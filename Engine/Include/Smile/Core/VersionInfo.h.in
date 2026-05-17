@@ -1,0 +1,11 @@
+#pragma once
+
+// Header gerado pelo CMake (configure_file). NAO editar manualmente -
+// editar Engine/Include/Smile/Core/VersionInfo.h.in.
+
+#define SMILE_VERSION_MAJOR  @SMILE_VERSION_MAJOR@
+#define SMILE_VERSION_MINOR  @SMILE_VERSION_MINOR@
+#define SMILE_VERSION_PATCH  @SMILE_VERSION_PATCH@
+#define SMILE_BUILD_NUMBER   "@SMILE_BUILD_NUMBER@"
+#define SMILE_BUILD_DATE     "@SMILE_BUILD_DATE@"
+#define SMILE_VERSION_STRING "@SMILE_VERSION_MAJOR@.@SMILE_VERSION_MINOR@.@SMILE_VERSION_PATCH@"

@@ -1,0 +1,34 @@
+# Pastas de build
+build/
+out/
+cmake-build-*/
+
+# Visual Studio / IDEs
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln.docstates
+CMakeSettings.json
+
+# Arquivos de objeto / binarios
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.tlog
+*.log
+
+# Shaders compilados (gerados em build time)
+*.cso
+
+# Sistema operacional
+Thumbs.db
+Desktop.ini
+.DS_Store

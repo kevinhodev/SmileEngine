@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Program Files/CMake/bin/cmake.exe\" -S . -B build -G \"Visual Studio 17 2022\" -A x64 -DCMAKE_PREFIX_PATH=\"C:/Qt/6.10.2/msvc2022_64\")",
+      "Bash(\"/c/Program Files/CMake/bin/cmake.exe\" --build build --config Debug --target SmileEditor)",
+      "Bash(\"/d/Engines/SmileEngine/build/bin/Debug/SmileEditor.exe\")"
+    ]
+  }
+}
