@@ -1,17 +1,10 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/Mesh.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
-#include <cmath>
 
 namespace Smile {
-
-namespace {
-    struct DemoVertex {
-        f32 pos[3];
-        f32 normal[3];
-    };
-}
 
 Renderer::Renderer() = default;
 
@@ -19,7 +12,7 @@ Renderer::~Renderer() {
     Shutdown();
 }
 
-void Renderer::Initialize(HWND _hWnd, u32 _Width, u32 _Height) {
+void Renderer::Initialize(HWND hwnd, u32 width, u32 height) {
     if (Initialized) {
         return;
     }
@@ -35,13 +28,13 @@ void Renderer::Initialize(HWND _hWnd, u32 _Width, u32 _Height) {
     SwapChain.Initialize(Device.GetFactory(),
                            CommandQueue.Native(),
                            Device.Native(),
-                           _hWnd,
-                           _Width,
-                           _Height,
+                           hwnd,
+                           width,
+                           height,
                            Device.TearingSupported());
     PipelineState.Initialize(Device.Native());
 
-    CreateCubeBuffers();
+    CreateGeometryBuffers();
     CreateDepthBuffer();
     CreateConstantBuffer();
 
@@ -49,65 +42,12 @@ void Renderer::Initialize(HWND _hWnd, u32 _Width, u32 _Height) {
     LogInfo("Renderer inicializado");
 }
 
-void Renderer::CreateCubeBuffers() {
-    // Cubo unitario centrado na origem (1x1x1, de -0.5 a +0.5)
-    // Vertices em coordenadas de MODELO — a transformacao e feita pela GPU via MVP
-    constexpr f32 S = 0.5f;
+void Renderer::CreateGeometryBuffers() {
+    Mesh mesh = Mesh::CreateCube();
 
-    // 6 normais distintas por face
-    constexpr f32 normFront[3]  = { 0.0f,  0.0f, -1.0f };
-    constexpr f32 normBack[3]   = { 0.0f,  0.0f,  1.0f };
-    constexpr f32 normBottom[3] = { 0.0f, -1.0f,  0.0f };
-    constexpr f32 normTop[3]    = { 0.0f,  1.0f,  0.0f };
-    constexpr f32 normLeft[3]   = {-1.0f,  0.0f,  0.0f };
-    constexpr f32 normRight[3]  = { 1.0f,  0.0f,  0.0f };
-
-    // 24 vertices (4 por face, cada face com normal unica)
-    const DemoVertex vertices[24] = {
-        // Front (Z = -S)
-        {{-S,  S, -S}, {normFront[0], normFront[1], normFront[2]}},
-        {{ S,  S, -S}, {normFront[0], normFront[1], normFront[2]}},
-        {{ S, -S, -S}, {normFront[0], normFront[1], normFront[2]}},
-        {{-S, -S, -S}, {normFront[0], normFront[1], normFront[2]}},
-        // Back (Z = +S)
-        {{ S,  S,  S}, {normBack[0], normBack[1], normBack[2]}},
-        {{-S,  S,  S}, {normBack[0], normBack[1], normBack[2]}},
-        {{-S, -S,  S}, {normBack[0], normBack[1], normBack[2]}},
-        {{ S, -S,  S}, {normBack[0], normBack[1], normBack[2]}},
-        // Top (Y = +S)
-        {{-S,  S,  S}, {normTop[0], normTop[1], normTop[2]}},
-        {{ S,  S,  S}, {normTop[0], normTop[1], normTop[2]}},
-        {{ S,  S, -S}, {normTop[0], normTop[1], normTop[2]}},
-        {{-S,  S, -S}, {normTop[0], normTop[1], normTop[2]}},
-        // Bottom (Y = -S)
-        {{-S, -S, -S}, {normBottom[0], normBottom[1], normBottom[2]}},
-        {{ S, -S, -S}, {normBottom[0], normBottom[1], normBottom[2]}},
-        {{ S, -S,  S}, {normBottom[0], normBottom[1], normBottom[2]}},
-        {{-S, -S,  S}, {normBottom[0], normBottom[1], normBottom[2]}},
-        // Left (X = -S)
-        {{-S,  S,  S}, {normLeft[0], normLeft[1], normLeft[2]}},
-        {{-S,  S, -S}, {normLeft[0], normLeft[1], normLeft[2]}},
-        {{-S, -S, -S}, {normLeft[0], normLeft[1], normLeft[2]}},
-        {{-S, -S,  S}, {normLeft[0], normLeft[1], normLeft[2]}},
-        // Right (X = +S)
-        {{ S,  S, -S}, {normRight[0], normRight[1], normRight[2]}},
-        {{ S,  S,  S}, {normRight[0], normRight[1], normRight[2]}},
-        {{ S, -S,  S}, {normRight[0], normRight[1], normRight[2]}},
-        {{ S, -S, -S}, {normRight[0], normRight[1], normRight[2]}},
-    };
-
-    // 36 indices — 2 triangulos por face
-    const u16 indices[36] = {
-         0,  1,  2,   0,  2,  3,  // Front
-         4,  5,  6,   4,  6,  7,  // Back
-         8,  9, 10,   8, 10, 11,  // Top
-        12, 13, 14,  12, 14, 15,  // Bottom
-        16, 17, 18,  16, 18, 19,  // Left
-        20, 21, 22,  20, 22, 23,  // Right
-    };
-
-    constexpr UINT vBufferSize = sizeof(vertices);
-    constexpr UINT iBufferSize = sizeof(indices);
+    const UINT vBufferSize = static_cast<UINT>(mesh.vertices.size() * sizeof(Vertex));
+    const UINT iBufferSize = static_cast<UINT>(mesh.indices.size()  * sizeof(u16));
+    IndexCount = static_cast<u32>(mesh.indices.size());
 
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type                 = D3D12_HEAP_TYPE_UPLOAD;
@@ -127,19 +67,20 @@ void Renderer::CreateCubeBuffers() {
     resDesc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     resDesc.Flags              = D3D12_RESOURCE_FLAG_NONE;
 
+    D3D12_RANGE noReadRange{ 0, 0 };
+    void* mapped = nullptr;
+
     // Vertex Buffer
     resDesc.Width = vBufferSize;
     SMILE_HR(Device.Native()->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resDesc,
              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&VertexBuffer)));
 
-    void* mapped = nullptr;
-    D3D12_RANGE noReadRange{ 0, 0 };
     SMILE_HR(VertexBuffer->Map(0, &noReadRange, &mapped));
-    std::memcpy(mapped, vertices, vBufferSize);
+    std::memcpy(mapped, mesh.vertices.data(), vBufferSize);
     VertexBuffer->Unmap(0, nullptr);
 
     VertexBufferView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();
-    VertexBufferView.StrideInBytes  = sizeof(DemoVertex);
+    VertexBufferView.StrideInBytes  = sizeof(Vertex);
     VertexBufferView.SizeInBytes    = vBufferSize;
 
     // Index Buffer
@@ -148,7 +89,7 @@ void Renderer::CreateCubeBuffers() {
              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&IndexBuffer)));
 
     SMILE_HR(IndexBuffer->Map(0, &noReadRange, &mapped));
-    std::memcpy(mapped, indices, iBufferSize);
+    std::memcpy(mapped, mesh.indices.data(), iBufferSize);
     IndexBuffer->Unmap(0, nullptr);
 
     IndexBufferView.BufferLocation = IndexBuffer->GetGPUVirtualAddress();
@@ -187,9 +128,9 @@ void Renderer::CreateConstantBuffer() {
 }
 
 void Renderer::CreateDepthBuffer() {
-    UINT Width = SwapChain.Width();
-    UINT Height = SwapChain.Height();
-    if (Width == 0 || Height == 0) return;
+    UINT width  = SwapChain.Width();
+    UINT height = SwapChain.Height();
+    if (width == 0 || height == 0) return;
 
     if (!DSVHeap.Native()) {
         DSVHeap.Initialize(Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
@@ -202,8 +143,8 @@ void Renderer::CreateDepthBuffer() {
 
     D3D12_RESOURCE_DESC depthDesc{};
     depthDesc.Dimension          = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    depthDesc.Width              = Width;
-    depthDesc.Height             = Height;
+    depthDesc.Width              = width;
+    depthDesc.Height             = height;
     depthDesc.DepthOrArraySize   = 1;
     depthDesc.MipLevels          = 1;
     depthDesc.Format             = DXGI_FORMAT_D32_FLOAT;
@@ -273,51 +214,31 @@ void Renderer::CreateMSAABuffers() {
     Device.Native()->CreateRenderTargetView(MSAAColorBuffer.Get(), &rtvDesc, MSAARTVHeap.CpuHandle(0));
 }
 
-void Renderer::SetMSAA(u32 _SampleCount) {
-    if (_SampleCount == MSAASampleCount || !Initialized) {
+void Renderer::SetMSAA(u32 sampleCount) {
+    if (sampleCount == MSAASampleCount || !Initialized) {
         return;
     }
 
     CommandQueue.Flush();
-    MSAASampleCount = _SampleCount;
+    MSAASampleCount = sampleCount;
     PipelineState.RecreatePSO(Device.Native(), MSAASampleCount);
     CreateMSAABuffers();
     CreateDepthBuffer();
 }
 
-void Renderer::Resize(u32 _Width, u32 _Height) {
-    if (!Initialized || _Width == 0 || _Height == 0) {
+void Renderer::Resize(u32 width, u32 height) {
+    if (!Initialized || width == 0 || height == 0) {
         return;
     }
 
     CommandQueue.Flush();
-    SwapChain.Resize(Device.Native(), _Width, _Height);
+    SwapChain.Resize(Device.Native(), width, height);
     CreateMSAABuffers();
     CreateDepthBuffer();
 }
 
 void Renderer::UpdateCamera(const CameraInput& input, f32 dt) {
-    // Rotação: yaw livre, pitch clampado em ±89° (padrão UE)
-    Yaw   += input.Look.X;
-    Pitch  = Clamp(Pitch + input.Look.Y, -89.0f, 89.0f);
-
-    f32 yawRad   = Yaw   * ToRad;
-    f32 pitchRad = Pitch * ToRad;
-
-    // W/S seguem a direção exata da câmera (inclui pitch)
-    Vec3 forward = {
-        std::cos(pitchRad) * std::sin(yawRad),
-        std::sin(pitchRad),
-        std::cos(pitchRad) * std::cos(yawRad)
-    };
-    // A/D sempre horizontal — strafe não inclina com o olhar
-    Vec3 right = { std::cos(yawRad), 0.0f, -std::sin(yawRad) };
-
-    constexpr f32 kBaseSpeed = 3.0f;
-    f32 speed = kBaseSpeed * input.Speed * dt;
-    CameraPos += (forward * input.Move.Z
-               +  right   * input.Move.X
-               +  Vec3::UnitY() * input.Move.Y) * speed;
+    m_camera.Update(input, dt);
 }
 
 void Renderer::RenderFrame() {
@@ -326,51 +247,38 @@ void Renderer::RenderFrame() {
     }
 
     // ---------- Atualiza a MVP matrix ----------
-    f32 Aspect = SwapChain.Width() > 0 && SwapChain.Height() > 0
+    f32 aspect = SwapChain.Width() > 0 && SwapChain.Height() > 0
                  ? static_cast<f32>(SwapChain.Width()) / static_cast<f32>(SwapChain.Height())
                  : 1.0f;
 
-    // Model: cubo estático na origem
     Mat44 model = Mat44::Identity();
+    Mat44 view  = m_camera.GetViewMatrix();
 
-    // View: construída a partir do estado da câmera (Pitch/Yaw em graus)
-    f32 pitchRad = Pitch * ToRad;
-    f32 yawRad   = Yaw   * ToRad;
-    Vec3 forward = {
-        std::cos(pitchRad) * std::sin(yawRad),
-        std::sin(pitchRad),
-        std::cos(pitchRad) * std::cos(yawRad)
-    };
-    Mat44 view = Mat44::LookAtLH(CameraPos, CameraPos + forward, Vec3::UnitY());
-
-    // Projection: perspectiva com FOV de 60 graus
     constexpr f32 kFovY = 60.0f * ToRad;
-    Mat44 proj = Mat44::PerspectiveFovLH(kFovY, Aspect, 0.1f, 100.0f);
+    Mat44 proj = Mat44::PerspectiveFovLH(kFovY, aspect, 0.1f, 100.0f);
 
-    // MVP = Model * View * Projection (row-major, esquerda para direita)
     MappedCB->MVP         = model * view * proj;
     MappedCB->ModelMatrix = model;
 
-    // Camera e luz
-    MappedCB->CameraPosition = Vec4{CameraPos.X, CameraPos.Y, CameraPos.Z, 1.0f};
+    Vec3 camPos = m_camera.GetPosition();
+    MappedCB->CameraPosition = Vec4{camPos.X, camPos.Y, camPos.Z, 1.0f};
     MappedCB->LightPosition  = Vec4{2.0f, 2.0f, -2.0f, 1.0f};
     MappedCB->LightColor     = Vec4{1.0f, 0.9f, 0.8f, 8.0f};
 
     // ---------- Grava command list ----------
     CommandQueue.ResetForRecording();
-    auto* CommandList = CommandQueue.List();
+    auto* commandList = CommandQueue.List();
 
-    const bool UseMSAA = MSAASampleCount > 1 && MSAAColorBuffer;
+    const bool useMSAA = MSAASampleCount > 1 && MSAAColorBuffer;
 
-    const FLOAT ClearColor[] = { 0.094f, 0.094f, 0.117f, 1.0f };
-    auto DSV = DSVHeap.CpuHandle(0);
+    const FLOAT clearColor[] = { 0.094f, 0.094f, 0.117f, 1.0f };
+    auto dsv = DSVHeap.CpuHandle(0);
 
-    if (UseMSAA) {
-        // MSAAColorBuffer criado em RENDER_TARGET; backbuffer fica em PRESENT até o resolve
-        auto MSAARTV = MSAARTVHeap.CpuHandle(0);
-        CommandList->OMSetRenderTargets(1, &MSAARTV, FALSE, &DSV);
-        CommandList->ClearRenderTargetView(MSAARTV, ClearColor, 0, nullptr);
-        CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    if (useMSAA) {
+        auto msaaRTV = MSAARTVHeap.CpuHandle(0);
+        commandList->OMSetRenderTargets(1, &msaaRTV, FALSE, &dsv);
+        commandList->ClearRenderTargetView(msaaRTV, clearColor, 0, nullptr);
+        commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     } else {
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -379,43 +287,37 @@ void Renderer::RenderFrame() {
         barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        CommandList->ResourceBarrier(1, &barrier);
+        commandList->ResourceBarrier(1, &barrier);
 
-        auto RTV = SwapChain.CurrentRTV();
-        CommandList->OMSetRenderTargets(1, &RTV, FALSE, &DSV);
-        CommandList->ClearRenderTargetView(RTV, ClearColor, 0, nullptr);
-        CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        auto rtv = SwapChain.CurrentRTV();
+        commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+        commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }
 
     D3D12_VIEWPORT viewport{};
-    viewport.TopLeftX = 0.0f;
-    viewport.TopLeftY = 0.0f;
     viewport.Width    = static_cast<FLOAT>(SwapChain.Width());
     viewport.Height   = static_cast<FLOAT>(SwapChain.Height());
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
 
     D3D12_RECT scissor{};
-    scissor.left   = 0;
-    scissor.top    = 0;
     scissor.right  = static_cast<LONG>(SwapChain.Width());
     scissor.bottom = static_cast<LONG>(SwapChain.Height());
 
-    CommandList->RSSetViewports(1, &viewport);
-    CommandList->RSSetScissorRects(1, &scissor);
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissor);
 
-    CommandList->SetGraphicsRootSignature(PipelineState.RootSignature());
-    CommandList->SetPipelineState(PipelineState.PSO());
+    commandList->SetGraphicsRootSignature(PipelineState.RootSignature());
+    commandList->SetPipelineState(PipelineState.PSO());
+    commandList->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
 
-    CommandList->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 1, &VertexBufferView);
+    commandList->IASetIndexBuffer(&IndexBufferView);
+    commandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
 
-    CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
-    CommandList->IASetIndexBuffer(&IndexBufferView);
-    CommandList->DrawIndexedInstanced(36, 1, 0, 0, 0);
-
-    if (UseMSAA) {
-        // Resolve MSAA → backbuffer, então volta os dois ao estado esperado
+    if (useMSAA) {
         D3D12_RESOURCE_BARRIER barriers[2]{};
         barriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barriers[0].Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
@@ -429,16 +331,16 @@ void Renderer::RenderFrame() {
         barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
         barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_DEST;
-        CommandList->ResourceBarrier(2, barriers);
+        commandList->ResourceBarrier(2, barriers);
 
-        CommandList->ResolveSubresource(SwapChain.CurrentBackBuffer(), 0,
+        commandList->ResolveSubresource(SwapChain.CurrentBackBuffer(), 0,
                                         MSAAColorBuffer.Get(), 0, SwapChain::kFormat);
 
         barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
         barriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
         barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
         barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-        CommandList->ResourceBarrier(2, barriers);
+        commandList->ResourceBarrier(2, barriers);
     } else {
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -447,12 +349,12 @@ void Renderer::RenderFrame() {
         barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-        CommandList->ResourceBarrier(1, &barrier);
+        commandList->ResourceBarrier(1, &barrier);
     }
 
-    SMILE_HR(CommandList->Close());
+    SMILE_HR(commandList->Close());
 
-    ID3D12CommandList* lists[] = { CommandList };
+    ID3D12CommandList* lists[] = { commandList };
     CommandQueue.ExecuteAndSync(lists, 1);
 
     SwapChain.Present();

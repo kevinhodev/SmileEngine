@@ -7,6 +7,7 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/SwapChain.h"
 #include "Smile/Graphics/PipelineState.h"
+#include "Smile/Graphics/Camera.h"
 
 namespace Smile {
 
@@ -38,15 +39,15 @@ public:
 
     bool IsInitialized() const { return Initialized; }
 
-    Vec3 GetCameraPos() const { return CameraPos; }
-    f32  GetPitch()     const { return Pitch; }
-    f32  GetYaw()       const { return Yaw; }
+    Vec3 GetCameraPos() const { return m_camera.GetPosition(); }
+    f32  GetPitch()     const { return m_camera.GetPitch(); }
+    f32  GetYaw()       const { return m_camera.GetYaw(); }
     u32  GetMSAA()      const { return MSAASampleCount; }
 
     const D3D12Device& GetDevice() const { return Device; }
 
 private:
-    void CreateCubeBuffers();
+    void CreateGeometryBuffers();
     void CreateDepthBuffer();
     void CreateConstantBuffer();
     void CreateMSAABuffers();
@@ -56,11 +57,14 @@ private:
     SwapChain     SwapChain;
     PipelineState PipelineState;
 
+    Camera m_camera;
+
     ComPtr<ID3D12Resource>   VertexBuffer;
     D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
-    
+
     ComPtr<ID3D12Resource>   IndexBuffer;
     D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
+    u32                      IndexCount = 0;
 
     ComPtr<ID3D12Resource>   DepthBuffer;
     DescriptorHeap           DSVHeap;
@@ -74,13 +78,7 @@ private:
     DescriptorHeap           MSAARTVHeap;
     u32                      MSAASampleCount = 1;
 
-    // Estado da câmera — atualizado via UpdateCamera()
-    Vec3 CameraPos = { 0.0f, 1.0f, -2.5f };
-    f32  Pitch     = -22.0f;   // graus; corresponde à vista inicial do cubo
-    f32  Yaw       = 0.0f;     // graus
-
     bool Initialized = false;
 };
 
 } // namespace Smile
-

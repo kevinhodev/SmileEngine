@@ -23,6 +23,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/DescriptorHeap.h
     Include/Smile/Graphics/SwapChain.h
     Include/Smile/Graphics/PipelineState.h
+    Include/Smile/Graphics/Camera.h
+    Include/Smile/Graphics/Mesh.h
     Include/Smile/Graphics/Renderer.h
 )
 
@@ -38,6 +40,8 @@ set(ENGINE_SOURCES
     Source/Graphics/DescriptorHeap.cpp
     Source/Graphics/SwapChain.cpp
     Source/Graphics/PipelineState.cpp
+    Source/Graphics/Camera.cpp
+    Source/Graphics/Mesh.cpp
     Source/Graphics/Renderer.cpp
 )
 
