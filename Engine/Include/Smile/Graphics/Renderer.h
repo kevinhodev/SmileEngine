@@ -10,75 +10,70 @@
 #include "Smile/Graphics/Camera.h"
 
 namespace Smile {
+    struct alignas(256) FrameConstants {
+        Mat44 MVP;             // 64 bytes — row_major float4x4 no HLSL
+        Mat44 ModelMatrix;     // 64 bytes
+        Vec4  CameraPosition;  // 16 bytes
+        Vec4  LightPosition;   // 16 bytes
+        Vec4  LightColor;      // 16 bytes
+    };
 
-// Dados enviados ao shader via Constant Buffer (deve ser alinhado a 256 bytes)
-struct alignas(256) FrameConstants {
-    Mat44 MVP;             // 64 bytes — row_major float4x4 no HLSL
-    Mat44 ModelMatrix;     // 64 bytes
-    Vec4  CameraPosition;  // 16 bytes
-    Vec4  LightPosition;   // 16 bytes
-    Vec4  LightColor;      // 16 bytes
-};
+    class Renderer {
+    public:
+        Renderer();
+        ~Renderer();
 
-class Renderer {
-public:
-    Renderer();
-    ~Renderer();
+        Renderer(const Renderer&)            = delete;
+        Renderer& operator=(const Renderer&) = delete;
 
-    Renderer(const Renderer&)            = delete;
-    Renderer& operator=(const Renderer&) = delete;
+        void Initialize(HWND hwnd, u32 width, u32 height);
+        void Shutdown();
 
-    void Initialize(HWND hwnd, u32 width, u32 height);
-    void Shutdown();
+        void Resize(u32 width, u32 height);
+        void SetMSAA(u32 sampleCount);
 
-    void Resize(u32 width, u32 height);
-    void SetMSAA(u32 sampleCount);
+        void UpdateCamera(const CameraInput& input, f32 dt);
+        void RenderFrame();
 
-    void UpdateCamera(const CameraInput& input, f32 dt);
-    void RenderFrame();
+        bool IsInitialized() const { return Initialized; }
 
-    bool IsInitialized() const { return Initialized; }
+        Vec3 GetCameraPos() const { return Camera.GetPosition(); }
+        f32  GetPitch()     const { return Camera.GetPitch(); }
+        f32  GetYaw()       const { return Camera.GetYaw(); }
+        u32  GetMSAA()      const { return MSAASampleCount; }
 
-    Vec3 GetCameraPos() const { return m_camera.GetPosition(); }
-    f32  GetPitch()     const { return m_camera.GetPitch(); }
-    f32  GetYaw()       const { return m_camera.GetYaw(); }
-    u32  GetMSAA()      const { return MSAASampleCount; }
+        const FD3D12Device& GetDevice() const { return Device; }
 
-    const D3D12Device& GetDevice() const { return Device; }
+    private:
+        void CreateGeometryBuffers();
+        void CreateDepthBuffer();
+        void CreateConstantBuffer();
+        void CreateMSAABuffers();
 
-private:
-    void CreateGeometryBuffers();
-    void CreateDepthBuffer();
-    void CreateConstantBuffer();
-    void CreateMSAABuffers();
+        FD3D12Device   Device;
+        FCommandQueue  CommandQueue;
+        FSwapChain     SwapChain;
+        FPipelineState PipelineState;
 
-    D3D12Device   Device;
-    CommandQueue  CommandQueue;
-    SwapChain     SwapChain;
-    PipelineState PipelineState;
+        FCamera Camera;
 
-    Camera m_camera;
+        ComPtr<ID3D12Resource>   VertexBuffer;
+        D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
 
-    ComPtr<ID3D12Resource>   VertexBuffer;
-    D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
+        ComPtr<ID3D12Resource>   IndexBuffer;
+        D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
+        u32                      IndexCount = 0;
 
-    ComPtr<ID3D12Resource>   IndexBuffer;
-    D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
-    u32                      IndexCount = 0;
+        ComPtr<ID3D12Resource>    DepthBuffer;
+        FDescriptorHeap           DSVHeap;
 
-    ComPtr<ID3D12Resource>   DepthBuffer;
-    DescriptorHeap           DSVHeap;
+        ComPtr<ID3D12Resource>   ConstantBuffer;
+        FrameConstants*          MappedCB = nullptr;
 
-    // Constant Buffer (MVP) — persistently mapped
-    ComPtr<ID3D12Resource>   ConstantBuffer;
-    FrameConstants*          MappedCB = nullptr;
+        ComPtr<ID3D12Resource>    MSAAColorBuffer;
+        FDescriptorHeap           MSAARTVHeap;
+        u32                       MSAASampleCount = 1;
 
-    // MSAA off-screen render target (sampleCount > 1)
-    ComPtr<ID3D12Resource>   MSAAColorBuffer;
-    DescriptorHeap           MSAARTVHeap;
-    u32                      MSAASampleCount = 1;
-
-    bool Initialized = false;
-};
-
-} // namespace Smile
+        bool Initialized = false;
+    };
+} 

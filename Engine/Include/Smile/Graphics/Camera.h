@@ -4,22 +4,20 @@
 #include "Smile/Input/CameraInput.h"
 
 namespace Smile {
+    class FCamera {
+    public:
+        FCamera() = default;
 
-class Camera {
-public:
-    Camera() = default;
+        void  Update(const CameraInput& Input, f32 DeltaTime);
+        Mat44 GetViewMatrix() const;
 
-    void  Update(const CameraInput& input, f32 dt);
-    Mat44 GetViewMatrix() const;
+        Vec3 GetPosition() const { return Position; }
+        f32  GetPitch()    const { return Pitch; }
+        f32  GetYaw()      const { return Yaw; }
 
-    Vec3 GetPosition() const { return m_pos; }
-    f32  GetPitch()    const { return m_pitch; }
-    f32  GetYaw()      const { return m_yaw; }
-
-private:
-    Vec3 m_pos   = { 0.0f, 1.0f, -2.5f };
-    f32  m_pitch = -22.0f;
-    f32  m_yaw   = 0.0f;
-};
-
-} // namespace Smile
+    private:
+        Vec3 Position   = { 0.0f, 1.0f, -2.5f };
+        f32  Pitch = -22.0f;
+        f32  Yaw   = 0.0f;
+    };
+} 

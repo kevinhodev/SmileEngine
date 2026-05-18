@@ -4,17 +4,15 @@
 #include <vector>
 
 namespace Smile {
+    struct Vertex {
+        f32 Position[3];
+        f32 Normal[3];
+    };
 
-struct Vertex {
-    f32 pos[3];
-    f32 normal[3];
-};
+    struct FMesh {
+        std::vector<Vertex> Vertices;
+        std::vector<u16>    Indices;
 
-struct Mesh {
-    std::vector<Vertex> vertices;
-    std::vector<u16>    indices;
-
-    static Mesh CreateCube();
-};
-
-} // namespace Smile
+        static FMesh CreateCube();
+    };
+} 

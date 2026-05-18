@@ -1,41 +1,38 @@
 #include "Smile/Core/Logger.h"
-
 #include <cstdio>
 #include <string>
 #include <Windows.h>
 
 namespace Smile {
+    namespace {
+        LogSink GLogSink;
 
-namespace {
-LogSink g_sink;
+        const char* LevelTag(LogLevel _LogLevel) {
+            switch (_LogLevel) {
+                case LogLevel::Info:    return "[INFO] ";
+                case LogLevel::Warning: return "[WARN] ";
+                case LogLevel::Error:   return "[ERR ] ";
+            }
+            return "[????] ";
+        }
+    } 
 
-const char* LevelTag(LogLevel level) {
-    switch (level) {
-        case LogLevel::Info:    return "[INFO] ";
-        case LogLevel::Warning: return "[WARN] ";
-        case LogLevel::Error:   return "[ERR ] ";
+    void SetLogSink(LogSink _LogSink) {
+        GLogSink = std::move(_LogSink);
     }
-    return "[????] ";
-}
-} // anon
 
-void SetLogSink(LogSink sink) {
-    g_sink = std::move(sink);
-}
+    void Log(LogLevel _LogLevel, std::string_view _Message) {
+        std::string Formatted;
+        Formatted.reserve(_Message.size() + 16);
+        Formatted.append(LevelTag(_LogLevel));
+        Formatted.append(_Message);
+        Formatted.push_back('\n');
 
-void Log(LogLevel level, std::string_view message) {
-    std::string formatted;
-    formatted.reserve(message.size() + 16);
-    formatted.append(LevelTag(level));
-    formatted.append(message);
-    formatted.push_back('\n');
+        OutputDebugStringA(Formatted.c_str());
+        std::fputs(Formatted.c_str(), stderr);
 
-    OutputDebugStringA(formatted.c_str());
-    std::fputs(formatted.c_str(), stderr);
-
-    if (g_sink) {
-        g_sink(level, message);
+        if (GLogSink) {
+            GLogSink(_LogLevel, _Message);
+        }
     }
-}
-
-} // namespace Smile
+} 
