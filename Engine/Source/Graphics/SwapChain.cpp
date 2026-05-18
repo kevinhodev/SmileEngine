@@ -26,12 +26,12 @@ namespace Smile {
         SwapChainDesc.AlphaMode   = DXGI_ALPHA_MODE_UNSPECIFIED;
         SwapChainDesc.Flags       = _AllowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0u;
 
-        ComPtr<IDXGISwapChain1> SwapChain;
-        SMILE_HR(_Factory->CreateSwapChainForHwnd(_CommandQueue, _hWnd, &SwapChainDesc, nullptr, nullptr, &SwapChain));
+        ComPtr<IDXGISwapChain1> Swap1;
+        SMILE_HR(_Factory->CreateSwapChainForHwnd(_CommandQueue, _hWnd, &SwapChainDesc, nullptr, nullptr, &Swap1));
 
         SMILE_HR(_Factory->MakeWindowAssociation(_hWnd, DXGI_MWA_NO_ALT_ENTER));
 
-        SMILE_HR(SwapChain.As(&SwapChain));
+        SMILE_HR(Swap1.As(&SwapChain));
 
         RTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kBufferCount, false);
         CreateRenderTargetViews(_Device);
