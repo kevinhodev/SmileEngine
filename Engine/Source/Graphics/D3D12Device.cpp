@@ -2,6 +2,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <d3d12sdklayers.h>
+#include <format>
 
 namespace Smile {
     void FD3D12Device::Initialize(bool _EnableDebugLayer) {
@@ -12,7 +13,7 @@ namespace Smile {
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&DebugController)))) {
                 DebugController->EnableDebugLayer();
                 FactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
-                LogInfo("D3D12 debug layer ativado");
+                LogInfo("D3D12 - Debug Layer Ativado");
             } else {
                 LogWarning("D3D12 debug layer indisponivel (Graphics Tools nao instalado?)");
             }
@@ -39,6 +40,48 @@ namespace Smile {
 
         SMILE_HR(D3D12CreateDevice(Adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&Device)));
 
-        LogInfo("D3D12 device criado");
+        // ── GPU info ─────────────────────────────────────────────────────────
+        {
+            std::string nameUtf8(AdapterDescription.begin(), AdapterDescription.end());
+            double vramGb = static_cast<double>(AdapterDedicatedVideoMemory) / (1024.0 * 1024.0 * 1024.0);
+            LogInfo(std::format("GPU: {} | VRAM: {:.1f} GB", nameUtf8, vramGb));
+        }
+
+        // ── Max feature level ─────────────────────────────────────────────────
+        {
+            constexpr D3D_FEATURE_LEVEL kLevels[] = {
+                D3D_FEATURE_LEVEL_12_2, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0,
+                D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
+            };
+            D3D12_FEATURE_DATA_FEATURE_LEVELS flData{};
+            flData.NumFeatureLevels        = static_cast<UINT>(std::size(kLevels));
+            flData.pFeatureLevelsRequested = kLevels;
+            if (SUCCEEDED(Device->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &flData, sizeof(flData)))) {
+                const char* flStr =
+                    flData.MaxSupportedFeatureLevel == D3D_FEATURE_LEVEL_12_2 ? "12_2" :
+                    flData.MaxSupportedFeatureLevel == D3D_FEATURE_LEVEL_12_1 ? "12_1" :
+                    flData.MaxSupportedFeatureLevel == D3D_FEATURE_LEVEL_12_0 ? "12_0" :
+                    flData.MaxSupportedFeatureLevel == D3D_FEATURE_LEVEL_11_1 ? "11_1" : "11_0";
+                LogInfo(std::format("D3D12 - Feature Level Máxima: {}", flStr));
+            }
+        }
+
+        // ── MSAA support ──────────────────────────────────────────────────────
+        {
+            auto checkMSAA = [&](UINT samples) -> bool {
+                D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msaaData{};
+                msaaData.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
+                msaaData.SampleCount = samples;
+                if (FAILED(Device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+                                                       &msaaData, sizeof(msaaData))))
+                    return false;
+                return msaaData.NumQualityLevels > 0;
+            };
+            bool msaa4  = checkMSAA(4);
+            bool msaa8  = checkMSAA(8);
+            LogInfo(std::format("MSAA Suportado: 4x={} 8x={}", msaa4 ? "Sim" : "Não", msaa8 ? "Sim" : "Não"));
+        }
+
+        LogInfo(std::format("Tearing (VSync off): {}", IsTearingSupported ? "Suportado" : "Não Suportado"));
     }
 } 

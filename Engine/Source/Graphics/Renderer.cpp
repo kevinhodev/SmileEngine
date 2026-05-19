@@ -2,7 +2,11 @@
 #include "Smile/Graphics/Mesh.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Core/VersionInfo.h"
 #include <cstring>
+#include <format>
+#include <intrin.h>
+#include <windows.h>
 
 namespace Smile {
     Renderer::Renderer() = default;
@@ -20,6 +24,36 @@ namespace Smile {
         constexpr bool kDebugLayer = false;
     #endif
 
+        // ── System info ───────────────────────────────────────────────────────
+        LogInfo(std::format("SmileEngine v{}", SMILE_VERSION_STRING));
+        {
+            // CPU brand string via __cpuid (MSVC/clang-cl)
+            int cpuInfo[4] = {};
+            char brand[49] = {};
+            __cpuid(cpuInfo, 0x80000002);
+            std::memcpy(brand,      cpuInfo, 16);
+            __cpuid(cpuInfo, 0x80000003);
+            std::memcpy(brand + 16, cpuInfo, 16);
+            __cpuid(cpuInfo, 0x80000004);
+            std::memcpy(brand + 32, cpuInfo, 16);
+            brand[48] = '\0';
+            // trim leading spaces
+            const char* cpuName = brand;
+            while (*cpuName == ' ') ++cpuName;
+
+            SYSTEM_INFO si{};
+            GetSystemInfo(&si);
+
+            LogInfo(std::format("CPU: {} | {} Núcleos Lógicos", cpuName, si.dwNumberOfProcessors));
+        }
+        {
+            MEMORYSTATUSEX ms{};
+            ms.dwLength = sizeof(ms);
+            GlobalMemoryStatusEx(&ms);
+            double totalGb = static_cast<double>(ms.ullTotalPhys) / (1024.0 * 1024.0 * 1024.0);
+            LogInfo(std::format("RAM: {:.1f} GB", totalGb));
+        }
+
         Device.Initialize(kDebugLayer);
         CommandQueue.Initialize(Device.Native(), D3D12_COMMAND_LIST_TYPE_DIRECT);
         SwapChain.Initialize(Device.GetFactory(),
@@ -36,7 +70,7 @@ namespace Smile {
         CreateConstantBuffer();
 
         Initialized = true;
-        LogInfo("Renderer inicializado");
+        LogInfo(std::format("Renderer Inicializado | Viewport {}x{}", _Width, _Height));
     }
 
     void Renderer::CreateGeometryBuffers() {
