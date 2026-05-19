@@ -1,18 +1,15 @@
 #pragma once
 
-// Janela principal do editor: viewport central + docks placeholder + menu bar.
-
 #include <QMainWindow>
 #include <QPointer>
 
 class QActionGroup;
-class QLabel;
-class QTextEdit;
 
 namespace SmileEditor {
 
 class ViewportWidget;
 class AboutDialog;
+class ConsoleWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -30,12 +27,11 @@ private:
     void CreateMenuBar();
     void CreateDocks();
 
-    ViewportWidget*       Viewport    = nullptr;
+    ViewportWidget*       Viewport  = nullptr;
     QPointer<AboutDialog> AboutDlg;
-    QActionGroup*         MSAAGroup   = nullptr;
+    QActionGroup*         MSAAGroup = nullptr;
 
-    QLabel*               StatsLabel  = nullptr;
-    QTextEdit*            LogOutput   = nullptr;
+    ConsoleWidget*        Console   = nullptr;
 };
 
 } // namespace SmileEditor
