@@ -49,6 +49,7 @@ void ViewportWidget::EnsureRendererIsInitialized() {
                          static_cast<unsigned int>(width()),
                          static_cast<unsigned int>(height()));
     Initialized = true;
+    emit RendererInitialized();
 }
 
 // ---------- Ciclo de vida ----------

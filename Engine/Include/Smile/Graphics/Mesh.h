@@ -7,6 +7,7 @@ namespace Smile {
     struct Vertex {
         f32 Position[3];
         f32 Normal[3];
+        f32 TexCoord[2];
     };
 
     struct FMesh {

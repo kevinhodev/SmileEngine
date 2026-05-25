@@ -25,6 +25,9 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/PipelineState.h
     Include/Smile/Graphics/Camera.h
     Include/Smile/Graphics/Mesh.h
+    Include/Smile/Graphics/TextureSRVHeap.h
+    Include/Smile/Graphics/Texture.h
+    Include/Smile/Graphics/Material.h
     Include/Smile/Graphics/Renderer.h
 )
 
@@ -42,6 +45,9 @@ set(ENGINE_SOURCES
     Source/Graphics/PipelineState.cpp
     Source/Graphics/Camera.cpp
     Source/Graphics/Mesh.cpp
+    Source/Graphics/TextureSRVHeap.cpp
+    Source/Graphics/Texture.cpp
+    Source/Graphics/Material.cpp
     Source/Graphics/Renderer.cpp
 )
 
@@ -69,6 +75,8 @@ target_link_libraries(SmileEngine
         d3d12
         dxgi
         dxguid
+        windowscodecs
+        ole32
 )
 
 # Organizacao no Visual Studio (filters por pasta)

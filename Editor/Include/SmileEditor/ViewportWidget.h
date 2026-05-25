@@ -41,6 +41,7 @@ namespace SmileEditor {
 
     signals:
         void FrameReady();
+        void RendererInitialized(); // emitted once when D3D12 renderer is ready
 
     private slots:
         void OnRenderTimer();

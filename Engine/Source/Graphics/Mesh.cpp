@@ -13,36 +13,36 @@ namespace Smile {
 
         FMesh Mesh;
         Mesh.Vertices = {
-            // Front (Z = -S)
-            {{-S,  S, -S}, {normFront[0],  normFront[1],  normFront[2]}},
-            {{ S,  S, -S}, {normFront[0],  normFront[1],  normFront[2]}},
-            {{ S, -S, -S}, {normFront[0],  normFront[1],  normFront[2]}},
-            {{-S, -S, -S}, {normFront[0],  normFront[1],  normFront[2]}},
+            // Front (Z = -S)  pos              normal                                  uv
+            {{-S,  S, -S}, {normFront[0],  normFront[1],  normFront[2]},  {0.0f, 0.0f}},
+            {{ S,  S, -S}, {normFront[0],  normFront[1],  normFront[2]},  {1.0f, 0.0f}},
+            {{ S, -S, -S}, {normFront[0],  normFront[1],  normFront[2]},  {1.0f, 1.0f}},
+            {{-S, -S, -S}, {normFront[0],  normFront[1],  normFront[2]},  {0.0f, 1.0f}},
             // Back (Z = +S)
-            {{ S,  S,  S}, {normBack[0],   normBack[1],   normBack[2]}},
-            {{-S,  S,  S}, {normBack[0],   normBack[1],   normBack[2]}},
-            {{-S, -S,  S}, {normBack[0],   normBack[1],   normBack[2]}},
-            {{ S, -S,  S}, {normBack[0],   normBack[1],   normBack[2]}},
+            {{ S,  S,  S}, {normBack[0],   normBack[1],   normBack[2]},   {0.0f, 0.0f}},
+            {{-S,  S,  S}, {normBack[0],   normBack[1],   normBack[2]},   {1.0f, 0.0f}},
+            {{-S, -S,  S}, {normBack[0],   normBack[1],   normBack[2]},   {1.0f, 1.0f}},
+            {{ S, -S,  S}, {normBack[0],   normBack[1],   normBack[2]},   {0.0f, 1.0f}},
             // Top (Y = +S)
-            {{-S,  S,  S}, {normTop[0],    normTop[1],    normTop[2]}},
-            {{ S,  S,  S}, {normTop[0],    normTop[1],    normTop[2]}},
-            {{ S,  S, -S}, {normTop[0],    normTop[1],    normTop[2]}},
-            {{-S,  S, -S}, {normTop[0],    normTop[1],    normTop[2]}},
+            {{-S,  S,  S}, {normTop[0],    normTop[1],    normTop[2]},    {0.0f, 0.0f}},
+            {{ S,  S,  S}, {normTop[0],    normTop[1],    normTop[2]},    {1.0f, 0.0f}},
+            {{ S,  S, -S}, {normTop[0],    normTop[1],    normTop[2]},    {1.0f, 1.0f}},
+            {{-S,  S, -S}, {normTop[0],    normTop[1],    normTop[2]},    {0.0f, 1.0f}},
             // Bottom (Y = -S)
-            {{-S, -S, -S}, {normBottom[0], normBottom[1], normBottom[2]}},
-            {{ S, -S, -S}, {normBottom[0], normBottom[1], normBottom[2]}},
-            {{ S, -S,  S}, {normBottom[0], normBottom[1], normBottom[2]}},
-            {{-S, -S,  S}, {normBottom[0], normBottom[1], normBottom[2]}},
+            {{-S, -S, -S}, {normBottom[0], normBottom[1], normBottom[2]}, {0.0f, 0.0f}},
+            {{ S, -S, -S}, {normBottom[0], normBottom[1], normBottom[2]}, {1.0f, 0.0f}},
+            {{ S, -S,  S}, {normBottom[0], normBottom[1], normBottom[2]}, {1.0f, 1.0f}},
+            {{-S, -S,  S}, {normBottom[0], normBottom[1], normBottom[2]}, {0.0f, 1.0f}},
             // Left (X = -S)
-            {{-S,  S,  S}, {normLeft[0],   normLeft[1],   normLeft[2]}},
-            {{-S,  S, -S}, {normLeft[0],   normLeft[1],   normLeft[2]}},
-            {{-S, -S, -S}, {normLeft[0],   normLeft[1],   normLeft[2]}},
-            {{-S, -S,  S}, {normLeft[0],   normLeft[1],   normLeft[2]}},
+            {{-S,  S,  S}, {normLeft[0],   normLeft[1],   normLeft[2]},   {0.0f, 0.0f}},
+            {{-S,  S, -S}, {normLeft[0],   normLeft[1],   normLeft[2]},   {1.0f, 0.0f}},
+            {{-S, -S, -S}, {normLeft[0],   normLeft[1],   normLeft[2]},   {1.0f, 1.0f}},
+            {{-S, -S,  S}, {normLeft[0],   normLeft[1],   normLeft[2]},   {0.0f, 1.0f}},
             // Right (X = +S)
-            {{ S,  S, -S}, {normRight[0],  normRight[1],  normRight[2]}},
-            {{ S,  S,  S}, {normRight[0],  normRight[1],  normRight[2]}},
-            {{ S, -S,  S}, {normRight[0],  normRight[1],  normRight[2]}},
-            {{ S, -S, -S}, {normRight[0],  normRight[1],  normRight[2]}},
+            {{ S,  S, -S}, {normRight[0],  normRight[1],  normRight[2]},  {0.0f, 0.0f}},
+            {{ S,  S,  S}, {normRight[0],  normRight[1],  normRight[2]},  {1.0f, 0.0f}},
+            {{ S, -S,  S}, {normRight[0],  normRight[1],  normRight[2]},  {1.0f, 1.0f}},
+            {{ S, -S, -S}, {normRight[0],  normRight[1],  normRight[2]},  {0.0f, 1.0f}},
         };
         Mesh.Indices = {
              0,  1,  2,   0,  2,  3,  // Front

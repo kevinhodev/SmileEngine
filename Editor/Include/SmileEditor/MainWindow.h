@@ -1,7 +1,5 @@
 #pragma once
 
-// Janela principal do editor: viewport central + docks placeholder + menu bar.
-
 #include <QMainWindow>
 #include <QPointer>
 
@@ -13,6 +11,7 @@ namespace SmileEditor {
 
 class ViewportWidget;
 class AboutDialog;
+class MaterialEditorPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -24,6 +23,7 @@ public:
 private slots:
     void OnHelpAbout();
     void OnMSAAChanged(int sampleCount);
+    void OnRendererReady();
     void UpdateStats();
 
 private:
@@ -36,6 +36,8 @@ private:
 
     QLabel*               StatsLabel  = nullptr;
     QTextEdit*            LogOutput   = nullptr;
+
+    MaterialEditorPanel*  MatPanel    = nullptr;
 };
 
 } // namespace SmileEditor

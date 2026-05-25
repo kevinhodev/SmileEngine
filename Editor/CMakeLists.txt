@@ -7,6 +7,8 @@ set(EDITOR_HEADERS
     Include/SmileEditor/ViewportWidget.h
     Include/SmileEditor/DarkTheme.h
     Include/SmileEditor/AboutDialog.h
+    Include/SmileEditor/TextureSlotWidget.h
+    Include/SmileEditor/MaterialEditorPanel.h
 )
 
 set(EDITOR_SOURCES
@@ -15,6 +17,8 @@ set(EDITOR_SOURCES
     Source/ViewportWidget.cpp
     Source/DarkTheme.cpp
     Source/AboutDialog.cpp
+    Source/TextureSlotWidget.cpp
+    Source/MaterialEditorPanel.cpp
 )
 
 # WIN32 = subsistema Windows (sem console preto atras)

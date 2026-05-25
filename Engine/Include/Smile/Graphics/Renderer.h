@@ -8,10 +8,14 @@
 #include "Smile/Graphics/SwapChain.h"
 #include "Smile/Graphics/PipelineState.h"
 #include "Smile/Graphics/Camera.h"
+#include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/Texture.h"
+#include "Smile/Graphics/Material.h"
 
 namespace Smile {
+
     struct alignas(256) FrameConstants {
-        Mat44 MVP;             // 64 bytes — row_major float4x4 no HLSL
+        Mat44 MVP;             // 64 bytes
         Mat44 ModelMatrix;     // 64 bytes
         Vec4  CameraPosition;  // 16 bytes
         Vec4  LightPosition;   // 16 bytes
@@ -35,6 +39,10 @@ namespace Smile {
         void UpdateCamera(const CameraInput& input, f32 dt);
         void RenderFrame();
 
+        // Replaces the active material for subsequent RenderFrame() calls.
+        // Pass nullptr to revert to the built-in default material.
+        void SetMaterial(FMaterial* Mat);
+
         bool IsInitialized() const { return Initialized; }
 
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
@@ -42,20 +50,34 @@ namespace Smile {
         f32  GetYaw()       const { return Camera.GetYaw(); }
         u32  GetMSAA()      const { return MSAASampleCount; }
 
-        const FD3D12Device& GetDevice() const { return Device; }
+        const FD3D12Device& GetDevice()  const { return Device; }
+        FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
+        FTextureSRVHeap&    GetSRVHeap()       { return SRVHeap; }
 
     private:
         void CreateGeometryBuffers();
         void CreateDepthBuffer();
         void CreateConstantBuffer();
         void CreateMSAABuffers();
+        void CreateDefaultMaterial();
 
         FD3D12Device   Device;
         FCommandQueue  CommandQueue;
         FSwapChain     SwapChain;
         FPipelineState PipelineState;
+        FTextureSRVHeap SRVHeap;
 
         FCamera Camera;
+
+        // Default 1×1 fallback textures (always valid)
+        FTexture TexDefaultWhite;
+        FTexture TexDefaultNormal;
+        FTexture TexDefaultBlack;
+        FTexture TexDefaultGrey;
+        FTexture TexDefaultORM;
+
+        FMaterial  DefaultMaterial;
+        FMaterial* ActiveMaterial = nullptr;
 
         ComPtr<ID3D12Resource>   VertexBuffer;
         D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
@@ -76,4 +98,5 @@ namespace Smile {
 
         bool Initialized = false;
     };
-} 
+
+} // namespace Smile

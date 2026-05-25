@@ -1,6 +1,7 @@
 #include "SmileEditor/MainWindow.h"
 #include "SmileEditor/AboutDialog.h"
 #include "SmileEditor/ViewportWidget.h"
+#include "SmileEditor/MaterialEditorPanel.h"
 
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
@@ -48,7 +49,8 @@ MainWindow::MainWindow(QWidget* parent)
             .arg(color, tag, QString::fromUtf8(msg.data(), static_cast<qsizetype>(msg.size()))));
     });
 
-    connect(Viewport, &ViewportWidget::FrameReady, this, &MainWindow::UpdateStats);
+    connect(Viewport, &ViewportWidget::FrameReady,          this, &MainWindow::UpdateStats);
+    connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
 
     statusBar()->showMessage(tr("Pronto"));
 }
@@ -86,6 +88,17 @@ void MainWindow::CreateMenuBar() {
 }
 
 void MainWindow::CreateDocks() {
+    // --- Right dock: Material Editor ---
+    auto* matDock = new QDockWidget(tr("Material"), this);
+    matDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+    matDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+
+    MatPanel = new MaterialEditorPanel(matDock);
+    matDock->setWidget(MatPanel);
+    addDockWidget(Qt::RightDockWidgetArea, matDock);
+    matDock->setMinimumWidth(240);
+
+    // --- Bottom dock: Console ---
     auto* consoleDock = new QDockWidget(tr("Console"), this);
     consoleDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
 
@@ -109,6 +122,11 @@ void MainWindow::CreateDocks() {
     consoleDock->setWidget(container);
     addDockWidget(Qt::BottomDockWidgetArea, consoleDock);
     consoleDock->resize(consoleDock->width(), 180);
+}
+
+void MainWindow::OnRendererReady() {
+    if (MatPanel && Viewport && Viewport->GetRenderer())
+        MatPanel->InitializeWithRenderer(Viewport->GetRenderer());
 }
 
 void MainWindow::OnMSAAChanged(int sampleCount) {
