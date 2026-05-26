@@ -53,12 +53,18 @@ struct PSInput {
 #define USE_BURLEY_DIFFUSE 1
 #define USE_EXACT_SMITH 1
 
+// --- POM tunables ---
+#define POM_MAX_STEPS         64
+#define POM_MIN_STEPS         16
+#define POM_SECANT_STEPS      4
+#define POM_FADE_START        5.0f    // meters: full POM until this distance
+#define POM_FADE_RANGE        10.0f   // meters: fade interval to flat
+#define POM_VIEWZ_CLAMP       0.30f   // anti-stretch in grazing angles
+
 // --- PBR Functions ---
 
 static const float PI = 3.14159265359f;
 
-// Analytical approximation of GGX directional albedo E(u, v) and Fresnel-weighted albedo E_f(u, v)
-// From Unreal Engine 5 (derived from Kulla-Conty 2017 and Fdez-Aguera 2019)
 void GGXEnergyLookup(float Roughness, float NoV, out float E, out float Ef) {
     float r = Roughness;
     float c = NoV;
@@ -66,8 +72,6 @@ void GGXEnergyLookup(float Roughness, float NoV, out float E, out float Ef) {
     Ef = pow(1.0f - c, 5.0f) * pow(2.36651f * pow(c, 4.7703f * r) + 0.0387332f, r);
 }
 
-// Disney/Burley Diffuse BRDF
-// [Burley 2012, "Physically-Based Shading at Disney"]
 float3 Diffuse_Burley(float3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH) {
     float FD90 = 0.5f + 2.0f * VoH * VoH * Roughness;
     float FdV = 1.0f + (FD90 - 1.0f) * pow(1.0f - NoV, 5.0f);
@@ -101,16 +105,19 @@ float3 F_Schlick(float3 SpecularColor, float VoH) {
     return f90 * Fc + (1.0f - Fc) * SpecularColor;
 }
 
-// --- Tangent space from screen-space derivatives (no per-vertex tangent needed) ---
-// Same technique used in CryEngine for meshes without pre-computed tangents.
-float3 PerturbNormal(float3 N, float3 WorldPos, float2 UV, float3 SampledNormal) {
-    float3 dPdx = ddx(WorldPos);
-    float3 dPdy = ddy(WorldPos);
-    float2 dUVdx = ddx(UV);
-    float2 dUVdy = ddy(UV);
+// --- Interleaved-gradient noise (Jorge Jimenez). Deterministic per-pixel jitter. ---
+float IGN(float2 screenPos) {
+    return frac(52.9829189f * frac(dot(screenPos, float2(0.06711056f, 0.00583715f))));
+}
 
+// --- Tangent space from screen-space derivatives ---
+// NOTE: caller must pass derivatives of the ORIGINAL (un-displaced) UV.
+float3 PerturbNormal(float3 N, float3 dPdx, float3 dPdy, float2 dUVdx, float2 dUVdy, float3 SampledNormal) {
     float3 T = normalize(dUVdy.y * dPdx - dUVdx.y * dPdy);
     float3 B = normalize(dUVdx.x * dPdy - dUVdy.x * dPdx);
+    // Gram-Schmidt orthonormalize against N for stability
+    T = normalize(T - N * dot(N, T));
+    B = normalize(cross(N, T)); // re-derive B to guarantee orthonormality
     float3x3 TBN = float3x3(T, B, N);
 
     // Remap [0,1] -> [-1,1], scale XY by NormalStrength
@@ -121,36 +128,61 @@ float3 PerturbNormal(float3 N, float3 WorldPos, float2 UV, float3 SampledNormal)
 }
 
 // --- Parallax Occlusion Mapping ---
-float2 ParallaxOcclusionMapping(float2 UV, float3 WorldPos, float3 N, out float OutDepth, out float2 OutdUVdx, out float2 OutdUVdy) {
+// Returns displaced UV. Outputs ray depth and original UV derivatives so the
+// caller can SampleGrad all material textures with consistent footprints.
+float2 ParallaxOcclusionMapping(
+    float2 UV, float3 WorldPos, float3 N, float2 ScreenPos,
+    out float OutDepth, out float2 OutdUVdx, out float2 OutdUVdy, out float OutFade)
+{
     float3 V = normalize(CameraPosition.xyz - WorldPos);
 
-    // Build view direction in tangent space via derivatives
-    float3 dPdx = ddx(WorldPos);
-    float3 dPdy = ddy(WorldPos);
+    float3 dPdx  = ddx(WorldPos);
+    float3 dPdy  = ddy(WorldPos);
     float2 dUVdx = ddx(UV);
     float2 dUVdy = ddy(UV);
+    OutdUVdx = dUVdx;
+    OutdUVdy = dUVdy;
+
+    // --- Distance fade. Skip POM entirely beyond fade range. ---
+    float dist = length(CameraPosition.xyz - WorldPos);
+    float fade = saturate(1.0f - (dist - POM_FADE_START) / POM_FADE_RANGE);
+    OutFade = fade;
+    if (fade <= 0.001f) {
+        OutDepth = 0.0f;
+        return UV;
+    }
+    float effectiveHeightScale = HeightScale * fade;
+
+    // --- Build view in tangent space (same convention as PerturbNormal) ---
     float3 T = normalize(dUVdy.y * dPdx - dUVdx.y * dPdy);
     float3 B = normalize(dUVdx.x * dPdy - dUVdy.x * dPdx);
+    T = normalize(T - N * dot(N, T));
+    B = normalize(cross(N, T));
 
     float3 viewTS;
     viewTS.x = dot(V, T);
     viewTS.y = dot(V, B);
     viewTS.z = dot(V, N);
 
-    const int MaxSteps = 64;
-    const int MinSteps = 8;
-    // viewTS.z is dot(V, N) - 1.0 directly facing, 0.0 at grazing angle
-    int NumSteps = (int)lerp(MaxSteps, MinSteps, saturate(viewTS.z));
+    // Anti-stretch clamp: prevents UVDelta from exploding at grazing angles.
+    viewTS.z = max(viewTS.z, POM_VIEWZ_CLAMP);
 
-    float  LayerDepth  = 1.0f / NumSteps;
-    float2 UVDelta     = (viewTS.xy / (viewTS.z + 0.001f)) * HeightScale / NumSteps;
+    // Smoother step ramp than linear-in-NoV
+    int NumSteps = (int)lerp((float)POM_MAX_STEPS, (float)POM_MIN_STEPS, sqrt(saturate(viewTS.z)));
 
-    float  CurrentDepth = 0.0f;
-    float2 CurrentUV    = UV;
+    float  LayerDepth = 1.0f / NumSteps;
+    float2 UVDelta    = (viewTS.xy / viewTS.z) * effectiveHeightScale / NumSteps;
+
+    // --- Jitter the start of the raymarch to dither layer transitions. ---
+    // Without this, all pixels start at depth 0 and snap to the same layer,
+    // producing the visible parallel banding lines.
+    float jitter = IGN(ScreenPos);
+    float  CurrentDepth = -LayerDepth * jitter;
+    float2 CurrentUV    = UV - UVDelta * jitter;
     float  SampledDepth = HeightMap.SampleGrad(MaterialSampler, CurrentUV, dUVdx, dUVdy).r;
 
     [loop]
-    for (int i = 0; i < MaxSteps; ++i) {
+    for (int i = 0; i < POM_MAX_STEPS; ++i) {
         if (i >= NumSteps) break;
         if (CurrentDepth >= SampledDepth) break;
         CurrentUV    += UVDelta;
@@ -158,20 +190,15 @@ float2 ParallaxOcclusionMapping(float2 UV, float3 WorldPos, float3 N, out float 
         CurrentDepth += LayerDepth;
     }
 
-    // Refine with Iterative Secant (Regula Falsi) method
-    float2 PrevUV = CurrentUV - UVDelta;
-    float  PrevDepth = CurrentDepth - LayerDepth;
-    
-    float  Height0 = HeightMap.SampleGrad(MaterialSampler, PrevUV, dUVdx, dUVdy).r;
-    float  Error0 = PrevDepth - Height0;
-    float  Error1 = CurrentDepth - SampledDepth;
+    // --- Iterative secant refinement ---
+    float2 PrevUV     = CurrentUV - UVDelta;
+    float  PrevDepth  = CurrentDepth - LayerDepth;
+    float  Height0    = HeightMap.SampleGrad(MaterialSampler, PrevUV, dUVdx, dUVdy).r;
+    float  Error0     = PrevDepth - Height0;
+    float  Error1     = CurrentDepth - SampledDepth;
 
-    float2 FinalUV = CurrentUV;
-    float  FinalRayDepth = CurrentDepth;
-    
-    #ifndef POM_SECANT_STEPS
-    #define POM_SECANT_STEPS 3
-    #endif
+    float2 FinalUV    = CurrentUV;
+    float  FinalDepth = CurrentDepth;
 
     [unroll(POM_SECANT_STEPS)]
     for (int j = 0; j < POM_SECANT_STEPS; ++j) {
@@ -179,30 +206,29 @@ float2 ParallaxOcclusionMapping(float2 UV, float3 WorldPos, float3 N, out float 
         float w = (abs(denom) > 1e-5f) ? (Error0 / denom) : 0.5f;
         w = saturate(w);
 
-        FinalUV = lerp(PrevUV, CurrentUV, w);
-        FinalRayDepth = lerp(PrevDepth, CurrentDepth, w);
+        FinalUV    = lerp(PrevUV, CurrentUV, w);
+        FinalDepth = lerp(PrevDepth, CurrentDepth, w);
         float RefinedHeight = HeightMap.SampleGrad(MaterialSampler, FinalUV, dUVdx, dUVdy).r;
-        float NewError = FinalRayDepth - RefinedHeight;
+        float NewError = FinalDepth - RefinedHeight;
 
         if (NewError > 0.0f) {
-            PrevUV = FinalUV;
-            PrevDepth = FinalRayDepth;
-            Error0 = NewError;
+            PrevUV = FinalUV;  PrevDepth = FinalDepth;  Error0 = NewError;
         } else {
-            CurrentUV = FinalUV;
-            CurrentDepth = FinalRayDepth;
-            Error1 = NewError;
+            CurrentUV = FinalUV;  CurrentDepth = FinalDepth;  Error1 = NewError;
         }
     }
-    
-    OutDepth = FinalRayDepth;
-    OutdUVdx = dUVdx;
-    OutdUVdy = dUVdy;
+
+    OutDepth = FinalDepth;
     return FinalUV;
 }
 
 // --- Parallax Self Shadowing ---
-float ParallaxSelfShadow(float2 UV, float3 L, float3 WorldPos, float3 N, float InitialDepth, float2 dUVdx, float2 dUVdy) {
+// Soft-shadow accumulator: at each step keep the *largest* occluder seen so far,
+// scaled by remaining ray length. Far smoother than the original hard break.
+float ParallaxSelfShadow(float2 UV, float3 L, float3 WorldPos, float3 N,
+                         float InitialDepth, float2 dUVdx, float2 dUVdy, float Fade)
+{
+    if (Fade <= 0.001f) return 1.0f;
     float NoL = dot(N, L);
     if (NoL <= 0.0f) return 0.0f;
 
@@ -210,94 +236,81 @@ float ParallaxSelfShadow(float2 UV, float3 L, float3 WorldPos, float3 N, float I
     float3 dPdy = ddy(WorldPos);
     float3 T = normalize(dUVdy.y * dPdx - dUVdx.y * dPdy);
     float3 B = normalize(dUVdx.x * dPdy - dUVdy.x * dPdx);
+    T = normalize(T - N * dot(N, T));
+    B = normalize(cross(N, T));
 
     float3 lightTS;
     lightTS.x = dot(L, T);
     lightTS.y = dot(L, B);
     lightTS.z = dot(L, N);
-
     if (lightTS.z <= 0.0f) return 0.0f;
 
+    lightTS.z = max(lightTS.z, POM_VIEWZ_CLAMP);
+
     const int ShadowSteps = 8;
-    float StepSize = InitialDepth / ShadowSteps;
-    float2 UVDelta = (lightTS.xy / (lightTS.z + 0.001f)) * HeightScale * StepSize;
+    float StepSize  = InitialDepth / ShadowSteps;
+    float2 UVDelta  = (lightTS.xy / lightTS.z) * HeightScale * Fade * StepSize;
 
     float CurrentDepth = InitialDepth;
-    float2 CurrentUV = UV;
-    float SampledDepth = HeightMap.SampleGrad(MaterialSampler, CurrentUV, dUVdx, dUVdy).r;
-
-    float ShadowFactor = 1.0f;
-    const float ShadowHardness = 1.0f; // Controls shadow soft transition
-    float DistTravelled = 0.001f;
-
-    float PrevDepth = CurrentDepth;
-    float PrevSampledDepth = SampledDepth;
+    float2 CurrentUV   = UV;
+    float Occlusion    = 0.0f;
 
     [unroll(8)]
-    for (int i = 0; i < ShadowSteps; ++i) {
-        PrevDepth = CurrentDepth;
-        PrevSampledDepth = SampledDepth;
-
+    for (int i = 1; i <= ShadowSteps; ++i) {
         CurrentDepth -= StepSize;
-        CurrentUV += UVDelta;
-        SampledDepth = HeightMap.SampleGrad(MaterialSampler, CurrentUV, dUVdx, dUVdy).r;
-        DistTravelled += StepSize;
-
-        if (SampledDepth < CurrentDepth) {
-            float den = (SampledDepth - PrevSampledDepth) - (CurrentDepth - PrevDepth);
-            float t = (abs(den) > 1e-5f) ? (PrevDepth - PrevSampledDepth) / den : 0.5f;
-
-            float InterpDepth = lerp(PrevDepth, CurrentDepth, t);
-            float InterpHeight = lerp(PrevSampledDepth, SampledDepth, t);
-
-            float CurrentShadow = (InterpDepth - InterpHeight) * ShadowHardness / (DistTravelled - StepSize * (1.0f - t));
-            ShadowFactor = min(ShadowFactor, 1.0f - saturate(CurrentShadow));
-            
-            break;
-        }
+        CurrentUV    += UVDelta;
+        float SampledDepth = HeightMap.SampleGrad(MaterialSampler, CurrentUV, dUVdx, dUVdy).r;
+        // Penumbra-style accumulation: bigger gap → more occlusion, fade with step index
+        float pen = (CurrentDepth - SampledDepth) * (1.0f - (float)i / ShadowSteps) * 8.0f;
+        Occlusion = max(Occlusion, pen);
     }
-
-    return ShadowFactor;
+    return 1.0f - saturate(Occlusion);
 }
-
 // --- PS Output Structure for Depth Modification ---
 struct PSOutput {
     float4 color : SV_TARGET;
     float  depth : SV_Depth;
 };
 
-// --- Main ---
-
 PSOutput main(PSInput input) {
     PSOutput output;
-    float2 UV = input.uv;
-    float POMDepth = 0.0f;
-    float2 POMdUVdx = 0;
-    float2 POMdUVdy = 0;
+    float2 UV          = input.uv;
+    float  POMDepth    = 0.0f;
+    float2 POMdUVdx    = ddx(input.uv);   // original UV derivatives (used by all material samples)
+    float2 POMdUVdy    = ddy(input.uv);
+    float  POMFade     = 0.0f;
+    float3 GeoN        = normalize(input.worldNormal);
 
-    // Parallax offset (applied before all other texture reads)
     if (HasHeightMap) {
-        UV = ParallaxOcclusionMapping(UV, input.worldPos, normalize(input.worldNormal), POMDepth, POMdUVdx, POMdUVdy);
+        UV = ParallaxOcclusionMapping(
+            input.uv, input.worldPos, GeoN, input.pos.xy,
+            POMDepth, POMdUVdx, POMdUVdy, POMFade);
     }
+
+    // --- All material samples below use SampleGrad with ORIGINAL UV derivatives.
+    //     This is critical: post-POM UV is discontinuous between adjacent pixels,
+    //     so implicit derivatives would pick random mips and trash the filtering.
 
     // --- Base Color ---
     float3 BaseColor = BaseColorFactor.rgb;
     if (HasAlbedoMap)
-        BaseColor *= AlbedoMap.Sample(MaterialSampler, UV).rgb;
+        BaseColor *= AlbedoMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy).rgb;
 
     // --- Normal ---
-    float3 N = normalize(input.worldNormal);
+    float3 N = GeoN;
     if (HasNormalMap) {
-        float3 SampledNormal = NormalMap.Sample(MaterialSampler, UV).rgb;
-        N = PerturbNormal(N, input.worldPos, UV, SampledNormal);
+        float3 SampledNormal = NormalMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy).rgb;
+        float3 dPdx = ddx(input.worldPos);
+        float3 dPdy = ddy(input.worldPos);
+        // Pass ORIGINAL UV derivatives so the TBN is continuous across the surface.
+        N = PerturbNormal(GeoN, dPdx, dPdy, ddx(input.uv), ddy(input.uv), SampledNormal);
     }
 
-    // --- Metallic / Roughness (glTF: R=Occlusion, G=Roughness, B=Metallic in some tools;
-    //     we use R=Metallic, G=Roughness per Substance Painter default export) ---
+    // --- Metallic / Roughness ---
     float Metallic  = MetallicFactor;
     float Roughness = RoughnessFactor;
     if (HasMetallicRoughnessMap) {
-        float2 MR  = MetallicRoughnessMap.Sample(MaterialSampler, UV).rg;
+        float2 MR = MetallicRoughnessMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy).rg;
         Metallic  *= MR.r;
         Roughness *= MR.g;
     }
@@ -313,7 +326,7 @@ PSOutput main(PSInput input) {
     // --- Ambient Occlusion ---
     float AO = 1.0f;
     if (HasAOMap)
-        AO = lerp(1.0f, AOMap.Sample(MaterialSampler, UV).r, AOStrength);
+        AO = lerp(1.0f, AOMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy).r, AOStrength);
 
     // --- Lighting vectors ---
     float3 V       = normalize(CameraPosition.xyz - input.worldPos);
@@ -323,7 +336,7 @@ PSOutput main(PSInput input) {
     float3 L       = LightV / Dist;
     float3 H       = normalize(L + V);
 
-    float Atten    = 1.0f / (Dist * Dist + 1.0f);
+    float Atten = 1.0f / (Dist * Dist + 1.0f);
 
     float NoL = saturate(dot(N, L));
     float NoV = saturate(dot(N, V));
@@ -340,15 +353,15 @@ PSOutput main(PSInput input) {
     // --- Direct lighting (Cook-Torrance BRDF) ---
     float3 Lighting = float3(0.0f, 0.0f, 0.0f);
     if (NoL > 0.0f) {
-        float  D       = D_GGX(a2, NoH);
+        float D = D_GGX(a2, NoH);
         #if USE_EXACT_SMITH
-            float  Vis     = Vis_SmithJointExact(a2, NoV, NoL);
+            float Vis = Vis_SmithJointExact(a2, NoV, NoL);
         #else
-            float  Vis     = Vis_SmithJointApprox(a2, NoV, NoL);
+            float Vis = Vis_SmithJointApprox(a2, NoV, NoL);
         #endif
-        float3 F       = F_Schlick(SpecularColor, VoH);
+        float3 F = F_Schlick(SpecularColor, VoH);
         float3 Specular = (D * Vis) * F;
-        
+
         float3 Kd = 1.0f - Metallic;
 
         #if USE_KULLA_CONTY_ENERGY_CONSERVATION
@@ -378,8 +391,9 @@ PSOutput main(PSInput input) {
         #endif
 
         float POMShadow = 1.0f;
-        if (HasHeightMap) {
-            POMShadow = ParallaxSelfShadow(UV, L, input.worldPos, normalize(input.worldNormal), POMDepth, POMdUVdx, POMdUVdy);
+        if (HasHeightMap && POMFade > 0.001f) {
+            POMShadow = ParallaxSelfShadow(UV, L, input.worldPos, GeoN,
+                                           POMDepth, POMdUVdx, POMdUVdy, POMFade);
         }
 
         float3 Radiance = LightColor.rgb * LightColor.w * Atten * POMShadow;
@@ -393,7 +407,7 @@ PSOutput main(PSInput input) {
     // --- Emissive ---
     float3 Emissive = EmissiveFactor.rgb * EmissiveStrength;
     if (HasEmissiveMap)
-        Emissive *= EmissiveMap.Sample(MaterialSampler, UV).rgb;
+        Emissive *= EmissiveMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy).rgb;
 
     // --- Compose and tonemap ---
     float3 FinalColor = Lighting + Ambient + Emissive;
@@ -402,11 +416,12 @@ PSOutput main(PSInput input) {
 
     output.color = float4(FinalColor, 1.0f);
 
-    // --- Pixel Depth Offset (PDO) Calculation ---
-    if (HasHeightMap) {
-        // Displace the world position into the surface along the geometric normal
-        float3 WorldPosDisplaced = input.worldPos - normalize(input.worldNormal) * (POMDepth * HeightScale);
-        // Project the displaced world position to homogeneous clip space
+    // --- Pixel Depth Offset (PDO) ---
+    // Only write modified depth when POM is actually contributing. Beyond the fade
+    // range the surface is flat and SV_Depth is a pure waste (and disables Hi-Z).
+    if (HasHeightMap && POMFade > 0.001f) {
+        float effectiveScale = HeightScale * POMFade;
+        float3 WorldPosDisplaced = input.worldPos - GeoN * (POMDepth * effectiveScale);
         float4 PosClip = mul(float4(WorldPosDisplaced, 1.0f), MVP);
         // Perform perspective divide to get correct NDC depth [0, 1]
         output.depth = PosClip.z / PosClip.w;
