@@ -49,9 +49,31 @@ struct PSInput {
     float2 uv          : TEXCOORD2;
 };
 
+#define USE_KULLA_CONTY_ENERGY_CONSERVATION 1
+#define USE_BURLEY_DIFFUSE 1
+#define USE_EXACT_SMITH 1
+
 // --- PBR Functions ---
 
 static const float PI = 3.14159265359f;
+
+// Analytical approximation of GGX directional albedo E(u, v) and Fresnel-weighted albedo E_f(u, v)
+// From Unreal Engine 5 (derived from Kulla-Conty 2017 and Fdez-Aguera 2019)
+void GGXEnergyLookup(float Roughness, float NoV, out float E, out float Ef) {
+    float r = Roughness;
+    float c = NoV;
+    E = 1.0f - saturate(pow(r, c / (r + 1e-5f)) * ((r * c + 0.0266916f) / (0.466495f + c)));
+    Ef = pow(1.0f - c, 5.0f) * pow(2.36651f * pow(c, 4.7703f * r) + 0.0387332f, r);
+}
+
+// Disney/Burley Diffuse BRDF
+// [Burley 2012, "Physically-Based Shading at Disney"]
+float3 Diffuse_Burley(float3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH) {
+    float FD90 = 0.5f + 2.0f * VoH * VoH * Roughness;
+    float FdV = 1.0f + (FD90 - 1.0f) * pow(1.0f - NoV, 5.0f);
+    float FdL = 1.0f + (FD90 - 1.0f) * pow(1.0f - NoL, 5.0f);
+    return DiffuseColor * ((1.0f / PI) * FdV * FdL);
+}
 
 float D_GGX(float a2, float NoH) {
     float d = (NoH * a2 - NoH) * NoH + 1.0f;
@@ -62,6 +84,14 @@ float Vis_SmithJointApprox(float a2, float NoV, float NoL) {
     float a = sqrt(a2);
     float Vis_SmithV = NoL * (NoV * (1.0f - a) + a);
     float Vis_SmithL = NoV * (NoL * (1.0f - a) + a);
+    return 0.5f / (Vis_SmithV + Vis_SmithL + 1e-5f);
+}
+
+// Exact Smith Joint visibility function
+// [Smith 1967, Heitz 2014]
+float Vis_SmithJointExact(float a2, float NoV, float NoL) {
+    float Vis_SmithV = NoL * sqrt(NoV * (NoV - NoV * a2) + a2);
+    float Vis_SmithL = NoV * sqrt(NoL * (NoL - NoL * a2) + a2);
     return 0.5f / (Vis_SmithV + Vis_SmithL + 1e-5f);
 }
 
@@ -311,11 +341,41 @@ PSOutput main(PSInput input) {
     float3 Lighting = float3(0.0f, 0.0f, 0.0f);
     if (NoL > 0.0f) {
         float  D       = D_GGX(a2, NoH);
-        float  Vis     = Vis_SmithJointApprox(a2, NoV, NoL);
+        #if USE_EXACT_SMITH
+            float  Vis     = Vis_SmithJointExact(a2, NoV, NoL);
+        #else
+            float  Vis     = Vis_SmithJointApprox(a2, NoV, NoL);
+        #endif
         float3 F       = F_Schlick(SpecularColor, VoH);
         float3 Specular = (D * Vis) * F;
-        float3 Kd      = (1.0f - F) * (1.0f - Metallic);
-        float3 Diffuse  = (Kd * DiffuseColor) / PI;
+        
+        float3 Kd = 1.0f - Metallic;
+
+        #if USE_KULLA_CONTY_ENERGY_CONSERVATION
+            // 1. Specular multiple-scattering energy compensation (Kulla-Conty)
+            float E_val, Ef_val;
+            GGXEnergyLookup(Roughness, NoV, E_val, Ef_val);
+
+            // W = 1.0 + F0 * (1 - E) / E
+            float3 W = 1.0f + SpecularColor * ((1.0f - E_val) / max(E_val, 1e-5f));
+            Specular *= W;
+
+            // 2. Diffuse-Specular energy preservation (split-sum)
+            float3 F90 = saturate(50.0f * SpecularColor.g);
+            float3 E_spec = W * (E_val * SpecularColor + Ef_val * (F90 - SpecularColor));
+            
+            // Attenuate diffuse by the energy reflected/scattered specularly
+            float DiffuseScale = 1.0f - saturate(dot(E_spec, float3(0.2126f, 0.7152f, 0.0722f))); // Luminance
+            Kd *= DiffuseScale;
+        #else
+            Kd *= (1.0f - F); // original ad-hoc conservation
+        #endif
+
+        #if USE_BURLEY_DIFFUSE
+            float3 Diffuse = Kd * Diffuse_Burley(DiffuseColor, Roughness, NoV, NoL, VoH);
+        #else
+            float3 Diffuse = (Kd * DiffuseColor) / PI;
+        #endif
 
         float POMShadow = 1.0f;
         if (HasHeightMap) {
