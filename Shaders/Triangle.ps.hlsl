@@ -119,7 +119,7 @@ float2 ParallaxOcclusionMapping(float2 UV, float3 WorldPos, float3 N, out float 
     float2 CurrentUV    = UV;
     float  SampledDepth = HeightMap.SampleGrad(MaterialSampler, CurrentUV, dUVdx, dUVdy).r;
 
-    [unroll(32)]
+    [loop]
     for (int i = 0; i < MaxSteps; ++i) {
         if (i >= NumSteps) break;
         if (CurrentDepth >= SampledDepth) break;
@@ -200,17 +200,30 @@ float ParallaxSelfShadow(float2 UV, float3 L, float3 WorldPos, float3 N, float I
     const float ShadowHardness = 1.0f; // Controls shadow soft transition
     float DistTravelled = 0.001f;
 
+    float PrevDepth = CurrentDepth;
+    float PrevSampledDepth = SampledDepth;
+
     [unroll(8)]
     for (int i = 0; i < ShadowSteps; ++i) {
+        PrevDepth = CurrentDepth;
+        PrevSampledDepth = SampledDepth;
+
         CurrentDepth -= StepSize;
         CurrentUV += UVDelta;
         SampledDepth = HeightMap.SampleGrad(MaterialSampler, CurrentUV, dUVdx, dUVdy).r;
         DistTravelled += StepSize;
 
         if (SampledDepth < CurrentDepth) {
-            float CurrentShadow = (CurrentDepth - SampledDepth) * ShadowHardness / DistTravelled;
+            float den = (SampledDepth - PrevSampledDepth) - (CurrentDepth - PrevDepth);
+            float t = (abs(den) > 1e-5f) ? (PrevDepth - PrevSampledDepth) / den : 0.5f;
+
+            float InterpDepth = lerp(PrevDepth, CurrentDepth, t);
+            float InterpHeight = lerp(PrevSampledDepth, SampledDepth, t);
+
+            float CurrentShadow = (InterpDepth - InterpHeight) * ShadowHardness / (DistTravelled - StepSize * (1.0f - t));
             ShadowFactor = min(ShadowFactor, 1.0f - saturate(CurrentShadow));
-            if (ShadowFactor <= 0.0f) break;
+            
+            break;
         }
     }
 
