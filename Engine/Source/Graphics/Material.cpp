@@ -2,23 +2,19 @@
 #include "Smile/Core/HResultCheck.h"
 
 namespace Smile {
+    void FMaterial::Finalize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
+        SRVTableStart = _SRVHeap.Allocate(kMaterialTextureSlots);
 
-    void FMaterial::Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap) {
-        // --- Allocate kMaterialTextureSlots contiguous SRV slots ---
-        SRVTableStart = SRVHeap.Allocate(kMaterialTextureSlots);
-
-        // Helper: write the SRV for a slot, using the given texture or skip if null
-        // (default textures should always be assigned before Finalize)
-        auto WriteSRV = [&](FTexture* Tex, u32 LocalSlot) {
-            if (!Tex || !Tex->IsValid()) return;
-            D3D12_SHADER_RESOURCE_VIEW_DESC Desc{};
-            Desc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
-            Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
-            Desc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            Desc.Texture2D.MipLevels           = 1;
-            Desc.Texture2D.MostDetailedMip     = 0;
-            Desc.Texture2D.ResourceMinLODClamp = 0.0f;
-            SRVHeap.CreateSRV(Device, Tex->Resource(), Desc, SRVTableStart + LocalSlot);
+        auto WriteSRV = [&](FTexture* _Texture, u32 _LocalSlot) {
+            if (!_Texture || !_Texture->IsValid()) return;
+            D3D12_SHADER_RESOURCE_VIEW_DESC ResourceDesc{};
+            ResourceDesc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
+            ResourceDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+            ResourceDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            ResourceDesc.Texture2D.MipLevels           = 1;
+            ResourceDesc.Texture2D.MostDetailedMip     = 0;
+            ResourceDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+            _SRVHeap.CreateSRV(_Device, _Texture->Resource(), ResourceDesc, SRVTableStart + _LocalSlot);
         };
 
         WriteSRV(Albedo,            0);
@@ -28,7 +24,6 @@ namespace Smile {
         WriteSRV(Height,            4);
         WriteSRV(Emissive,          5);
 
-        // --- Sync flags into constants ---
         Constants.HasAlbedoMap            = (Albedo            && Albedo->IsValid())            ? 1 : 0;
         Constants.HasNormalMap            = (Normal            && Normal->IsValid())            ? 1 : 0;
         Constants.HasMetallicRoughnessMap = (MetallicRoughness && MetallicRoughness->IsValid()) ? 1 : 0;
@@ -36,23 +31,22 @@ namespace Smile {
         Constants.HasHeightMap            = (Height            && Height->IsValid())            ? 1 : 0;
         Constants.HasEmissiveMap          = (Emissive          && Emissive->IsValid())          ? 1 : 0;
 
-        // --- Create constant buffer (256-byte aligned, persistently mapped) ---
         D3D12_HEAP_PROPERTIES UploadHeap{};
         UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
 
-        D3D12_RESOURCE_DESC BufDesc{};
-        BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        BufDesc.Width            = sizeof(MaterialConstants);
-        BufDesc.Height           = 1;
-        BufDesc.DepthOrArraySize = 1;
-        BufDesc.MipLevels        = 1;
-        BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        BufDesc.SampleDesc       = { 1, 0 };
-        BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        BufDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_RESOURCE_DESC BufferDesc{};
+        BufferDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        BufferDesc.Width            = sizeof(MaterialConstants);
+        BufferDesc.Height           = 1;
+        BufferDesc.DepthOrArraySize = 1;
+        BufferDesc.MipLevels        = 1;
+        BufferDesc.Format           = DXGI_FORMAT_UNKNOWN;
+        BufferDesc.SampleDesc       = { 1, 0 };
+        BufferDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        BufferDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
 
-        SMILE_HR(Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
+        SMILE_HR(_Device->CreateCommittedResource(
+            &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufferDesc,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
             IID_PPV_ARGS(&CBV)));
 
@@ -65,9 +59,9 @@ namespace Smile {
             memcpy(MappedCBV, &Constants, sizeof(MaterialConstants));
     }
 
-    void FMaterial::UpdateTextureSlot(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
-                                       u32 LocalSlot, FTexture* Tex) {
-        if (!Tex || !Tex->IsValid() || LocalSlot >= kMaterialTextureSlots) return;
+    void FMaterial::UpdateTextureSlot(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                       u32 _LocalSlot, FTexture* _Texture) {
+        if (!_Texture || !_Texture->IsValid() || _LocalSlot >= kMaterialTextureSlots) return;
         D3D12_SHADER_RESOURCE_VIEW_DESC Desc{};
         Desc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
         Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -75,15 +69,11 @@ namespace Smile {
         Desc.Texture2D.MipLevels           = 1;
         Desc.Texture2D.MostDetailedMip     = 0;
         Desc.Texture2D.ResourceMinLODClamp = 0.0f;
-        SRVHeap.CreateSRV(Device, Tex->Resource(), Desc, SRVTableStart + LocalSlot);
+        _SRVHeap.CreateSRV(_Device, _Texture->Resource(), Desc, SRVTableStart + _LocalSlot);
     }
 
-    void FMaterial::Bind(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap) const {
-        // Root parameter 1: CBV b1 — material constants
-        Cmd->SetGraphicsRootConstantBufferView(1, CBV->GetGPUVirtualAddress());
-
-        // Root parameter 2: Descriptor table t0–t5 — textures
-        Cmd->SetGraphicsRootDescriptorTable(2, SRVHeap.GpuHandle(SRVTableStart));
+    void FMaterial::Bind(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap) const {
+        _CommandList->SetGraphicsRootConstantBufferView(1, CBV->GetGPUVirtualAddress());
+        _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(SRVTableStart));
     }
-
-} // namespace Smile
+} 

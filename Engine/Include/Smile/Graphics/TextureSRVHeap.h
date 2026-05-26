@@ -5,16 +5,12 @@
 #include <wrl/client.h>
 
 namespace Smile {
-
-    // Shader-visible CBV/SRV/UAV heap with a simple linear allocator.
-    // Each FTexture and FMaterial allocates slots here at load time.
     class FTextureSRVHeap {
     public:
         static constexpr u32 kCapacity = 512;
 
         void Initialize(ID3D12Device* Device);
 
-        // Returns the descriptor slot index. Never freed — assumes static lifetime for now.
         u32  Allocate(u32 Count = 1);
 
         void CreateSRV(ID3D12Device* Device, ID3D12Resource* Resource,
@@ -30,5 +26,4 @@ namespace Smile {
         u32 HandleSize  = 0;
         u32 NextSlot    = 0;
     };
-
-} // namespace Smile
+} 

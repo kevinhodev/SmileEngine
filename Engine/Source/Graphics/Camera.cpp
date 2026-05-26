@@ -10,29 +10,29 @@ namespace Smile {
         f32 YawRad   = Yaw   * ToRad;
         f32 PitchRad = Pitch * ToRad;
 
-        Vec3 forward = {
+        Vec3 Forward = {
             std::cos(PitchRad) * std::sin(YawRad),
             std::sin(PitchRad),
             std::cos(PitchRad) * std::cos(YawRad)
         };
 
-        Vec3 right = { std::cos(YawRad), 0.0f, -std::sin(YawRad) };
+        Vec3 Right = { std::cos(YawRad), 0.0f, -std::sin(YawRad) };
 
         constexpr f32 kBaseSpeed = 3.0f;
-        f32 speed = kBaseSpeed * _Input.Speed * _DeltaTime;
-        Position += (forward * _Input.Move.Z
-               +  right   * _Input.Move.X
-               +  Vec3::UnitY() * _Input.Move.Y) * speed;
+        f32 Speed = kBaseSpeed * _Input.Speed * _DeltaTime;
+        Position += (Forward * _Input.Move.Z
+               +  Right   * _Input.Move.X
+               +  Vec3::UnitY() * _Input.Move.Y) * Speed;
     }
 
     Mat44 FCamera::GetViewMatrix() const {
         f32 PitchRad = Pitch * ToRad;
         f32 YawRad   = Yaw   * ToRad;
-        Vec3 forward = {
+        Vec3 Forward = {
             std::cos(PitchRad) * std::sin(YawRad),
             std::sin(PitchRad),
             std::cos(PitchRad) * std::cos(YawRad)
         };
-        return Mat44::LookAtLH(Position, Position + forward, Vec3::UnitY());
+        return Mat44::LookAtLH(Position, Position + Forward, Vec3::UnitY());
     }
 }

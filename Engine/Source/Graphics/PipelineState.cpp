@@ -30,30 +30,22 @@ namespace Smile {
     }
 
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        // --- Root parameters ---
-        // [0] CBV b0 — FrameConstants  (MVP, camera, light) — changes every frame
-        // [1] CBV b1 — MaterialConstants (factors, flags)   — changes per material
-        // [2] Descriptor Table — SRV t0-t5 (6 texture slots) — changes per material
-
         D3D12_ROOT_PARAMETER RootParams[3]{};
 
-        // b0 — FrameConstants
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].Descriptor.RegisterSpace  = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
 
-        // b1 — MaterialConstants
         RootParams[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[1].Descriptor.ShaderRegister = 1;
         RootParams[1].Descriptor.RegisterSpace  = 0;
         RootParams[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // Descriptor table: t0-t5 (6 SRV slots)
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SRVRange.NumDescriptors                    = 6;
-        SRVRange.BaseShaderRegister                = 0; // t0
+        SRVRange.BaseShaderRegister                = 0; 
         SRVRange.RegisterSpace                     = 0;
         SRVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -62,7 +54,6 @@ namespace Smile {
         RootParams[2].DescriptorTable.pDescriptorRanges   = &SRVRange;
         RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // --- Static sampler s0: anisotropic wrap (like UE's default material sampler) ---
         D3D12_STATIC_SAMPLER_DESC StaticSampler{};
         StaticSampler.Filter           = D3D12_FILTER_ANISOTROPIC;
         StaticSampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -73,7 +64,7 @@ namespace Smile {
         StaticSampler.BorderColor      = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
         StaticSampler.MinLOD           = 0.0f;
         StaticSampler.MaxLOD           = D3D12_FLOAT32_MAX;
-        StaticSampler.ShaderRegister   = 0; // s0
+        StaticSampler.ShaderRegister   = 0; 
         StaticSampler.RegisterSpace    = 0;
         StaticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
@@ -110,7 +101,6 @@ namespace Smile {
         auto VertexShaderBlob = LoadShaderBlob("Triangle.vs_6_0.cso");
         auto PixelShaderBlob  = LoadShaderBlob("Triangle.ps_6_0.cso");
 
-        // Vertex layout: Position(12) + Normal(12) + TexCoord(8) = 32 bytes stride
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
             { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },

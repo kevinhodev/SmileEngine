@@ -5,7 +5,6 @@
 #include <cstring>
 
 namespace Smile {
-
     Renderer::Renderer() = default;
     Renderer::~Renderer() { Shutdown(); }
 
@@ -37,10 +36,6 @@ namespace Smile {
         LogInfo("Renderer inicializado");
     }
 
-    // ---------------------------------------------------------------------------
-    // Default material — neutral grey PBR, all 6 texture slots bound to 1×1 fallbacks
-    // so the descriptor table is always fully populated (D3D12 validation requirement).
-    // ---------------------------------------------------------------------------
     void Renderer::CreateDefaultMaterial() {
         auto* Dev = Device.Native();
 
@@ -50,7 +45,6 @@ namespace Smile {
         TexDefaultGrey   = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::MidGrey);
         TexDefaultBlack  = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::Black);
 
-        // Assign fallback textures — HasXxxMap = 0, so shader uses factor constants
         DefaultMaterial.Albedo            = &TexDefaultWhite;
         DefaultMaterial.Normal            = &TexDefaultNormal;
         DefaultMaterial.MetallicRoughness = &TexDefaultORM;
@@ -58,7 +52,6 @@ namespace Smile {
         DefaultMaterial.Height            = &TexDefaultGrey;
         DefaultMaterial.Emissive          = &TexDefaultBlack;
 
-        // Default values: slightly warm grey plastic
         DefaultMaterial.Constants.BaseColorFactor  = { 0.8f, 0.8f, 0.8f, 1.0f };
         DefaultMaterial.Constants.MetallicFactor   = 0.0f;
         DefaultMaterial.Constants.RoughnessFactor  = 0.5f;
@@ -67,13 +60,10 @@ namespace Smile {
         ActiveMaterial = &DefaultMaterial;
     }
 
-    void Renderer::SetMaterial(FMaterial* Mat) {
-        ActiveMaterial = (Mat && Mat->IsFinalized()) ? Mat : &DefaultMaterial;
+    void Renderer::SetMaterial(FMaterial* _Material) {
+        ActiveMaterial = (_Material && _Material->IsFinalized()) ? _Material : &DefaultMaterial;
     }
 
-    // ---------------------------------------------------------------------------
-    // Geometry buffers
-    // ---------------------------------------------------------------------------
     void Renderer::CreateGeometryBuffers() {
         FMesh CubeMesh = FMesh::CreateCube();
 
@@ -123,7 +113,7 @@ namespace Smile {
     }
 
     void Renderer::CreateConstantBuffer() {
-        constexpr UINT CBSize = sizeof(FrameConstants); // already aligned(256)
+        constexpr UINT CBSize = sizeof(FrameConstants); 
 
         D3D12_HEAP_PROPERTIES HeapProps{};
         HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -254,13 +244,9 @@ namespace Smile {
         Camera.Update(_Input, _DeltaTime);
     }
 
-    // ---------------------------------------------------------------------------
-    // RenderFrame
-    // ---------------------------------------------------------------------------
     void Renderer::RenderFrame() {
         if (!Initialized) return;
 
-        // Update frame constants
         f32 Aspect = SwapChain.GetWidth() > 0 && SwapChain.GetHeight() > 0
                      ? static_cast<f32>(SwapChain.GetWidth()) / static_cast<f32>(SwapChain.GetHeight())
                      : 1.0f;
@@ -269,15 +255,15 @@ namespace Smile {
         Mat44 View       = Camera.GetViewMatrix();
         Mat44 Projection = Mat44::PerspectiveFovLH(60.0f * ToRad, Aspect, 0.1f, 100.0f);
 
-        MappedCB->MVP           = Model * View * Projection;
-        MappedCB->ModelMatrix   = Model;
-        Vec3 CamPos             = Camera.GetPosition();
-        MappedCB->CameraPosition = { CamPos.X, CamPos.Y, CamPos.Z, 1.0f };
+        MappedCB->MVP            = Model * View * Projection;
+        MappedCB->ModelMatrix    = Model;
+        Vec3 CameraPosition      = Camera.GetPosition();
+        MappedCB->CameraPosition = { CameraPosition.X, CameraPosition.Y, CameraPosition.Z, 1.0f };
         MappedCB->LightPosition  = { 2.0f, 2.0f, -2.0f, 1.0f };
         MappedCB->LightColor     = { 1.0f, 0.9f, 0.8f, 8.0f };
 
         CommandQueue.ResetForRecording();
-        auto* Cmd = CommandQueue.List();
+        auto* CommandList = CommandQueue.List();
 
         const bool UseMSAA = MSAASampleCount > 1 && MSAAColorBuffer;
         const FLOAT ClearColor[] = { 0.094f, 0.094f, 0.117f, 1.0f };
@@ -285,22 +271,22 @@ namespace Smile {
 
         if (UseMSAA) {
             auto MSAARTV = MSAARTVHeap.CpuHandle(0);
-            Cmd->OMSetRenderTargets(1, &MSAARTV, FALSE, &DSV);
-            Cmd->ClearRenderTargetView(MSAARTV, ClearColor, 0, nullptr);
-            Cmd->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            CommandList->OMSetRenderTargets(1, &MSAARTV, FALSE, &DSV);
+            CommandList->ClearRenderTargetView(MSAARTV, ClearColor, 0, nullptr);
+            CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         } else {
-            D3D12_RESOURCE_BARRIER Barrier{};
-            Barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
-            Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-            Barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            Cmd->ResourceBarrier(1, &Barrier);
+            D3D12_RESOURCE_BARRIER ResourceBarrier{};
+            ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            ResourceBarrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
+            ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            CommandList->ResourceBarrier(1, &ResourceBarrier);
 
             auto RTV = SwapChain.CurrentRTV();
-            Cmd->OMSetRenderTargets(1, &RTV, FALSE, &DSV);
-            Cmd->ClearRenderTargetView(RTV, ClearColor, 0, nullptr);
-            Cmd->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            CommandList->OMSetRenderTargets(1, &RTV, FALSE, &DSV);
+            CommandList->ClearRenderTargetView(RTV, ClearColor, 0, nullptr);
+            CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         }
 
         D3D12_VIEWPORT Viewport{};
@@ -313,62 +299,59 @@ namespace Smile {
         ScissorRect.right  = static_cast<LONG>(SwapChain.GetWidth());
         ScissorRect.bottom = static_cast<LONG>(SwapChain.GetHeight());
 
-        Cmd->RSSetViewports(1, &Viewport);
-        Cmd->RSSetScissorRects(1, &ScissorRect);
+        CommandList->RSSetViewports(1, &Viewport);
+        CommandList->RSSetScissorRects(1, &ScissorRect);
 
-        // D3D12 requires SetDescriptorHeaps BEFORE any root table binding
-        ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
-        Cmd->SetDescriptorHeaps(_countof(Heaps), Heaps);
+        ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
+        CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
 
-        Cmd->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-        Cmd->SetPipelineState(PipelineState.PSO());
+        CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+        CommandList->SetPipelineState(PipelineState.PSO());
 
-        // Root parameter 0: FrameConstants (b0)
-        Cmd->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
+        CommandList->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
 
-        // Root parameters 1 and 2: MaterialConstants (b1) + texture table (t0-t5)
-        ActiveMaterial->Bind(Cmd, SRVHeap);
+        ActiveMaterial->Bind(CommandList, SRVHeap);
 
-        Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        Cmd->IASetVertexBuffers(0, 1, &VertexBufferView);
-        Cmd->IASetIndexBuffer(&IndexBufferView);
-        Cmd->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+        CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
+        CommandList->IASetIndexBuffer(&IndexBufferView);
+        CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
 
         if (UseMSAA) {
-            D3D12_RESOURCE_BARRIER Barriers[2]{};
-            Barriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barriers[0].Transition.pResource   = MSAAColorBuffer.Get();
-            Barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            Barriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
-            Barriers[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barriers[1].Transition.pResource   = SwapChain.CurrentBackBuffer();
-            Barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-            Barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_DEST;
-            Cmd->ResourceBarrier(2, Barriers);
+            D3D12_RESOURCE_BARRIER ResourceBarriers[2]{};
+            ResourceBarriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            ResourceBarriers[0].Transition.pResource   = MSAAColorBuffer.Get();
+            ResourceBarriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ResourceBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            ResourceBarriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+            ResourceBarriers[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            ResourceBarriers[1].Transition.pResource   = SwapChain.CurrentBackBuffer();
+            ResourceBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ResourceBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            ResourceBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+            CommandList->ResourceBarrier(2, ResourceBarriers);
 
-            Cmd->ResolveSubresource(SwapChain.CurrentBackBuffer(), 0,
+            CommandList->ResolveSubresource(SwapChain.CurrentBackBuffer(), 0,
                                     MSAAColorBuffer.Get(), 0, FSwapChain::kFormat);
 
-            Barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
-            Barriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            Barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
-            Barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-            Cmd->ResourceBarrier(2, Barriers);
+            ResourceBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+            ResourceBarriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            ResourceBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+            ResourceBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+            CommandList->ResourceBarrier(2, ResourceBarriers);
         } else {
-            D3D12_RESOURCE_BARRIER Barrier{};
-            Barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
-            Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            Barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-            Cmd->ResourceBarrier(1, &Barrier);
+            D3D12_RESOURCE_BARRIER ResourceBarrier{};
+            ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            ResourceBarrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
+            ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+            CommandList->ResourceBarrier(1, &ResourceBarrier);
         }
 
-        SMILE_HR(Cmd->Close());
-        ID3D12CommandList* Lists[] = { Cmd };
-        CommandQueue.ExecuteAndSync(Lists, 1);
+        SMILE_HR(CommandList->Close());
+        ID3D12CommandList* CommandLists[] = { CommandList };
+        CommandQueue.ExecuteAndSync(CommandLists, 1);
         SwapChain.Present();
     }
 
@@ -383,5 +366,4 @@ namespace Smile {
         Initialized = false;
         LogInfo("Renderer encerrado");
     }
-
-} // namespace Smile
+} 

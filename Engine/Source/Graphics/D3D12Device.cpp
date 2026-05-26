@@ -31,11 +31,11 @@ namespace Smile {
                                                         DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
                                                         IID_PPV_ARGS(&Adapter)));
 
-        DXGI_ADAPTER_DESC1 desc{};
-        Adapter->GetDesc1(&desc);
+        DXGI_ADAPTER_DESC1 AdapterDesc{};
+        Adapter->GetDesc1(&AdapterDesc);
 
-        AdapterDescription          = desc.Description;
-        AdapterDedicatedVideoMemory = static_cast<u64>(desc.DedicatedVideoMemory);
+        AdapterDescription          = AdapterDesc.Description;
+        AdapterDedicatedVideoMemory = static_cast<u64>(AdapterDesc.DedicatedVideoMemory);
 
         SMILE_HR(D3D12CreateDevice(Adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&Device)));
 

@@ -13,7 +13,6 @@
 #include "Smile/Graphics/Material.h"
 
 namespace Smile {
-
     struct alignas(256) FrameConstants {
         Mat44 MVP;             // 64 bytes
         Mat44 ModelMatrix;     // 64 bytes
@@ -30,18 +29,16 @@ namespace Smile {
         Renderer(const Renderer&)            = delete;
         Renderer& operator=(const Renderer&) = delete;
 
-        void Initialize(HWND hwnd, u32 width, u32 height);
+        void Initialize(HWND hWnd, u32 Width, u32 Height);
         void Shutdown();
 
-        void Resize(u32 width, u32 height);
-        void SetMSAA(u32 sampleCount);
+        void Resize(u32 Width, u32 Height);
+        void SetMSAA(u32 SampleCount);
 
-        void UpdateCamera(const CameraInput& input, f32 dt);
+        void UpdateCamera(const CameraInput& Input, f32 DeltaTime);
         void RenderFrame();
 
-        // Replaces the active material for subsequent RenderFrame() calls.
-        // Pass nullptr to revert to the built-in default material.
-        void SetMaterial(FMaterial* Mat);
+        void SetMaterial(FMaterial* Material);
 
         bool IsInitialized() const { return Initialized; }
 
@@ -61,15 +58,14 @@ namespace Smile {
         void CreateMSAABuffers();
         void CreateDefaultMaterial();
 
-        FD3D12Device   Device;
-        FCommandQueue  CommandQueue;
-        FSwapChain     SwapChain;
-        FPipelineState PipelineState;
+        FD3D12Device    Device;
+        FCommandQueue   CommandQueue;
+        FSwapChain      SwapChain;
+        FPipelineState  PipelineState;
         FTextureSRVHeap SRVHeap;
 
         FCamera Camera;
 
-        // Default 1×1 fallback textures (always valid)
         FTexture TexDefaultWhite;
         FTexture TexDefaultNormal;
         FTexture TexDefaultBlack;
@@ -86,17 +82,16 @@ namespace Smile {
         D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
         u32                      IndexCount = 0;
 
-        ComPtr<ID3D12Resource>    DepthBuffer;
-        FDescriptorHeap           DSVHeap;
+        ComPtr<ID3D12Resource>   DepthBuffer;
+        FDescriptorHeap          DSVHeap;
 
         ComPtr<ID3D12Resource>   ConstantBuffer;
         FrameConstants*          MappedCB = nullptr;
 
-        ComPtr<ID3D12Resource>    MSAAColorBuffer;
-        FDescriptorHeap           MSAARTVHeap;
-        u32                       MSAASampleCount = 1;
+        ComPtr<ID3D12Resource>   MSAAColorBuffer;
+        FDescriptorHeap          MSAARTVHeap;
+        u32                      MSAASampleCount = 1;
 
         bool Initialized = false;
     };
-
-} // namespace Smile
+} 

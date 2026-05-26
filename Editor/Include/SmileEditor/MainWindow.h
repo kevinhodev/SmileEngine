@@ -37,7 +37,7 @@ private:
     QLabel*               StatsLabel  = nullptr;
     QTextEdit*            LogOutput   = nullptr;
 
-    MaterialEditorPanel*  MatPanel    = nullptr;
+    MaterialEditorPanel*  MaterialPanel    = nullptr;
 };
 
 } // namespace SmileEditor

@@ -3,12 +3,12 @@
 
 namespace Smile {
     void FCommandQueue::Initialize(ID3D12Device* _Device, D3D12_COMMAND_LIST_TYPE _Type) {
-        D3D12_COMMAND_QUEUE_DESC queueDesc{};
-        queueDesc.Type     = _Type;
-        queueDesc.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
-        queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
-        queueDesc.NodeMask = 0;
-        SMILE_HR(_Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&CommandQueue)));
+        D3D12_COMMAND_QUEUE_DESC CommandQueueDesc{};
+        CommandQueueDesc.Type     = _Type;
+        CommandQueueDesc.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        CommandQueueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+        CommandQueueDesc.NodeMask = 0;
+        SMILE_HR(_Device->CreateCommandQueue(&CommandQueueDesc, IID_PPV_ARGS(&CommandQueue)));
 
         SMILE_HR(_Device->CreateCommandAllocator(_Type, IID_PPV_ARGS(&CommandAllocator)));
 

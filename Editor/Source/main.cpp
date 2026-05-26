@@ -1,8 +1,5 @@
-// Ponto de entrada do SmileEditor.
-
 #include "SmileEditor/DarkTheme.h"
 #include "SmileEditor/MainWindow.h"
-
 #include <QApplication>
 
 int main(int argc, char* argv[]) {
