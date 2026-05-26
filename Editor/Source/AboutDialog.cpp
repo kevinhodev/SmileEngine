@@ -53,54 +53,15 @@ namespace SmileEditor {
         setWindowTitle(tr("Sobre o SmileEngine"));
         setModal(true);
         setFixedSize(620, 500);
-
-        setStyleSheet(QString(R"(
-            QDialog { background: %1; }
-            QLabel { color: %5; }
-            QTabWidget::pane {
-                background: %2;
-                border: 1px solid %4;
-                border-top: 2px solid %7;
-            }
-            QTabBar::tab {
-                background: %3;
-                color: %6;
-                padding: 7px 18px;
-                border: 1px solid %4;
-                border-bottom: none;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected { background: %7; color: white; }
-            QTabBar::tab:hover:!selected { background: %4; color: %5; }
-            QTextBrowser {
-                background: %2;
-                color: %5;
-                border: none;
-                padding: 14px;
-                selection-background-color: %7;
-                selection-color: white;
-            }
-            QPushButton {
-                background: %3;
-                color: %5;
-                padding: 7px 22px;
-                border: 1px solid %4;
-                border-radius: 2px;
-                min-width: 80px;
-            }
-            QPushButton:hover  { background: %7; border-color: %7; color: white; }
-            QPushButton:pressed { background: %8; border-color: %8; }
-        )")
-            .arg(kBgWindow,    kBgPanel,    kBgPanelAlt, kBorder,
-                 kText,        kTextMuted,  kAccent,     kAccentDark));
+        setObjectName("AboutDialog");
 
         auto* RootLayout = new QHBoxLayout(this);
         RootLayout->setContentsMargins(0, 0, 0, 0);
         RootLayout->setSpacing(0);
 
         auto* AccentStrip = new QFrame(this);
+        AccentStrip->setObjectName("AboutAccentStrip");
         AccentStrip->setFixedWidth(4);
-        AccentStrip->setStyleSheet(QStringLiteral("background: %1;").arg(kAccent));
         RootLayout->addWidget(AccentStrip);
 
         auto* ContentLayout = new QVBoxLayout();
@@ -148,19 +109,17 @@ namespace SmileEditor {
 
     QWidget* AboutDialog::BuildHeader() {
         auto* Header = new QWidget(this);
+        Header->setObjectName("AboutHeader");
         Header->setFixedHeight(96);
-        Header->setStyleSheet(QStringLiteral("background: %1;").arg(kBgPanelAlt));
 
         auto* Layout = new QHBoxLayout(Header);
         Layout->setContentsMargins(20, 14, 20, 14);
         Layout->setSpacing(18);
 
         auto* Logo = new QLabel(QStringLiteral("S"), Header);
+        Logo->setObjectName("AboutLogo");
         Logo->setFixedSize(64, 64);
         Logo->setAlignment(Qt::AlignCenter);
-        Logo->setStyleSheet(QString(
-            "background: %1; color: white; font-size: 40px; font-weight: bold;"
-            "border-radius: 6px;").arg(kAccent));
         Layout->addWidget(Logo);
 
         auto* TextBox = new QVBoxLayout();
@@ -168,11 +127,11 @@ namespace SmileEditor {
         TextBox->setSpacing(2);
 
         auto* Title = new QLabel(QStringLiteral("SmileEngine"), Header);
-        Title->setStyleSheet(QString("color: %1; font-size: 24px; font-weight: 600;").arg(kText));
+        Title->setObjectName("AboutTitle");
         TextBox->addWidget(Title);
 
         auto* Subtitle = new QLabel(tr("Game Engine"), Header);
-        Subtitle->setStyleSheet(QString("color: %1; font-size: 11px; letter-spacing: 1px;").arg(kTextMuted));
+        Subtitle->setObjectName("AboutSubtitle");
         TextBox->addWidget(Subtitle);
 
         auto* Version = new QLabel(
@@ -180,9 +139,7 @@ namespace SmileEditor {
                 .arg(QStringLiteral(SMILE_VERSION_STRING))
                 .arg(QStringLiteral(SMILE_BUILD_NUMBER)),
             Header);
-        Version->setStyleSheet(QString(
-            "color: %1; font-family: 'Consolas', 'Cascadia Mono', monospace; font-size: 10px;"
-        ).arg(kTextMuted));
+        Version->setObjectName("AboutVersion");
         TextBox->addWidget(Version);
 
         Layout->addLayout(TextBox);

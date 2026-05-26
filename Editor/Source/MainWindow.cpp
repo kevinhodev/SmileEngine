@@ -2,6 +2,7 @@
 #include "SmileEditor/AboutDialog.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/MaterialEditorPanel.h"
+#include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Graphics/D3D12Device.h"
@@ -16,6 +17,10 @@
 #include <QTextEdit>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QFileSystemWatcher>
+#include <QTimer>
+#include <QApplication>
+
 
 namespace SmileEditor {
     MainWindow::MainWindow(QWidget* _Parent)
@@ -48,6 +53,20 @@ namespace SmileEditor {
 
         connect(Viewport, &ViewportWidget::FrameReady,          this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
+
+        StylesheetWatcher = new QFileSystemWatcher(this);
+        const QStringList QSSFiles = GetStylesheetFiles();
+        StylesheetWatcher->addPaths(QSSFiles);
+
+        connect(StylesheetWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString& _Path) {
+            LoadAndApplyStylesheets(*static_cast<QApplication*>(QCoreApplication::instance()));
+
+            QTimer::singleShot(100, this, [this, _Path]() {
+                if (StylesheetWatcher && !StylesheetWatcher->files().contains(_Path)) {
+                    StylesheetWatcher->addPath(_Path);
+                }
+            });
+        });
 
         statusBar()->showMessage(tr("Pronto"));
     }
@@ -103,14 +122,14 @@ namespace SmileEditor {
         Layout->setSpacing(4);
 
         StatsLabel = new QLabel(tr("Aguardando renderer..."), Container);
+        StatsLabel->setObjectName("StatsLabel");
         StatsLabel->setFont(QFont("Consolas", 9));
-        StatsLabel->setStyleSheet("color: #a0c8ff;");
         Layout->addWidget(StatsLabel);
 
         LogOutput = new QTextEdit(Container);
+        LogOutput->setObjectName("LogOutput");
         LogOutput->setReadOnly(true);
         LogOutput->setFont(QFont("Consolas", 9));
-        LogOutput->setStyleSheet("background: #1a1a1f; color: #c8c8c8; border: none;");
         LogOutput->document()->setMaximumBlockCount(500);
         Layout->addWidget(LogOutput);
 

@@ -1,0 +1,80 @@
+QDialog#AboutDialog {
+    background: #1E1E1E;
+}
+QDialog#AboutDialog QLabel {
+    color: #DCDCDC;
+}
+QDialog#AboutDialog QTabWidget::pane {
+    background: #252526;
+    border: 1px solid #3C3C3C;
+    border-top: 2px solid #0E639C;
+}
+QDialog#AboutDialog QTabBar::tab {
+    background: #2D2D30;
+    color: #9A9A9A;
+    padding: 7px 18px;
+    border: 1px solid #3C3C3C;
+    border-bottom: none;
+    margin-right: 2px;
+}
+QDialog#AboutDialog QTabBar::tab:selected {
+    background: #0E639C;
+    color: white;
+}
+QDialog#AboutDialog QTabBar::tab:hover:!selected {
+    background: #3C3C3C;
+    color: #DCDCDC;
+}
+QDialog#AboutDialog QTextBrowser {
+    background: #252526;
+    color: #DCDCDC;
+    border: none;
+    padding: 14px;
+    selection-background-color: #0E639C;
+    selection-color: white;
+}
+QDialog#AboutDialog QPushButton {
+    background: #2D2D30;
+    color: #DCDCDC;
+    padding: 7px 22px;
+    border: 1px solid #3C3C3C;
+    border-radius: 2px;
+    min-width: 80px;
+}
+QDialog#AboutDialog QPushButton:hover {
+    background: #0E639C;
+    border-color: #0E639C;
+    color: white;
+}
+QDialog#AboutDialog QPushButton:pressed {
+    background: #094771;
+    border-color: #094771;
+}
+QFrame#AboutAccentStrip {
+    background: #0E639C;
+}
+QWidget#AboutHeader {
+    background: #2D2D30;
+}
+QLabel#AboutLogo {
+    background: #0E639C;
+    color: white;
+    font-size: 40px;
+    font-weight: bold;
+    border-radius: 6px;
+}
+QLabel#AboutTitle {
+    color: #DCDCDC;
+    font-size: 24px;
+    font-weight: 600;
+}
+QLabel#AboutSubtitle {
+    color: #9A9A9A;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+QLabel#AboutVersion {
+    color: #9A9A9A;
+    font-family: 'Consolas', 'Cascadia Mono', monospace;
+    font-size: 10px;
+}

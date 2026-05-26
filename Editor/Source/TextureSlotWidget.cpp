@@ -11,24 +11,17 @@ namespace SmileEditor {
         : QWidget(_Parent)
     {
         setFixedHeight(64);
-
-        setStyleSheet(
-            "TextureSlotWidget {"
-            "  background: #2a2a2e;"
-            "  border: 1px solid #3c3c42;"
-            "  border-radius: 4px;"
-            "}"
-        );
+        setAttribute(Qt::WA_StyledBackground, true);
+        setObjectName("TextureSlotWidget");
 
         auto* RootLayout = new QHBoxLayout(this);
         RootLayout->setContentsMargins(6, 6, 6, 6);
         RootLayout->setSpacing(8);
 
         ThumbnailLabel = new QLabel(this);
+        ThumbnailLabel->setObjectName("SlotThumbnail");
         ThumbnailLabel->setFixedSize(48, 48);
         ThumbnailLabel->setAlignment(Qt::AlignCenter);
-        ThumbnailLabel->setStyleSheet(
-            "border: 1px solid #555560; border-radius: 2px; background: transparent;");
         ClearThumbnail();
         RootLayout->addWidget(ThumbnailLabel);
 
@@ -37,11 +30,11 @@ namespace SmileEditor {
         RightColumn->setSpacing(2);
 
         auto* NameLabel = new QLabel(_SlotName, this);
-        NameLabel->setStyleSheet("color: #dcdcdc; font-weight: bold; font-size: 11px; border: none; background: transparent;");
+        NameLabel->setObjectName("SlotNameLabel");
         RightColumn->addWidget(NameLabel);
 
         PathLabel = new QLabel(tr("(nenhuma)"), this);
-        PathLabel->setStyleSheet("color: #888; font-size: 10px; border: none; background: transparent;");
+        PathLabel->setObjectName("SlotPathLabel");
         PathLabel->setMaximumWidth(160);
         RightColumn->addWidget(PathLabel);
 
@@ -50,18 +43,13 @@ namespace SmileEditor {
         BtnRow->setSpacing(4);
 
         BrowseBtn = new QPushButton(tr("Browse..."), this);
+        BrowseBtn->setObjectName("SlotBrowseBtn");
         BrowseBtn->setFixedHeight(20);
-        BrowseBtn->setStyleSheet(
-            "QPushButton { background: #3c3c3c; color: #dcdcdc; border: 1px solid #555; border-radius: 3px; font-size: 10px; padding: 0 6px; }"
-            "QPushButton:hover { background: #4c4c4c; }"
-            "QPushButton:pressed { background: #0e639c; }");
 
         ClearBtn = new QPushButton(tr("✕"), this);
+        ClearBtn->setObjectName("SlotClearBtn");
         ClearBtn->setFixedSize(20, 20);
         ClearBtn->setToolTip(tr("Remover textura"));
-        ClearBtn->setStyleSheet(
-            "QPushButton { background: #3c3c3c; color: #aaa; border: 1px solid #555; border-radius: 3px; font-size: 11px; }"
-            "QPushButton:hover { background: #8b1a1a; color: #fff; }");
 
         BtnRow->addWidget(BrowseBtn);
         BtnRow->addWidget(ClearBtn);

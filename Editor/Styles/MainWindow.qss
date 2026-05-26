@@ -1,0 +1,8 @@
+QLabel#StatsLabel {
+    color: #a0c8ff;
+}
+QTextEdit#LogOutput {
+    background: #1a1a1f;
+    color: #c8c8c8;
+    border: none;
+}

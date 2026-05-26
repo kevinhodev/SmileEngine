@@ -3,8 +3,70 @@
 #include <QPalette>
 #include <QStyleFactory>
 #include <QColor>
+#include <QFile>
+#include <QDir>
+#include <QCoreApplication>
+#include <QDebug>
 
 namespace SmileEditor {
+    QString GetStylesDirectoryPath() {
+#ifdef SMILE_EDITOR_SOURCE_DIR
+        QString SourceDir = QStringLiteral(SMILE_EDITOR_SOURCE_DIR) + "/Styles";
+        if (QDir(SourceDir).exists()) {
+            return SourceDir;
+        }
+#endif
+        return QDir(QCoreApplication::applicationDirPath()).filePath("Editor/Styles");
+    }
+
+    QStringList GetStylesheetFiles() {
+        const QString StylesDir = GetStylesDirectoryPath();
+        return QStringList {
+            StylesDir + "/global.qss",
+            StylesDir + "/MainWindow.qss",
+            StylesDir + "/AboutDialog.qss",
+            StylesDir + "/MaterialEditorPanel.qss",
+            StylesDir + "/TextureSlotWidget.qss"
+        };
+    }
+
+    void LoadAndApplyStylesheets(QApplication& _App) {
+        QString CombinedStyles;
+        const QStringList QSSFiles = GetStylesheetFiles();
+        bool AnyLoaded = false;
+
+        for (const QString& Path : QSSFiles) {
+            QFile File(Path);
+            if (File.open(QFile::ReadOnly | QFile::Text)) {
+                CombinedStyles += "\n/* --- " + QFileInfo(Path).fileName() + " --- */\n";
+                CombinedStyles += File.readAll();
+                AnyLoaded = true;
+            }
+        }
+
+        if (AnyLoaded) {
+            _App.setStyleSheet(CombinedStyles);
+        } else {
+            _App.setStyleSheet(R"(
+                QToolTip {
+                    color: #DCDCDC;
+                    background-color: #252526;
+                    border: 1px solid #3C3C3C;
+                }
+                QMainWindow::separator {
+                    background: #3C3C3C;
+                    width: 1px;
+                    height: 1px;
+                }
+                QDockWidget::title {
+                    background: #2D2D30;
+                    padding: 4px;
+                    border-bottom: 1px solid #3C3C3C;
+                }
+            )");
+        }
+    }
+
     void ApplyDarkTheme(QApplication& _App) {
         _App.setStyle(QStyleFactory::create("Fusion"));
 
@@ -43,22 +105,7 @@ namespace SmileEditor {
 
         _App.setPalette(Palette);
 
-        _App.setStyleSheet(R"(
-            QToolTip {
-                color: #DCDCDC;
-                background-color: #252526;
-                border: 1px solid #3C3C3C;
-            }
-            QMainWindow::separator {
-                background: #3C3C3C;
-                width: 1px;
-                height: 1px;
-            }
-            QDockWidget::title {
-                background: #2D2D30;
-                padding: 4px;
-                border-bottom: 1px solid #3C3C3C;
-            }
-        )");
+        LoadAndApplyStylesheets(_App);
     }
-} 
+}
+ 

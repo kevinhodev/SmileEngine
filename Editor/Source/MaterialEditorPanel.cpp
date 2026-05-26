@@ -38,15 +38,13 @@ namespace SmileEditor {
         RootLayout->setSpacing(0);
 
         auto* Header = new QLabel(tr("Material"), this);
-        Header->setStyleSheet(
-            "background: #252526; color: #dcdcdc; font-weight: bold; font-size: 12px;"
-            "padding: 6px 10px; border-bottom: 1px solid #3c3c42;");
+        Header->setObjectName("MaterialHeader");
         RootLayout->addWidget(Header);
 
         auto* ScrollArea = new QScrollArea(this);
+        ScrollArea->setObjectName("MaterialScrollArea");
         ScrollArea->setWidgetResizable(true);
         ScrollArea->setFrameShape(QFrame::NoFrame);
-        ScrollArea->setStyleSheet("QScrollArea { background: #1e1e1e; border: none; }");
 
         auto* Inner  = new QWidget(ScrollArea);
         auto* Layout = new QVBoxLayout(Inner);
@@ -63,10 +61,7 @@ namespace SmileEditor {
 
     QWidget* MaterialEditorPanel::BuildTexturesSection() {
         auto* TexturesGroup = new QGroupBox(tr("Texturas"), this);
-        TexturesGroup->setStyleSheet(
-            "QGroupBox { color: #a0c8ff; font-size: 11px; font-weight: bold;"
-            "  border: 1px solid #3c3c42; border-radius: 4px; margin-top: 8px; padding-top: 4px; }"
-            "QGroupBox::title { subcontrol-origin: margin; left: 8px; }");
+        TexturesGroup->setObjectName("MaterialTexturesGroup");
 
         auto* Layout = new QVBoxLayout(TexturesGroup);
         Layout->setContentsMargins(4, 8, 4, 4);
@@ -85,107 +80,85 @@ namespace SmileEditor {
     }
 
     QWidget* MaterialEditorPanel::BuildParametersSection() {
-        auto* group = new QGroupBox(tr("Parâmetros PBR"), this);
-        group->setStyleSheet(
-            "QGroupBox { color: #a0c8ff; font-size: 11px; font-weight: bold;"
-            "  border: 1px solid #3c3c42; border-radius: 4px; margin-top: 8px; padding-top: 4px; }"
-            "QGroupBox::title { subcontrol-origin: margin; left: 8px; }");
+        auto* Group = new QGroupBox(tr("Parâmetros PBR"), this);
+        Group->setObjectName("MaterialParametersGroup");
 
-        auto* form = new QFormLayout(group);
-        form->setContentsMargins(4, 8, 4, 4);
-        form->setSpacing(4);
-        form->setLabelAlignment(Qt::AlignRight);
+        auto* FormLayout = new QFormLayout(Group);
+        FormLayout->setContentsMargins(4, 8, 4, 4);
+        FormLayout->setSpacing(4);
+        FormLayout->setLabelAlignment(Qt::AlignRight);
 
-        const QString labelStyle = "color: #aaa; font-size: 10px;";
-        const QString spinStyle  =
-            "QDoubleSpinBox { background: #2d2d30; color: #dcdcdc; border: 1px solid #555;"
-            "  border-radius: 3px; padding: 1px 4px; font-size: 10px; }"
-            "QDoubleSpinBox:focus { border-color: #0e639c; }";
-        const QString btnStyle =
-            "QPushButton { border: 1px solid #555; border-radius: 3px; min-height: 20px; }"
-            "QPushButton:hover { border-color: #0e639c; }";
-
-        auto makeLabel = [&](const char* text) -> QLabel* {
-            auto* l = new QLabel(tr(text), group);
-            l->setStyleSheet(labelStyle);
-            return l;
+        auto MakeLabel = [&](const char* _Text) -> QLabel* {
+            auto* Label = new QLabel(tr(_Text), Group);
+            Label->setObjectName("MaterialParamLabel");
+            return Label;
         };
 
-        auto makeSpinbox = [&](double lo, double hi, double step, double val) -> QDoubleSpinBox* {
-            auto* s = new QDoubleSpinBox(group);
-            s->setRange(lo, hi);
-            s->setSingleStep(step);
-            s->setValue(val);
+        auto MakeSpinbox = [&](double _Min, double _Max, double _Step, double _Value) -> QDoubleSpinBox* {
+            auto* s = new QDoubleSpinBox(Group);
+            s->setObjectName("MaterialSpinBox");
+            s->setRange(_Min, _Max);
+            s->setSingleStep(_Step);
+            s->setValue(_Value);
             s->setDecimals(3);
             s->setFixedWidth(72);
-            s->setStyleSheet(spinStyle);
             return s;
         };
 
-        // --- Cor Base ---
-        BaseColorBtn = new QPushButton(group);
+        BaseColorBtn = new QPushButton(Group);
+        BaseColorBtn->setObjectName("MaterialColorBtn");
         BaseColorBtn->setFixedHeight(22);
-        BaseColorBtn->setStyleSheet(btnStyle);
         UpdateColorButton(BaseColorBtn, BaseColorValue);
-        form->addRow(makeLabel("Cor Base"), BaseColorBtn);
+        FormLayout->addRow(MakeLabel("Cor Base"), BaseColorBtn);
         connect(BaseColorBtn, &QPushButton::clicked, this, &MaterialEditorPanel::OnPickBaseColor);
 
-        // --- Metálico ---
-        MetallicSpin = makeSpinbox(0.0, 1.0, 0.01, 0.0);
-        form->addRow(makeLabel("Metálico"), MetallicSpin);
+        MetallicSpin = MakeSpinbox(0.0, 1.0, 0.01, 0.0);
+        FormLayout->addRow(MakeLabel("Metálico"), MetallicSpin);
         connect(MetallicSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnMetallicChanged);
 
-        // --- Rugosidade ---
-        RoughnessSpin = makeSpinbox(0.0, 1.0, 0.01, 0.5);
-        form->addRow(makeLabel("Rugosidade"), RoughnessSpin);
+        RoughnessSpin = MakeSpinbox(0.0, 1.0, 0.01, 0.5);
+        FormLayout->addRow(MakeLabel("Rugosidade"), RoughnessSpin);
         connect(RoughnessSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnRoughnessChanged);
 
-        // --- Força AO ---
-        AOStrengthSpin = makeSpinbox(0.0, 1.0, 0.01, 1.0);
-        form->addRow(makeLabel("Força AO"), AOStrengthSpin);
+        AOStrengthSpin = MakeSpinbox(0.0, 1.0, 0.01, 1.0);
+        FormLayout->addRow(MakeLabel("Força AO"), AOStrengthSpin);
         connect(AOStrengthSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnAOStrengthChanged);
 
-        // --- Força Normal ---
-        NormalStrSpin = makeSpinbox(0.0, 3.0, 0.05, 1.0);
-        form->addRow(makeLabel("Força Normal"), NormalStrSpin);
+        NormalStrSpin = MakeSpinbox(0.0, 3.0, 0.05, 1.0);
+        FormLayout->addRow(MakeLabel("Força Normal"), NormalStrSpin);
         connect(NormalStrSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnNormalStrengthChanged);
 
-        // --- Normal FlipY (DirectX convention) ---
-        NormalFlipYCheck = new QCheckBox(tr("Normal DirectX (inverter Y)"), group);
-        NormalFlipYCheck->setStyleSheet("color: #aaa; font-size: 10px;");
-        form->addRow(NormalFlipYCheck);
+        NormalFlipYCheck = new QCheckBox(tr("Normal DirectX (inverter Y)"), Group);
+        NormalFlipYCheck->setObjectName("MaterialDirectXCheck");
+        FormLayout->addRow(NormalFlipYCheck);
         connect(NormalFlipYCheck, &QCheckBox::toggled, this, &MaterialEditorPanel::OnNormalFlipYChanged);
 
-        // --- Escala Height ---
-        HeightScaleSpin = makeSpinbox(0.0, 0.2, 0.001, 0.05);
-        form->addRow(makeLabel("Escala Height"), HeightScaleSpin);
+        HeightScaleSpin = MakeSpinbox(0.0, 0.2, 0.001, 0.05);
+        FormLayout->addRow(MakeLabel("Escala Height"), HeightScaleSpin);
         connect(HeightScaleSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnHeightScaleChanged);
 
-        // --- Separador visual ---
-        auto* sep = new QFrame(group);
-        sep->setFrameShape(QFrame::HLine);
-        sep->setStyleSheet("color: #3c3c42;");
-        form->addRow(sep);
+        auto* Separator = new QFrame(Group);
+        Separator->setObjectName("MaterialSeparator");
+        Separator->setFrameShape(QFrame::HLine);
+        FormLayout->addRow(Separator);
 
-        // --- Cor Emissiva ---
-        EmissiveColorBtn = new QPushButton(group);
+        EmissiveColorBtn = new QPushButton(Group);
+        EmissiveColorBtn->setObjectName("MaterialColorBtn");
         EmissiveColorBtn->setFixedHeight(22);
-        EmissiveColorBtn->setStyleSheet(btnStyle);
         UpdateColorButton(EmissiveColorBtn, EmissiveColorValue);
-        form->addRow(makeLabel("Emissivo"), EmissiveColorBtn);
+        FormLayout->addRow(MakeLabel("Emissivo"), EmissiveColorBtn);
         connect(EmissiveColorBtn, &QPushButton::clicked, this, &MaterialEditorPanel::OnPickEmissiveColor);
 
-        // --- Intensidade Emissiva ---
-        EmissiveStrSpin = makeSpinbox(0.0, 20.0, 0.1, 1.0);
-        form->addRow(makeLabel("Intensidade"), EmissiveStrSpin);
+        EmissiveStrSpin = MakeSpinbox(0.0, 20.0, 0.1, 1.0);
+        FormLayout->addRow(MakeLabel("Intensidade"), EmissiveStrSpin);
         connect(EmissiveStrSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnEmissiveStrengthChanged);
 
-        return group;
+        return Group;
     }
 
-    Smile::EDefaultTexture MaterialEditorPanel::FallbackTypeForSlot(int slot) {
+    Smile::EDefaultTexture MaterialEditorPanel::FallbackTypeForSlot(int _Slot) {
         using E = Smile::EDefaultTexture;
-        switch (slot) {
+        switch (_Slot) {
             case 0: return E::White;       // Albedo
             case 1: return E::FlatNormal;  // Normal
             case 2: return E::ORM;         // MetallicRoughness
@@ -196,19 +169,17 @@ namespace SmileEditor {
         }
     }
 
-    void MaterialEditorPanel::InitializeWithRenderer(Smile::Renderer* renderer) {
-        if (RendererPtr) return; // already done
-        RendererPtr = renderer;
+    void MaterialEditorPanel::InitializeWithRenderer(Smile::Renderer* _Renderer) {
+        if (RendererPtr) return; 
+        RendererPtr = _Renderer;
 
-        auto* Dev = renderer->GetDevice().Native();
-        auto& CQ  = renderer->GetCmdQueue();
-        auto& SRV = renderer->GetSRVHeap();
+        auto* Device = _Renderer->GetDevice().Native();
+        auto& CommandQueue  = _Renderer->GetCmdQueue();
+        auto& SRVHeap = _Renderer->GetSRVHeap();
 
-        // Create 1×1 fallback textures for all 6 slots
         for (int i = 0; i < static_cast<int>(Smile::kMaterialTextureSlots); ++i)
-            FallbackTexture[i] = Smile::FTexture::CreateDefault(Dev, CQ, SRV, FallbackTypeForSlot(i));
+            FallbackTexture[i] = Smile::FTexture::CreateDefault(Device, CommandQueue, SRVHeap, FallbackTypeForSlot(i));
 
-        // Wire fallbacks into material
         Material.Albedo            = &FallbackTexture[0];
         Material.Normal            = &FallbackTexture[1];
         Material.MetallicRoughness = &FallbackTexture[2];
@@ -216,7 +187,6 @@ namespace SmileEditor {
         Material.Height            = &FallbackTexture[4];
         Material.Emissive          = &FallbackTexture[5];
 
-        // Apply initial parameter values from UI state
         Material.Constants.BaseColorFactor  = {
             BaseColorValue.redF(),
             BaseColorValue.greenF(),
@@ -236,92 +206,88 @@ namespace SmileEditor {
         };
         Material.Constants.EmissiveStrength = static_cast<float>(EmissiveStrSpin->value());
 
-        Material.Finalize(Dev, SRV);
-        renderer->SetMaterial(&Material);
+        Material.Finalize(Device, SRVHeap);
+        _Renderer->SetMaterial(&Material);
     }
 
-    void MaterialEditorPanel::SetSlotPointer(int slot, Smile::FTexture* tex) {
-        switch (slot) {
-            case 0: Material.Albedo            = tex; break;
-            case 1: Material.Normal            = tex; break;
-            case 2: Material.MetallicRoughness = tex; break;
-            case 3: Material.AO                = tex; break;
-            case 4: Material.Height            = tex; break;
-            case 5: Material.Emissive          = tex; break;
+    void MaterialEditorPanel::SetSlotPointer(int _Slot, Smile::FTexture* _Texture) {
+        switch (_Slot) {
+            case 0: Material.Albedo            = _Texture; break;
+            case 1: Material.Normal            = _Texture; break;
+            case 2: Material.MetallicRoughness = _Texture; break;
+            case 3: Material.AO                = _Texture; break;
+            case 4: Material.Height            = _Texture; break;
+            case 5: Material.Emissive          = _Texture; break;
         }
     }
 
-    void MaterialEditorPanel::UpdateHasFlag(int slot, bool has) {
-        const Smile::u32 v = has ? 1u : 0u;
-        switch (slot) {
-            case 0: Material.Constants.HasAlbedoMap            = v; break;
-            case 1: Material.Constants.HasNormalMap            = v; break;
-            case 2: Material.Constants.HasMetallicRoughnessMap = v; break;
-            case 3: Material.Constants.HasAOMap                = v; break;
-            case 4: Material.Constants.HasHeightMap            = v; break;
-            case 5: Material.Constants.HasEmissiveMap          = v; break;
+    void MaterialEditorPanel::UpdateHasFlag(int _Slot, bool _Has) {
+        const Smile::u32 Value = _Has ? 1u : 0u;
+        switch (_Slot) {
+            case 0: Material.Constants.HasAlbedoMap            = Value; break;
+            case 1: Material.Constants.HasNormalMap            = Value; break;
+            case 2: Material.Constants.HasMetallicRoughnessMap = Value; break;
+            case 3: Material.Constants.HasAOMap                = Value; break;
+            case 4: Material.Constants.HasHeightMap            = Value; break;
+            case 5: Material.Constants.HasEmissiveMap          = Value; break;
         }
     }
 
-    void MaterialEditorPanel::ApplyTextureToSlot(int slot, const QString& path) {
+    void MaterialEditorPanel::ApplyTextureToSlot(int _Slot, const QString& _Path) {
         if (!RendererPtr) return;
 
-        auto* Dev = RendererPtr->GetDevice().Native();
-        auto& CQ  = RendererPtr->GetCmdQueue();
-        auto& SRV = RendererPtr->GetSRVHeap();
+        auto* Device = RendererPtr->GetDevice().Native();
+        auto& CommandQueue  = RendererPtr->GetCmdQueue();
+        auto& SRVHeap = RendererPtr->GetSRVHeap();
 
-        // Load texture via WIC — runs synchronously on the Qt main thread
-        const std::wstring wpath = path.toStdWString();
-        SlotTexture[slot] = Smile::FTexture::LoadFromFile(Dev, CQ, SRV, wpath);
+        const std::wstring wPath = _Path.toStdWString();
+        SlotTexture[_Slot] = Smile::FTexture::LoadFromFile(Device, CommandQueue, SRVHeap, wPath);
 
-        SetSlotPointer(slot, &SlotTexture[slot].value());
-        Material.UpdateTextureSlot(Dev, SRV, static_cast<Smile::u32>(slot), &SlotTexture[slot].value());
-        UpdateHasFlag(slot, true);
+        SetSlotPointer(_Slot, &SlotTexture[_Slot].value());
+        Material.UpdateTextureSlot(Device, SRVHeap, static_cast<Smile::u32>(_Slot), &SlotTexture[_Slot].value());
+        UpdateHasFlag(_Slot, true);
         Material.UpdateConstants();
 
-        // Update thumbnail using Qt's own image loading (independent of WIC)
-        if (SlotWidgets[slot]) {
-            SlotWidgets[slot]->SetThumbnail(QPixmap(path));
-            SlotWidgets[slot]->SetPath(path);
+        if (SlotWidgets[_Slot]) {
+            SlotWidgets[_Slot]->SetThumbnail(QPixmap(_Path));
+            SlotWidgets[_Slot]->SetPath(_Path);
         }
     }
 
-    void MaterialEditorPanel::ClearSlot(int slot) {
+    void MaterialEditorPanel::ClearSlot(int _Slot) {
         if (!RendererPtr) return;
 
-        auto* Dev = RendererPtr->GetDevice().Native();
-        auto& SRV = RendererPtr->GetSRVHeap();
+        auto* Device = RendererPtr->GetDevice().Native();
+        auto& SRVHeap = RendererPtr->GetSRVHeap();
 
-        SlotTexture[slot] = std::nullopt;
-        SetSlotPointer(slot, &FallbackTexture[slot]);
-        Material.UpdateTextureSlot(Dev, SRV, static_cast<Smile::u32>(slot), &FallbackTexture[slot]);
-        UpdateHasFlag(slot, false);
+        SlotTexture[_Slot] = std::nullopt;
+        SetSlotPointer(_Slot, &FallbackTexture[_Slot]);
+        Material.UpdateTextureSlot(Device, SRVHeap, static_cast<Smile::u32>(_Slot), &FallbackTexture[_Slot]);
+        UpdateHasFlag(_Slot, false);
         Material.UpdateConstants();
 
-        if (SlotWidgets[slot]) {
-            SlotWidgets[slot]->ClearThumbnail();
-            SlotWidgets[slot]->SetPath(QString());
+        if (SlotWidgets[_Slot]) {
+            SlotWidgets[_Slot]->ClearThumbnail();
+            SlotWidgets[_Slot]->SetPath(QString());
         }
     }
 
-    void MaterialEditorPanel::OnBrowseSlot(int slot) {
-        const QString path = QFileDialog::getOpenFileName(
+    void MaterialEditorPanel::OnBrowseSlot(int _Slot) {
+        const QString Path = QFileDialog::getOpenFileName(
             this,
-            tr("Selecionar Textura — %1").arg(tr(kSlots[slot].Name)),
+            tr("Selecionar Textura — %1").arg(tr(kSlots[_Slot].Name)),
             QString(),
             tr("Imagens (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;Todos os arquivos (*)"));
-        if (!path.isEmpty())
-            ApplyTextureToSlot(slot, path);
+        if (!Path.isEmpty())
+            ApplyTextureToSlot(_Slot, Path);
     }
 
-    void MaterialEditorPanel::OnClearSlot(int slot) {
-        ClearSlot(slot);
+    void MaterialEditorPanel::OnClearSlot(int _Slot) {
+        ClearSlot(_Slot);
     }
 
-    void MaterialEditorPanel::UpdateColorButton(QPushButton* _Button, const QColor& color) {
-        _Button->setStyleSheet(QString(
-            "QPushButton { background: %1; border: 1px solid #555; border-radius: 3px; min-height: 20px; }"
-            "QPushButton:hover { border-color: #0e639c; }").arg(color.name()));
+    void MaterialEditorPanel::UpdateColorButton(QPushButton* _Button, const QColor& _Color) {
+        _Button->setStyleSheet(QStringLiteral("background-color: %1;").arg(_Color.name()));
     }
 
     void MaterialEditorPanel::OnPickBaseColor() {
@@ -340,59 +306,59 @@ namespace SmileEditor {
     }
 
     void MaterialEditorPanel::OnPickEmissiveColor() {
-        const QColor c = QColorDialog::getColor(EmissiveColorValue, this, tr("Cor Emissiva"));
-        if (!c.isValid()) return;
-        EmissiveColorValue = c;
-        UpdateColorButton(EmissiveColorBtn, c);
+        const QColor Color = QColorDialog::getColor(EmissiveColorValue, this, tr("Cor Emissiva"));
+        if (!Color.isValid()) return;
+        EmissiveColorValue = Color;
+        UpdateColorButton(EmissiveColorBtn, Color);
         if (!RendererPtr) return;
         Material.Constants.EmissiveFactor = {
-            static_cast<Smile::f32>(c.redF()),
-            static_cast<Smile::f32>(c.greenF()),
-            static_cast<Smile::f32>(c.blueF()),
+            static_cast<Smile::f32>(Color.redF()),
+            static_cast<Smile::f32>(Color.greenF()),
+            static_cast<Smile::f32>(Color.blueF()),
             1.0f
         };
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnMetallicChanged(double v) {
+    void MaterialEditorPanel::OnMetallicChanged(double _Value) {
         if (!RendererPtr) return;
-        Material.Constants.MetallicFactor = static_cast<Smile::f32>(v);
+        Material.Constants.MetallicFactor = static_cast<Smile::f32>(_Value);
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnRoughnessChanged(double v) {
+    void MaterialEditorPanel::OnRoughnessChanged(double _Value) {
         if (!RendererPtr) return;
-        Material.Constants.RoughnessFactor = static_cast<Smile::f32>(v);
+        Material.Constants.RoughnessFactor = static_cast<Smile::f32>(_Value);
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnAOStrengthChanged(double v) {
+    void MaterialEditorPanel::OnAOStrengthChanged(double _Value) {
         if (!RendererPtr) return;
-        Material.Constants.AOStrength = static_cast<Smile::f32>(v);
+        Material.Constants.AOStrength = static_cast<Smile::f32>(_Value);
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnNormalStrengthChanged(double v) {
+    void MaterialEditorPanel::OnNormalStrengthChanged(double _Value) {
         if (!RendererPtr) return;
-        Material.Constants.NormalStrength = static_cast<Smile::f32>(v);
+        Material.Constants.NormalStrength = static_cast<Smile::f32>(_Value);
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnHeightScaleChanged(double v) {
+    void MaterialEditorPanel::OnHeightScaleChanged(double _Value) {
         if (!RendererPtr) return;
-        Material.Constants.HeightScale = static_cast<Smile::f32>(v);
+        Material.Constants.HeightScale = static_cast<Smile::f32>(_Value);
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnEmissiveStrengthChanged(double v) {
+    void MaterialEditorPanel::OnEmissiveStrengthChanged(double _Value) {
         if (!RendererPtr) return;
-        Material.Constants.EmissiveStrength = static_cast<Smile::f32>(v);
+        Material.Constants.EmissiveStrength = static_cast<Smile::f32>(_Value);
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnNormalFlipYChanged(bool checked) {
+    void MaterialEditorPanel::OnNormalFlipYChanged(bool _Checked) {
         if (!RendererPtr) return;
-        Material.Constants.NormalFlipY = checked ? 1u : 0u;
+        Material.Constants.NormalFlipY = _Checked ? 1u : 0u;
         Material.UpdateConstants();
     }
 } 

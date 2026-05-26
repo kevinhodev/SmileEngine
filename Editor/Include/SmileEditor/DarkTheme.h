@@ -1,11 +1,14 @@
 #pragma once
 
-// Aplica o tema escuro Fusion ao QApplication corrente.
+#include <QString>
+#include <QStringList>
 
 class QApplication;
 
 namespace SmileEditor {
+	void ApplyDarkTheme(QApplication& App);
+	QString GetStylesDirectoryPath();
+	QStringList GetStylesheetFiles();
+	void LoadAndApplyStylesheets(QApplication& App);
+} 
 
-void ApplyDarkTheme(QApplication& app);
-
-} // namespace SmileEditor

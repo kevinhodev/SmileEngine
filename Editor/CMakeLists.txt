@@ -40,6 +40,12 @@ target_link_libraries(SmileEditor
         Qt6::Widgets
 )
 
+# Define o diretório de origem do editor para busca de stylesheets em desenvolvimento
+target_compile_definitions(SmileEditor
+    PRIVATE
+        SMILE_EDITOR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 # O Editor depende do build dos shaders para que os .cso existam em runtime
 add_dependencies(SmileEditor Shaders)
 
@@ -63,4 +69,13 @@ if(WIN32)
     else()
         message(WARNING "windeployqt nao encontrado - sera necessario copiar as DLLs do Qt manualmente")
     endif()
+
+    # Copia a pasta de Styles para a pasta de saída do executável
+    add_custom_command(TARGET SmileEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/Styles"
+                "$<TARGET_FILE_DIR:SmileEditor>/Editor/Styles"
+        COMMENT "Copiando stylesheets QSS para o diretorio de build"
+    )
 endif()
+

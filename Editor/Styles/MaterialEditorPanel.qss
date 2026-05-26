@@ -1,0 +1,55 @@
+QLabel#MaterialHeader {
+    background: #252526;
+    color: #dcdcdc;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-bottom: 1px solid #3c3c42;
+}
+QScrollArea#MaterialScrollArea {
+    background: #1e1e1e;
+    border: none;
+}
+QGroupBox#MaterialTexturesGroup, QGroupBox#MaterialParametersGroup {
+    color: #a0c8ff;
+    font-size: 11px;
+    font-weight: bold;
+    border: 1px solid #3c3c42;
+    border-radius: 4px;
+    margin-top: 8px;
+    padding-top: 4px;
+}
+QGroupBox#MaterialTexturesGroup::title, QGroupBox#MaterialParametersGroup::title {
+    subcontrol-origin: margin;
+    left: 8px;
+}
+QLabel#MaterialParamLabel {
+    color: #aaa;
+    font-size: 10px;
+}
+QDoubleSpinBox {
+    background: #2d2d30;
+    color: #dcdcdc;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 10px;
+}
+QDoubleSpinBox:focus {
+    border-color: #0e639c;
+}
+QPushButton#MaterialColorBtn {
+    border: 1px solid #555;
+    border-radius: 3px;
+    min-height: 20px;
+}
+QPushButton#MaterialColorBtn:hover {
+    border-color: #0e639c;
+}
+QCheckBox#MaterialDirectXCheck {
+    color: #aaa;
+    font-size: 10px;
+}
+QFrame#MaterialSeparator {
+    color: #3c3c42;
+}
