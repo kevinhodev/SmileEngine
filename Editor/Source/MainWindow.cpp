@@ -20,6 +20,9 @@
 #include <QFileSystemWatcher>
 #include <QTimer>
 #include <QApplication>
+#include <QProcess>
+#include <QDir>
+#include <QFileInfo>
 
 
 namespace SmileEditor {
@@ -67,6 +70,33 @@ namespace SmileEditor {
                 }
             });
         });
+
+#ifdef SMILE_SHADERS_SOURCE_DIR
+        QString ShadersSourceDir = QStringLiteral(SMILE_SHADERS_SOURCE_DIR);
+#else
+        QString ShadersSourceDir = QDir(QCoreApplication::applicationDirPath()).filePath("../Shaders");
+#endif
+        if (QDir(ShadersSourceDir).exists()) {
+            ShaderWatcher = new QFileSystemWatcher(this);
+            QStringList ShadersToWatch = {
+                QDir(ShadersSourceDir).filePath("Triangle.vs.hlsl"),
+                QDir(ShadersSourceDir).filePath("Triangle.ps.hlsl")
+            };
+            ShaderWatcher->addPaths(ShadersToWatch);
+
+            connect(ShaderWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString& _Path) {
+                TriggerShaderCompileAndReload(_Path);
+
+                QTimer::singleShot(100, this, [this, _Path]() {
+                    if (ShaderWatcher && !ShaderWatcher->files().contains(_Path)) {
+                        ShaderWatcher->addPath(_Path);
+                    }
+                });
+            });
+            Smile::LogInfo("Shader Watcher ativo. Monitorando pasta: " + ShadersSourceDir.toStdString());
+        } else {
+            Smile::LogWarning("Diretorio de shaders de origem nao encontrado: " + ShadersSourceDir.toStdString());
+        }
 
         statusBar()->showMessage(tr("Pronto"));
     }
@@ -185,5 +215,42 @@ namespace SmileEditor {
         AboutDlg->show();
         AboutDlg->raise();
         AboutDlg->activateWindow();
+    }
+
+    void MainWindow::TriggerShaderCompileAndReload(const QString& _Path) {
+        Smile::LogInfo("Alteracao detectada no shader: " + QFileInfo(_Path).fileName().toStdString());
+
+#ifdef SMILE_CMAKE_BINARY_DIR
+        QString BuildDir = QStringLiteral(SMILE_CMAKE_BINARY_DIR);
+#else
+        QString BuildDir = QDir(QCoreApplication::applicationDirPath()).filePath("..");
+#endif
+
+        QProcess* CompileProcess = new QProcess(this);
+        QStringList Arguments = { "--build", BuildDir, "--target", "Shaders" };
+        
+        Smile::LogInfo("Compilando shaders via CMake...");
+        CompileProcess->start("cmake", Arguments);
+
+        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess](int ExitCode, QProcess::ExitStatus Status) {
+            Q_UNUSED(Status);
+            if (ExitCode == 0) {
+                if (Viewport && Viewport->GetRenderer()) {
+                    if (Viewport->GetRenderer()->ReloadShaders()) {
+                        statusBar()->showMessage(tr("Shaders recarregados com sucesso!"), 3000);
+                    } else {
+                        statusBar()->showMessage(tr("Erro ao recarregar shaders no Renderizador."), 3000);
+                    }
+                }
+            } else {
+                QString Errors = QString::fromUtf8(CompileProcess->readAllStandardError());
+                if (Errors.isEmpty()) {
+                    Errors = QString::fromUtf8(CompileProcess->readAllStandardOutput());
+                }
+                Smile::LogError("Falha ao compilar shaders via CMake:\n" + Errors.toStdString());
+                statusBar()->showMessage(tr("Falha na compilação do Shader."), 3000);
+            }
+            CompileProcess->deleteLater();
+        });
     }
 } 

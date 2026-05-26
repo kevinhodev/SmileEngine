@@ -107,7 +107,7 @@ float2 ParallaxOcclusionMapping(float2 UV, float3 WorldPos, float3 N, out float 
     viewTS.y = dot(V, B);
     viewTS.z = dot(V, N);
 
-    const int MaxSteps = 32;
+    const int MaxSteps = 64;
     const int MinSteps = 8;
     // viewTS.z is dot(V, N) - 1.0 directly facing, 0.0 at grazing angle
     int NumSteps = (int)lerp(MaxSteps, MinSteps, saturate(viewTS.z));

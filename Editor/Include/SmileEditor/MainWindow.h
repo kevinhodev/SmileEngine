@@ -25,6 +25,7 @@ namespace SmileEditor {
         void OnMSAAChanged(int sampleCount);
         void OnRendererReady();
         void UpdateStats();
+        void TriggerShaderCompileAndReload(const QString& Path);
 
     private:
         void CreateMenuBar();
@@ -40,5 +41,6 @@ namespace SmileEditor {
         MaterialEditorPanel*  MaterialPanel    = nullptr;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
+        QFileSystemWatcher*   ShaderWatcher     = nullptr;
     };
 } 

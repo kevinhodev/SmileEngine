@@ -44,6 +44,8 @@ target_link_libraries(SmileEditor
 target_compile_definitions(SmileEditor
     PRIVATE
         SMILE_EDITOR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        SMILE_SHADERS_SOURCE_DIR="${CMAKE_SOURCE_DIR}/Shaders"
+        SMILE_CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}"
 )
 
 # O Editor depende do build dos shaders para que os .cso existam em runtime

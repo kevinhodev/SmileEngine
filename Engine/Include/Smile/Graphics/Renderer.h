@@ -34,6 +34,7 @@ namespace Smile {
 
         void Resize(u32 Width, u32 Height);
         void SetMSAA(u32 SampleCount);
+        bool ReloadShaders();
 
         void UpdateCamera(const CameraInput& Input, f32 DeltaTime);
         void RenderFrame();

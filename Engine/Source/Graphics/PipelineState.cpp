@@ -96,8 +96,6 @@ namespace Smile {
     }
 
     void FPipelineState::RecreatePSO(ID3D12Device* _Device, u32 _SampleCount) {
-        PipelineState.Reset();
-
         auto VertexShaderBlob = LoadShaderBlob("Triangle.vs_6_0.cso");
         auto PixelShaderBlob  = LoadShaderBlob("Triangle.ps_6_0.cso");
 
@@ -146,6 +144,9 @@ namespace Smile {
         PSODesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
         PSODesc.SampleDesc            = { _SampleCount, 0 };
 
-        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&PipelineState)));
+        ComPtr<ID3D12PipelineState> NewPSO;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSO)));
+
+        PipelineState = NewPSO;
     }
 }

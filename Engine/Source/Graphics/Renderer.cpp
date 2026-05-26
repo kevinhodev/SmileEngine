@@ -232,6 +232,19 @@ namespace Smile {
         CreateDepthBuffer();
     }
 
+    bool Renderer::ReloadShaders() {
+        if (!Initialized) return false;
+        try {
+            CommandQueue.Flush();
+            PipelineState.RecreatePSO(Device.Native(), MSAASampleCount);
+            LogInfo("Shaders recarregados com sucesso");
+            return true;
+        } catch (const std::exception& e) {
+            LogError(std::string("Erro ao recarregar shaders: ") + e.what());
+            return false;
+        }
+    }
+
     void Renderer::Resize(u32 _Width, u32 _Height) {
         if (!Initialized || _Width == 0 || _Height == 0) return;
         CommandQueue.Flush();
