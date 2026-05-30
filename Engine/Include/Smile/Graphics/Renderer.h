@@ -84,7 +84,6 @@ namespace Smile {
         FTexture TexDefaultWhite;
         FTexture TexDefaultNormal;
         FTexture TexDefaultBlack;
-        FTexture TexDefaultGrey;
         FTexture TexDefaultORM;
 
         FMaterial  DefaultMaterial;

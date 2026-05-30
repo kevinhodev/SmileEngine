@@ -74,14 +74,12 @@ namespace Smile {
         TexDefaultWhite  = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::White);
         TexDefaultNormal = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::FlatNormal);
         TexDefaultORM    = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::ORM);
-        TexDefaultGrey   = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::MidGrey);
         TexDefaultBlack  = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::Black);
 
         DefaultMaterial.Albedo            = &TexDefaultWhite;
         DefaultMaterial.Normal            = &TexDefaultNormal;
         DefaultMaterial.MetallicRoughness = &TexDefaultORM;
         DefaultMaterial.AO                = &TexDefaultWhite;
-        DefaultMaterial.Height            = &TexDefaultGrey;
         DefaultMaterial.Emissive          = &TexDefaultBlack;
 
         DefaultMaterial.Constants.BaseColorFactor  = { 0.8f, 0.8f, 0.8f, 1.0f };

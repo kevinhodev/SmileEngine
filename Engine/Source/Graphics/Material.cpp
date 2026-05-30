@@ -21,14 +21,12 @@ namespace Smile {
         WriteSRV(Normal,            1);
         WriteSRV(MetallicRoughness, 2);
         WriteSRV(AO,                3);
-        WriteSRV(Height,            4);
-        WriteSRV(Emissive,          5);
+        WriteSRV(Emissive,          4);
 
         Constants.HasAlbedoMap            = (Albedo            && Albedo->IsValid())            ? 1 : 0;
         Constants.HasNormalMap            = (Normal            && Normal->IsValid())            ? 1 : 0;
         Constants.HasMetallicRoughnessMap = (MetallicRoughness && MetallicRoughness->IsValid()) ? 1 : 0;
         Constants.HasAOMap                = (AO                && AO->IsValid())                ? 1 : 0;
-        Constants.HasHeightMap            = (Height            && Height->IsValid())            ? 1 : 0;
         Constants.HasEmissiveMap          = (Emissive          && Emissive->IsValid())          ? 1 : 0;
 
         D3D12_HEAP_PROPERTIES UploadHeap{};

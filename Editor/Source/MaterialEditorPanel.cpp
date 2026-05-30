@@ -20,7 +20,6 @@ namespace SmileEditor {
         { "Normal Map"          },
         { "Metallic/Roughness"  },
         { "Oclusão Ambiente"    },
-        { "Height/Deslocamento" },
         { "Emissivo"            },
     };
 
@@ -133,9 +132,7 @@ namespace SmileEditor {
         FormLayout->addRow(NormalFlipYCheck);
         connect(NormalFlipYCheck, &QCheckBox::toggled, this, &MaterialEditorPanel::OnNormalFlipYChanged);
 
-        HeightScaleSpin = MakeSpinbox(0.0, 0.2, 0.001, 0.05);
-        FormLayout->addRow(MakeLabel("Escala Height"), HeightScaleSpin);
-        connect(HeightScaleSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnHeightScaleChanged);
+
 
         auto* Separator = new QFrame(Group);
         Separator->setObjectName("MaterialSeparator");
@@ -163,8 +160,7 @@ namespace SmileEditor {
             case 1: return E::FlatNormal;  // Normal
             case 2: return E::ORM;         // MetallicRoughness
             case 3: return E::White;       // AO
-            case 4: return E::MidGrey;     // Height
-            case 5: return E::Black;       // Emissive
+            case 4: return E::Black;       // Emissive
             default: return E::White;
         }
     }
@@ -184,8 +180,7 @@ namespace SmileEditor {
         Material.Normal            = &FallbackTexture[1];
         Material.MetallicRoughness = &FallbackTexture[2];
         Material.AO                = &FallbackTexture[3];
-        Material.Height            = &FallbackTexture[4];
-        Material.Emissive          = &FallbackTexture[5];
+        Material.Emissive          = &FallbackTexture[4];
 
         Material.Constants.BaseColorFactor  = {
             BaseColorValue.redF(),
@@ -197,7 +192,7 @@ namespace SmileEditor {
         Material.Constants.RoughnessFactor  = static_cast<float>(RoughnessSpin->value());
         Material.Constants.AOStrength       = static_cast<float>(AOStrengthSpin->value());
         Material.Constants.NormalStrength   = static_cast<float>(NormalStrSpin->value());
-        Material.Constants.HeightScale      = static_cast<float>(HeightScaleSpin->value());
+
         Material.Constants.EmissiveFactor   = {
             EmissiveColorValue.redF(),
             EmissiveColorValue.greenF(),
@@ -216,8 +211,7 @@ namespace SmileEditor {
             case 1: Material.Normal            = _Texture; break;
             case 2: Material.MetallicRoughness = _Texture; break;
             case 3: Material.AO                = _Texture; break;
-            case 4: Material.Height            = _Texture; break;
-            case 5: Material.Emissive          = _Texture; break;
+            case 4: Material.Emissive          = _Texture; break;
         }
     }
 
@@ -228,8 +222,7 @@ namespace SmileEditor {
             case 1: Material.Constants.HasNormalMap            = Value; break;
             case 2: Material.Constants.HasMetallicRoughnessMap = Value; break;
             case 3: Material.Constants.HasAOMap                = Value; break;
-            case 4: Material.Constants.HasHeightMap            = Value; break;
-            case 5: Material.Constants.HasEmissiveMap          = Value; break;
+            case 4: Material.Constants.HasEmissiveMap          = Value; break;
         }
     }
 
@@ -345,11 +338,7 @@ namespace SmileEditor {
         Material.UpdateConstants();
     }
 
-    void MaterialEditorPanel::OnHeightScaleChanged(double _Value) {
-        if (!RendererPtr) return;
-        Material.Constants.HeightScale = static_cast<Smile::f32>(_Value);
-        Material.UpdateConstants();
-    }
+
 
     void MaterialEditorPanel::OnEmissiveStrengthChanged(double _Value) {
         if (!RendererPtr) return;

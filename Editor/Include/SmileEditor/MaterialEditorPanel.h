@@ -36,7 +36,6 @@ namespace SmileEditor {
         void OnRoughnessChanged(double Value);
         void OnAOStrengthChanged(double Value);
         void OnNormalStrengthChanged(double Value);
-        void OnHeightScaleChanged(double Value);
         void OnEmissiveStrengthChanged(double Value);
 
     private:
@@ -68,7 +67,6 @@ namespace SmileEditor {
         QDoubleSpinBox* RoughnessSpin       = nullptr;
         QDoubleSpinBox* AOStrengthSpin      = nullptr;
         QDoubleSpinBox* NormalStrSpin       = nullptr;
-        QDoubleSpinBox* HeightScaleSpin     = nullptr;
         QDoubleSpinBox* EmissiveStrSpin     = nullptr;
         QCheckBox*      NormalFlipYCheck    = nullptr;
     };
