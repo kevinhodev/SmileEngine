@@ -149,7 +149,7 @@ namespace SmileEditor {
         EnvironmentDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
         EnvPanel = new EnvironmentPanel(EnvironmentDock);
         EnvironmentDock->setWidget(EnvPanel);
-        addDockWidget(Qt::RightDockWidgetArea, EnvironmentDock);
+        addDockWidget(Qt::LeftDockWidgetArea, EnvironmentDock);
         EnvironmentDock->setMinimumWidth(240);
 
         auto* ConsoleDock = new QDockWidget(tr("Console"), this);

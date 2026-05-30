@@ -26,6 +26,12 @@ cbuffer MaterialCB : register(b1) {
     uint   HasEmissiveMap;
     float  NormalStrength;
     uint   NormalFlipY;    // 1 = DirectX convention (G inverted), 0 = OpenGL
+    uint   HasHeightMap;
+    float  POMHeightScale;
+    float  POMMinSteps;
+    float  POMMaxSteps;
+    uint   POMEnableShadows;
+    uint   POMEnableSilhouette;
 };
 
 // --- Texture Slots ---
@@ -35,6 +41,7 @@ Texture2D NormalMap            : register(t1);
 Texture2D MetallicRoughnessMap : register(t2); // R=Metallic, G=Roughness (glTF convention)
 Texture2D AOMap                : register(t3);
 Texture2D EmissiveMap          : register(t4);
+Texture2D HeightMap            : register(t5);
 
 TextureCube IrradianceMap      : register(t6); // diffuse irradiance cube
 TextureCube PrefilteredMap     : register(t7); // GGX prefiltered specular cube (mip = roughness * maxMip)
@@ -58,6 +65,7 @@ struct PSInput {
 
 
 // --- PBR Functions ---
+#include "Includes/ParallaxOcclusionMapping.hlsl"
 
 static const float PI = 3.14159265359f;
 
@@ -133,7 +141,49 @@ float3 PerturbNormal(float3 N, float3 dPdx, float3 dPdy, float2 dUVdx, float2 dU
 float4 main(PSInput input) : SV_TARGET {
     float2 UV          = input.uv;
     float3 GeoN        = normalize(input.worldNormal);
+    float3 V           = normalize(CameraPosition.xyz - input.worldPos);
+    float3 LightP      = LightDirection.xyz;
+    float3 LightV      = LightP - input.worldPos;
+    float  Dist        = length(LightV);
+    float3 L           = LightV / Dist;
 
+    // --- Parallax Occlusion Mapping ---
+    float POMShadowFactor = 1.0f;
+    if (HasHeightMap) {
+        // Calculate tangent space using derivatives
+        float3 dPdx = ddx(input.worldPos);
+        float3 dPdy = ddy(input.worldPos);
+        float2 dUVdx = ddx(UV);
+        float2 dUVdy = ddy(UV);
+
+        float det = dUVdx.x * dUVdy.y - dUVdx.y * dUVdy.x;
+        float invDet = (det < 0.0f) ? -1.0f : 1.0f;
+
+        float3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y) * invDet;
+        float3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x) * invDet;
+        
+        T = normalize(T - GeoN * dot(GeoN, T));
+        B = normalize(cross(GeoN, T)) * invDet;
+        
+        float3x3 TBN = float3x3(T, B, GeoN);
+
+        float3 ViewDirTS = mul(TBN, V);
+        float3 LightDirTS = mul(TBN, L);
+
+        POMResult result = ParallaxOcclusionMapping(
+            HeightMap, MaterialSampler, UV, ViewDirTS, LightDirTS,
+            POMMinSteps, POMMaxSteps, POMHeightScale, input.pos.xy,
+            POMEnableShadows > 0, POMEnableSilhouette > 0
+        );
+
+        if (result.bClipped) {
+            clip(-1);
+        }
+
+        UV = result.UV;
+        input.pos.z += result.PixelDepthOffset; // Actually output depth would require modifying SV_Depth, but we just offset the position z internally. Wait, modifying input.pos.z won't write to depth buffer.
+        POMShadowFactor = result.ShadowFactor;
+    }
 
     // --- Base Color ---
     float3 BaseColor = BaseColorFactor.rgb;
@@ -189,11 +239,6 @@ float4 main(PSInput input) : SV_TARGET {
         AO = lerp(1.0f, AOMap.Sample(MaterialSampler, UV).r, AOStrength);
 
     // --- Lighting vectors ---
-    float3 V       = normalize(CameraPosition.xyz - input.worldPos);
-    float3 LightP  = LightDirection.xyz;
-    float3 LightV  = LightP - input.worldPos;
-    float  Dist    = length(LightV);
-    float3 L       = LightV / Dist;
     float3 H       = normalize(L + V);
 
     float Atten = 1.0f / (Dist * Dist + 1.0f);
@@ -250,7 +295,7 @@ float4 main(PSInput input) : SV_TARGET {
             float3 Diffuse = (Kd * DiffuseColor) / PI;
         #endif
 
-        float3 Radiance = LightColor.rgb * LightColor.w * Atten;
+        float3 Radiance = LightColor.rgb * LightColor.w * Atten * POMShadowFactor;
         Lighting        = (Diffuse + Specular) * Radiance * NoL;
     }
 

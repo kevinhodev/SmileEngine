@@ -22,11 +22,17 @@ namespace Smile {
         u32   HasEmissiveMap          = 0;
         float NormalStrength          = 1.0f;
         u32   NormalFlipY             = 0;
-        u8    _Pad[180] = {};
+        u32   HasHeightMap            = 0;
+        float POMHeightScale          = 0.05f;
+        float POMMinSteps             = 8.0f;
+        float POMMaxSteps             = 32.0f;
+        u32   POMEnableShadows        = 1;
+        u32   POMEnableSilhouette     = 0;
+        u8    _Pad[156] = {};
     };
     static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants must be 256 bytes");
 
-    inline constexpr u32 kMaterialTextureSlots = 5;
+    inline constexpr u32 kMaterialTextureSlots = 6;
 
     class FMaterial {
     public:
@@ -35,6 +41,7 @@ namespace Smile {
         FTexture* MetallicRoughness = nullptr; 
         FTexture* AO                = nullptr; 
         FTexture* Emissive          = nullptr; 
+        FTexture* Height            = nullptr;
 
         MaterialConstants Constants;
 

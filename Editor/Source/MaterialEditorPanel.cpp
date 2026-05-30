@@ -21,6 +21,7 @@ namespace SmileEditor {
         { "Metallic/Roughness"  },
         { "Oclusão Ambiente"    },
         { "Emissivo"            },
+        { "Height Map (POM)"    },
     };
 
     MaterialEditorPanel::MaterialEditorPanel(QWidget* _Parent)
@@ -132,6 +133,36 @@ namespace SmileEditor {
         FormLayout->addRow(NormalFlipYCheck);
         connect(NormalFlipYCheck, &QCheckBox::toggled, this, &MaterialEditorPanel::OnNormalFlipYChanged);
 
+        auto* POMScaleSpin = MakeSpinbox(0.0, 0.5, 0.005, 0.05);
+        POMScaleSpin->setDecimals(3);
+        FormLayout->addRow(MakeLabel("Escala POM"), POMScaleSpin);
+        connect(POMScaleSpin, &QDoubleSpinBox::valueChanged, this, [this](double _Val) {
+            if (RendererPtr) {
+                Material.Constants.POMHeightScale = static_cast<Smile::f32>(_Val);
+                Material.UpdateConstants();
+            }
+        });
+
+        auto* POMMinStepsSpin = MakeSpinbox(4.0, 128.0, 1.0, 8.0);
+        POMMinStepsSpin->setDecimals(0);
+        FormLayout->addRow(MakeLabel("Min Steps POM"), POMMinStepsSpin);
+        connect(POMMinStepsSpin, &QDoubleSpinBox::valueChanged, this, [this](double _Val) {
+            if (RendererPtr) {
+                Material.Constants.POMMinSteps = static_cast<Smile::f32>(_Val);
+                Material.UpdateConstants();
+            }
+        });
+
+        auto* POMMaxStepsSpin = MakeSpinbox(8.0, 256.0, 1.0, 32.0);
+        POMMaxStepsSpin->setDecimals(0);
+        FormLayout->addRow(MakeLabel("Max Steps POM"), POMMaxStepsSpin);
+        connect(POMMaxStepsSpin, &QDoubleSpinBox::valueChanged, this, [this](double _Val) {
+            if (RendererPtr) {
+                Material.Constants.POMMaxSteps = static_cast<Smile::f32>(_Val);
+                Material.UpdateConstants();
+            }
+        });
+
 
 
         auto* Separator = new QFrame(Group);
@@ -161,6 +192,7 @@ namespace SmileEditor {
             case 2: return E::ORM;         // MetallicRoughness
             case 3: return E::White;       // AO
             case 4: return E::Black;       // Emissive
+            case 5: return E::Black;       // Height
             default: return E::White;
         }
     }
@@ -181,6 +213,7 @@ namespace SmileEditor {
         Material.MetallicRoughness = &FallbackTexture[2];
         Material.AO                = &FallbackTexture[3];
         Material.Emissive          = &FallbackTexture[4];
+        Material.Height            = &FallbackTexture[5];
 
         Material.Constants.BaseColorFactor  = {
             BaseColorValue.redF(),
@@ -192,6 +225,12 @@ namespace SmileEditor {
         Material.Constants.RoughnessFactor  = static_cast<float>(RoughnessSpin->value());
         Material.Constants.AOStrength       = static_cast<float>(AOStrengthSpin->value());
         Material.Constants.NormalStrength   = static_cast<float>(NormalStrSpin->value());
+        
+        Material.Constants.POMHeightScale   = 0.05f;
+        Material.Constants.POMMinSteps      = 8.0f;
+        Material.Constants.POMMaxSteps      = 32.0f;
+        Material.Constants.POMEnableShadows = 1u;
+        Material.Constants.POMEnableSilhouette = 0u;
 
         Material.Constants.EmissiveFactor   = {
             EmissiveColorValue.redF(),
@@ -212,6 +251,7 @@ namespace SmileEditor {
             case 2: Material.MetallicRoughness = _Texture; break;
             case 3: Material.AO                = _Texture; break;
             case 4: Material.Emissive          = _Texture; break;
+            case 5: Material.Height            = _Texture; break;
         }
     }
 
@@ -223,6 +263,7 @@ namespace SmileEditor {
             case 2: Material.Constants.HasMetallicRoughnessMap = Value; break;
             case 3: Material.Constants.HasAOMap                = Value; break;
             case 4: Material.Constants.HasEmissiveMap          = Value; break;
+            case 5: Material.Constants.HasHeightMap            = Value; break;
         }
     }
 
