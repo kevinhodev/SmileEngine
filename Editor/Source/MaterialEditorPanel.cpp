@@ -241,7 +241,8 @@ namespace SmileEditor {
         auto& SRVHeap = RendererPtr->GetSRVHeap();
 
         const std::wstring wPath = _Path.toStdWString();
-        SlotTexture[_Slot] = Smile::FTexture::LoadFromFile(Device, CommandQueue, SRVHeap, wPath);
+        const bool IsNormalMap = (_Slot == 1); // slot index 1 = Normal Map (see kSlots)
+        SlotTexture[_Slot] = Smile::FTexture::LoadFromFile(Device, CommandQueue, SRVHeap, wPath, IsNormalMap);
 
         SetSlotPointer(_Slot, &SlotTexture[_Slot].value());
         Material.UpdateTextureSlot(Device, SRVHeap, static_cast<Smile::u32>(_Slot), &SlotTexture[_Slot].value());

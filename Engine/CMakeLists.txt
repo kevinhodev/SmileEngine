@@ -27,7 +27,11 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Mesh.h
     Include/Smile/Graphics/TextureSRVHeap.h
     Include/Smile/Graphics/Texture.h
+    Include/Smile/Graphics/CubeTexture.h
     Include/Smile/Graphics/Material.h
+    Include/Smile/Graphics/ComputePipeline.h
+    Include/Smile/Graphics/HDREnvironment.h
+    Include/Smile/Graphics/Skybox.h
     Include/Smile/Graphics/Renderer.h
 )
 
@@ -47,7 +51,11 @@ set(ENGINE_SOURCES
     Source/Graphics/Mesh.cpp
     Source/Graphics/TextureSRVHeap.cpp
     Source/Graphics/Texture.cpp
+    Source/Graphics/CubeTexture.cpp
     Source/Graphics/Material.cpp
+    Source/Graphics/ComputePipeline.cpp
+    Source/Graphics/HDREnvironment.cpp
+    Source/Graphics/Skybox.cpp
     Source/Graphics/Renderer.cpp
 )
 
@@ -61,6 +69,8 @@ target_include_directories(SmileEngine
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/Include
         ${CMAKE_CURRENT_BINARY_DIR}/generated
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty
 )
 
 # Diretorio dos shaders compilados, exposto como compile definition

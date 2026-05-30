@@ -11,7 +11,7 @@ namespace Smile {
             ResourceDesc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
             ResourceDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
             ResourceDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            ResourceDesc.Texture2D.MipLevels           = 1;
+            ResourceDesc.Texture2D.MipLevels           = _Texture->MipCount();
             ResourceDesc.Texture2D.MostDetailedMip     = 0;
             ResourceDesc.Texture2D.ResourceMinLODClamp = 0.0f;
             _SRVHeap.CreateSRV(_Device, _Texture->Resource(), ResourceDesc, SRVTableStart + _LocalSlot);
@@ -66,7 +66,7 @@ namespace Smile {
         Desc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
         Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
         Desc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        Desc.Texture2D.MipLevels           = 1;
+        Desc.Texture2D.MipLevels           = _Texture->MipCount();
         Desc.Texture2D.MostDetailedMip     = 0;
         Desc.Texture2D.ResourceMinLODClamp = 0.0f;
         _SRVHeap.CreateSRV(_Device, _Texture->Resource(), Desc, SRVTableStart + _LocalSlot);

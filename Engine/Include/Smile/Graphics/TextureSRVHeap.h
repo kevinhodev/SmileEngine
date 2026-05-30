@@ -16,6 +16,9 @@ namespace Smile {
         void CreateSRV(ID3D12Device* Device, ID3D12Resource* Resource,
                        const D3D12_SHADER_RESOURCE_VIEW_DESC& Desc, u32 Slot);
 
+        void CreateUAV(ID3D12Device* Device, ID3D12Resource* Resource,
+                       const D3D12_UNORDERED_ACCESS_VIEW_DESC& Desc, u32 Slot);
+
         D3D12_CPU_DESCRIPTOR_HANDLE CpuHandle(u32 Slot) const;
         D3D12_GPU_DESCRIPTOR_HANDLE GpuHandle(u32 Slot) const;
 

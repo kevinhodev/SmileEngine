@@ -28,6 +28,11 @@ namespace Smile {
         Device->CreateShaderResourceView(_Resource, &_SRVDesc, CpuHandle(_Slot));
     }
 
+    void FTextureSRVHeap::CreateUAV(ID3D12Device* Device, ID3D12Resource* _Resource,
+                                     const D3D12_UNORDERED_ACCESS_VIEW_DESC& _UAVDesc, u32 _Slot) {
+        Device->CreateUnorderedAccessView(_Resource, nullptr, &_UAVDesc, CpuHandle(_Slot));
+    }
+
     D3D12_CPU_DESCRIPTOR_HANDLE FTextureSRVHeap::CpuHandle(u32 _Slot) const {
         D3D12_CPU_DESCRIPTOR_HANDLE Handle =
             Heap->GetCPUDescriptorHandleForHeapStart();

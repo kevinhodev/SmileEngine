@@ -32,8 +32,40 @@ namespace Smile {
         CreateConstantBuffer();
         CreateDefaultMaterial();
 
+        // IBL: build the HDR pipeline (BRDF LUT + default black env), the
+        // contiguous descriptor table for the PS, and the skybox PSO.
+        HDREnv.Initialize(Device.Native(), CommandQueue, SRVHeap);
+        CreateIBLDescriptorTable();
+        Skybox.Initialize(Device.Native(), MSAASampleCount,
+                          FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+
         Initialized = true;
         LogInfo("Renderer inicializado");
+    }
+
+    void Renderer::CreateIBLDescriptorTable() {
+        // Reserve 3 contiguous slots and copy the IBL SRVs (which live elsewhere
+        // in the heap, allocated as cubes are created) into them. The PS root
+        // signature binds this table at t6..t8.
+        IBLTableStart = SRVHeap.Allocate(3);
+
+        D3D12_CPU_DESCRIPTOR_HANDLE DstStart = SRVHeap.CpuHandle(IBLTableStart);
+        D3D12_CPU_DESCRIPTOR_HANDLE Sources[3] = {
+            SRVHeap.CpuHandle(HDREnv.IrradianceSRV()),
+            SRVHeap.CpuHandle(HDREnv.SpecularSRV()),
+            SRVHeap.CpuHandle(HDREnv.BRDFLutSRV()),
+        };
+        UINT DstCount = 3;
+        UINT SrcCounts[3] = { 1, 1, 1 };
+        Device.Native()->CopyDescriptors(1, &DstStart, &DstCount,
+                                          3, Sources, SrcCounts,
+                                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    bool Renderer::LoadHDREnvironment(const std::wstring& _Path) {
+        if (!Initialized) return false;
+        CommandQueue.Flush();
+        return HDREnv.LoadFromFile(Device.Native(), CommandQueue, SRVHeap, _Path);
     }
 
     void Renderer::CreateDefaultMaterial() {
@@ -228,6 +260,8 @@ namespace Smile {
         CommandQueue.Flush();
         MSAASampleCount = _SampleCount;
         PipelineState.RecreatePSO(Device.Native(), MSAASampleCount);
+        Skybox.Recreate(Device.Native(), MSAASampleCount,
+                        FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
         CreateMSAABuffers();
         CreateDepthBuffer();
     }
@@ -274,6 +308,11 @@ namespace Smile {
         MappedCB->CameraPosition = { CameraPosition.X, CameraPosition.Y, CameraPosition.Z, 1.0f };
         MappedCB->LightPosition  = { 2.0f, 2.0f, -2.0f, 1.0f };
         MappedCB->LightColor     = { 1.0f, 0.9f, 0.8f, 8.0f };
+        // IBL: x=intensity, y=rotation, z=maxMip (specularMips-1), w=enabled
+        const f32 IBLEnabled = HDREnv.HasHDRLoaded() ? 1.0f : 0.0f;
+        MappedCB->IBLParams      = { IBLIntensity, IBLRotation,
+                                     static_cast<f32>(FHDREnvironment::kSpecularMips - 1),
+                                     IBLEnabled };
 
         CommandQueue.ResetForRecording();
         auto* CommandList = CommandQueue.List();
@@ -318,12 +357,29 @@ namespace Smile {
         ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
 
+        // --- Skybox (renders to far-plane depth, before geometry) ---
+        if (ShowSkybox && HDREnv.HasHDRLoaded()) {
+            // Build view-projection without translation, then invert for the VS.
+            Mat44 ViewNoTrans = View;
+            ViewNoTrans.M[3][0] = 0.0f;
+            ViewNoTrans.M[3][1] = 0.0f;
+            ViewNoTrans.M[3][2] = 0.0f;
+            Mat44 VPNoTrans       = ViewNoTrans * Projection;
+            Mat44 InvVPNoTrans    = VPNoTrans.Inverse();
+            Skybox.Render(CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
+                          InvVPNoTrans, IBLIntensity, IBLRotation);
+        }
+
+        // --- Scene geometry ---
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
         CommandList->SetPipelineState(PipelineState.PSO());
 
         CommandList->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
 
         ActiveMaterial->Bind(CommandList, SRVHeap);
+
+        // IBL descriptor table at root param 3 (t6..t8).
+        CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
 
         CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);

@@ -2,6 +2,7 @@
 #include "SmileEditor/AboutDialog.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/MaterialEditorPanel.h"
+#include "SmileEditor/EnvironmentPanel.h"
 #include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
@@ -143,6 +144,14 @@ namespace SmileEditor {
         addDockWidget(Qt::RightDockWidgetArea, MaterialDock);
         MaterialDock->setMinimumWidth(240);
 
+        auto* EnvironmentDock = new QDockWidget(tr("Environment"), this);
+        EnvironmentDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+        EnvironmentDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+        EnvPanel = new EnvironmentPanel(EnvironmentDock);
+        EnvironmentDock->setWidget(EnvPanel);
+        addDockWidget(Qt::RightDockWidgetArea, EnvironmentDock);
+        EnvironmentDock->setMinimumWidth(240);
+
         auto* ConsoleDock = new QDockWidget(tr("Console"), this);
         ConsoleDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
 
@@ -169,8 +178,9 @@ namespace SmileEditor {
     }
 
     void MainWindow::OnRendererReady() {
-        if (MaterialPanel && Viewport && Viewport->GetRenderer())
-            MaterialPanel->InitializeWithRenderer(Viewport->GetRenderer());
+        if (!Viewport || !Viewport->GetRenderer()) return;
+        if (MaterialPanel) MaterialPanel->InitializeWithRenderer(Viewport->GetRenderer());
+        if (EnvPanel)      EnvPanel     ->InitializeWithRenderer(Viewport->GetRenderer());
     }
 
     void MainWindow::OnMSAAChanged(int _SampleCount) {

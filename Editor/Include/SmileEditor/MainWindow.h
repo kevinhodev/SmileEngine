@@ -12,6 +12,7 @@ namespace SmileEditor {
     class ViewportWidget;
     class AboutDialog;
     class MaterialEditorPanel;
+    class EnvironmentPanel;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -39,6 +40,7 @@ namespace SmileEditor {
         QTextEdit*            LogOutput   = nullptr;
 
         MaterialEditorPanel*  MaterialPanel    = nullptr;
+        EnvironmentPanel*     EnvPanel         = nullptr;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

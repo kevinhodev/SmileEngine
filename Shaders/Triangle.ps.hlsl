@@ -9,6 +9,7 @@ cbuffer TransformCB : register(b0) {
     float4 CameraPosition;
     float4 LightDirection; // xyz = world position of point light
     float4 LightColor;     // rgb = color, w = brightness
+    float4 IBLParams;      // x = intensity, y = rotation (rad), z = maxMip (specular), w = enabled (0/1)
 };
 
 cbuffer MaterialCB : register(b1) {
@@ -38,7 +39,12 @@ Texture2D AOMap                : register(t3);
 Texture2D HeightMap            : register(t4);
 Texture2D EmissiveMap          : register(t5);
 
-SamplerState MaterialSampler   : register(s0); // anisotropic wrap (static in root sig)
+TextureCube IrradianceMap      : register(t6); // diffuse irradiance cube
+TextureCube PrefilteredMap     : register(t7); // GGX prefiltered specular cube (mip = roughness * maxMip)
+Texture2D   BRDFLut            : register(t8); // Karis split-sum LUT (RG16F: F0 scale, F0 bias)
+
+SamplerState MaterialSampler   : register(s0); // anisotropic wrap (materials)
+SamplerState IBLSampler        : register(s1); // trilinear clamp   (cube + LUT)
 
 // --- Input ---
 
@@ -59,7 +65,7 @@ struct PSInput {
 #define POM_SECANT_STEPS      4
 #define POM_FADE_START        5.0f    // meters: full POM until this distance
 #define POM_FADE_RANGE        10.0f   // meters: fade interval to flat
-#define POM_VIEWZ_CLAMP       0.30f   // anti-stretch in grazing angles
+#define POM_VIEWZ_CLAMP       0.45f   // anti-stretch in grazing angles (bumped from 0.30 — kills more buzz)
 
 // --- PBR Functions ---
 
@@ -105,6 +111,17 @@ float3 F_Schlick(float3 SpecularColor, float VoH) {
     return f90 * Fc + (1.0f - Fc) * SpecularColor;
 }
 
+// Roughness-aware Schlick: clamps Fresnel on rough surfaces (used only for IBL).
+float3 F_SchlickRoughness(float3 F0, float cosTheta, float roughness) {
+    float r1 = 1.0f - roughness;
+    return F0 + (max(float3(r1, r1, r1), F0) - F0) * pow(1.0f - cosTheta, 5.0f);
+}
+
+float3 RotateY(float3 v, float angle) {
+    float s = sin(angle), c = cos(angle);
+    return float3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+}
+
 // --- Interleaved-gradient noise (Jorge Jimenez). Deterministic per-pixel jitter. ---
 float IGN(float2 screenPos) {
     return frac(52.9829189f * frac(dot(screenPos, float2(0.06711056f, 0.00583715f))));
@@ -146,6 +163,13 @@ float2 ParallaxOcclusionMapping(
     // --- Distance fade. Skip POM entirely beyond fade range. ---
     float dist = length(CameraPosition.xyz - WorldPos);
     float fade = saturate(1.0f - (dist - POM_FADE_START) / POM_FADE_RANGE);
+
+    // --- Grazing-angle fade. Below NoV~0.35 the ray steps become too coarse
+    // and aliasing produces a visible "buzz band" at the horizon of a surface.
+    // Smooth ramp from 0.20 (full kill) to 0.45 (full POM). Multiplies fade.
+    float NoV = saturate(dot(V, N));
+    fade *= smoothstep(0.20f, 0.45f, NoV);
+
     OutFade = fade;
     if (fade <= 0.001f) {
         OutDepth = 0.0f;
@@ -297,9 +321,12 @@ PSOutput main(PSInput input) {
         BaseColor *= AlbedoMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy).rgb;
 
     // --- Normal ---
-    float3 N = GeoN;
+    float3 N         = GeoN;
+    float  ToksvigT  = 1.0f; // Toksvig factor from normal map .a; 1.0 = no per-mip variance
     if (HasNormalMap) {
-        float3 SampledNormal = NormalMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy).rgb;
+        float4 NrmSample      = NormalMap.SampleGrad(MaterialSampler, UV, POMdUVdx, POMdUVdy);
+        float3 SampledNormal  = NrmSample.rgb;
+        ToksvigT              = NrmSample.a;
         float3 dPdx = ddx(input.worldPos);
         float3 dPdy = ddy(input.worldPos);
         // Pass ORIGINAL UV derivatives so the TBN is continuous across the surface.
@@ -316,12 +343,25 @@ PSOutput main(PSInput input) {
     }
     Roughness = max(Roughness, 0.04f); // avoid mirror-perfect surfaces
 
-    // --- Specular Anti-Aliasing (Geometric Roughness Filter) ---
-    float3 dNdx = ddx(N);
-    float3 dNdy = ddy(N);
-    float normalVariance = max(dot(dNdx, dNdx), dot(dNdy, dNdy));
-    float geometricRoughness = saturate(normalVariance * 2.0f);
-    Roughness = max(Roughness, geometricRoughness);
+    // --- Specular Anti-Aliasing (Karis SAA + Toksvig combined in α² space) ---
+    // Both contributions accumulate as variances on α² (microfacet variance):
+    //   • Karis: per-pixel normal derivative captures screen-space normal change.
+    //     0.18 cap prevents over-darkening from high-frequency normal map noise.
+    //   • Toksvig: mip-level normal variance encoded as .a during normal map
+    //     mipgen. T=1 (mip 0) contributes 0; lower T (high mips, blended via
+    //     bilinear) contributes (1 - T²).
+    // Final α² = α²_base + kernel_karis + toksvig_var, clamped, then converted
+    // back to perceptual roughness via sqrt(sqrt(...)) for the rest of the PS.
+    {
+        float3 dNdx = ddx(N);
+        float3 dNdy = ddy(N);
+        float variance         = 0.25f * (dot(dNdx, dNdx) + dot(dNdy, dNdy));
+        float kernelRoughness2 = min(2.0f * variance, 0.18f);
+        float toksvigVar       = 1.0f - ToksvigT * ToksvigT; // 0 when T=1
+        float aLin             = Roughness * Roughness;      // perceptual² = α (GGX linear)
+        float a2New            = saturate(aLin * aLin + kernelRoughness2 + toksvigVar);
+        Roughness              = sqrt(sqrt(a2New));          // back to perceptual
+    }
 
     // --- Ambient Occlusion ---
     float AO = 1.0f;
@@ -400,9 +440,26 @@ PSOutput main(PSInput input) {
         Lighting        = (Diffuse + Specular) * Radiance * NoL;
     }
 
-    // --- Ambient (hemispheric sky simulation) ---
-    float  SkyOcclusion = dot(N, float3(0.0f, 1.0f, 0.0f)) * 0.5f + 0.5f;
-    float3 Ambient      = float3(0.05f, 0.06f, 0.08f) * BaseColor * SkyOcclusion * AO;
+    // --- Ambient (Image-Based Lighting, split-sum) ---
+    float3 Ambient = float3(0.0f, 0.0f, 0.0f);
+    if (IBLParams.w > 0.5f) {
+        float3 RotN = RotateY(N, IBLParams.y);
+        float3 R    = reflect(-V, N);
+        float3 RotR = RotateY(R, IBLParams.y);
+
+        float3 F        = F_SchlickRoughness(SpecularColor, NoV, Roughness);
+        float3 KdIBL    = (1.0f - F) * (1.0f - Metallic);
+
+        float3 Irradiance  = IrradianceMap.SampleLevel(IBLSampler, RotN, 0.0f).rgb;
+        float3 DiffuseIBL  = KdIBL * DiffuseColor * Irradiance;
+
+        float  Mip         = Roughness * IBLParams.z;
+        float3 Prefiltered = PrefilteredMap.SampleLevel(IBLSampler, RotR, Mip).rgb;
+        float2 BRDF        = BRDFLut.SampleLevel(IBLSampler, float2(NoV, Roughness), 0.0f).rg;
+        float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y);
+
+        Ambient = (DiffuseIBL + SpecularIBL) * AO * IBLParams.x;
+    }
 
     // --- Emissive ---
     float3 Emissive = EmissiveFactor.rgb * EmissiveStrength;
@@ -417,9 +474,13 @@ PSOutput main(PSInput input) {
     output.color = float4(FinalColor, 1.0f);
 
     // --- Pixel Depth Offset (PDO) ---
-    // Only write modified depth when POM is actually contributing. Beyond the fade
-    // range the surface is flat and SV_Depth is a pure waste (and disables Hi-Z).
-    if (HasHeightMap && POMFade > 0.001f) {
+    // Write modified depth ONLY when POM is fully contributing (POMFade > 0.8).
+    // In the fade zone (0 < POMFade < 0.8), per-fragment POMDepth varies
+    // discontinuously across adjacent pixels — with MSAA, all subsamples share
+    // the fragment's SV_Depth, so MSAA can't smooth that variance and it shows
+    // as a noise band. Keep the UV displacement (preserves parallax look) but
+    // fall back to geometric depth in the fade zone.
+    if (HasHeightMap && POMFade > 0.8f) {
         float effectiveScale = HeightScale * POMFade;
         float3 WorldPosDisplaced = input.worldPos - GeoN * (POMDepth * effectiveScale);
         float4 PosClip = mul(float4(WorldPosDisplaced, 1.0f), MVP);
