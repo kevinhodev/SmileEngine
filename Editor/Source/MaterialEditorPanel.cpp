@@ -21,6 +21,7 @@ namespace SmileEditor {
         { "Metallic/Roughness"  },
         { "Oclusão Ambiente"    },
         { "Emissivo"            },
+        { "Mapa de Altura"      },
     };
 
     MaterialEditorPanel::MaterialEditorPanel(QWidget* _Parent)
@@ -52,6 +53,7 @@ namespace SmileEditor {
 
         Layout->addWidget(BuildTexturesSection());
         Layout->addWidget(BuildParametersSection());
+        Layout->addWidget(BuildParallaxSection());
         Layout->addStretch();
 
         ScrollArea->setWidget(Inner);
@@ -153,6 +155,73 @@ namespace SmileEditor {
         return Group;
     }
 
+    QWidget* MaterialEditorPanel::BuildParallaxSection() {
+        auto* Group = new QGroupBox(tr("Parallax (POM)"), this);
+        Group->setObjectName("MaterialParametersGroup");
+
+        auto* FormLayout = new QFormLayout(Group);
+        FormLayout->setContentsMargins(4, 8, 4, 4);
+        FormLayout->setSpacing(4);
+        FormLayout->setLabelAlignment(Qt::AlignRight);
+
+        auto MakeLabel = [&](const char* _Text) -> QLabel* {
+            auto* Label = new QLabel(tr(_Text), Group);
+            Label->setObjectName("MaterialParamLabel");
+            return Label;
+        };
+        auto MakeSpinbox = [&](double _Min, double _Max, double _Step, double _Value, int _Decimals) -> QDoubleSpinBox* {
+            auto* s = new QDoubleSpinBox(Group);
+            s->setObjectName("MaterialSpinBox");
+            s->setRange(_Min, _Max);
+            s->setSingleStep(_Step);
+            s->setValue(_Value);
+            s->setDecimals(_Decimals);
+            s->setFixedWidth(72);
+            return s;
+        };
+
+        HeightScaleSpin = MakeSpinbox(0.0, 0.5, 0.005, Material.Constants.HeightScale, 3);
+        FormLayout->addRow(MakeLabel("Escala"), HeightScaleSpin);
+        connect(HeightScaleSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnHeightScaleChanged);
+
+        ParallaxMinSpin = MakeSpinbox(1.0, 256.0, 1.0, Material.Constants.ParallaxMinSteps, 0);
+        FormLayout->addRow(MakeLabel("Passos mín."), ParallaxMinSpin);
+        connect(ParallaxMinSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnParallaxMinStepsChanged);
+
+        ParallaxMaxSpin = MakeSpinbox(1.0, 256.0, 1.0, Material.Constants.ParallaxMaxSteps, 0);
+        FormLayout->addRow(MakeLabel("Passos máx."), ParallaxMaxSpin);
+        connect(ParallaxMaxSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnParallaxMaxStepsChanged);
+
+        ParallaxSelfShadowChk = new QCheckBox(tr("Auto-sombra"), Group);
+        ParallaxSelfShadowChk->setObjectName("MaterialDirectXCheck");
+        FormLayout->addRow(ParallaxSelfShadowChk);
+        connect(ParallaxSelfShadowChk, &QCheckBox::toggled, this, &MaterialEditorPanel::OnParallaxSelfShadowChanged);
+
+        ParallaxShadowStepsSpin = MakeSpinbox(1.0, 128.0, 1.0, Material.Constants.ParallaxShadowSteps, 0);
+        FormLayout->addRow(MakeLabel("Passos sombra"), ParallaxShadowStepsSpin);
+        connect(ParallaxShadowStepsSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnParallaxShadowStepsChanged);
+
+        ParallaxFadeStartSpin = MakeSpinbox(0.0, 12.0, 0.5, Material.Constants.ParallaxFadeStart, 1);
+        FormLayout->addRow(MakeLabel("Fade início"), ParallaxFadeStartSpin);
+        connect(ParallaxFadeStartSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnParallaxFadeStartChanged);
+
+        ParallaxFadeRangeSpin = MakeSpinbox(0.5, 12.0, 0.5, Material.Constants.ParallaxFadeRange, 1);
+        FormLayout->addRow(MakeLabel("Fade alcance"), ParallaxFadeRangeSpin);
+        connect(ParallaxFadeRangeSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnParallaxFadeRangeChanged);
+
+        ParallaxRefineChk = new QCheckBox(tr("Refino (busca binária)"), Group);
+        ParallaxRefineChk->setObjectName("MaterialDirectXCheck");
+        FormLayout->addRow(ParallaxRefineChk);
+        connect(ParallaxRefineChk, &QCheckBox::toggled, this, &MaterialEditorPanel::OnParallaxRefineChanged);
+
+        ParallaxRefineStepsSpin = MakeSpinbox(1.0, 8.0, 1.0, Material.Constants.ParallaxRefineSteps, 0);
+        ParallaxRefineStepsSpin->setEnabled(ParallaxRefineChk->isChecked());
+        FormLayout->addRow(MakeLabel("Iterações refino"), ParallaxRefineStepsSpin);
+        connect(ParallaxRefineStepsSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnParallaxRefineStepsChanged);
+
+        return Group;
+    }
+
     Smile::EDefaultTexture MaterialEditorPanel::FallbackTypeForSlot(int _Slot) {
         using E = Smile::EDefaultTexture;
         switch (_Slot) {
@@ -161,6 +230,7 @@ namespace SmileEditor {
             case 2: return E::ORM;         // MetallicRoughness
             case 3: return E::White;       // AO
             case 4: return E::Black;       // Emissive
+            case 5: return E::White;       // Height (1.0 = surface top → zero parallax)
             default: return E::White;
         }
     }
@@ -181,6 +251,7 @@ namespace SmileEditor {
         Material.MetallicRoughness = &FallbackTexture[2];
         Material.AO                = &FallbackTexture[3];
         Material.Emissive          = &FallbackTexture[4];
+        Material.Height            = &FallbackTexture[5];
 
         Material.Constants.BaseColorFactor  = {
             BaseColorValue.redF(),
@@ -212,6 +283,7 @@ namespace SmileEditor {
             case 2: Material.MetallicRoughness = _Texture; break;
             case 3: Material.AO                = _Texture; break;
             case 4: Material.Emissive          = _Texture; break;
+            case 5: Material.Height            = _Texture; break;
         }
     }
 
@@ -223,6 +295,7 @@ namespace SmileEditor {
             case 2: Material.Constants.HasMetallicRoughnessMap = Value; break;
             case 3: Material.Constants.HasAOMap                = Value; break;
             case 4: Material.Constants.HasEmissiveMap          = Value; break;
+            case 5: Material.Constants.HasHeightMap            = Value; break;
         }
     }
 
@@ -351,4 +424,60 @@ namespace SmileEditor {
         Material.Constants.NormalFlipY = _Checked ? 1u : 0u;
         Material.UpdateConstants();
     }
-} 
+
+    void MaterialEditorPanel::OnHeightScaleChanged(double _Value) {
+        if (!RendererPtr) return;
+        Material.Constants.HeightScale = static_cast<Smile::f32>(_Value);
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxMinStepsChanged(double _Value) {
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxMinSteps = static_cast<Smile::f32>(_Value);
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxMaxStepsChanged(double _Value) {
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxMaxSteps = static_cast<Smile::f32>(_Value);
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxSelfShadowChanged(bool _Checked) {
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxSelfShadow = _Checked ? 1u : 0u;
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxShadowStepsChanged(double _Value) {
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxShadowSteps = static_cast<Smile::f32>(_Value);
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxFadeStartChanged(double _Value) {
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxFadeStart = static_cast<Smile::f32>(_Value);
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxFadeRangeChanged(double _Value) {
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxFadeRange = static_cast<Smile::f32>(_Value);
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxRefineChanged(bool _Checked) {
+        if (ParallaxRefineStepsSpin)
+            ParallaxRefineStepsSpin->setEnabled(_Checked);
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxRefine = _Checked ? 1u : 0u;
+        Material.UpdateConstants();
+    }
+
+    void MaterialEditorPanel::OnParallaxRefineStepsChanged(double _Value) {
+        if (!RendererPtr) return;
+        Material.Constants.ParallaxRefineSteps = static_cast<Smile::u32>(_Value);
+        Material.UpdateConstants();
+    }
+}

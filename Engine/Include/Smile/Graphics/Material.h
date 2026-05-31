@@ -22,19 +22,33 @@ namespace Smile {
         u32   HasEmissiveMap          = 0;
         float NormalStrength          = 1.0f;
         u32   NormalFlipY             = 0;
-        u8    _Pad[180] = {};
+
+        // Parallax Occlusion Mapping (height map in texture slot 5)
+        u32   HasHeightMap            = 0;
+        float HeightScale             = 0.05f;   // max UV displacement at depth 1
+        float ParallaxMinSteps        = 8.0f;    // samples head-on
+        float ParallaxMaxSteps        = 32.0f;   // samples at grazing angles
+        u32   ParallaxSelfShadow      = 0;       // 1 = trace soft self-shadow
+        float ParallaxShadowSteps     = 16.0f;
+        float ParallaxFadeStart       = 3.0f;    // height-map mip where POM begins to fade
+        float ParallaxFadeRange       = 5.0f;    // mips over which POM fades to flat (0 = off)
+        u32   ParallaxRefine          = 0;       // 1 = binary-search refine the hit (sharper)
+        u32   ParallaxRefineSteps     = 5;       // binary-search iterations (1 = cheapest)
+
+        u8    _Pad[140] = {};
     };
     static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants must be 256 bytes");
 
-    inline constexpr u32 kMaterialTextureSlots = 5;
+    inline constexpr u32 kMaterialTextureSlots = 6;
 
     class FMaterial {
     public:
         FTexture* Albedo            = nullptr; 
         FTexture* Normal            = nullptr; 
         FTexture* MetallicRoughness = nullptr; 
-        FTexture* AO                = nullptr; 
-        FTexture* Emissive          = nullptr; 
+        FTexture* AO                = nullptr;
+        FTexture* Emissive          = nullptr;
+        FTexture* Height            = nullptr;
 
         MaterialConstants Constants;
 

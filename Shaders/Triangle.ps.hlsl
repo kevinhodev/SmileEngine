@@ -1,5 +1,5 @@
 // PBR Pixel Shader — Cook-Torrance BRDF with full PBR texture support.
-// Texture slots (t0-t4) must match Material.h kMaterialTextureSlots order.
+// Texture slots (t0-t5) must match Material.h kMaterialTextureSlots order.
 
 // --- Constant Buffers ---
 
@@ -26,6 +26,18 @@ cbuffer MaterialCB : register(b1) {
     uint   HasEmissiveMap;
     float  NormalStrength;
     uint   NormalFlipY;    // 1 = DirectX convention (G inverted), 0 = OpenGL
+
+    // --- Parallax Occlusion Mapping (height map at t5) ---
+    uint   HasHeightMap;
+    float  HeightScale;        // max UV displacement at depth 1 (≈ 0.02..0.10)
+    float  ParallaxMinSteps;   // ray-march samples when viewed head-on
+    float  ParallaxMaxSteps;   // ray-march samples at grazing angles
+    uint   ParallaxSelfShadow; // 1 = trace soft self-shadow toward the light
+    float  ParallaxShadowSteps;
+    float  ParallaxFadeStart;  // height-map mip where POM starts fading to flat
+    float  ParallaxFadeRange;  // mips over which POM fades out (kills distant/grazing swimming)
+    uint   ParallaxRefine;     // 1 = binary-search refine the intersection (sharper hit)
+    uint   ParallaxRefineSteps; // binary-search iterations when refine is enabled
 };
 
 // --- Texture Slots ---
@@ -35,6 +47,7 @@ Texture2D NormalMap            : register(t1);
 Texture2D MetallicRoughnessMap : register(t2); // R=Metallic, G=Roughness (glTF convention)
 Texture2D AOMap                : register(t3);
 Texture2D EmissiveMap          : register(t4);
+Texture2D HeightMap            : register(t5); // R = height [0,1] (1 = surface, 0 = deepest)
 
 TextureCube IrradianceMap      : register(t6); // diffuse irradiance cube
 TextureCube PrefilteredMap     : register(t7); // GGX prefiltered specular cube (mip = roughness * maxMip)
@@ -114,14 +127,18 @@ float3 RotateY(float3 v, float angle) {
 
 
 // --- Tangent space from screen-space derivatives ---
-float3 PerturbNormal(float3 N, float3 dPdx, float3 dPdy, float2 dUVdx, float2 dUVdy, float3 SampledNormal) {
-    float3 T = normalize(dUVdy.y * dPdx - dUVdx.y * dPdy);
-    float3 B = normalize(dUVdx.x * dPdy - dUVdy.x * dPdx);
+// Built once per pixel and shared by POM (view→tangent) and normal mapping.
+void BuildTangentBasis(float3 N, float3 dPdx, float3 dPdy, float2 dUVdx, float2 dUVdy,
+                       out float3 T, out float3 B) {
+    T = normalize(dUVdy.y * dPdx - dUVdx.y * dPdy);
+    B = normalize(dUVdx.x * dPdy - dUVdy.x * dPdx);
     // Gram-Schmidt orthonormalize against N for stability
     T = normalize(T - N * dot(N, T));
     B = normalize(cross(N, T)); // re-derive B to guarantee orthonormality
-    float3x3 TBN = float3x3(T, B, N);
+}
 
+float3 ApplyNormalMap(float3 N, float3 T, float3 B, float3 SampledNormal) {
+    float3x3 TBN = float3x3(T, B, N);
     // Remap [0,1] -> [-1,1], scale XY by NormalStrength
     float3 n = SampledNormal * 2.0f - 1.0f;
     if (NormalFlipY) n.y = -n.y; // DirectX → OpenGL: invert green channel
@@ -130,10 +147,135 @@ float3 PerturbNormal(float3 N, float3 dPdx, float3 dPdy, float2 dUVdx, float2 dU
 }
 
 
-float4 main(PSInput input) : SV_TARGET {
-    float2 UV          = input.uv;
-    float3 GeoN        = normalize(input.worldNormal);
+// --- Parallax Occlusion Mapping ---------------------------------------------
+// Synthesis of the three engines studied:
+//   • Flax  — linear ray-march + single secant intersection, tangent space,
+//             SampleGrad for correct mips (MaterialGenerator.Textures.cpp:255).
+//   • Unreal— view-dependent step count and the soft self-shadow loop
+//             (ParallaxOcclusionMapping material function).
+//   • Cry   — quality scaling idea (HasHeightMap gate ≈ off/on tier) and the
+//             grazing-angle step ramp (shadeLib.txt:1136 / CommonZPasscfi:289).
+// Convention: height map R in [0,1], 1 = surface top, 0 = deepest. All vectors
+// in tangent space; Vts = surface→camera dir (Vts.z = N·V).
+//
+// 'fade' (0..1) scales displacement toward 0 at distance/grazing (see ParallaxFade)
+// so the height field melts into the plain normal map instead of swimming.
 
+// Mip-derived fade factor: 1 = full POM, 0 = flat. High mip (far away OR grazing,
+// where the UV derivatives stretch) fades out — the trick Unreal/Cry use to hide
+// the swimming/streaking artifacts at shallow angles and distance.
+float ParallaxFade(float2 dUVdx, float2 dUVdy) {
+    float2 texSize;
+    HeightMap.GetDimensions(texSize.x, texSize.y);
+    float2 dx  = dUVdx * texSize;
+    float2 dy  = dUVdy * texSize;
+    float  mip = 0.5f * log2(max(dot(dx, dx), dot(dy, dy)));
+    return saturate(1.0f - (mip - ParallaxFadeStart) / max(ParallaxFadeRange, 1e-4f));
+}
+
+float2 ParallaxOcclusionMapping(float2 uv, float3 Vts, float2 dUVdx, float2 dUVdy,
+                                float fade, out float outSurfaceHeight) {
+    // More samples at grazing angles (Vts.z→0), fewer head-on (Vts.z→1).
+    float numSteps = lerp(ParallaxMaxSteps, ParallaxMinSteps, saturate(Vts.z));
+    float stepSize = 1.0f / numSteps;
+
+    // Total UV travel along the view ray (heightmap convention → offset opposes Vts.xy).
+    float2 maxOffset = -(Vts.xy / max(Vts.z, 1e-4f)) * (HeightScale * fade);
+    float2 deltaUV   = maxOffset * stepSize;
+
+    float  rayHeight  = 1.0f;
+    float  lastHeight = 1.0f;
+    float2 currOffset = 0.0f;
+    float2 lastOffset = 0.0f;
+    float  currHeight = HeightMap.SampleGrad(MaterialSampler, uv, dUVdx, dUVdy).r;
+
+    [loop]
+    for (int i = 0; i < (int)numSteps; ++i) {
+        if (currHeight >= rayHeight) break;     // ray dipped below the surface
+        lastOffset = currOffset;  lastHeight = currHeight;
+        rayHeight -= stepSize;    currOffset += deltaUV;
+        currHeight = HeightMap.SampleGrad(MaterialSampler, uv + currOffset, dUVdx, dUVdy).r;
+    }
+
+    // --- Resolve the exact hit inside the bracketing interval ---
+    // [lastOffset,lastHeight] = ray still above surface; [currOffset,currHeight] = below.
+    float2 finalOffset;
+    if (ParallaxRefine) {
+        // Binary search (CryEngine-style regula-falsi): a few iterations refine the
+        // crossing, removing the stair-stepping the single secant leaves up close.
+        // t parametrizes the interval: 0 = lastOffset (above), 1 = currOffset (below).
+        float tLow = 0.0f, tHigh = 1.0f;
+        [loop]
+        for (int j = 0; j < (int)ParallaxRefineSteps; ++j) {
+            float  tMid   = 0.5f * (tLow + tHigh);
+            float2 offMid = lerp(lastOffset, currOffset, tMid);
+            float  rayMid = rayHeight + stepSize * (1.0f - tMid);
+            float  hMid   = HeightMap.SampleGrad(MaterialSampler, uv + offMid, dUVdx, dUVdy).r;
+            if (hMid >= rayMid) tHigh = tMid; else tLow = tMid;
+        }
+        float t          = 0.5f * (tLow + tHigh);
+        finalOffset      = lerp(lastOffset, currOffset, t);
+        outSurfaceHeight = rayHeight + stepSize * (1.0f - t);
+    } else {
+        // Single secant interpolation between the two bracketing samples (Flax/UE).
+        float afterDepth  = currHeight - rayHeight;
+        float beforeDepth = lastHeight - (rayHeight + stepSize);
+        float t           = afterDepth / max(afterDepth - beforeDepth, 1e-5f); // weight → last
+        finalOffset       = lerp(currOffset, lastOffset, t);
+        outSurfaceHeight  = rayHeight + stepSize * t;
+    }
+    return uv + finalOffset;
+}
+
+// Soft self-shadow: march from the hit point toward the light and accumulate the
+// largest occluder penetration as a faked penumbra (adapted from Unreal's loop).
+// Returns 1 = fully lit, 0 = fully shadowed.
+float TraceParallaxSelfShadow(float2 uv, float surfaceHeight, float3 Lts,
+                              float2 dUVdx, float2 dUVdy, float fade) {
+    if (Lts.z <= 0.0f) return 0.0f;              // light below the local horizon
+    float  stepSize = 1.0f / ParallaxShadowSteps;
+    float2 deltaUV  = (Lts.xy / Lts.z) * (HeightScale * fade) * stepSize;
+
+    float  shadow    = 0.0f;
+    float  rayHeight = surfaceHeight;
+    float2 offset    = 0.0f;
+    [loop]
+    for (int i = 0; i < (int)ParallaxShadowSteps; ++i) {
+        rayHeight += Lts.z * stepSize;
+        offset    += deltaUV;
+        if (rayHeight >= 1.0f) break;            // climbed above the height field
+        float h = HeightMap.SampleGrad(MaterialSampler, uv + offset, dUVdx, dUVdy).r;
+        if (h > rayHeight)                       // occluded by taller relief
+            shadow = max(shadow, (h - rayHeight) * 8.0f * (1.0f - (float)i / ParallaxShadowSteps));
+    }
+    return 1.0f - saturate(shadow);
+}
+
+
+float4 main(PSInput input) : SV_TARGET {
+    float3 GeoN = normalize(input.worldNormal);
+
+    // --- Tangent basis (built once, shared by POM + normal mapping) ---
+    float3 dPdx  = ddx(input.worldPos);
+    float3 dPdy  = ddy(input.worldPos);
+    float2 dUVdx = ddx(input.uv);   // ORIGINAL UV derivatives → TBN continuous across surface
+    float2 dUVdy = ddy(input.uv);
+    float3 T, B;
+    BuildTangentBasis(GeoN, dPdx, dPdy, dUVdx, dUVdy, T, B);
+
+    float3 V = normalize(CameraPosition.xyz - input.worldPos);
+
+    // --- Parallax Occlusion Mapping (offsets the UV used by every map below) ---
+    float2 UV            = input.uv;
+    float  SurfaceHeight = 1.0f;
+    float  ParallaxFadeF = 0.0f;
+    if (HasHeightMap) {
+        ParallaxFadeF = ParallaxFade(dUVdx, dUVdy);    // 0 far/grazing .. 1 close
+        if (ParallaxFadeF > 0.0f) {
+            float3 Vts = float3(dot(V, T), dot(V, B), dot(V, GeoN)); // surface→camera in tangent space
+            UV = ParallaxOcclusionMapping(input.uv, Vts, dUVdx, dUVdy, ParallaxFadeF, SurfaceHeight);
+        }
+    }
 
     // --- Base Color ---
     float3 BaseColor = BaseColorFactor.rgb;
@@ -144,13 +286,9 @@ float4 main(PSInput input) : SV_TARGET {
     float3 N         = GeoN;
     float  ToksvigT  = 1.0f; // Toksvig factor from normal map .a; 1.0 = no per-mip variance
     if (HasNormalMap) {
-        float4 NrmSample      = NormalMap.Sample(MaterialSampler, UV);
-        float3 SampledNormal  = NrmSample.rgb;
-        ToksvigT              = NrmSample.a;
-        float3 dPdx = ddx(input.worldPos);
-        float3 dPdy = ddy(input.worldPos);
-        // Pass ORIGINAL UV derivatives so the TBN is continuous across the surface.
-        N = PerturbNormal(GeoN, dPdx, dPdy, ddx(input.uv), ddy(input.uv), SampledNormal);
+        float4 NrmSample = NormalMap.Sample(MaterialSampler, UV);
+        N        = ApplyNormalMap(GeoN, T, B, NrmSample.rgb);
+        ToksvigT = NrmSample.a;
     }
 
     // --- Metallic / Roughness ---
@@ -188,8 +326,7 @@ float4 main(PSInput input) : SV_TARGET {
     if (HasAOMap)
         AO = lerp(1.0f, AOMap.Sample(MaterialSampler, UV).r, AOStrength);
 
-    // --- Lighting vectors ---
-    float3 V       = normalize(CameraPosition.xyz - input.worldPos);
+    // --- Lighting vectors --- (V built above, before POM)
     float3 LightP  = LightDirection.xyz;
     float3 LightV  = LightP - input.worldPos;
     float  Dist    = length(LightV);
@@ -252,6 +389,12 @@ float4 main(PSInput input) : SV_TARGET {
 
         float3 Radiance = LightColor.rgb * LightColor.w * Atten;
         Lighting        = (Diffuse + Specular) * Radiance * NoL;
+
+        // POM soft self-shadowing toward the light (tangent-space march)
+        if (ParallaxSelfShadow && HasHeightMap && ParallaxFadeF > 0.0f) {
+            float3 Lts = float3(dot(L, T), dot(L, B), dot(L, GeoN));
+            Lighting  *= TraceParallaxSelfShadow(UV, SurfaceHeight, Lts, dUVdx, dUVdy, ParallaxFadeF);
+        }
     }
 
     // --- Ambient (Image-Based Lighting, split-sum) ---

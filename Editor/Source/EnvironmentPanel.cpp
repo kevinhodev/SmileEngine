@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QDir>
 
 namespace SmileEditor {
     EnvironmentPanel::EnvironmentPanel(QWidget* _Parent)
@@ -105,6 +106,22 @@ namespace SmileEditor {
         IntensitySpin  ->setValue(RendererPtr->GetIBLIntensity());
         RotationSpin   ->setValue(RendererPtr->GetIBLRotation() / Smile::ToRad);
         ShowSkyboxCheck->setChecked(RendererPtr->GetShowSkybox());
+
+        // Auto-carrega o primeiro HDR encontrado em Assets/HDRi como ambiente padrão.
+#ifdef SMILE_ASSETS_DIR
+        QDir HdrDir(QString::fromUtf8(SMILE_ASSETS_DIR) + "/HDRi");
+        const QStringList Hdrs = HdrDir.entryList(QStringList{ "*.hdr" }, QDir::Files, QDir::Name);
+        if (!Hdrs.isEmpty()) {
+            const QString File = HdrDir.filePath(Hdrs.first());
+            if (RendererPtr->LoadHDREnvironment(File.toStdWString())) {
+                CurrentPathLabel->setText(QFileInfo(File).fileName());
+                CurrentPathLabel->setToolTip(File);
+                CurrentPathLabel->setStyleSheet("color: #ddd;");
+            } else {
+                Smile::LogError("EnvironmentPanel: falha ao auto-carregar HDR: " + File.toStdString());
+            }
+        }
+#endif
     }
 
     void EnvironmentPanel::OnBrowseHDR() {
