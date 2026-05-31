@@ -15,5 +15,8 @@ namespace Smile {
         std::vector<u16>    Indices;
 
         static FMesh CreateCube();
+
+        // UV sphere centered at origin. Default radius 0.5 matches the cube's extent.
+        static FMesh CreateSphere(u32 Slices = 64, u32 Stacks = 32, f32 Radius = 0.5f);
     };
 } 

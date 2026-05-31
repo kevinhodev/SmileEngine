@@ -98,11 +98,11 @@ namespace Smile {
     }
 
     void Renderer::CreateGeometryBuffers() {
-        FMesh CubeMesh = FMesh::CreateCube();
+        FMesh SphereMesh = FMesh::CreateSphere();
 
-        const UINT VertexBufferSize = static_cast<UINT>(CubeMesh.Vertices.size() * sizeof(Vertex));
-        const UINT IndexBufferSize  = static_cast<UINT>(CubeMesh.Indices.size()  * sizeof(u16));
-        IndexCount = static_cast<u32>(CubeMesh.Indices.size());
+        const UINT VertexBufferSize = static_cast<UINT>(SphereMesh.Vertices.size() * sizeof(Vertex));
+        const UINT IndexBufferSize  = static_cast<UINT>(SphereMesh.Indices.size()  * sizeof(u16));
+        IndexCount = static_cast<u32>(SphereMesh.Indices.size());
 
         D3D12_HEAP_PROPERTIES HeapProps{};
         HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -125,7 +125,7 @@ namespace Smile {
                  &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                  IID_PPV_ARGS(&VertexBuffer)));
         SMILE_HR(VertexBuffer->Map(0, &NoReadRange, &Mapped));
-        std::memcpy(Mapped, CubeMesh.Vertices.data(), VertexBufferSize);
+        std::memcpy(Mapped, SphereMesh.Vertices.data(), VertexBufferSize);
         VertexBuffer->Unmap(0, nullptr);
 
         VertexBufferView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();
@@ -137,7 +137,7 @@ namespace Smile {
                  &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                  IID_PPV_ARGS(&IndexBuffer)));
         SMILE_HR(IndexBuffer->Map(0, &NoReadRange, &Mapped));
-        std::memcpy(Mapped, CubeMesh.Indices.data(), IndexBufferSize);
+        std::memcpy(Mapped, SphereMesh.Indices.data(), IndexBufferSize);
         IndexBuffer->Unmap(0, nullptr);
 
         IndexBufferView.BufferLocation = IndexBuffer->GetGPUVirtualAddress();

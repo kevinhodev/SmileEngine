@@ -314,7 +314,7 @@ float4 main(PSInput input) : SV_TARGET {
     // --- Specular Anti-Aliasing (Karis SAA + Toksvig combined in α² space) ---
     // Both contributions accumulate as variances on α² (microfacet variance):
     //   • Karis: per-pixel normal derivative captures screen-space normal change.
-    //     0.18 cap prevents over-darkening from high-frequency normal map noise.
+    //     0.25 cap prevents over-darkening from high-frequency normal map noise.
     //   • Toksvig: mip-level normal variance encoded as .a during normal map
     //     mipgen. T=1 (mip 0) contributes 0; lower T (high mips, blended via
     //     bilinear) contributes (1 - T²).
@@ -324,7 +324,7 @@ float4 main(PSInput input) : SV_TARGET {
         float3 dNdx = ddx(N);
         float3 dNdy = ddy(N);
         float variance         = 0.25f * (dot(dNdx, dNdx) + dot(dNdy, dNdy));
-        float kernelRoughness2 = min(2.0f * variance, 0.18f);
+        float kernelRoughness2 = min(2.0f * variance, 0.25f); // higher cap tames POM groove-wall specular fireflies
         float toksvigVar       = 1.0f - ToksvigT * ToksvigT; // 0 when T=1
         float aLin             = Roughness * Roughness;      // perceptual² = α (GGX linear)
         float a2New            = saturate(aLin * aLin + kernelRoughness2 + toksvigVar);
