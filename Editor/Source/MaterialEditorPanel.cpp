@@ -131,7 +131,9 @@ namespace SmileEditor {
         FormLayout->addRow(MakeLabel("Força Normal"), NormalStrSpin);
         connect(NormalStrSpin, &QDoubleSpinBox::valueChanged, this, &MaterialEditorPanel::OnNormalStrengthChanged);
 
-        NormalFlipYCheck = new QCheckBox(tr("Normal DirectX (inverter Y)"), Group);
+        // Padrão = desmarcado = normal map OpenGL/GL (verde invertido p/ D3D).
+        // Marque apenas se o map for DirectX (verde p/ baixo), que dispensa o flip.
+        NormalFlipYCheck = new QCheckBox(tr("Normal map é DirectX"), Group);
         NormalFlipYCheck->setObjectName("MaterialDirectXCheck");
         FormLayout->addRow(NormalFlipYCheck);
         connect(NormalFlipYCheck, &QCheckBox::toggled, this, &MaterialEditorPanel::OnNormalFlipYChanged);

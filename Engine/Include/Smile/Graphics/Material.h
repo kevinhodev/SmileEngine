@@ -21,7 +21,7 @@ namespace Smile {
         u32   HasAOMap                = 0;
         u32   HasEmissiveMap          = 0;
         float NormalStrength          = 1.0f;
-        u32   NormalFlipY             = 0;
+        u32   NormalFlipY             = 0;       // 0 = normal map OpenGL/GL (default); 1 = DirectX
 
         // Parallax Occlusion Mapping (height map in texture slot 5)
         u32   HasHeightMap            = 0;

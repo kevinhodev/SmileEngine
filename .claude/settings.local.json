@@ -8,7 +8,8 @@
       "Read(//d/Engines/**)",
       "Bash(cmd /c \"dir /b /ad D:\\\\Engines\")",
       "Bash(cmd /c \"dir /b /s D:\\\\Engines\\\\FlaxEngine\\\\Source\\\\Shaders\\\\*.hlsl\")",
-      "Bash(findstr /i \"lighting brdf pbr material gbuffer\")"
+      "Bash(findstr /i \"lighting brdf pbr material gbuffer\")",
+      "Bash('/c/Program Files \\(x86\\)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe' -T ps_6_0 -E main -Fo /tmp/triangle.cso D:/Engines/SmileEngine/Shaders/Triangle.ps.hlsl)"
     ]
   }
 }

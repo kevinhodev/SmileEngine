@@ -25,7 +25,7 @@ cbuffer MaterialCB : register(b1) {
     uint   HasAOMap;
     uint   HasEmissiveMap;
     float  NormalStrength;
-    uint   NormalFlipY;    // 1 = DirectX convention (G inverted), 0 = OpenGL
+    uint   NormalFlipY;    // 0 = normal map OpenGL/GL (default, verde invertido p/ D3D); 1 = DirectX
 
     // --- Parallax Occlusion Mapping (height map at t5) ---
     uint   HasHeightMap;
@@ -147,7 +147,12 @@ float3 ApplyNormalMap(float3 N, float3 T, float3 B, float3 SampledNormal) {
     float3x3 TBN = float3x3(T, B, N);
     // Remap [0,1] -> [-1,1], scale XY by NormalStrength
     float3 n = SampledNormal * 2.0f - 1.0f;
-    if (NormalFlipY) n.y = -n.y; // DirectX → OpenGL: invert green channel
+    // Engine D3D (origem da textura no topo-esquerda) + tangente derivada de ∂P/∂V:
+    // nessa combinação o verde "+Y" de um normal map GL (padrão glTF/AmbientCG) aponta
+    // pro topo da imagem, oposto ao bitangent (que segue +V = base). Logo o GL PRECISA
+    // do flip do verde, e o DirectX NÃO. Por isso o flip é o DEFAULT e só desliga quando
+    // o material marca que o map é DirectX (NormalFlipY=1).
+    if (NormalFlipY == 0) n.y = -n.y;
     n.xy *= NormalStrength;
     return normalize(mul(n, TBN));
 }
@@ -324,7 +329,7 @@ float4 main(PSInput input) : SV_TARGET {
         float3 dNdx = ddx(N);
         float3 dNdy = ddy(N);
         float variance         = 0.25f * (dot(dNdx, dNdx) + dot(dNdy, dNdy));
-        float kernelRoughness2 = min(2.0f * variance, 0.25f); // higher cap tames POM groove-wall specular fireflies
+        float kernelRoughness2 = min(2.0f * variance, 0.25f);
         float toksvigVar       = 1.0f - ToksvigT * ToksvigT; // 0 when T=1
         float aLin             = Roughness * Roughness;      // perceptual² = α (GGX linear)
         float a2New            = saturate(aLin * aLin + kernelRoughness2 + toksvigVar);
