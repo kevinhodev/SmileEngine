@@ -81,6 +81,9 @@ namespace Smile {
         DefaultMaterial.MetallicRoughness = &TexDefaultORM;
         DefaultMaterial.AO                = &TexDefaultWhite;
         DefaultMaterial.Emissive          = &TexDefaultBlack;
+        DefaultMaterial.Height            = &TexDefaultWhite; // 1.0 = sem paralaxe
+        DefaultMaterial.Metalness         = &TexDefaultWhite; // identidade multiplicativa
+        DefaultMaterial.Roughness         = &TexDefaultWhite; // identidade multiplicativa
 
         DefaultMaterial.Constants.BaseColorFactor  = { 0.8f, 0.8f, 0.8f, 1.0f };
         DefaultMaterial.Constants.MetallicFactor   = 0.0f;

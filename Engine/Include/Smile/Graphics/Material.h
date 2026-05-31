@@ -35,11 +35,15 @@ namespace Smile {
         u32   ParallaxRefine          = 0;       // 1 = binary-search refine the hit (sharper)
         u32   ParallaxRefineSteps     = 5;       // binary-search iterations (1 = cheapest)
 
-        u8    _Pad[140] = {};
+        // Separate metalness/roughness maps (slots 6/7), alternative to combined MR (slot 2)
+        u32   HasMetalnessMap         = 0;
+        u32   HasRoughnessMap         = 0;
+
+        u8    _Pad[132] = {};
     };
     static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants must be 256 bytes");
 
-    inline constexpr u32 kMaterialTextureSlots = 6;
+    inline constexpr u32 kMaterialTextureSlots = 8;
 
     class FMaterial {
     public:
@@ -49,6 +53,8 @@ namespace Smile {
         FTexture* AO                = nullptr;
         FTexture* Emissive          = nullptr;
         FTexture* Height            = nullptr;
+        FTexture* Metalness         = nullptr;
+        FTexture* Roughness         = nullptr;
 
         MaterialConstants Constants;
 

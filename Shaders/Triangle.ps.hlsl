@@ -1,5 +1,5 @@
 // PBR Pixel Shader — Cook-Torrance BRDF with full PBR texture support.
-// Texture slots (t0-t5) must match Material.h kMaterialTextureSlots order.
+// Texture slots (t0-t7) must match Material.h kMaterialTextureSlots order.
 
 // --- Constant Buffers ---
 
@@ -38,6 +38,10 @@ cbuffer MaterialCB : register(b1) {
     float  ParallaxFadeRange;  // mips over which POM fades out (kills distant/grazing swimming)
     uint   ParallaxRefine;     // 1 = binary-search refine the intersection (sharper hit)
     uint   ParallaxRefineSteps; // binary-search iterations when refine is enabled
+
+    // Separate metalness/roughness maps (t6/t7), as an alternative to the combined MR (t2)
+    uint   HasMetalnessMap;
+    uint   HasRoughnessMap;
 };
 
 // --- Texture Slots ---
@@ -48,10 +52,12 @@ Texture2D MetallicRoughnessMap : register(t2); // R=Metallic, G=Roughness (glTF 
 Texture2D AOMap                : register(t3);
 Texture2D EmissiveMap          : register(t4);
 Texture2D HeightMap            : register(t5); // R = height [0,1] (1 = surface, 0 = deepest)
+Texture2D MetalnessMap         : register(t6); // R = metalness (separate from combined MR)
+Texture2D RoughnessMap         : register(t7); // R = roughness  (separate from combined MR)
 
-TextureCube IrradianceMap      : register(t6); // diffuse irradiance cube
-TextureCube PrefilteredMap     : register(t7); // GGX prefiltered specular cube (mip = roughness * maxMip)
-Texture2D   BRDFLut            : register(t8); // Karis split-sum LUT (RG16F: F0 scale, F0 bias)
+TextureCube IrradianceMap      : register(t8);  // diffuse irradiance cube
+TextureCube PrefilteredMap     : register(t9);  // GGX prefiltered specular cube (mip = roughness * maxMip)
+Texture2D   BRDFLut            : register(t10); // Karis split-sum LUT (RG16F: F0 scale, F0 bias)
 
 SamplerState MaterialSampler   : register(s0); // anisotropic wrap (materials)
 SamplerState IBLSampler        : register(s1); // trilinear clamp   (cube + LUT)
@@ -299,6 +305,10 @@ float4 main(PSInput input) : SV_TARGET {
         Metallic  *= MR.r;
         Roughness *= MR.g;
     }
+    // Separate maps (override/compose on top of the combined MR; factor must be 1.0
+    // to pass the texture through, same convention as the combined map above).
+    if (HasMetalnessMap) Metallic  *= MetalnessMap.Sample(MaterialSampler, UV).r;
+    if (HasRoughnessMap) Roughness *= RoughnessMap.Sample(MaterialSampler, UV).r;
     Roughness = max(Roughness, 0.04f); // avoid mirror-perfect surfaces
 
     // --- Specular Anti-Aliasing (Karis SAA + Toksvig combined in α² space) ---

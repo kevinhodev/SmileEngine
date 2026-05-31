@@ -33,8 +33,8 @@ namespace Smile {
         // Root layout:
         //   [0] CBV  b0          FrameConstants (all)
         //   [1] CBV  b1          MaterialConstants (PS)
-        //   [2] SRV table t0-t5  material textures (PS)
-        //   [3] SRV table t6-t8  IBL: irradiance cube, prefiltered cube, BRDF LUT (PS)
+        //   [2] SRV table t0-t7  material textures (PS)
+        //   [3] SRV table t8-t10 IBL: irradiance cube, prefiltered cube, BRDF LUT (PS)
         //   Static sampler s0    anisotropic wrap (materials)
         //   Static sampler s1    linear clamp     (cubemaps + LUT)
         D3D12_ROOT_PARAMETER RootParams[4]{};
@@ -51,8 +51,8 @@ namespace Smile {
 
         D3D12_DESCRIPTOR_RANGE MaterialRange{};
         MaterialRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        MaterialRange.NumDescriptors                    = 6;
-        MaterialRange.BaseShaderRegister                = 0; // t0..t5
+        MaterialRange.NumDescriptors                    = 8;
+        MaterialRange.BaseShaderRegister                = 0; // t0..t7
         MaterialRange.RegisterSpace                     = 0;
         MaterialRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -64,7 +64,7 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE IBLRange{};
         IBLRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         IBLRange.NumDescriptors                    = 3;
-        IBLRange.BaseShaderRegister                = 6; // t6..t8
+        IBLRange.BaseShaderRegister                = 8; // t8..t10
         IBLRange.RegisterSpace                     = 0;
         IBLRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 

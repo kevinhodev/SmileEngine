@@ -22,6 +22,8 @@ namespace SmileEditor {
         { "Oclusão Ambiente"    },
         { "Emissivo"            },
         { "Mapa de Altura"      },
+        { "Metalness"           },
+        { "Roughness"           },
     };
 
     MaterialEditorPanel::MaterialEditorPanel(QWidget* _Parent)
@@ -231,6 +233,8 @@ namespace SmileEditor {
             case 3: return E::White;       // AO
             case 4: return E::Black;       // Emissive
             case 5: return E::White;       // Height (1.0 = surface top → zero parallax)
+            case 6: return E::White;       // Metalness (1.0 = identidade multiplicativa)
+            case 7: return E::White;       // Roughness  (1.0 = identidade multiplicativa)
             default: return E::White;
         }
     }
@@ -252,6 +256,8 @@ namespace SmileEditor {
         Material.AO                = &FallbackTexture[3];
         Material.Emissive          = &FallbackTexture[4];
         Material.Height            = &FallbackTexture[5];
+        Material.Metalness         = &FallbackTexture[6];
+        Material.Roughness         = &FallbackTexture[7];
 
         Material.Constants.BaseColorFactor  = {
             BaseColorValue.redF(),
@@ -284,6 +290,8 @@ namespace SmileEditor {
             case 3: Material.AO                = _Texture; break;
             case 4: Material.Emissive          = _Texture; break;
             case 5: Material.Height            = _Texture; break;
+            case 6: Material.Metalness         = _Texture; break;
+            case 7: Material.Roughness         = _Texture; break;
         }
     }
 
@@ -296,6 +304,8 @@ namespace SmileEditor {
             case 3: Material.Constants.HasAOMap                = Value; break;
             case 4: Material.Constants.HasEmissiveMap          = Value; break;
             case 5: Material.Constants.HasHeightMap            = Value; break;
+            case 6: Material.Constants.HasMetalnessMap         = Value; break;
+            case 7: Material.Constants.HasRoughnessMap         = Value; break;
         }
     }
 
