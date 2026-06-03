@@ -3,6 +3,7 @@
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/MaterialEditorPanel.h"
 #include "SmileEditor/EnvironmentPanel.h"
+#include "SmileEditor/SkyCloudPanel.h"
 #include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
@@ -152,6 +153,14 @@ namespace SmileEditor {
         addDockWidget(Qt::LeftDockWidgetArea, EnvironmentDock);
         EnvironmentDock->setMinimumWidth(240);
 
+        auto* SkyDock = new QDockWidget(tr("Céu & Nuvens"), this);
+        SkyDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+        SkyDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+        SkyPanel = new SkyCloudPanel(SkyDock);
+        SkyDock->setWidget(SkyPanel);
+        addDockWidget(Qt::LeftDockWidgetArea, SkyDock);
+        SkyDock->setMinimumWidth(240);
+
         auto* ConsoleDock = new QDockWidget(tr("Console"), this);
         ConsoleDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
 
@@ -181,6 +190,7 @@ namespace SmileEditor {
         if (!Viewport || !Viewport->GetRenderer()) return;
         if (MaterialPanel) MaterialPanel->InitializeWithRenderer(Viewport->GetRenderer());
         if (EnvPanel)      EnvPanel     ->InitializeWithRenderer(Viewport->GetRenderer());
+        if (SkyPanel)      SkyPanel     ->InitializeWithRenderer(Viewport->GetRenderer());
     }
 
     void MainWindow::OnMSAAChanged(int _SampleCount) {

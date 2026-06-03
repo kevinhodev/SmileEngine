@@ -14,6 +14,21 @@ smile_compile_shader(IBL/IrradianceConvolution.cs.hlsl cs_6_0 main SHADER_OUTPUT
 smile_compile_shader(IBL/SpecularPrefilter.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(IBL/BRDFIntegration.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
 
+# Atmosfera (Hillaire) — LUTs base + Sky-View + render do céu
+smile_compile_shader(Atmosphere/BakeTransmittance.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/BakeMultiScatter.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/BakeSkyView.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/SkyAtmosphere.vs.hlsl     vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/SkyAtmosphere.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
+
+# Nuvens volumetricas — bake de ruido 3D + raymarch + composite
+smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/BakeDetailNoise.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/BakeWeather.cs.hlsl           cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/CloudRaymarch.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/CloudComposite.vs.hlsl        vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/CloudComposite.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
+
 add_custom_target(Shaders
     DEPENDS ${SHADER_OUTPUTS}
     SOURCES
@@ -27,6 +42,21 @@ add_custom_target(Shaders
         IBL/IrradianceConvolution.cs.hlsl
         IBL/SpecularPrefilter.cs.hlsl
         IBL/BRDFIntegration.cs.hlsl
+        Atmosphere/AtmosphereCommon.hlsli
+        Atmosphere/BakeTransmittance.cs.hlsl
+        Atmosphere/BakeMultiScatter.cs.hlsl
+        Atmosphere/BakeSkyView.cs.hlsl
+        Atmosphere/SkyAtmosphere.vs.hlsl
+        Atmosphere/SkyAtmosphere.ps.hlsl
+        Clouds/CloudNoiseCommon.hlsli
+        Clouds/CloudDensity.hlsli
+        Clouds/CloudLighting.hlsli
+        Clouds/BakeBaseNoise.cs.hlsl
+        Clouds/BakeDetailNoise.cs.hlsl
+        Clouds/BakeWeather.cs.hlsl
+        Clouds/CloudRaymarch.cs.hlsl
+        Clouds/CloudComposite.vs.hlsl
+        Clouds/CloudComposite.ps.hlsl
 )
 
 # Mantem a pasta Shaders visivel no Visual Studio com seus .hlsl

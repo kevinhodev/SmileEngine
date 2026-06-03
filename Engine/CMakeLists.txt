@@ -28,9 +28,14 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/TextureSRVHeap.h
     Include/Smile/Graphics/Texture.h
     Include/Smile/Graphics/CubeTexture.h
+    Include/Smile/Graphics/VolumeTexture.h
     Include/Smile/Graphics/Material.h
     Include/Smile/Graphics/ComputePipeline.h
+    Include/Smile/Graphics/VolumetricPipeline.h
     Include/Smile/Graphics/HDREnvironment.h
+    Include/Smile/Graphics/Atmosphere.h
+    Include/Smile/Graphics/CloudNoise.h
+    Include/Smile/Graphics/VolumetricClouds.h
     Include/Smile/Graphics/Skybox.h
     Include/Smile/Graphics/Renderer.h
 )
@@ -52,9 +57,14 @@ set(ENGINE_SOURCES
     Source/Graphics/TextureSRVHeap.cpp
     Source/Graphics/Texture.cpp
     Source/Graphics/CubeTexture.cpp
+    Source/Graphics/VolumeTexture.cpp
     Source/Graphics/Material.cpp
     Source/Graphics/ComputePipeline.cpp
+    Source/Graphics/VolumetricPipeline.cpp
     Source/Graphics/HDREnvironment.cpp
+    Source/Graphics/Atmosphere.cpp
+    Source/Graphics/CloudNoise.cpp
+    Source/Graphics/VolumetricClouds.cpp
     Source/Graphics/Skybox.cpp
     Source/Graphics/Renderer.cpp
 )

@@ -7,9 +7,12 @@ cbuffer TransformCB : register(b0) {
     row_major float4x4 MVP;
     row_major float4x4 ModelMatrix;
     float4 CameraPosition;
-    float4 LightDirection; // xyz = world position of point light
-    float4 LightColor;     // rgb = color, w = brightness
     float4 IBLParams;      // x = intensity, y = rotation (rad), z = maxMip (specular), w = enabled (0/1)
+    float4 Time;           // x = elapsed sec, y = delta sec, z = frameIndex
+    float4 SunDirection;   // xyz = direction TO the sun (normalized), w = intensity
+    float4 SunColor;       // rgb = color, w = unused
+    float4 SkyAmbientColor;    // rgb = sky (zenith) ambient, w = enabled (0/1)
+    float4 GroundAmbientColor; // rgb = ground (nadir) ambient, w = intensity
 };
 
 cbuffer MaterialCB : register(b1) {
@@ -263,6 +266,58 @@ float TraceParallaxSelfShadow(float2 uv, float surfaceHeight, float3 Lts,
 }
 
 
+// --- Cook-Torrance direct lighting for a single light -----------------------
+// Factored out so the unified directional sun and the secondary point light share
+// the exact same BRDF (incl. Kulla-Conty energy compensation). Radiance already
+// folds in light color/intensity/attenuation. Returns the lit contribution.
+float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
+                   float3 DiffuseColor, float3 SpecularColor,
+                   float Metallic, float Roughness, float a2) {
+    float NoL = saturate(dot(N, L));
+    if (NoL <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
+
+    float3 H   = normalize(L + V);
+    float  NoV = saturate(dot(N, V));
+    float  NoH = saturate(dot(N, H));
+    float  VoH = saturate(dot(V, H));
+
+    float D = D_GGX(a2, NoH);
+    #if USE_EXACT_SMITH
+        float Vis = Vis_SmithJointExact(a2, NoV, NoL);
+    #else
+        float Vis = Vis_SmithJointApprox(a2, NoV, NoL);
+    #endif
+    float3 F = F_Schlick(SpecularColor, VoH);
+    float3 Specular = (D * Vis) * F;
+
+    float3 Kd = 1.0f - Metallic;
+
+    #if USE_KULLA_CONTY_ENERGY_CONSERVATION
+        // 1. Specular multiple-scattering energy compensation (Kulla-Conty)
+        float E_val, Ef_val;
+        GGXEnergyLookup(Roughness, NoV, E_val, Ef_val);
+        float3 W = 1.0f + SpecularColor * ((1.0f - E_val) / max(E_val, 1e-5f));
+        Specular *= W;
+
+        // 2. Diffuse-Specular energy preservation (split-sum)
+        float3 F90    = saturate(50.0f * SpecularColor.g);
+        float3 E_spec = W * (E_val * SpecularColor + Ef_val * (F90 - SpecularColor));
+        float  DiffuseScale = 1.0f - saturate(dot(E_spec, float3(0.2126f, 0.7152f, 0.0722f)));
+        Kd *= DiffuseScale;
+    #else
+        Kd *= (1.0f - F);
+    #endif
+
+    #if USE_BURLEY_DIFFUSE
+        float3 Diffuse = Kd * Diffuse_Burley(DiffuseColor, Roughness, NoV, NoL, VoH);
+    #else
+        float3 Diffuse = (Kd * DiffuseColor) / PI;
+    #endif
+
+    return (Diffuse + Specular) * Radiance * NoL;
+}
+
+
 float4 main(PSInput input) : SV_TARGET {
     float3 GeoN = normalize(input.worldNormal);
 
@@ -341,79 +396,45 @@ float4 main(PSInput input) : SV_TARGET {
     if (HasAOMap)
         AO = lerp(1.0f, AOMap.Sample(MaterialSampler, UV).r, AOStrength);
 
-    // --- Lighting vectors --- (V built above, before POM)
-    float3 LightP  = LightDirection.xyz;
-    float3 LightV  = LightP - input.worldPos;
-    float  Dist    = length(LightV);
-    float3 L       = LightV / Dist;
-    float3 H       = normalize(L + V);
-
-    float Atten = 1.0f / (Dist * Dist + 1.0f);
-
-    float NoL = saturate(dot(N, L));
-    float NoV = saturate(dot(N, V));
-    float NoH = saturate(dot(N, H));
-    float VoH = saturate(dot(V, H));
-
     // --- PBR material derivation ---
     float3 DiffuseColor  = BaseColor * (1.0f - Metallic);
     float3 SpecularColor = lerp(float3(0.04f, 0.04f, 0.04f), BaseColor, Metallic);
 
-    float a  = Roughness * Roughness;
-    float a2 = a * a;
+    float a   = Roughness * Roughness;
+    float a2  = a * a;
+    float NoV = saturate(dot(N, V)); // shared with the ambient/IBL block below
 
-    // --- Direct lighting (Cook-Torrance BRDF) ---
+    // --- Direct lighting --------------------------------------------------------
+    // Single directional sun, unified with the atmosphere and clouds.
     float3 Lighting = float3(0.0f, 0.0f, 0.0f);
-    if (NoL > 0.0f) {
-        float D = D_GGX(a2, NoH);
-        #if USE_EXACT_SMITH
-            float Vis = Vis_SmithJointExact(a2, NoV, NoL);
-        #else
-            float Vis = Vis_SmithJointApprox(a2, NoV, NoL);
-        #endif
-        float3 F = F_Schlick(SpecularColor, VoH);
-        float3 Specular = (D * Vis) * F;
-
-        float3 Kd = 1.0f - Metallic;
-
-        #if USE_KULLA_CONTY_ENERGY_CONSERVATION
-            // 1. Specular multiple-scattering energy compensation (Kulla-Conty)
-            float E_val, Ef_val;
-            GGXEnergyLookup(Roughness, NoV, E_val, Ef_val);
-
-            // W = 1.0 + F0 * (1 - E) / E
-            float3 W = 1.0f + SpecularColor * ((1.0f - E_val) / max(E_val, 1e-5f));
-            Specular *= W;
-
-            // 2. Diffuse-Specular energy preservation (split-sum)
-            float3 F90 = saturate(50.0f * SpecularColor.g);
-            float3 E_spec = W * (E_val * SpecularColor + Ef_val * (F90 - SpecularColor));
-            
-            // Attenuate diffuse by the energy reflected/scattered specularly
-            float DiffuseScale = 1.0f - saturate(dot(E_spec, float3(0.2126f, 0.7152f, 0.0722f))); // Luminance
-            Kd *= DiffuseScale;
-        #else
-            Kd *= (1.0f - F); // original ad-hoc conservation
-        #endif
-
-        #if USE_BURLEY_DIFFUSE
-            float3 Diffuse = Kd * Diffuse_Burley(DiffuseColor, Roughness, NoV, NoL, VoH);
-        #else
-            float3 Diffuse = (Kd * DiffuseColor) / PI;
-        #endif
-
-        float3 Radiance = LightColor.rgb * LightColor.w * Atten;
-        Lighting        = (Diffuse + Specular) * Radiance * NoL;
-
-        // POM soft self-shadowing toward the light (tangent-space march)
-        if (ParallaxSelfShadow && HasHeightMap && ParallaxFadeF > 0.0f) {
-            float3 Lts = float3(dot(L, T), dot(L, B), dot(L, GeoN));
-            Lighting  *= TraceParallaxSelfShadow(UV, SurfaceHeight, Lts, dUVdx, dUVdy, ParallaxFadeF);
+    {
+        float3 Lsun        = normalize(SunDirection.xyz);
+        float3 SunRadiance = SunColor.rgb * SunDirection.w; // w = intensity
+        float3 SunLit      = BRDF_Direct(N, V, Lsun, SunRadiance,
+                                         DiffuseColor, SpecularColor, Metallic, Roughness, a2);
+        // POM soft self-shadow toward the sun.
+        if (ParallaxSelfShadow && HasHeightMap && ParallaxFadeF > 0.0f && dot(GeoN, Lsun) > 0.0f) {
+            float3 Lts = float3(dot(Lsun, T), dot(Lsun, B), dot(Lsun, GeoN));
+            SunLit    *= TraceParallaxSelfShadow(UV, SurfaceHeight, Lts, dUVdx, dUVdy, ParallaxFadeF);
         }
+        Lighting += SunLit;
     }
 
-    // --- Ambient (Image-Based Lighting, split-sum) ---
+    // --- Ambient ---
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);
+
+    // Atmosphere-derived hemispheric diffuse ambient (A4). When on, it supplies
+    // the sky diffuse (and replaces the IBL diffuse to avoid double-counting),
+    // keeping the IBL specular for environment reflections.
+    bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
+    if (UseAtmoAmbient) {
+        float  hemi       = saturate(N.y * 0.5f + 0.5f);
+        float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
+        float3 KdAmb      = (1.0f - Metallic);
+        Ambient += KdAmb * DiffuseColor * ambientCol * AO * GroundAmbientColor.w;
+    }
+
+    // --- Image-Based Lighting (split-sum) ---
     if (IBLParams.w > 0.5f) {
         float3 RotN = RotateY(N, IBLParams.y);
         float3 R    = reflect(-V, N);
@@ -430,7 +451,8 @@ float4 main(PSInput input) : SV_TARGET {
         float2 BRDF        = BRDFLut.SampleLevel(IBLSampler, float2(NoV, Roughness), 0.0f).rg;
         float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y);
 
-        Ambient = (DiffuseIBL + SpecularIBL) * AO * IBLParams.x;
+        float3 IBLContrib = UseAtmoAmbient ? SpecularIBL : (DiffuseIBL + SpecularIBL);
+        Ambient += IBLContrib * AO * IBLParams.x;
     }
 
     // --- Emissive ---

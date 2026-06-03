@@ -2,8 +2,7 @@ cbuffer TransformCB : register(b0) {
     row_major float4x4 MVP;
     row_major float4x4 ModelMatrix;
     float4 CameraPosition;
-    float4 LightDirection;
-    float4 LightColor;
+    // (remaining FrameConstants fields — IBLParams, Time, Sun* — unused by the VS)
 };
 
 struct VSInput {

@@ -3,6 +3,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
+#include <cmath>
 
 namespace Smile {
     Renderer::Renderer() = default;
@@ -38,6 +39,19 @@ namespace Smile {
         CreateIBLDescriptorTable();
         Skybox.Initialize(Device.Native(), MSAASampleCount,
                           FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+
+        // Physical atmosphere (Hillaire) — bakes the Transmittance + Multi-Scatter
+        // LUTs on the GPU at startup and builds the sky-view + sky-render pipelines.
+        Atmosphere.Initialize(Device.Native(), CommandQueue, SRVHeap, MSAASampleCount,
+                              FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+
+        // Volumetric clouds: bake the 3D noise volumes, then build the raymarch +
+        // composite pipelines (screen-res cloud RT).
+        CloudNoise.Initialize(Device.Native(), CommandQueue, SRVHeap);
+        CloudVolumetrics.Initialize(Device.Native(), SRVHeap, CloudNoise,
+                                    Atmosphere.TransmittanceSRV(), Atmosphere.MultiScatterSRV(),
+                                    MSAASampleCount, FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT,
+                                    SwapChain.GetWidth(), SwapChain.GetHeight());
 
         Initialized = true;
         LogInfo("Renderer inicializado");
@@ -186,13 +200,15 @@ namespace Smile {
         D3D12_HEAP_PROPERTIES HeapProps{};
         HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
+        // Typeless so the same resource can carry a D32_FLOAT DSV and an R32_FLOAT
+        // SRV (for the atmosphere/cloud passes that sample scene depth).
         D3D12_RESOURCE_DESC ResourceDesc{};
         ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         ResourceDesc.Width            = Width;
         ResourceDesc.Height           = Height;
         ResourceDesc.DepthOrArraySize = 1;
         ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_D32_FLOAT;
+        ResourceDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
         ResourceDesc.SampleDesc       = { MSAASampleCount, 0 };
         ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
@@ -213,6 +229,23 @@ namespace Smile {
                                                     : D3D12_DSV_DIMENSION_TEXTURE2D;
         DSVDesc.Texture2D.MipSlice = 0;
         Device.Native()->CreateDepthStencilView(DepthBuffer.Get(), &DSVDesc, DSVHeap.CpuHandle(0));
+
+        // Companion SRV (R32_FLOAT). Allocate the heap slot once, then re-create the
+        // view onto the (possibly recreated) resource on every resize/MSAA change.
+        if (DepthSRVSlot == kInvalidSlot)
+            DepthSRVSlot = SRVHeap.Allocate(1);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
+        SRVDesc.Format                  = DXGI_FORMAT_R32_FLOAT;
+        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        if (MSAASampleCount > 1) {
+            SRVDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+        } else {
+            SRVDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
+            SRVDesc.Texture2D.MipLevels       = 1;
+            SRVDesc.Texture2D.MostDetailedMip = 0;
+        }
+        SRVHeap.CreateSRV(Device.Native(), DepthBuffer.Get(), SRVDesc, DepthSRVSlot);
     }
 
     void Renderer::CreateMSAABuffers() {
@@ -263,6 +296,10 @@ namespace Smile {
         PipelineState.RecreatePSO(Device.Native(), MSAASampleCount);
         Skybox.Recreate(Device.Native(), MSAASampleCount,
                         FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+        Atmosphere.RecreateSky(Device.Native(), MSAASampleCount,
+                               FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+        CloudVolumetrics.RecreateComposite(Device.Native(), MSAASampleCount,
+                                           FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
         CreateMSAABuffers();
         CreateDepthBuffer();
     }
@@ -286,10 +323,24 @@ namespace Smile {
         SwapChain.Resize(Device.Native(), _Width, _Height);
         CreateMSAABuffers();
         CreateDepthBuffer();
+        CloudVolumetrics.Resize(Device.Native(), SRVHeap, _Width, _Height);
     }
 
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
         Camera.Update(_Input, _DeltaTime);
+        ElapsedTime  += _DeltaTime;
+        LastDeltaTime = _DeltaTime;
+    }
+
+    void Renderer::SetSunDirection(const Vec3& _Dir) {
+        SunDir = _Dir.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
+    }
+
+    void Renderer::SetSunAzimuthElevation(f32 _AzimuthDeg, f32 _ElevationDeg) {
+        const f32 Az = _AzimuthDeg   * ToRad;
+        const f32 El = _ElevationDeg * ToRad;
+        const f32 CosEl = std::cos(El);
+        SetSunDirection(Vec3{ CosEl * std::sin(Az), std::sin(El), CosEl * std::cos(Az) });
     }
 
     void Renderer::RenderFrame() {
@@ -307,13 +358,45 @@ namespace Smile {
         MappedCB->ModelMatrix    = Model;
         Vec3 CameraPosition      = Camera.GetPosition();
         MappedCB->CameraPosition = { CameraPosition.X, CameraPosition.Y, CameraPosition.Z, 1.0f };
-        MappedCB->LightPosition  = { 2.0f, 2.0f, -2.0f, 1.0f };
-        MappedCB->LightColor     = { 1.0f, 0.9f, 0.8f, 8.0f };
         // IBL: x=intensity, y=rotation, z=maxMip (specularMips-1), w=enabled
         const f32 IBLEnabled = HDREnv.HasHDRLoaded() ? 1.0f : 0.0f;
         MappedCB->IBLParams      = { IBLIntensity, IBLRotation,
                                      static_cast<f32>(FHDREnvironment::kSpecularMips - 1),
                                      IBLEnabled };
+        MappedCB->Time           = { ElapsedTime, LastDeltaTime,
+                                     static_cast<f32>(FrameIndex), 0.0f };
+        const Vec3 SunN          = SunDir.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
+        MappedCB->SunDirection   = { SunN.X, SunN.Y, SunN.Z, SunIntensity };
+        MappedCB->SunColor       = { SunColorRGB.X, SunColorRGB.Y, SunColorRGB.Z, 0.0f };
+
+        // Atmosphere-derived hemispheric ambient (A4): blue zenith when the sun is
+        // high, warm + dim near sunset — coherent with the physical sky.
+        {
+            auto Sat = [](f32 X) { return X < 0.0f ? 0.0f : (X > 1.0f ? 1.0f : X); };
+            const f32 SunY   = SunN.Y;
+            const f32 Day    = Sat(SunY * 4.0f + 0.2f);   // 0 at night → 1 high sun
+            const f32 LowSun = Sat(1.0f - SunY * 2.5f);   // high when the sun is low
+            const Vec3 Zenith  = { 0.18f, 0.30f, 0.55f }; // Rayleigh blue
+            const Vec3 Horizon = { 0.60f, 0.40f, 0.26f }; // warm sunset
+            const Vec3 Sky    = (Zenith + (Horizon - Zenith) * LowSun) * Day;
+            const Vec3 Ground = Sky * 0.35f;
+            MappedCB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
+                                             UseAtmosphereAmbient ? 1.0f : 0.0f };
+            MappedCB->GroundAmbientColor = { Ground.X, Ground.Y, Ground.Z, AtmoAmbientIntensity };
+        }
+        ++FrameIndex;
+
+        // View-projection without translation: sky/atmosphere world-ray reconstruction.
+        Mat44 ViewNoTrans = View;
+        ViewNoTrans.M[3][0] = 0.0f;
+        ViewNoTrans.M[3][1] = 0.0f;
+        ViewNoTrans.M[3][2] = 0.0f;
+        const Mat44 InvVPNoTrans = (ViewNoTrans * Projection).Inverse();
+        Atmosphere.UpdatePerFrame(SunN, InvVPNoTrans);
+        // Clouds share the atmosphere km-frame: camera at (0, viewHeight, 0).
+        const f32 CloudViewHeight = 6360.0f + FAtmosphere::kGroundAltitudeKm;
+        CloudVolumetrics.UpdatePerFrame(InvVPNoTrans, CloudViewHeight, SunN, SunColorRGB,
+                                        ElapsedTime, SwapChain.GetWidth(), SwapChain.GetHeight());
 
         CommandQueue.ResetForRecording();
         auto* CommandList = CommandQueue.List();
@@ -358,15 +441,12 @@ namespace Smile {
         ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
 
-        // --- Skybox (renders to far-plane depth, before geometry) ---
-        if (ShowSkybox && HDREnv.HasHDRLoaded()) {
-            // Build view-projection without translation, then invert for the VS.
-            Mat44 ViewNoTrans = View;
-            ViewNoTrans.M[3][0] = 0.0f;
-            ViewNoTrans.M[3][1] = 0.0f;
-            ViewNoTrans.M[3][2] = 0.0f;
-            Mat44 VPNoTrans       = ViewNoTrans * Projection;
-            Mat44 InvVPNoTrans    = VPNoTrans.Inverse();
+        // --- Sky background (far-plane depth, before geometry) ---
+        // Atmosphere takes precedence over the HDR skybox when enabled.
+        if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
+            Atmosphere.RecordSkyViewBake(CommandList); // per-frame sky-view LUT (compute)
+            Atmosphere.RenderSky(CommandList, SRVHeap);
+        } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
             Skybox.Render(CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
                           InvVPNoTrans, IBLIntensity, IBLRotation);
         }
@@ -386,6 +466,12 @@ namespace Smile {
         CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
         CommandList->IASetIndexBuffer(&IndexBufferView);
         CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+
+        // --- Volumetric clouds (raymarch → composite over the sky, depth-gated) ---
+        if (UseClouds && CloudVolumetrics.IsInitialized()) {
+            CloudVolumetrics.RecordRaymarch(CommandList, SRVHeap);
+            CloudVolumetrics.Composite(CommandList, SRVHeap);
+        }
 
         if (UseMSAA) {
             D3D12_RESOURCE_BARRIER ResourceBarriers[2]{};
