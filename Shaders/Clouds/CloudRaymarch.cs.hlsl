@@ -155,9 +155,21 @@ void main(uint3 id : SV_DispatchThreadID) {
             float3 atmoT  = SampleAtmoTransmittance(TransmittanceLUT, LinearClampSampler,
                                                     height, sunZen, ctx.bottomR, atmoTopR);
             float3 sunRadiance = SunColor.rgb * SunDir.w * atmoT;
-            float3 skyAmbient  = SampleAtmoMultiScatter(MultiScatterLUT, LinearClampSampler,
-                                                        height, sunZen, ctx.bottomR, atmoTopR)
-                               * SunDir.w * ambientScale;
+            float sunY = SunDir.y;
+            float day = saturate(sunY * 4.0f + 0.2f);
+            float lowSun = saturate(1.0f - sunY * 2.5f);
+            float3 zenithCol = float3(0.18f, 0.30f, 0.55f); // Azul Rayleigh
+            float3 horizonCol = float3(0.60f, 0.40f, 0.26f); // Sunset quente
+            float3 ambientSky = (zenithCol + (horizonCol - zenithCol) * lowSun) * day * SunColor.rgb;
+            float3 ambientGround = ambientSky * 0.35f;
+
+            // 2. Mistura hemisférica baseada na fração de altura da nuvem (hf)
+            float3 hemiAmbient = lerp(ambientGround, ambientSky, hf) * ambientScale;
+
+            // 3. Combina o multi-scattering atmosférico corrigido com o domo celeste
+            float3 skyAmbient = (SampleAtmoMultiScatter(MultiScatterLUT, LinearClampSampler,
+                                            height, sunZen, ctx.bottomR, atmoTopR) * SunColor.rgb 
+                     + hemiAmbient) * SunDir.w;
 
             // Wrenninge multi-scatter octaves of the sun in-scatter.
             float sAtten = 1.0f, eAtten = 1.0f, pAtten = 1.0f;

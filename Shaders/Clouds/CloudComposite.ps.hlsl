@@ -19,9 +19,5 @@ float4 main(PSInput input) : SV_TARGET {
     float3 L = cloud.rgb;            // scattered luminance (linear, premultiplied)
     float  T = cloud.a;             // transmittance
 
-    // Reinhard + gamma to match the sky/scene tonemap chain.
-    float3 col = L / (L + 1.0f);
-    col = pow(col, 1.0f / 2.2f);
-
-    return float4(col, T);
+    return float4(L, T);
 }

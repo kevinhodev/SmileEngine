@@ -173,7 +173,7 @@ namespace Smile {
         PSODesc.InputLayout           = { InputLayout, _countof(InputLayout) };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         PSODesc.NumRenderTargets      = 1;
-        PSODesc.RTVFormats[0]         = FSwapChain::kFormat;
+        PSODesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
         PSODesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
         PSODesc.SampleDesc            = { _SampleCount, 0 };
 

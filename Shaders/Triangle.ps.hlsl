@@ -462,8 +462,6 @@ float4 main(PSInput input) : SV_TARGET {
 
     // --- Compose and tonemap ---
     float3 FinalColor = Lighting + Ambient + Emissive;
-    FinalColor = FinalColor / (FinalColor + 1.0f); // Reinhard tonemap
-    FinalColor = pow(FinalColor, 1.0f / 2.2f);     // Gamma correction
 
     return float4(FinalColor, 1.0f);
 }

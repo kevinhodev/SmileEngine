@@ -30,6 +30,7 @@ namespace Smile {
 
         CreateGeometryBuffers();
         CreateDepthBuffer();
+        CreateHDRBuffers();
         CreateConstantBuffer();
         CreateDefaultMaterial();
 
@@ -38,20 +39,23 @@ namespace Smile {
         HDREnv.Initialize(Device.Native(), CommandQueue, SRVHeap);
         CreateIBLDescriptorTable();
         Skybox.Initialize(Device.Native(), MSAASampleCount,
-                          FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+                          DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
         // Physical atmosphere (Hillaire) — bakes the Transmittance + Multi-Scatter
         // LUTs on the GPU at startup and builds the sky-view + sky-render pipelines.
         Atmosphere.Initialize(Device.Native(), CommandQueue, SRVHeap, MSAASampleCount,
-                              FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+                              DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
         // Volumetric clouds: bake the 3D noise volumes, then build the raymarch +
         // composite pipelines (screen-res cloud RT).
         CloudNoise.Initialize(Device.Native(), CommandQueue, SRVHeap);
         CloudVolumetrics.Initialize(Device.Native(), SRVHeap, CloudNoise,
                                     Atmosphere.TransmittanceSRV(), Atmosphere.MultiScatterSRV(),
-                                    MSAASampleCount, FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT,
+                                    MSAASampleCount, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                                     SwapChain.GetWidth(), SwapChain.GetHeight());
+
+        // Inicializa o pos-processamento
+        PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
         Initialized = true;
         LogInfo("Renderer inicializado");
@@ -289,18 +293,84 @@ namespace Smile {
                                                 MSAARTVHeap.CpuHandle(0));
     }
 
+    void Renderer::CreateHDRBuffers() {
+        UINT Width  = SwapChain.GetWidth();
+        UINT Height = SwapChain.GetHeight();
+        if (Width == 0 || Height == 0) return;
+
+        HDRColorBuffer.Reset();
+        HDRMSAAColorBuffer.Reset();
+
+        D3D12_HEAP_PROPERTIES HeapProps{};
+        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12_RESOURCE_DESC ResourceDesc{};
+        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        ResourceDesc.Width            = Width;
+        ResourceDesc.Height           = Height;
+        ResourceDesc.DepthOrArraySize = 1;
+        ResourceDesc.MipLevels        = 1;
+        ResourceDesc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        ResourceDesc.SampleDesc       = { 1, 0 };
+        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        const FLOAT ClearColor[] = { 0.094f, 0.094f, 0.117f, 1.0f };
+        D3D12_CLEAR_VALUE ClearValue{};
+        ClearValue.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
+
+        // Create resolved HDR color buffer (single-sample)
+        SMILE_HR(Device.Native()->CreateCommittedResource(
+            &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
+            IID_PPV_ARGS(&HDRColorBuffer)));
+
+        if (!HDRRTVHeap.Native())
+            HDRRTVHeap.Initialize(Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
+
+        // HDR color buffer RTV
+        D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
+        RTVDesc.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        Device.Native()->CreateRenderTargetView(HDRColorBuffer.Get(), &RTVDesc, HDRRTVHeap.CpuHandle(0));
+
+        // HDR color buffer SRV
+        if (HDRSRVSlot == kInvalidSlot)
+            HDRSRVSlot = SRVHeap.Allocate(1);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
+        SRVDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        SRVDesc.Texture2D.MipLevels     = 1;
+        SRVHeap.CreateSRV(Device.Native(), HDRColorBuffer.Get(), SRVDesc, HDRSRVSlot);
+
+        // Create MSAA HDR color buffer if needed
+        if (MSAASampleCount > 1) {
+            ResourceDesc.SampleDesc = { MSAASampleCount, 0 };
+            SMILE_HR(Device.Native()->CreateCommittedResource(
+                &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &ClearValue,
+                IID_PPV_ARGS(&HDRMSAAColorBuffer)));
+
+            RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DMS;
+            Device.Native()->CreateRenderTargetView(HDRMSAAColorBuffer.Get(), &RTVDesc, HDRRTVHeap.CpuHandle(1));
+        }
+    }
+
     void Renderer::SetMSAA(u32 _SampleCount) {
         if (_SampleCount == MSAASampleCount || !Initialized) return;
         CommandQueue.Flush();
         MSAASampleCount = _SampleCount;
         PipelineState.RecreatePSO(Device.Native(), MSAASampleCount);
         Skybox.Recreate(Device.Native(), MSAASampleCount,
-                        FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+                        DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         Atmosphere.RecreateSky(Device.Native(), MSAASampleCount,
-                               FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
+                               DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         CloudVolumetrics.RecreateComposite(Device.Native(), MSAASampleCount,
-                                           FSwapChain::kFormat, DXGI_FORMAT_D32_FLOAT);
-        CreateMSAABuffers();
+                                           DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
+        CreateHDRBuffers();
         CreateDepthBuffer();
     }
 
@@ -321,9 +391,10 @@ namespace Smile {
         if (!Initialized || _Width == 0 || _Height == 0) return;
         CommandQueue.Flush();
         SwapChain.Resize(Device.Native(), _Width, _Height);
-        CreateMSAABuffers();
+        CreateHDRBuffers();
         CreateDepthBuffer();
         CloudVolumetrics.Resize(Device.Native(), SRVHeap, _Width, _Height);
+        PostProcessor.Resize(Device.Native(), SRVHeap, _Width, _Height);
     }
 
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
@@ -352,7 +423,10 @@ namespace Smile {
 
         Mat44 Model      = Mat44::Identity();
         Mat44 View       = Camera.GetViewMatrix();
-        Mat44 Projection = Mat44::PerspectiveFovLH(60.0f * ToRad, Aspect, 0.1f, 100.0f);
+        // Far-plane estendido p/ o oceano alcançar o horizonte mesmo de câmera alta
+        // (senão o projected grid termina antes do horizonte = "mar flutuando").
+        const f32 NearZ = 0.1f, FarZ = 20000.0f;
+        Mat44 Projection = Mat44::PerspectiveFovLH(60.0f * ToRad, Aspect, NearZ, FarZ);
 
         MappedCB->MVP            = Model * View * Projection;
         MappedCB->ModelMatrix    = Model;
@@ -401,27 +475,27 @@ namespace Smile {
         CommandQueue.ResetForRecording();
         auto* CommandList = CommandQueue.List();
 
-        const bool UseMSAA = MSAASampleCount > 1 && MSAAColorBuffer;
+        const bool UseMSAA = MSAASampleCount > 1 && HDRMSAAColorBuffer;
         const FLOAT ClearColor[] = { 0.094f, 0.094f, 0.117f, 1.0f };
         auto DSV = DSVHeap.CpuHandle(0);
 
         if (UseMSAA) {
-            auto MSAARTV = MSAARTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &MSAARTV, FALSE, &DSV);
-            CommandList->ClearRenderTargetView(MSAARTV, ClearColor, 0, nullptr);
+            auto HDR_RTV = HDRRTVHeap.CpuHandle(1);
+            CommandList->OMSetRenderTargets(1, &HDR_RTV, FALSE, &DSV);
+            CommandList->ClearRenderTargetView(HDR_RTV, ClearColor, 0, nullptr);
             CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         } else {
             D3D12_RESOURCE_BARRIER ResourceBarrier{};
             ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            ResourceBarrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
+            ResourceBarrier.Transition.pResource   = HDRColorBuffer.Get();
             ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
             CommandList->ResourceBarrier(1, &ResourceBarrier);
 
-            auto RTV = SwapChain.CurrentRTV();
-            CommandList->OMSetRenderTargets(1, &RTV, FALSE, &DSV);
-            CommandList->ClearRenderTargetView(RTV, ClearColor, 0, nullptr);
+            auto HDR_RTV = HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &HDR_RTV, FALSE, &DSV);
+            CommandList->ClearRenderTargetView(HDR_RTV, ClearColor, 0, nullptr);
             CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         }
 
@@ -476,34 +550,52 @@ namespace Smile {
         if (UseMSAA) {
             D3D12_RESOURCE_BARRIER ResourceBarriers[2]{};
             ResourceBarriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            ResourceBarriers[0].Transition.pResource   = MSAAColorBuffer.Get();
+            ResourceBarriers[0].Transition.pResource   = HDRMSAAColorBuffer.Get();
             ResourceBarriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             ResourceBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
             ResourceBarriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
             ResourceBarriers[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            ResourceBarriers[1].Transition.pResource   = SwapChain.CurrentBackBuffer();
+            ResourceBarriers[1].Transition.pResource   = HDRColorBuffer.Get();
             ResourceBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            ResourceBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            ResourceBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             ResourceBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_DEST;
             CommandList->ResourceBarrier(2, ResourceBarriers);
 
-            CommandList->ResolveSubresource(SwapChain.CurrentBackBuffer(), 0,
-                                    MSAAColorBuffer.Get(), 0, FSwapChain::kFormat);
+            CommandList->ResolveSubresource(HDRColorBuffer.Get(), 0,
+                                            HDRMSAAColorBuffer.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
 
             ResourceBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
             ResourceBarriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
             ResourceBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
-            ResourceBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+            ResourceBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(2, ResourceBarriers);
         } else {
             D3D12_RESOURCE_BARRIER ResourceBarrier{};
             ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            ResourceBarrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
+            ResourceBarrier.Transition.pResource   = HDRColorBuffer.Get();
             ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &ResourceBarrier);
         }
+
+        // Transição do backbuffer para RENDER_TARGET para receber o output final pós-processado
+        D3D12_RESOURCE_BARRIER BackBufferBarrier{};
+        BackBufferBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        BackBufferBarrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
+        BackBufferBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        BackBufferBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        BackBufferBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        CommandList->ResourceBarrier(1, &BackBufferBarrier);
+
+        // Executa pós-processamento: Bloom + ACES Filmic Tonemapping direto no SwapChain
+        PostProcessor.Execute(CommandList, SRVHeap, HDRColorBuffer.Get(), SwapChain.CurrentRTV(),
+                              HDRSRVSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
+
+        // Transição do backbuffer de volta para PRESENT
+        BackBufferBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        BackBufferBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+        CommandList->ResourceBarrier(1, &BackBufferBarrier);
 
         SMILE_HR(CommandList->Close());
         ID3D12CommandList* CommandLists[] = { CommandList };

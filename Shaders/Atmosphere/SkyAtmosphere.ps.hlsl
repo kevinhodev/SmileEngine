@@ -43,8 +43,5 @@ float4 main(PSInput input) : SV_TARGET {
 
     L += sunTrans * (kSunDiskInt * core + kSunGlareInt * glare);
 
-    // Match the main PS tonemap.
-    L = L / (L + 1.0f);
-    L = pow(L, 1.0f / 2.2f);
     return float4(L, 1.0f);
 }

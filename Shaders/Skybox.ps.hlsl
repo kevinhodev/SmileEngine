@@ -30,8 +30,5 @@ float4 main(PSInput input) : SV_TARGET {
     dir = RotateY(dir, IBLRotation);
 
     float3 color = EnvCube.SampleLevel(IBLSampler, dir, 0.0f).rgb * IBLIntensity;
-    // Match main PS: Reinhard + gamma.
-    color = color / (color + 1.0f);
-    color = pow(color, 1.0f / 2.2f);
     return float4(color, 1.0f);
 }

@@ -17,6 +17,7 @@
 #include "Smile/Graphics/CloudNoise.h"
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
+#include "Smile/Graphics/PostProcess.h"
 
 namespace Smile {
     struct alignas(256) FrameConstants {
@@ -116,6 +117,7 @@ namespace Smile {
         void CreateDepthBuffer();
         void CreateConstantBuffer();
         void CreateMSAABuffers();
+        void CreateHDRBuffers();
         void CreateDefaultMaterial();
         void CreateIBLDescriptorTable();
 
@@ -155,6 +157,13 @@ namespace Smile {
         ComPtr<ID3D12Resource>   MSAAColorBuffer;
         FDescriptorHeap          MSAARTVHeap;
         u32                      MSAASampleCount = 1;
+
+        // HDR targets & post processing
+        ComPtr<ID3D12Resource>   HDRColorBuffer;
+        ComPtr<ID3D12Resource>   HDRMSAAColorBuffer;
+        FDescriptorHeap          HDRRTVHeap;
+        u32                      HDRSRVSlot = kInvalidSlot;
+        FPostProcessor           PostProcessor;
 
         // IBL: HDR environment chain + skybox renderer.
         FHDREnvironment HDREnv;
