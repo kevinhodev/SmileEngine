@@ -16,6 +16,7 @@
 #include "Smile/Graphics/Atmosphere.h"
 #include "Smile/Graphics/CloudNoise.h"
 #include "Smile/Graphics/VolumetricClouds.h"
+#include "Smile/Graphics/OceanWater.h"
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/PostProcess.h"
 
@@ -97,6 +98,13 @@ namespace Smile {
         void SetCloudPowder(f32 V)            { CloudVolumetrics.SetPowder(V); }
         void SetCloudErosion(f32 V)           { CloudVolumetrics.SetErosion(V); }
 
+        void SetUseOceanWater(bool Use)       { OceanWater.SetEnabled(Use); }
+        void SetOceanWaterLevel(f32 LevelY)   { OceanWater.SetWaterLevel(LevelY); }
+        void SetOceanWind(f32 DirectionRad, f32 Speed) { OceanWater.SetWind(DirectionRad, Speed); }
+        void SetOceanWaveParams(f32 WaveAmount, f32 WaveSize, f32 Choppiness) {
+            OceanWater.SetWaveParams(WaveAmount, WaveSize, Choppiness);
+        }
+
         // Atmosphere-derived hemispheric ambient for the PBR scene (A4).
         void SetUseAtmosphereAmbient(bool Use)      { UseAtmosphereAmbient = Use; }
         bool GetUseAtmosphereAmbient() const        { return UseAtmosphereAmbient; }
@@ -174,6 +182,7 @@ namespace Smile {
         // Volumetric clouds: 3D noise volumes (B1) + raymarch/composite (B2).
         FCloudNoise       CloudNoise;
         FVolumetricClouds CloudVolumetrics;
+        FOceanWater       OceanWater;
         bool              UseClouds = true;
         bool            ShowSkybox    = true;
         f32             IBLIntensity  = 1.0f;

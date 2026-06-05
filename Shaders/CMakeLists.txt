@@ -29,6 +29,10 @@ smile_compile_shader(Clouds/CloudRaymarch.cs.hlsl         cs_6_0 main SHADER_OUT
 smile_compile_shader(Clouds/CloudComposite.vs.hlsl        vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudComposite.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 
+# Agua / oceano FFT
+smile_compile_shader(Water/OceanWater.vs.hlsl             vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Water/OceanWater.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
+
 # Pos-processamento e Tonemapping
 smile_compile_shader(Tonemap/PostProcess.vs.hlsl          vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Tonemap/BloomExtract.ps.hlsl         ps_6_0 main SHADER_OUTPUTS)
@@ -64,6 +68,9 @@ add_custom_target(Shaders
         Clouds/CloudRaymarch.cs.hlsl
         Clouds/CloudComposite.vs.hlsl
         Clouds/CloudComposite.ps.hlsl
+        Water/WaterCommon.hlsli
+        Water/OceanWater.vs.hlsl
+        Water/OceanWater.ps.hlsl
         Tonemap/PostProcess.vs.hlsl
         Tonemap/BloomExtract.ps.hlsl
         Tonemap/BloomBlur.ps.hlsl

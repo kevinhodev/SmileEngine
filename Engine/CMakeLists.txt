@@ -36,6 +36,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Atmosphere.h
     Include/Smile/Graphics/CloudNoise.h
     Include/Smile/Graphics/VolumetricClouds.h
+    Include/Smile/Graphics/OceanWater.h
     Include/Smile/Graphics/Skybox.h
     Include/Smile/Graphics/PostProcess.h
     Include/Smile/Graphics/Renderer.h
@@ -66,6 +67,7 @@ set(ENGINE_SOURCES
     Source/Graphics/Atmosphere.cpp
     Source/Graphics/CloudNoise.cpp
     Source/Graphics/VolumetricClouds.cpp
+    Source/Graphics/OceanWater.cpp
     Source/Graphics/Skybox.cpp
     Source/Graphics/PostProcess.cpp
     Source/Graphics/Renderer.cpp

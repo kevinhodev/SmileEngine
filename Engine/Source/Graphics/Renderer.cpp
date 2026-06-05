@@ -54,6 +54,9 @@ namespace Smile {
                                     MSAASampleCount, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                                     SwapChain.GetWidth(), SwapChain.GetHeight());
 
+        OceanWater.Initialize(Device.Native(), SRVHeap, MSAASampleCount,
+                              DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
+
         // Inicializa o pos-processamento
         PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
@@ -370,6 +373,8 @@ namespace Smile {
                                DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         CloudVolumetrics.RecreateComposite(Device.Native(), MSAASampleCount,
                                            DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
+        OceanWater.Recreate(Device.Native(), MSAASampleCount,
+                            DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         CreateHDRBuffers();
         CreateDepthBuffer();
     }
@@ -379,6 +384,8 @@ namespace Smile {
         try {
             CommandQueue.Flush();
             PipelineState.RecreatePSO(Device.Native(), MSAASampleCount);
+            OceanWater.Recreate(Device.Native(), MSAASampleCount,
+                                DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
             LogInfo("Shaders recarregados com sucesso");
             return true;
         } catch (const std::exception& e) {
@@ -471,6 +478,10 @@ namespace Smile {
         const f32 CloudViewHeight = 6360.0f + FAtmosphere::kGroundAltitudeKm;
         CloudVolumetrics.UpdatePerFrame(InvVPNoTrans, CloudViewHeight, SunN, SunColorRGB,
                                         ElapsedTime, SwapChain.GetWidth(), SwapChain.GetHeight());
+        OceanWater.UpdatePerFrame(View * Projection, CameraPosition, SunN, SunColorRGB, SunIntensity,
+                                  ElapsedTime, IBLIntensity, IBLRotation,
+                                  static_cast<f32>(FHDREnvironment::kSpecularMips - 1),
+                                  HDREnv.HasHDRLoaded());
 
         CommandQueue.ResetForRecording();
         auto* CommandList = CommandQueue.List();
@@ -540,6 +551,9 @@ namespace Smile {
         CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
         CommandList->IASetIndexBuffer(&IndexBufferView);
         CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+
+        // --- Ocean water (FFT surface, camera-centered grid) ---
+        OceanWater.Render(CommandList, SRVHeap, IBLTableStart);
 
         // --- Volumetric clouds (raymarch → composite over the sky, depth-gated) ---
         if (UseClouds && CloudVolumetrics.IsInitialized()) {
@@ -611,6 +625,7 @@ namespace Smile {
             MappedCB = nullptr;
         }
         MSAAColorBuffer.Reset();
+        OceanWater.Shutdown();
         Initialized = false;
         LogInfo("Renderer encerrado");
     }
