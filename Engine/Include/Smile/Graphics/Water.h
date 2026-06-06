@@ -23,9 +23,16 @@ namespace Smile {
     class FWaterRenderer {
     public:
         enum class EDebugMode : u32 {
-            Off       = 0,
-            Wireframe = 1,
-            Tiles     = 2,
+            Off          = 0,
+            Wireframe    = 1,
+            Tiles        = 2,
+            Displacement = 3,
+            Normal       = 4,
+            Fresnel      = 5,
+            Body         = 6,
+            Reflection   = 7,
+            Foam         = 8,
+            Depth        = 9,
         };
 
         // SampleCount/RTFormat/DSFormat devem casar com o RT de cena ativo (MSAA/HDR).
@@ -61,13 +68,20 @@ namespace Smile {
         // --- Setters do editor (Etapa 5). Defaults estilo Cry (3dEngineLoad.cpp:1369). ---
         void SetWaterLevel(f32 V)        { WaterLevel = V; }
         void SetWindDirection(f32 Rad)   { WindDir = Rad; }
+        f32  GetWindDirection() const    { return WindDir; }
         void SetWindSpeed(f32 V)         { WindSpeed = V; }
         void SetWavesAmount(f32 V)       { WavesAmount = V; }
         void SetWavesSize(f32 V)         { WavesSize = V; }
+        f32  GetWindSpeed() const        { return WindSpeed; }
+        f32  GetWavesAmount() const      { return WavesAmount; }
+        f32  GetWavesSize() const        { return WavesSize; }
         void SetDeepColor(const Vec3& C) { DeepColor = C; }
         void SetReflectionScale(f32 V)   { ReflectionScale = V; }
         void SetReflectionBumpScale(f32 V) { ReflectionBumpScale = V; }
         void SetFresnelGloss(f32 V)      { FresnelGloss = V; }
+        f32  GetReflectionScale() const  { return ReflectionScale; }
+        f32  GetReflectionBumpScale() const { return ReflectionBumpScale; }
+        f32  GetFresnelGloss() const     { return FresnelGloss; }
         f32  GetWaterLevel() const       { return WaterLevel; }
         // FFT (Etapa 1).
         void SetUseFFT(bool V)           { UseFFT = V; }
@@ -75,6 +89,9 @@ namespace Smile {
         void SetFFTChoppyScale(f32 V)    { FFTChoppyScale = V; }
         void SetFFTNormalUp(f32 V)       { FFTNormalUp = V; }
         void SetFFTFade(f32 Start, f32 Range) { FFTFadeStart = Start; FFTFadeRange = Range; }
+        f32  GetFFTDisplacementScale() const { return FFTDispScale; }
+        f32  GetFFTChoppyScale() const   { return FFTChoppyScale; }
+        f32  GetFFTNormalUp() const      { return FFTNormalUp; }
         // Bump de detalhe + scroll por vento + parallax (Etapa 2).
         void SetUseBump(bool V)          { UseBump = V; }
         void SetBumpTiling(f32 V)        { BumpTilling = V; }
@@ -82,15 +99,31 @@ namespace Smile {
         void SetBumpStrength(f32 V)      { BumpStrength = V; }
         void SetParallaxHeight(f32 V)    { ParallaxHeight = V; }
         void SetBumpFadeDist(f32 V)      { BumpFadeDist = V; }
+        f32  GetBumpStrength() const     { return BumpStrength; }
         // Refração / fog (Etapa 3).
         void SetRefractionBumpScale(f32 V) { RefractionBumpScale = V; }
         void SetSoftIntersection(f32 V)    { SoftIntersectionFactor = V; }
         void SetFogDensity(f32 V)          { FogDensity = V; }
+        f32  GetRefractionBumpScale() const { return RefractionBumpScale; }
+        f32  GetFogDensity() const          { return FogDensity; }
         // In-scattering (turquesa "dentro d'agua") + absorcao por canal (Etapa 3, estilo Cry/SLW).
         void SetInScatterColor(const Vec3& C) { InScatterColor = C; }
         void SetInScatterDensity(f32 V)       { InScatterDensity = V; }
         void SetAbsorption(const Vec3& C)     { AbsorptionColor = C; }
         void SetSunSpecClamp(f32 V)           { SunSpecClamp = V; }
+        f32  GetInScatterDensity() const      { return InScatterDensity; }
+        f32  GetSunSpecClamp() const          { return SunSpecClamp; }
+        // Foam / whitecaps (Jacobiano da choppy do FFT, estilo Asylum/Cry).
+        void SetUseFoam(bool V)            { UseFoam = V; }
+        void SetFoamCoverage(f32 V)        { FoamCoverage = V; }
+        void SetFoamSharpness(f32 V)       { FoamSharpness = V; }
+        void SetFoamIntensity(f32 V)       { FoamIntensity = V; }
+        void SetFoamFadeDist(f32 V)        { FoamFadeDist = V; }
+        void SetFoamColor(const Vec3& C)   { FoamColor = C; }
+        void SetFoamSpecSuppress(f32 V)    { FoamSpecSuppress = V; }
+        bool GetUseFoam() const            { return UseFoam; }
+        f32  GetFoamCoverage() const       { return FoamCoverage; }
+        f32  GetFoamIntensity() const      { return FoamIntensity; }
         // Aerial perspective da superficie no horizonte (HDR, pos-water, estilo Cry).
         void SetUseAerialFog(bool V)       { UseAerialFog = V; }
         void SetAerialFog(f32 Start, f32 Range, f32 Density) {
@@ -128,6 +161,8 @@ namespace Smile {
             Vec4  DebugParams;     // 16  x=debug mode (0 off/1 wire/2 tiles)
             Vec4  InScatterColor;  // 16  rgb=cor turquesa do in-scatter, w=densidade do in-scatter
             Vec4  AbsorptionColor; // 16  rgb=extincao por canal (Beer-Lambert), w=clamp do sun-spec
+            Vec4  FoamParams;      // 16  x=coverage(limiar J) y=sharpness z=intensidade(0=off) w=fadeDist(m)
+            Vec4  FoamColor;       // 16  rgb=tint da espuma, w=supressao do sun-spec
         };
         static_assert(sizeof(WaterConstants) % 256 == 0, "WaterConstants deve ser multiplo de 256");
 
@@ -206,7 +241,7 @@ namespace Smile {
         f32  BumpFadeDist      = 250.0f;// ripple fino some ate aqui (anti-speckle no horizonte)
 
         // Refração / ocean fog (Etapa 3).
-        f32  ReflectionBumpScale    = 0.045f; // Water.cfx PM2.x
+        f32  ReflectionBumpScale    = 0.18f; // Water.cfx PM2.x; deixa o reflexo ler a normal FFT
         f32  RefractionBumpScale    = 0.1f;  // Water.cfx PM2.y
         f32  SoftIntersectionFactor = 1.0f;  // Water.cfx PM0.x
         f32  FogDensity             = 0.1f;  // densidade da absorcao (Beer-Lambert)
@@ -217,6 +252,15 @@ namespace Smile {
         f32  InScatterDensity = 1.5f;
         Vec3 AbsorptionColor  = { 0.45f, 0.15f, 0.10f };
         f32  SunSpecClamp     = 2.0f;  // limita o glint do sol espalhado nas ripples (manchas brancas)
+        // Foam / whitecaps. Coverage e o limiar de J (espuma onde J < coverage); sharpness
+        // e a faixa de J do fade; intensidade e a opacidade mestra; fade some a espuma ao longe.
+        bool UseFoam          = true;
+        f32  FoamCoverage     = 0.62f; // limiar do Jacobiano (J menor que isto vira espuma)
+        f32  FoamSharpness    = 0.5f;  // faixa de J ate cobertura cheia (J = coverage - sharpness)
+        f32  FoamIntensity    = 1.0f;  // opacidade mestra da espuma
+        f32  FoamFadeDist     = 600.0f;// espuma some linearmente ate aqui (anti-aliasing no horizonte)
+        Vec3 FoamColor        = { 0.82f, 0.86f, 0.90f }; // branco levemente azulado
+        f32  FoamSpecSuppress = 0.85f; // quanto a espuma abafa o glint do sol (0..1)
         bool UseAerialFog           = false;
         f32  AerialFogStart         = 900.0f;
         f32  AerialFogRange         = 3800.0f;

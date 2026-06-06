@@ -1,5 +1,6 @@
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Core/HResultCheck.h"
+#include "Smile/Core/Logger.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -7,10 +8,10 @@
 namespace Smile {
 
     // =====================================================================================
-    // Simulacao — porte verbatim do CWaterSim (WaterUtils.cpp)
+    // Espectro inicial H0 (CPU, 1x ou ao mudar vento/amplitude)
     // =====================================================================================
 
-    // Box-Muller (WaterUtils.cpp:142). cry_random(-1,1) -> uniform real em [-1,1].
+    // Box-Muller (WaterUtils.cpp:142).
     f32 FOceanFFT::FrandGaussian() {
         if (GaussianHasLast) {
             GaussianHasLast = false;
@@ -29,8 +30,9 @@ namespace Smile {
         return x1 * w;
     }
 
-    // Phillips (WaterUtils.cpp:362). pW = -(cos(wind), sin(wind)) (InitFourierAmps:406-407);
-    // com wind=0 -> pW=(-1,0), |w|^2=1, L=1/g.
+    // Phillips (WaterUtils.cpp:362). pW = -(cos(wind), sin(wind)); o vento agora vem do
+    // usuario (antes era forcado 0). Mesma FORMA do espectro CPU antigo + damping suave
+    // contra o vento (direcionalidade das ondas).
     f32 FOceanFFT::ComputePhillips(f32 kx, f32 ky) const {
         const f32 k2 = kx * kx + ky * ky;
         if (k2 == 0.0f) return 0.0f;
@@ -38,444 +40,347 @@ namespace Smile {
         const f32 wx = -std::cos(WindAngle);
         const f32 wy = -std::sin(WindAngle);
         const f32 w2 = wx * wx + wy * wy;       // 1
-        const f32 L  = w2 / kG;
+        const f32 Wind = std::max(WindSpeed, 0.1f);
+        const f32 L  = (Wind * Wind) / kG;
         const f32 L2 = L * L;
         const f32 kDotW = kx * wx + ky * wy;
 
-        return Amplitude * (std::exp(-1.0f / (k2 * L2)) / (k2 * k2)) * (kDotW * kDotW / k2 * w2);
+        f32 P = Amplitude * (std::exp(-1.0f / (k2 * L2)) / (k2 * k2)) * (kDotW * kDotW / std::max(k2 * w2, 1e-6f));
+        if (kDotW < 0.0f) P *= 0.25f; // onda contra o vento e atenuada
+        return P;
     }
 
-    // LUT de k (WaterUtils.cpp:386). GetIndexToWorld = (i - N/2) * 2*PI/worldSize.
-    void FOceanFFT::InitTableK() {
-        const f32 pi2OverWorld = (2.0f * 3.14159265358979323846f) / WorldSize;
-        for (int y = 0; y < N; ++y) {
-            const f32 ky = (f32(y) - (N / 2.0f)) * pi2OverWorld;
-            for (int x = 0; x < N; ++x) {
-                const f32 kx   = (f32(x) - (N / 2.0f)) * pi2OverWorld;
-                const f32 klen = std::sqrt(kx * kx + ky * ky);
-                const f32 omega = std::sqrt(klen * kG); // GetTermAngularFreq
-                LUTK[Offset(x, y)] = Vec4(kx, ky, klen, omega);
-            }
-        }
-    }
+    // Preenche o staging de H0: (h0(k).x, h0(k).y, omega(k), 0) sobre (N+1)^2, com a
+    // convencao de k do caminho CPU antigo (worldSize=1 -> k=(i-N/2)*2pi). Determinismo
+    // garantido re-semeando o RNG (mesmo oceano ao re-bakar).
+    void FOceanFFT::ComputeH0() {
+        if (!H0StagingMapped) return;
 
-    // H0 (WaterUtils.cpp:402). e = (gaussian, gaussian) * (1/sqrt2) * sqrt(Phillips).
-    void FOceanFFT::InitFourierAmps() {
-        const f32 recipSqrt2 = 1.0f / std::sqrt(2.0f);
-        for (int y = 0; y < N; ++y) {
-            for (int x = 0; x < N; ++x) {
-                const int off = Offset(x, y);
-                complexF e(FrandGaussian(), FrandGaussian());
-                const Vec4 k = LUTK[off];
-                e *= recipSqrt2 * std::sqrt(ComputePhillips(k.X, k.Y));
-                FourierAmps[off] = e;
-            }
-        }
-    }
+        const f32 kTwoPi       = 6.28318530717958647692f;
+        const f32 recipSqrt2   = 1.0f / std::sqrt(2.0f);
+        const f32 pi2OverWorld = kTwoPi / WorldSize;
+        const f32 start        = N / 2.0f;
+        const UINT rowPitch    = H0Footprint.Footprint.RowPitch;
 
-    // FFT 1D Cooley-Tukey (WaterUtils.cpp:198, ref. Paul Bourke). Dir=-1 = inversa, SEM
-    // normalizar (so Dir=+1 divide por N) — quirk fiel da Cry.
-    void FOceanFFT::ComputeFFT1D(int Dir, f32* pReal, f32* pImag) {
-        const long nn = N;
-        const f32 fRecipNN = 1.0f / f32(nn);
+        Rng.seed(1337u);
+        GaussianHasLast = false;
 
-        // Bit reversal.
-        long i2 = nn >> 1;
-        long j = 0;
-        for (long i = 0; i < nn - 1; ++i) {
-            if (i < j) {
-                f32 tr = pReal[i]; f32 ti = pImag[i];
-                pReal[i] = pReal[j]; pImag[i] = pImag[j];
-                pReal[j] = tr;       pImag[j] = ti;
-            }
-            long k = i2;
-            while (k <= j) { j -= k; k >>= 1; }
-            j += k;
-        }
+        for (int m = 0; m < M; ++m) {
+            const f32 ky = (start - (f32)m) * pi2OverWorld;
+            Vec4* row = reinterpret_cast<Vec4*>(
+                H0StagingMapped + H0Footprint.Offset + (UINT64)m * rowPitch);
 
-        // Butterflies.
-        f32 c1 = -1.0f, c2 = 0.0f;
-        long l2 = 1;
-        for (long l = 0; l < (long)kLogGridSize; ++l) {
-            long l1 = l2;
-            l2 <<= 1;
-            f32 u1 = 1.0f, u2 = 0.0f;
-            for (j = 0; j < l1; ++j) {
-                for (long i = j; i < nn; i += l2) {
-                    long i1 = i + l1;
-                    f32 t1 = u1 * pReal[i1] - u2 * pImag[i1];
-                    f32 t2 = u1 * pImag[i1] + u2 * pReal[i1];
-                    pReal[i1] = pReal[i] - t1;
-                    pImag[i1] = pImag[i] - t2;
-                    pReal[i] += t1;
-                    pImag[i] += t2;
-                }
-                f32 z = u1 * c1 - u2 * c2;
-                u2 = u1 * c2 + u2 * c1;
-                u1 = z;
-            }
-            c2 = std::sqrt((1.0f - c1) * 0.5f);
-            if (Dir == 1) c2 = -c2;
-            c1 = std::sqrt((1.0f + c1) * 0.5f);
-        }
+            for (int n = 0; n < M; ++n) {
+                const f32 kx = (start - (f32)n) * pi2OverWorld;
 
-        // Normalizacao so no forward.
-        if (Dir == 1) {
-            for (long i = 0; i < nn; ++i) { pReal[i] *= fRecipNN; pImag[i] *= fRecipNN; }
-        }
-    }
-
-    // FFT 2D: linhas depois colunas (WaterUtils.cpp:284).
-    void FOceanFFT::ComputeFFT2D(int Dir, complexF* c) {
-        f32 pReal[N];
-        f32 pImag[N];
-
-        for (int y = 0; y < N; ++y) {
-            for (int x = 0; x < N; ++x) {
-                const complexF& cur = c[Offset(x, y)];
-                pReal[x] = cur.real(); pImag[x] = cur.imag();
-            }
-            ComputeFFT1D(Dir, pReal, pImag);
-            for (int x = 0; x < N; ++x) c[Offset(x, y)] = complexF(pReal[x], pImag[x]);
-        }
-        for (int x = 0; x < N; ++x) {
-            for (int y = 0; y < N; ++y) {
-                const complexF& cur = c[Offset(x, y)];
-                pReal[y] = cur.real(); pImag[y] = cur.imag();
-            }
-            ComputeFFT1D(Dir, pReal, pImag);
-            for (int y = 0; y < N; ++y) c[Offset(x, y)] = complexF(pReal[y], pImag[y]);
-        }
-    }
-
-    // Evolucao temporal + IFFT + empacotamento (WaterUtils.cpp:435).
-    void FOceanFFT::UpdateSim(f32 fTime) {
-        const int halfY = (N >> 1) + 1; // 33
-        for (int y = 0; y < halfY; ++y) {
-            for (int x = 0; x < N; ++x) {
-                const int off    = Offset(x, y);
-                const int offMir = OffsetMirror(x, y);
-
-                const Vec4 k = LUTK[off];
-                const f32 klen = k.Z;
-                const f32 angFreq = k.W * fTime;
-                const f32 s = std::sin(angFreq);
-                const f32 cse = std::cos(angFreq);
-
-                const complexF ep(cse, s);
-                const complexF em = std::conj(ep);
-
-                // H(k,t) = H0(k)*e^{iwt} + conj(H0(-k))*e^{-iwt}
-                const complexF wave = FourierAmps[off] * ep + std::conj(FourierAmps[offMir]) * em;
-
-                HeightField[off] = wave;
-                if (klen != 0.0f) {
-                    DisplaceX[off] = wave * complexF(0.0f, (-k.X - k.Y) / klen);
-                    DisplaceY[off] = wave * complexF(0.0f, (-k.Y) / klen);
-                } else {
-                    DisplaceX[off] = complexF(0.0f);
-                    DisplaceY[off] = complexF(0.0f);
+                f32 sqrtP = 0.0f;
+                if (kx != 0.0f || ky != 0.0f) {
+                    const f32 P = ComputePhillips(kx, ky);
+                    sqrtP = (P > 0.0f) ? std::sqrt(P) : 0.0f;
                 }
 
-                if (y != halfY - 1) {
-                    HeightField[offMir] = std::conj(HeightField[off]);
-                    DisplaceX[offMir]   = std::conj(DisplaceX[off]);
-                    DisplaceY[offMir]   = std::conj(DisplaceY[off]);
-                }
-            }
-        }
+                const f32 h0x   = sqrtP * FrandGaussian() * recipSqrt2;
+                const f32 h0y   = sqrtP * FrandGaussian() * recipSqrt2;
+                const f32 klen  = std::sqrt(kx * kx + ky * ky);
+                const f32 omega = std::sqrt(klen * kG);
 
-        ComputeFFT2D(-1, HeightField);
-        ComputeFFT2D(-1, DisplaceX);
-        ComputeFFT2D(-1, DisplaceY);
-
-        for (int y = 0; y < N; ++y) {
-            for (int x = 0; x < N; ++x) {
-                const int off = Offset(x, y);
-                const f32 sign = (f32)PowNeg1(x + y);
-
-                HeightField[off] *= sign * MaxWaveSize;
-                DisplaceX[off]   *= sign * ChoppyWaveScale;
-                DisplaceY[off]   *= sign * ChoppyWaveScale;
-
-                // (Dx, Dy, -h, 0) — convencao Cry (Z = -altura).
-                DisplaceGrid[off] = Vec4(DisplaceX[off].real(),
-                                         DisplaceY[off].real(),
-                                         -HeightField[off].real(),
-                                         0.0f);
+                row[n] = Vec4(h0x, h0y, omega, 0.0f);
             }
         }
     }
 
-    u32 FOceanFFT::NormalMipSize(u32 _Mip) {
-        return std::max(1u, kGridSize >> _Mip);
+    void FOceanFFT::SetWindDirection(f32 _Rad) {
+        if (_Rad == WindAngle) return;
+        WindAngle = _Rad;
+        if (H0StagingMapped) { ComputeH0(); H0Dirty = true; }
     }
 
-    u32 FOceanFFT::NormalMipOffset(u32 _Mip) {
-        u32 Offset = 0;
-        for (u32 Mip = 0; Mip < _Mip; ++Mip) {
-            const u32 Size = NormalMipSize(Mip);
-            Offset += Size * Size;
-        }
-        return Offset;
+    void FOceanFFT::SetWindSpeed(f32 _V) {
+        const f32 V = std::max(_V, 0.1f);
+        if (V == WindSpeed) return;
+        WindSpeed = V;
+        if (H0StagingMapped) { ComputeH0(); H0Dirty = true; }
     }
 
-    void FOceanFFT::BuildNormalMipChain() {
-        constexpr f32 kNormalUp = 8.0f; // WaterVolumesNormalGenPS usa float3(dx,dy,8).
-
-        // Mip 0: normal de mundo Y-up derivada da altura FFT.
-        Vec4* Mip0 = NormalMipChain;
-        for (u32 y = 0; y < kGridSize; ++y) {
-            for (u32 x = 0; x < kGridSize; ++x) {
-                const u32 x1 = (x + 1u) & (kGridSize - 1u);
-                const u32 y1 = (y + 1u) & (kGridSize - 1u);
-
-                const f32 hC = DisplaceGrid[Offset((int)x,  (int)y )].Z;
-                const f32 hX = DisplaceGrid[Offset((int)x1, (int)y )].Z;
-                const f32 hZ = DisplaceGrid[Offset((int)x,  (int)y1)].Z;
-
-                f32 nx = hC - hX;
-                f32 ny = kNormalUp;
-                f32 nz = hC - hZ;
-                const f32 Len = std::sqrt(nx * nx + ny * ny + nz * nz);
-                if (Len > 1e-6f) {
-                    const f32 InvLen = 1.0f / Len;
-                    nx *= InvLen; ny *= InvLen; nz *= InvLen;
-                } else {
-                    nx = 0.0f; ny = 1.0f; nz = 0.0f;
-                }
-
-                Mip0[y * kGridSize + x] = Vec4(nx, ny, nz, 1.0f);
-            }
-        }
-
-        // Mips seguintes: media vetorial + Toksvig T propagado no alpha.
-        for (u32 Mip = 1; Mip < kNormalMipCount; ++Mip) {
-            const u32 SrcSize = NormalMipSize(Mip - 1);
-            const u32 DstSize = NormalMipSize(Mip);
-            const Vec4* Src = NormalMipChain + NormalMipOffset(Mip - 1);
-            Vec4* Dst = NormalMipChain + NormalMipOffset(Mip);
-
-            for (u32 y = 0; y < DstSize; ++y) {
-                for (u32 x = 0; x < DstSize; ++x) {
-                    f32 sx = 0.0f, sy = 0.0f, sz = 0.0f;
-                    for (u32 oy = 0; oy < 2; ++oy) {
-                        for (u32 ox = 0; ox < 2; ++ox) {
-                            const u32 SrcX = std::min(x * 2u + ox, SrcSize - 1u);
-                            const u32 SrcY = std::min(y * 2u + oy, SrcSize - 1u);
-                            const Vec4 N = Src[SrcY * SrcSize + SrcX];
-                            const f32 T = std::clamp(N.W, 0.0f, 1.0f);
-                            sx += N.X * T;
-                            sy += N.Y * T;
-                            sz += N.Z * T;
-                        }
-                    }
-
-                    const f32 SumLen = std::sqrt(sx * sx + sy * sy + sz * sz);
-                    f32 T = std::clamp(SumLen * 0.25f, 1e-4f, 1.0f);
-                    f32 nx = 0.0f, ny = 1.0f, nz = 0.0f;
-                    if (SumLen > 1e-6f) {
-                        const f32 InvLen = 1.0f / SumLen;
-                        nx = sx * InvLen;
-                        ny = sy * InvLen;
-                        nz = sz * InvLen;
-                    }
-                    Dst[y * DstSize + x] = Vec4(nx, ny, nz, T);
-                }
-            }
-        }
-    }
-
-    void FOceanFFT::StageDisplacement() {
-        if (!StagingMapped) return;
-        const u32 SrcRowBytes = kGridSize * 4u * sizeof(f32);
-        for (u32 row = 0; row < kGridSize; ++row) {
-            memcpy(StagingMapped + Footprint.Offset + (UINT64)row * Footprint.Footprint.RowPitch,
-                   reinterpret_cast<const u8*>(DisplaceGrid) + (UINT64)row * SrcRowBytes,
-                   SrcRowBytes);
-        }
-    }
-
-    void FOceanFFT::StageNormalMipChain() {
-        if (!NormalStagingMapped) return;
-        for (u32 Mip = 0; Mip < kNormalMipCount; ++Mip) {
-            const u32 Size = NormalMipSize(Mip);
-            const u32 SrcRowBytes = Size * 4u * sizeof(f32);
-            const Vec4* SrcMip = NormalMipChain + NormalMipOffset(Mip);
-            for (u32 row = 0; row < Size; ++row) {
-                memcpy(NormalStagingMapped + NormalFootprints[Mip].Offset +
-                           (UINT64)row * NormalFootprints[Mip].Footprint.RowPitch,
-                       reinterpret_cast<const u8*>(SrcMip) + (UINT64)row * SrcRowBytes,
-                       SrcRowBytes);
-            }
-        }
+    void FOceanFFT::SetAmplitude(f32 _A) {
+        if (_A == Amplitude) return;
+        Amplitude = _A;
+        if (H0StagingMapped) { ComputeH0(); H0Dirty = true; }
     }
 
     // =====================================================================================
-    // GPU
+    // Setup GPU
     // =====================================================================================
 
-    void FOceanFFT::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        // Espectro inicial (LUT + H0).
-        InitTableK();
-        InitFourierAmps();
+    Microsoft::WRL::ComPtr<ID3D12Resource> FOceanFFT::Create2D(
+        ID3D12Device* _Device, DXGI_FORMAT _Format, u32 _Width, u32 _Height, u32 _Mips,
+        bool _AllowUAV, D3D12_RESOURCE_STATES _InitialState) {
 
-        // Textura DEFAULT 64x64 RGBA32F (s_ptexWaterOcean da Cry).
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = kGridSize;
-        Desc.Height           = kGridSize;
+        Desc.Width            = _Width;
+        Desc.Height           = _Height;
         Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        Desc.MipLevels        = static_cast<UINT16>(_Mips);
+        Desc.Format           = _Format;
         Desc.SampleDesc       = { 1, 0 };
         Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-        D3D12_HEAP_PROPERTIES DefaultHeap{}; DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        Desc.Flags            = _AllowUAV ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+                                          : D3D12_RESOURCE_FLAG_NONE;
+
+        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Res;
         SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&OceanTex)));
-        CurrentState = D3D12_RESOURCE_STATE_COPY_DEST;
+            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, _InitialState, nullptr, IID_PPV_ARGS(&Res)));
+        return Res;
+    }
 
-        // Footprint + staging UPLOAD persistente (mapeado).
-        UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;
-        _Device->GetCopyableFootprints(&Desc, 0, 1, 0, &Footprint, &NumRows, &RowSize, &TotalSize);
+    void FOceanFFT::CreateTextures(ID3D12Device* _Device) {
+        // H0 (N+1)^2 RGBA32F (SRV only) + staging UPLOAD persistente.
+        H0Tex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, M, M, 1, false,
+                         D3D12_RESOURCE_STATE_COPY_DEST);
+        H0State = D3D12_RESOURCE_STATE_COPY_DEST;
+        {
+            D3D12_RESOURCE_DESC Desc = H0Tex->GetDesc();
+            UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;
+            _Device->GetCopyableFootprints(&Desc, 0, 1, 0, &H0Footprint, &NumRows, &RowSize, &TotalSize);
 
-        D3D12_RESOURCE_DESC BufDesc{};
-        BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        BufDesc.Width            = TotalSize;
-        BufDesc.Height           = 1;
-        BufDesc.DepthOrArraySize = 1;
-        BufDesc.MipLevels        = 1;
-        BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        BufDesc.SampleDesc       = { 1, 0 };
-        BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            D3D12_RESOURCE_DESC BufDesc{};
+            BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            BufDesc.Width            = TotalSize;
+            BufDesc.Height           = 1;
+            BufDesc.DepthOrArraySize = 1;
+            BufDesc.MipLevels        = 1;
+            BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
+            BufDesc.SampleDesc       = { 1, 0 };
+            BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+            SMILE_HR(_Device->CreateCommittedResource(
+                &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&H0Staging)));
+            SMILE_HR(H0Staging->Map(0, nullptr, reinterpret_cast<void**>(&H0StagingMapped)));
+        }
+
+        // Espectros + scratch (RG32F, UAV) e mapas (RGBA32F, UAV).
+        SpecH    = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        SpecD    = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        FFTTemp  = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        DispTex  = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        OceanTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        NormalTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, kNormalMipCount, true,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        for (auto& S : NormalMipState) S = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+        // CB compartilhado (upload, mapeado persistente).
+        D3D12_RESOURCE_DESC CBDesc{};
+        CBDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        CBDesc.Width            = sizeof(OceanCB);
+        CBDesc.Height           = 1;
+        CBDesc.DepthOrArraySize = 1;
+        CBDesc.MipLevels        = 1;
+        CBDesc.Format           = DXGI_FORMAT_UNKNOWN;
+        CBDesc.SampleDesc       = { 1, 0 };
+        CBDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
         SMILE_HR(_Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&StagingBuf)));
-        SMILE_HR(StagingBuf->Map(0, nullptr, reinterpret_cast<void**>(&StagingMapped)));
-
-        // Textura normal derivada do FFT, com mip chain para o PS (WaterNormalTex).
-        D3D12_RESOURCE_DESC NormalDesc = Desc;
-        NormalDesc.MipLevels = kNormalMipCount;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &NormalDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&NormalTex)));
-        NormalCurrentState = D3D12_RESOURCE_STATE_COPY_DEST;
-
-        _Device->GetCopyableFootprints(&NormalDesc, 0, kNormalMipCount, 0,
-                                       NormalFootprints, NormalNumRows, NormalRowSize,
-                                       &NormalTotalSize);
-
-        BufDesc.Width = NormalTotalSize;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&NormalStagingBuf)));
-        SMILE_HR(NormalStagingBuf->Map(0, nullptr, reinterpret_cast<void**>(&NormalStagingMapped)));
-
-        // Estado inicial (t=0) -> staging, p/ o 1o RecordUpload ter dados validos.
-        UpdateSim(0.0f);
-        BuildNormalMipChain();
-        StageDisplacement();
-        StageNormalMipChain();
-
-        // SRV no heap compartilhado.
-        TexSRVSlot = _SRVHeap.Allocate(1);
-        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format                  = DXGI_FORMAT_R32G32B32A32_FLOAT;
-        SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        SRVDesc.Texture2D.MipLevels     = 1;
-        _SRVHeap.CreateSRV(_Device, OceanTex.Get(), SRVDesc, TexSRVSlot);
-
-        NormalTexSRVSlot = _SRVHeap.Allocate(1);
-        SRVDesc.Texture2D.MipLevels     = kNormalMipCount;
-        SRVDesc.Texture2D.MostDetailedMip = 0;
-        SRVDesc.Texture2D.ResourceMinLODClamp = 0.0f;
-        _SRVHeap.CreateSRV(_Device, NormalTex.Get(), SRVDesc, NormalTexSRVSlot);
+            &UploadHeap, D3D12_HEAP_FLAG_NONE, &CBDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
+        SMILE_HR(CB->Map(0, nullptr, reinterpret_cast<void**>(&MappedCB)));
     }
 
-    void FOceanFFT::Update(f32 _ElapsedTime) {
-        if (!StagingMapped) return;
-        // tempo de sim = 0.125 * elapsed (CREWaterOcean::FrameUpdate:346).
-        UpdateSim(0.125f * _ElapsedTime);
-        BuildNormalMipChain();
-        StageDisplacement();
-        StageNormalMipChain();
+    void FOceanFFT::CreateDescriptors(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
+        H0SRVSlot          = _SRVHeap.Allocate(1);
+        SpecSRVPair        = _SRVHeap.Allocate(2);
+        FFTTempSRVSlot     = _SRVHeap.Allocate(1);
+        SpecUAVPair        = _SRVHeap.Allocate(2);
+        FFTTempUAVSlot     = _SRVHeap.Allocate(1);
+        DispSRVSlot        = _SRVHeap.Allocate(1);
+        DispUAVSlot        = _SRVHeap.Allocate(1);
+        GradUAVPair        = _SRVHeap.Allocate(2);
+        OceanSRVSlot       = _SRVHeap.Allocate(1);
+        NormalChainSRVSlot = _SRVHeap.Allocate(1);
+        const u32 NormalMipUAVRest  = _SRVHeap.Allocate(kNormalMipCount - 1); // mips 1..8
+        const u32 NormalMipSRVBlock = _SRVHeap.Allocate(kNormalMipCount - 1); // mips 0..7
+
+        NormalMipUAVSlot[0] = GradUAVPair + 1;
+        for (u32 i = 1; i < kNormalMipCount; ++i) NormalMipUAVSlot[i] = NormalMipUAVRest + (i - 1);
+        for (u32 i = 0; i + 1 < kNormalMipCount; ++i) NormalMipSRVSlot[i] = NormalMipSRVBlock + i;
+
+        // --- SRVs ---
+        D3D12_SHADER_RESOURCE_VIEW_DESC SRV{};
+        SRV.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        SRV.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+
+        SRV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; SRV.Texture2D.MipLevels = 1;
+        _SRVHeap.CreateSRV(_Device, H0Tex.Get(), SRV, H0SRVSlot);
+
+        SRV.Format = DXGI_FORMAT_R32G32_FLOAT;
+        _SRVHeap.CreateSRV(_Device, SpecH.Get(), SRV, SpecSRVPair);
+        _SRVHeap.CreateSRV(_Device, SpecD.Get(), SRV, SpecSRVPair + 1);
+        _SRVHeap.CreateSRV(_Device, FFTTemp.Get(), SRV, FFTTempSRVSlot);
+
+        SRV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        _SRVHeap.CreateSRV(_Device, DispTex.Get(), SRV, DispSRVSlot);
+        _SRVHeap.CreateSRV(_Device, OceanTex.Get(), SRV, OceanSRVSlot);
+
+        SRV.Texture2D.MipLevels = kNormalMipCount;
+        _SRVHeap.CreateSRV(_Device, NormalTex.Get(), SRV, NormalChainSRVSlot);
+
+        SRV.Texture2D.MipLevels = 1;
+        for (u32 i = 0; i + 1 < kNormalMipCount; ++i) {
+            SRV.Texture2D.MostDetailedMip = i;
+            _SRVHeap.CreateSRV(_Device, NormalTex.Get(), SRV, NormalMipSRVSlot[i]);
+        }
+        SRV.Texture2D.MostDetailedMip = 0;
+
+        // --- UAVs ---
+        D3D12_UNORDERED_ACCESS_VIEW_DESC UAV{};
+        UAV.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+        UAV.Format = DXGI_FORMAT_R32G32_FLOAT;
+        _SRVHeap.CreateUAV(_Device, SpecH.Get(), UAV, SpecUAVPair);
+        _SRVHeap.CreateUAV(_Device, SpecD.Get(), UAV, SpecUAVPair + 1);
+        _SRVHeap.CreateUAV(_Device, FFTTemp.Get(), UAV, FFTTempUAVSlot);
+
+        UAV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        _SRVHeap.CreateUAV(_Device, DispTex.Get(), UAV, DispUAVSlot);
+        _SRVHeap.CreateUAV(_Device, OceanTex.Get(), UAV, GradUAVPair);
+
+        for (u32 i = 0; i < kNormalMipCount; ++i) {
+            UAV.Texture2D.MipSlice = i;
+            _SRVHeap.CreateUAV(_Device, NormalTex.Get(), UAV, NormalMipUAVSlot[i]);
+        }
+        UAV.Texture2D.MipSlice = 0;
     }
 
-    void FOceanFFT::RecordUpload(ID3D12GraphicsCommandList* _CommandList) {
+    void FOceanFFT::CreatePipelines(ID3D12Device* _Device) {
+        UpdateSpectrumPSO.Initialize(_Device, "OceanUpdateSpectrum.cs_6_0.cso", 1, 2);
+        FFTPSO.Initialize(_Device, "OceanFFT.cs_6_0.cso", 1, 1);
+        CreateDispPSO.Initialize(_Device, "OceanCreateDisplacement.cs_6_0.cso", 2, 1);
+        GradientsPSO.Initialize(_Device, "OceanGradients.cs_6_0.cso", 1, 2);
+        NormalMipPSO.Initialize(_Device, "OceanNormalMip.cs_6_0.cso", 1, 1);
+    }
+
+    void FOceanFFT::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
+        CreateTextures(_Device);
+        CreateDescriptors(_Device, _SRVHeap);
+        CreatePipelines(_Device);
+        ComputeH0();      // preenche o staging com os params iniciais (vento/amplitude)
+        H0Dirty = true;   // 1o RecordCompute sobe H0 -> GPU
+        LogInfo("Oceano FFT na GPU: 256^2, espectro com direcao de vento + foam (Jacobiano)");
+    }
+
+    // =====================================================================================
+    // Per-frame: pipeline de compute
+    // =====================================================================================
+
+    void FOceanFFT::TransitionTex(ID3D12GraphicsCommandList* _CL, ID3D12Resource* _R,
+                                  D3D12_RESOURCE_STATES& _State, D3D12_RESOURCE_STATES _Target,
+                                  u32 _Subresource) {
+        if (_State == _Target) return;
+        D3D12_RESOURCE_BARRIER B{};
+        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        B.Transition.pResource   = _R;
+        B.Transition.StateBefore = _State;
+        B.Transition.StateAfter  = _Target;
+        B.Transition.Subresource = _Subresource;
+        _CL->ResourceBarrier(1, &B);
+        _State = _Target;
+    }
+
+    void FOceanFFT::RecordCompute(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (!OceanTex) return;
 
-        const D3D12_RESOURCE_STATES ReadState =
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        const auto UAV  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        const auto NPS  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        const auto READ = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
-        if (CurrentState != D3D12_RESOURCE_STATE_COPY_DEST) {
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = OceanTex.Get();
-            B.Transition.StateBefore = CurrentState;
-            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            _CommandList->ResourceBarrier(1, &B);
-            CurrentState = D3D12_RESOURCE_STATE_COPY_DEST;
-        }
-        if (NormalTex && NormalCurrentState != D3D12_RESOURCE_STATE_COPY_DEST) {
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = NormalTex.Get();
-            B.Transition.StateBefore = NormalCurrentState;
-            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            _CommandList->ResourceBarrier(1, &B);
-            NormalCurrentState = D3D12_RESOURCE_STATE_COPY_DEST;
+        // 0) Upload do H0 (1a vez ou apos mudar vento/amplitude).
+        if (H0Dirty) {
+            TransitionTex(_CL, H0Tex.Get(), H0State, D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_TEXTURE_COPY_LOCATION Src{};
+            Src.pResource       = H0Staging.Get();
+            Src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            Src.PlacedFootprint = H0Footprint;
+            D3D12_TEXTURE_COPY_LOCATION Dst{};
+            Dst.pResource        = H0Tex.Get();
+            Dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            Dst.SubresourceIndex = 0;
+            _CL->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
+            TransitionTex(_CL, H0Tex.Get(), H0State, NPS);
+            H0Dirty = false;
         }
 
-        D3D12_TEXTURE_COPY_LOCATION SrcLoc{};
-        SrcLoc.pResource       = StagingBuf.Get();
-        SrcLoc.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        SrcLoc.PlacedFootprint = Footprint;
-        D3D12_TEXTURE_COPY_LOCATION DstLoc{};
-        DstLoc.pResource        = OceanTex.Get();
-        DstLoc.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        DstLoc.SubresourceIndex = 0;
-        _CommandList->CopyTextureRegion(&DstLoc, 0, 0, 0, &SrcLoc, nullptr);
+        // 1) CB do frame.
+        MappedCB->Time          = SimTime;
+        MappedCB->ChoppyScale   = ChoppyWaveScale;
+        MappedCB->HeightScale   = MaxWaveSize;
+        MappedCB->NormalUp      = NormalUp;
+        MappedCB->JacobianScale = ChoppyJacobianScale;
+        const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress();
 
-        if (NormalTex) {
-            for (u32 Mip = 0; Mip < kNormalMipCount; ++Mip) {
-                D3D12_TEXTURE_COPY_LOCATION NormalSrc{};
-                NormalSrc.pResource       = NormalStagingBuf.Get();
-                NormalSrc.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-                NormalSrc.PlacedFootprint = NormalFootprints[Mip];
+        // 2) UpdateSpectrum: H0 -> SpecH, SpecD.
+        TransitionTex(_CL, SpecH.Get(), SpecHState, UAV);
+        TransitionTex(_CL, SpecD.Get(), SpecDState, UAV);
+        UpdateSpectrumPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr);
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(H0SRVSlot));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(SpecUAVPair));
+        _CL->Dispatch(N / 16, N / 16, 1);
 
-                D3D12_TEXTURE_COPY_LOCATION NormalDst{};
-                NormalDst.pResource        = NormalTex.Get();
-                NormalDst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                NormalDst.SubresourceIndex = Mip;
+        // 3) FFT 2D de cada campo (horizontal -> scratch, vertical -> de volta).
+        auto FFTPass = [&](ID3D12Resource* SrcRes, D3D12_RESOURCE_STATES& SrcState, u32 SrcSRV,
+                           ID3D12Resource* DstRes, D3D12_RESOURCE_STATES& DstState, u32 DstUAV) {
+            TransitionTex(_CL, SrcRes, SrcState, NPS);
+            TransitionTex(_CL, DstRes, DstState, UAV);
+            FFTPSO.Bind(_CL);
+            _CL->SetComputeRootConstantBufferView(0, CBAddr);
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SrcSRV));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DstUAV));
+            _CL->Dispatch(N, 1, 1);
+        };
+        FFTPass(SpecH.Get(),   SpecHState,   SpecSRVPair,     FFTTemp.Get(), FFTTempState, FFTTempUAVSlot);
+        FFTPass(FFTTemp.Get(), FFTTempState, FFTTempSRVSlot,  SpecH.Get(),   SpecHState,   SpecUAVPair);
+        FFTPass(SpecD.Get(),   SpecDState,   SpecSRVPair + 1, FFTTemp.Get(), FFTTempState, FFTTempUAVSlot);
+        FFTPass(FFTTemp.Get(), FFTTempState, FFTTempSRVSlot,  SpecD.Get(),   SpecDState,   SpecUAVPair + 1);
 
-                _CommandList->CopyTextureRegion(&NormalDst, 0, 0, 0, &NormalSrc, nullptr);
-            }
+        // 4) CreateDisplacement: SpecH, SpecD -> DispTex.
+        TransitionTex(_CL, SpecH.Get(), SpecHState, NPS);
+        TransitionTex(_CL, SpecD.Get(), SpecDState, NPS);
+        TransitionTex(_CL, DispTex.Get(), DispState, UAV);
+        CreateDispPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr);
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpecSRVPair)); // [SpecH, SpecD]
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DispUAVSlot));
+        _CL->Dispatch(N / 16, N / 16, 1);
+
+        // 5) Gradients: DispTex -> OceanTex(+J) + NormalTex mip0.
+        TransitionTex(_CL, DispTex.Get(), DispState, NPS);
+        TransitionTex(_CL, OceanTex.Get(), OceanState, UAV);
+        TransitionTex(_CL, NormalTex.Get(), NormalMipState[0], UAV, 0);
+        GradientsPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr);
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(DispSRVSlot));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(GradUAVPair)); // [Ocean, NormalMip0]
+        _CL->Dispatch(N / 16, N / 16, 1);
+
+        // 6) Mip chain da normal (Toksvig). mip(i) <- mip(i-1).
+        NormalMipPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr);
+        for (u32 Mip = 1; Mip < kNormalMipCount; ++Mip) {
+            TransitionTex(_CL, NormalTex.Get(), NormalMipState[Mip - 1], NPS, Mip - 1);
+            TransitionTex(_CL, NormalTex.Get(), NormalMipState[Mip], UAV, Mip);
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(NormalMipSRVSlot[Mip - 1]));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(NormalMipUAVSlot[Mip]));
+            const u32 Res    = kGridSize >> Mip;
+            const u32 Groups = (Res + 7) / 8;
+            _CL->Dispatch(Groups, Groups, 1);
         }
 
-        D3D12_RESOURCE_BARRIER Barriers[2]{};
-        UINT BarrierCount = 0;
-        Barriers[BarrierCount].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        Barriers[BarrierCount].Transition.pResource   = OceanTex.Get();
-        Barriers[BarrierCount].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        Barriers[BarrierCount].Transition.StateAfter  = ReadState;
-        Barriers[BarrierCount].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        ++BarrierCount;
-        if (NormalTex) {
-            Barriers[BarrierCount].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barriers[BarrierCount].Transition.pResource   = NormalTex.Get();
-            Barriers[BarrierCount].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-            Barriers[BarrierCount].Transition.StateAfter  = ReadState;
-            Barriers[BarrierCount].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            ++BarrierCount;
-        }
-        _CommandList->ResourceBarrier(BarrierCount, Barriers);
-        CurrentState = ReadState;
-        NormalCurrentState = ReadState;
+        // 7) Estados finais p/ o draw da agua (VS le displacement, PS le normal/foam).
+        TransitionTex(_CL, OceanTex.Get(), OceanState, READ);
+        for (u32 Mip = 0; Mip < kNormalMipCount; ++Mip)
+            TransitionTex(_CL, NormalTex.Get(), NormalMipState[Mip], READ, Mip);
     }
 }

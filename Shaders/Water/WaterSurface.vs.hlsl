@@ -68,8 +68,8 @@ VSOutput main(VSInput IN) {
         worldPos.y += disp.z * s + farSwell;
 
         float hC = disp.z;
-        float hX = FFTDisplacement.SampleLevel(LinearWrap, tcFFT + float2(1.0 / 64.0, 0.0), 0.0).z;
-        float hZ = FFTDisplacement.SampleLevel(LinearWrap, tcFFT + float2(0.0, 1.0 / 64.0), 0.0).z;
+        float hX = FFTDisplacement.SampleLevel(LinearWrap, tcFFT + float2(1.0 / 256.0, 0.0), 0.0).z;
+        float hZ = FFTDisplacement.SampleLevel(LinearWrap, tcFFT + float2(0.0, 1.0 / 256.0), 0.0).z;
         float3 fftNormal = normalize(float3(hC - hX, OceanFFT.w, hC - hZ));
         float3 farNormal = WaterFarSwellNormal(sampleWorldXZ);
         normal = normalize(lerp(fftNormal, farNormal, farBlend));

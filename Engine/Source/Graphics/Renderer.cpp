@@ -546,8 +546,14 @@ namespace Smile {
                                  HDREnv.HasHDRLoaded(), IBLIntensity,
                                  SwapChain.GetWidth(), SwapChain.GetHeight(), NearZ, FarZ,
                                  WaterHasDepth, UseAtmosphereSky);
-            // FFT na CPU: roda a sim e preenche o staging (upload na command list abaixo).
-            if (Ocean.IsInitialized()) Ocean.Update(ElapsedTime);
+            // FFT na GPU: define tempo de sim + propaga a direcao do vento (re-baka H0 so
+            // se mudou). O pipeline de compute roda no RecordCompute, abaixo.
+            if (Ocean.IsInitialized()) {
+                Ocean.SetTime(ElapsedTime);
+                Ocean.SetWindDirection(Water.GetWindDirection());
+                Ocean.SetWindSpeed(Water.GetWindSpeed());
+                Ocean.SetAmplitude(Water.GetWavesAmount());
+            }
         }
 
         CommandQueue.ResetForRecording();
@@ -593,9 +599,10 @@ namespace Smile {
         ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
 
-        // Oceano FFT: sobe a textura de displacement (staging->GPU) antes de qualquer draw.
+        // Oceano FFT: roda o pipeline de compute (espectro->FFT->deslocamento->normal/foam)
+        // antes de qualquer draw. Os descriptor heaps ja estao setados acima.
         if (UseWater && Ocean.IsInitialized()) {
-            Ocean.RecordUpload(CommandList);
+            Ocean.RecordCompute(CommandList, SRVHeap);
         }
 
         // --- Sky background (far-plane depth, before geometry) ---

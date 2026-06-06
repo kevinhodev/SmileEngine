@@ -27,6 +27,8 @@ cbuffer WaterCB : register(b0) {
     float4 DebugParams;      // x=debug mode (0 off/1 wire/2 tiles)
     float4 InScatterColor;   // rgb=cor turquesa do in-scatter, w=densidade
     float4 AbsorptionColor;  // rgb=extincao por canal (Beer-Lambert), w=clamp do sun-spec
+    float4 FoamParams;       // x=coverage(limiar J) y=sharpness z=intensidade(0=off) w=fadeDist(m)
+    float4 FoamColor;        // rgb=tint da espuma, w=supressao do sun-spec
 };
 
 // t1 = displacement do FFT (Dx, Dy, -h, 0), porte de s_ptexWaterOcean. s0 = linear wrap

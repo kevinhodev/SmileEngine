@@ -900,6 +900,10 @@ namespace Smile {
         // In-scattering (turquesa) + absorcao por canal + clamp do sun-spec (Etapa 3).
         MappedCBV->InScatterColor  = { InScatterColor.X, InScatterColor.Y, InScatterColor.Z, InScatterDensity };
         MappedCBV->AbsorptionColor = { AbsorptionColor.X, AbsorptionColor.Y, AbsorptionColor.Z, SunSpecClamp };
+        // Foam: coverage(limiar J), sharpness, intensidade (0 desliga), distancia de fade.
+        MappedCBV->FoamParams = { FoamCoverage, FoamSharpness,
+                                  UseFoam ? FoamIntensity : 0.0f, FoamFadeDist };
+        MappedCBV->FoamColor  = { FoamColor.X, FoamColor.Y, FoamColor.Z, FoamSpecSuppress };
 
         BuildTileInstances(_ViewProj, _Projection, _CameraPos, _ScreenW, _ScreenH);
     }

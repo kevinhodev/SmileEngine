@@ -76,10 +76,12 @@ float WaterAerialFogAmount(float camDist, float3 viewDir) {
 // Etapa 0: agua plana. Fresnel mistura cor de fundo <-> reflexao do ceu; + sun specular.
 // Saida em HDR LINEAR (o tonemap ACES e um passe final unico — DOCS/ARCHITECTURE).
 float4 main(VSOutput IN) : SV_Target {
-    if (DebugParams.x > 0.5f && DebugParams.x < 1.5f) {
+    int debugMode = (int)floor(DebugParams.x + 0.5f);
+
+    if (debugMode == 1) {
         return float4(0.05f, 0.95f, 1.0f, 1.0f);
     }
-    if (DebugParams.x > 1.5f) {
+    if (debugMode == 2) {
         float tileSize = max(IN.debugData.x, 1.0f);
         float internalLodRaw = clamp(IN.debugData.z, 0.0f, 2.0f);
         float effectiveCellSize = tileSize * exp2(internalLodRaw) / 32.0f;
@@ -139,7 +141,22 @@ float4 main(VSOutput IN) : SV_Target {
         normalToksvigT = lerp(normalToksvigT, 1.0, farBlend);
     }
 
+    if (debugMode == 3) {
+        float2 tcDebug = IN.worldPos.xz * 0.0125 * OceanParams0.w * 1.25;
+        float4 dispDebug = FFTDisplacement.SampleLevel(LinearWrap, tcDebug, 0.0);
+        float h = dispDebug.z * 0.01f;
+        float pos = saturate(h);
+        float neg = saturate(-h);
+        return float4(0.42f + pos * 0.58f, 0.48f - saturate(abs(h)) * 0.22f,
+                      0.55f + neg * 0.45f, 1.0f);
+    }
+    if (debugMode == 4) {
+        return float4(N * 0.5f + 0.5f, 1.0f);
+    }
+
     float  NoV = saturate(dot(N, V));
+    float  horizonGrazing = saturate(1.0f - abs(V.y) * 5.0f);
+    horizonGrazing = horizonGrazing * horizonGrazing * (3.0f - 2.0f * horizonGrazing);
 
     // --- Specular AA para agua: Karis (derivadas de normal) + Toksvig (normal mipped) ---
     float3 dNdx = ddx(N);
@@ -151,9 +168,13 @@ float4 main(VSOutput IN) : SV_Target {
     float  glossFadeDist = max(BumpParams2.w * 14.0, 3500.0);
     float  distGlossFade = clamp(1.0 - camDist / glossFadeDist, 0.45, 1.0); // mais blur ao longe (mata blocos)
     float  baseRoughness = saturate(1.0 - ShadeParams.x * distGlossFade);
+    float  horizonRoughness = horizonGrazing * farBlend * 0.35f;
     float  reflectionRoughness =
-        saturate(sqrt(baseRoughness * baseRoughness + karisVariance + toksvigVar) + farBlend * 0.18);
-    float reflBump = saturate(RefractionParams.w * lerp(1.0, 0.32, farBlend));
+        saturate(sqrt(baseRoughness * baseRoughness + karisVariance + toksvigVar) +
+                 farBlend * 0.18 + horizonRoughness);
+    float reflBump = saturate(RefractionParams.w *
+                              lerp(1.0, 0.32, farBlend) *
+                              lerp(1.0, 0.55, horizonGrazing * farBlend));
     float3 Nrefl = normalize(lerp(float3(0.0, 1.0, 0.0), N, reflBump));
 
     // --- Reflexao ---
@@ -166,22 +187,32 @@ float4 main(VSOutput IN) : SV_Target {
     } else {
         reflection = AnalyticSky(R);
     }
+    float horizonReflectionScatter = horizonGrazing * farBlend;
+    reflection = lerp(reflection, WaterAerialFogColor(normalize(IN.worldPos - CameraPos.xyz)),
+                      horizonReflectionScatter * 0.16f);
     reflection *= ShadeParams.y; // ReflectionScale
 
     // --- Fresnel (F0 da agua ~0.02) decide reflexao vs corpo ---
     float F = FresnelSchlick(0.02, NoV, ShadeParams.x);
+    if (debugMode == 5) {
+        return float4(F.xxx, 1.0f);
+    }
 
     // --- Corpo da agua: refracao + absorcao (Etapa 3), porte do WaterPS (Water.cfx:1030+) ---
     float3 body = DeepColorDensity.rgb;
+    float  columnDebug = 0.0f;
+    float  softDebug   = 0.0f;
     float  fA   = 1.0; // soft-intersection (mundo x camera) — modula o Fresnel nas bordas
     if (DepthParams.z > 0.5) {
         float  waterDepth = IN.screenProj.w;                 // view-Z da agua (clip.w)
         float2 screenUV   = IN.screenProj.xy / IN.screenProj.w;
         float  sceneDepth = SampleSceneDepthLin(screenUV);   // cena atras da agua
+        columnDebug = max(sceneDepth - waterDepth, 0.0f);
         float  column     = sceneDepth - waterDepth;         // espessura da coluna d'agua (na vista)
 
         // borda suave: orla fina (column pequeno) deixa a cena aparecer.
         float softIntersect = saturate(RefractionParams.y * column);
+        softDebug = softIntersect;
 
         // refracao: desloca o UV pela normal; escala por softIntersect e screenProj.z (atenua longe).
         float2 refrOfs = N.xz * RefractionParams.x * softIntersect * IN.screenProj.z;
@@ -196,15 +227,52 @@ float4 main(VSOutput IN) : SV_Target {
         // aparece mesmo na esfera demo pequena.
         float cosForward = waterDepth / max(length(IN.vView), 1e-3);
         float pathLen    = max(column, 0.0) / max(cosForward, 0.1);
-        float3 transmit  = exp2(-AbsorptionColor.rgb * pathLen);
-        float3 inScatter = InScatterColor.rgb * (1.0 - exp2(-InScatterColor.w * pathLen));
+        // A coluna em view-space fica enorme no oceano aberto; escalar pelo fog density
+        // evita que o corpo vire uma chapa turquesa saturada em poucos metros.
+        float opticalLen = pathLen * max(RefractionParams.z, 0.0f) * 0.08f;
+        float3 transmit  = exp2(-AbsorptionColor.rgb * opticalLen);
+        float3 inScatter = InScatterColor.rgb * (1.0 - exp2(-InScatterColor.w * opticalLen));
         body = refrColor * transmit + inScatter;
 
         float cameraSoft = saturate(waterDepth - 0.33);
         fA = softIntersect * cameraSoft;
     }
 
-    float3 color = lerp(body, reflection, F * fA);
+    float slopeEnergy = saturate(length(N.xz) * 1.45f);
+    float surfaceReflection = (0.18f + 0.32f * slopeEnergy) * saturate(1.0f - farBlend * 0.55f);
+    float reflectionWeight = saturate(max(F * fA, surfaceReflection * fA) * ShadeParams.y);
+    float3 color = lerp(body, reflection, reflectionWeight);
+    if (debugMode == 6) {
+        return float4(body / (body + 1.0f), 1.0f);
+    }
+    if (debugMode == 7) {
+        return float4(reflection / (reflection + 1.0f), 1.0f);
+    }
+    if (debugMode == 9) {
+        float d = saturate(columnDebug * 0.05f);
+        return float4(d, softDebug, 1.0f - d, 1.0f);
+    }
+
+    // --- Foam / whitecaps: Jacobiano da deformacao choppy do FFT (Asylum/Cry) ---
+    // J<1 = cristas dobrando -> espuma difusa que clareia a agua e abafa o specular.
+    // Amostra o .w do FFT na mesma tiling do VS (recomputada de worldPos.xz).
+    float  foam    = 0.0;
+    float3 foamLit = float3(0.0, 0.0, 0.0);
+    float  JDebug  = 1.0;
+    if (FoamParams.z > 0.0 || debugMode == 8) {
+        float2 tcFoam = IN.worldPos.xz * 0.0125 * OceanParams0.w * 1.25;
+        JDebug = FFTDisplacement.SampleLevel(LinearWrap, tcFoam, 0.0).w;
+        foam = saturate((FoamParams.x - JDebug) / max(FoamParams.y, 1e-3));
+        foam = foam * foam * (3.0 - 2.0 * foam);
+        float foamFade = saturate(1.0 - camDist / max(FoamParams.w, 1.0));
+        foamFade = foamFade * foamFade * (3.0 - 2.0 * foamFade);
+        foam = saturate(foam * FoamParams.z * foamFade * nearFFT);
+        // espuma iluminada pelo sol (acompanha a exposicao HDR da cena) + termo ambiente.
+        foamLit = FoamColor.rgb * (SunColor.rgb * SunDirection.w * 0.16 + 0.30);
+    }
+    if (debugMode == 8) {
+        return float4(saturate((1.0f - JDebug) * 2.0f), foam, saturate(JDebug), 1.0f);
+    }
 
     // --- Sun specular (2 lobos) ---
     float specAA = saturate(1.0 - reflectionRoughness * 1.25) * lerp(1.0, 0.22, farBlend);
@@ -212,7 +280,11 @@ float4 main(VSOutput IN) : SV_Target {
     float spec = SunSpecularLobes(N, V, normalize(SunDirection.xyz), sunShininess) * specAA;
     float3 sunSpecCol = SunColor.rgb * (spec * SunDirection.w * ShadeParams.w);
     sunSpecCol = min(sunSpecCol, AbsorptionColor.w); // clamp fireflies do sol (patches brancos)
+    sunSpecCol *= (1.0 - foam * FoamColor.w);        // espuma abafa o glint do sol
     color += sunSpecCol;
+
+    // Espuma por cima (difusa): sobrepoe reflexo/specular onde as cristas dobram.
+    color = lerp(color, foamLit, foam);
 
     // Aerial perspective de superficie: lava contraste/spec no medio-longe em HDR,
     // escondendo o aliasing residual do projected grid sem apagar o primeiro plano.
