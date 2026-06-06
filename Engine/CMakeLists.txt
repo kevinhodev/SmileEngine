@@ -38,6 +38,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/VolumetricClouds.h
     Include/Smile/Graphics/Skybox.h
     Include/Smile/Graphics/PostProcess.h
+    Include/Smile/Graphics/OceanFFT.h
+    Include/Smile/Graphics/Water.h
     Include/Smile/Graphics/Renderer.h
 )
 
@@ -68,6 +70,8 @@ set(ENGINE_SOURCES
     Source/Graphics/VolumetricClouds.cpp
     Source/Graphics/Skybox.cpp
     Source/Graphics/PostProcess.cpp
+    Source/Graphics/OceanFFT.cpp
+    Source/Graphics/Water.cpp
     Source/Graphics/Renderer.cpp
 )
 

@@ -31,6 +31,7 @@ namespace Smile {
         CreateGeometryBuffers();
         CreateDepthBuffer();
         CreateHDRBuffers();
+        CreateSceneCopies();
         CreateConstantBuffer();
         CreateDefaultMaterial();
 
@@ -53,6 +54,13 @@ namespace Smile {
                                     Atmosphere.TransmittanceSRV(), Atmosphere.MultiScatterSRV(),
                                     MSAASampleCount, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                                     SwapChain.GetWidth(), SwapChain.GetHeight());
+
+        // Oceano (port fiel da CryEngine): simulacao FFT (CPU) + superficie. A FFT baka o
+        // espectro e cria a textura de displacement; a reflexao usa o cubemap especular
+        // do HDREnv (passado por frame no RenderSurface).
+        Ocean.Initialize(Device.Native(), SRVHeap);
+        Water.Initialize(Device.Native(), MSAASampleCount,
+                         DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
         // Inicializa o pos-processamento
         PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
@@ -359,6 +367,56 @@ namespace Smile {
         }
     }
 
+    void Renderer::CreateSceneCopies() {
+        // Copias single-sample da cena (pre-agua) p/ a refracao/fog da agua (Etapa 3).
+        // scene-color = HDR R16F LINEAR (sem inverse-tonemap); scene-depth = R32 linearizavel.
+        UINT Width = SwapChain.GetWidth(), Height = SwapChain.GetHeight();
+        if (Width == 0 || Height == 0) return;
+
+        SceneColorCopy.Reset();
+        SceneDepthCopy.Reset();
+
+        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12_RESOURCE_DESC Desc{};
+        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        Desc.Width            = Width;
+        Desc.Height           = Height;
+        Desc.DepthOrArraySize = 1;
+        Desc.MipLevels        = 1;
+        Desc.SampleDesc       = { 1, 0 };
+        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+
+        Desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneColorCopy)));
+        SceneColorCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
+
+        Desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneDepthCopy)));
+        SceneDepthCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
+
+        // Tabela SRV contigua [color(t2), depth(t3)] — aloca 1x, recria as views no resize.
+        if (SceneCopyTableStart == kInvalidSlot)
+            SceneCopyTableStart = SRVHeap.Allocate(2);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC CSRV{};
+        CSRV.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        CSRV.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        CSRV.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        CSRV.Texture2D.MipLevels     = 1;
+        SRVHeap.CreateSRV(Device.Native(), SceneColorCopy.Get(), CSRV, SceneCopyTableStart);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC DSRV{};
+        DSRV.Format                  = DXGI_FORMAT_R32_FLOAT;
+        DSRV.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        DSRV.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        DSRV.Texture2D.MipLevels     = 1;
+        SRVHeap.CreateSRV(Device.Native(), SceneDepthCopy.Get(), DSRV, SceneCopyTableStart + 1);
+    }
+
     void Renderer::SetMSAA(u32 _SampleCount) {
         if (_SampleCount == MSAASampleCount || !Initialized) return;
         CommandQueue.Flush();
@@ -370,6 +428,8 @@ namespace Smile {
                                DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         CloudVolumetrics.RecreateComposite(Device.Native(), MSAASampleCount,
                                            DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
+        Water.Recreate(Device.Native(), MSAASampleCount,
+                       DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         CreateHDRBuffers();
         CreateDepthBuffer();
     }
@@ -394,6 +454,8 @@ namespace Smile {
         CreateHDRBuffers();
         CreateDepthBuffer();
         CloudVolumetrics.Resize(Device.Native(), SRVHeap, _Width, _Height);
+        Water.Resize(Device.Native(), _Width, _Height);
+        CreateSceneCopies();
         PostProcessor.Resize(Device.Native(), SRVHeap, _Width, _Height);
     }
 
@@ -472,6 +534,22 @@ namespace Smile {
         CloudVolumetrics.UpdatePerFrame(InvVPNoTrans, CloudViewHeight, SunN, SunColorRGB,
                                         ElapsedTime, SwapChain.GetWidth(), SwapChain.GetHeight());
 
+        // Oceano: usa o ViewProj COMPLETO (com translacao) p/ projetar o grid e reconstruir
+        // o raio de mundo que intersecta o plano d'agua.
+        const Mat44 WaterViewProj    = View * Projection;
+        const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
+        // Refracao/fog so no caminho sem MSAA (depth MSAA nao copia p/ single-sample).
+        const bool WaterHasDepth = (MSAASampleCount <= 1) && SceneColorCopy && SceneDepthCopy;
+        if (UseWater && Water.IsInitialized()) {
+            Water.UpdatePerFrame(WaterViewProj, Projection, WaterInvViewProj, CameraPosition, SunN,
+                                 SunIntensity, SunColorRGB, ElapsedTime,
+                                 HDREnv.HasHDRLoaded(), IBLIntensity,
+                                 SwapChain.GetWidth(), SwapChain.GetHeight(), NearZ, FarZ,
+                                 WaterHasDepth, UseAtmosphereSky);
+            // FFT na CPU: roda a sim e preenche o staging (upload na command list abaixo).
+            if (Ocean.IsInitialized()) Ocean.Update(ElapsedTime);
+        }
+
         CommandQueue.ResetForRecording();
         auto* CommandList = CommandQueue.List();
 
@@ -515,6 +593,11 @@ namespace Smile {
         ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
 
+        // Oceano FFT: sobe a textura de displacement (staging->GPU) antes de qualquer draw.
+        if (UseWater && Ocean.IsInitialized()) {
+            Ocean.RecordUpload(CommandList);
+        }
+
         // --- Sky background (far-plane depth, before geometry) ---
         // Atmosphere takes precedence over the HDR skybox when enabled.
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
@@ -540,6 +623,48 @@ namespace Smile {
         CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
         CommandList->IASetIndexBuffer(&IndexBufferView);
         CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+
+        // --- Snapshot da cena (pre-agua) p/ refracao/fog (Etapa 3, so sem MSAA) ---
+        if (UseWater && Water.IsInitialized() && WaterHasDepth) {
+            CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); // solta RT+DSV p/ copiar
+
+            auto Transition = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& Cur,
+                                  D3D12_RESOURCE_STATES To) {
+                if (Cur == To) return;
+                D3D12_RESOURCE_BARRIER B{};
+                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                B.Transition.pResource   = R;
+                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                B.Transition.StateBefore = Cur;
+                B.Transition.StateAfter  = To;
+                CommandList->ResourceBarrier(1, &B);
+                Cur = To;
+            };
+
+            D3D12_RESOURCE_STATES HdrState   = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            D3D12_RESOURCE_STATES DepthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            Transition(HDRColorBuffer.Get(),  HdrState,   D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Transition(DepthBuffer.Get(),     DepthState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Transition(SceneColorCopy.Get(),  SceneColorCopyState, D3D12_RESOURCE_STATE_COPY_DEST);
+            Transition(SceneDepthCopy.Get(),  SceneDepthCopyState, D3D12_RESOURCE_STATE_COPY_DEST);
+
+            CommandList->CopyResource(SceneColorCopy.Get(), HDRColorBuffer.Get());
+            CommandList->CopyResource(SceneDepthCopy.Get(), DepthBuffer.Get());
+
+            Transition(HDRColorBuffer.Get(),  HdrState,   D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Transition(DepthBuffer.Get(),     DepthState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Transition(SceneColorCopy.Get(),  SceneColorCopyState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Transition(SceneDepthCopy.Get(),  SceneDepthCopyState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+            auto HDR_RTV_Rebind = HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &HDR_RTV_Rebind, FALSE, &DSV);
+        }
+
+        // --- Ocean surface (porte da CryEngine) — entre a geometria opaca e as nuvens ---
+        if (UseWater && Water.IsInitialized()) {
+            Water.RenderSurface(CommandList, SRVHeap, HDREnv.SpecularSRV(), Ocean.SRVSlot(),
+                                Ocean.NormalSRVSlot(), SceneCopyTableStart, Atmosphere.SkyViewSRV());
+        }
 
         // --- Volumetric clouds (raymarch → composite over the sky, depth-gated) ---
         if (UseClouds && CloudVolumetrics.IsInitialized()) {

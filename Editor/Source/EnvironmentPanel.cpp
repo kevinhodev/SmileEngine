@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QDir>
@@ -86,6 +87,20 @@ namespace SmileEditor {
         ParamsLayout->addRow(QString(), ShowSkyboxCheck);
 
         Layout->addWidget(ParamsGroup);
+
+        auto* WaterGroup  = new QGroupBox(tr("Water Debug"), Container);
+        auto* WaterLayout = new QFormLayout(WaterGroup);
+        WaterLayout->setContentsMargins(4, 8, 4, 4);
+        WaterLayout->setHorizontalSpacing(6);
+        WaterLayout->setVerticalSpacing(4);
+
+        WaterDebugCombo = new QComboBox(WaterGroup);
+        WaterDebugCombo->addItem(tr("Off"));
+        WaterDebugCombo->addItem(tr("Wireframe"));
+        WaterDebugCombo->addItem(tr("Tiles / LOD"));
+        WaterLayout->addRow(tr("Modo"), WaterDebugCombo);
+        Layout->addWidget(WaterGroup);
+
         Layout->addStretch();
 
         RootLayout->addWidget(Container);
@@ -97,6 +112,9 @@ namespace SmileEditor {
                 static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged),
                 this, &EnvironmentPanel::OnRotationChanged);
         connect(ShowSkyboxCheck, &QCheckBox::toggled, this, &EnvironmentPanel::OnShowSkyboxToggled);
+        connect(WaterDebugCombo,
+                static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+                this, &EnvironmentPanel::OnWaterDebugModeChanged);
     }
 
     void EnvironmentPanel::InitializeWithRenderer(Smile::Renderer* _Renderer) {
@@ -106,6 +124,7 @@ namespace SmileEditor {
         IntensitySpin  ->setValue(RendererPtr->GetIBLIntensity());
         RotationSpin   ->setValue(RendererPtr->GetIBLRotation() / Smile::ToRad);
         ShowSkyboxCheck->setChecked(RendererPtr->GetShowSkybox());
+        WaterDebugCombo->setCurrentIndex(static_cast<int>(RendererPtr->GetWater().GetDebugMode()));
 
         // Auto-carrega o primeiro HDR encontrado em Assets/HDRi como ambiente padrão.
 #ifdef SMILE_ASSETS_DIR
@@ -160,5 +179,10 @@ namespace SmileEditor {
 
     void EnvironmentPanel::OnShowSkyboxToggled(bool _Checked) {
         if (RendererPtr) RendererPtr->SetShowSkybox(_Checked);
+    }
+
+    void EnvironmentPanel::OnWaterDebugModeChanged(int _Index) {
+        if (!RendererPtr) return;
+        RendererPtr->GetWater().SetDebugMode(static_cast<Smile::FWaterRenderer::EDebugMode>(_Index));
     }
 }

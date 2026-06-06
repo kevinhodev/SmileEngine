@@ -7,6 +7,7 @@ class QLabel;
 class QPushButton;
 class QDoubleSpinBox;
 class QCheckBox;
+class QComboBox;
 
 namespace Smile { class Renderer; }
 
@@ -28,6 +29,7 @@ namespace SmileEditor {
         void OnIntensityChanged(double Value);
         void OnRotationChanged(double Degrees);
         void OnShowSkyboxToggled(bool Checked);
+        void OnWaterDebugModeChanged(int Index);
 
     private:
         void BuildUI();
@@ -40,5 +42,6 @@ namespace SmileEditor {
         QDoubleSpinBox* IntensitySpin    = nullptr;
         QDoubleSpinBox* RotationSpin     = nullptr; // degrees
         QCheckBox*      ShowSkyboxCheck  = nullptr;
+        QComboBox*      WaterDebugCombo  = nullptr;
     };
 }

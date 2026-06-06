@@ -18,6 +18,8 @@
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/PostProcess.h"
+#include "Smile/Graphics/OceanFFT.h"
+#include "Smile/Graphics/Water.h"
 
 namespace Smile {
     struct alignas(256) FrameConstants {
@@ -83,6 +85,11 @@ namespace Smile {
         void SetUseClouds(bool Use)          { UseClouds = Use; }
         bool GetUseClouds() const            { return UseClouds; }
 
+        // Ocean (port fiel da CryEngine). Toggle + acesso ao subsistema p/ setters do editor.
+        void SetUseWater(bool Use)           { UseWater = Use; }
+        bool GetUseWater() const             { return UseWater; }
+        FWaterRenderer& GetWater()           { return Water; }
+
         // --- Sky & Clouds editor controls ---
         // Sun placed by azimuth (around +Y) and elevation (from the horizon), deg.
         void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
@@ -118,6 +125,7 @@ namespace Smile {
         void CreateConstantBuffer();
         void CreateMSAABuffers();
         void CreateHDRBuffers();
+        void CreateSceneCopies(); // scene-color + scene-depth p/ refracao da agua (Etapa 3)
         void CreateDefaultMaterial();
         void CreateIBLDescriptorTable();
 
@@ -175,6 +183,17 @@ namespace Smile {
         FCloudNoise       CloudNoise;
         FVolumetricClouds CloudVolumetrics;
         bool              UseClouds = true;
+        // Ocean: simulacao FFT (CPU, port do CWaterSim) + superficie (projected grid).
+        FOceanFFT         Ocean;
+        FWaterRenderer    Water;
+        bool              UseWater  = true;
+        // Copias da cena (pre-agua) p/ refracao/fog da agua (Etapa 3). Tabela SRV contigua
+        // [color(t2), depth(t3)]. So no caminho sem MSAA (depth MSAA nao copia single-sample).
+        ComPtr<ID3D12Resource> SceneColorCopy;
+        ComPtr<ID3D12Resource> SceneDepthCopy;
+        u32                    SceneCopyTableStart = kInvalidSlot;
+        D3D12_RESOURCE_STATES  SceneColorCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
+        D3D12_RESOURCE_STATES  SceneDepthCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
         bool            ShowSkybox    = true;
         f32             IBLIntensity  = 1.0f;
         f32             IBLRotation   = 0.0f; // radians, Y axis
