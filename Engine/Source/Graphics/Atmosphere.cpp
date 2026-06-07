@@ -142,7 +142,7 @@ namespace Smile {
 
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = sizeof(AtmosphereConstants);
+        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(AtmosphereConstants);
         Desc.Height           = 1;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
@@ -158,8 +158,11 @@ namespace Smile {
         D3D12_RANGE NoRead{ 0, 0 };
         void* Ptr = nullptr;
         SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedCB = reinterpret_cast<AtmosphereConstants*>(Ptr);
-        *MappedCB = CPUConstants;
+        MappedBase = reinterpret_cast<u8*>(Ptr);
+        // Popula todas as regioes para que qualquer slot seja valido antes do 1o UpdatePerFrame.
+        for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
+            std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(AtmosphereConstants),
+                        &CPUConstants, sizeof(AtmosphereConstants));
     }
 
     void FAtmosphere::BuildInputTables(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
@@ -289,24 +292,22 @@ namespace Smile {
         BuildSkyPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
     }
 
-    void FAtmosphere::UpdatePerFrame(const Vec3& _DirToSun, const Mat44& _InvViewProjNoTranslation) {
+    void FAtmosphere::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, const Mat44& _InvViewProjNoTranslation) {
+        FrameSlot = _FrameSlot;
         Vec3 d = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 0.6f, 0.8f }.Normalized());
         CPUConstants.SunDir = { d.X, d.Y, d.Z, CPUConstants.SunDir.W }; // keep illuminance
         CPUConstants.InvViewProjNoTrans = _InvViewProjNoTranslation;
-        if (MappedCB) {
-            MappedCB->SunDir            = CPUConstants.SunDir;
-            MappedCB->InvViewProjNoTrans = CPUConstants.InvViewProjNoTrans;
-        }
+        // Copia o shadow inteiro p/ a regiao deste frame (inclui SunDisk dos setters).
+        if (MappedBase) *Mapped() = CPUConstants;
     }
 
     void FAtmosphere::SetSunDiskHalfAngle(f32 _DegHalfAngle) {
+        // So o shadow; aplicado na regiao do frame no proximo UpdatePerFrame.
         CPUConstants.SunDisk.X = std::cos(_DegHalfAngle * 3.14159265358979f / 180.0f);
-        if (MappedCB) MappedCB->SunDisk = CPUConstants.SunDisk;
     }
 
     void FAtmosphere::SetSunGlare(f32 _Intensity) {
         CPUConstants.SunDisk.W = _Intensity;
-        if (MappedCB) MappedCB->SunDisk = CPUConstants.SunDisk;
     }
 
     f32 FAtmosphere::GetSunDiskHalfAngle() const {
@@ -326,7 +327,7 @@ namespace Smile {
 
     void FAtmosphere::Bake(ID3D12Device* _Device, FCommandQueue& _CmdQueue) {
         (void)_Device;
-        if (MappedCB) *MappedCB = CPUConstants;
+        if (MappedBase) *Mapped() = CPUConstants;
 
         _CmdQueue.ResetForRecording();
         auto* CL = _CmdQueue.List();
@@ -334,7 +335,7 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { SRVHeapPtr->Native() };
         CL->SetDescriptorHeaps(1, Heaps);
 
-        const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = ConstantBuffer->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = this->CBAddr();
 
         // --- Transmittance LUT (no SRV input; t0 bound to a valid dummy slot) ---
         Transmittance.Transition(CL, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -364,7 +365,7 @@ namespace Smile {
 
         SkyView.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         SkyViewPSO.Bind(_CommandList);
-        _CommandList->SetComputeRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
+        _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
         _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(SkyViewBakeTableStart));
         _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(SkyView.UAVSlot));
         _CommandList->Dispatch((kSkyViewW + 7) / 8, (kSkyViewH + 7) / 8, 1);
@@ -375,7 +376,7 @@ namespace Smile {
         if (!Initialized) return;
         _CommandList->SetGraphicsRootSignature(SkyRootSig.Get());
         _CommandList->SetPipelineState(SkyPSO.Get());
-        _CommandList->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
+        _CommandList->SetGraphicsRootConstantBufferView(0, CBAddr());
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(SkyRenderTableStart));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CommandList->IASetVertexBuffers(0, 0, nullptr);

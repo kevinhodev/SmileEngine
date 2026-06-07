@@ -43,7 +43,7 @@ namespace Smile {
 
         // Per-frame CB update. Camera is placed at (0, viewHeight, 0) in the
         // atmosphere km-frame to match the sky.
-        void UpdatePerFrame(const Mat44& InvViewProjNoTranslation, f32 ViewHeightKm,
+        void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjNoTranslation, f32 ViewHeightKm,
                             const Vec3& DirToSun, const Vec3& SunColor, f32 Time,
                             u32 Width, u32 Height);
 
@@ -99,9 +99,20 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
 
+        // CB double-buffered: kFramesInFlight copias; CPUConstants eh o shadow.
         Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
-        CloudConstants* MappedCB = nullptr;
+        u8*             MappedBase = nullptr;
+        u32             FrameSlot  = 0;
         CloudConstants  CPUConstants{};
+
+        D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const {
+            return ConstantBuffer->GetGPUVirtualAddress() +
+                   static_cast<UINT64>(FrameSlot) * sizeof(CloudConstants);
+        }
+        CloudConstants* Mapped() const {
+            return reinterpret_cast<CloudConstants*>(
+                MappedBase + static_cast<size_t>(FrameSlot) * sizeof(CloudConstants));
+        }
 
         bool Initialized = false;
     };

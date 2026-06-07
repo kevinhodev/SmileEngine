@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Skybox.h"
+#include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <fstream>
@@ -125,7 +126,7 @@ namespace Smile {
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = sizeof(SkyboxConstants);
+        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(SkyboxConstants);
         Desc.Height           = 1;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
@@ -136,7 +137,7 @@ namespace Smile {
             &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBV)));
         D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CBV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBV)));
+        SMILE_HR(CBV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBVBase)));
     }
 
     void FSkybox::Recreate(ID3D12Device* _Device, u32 _SampleCount,
@@ -144,18 +145,23 @@ namespace Smile {
         BuildPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
     }
 
-    void FSkybox::Render(ID3D12GraphicsCommandList* _CommandList,
+    void FSkybox::Render(u32 _FrameSlot,
+                          ID3D12GraphicsCommandList* _CommandList,
                           FTextureSRVHeap& _SRVHeap,
                           u32 _EnvCubeSRVSlot,
                           const Mat44& _InvViewProjNoTranslation,
                           f32 _IBLIntensity, f32 _IBLRotation) {
+        // Regiao do CB deste frame (double-buffered).
+        MappedCBV = reinterpret_cast<SkyboxConstants*>(
+            MappedCBVBase + static_cast<size_t>(_FrameSlot) * sizeof(SkyboxConstants));
         MappedCBV->InvViewProjNoTranslation = _InvViewProjNoTranslation;
         MappedCBV->IBLIntensity             = _IBLIntensity;
         MappedCBV->IBLRotation              = _IBLRotation;
 
         _CommandList->SetGraphicsRootSignature(RootSignature.Get());
         _CommandList->SetPipelineState(PSO.Get());
-        _CommandList->SetGraphicsRootConstantBufferView(0, CBV->GetGPUVirtualAddress());
+        _CommandList->SetGraphicsRootConstantBufferView(
+            0, CBV->GetGPUVirtualAddress() + static_cast<UINT64>(_FrameSlot) * sizeof(SkyboxConstants));
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(_EnvCubeSRVSlot));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CommandList->IASetVertexBuffers(0, 0, nullptr);

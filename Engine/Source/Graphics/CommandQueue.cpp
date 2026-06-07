@@ -10,9 +10,11 @@ namespace Smile {
         CommandQueueDesc.NodeMask = 0;
         SMILE_HR(_Device->CreateCommandQueue(&CommandQueueDesc, IID_PPV_ARGS(&CommandQueue)));
 
-        SMILE_HR(_Device->CreateCommandAllocator(_Type, IID_PPV_ARGS(&CommandAllocator)));
+        SMILE_HR(_Device->CreateCommandAllocator(_Type, IID_PPV_ARGS(&UploadAllocator)));
+        for (u32 i = 0; i < kFramesInFlight; ++i)
+            SMILE_HR(_Device->CreateCommandAllocator(_Type, IID_PPV_ARGS(&FrameAllocators[i])));
 
-        SMILE_HR(_Device->CreateCommandList(0, _Type, CommandAllocator.Get(), nullptr, IID_PPV_ARGS(&CommandList)));
+        SMILE_HR(_Device->CreateCommandList(0, _Type, UploadAllocator.Get(), nullptr, IID_PPV_ARGS(&CommandList)));
         SMILE_HR(CommandList->Close());
 
         SMILE_HR(_Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&Fence)));
@@ -29,26 +31,44 @@ namespace Smile {
         SMILE_HR(CommandQueue->Signal(Fence.Get(), FenceValue));
     }
 
-    void FCommandQueue::WaitForFence() {
-        if (Fence->GetCompletedValue() < FenceValue) {
-            SMILE_HR(Fence->SetEventOnCompletion(FenceValue, FenceEvent));
+    void FCommandQueue::WaitForValue(UINT64 _Value) {
+        if (Fence->GetCompletedValue() < _Value) {
+            SMILE_HR(Fence->SetEventOnCompletion(_Value, FenceEvent));
             WaitForSingleObject(FenceEvent, INFINITE);
         }
+    }
+
+    // --- Caminho sincrono ---
+
+    void FCommandQueue::ResetForRecording() {
+        SMILE_HR(UploadAllocator->Reset());
+        SMILE_HR(CommandList->Reset(UploadAllocator.Get(), nullptr));
     }
 
     void FCommandQueue::ExecuteAndSync(ID3D12CommandList* const* _CommandLists, UINT _Count) {
         CommandQueue->ExecuteCommandLists(_Count, _CommandLists);
         Signal();
-        WaitForFence();
+        WaitForValue(FenceValue);
     }
 
     void FCommandQueue::Flush() {
         Signal();
-        WaitForFence();
+        WaitForValue(FenceValue);
     }
 
-    void FCommandQueue::ResetForRecording() {
-        SMILE_HR(CommandAllocator->Reset());
-        SMILE_HR(CommandList->Reset(CommandAllocator.Get(), nullptr));
+    // --- Caminho per-frame (frames in flight) ---
+
+    void FCommandQueue::BeginFrame() {
+        CurrentFrame = (CurrentFrame + 1) % kFramesInFlight;
+        // Espera a GPU terminar o ultimo frame que usou este allocator antes de reseta-lo.
+        WaitForValue(FrameFenceValues[CurrentFrame]);
+        SMILE_HR(FrameAllocators[CurrentFrame]->Reset());
+        SMILE_HR(CommandList->Reset(FrameAllocators[CurrentFrame].Get(), nullptr));
     }
-} 
+
+    void FCommandQueue::EndFrame(ID3D12CommandList* const* _CommandLists, UINT _Count) {
+        CommandQueue->ExecuteCommandLists(_Count, _CommandLists);
+        Signal();
+        FrameFenceValues[CurrentFrame] = FenceValue;
+    }
+}

@@ -21,7 +21,8 @@ namespace Smile {
         // Records the fullscreen draw. Caller must already have set viewport,
         // scissor, render target, depth target, and descriptor heaps. Binds the
         // env cube SRV from the active descriptor heap at EnvCubeSRVSlot.
-        void Render(ID3D12GraphicsCommandList* CommandList,
+        void Render(u32 FrameSlot,
+                    ID3D12GraphicsCommandList* CommandList,
                     FTextureSRVHeap& SRVHeap,
                     u32 EnvCubeSRVSlot,
                     const Mat44& InvViewProjNoTranslation,
@@ -45,7 +46,9 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSignature;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
 
+        // CB double-buffered: kFramesInFlight copias; MappedCBV repontado por frame.
         Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
-        SkyboxConstants* MappedCBV = nullptr;
+        u8*              MappedCBVBase = nullptr;
+        SkyboxConstants* MappedCBV     = nullptr;
     };
 }

@@ -56,6 +56,10 @@ namespace Smile {
         void SetMSAA(u32 SampleCount);
         bool ReloadShaders();
 
+        // VSync (pacing do Present). On = trava no refresh; Off = FPS livre.
+        void SetVSync(bool Enabled) { SwapChain.SetVSync(Enabled); }
+        bool GetVSync() const       { return SwapChain.GetVSync(); }
+
         void UpdateCamera(const CameraInput& Input, f32 DeltaTime);
         void RenderFrame();
 
@@ -175,14 +179,17 @@ namespace Smile {
         static constexpr u32     kInvalidSlot = 0xFFFFFFFFu;
         u32                      DepthSRVSlot = kInvalidSlot;
 
-        ComPtr<ID3D12Resource>   ConstantBuffer;
-        FrameConstants*          MappedCB = nullptr;
+        // CBs por-frame, double-buffered (kFramesInFlight copias contiguas). Indexados
+        // pelo CommandQueue.FrameIndex() para nao sobrescrever dados que a GPU ainda le
+        // quando os frames in flight estiverem ligados.
+        ComPtr<ID3D12Resource>   ConstantBuffer;   // N * FrameConstants (b0)
+        u8*                      MappedFrameBase = nullptr;
 
-        // Buffer por-objeto: array de ObjectConstants (256B cada) num upload heap
-        // mapeado. Cada renderavel ocupa um slot; bind via CBV offset por draw.
-        // Seguro reescrever todo frame enquanto houver 1 frame in flight (flush no Present).
+        // Buffer por-objeto: N * kMaxObjects slots de ObjectConstants (256B cada) num
+        // upload heap mapeado. Cada renderavel ocupa um slot dentro da regiao do frame;
+        // bind via CBV offset por draw.
         static constexpr u32     kMaxObjects = 1024;
-        ComPtr<ID3D12Resource>   ObjectCB;
+        ComPtr<ID3D12Resource>   ObjectCB;          // N * kMaxObjects * ObjectConstants (b2)
         u8*                      MappedObjectCB = nullptr;
 
         ComPtr<ID3D12Resource>   MSAAColorBuffer;

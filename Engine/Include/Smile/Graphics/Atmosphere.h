@@ -72,7 +72,7 @@ namespace Smile {
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         // Per-frame: update sun direction + camera-relative view matrix in the CB.
-        void UpdatePerFrame(const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation);
+        void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation);
 
         // Sun disk controls (CB-only, no LUT re-bake).
         void SetSunDiskHalfAngle(f32 DegHalfAngle);
@@ -96,9 +96,7 @@ namespace Smile {
         u32 TransmittanceSRV() const { return Transmittance.SRVSlot; }
         u32 MultiScatterSRV()  const { return MultiScatter.SRVSlot; }
         u32 SkyViewSRV()       const { return SkyView.SRVSlot; }
-        D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const {
-            return ConstantBuffer->GetGPUVirtualAddress();
-        }
+        D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
         bool IsInitialized() const { return Initialized; }
 
     private:
@@ -130,9 +128,21 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> SkyRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> SkyPSO;
 
+        // CB double-buffered: array de kFramesInFlight copias de AtmosphereConstants.
+        // CPUConstants eh o shadow; cada frame copia o shadow inteiro p/ sua regiao.
         Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
-        AtmosphereConstants* MappedCB = nullptr;
+        u8*                  MappedBase = nullptr;
+        u32                  FrameSlot  = 0;
         AtmosphereConstants  CPUConstants{};
+
+        D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const {
+            return ConstantBuffer->GetGPUVirtualAddress() +
+                   static_cast<UINT64>(FrameSlot) * sizeof(AtmosphereConstants);
+        }
+        AtmosphereConstants* Mapped() const {
+            return reinterpret_cast<AtmosphereConstants*>(
+                MappedBase + static_cast<size_t>(FrameSlot) * sizeof(AtmosphereConstants));
+        }
 
         bool Dirty       = true;
         bool Initialized = false;

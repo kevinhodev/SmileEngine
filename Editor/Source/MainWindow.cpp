@@ -199,6 +199,15 @@ namespace SmileEditor {
             OnMSAAChanged(Action->data().toInt());
         });
 
+        // VSync: liga/desliga o trava-no-vblank do Present (default ligado).
+        auto* VSyncAction = RenderMenu->addAction(tr("VSync"));
+        VSyncAction->setCheckable(true);
+        VSyncAction->setChecked(true);
+        connect(VSyncAction, &QAction::toggled, this, [this](bool Enabled) {
+            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
+                Viewport->GetRenderer()->SetVSync(Enabled);
+        });
+
         auto* HelpMenu = Menus->addMenu(tr("Ajuda"));
         HelpMenu->addAction(tr("Sobre o Smile Engine..."), this, &MainWindow::OnHelpAbout);
         Layout->addWidget(Menus, 0, Qt::AlignVCenter);

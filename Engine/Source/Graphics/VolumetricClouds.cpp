@@ -1,7 +1,9 @@
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/CloudNoise.h"
+#include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <cstring>
 #include <fstream>
 #include <vector>
 #include <stdexcept>
@@ -126,7 +128,7 @@ namespace Smile {
 
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = sizeof(CloudConstants);
+        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(CloudConstants);
         Desc.Height           = 1;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
@@ -142,8 +144,10 @@ namespace Smile {
         D3D12_RANGE NoRead{ 0, 0 };
         void* Ptr = nullptr;
         SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedCB = reinterpret_cast<CloudConstants*>(Ptr);
-        *MappedCB = CPUConstants;
+        MappedBase = reinterpret_cast<u8*>(Ptr);
+        for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
+            std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(CloudConstants),
+                        &CPUConstants, sizeof(CloudConstants));
     }
 
     void FVolumetricClouds::BuildNoiseTable(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -248,9 +252,10 @@ namespace Smile {
         BuildCompositePSO(_Device, _SampleCount, _RTFormat, _DSFormat);
     }
 
-    void FVolumetricClouds::UpdatePerFrame(const Mat44& _InvVP, f32 _ViewHeightKm,
+    void FVolumetricClouds::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvVP, f32 _ViewHeightKm,
                                            const Vec3& _DirToSun, const Vec3& _SunColor,
                                            f32 _Time, u32 _Width, u32 _Height) {
+        FrameSlot = _FrameSlot;
         Vec3 d = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 0.6f, 0.8f }.Normalized());
         CPUConstants.InvViewProjNoTrans = _InvVP;
         CPUConstants.CameraPos = { 0.0f, _ViewHeightKm, 0.0f, _ViewHeightKm };
@@ -259,7 +264,7 @@ namespace Smile {
         CPUConstants.CloudParams.W = _Time;
         CPUConstants.ScreenParams  = { (f32)_Width, (f32)_Height,
                                        1.0f / (f32)_Width, 1.0f / (f32)_Height };
-        if (MappedCB) *MappedCB = CPUConstants;
+        if (MappedBase) *Mapped() = CPUConstants;
     }
 
     void FVolumetricClouds::RecordRaymarch(ID3D12GraphicsCommandList* _CommandList,
@@ -268,7 +273,7 @@ namespace Smile {
 
         TransitionRT(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         RaymarchPSO.Bind(_CommandList);
-        _CommandList->SetComputeRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
+        _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
         _CommandList->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(NoiseTableStart));
         _CommandList->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(RTUAVSlot));
         _CommandList->Dispatch((RTWidth + 7) / 8, (RTHeight + 7) / 8, 1);

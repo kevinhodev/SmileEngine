@@ -1,4 +1,5 @@
 #include "Smile/Graphics/OceanFFT.h"
+#include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
@@ -174,7 +175,7 @@ namespace Smile {
         // CB compartilhado (upload, mapeado persistente).
         D3D12_RESOURCE_DESC CBDesc{};
         CBDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        CBDesc.Width            = sizeof(OceanCB);
+        CBDesc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(OceanCB);
         CBDesc.Height           = 1;
         CBDesc.DepthOrArraySize = 1;
         CBDesc.MipLevels        = 1;
@@ -185,7 +186,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &UploadHeap, D3D12_HEAP_FLAG_NONE, &CBDesc,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        SMILE_HR(CB->Map(0, nullptr, reinterpret_cast<void**>(&MappedCB)));
+        SMILE_HR(CB->Map(0, nullptr, reinterpret_cast<void**>(&MappedCBBase)));
     }
 
     void FOceanFFT::CreateDescriptors(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
@@ -288,8 +289,13 @@ namespace Smile {
         _State = _Target;
     }
 
-    void FOceanFFT::RecordCompute(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+    void FOceanFFT::RecordCompute(u32 _FrameSlot, ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (!OceanTex) return;
+
+        // Reaponta o CB para a regiao deste frame (double-buffered).
+        FrameSlot = _FrameSlot;
+        MappedCB = reinterpret_cast<OceanCB*>(
+            MappedCBBase + static_cast<size_t>(FrameSlot) * sizeof(OceanCB));
 
         const auto UAV  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         const auto NPS  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -318,7 +324,8 @@ namespace Smile {
         MappedCB->HeightScale   = MaxWaveSize;
         MappedCB->NormalUp      = NormalUp;
         MappedCB->JacobianScale = ChoppyJacobianScale;
-        const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress() +
+            static_cast<UINT64>(FrameSlot) * sizeof(OceanCB);
 
         // 2) UpdateSpectrum: H0 -> SpecH, SpecD.
         TransitionTex(_CL, SpecH.Get(), SpecHState, UAV);

@@ -45,7 +45,7 @@ namespace Smile {
         // Atualiza o constant buffer do frame. ViewProj = View*Projection (row-major,
         // convencao row-vector da engine). Projection alimenta o coverage da quadtree
         // no estilo Asylum; InvViewProj fica no CB por compatibilidade com shaders.
-        void UpdatePerFrame(const Mat44& ViewProj, const Mat44& Projection, const Mat44& InvViewProj,
+        void UpdatePerFrame(u32 FrameSlot, const Mat44& ViewProj, const Mat44& Projection, const Mat44& InvViewProj,
                             const Vec3& CameraPos, const Vec3& SunDir, f32 SunIntensity,
                             const Vec3& SunColor, f32 ElapsedTime,
                             bool IBLEnabled, f32 IBLIntensity,
@@ -193,8 +193,12 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> WireframePSO;
 
+        // CB double-buffered: kFramesInFlight copias. MappedCBVBase eh a base mapeada;
+        // MappedCBV/FrameSlot sao repontados por frame no UpdatePerFrame.
         Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
-        WaterConstants* MappedCBV = nullptr;
+        u8*             MappedCBVBase = nullptr;
+        WaterConstants* MappedCBV     = nullptr;
+        u32             FrameSlot     = 0;
 
         // Grid local [0,1]^2, instanciado pelos tiles da quadtree.
         // z guarda edge Chebyshev para debug/futuros skirts.
@@ -203,9 +207,12 @@ namespace Smile {
         D3D12_VERTEX_BUFFER_VIEW VBView{};
         Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
         D3D12_INDEX_BUFFER_VIEW IBView{};
+        // Buffer de instancias tambem double-buffered (reescrito por frame em
+        // BuildTileInstances). MappedInstances eh repontado p/ a regiao do frame.
         Microsoft::WRL::ComPtr<ID3D12Resource> InstanceBuffer;
         D3D12_VERTEX_BUFFER_VIEW InstanceVBView{};
-        TileInstance* MappedInstances = nullptr;
+        u8*           MappedInstancesBase = nullptr;
+        TileInstance* MappedInstances     = nullptr;
         u32 InstanceCount = 0;
         IndexRange PatternRanges[kSubsetRangeCount]{};
         u32 PatternInstanceStarts[kSubsetRangeCount]{};

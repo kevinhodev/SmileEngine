@@ -25,8 +25,11 @@ namespace SmileEditor {
         setFocusPolicy(Qt::StrongFocus);
         setMinimumSize(320, 200);
 
+        // Interval 0: renderiza continuamente (dispara quando a fila de eventos esvazia,
+        // sem starvar input/resize). O pacing fica a cargo do Present: com VSync ligado
+        // ele trava no vblank; desligado, roda em FPS livre.
         RedrawTimer = new QTimer(this);
-        RedrawTimer->setInterval(16);
+        RedrawTimer->setInterval(0);
         connect(RedrawTimer, &QTimer::timeout, this, &ViewportWidget::OnRenderTimer);
 
         FrameTimer.start();

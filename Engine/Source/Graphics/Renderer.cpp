@@ -153,15 +153,17 @@ namespace Smile {
         D3D12_RANGE NoReadRange{ 0, 0 };
         void* Ptr = nullptr;
 
-        // CB de globais por-frame (b0).
+        // CB de globais por-frame (b0): N copias contiguas (uma por frame in flight).
+        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(FrameConstants);
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
                  &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                  IID_PPV_ARGS(&ConstantBuffer)));
         SMILE_HR(ConstantBuffer->Map(0, &NoReadRange, &Ptr));
-        MappedCB = reinterpret_cast<FrameConstants*>(Ptr);
+        MappedFrameBase = reinterpret_cast<u8*>(Ptr);
 
-        // CB por-objeto (b2): array de kMaxObjects slots de 256B.
-        ResourceDesc.Width = static_cast<UINT64>(kMaxObjects) * sizeof(ObjectConstants);
+        // CB por-objeto (b2): N * kMaxObjects slots de 256B.
+        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
+                             kMaxObjects * sizeof(ObjectConstants);
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
                  &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                  IID_PPV_ARGS(&ObjectCB)));
@@ -450,6 +452,10 @@ namespace Smile {
     void Renderer::RenderFrame() {
         if (!Initialized) return;
 
+        // Inicia o frame no ring: espera a GPU liberar o allocator deste slot (N frames
+        // atras) e reseta list+allocator. Avanca o FrameIndex usado p/ indexar os CBs.
+        CommandQueue.BeginFrame();
+
         f32 Aspect = SwapChain.GetWidth() > 0 && SwapChain.GetHeight() > 0
                      ? static_cast<f32>(SwapChain.GetWidth()) / static_cast<f32>(SwapChain.GetHeight())
                      : 1.0f;
@@ -460,6 +466,11 @@ namespace Smile {
         const f32 NearZ = 0.1f, FarZ = 20000.0f;
         Mat44 Projection = Mat44::PerspectiveFovLH(60.0f * ToRad, Aspect, NearZ, FarZ);
         const Mat44 ViewProjection = View * Projection;
+
+        // Slot do frame no ring: indexa as copias double-buffered dos CBs (b0/b2).
+        const u32 FrameSlot = CommandQueue.FrameIndex();
+        FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
+            MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));
 
         Vec3 CameraPosition      = Camera.GetPosition();
         MappedCB->CameraPosition = { CameraPosition.X, CameraPosition.Y, CameraPosition.Z, 1.0f };
@@ -497,10 +508,10 @@ namespace Smile {
         ViewNoTrans.M[3][1] = 0.0f;
         ViewNoTrans.M[3][2] = 0.0f;
         const Mat44 InvVPNoTrans = (ViewNoTrans * Projection).Inverse();
-        Atmosphere.UpdatePerFrame(SunN, InvVPNoTrans);
+        Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans);
         // Clouds share the atmosphere km-frame: camera at (0, viewHeight, 0).
         const f32 CloudViewHeight = 6360.0f + FAtmosphere::kGroundAltitudeKm;
-        CloudVolumetrics.UpdatePerFrame(InvVPNoTrans, CloudViewHeight, SunN, SunColorRGB,
+        CloudVolumetrics.UpdatePerFrame(FrameSlot, InvVPNoTrans, CloudViewHeight, SunN, SunColorRGB,
                                         ElapsedTime, SwapChain.GetWidth(), SwapChain.GetHeight());
 
         // Oceano: usa o ViewProj COMPLETO (com translacao) p/ projetar o grid e reconstruir
@@ -510,7 +521,7 @@ namespace Smile {
         // Refracao/fog so no caminho sem MSAA (depth MSAA nao copia p/ single-sample).
         const bool WaterHasDepth = (MSAASampleCount <= 1) && SceneColorCopy && SceneDepthCopy;
         if (UseWater && Water.IsInitialized()) {
-            Water.UpdatePerFrame(WaterViewProj, Projection, WaterInvViewProj, CameraPosition, SunN,
+            Water.UpdatePerFrame(FrameSlot, WaterViewProj, Projection, WaterInvViewProj, CameraPosition, SunN,
                                  SunIntensity, SunColorRGB, ElapsedTime,
                                  HDREnv.HasHDRLoaded(), IBLIntensity,
                                  SwapChain.GetWidth(), SwapChain.GetHeight(), NearZ, FarZ,
@@ -525,7 +536,7 @@ namespace Smile {
             }
         }
 
-        CommandQueue.ResetForRecording();
+        // List/allocator ja resetados pelo BeginFrame no inicio do RenderFrame.
         auto* CommandList = CommandQueue.List();
 
         const bool UseMSAA = MSAASampleCount > 1 && HDRMSAAColorBuffer;
@@ -571,7 +582,7 @@ namespace Smile {
         // Oceano FFT: roda o pipeline de compute (espectro->FFT->deslocamento->normal/foam)
         // antes de qualquer draw. Os descriptor heaps ja estao setados acima.
         if (UseWater && Ocean.IsInitialized()) {
-            Ocean.RecordCompute(CommandList, SRVHeap);
+            Ocean.RecordCompute(FrameSlot, CommandList, SRVHeap);
         }
 
         // --- Sky background (far-plane depth, before geometry) ---
@@ -580,7 +591,7 @@ namespace Smile {
             Atmosphere.RecordSkyViewBake(CommandList); // per-frame sky-view LUT (compute)
             Atmosphere.RenderSky(CommandList, SRVHeap);
         } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
-            Skybox.Render(CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
+            Skybox.Render(FrameSlot, CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
                           InvVPNoTrans, IBLIntensity, IBLRotation);
         }
 
@@ -588,27 +599,31 @@ namespace Smile {
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
         CommandList->SetPipelineState(PipelineState.PSO());
 
-        // Globais por-frame (b0) + tabela IBL (t8..t10) — iguais p/ todos os objetos.
-        CommandList->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
+        // Globais por-frame (b0, regiao do frame corrente) + tabela IBL (t8..t10).
+        CommandList->SetGraphicsRootConstantBufferView(
+            0, ConstantBuffer->GetGPUVirtualAddress() +
+               static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
         CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
 
-        // Itera os renderaveis: escreve ObjectConstants no slot do objeto, faz o bind
-        // do CBV b2 (offset 256B) e do material, e desenha o mesh.
+        // Itera os renderaveis: escreve ObjectConstants no slot do objeto (dentro da
+        // regiao do frame), faz o bind do CBV b2 e do material, e desenha o mesh.
         const D3D12_GPU_VIRTUAL_ADDRESS ObjectCBBase = ObjectCB->GetGPUVirtualAddress();
+        const u32 FrameObjectBase = FrameSlot * kMaxObjects; // 1o slot deste frame
         u32 ObjectIndex = 0;
         for (const FRenderable& R : Scene.Renderables()) {
             if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
             if (ObjectIndex >= kMaxObjects) break;
 
+            const u32 Slot = FrameObjectBase + ObjectIndex;
             const Mat44 Model = R.Transform.Matrix();
             ObjectConstants OC;
             OC.MVP         = Model * ViewProjection;
             OC.ModelMatrix = Model;
-            std::memcpy(MappedObjectCB + static_cast<size_t>(ObjectIndex) * sizeof(ObjectConstants),
+            std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                         &OC, sizeof(ObjectConstants));
 
             CommandList->SetGraphicsRootConstantBufferView(
-                4, ObjectCBBase + static_cast<u64>(ObjectIndex) * sizeof(ObjectConstants));
+                4, ObjectCBBase + static_cast<u64>(Slot) * sizeof(ObjectConstants));
 
             FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
             Mat->Bind(CommandList, SRVHeap);
@@ -717,16 +732,18 @@ namespace Smile {
 
         SMILE_HR(CommandList->Close());
         ID3D12CommandList* CommandLists[] = { CommandList };
-        CommandQueue.ExecuteAndSync(CommandLists, 1);
+        // Frames in flight: executa e sinaliza a fence deste frame SEM esperar — a
+        // espera acontece no BeginFrame N frames adiante (CPU e GPU em paralelo).
+        CommandQueue.EndFrame(CommandLists, 1);
         SwapChain.Present();
     }
 
     void Renderer::Shutdown() {
         if (!Initialized) return;
         CommandQueue.Flush();
-        if (ConstantBuffer && MappedCB) {
+        if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);
-            MappedCB = nullptr;
+            MappedFrameBase = nullptr;
         }
         if (ObjectCB && MappedObjectCB) {
             ObjectCB->Unmap(0, nullptr);

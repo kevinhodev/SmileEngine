@@ -43,7 +43,7 @@ namespace Smile {
         // Roda o pipeline FFT inteiro na GPU. A command list ja deve ter os descriptor
         // heaps setados (chamada do RenderFrame). Ao final, OceanTex/NormalTex ficam em
         // estado shader-resource (PIXEL|NON_PIXEL), prontos p/ o draw da agua.
-        void RecordCompute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
+        void RecordCompute(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         u32  SRVSlot() const       { return OceanSRVSlot; }
         u32  NormalSRVSlot() const { return NormalChainSRVSlot; }
@@ -97,8 +97,11 @@ namespace Smile {
             f32 JacobianScale;
             f32 _Pad[3];
         };
+        // CB double-buffered: kFramesInFlight copias. MappedCB eh repontado por frame.
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
-        OceanCB* MappedCB = nullptr;
+        u8*      MappedCBBase = nullptr;
+        OceanCB* MappedCB     = nullptr;
+        u32      FrameSlot    = 0;
 
         // --- Texturas GPU ---
         Microsoft::WRL::ComPtr<ID3D12Resource> H0Tex;       // (N+1)^2 RGBA32F (h0.xy, omega, 0)

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Water.h"
+#include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
@@ -405,7 +406,9 @@ namespace Smile {
     }
 
     void FWaterRenderer::BuildInstanceBuffer(ID3D12Device* _Device) {
-        const UINT BufferSize = static_cast<UINT>(sizeof(TileInstance) * kMaxTileInstances);
+        // Uma regiao de kMaxTileInstances por frame in flight (double-buffered).
+        const UINT FrameSize  = static_cast<UINT>(sizeof(TileInstance) * kMaxTileInstances);
+        const UINT BufferSize = FrameSize * FCommandQueue::kFramesInFlight;
 
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
@@ -423,11 +426,12 @@ namespace Smile {
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&InstanceBuffer)));
 
         D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(InstanceBuffer->Map(0, &NoRead, reinterpret_cast<void**>(&MappedInstances)));
+        SMILE_HR(InstanceBuffer->Map(0, &NoRead, reinterpret_cast<void**>(&MappedInstancesBase)));
 
+        // BufferLocation eh repontado por frame no UpdatePerFrame; SizeInBytes = 1 regiao.
         InstanceVBView.BufferLocation = InstanceBuffer->GetGPUVirtualAddress();
         InstanceVBView.StrideInBytes  = sizeof(TileInstance);
-        InstanceVBView.SizeInBytes    = BufferSize;
+        InstanceVBView.SizeInBytes    = FrameSize;
     }
 
     void FWaterRenderer::BuildTileInstances(const Mat44& _ViewProj, const Mat44& _Projection,
@@ -828,7 +832,7 @@ namespace Smile {
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = sizeof(WaterConstants);
+        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(WaterConstants);
         Desc.Height           = 1;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
@@ -839,7 +843,7 @@ namespace Smile {
             &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBV)));
         D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CBV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBV)));
+        SMILE_HR(CBV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBVBase)));
     }
 
     void FWaterRenderer::Recreate(ID3D12Device* _Device, u32 _SampleCount,
@@ -851,14 +855,23 @@ namespace Smile {
         // No-op ate a Etapa 3 (snapshots de scene-color/depth para refracao).
     }
 
-    void FWaterRenderer::UpdatePerFrame(const Mat44& _ViewProj, const Mat44& _Projection,
+    void FWaterRenderer::UpdatePerFrame(u32 _FrameSlot, const Mat44& _ViewProj, const Mat44& _Projection,
                                         const Mat44& _InvViewProj,
                                         const Vec3& _CameraPos, const Vec3& _SunDir, f32 _SunIntensity,
                                         const Vec3& _SunColor, f32 _ElapsedTime,
                                         bool _IBLEnabled, f32 _IBLIntensity,
                                         u32 _ScreenW, u32 _ScreenH, f32 _NearZ, f32 _FarZ,
                                         bool _HasSceneCopies, bool _UseAtmosphereSky) {
-        if (!MappedCBV) return;
+        if (!MappedCBVBase || !MappedInstancesBase) return;
+
+        // Reaponta CB + instancias + view de instancia para a regiao deste frame.
+        FrameSlot = _FrameSlot;
+        MappedCBV = reinterpret_cast<WaterConstants*>(
+            MappedCBVBase + static_cast<size_t>(FrameSlot) * sizeof(WaterConstants));
+        MappedInstances = reinterpret_cast<TileInstance*>(
+            MappedInstancesBase + static_cast<size_t>(FrameSlot) * sizeof(TileInstance) * kMaxTileInstances);
+        InstanceVBView.BufferLocation = InstanceBuffer->GetGPUVirtualAddress() +
+            static_cast<UINT64>(FrameSlot) * sizeof(TileInstance) * kMaxTileInstances;
 
         const f32 Cos = std::cos(WindDir);
         const f32 Sin = std::sin(WindDir);
@@ -918,7 +931,8 @@ namespace Smile {
         ID3D12PipelineState* ActivePSO =
             (DebugMode == EDebugMode::Wireframe && WireframePSO) ? WireframePSO.Get() : PSO.Get();
         _CommandList->SetPipelineState(ActivePSO);
-        _CommandList->SetGraphicsRootConstantBufferView(0, CBV->GetGPUVirtualAddress());
+        _CommandList->SetGraphicsRootConstantBufferView(
+            0, CBV->GetGPUVirtualAddress() + static_cast<UINT64>(FrameSlot) * sizeof(WaterConstants));
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(_SpecularCubeSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_SceneCopyTableStart));
