@@ -171,8 +171,8 @@ namespace Smile {
         {
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(SkyViewBakeTableStart);
             D3D12_CPU_DESCRIPTOR_HANDLE Srcs[2] = {
-                _SRVHeap.CpuHandle(Transmittance.SRVSlot),
-                _SRVHeap.CpuHandle(MultiScatter.SRVSlot),
+                _SRVHeap.CpuHandleStaging(Transmittance.SRVSlot),
+                _SRVHeap.CpuHandleStaging(MultiScatter.SRVSlot),
             };
             UINT DstCount = 2; UINT SrcCounts[2] = { 1, 1 };
             _Device->CopyDescriptors(1, &Dst, &DstCount, 2, Srcs, SrcCounts,
@@ -183,8 +183,8 @@ namespace Smile {
         {
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(SkyRenderTableStart);
             D3D12_CPU_DESCRIPTOR_HANDLE Srcs[2] = {
-                _SRVHeap.CpuHandle(SkyView.SRVSlot),
-                _SRVHeap.CpuHandle(Transmittance.SRVSlot),
+                _SRVHeap.CpuHandleStaging(SkyView.SRVSlot),
+                _SRVHeap.CpuHandleStaging(Transmittance.SRVSlot),
             };
             UINT DstCount = 2; UINT SrcCounts[2] = { 1, 1 };
             _Device->CopyDescriptors(1, &Dst, &DstCount, 2, Srcs, SrcCounts,

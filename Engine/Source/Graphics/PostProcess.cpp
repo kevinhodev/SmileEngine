@@ -345,38 +345,30 @@ namespace Smile {
         // Bind parameters (Exposure + BloomIntensity)
         CommandList->SetGraphicsRootConstantBufferView(0, CBParams->GetGPUVirtualAddress());
 
-        // Bind table [HDRColorBuffer (t0), BloomBuffer (t1)].
-        // Wait, HDRSRVSlot and BloomSRVSlot might not be contiguous in the heap!
-        // In the root signature, t0 and t1 are declared in a single descriptor table of size 2.
-        // D3D12 requires descriptor tables to point to CONTIGUOUS slots in the descriptor heap.
-        // Therefore, we must copy HDRSRVSlot and BloomSRVSlot into a new contiguous table!
-        // Let's reserve 2 contiguous slots inside the post processor, say PostTableStart.
-        // Let's create it once at init, or every frame.
-        // Since we copy descriptor handles, let's look at how CopyDescriptors is used in Renderer:
-        // CopyDescriptors(NumDestDescriptorRanges, DstStarts, DstSizes, NumSrcDescriptorRanges, SrcStarts, SrcSizes, Type)
-        // Let's implement this beautifully by allocating 2 contiguous slots in FTextureSRVHeap
-        // once at init and copy them here before binding!
-        // This is extremely safe and correct!
-        
-        static u32 PostTableStart = kInvalidSlot;
-        if (PostTableStart == kInvalidSlot) {
+        // Tabela contigua [HDR (t0), Bloom (t1)] exigida pela root signature do tonemap.
+        // Em vez de CopyDescriptors (que leria do heap shader-visible — invalido: ele eh
+        // CPU-write-only, erro #654), criamos os SRVs DIRETO nos slots da tabela —
+        // escrever descritor num heap shader-visible eh permitido. So reconstruimos quando
+        // o recurso HDR muda (init/resize, ambos com flush antes), nunca todo frame.
+        if (PostTableStart == kInvalidSlot)
             PostTableStart = SRVHeap.Allocate(2);
-        }
 
-        ID3D12Device* Device = nullptr;
-        SMILE_HR(ResolvedHDR->GetDevice(IID_PPV_ARGS(&Device)));
-        
-        D3D12_CPU_DESCRIPTOR_HANDLE DstStart = SRVHeap.CpuHandle(PostTableStart);
-        D3D12_CPU_DESCRIPTOR_HANDLE Sources[2] = {
-            SRVHeap.CpuHandle(HDRSRVSlot),
-            SRVHeap.CpuHandle(BloomSRVSlot)
-        };
-        UINT DstCount = 2;
-        UINT SrcCounts[2] = { 1, 1 };
-        Device->CopyDescriptors(1, &DstStart, &DstCount,
-                                 2, Sources, SrcCounts,
-                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        Device->Release();
+        if (ResolvedHDR != CachedHDRForTable) {
+            ID3D12Device* Device = nullptr;
+            SMILE_HR(ResolvedHDR->GetDevice(IID_PPV_ARGS(&Device)));
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
+            SRVDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+            SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            SRVDesc.Texture2D.MipLevels     = 1;
+
+            SRVHeap.CreateSRV(Device, ResolvedHDR,       SRVDesc, PostTableStart);     // t0 = HDR
+            SRVHeap.CreateSRV(Device, BloomBuffer.Get(), SRVDesc, PostTableStart + 1); // t1 = Bloom
+            Device->Release();
+
+            CachedHDRForTable = ResolvedHDR;
+        }
 
         CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(PostTableStart));
 

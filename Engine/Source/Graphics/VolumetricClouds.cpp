@@ -157,11 +157,11 @@ namespace Smile {
         NoiseTableStart = _SRVHeap.Allocate(5);
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(NoiseTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE Srcs[5] = {
-            _SRVHeap.CpuHandle(_Noise.BaseNoiseSRV()),
-            _SRVHeap.CpuHandle(_Noise.DetailNoiseSRV()),
-            _SRVHeap.CpuHandle(_Noise.WeatherSRV()),
-            _SRVHeap.CpuHandle(_AtmoTransmittanceSRV),
-            _SRVHeap.CpuHandle(_AtmoMultiScatterSRV),
+            _SRVHeap.CpuHandleStaging(_Noise.BaseNoiseSRV()),
+            _SRVHeap.CpuHandleStaging(_Noise.DetailNoiseSRV()),
+            _SRVHeap.CpuHandleStaging(_Noise.WeatherSRV()),
+            _SRVHeap.CpuHandleStaging(_AtmoTransmittanceSRV),
+            _SRVHeap.CpuHandleStaging(_AtmoMultiScatterSRV),
         };
         UINT DstCount = 5; UINT SrcCounts[5] = { 1, 1, 1, 1, 1 };
         _Device->CopyDescriptors(1, &Dst, &DstCount, 5, Srcs, SrcCounts,

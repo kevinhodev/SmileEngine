@@ -77,9 +77,9 @@ namespace Smile {
 
         D3D12_CPU_DESCRIPTOR_HANDLE DstStart = SRVHeap.CpuHandle(IBLTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE Sources[3] = {
-            SRVHeap.CpuHandle(HDREnv.IrradianceSRV()),
-            SRVHeap.CpuHandle(HDREnv.SpecularSRV()),
-            SRVHeap.CpuHandle(HDREnv.BRDFLutSRV()),
+            SRVHeap.CpuHandleStaging(HDREnv.IrradianceSRV()),
+            SRVHeap.CpuHandleStaging(HDREnv.SpecularSRV()),
+            SRVHeap.CpuHandleStaging(HDREnv.BRDFLutSRV()),
         };
         UINT DstCount = 3;
         UINT SrcCounts[3] = { 1, 1, 1 };

@@ -31,13 +31,20 @@ namespace Smile {
         D3D12_CPU_DESCRIPTOR_HANDLE CpuHandle(u32 Slot) const;
         D3D12_GPU_DESCRIPTOR_HANDLE GpuHandle(u32 Slot) const;
 
+        // Handle no heap "staging" (NAO shader-visible), espelho do mesmo slot. Usar como
+        // FONTE de CopyDescriptors — ler do heap shader-visible (CPU-write-only) e invalido.
+        D3D12_CPU_DESCRIPTOR_HANDLE CpuHandleStaging(u32 Slot) const;
+
         ID3D12DescriptorHeap* Native() const { return Heap.Get(); }
 
     private:
         // Range contiguo de slots livres [Offset, Offset+Count).
         struct FFreeRange { u32 Offset; u32 Count; };
 
-        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> Heap;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> Heap;        // shader-visible (GPU)
+        // Espelho CPU-only: cada CreateSRV/CreateUAV escreve nos dois. Serve de fonte
+        // valida para CopyDescriptors (o shader-visible nao pode ser lido como fonte).
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> StagingHeap; // non-shader-visible (CPU)
         u32 HandleSize = 0;
         // Mantida ordenada por Offset e sem ranges adjacentes (coalescidos).
         std::vector<FFreeRange> FreeList;

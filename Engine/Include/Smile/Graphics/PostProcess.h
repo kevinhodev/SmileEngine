@@ -41,6 +41,11 @@ namespace Smile {
         u32 BloomSRVSlot = kInvalidSlot;
         u32 BloomBlurSRVSlot = kInvalidSlot;
 
+        // Tabela contigua [HDR(t0), Bloom(t1)] do tonemap. Construida via CreateSRV
+        // direto nos slots (sem CopyDescriptors). Reconstruida so quando o HDR muda.
+        u32 PostTableStart = kInvalidSlot;
+        ID3D12Resource* CachedHDRForTable = nullptr;
+
         Microsoft::WRL::ComPtr<ID3D12Resource> CBParams; // For PostParams (Exposure, BloomIntensity)
         PostParams* MappedParams = nullptr;
 

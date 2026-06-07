@@ -11,6 +11,10 @@ namespace Smile {
         DescriptorHeapDesc.NodeMask       = 0;
         SMILE_HR(_Device->CreateDescriptorHeap(&DescriptorHeapDesc, IID_PPV_ARGS(&Heap)));
 
+        // Heap espelho CPU-only (non-shader-visible), mesma capacidade. Fonte valida p/ copias.
+        DescriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        SMILE_HR(_Device->CreateDescriptorHeap(&DescriptorHeapDesc, IID_PPV_ARGS(&StagingHeap)));
+
         HandleSize = _Device->GetDescriptorHandleIncrementSize(
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
@@ -59,12 +63,15 @@ namespace Smile {
 
     void FTextureSRVHeap::CreateSRV(ID3D12Device* Device, ID3D12Resource* _Resource,
                                      const D3D12_SHADER_RESOURCE_VIEW_DESC& _SRVDesc, u32 _Slot) {
+        // Escreve nos dois heaps: o shader-visible (GPU) e o staging (fonte de copia).
         Device->CreateShaderResourceView(_Resource, &_SRVDesc, CpuHandle(_Slot));
+        Device->CreateShaderResourceView(_Resource, &_SRVDesc, CpuHandleStaging(_Slot));
     }
 
     void FTextureSRVHeap::CreateUAV(ID3D12Device* Device, ID3D12Resource* _Resource,
                                      const D3D12_UNORDERED_ACCESS_VIEW_DESC& _UAVDesc, u32 _Slot) {
         Device->CreateUnorderedAccessView(_Resource, nullptr, &_UAVDesc, CpuHandle(_Slot));
+        Device->CreateUnorderedAccessView(_Resource, nullptr, &_UAVDesc, CpuHandleStaging(_Slot));
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE FTextureSRVHeap::CpuHandle(u32 _Slot) const {
@@ -78,6 +85,13 @@ namespace Smile {
         D3D12_GPU_DESCRIPTOR_HANDLE Handle =
             Heap->GetGPUDescriptorHandleForHeapStart();
         Handle.ptr += static_cast<UINT64>(_Slot) * HandleSize;
+        return Handle;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE FTextureSRVHeap::CpuHandleStaging(u32 _Slot) const {
+        D3D12_CPU_DESCRIPTOR_HANDLE Handle =
+            StagingHeap->GetCPUDescriptorHandleForHeapStart();
+        Handle.ptr += static_cast<SIZE_T>(_Slot) * HandleSize;
         return Handle;
     }
 } 
