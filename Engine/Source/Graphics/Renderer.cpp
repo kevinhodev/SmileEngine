@@ -28,12 +28,12 @@ namespace Smile {
         SRVHeap.Initialize(Device.Native());
         PipelineState.Initialize(Device.Native());
 
-        CreateGeometryBuffers();
         CreateDepthBuffer();
         CreateHDRBuffers();
         CreateSceneCopies();
         CreateConstantBuffer();
         CreateDefaultMaterial();
+        BuildDefaultScene();
 
         // IBL: build the HDR pipeline (BRDF LUT + default black env), the
         // contiguous descriptor table for the PS, and the skybox PSO.
@@ -123,63 +123,25 @@ namespace Smile {
         ActiveMaterial = (_Material && _Material->IsFinalized()) ? _Material : &DefaultMaterial;
     }
 
-    void Renderer::CreateGeometryBuffers() {
-        FMesh SphereMesh = FMesh::CreateSphere();
+    void Renderer::BuildDefaultScene() {
+        // Cena inicial: uma unica esfera na origem. Material nulo => o draw usa o
+        // material ativo (controlado pelo editor via SetMaterial).
+        FGpuMesh* Sphere = Scene.AddMesh(Device.Native(), FMesh::CreateSphere());
 
-        const UINT VertexBufferSize = static_cast<UINT>(SphereMesh.Vertices.size() * sizeof(Vertex));
-        const UINT IndexBufferSize  = static_cast<UINT>(SphereMesh.Indices.size()  * sizeof(u16));
-        IndexCount = static_cast<u32>(SphereMesh.Indices.size());
-
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        ResourceDesc.Height           = 1;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-        D3D12_RANGE NoReadRange{ 0, 0 };
-        void* Mapped = nullptr;
-
-        ResourceDesc.Width = VertexBufferSize;
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                 IID_PPV_ARGS(&VertexBuffer)));
-        SMILE_HR(VertexBuffer->Map(0, &NoReadRange, &Mapped));
-        std::memcpy(Mapped, SphereMesh.Vertices.data(), VertexBufferSize);
-        VertexBuffer->Unmap(0, nullptr);
-
-        VertexBufferView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();
-        VertexBufferView.StrideInBytes  = sizeof(Vertex);
-        VertexBufferView.SizeInBytes    = VertexBufferSize;
-
-        ResourceDesc.Width = IndexBufferSize;
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                 IID_PPV_ARGS(&IndexBuffer)));
-        SMILE_HR(IndexBuffer->Map(0, &NoReadRange, &Mapped));
-        std::memcpy(Mapped, SphereMesh.Indices.data(), IndexBufferSize);
-        IndexBuffer->Unmap(0, nullptr);
-
-        IndexBufferView.BufferLocation = IndexBuffer->GetGPUVirtualAddress();
-        IndexBufferView.Format         = DXGI_FORMAT_R16_UINT;
-        IndexBufferView.SizeInBytes    = IndexBufferSize;
+        FRenderable R;
+        R.Name     = "Sphere";
+        R.Mesh     = Sphere;
+        R.Material = nullptr;
+        Scene.AddRenderable(R);
     }
 
     void Renderer::CreateConstantBuffer() {
-        constexpr UINT CBSize = sizeof(FrameConstants); 
-
         D3D12_HEAP_PROPERTIES HeapProps{};
         HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
 
         D3D12_RESOURCE_DESC ResourceDesc{};
         ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        ResourceDesc.Width            = CBSize;
+        ResourceDesc.Width            = sizeof(FrameConstants);
         ResourceDesc.Height           = 1;
         ResourceDesc.DepthOrArraySize = 1;
         ResourceDesc.MipLevels        = 1;
@@ -188,15 +150,24 @@ namespace Smile {
         ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
 
+        D3D12_RANGE NoReadRange{ 0, 0 };
+        void* Ptr = nullptr;
+
+        // CB de globais por-frame (b0).
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
                  &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                  IID_PPV_ARGS(&ConstantBuffer)));
-
-        D3D12_RANGE NoReadRange{ 0, 0 };
-        void* Ptr = nullptr;
         SMILE_HR(ConstantBuffer->Map(0, &NoReadRange, &Ptr));
         MappedCB = reinterpret_cast<FrameConstants*>(Ptr);
-        MappedCB->MVP = Mat44::Identity();
+
+        // CB por-objeto (b2): array de kMaxObjects slots de 256B.
+        ResourceDesc.Width = static_cast<UINT64>(kMaxObjects) * sizeof(ObjectConstants);
+        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
+                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                 IID_PPV_ARGS(&ObjectCB)));
+        Ptr = nullptr;
+        SMILE_HR(ObjectCB->Map(0, &NoReadRange, &Ptr));
+        MappedObjectCB = reinterpret_cast<u8*>(Ptr);
     }
 
     void Renderer::CreateDepthBuffer() {
@@ -483,15 +454,13 @@ namespace Smile {
                      ? static_cast<f32>(SwapChain.GetWidth()) / static_cast<f32>(SwapChain.GetHeight())
                      : 1.0f;
 
-        Mat44 Model      = Mat44::Identity();
         Mat44 View       = Camera.GetViewMatrix();
         // Far-plane estendido p/ o oceano alcançar o horizonte mesmo de câmera alta
         // (senão o projected grid termina antes do horizonte = "mar flutuando").
         const f32 NearZ = 0.1f, FarZ = 20000.0f;
         Mat44 Projection = Mat44::PerspectiveFovLH(60.0f * ToRad, Aspect, NearZ, FarZ);
+        const Mat44 ViewProjection = View * Projection;
 
-        MappedCB->MVP            = Model * View * Projection;
-        MappedCB->ModelMatrix    = Model;
         Vec3 CameraPosition      = Camera.GetPosition();
         MappedCB->CameraPosition = { CameraPosition.X, CameraPosition.Y, CameraPosition.Z, 1.0f };
         // IBL: x=intensity, y=rotation, z=maxMip (specularMips-1), w=enabled
@@ -536,7 +505,7 @@ namespace Smile {
 
         // Oceano: usa o ViewProj COMPLETO (com translacao) p/ projetar o grid e reconstruir
         // o raio de mundo que intersecta o plano d'agua.
-        const Mat44 WaterViewProj    = View * Projection;
+        const Mat44 WaterViewProj    = ViewProjection;
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
         // Refracao/fog so no caminho sem MSAA (depth MSAA nao copia p/ single-sample).
         const bool WaterHasDepth = (MSAASampleCount <= 1) && SceneColorCopy && SceneDepthCopy;
@@ -619,17 +588,34 @@ namespace Smile {
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
         CommandList->SetPipelineState(PipelineState.PSO());
 
+        // Globais por-frame (b0) + tabela IBL (t8..t10) — iguais p/ todos os objetos.
         CommandList->SetGraphicsRootConstantBufferView(0, ConstantBuffer->GetGPUVirtualAddress());
-
-        ActiveMaterial->Bind(CommandList, SRVHeap);
-
-        // IBL descriptor table at root param 3 (t6..t8).
         CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
 
-        CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
-        CommandList->IASetIndexBuffer(&IndexBufferView);
-        CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+        // Itera os renderaveis: escreve ObjectConstants no slot do objeto, faz o bind
+        // do CBV b2 (offset 256B) e do material, e desenha o mesh.
+        const D3D12_GPU_VIRTUAL_ADDRESS ObjectCBBase = ObjectCB->GetGPUVirtualAddress();
+        u32 ObjectIndex = 0;
+        for (const FRenderable& R : Scene.Renderables()) {
+            if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
+            if (ObjectIndex >= kMaxObjects) break;
+
+            const Mat44 Model = R.Transform.Matrix();
+            ObjectConstants OC;
+            OC.MVP         = Model * ViewProjection;
+            OC.ModelMatrix = Model;
+            std::memcpy(MappedObjectCB + static_cast<size_t>(ObjectIndex) * sizeof(ObjectConstants),
+                        &OC, sizeof(ObjectConstants));
+
+            CommandList->SetGraphicsRootConstantBufferView(
+                4, ObjectCBBase + static_cast<u64>(ObjectIndex) * sizeof(ObjectConstants));
+
+            FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
+            Mat->Bind(CommandList, SRVHeap);
+
+            R.Mesh->Draw(CommandList);
+            ++ObjectIndex;
+        }
 
         // --- Snapshot da cena (pre-agua) p/ refracao/fog (Etapa 3, so sem MSAA) ---
         if (UseWater && Water.IsInitialized() && WaterHasDepth) {
@@ -741,6 +727,10 @@ namespace Smile {
         if (ConstantBuffer && MappedCB) {
             ConstantBuffer->Unmap(0, nullptr);
             MappedCB = nullptr;
+        }
+        if (ObjectCB && MappedObjectCB) {
+            ObjectCB->Unmap(0, nullptr);
+            MappedObjectCB = nullptr;
         }
         MSAAColorBuffer.Reset();
         Initialized = false;

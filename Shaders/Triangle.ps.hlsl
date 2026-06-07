@@ -3,9 +3,7 @@
 
 // --- Constant Buffers ---
 
-cbuffer TransformCB : register(b0) {
-    row_major float4x4 MVP;
-    row_major float4x4 ModelMatrix;
+cbuffer FrameCB : register(b0) {
     float4 CameraPosition;
     float4 IBLParams;      // x = intensity, y = rotation (rad), z = maxMip (specular), w = enabled (0/1)
     float4 Time;           // x = elapsed sec, y = delta sec, z = frameIndex

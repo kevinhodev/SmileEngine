@@ -31,13 +31,14 @@ namespace Smile {
 
     void FPipelineState::Initialize(ID3D12Device* _Device) {
         // Root layout:
-        //   [0] CBV  b0          FrameConstants (all)
+        //   [0] CBV  b0          FrameConstants — globais por-frame (PS)
         //   [1] CBV  b1          MaterialConstants (PS)
         //   [2] SRV table t0-t7  material textures (PS)
         //   [3] SRV table t8-t10 IBL: irradiance cube, prefiltered cube, BRDF LUT (PS)
+        //   [4] CBV  b2          ObjectConstants — MVP + Model por-objeto (VS)
         //   Static sampler s0    anisotropic wrap (materials)
         //   Static sampler s1    linear clamp     (cubemaps + LUT)
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[5]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -72,6 +73,12 @@ namespace Smile {
         RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[3].DescriptorTable.pDescriptorRanges   = &IBLRange;
         RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // b2 — ObjectConstants (MVP + Model por-objeto). Lido apenas pelo VS.
+        RootParams[4].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[4].Descriptor.ShaderRegister = 2;
+        RootParams[4].Descriptor.RegisterSpace  = 0;
+        RootParams[4].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[2]{};
         // s0 — material sampler (anisotropic wrap)

@@ -25,6 +25,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/PipelineState.h
     Include/Smile/Graphics/Camera.h
     Include/Smile/Graphics/Mesh.h
+    Include/Smile/Graphics/GpuMesh.h
+    Include/Smile/Scene/Scene.h
     Include/Smile/Graphics/TextureSRVHeap.h
     Include/Smile/Graphics/Texture.h
     Include/Smile/Graphics/CubeTexture.h
@@ -57,6 +59,8 @@ set(ENGINE_SOURCES
     Source/Graphics/PipelineState.cpp
     Source/Graphics/Camera.cpp
     Source/Graphics/Mesh.cpp
+    Source/Graphics/GpuMesh.cpp
+    Source/Scene/Scene.cpp
     Source/Graphics/TextureSRVHeap.cpp
     Source/Graphics/Texture.cpp
     Source/Graphics/CubeTexture.cpp

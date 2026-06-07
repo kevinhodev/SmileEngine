@@ -1,8 +1,7 @@
-cbuffer TransformCB : register(b0) {
+// Constantes por-objeto (b2): preenchidas pelo Renderer para cada renderavel.
+cbuffer ObjectCB : register(b2) {
     row_major float4x4 MVP;
     row_major float4x4 ModelMatrix;
-    float4 CameraPosition;
-    // (remaining FrameConstants fields — IBLParams, Time, Sun* — unused by the VS)
 };
 
 struct VSInput {

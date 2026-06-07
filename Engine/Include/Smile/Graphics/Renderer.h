@@ -20,11 +20,12 @@
 #include "Smile/Graphics/PostProcess.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
+#include "Smile/Graphics/GpuMesh.h"
+#include "Smile/Scene/Scene.h"
 
 namespace Smile {
+    // Globais por-frame (b0): iguais para todos os objetos da cena.
     struct alignas(256) FrameConstants {
-        Mat44 MVP;             // 64 bytes
-        Mat44 ModelMatrix;     // 64 bytes
         Vec4  CameraPosition;  // 16 bytes
         Vec4  IBLParams;       // 16 bytes — x=intensity, y=rotation(rad), z=maxMip, w=enabled
         Vec4  Time;            // 16 bytes — x=elapsed sec, y=delta sec, z=frameIndex, w=unused
@@ -32,7 +33,12 @@ namespace Smile {
         Vec4  SunColor;        // 16 bytes — rgb = color, w = unused
         Vec4  SkyAmbientColor;    // 16 bytes — rgb = sky (zenith) ambient, w = enabled (0/1)
         Vec4  GroundAmbientColor; // 16 bytes — rgb = ground (nadir) ambient, w = intensity
-        // Total: 240 bytes used of the 256-byte alignment.
+    };
+
+    // Constantes por-objeto (b2): escritas uma vez por renderavel, por frame.
+    struct alignas(256) ObjectConstants {
+        Mat44 MVP;          // 64 bytes — Model * View * Projection
+        Mat44 ModelMatrix;  // 64 bytes — world (para worldPos/worldNormal)
     };
 
     class Renderer {
@@ -54,6 +60,10 @@ namespace Smile {
         void RenderFrame();
 
         void SetMaterial(FMaterial* Material);
+
+        // Cena multi-objeto. O editor pode adicionar meshes/renderaveis aqui;
+        // o Renderer itera a lista em RenderFrame.
+        FScene& GetScene() { return Scene; }
 
         bool IsInitialized() const { return Initialized; }
 
@@ -130,7 +140,7 @@ namespace Smile {
         FTextureSRVHeap&    GetSRVHeap()       { return SRVHeap; }
 
     private:
-        void CreateGeometryBuffers();
+        void BuildDefaultScene();
         void CreateDepthBuffer();
         void CreateConstantBuffer();
         void CreateMSAABuffers();
@@ -155,12 +165,8 @@ namespace Smile {
         FMaterial  DefaultMaterial;
         FMaterial* ActiveMaterial = nullptr;
 
-        ComPtr<ID3D12Resource>   VertexBuffer;
-        D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
-
-        ComPtr<ID3D12Resource>   IndexBuffer;
-        D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
-        u32                      IndexCount = 0;
+        // Cena multi-objeto (biblioteca de meshes + renderaveis).
+        FScene Scene;
 
         ComPtr<ID3D12Resource>   DepthBuffer;
         FDescriptorHeap          DSVHeap;
@@ -171,6 +177,13 @@ namespace Smile {
 
         ComPtr<ID3D12Resource>   ConstantBuffer;
         FrameConstants*          MappedCB = nullptr;
+
+        // Buffer por-objeto: array de ObjectConstants (256B cada) num upload heap
+        // mapeado. Cada renderavel ocupa um slot; bind via CBV offset por draw.
+        // Seguro reescrever todo frame enquanto houver 1 frame in flight (flush no Present).
+        static constexpr u32     kMaxObjects = 1024;
+        ComPtr<ID3D12Resource>   ObjectCB;
+        u8*                      MappedObjectCB = nullptr;
 
         ComPtr<ID3D12Resource>   MSAAColorBuffer;
         FDescriptorHeap          MSAARTVHeap;
