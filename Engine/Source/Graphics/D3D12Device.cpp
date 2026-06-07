@@ -34,9 +34,9 @@ namespace Smile {
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&DebugController)))) {
                 DebugController->EnableDebugLayer();
                 FactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
-                LogInfo("D3D12 debug layer ativado");
+                LogInfo("[D3D12] - Debug Layer Ativado");
             } else {
-                LogWarning("D3D12 debug layer indisponivel (Graphics Tools nao instalado?)");
+                LogWarning("[D3D12] - Debug Layer Indisponivel (Graphics Tools nao Instalado?)");
             }
         }
 
@@ -70,13 +70,13 @@ namespace Smile {
                 if (SUCCEEDED(InfoQueue->RegisterMessageCallback(
                         D3D12DebugMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE,
                         nullptr, &Cookie))) {
-                    LogInfo("D3D12 debug messages roteadas para o Logger");
+                    LogInfo("[D3D12] - Debug Messages Roteadas para o Logger");
                 }
             } else {
                 LogWarning("ID3D12InfoQueue1 indisponivel; erros da debug layer so no OutputDebugString");
             }
         }
 
-        LogInfo("D3D12 device criado");
+        LogInfo("[D3D12] - Device Criado");
     }
 } 

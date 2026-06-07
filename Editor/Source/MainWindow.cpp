@@ -78,13 +78,6 @@ namespace SmileEditor {
         statusBar()->addPermanentWidget(FooterStatsLabel);
         statusBar()->showMessage(tr("Pronto"));
 
-        if (LogOutput) {
-            LogOutput->append(QString("<span style='color:#777'>[%1]</span> "
-                                      "<span style='color:#a7b5ff'><b>[INFO]</b></span> "
-                                      "<span style='color:#b9b5aa'>Smile Engine Editor iniciado com sucesso</span>")
-                .arg(QTime::currentTime().toString("HH:mm:ss")));
-        }
-
         connect(Viewport, &ViewportWidget::FrameReady,          this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
 
@@ -124,7 +117,7 @@ namespace SmileEditor {
                     }
                 });
             });
-            Smile::LogInfo("Shader watcher ativo. Monitorando pasta: " + ShadersSourceDir.toStdString());
+            Smile::LogInfo("Shader Watcher Ativo. Monitorando Pasta: " + ShadersSourceDir.toStdString());
         } else {
             Smile::LogWarning("Diretorio de shaders de origem nao encontrado: " + ShadersSourceDir.toStdString());
         }
