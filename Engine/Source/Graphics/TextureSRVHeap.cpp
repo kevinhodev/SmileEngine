@@ -13,14 +13,48 @@ namespace Smile {
 
         HandleSize = _Device->GetDescriptorHandleIncrementSize(
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        // Comeca com o heap inteiro como um unico range livre.
+        FreeList.clear();
+        FreeList.push_back({ 0u, kCapacity });
     }
 
     u32 FTextureSRVHeap::Allocate(u32 _Count) {
-        if (NextSlot + _Count > kCapacity)
-            throw std::runtime_error("TextureSRVHeap capacity exceeded");
-        u32 Slot = NextSlot;
-        NextSlot += _Count;
-        return Slot;
+        if (_Count == 0) _Count = 1;
+
+        // First-fit: primeiro range com espaco suficiente; carve a partir do inicio.
+        for (size_t i = 0; i < FreeList.size(); ++i) {
+            if (FreeList[i].Count >= _Count) {
+                const u32 Slot = FreeList[i].Offset;
+                FreeList[i].Offset += _Count;
+                FreeList[i].Count  -= _Count;
+                if (FreeList[i].Count == 0)
+                    FreeList.erase(FreeList.begin() + i);
+                return Slot;
+            }
+        }
+        throw std::runtime_error("TextureSRVHeap capacity exceeded");
+    }
+
+    void FTextureSRVHeap::Free(u32 _Slot, u32 _Count) {
+        if (_Count == 0) return;
+
+        // Insere mantendo a ordenacao por Offset.
+        size_t i = 0;
+        while (i < FreeList.size() && FreeList[i].Offset < _Slot) ++i;
+        FreeList.insert(FreeList.begin() + i, { _Slot, _Count });
+
+        // Coalesce com o vizinho a direita, depois com o da esquerda.
+        if (i + 1 < FreeList.size() &&
+            FreeList[i].Offset + FreeList[i].Count == FreeList[i + 1].Offset) {
+            FreeList[i].Count += FreeList[i + 1].Count;
+            FreeList.erase(FreeList.begin() + i + 1);
+        }
+        if (i > 0 &&
+            FreeList[i - 1].Offset + FreeList[i - 1].Count == FreeList[i].Offset) {
+            FreeList[i - 1].Count += FreeList[i].Count;
+            FreeList.erase(FreeList.begin() + i);
+        }
     }
 
     void FTextureSRVHeap::CreateSRV(ID3D12Device* Device, ID3D12Resource* _Resource,

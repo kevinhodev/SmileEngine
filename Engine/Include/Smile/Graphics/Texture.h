@@ -36,6 +36,10 @@ namespace Smile {
                                       FTextureSRVHeap& SRVHeap,
                                       EDefaultTexture Type);
 
+        // Libera o slot SRV de volta para o heap e solta o recurso GPU. Idempotente.
+        // Chamado quando uma textura carregada eh substituida/removida em runtime.
+        void Release(FTextureSRVHeap& SRVHeap);
+
         ID3D12Resource* Resource()  const { return GpuResource.Get(); }
         u32             SRVSlot()   const { return Slot; }
         u32             Width()     const { return TexWidth; }
@@ -58,8 +62,10 @@ namespace Smile {
                                const std::vector<FMipData>& Mips,
                                DXGI_FORMAT Format);
 
+        static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
+
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuResource;
-        u32 Slot        = 0;
+        u32 Slot        = kInvalidSlot;
         u32 TexWidth    = 0;
         u32 TexHeight   = 0;
         u32 TexMipCount = 1;

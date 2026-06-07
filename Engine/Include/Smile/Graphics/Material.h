@@ -60,6 +60,10 @@ namespace Smile {
 
         void Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
+        // Libera a tabela SRV de 8 slots e solta o CB. Idempotente. Chamado quando
+        // o material eh re-finalizado ou descartado em runtime.
+        void Release(FTextureSRVHeap& SRVHeap);
+
         void Bind(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap) const;
 
         void UpdateConstants();
@@ -70,8 +74,10 @@ namespace Smile {
         bool IsFinalized() const { return CBV != nullptr; }
 
     private:
+        static constexpr u32 kInvalidTable = 0xFFFFFFFFu;
+
         Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
-        MaterialConstants* MappedCBV = nullptr; 
-        u32 SRVTableStart            = 0;       
+        MaterialConstants* MappedCBV = nullptr;
+        u32 SRVTableStart            = kInvalidTable;
     };
 } 

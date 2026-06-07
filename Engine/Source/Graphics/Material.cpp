@@ -3,6 +3,9 @@
 
 namespace Smile {
     void FMaterial::Finalize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
+        // Re-finalizar: devolve a tabela anterior antes de realocar (evita vazar slots).
+        if (SRVTableStart != kInvalidTable)
+            _SRVHeap.Free(SRVTableStart, kMaterialTextureSlots);
         SRVTableStart = _SRVHeap.Allocate(kMaterialTextureSlots);
 
         auto WriteSRV = [&](FTexture* _Texture, u32 _LocalSlot) {
@@ -56,6 +59,18 @@ namespace Smile {
 
         SMILE_HR(CBV->Map(0, nullptr, reinterpret_cast<void**>(&MappedCBV)));
         memcpy(MappedCBV, &Constants, sizeof(MaterialConstants));
+    }
+
+    void FMaterial::Release(FTextureSRVHeap& _SRVHeap) {
+        if (SRVTableStart != kInvalidTable) {
+            _SRVHeap.Free(SRVTableStart, kMaterialTextureSlots);
+            SRVTableStart = kInvalidTable;
+        }
+        if (CBV && MappedCBV) {
+            CBV->Unmap(0, nullptr);
+            MappedCBV = nullptr;
+        }
+        CBV.Reset();
     }
 
     void FMaterial::UpdateConstants() {

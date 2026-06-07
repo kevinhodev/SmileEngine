@@ -226,6 +226,14 @@ namespace Smile {
         return Result;
     }
 
+    void FTexture::Release(FTextureSRVHeap& _SRVHeap) {
+        if (GpuResource && Slot != kInvalidSlot) {
+            _SRVHeap.Free(Slot, 1);
+            Slot = kInvalidSlot;
+        }
+        GpuResource.Reset();
+    }
+
     FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
                                      FTextureSRVHeap& _SRVHeap,
                                      const std::wstring& _Path, bool _IsNormalMap) {
