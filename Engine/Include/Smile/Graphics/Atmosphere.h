@@ -77,6 +77,8 @@ namespace Smile {
         // Sun disk controls (CB-only, no LUT re-bake).
         void SetSunDiskHalfAngle(f32 DegHalfAngle);
         void SetSunGlare(f32 Intensity);
+        f32  GetSunDiskHalfAngle() const;
+        f32  GetSunGlare() const;
 
         // Records the per-frame sky-view LUT bake (compute) into the given list.
         // Caller must have already set descriptor heaps. Leaves the sky-view LUT

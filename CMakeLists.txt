@@ -41,7 +41,7 @@ if(MSVC)
 endif()
 
 # Localiza Qt 6
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Svg Widgets)
 qt_standard_project_setup()
 
 # Modulo cmake interno: utilitario para compilar shaders HLSL

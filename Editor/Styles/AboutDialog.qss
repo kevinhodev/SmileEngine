@@ -1,80 +1,92 @@
 QDialog#AboutDialog {
-    background: #1E1E1E;
+    background: #080909;
 }
+
 QDialog#AboutDialog QLabel {
-    color: #DCDCDC;
+    color: #ddd8ca;
 }
+
 QDialog#AboutDialog QTabWidget::pane {
-    background: #252526;
-    border: 1px solid #3C3C3C;
-    border-top: 2px solid #0E639C;
+    background: #10110f;
+    border: 1px solid #292a24;
+    border-top: 2px solid #d9a514;
 }
+
 QDialog#AboutDialog QTabBar::tab {
-    background: #2D2D30;
-    color: #9A9A9A;
+    background: #181916;
+    color: #9a958a;
     padding: 7px 18px;
-    border: 1px solid #3C3C3C;
+    border: 1px solid #292a24;
     border-bottom: none;
     margin-right: 2px;
 }
+
 QDialog#AboutDialog QTabBar::tab:selected {
-    background: #0E639C;
-    color: white;
+    background: #30230d;
+    color: #ffd35d;
 }
+
 QDialog#AboutDialog QTabBar::tab:hover:!selected {
-    background: #3C3C3C;
-    color: #DCDCDC;
+    background: #202018;
+    color: #ddd8ca;
 }
+
 QDialog#AboutDialog QTextBrowser {
-    background: #252526;
-    color: #DCDCDC;
+    background: #10110f;
+    color: #ddd8ca;
     border: none;
     padding: 14px;
-    selection-background-color: #0E639C;
-    selection-color: white;
+    selection-background-color: #d9a514;
+    selection-color: #0a0a09;
 }
+
 QDialog#AboutDialog QPushButton {
-    background: #2D2D30;
-    color: #DCDCDC;
+    background: #181916;
+    color: #ddd8ca;
     padding: 7px 22px;
-    border: 1px solid #3C3C3C;
-    border-radius: 2px;
+    border: 1px solid #292a24;
+    border-radius: 5px;
     min-width: 80px;
 }
+
 QDialog#AboutDialog QPushButton:hover {
-    background: #0E639C;
-    border-color: #0E639C;
-    color: white;
+    background: #30230d;
+    border-color: #d9a514;
+    color: #ffd35d;
 }
+
 QDialog#AboutDialog QPushButton:pressed {
-    background: #094771;
-    border-color: #094771;
+    background: #7a5305;
+    border-color: #d9a514;
 }
+
 QFrame#AboutAccentStrip {
-    background: #0E639C;
+    background: #d9a514;
 }
+
 QWidget#AboutHeader {
-    background: #2D2D30;
+    background: #10110f;
+    border-bottom: 1px solid #292a24;
 }
+
 QLabel#AboutLogo {
-    background: #0E639C;
-    color: white;
-    font-size: 40px;
-    font-weight: bold;
-    border-radius: 6px;
+    background: transparent;
+    border: none;
 }
+
 QLabel#AboutTitle {
-    color: #DCDCDC;
+    color: #f1eadc;
     font-size: 24px;
     font-weight: 600;
 }
+
 QLabel#AboutSubtitle {
-    color: #9A9A9A;
+    color: #d9a514;
     font-size: 11px;
-    letter-spacing: 1px;
 }
+
 QLabel#AboutVersion {
-    color: #9A9A9A;
-    font-family: 'Consolas', 'Cascadia Mono', monospace;
+    color: #9a958a;
+    font-family: "Consolas", "Cascadia Mono", monospace;
     font-size: 10px;
 }

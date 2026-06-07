@@ -7,6 +7,9 @@ set(EDITOR_HEADERS
     Include/SmileEditor/ViewportWidget.h
     Include/SmileEditor/DarkTheme.h
     Include/SmileEditor/AboutDialog.h
+    Include/SmileEditor/SmileLogo.h
+    Include/SmileEditor/LucideIcon.h
+    Include/SmileEditor/EnvironmentWindow.h
     Include/SmileEditor/TextureSlotWidget.h
     Include/SmileEditor/MaterialEditorPanel.h
     Include/SmileEditor/EnvironmentPanel.h
@@ -19,6 +22,9 @@ set(EDITOR_SOURCES
     Source/ViewportWidget.cpp
     Source/DarkTheme.cpp
     Source/AboutDialog.cpp
+    Source/SmileLogo.cpp
+    Source/LucideIcon.cpp
+    Source/EnvironmentWindow.cpp
     Source/TextureSlotWidget.cpp
     Source/MaterialEditorPanel.cpp
     Source/EnvironmentPanel.cpp
@@ -41,6 +47,7 @@ target_link_libraries(SmileEditor
         SmileEngine
         Qt6::Core
         Qt6::Gui
+        Qt6::Svg
         Qt6::Widgets
 )
 

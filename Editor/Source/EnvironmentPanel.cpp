@@ -13,6 +13,8 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
+#include <QScrollArea>
 #include <QDir>
 
 namespace SmileEditor {
@@ -29,17 +31,22 @@ namespace SmileEditor {
         RootLayout->setContentsMargins(0, 0, 0, 0);
         RootLayout->setSpacing(0);
 
-        auto* Header = new QLabel(tr("Environment (IBL)"), this);
+        auto* Header = new QLabel(tr("Ambiente"), this);
         Header->setObjectName("MaterialHeader");
         RootLayout->addWidget(Header);
 
-        auto* Container = new QWidget(this);
+        auto* ScrollArea = new QScrollArea(this);
+        ScrollArea->setObjectName("PanelScrollArea");
+        ScrollArea->setWidgetResizable(true);
+        ScrollArea->setFrameShape(QFrame::NoFrame);
+
+        auto* Container = new QWidget(ScrollArea);
         auto* Layout    = new QVBoxLayout(Container);
         Layout->setContentsMargins(6, 6, 6, 6);
         Layout->setSpacing(6);
 
         // --- HDR file group ---
-        auto* FileGroup = new QGroupBox(tr("HDR Texture"), Container);
+        auto* FileGroup = new QGroupBox(tr("HDRI"), Container);
         auto* FileLayout = new QVBoxLayout(FileGroup);
         FileLayout->setContentsMargins(4, 8, 4, 4);
         FileLayout->setSpacing(4);
@@ -50,8 +57,8 @@ namespace SmileEditor {
         FileLayout->addWidget(CurrentPathLabel);
 
         auto* BtnRow = new QHBoxLayout();
-        BrowseBtn = new QPushButton(tr("Browse..."), FileGroup);
-        ClearBtn  = new QPushButton(tr("Clear"),     FileGroup);
+        BrowseBtn = new QPushButton(tr("Buscar..."), FileGroup);
+        ClearBtn  = new QPushButton(tr("Limpar"),    FileGroup);
         BtnRow->addWidget(BrowseBtn);
         BtnRow->addWidget(ClearBtn);
         FileLayout->addLayout(BtnRow);
@@ -61,7 +68,7 @@ namespace SmileEditor {
         connect(ClearBtn,  &QPushButton::clicked, this, &EnvironmentPanel::OnClearHDR);
 
         // --- Parameters group ---
-        auto* ParamsGroup  = new QGroupBox(tr("Parameters"), Container);
+        auto* ParamsGroup  = new QGroupBox(tr("Renderização"), Container);
         auto* ParamsLayout = new QFormLayout(ParamsGroup);
         ParamsLayout->setContentsMargins(4, 8, 4, 4);
         ParamsLayout->setHorizontalSpacing(6);
@@ -88,23 +95,23 @@ namespace SmileEditor {
 
         Layout->addWidget(ParamsGroup);
 
-        auto* WaterGroup  = new QGroupBox(tr("Water Debug"), Container);
+        auto* WaterGroup  = new QGroupBox(tr("Água"), Container);
         auto* WaterLayout = new QFormLayout(WaterGroup);
         WaterLayout->setContentsMargins(4, 8, 4, 4);
         WaterLayout->setHorizontalSpacing(6);
         WaterLayout->setVerticalSpacing(4);
 
         WaterDebugCombo = new QComboBox(WaterGroup);
-        WaterDebugCombo->addItem(tr("Off"));
-        WaterDebugCombo->addItem(tr("Wireframe"));
+        WaterDebugCombo->addItem(tr("Desligado"));
+        WaterDebugCombo->addItem(tr("Aramado"));
         WaterDebugCombo->addItem(tr("Tiles / LOD"));
-        WaterDebugCombo->addItem(tr("Displacement"));
+        WaterDebugCombo->addItem(tr("Deslocamento"));
         WaterDebugCombo->addItem(tr("Normal"));
         WaterDebugCombo->addItem(tr("Fresnel"));
-        WaterDebugCombo->addItem(tr("Body"));
-        WaterDebugCombo->addItem(tr("Reflection"));
-        WaterDebugCombo->addItem(tr("Foam / J"));
-        WaterDebugCombo->addItem(tr("Depth"));
+        WaterDebugCombo->addItem(tr("Corpo"));
+        WaterDebugCombo->addItem(tr("Reflexo"));
+        WaterDebugCombo->addItem(tr("Espuma / J"));
+        WaterDebugCombo->addItem(tr("Profundidade"));
         WaterLayout->addRow(tr("Modo"), WaterDebugCombo);
 
         FoamCheck = new QCheckBox(tr("Espuma (foam)"), WaterGroup);
@@ -165,14 +172,14 @@ namespace SmileEditor {
         ReflectionScaleSpin->setDecimals(2);
         ReflectionScaleSpin->setValue(1.0);
         ReflectionScaleSpin->setToolTip(tr("Peso do reflexo no composite final"));
-        WaterLayout->addRow(tr("Reflexao"), ReflectionScaleSpin);
+        WaterLayout->addRow(tr("Reflexão"), ReflectionScaleSpin);
 
         ReflectionBumpSpin = new QDoubleSpinBox(WaterGroup);
         ReflectionBumpSpin->setRange(0.0, 1.0);
         ReflectionBumpSpin->setSingleStep(0.01);
         ReflectionBumpSpin->setDecimals(2);
         ReflectionBumpSpin->setValue(0.18);
-        ReflectionBumpSpin->setToolTip(tr("Quanto a normal das ondas distorce a reflexao"));
+        ReflectionBumpSpin->setToolTip(tr("Quanto a normal das ondas distorce a reflexão"));
         WaterLayout->addRow(tr("Refl. bump"), ReflectionBumpSpin);
 
         RefractionBumpSpin = new QDoubleSpinBox(WaterGroup);
@@ -211,7 +218,8 @@ namespace SmileEditor {
 
         Layout->addStretch();
 
-        RootLayout->addWidget(Container);
+        ScrollArea->setWidget(Container);
+        RootLayout->addWidget(ScrollArea);
 
         connect(IntensitySpin,
                 static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged),

@@ -1,60 +1,89 @@
 #include "SmileEditor/MainWindow.h"
 #include "SmileEditor/AboutDialog.h"
+#include "SmileEditor/EnvironmentWindow.h"
+#include "SmileEditor/LucideIcon.h"
+#include "SmileEditor/SmileLogo.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/MaterialEditorPanel.h"
-#include "SmileEditor/EnvironmentPanel.h"
-#include "SmileEditor/SkyCloudPanel.h"
 #include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Graphics/D3D12Device.h"
+
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
+#include <QColor>
+#include <QCoreApplication>
+#include <QDir>
 #include <QDockWidget>
+#include <QFileInfo>
+#include <QFileSystemWatcher>
+#include <QFont>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QIcon>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
+#include <QProcess>
+#include <QSizePolicy>
 #include <QStatusBar>
 #include <QTextEdit>
+#include <QTime>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <QFileSystemWatcher>
-#include <QTimer>
-#include <QApplication>
-#include <QProcess>
-#include <QDir>
-#include <QFileInfo>
-
 
 namespace SmileEditor {
     MainWindow::MainWindow(QWidget* _Parent)
         : QMainWindow(_Parent)
     {
-        setWindowTitle(tr("SmileEditor"));
-        resize(1280, 720);
+        setWindowTitle(tr("Smile Engine"));
+        setWindowIcon(QIcon(MakeSmileLogoPixmap(256)));
+        resize(1536, 864);
+        setMinimumSize(1120, 680);
+        setWindowState(Qt::WindowMaximized);
+        setObjectName("SmileMainWindow");
 
         setDockNestingEnabled(true);
         setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
 
         CreateMenuBar();
-
-        Viewport = new ViewportWidget(this);
-        setCentralWidget(Viewport);
-
+        setCentralWidget(CreateViewportChrome());
         CreateDocks();
 
         Smile::SetLogSink([this](Smile::LogLevel level, std::string_view msg) {
             if (!LogOutput) return;
-            const char* color = level == Smile::LogLevel::Error   ? "#e05252"
-                              : level == Smile::LogLevel::Warning ? "#e0a840"
-                                                                  : "#c8c8c8";
-            const char* tag   = level == Smile::LogLevel::Error   ? "[ERR]"
+            const char* Color = level == Smile::LogLevel::Error   ? "#ff5f57"
+                              : level == Smile::LogLevel::Warning ? "#f3b43f"
+                                                                  : "#a7b5ff";
+            const char* Tag   = level == Smile::LogLevel::Error   ? "[ERR]"
                               : level == Smile::LogLevel::Warning ? "[WARN]"
                                                                   : "[INFO]";
-            LogOutput->append(QString("<span style='color:%1'><b>%2</b> %3</span>")
-                .arg(color, tag, QString::fromUtf8(msg.data(), static_cast<qsizetype>(msg.size()))));
+
+            LogOutput->append(QString("<span style='color:#777'>[%1]</span> "
+                                      "<span style='color:%2'><b>%3</b></span> "
+                                      "<span style='color:#b9b5aa'>%4</span>")
+                .arg(QTime::currentTime().toString("HH:mm:ss"),
+                     Color,
+                     Tag,
+                     QString::fromUtf8(msg.data(), static_cast<qsizetype>(msg.size()))));
         });
+
+        statusBar()->setObjectName("SmileStatusBar");
+        FooterStatsLabel = new QLabel(tr("FPS: --  |  Frame: -- ms"), this);
+        FooterStatsLabel->setObjectName("FooterStatsLabel");
+        statusBar()->addPermanentWidget(FooterStatsLabel);
+        statusBar()->showMessage(tr("Pronto"));
+
+        if (LogOutput) {
+            LogOutput->append(QString("<span style='color:#777'>[%1]</span> "
+                                      "<span style='color:#a7b5ff'><b>[INFO]</b></span> "
+                                      "<span style='color:#b9b5aa'>Smile Engine Editor iniciado com sucesso</span>")
+                .arg(QTime::currentTime().toString("HH:mm:ss")));
+        }
 
         connect(Viewport, &ViewportWidget::FrameReady,          this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
@@ -95,30 +124,69 @@ namespace SmileEditor {
                     }
                 });
             });
-            Smile::LogInfo("Shader Watcher ativo. Monitorando pasta: " + ShadersSourceDir.toStdString());
+            Smile::LogInfo("Shader watcher ativo. Monitorando pasta: " + ShadersSourceDir.toStdString());
         } else {
             Smile::LogWarning("Diretorio de shaders de origem nao encontrado: " + ShadersSourceDir.toStdString());
         }
-
-        statusBar()->showMessage(tr("Pronto"));
     }
 
     void MainWindow::CreateMenuBar() {
-        auto* FileMenu   = menuBar()->addMenu(tr("&File"));
-        auto* ExitAction = FileMenu->addAction(tr("E&xit"), this, &QWidget::close);
+        auto* TopBar = new QWidget(this);
+        TopBar->setObjectName("SmileTopBar");
+        TopBar->setFixedHeight(36);
+
+        auto* Layout = new QHBoxLayout(TopBar);
+        Layout->setContentsMargins(8, 0, 10, 0);
+        Layout->setSpacing(8);
+        Layout->setAlignment(Qt::AlignVCenter);
+
+        auto* Logo = new QLabel(TopBar);
+        Logo->setObjectName("SmileTopLogo");
+        Logo->setFixedSize(22, 22);
+        Logo->setPixmap(MakeSmileLogoPixmap(22));
+        Logo->setScaledContents(true);
+        Layout->addWidget(Logo, 0, Qt::AlignVCenter);
+
+        auto* Brand = new QLabel(tr("Smile Engine"), TopBar);
+        Brand->setObjectName("SmileBrandLabel");
+        Brand->setFixedHeight(24);
+        Brand->setAlignment(Qt::AlignVCenter);
+        Layout->addWidget(Brand, 0, Qt::AlignVCenter);
+
+        auto* Menus = new QMenuBar(TopBar);
+        Menus->setObjectName("SmileMenuBar");
+        Menus->setNativeMenuBar(false);
+        Menus->setFixedHeight(24);
+
+        auto* FileMenu = Menus->addMenu(tr("Arquivo"));
+        auto* ExitAction = FileMenu->addAction(tr("Sair"), this, &QWidget::close);
         ExitAction->setShortcut(QKeySequence::Quit);
 
-        auto* RenderMenu = menuBar()->addMenu(tr("&Renderização"));
-        auto* MSAAMenu   = RenderMenu->addMenu(tr("&MSAA"));
+        auto* EditMenu = Menus->addMenu(tr("Editar"));
+        EditMenu->addAction(tr("Desfazer"))->setEnabled(false);
+        EditMenu->addAction(tr("Refazer"))->setEnabled(false);
+
+        WindowMenu = Menus->addMenu(tr("Janela"));
+        auto* EnvironmentAction = WindowMenu->addAction(
+            MakeLucideIcon(QStringLiteral("cloud-sun"), QColor(221, 216, 202), 18),
+            tr("Ambiente & Céu"),
+            this,
+            &MainWindow::OnOpenEnvironmentWindow);
+        EnvironmentAction->setShortcut(QKeySequence(tr("Ctrl+Shift+A")));
+        WindowMenu->addSeparator();
+
+        auto* ProjectMenu = Menus->addMenu(tr("Projeto"));
+        auto* RenderMenu  = ProjectMenu->addMenu(tr("Renderização"));
+        auto* MSAAMenu    = RenderMenu->addMenu(tr("MSAA"));
 
         MSAAGroup = new QActionGroup(this);
         MSAAGroup->setExclusive(true);
 
         struct { const char* Label; int Count; } MSAAOptions[] = {
-            { "&Desativado (1x)", 1 },
-            { "&2x",              2 },
-            { "&4x",              4 },
-            { "&8x",              8 },
+            { "Desativado (1x)", 1 },
+            { "2x",              2 },
+            { "4x",              4 },
+            { "8x",              8 },
         };
         for (auto& Option : MSAAOptions) {
             auto* Action = MSAAMenu->addAction(tr(Option.Label));
@@ -127,70 +195,134 @@ namespace SmileEditor {
             MSAAGroup->addAction(Action);
             if (Option.Count == 1) Action->setChecked(true);
         }
-        connect(MSAAGroup, &QActionGroup::triggered, this, [this](QAction* a) {
-            OnMSAAChanged(a->data().toInt());
+        connect(MSAAGroup, &QActionGroup::triggered, this, [this](QAction* Action) {
+            OnMSAAChanged(Action->data().toInt());
         });
 
-        auto* HelpMenu = menuBar()->addMenu(tr("&Help"));
-        HelpMenu->addAction(tr("&About SmileEngine..."), this, &MainWindow::OnHelpAbout);
+        auto* HelpMenu = Menus->addMenu(tr("Ajuda"));
+        HelpMenu->addAction(tr("Sobre o Smile Engine..."), this, &MainWindow::OnHelpAbout);
+        Layout->addWidget(Menus, 0, Qt::AlignVCenter);
+
+        Layout->addStretch(1);
+
+        setMenuWidget(TopBar);
+    }
+
+    QWidget* MainWindow::CreateViewportChrome() {
+        auto* Shell = new QFrame(this);
+        Shell->setObjectName("ViewportPanel");
+        Shell->setFrameShape(QFrame::NoFrame);
+        Shell->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+        auto* Layout = new QVBoxLayout(Shell);
+        Layout->setContentsMargins(0, 0, 0, 0);
+        Layout->setSpacing(0);
+
+        Viewport = new ViewportWidget(Shell);
+        Viewport->setObjectName("MainViewport");
+        Layout->addWidget(Viewport, 1);
+
+        return Shell;
     }
 
     void MainWindow::CreateDocks() {
-        auto* MaterialDock = new QDockWidget(tr("Material"), this);
+        auto RegisterDock = [this](QDockWidget* Dock) {
+            if (!WindowMenu) return;
+            QAction* ToggleAction = Dock->toggleViewAction();
+            ToggleAction->setText(Dock->windowTitle());
+            WindowMenu->addAction(ToggleAction);
+        };
+
+        auto* MaterialDock = new QDockWidget(tr("Recursos"), this);
+        MaterialDock->setObjectName("ResourcesDock");
         MaterialDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
-        MaterialDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+        MaterialDock->setFeatures(QDockWidget::DockWidgetMovable |
+                                  QDockWidget::DockWidgetFloatable |
+                                  QDockWidget::DockWidgetClosable);
 
         MaterialPanel = new MaterialEditorPanel(MaterialDock);
         MaterialDock->setWidget(MaterialPanel);
         addDockWidget(Qt::RightDockWidgetArea, MaterialDock);
-        MaterialDock->setMinimumWidth(240);
-
-        auto* EnvironmentDock = new QDockWidget(tr("Environment"), this);
-        EnvironmentDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
-        EnvironmentDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-        EnvPanel = new EnvironmentPanel(EnvironmentDock);
-        EnvironmentDock->setWidget(EnvPanel);
-        addDockWidget(Qt::LeftDockWidgetArea, EnvironmentDock);
-        EnvironmentDock->setMinimumWidth(240);
-
-        auto* SkyDock = new QDockWidget(tr("Céu & Nuvens"), this);
-        SkyDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
-        SkyDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-        SkyPanel = new SkyCloudPanel(SkyDock);
-        SkyDock->setWidget(SkyPanel);
-        addDockWidget(Qt::LeftDockWidgetArea, SkyDock);
-        SkyDock->setMinimumWidth(240);
+        MaterialDock->setMinimumWidth(300);
+        RegisterDock(MaterialDock);
 
         auto* ConsoleDock = new QDockWidget(tr("Console"), this);
+        ConsoleDock->setObjectName("ConsoleDock");
         ConsoleDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+        ConsoleDock->setFeatures(QDockWidget::DockWidgetMovable |
+                                 QDockWidget::DockWidgetFloatable |
+                                 QDockWidget::DockWidgetClosable);
 
         auto* Container = new QWidget(ConsoleDock);
-        auto* Layout    = new QVBoxLayout(Container);
-        Layout->setContentsMargins(4, 4, 4, 4);
-        Layout->setSpacing(4);
-
-        StatsLabel = new QLabel(tr("Aguardando renderer..."), Container);
-        StatsLabel->setObjectName("StatsLabel");
-        StatsLabel->setFont(QFont("Consolas", 9));
-        Layout->addWidget(StatsLabel);
+        Container->setObjectName("ConsolePanel");
+        auto* Layout = new QVBoxLayout(Container);
+        Layout->setContentsMargins(8, 6, 8, 8);
+        Layout->setSpacing(6);
 
         LogOutput = new QTextEdit(Container);
         LogOutput->setObjectName("LogOutput");
         LogOutput->setReadOnly(true);
         LogOutput->setFont(QFont("Consolas", 9));
         LogOutput->document()->setMaximumBlockCount(500);
-        Layout->addWidget(LogOutput);
+        Layout->addWidget(LogOutput, 1);
 
         ConsoleDock->setWidget(Container);
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
-        ConsoleDock->resize(ConsoleDock->width(), 180);
+        ConsoleDock->resize(ConsoleDock->width(), 210);
+        RegisterDock(ConsoleDock);
+
+        resizeDocks({ MaterialDock }, { 320 }, Qt::Horizontal);
     }
 
     void MainWindow::OnRendererReady() {
         if (!Viewport || !Viewport->GetRenderer()) return;
         if (MaterialPanel) MaterialPanel->InitializeWithRenderer(Viewport->GetRenderer());
-        if (EnvPanel)      EnvPanel     ->InitializeWithRenderer(Viewport->GetRenderer());
-        if (SkyPanel)      SkyPanel     ->InitializeWithRenderer(Viewport->GetRenderer());
+        LoadDefaultHDR();
+        if (EnvironmentDlg) {
+            EnvironmentDlg->InitializeWithRenderer(Viewport->GetRenderer());
+            EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
+        }
+    }
+
+    void MainWindow::OnOpenEnvironmentWindow() {
+        if (!EnvironmentDlg) {
+            EnvironmentDlg = new EnvironmentWindow(this);
+            EnvironmentDlg->setAttribute(Qt::WA_DeleteOnClose, false);
+            connect(EnvironmentDlg, &EnvironmentWindow::HDRChanged, this, [this](const QString& Path) {
+                CurrentHDRPath = Path;
+            });
+        }
+
+        if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized()) {
+            EnvironmentDlg->InitializeWithRenderer(Viewport->GetRenderer());
+        }
+        EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
+        EnvironmentDlg->show();
+        EnvironmentDlg->raise();
+        EnvironmentDlg->activateWindow();
+    }
+
+    void MainWindow::LoadDefaultHDR() {
+        if (DefaultHDRLoaded || !Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized()) {
+            return;
+        }
+        DefaultHDRLoaded = true;
+
+#ifdef SMILE_ASSETS_DIR
+        QDir HdrDir(QString::fromUtf8(SMILE_ASSETS_DIR) + "/HDRi");
+        const QStringList Hdrs = HdrDir.entryList(QStringList{ "*.hdr" }, QDir::Files, QDir::Name);
+        if (!Hdrs.isEmpty()) {
+            const QString File = HdrDir.filePath(Hdrs.first());
+            if (Viewport->GetRenderer()->LoadHDREnvironment(File.toStdWString())) {
+                CurrentHDRPath = File;
+                if (EnvironmentDlg) {
+                    EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
+                }
+            } else {
+                Smile::LogError("Falha ao auto-carregar HDR: " + File.toStdString());
+            }
+        }
+#endif
     }
 
     void MainWindow::OnMSAAChanged(int _SampleCount) {
@@ -200,27 +332,18 @@ namespace SmileEditor {
     }
 
     void MainWindow::UpdateStats() {
-        if (!StatsLabel || !Viewport) return;
+        if (!Viewport) return;
         auto* Renderer = Viewport->GetRenderer();
         if (!Renderer || !Renderer->IsInitialized()) return;
 
-        Smile::Vec3 Camera = Renderer->GetCameraPos();
-        float Pitch        = Renderer->GetPitch();
-        float Yaw          = Renderer->GetYaw();
-        Smile::u32 MSAA    = Renderer->GetMSAA();
-        float FPS          = Viewport->GetFPS();
+        float FPS = Viewport->GetFPS();
+        const float FrameMs = FPS > 0.0f ? 1000.0f / FPS : 0.0f;
 
-        StatsLabel->setText(QString(
-            "FPS: %1  |  Frame: %2 ms  |  MSAA: %3x\n"
-            "Câmera: (%4, %5, %6)  |  Pitch: %7°  Yaw: %8°")
-            .arg(FPS,   0, 'f', 1)
-            .arg(FPS > 0.0f ? 1000.0f / FPS : 0.0f, 0, 'f', 2)
-            .arg(MSAA)
-            .arg(Camera.X, 0, 'f', 2)
-            .arg(Camera.Y, 0, 'f', 2)
-            .arg(Camera.Z, 0, 'f', 2)
-            .arg(Pitch, 0, 'f', 1)
-            .arg(Yaw,   0, 'f', 1));
+        if (FooterStatsLabel) {
+            FooterStatsLabel->setText(QString("FPS: %1  |  Frame: %2 ms")
+                .arg(FPS, 0, 'f', 1)
+                .arg(FrameMs, 0, 'f', 2));
+        }
     }
 
     void MainWindow::OnHelpAbout() {
@@ -248,7 +371,7 @@ namespace SmileEditor {
 
         QProcess* CompileProcess = new QProcess(this);
         QStringList Arguments = { "--build", BuildDir, "--target", "Shaders" };
-        
+
         Smile::LogInfo("Compilando shaders via CMake...");
         CompileProcess->start("cmake", Arguments);
 
@@ -257,9 +380,9 @@ namespace SmileEditor {
             if (ExitCode == 0) {
                 if (Viewport && Viewport->GetRenderer()) {
                     if (Viewport->GetRenderer()->ReloadShaders()) {
-                        statusBar()->showMessage(tr("Shaders recarregados com sucesso!"), 3000);
+                        statusBar()->showMessage(tr("Shaders recarregados com sucesso."), 3000);
                     } else {
-                        statusBar()->showMessage(tr("Erro ao recarregar shaders no Renderizador."), 3000);
+                        statusBar()->showMessage(tr("Erro ao recarregar shaders no renderer."), 3000);
                     }
                 }
             } else {
@@ -268,9 +391,9 @@ namespace SmileEditor {
                     Errors = QString::fromUtf8(CompileProcess->readAllStandardOutput());
                 }
                 Smile::LogError("Falha ao compilar shaders via CMake:\n" + Errors.toStdString());
-                statusBar()->showMessage(tr("Falha na compilação do Shader."), 3000);
+                statusBar()->showMessage(tr("Falha na compilação do shader."), 3000);
             }
             CompileProcess->deleteLater();
         });
     }
-} 
+}

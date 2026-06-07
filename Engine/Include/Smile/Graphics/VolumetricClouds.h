@@ -66,6 +66,14 @@ namespace Smile {
             CPUConstants.PlanetRadii.Y = CPUConstants.PlanetRadii.X + BottomKm;
             CPUConstants.PlanetRadii.Z = CPUConstants.PlanetRadii.X + BottomKm + ThicknessKm;
         }
+        f32  GetCoverage() const       { return CPUConstants.CloudParams.X; }
+        f32  GetDensityScale() const   { return CPUConstants.CloudParams.Y; }
+        f32  GetWindSpeed() const      { return CPUConstants.WindParams.X; }
+        f32  GetErosion() const        { return CPUConstants.CloudParams2.Y; }
+        f32  GetPhaseG() const         { return CPUConstants.PhaseParams.X; }
+        f32  GetPowder() const         { return CPUConstants.PhaseParams.W; }
+        f32  GetBottomAltitude() const { return CPUConstants.PlanetRadii.Y - CPUConstants.PlanetRadii.X; }
+        f32  GetThickness() const      { return CPUConstants.PlanetRadii.Z - CPUConstants.PlanetRadii.Y; }
 
     private:
         void CreateRT(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);

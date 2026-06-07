@@ -1,55 +1,73 @@
 QLabel#MaterialHeader {
-    background: #252526;
-    color: #dcdcdc;
-    font-weight: bold;
+    background: #10110f;
+    color: #d9a514;
+    font-weight: 600;
     font-size: 12px;
-    padding: 6px 10px;
-    border-bottom: 1px solid #3c3c42;
+    padding: 9px 10px;
+    border-bottom: 1px solid #292a24;
 }
+
 QScrollArea#MaterialScrollArea {
-    background: #1e1e1e;
+    background: #10110f;
     border: none;
 }
-QGroupBox#MaterialTexturesGroup, QGroupBox#MaterialParametersGroup {
-    color: #a0c8ff;
+
+QGroupBox#MaterialTexturesGroup,
+QGroupBox#MaterialParametersGroup {
+    background: #121310;
+    color: #d9a514;
     font-size: 11px;
-    font-weight: bold;
-    border: 1px solid #3c3c42;
-    border-radius: 4px;
-    margin-top: 8px;
-    padding-top: 4px;
+    font-weight: 600;
+    border: 1px solid #292a24;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding-top: 10px;
 }
-QGroupBox#MaterialTexturesGroup::title, QGroupBox#MaterialParametersGroup::title {
+
+QGroupBox#MaterialTexturesGroup::title,
+QGroupBox#MaterialParametersGroup::title {
     subcontrol-origin: margin;
-    left: 8px;
+    left: 10px;
+    padding: 0 5px;
+    background: #10110f;
+    color: #d9a514;
 }
+
 QLabel#MaterialParamLabel {
-    color: #aaa;
+    color: #a9a396;
     font-size: 10px;
 }
-QDoubleSpinBox {
-    background: #2d2d30;
-    color: #dcdcdc;
-    border: 1px solid #555;
-    border-radius: 3px;
-    padding: 1px 4px;
+
+QDoubleSpinBox#MaterialSpinBox {
+    background: #181916;
+    color: #e5dfd2;
+    border: 1px solid #2a2b26;
+    border-radius: 4px;
+    padding: 3px 6px;
     font-size: 10px;
 }
-QDoubleSpinBox:focus {
-    border-color: #0e639c;
+
+QDoubleSpinBox#MaterialSpinBox:focus {
+    border-color: #d49a11;
 }
+
 QPushButton#MaterialColorBtn {
-    border: 1px solid #555;
-    border-radius: 3px;
-    min-height: 20px;
+    border: 1px solid #3b3b33;
+    border-radius: 4px;
+    min-height: 22px;
 }
+
 QPushButton#MaterialColorBtn:hover {
-    border-color: #0e639c;
+    border-color: #d49a11;
 }
+
 QCheckBox#MaterialDirectXCheck {
-    color: #aaa;
+    color: #aaa497;
     font-size: 10px;
 }
+
 QFrame#MaterialSeparator {
-    color: #3c3c42;
+    color: #292a24;
+    background: #292a24;
+    max-height: 1px;
 }

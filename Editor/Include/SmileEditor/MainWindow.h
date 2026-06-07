@@ -2,18 +2,20 @@
 
 #include <QMainWindow>
 #include <QPointer>
+#include <QString>
 
 class QActionGroup;
 class QLabel;
+class QMenu;
 class QTextEdit;
 class QFileSystemWatcher;
+class QWidget;
 
 namespace SmileEditor {
     class ViewportWidget;
     class AboutDialog;
     class MaterialEditorPanel;
-    class EnvironmentPanel;
-    class SkyCloudPanel;
+    class EnvironmentWindow;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -24,6 +26,7 @@ namespace SmileEditor {
 
     private slots:
         void OnHelpAbout();
+        void OnOpenEnvironmentWindow();
         void OnMSAAChanged(int sampleCount);
         void OnRendererReady();
         void UpdateStats();
@@ -32,17 +35,21 @@ namespace SmileEditor {
     private:
         void CreateMenuBar();
         void CreateDocks();
+        QWidget* CreateViewportChrome();
+        void LoadDefaultHDR();
 
         ViewportWidget*       Viewport    = nullptr;
         QPointer<AboutDialog> AboutDlg;
+        QPointer<EnvironmentWindow> EnvironmentDlg;
         QActionGroup*         MSAAGroup   = nullptr;
+        QMenu*                WindowMenu  = nullptr;
 
-        QLabel*               StatsLabel  = nullptr;
+        QLabel*               FooterStatsLabel = nullptr;
         QTextEdit*            LogOutput   = nullptr;
 
         MaterialEditorPanel*  MaterialPanel    = nullptr;
-        EnvironmentPanel*     EnvPanel         = nullptr;
-        SkyCloudPanel*        SkyPanel         = nullptr;
+        QString               CurrentHDRPath;
+        bool                  DefaultHDRLoaded = false;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

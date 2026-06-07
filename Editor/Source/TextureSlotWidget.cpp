@@ -42,7 +42,7 @@ namespace SmileEditor {
         BtnRow->setContentsMargins(0, 0, 0, 0);
         BtnRow->setSpacing(4);
 
-        BrowseBtn = new QPushButton(tr("Browse..."), this);
+        BrowseBtn = new QPushButton(tr("Buscar..."), this);
         BrowseBtn->setObjectName("SlotBrowseBtn");
         BrowseBtn->setFixedHeight(20);
 

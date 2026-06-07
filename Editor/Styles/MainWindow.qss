@@ -1,8 +1,22 @@
-QLabel#StatsLabel {
-    color: #a0c8ff;
+QFrame#ViewportPanel {
+    background: #0b0c0c;
+    border: 1px solid #262720;
+    border-radius: 6px;
 }
+
+QWidget#MainViewport {
+    background: #050606;
+    border-radius: 6px;
+}
+
+QWidget#ConsolePanel {
+    background: #10110f;
+}
+
 QTextEdit#LogOutput {
-    background: #1a1a1f;
-    color: #c8c8c8;
-    border: none;
+    background: #10110f;
+    color: #c8c2b4;
+    border: 1px solid #24251f;
+    border-radius: 5px;
+    padding: 6px;
 }

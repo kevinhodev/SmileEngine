@@ -95,6 +95,8 @@ namespace Smile {
         void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
         void SetSunDiskSize(f32 HalfAngleDeg) { Atmosphere.SetSunDiskHalfAngle(HalfAngleDeg); }
         void SetSunGlare(f32 Intensity)       { Atmosphere.SetSunGlare(Intensity); }
+        f32  GetSunDiskSize() const           { return Atmosphere.GetSunDiskHalfAngle(); }
+        f32  GetSunGlare() const              { return Atmosphere.GetSunGlare(); }
 
         void SetCloudCoverage(f32 V)          { CloudVolumetrics.SetCoverage(V); }
         void SetCloudDensity(f32 V)           { CloudVolumetrics.SetDensityScale(V); }
@@ -103,6 +105,14 @@ namespace Smile {
         void SetCloudPhaseG(f32 V)            { CloudVolumetrics.SetPhaseG(V); }
         void SetCloudPowder(f32 V)            { CloudVolumetrics.SetPowder(V); }
         void SetCloudErosion(f32 V)           { CloudVolumetrics.SetErosion(V); }
+        f32  GetCloudCoverage() const         { return CloudVolumetrics.GetCoverage(); }
+        f32  GetCloudDensity() const          { return CloudVolumetrics.GetDensityScale(); }
+        f32  GetCloudWind() const             { return CloudVolumetrics.GetWindSpeed(); }
+        f32  GetCloudPhaseG() const           { return CloudVolumetrics.GetPhaseG(); }
+        f32  GetCloudPowder() const           { return CloudVolumetrics.GetPowder(); }
+        f32  GetCloudErosion() const          { return CloudVolumetrics.GetErosion(); }
+        f32  GetCloudBottomAltitude() const   { return CloudVolumetrics.GetBottomAltitude(); }
+        f32  GetCloudThickness() const        { return CloudVolumetrics.GetThickness(); }
 
         // Atmosphere-derived hemispheric ambient for the PBR scene (A4).
         void SetUseAtmosphereAmbient(bool Use)      { UseAtmosphereAmbient = Use; }

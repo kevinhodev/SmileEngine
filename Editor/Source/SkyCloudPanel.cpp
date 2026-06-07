@@ -7,6 +7,8 @@
 #include <QLabel>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QFrame>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <cmath>
 #include <algorithm>
@@ -40,7 +42,12 @@ namespace SmileEditor {
         Header->setObjectName("MaterialHeader");
         RootLayout->addWidget(Header);
 
-        auto* Container = new QWidget(this);
+        auto* ScrollArea = new QScrollArea(this);
+        ScrollArea->setObjectName("PanelScrollArea");
+        ScrollArea->setWidgetResizable(true);
+        ScrollArea->setFrameShape(QFrame::NoFrame);
+
+        auto* Container = new QWidget(ScrollArea);
         auto* Layout    = new QVBoxLayout(Container);
         Layout->setContentsMargins(6, 6, 6, 6);
         Layout->setSpacing(6);
@@ -104,7 +111,8 @@ namespace SmileEditor {
         Layout->addWidget(CloudGroup);
 
         Layout->addStretch();
-        RootLayout->addWidget(Container);
+        ScrollArea->setWidget(Container);
+        RootLayout->addWidget(ScrollArea);
 
         // --- Connections ---
         auto SpinSig = static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged);

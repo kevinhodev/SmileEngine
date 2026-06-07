@@ -309,6 +309,15 @@ namespace Smile {
         if (MappedCB) MappedCB->SunDisk = CPUConstants.SunDisk;
     }
 
+    f32 FAtmosphere::GetSunDiskHalfAngle() const {
+        constexpr f32 kRadiansToDegrees = 180.0f / 3.14159265358979f;
+        return static_cast<f32>(std::acos(CPUConstants.SunDisk.X) * kRadiansToDegrees);
+    }
+
+    f32 FAtmosphere::GetSunGlare() const {
+        return CPUConstants.SunDisk.W;
+    }
+
     void FAtmosphere::BakeIfDirty(ID3D12Device* _Device, FCommandQueue& _CmdQueue) {
         if (!Initialized || !Dirty) return;
         Bake(_Device, _CmdQueue);
