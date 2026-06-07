@@ -18,6 +18,24 @@ namespace Smile {
         ORM,
     };
 
+    // Um nivel de mip em CPU (R8G8B8A8). Publico para permitir decode em worker thread.
+    struct FMipData {
+        std::vector<u8> Pixels;
+        u32             Width  = 0;
+        u32             Height = 0;
+    };
+
+    // Resultado do decode/mipgen em CPU (sem nenhuma chamada D3D12). Movivel, pensado
+    // para ser produzido em um worker thread e consumido (upload) no thread de render.
+    struct FTextureCPUData {
+        std::vector<FMipData> Mips;
+        u32         Width   = 0;
+        u32         Height  = 0;
+        DXGI_FORMAT Format  = DXGI_FORMAT_R8G8B8A8_UNORM;
+        bool        IsNormalMap = false;
+        bool Valid() const { return !Mips.empty(); }
+    };
+
     class FTexture {
     public:
         // Loads a texture from file (JPG/PNG/BMP/TIFF via WIC) and generates a
@@ -31,6 +49,17 @@ namespace Smile {
                                      FTextureSRVHeap& SRVHeap,
                                      const std::wstring& Path,
                                      bool IsNormalMap = false);
+
+        // Etapa 1 (CPU, sem D3D12): decode WIC + geracao de mips. SEGURA para rodar
+        // fora do thread de render (worker). Em falha, retorna dados invalidos (Valid()==false)
+        // sem lancar — exceptions nao devem cruzar a fronteira do thread.
+        static FTextureCPUData LoadCPU(const std::wstring& Path, bool IsNormalMap = false);
+
+        // Etapa 2 (D3D12, thread de render): sobe os dados CPU para a GPU e cria a textura.
+        // Dados invalidos => textura invalida (IsValid()==false).
+        static FTexture CreateFromCPU(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                                      FTextureSRVHeap& SRVHeap,
+                                      const FTextureCPUData& Data);
 
         static FTexture CreateDefault(ID3D12Device* Device, FCommandQueue& CmdQueue,
                                       FTextureSRVHeap& SRVHeap,
@@ -48,13 +77,6 @@ namespace Smile {
         bool            IsValid()   const { return GpuResource != nullptr; }
 
     private:
-        // One mip level of CPU-side pixel data, R8G8B8A8.
-        struct FMipData {
-            std::vector<u8> Pixels;
-            u32             Width  = 0;
-            u32             Height = 0;
-        };
-
         // Uploads all mip levels of a single texture in one staging buffer +
         // one ExecuteAndSync. Caller owns the FMipData chain.
         static FTexture Upload(ID3D12Device* Device, FCommandQueue& CmdQueue,

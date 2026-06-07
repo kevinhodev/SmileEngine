@@ -234,84 +234,107 @@ namespace Smile {
         GpuResource.Reset();
     }
 
+    FTextureCPUData FTexture::LoadCPU(const std::wstring& _Path, bool _IsNormalMap) {
+        // Roda no worker thread: somente CPU (WIC + mips), NENHUMA chamada D3D12.
+        // Captura excecoes para nao cruzar a fronteira do thread; falha => Valid()==false.
+        FTextureCPUData Data;
+        Data.IsNormalMap = _IsNormalMap;
+        Data.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
+        try {
+            auto Factory = GetWICFactory();
+
+            ComPtr<IWICBitmapDecoder> Decoder;
+            SMILE_HR(Factory->CreateDecoderFromFilename(
+                _Path.c_str(), nullptr, GENERIC_READ,
+                WICDecodeMetadataCacheOnLoad, &Decoder));
+
+            ComPtr<IWICBitmapFrameDecode> Frame;
+            SMILE_HR(Decoder->GetFrame(0, &Frame));
+
+            ComPtr<IWICFormatConverter> Converter;
+            SMILE_HR(Factory->CreateFormatConverter(&Converter));
+            SMILE_HR(Converter->Initialize(
+                Frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                WICBitmapDitherTypeNone, nullptr, 0.0,
+                WICBitmapPaletteTypeCustom));
+
+            UINT Width = 0, Height = 0;
+            SMILE_HR(Converter->GetSize(&Width, &Height));
+
+            // Mip 0
+            std::vector<FMipData>& Mips = Data.Mips;
+            Mips.reserve(16);
+            FMipData Mip0;
+            Mip0.Width  = Width;
+            Mip0.Height = Height;
+            Mip0.Pixels.resize(static_cast<size_t>(Width) * Height * 4);
+            SMILE_HR(Converter->CopyPixels(nullptr, Width * 4,
+                                            static_cast<UINT>(Mip0.Pixels.size()),
+                                            Mip0.Pixels.data()));
+
+            // For normal maps, force the alpha of mip 0 to 1.0 (T = 1: no variance).
+            // JPG/PNG normal maps don't carry a meaningful alpha — we own it now.
+            if (_IsNormalMap) {
+                for (size_t i = 0; i < Mip0.Pixels.size(); i += 4)
+                    Mip0.Pixels[i + 3] = 255;
+            }
+            Mips.push_back(std::move(Mip0));
+
+            // Build the full mip chain. Stop when both dims hit 1.
+            u32 W = Width, H = Height;
+            float MinT = 1.0f;
+            while (W > 1 || H > 1) {
+                u32 PrevW = W;
+                u32 PrevH = H;
+                W = std::max(1u, W / 2);
+                H = std::max(1u, H / 2);
+
+                FMipData Next;
+                Next.Width  = W;
+                Next.Height = H;
+                Next.Pixels.resize(static_cast<size_t>(W) * H * 4);
+
+                const auto& Prev = Mips.back();
+                if (_IsNormalMap) {
+                    float AvgT = DownsampleNormal2x2(Prev.Pixels.data(), PrevW, PrevH,
+                                                     Next.Pixels.data(), W, H);
+                    MinT = std::min(MinT, AvgT);
+                } else {
+                    DownsampleColor2x2(Prev.Pixels.data(), PrevW, PrevH,
+                                       Next.Pixels.data(), W, H);
+                }
+                Mips.push_back(std::move(Next));
+            }
+
+            Data.Width  = Width;
+            Data.Height = Height;
+
+            if (_IsNormalMap) {
+                LogInfo("Normal map decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
+                        ", " + std::to_string(Mips.size()) + " mips, Toksvig minAvg=" +
+                        std::to_string(MinT));
+            } else {
+                LogInfo("Texture decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
+                        ", " + std::to_string(Mips.size()) + " mips");
+            }
+        } catch (const std::exception& e) {
+            LogError(std::string("Falha ao decodificar textura: ") + e.what());
+            Data.Mips.clear(); // garante Valid()==false
+        }
+        return Data;
+    }
+
+    FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+                                     FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data) {
+        if (!_Data.Valid()) return FTexture{}; // textura invalida; caller mantem fallback
+        return Upload(_Device, _CommandQueue, _SRVHeap, _Data.Mips, _Data.Format);
+    }
+
     FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
                                      FTextureSRVHeap& _SRVHeap,
                                      const std::wstring& _Path, bool _IsNormalMap) {
-        auto Factory = GetWICFactory();
-
-        ComPtr<IWICBitmapDecoder> Decoder;
-        SMILE_HR(Factory->CreateDecoderFromFilename(
-            _Path.c_str(), nullptr, GENERIC_READ,
-            WICDecodeMetadataCacheOnLoad, &Decoder));
-
-        ComPtr<IWICBitmapFrameDecode> Frame;
-        SMILE_HR(Decoder->GetFrame(0, &Frame));
-
-        ComPtr<IWICFormatConverter> Converter;
-        SMILE_HR(Factory->CreateFormatConverter(&Converter));
-        SMILE_HR(Converter->Initialize(
-            Frame.Get(), GUID_WICPixelFormat32bppRGBA,
-            WICBitmapDitherTypeNone, nullptr, 0.0,
-            WICBitmapPaletteTypeCustom));
-
-        UINT Width = 0, Height = 0;
-        SMILE_HR(Converter->GetSize(&Width, &Height));
-
-        // Mip 0
-        std::vector<FMipData> Mips;
-        Mips.reserve(16);
-        FMipData Mip0;
-        Mip0.Width  = Width;
-        Mip0.Height = Height;
-        Mip0.Pixels.resize(static_cast<size_t>(Width) * Height * 4);
-        SMILE_HR(Converter->CopyPixels(nullptr, Width * 4,
-                                        static_cast<UINT>(Mip0.Pixels.size()),
-                                        Mip0.Pixels.data()));
-
-        // For normal maps, force the alpha of mip 0 to 1.0 (T = 1: no variance).
-        // JPG/PNG normal maps don't carry a meaningful alpha — we own it now.
-        if (_IsNormalMap) {
-            for (size_t i = 0; i < Mip0.Pixels.size(); i += 4)
-                Mip0.Pixels[i + 3] = 255;
-        }
-        Mips.push_back(std::move(Mip0));
-
-        // Build the full mip chain. Stop when both dims hit 1.
-        u32 W = Width, H = Height;
-        float MinT = 1.0f;
-        while (W > 1 || H > 1) {
-            u32 PrevW = W;
-            u32 PrevH = H;
-            W = std::max(1u, W / 2);
-            H = std::max(1u, H / 2);
-
-            FMipData Next;
-            Next.Width  = W;
-            Next.Height = H;
-            Next.Pixels.resize(static_cast<size_t>(W) * H * 4);
-
-            const auto& Prev = Mips.back();
-            if (_IsNormalMap) {
-                float AvgT = DownsampleNormal2x2(Prev.Pixels.data(), PrevW, PrevH,
-                                                 Next.Pixels.data(), W, H);
-                MinT = std::min(MinT, AvgT);
-            } else {
-                DownsampleColor2x2(Prev.Pixels.data(), PrevW, PrevH,
-                                   Next.Pixels.data(), W, H);
-            }
-            Mips.push_back(std::move(Next));
-        }
-
-        if (_IsNormalMap) {
-            LogInfo("Normal map loaded: " + std::to_string(Width) + "x" + std::to_string(Height) +
-                    ", " + std::to_string(Mips.size()) + " mips, Toksvig minAvg=" +
-                    std::to_string(MinT));
-        } else {
-            LogInfo("Texture loaded: " + std::to_string(Width) + "x" + std::to_string(Height) +
-                    ", " + std::to_string(Mips.size()) + " mips");
-        }
-
-        return Upload(_Device, _CommandQueue, _SRVHeap, Mips, DXGI_FORMAT_R8G8B8A8_UNORM);
+        // Conveniencia sincrona (decode + upload no mesmo thread).
+        return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
     }
 
     FTexture FTexture::CreateDefault(ID3D12Device* _Device, FCommandQueue& _CommandQueue,

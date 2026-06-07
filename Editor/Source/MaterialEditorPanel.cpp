@@ -32,6 +32,15 @@ namespace SmileEditor {
         setMinimumWidth(240);
         setMaximumWidth(320);
         BuildUI();
+
+        // Worker auto-contido (encapsula o proprio thread). Faz o decode CPU fora do
+        // thread de render; o upload D3D12 acontece em OnTextureLoaded (thread principal).
+        qRegisterMetaType<SmileEditor::TexCPUPtr>("SmileEditor::TexCPUPtr");
+        LoadWorker = std::make_unique<TextureLoadWorker>();
+        connect(this, &MaterialEditorPanel::RequestLoad,
+                LoadWorker.get(), &TextureLoadWorker::Process);
+        connect(LoadWorker.get(), &TextureLoadWorker::Loaded,
+                this, &MaterialEditorPanel::OnTextureLoaded);
     }
 
     void MaterialEditorPanel::BuildUI() {
@@ -314,16 +323,49 @@ namespace SmileEditor {
     void MaterialEditorPanel::ApplyTextureToSlot(int _Slot, const QString& _Path) {
         if (!RendererPtr) return;
 
-        auto* Device = RendererPtr->GetDevice().Native();
-        auto& CommandQueue  = RendererPtr->GetCmdQueue();
-        auto& SRVHeap = RendererPtr->GetSRVHeap();
-
-        const std::wstring wPath = _Path.toStdWString();
+        // Assincrono: dispara o decode (CPU) no worker e retorna imediatamente — o
+        // render nao congela. O upload D3D12 e o wire do material acontecem em
+        // OnTextureLoaded (thread principal). A textura atual continua visivel ate la.
         const bool IsNormalMap = (_Slot == 1); // slot index 1 = Normal Map (see kSlots)
-        // Recarregando o slot: devolve o slot SRV da textura anterior ao heap.
+        const quint64 ReqId = ++RequestCounter;
+        SlotRequestId[_Slot]   = ReqId; // pedidos anteriores deste slot ficam obsoletos
+        SlotPendingPath[_Slot] = _Path;
+
+        if (SlotWidgets[_Slot])
+            SlotWidgets[_Slot]->SetPath(QStringLiteral("(carregando…)"));
+
+        emit RequestLoad(ReqId, _Slot, _Path, IsNormalMap);
+    }
+
+    void MaterialEditorPanel::OnTextureLoaded(quint64 _ReqId, int _Slot, SmileEditor::TexCPUPtr _Data) {
+        // Descarta resultados obsoletos (o usuario trocou de textura nesse slot enquanto carregava).
+        if (_Slot < 0 || _Slot >= static_cast<int>(Smile::kMaterialTextureSlots)) return;
+        if (_ReqId != SlotRequestId[_Slot]) return; // resultado obsoleto (slot ja repedido)
+        if (!RendererPtr) return;
+
+        const QString& Path = SlotPendingPath[_Slot];
+
+        if (!_Data || !_Data->Valid()) {
+            // Decode falhou: mantem a textura atual; sinaliza no label.
+            if (SlotWidgets[_Slot]) SlotWidgets[_Slot]->SetPath(QStringLiteral("(falha ao carregar)"));
+            return;
+        }
+
+        auto* Device       = RendererPtr->GetDevice().Native();
+        auto& CommandQueue = RendererPtr->GetCmdQueue();
+        auto& SRVHeap      = RendererPtr->GetSRVHeap();
+
+        // Upload D3D12 (rapido) no thread principal, serializado com o render loop.
+        Smile::FTexture Tex = Smile::FTexture::CreateFromCPU(Device, CommandQueue, SRVHeap, *_Data);
+        if (!Tex.IsValid()) {
+            if (SlotWidgets[_Slot]) SlotWidgets[_Slot]->SetPath(QStringLiteral("(falha no upload)"));
+            return;
+        }
+
+        // So agora devolve o slot SRV da textura anterior (sem flicker para o fallback).
         if (SlotTexture[_Slot].has_value())
             SlotTexture[_Slot]->Release(SRVHeap);
-        SlotTexture[_Slot] = Smile::FTexture::LoadFromFile(Device, CommandQueue, SRVHeap, wPath, IsNormalMap);
+        SlotTexture[_Slot] = std::move(Tex);
 
         SetSlotPointer(_Slot, &SlotTexture[_Slot].value());
         Material.UpdateTextureSlot(Device, SRVHeap, static_cast<Smile::u32>(_Slot), &SlotTexture[_Slot].value());
@@ -331,8 +373,8 @@ namespace SmileEditor {
         Material.UpdateConstants();
 
         if (SlotWidgets[_Slot]) {
-            SlotWidgets[_Slot]->SetThumbnail(QPixmap(_Path));
-            SlotWidgets[_Slot]->SetPath(_Path);
+            SlotWidgets[_Slot]->SetThumbnail(QPixmap(Path));
+            SlotWidgets[_Slot]->SetPath(Path);
         }
     }
 
@@ -341,6 +383,10 @@ namespace SmileEditor {
 
         auto* Device = RendererPtr->GetDevice().Native();
         auto& SRVHeap = RendererPtr->GetSRVHeap();
+
+        // Invalida qualquer load em voo deste slot (o resultado sera descartado).
+        SlotRequestId[_Slot] = ++RequestCounter;
+        SlotPendingPath[_Slot].clear();
 
         // Devolve o slot SRV da textura carregada antes de descarta-la.
         if (SlotTexture[_Slot].has_value())

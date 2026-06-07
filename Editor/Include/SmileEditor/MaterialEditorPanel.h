@@ -5,6 +5,7 @@
 #include <optional>
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/Texture.h"
+#include "SmileEditor/TextureLoadWorker.h"
 
 class QPushButton;
 class QDoubleSpinBox;
@@ -26,7 +27,13 @@ namespace SmileEditor {
 
         bool IsInitialized() const { return RendererPtr != nullptr; }
 
+    signals:
+        // Dispara o decode no worker thread (conectado a TextureLoadWorker::Process).
+        void RequestLoad(quint64 ReqId, int Slot, QString Path, bool IsNormalMap);
+
     private slots:
+        // Recebe os dados CPU do worker (no thread principal) e faz o upload D3D12.
+        void OnTextureLoaded(quint64 ReqId, int Slot, SmileEditor::TexCPUPtr Data);
         void OnBrowseSlot(int Slot);
         void OnClearSlot(int Slot);
         void OnPickBaseColor();
@@ -63,9 +70,18 @@ namespace SmileEditor {
 
         Smile::Renderer* RendererPtr = nullptr;
 
+        // Carregamento assincrono de textura: o worker encapsula seu proprio thread e
+        // faz o decode (CPU); o upload D3D12 acontece em OnTextureLoaded (thread principal).
+        std::unique_ptr<TextureLoadWorker> LoadWorker;
+        quint64            RequestCounter = 0;
+        // Ultimo ReqId emitido por slot — resultados mais antigos sao descartados (supersede).
+        quint64            SlotRequestId[Smile::kMaterialTextureSlots] = {};
+        // Path do pedido mais recente por slot (para thumbnail/label ao concluir).
+        QString            SlotPendingPath[Smile::kMaterialTextureSlots];
+
         Smile::FMaterial               Material;
-        std::optional<Smile::FTexture> SlotTexture[Smile::kMaterialTextureSlots]; 
-        Smile::FTexture                FallbackTexture[Smile::kMaterialTextureSlots]; 
+        std::optional<Smile::FTexture> SlotTexture[Smile::kMaterialTextureSlots];
+        Smile::FTexture                FallbackTexture[Smile::kMaterialTextureSlots];
 
         TextureSlotWidget* SlotWidgets[Smile::kMaterialTextureSlots] = {};
 

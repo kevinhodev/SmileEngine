@@ -11,6 +11,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/LucideIcon.h
     Include/SmileEditor/EnvironmentWindow.h
     Include/SmileEditor/TextureSlotWidget.h
+    Include/SmileEditor/TextureLoadWorker.h
     Include/SmileEditor/MaterialEditorPanel.h
     Include/SmileEditor/EnvironmentPanel.h
     Include/SmileEditor/SkyCloudPanel.h
@@ -26,6 +27,7 @@ set(EDITOR_SOURCES
     Source/LucideIcon.cpp
     Source/EnvironmentWindow.cpp
     Source/TextureSlotWidget.cpp
+    Source/TextureLoadWorker.cpp
     Source/MaterialEditorPanel.cpp
     Source/EnvironmentPanel.cpp
     Source/SkyCloudPanel.cpp
