@@ -93,6 +93,20 @@ namespace SmileEditor {
         ShowSkyboxCheck->setChecked(true);
         ParamsLayout->addRow(QString(), ShowSkyboxCheck);
 
+        BloomIntensitySpin = new QDoubleSpinBox(ParamsGroup);
+        BloomIntensitySpin->setRange(0.0, 2.0);
+        BloomIntensitySpin->setSingleStep(0.01);
+        BloomIntensitySpin->setDecimals(3);
+        BloomIntensitySpin->setValue(0.04);
+        ParamsLayout->addRow(tr("Bloom"), BloomIntensitySpin);
+
+        ExposureSpin = new QDoubleSpinBox(ParamsGroup);
+        ExposureSpin->setRange(0.01, 10.0);
+        ExposureSpin->setSingleStep(0.05);
+        ExposureSpin->setDecimals(2);
+        ExposureSpin->setValue(1.0);
+        ParamsLayout->addRow(tr("Exposição"), ExposureSpin);
+
         Layout->addWidget(ParamsGroup);
 
         auto* WaterGroup  = new QGroupBox(tr("Água"), Container);
@@ -228,6 +242,12 @@ namespace SmileEditor {
                 static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged),
                 this, &EnvironmentPanel::OnRotationChanged);
         connect(ShowSkyboxCheck, &QCheckBox::toggled, this, &EnvironmentPanel::OnShowSkyboxToggled);
+        connect(BloomIntensitySpin,
+                static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged),
+                this, &EnvironmentPanel::OnBloomIntensityChanged);
+        connect(ExposureSpin,
+                static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged),
+                this, &EnvironmentPanel::OnExposureChanged);
         connect(WaterDebugCombo,
                 static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
                 this, &EnvironmentPanel::OnWaterDebugModeChanged);
@@ -277,6 +297,8 @@ namespace SmileEditor {
         IntensitySpin  ->setValue(RendererPtr->GetIBLIntensity());
         RotationSpin   ->setValue(RendererPtr->GetIBLRotation() / Smile::ToRad);
         ShowSkyboxCheck->setChecked(RendererPtr->GetShowSkybox());
+        BloomIntensitySpin->setValue(RendererPtr->GetBloomIntensity());
+        ExposureSpin      ->setValue(RendererPtr->GetExposure());
         WaterDebugCombo->setCurrentIndex(static_cast<int>(RendererPtr->GetWater().GetDebugMode()));
         FoamCheck        ->setChecked(RendererPtr->GetWater().GetUseFoam());
         FoamCoverageSpin ->setValue(RendererPtr->GetWater().GetFoamCoverage());
@@ -402,5 +424,13 @@ namespace SmileEditor {
 
     void EnvironmentPanel::OnInScatterDensityChanged(double _Value) {
         if (RendererPtr) RendererPtr->GetWater().SetInScatterDensity(static_cast<float>(_Value));
+    }
+
+    void EnvironmentPanel::OnBloomIntensityChanged(double _Value) {
+        if (RendererPtr) RendererPtr->SetBloomIntensity(static_cast<float>(_Value));
+    }
+
+    void EnvironmentPanel::OnExposureChanged(double _Value) {
+        if (RendererPtr) RendererPtr->SetExposure(static_cast<float>(_Value));
     }
 }

@@ -58,16 +58,22 @@ namespace Smile {
     }
 
     void FPostProcessor::CreateBloomTextures(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height) {
-        BloomWidth  = std::max(1u, Width / 4);
-        BloomHeight = std::max(1u, Height / 4);
+        BloomWidths[0]  = std::max(1u, Width / 4);
+        BloomHeights[0] = std::max(1u, Height / 4);
+        for (int i = 1; i < kNumBloomLevels; ++i) {
+            BloomWidths[i]  = std::max(1u, BloomWidths[i-1] / 2);
+            BloomHeights[i] = std::max(1u, BloomHeights[i-1] / 2);
+        }
 
-        BloomBuffer.Reset();
-        BloomBlurBuffer.Reset();
+        for (int i = 0; i < kNumBloomLevels; ++i) {
+            BloomBuffers[i].Reset();
+        }
+        for (int i = 0; i < kNumBloomLevels - 1; ++i) {
+            BloomBlurBuffers[i].Reset();
+        }
 
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = BloomWidth;
-        Desc.Height           = BloomHeight;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
         Desc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -84,30 +90,42 @@ namespace Smile {
         ClearValue.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
 
-        SMILE_HR(Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&BloomBuffer)));
+        for (int i = 0; i < kNumBloomLevels; ++i) {
+            Desc.Width  = BloomWidths[i];
+            Desc.Height = BloomHeights[i];
+            SMILE_HR(Device->CreateCommittedResource(
+                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
+                IID_PPV_ARGS(&BloomBuffers[i])));
+        }
 
-        SMILE_HR(Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&BloomBlurBuffer)));
+        for (int i = 0; i < kNumBloomLevels - 1; ++i) {
+            Desc.Width  = BloomWidths[i];
+            Desc.Height = BloomHeights[i];
+            SMILE_HR(Device->CreateCommittedResource(
+                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
+                IID_PPV_ARGS(&BloomBlurBuffers[i])));
+        }
 
-        // Create RTVs
+        // Create RTVs (5 for BloomBuffers, 4 for BloomBlurBuffers)
         if (!BloomRTVHeap.Native())
-            BloomRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
+            BloomRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 9, false);
 
         D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
         RTVDesc.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-        Device->CreateRenderTargetView(BloomBuffer.Get(), &RTVDesc, BloomRTVHeap.CpuHandle(0));
-        Device->CreateRenderTargetView(BloomBlurBuffer.Get(), &RTVDesc, BloomRTVHeap.CpuHandle(1));
+        
+        for (int i = 0; i < kNumBloomLevels; ++i) {
+            Device->CreateRenderTargetView(BloomBuffers[i].Get(), &RTVDesc, BloomRTVHeap.CpuHandle(i));
+        }
+        for (int i = 0; i < kNumBloomLevels - 1; ++i) {
+            Device->CreateRenderTargetView(BloomBlurBuffers[i].Get(), &RTVDesc, BloomRTVHeap.CpuHandle(5 + i));
+        }
 
-        // Create SRVs (allocating contiguous table if not already allocated)
-        if (BloomSRVSlot == kInvalidSlot)
-            BloomSRVSlot = SRVHeap.Allocate(2);
-        BloomBlurSRVSlot = BloomSRVSlot + 1;
+        // Create SRVs (allocating contiguous table of size 17: 5 BloomBuffers + 4 BloomBlurBuffers + 8 upsample tables)
+        if (BloomSRVBase == kInvalidSlot)
+            BloomSRVBase = SRVHeap.Allocate(17);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -115,17 +133,48 @@ namespace Smile {
         SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         SRVDesc.Texture2D.MipLevels     = 1;
 
-        SRVHeap.CreateSRV(Device, BloomBuffer.Get(), SRVDesc, BloomSRVSlot);
-        SRVHeap.CreateSRV(Device, BloomBlurBuffer.Get(), SRVDesc, BloomBlurSRVSlot);
+        for (int i = 0; i < kNumBloomLevels; ++i) {
+            SRVHeap.CreateSRV(Device, BloomBuffers[i].Get(), SRVDesc, BloomSRVBase + i);
+        }
+        for (int i = 0; i < kNumBloomLevels - 1; ++i) {
+            SRVHeap.CreateSRV(Device, BloomBlurBuffers[i].Get(), SRVDesc, BloomSRVBase + 5 + i);
+        }
+
+        // Upsample tables: 2 SRVs each (t0 = LowRes, t1 = HighRes)
+        // Up 3 (i=3): LowRes = BloomBuffers[4] (slot 4), HighRes = BloomBuffers[3] (slot 3)
+        SRVHeap.CreateSRV(Device, BloomBuffers[4].Get(), SRVDesc, BloomSRVBase + 9 + 3 * 2);
+        SRVHeap.CreateSRV(Device, BloomBuffers[3].Get(), SRVDesc, BloomSRVBase + 9 + 3 * 2 + 1);
+
+        // Up 2 (i=2): LowRes = BloomBlurBuffers[3] (slot 8), HighRes = BloomBuffers[2] (slot 2)
+        SRVHeap.CreateSRV(Device, BloomBlurBuffers[3].Get(), SRVDesc, BloomSRVBase + 9 + 2 * 2);
+        SRVHeap.CreateSRV(Device, BloomBuffers[2].Get(), SRVDesc, BloomSRVBase + 9 + 2 * 2 + 1);
+
+        // Up 1 (i=1): LowRes = BloomBlurBuffers[2] (slot 7), HighRes = BloomBuffers[1] (slot 1)
+        SRVHeap.CreateSRV(Device, BloomBlurBuffers[2].Get(), SRVDesc, BloomSRVBase + 9 + 1 * 2);
+        SRVHeap.CreateSRV(Device, BloomBuffers[1].Get(), SRVDesc, BloomSRVBase + 9 + 1 * 2 + 1);
+
+        // Up 0 (i=0): LowRes = BloomBlurBuffers[1] (slot 6), HighRes = BloomBuffers[0] (slot 0)
+        SRVHeap.CreateSRV(Device, BloomBlurBuffers[1].Get(), SRVDesc, BloomSRVBase + 9 + 0 * 2);
+        SRVHeap.CreateSRV(Device, BloomBuffers[0].Get(), SRVDesc, BloomSRVBase + 9 + 0 * 2 + 1);
+
+        // Force tonemap table to update next frame
+        CachedHDRForTable = nullptr;
 
         // Update constant buffers with new texture sizes
-        if (MappedBlurH) {
-            MappedBlurH[0] = 1.0f / static_cast<float>(BloomWidth);
-            MappedBlurH[1] = 0.0f;
-        }
-        if (MappedBlurV) {
-            MappedBlurV[0] = 0.0f;
-            MappedBlurV[1] = 1.0f / static_cast<float>(BloomHeight);
+        if (MappedParamsBase) {
+            // Downsample params: Down 1 (L0 -> L1, i=1) uses L0 texel size.
+            for (int i = 1; i < kNumBloomLevels; ++i) {
+                float* DParams = reinterpret_cast<float*>(MappedParamsBase + 256 + i * 256);
+                DParams[0] = 1.0f / static_cast<float>(BloomWidths[i - 1]);
+                DParams[1] = 1.0f / static_cast<float>(BloomHeights[i - 1]);
+            }
+            // Upsample params: Up i (L[i+1] -> L[i]) uses FilterRadius relative to L[i]
+            for (int i = 0; i < kNumBloomLevels - 1; ++i) {
+                float* UParams = reinterpret_cast<float*>(MappedParamsBase + 256 + kNumBloomLevels * 256 + i * 256);
+                UParams[0] = 0.0f; // unused padding
+                UParams[1] = 0.0f; // unused padding
+                UParams[2] = 1.0f / static_cast<float>(BloomWidths[i]); // FilterRadius
+            }
         }
     }
 
@@ -179,7 +228,8 @@ namespace Smile {
     void FPostProcessor::BuildPSOs(ID3D12Device* Device) {
         auto VS = LoadShaderBlob("PostProcess.vs_6_0.cso");
         auto PSExtract = LoadShaderBlob("BloomExtract.ps_6_0.cso");
-        auto PSBlur    = LoadShaderBlob("BloomBlur.ps_6_0.cso");
+        auto PSDownsample = LoadShaderBlob("BloomDownsample.ps_6_0.cso");
+        auto PSUpsample   = LoadShaderBlob("BloomUpsample.ps_6_0.cso");
         auto PSTonemap = LoadShaderBlob("FinalTonemap.ps_6_0.cso");
 
         D3D12_RASTERIZER_DESC Raster{};
@@ -211,11 +261,15 @@ namespace Smile {
         PSODesc.PS = { PSExtract.data(), PSExtract.size() };
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&ExtractPSO)));
 
-        // 2. Bloom Blur PSO
-        PSODesc.PS = { PSBlur.data(), PSBlur.size() };
-        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&BlurPSO)));
+        // 2. Bloom Downsample PSO
+        PSODesc.PS = { PSDownsample.data(), PSDownsample.size() };
+        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&DownsamplePSO)));
 
-        // 3. Final Tonemap PSO (outputs to SDR backbuffer of SwapChain)
+        // 3. Bloom Upsample PSO
+        PSODesc.PS = { PSUpsample.data(), PSUpsample.size() };
+        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&UpsamplePSO)));
+
+        // 4. Final Tonemap PSO (outputs to SDR backbuffer of SwapChain)
         PSODesc.PS = { PSTonemap.data(), PSTonemap.size() };
         PSODesc.RTVFormats[0] = FSwapChain::kFormat; // R8G8B8A8_UNORM
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&TonemapPSO)));
@@ -227,7 +281,7 @@ namespace Smile {
 
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = 256;
+        Desc.Width            = 4096; // Extended to fit PostParams and Downsample/Upsample level params
         Desc.Height           = 1;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
@@ -239,21 +293,13 @@ namespace Smile {
         SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
                  D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBParams)));
         D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CBParams->Map(0, &NoRead, reinterpret_cast<void**>(&MappedParams)));
+        SMILE_HR(CBParams->Map(0, &NoRead, reinterpret_cast<void**>(&MappedParamsBase)));
         
+        MappedParams = reinterpret_cast<PostParams*>(MappedParamsBase);
+
         // Default parameters: bloom intensity = 0.04f, exposure = 1.0f
         MappedParams->BloomIntensity = 0.04f;
         MappedParams->Exposure       = 1.0f;
-
-        // CBBlurH
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBBlurH)));
-        SMILE_HR(CBBlurH->Map(0, &NoRead, reinterpret_cast<void**>(&MappedBlurH)));
-
-        // CBBlurV
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBBlurV)));
-        SMILE_HR(CBBlurV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedBlurV)));
     }
 
     void FPostProcessor::Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
@@ -271,28 +317,29 @@ namespace Smile {
         FullScissor.right  = static_cast<LONG>(Width);
         FullScissor.bottom = static_cast<LONG>(Height);
 
-        D3D12_VIEWPORT BloomVP{};
-        BloomVP.Width    = static_cast<FLOAT>(BloomWidth);
-        BloomVP.Height   = static_cast<FLOAT>(BloomHeight);
-        BloomVP.MinDepth = 0.0f;
-        BloomVP.MaxDepth = 1.0f;
-
-        D3D12_RECT BloomScissor{};
-        BloomScissor.right  = static_cast<LONG>(BloomWidth);
-        BloomScissor.bottom = static_cast<LONG>(BloomHeight);
+        CommandList->SetGraphicsRootSignature(RootSig.Get());
 
         // --- STEP 1: Bloom Extraction ---
-        TransitionResource(CommandList, BloomBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        TransitionResource(CommandList, BloomBuffers[0].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        CommandList->SetGraphicsRootSignature(RootSig.Get());
+        D3D12_VIEWPORT VP0{};
+        VP0.Width    = static_cast<FLOAT>(BloomWidths[0]);
+        VP0.Height   = static_cast<FLOAT>(BloomHeights[0]);
+        VP0.MinDepth = 0.0f;
+        VP0.MaxDepth = 1.0f;
+
+        D3D12_RECT Scissor0{};
+        Scissor0.right  = static_cast<LONG>(BloomWidths[0]);
+        Scissor0.bottom = static_cast<LONG>(BloomHeights[0]);
+
         CommandList->SetPipelineState(ExtractPSO.Get());
-        CommandList->RSSetViewports(1, &BloomVP);
-        CommandList->RSSetScissorRects(1, &BloomScissor);
+        CommandList->RSSetViewports(1, &VP0);
+        CommandList->RSSetScissorRects(1, &Scissor0);
 
         auto BloomRTV0 = BloomRTVHeap.CpuHandle(0);
         CommandList->OMSetRenderTargets(1, &BloomRTV0, FALSE, nullptr);
 
-        // Bind CBParams (though not strictly needed by extraction, keeps layout simple)
+        // Bind CBParams (tonemap settings at offset 0)
         CommandList->SetGraphicsRootConstantBufferView(0, CBParams->GetGPUVirtualAddress());
         // Bind HDR texture as input (slot t0)
         CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(HDRSRVSlot));
@@ -303,53 +350,82 @@ namespace Smile {
         CommandList->IASetIndexBuffer(nullptr);
         CommandList->DrawInstanced(3, 1, 0, 0);
 
-        TransitionResource(CommandList, BloomBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        TransitionResource(CommandList, BloomBuffers[0].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-        // --- STEP 2: Bloom Horizontal Blur ---
-        TransitionResource(CommandList, BloomBlurBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        // --- STEP 2: Downsampling Chain ---
+        CommandList->SetPipelineState(DownsamplePSO.Get());
+        for (int i = 1; i < kNumBloomLevels; ++i) {
+            TransitionResource(CommandList, BloomBuffers[i].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        CommandList->SetPipelineState(BlurPSO.Get());
-        auto BloomRTV1 = BloomRTVHeap.CpuHandle(1);
-        CommandList->OMSetRenderTargets(1, &BloomRTV1, FALSE, nullptr);
+            D3D12_VIEWPORT VP{};
+            VP.Width    = static_cast<FLOAT>(BloomWidths[i]);
+            VP.Height   = static_cast<FLOAT>(BloomHeights[i]);
+            VP.MinDepth = 0.0f;
+            VP.MaxDepth = 1.0f;
 
-        // Bind Horizontal blur CB
-        CommandList->SetGraphicsRootConstantBufferView(0, CBBlurH->GetGPUVirtualAddress());
-        // Bind extracted BloomBuffer (slot t0)
-        CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(BloomSRVSlot));
+            D3D12_RECT Scissor{};
+            Scissor.right  = static_cast<LONG>(BloomWidths[i]);
+            Scissor.bottom = static_cast<LONG>(BloomHeights[i]);
 
-        CommandList->DrawInstanced(3, 1, 0, 0);
+            CommandList->RSSetViewports(1, &VP);
+            CommandList->RSSetScissorRects(1, &Scissor);
 
-        TransitionResource(CommandList, BloomBlurBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            auto RTV = BloomRTVHeap.CpuHandle(i);
+            CommandList->OMSetRenderTargets(1, &RTV, FALSE, nullptr);
 
-        // --- STEP 3: Bloom Vertical Blur ---
-        TransitionResource(CommandList, BloomBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            // Bind constant buffer view for downsample level parameters
+            u64 CBOffset = 256 + i * 256;
+            CommandList->SetGraphicsRootConstantBufferView(0, CBParams->GetGPUVirtualAddress() + CBOffset);
+            // Bind BloomBuffers[i - 1] as input
+            CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(BloomSRVBase + (i - 1)));
 
-        CommandList->OMSetRenderTargets(1, &BloomRTV0, FALSE, nullptr);
+            CommandList->DrawInstanced(3, 1, 0, 0);
 
-        // Bind Vertical blur CB
-        CommandList->SetGraphicsRootConstantBufferView(0, CBBlurV->GetGPUVirtualAddress());
-        // Bind horizontally blurred BloomBlurBuffer (slot t0)
-        CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(BloomBlurSRVSlot));
+            TransitionResource(CommandList, BloomBuffers[i].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
 
-        CommandList->DrawInstanced(3, 1, 0, 0);
+        // --- STEP 3: Upsampling Chain ---
+        CommandList->SetPipelineState(UpsamplePSO.Get());
+        for (int i = kNumBloomLevels - 2; i >= 0; --i) {
+            TransitionResource(CommandList, BloomBlurBuffers[i].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        TransitionResource(CommandList, BloomBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            D3D12_VIEWPORT VP{};
+            VP.Width    = static_cast<FLOAT>(BloomWidths[i]);
+            VP.Height   = static_cast<FLOAT>(BloomHeights[i]);
+            VP.MinDepth = 0.0f;
+            VP.MaxDepth = 1.0f;
+
+            D3D12_RECT Scissor{};
+            Scissor.right  = static_cast<LONG>(BloomWidths[i]);
+            Scissor.bottom = static_cast<LONG>(BloomHeights[i]);
+
+            CommandList->RSSetViewports(1, &VP);
+            CommandList->RSSetScissorRects(1, &Scissor);
+
+            auto RTV = BloomRTVHeap.CpuHandle(5 + i);
+            CommandList->OMSetRenderTargets(1, &RTV, FALSE, nullptr);
+
+            // Bind constant buffer view for upsample level parameters
+            u64 CBOffset = 256 + kNumBloomLevels * 256 + i * 256;
+            CommandList->SetGraphicsRootConstantBufferView(0, CBParams->GetGPUVirtualAddress() + CBOffset);
+
+            // Bind the descriptor table for upsample level inputs (t0 = LowRes, t1 = HighRes)
+            u32 TableSlot = BloomSRVBase + 9 + i * 2;
+            CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(TableSlot));
+
+            CommandList->DrawInstanced(3, 1, 0, 0);
+
+            TransitionResource(CommandList, BloomBlurBuffers[i].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
 
         // --- STEP 4: Final Tonemap & Present ---
-        // Output goes to SwapChain backbuffer RTV (passed in)
         CommandList->SetPipelineState(TonemapPSO.Get());
         CommandList->RSSetViewports(1, &FullVP);
         CommandList->RSSetScissorRects(1, &FullScissor);
         CommandList->OMSetRenderTargets(1, &SwapChainRTV, FALSE, nullptr);
 
-        // Bind parameters (Exposure + BloomIntensity)
         CommandList->SetGraphicsRootConstantBufferView(0, CBParams->GetGPUVirtualAddress());
 
-        // Tabela contigua [HDR (t0), Bloom (t1)] exigida pela root signature do tonemap.
-        // Em vez de CopyDescriptors (que leria do heap shader-visible — invalido: ele eh
-        // CPU-write-only, erro #654), criamos os SRVs DIRETO nos slots da tabela —
-        // escrever descritor num heap shader-visible eh permitido. So reconstruimos quando
-        // o recurso HDR muda (init/resize, ambos com flush antes), nunca todo frame.
         if (PostTableStart == kInvalidSlot)
             PostTableStart = SRVHeap.Allocate(2);
 
@@ -363,8 +439,8 @@ namespace Smile {
             SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             SRVDesc.Texture2D.MipLevels     = 1;
 
-            SRVHeap.CreateSRV(Device, ResolvedHDR,       SRVDesc, PostTableStart);     // t0 = HDR
-            SRVHeap.CreateSRV(Device, BloomBuffer.Get(), SRVDesc, PostTableStart + 1); // t1 = Bloom
+            SRVHeap.CreateSRV(Device, ResolvedHDR, SRVDesc, PostTableStart); // t0 = HDR
+            SRVHeap.CreateSRV(Device, BloomBlurBuffers[0].Get(), SRVDesc, PostTableStart + 1); // t1 = Bloom (Blur0)
             Device->Release();
 
             CachedHDRForTable = ResolvedHDR;

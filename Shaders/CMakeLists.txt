@@ -43,6 +43,8 @@ smile_compile_shader(Water/OceanNormalMip.cs.hlsl         cs_6_0 main SHADER_OUT
 smile_compile_shader(Tonemap/PostProcess.vs.hlsl          vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Tonemap/BloomExtract.ps.hlsl         ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Tonemap/BloomBlur.ps.hlsl            ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Tonemap/BloomDownsample.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Tonemap/BloomUpsample.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Tonemap/FinalTonemap.ps.hlsl         ps_6_0 main SHADER_OUTPUTS)
 
 
@@ -86,6 +88,8 @@ add_custom_target(Shaders
         Tonemap/PostProcess.vs.hlsl
         Tonemap/BloomExtract.ps.hlsl
         Tonemap/BloomBlur.ps.hlsl
+        Tonemap/BloomDownsample.ps.hlsl
+        Tonemap/BloomUpsample.ps.hlsl
         Tonemap/FinalTonemap.ps.hlsl
 )
 

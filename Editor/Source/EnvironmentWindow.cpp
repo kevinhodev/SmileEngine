@@ -455,6 +455,12 @@ namespace SmileEditor {
         Layout->addWidget(MakeToggleRow(tr("Mostrar skybox"), &ShowSkyboxCheck, true, [this](bool Checked) {
             if (RendererPtr) RendererPtr->SetShowSkybox(Checked);
         }));
+        Layout->addWidget(MakeNumericRow(tr("Bloom"), 0.0, 2.0, 0.01, 3, 0.04, QString(), &BloomIntensitySpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetBloomIntensity(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Exposição"), 0.01, 10.0, 0.05, 2, 1.0, QString(), &ExposureSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetExposure(static_cast<float>(Value));
+        }));
         return Body;
     }
 
@@ -606,6 +612,8 @@ namespace SmileEditor {
         if (IBLIntensitySpin) IBLIntensitySpin->setValue(RendererPtr->GetIBLIntensity());
         if (IBLRotationSpin) IBLRotationSpin->setValue(RendererPtr->GetIBLRotation() / Smile::ToRad);
         if (ShowSkyboxCheck) ShowSkyboxCheck->setChecked(RendererPtr->GetShowSkybox());
+        if (BloomIntensitySpin) BloomIntensitySpin->setValue(RendererPtr->GetBloomIntensity());
+        if (ExposureSpin) ExposureSpin->setValue(RendererPtr->GetExposure());
     }
 
     void EnvironmentWindow::SetDefaults() {
@@ -647,6 +655,8 @@ namespace SmileEditor {
         if (IBLIntensitySpin) IBLIntensitySpin->setValue(1.0);
         if (IBLRotationSpin) IBLRotationSpin->setValue(0.0);
         if (ShowSkyboxCheck) ShowSkyboxCheck->setChecked(true);
+        if (BloomIntensitySpin) BloomIntensitySpin->setValue(0.04);
+        if (ExposureSpin) ExposureSpin->setValue(1.0);
     }
 
     void EnvironmentWindow::ApplyCloudAltitude() {

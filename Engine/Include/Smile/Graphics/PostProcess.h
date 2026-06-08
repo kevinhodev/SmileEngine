@@ -21,6 +21,10 @@ namespace Smile {
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      ID3D12Resource* ResolvedHDR, D3D12_CPU_DESCRIPTOR_HANDLE SwapChainRTV,
                      u32 HDRSRVSlot, u32 Width, u32 Height);
+        void SetBloomIntensity(f32 Intensity) { if (MappedParams) MappedParams->BloomIntensity = Intensity; }
+        f32  GetBloomIntensity() const        { return MappedParams ? MappedParams->BloomIntensity : 0.04f; }
+        void SetExposure(f32 Exposure)        { if (MappedParams) MappedParams->Exposure = Exposure; }
+        f32  GetExposure() const              { return MappedParams ? MappedParams->Exposure : 1.0f; }
 
     private:
         void CreateBloomTextures(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
@@ -30,32 +34,29 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> ExtractPSO;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> BlurPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> DownsamplePSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> UpsamplePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> TonemapPSO;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> BloomBuffer;
-        Microsoft::WRL::ComPtr<ID3D12Resource> BloomBlurBuffer;
+        static constexpr int kNumBloomLevels = 5;
+        Microsoft::WRL::ComPtr<ID3D12Resource> BloomBuffers[kNumBloomLevels];
+        Microsoft::WRL::ComPtr<ID3D12Resource> BloomBlurBuffers[kNumBloomLevels - 1];
         FDescriptorHeap        BloomRTVHeap;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
-        u32 BloomSRVSlot = kInvalidSlot;
-        u32 BloomBlurSRVSlot = kInvalidSlot;
+        u32 BloomSRVBase = kInvalidSlot; // Contiguous block of SRV slots for all buffers
 
         // Tabela contigua [HDR(t0), Bloom(t1)] do tonemap. Construida via CreateSRV
         // direto nos slots (sem CopyDescriptors). Reconstruida so quando o HDR muda.
         u32 PostTableStart = kInvalidSlot;
         ID3D12Resource* CachedHDRForTable = nullptr;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> CBParams; // For PostParams (Exposure, BloomIntensity)
+        Microsoft::WRL::ComPtr<ID3D12Resource> CBParams; // For PostParams and level params (Exposure, BloomIntensity, etc.)
+        u8* MappedParamsBase = nullptr;
         PostParams* MappedParams = nullptr;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> CBBlurH;  // Direction H (1/w, 0)
-        Microsoft::WRL::ComPtr<ID3D12Resource> CBBlurV;  // Direction V (0, 1/h)
-        float* MappedBlurH = nullptr;
-        float* MappedBlurV = nullptr;
-
-        u32 BloomWidth = 0;
-        u32 BloomHeight = 0;
+        u32 BloomWidths[kNumBloomLevels] = {};
+        u32 BloomHeights[kNumBloomLevels] = {};
         bool Initialized = false;
     };
 }

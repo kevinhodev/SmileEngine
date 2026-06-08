@@ -114,5 +114,7 @@ namespace SmileEditor {
         QDoubleSpinBox* IBLIntensitySpin = nullptr;
         QDoubleSpinBox* IBLRotationSpin = nullptr;
         QCheckBox* ShowSkyboxCheck = nullptr;
+        QDoubleSpinBox* BloomIntensitySpin = nullptr;
+        QDoubleSpinBox* ExposureSpin = nullptr;
     };
 }

@@ -43,6 +43,8 @@ namespace SmileEditor {
         void OnBumpStrengthChanged(double Value);
         void OnFogDensityChanged(double Value);
         void OnInScatterDensityChanged(double Value);
+        void OnBloomIntensityChanged(double Value);
+        void OnExposureChanged(double Value);
 
     private:
         void BuildUI();
@@ -69,5 +71,7 @@ namespace SmileEditor {
         QDoubleSpinBox* BumpStrengthSpin   = nullptr;
         QDoubleSpinBox* FogDensitySpin      = nullptr;
         QDoubleSpinBox* InScatterDensitySpin = nullptr;
+        QDoubleSpinBox* BloomIntensitySpin = nullptr;
+        QDoubleSpinBox* ExposureSpin       = nullptr;
     };
 }

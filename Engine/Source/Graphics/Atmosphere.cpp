@@ -110,7 +110,7 @@ namespace Smile {
         // ~0.27 deg for visibility); the wide soft glare (w) gives the game-like
         // "big sun" look without a bloom post-process. Tuned in the editor later.
         const f32 SunDiskHalfAngleRad = 0.7f * 3.14159265358979f / 180.0f;
-        CPUConstants.SunDisk          = { std::cos(SunDiskHalfAngleRad), 30.0f, 22.0f, 4.0f };
+        CPUConstants.SunDisk          = { std::cos(SunDiskHalfAngleRad), 30.0f, 22.0f, 0.0f };
         CPUConstants.InvViewProjNoTrans = Mat44::Identity();
 
         CreateConstantBuffer(_Device);

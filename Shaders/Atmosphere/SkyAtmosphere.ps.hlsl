@@ -36,12 +36,16 @@ float4 main(PSInput input) : SV_TARGET {
     float  cosToSun = dot(viewDir, sunDir);
     float3 sunTrans = SampleTransmittanceToTop(TransmittanceLUT, kViewHeight, dot(up, sunDir));
 
+    // Horizon occlusion check to prevent sun rendering under/through the ground.
+    //float  cosHorizon = -sqrt(max(0.0f, kViewHeight * kViewHeight - kBottomR * kBottomR)) / max(kViewHeight, 1e-4f);
+    //float  sunVisible = saturate((dot(up, sunDir) - cosHorizon) * 100.0f) * saturate((viewZenithCos - cosHorizon) * 100.0f);
+
     // Bright near-physical core disk.
     float core = smoothstep(kSunDiskCos, lerp(kSunDiskCos, 1.0f, 0.5f), cosToSun);
     // Wide soft glare: pow falloff that fades over a few degrees around the sun.
     float glare = pow(saturate(cosToSun), 350.0f);
 
-    L += sunTrans * (kSunDiskInt * core + kSunGlareInt * glare);
+    L += sunVisible * sunTrans * (kSunDiskInt * core + kSunGlareInt * glare);
 
     return float4(L, 1.0f);
 }

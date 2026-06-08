@@ -89,6 +89,12 @@ namespace Smile {
         Vec3 GetSunColor()     const         { return SunColorRGB; }
         f32  GetSunIntensity() const         { return SunIntensity; }
 
+        // Post-processing controls
+        void SetBloomIntensity(f32 V)        { PostProcessor.SetBloomIntensity(V); }
+        f32  GetBloomIntensity() const       { return PostProcessor.GetBloomIntensity(); }
+        void SetExposure(f32 V)              { PostProcessor.SetExposure(V); }
+        f32  GetExposure() const             { return PostProcessor.GetExposure(); }
+
         // Scene depth exposed as an SRV (R32_FLOAT) for the atmosphere/cloud passes.
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
