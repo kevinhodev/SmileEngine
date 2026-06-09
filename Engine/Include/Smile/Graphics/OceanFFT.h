@@ -11,38 +11,36 @@
 #include <vector>
 
 namespace Smile {
-    // Simulacao FFT do oceano (Tessendorf) — agora 100% GPU compute em 256x256
-    // (era 64x64 na CPU). O espectro inicial H0 (Phillips com DIRECAO DE VENTO) +
-    // amplitudes gaussianas e calculado UMA VEZ na CPU e bakado numa textura; a
-    // evolucao temporal H(k,t), a IFFT 2D, o deslocamento, a normal e o Jacobiano
-    // (foam) rodam em compute todo frame.
+    // Simulacao FFT do oceano (Tessendorf) em compute 256x256.
+    // O espectro inicial H0 (Phillips com direcao de vento) e calculado uma vez
+    // na CPU e bakado numa textura; a evolucao temporal H(k,t), a IFFT 2D,
+    // o deslocamento, a normal e o Jacobiano (foam) rodam em compute todo frame.
     //
-    // Pipeline (espelha o tutorial 56_Ocean do Asylum):
+    // Pipeline:
     //   UpdateSpectrum -> FFT(h) -> FFT(D) -> CreateDisplacement -> Gradients -> mips
     //
-    // Saidas (contrato IDENTICO ao caminho CPU antigo, so muda a resolucao):
-    //   OceanTex  256^2 RGBA32F      = (Dx, Dz, -h, J)        — VS desloca + PS foam/parallax
-    //   NormalTex 256^2 RGBA32F+mips = (normal Y-up, ToksvigT) — PS bump de detalhe
+    // Saidas:
+    //   OceanTex  256^2 RGBA32F      = (Dx, Dz, -h, J)         VS desloca + PS foam/parallax
+    //   NormalTex 256^2 RGBA32F+mips = (normal Y-up, ToksvigT) PS bump de detalhe
     class FOceanFFT {
     public:
-        static constexpr u32 kGridSize       = 256; // g_nGridSize
-        static constexpr u32 kLogGridSize    = 8;   // log2(256)
-        static constexpr u32 kNormalMipCount = 9;   // 256,128,64,32,16,8,4,2,1
+        static constexpr u32 kGridSize       = 256;
+        static constexpr u32 kLogGridSize    = 8;
+        static constexpr u32 kNormalMipCount = 9;
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
-        // Tempo de sim por frame. Interno = 0.125*elapsed (CREWaterOcean::FrameUpdate).
+        // Tempo de sim por frame. Interno = 0.125*elapsed para deixar as ondas mais lentas.
         void SetTime(f32 ElapsedTime) { SimTime = 0.125f * ElapsedTime; }
         // Direcao do vento (rad). Se mudar, re-baka H0 no proximo RecordCompute.
         void SetWindDirection(f32 Rad);
         // Velocidade do vento usada no comprimento dominante do espectro Phillips.
         void SetWindSpeed(f32 V);
-        // Amplitude do espectro de Phillips (re-baka H0). Default Cry = 1.0.
+        // Amplitude do espectro de Phillips.
         void SetAmplitude(f32 A);
 
         // Roda o pipeline FFT inteiro na GPU. A command list ja deve ter os descriptor
-        // heaps setados (chamada do RenderFrame). Ao final, OceanTex/NormalTex ficam em
-        // estado shader-resource (PIXEL|NON_PIXEL), prontos p/ o draw da agua.
+        // heaps setados. Ao final, OceanTex/NormalTex ficam em estado shader-resource.
         void RecordCompute(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         u32  SRVSlot() const       { return OceanSRVSlot; }
@@ -51,13 +49,13 @@ namespace Smile {
 
     private:
         using complexF = std::complex<f32>;
-        static constexpr int N = (int)kGridSize;
+        static constexpr int N = static_cast<int>(kGridSize);
         static constexpr int M = N + 1; // H0 e (N+1)^2 p/ a simetria conjugada
 
         // --- Espectro inicial (CPU, 1x ou ao mudar vento/amplitude) ---
         f32  ComputePhillips(f32 kx, f32 ky) const;
         f32  FrandGaussian();
-        void ComputeH0();           // preenche H0StagingMapped (respeitando o RowPitch)
+        void ComputeH0();
 
         // --- Setup GPU ---
         void CreateTextures(ID3D12Device* Device);
@@ -71,16 +69,16 @@ namespace Smile {
             DXGI_FORMAT Format, u32 Width, u32 Height, u32 Mips, bool AllowUAV,
             D3D12_RESOURCE_STATES InitialState);
 
-        // Constantes da Cry / spectrum.
-        f32 Amplitude       = 1.0f;   // m_fA
-        f32 WindSpeed       = 4.0f;   // m/s, controla L = V^2/g no Phillips
-        f32 WindAngle       = 0.0f;   // direcao do vento (rad) — agora ALIMENTADA pelo usuario
-        f32 WorldSize       = 1.0f;   // m_fWorldSizeX/Y
+        // Constantes do espectro.
+        f32 Amplitude       = 1.0f;
+        f32 WindSpeed       = 4.0f;
+        f32 WindAngle       = 0.0f;
+        f32 WorldSize       = 1.0f;
         static constexpr f32 kG = 9.81f;
-        f32 MaxWaveSize     = 200.0f; // m_fMaxWaveSize  -> HeightScale no CB
-        f32 ChoppyWaveScale = 400.0f; // m_fChoppyWaveScale -> ChoppyScale no CB
-        f32 NormalUp        = 8.0f;   // componente "up" da normal (WaterVolumesNormalGenPS)
-        f32 ChoppyJacobianScale = 0.15f; // sensibilidade do foam (ver doc no antigo header)
+        f32 MaxWaveSize     = 200.0f;
+        f32 ChoppyWaveScale = 400.0f;
+        f32 NormalUp        = 8.0f;
+        f32 ChoppyJacobianScale = 0.15f;
         f32 SimTime         = 0.0f;
 
         // RNG deterministico p/ H0 (Box-Muller). Re-semeado a cada ComputeH0.
@@ -97,54 +95,52 @@ namespace Smile {
             f32 JacobianScale;
             f32 _Pad[3];
         };
-        // CB double-buffered: kFramesInFlight copias. MappedCB eh repontado por frame.
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8*      MappedCBBase = nullptr;
         OceanCB* MappedCB     = nullptr;
         u32      FrameSlot    = 0;
 
         // --- Texturas GPU ---
-        Microsoft::WRL::ComPtr<ID3D12Resource> H0Tex;       // (N+1)^2 RGBA32F (h0.xy, omega, 0)
-        Microsoft::WRL::ComPtr<ID3D12Resource> H0Staging;   // UPLOAD mapeado
-        u8*  H0StagingMapped = nullptr;
+        Microsoft::WRL::ComPtr<ID3D12Resource> H0Tex;
+        Microsoft::WRL::ComPtr<ID3D12Resource> H0Staging;
+        u8* H0StagingMapped = nullptr;
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT H0Footprint{};
         bool H0Dirty = true;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> SpecH;       // N^2 RG32F
-        Microsoft::WRL::ComPtr<ID3D12Resource> SpecD;       // N^2 RG32F
-        Microsoft::WRL::ComPtr<ID3D12Resource> FFTTemp;     // N^2 RG32F (scratch transpose)
-        Microsoft::WRL::ComPtr<ID3D12Resource> DispTex;     // N^2 RGBA32F (Dx,Dz,-h,0)
-        Microsoft::WRL::ComPtr<ID3D12Resource> OceanTex;    // N^2 RGBA32F (Dx,Dz,-h,J)
-        Microsoft::WRL::ComPtr<ID3D12Resource> NormalTex;   // N^2 RGBA32F + mips
+        Microsoft::WRL::ComPtr<ID3D12Resource> SpecH;
+        Microsoft::WRL::ComPtr<ID3D12Resource> SpecD;
+        Microsoft::WRL::ComPtr<ID3D12Resource> FFTTemp;
+        Microsoft::WRL::ComPtr<ID3D12Resource> DispTex;
+        Microsoft::WRL::ComPtr<ID3D12Resource> OceanTex;
+        Microsoft::WRL::ComPtr<ID3D12Resource> NormalTex;
 
-        // Estados (single-subresource exceto NormalTex, que e por-mip).
         D3D12_RESOURCE_STATES H0State      = D3D12_RESOURCE_STATE_COPY_DEST;
         D3D12_RESOURCE_STATES SpecHState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES SpecDState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES FFTTempState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES DispState    = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES OceanState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        D3D12_RESOURCE_STATES NormalMipState[kNormalMipCount];
+        D3D12_RESOURCE_STATES NormalMipState[kNormalMipCount]{};
 
         // --- Descritores (no heap compartilhado) ---
-        u32 H0SRVSlot          = 0;             // t0 do UpdateSpectrum
-        u32 SpecSRVPair        = 0;             // [SpecH_srv, SpecD_srv] (createdisp + fft)
+        u32 H0SRVSlot          = 0;
+        u32 SpecSRVPair        = 0;
         u32 FFTTempSRVSlot     = 0;
-        u32 SpecUAVPair        = 0;             // [SpecH_uav, SpecD_uav] (updatespectrum + fft)
+        u32 SpecUAVPair        = 0;
         u32 FFTTempUAVSlot     = 0;
         u32 DispSRVSlot        = 0;
         u32 DispUAVSlot        = 0;
-        u32 GradUAVPair        = 0;             // [OceanTex_uav, NormalTex_mip0_uav]
-        u32 OceanSRVSlot       = 0;             // OceanTex full (consumido pela agua)
-        u32 NormalChainSRVSlot = 0;             // NormalTex chain completa (PS)
-        u32 NormalMipUAVSlot[kNormalMipCount]{}; // UAV por mip (mip0 = GradUAVPair+1)
-        u32 NormalMipSRVSlot[kNormalMipCount]{}; // SRV single-mip dos mips de origem (0..N-2)
+        u32 GradUAVPair        = 0;
+        u32 OceanSRVSlot       = 0;
+        u32 NormalChainSRVSlot = 0;
+        u32 NormalMipUAVSlot[kNormalMipCount]{};
+        u32 NormalMipSRVSlot[kNormalMipCount]{};
 
         // --- Pipelines de compute ---
-        FVolumetricPipeline UpdateSpectrumPSO; // 1 SRV, 2 UAV
-        FVolumetricPipeline FFTPSO;            // 1 SRV, 1 UAV
-        FVolumetricPipeline CreateDispPSO;     // 2 SRV, 1 UAV
-        FVolumetricPipeline GradientsPSO;      // 1 SRV, 2 UAV
-        FVolumetricPipeline NormalMipPSO;      // 1 SRV, 1 UAV
+        FVolumetricPipeline UpdateSpectrumPSO;
+        FVolumetricPipeline FFTPSO;
+        FVolumetricPipeline CreateDispPSO;
+        FVolumetricPipeline GradientsPSO;
+        FVolumetricPipeline NormalMipPSO;
     };
 }

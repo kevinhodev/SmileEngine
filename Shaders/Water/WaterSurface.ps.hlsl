@@ -73,7 +73,8 @@ float WaterAerialFogAmount(float camDist, float3 viewDir) {
     return saturate(max(max(rangeT * grazing * 0.55f, expFog * earlyT), horizonFog) * 0.78f);
 }
 
-// Etapa 0: agua plana. Fresnel mistura cor de fundo <-> reflexao do ceu; + sun specular.
+// Shading da superficie: Fresnel (reflexao IBL <-> corpo), refracao + absorcao + in-scatter,
+// foam, sun-spec, subsurface scattering e aerial fog.
 // Saida em HDR LINEAR (o tonemap ACES e um passe final unico — DOCS/ARCHITECTURE).
 float4 main(VSOutput IN) : SV_Target {
     int debugMode = (int)floor(DebugParams.x + 0.5f);
@@ -84,20 +85,38 @@ float4 main(VSOutput IN) : SV_Target {
     if (debugMode == 2) {
         float tileSize = max(IN.debugData.x, 1.0f);
         float internalLodRaw = clamp(IN.debugData.z, 0.0f, 2.0f);
-        float effectiveCellSize = tileSize * exp2(internalLodRaw) / 32.0f;
-        float lodT = saturate(1.0f - log2(max(effectiveCellSize, 2.0f) / 2.0f) / 8.0f);
-        float3 nearColor = float3(1.0f, 0.76f, 0.12f);
-        float3 farColor  = float3(0.06f, 0.32f, 1.0f);
-        float3 color = lerp(farColor, nearColor, lodT);
+        float scaleLevel = log2(tileSize / max(QuadTreeParams.z, 1.0f));
+        float scaleT = saturate(scaleLevel / 9.0f);
 
-        float internalLod = saturate(internalLodRaw / 2.0f);
-        color = lerp(color, float3(0.72f, 0.20f, 0.95f), internalLod * 0.30f);
+        float3 lod0 = float3(0.10f, 0.78f, 0.96f);
+        float3 lod1 = float3(1.00f, 0.72f, 0.18f);
+        float3 lod2 = float3(0.86f, 0.20f, 0.92f);
+        float3 color = (internalLodRaw < 0.5f) ? lod0 : ((internalLodRaw < 1.5f) ? lod1 : lod2);
+        color = lerp(color, float3(0.04f, 0.10f, 0.18f), scaleT * 0.35f);
+
+        float2 tileUV = saturate(IN.tileUV);
+        float2 edgeDist = min(tileUV, 1.0f - tileUV);
+        float gridWidth = max(max(fwidth(tileUV.x), fwidth(tileUV.y)) * 1.15f, 0.0015f);
+        float gridLine = 1.0f - smoothstep(0.0f, gridWidth, min(edgeDist.x, edgeDist.y));
 
         float geomorph = saturate(IN.debugData.w);
-        color = lerp(color, float3(0.15f, 1.0f, 0.42f), geomorph * 0.22f);
+        color = lerp(color, float3(0.15f, 1.0f, 0.42f), geomorph * 0.25f);
 
-        float hasSkirt = step(0.5f, IN.debugData.y);
-        color = lerp(color, float3(1.0f, 0.08f, 0.08f), hasSkirt * 0.25f);
+        uint subsetPattern = (uint)floor(IN.debugData.y + 0.5f);
+        uint leftPattern = subsetPattern % 3u; subsetPattern /= 3u;
+        uint rightPattern = subsetPattern % 3u; subsetPattern /= 3u;
+        uint bottomPattern = subsetPattern % 3u; subsetPattern /= 3u;
+        uint topPattern = subsetPattern % 3u;
+
+        float stitchWidth = max(gridWidth * 2.0f, 0.003f);
+        float stitchLine = 0.0f;
+        stitchLine = max(stitchLine, (leftPattern > 0u) ? 1.0f - smoothstep(0.0f, stitchWidth, tileUV.x) : 0.0f);
+        stitchLine = max(stitchLine, (rightPattern > 0u) ? 1.0f - smoothstep(0.0f, stitchWidth, 1.0f - tileUV.x) : 0.0f);
+        stitchLine = max(stitchLine, (bottomPattern > 0u) ? 1.0f - smoothstep(0.0f, stitchWidth, tileUV.y) : 0.0f);
+        stitchLine = max(stitchLine, (topPattern > 0u) ? 1.0f - smoothstep(0.0f, stitchWidth, 1.0f - tileUV.y) : 0.0f);
+
+        color = lerp(color, float3(0.86f, 0.96f, 1.0f), gridLine * 0.18f);
+        color = lerp(color, float3(1.0f, 0.08f, 0.04f), stitchLine * 0.78f);
         return float4(color, 1.0f);
     }
 
@@ -105,17 +124,14 @@ float4 main(VSOutput IN) : SV_Target {
     float3 V = normalize(IN.vView);
     float  normalToksvigT = 1.0;
 
-    // --- Bump de detalhe (Etapa 2): perturba a normal do FFT com detalhe filtrado ---
+    // --- Bump de detalhe: perturba a normal do FFT com detalhe filtrado ---
     // O ripple fino morre cedo; a baixa frequencia continua no fundo para a agua nao
     // virar um plano liso depois do anti-shimmer.
     float camDist  = length(IN.vView);
     float farBlend = WaterFarBlend(camDist);
     float nearFFT = 1.0 - farBlend;
-    float detailFade = saturate(1.0 - camDist / max(BumpParams2.w, 1.0));
-    detailFade = detailFade * detailFade * (3.0 - 2.0 * detailFade) * nearFFT;
-    float swellFadeRange = max(BumpParams2.w * 16.0, 4500.0);
-    float swellFade = saturate(1.0 - (camDist - BumpParams2.w) / swellFadeRange);
-    swellFade = swellFade * swellFade * (3.0 - 2.0 * swellFade);
+    float detailFade = WaterDistanceFade(camDist, 0.0, BumpParams2.w) * nearFFT;
+    float swellFade = WaterDistanceFade(camDist, BumpParams2.w, max(BumpParams2.w * 16.0, 4500.0));
     swellFade = lerp(0.30, 1.0, swellFade) * nearFFT;
     float2 hiDx = ddx(IN.baseTC.zw);
     float2 hiDy = ddy(IN.baseTC.zw);
@@ -142,8 +158,7 @@ float4 main(VSOutput IN) : SV_Target {
     }
 
     if (debugMode == 3) {
-        float2 tcDebug = IN.worldPos.xz * 0.0125 * OceanParams0.w * 1.25;
-        float4 dispDebug = FFTDisplacement.SampleLevel(LinearWrap, tcDebug, 0.0);
+        float4 dispDebug = WaterSampleFFT(IN.worldPos.xz);
         float h = dispDebug.z * 0.01f;
         float pos = saturate(h);
         float neg = saturate(-h);
@@ -198,7 +213,7 @@ float4 main(VSOutput IN) : SV_Target {
         return float4(F.xxx, 1.0f);
     }
 
-    // --- Corpo da agua: refracao + absorcao (Etapa 3), porte do WaterPS (Water.cfx:1030+) ---
+    // --- Corpo da agua: refracao + absorcao (single-layer water) ---
     float3 body = DeepColorDensity.rgb;
     float  columnDebug = 0.0f;
     float  softDebug   = 0.0f;
@@ -221,10 +236,9 @@ float4 main(VSOutput IN) : SV_Target {
         if (SampleSceneDepthLin(refrUV) < waterDepth) refrUV = screenUV;
         float3 refrColor = SceneColor.SampleLevel(LinearClamp, refrUV, 0).rgb; // ja LINEAR HDR
 
-        // in-scattering estilo Cry (OceanIntoPS) / Single Layer Water: a coluna d'agua
-        // ABSORVE a refracao por canal (vermelho some 1o -> azula) e ESPALHA de volta um
-        // turquesa que cresce com a profundidade e satura. Independe da espessura, entao
-        // aparece mesmo na esfera demo pequena.
+        // in-scattering (single-layer water): a coluna d'agua ABSORVE a refracao por canal
+        // (vermelho some 1o -> azula) e ESPALHA de volta um turquesa que cresce com a
+        // profundidade e satura. Independe da espessura, entao aparece ate em coluna fina.
         float cosForward = waterDepth / max(length(IN.vView), 1e-3);
         float pathLen    = max(column, 0.0) / max(cosForward, 0.1);
         // A coluna em view-space fica enorme no oceano aberto; escalar pelo fog density
@@ -255,19 +269,14 @@ float4 main(VSOutput IN) : SV_Target {
 
     // --- Foam / whitecaps: Jacobiano da deformacao choppy do FFT (Asylum/Cry) ---
     // J<1 = cristas dobrando -> espuma difusa que clareia a agua e abafa o specular.
-    // Amostra o .w do FFT na mesma tiling do VS (recomputada de worldPos.xz).
     float  foam    = 0.0;
     float3 foamLit = float3(0.0, 0.0, 0.0);
     float  JDebug  = 1.0;
     if (FoamParams.z > 0.0 || debugMode == 8) {
-        float2 tcFoam = IN.worldPos.xz * 0.0125 * OceanParams0.w * 1.25;
-        JDebug = FFTDisplacement.SampleLevel(LinearWrap, tcFoam, 0.0).w;
+        JDebug = WaterSampleFFT(IN.worldPos.xz).w;
         foam = saturate((FoamParams.x - JDebug) / max(FoamParams.y, 1e-3));
         foam = foam * foam * (3.0 - 2.0 * foam);
-        float foamFade = saturate(1.0 - camDist / max(FoamParams.w, 1.0));
-        foamFade = foamFade * foamFade * (3.0 - 2.0 * foamFade);
-        foam = saturate(foam * FoamParams.z * foamFade * nearFFT);
-        // espuma iluminada pelo sol (acompanha a exposicao HDR da cena) + termo ambiente.
+        foam = saturate(foam * FoamParams.z * WaterDistanceFade(camDist, 0.0, FoamParams.w) * nearFFT);
         foamLit = FoamColor.rgb * (SunColor.rgb * SunDirection.w * 0.16 + 0.30);
     }
     if (debugMode == 8) {
@@ -287,7 +296,7 @@ float4 main(VSOutput IN) : SV_Target {
     color = lerp(color, foamLit, foam);
 
     // Aerial perspective de superficie: lava contraste/spec no medio-longe em HDR,
-    // escondendo o aliasing residual do projected grid sem apagar o primeiro plano.
+    // escondendo o aliasing residual no horizonte sem apagar o primeiro plano.
     float3 viewDir = normalize(IN.worldPos - CameraPos.xyz);
     float aerialFog = WaterAerialFogAmount(camDist, viewDir);
     if (aerialFog > 0.0) {

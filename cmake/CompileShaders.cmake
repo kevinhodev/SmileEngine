@@ -25,6 +25,8 @@ function(smile_compile_shader HLSL_FILE PROFILE ENTRY OUT_VAR)
     get_filename_component(SHADER_NAME ${HLSL_FILE} NAME_WE)
     set(SHADER_INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/${HLSL_FILE}")
     set(SHADER_OUTPUT "${SMILE_SHADER_OUTPUT_DIR}/${SHADER_NAME}.${PROFILE}.cso")
+    file(GLOB_RECURSE SHADER_INCLUDE_DEPS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/*.hlsli")
 
     # Flags: debug em Debug, otimizacao em Release
     set(DXC_FLAGS -T ${PROFILE} -E ${ENTRY} -Fo ${SHADER_OUTPUT})
@@ -42,6 +44,7 @@ function(smile_compile_shader HLSL_FILE PROFILE ENTRY OUT_VAR)
         OUTPUT  ${SHADER_OUTPUT}
         COMMAND ${SMILE_DXC_EXECUTABLE} ${DXC_FLAGS} ${SHADER_INPUT}
         MAIN_DEPENDENCY ${SHADER_INPUT}
+        DEPENDS ${SHADER_INCLUDE_DEPS}
         COMMENT "[DXC] ${SHADER_NAME}.hlsl -> ${SHADER_NAME}.${PROFILE}.cso (${PROFILE})"
         VERBATIM
     )

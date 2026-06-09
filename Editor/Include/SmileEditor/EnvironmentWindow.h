@@ -97,6 +97,10 @@ namespace SmileEditor {
 
         QCheckBox* OceanCheck = nullptr;
         QComboBox* WaterDebugCombo = nullptr;
+        QCheckBox* QuadtreeCullCheck = nullptr;
+        QDoubleSpinBox* QuadtreeBaseSpin = nullptr;
+        QDoubleSpinBox* QuadtreeDepthSpin = nullptr;
+        QDoubleSpinBox* QuadtreeRingSpin = nullptr;
         QCheckBox* FoamCheck = nullptr;
         QDoubleSpinBox* FoamCoverageSpin = nullptr;
         QDoubleSpinBox* FoamIntensitySpin = nullptr;
@@ -110,6 +114,9 @@ namespace SmileEditor {
         QDoubleSpinBox* BumpStrengthSpin = nullptr;
         QDoubleSpinBox* FogDensitySpin = nullptr;
         QDoubleSpinBox* InScatterDensitySpin = nullptr;
+        QDoubleSpinBox* SSSStrengthSpin = nullptr;
+        QDoubleSpinBox* ShoreFoamSpin = nullptr;
+        QDoubleSpinBox* WaterClaritySpin = nullptr;
 
         QDoubleSpinBox* IBLIntensitySpin = nullptr;
         QDoubleSpinBox* IBLRotationSpin = nullptr;

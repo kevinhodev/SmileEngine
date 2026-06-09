@@ -377,6 +377,19 @@ namespace SmileEditor {
         });
         Layout->addWidget(ModeRow);
 
+        Layout->addWidget(MakeToggleRow(tr("Cull frustum"), &QuadtreeCullCheck, true, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->GetWater().SetGpuFrustumCull(Checked);
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Tile base"), 16.0, 256.0, 1.0, 0, 64.0, QStringLiteral(" m"), &QuadtreeBaseSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetWater().SetTileBaseSize(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Profundidade QT"), 6.0, 10.0, 1.0, 0, 9.0, QString(), &QuadtreeDepthSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetWater().SetTileMaxDepth(static_cast<Smile::u32>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Raio anéis"), 4.0, 16.0, 1.0, 0, 8.0, QString(), &QuadtreeRingSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetWater().SetGpuRingRadius(static_cast<Smile::u32>(Value));
+        }));
+
         Layout->addWidget(MakeToggleRow(tr("Espuma"), &FoamCheck, true, [this](bool Checked) {
             if (RendererPtr) RendererPtr->GetWater().SetUseFoam(Checked);
         }));
@@ -415,6 +428,15 @@ namespace SmileEditor {
         }));
         Layout->addWidget(MakeNumericRow(tr("In-scatter"), 0.0, 6.0, 0.05, 2, 1.5, QString(), &InScatterDensitySpin, [this](double Value) {
             if (RendererPtr) RendererPtr->GetWater().SetInScatterDensity(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Translucência"), 0.0, 3.0, 0.05, 2, 0.6, QString(), &SSSStrengthSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetWater().SetSSSStrength(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Espuma costa"), 0.0, 4.0, 0.05, 2, 1.0, QString(), &ShoreFoamSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetWater().SetShoreFoamIntensity(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Clareza"), 0.1, 60.0, 0.5, 1, 8.0, QStringLiteral(" m"), &WaterClaritySpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetWater().SetWaterClarity(static_cast<float>(Value));
         }));
         return Body;
     }
@@ -595,6 +617,10 @@ namespace SmileEditor {
         auto& Water = RendererPtr->GetWater();
         if (OceanCheck) OceanCheck->setChecked(RendererPtr->GetUseWater());
         if (WaterDebugCombo) WaterDebugCombo->setCurrentIndex(static_cast<int>(Water.GetDebugMode()));
+        if (QuadtreeCullCheck) QuadtreeCullCheck->setChecked(Water.GetGpuFrustumCull());
+        if (QuadtreeBaseSpin) QuadtreeBaseSpin->setValue(Water.GetTileBaseSize());
+        if (QuadtreeDepthSpin) QuadtreeDepthSpin->setValue(Water.GetTileMaxDepth());
+        if (QuadtreeRingSpin) QuadtreeRingSpin->setValue(Water.GetGpuRingRadius());
         if (FoamCheck) FoamCheck->setChecked(Water.GetUseFoam());
         if (FoamCoverageSpin) FoamCoverageSpin->setValue(Water.GetFoamCoverage());
         if (FoamIntensitySpin) FoamIntensitySpin->setValue(Water.GetFoamIntensity());
@@ -608,6 +634,9 @@ namespace SmileEditor {
         if (BumpStrengthSpin) BumpStrengthSpin->setValue(Water.GetBumpStrength());
         if (FogDensitySpin) FogDensitySpin->setValue(Water.GetFogDensity());
         if (InScatterDensitySpin) InScatterDensitySpin->setValue(Water.GetInScatterDensity());
+        if (SSSStrengthSpin) SSSStrengthSpin->setValue(Water.GetSSSStrength());
+        if (ShoreFoamSpin) ShoreFoamSpin->setValue(Water.GetShoreFoamIntensity());
+        if (WaterClaritySpin) WaterClaritySpin->setValue(Water.GetWaterClarity());
 
         if (IBLIntensitySpin) IBLIntensitySpin->setValue(RendererPtr->GetIBLIntensity());
         if (IBLRotationSpin) IBLRotationSpin->setValue(RendererPtr->GetIBLRotation() / Smile::ToRad);
@@ -638,6 +667,10 @@ namespace SmileEditor {
 
         if (OceanCheck) OceanCheck->setChecked(true);
         if (WaterDebugCombo) WaterDebugCombo->setCurrentIndex(0);
+        if (QuadtreeCullCheck) QuadtreeCullCheck->setChecked(true);
+        if (QuadtreeBaseSpin) QuadtreeBaseSpin->setValue(64.0);
+        if (QuadtreeDepthSpin) QuadtreeDepthSpin->setValue(9.0);
+        if (QuadtreeRingSpin) QuadtreeRingSpin->setValue(8.0);
         if (FoamCheck) FoamCheck->setChecked(true);
         if (FoamCoverageSpin) FoamCoverageSpin->setValue(0.62);
         if (FoamIntensitySpin) FoamIntensitySpin->setValue(1.0);

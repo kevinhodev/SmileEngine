@@ -12,7 +12,8 @@
       "Bash('/c/Program Files \\(x86\\)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe' -T ps_6_0 -E main -Fo /tmp/triangle.cso D:/Engines/SmileEngine/Shaders/Triangle.ps.hlsl)",
       "Bash(cd /d D:\\\\Engines\\\\SmileEngine)",
       "Bash(dir /b)",
-      "PowerShell(cmake --build build --config Debug --target SmileEngine 2>&1)"
+      "PowerShell(cmake --build build --config Debug --target SmileEngine 2>&1)",
+      "Bash(git -C \"D:/Engines/SmileEngine\" diff --stat HEAD)"
     ]
   }
 }

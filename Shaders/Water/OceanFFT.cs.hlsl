@@ -25,7 +25,7 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID) {
     // STEP 2: butterflies.
     int src = 0;
     [loop] for (int s = 1; s <= int(LOG2_DISP_MAP_SIZE); ++s) {
-        int m  = 1 << s;            // altura do grupo butterfly
+        int m  = int(1u << uint(s)); // altura do grupo butterfly
         int mh = m >> 1;            // meia-altura
         int k  = (x * (int(DISP_MAP_SIZE) / m)) & (int(DISP_MAP_SIZE) - 1);
         int i  = (x & ~(m - 1));    // inicio do grupo butterfly

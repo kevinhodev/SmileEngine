@@ -2,9 +2,10 @@
 
 // Local tile vertex: xy in [0,1], z = Chebyshev edge value.
 struct VSInput {
-    float3 GridPos  : POSITION;
-    float4 TileData : TEXCOORD0; // x=originX y=originZ z=size w=subset range (internal LOD + pattern)
-    float4 MorphData : TEXCOORD1; // x=geomorph y=coverage z=internal LOD debug w=unused
+    float3 GridPos       : POSITION;
+    uint   InstanceData0 : TEXCOORD0; // nodeX/nodeZ/nodeScaleLOD/internalLOD
+    uint   InstanceData1 : TEXCOORD1; // subset range: internal LOD + edge pattern
+    uint   InstanceData2 : TEXCOORD2; // morph/subset pattern/debug coverage
 };
 
 // World-space quadtree tile. This replaces the old projected grid/ray-plane
@@ -16,18 +17,24 @@ VSOutput main(VSInput IN) {
     const float3 camPos = CameraPos.xyz;
 
     float2 localUV = saturate(IN.GridPos.xy);
-    float subsetRange = IN.TileData.w;
-    float internalLod = floor(subsetRange / 81.0);
-    float subsetPattern = subsetRange - internalLod * 81.0;
-    float geomorph = saturate(IN.MorphData.x);
+    uint nodeX = IN.InstanceData0 & 0x7FFu;
+    uint nodeZ = (IN.InstanceData0 >> 11u) & 0x7FFu;
+    uint nodeScaleLOD = (IN.InstanceData0 >> 22u) & 0x1Fu;
+    uint subsetRange = IN.InstanceData1;
+    uint internalLodU = min(subsetRange / 81u, 2u);
+    float internalLod = (float)internalLodU;
+    float subsetPattern = (float)(subsetRange - internalLodU * 81u);
+    float geomorph = (float)(IN.InstanceData2 & 0xFFu) / 255.0f;
+    float tileSize = QuadTreeParams.z * exp2((float)nodeScaleLOD);
+    float2 tileOrigin = QuadTreeParams.xy + float2(nodeX, nodeZ) * tileSize;
     // Geomorph em borda compartilhada abre crack: vizinhos podem estar em LOD/morph
     // diferentes. Pinamos a borda e deixamos o morph atuar no interior do tile.
     geomorph *= saturate((1.0 - IN.GridPos.z) * 16.0);
     float nextLodStep = min(exp2(internalLod + 1.0) / 32.0, 1.0);
     float2 coarseUV = saturate(floor(localUV / nextLodStep + 0.5) * nextLodStep);
     float2 sampleUV = lerp(localUV, coarseUV, geomorph);
-    float2 worldXZ = IN.TileData.xy + localUV * IN.TileData.z;
-    float2 sampleWorldXZ = IN.TileData.xy + sampleUV * IN.TileData.z;
+    float2 worldXZ = tileOrigin + localUV * tileSize;
+    float2 sampleWorldXZ = tileOrigin + sampleUV * tileSize;
 
     float3 worldPos = float3(worldXZ.x, waterLevel, worldXZ.y);
     float3 normal = float3(0.0, 1.0, 0.0);
@@ -36,12 +43,7 @@ VSOutput main(VSInput IN) {
     float farBlend = WaterFarBlend(camDist);
     float nearFFT = 1.0 - farBlend;
 
-    // Small far lift, kept from the Cry path, but driven by world distance instead of
-    // projected-grid edge vertices. It helps the last ocean tiles blend into haze/sky.
-    float horizonT = SmoothWaterStep(saturate((camDist - ProjGrid.x * 0.72) / max(ProjGrid.x * 0.28, 1.0)));
-    worldPos.y += horizonT * ProjGrid.z;
-
-    // --- FFT displacement near/mid, Asylum-style procedural swell in the distance. ---
+    // --- FFT displacement near/mid, procedural swell in the distance. ---
     if (OceanFFT.x > 0.5) {
         // No tile-edge damping here: damping every quadtree border would reveal the grid.
         float edgeMask = 1.0;
@@ -49,18 +51,13 @@ VSOutput main(VSInput IN) {
         float atten = saturate(camDist * 0.5);
         atten *= atten;
 
-        float farFade = saturate(1.0 - (camDist - OceanFade.x) / max(OceanFade.y, 1.0));
-        farFade = farFade * farFade * (3.0 - 2.0 * farFade);
-
-        float normalFadeStart = max(OceanFade.x * 2.5, 1000.0);
-        float normalFadeRange = max(OceanFade.y * 3.0, 4500.0);
-        float farNormalFade = saturate(1.0 - (camDist - normalFadeStart) / normalFadeRange);
-        farNormalFade = farNormalFade * farNormalFade * (3.0 - 2.0 * farNormalFade);
+        float farFade = WaterDistanceFade(camDist, OceanFade.x, OceanFade.y);
+        float farNormalFade = WaterNormalFade(camDist);
 
         float s = atten * edgeMask * farFade * nearFFT * 0.06 * OceanParams1.x * OceanFFT.y;
 
-        float2 tcFFT = sampleWorldXZ * 0.0125 * OceanParams0.w * 1.25;
-        float4 disp = FFTDisplacement.SampleLevel(LinearWrap, tcFFT, 0.0);
+        float2 tcFFT = WaterFFTSampleUV(sampleWorldXZ);
+        float4 disp = WaterSampleFFTUv(tcFFT);
         float farSwell = WaterFarSwellHeight(sampleWorldXZ) * atten * edgeMask * farBlend;
 
         worldPos.x += disp.x * s * OceanFFT.z;
@@ -68,8 +65,8 @@ VSOutput main(VSInput IN) {
         worldPos.y += disp.z * s + farSwell;
 
         float hC = disp.z;
-        float hX = FFTDisplacement.SampleLevel(LinearWrap, tcFFT + float2(1.0 / 256.0, 0.0), 0.0).z;
-        float hZ = FFTDisplacement.SampleLevel(LinearWrap, tcFFT + float2(0.0, 1.0 / 256.0), 0.0).z;
+        float hX = WaterSampleFFTUv(tcFFT + float2(1.0 / 256.0, 0.0)).z;
+        float hZ = WaterSampleFFTUv(tcFFT + float2(0.0, 1.0 / 256.0)).z;
         float3 fftNormal = normalize(float3(hC - hX, OceanFFT.w, hC - hZ));
         float3 farNormal = WaterFarSwellNormal(sampleWorldXZ);
         normal = normalize(lerp(fftNormal, farNormal, farBlend));
@@ -81,16 +78,14 @@ VSOutput main(VSInput IN) {
     float2 vTex = worldPos.xz * 0.005;
     o.baseTC.xy = vTex * BumpParams.x + trans;
     o.baseTC.zw = vTex * (2.0 * BumpParams.x * BumpParams.y) + trans * 2.0;
-    o.debugData = float4(IN.TileData.z, subsetPattern, internalLod, geomorph);
+    o.debugData = float4(tileSize, subsetPattern, internalLod, geomorph);
+    o.tileUV = localUV;
 
     o.worldPos = worldPos;
     o.vView = camPos - worldPos;
     o.pos = mul(float4(worldPos, 1.0), ViewProj);
 
-    float normalScreenFadeStart = max(OceanFade.x * 2.5, 1000.0);
-    float normalScreenFadeRange = max(OceanFade.y * 3.0, 4500.0);
-    float normalScreenFade = saturate(1.0 - (max(o.pos.w, 0.0) - normalScreenFadeStart) / normalScreenFadeRange);
-    normalScreenFade = normalScreenFade * normalScreenFade * (3.0 - 2.0 * normalScreenFade);
+    float normalScreenFade = WaterNormalFade(max(o.pos.w, 0.0));
     o.normal = normalize(lerp(float3(0.0, 1.0, 0.0), normal, normalScreenFade));
 
     o.screenProj.xy = o.pos.xy * float2(0.5, -0.5) + 0.5 * o.pos.w;

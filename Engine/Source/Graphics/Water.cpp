@@ -29,6 +29,13 @@ namespace Smile {
             File.read(reinterpret_cast<char*>(Data.data()), Size);
             return Data;
         }
+
+        u32 FloatBits(f32 _Value) {
+            u32 Result = 0;
+            static_assert(sizeof(Result) == sizeof(_Value));
+            std::memcpy(&Result, &_Value, sizeof(Result));
+            return Result;
+        }
     }
 
     void FWaterRenderer::BuildRootSignature(ID3D12Device* _Device) {
@@ -63,7 +70,7 @@ namespace Smile {
         AtmoSkyViewRange.RegisterSpace                     = 0;
         AtmoSkyViewRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        // t2..t3 = scene-color + scene-depth (refracao/fog, Etapa 3) — tabela contigua, PS.
+        // t2..t3 = scene-color + scene-depth (refracao/fog) — tabela contigua, PS.
         D3D12_DESCRIPTOR_RANGE SceneRange{};
         SceneRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SceneRange.NumDescriptors                    = 2;
@@ -159,9 +166,11 @@ namespace Smile {
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
               D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "TEXCOORD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0,
+            { "TEXCOORD", 0, DXGI_FORMAT_R32_UINT, 1, 0,
               D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
-            { "TEXCOORD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, sizeof(Vec4),
+            { "TEXCOORD", 1, DXGI_FORMAT_R32_UINT, 1, sizeof(u32),
+              D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+            { "TEXCOORD", 2, DXGI_FORMAT_R32_UINT, 1, sizeof(u32) * 2,
               D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
         };
 
@@ -202,6 +211,63 @@ namespace Smile {
 
         CreateWaterPSO(D3D12_FILL_MODE_SOLID, PSO);
         CreateWaterPSO(D3D12_FILL_MODE_WIREFRAME, WireframePSO);
+    }
+
+    void FWaterRenderer::BuildGenerateDrawsPipeline(ID3D12Device* _Device) {
+        D3D12_DESCRIPTOR_RANGE SRVRanges[1]{};
+        SRVRanges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        SRVRanges[0].NumDescriptors                    = 2; // t0=tile sources, t1=bucket sources
+        SRVRanges[0].BaseShaderRegister                = 0;
+        SRVRanges[0].RegisterSpace                     = 0;
+        SRVRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_DESCRIPTOR_RANGE UAVRanges[1]{};
+        UAVRanges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        UAVRanges[0].NumDescriptors                    = 5; // u0=instances, u1=draw args, u2=scratch, u3=tile sources, u4=debug counters
+        UAVRanges[0].BaseShaderRegister                = 0;
+        UAVRanges[0].RegisterSpace                     = 0;
+        UAVRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_ROOT_PARAMETER RootParams[3]{};
+        RootParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        RootParams[0].Constants.ShaderRegister = 0;
+        RootParams[0].Constants.RegisterSpace  = 0;
+        RootParams[0].Constants.Num32BitValues = 40;
+        RootParams[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[1].DescriptorTable.pDescriptorRanges   = SRVRanges;
+        RootParams[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[2].DescriptorTable.pDescriptorRanges   = UAVRanges;
+        RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        D3D12_ROOT_SIGNATURE_DESC RootSigDesc{};
+        RootSigDesc.NumParameters = _countof(RootParams);
+        RootSigDesc.pParameters   = RootParams;
+        RootSigDesc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        Microsoft::WRL::ComPtr<ID3DBlob> Blob, ErrorBlob;
+        HRESULT Hr = D3D12SerializeRootSignature(&RootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                 &Blob, &ErrorBlob);
+        if (FAILED(Hr)) {
+            if (ErrorBlob)
+                LogError(std::string("Water generate draws root sig error: ") +
+                         static_cast<const char*>(ErrorBlob->GetBufferPointer()));
+            SMILE_HR(Hr);
+        }
+
+        SMILE_HR(_Device->CreateRootSignature(0, Blob->GetBufferPointer(), Blob->GetBufferSize(),
+                                              IID_PPV_ARGS(&GenerateDrawsRootSignature)));
+
+        auto CS = LoadShader("WaterGenerateDraws.cs_6_0.cso");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC Desc{};
+        Desc.pRootSignature = GenerateDrawsRootSignature.Get();
+        Desc.CS             = { CS.data(), CS.size() };
+        SMILE_HR(_Device->CreateComputePipelineState(&Desc, IID_PPV_ARGS(&GenerateDrawsPSO)));
     }
 
     void FWaterRenderer::BuildGrid(ID3D12Device* _Device) {
@@ -406,14 +472,31 @@ namespace Smile {
     }
 
     void FWaterRenderer::BuildInstanceBuffer(ID3D12Device* _Device) {
-        // Uma regiao de kMaxTileInstances por frame in flight (double-buffered).
-        const UINT FrameSize  = static_cast<UINT>(sizeof(TileInstance) * kMaxTileInstances);
-        const UINT BufferSize = FrameSize * FCommandQueue::kFramesInFlight;
+        const UINT TileSourceFrameSize =
+            static_cast<UINT>(sizeof(TileSource) * kMaxTileInstances);
+        const UINT TileSourceBufferSize = TileSourceFrameSize * FCommandQueue::kFramesInFlight;
+        const UINT DrawBucketFrameSize =
+            static_cast<UINT>(sizeof(DrawBucketSource) * kSubsetRangeCount);
+        const UINT DrawBucketBufferSize = DrawBucketFrameSize * FCommandQueue::kFramesInFlight;
+        const UINT GpuInstanceFrameSize =
+            static_cast<UINT>(sizeof(TileInstance) * kMaxTileInstances);
+        const UINT GpuInstanceBufferSize = GpuInstanceFrameSize * FCommandQueue::kFramesInFlight;
+        const UINT GpuIndirectFrameSize =
+            static_cast<UINT>(sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * kSubsetRangeCount);
+        const UINT GpuIndirectBufferSize = GpuIndirectFrameSize * FCommandQueue::kFramesInFlight;
+        const UINT GpuDrawBucketScratchFrameSize =
+            static_cast<UINT>(sizeof(u32) * kSubsetRangeCount * 3u);
+        const UINT GpuDrawBucketScratchBufferSize =
+            GpuDrawBucketScratchFrameSize * FCommandQueue::kFramesInFlight;
+        const UINT GpuDebugCounterFrameSize =
+            static_cast<UINT>(sizeof(u32) * kGpuDebugCounterCount);
+        const UINT GpuDebugCounterBufferSize =
+            GpuDebugCounterFrameSize * FCommandQueue::kFramesInFlight;
 
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = BufferSize;
+        Desc.Width            = DrawBucketBufferSize;
         Desc.Height           = 1;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
@@ -421,410 +504,239 @@ namespace Smile {
         Desc.SampleDesc       = { 1, 0 };
         Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
+        D3D12_RANGE NoRead{ 0, 0 };
         SMILE_HR(_Device->CreateCommittedResource(
             &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&InstanceBuffer)));
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&DrawBucketSourceBuffer)));
+        SMILE_HR(DrawBucketSourceBuffer->Map(0, &NoRead, reinterpret_cast<void**>(&MappedDrawBucketsBase)));
 
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(InstanceBuffer->Map(0, &NoRead, reinterpret_cast<void**>(&MappedInstancesBase)));
+        D3D12_INDIRECT_ARGUMENT_DESC DrawArg{};
+        DrawArg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
 
-        // BufferLocation eh repontado por frame no UpdatePerFrame; SizeInBytes = 1 regiao.
-        InstanceVBView.BufferLocation = InstanceBuffer->GetGPUVirtualAddress();
-        InstanceVBView.StrideInBytes  = sizeof(TileInstance);
-        InstanceVBView.SizeInBytes    = FrameSize;
+        D3D12_COMMAND_SIGNATURE_DESC SignatureDesc{};
+        SignatureDesc.ByteStride       = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+        SignatureDesc.NumArgumentDescs = 1;
+        SignatureDesc.pArgumentDescs   = &DrawArg;
+        SMILE_HR(_Device->CreateCommandSignature(
+            &SignatureDesc, nullptr, IID_PPV_ARGS(&IndirectCommandSignature)));
+
+        D3D12_HEAP_PROPERTIES DefaultHeap{};
+        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12_RESOURCE_DESC DefaultDesc = Desc;
+        DefaultDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        DefaultDesc.Width = GpuInstanceBufferSize;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&GpuInstanceBuffer)));
+        GpuInstanceBufferState = D3D12_RESOURCE_STATE_COMMON;
+        GpuInstanceVBView.BufferLocation = GpuInstanceBuffer->GetGPUVirtualAddress();
+        GpuInstanceVBView.StrideInBytes  = sizeof(TileInstance);
+        GpuInstanceVBView.SizeInBytes    = GpuInstanceFrameSize;
+
+        DefaultDesc.Width = GpuIndirectBufferSize;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&GpuIndirectArgsBuffer)));
+        GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_COMMON;
+
+        DefaultDesc.Width = TileSourceBufferSize;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&GpuTileSourceBuffer)));
+        GpuTileSourceBufferState = D3D12_RESOURCE_STATE_COMMON;
+
+        DefaultDesc.Width = GpuDrawBucketScratchBufferSize;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&GpuDrawBucketScratchBuffer)));
+        GpuDrawBucketScratchState = D3D12_RESOURCE_STATE_COMMON;
+
+        DefaultDesc.Width = GpuDebugCounterBufferSize;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&GpuDebugCounterBuffer)));
+        GpuDebugCounterState = D3D12_RESOURCE_STATE_COMMON;
+
+        D3D12_HEAP_PROPERTIES ReadbackHeap{};
+        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC ReadbackDesc = Desc;
+        ReadbackDesc.Width = GpuDebugCounterBufferSize;
+        ReadbackDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &ReadbackDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&GpuDebugReadbackBuffer)));
+        D3D12_RANGE DebugReadRange{ 0, GpuDebugCounterBufferSize };
+        SMILE_HR(GpuDebugReadbackBuffer->Map(
+            0, &DebugReadRange, reinterpret_cast<void**>(&MappedGpuDebugCountersBase)));
+
+        // Layout do heap: [0,1] SRVs (tile sources, draw buckets) + [2..6] UAVs
+        // (instances, draw args, scratch, tile sources, debug counters). A tabela SRV
+        // e bindada em GpuHandle(0) e a UAV em GpuHandle(2) no DispatchGenerateDraws.
+        GenerateDrawsHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 7, true);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
+        SRVDesc.Format                  = DXGI_FORMAT_UNKNOWN;
+        SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
+        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        SRVDesc.Buffer.FirstElement     = 0;
+        SRVDesc.Buffer.NumElements      = kMaxTileInstances * FCommandQueue::kFramesInFlight;
+        SRVDesc.Buffer.StructureByteStride = sizeof(TileSource);
+        _Device->CreateShaderResourceView(GpuTileSourceBuffer.Get(), &SRVDesc,
+                                          GenerateDrawsHeap.CpuHandle(0));
+
+        SRVDesc.Buffer.NumElements         = kSubsetRangeCount * FCommandQueue::kFramesInFlight;
+        SRVDesc.Buffer.StructureByteStride = sizeof(DrawBucketSource);
+        _Device->CreateShaderResourceView(DrawBucketSourceBuffer.Get(), &SRVDesc,
+                                          GenerateDrawsHeap.CpuHandle(1));
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
+        UAVDesc.Format                    = DXGI_FORMAT_UNKNOWN;
+        UAVDesc.ViewDimension             = D3D12_UAV_DIMENSION_BUFFER;
+        UAVDesc.Buffer.FirstElement       = 0;
+        UAVDesc.Buffer.NumElements        = kMaxTileInstances * FCommandQueue::kFramesInFlight;
+        UAVDesc.Buffer.StructureByteStride = sizeof(TileInstance);
+        _Device->CreateUnorderedAccessView(GpuInstanceBuffer.Get(), nullptr, &UAVDesc,
+                                           GenerateDrawsHeap.CpuHandle(2));
+
+        UAVDesc.Buffer.NumElements         = kSubsetRangeCount * FCommandQueue::kFramesInFlight;
+        UAVDesc.Buffer.StructureByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+        _Device->CreateUnorderedAccessView(GpuIndirectArgsBuffer.Get(), nullptr, &UAVDesc,
+                                           GenerateDrawsHeap.CpuHandle(3));
+
+        UAVDesc.Buffer.NumElements         = kSubsetRangeCount * 3u * FCommandQueue::kFramesInFlight;
+        UAVDesc.Buffer.StructureByteStride = sizeof(u32);
+        _Device->CreateUnorderedAccessView(GpuDrawBucketScratchBuffer.Get(), nullptr, &UAVDesc,
+                                           GenerateDrawsHeap.CpuHandle(4));
+
+        UAVDesc.Buffer.NumElements         = kMaxTileInstances * FCommandQueue::kFramesInFlight;
+        UAVDesc.Buffer.StructureByteStride = sizeof(TileSource);
+        _Device->CreateUnorderedAccessView(GpuTileSourceBuffer.Get(), nullptr, &UAVDesc,
+                                           GenerateDrawsHeap.CpuHandle(5));
+
+        UAVDesc.Buffer.NumElements         = kGpuDebugCounterCount * FCommandQueue::kFramesInFlight;
+        UAVDesc.Buffer.StructureByteStride = sizeof(u32);
+        _Device->CreateUnorderedAccessView(GpuDebugCounterBuffer.Get(), nullptr, &UAVDesc,
+                                           GenerateDrawsHeap.CpuHandle(6));
     }
 
-    void FWaterRenderer::BuildTileInstances(const Mat44& _ViewProj, const Mat44& _Projection,
-                                            const Vec3& _CameraPos,
-                                            u32 _ScreenW, u32 _ScreenH) {
-        if (!MappedInstances) {
-            InstanceCount = 0;
-            return;
-        }
-
-        struct Node {
-            f32 X;
-            f32 Z;
-            f32 Size;
-            u32 Depth;
-            u32 LOD = 0;
-            f32 Coverage = 0.0f;
-            f32 Morph = 0.0f;
-        };
-
+    void FWaterRenderer::PrepareGpuTileSources(const Mat44& _ViewProj, const Vec3& _CameraPos) {
+        DebugStats = {};
+        DebugStats.GpuDrawPath = true;
+        DebugStats.GpuTileBuild = true;
+        DebugStats.BucketCount = kSubsetRangeCount;
         InstanceCount = 0;
+        GpuTileSourceCandidateCount = 0;
 
         const f32 BaseSize = std::max(TileBaseSize, 1.0f);
-        const f32 CoverageThreshold = std::max(TileCoverageThreshold, 1.0f);
-        const u32 MeshDim = kGridPoints - 1;
         const u32 Depth = std::min(TileMaxDepth, 10u);
         const u32 RootCells = 1u << Depth;
-        const f32 RootSize = BaseSize * static_cast<f32>(1u << Depth);
+        const f32 RootSize = BaseSize * static_cast<f32>(RootCells);
         const f32 SnapX = std::floor(_CameraPos.X / BaseSize) * BaseSize;
         const f32 SnapZ = std::floor(_CameraPos.Z / BaseSize) * BaseSize;
         const f32 RootX = SnapX - RootSize * 0.5f;
         const f32 RootZ = SnapZ - RootSize * 0.5f;
-        const f32 ScreenW = static_cast<f32>(_ScreenW ? _ScreenW : 1u);
-        const f32 ScreenH = static_cast<f32>(_ScreenH ? _ScreenH : 1u);
-        // Asylum TerrainQuadTree::CalculateCoverage usa proj._11 * proj._22.
-        // Passar a Projection real evita depender de como o ViewProj empacota a camera.
-        const f32 ProjScaleX = std::fabs(_Projection.M[0][0]);
-        const f32 ProjScaleY = std::fabs(_Projection.M[1][1]);
-        const f32 ScreenProjectionScale = ScreenW * ScreenH * 0.25f *
-                                          std::max(ProjScaleX * ProjScaleY, 0.001f);
-        const f32 BoundsPad = 12.0f;
-        const f32 MinCoverageDist = 1.0f;
-        const f32 CoveragePad = 1.35f;
 
-        auto ClipAt = [&_ViewProj](f32 _X, f32 _Y, f32 _Z) {
-            return Vec4{
-                _X * _ViewProj.M[0][0] + _Y * _ViewProj.M[1][0] + _Z * _ViewProj.M[2][0] + _ViewProj.M[3][0],
-                _X * _ViewProj.M[0][1] + _Y * _ViewProj.M[1][1] + _Z * _ViewProj.M[2][1] + _ViewProj.M[3][1],
-                _X * _ViewProj.M[0][2] + _Y * _ViewProj.M[1][2] + _Z * _ViewProj.M[2][2] + _ViewProj.M[3][2],
-                _X * _ViewProj.M[0][3] + _Y * _ViewProj.M[1][3] + _Z * _ViewProj.M[2][3] + _ViewProj.M[3][3],
-            };
-        };
-        auto NodeIntersectsFrustum = [&](const Node& _N) {
-            bool OutsideLeft = true, OutsideRight = true;
-            bool OutsideBottom = true, OutsideTop = true;
-            bool OutsideNear = true, OutsideFar = true;
+        if (MappedCBV) {
+            MappedCBV->QuadTreeParams = { RootX, RootZ, BaseSize, RootSize };
+        }
+        GpuTileBuildRootX = RootX;
+        GpuTileBuildRootZ = RootZ;
+        GpuTileBuildBaseSize = BaseSize;
+        GpuTileBuildBoundsPad = std::max(BaseSize * 2.0f,
+                                         std::max(FFTDispScale * 4.0f, FarSwellHeight * 8.0f) + 16.0f);
+        GpuTileBuildViewProj = _ViewProj;
 
-            const f32 X0 = _N.X - BoundsPad;
-            const f32 X1 = _N.X + _N.Size + BoundsPad;
-            const f32 Z0 = _N.Z - BoundsPad;
-            const f32 Z1 = _N.Z + _N.Size + BoundsPad;
-            const f32 Y0 = WaterLevel - BoundsPad;
-            const f32 Y1 = WaterLevel + BoundsPad;
+        const i32 CameraCellX = std::clamp(
+            static_cast<i32>(std::floor((_CameraPos.X - RootX) / BaseSize)), 0,
+            static_cast<i32>(RootCells) - 1);
+        const i32 CameraCellZ = std::clamp(
+            static_cast<i32>(std::floor((_CameraPos.Z - RootZ) / BaseSize)), 0,
+            static_cast<i32>(RootCells) - 1);
 
-            for (u32 xi = 0; xi < 2; ++xi) {
-                for (u32 yi = 0; yi < 2; ++yi) {
-                    for (u32 zi = 0; zi < 2; ++zi) {
-                        const Vec4 C = ClipAt(xi ? X1 : X0, yi ? Y1 : Y0, zi ? Z1 : Z0);
-                        OutsideLeft   = OutsideLeft   && (C.X < -C.W);
-                        OutsideRight  = OutsideRight  && (C.X >  C.W);
-                        OutsideBottom = OutsideBottom && (C.Y < -C.W);
-                        OutsideTop    = OutsideTop    && (C.Y >  C.W);
-                        OutsideNear   = OutsideNear   && (C.Z <  0.0f);
-                        OutsideFar    = OutsideFar    && (C.Z >  C.W);
-                    }
-                }
-            }
-
-            return !(OutsideLeft || OutsideRight || OutsideBottom ||
-                     OutsideTop || OutsideNear || OutsideFar);
-        };
-
-        auto PushChildren = [](std::vector<Node>& _Out, const Node& _N) {
-            const f32 Half = _N.Size * 0.5f;
-            const u32 ChildDepth = _N.Depth + 1;
-            _Out.push_back({ _N.X,        _N.Z,        Half, ChildDepth });
-            _Out.push_back({ _N.X + Half, _N.Z,        Half, ChildDepth });
-            _Out.push_back({ _N.X,        _N.Z + Half, Half, ChildDepth });
-            _Out.push_back({ _N.X + Half, _N.Z + Half, Half, ChildDepth });
-        };
-
-        auto NodeScreenCoverage = [&](const Node& _N) {
-            const f32 CellSize = _N.Size / static_cast<f32>(MeshDim);
-            const f32 WorldArea = CellSize * CellSize;
-            f32 MaxCoverage = 0.0f;
-
-            static constexpr f32 Samples[16][2] = {
-                { 0.0f,    0.0f   }, { 0.0f,    1.0f   },
-                { 1.0f,    0.0f   }, { 1.0f,    1.0f   },
-                { 0.5f,    0.333f }, { 0.25f,   0.667f },
-                { 0.75f,   0.111f }, { 0.125f,  0.444f },
-                { 0.625f,  0.778f }, { 0.375f,  0.222f },
-                { 0.875f,  0.556f }, { 0.0625f, 0.889f },
-                { 0.5625f, 0.037f }, { 0.3125f, 0.37f  },
-                { 0.8125f, 0.704f }, { 0.1875f, 0.148f },
-            };
-
-            for (const auto& Sample : Samples) {
-                const f32 X = (_N.X - CoveragePad) + (_N.Size + 2.0f * CoveragePad) * Sample[0];
-                const f32 Z = (_N.Z - CoveragePad) + (_N.Size + 2.0f * CoveragePad) * Sample[1];
-                const f32 Dx = X - _CameraPos.X;
-                const f32 Dy = WaterLevel - _CameraPos.Y;
-                const f32 Dz = Z - _CameraPos.Z;
-                const f32 DistSq = std::max(Dx * Dx + Dy * Dy + Dz * Dz,
-                                            MinCoverageDist * MinCoverageDist);
-                const f32 Coverage = WorldArea * ScreenProjectionScale / DistSq;
-                MaxCoverage = std::max(MaxCoverage, Coverage);
-            }
-
-            return MaxCoverage;
-        };
-        auto CalculateNodeLOD = [&](f32 _Coverage) {
-            u32 LOD = 0;
-            f32 Coverage = _Coverage;
-            for (; LOD + 1 < kSubsetLODCount; ++LOD) {
-                if (Coverage > CoverageThreshold)
-                    break;
-                Coverage *= 4.0f;
-            }
-            return std::min(LOD, kSubsetLODCount - 1);
-        };
-        auto CalculateNodeMorph = [&](f32 _Coverage, u32 _LOD) {
-            if (_LOD + 1 >= kSubsetLODCount)
-                return 0.0f;
-
-            f32 SwitchCoverage = CoverageThreshold;
-            for (u32 I = 0; I < _LOD; ++I)
-                SwitchCoverage *= 0.25f;
-
-            const f32 MorphStartCoverage = SwitchCoverage * 1.75f;
-            const f32 Denom = std::max(MorphStartCoverage - SwitchCoverage, 1.0f);
-            f32 T = (MorphStartCoverage - _Coverage) / Denom;
-            T = std::clamp(T, 0.0f, 1.0f);
-            return T * T * (3.0f - 2.0f * T);
-        };
-
-        std::vector<Node> Stack;
-        Stack.reserve(512);
-        Stack.push_back({ RootX, RootZ, RootSize, 0 });
-
-        std::vector<Node> Leaves;
-        Leaves.reserve(1024);
-
-        while (!Stack.empty()) {
-            const Node N = Stack.back();
-            Stack.pop_back();
-
-            if (!NodeIntersectsFrustum(N)) {
-                continue;
-            }
-
-            const f32 Coverage = NodeScreenCoverage(N);
-            const bool CanSplit = N.Depth < Depth && N.Size > BaseSize * 1.01f;
-            const bool ShouldSplit = CanSplit && Coverage > CoverageThreshold;
-            if (ShouldSplit) {
-                PushChildren(Stack, N);
-                continue;
-            }
-
-            Node Leaf = N;
-            Leaf.Coverage = Coverage;
-            Leaf.LOD = CalculateNodeLOD(Coverage);
-            Leaf.Morph = CalculateNodeMorph(Coverage, Leaf.LOD);
-            Leaves.push_back(Leaf);
+        u32 RingRadius = GpuTileBuildRequestedRingRadius;
+        u32 CellsPerSide = RingRadius * 2u + 1u;
+        u32 LevelCount = 1u;
+        for (u32 CoverCells = CellsPerSide; LevelCount <= Depth && CoverCells < RootCells; CoverCells <<= 1u) {
+            ++LevelCount;
         }
 
-        std::vector<i32> LeafGrid(static_cast<size_t>(RootCells) * RootCells, -1);
-        auto RebuildLeafGrid = [&]() {
-            std::fill(LeafGrid.begin(), LeafGrid.end(), -1);
-            for (u32 LeafIndex = 0; LeafIndex < static_cast<u32>(Leaves.size()); ++LeafIndex) {
-                const Node& N = Leaves[LeafIndex];
-                const i32 X0 = std::max(0, static_cast<i32>(std::round((N.X - RootX) / BaseSize)));
-                const i32 Z0 = std::max(0, static_cast<i32>(std::round((N.Z - RootZ) / BaseSize)));
-                const i32 Count = std::max(1, static_cast<i32>(std::round(N.Size / BaseSize)));
-                const i32 X1 = std::min(static_cast<i32>(RootCells), X0 + Count);
-                const i32 Z1 = std::min(static_cast<i32>(RootCells), Z0 + Count);
-
-                for (i32 Z = Z0; Z < Z1; ++Z) {
-                    for (i32 X = X0; X < X1; ++X) {
-                        LeafGrid[static_cast<size_t>(Z) * RootCells + X] = static_cast<i32>(LeafIndex);
-                    }
-                }
+        while (CellsPerSide * CellsPerSide * LevelCount > kMaxTileInstances && RingRadius > 4u) {
+            --RingRadius;
+            CellsPerSide = RingRadius * 2u + 1u;
+            LevelCount = 1u;
+            for (u32 CoverCells = CellsPerSide; LevelCount <= Depth && CoverCells < RootCells; CoverCells <<= 1u) {
+                ++LevelCount;
             }
-        };
-
-        auto LeafAtCell = [&](i32 _X, i32 _Z) -> i32 {
-            if (_X < 0 || _Z < 0 || _X >= static_cast<i32>(RootCells) || _Z >= static_cast<i32>(RootCells))
-                return -1;
-            return LeafGrid[static_cast<size_t>(_Z) * RootCells + _X];
-        };
-
-        // Os subsets so cobrem vizinho igual, 2x e 4x mais grosso. Se a quadtree
-        // gerar saltos maiores, subdividimos o lado grosso para nao sobrar T-junction.
-        static constexpr f32 MaxSubsetScale = 4.0f;
-        for (u32 BalancePass = 0; BalancePass < 4; ++BalancePass) {
-            RebuildLeafGrid();
-            std::vector<u8> SplitFlags(Leaves.size(), 0);
-
-            auto MarkPair = [&](u32 _AIndex, i32 _BIndex) {
-                if (_BIndex < 0 || static_cast<u32>(_BIndex) == _AIndex)
-                    return;
-
-                const Node& A = Leaves[_AIndex];
-                const Node& B = Leaves[static_cast<size_t>(_BIndex)];
-                if (A.Size > B.Size * MaxSubsetScale + 0.01f && A.Depth < Depth)
-                    SplitFlags[_AIndex] = 1;
-                if (B.Size > A.Size * MaxSubsetScale + 0.01f && B.Depth < Depth)
-                    SplitFlags[static_cast<size_t>(_BIndex)] = 1;
-            };
-
-            for (u32 LeafIndex = 0; LeafIndex < static_cast<u32>(Leaves.size()); ++LeafIndex) {
-                const Node& N = Leaves[LeafIndex];
-                const i32 X0 = static_cast<i32>(std::round((N.X - RootX) / BaseSize));
-                const i32 Z0 = static_cast<i32>(std::round((N.Z - RootZ) / BaseSize));
-                const i32 Count = std::max(1, static_cast<i32>(std::round(N.Size / BaseSize)));
-
-                for (i32 I = 0; I < Count; ++I) {
-                    MarkPair(LeafIndex, LeafAtCell(X0 - 1,     Z0 + I));
-                    MarkPair(LeafIndex, LeafAtCell(X0 + Count, Z0 + I));
-                    MarkPair(LeafIndex, LeafAtCell(X0 + I,     Z0 - 1));
-                    MarkPair(LeafIndex, LeafAtCell(X0 + I,     Z0 + Count));
-                }
-            }
-
-            if (std::find(SplitFlags.begin(), SplitFlags.end(), 1) == SplitFlags.end())
-                break;
-
-            std::vector<Node> Balanced;
-            Balanced.reserve(std::min<size_t>(Leaves.size() * 2, kMaxTileInstances));
-            for (u32 LeafIndex = 0; LeafIndex < static_cast<u32>(Leaves.size()); ++LeafIndex) {
-                const Node& N = Leaves[LeafIndex];
-                if (SplitFlags[LeafIndex] && Balanced.size() + 4 <= kMaxTileInstances) {
-                    PushChildren(Balanced, N);
-                } else {
-                    Balanced.push_back(N);
-                }
-            }
-
-            Leaves.swap(Balanced);
         }
 
-        for (Node& N : Leaves) {
-            N.Coverage = NodeScreenCoverage(N);
-            N.LOD = CalculateNodeLOD(N.Coverage);
-            N.Morph = CalculateNodeMorph(N.Coverage, N.LOD);
-        }
-
-        for (u32 LODBalancePass = 0; LODBalancePass < 4; ++LODBalancePass) {
-            RebuildLeafGrid();
-            bool Changed = false;
-
-            auto EffectiveCellSize = [&](const Node& _N) {
-                const u32 LevelSize = std::max(1u, MeshDim >> _N.LOD);
-                return _N.Size / static_cast<f32>(LevelSize);
-            };
-            auto BalanceLODPair = [&](u32 _AIndex, i32 _BIndex) {
-                if (_BIndex < 0 || static_cast<u32>(_BIndex) == _AIndex)
-                    return;
-
-                Node& A = Leaves[_AIndex];
-                Node& B = Leaves[static_cast<size_t>(_BIndex)];
-                const f32 ACell = EffectiveCellSize(A);
-                const f32 BCell = EffectiveCellSize(B);
-
-                const bool AIsSmaller = A.Size < B.Size * 0.999f;
-                const bool BIsSmaller = B.Size < A.Size * 0.999f;
-                const f32 AAllowedScale = AIsSmaller ? 1.0f : MaxSubsetScale;
-                const f32 BAllowedScale = BIsSmaller ? 1.0f : MaxSubsetScale;
-
-                if (ACell > BCell * AAllowedScale + 0.001f && A.LOD > 0) {
-                    --A.LOD;
-                    Changed = true;
-                }
-                if (BCell > ACell * BAllowedScale + 0.001f && B.LOD > 0) {
-                    --B.LOD;
-                    Changed = true;
-                }
-            };
-
-            for (u32 LeafIndex = 0; LeafIndex < static_cast<u32>(Leaves.size()); ++LeafIndex) {
-                const Node& N = Leaves[LeafIndex];
-                const i32 X0 = static_cast<i32>(std::round((N.X - RootX) / BaseSize));
-                const i32 Z0 = static_cast<i32>(std::round((N.Z - RootZ) / BaseSize));
-                const i32 Count = std::max(1, static_cast<i32>(std::round(N.Size / BaseSize)));
-
-                for (i32 I = 0; I < Count; ++I) {
-                    BalanceLODPair(LeafIndex, LeafAtCell(X0 - 1,     Z0 + I));
-                    BalanceLODPair(LeafIndex, LeafAtCell(X0 + Count, Z0 + I));
-                    BalanceLODPair(LeafIndex, LeafAtCell(X0 + I,     Z0 - 1));
-                    BalanceLODPair(LeafIndex, LeafAtCell(X0 + I,     Z0 + Count));
-                }
-            }
-
-            if (!Changed)
-                break;
-        }
-
-        for (Node& N : Leaves) {
-            N.Morph = CalculateNodeMorph(N.Coverage, N.LOD);
-        }
-
-        RebuildLeafGrid();
-        auto EdgePattern = [&](const Node& _N, u32 _Edge) {
-            const i32 X0 = static_cast<i32>(std::round((_N.X - RootX) / BaseSize));
-            const i32 Z0 = static_cast<i32>(std::round((_N.Z - RootZ) / BaseSize));
-            const i32 Count = std::max(1, static_cast<i32>(std::round(_N.Size / BaseSize)));
-            i32 NX = X0 + Count / 2;
-            i32 NZ = Z0 + Count / 2;
-
-            if (_Edge == 0) { NX = X0 - 1;         NZ = Z0 + Count / 2; }
-            if (_Edge == 1) { NX = X0 + Count;     NZ = Z0 + Count / 2; }
-            if (_Edge == 2) { NX = X0 + Count / 2; NZ = Z0 + Count; } // bottom: +Z
-            if (_Edge == 3) { NX = X0 + Count / 2; NZ = Z0 - 1; }     // top: -Z
-
-            const i32 Neighbor = LeafAtCell(NX, NZ);
-            if (Neighbor < 0) return 0u;
-
-            const Node& Adj = Leaves[static_cast<size_t>(Neighbor)];
-            if (Adj.Size <= _N.Size * 0.999f)
-                return 0u;
-
-            const f32 NodeLevelSize = static_cast<f32>(MeshDim >> _N.LOD);
-            const f32 AdjLevelSize = static_cast<f32>(MeshDim >> Adj.LOD);
-            const f32 Scale = Adj.Size / std::max(_N.Size, 1.0f) *
-                              NodeLevelSize / std::max(AdjLevelSize, 1.0f);
-            if (Scale > 3.999f) return 2u;
-            if (Scale > 1.999f) return 1u;
-            return 0u;
-        };
-        auto PatternIndex = [](u32 _Left, u32 _Right, u32 _Bottom, u32 _Top) {
-            return _Left + _Right * 3u + _Bottom * 9u + _Top * 27u;
-        };
+        GpuTileBuildDepth = Depth;
+        GpuTileBuildLevelCount = LevelCount;
+        GpuTileBuildRingRadius = RingRadius;
+        GpuTileBuildCameraCellX = static_cast<u32>(CameraCellX);
+        GpuTileBuildCameraCellZ = static_cast<u32>(CameraCellZ);
+        GpuTileSourceCandidateCount = std::min(kMaxTileInstances, CellsPerSide * CellsPerSide * LevelCount);
+        InstanceCount = GpuTileSourceCandidateCount;
+        DebugStats.CandidateCount = GpuTileSourceCandidateCount;
+        DebugStats.LevelCount = GpuTileBuildLevelCount;
+        DebugStats.RingRadius = GpuTileBuildRingRadius;
+        DebugStats.Depth = GpuTileBuildDepth;
+        DebugStats.RootX = RootX;
+        DebugStats.RootZ = RootZ;
+        DebugStats.BaseSize = BaseSize;
+        DebugStats.RootSize = RootSize;
 
         for (u32 RangeIndex = 0; RangeIndex < kSubsetRangeCount; ++RangeIndex) {
-            PatternInstanceStarts[RangeIndex] = 0;
-            PatternInstanceCounts[RangeIndex] = 0;
+            if (MappedDrawBuckets) {
+                const IndexRange& Range = PatternRanges[RangeIndex];
+                MappedDrawBuckets[RangeIndex] = {
+                    Range.Start,
+                    Range.Count,
+                    0u,
+                    0u
+                };
+            }
+        }
+        ReadGpuDebugCounters(FrameSlot);
+    }
+
+    void FWaterRenderer::ReadGpuDebugCounters(u32 _FrameSlot) {
+        if (!MappedGpuDebugCountersBase) {
+            return;
         }
 
-        struct PendingInstance {
-            TileInstance Instance;
-            u32 RangeIndex = 0;
-        };
+        const u32* Counters = MappedGpuDebugCountersBase +
+            static_cast<size_t>(_FrameSlot) * kGpuDebugCounterCount;
+        const u32 ReadbackTileCount = Counters[GpuCounterTileCount];
 
-        std::vector<PendingInstance> Pending;
-        Pending.reserve(std::min<size_t>(Leaves.size(), kMaxTileInstances));
-        for (const Node& N : Leaves) {
-            if (Pending.size() >= kMaxTileInstances) break;
+        DebugStats.ValidTileCount = Counters[GpuCounterValidTiles];
+        DebugStats.CountedTileCount = Counters[GpuCounterCountedTiles];
+        DebugStats.ScatteredTileCount = Counters[GpuCounterScatteredTiles];
+        DebugStats.DrawCommandCount = Counters[GpuCounterDrawCommands];
+        DebugStats.OutOfBoundsCount = Counters[GpuCounterOutOfBounds];
+        DebugStats.CoveredByFinerCount = Counters[GpuCounterCoveredByFiner];
+        DebugStats.FrustumCulledCount = Counters[GpuCounterFrustumCulled];
 
-            const u32 Left   = EdgePattern(N, 0);
-            const u32 Right  = EdgePattern(N, 1);
-            const u32 Bottom = EdgePattern(N, 2);
-            const u32 Top    = EdgePattern(N, 3);
-            const u32 Pattern = PatternIndex(Left, Right, Bottom, Top);
-            const u32 LOD = std::min(N.LOD, kSubsetLODCount - 1);
-            const u32 RangeIndex = LOD * kSubsetPatternCount + Pattern;
-
-            Pending.push_back({
-                { { N.X, N.Z, N.Size, static_cast<f32>(RangeIndex) },
-                  { N.Morph, N.Coverage, static_cast<f32>(LOD), 0.0f } },
-                RangeIndex
-            });
-            ++PatternInstanceCounts[RangeIndex];
+        if (ReadbackTileCount > 0) {
+            DebugStats.CandidateCount = ReadbackTileCount;
+            DebugStats.LevelCount = Counters[GpuCounterLevelCount];
+            DebugStats.RingRadius = Counters[GpuCounterRingRadius];
+            DebugStats.Depth = Counters[GpuCounterDepth];
         }
-
-        u32 Start = 0;
-        for (u32 RangeIndex = 0; RangeIndex < kSubsetRangeCount; ++RangeIndex) {
-            PatternInstanceStarts[RangeIndex] = Start;
-            Start += PatternInstanceCounts[RangeIndex];
-            PatternInstanceCounts[RangeIndex] = 0;
-        }
-
-        for (const PendingInstance& PendingInst : Pending) {
-            const u32 RangeIndex = PendingInst.RangeIndex;
-            const u32 Dst = PatternInstanceStarts[RangeIndex] + PatternInstanceCounts[RangeIndex]++;
-            MappedInstances[Dst] = PendingInst.Instance;
-        }
-        InstanceCount = static_cast<u32>(Pending.size());
     }
 
     void FWaterRenderer::Initialize(ID3D12Device* _Device, u32 _SampleCount,
                                     DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         BuildRootSignature(_Device);
         BuildPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildGenerateDrawsPipeline(_Device);
         BuildGrid(_Device);
         BuildInstanceBuffer(_Device);
 
@@ -852,7 +764,7 @@ namespace Smile {
     }
 
     void FWaterRenderer::Resize(ID3D12Device*, u32, u32) {
-        // No-op ate a Etapa 3 (snapshots de scene-color/depth para refracao).
+        // No-op por ora (as copias de scene-color/depth sao geridas pelo Renderer).
     }
 
     void FWaterRenderer::UpdatePerFrame(u32 _FrameSlot, const Mat44& _ViewProj, const Mat44& _Projection,
@@ -862,16 +774,22 @@ namespace Smile {
                                         bool _IBLEnabled, f32 _IBLIntensity,
                                         u32 _ScreenW, u32 _ScreenH, f32 _NearZ, f32 _FarZ,
                                         bool _HasSceneCopies, bool _UseAtmosphereSky) {
-        if (!MappedCBVBase || !MappedInstancesBase) return;
+        (void)_Projection;
+        if (!MappedCBVBase || !MappedDrawBucketsBase) return;
 
-        // Reaponta CB + instancias + view de instancia para a regiao deste frame.
+        // Reaponta CB, draw buckets e view de instancia GPU para a regiao deste frame.
         FrameSlot = _FrameSlot;
         MappedCBV = reinterpret_cast<WaterConstants*>(
             MappedCBVBase + static_cast<size_t>(FrameSlot) * sizeof(WaterConstants));
-        MappedInstances = reinterpret_cast<TileInstance*>(
-            MappedInstancesBase + static_cast<size_t>(FrameSlot) * sizeof(TileInstance) * kMaxTileInstances);
-        InstanceVBView.BufferLocation = InstanceBuffer->GetGPUVirtualAddress() +
-            static_cast<UINT64>(FrameSlot) * sizeof(TileInstance) * kMaxTileInstances;
+        MappedDrawBuckets = MappedDrawBucketsBase
+            ? reinterpret_cast<DrawBucketSource*>(
+                MappedDrawBucketsBase + static_cast<size_t>(FrameSlot) *
+                sizeof(DrawBucketSource) * kSubsetRangeCount)
+            : nullptr;
+        GpuInstanceVBView.BufferLocation = GpuInstanceBuffer
+            ? GpuInstanceBuffer->GetGPUVirtualAddress() +
+                static_cast<UINT64>(FrameSlot) * sizeof(TileInstance) * kMaxTileInstances
+            : 0;
 
         const f32 Cos = std::cos(WindDir);
         const f32 Sin = std::sin(WindDir);
@@ -880,37 +798,38 @@ namespace Smile {
         MappedCBV->InvViewProj  = _InvViewProj;
         MappedCBV->CameraPos    = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z, 1.0f };
         MappedCBV->SunDirection = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
-        MappedCBV->SunColor     = { _SunColor.X, _SunColor.Y, _SunColor.Z, 0.0f };
-        // OceanParams0/1 — semantica da Cry (terrain_water_quad.cpp:491).
-        MappedCBV->OceanParams0    = { WindDir, WindSpeed, 0.0f, WavesAmount };
+        MappedCBV->SunColor     = { _SunColor.X, _SunColor.Y, _SunColor.Z, WaterClarity };
+        // OceanParams0/1: vento, ondas, flow-dir e nivel da agua. z = intensidade da
+        // espuma de costa (so aplicada no caminho com depth da cena).
+        MappedCBV->OceanParams0    = { WindDir, WindSpeed, UseFoam ? ShoreFoamIntensity : 0.0f, WavesAmount };
         MappedCBV->OceanParams1    = { WavesSize, Cos, Sin, WaterLevel };
-        MappedCBV->DeepColorDensity = { DeepColor.X, DeepColor.Y, DeepColor.Z, 0.0f };
-        // Misc: time, gate de reflexao IBL, intensidade, mip max do cubemap especular (6).
-        MappedCBV->Misc = { _ElapsedTime, _IBLEnabled ? 1.0f : 0.0f, _IBLIntensity, 6.0f };
-        // ProjGrid: maxDist/horizonBias ainda usados pelo fade final; y/w ficam legados.
-        MappedCBV->ProjGrid     = { 8000.0f, 1.3f, 4.5f, 1.0f / 20000.0f };
+        // Misc: time, gate de reflexao IBL, intensidade, mip max do cubemap especular.
+        MappedCBV->Misc = { _ElapsedTime, _IBLEnabled ? 1.0f : 0.0f, _IBLIntensity, kSpecularMaxMip };
+        // WaterFXParams: subsurface scattering (forca, expoente, escala de altura) + orla.
+        MappedCBV->WaterFXParams = { SSSStrength, SSSPower, SSSHeightScale, ShoreFoamWidth };
         // ShadeParams: FresnelGloss, ReflectionScale, expoente do sun spec, escala do sun spec.
-        MappedCBV->ShadeParams  = { FresnelGloss, ReflectionScale, 256.0f, 1.0f };
+        MappedCBV->ShadeParams  = { FresnelGloss, ReflectionScale, kSunShininess, kSunSpecScale };
         // OceanFFT: usa FFT?, escala mestre do deslocamento, escala choppy, "up" do normal.
         MappedCBV->OceanFFT     = { UseFFT ? 1.0f : 0.0f, FFTDispScale, FFTChoppyScale, FFTNormalUp };
         // OceanFade: distancia de inicio e faixa do achatamento (anti-shimmer no horizonte).
         MappedCBV->OceanFade    = { FFTFadeStart, FFTFadeRange, 0.0f, 0.0f };
-        // Bump de detalhe (Etapa 2): tilings + escalas de normal; strength/parallax/toggle.
+        // Bump de detalhe: tilings + escalas de normal; strength/parallax/toggle.
         MappedCBV->BumpParams   = { BumpTilling, BumpDetailTilling, BumpNormalsScale, BumpDetailScale };
         MappedCBV->BumpParams2  = { BumpStrength, ParallaxHeight, UseBump ? 1.0f : 0.0f, BumpFadeDist };
-        // Refração / fog (Etapa 3).
+        // Refracao / fog (depende das copias scene-color/depth pre-agua).
         const f32 W = (f32)(_ScreenW ? _ScreenW : 1), H = (f32)(_ScreenH ? _ScreenH : 1);
         MappedCBV->ScreenParams     = { W, H, 1.0f / W, 1.0f / H };
-        MappedCBV->DepthParams      = { _NearZ, _FarZ, _HasSceneCopies ? 1.0f : 0.0f, 0.0f };
+        MappedCBV->DepthParams      = { _NearZ, _FarZ, _HasSceneCopies ? 1.0f : 0.0f,
+                                        _UseAtmosphereSky ? 1.0f : 0.0f };
         MappedCBV->RefractionParams = { RefractionBumpScale, SoftIntersectionFactor, FogDensity, ReflectionBumpScale };
         MappedCBV->AerialFogParams  = { AerialFogStart, AerialFogRange, AerialFogDensity,
                                          UseAerialFog ? (_UseAtmosphereSky ? 2.0f : 1.0f) : 0.0f };
         MappedCBV->FarBlendParams   = { FarBlendStart, FarBlendRange,
                                          FarSwellHeight, FarSwellNormalStrength };
         MappedCBV->DebugParams      = { static_cast<f32>(static_cast<u32>(DebugMode)), 0.0f, 0.0f, 0.0f };
-        // densidade do fog tambem em DeepColorDensity.w (Cry empacota la).
+        // densidade do fog tambem empacotada em DeepColorDensity.w.
         MappedCBV->DeepColorDensity = { DeepColor.X, DeepColor.Y, DeepColor.Z, FogDensity };
-        // In-scattering (turquesa) + absorcao por canal + clamp do sun-spec (Etapa 3).
+        // In-scattering (turquesa) + absorcao por canal + clamp do sun-spec.
         MappedCBV->InScatterColor  = { InScatterColor.X, InScatterColor.Y, InScatterColor.Z, InScatterDensity };
         MappedCBV->AbsorptionColor = { AbsorptionColor.X, AbsorptionColor.Y, AbsorptionColor.Z, SunSpecClamp };
         // Foam: coverage(limiar J), sharpness, intensidade (0 desliga), distancia de fade.
@@ -918,7 +837,163 @@ namespace Smile {
                                   UseFoam ? FoamIntensity : 0.0f, FoamFadeDist };
         MappedCBV->FoamColor  = { FoamColor.X, FoamColor.Y, FoamColor.Z, FoamSpecSuppress };
 
-        BuildTileInstances(_ViewProj, _Projection, _CameraPos, _ScreenW, _ScreenH);
+        const bool CanBuildTileSourcesOnGpu =
+            GenerateDrawsPSO && GpuTileSourceBuffer && GpuInstanceBuffer &&
+            GpuIndirectArgsBuffer && GpuDrawBucketScratchBuffer &&
+            GpuDebugCounterBuffer && MappedDrawBuckets;
+        if (CanBuildTileSourcesOnGpu) {
+            PrepareGpuTileSources(_ViewProj, _CameraPos);
+        } else {
+            DebugStats = {};
+            InstanceCount = 0;
+            GpuTileSourceCandidateCount = 0;
+        }
+    }
+
+    void FWaterRenderer::DispatchGenerateDraws(ID3D12GraphicsCommandList* _CommandList) {
+        const u32 SourceCount = GpuTileSourceCandidateCount;
+
+        if (!GenerateDrawsPSO || !GenerateDrawsRootSignature ||
+            !GpuInstanceBuffer || !GpuIndirectArgsBuffer || !GpuDrawBucketScratchBuffer ||
+            !GpuTileSourceBuffer ||
+            !GpuDebugCounterBuffer ||
+            SourceCount == 0) {
+            return;
+        }
+
+        auto AppendTransition = [](D3D12_RESOURCE_BARRIER* _Barriers, UINT& _Count,
+                                   ID3D12Resource* _Resource,
+                                   D3D12_RESOURCE_STATES _Before,
+                                   D3D12_RESOURCE_STATES _After) {
+            if (!_Resource || _Before == _After) {
+                return;
+            }
+
+            D3D12_RESOURCE_BARRIER& Barrier = _Barriers[_Count++];
+            Barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            Barrier.Transition.pResource = _Resource;
+            Barrier.Transition.StateBefore = _Before;
+            Barrier.Transition.StateAfter = _After;
+            Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        };
+
+        D3D12_RESOURCE_BARRIER ToUAV[5]{};
+        UINT ToUAVCount = 0;
+        AppendTransition(ToUAV, ToUAVCount, GpuTileSourceBuffer.Get(),
+                         GpuTileSourceBufferState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        AppendTransition(ToUAV, ToUAVCount, GpuInstanceBuffer.Get(),
+                         GpuInstanceBufferState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        AppendTransition(ToUAV, ToUAVCount, GpuIndirectArgsBuffer.Get(),
+                         GpuIndirectArgsBufferState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        AppendTransition(ToUAV, ToUAVCount, GpuDrawBucketScratchBuffer.Get(),
+                         GpuDrawBucketScratchState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        AppendTransition(ToUAV, ToUAVCount, GpuDebugCounterBuffer.Get(),
+                         GpuDebugCounterState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        if (ToUAVCount > 0) {
+            _CommandList->ResourceBarrier(ToUAVCount, ToUAV);
+        }
+        GpuTileSourceBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        GpuInstanceBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        GpuDrawBucketScratchState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        GpuDebugCounterState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+        ID3D12DescriptorHeap* Heaps[] = { GenerateDrawsHeap.Native() };
+        _CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
+        _CommandList->SetComputeRootSignature(GenerateDrawsRootSignature.Get());
+        _CommandList->SetPipelineState(GenerateDrawsPSO.Get());
+
+        const u32 TileBase = FrameSlot * kMaxTileInstances;
+        const u32 BucketBase = FrameSlot * kSubsetRangeCount;
+        const u32 ScratchBase = FrameSlot * kSubsetRangeCount * 3u;
+        const u32 OutputBase = TileBase;
+        const u32 DebugBase = FrameSlot * kGpuDebugCounterCount;
+
+        auto DispatchPass = [&](u32 _PassMode, u32 _WorkItems) {
+            u32 Constants[40]{};
+            Constants[0]  = SourceCount;
+            Constants[1]  = TileBase;
+            Constants[2]  = BucketBase;
+            Constants[3]  = kSubsetRangeCount;
+            Constants[4]  = _PassMode;
+            Constants[5]  = ScratchBase;
+            Constants[6]  = OutputBase;
+            Constants[7]  = GpuTileBuildLevelCount;
+            Constants[8]  = GpuTileBuildRingRadius;
+            Constants[9]  = GpuTileBuildDepth;
+            Constants[10] = GpuTileBuildCameraCellX;
+            Constants[11] = GpuTileBuildCameraCellZ;
+            Constants[12] = DebugBase;
+            for (u32 Row = 0; Row < 4; ++Row) {
+                for (u32 Col = 0; Col < 4; ++Col) {
+                    Constants[16u + Row * 4u + Col] =
+                        FloatBits(GpuTileBuildViewProj.M[Row][Col]);
+                }
+            }
+            Constants[32] = FloatBits(GpuTileBuildRootX);
+            Constants[33] = FloatBits(GpuTileBuildRootZ);
+            Constants[34] = FloatBits(GpuTileBuildBaseSize);
+            Constants[35] = FloatBits(WaterLevel);
+            Constants[36] = FloatBits(GpuTileBuildBoundsPad);
+            Constants[37] = FloatBits(UseGpuFrustumCull ? 1.0f : 0.0f);
+            _CommandList->SetComputeRoot32BitConstants(0, _countof(Constants), Constants, 0);
+            _CommandList->Dispatch((std::max(_WorkItems, 1u) + 63u) / 64u, 1, 1);
+
+            D3D12_RESOURCE_BARRIER Barrier{};
+            Barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            Barrier.UAV.pResource = nullptr;
+            _CommandList->ResourceBarrier(1, &Barrier);
+        };
+        _CommandList->SetComputeRootDescriptorTable(2, GenerateDrawsHeap.GpuHandle(2));
+
+        _CommandList->SetComputeRootDescriptorTable(1, GenerateDrawsHeap.GpuHandle(0));
+        DispatchPass(0u, kSubsetRangeCount); // clear counts, cursors, indirect args and debug counters
+
+        DispatchPass(4u, SourceCount); // build packed tile sources on GPU
+
+        D3D12_RESOURCE_BARRIER ToTileSourceSRV[1]{};
+        UINT ToTileSourceSRVCount = 0;
+        AppendTransition(ToTileSourceSRV, ToTileSourceSRVCount, GpuTileSourceBuffer.Get(),
+                         GpuTileSourceBufferState,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if (ToTileSourceSRVCount > 0) {
+            _CommandList->ResourceBarrier(ToTileSourceSRVCount, ToTileSourceSRV);
+        }
+        GpuTileSourceBufferState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        // O conteudo dos SRVs nao mudou (o descritor independe do estado do recurso),
+        // entao a tabela SRV ja bindada em GpuHandle(0) continua valida.
+
+        DispatchPass(1u, SourceCount);       // count instances per bucket
+        DispatchPass(2u, 1u);                // prefix sum and indirect args
+        DispatchPass(3u, SourceCount);       // scatter packed instances by bucket
+
+        D3D12_RESOURCE_BARRIER ToCopy[1]{};
+        UINT ToCopyCount = 0;
+        AppendTransition(ToCopy, ToCopyCount, GpuDebugCounterBuffer.Get(),
+                         GpuDebugCounterState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        if (ToCopyCount > 0) {
+            _CommandList->ResourceBarrier(ToCopyCount, ToCopy);
+        }
+        GpuDebugCounterState = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        if (GpuDebugReadbackBuffer) {
+            const UINT64 DebugOffset = static_cast<UINT64>(DebugBase) * sizeof(u32);
+            _CommandList->CopyBufferRegion(
+                GpuDebugReadbackBuffer.Get(), DebugOffset,
+                GpuDebugCounterBuffer.Get(), DebugOffset,
+                static_cast<UINT64>(kGpuDebugCounterCount) * sizeof(u32));
+        }
+
+        D3D12_RESOURCE_BARRIER ToRead[2]{};
+        UINT ToReadCount = 0;
+        AppendTransition(ToRead, ToReadCount, GpuInstanceBuffer.Get(),
+                         GpuInstanceBufferState, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        AppendTransition(ToRead, ToReadCount, GpuIndirectArgsBuffer.Get(),
+                         GpuIndirectArgsBufferState, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        if (ToReadCount > 0) {
+            _CommandList->ResourceBarrier(ToReadCount, ToRead);
+        }
+        GpuInstanceBufferState = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+        GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
     }
 
     void FWaterRenderer::RenderSurface(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
@@ -927,6 +1002,18 @@ namespace Smile {
                                        u32 _AtmosphereSkyViewSRVSlot) {
         if (!PSO || InstanceCount == 0) return;
 
+        const bool CanRenderGpuDraws =
+            GenerateDrawsPSO && IndirectCommandSignature && GpuInstanceBuffer &&
+            GpuIndirectArgsBuffer && GpuDrawBucketScratchBuffer &&
+            GpuDebugCounterBuffer &&
+            MappedDrawBuckets && GpuTileSourceCandidateCount > 0;
+        if (!CanRenderGpuDraws) {
+            return;
+        }
+        DispatchGenerateDraws(_CommandList);
+
+        ID3D12DescriptorHeap* GraphicsHeaps[] = { _SRVHeap.Native() };
+        _CommandList->SetDescriptorHeaps(_countof(GraphicsHeaps), GraphicsHeaps);
         _CommandList->SetGraphicsRootSignature(RootSignature.Get());
         ID3D12PipelineState* ActivePSO =
             (DebugMode == EDebugMode::Wireframe && WireframePSO) ? WireframePSO.Get() : PSO.Get();
@@ -939,15 +1026,14 @@ namespace Smile {
         _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_FFTNormalSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(5, _SRVHeap.GpuHandle(_AtmosphereSkyViewSRVSlot));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        D3D12_VERTEX_BUFFER_VIEW Views[] = { VBView, InstanceVBView };
+        D3D12_VERTEX_BUFFER_VIEW Views[] = { VBView, GpuInstanceVBView };
         _CommandList->IASetVertexBuffers(0, _countof(Views), Views);
         _CommandList->IASetIndexBuffer(&IBView);
-        for (u32 RangeIndex = 0; RangeIndex < kSubsetRangeCount; ++RangeIndex) {
-            const u32 Count = PatternInstanceCounts[RangeIndex];
-            const IndexRange& Range = PatternRanges[RangeIndex];
-            if (Count == 0 || Range.Count == 0) continue;
-            _CommandList->DrawIndexedInstanced(Range.Count, Count, Range.Start, 0,
-                                               PatternInstanceStarts[RangeIndex]);
-        }
+        const UINT64 ArgsOffset = static_cast<UINT64>(FrameSlot) *
+            sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * kSubsetRangeCount;
+        _CommandList->ExecuteIndirect(
+            IndirectCommandSignature.Get(), kSubsetRangeCount,
+            GpuIndirectArgsBuffer.Get(), ArgsOffset,
+            nullptr, 0);
     }
 }

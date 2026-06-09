@@ -45,7 +45,7 @@ float4 main(PSInput input) : SV_TARGET {
     // Wide soft glare: pow falloff that fades over a few degrees around the sun.
     float glare = pow(saturate(cosToSun), 350.0f);
 
-    L += sunVisible * sunTrans * (kSunDiskInt * core + kSunGlareInt * glare);
+    L += sunTrans * (kSunDiskInt * core + kSunGlareInt * glare);
 
     return float4(L, 1.0f);
 }

@@ -8,19 +8,19 @@ cbuffer WaterCB : register(b0) {
     row_major float4x4 InvViewProj;
     float4 CameraPos;        // xyz, w=1
     float4 SunDirection;     // xyz=dir TO sun (norm), w=intensity
-    float4 SunColor;         // rgb, w=unused
-    float4 OceanParams0;     // x=windDir(rad) y=windSpeed z=0 w=wavesAmount
+    float4 SunColor;         // rgb, w=waterClarity(m)
+    float4 OceanParams0;     // x=windDir(rad) y=windSpeed z=shoreFoamIntensity w=wavesAmount
     float4 OceanParams1;     // x=wavesSize y=FlowDir.x z=FlowDir.y w=waterLevel
     float4 DeepColorDensity; // rgb=cor de fundo, w=fogDensity (futuro)
     float4 Misc;             // x=time y=iblEnabled z=iblIntensity w=specMaxMip
-    float4 ProjGrid;         // x=maxDist y=overscan z=horizonBias w=nearClampEps
+    float4 WaterFXParams;    // x=sssStrength y=sssPower z=sssHeightScale w=shoreFoamWidth(m)
     float4 ShadeParams;      // x=FresnelGloss y=ReflectionScale z=SunShininess w=SunSpecScale
     float4 OceanFFT;         // x=useFFT y=dispScale z=choppyScale w=normalUp
     float4 OceanFade;        // x=fadeStart(m) y=fadeRange(m)
     float4 BumpParams;       // x=Tilling y=DetailTilling z=NormalsScale w=DetailNormalsScale
     float4 BumpParams2;      // x=bumpStrength y=parallaxHeight z=useBump w=bumpFadeDist
     float4 ScreenParams;     // x=w y=h z=1/w w=1/h
-    float4 DepthParams;      // x=near y=far z=hasSceneCopies w=unused
+    float4 DepthParams;      // x=near y=far z=hasSceneCopies w=useAtmosphereSky
     float4 RefractionParams; // x=RefractionBumpScale y=SoftIntersectionFactor z=fogDensity w=ReflectionBumpScale
     float4 AerialFogParams;  // x=start(m) y=range(m) z=density w=0 off/1 HDR/2 physical sky
     float4 FarBlendParams;   // x=FFT->swell start(m) y=range(m) z=swell height w=swell normal strength
@@ -29,19 +29,42 @@ cbuffer WaterCB : register(b0) {
     float4 AbsorptionColor;  // rgb=extincao por canal (Beer-Lambert), w=clamp do sun-spec
     float4 FoamParams;       // x=coverage(limiar J) y=sharpness z=intensidade(0=off) w=fadeDist(m)
     float4 FoamColor;        // rgb=tint da espuma, w=supressao do sun-spec
+    float4 QuadTreeParams;   // x=rootX y=rootZ z=leafSize w=rootSize
 };
 
-// t1 = displacement do FFT (Dx, Dy, -h, 0), porte de s_ptexWaterOcean. s0 = linear wrap
-// (a textura e periodica). Visivel a VS (deslocamento) e PS (parallax opcional).
+// t1 = displacement do FFT (Dx, Dz, -h, J). s0 = linear wrap.
 Texture2D<float4> FFTDisplacement : register(t1);
 SamplerState      LinearWrap      : register(s0);
 
-// t4 = normal-map dinamico derivado do FFT, equivalente ao s_ptexWaterVolumeDDN da Cry.
-// RGB fica em espaco-mundo Y-up assinado; A guarda Toksvig T da mip chain.
-Texture2D<float4> WaterNormalTex  : register(t4);
-SamplerState      AnisoWrap       : register(s2);
+// Mapeamento world-space -> UV base da textura FFT. Fonte UNICA: VS (deslocamento), PS
+// (foam/debug) e funcoes de detalhe devem usar a mesma escala para manter alinhamento.
+float2 WaterFFTSampleUV(float2 worldXZ) {
+    return worldXZ * 0.0125 * OceanParams0.w * 1.25;
+}
 
-// t2/t3 = copias da cena ANTES da agua (refracao/fog, Etapa 3). scene-color e HDR LINEAR
+float4 WaterSampleFFTUv(float2 baseUV) {
+    return FFTDisplacement.SampleLevel(LinearWrap, baseUV, 0.0);
+}
+
+float4 WaterSampleFFT(float2 worldXZ) {
+    return WaterSampleFFTUv(WaterFFTSampleUV(worldXZ));
+}
+
+float3 WaterFFTNormalFromDisplacement(float2 worldXZ, float worldStep, float normalUp) {
+    float2 e = float2(max(worldStep, 0.05), 0.0);
+    float hL = WaterSampleFFT(worldXZ - e.xy).z;
+    float hR = WaterSampleFFT(worldXZ + e.xy).z;
+    float hD = WaterSampleFFT(worldXZ - e.yx).z;
+    float hU = WaterSampleFFT(worldXZ + e.yx).z;
+    return normalize(float3(hL - hR, max(normalUp * 0.65, 1.0), hD - hU));
+}
+
+// t4 = normal-map dinamico derivado do FFT (com mip chain Toksvig).
+// RGB fica em espaco-mundo Y-up assinado; A guarda Toksvig T da mip chain.
+Texture2D<float4> WaterNormalTex : register(t4);
+SamplerState      AnisoWrap      : register(s2);
+
+// t2/t3 = copias da cena ANTES da agua (refracao/fog). scene-color e HDR LINEAR
 // (sem inverse-tonemap, especificidade Smile); scene-depth e a profundidade NDC linearizavel.
 Texture2D<float4> SceneColor : register(t2);
 Texture2D<float>  SceneDepth : register(t3);
@@ -66,10 +89,10 @@ struct VSOutput {
     float4 screenProj : TEXCOORD3; // xy=uv de tela, w=clip.w, z=escala de prof. (refracao futura)
     float4 baseTC     : TEXCOORD4; // .xy=bump low-freq, .zw=bump high-freq (com scroll por vento)
     float4 debugData  : TEXCOORD5; // x=tile size y=subset pattern z=internal LOD w=geomorph
+    float2 tileUV     : TEXCOORD6; // uv local estavel do tile para debug de quadtree
 };
 
-// Fresnel de Schlick. F0 da agua ~ 0.02 (indice ~1.33). FresnelGloss aguca a curva
-// (Water.cfx usa GetEnvmapFresnel(WaterSpec0, FresnelGloss, NdotE)).
+// Fresnel de Schlick. F0 da agua ~ 0.02 (indice ~1.33). FresnelGloss aguca a curva.
 float FresnelSchlick(float F0, float cosTheta, float gloss) {
     float f = pow(saturate(1.0 - cosTheta), 5.0);
     // gloss alto -> curva mais nitida (menos Fresnel em angulo raso interno).
@@ -100,6 +123,38 @@ float4 SampleWaterNormalGrad(float2 uv, float2 dx, float2 dy) {
 float SmoothWaterStep(float x) {
     x = saturate(x);
     return x * x * (3.0 - 2.0 * x);
+}
+
+// Fade suavizado por distancia: 1 perto, cai a 0 alem de (start + range). Padrao usado
+// por todos os anti-shimmer/anti-aliasing de horizonte (deslocamento, normal, detalhe).
+float WaterDistanceFade(float dist, float start, float range) {
+    return SmoothWaterStep(saturate(1.0 - (dist - start) / max(range, 1.0)));
+}
+
+// Fade da normal de detalhe no horizonte: start/range derivados do OceanFade, com pisos
+// para a normal nao tremer no longe mesmo com OceanFade curto.
+float WaterNormalFade(float dist) {
+    float start = max(OceanFade.x * 2.5, 1000.0);
+    float range = max(OceanFade.y * 3.0, 4500.0);
+    return WaterDistanceFade(dist, start, range);
+}
+
+// Value-noise barato (hash 2D + bilinear suavizado). Usado p/ quebrar a borda da espuma,
+// que senao fica chapada e revela o limiar do Jacobiano.
+float WaterHash21(float2 p) {
+    p = frac(p * float2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return frac(p.x * p.y);
+}
+float WaterValueNoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = WaterHash21(i);
+    float b = WaterHash21(i + float2(1.0, 0.0));
+    float c = WaterHash21(i + float2(0.0, 1.0));
+    float d = WaterHash21(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
 float WaterFarBlend(float camDist) {
@@ -145,20 +200,20 @@ float3 WaterFarSwellNormal(float2 worldXZ) {
     return normalize(float3(-slope.x, 1.0, -slope.y));
 }
 
-// Parallax offset (porte de GetParalaxOffset, Water.cfx:918), 2 iteracoes. Desloca as UVs
+// Parallax offset, 2 iteracoes. Desloca as UVs
 // do bump pela altura na direcao da visao. dir = V projetado no plano (V.xz / V.y).
 float2 BumpParallaxOffset(float4 baseTC, float3 V, float heightScale) {
     if (heightScale <= 0.0) return float2(0.0, 0.0);
     float2 dir = V.xz / max(V.y, 0.2);
-    float h1 = FFTDisplacement.SampleLevel(LinearWrap, baseTC.xy * 0.25, 0).b * heightScale;
+    float h1 = WaterSampleFFTUv(baseTC.xy * 0.25).b * heightScale;
     float2 p = dir * h1;
-    float h2 = FFTDisplacement.SampleLevel(LinearWrap, baseTC.zw + p, 0).b * heightScale;
+    float h2 = WaterSampleFFTUv(baseTC.zw + p).b * heightScale;
     p += dir * h2;
     return p;
 }
 
-// Specular do sol — Blinn-Phong de 2 lobos (Water.cfx SunSpecular:971): lobo largo +
-// lobo estreito, dando o glint nitido nas cristas alem do brilho amplo.
+// Specular do sol — Blinn-Phong de 2 lobos: lobo largo + lobo estreito, dando o glint
+// nitido nas cristas alem do brilho amplo.
 float SunSpecularLobes(float3 N, float3 V, float3 L, float shininess) {
     float3 R = reflect(-V, N);
     float LdotR = saturate(dot(L, R));

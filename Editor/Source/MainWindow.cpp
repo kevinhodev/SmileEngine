@@ -342,9 +342,24 @@ namespace SmileEditor {
         const float FrameMs = FPS > 0.0f ? 1000.0f / FPS : 0.0f;
 
         if (FooterStatsLabel) {
-            FooterStatsLabel->setText(QString("FPS: %1  |  Frame: %2 ms")
+            const auto& WaterStats = Renderer->GetWater().GetDebugStats();
+            QString WaterText;
+            if (Renderer->GetUseWater()) {
+                WaterText = QString("  |  Ocean GPU: %1/%2 tiles  |  cull F:%3 C:%4 O:%5  |  draws:%6 L:%7 R:%8")
+                    .arg(WaterStats.ValidTileCount)
+                    .arg(WaterStats.CandidateCount)
+                    .arg(WaterStats.FrustumCulledCount)
+                    .arg(WaterStats.CoveredByFinerCount)
+                    .arg(WaterStats.OutOfBoundsCount)
+                    .arg(WaterStats.DrawCommandCount)
+                    .arg(WaterStats.LevelCount)
+                    .arg(WaterStats.RingRadius);
+            }
+
+            FooterStatsLabel->setText(QString("FPS: %1  |  Frame: %2 ms%3")
                 .arg(FPS, 0, 'f', 1)
-                .arg(FrameMs, 0, 'f', 2));
+                .arg(FrameMs, 0, 'f', 2)
+                .arg(WaterText));
         }
     }
 

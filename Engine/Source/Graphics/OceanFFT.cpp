@@ -12,7 +12,6 @@ namespace Smile {
     // Espectro inicial H0 (CPU, 1x ou ao mudar vento/amplitude)
     // =====================================================================================
 
-    // Box-Muller (WaterUtils.cpp:142).
     f32 FOceanFFT::FrandGaussian() {
         if (GaussianHasLast) {
             GaussianHasLast = false;
@@ -31,35 +30,34 @@ namespace Smile {
         return x1 * w;
     }
 
-    // Phillips (WaterUtils.cpp:362). pW = -(cos(wind), sin(wind)); o vento agora vem do
-    // usuario (antes era forcado 0). Mesma FORMA do espectro CPU antigo + damping suave
-    // contra o vento (direcionalidade das ondas).
+    // Phillips. pW = -(cos(wind), sin(wind)); o vento vem do usuario, com damping
+    // suave contra o vento para direcionalidade.
     f32 FOceanFFT::ComputePhillips(f32 kx, f32 ky) const {
         const f32 k2 = kx * kx + ky * ky;
         if (k2 == 0.0f) return 0.0f;
 
         const f32 wx = -std::cos(WindAngle);
         const f32 wy = -std::sin(WindAngle);
-        const f32 w2 = wx * wx + wy * wy;       // 1
+        const f32 w2 = wx * wx + wy * wy;
         const f32 Wind = std::max(WindSpeed, 0.1f);
         const f32 L  = (Wind * Wind) / kG;
         const f32 L2 = L * L;
         const f32 kDotW = kx * wx + ky * wy;
 
-        f32 P = Amplitude * (std::exp(-1.0f / (k2 * L2)) / (k2 * k2)) * (kDotW * kDotW / std::max(k2 * w2, 1e-6f));
-        if (kDotW < 0.0f) P *= 0.25f; // onda contra o vento e atenuada
+        f32 P = Amplitude *
+                (std::exp(-1.0f / (k2 * L2)) / (k2 * k2)) *
+                (kDotW * kDotW / std::max(k2 * w2, 1e-6f));
+        if (kDotW < 0.0f) P *= 0.25f;
         return P;
     }
 
-    // Preenche o staging de H0: (h0(k).x, h0(k).y, omega(k), 0) sobre (N+1)^2, com a
-    // convencao de k do caminho CPU antigo (worldSize=1 -> k=(i-N/2)*2pi). Determinismo
-    // garantido re-semeando o RNG (mesmo oceano ao re-bakar).
+    // Preenche o staging de H0: (h0(k).x, h0(k).y, omega(k), 0) sobre (N+1)^2.
     void FOceanFFT::ComputeH0() {
         if (!H0StagingMapped) return;
 
         const f32 kTwoPi       = 6.28318530717958647692f;
         const f32 recipSqrt2   = 1.0f / std::sqrt(2.0f);
-        const f32 pi2OverWorld = kTwoPi / WorldSize;
+        const f32 pi2OverWorld = kTwoPi / std::max(WorldSize, 1e-3f);
         const f32 start        = N / 2.0f;
         const UINT rowPitch    = H0Footprint.Footprint.RowPitch;
 
@@ -67,12 +65,12 @@ namespace Smile {
         GaussianHasLast = false;
 
         for (int m = 0; m < M; ++m) {
-            const f32 ky = (start - (f32)m) * pi2OverWorld;
+            const f32 ky = (start - static_cast<f32>(m)) * pi2OverWorld;
             Vec4* row = reinterpret_cast<Vec4*>(
-                H0StagingMapped + H0Footprint.Offset + (UINT64)m * rowPitch);
+                H0StagingMapped + H0Footprint.Offset + static_cast<UINT64>(m) * rowPitch);
 
             for (int n = 0; n < M; ++n) {
-                const f32 kx = (start - (f32)n) * pi2OverWorld;
+                const f32 kx = (start - static_cast<f32>(n)) * pi2OverWorld;
 
                 f32 sqrtP = 0.0f;
                 if (kx != 0.0f || ky != 0.0f) {
@@ -93,20 +91,29 @@ namespace Smile {
     void FOceanFFT::SetWindDirection(f32 _Rad) {
         if (_Rad == WindAngle) return;
         WindAngle = _Rad;
-        if (H0StagingMapped) { ComputeH0(); H0Dirty = true; }
+        if (H0StagingMapped) {
+            ComputeH0();
+            H0Dirty = true;
+        }
     }
 
     void FOceanFFT::SetWindSpeed(f32 _V) {
         const f32 V = std::max(_V, 0.1f);
         if (V == WindSpeed) return;
         WindSpeed = V;
-        if (H0StagingMapped) { ComputeH0(); H0Dirty = true; }
+        if (H0StagingMapped) {
+            ComputeH0();
+            H0Dirty = true;
+        }
     }
 
     void FOceanFFT::SetAmplitude(f32 _A) {
         if (_A == Amplitude) return;
         Amplitude = _A;
-        if (H0StagingMapped) { ComputeH0(); H0Dirty = true; }
+        if (H0StagingMapped) {
+            ComputeH0();
+            H0Dirty = true;
+        }
     }
 
     // =====================================================================================
@@ -144,7 +151,8 @@ namespace Smile {
         {
             D3D12_RESOURCE_DESC Desc = H0Tex->GetDesc();
             UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;
-            _Device->GetCopyableFootprints(&Desc, 0, 1, 0, &H0Footprint, &NumRows, &RowSize, &TotalSize);
+            _Device->GetCopyableFootprints(&Desc, 0, 1, 0,
+                                           &H0Footprint, &NumRows, &RowSize, &TotalSize);
 
             D3D12_RESOURCE_DESC BufDesc{};
             BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -168,11 +176,11 @@ namespace Smile {
         FFTTemp  = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         DispTex  = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         OceanTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        NormalTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, kNormalMipCount, true,
+        NormalTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N,
+                             kNormalMipCount, true,
                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         for (auto& S : NormalMipState) S = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-        // CB compartilhado (upload, mapeado persistente).
         D3D12_RESOURCE_DESC CBDesc{};
         CBDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
         CBDesc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(OceanCB);
@@ -200,14 +208,15 @@ namespace Smile {
         GradUAVPair        = _SRVHeap.Allocate(2);
         OceanSRVSlot       = _SRVHeap.Allocate(1);
         NormalChainSRVSlot = _SRVHeap.Allocate(1);
-        const u32 NormalMipUAVRest  = _SRVHeap.Allocate(kNormalMipCount - 1); // mips 1..8
-        const u32 NormalMipSRVBlock = _SRVHeap.Allocate(kNormalMipCount - 1); // mips 0..7
+        const u32 NormalMipUAVRest  = _SRVHeap.Allocate(kNormalMipCount - 1);
+        const u32 NormalMipSRVBlock = _SRVHeap.Allocate(kNormalMipCount - 1);
 
         NormalMipUAVSlot[0] = GradUAVPair + 1;
-        for (u32 i = 1; i < kNormalMipCount; ++i) NormalMipUAVSlot[i] = NormalMipUAVRest + (i - 1);
-        for (u32 i = 0; i + 1 < kNormalMipCount; ++i) NormalMipSRVSlot[i] = NormalMipSRVBlock + i;
+        for (u32 i = 1; i < kNormalMipCount; ++i)
+            NormalMipUAVSlot[i] = NormalMipUAVRest + (i - 1);
+        for (u32 i = 0; i + 1 < kNormalMipCount; ++i)
+            NormalMipSRVSlot[i] = NormalMipSRVBlock + i;
 
-        // --- SRVs ---
         D3D12_SHADER_RESOURCE_VIEW_DESC SRV{};
         SRV.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         SRV.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -234,7 +243,6 @@ namespace Smile {
         }
         SRV.Texture2D.MostDetailedMip = 0;
 
-        // --- UAVs ---
         D3D12_UNORDERED_ACCESS_VIEW_DESC UAV{};
         UAV.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
 
@@ -266,9 +274,9 @@ namespace Smile {
         CreateTextures(_Device);
         CreateDescriptors(_Device, _SRVHeap);
         CreatePipelines(_Device);
-        ComputeH0();      // preenche o staging com os params iniciais (vento/amplitude)
-        H0Dirty = true;   // 1o RecordCompute sobe H0 -> GPU
-        LogInfo("Oceano FFT na GPU: 256^2, espectro com direcao de vento + foam (Jacobiano)");
+        ComputeH0();
+        H0Dirty = true;
+        LogInfo("Oceano FFT na GPU: 256^2, espectro com direcao de vento + foam");
     }
 
     // =====================================================================================
@@ -290,9 +298,8 @@ namespace Smile {
     }
 
     void FOceanFFT::RecordCompute(u32 _FrameSlot, ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
-        if (!OceanTex) return;
+        if (!IsInitialized() || !MappedCBBase) return;
 
-        // Reaponta o CB para a regiao deste frame (double-buffered).
         FrameSlot = _FrameSlot;
         MappedCB = reinterpret_cast<OceanCB*>(
             MappedCBBase + static_cast<size_t>(FrameSlot) * sizeof(OceanCB));
@@ -302,7 +309,6 @@ namespace Smile {
         const auto READ = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
-        // 0) Upload do H0 (1a vez ou apos mudar vento/amplitude).
         if (H0Dirty) {
             TransitionTex(_CL, H0Tex.Get(), H0State, D3D12_RESOURCE_STATE_COPY_DEST);
             D3D12_TEXTURE_COPY_LOCATION Src{};
@@ -318,7 +324,6 @@ namespace Smile {
             H0Dirty = false;
         }
 
-        // 1) CB do frame.
         MappedCB->Time          = SimTime;
         MappedCB->ChoppyScale   = ChoppyWaveScale;
         MappedCB->HeightScale   = MaxWaveSize;
@@ -327,7 +332,6 @@ namespace Smile {
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress() +
             static_cast<UINT64>(FrameSlot) * sizeof(OceanCB);
 
-        // 2) UpdateSpectrum: H0 -> SpecH, SpecD.
         TransitionTex(_CL, SpecH.Get(), SpecHState, UAV);
         TransitionTex(_CL, SpecD.Get(), SpecDState, UAV);
         UpdateSpectrumPSO.Bind(_CL);
@@ -336,7 +340,6 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(SpecUAVPair));
         _CL->Dispatch(N / 16, N / 16, 1);
 
-        // 3) FFT 2D de cada campo (horizontal -> scratch, vertical -> de volta).
         auto FFTPass = [&](ID3D12Resource* SrcRes, D3D12_RESOURCE_STATES& SrcState, u32 SrcSRV,
                            ID3D12Resource* DstRes, D3D12_RESOURCE_STATES& DstState, u32 DstUAV) {
             TransitionTex(_CL, SrcRes, SrcState, NPS);
@@ -347,32 +350,33 @@ namespace Smile {
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DstUAV));
             _CL->Dispatch(N, 1, 1);
         };
-        FFTPass(SpecH.Get(),   SpecHState,   SpecSRVPair,     FFTTemp.Get(), FFTTempState, FFTTempUAVSlot);
-        FFTPass(FFTTemp.Get(), FFTTempState, FFTTempSRVSlot,  SpecH.Get(),   SpecHState,   SpecUAVPair);
-        FFTPass(SpecD.Get(),   SpecDState,   SpecSRVPair + 1, FFTTemp.Get(), FFTTempState, FFTTempUAVSlot);
-        FFTPass(FFTTemp.Get(), FFTTempState, FFTTempSRVSlot,  SpecD.Get(),   SpecDState,   SpecUAVPair + 1);
+        FFTPass(SpecH.Get(),   SpecHState,   SpecSRVPair,
+                FFTTemp.Get(), FFTTempState, FFTTempUAVSlot);
+        FFTPass(FFTTemp.Get(), FFTTempState, FFTTempSRVSlot,
+                SpecH.Get(),   SpecHState,   SpecUAVPair);
+        FFTPass(SpecD.Get(),   SpecDState,   SpecSRVPair + 1,
+                FFTTemp.Get(), FFTTempState, FFTTempUAVSlot);
+        FFTPass(FFTTemp.Get(), FFTTempState, FFTTempSRVSlot,
+                SpecD.Get(),   SpecDState,   SpecUAVPair + 1);
 
-        // 4) CreateDisplacement: SpecH, SpecD -> DispTex.
         TransitionTex(_CL, SpecH.Get(), SpecHState, NPS);
         TransitionTex(_CL, SpecD.Get(), SpecDState, NPS);
         TransitionTex(_CL, DispTex.Get(), DispState, UAV);
         CreateDispPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr);
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpecSRVPair)); // [SpecH, SpecD]
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpecSRVPair));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DispUAVSlot));
         _CL->Dispatch(N / 16, N / 16, 1);
 
-        // 5) Gradients: DispTex -> OceanTex(+J) + NormalTex mip0.
         TransitionTex(_CL, DispTex.Get(), DispState, NPS);
         TransitionTex(_CL, OceanTex.Get(), OceanState, UAV);
         TransitionTex(_CL, NormalTex.Get(), NormalMipState[0], UAV, 0);
         GradientsPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr);
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(DispSRVSlot));
-        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(GradUAVPair)); // [Ocean, NormalMip0]
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(GradUAVPair));
         _CL->Dispatch(N / 16, N / 16, 1);
 
-        // 6) Mip chain da normal (Toksvig). mip(i) <- mip(i-1).
         NormalMipPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr);
         for (u32 Mip = 1; Mip < kNormalMipCount; ++Mip) {
@@ -385,7 +389,6 @@ namespace Smile {
             _CL->Dispatch(Groups, Groups, 1);
         }
 
-        // 7) Estados finais p/ o draw da agua (VS le displacement, PS le normal/foam).
         TransitionTex(_CL, OceanTex.Get(), OceanState, READ);
         for (u32 Mip = 0; Mip < kNormalMipCount; ++Mip)
             TransitionTex(_CL, NormalTex.Get(), NormalMipState[Mip], READ, Mip);

@@ -32,6 +32,7 @@ smile_compile_shader(Clouds/CloudComposite.ps.hlsl        ps_6_0 main SHADER_OUT
 # Oceano (port fiel da CryEngine) — superficie (projected grid + shading)
 smile_compile_shader(Water/WaterSurface.vs.hlsl           vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Water/WaterGenerateDraws.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 # Oceano FFT na GPU (256^2) — espectro -> FFT -> deslocamento -> gradientes/normal
 smile_compile_shader(Water/OceanUpdateSpectrum.cs.hlsl    cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/OceanFFT.cs.hlsl               cs_6_0 main SHADER_OUTPUTS)
@@ -79,6 +80,7 @@ add_custom_target(Shaders
         Water/WaterCommon.hlsli
         Water/WaterSurface.vs.hlsl
         Water/WaterSurface.ps.hlsl
+        Water/WaterGenerateDraws.cs.hlsl
         Water/OceanFFTCommon.hlsli
         Water/OceanUpdateSpectrum.cs.hlsl
         Water/OceanFFT.cs.hlsl
