@@ -40,36 +40,27 @@ VSOutput main(VSInput IN) {
     float3 normal = float3(0.0, 1.0, 0.0);
 
     float camDist = length(worldPos - camPos);
-    float farBlend = WaterFarBlend(camDist);
-    float nearFFT = 1.0 - farBlend;
 
-    // --- FFT displacement near/mid, procedural swell in the distance. ---
     if (OceanFFT.x > 0.5) {
-        // No tile-edge damping here: damping every quadtree border would reveal the grid.
-        float edgeMask = 1.0;
-
         float atten = saturate(camDist * 0.5);
         atten *= atten;
 
         float farFade = WaterDistanceFade(camDist, OceanFade.x, OceanFade.y);
         float farNormalFade = WaterNormalFade(camDist);
 
-        float s = atten * edgeMask * farFade * nearFFT * 0.06 * OceanParams1.x * OceanFFT.y;
+        float s = atten * farFade * 0.06 * OceanParams1.x * OceanFFT.y;
 
         float2 tcFFT = WaterFFTSampleUV(sampleWorldXZ);
         float4 disp = WaterSampleFFTUv(tcFFT);
-        float farSwell = WaterFarSwellHeight(sampleWorldXZ) * atten * edgeMask * farBlend;
 
         worldPos.x += disp.x * s * OceanFFT.z;
         worldPos.z += disp.y * s * OceanFFT.z;
-        worldPos.y += disp.z * s + farSwell;
+        worldPos.y += disp.z * s;
 
         float hC = disp.z;
         float hX = WaterSampleFFTUv(tcFFT + float2(1.0 / 256.0, 0.0)).z;
         float hZ = WaterSampleFFTUv(tcFFT + float2(0.0, 1.0 / 256.0)).z;
-        float3 fftNormal = normalize(float3(hC - hX, OceanFFT.w, hC - hZ));
-        float3 farNormal = WaterFarSwellNormal(sampleWorldXZ);
-        normal = normalize(lerp(fftNormal, farNormal, farBlend));
+        normal = normalize(float3(hC - hX, OceanFFT.w, hC - hZ));
         normal = normalize(lerp(float3(0.0, 1.0, 0.0), normal, farNormalFade));
     }
 

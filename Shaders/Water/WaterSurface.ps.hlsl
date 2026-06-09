@@ -2,76 +2,11 @@
 
 // t0 = cubemap especular prefiltrado do FHDREnvironment (reflexao IBL).
 TextureCube SpecularCube : register(t0);
-Texture2D<float4> AtmosphereSkyView : register(t5);
 SamplerState LinearClamp  : register(s1);
 
-static const float WaterAtmoBottomR = 6360.0f;
-static const float WaterAtmoViewH   = 6360.5f;
-
-float2 WaterSkyViewParamsToUv(float viewZenithCos, float lightViewCos) {
-    float vHorizon = sqrt(max(0.0f, WaterAtmoViewH * WaterAtmoViewH - WaterAtmoBottomR * WaterAtmoBottomR));
-    float cosBeta  = vHorizon / max(WaterAtmoViewH, 1e-4f);
-    float beta     = acos(clamp(cosBeta, -1.0f, 1.0f));
-    float zenithHorizonAngle = 3.14159265f - beta;
-
-    float viewZenithAngle = acos(clamp(viewZenithCos, -1.0f, 1.0f));
-    float u, v;
-    if (viewZenithAngle < zenithHorizonAngle) {
-        float coord = viewZenithAngle / max(zenithHorizonAngle, 1e-4f);
-        coord = 1.0f - coord;
-        coord = 1.0f - sqrt(max(0.0f, coord));
-        v = coord * 0.5f;
-    } else {
-        float coord = (viewZenithAngle - zenithHorizonAngle) / max(beta, 1e-4f);
-        coord = sqrt(max(0.0f, coord));
-        v = coord * 0.5f + 0.5f;
-    }
-
-    float coord = -lightViewCos * 0.5f + 0.5f;
-    u = sqrt(max(0.0f, coord));
-    return float2(u, v);
-}
-
-float3 WaterAerialFogColor(float3 viewDir) {
-    const float3 up = float3(0.0f, 1.0f, 0.0f);
-    float3 fogDir = normalize(float3(viewDir.x, max(viewDir.y, 0.015f), viewDir.z));
-
-    if (AerialFogParams.w > 1.5f) {
-        float3 sunDir = normalize(SunDirection.xyz);
-        float viewZenithCos = max(dot(fogDir, up), -0.02f);
-        float3 viewHoriz = fogDir - up * viewZenithCos;
-        float3 sunHoriz  = sunDir - up * dot(sunDir, up);
-        float lightViewCos = dot(normalize(viewHoriz + 1e-6f), normalize(sunHoriz + 1e-6f));
-        return AtmosphereSkyView.SampleLevel(LinearClamp, WaterSkyViewParamsToUv(viewZenithCos, lightViewCos), 0.0f).rgb;
-    }
-
-    if (Misc.y > 0.5f) {
-        return SpecularCube.SampleLevel(LinearClamp, fogDir, Misc.w).rgb * Misc.z;
-    }
-
-    return AnalyticSky(fogDir);
-}
-
-float WaterAerialFogAmount(float camDist, float3 viewDir) {
-    if (AerialFogParams.w <= 0.5f) return 0.0f;
-
-    float distPastStart = max(camDist - AerialFogParams.x, 0.0f);
-    float rangeT = saturate(distPastStart / max(AerialFogParams.y, 1.0f));
-    rangeT = rangeT * rangeT * (3.0f - 2.0f * rangeT);
-
-    float earlyT = saturate(distPastStart / max(AerialFogParams.y * 0.72f, 1.0f));
-    earlyT = earlyT * earlyT * (3.0f - 2.0f * earlyT);
-
-    float grazing = saturate(1.0f - abs(viewDir.y) * 8.5f);
-    grazing = grazing * grazing * (3.0f - 2.0f * grazing);
-
-    float distanceKm = distPastStart * 0.001f;
-    float density = max(AerialFogParams.z, 0.0f);
-    float expFog = 1.0f - exp2(-density * distanceKm * lerp(0.45f, 2.35f, grazing));
-    float horizonFog = earlyT * grazing * 0.38f;
-
-    return saturate(max(max(rangeT * grazing * 0.55f, expFog * earlyT), horizonFog) * 0.78f);
-}
+// O aerial perspective + height fog atmosfericos agora sao um passe DEFERIDO
+// global (FFogPass / Atmosphere froxel), aplicado sobre o HDR linear depois das
+// nuvens. O fog ad-hoc de superficie (WaterAerialFog*) foi REMOVIDO daqui.
 
 // Shading da superficie: Fresnel (reflexao IBL <-> corpo), refracao + absorcao + in-scatter,
 // foam, sun-spec, subsurface scattering e aerial fog.
@@ -128,11 +63,9 @@ float4 main(VSOutput IN) : SV_Target {
     // O ripple fino morre cedo; a baixa frequencia continua no fundo para a agua nao
     // virar um plano liso depois do anti-shimmer.
     float camDist  = length(IN.vView);
-    float farBlend = WaterFarBlend(camDist);
-    float nearFFT = 1.0 - farBlend;
-    float detailFade = WaterDistanceFade(camDist, 0.0, BumpParams2.w) * nearFFT;
+    float detailFade = WaterDistanceFade(camDist, 0.0, BumpParams2.w);
     float swellFade = WaterDistanceFade(camDist, BumpParams2.w, max(BumpParams2.w * 16.0, 4500.0));
-    swellFade = lerp(0.30, 1.0, swellFade) * nearFFT;
+    swellFade = lerp(0.30, 1.0, swellFade);
     float2 hiDx = ddx(IN.baseTC.zw);
     float2 hiDy = ddy(IN.baseTC.zw);
     float2 loDx = ddx(IN.baseTC.xy);
@@ -152,11 +85,6 @@ float4 main(VSOutput IN) : SV_Target {
         N.xz += (hiSlope * detailFade + loSlope * swellFade) * BumpParams2.x;
         N = normalize(N);
     }
-    if (farBlend > 0.0) {
-        N = normalize(lerp(N, WaterFarSwellNormal(IN.worldPos.xz), farBlend));
-        normalToksvigT = lerp(normalToksvigT, 1.0, farBlend);
-    }
-
     if (debugMode == 3) {
         float4 dispDebug = WaterSampleFFT(IN.worldPos.xz);
         float h = dispDebug.z * 0.01f;
@@ -170,8 +98,6 @@ float4 main(VSOutput IN) : SV_Target {
     }
 
     float  NoV = saturate(dot(N, V));
-    float  horizonGrazing = saturate(1.0f - abs(V.y) * 5.0f);
-    horizonGrazing = horizonGrazing * horizonGrazing * (3.0f - 2.0f * horizonGrazing);
 
     // --- Specular AA para agua: Karis (derivadas de normal) + Toksvig (normal mipped) ---
     float3 dNdx = ddx(N);
@@ -183,13 +109,9 @@ float4 main(VSOutput IN) : SV_Target {
     float  glossFadeDist = max(BumpParams2.w * 14.0, 3500.0);
     float  distGlossFade = clamp(1.0 - camDist / glossFadeDist, 0.45, 1.0); // mais blur ao longe (mata blocos)
     float  baseRoughness = saturate(1.0 - ShadeParams.x * distGlossFade);
-    float  horizonRoughness = horizonGrazing * farBlend * 0.35f;
     float  reflectionRoughness =
-        saturate(sqrt(baseRoughness * baseRoughness + karisVariance + toksvigVar) +
-                 farBlend * 0.18 + horizonRoughness);
-    float reflBump = saturate(RefractionParams.w *
-                              lerp(1.0, 0.32, farBlend) *
-                              lerp(1.0, 0.55, horizonGrazing * farBlend));
+        saturate(sqrt(baseRoughness * baseRoughness + karisVariance + toksvigVar));
+    float reflBump = saturate(RefractionParams.w);
     float3 Nrefl = normalize(lerp(float3(0.0, 1.0, 0.0), N, reflBump));
 
     // --- Reflexao ---
@@ -202,9 +124,6 @@ float4 main(VSOutput IN) : SV_Target {
     } else {
         reflection = AnalyticSky(R);
     }
-    float horizonReflectionScatter = horizonGrazing * farBlend;
-    reflection = lerp(reflection, WaterAerialFogColor(normalize(IN.worldPos - CameraPos.xyz)),
-                      horizonReflectionScatter * 0.16f);
     reflection *= ShadeParams.y; // ReflectionScale
 
     // --- Fresnel (F0 da agua ~0.02) decide reflexao vs corpo ---
@@ -253,7 +172,7 @@ float4 main(VSOutput IN) : SV_Target {
     }
 
     float slopeEnergy = saturate(length(N.xz) * 1.45f);
-    float surfaceReflection = (0.18f + 0.32f * slopeEnergy) * saturate(1.0f - farBlend * 0.55f);
+    float surfaceReflection = 0.18f + 0.32f * slopeEnergy;
     float reflectionWeight = saturate(max(F * fA, surfaceReflection * fA) * ShadeParams.y);
     float3 color = lerp(body, reflection, reflectionWeight);
     if (debugMode == 6) {
@@ -276,7 +195,7 @@ float4 main(VSOutput IN) : SV_Target {
         JDebug = WaterSampleFFT(IN.worldPos.xz).w;
         foam = saturate((FoamParams.x - JDebug) / max(FoamParams.y, 1e-3));
         foam = foam * foam * (3.0 - 2.0 * foam);
-        foam = saturate(foam * FoamParams.z * WaterDistanceFade(camDist, 0.0, FoamParams.w) * nearFFT);
+        foam = saturate(foam * FoamParams.z * WaterDistanceFade(camDist, 0.0, FoamParams.w));
         foamLit = FoamColor.rgb * (SunColor.rgb * SunDirection.w * 0.16 + 0.30);
     }
     if (debugMode == 8) {
@@ -284,7 +203,7 @@ float4 main(VSOutput IN) : SV_Target {
     }
 
     // --- Sun specular (2 lobos) ---
-    float specAA = saturate(1.0 - reflectionRoughness * 1.25) * lerp(1.0, 0.22, farBlend);
+    float specAA = saturate(1.0 - reflectionRoughness * 1.25);
     float sunShininess = lerp(24.0, ShadeParams.z, specAA * specAA);
     float spec = SunSpecularLobes(N, V, normalize(SunDirection.xyz), sunShininess) * specAA;
     float3 sunSpecCol = SunColor.rgb * (spec * SunDirection.w * ShadeParams.w);
@@ -295,14 +214,7 @@ float4 main(VSOutput IN) : SV_Target {
     // Espuma por cima (difusa): sobrepoe reflexo/specular onde as cristas dobram.
     color = lerp(color, foamLit, foam);
 
-    // Aerial perspective de superficie: lava contraste/spec no medio-longe em HDR,
-    // escondendo o aliasing residual no horizonte sem apagar o primeiro plano.
-    float3 viewDir = normalize(IN.worldPos - CameraPos.xyz);
-    float aerialFog = WaterAerialFogAmount(camDist, viewDir);
-    if (aerialFog > 0.0) {
-        float3 fogColor = lerp(DeepColorDensity.rgb, WaterAerialFogColor(viewDir), 0.82);
-        color = lerp(color, fogColor, min(aerialFog, 0.68));
-    }
-
+    // A transicao oceano->atmosfera (aerial perspective + height fog) e aplicada
+    // pelo passe de fog DEFERIDO sobre o HDR linear, depois das nuvens.
     return float4(color, 1.0);
 }

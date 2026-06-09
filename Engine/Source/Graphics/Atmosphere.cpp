@@ -112,6 +112,11 @@ namespace Smile {
         const f32 SunDiskHalfAngleRad = 0.7f * 3.14159265358979f / 180.0f;
         CPUConstants.SunDisk          = { std::cos(SunDiskHalfAngleRad), 30.0f, 22.0f, 0.0f };
         CPUConstants.InvViewProjNoTrans = Mat44::Identity();
+        // Aerial-perspective froxel: depth covers the scene far-plane (20 km at the
+        // default 0.001 km/world-unit scale). 16 slices, 2 march samples per slice.
+        CPUConstants.InvViewProj    = Mat44::Identity();
+        CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f }; // w = km per world unit
+        CPUConstants.AerialParams   = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
 
         CreateConstantBuffer(_Device);
 
@@ -121,10 +126,13 @@ namespace Smile {
                             kMultiScatterW, kMultiScatterH);
         SkyView.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
                        kSkyViewW, kSkyViewH);
+        AerialPerspectiveVolume.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                       kAerialW, kAerialH, kAerialSlices, 1, true);
 
         TransmittancePSO.Initialize(_Device, "BakeTransmittance.cs_6_0.cso", 1, 1);
         MultiScatterPSO.Initialize(_Device, "BakeMultiScatter.cs_6_0.cso", 1, 1);
         SkyViewPSO.Initialize(_Device, "BakeSkyView.cs_6_0.cso", 2, 1);
+        AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
 
         BuildInputTables(_Device, _SRVHeap);
         BuildSkyRootSignature(_Device);
@@ -292,11 +300,17 @@ namespace Smile {
         BuildSkyPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
     }
 
-    void FAtmosphere::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, const Mat44& _InvViewProjNoTranslation) {
+    void FAtmosphere::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun,
+                                     const Mat44& _InvViewProjNoTranslation,
+                                     const Mat44& _InvViewProjFull, const Vec3& _CameraWorldPos,
+                                     f32 _KmPerWorldUnit) {
         FrameSlot = _FrameSlot;
         Vec3 d = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 0.6f, 0.8f }.Normalized());
         CPUConstants.SunDir = { d.X, d.Y, d.Z, CPUConstants.SunDir.W }; // keep illuminance
         CPUConstants.InvViewProjNoTrans = _InvViewProjNoTranslation;
+        // Aerial-perspective froxel inputs (full reconstruction + world->km scale).
+        CPUConstants.InvViewProj    = _InvViewProjFull;
+        CPUConstants.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
         // Copia o shadow inteiro p/ a regiao deste frame (inclui SunDisk dos setters).
         if (MappedBase) *Mapped() = CPUConstants;
     }
@@ -370,6 +384,20 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(SkyView.UAVSlot));
         _CommandList->Dispatch((kSkyViewW + 7) / 8, (kSkyViewH + 7) / 8, 1);
         SkyView.Transition(_CommandList, kReadState);
+    }
+
+    void FAtmosphere::RecordAerialPerspectiveBake(ID3D12GraphicsCommandList* _CommandList) {
+        if (!Initialized || !AerialPerspectiveVolume.IsValid()) return;
+
+        AerialPerspectiveVolume.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        AerialPerspectivePSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
+        // Reuse the sky-view bake input table: [transmittance(t0), multiscatter(t1)].
+        _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(SkyViewBakeTableStart));
+        _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(AerialPerspectiveVolume.UAVSlot(0)));
+        // numthreads(4,4,4) over a 32x32x16 volume.
+        _CommandList->Dispatch((kAerialW + 3) / 4, (kAerialH + 3) / 4, (kAerialSlices + 3) / 4);
+        AerialPerspectiveVolume.Transition(_CommandList, kReadState);
     }
 
     void FAtmosphere::RenderSky(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap) {

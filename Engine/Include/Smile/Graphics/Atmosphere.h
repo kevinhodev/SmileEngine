@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/VolumeTexture.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -27,6 +28,10 @@ namespace Smile {
         Vec4 SkyViewSize;        // x = skyW, y = skyH, z = camera view height (km), w = ground altitude (km)
         Vec4 SunDisk;            // x = cos(half angle), y = disk intensity, z = sun illuminance (sky-view)
         Mat44 InvViewProjNoTrans; // sky PS world-ray reconstruction
+        // --- Aerial perspective froxel (A3) ---
+        Mat44 InvViewProj;       // FULL inverse view-proj (with translation) — froxel world reconstruction
+        Vec4 CameraWorldPos;     // xyz = camera world position (scene units), w = km per world unit
+        Vec4 AerialParams;       // x = volume depth (km), y = slice count, z = start depth (km), w = samples/slice
     };
 
     // A 2D compute-written lookup texture (resource + SRV + UAV + tracked state).
@@ -55,6 +60,10 @@ namespace Smile {
         static constexpr u32 kMultiScatterH  = 32;
         static constexpr u32 kSkyViewW       = 192;
         static constexpr u32 kSkyViewH       = 104;
+        // Aerial-perspective froxel (camera-frustum volume). 32x32x16 like UE5.
+        static constexpr u32 kAerialW        = 32;
+        static constexpr u32 kAerialH        = 32;
+        static constexpr u32 kAerialSlices   = 16;
         // Camera altitude above the planet surface (km). The atmosphere lives in
         // its own km-scaled frame, decoupled from the scene's engine units.
         static constexpr f32 kGroundAltitudeKm = 0.5f;
@@ -72,7 +81,10 @@ namespace Smile {
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         // Per-frame: update sun direction + camera-relative view matrix in the CB.
-        void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation);
+        // Also feeds the aerial-perspective froxel: the FULL inverse view-proj (with
+        // translation), the camera world position (scene units) and the world->km scale.
+        void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation,
+                            const Mat44& InvViewProjFull, const Vec3& CameraWorldPos, f32 KmPerWorldUnit);
 
         // Sun disk controls (CB-only, no LUT re-bake).
         void SetSunDiskHalfAngle(f32 DegHalfAngle);
@@ -85,6 +97,10 @@ namespace Smile {
         // in a shader-readable state for RenderSky.
         void RecordSkyViewBake(ID3D12GraphicsCommandList* CommandList);
 
+        // Records the per-frame aerial-perspective froxel bake (compute). Reuses the
+        // [transmittance, multiscatter] input table. Leaves the volume shader-readable.
+        void RecordAerialPerspectiveBake(ID3D12GraphicsCommandList* CommandList);
+
         // Records the fullscreen sky draw (graphics). Caller must have set the
         // render/depth targets, viewport, scissor and descriptor heaps.
         void RenderSky(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
@@ -96,6 +112,8 @@ namespace Smile {
         u32 TransmittanceSRV() const { return Transmittance.SRVSlot; }
         u32 MultiScatterSRV()  const { return MultiScatter.SRVSlot; }
         u32 SkyViewSRV()       const { return SkyView.SRVSlot; }
+        u32 AerialVolumeSRV()  const { return AerialPerspectiveVolume.SRVSlot(); }
+        f32 AerialDepthKm()    const { return CPUConstants.AerialParams.X; }
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
         bool IsInitialized() const { return Initialized; }
 
@@ -119,6 +137,10 @@ namespace Smile {
         FVolumetricPipeline TransmittancePSO;
         FVolumetricPipeline MultiScatterPSO;
         FVolumetricPipeline SkyViewPSO;
+        // Aerial-perspective froxel volume (3D) + its compute bake pipeline.
+        // The volume tracks its own resource state internally.
+        FVolumeTexture      AerialPerspectiveVolume;
+        FVolumetricPipeline AerialPerspectivePSO;
 
         // Contiguous 2-slot SRV tables built once via CopyDescriptors.
         u32 SkyViewBakeTableStart = 0; // [transmittance(t0), multiscatter(t1)]

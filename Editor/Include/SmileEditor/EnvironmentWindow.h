@@ -44,6 +44,7 @@ namespace SmileEditor {
         QWidget* BuildSunSection();
         QWidget* BuildAtmosphereSection();
         QWidget* BuildCloudSection();
+        QWidget* BuildFogSection();
         QWidget* BuildOceanSection();
         QWidget* BuildEnvironmentSection();
         QWidget* BuildFooter();
@@ -73,6 +74,7 @@ namespace SmileEditor {
         QWidget* SunSection = nullptr;
         QWidget* AtmosphereSection = nullptr;
         QWidget* CloudSection = nullptr;
+        QWidget* FogSection = nullptr;
         QWidget* OceanSection = nullptr;
         QWidget* EnvironmentSection = nullptr;
 
@@ -117,6 +119,14 @@ namespace SmileEditor {
         QDoubleSpinBox* SSSStrengthSpin = nullptr;
         QDoubleSpinBox* ShoreFoamSpin = nullptr;
         QDoubleSpinBox* WaterClaritySpin = nullptr;
+
+        QCheckBox*      HeightFogCheck = nullptr;
+        QCheckBox*      AerialFogCheck = nullptr;
+        QDoubleSpinBox* AtmFogDensitySpin = nullptr;
+        QDoubleSpinBox* AtmFogFalloffSpin = nullptr;
+        QDoubleSpinBox* AtmFogHeightSpin  = nullptr;
+        QDoubleSpinBox* AtmFogOpacitySpin = nullptr;
+        QDoubleSpinBox* AtmFogStartSpin   = nullptr;
 
         QDoubleSpinBox* IBLIntensitySpin = nullptr;
         QDoubleSpinBox* IBLRotationSpin = nullptr;

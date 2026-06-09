@@ -17,6 +17,7 @@
 #include "Smile/Graphics/CloudNoise.h"
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
+#include "Smile/Graphics/Fog.h"
 #include "Smile/Graphics/PostProcess.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
@@ -104,6 +105,14 @@ namespace Smile {
         bool GetUseAtmosphereSky() const     { return UseAtmosphereSky; }
         void SetUseClouds(bool Use)          { UseClouds = Use; }
         bool GetUseClouds() const            { return UseClouds; }
+
+        // Deferred atmospheric fog (UE5): aerial-perspective froxel + exponential
+        // height fog. Replaces the old ad-hoc water/horizon fog.
+        void SetUseAerialPerspective(bool Use) { UseAerialPerspective = Use; }
+        bool GetUseAerialPerspective() const   { return UseAerialPerspective; }
+        void SetUseHeightFog(bool Use)         { UseHeightFog = Use; }
+        bool GetUseHeightFog() const           { return UseHeightFog; }
+        FFogPass& GetFog()                     { return Fog; }
 
         // Ocean (port fiel da CryEngine). Toggle + acesso ao subsistema p/ setters do editor.
         void SetUseWater(bool Use)           { UseWater = Use; }
@@ -215,6 +224,12 @@ namespace Smile {
         // Physical atmosphere (Hillaire): LUTs + sky-view + sky render.
         FAtmosphere     Atmosphere;
         bool            UseAtmosphereSky = true; // default outdoor sky
+        // Deferred atmospheric fog (aerial perspective froxel + height fog).
+        FFogPass        Fog;
+        bool            UseAerialPerspective = true;
+        bool            UseHeightFog         = true;
+        // Scene world-unit -> atmosphere km scale (1 world unit = 1 m).
+        static constexpr f32 kKmPerWorldUnit = 0.001f;
         // Volumetric clouds: 3D noise volumes (B1) + raymarch/composite (B2).
         FCloudNoise       CloudNoise;
         FVolumetricClouds CloudVolumetrics;

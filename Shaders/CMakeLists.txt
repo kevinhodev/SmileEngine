@@ -20,6 +20,12 @@ smile_compile_shader(Atmosphere/BakeMultiScatter.cs.hlsl  cs_6_0 main SHADER_OUT
 smile_compile_shader(Atmosphere/BakeSkyView.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/SkyAtmosphere.vs.hlsl     vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/SkyAtmosphere.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/BakeAerialPerspective.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+
+# Fog deferido (UE5): aerial perspective froxel + exponential height fog
+smile_compile_shader(Fog/FogFullscreen.vs.hlsl            vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/FogFullscreen.ps.hlsl            ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/FogFullscreenMS.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
 
 # Nuvens volumetricas — bake de ruido 3D + raymarch + composite
 smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
@@ -68,6 +74,12 @@ add_custom_target(Shaders
         Atmosphere/BakeSkyView.cs.hlsl
         Atmosphere/SkyAtmosphere.vs.hlsl
         Atmosphere/SkyAtmosphere.ps.hlsl
+        Atmosphere/BakeAerialPerspective.cs.hlsl
+        Fog/FogCommon.hlsli
+        Fog/FogApply.hlsli
+        Fog/FogFullscreen.vs.hlsl
+        Fog/FogFullscreen.ps.hlsl
+        Fog/FogFullscreenMS.ps.hlsl
         Clouds/CloudNoiseCommon.hlsli
         Clouds/CloudDensity.hlsli
         Clouds/CloudLighting.hlsli

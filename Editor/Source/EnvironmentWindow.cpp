@@ -154,6 +154,7 @@ namespace SmileEditor {
         Layout->addWidget(AddSidebarButton(QStringLiteral("sun"), tr("Sol"), SunSection));
         Layout->addWidget(AddSidebarButton(QStringLiteral("cloud-sun"), tr("Céu & Atmosfera"), AtmosphereSection));
         Layout->addWidget(AddSidebarButton(QStringLiteral("cloud"), tr("Nuvens"), CloudSection));
+        Layout->addWidget(AddSidebarButton(QStringLiteral("wind"), tr("Névoa"), FogSection));
         Layout->addWidget(AddSidebarButton(QStringLiteral("waves"), tr("Oceano"), OceanSection));
         Layout->addWidget(AddSidebarButton(QStringLiteral("globe"), tr("Ambiente"), EnvironmentSection));
         Layout->addStretch(1);
@@ -213,6 +214,7 @@ namespace SmileEditor {
         ContentLayout->addWidget(BuildSection(QStringLiteral("sun"), tr("SOL"), BuildSunSection(), &SunSection));
         ContentLayout->addWidget(BuildSection(QStringLiteral("orbit"), tr("ATMOSFERA"), BuildAtmosphereSection(), &AtmosphereSection));
         ContentLayout->addWidget(BuildSection(QStringLiteral("cloud"), tr("NUVENS"), BuildCloudSection(), &CloudSection));
+        ContentLayout->addWidget(BuildSection(QStringLiteral("wind"), tr("NÉVOA"), BuildFogSection(), &FogSection));
         ContentLayout->addWidget(BuildSection(QStringLiteral("waves"), tr("OCEANO"), BuildOceanSection(), &OceanSection));
         ContentLayout->addWidget(BuildSection(QStringLiteral("globe"), tr("AMBIENTE"), BuildEnvironmentSection(), &EnvironmentSection));
         ContentLayout->addStretch(1);
@@ -340,6 +342,36 @@ namespace SmileEditor {
         }));
         Layout->addWidget(MakeNumericRow(tr("Erosão"), 0.0, 1.0, 0.01, 2, 0.45, QString(), &ErosionSpin, [this](double Value) {
             if (RendererPtr) RendererPtr->SetCloudErosion(static_cast<float>(Value));
+        }));
+        return Body;
+    }
+
+    QWidget* EnvironmentWindow::BuildFogSection() {
+        auto* Body = new QWidget(this);
+        auto* Layout = new QVBoxLayout(Body);
+        Layout->setContentsMargins(18, 0, 18, 12);
+        Layout->setSpacing(6);
+
+        Layout->addWidget(MakeToggleRow(tr("Aerial perspective"), &AerialFogCheck, true, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetUseAerialPerspective(Checked);
+        }));
+        Layout->addWidget(MakeToggleRow(tr("Height fog"), &HeightFogCheck, true, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetUseHeightFog(Checked);
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Densidade"), 0.0, 0.01, 0.0001, 5, 0.0002, QString(), &AtmFogDensitySpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetFog().SetDensity(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Falloff (alt.)"), 0.0, 0.05, 0.0001, 5, 0.0005, QString(), &AtmFogFalloffSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetFog().SetHeightFalloff(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Altura base"), -500.0, 2000.0, 10.0, 0, 0.0, QStringLiteral(" m"), &AtmFogHeightSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetFog().SetFogHeight(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Opacidade máx"), 0.0, 1.0, 0.01, 2, 0.85, QString(), &AtmFogOpacitySpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetFog().SetMaxOpacity(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Dist. início"), 0.0, 20000.0, 100.0, 0, 0.0, QStringLiteral(" m"), &AtmFogStartSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->GetFog().SetStartDistance(static_cast<float>(Value));
         }));
         return Body;
     }
@@ -614,6 +646,16 @@ namespace SmileEditor {
         if (PowderSpin) PowderSpin->setValue(RendererPtr->GetCloudPowder());
         if (ErosionSpin) ErosionSpin->setValue(RendererPtr->GetCloudErosion());
 
+        if (AerialFogCheck) AerialFogCheck->setChecked(RendererPtr->GetUseAerialPerspective());
+        if (HeightFogCheck) HeightFogCheck->setChecked(RendererPtr->GetUseHeightFog());
+        auto& AtmFog = RendererPtr->GetFog();
+        if (AtmFog.IsInitialized()) {
+            if (AtmFogDensitySpin) AtmFogDensitySpin->setValue(AtmFog.GetDensity());
+            if (AtmFogFalloffSpin) AtmFogFalloffSpin->setValue(AtmFog.GetHeightFalloff());
+            if (AtmFogHeightSpin)  AtmFogHeightSpin->setValue(AtmFog.GetFogHeight());
+            if (AtmFogOpacitySpin) AtmFogOpacitySpin->setValue(AtmFog.GetMaxOpacity());
+        }
+
         auto& Water = RendererPtr->GetWater();
         if (OceanCheck) OceanCheck->setChecked(RendererPtr->GetUseWater());
         if (WaterDebugCombo) WaterDebugCombo->setCurrentIndex(static_cast<int>(Water.GetDebugMode()));
@@ -664,6 +706,14 @@ namespace SmileEditor {
         if (PhaseSpin) PhaseSpin->setValue(0.8);
         if (PowderSpin) PowderSpin->setValue(0.5);
         if (ErosionSpin) ErosionSpin->setValue(0.45);
+
+        if (AerialFogCheck) AerialFogCheck->setChecked(true);
+        if (HeightFogCheck) HeightFogCheck->setChecked(true);
+        if (AtmFogDensitySpin) AtmFogDensitySpin->setValue(0.0002);
+        if (AtmFogFalloffSpin) AtmFogFalloffSpin->setValue(0.0005);
+        if (AtmFogHeightSpin)  AtmFogHeightSpin->setValue(0.0);
+        if (AtmFogOpacitySpin) AtmFogOpacitySpin->setValue(0.85);
+        if (AtmFogStartSpin)   AtmFogStartSpin->setValue(0.0);
 
         if (OceanCheck) OceanCheck->setChecked(true);
         if (WaterDebugCombo) WaterDebugCombo->setCurrentIndex(0);

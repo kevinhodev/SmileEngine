@@ -650,8 +650,7 @@ namespace Smile {
         GpuTileBuildRootX = RootX;
         GpuTileBuildRootZ = RootZ;
         GpuTileBuildBaseSize = BaseSize;
-        GpuTileBuildBoundsPad = std::max(BaseSize * 2.0f,
-                                         std::max(FFTDispScale * 4.0f, FarSwellHeight * 8.0f) + 16.0f);
+        GpuTileBuildBoundsPad = std::max(BaseSize * 2.0f, FFTDispScale * 4.0f + 16.0f);
         GpuTileBuildViewProj = _ViewProj;
 
         const i32 CameraCellX = std::clamp(
@@ -822,10 +821,6 @@ namespace Smile {
         MappedCBV->DepthParams      = { _NearZ, _FarZ, _HasSceneCopies ? 1.0f : 0.0f,
                                         _UseAtmosphereSky ? 1.0f : 0.0f };
         MappedCBV->RefractionParams = { RefractionBumpScale, SoftIntersectionFactor, FogDensity, ReflectionBumpScale };
-        MappedCBV->AerialFogParams  = { AerialFogStart, AerialFogRange, AerialFogDensity,
-                                         UseAerialFog ? (_UseAtmosphereSky ? 2.0f : 1.0f) : 0.0f };
-        MappedCBV->FarBlendParams   = { FarBlendStart, FarBlendRange,
-                                         FarSwellHeight, FarSwellNormalStrength };
         MappedCBV->DebugParams      = { static_cast<f32>(static_cast<u32>(DebugMode)), 0.0f, 0.0f, 0.0f };
         // densidade do fog tambem empacotada em DeepColorDensity.w.
         MappedCBV->DeepColorDensity = { DeepColor.X, DeepColor.Y, DeepColor.Z, FogDensity };

@@ -170,16 +170,8 @@ namespace Smile {
         void SetShoreFoamIntensity(f32 V)  { ShoreFoamIntensity = V; }
         f32  GetShoreFoamWidth() const     { return ShoreFoamWidth; }
         f32  GetShoreFoamIntensity() const { return ShoreFoamIntensity; }
-        // Aerial perspective da superficie no horizonte (HDR, pos-water, estilo Cry).
-        void SetUseAerialFog(bool V)       { UseAerialFog = V; }
-        void SetAerialFog(f32 Start, f32 Range, f32 Density) {
-            AerialFogStart = Start; AerialFogRange = Range; AerialFogDensity = Density;
-        }
-        // Blend estilo Asylum: FFT/choppy perto, swell procedural suave no medio-longe.
-        void SetFarSwellBlend(f32 Start, f32 Range, f32 Height, f32 NormalStrength) {
-            FarBlendStart = Start; FarBlendRange = Range;
-            FarSwellHeight = Height; FarSwellNormalStrength = NormalStrength;
-        }
+        // (O aerial perspective / height fog atmosferico agora e um passe deferido
+        // global — ver FFogPass; o fog ad-hoc de superficie foi removido.)
 
     private:
         // Layout casa campo-a-campo com o cbuffer WaterCB (WaterCommon.hlsli).
@@ -202,8 +194,6 @@ namespace Smile {
             Vec4  ScreenParams;    // 16  x=w y=h z=1/w w=1/h
             Vec4  DepthParams;     // 16  x=near y=far z=hasSceneCopies w=useAtmosphereSky
             Vec4  RefractionParams;// 16  x=RefractionBumpScale y=SoftIntersectionFactor z=fogDensity w=ReflectionBumpScale
-            Vec4  AerialFogParams; // 16  x=start(m) y=range(m) z=density w=0 off/1 HDR/2 physical sky
-            Vec4  FarBlendParams;  // 16  x=FFT->swell start y=range z=swell height w=normal strength
             Vec4  DebugParams;     // 16  x=debug mode (0 off/1 wire/2 tiles)
             Vec4  InScatterColor;  // 16  rgb=cor turquesa do in-scatter, w=densidade do in-scatter
             Vec4  AbsorptionColor; // 16  rgb=extincao por canal (Beer-Lambert), w=clamp do sun-spec
@@ -392,14 +382,6 @@ namespace Smile {
         // Espuma de costa (orla): mais espuma onde a coluna d'agua e fina.
         f32  ShoreFoamWidth     = 6.0f; // espessura (m) da faixa de espuma na orla
         f32  ShoreFoamIntensity = 1.0f; // 0 = desliga a espuma de costa
-        bool UseAerialFog           = false;
-        f32  AerialFogStart         = 900.0f;
-        f32  AerialFogRange         = 3800.0f;
-        f32  AerialFogDensity       = 0.18f;
-        f32  FarBlendStart          = 220.0f;
-        f32  FarBlendRange          = 1600.0f;
-        f32  FarSwellHeight         = 0.70f;
-        f32  FarSwellNormalStrength = 1.15f;
 
         // Quadtree: cobertura 64m * 2^9 = 32768m, split por coverage de tela.
         bool UseGpuFrustumCull     = true;

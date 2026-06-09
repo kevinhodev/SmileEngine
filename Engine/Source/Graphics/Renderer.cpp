@@ -62,6 +62,10 @@ namespace Smile {
         Water.Initialize(Device.Native(), MSAASampleCount,
                          DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
+        // Fog deferido (UE5): aerial-perspective froxel (FAtmosphere) + exponential
+        // height fog, compostos num passe fullscreen sobre o HDR linear antes do tonemap.
+        Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+
         // Inicializa o pos-processamento
         PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
@@ -508,7 +512,14 @@ namespace Smile {
         ViewNoTrans.M[3][1] = 0.0f;
         ViewNoTrans.M[3][2] = 0.0f;
         const Mat44 InvVPNoTrans = (ViewNoTrans * Projection).Inverse();
-        Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans);
+        // Full inverse view-proj (with translation) for the aerial-perspective froxel
+        // and the deferred fog world-position reconstruction.
+        const Mat44 InvViewProjFull = ViewProjection.Inverse();
+        Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans,
+                                  InvViewProjFull, CameraPosition, kKmPerWorldUnit);
+        Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, SunN,
+                           NearZ, FarZ, SwapChain.GetWidth(), SwapChain.GetHeight(),
+                           UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm());
         // Clouds share the atmosphere km-frame: camera at (0, viewHeight, 0).
         const f32 CloudViewHeight = 6360.0f + FAtmosphere::kGroundAltitudeKm;
         CloudVolumetrics.UpdatePerFrame(FrameSlot, InvVPNoTrans, CloudViewHeight, SunN, SunColorRGB,
@@ -593,6 +604,15 @@ namespace Smile {
         } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
             Skybox.Render(FrameSlot, CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
                           InvVPNoTrans, IBLIntensity, IBLRotation);
+        }
+
+        // Aerial-perspective froxel (compute). Baked every frame from the atmosphere
+        // LUTs (cheap, 32x32x16); leaves the volume shader-readable for the fog pass.
+        // Always baked when the atmosphere is up so the volume rests in a read state
+        // even when the fog only samples height fog (UseAerialPerspective toggles
+        // whether the deferred pass reads it).
+        if (Atmosphere.IsInitialized()) {
+            Atmosphere.RecordAerialPerspectiveBake(CommandList);
         }
 
         // --- Scene geometry ---
@@ -680,6 +700,9 @@ namespace Smile {
             CloudVolumetrics.Composite(CommandList, SRVHeap);
         }
 
+        // Resolve MSAA so the deferred fog + post-process run on the single-sample
+        // HDR scene color. The resolved HDRColorBuffer is left in RENDER_TARGET so
+        // the fog pass can blend onto it; the final RT->PSR transition happens after.
         if (UseMSAA) {
             D3D12_RESOURCE_BARRIER ResourceBarriers[2]{};
             ResourceBarriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -700,9 +723,36 @@ namespace Smile {
             ResourceBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
             ResourceBarriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
             ResourceBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
-            ResourceBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            ResourceBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
             CommandList->ResourceBarrier(2, ResourceBarriers);
-        } else {
+        }
+        // (non-MSAA: HDRColorBuffer is already in RENDER_TARGET from the scene pass.)
+
+        // --- Deferred atmospheric fog: aerial-perspective froxel + height fog ------
+        // Composited over the single-sample linear HDR scene color (before tonemap),
+        // reading the post-water scene depth as an SRV. Affects the ocean and all
+        // opaque geometry; sky pixels (depth == far) are skipped in the shader.
+        if ((UseHeightFog || UseAerialPerspective) && Fog.IsInitialized()) {
+            D3D12_RESOURCE_BARRIER DepthBarrier{};
+            DepthBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            DepthBarrier.Transition.pResource   = DepthBuffer.Get();
+            DepthBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &DepthBarrier);
+
+            auto Fog_RTV = HDRRTVHeap.CpuHandle(0); // resolved single-sample HDR color
+            CommandList->OMSetRenderTargets(1, &Fog_RTV, FALSE, nullptr);
+            Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV(), UseMSAA);
+
+            // Restore depth to DEPTH_WRITE for the next frame's clear.
+            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            CommandList->ResourceBarrier(1, &DepthBarrier);
+        }
+
+        // Resolved HDR color -> shader resource for the bloom + tonemap post pass.
+        {
             D3D12_RESOURCE_BARRIER ResourceBarrier{};
             ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             ResourceBarrier.Transition.pResource   = HDRColorBuffer.Get();

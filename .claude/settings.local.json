@@ -13,7 +13,11 @@
       "Bash(cd /d D:\\\\Engines\\\\SmileEngine)",
       "Bash(dir /b)",
       "PowerShell(cmake --build build --config Debug --target SmileEngine 2>&1)",
-      "Bash(git -C \"D:/Engines/SmileEngine\" diff --stat HEAD)"
+      "Bash(git -C \"D:/Engines/SmileEngine\" diff --stat HEAD)",
+      "Bash(Remove-Item -Path \"D:\\\\Engines\\\\SmileEngine\\\\Editor\\\\Include\\\\SmileEditor\\\\SkyCloudPanel.h\" -Force)",
+      "Bash(Remove-Item -Path \"D:\\\\Engines\\\\SmileEngine\\\\Editor\\\\Source\\\\SkyCloudPanel.cpp\" -Force)",
+      "Bash(Write-Host \"Deleted\")",
+      "PowerShell(\"Deleted\")"
     ]
   }
 }

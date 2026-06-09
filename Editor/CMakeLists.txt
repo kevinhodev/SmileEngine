@@ -14,7 +14,6 @@ set(EDITOR_HEADERS
     Include/SmileEditor/TextureLoadWorker.h
     Include/SmileEditor/MaterialEditorPanel.h
     Include/SmileEditor/EnvironmentPanel.h
-    Include/SmileEditor/SkyCloudPanel.h
 )
 
 set(EDITOR_SOURCES
@@ -30,7 +29,6 @@ set(EDITOR_SOURCES
     Source/TextureLoadWorker.cpp
     Source/MaterialEditorPanel.cpp
     Source/EnvironmentPanel.cpp
-    Source/SkyCloudPanel.cpp
 )
 
 # WIN32 = subsistema Windows (sem console preto atras)

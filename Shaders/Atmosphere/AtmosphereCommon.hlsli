@@ -26,7 +26,17 @@ cbuffer AtmosphereCB : register(b0) {
     float4 SkyViewSize;        // x = skyW, y = skyH, z = camera view height (km), w = ground altitude (km)
     float4 SunDisk;            // x = cos(half angle), y = disk intensity, z = sun illuminance (sky-view), w unused
     row_major float4x4 InvViewProjNoTrans; // sky PS world-ray reconstruction
+    // --- Aerial perspective froxel (A3) ---
+    row_major float4x4 InvViewProj; // FULL inverse view-proj (with translation)
+    float4 CameraWorldPos;          // xyz = camera world pos (scene units), w = km per world unit
+    float4 AerialParams;            // x = volume depth (km), y = slice count, z = start depth (km), w = samples/slice
 };
+
+#define kKmPerWorldUnit (CameraWorldPos.w)
+#define kAerialDepthKm  (AerialParams.x)
+#define kAerialSlices   (AerialParams.y)
+#define kAerialStartKm  (AerialParams.z)
+#define kAerialSamples  (AerialParams.w)
 
 // Convenience aliases for the packed scalars.
 #define kRayleighScaleH (RayleighScattering.w)

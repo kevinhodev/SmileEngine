@@ -22,8 +22,6 @@ cbuffer WaterCB : register(b0) {
     float4 ScreenParams;     // x=w y=h z=1/w w=1/h
     float4 DepthParams;      // x=near y=far z=hasSceneCopies w=useAtmosphereSky
     float4 RefractionParams; // x=RefractionBumpScale y=SoftIntersectionFactor z=fogDensity w=ReflectionBumpScale
-    float4 AerialFogParams;  // x=start(m) y=range(m) z=density w=0 off/1 HDR/2 physical sky
-    float4 FarBlendParams;   // x=FFT->swell start(m) y=range(m) z=swell height w=swell normal strength
     float4 DebugParams;      // x=debug mode (0 off/1 wire/2 tiles)
     float4 InScatterColor;   // rgb=cor turquesa do in-scatter, w=densidade
     float4 AbsorptionColor;  // rgb=extincao por canal (Beer-Lambert), w=clamp do sun-spec
@@ -155,49 +153,6 @@ float WaterValueNoise(float2 p) {
     float c = WaterHash21(i + float2(0.0, 1.0));
     float d = WaterHash21(i + float2(1.0, 1.0));
     return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
-}
-
-float WaterFarBlend(float camDist) {
-    return SmoothWaterStep((camDist - FarBlendParams.x) / max(FarBlendParams.y, 1.0));
-}
-
-float2 SafeWaterFlowDir() {
-    float2 flow = OceanParams1.yz;
-    float lenSq = max(dot(flow, flow), 1e-4);
-    return flow * rsqrt(lenSq);
-}
-
-// Asylum-style far-water replacement: a few long, smooth procedural swells.
-// It is intentionally low-frequency so the horizon stops carrying FFT/choppy detail.
-float WaterFarSwellHeight(float2 worldXZ) {
-    float2 flow = SafeWaterFlowDir();
-    float2 side = float2(-flow.y, flow.x);
-    float windT = Misc.x * max(OceanParams0.y, 0.1);
-
-    float2 d0 = flow;
-    float2 d1 = normalize(flow * 0.62 + side * 0.78);
-    float2 d2 = normalize(flow * 0.24 - side * 0.97);
-
-    float h =
-        sin(dot(worldXZ, d0) * 0.025 + windT * 0.105) * 0.55 +
-        sin(dot(worldXZ, d1) * 0.015 + windT * 0.062 + 1.7) * 0.32 +
-        sin(dot(worldXZ, d2) * 0.008 + windT * 0.037 + 4.1) * 0.22;
-
-    return h * FarBlendParams.z * OceanParams1.x;
-}
-
-float2 WaterFarSwellSlope(float2 worldXZ) {
-    const float eps = 3.0;
-    float hx0 = WaterFarSwellHeight(worldXZ - float2(eps, 0.0));
-    float hx1 = WaterFarSwellHeight(worldXZ + float2(eps, 0.0));
-    float hz0 = WaterFarSwellHeight(worldXZ - float2(0.0, eps));
-    float hz1 = WaterFarSwellHeight(worldXZ + float2(0.0, eps));
-    return float2(hx1 - hx0, hz1 - hz0) / (2.0 * eps);
-}
-
-float3 WaterFarSwellNormal(float2 worldXZ) {
-    float2 slope = WaterFarSwellSlope(worldXZ) * max(FarBlendParams.w, 0.0);
-    return normalize(float3(-slope.x, 1.0, -slope.y));
 }
 
 // Parallax offset, 2 iteracoes. Desloca as UVs
