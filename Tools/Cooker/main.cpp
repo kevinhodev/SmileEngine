@@ -1,0 +1,342 @@
+// SmileCooker — converte um arquivo FBX (via ufbx) no formato binario proprio da
+// engine (.smesh + .sscene). Roda offline; o runtime nunca le FBX direto.
+//
+// Uso:  SmileCooker <entrada.fbx> [saida_sem_extensao]
+//   ex: SmileCooker Assets/Scenes/Bistro/BistroExterior.fbx
+//       -> gera BistroExterior.smesh e BistroExterior.sscene ao lado do .fbx
+//
+// Pipeline (espelha Cry RC / Unreal Interchange, versao enxuta):
+//   1. ufbx carrega o FBX, normalizado p/ RH Y-up + metros (MODIFY_GEOMETRY).
+//   2. Por no com mesh, por parte-de-material: triangula, transforma p/ mundo,
+//      converte RH->LH (nega Z + inverte winding), funde vertices (weld).
+//      -> 1 mesh por (no, material). SEM fusao entre nos (Fase 4 mede o ganho).
+//   3. Resolve as texturas pela convencao Bistro (nome_Sufixo.dds) + fallback ufbx.
+//   4. Escreve .smesh (geometria) e .sscene (materiais + renderaveis).
+
+#include "Smile/Scene/CookedFormat.h"
+#include "Smile/Graphics/Mesh.h" // Smile::Vertex (stride 32)
+
+#include "ufbx.h"
+
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <filesystem>
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+
+namespace fs = std::filesystem;
+using Smile::Vertex;
+
+// --- RH(Y-up) -> LH(Y-up): inverter winding (par com a negacao de Z nas posicoes).
+// Se a cena sair "inside-out" (culling invertido), trocar p/ false e rebuildar.
+static constexpr bool kReverseWinding = true;
+
+// ----------------------------------------------------------------------------
+// Weld de vertices: chave = 8 floats (pos3, normal3, uv2), igualdade por bytes.
+struct VertKey {
+    Vertex V;
+    bool operator==(const VertKey& O) const {
+        return std::memcmp(&V, &O.V, sizeof(Vertex)) == 0;
+    }
+};
+struct VertKeyHash {
+    size_t operator()(const VertKey& K) const {
+        // FNV-1a sobre os bytes do vertice.
+        const auto* p = reinterpret_cast<const unsigned char*>(&K.V);
+        size_t h = 1469598103934665603ull;
+        for (size_t i = 0; i < sizeof(Vertex); ++i) { h ^= p[i]; h *= 1099511628211ull; }
+        return h;
+    }
+};
+
+// Sub-mesh acumulado durante o cook.
+struct SubMesh {
+    std::vector<Vertex>   Vertices;
+    std::vector<uint32_t> Indices;
+    std::unordered_map<VertKey, uint32_t, VertKeyHash> Weld;
+    float Min[3] = {  1e30f,  1e30f,  1e30f };
+    float Max[3] = { -1e30f, -1e30f, -1e30f };
+
+    uint32_t Add(const Vertex& v) {
+        VertKey k{ v };
+        auto it = Weld.find(k);
+        if (it != Weld.end()) return it->second;
+        uint32_t idx = static_cast<uint32_t>(Vertices.size());
+        Vertices.push_back(v);
+        Weld.emplace(k, idx);
+        for (int c = 0; c < 3; ++c) {
+            Min[c] = std::min(Min[c], v.Position[c]);
+            Max[c] = std::max(Max[c], v.Position[c]);
+        }
+        return idx;
+    }
+};
+
+// ----------------------------------------------------------------------------
+static std::string ToLower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+    return s;
+}
+static std::string BaseNameNoExt(const std::string& path) {
+    return fs::path(path).stem().string();
+}
+static void SetStr(char* dst, size_t cap, const std::string& s) {
+    std::memset(dst, 0, cap);
+    std::strncpy(dst, s.c_str(), cap - 1);
+}
+
+// Procura "Textures/<base>.dds" no diretorio da cena (case-insensitive no basename).
+// Retorna o caminho relativo ("Textures/Foo.dds") se existir, senao "".
+static std::string FindDDS(const fs::path& sceneDir, const std::string& base) {
+    if (base.empty()) return "";
+    fs::path rel = fs::path("Textures") / (base + ".dds");
+    if (fs::exists(sceneDir / rel)) return rel.generic_string();
+    // Tentativa case-insensitive: varre a pasta Textures uma vez.
+    static std::vector<std::pair<std::string,std::string>> cache; // (lowerStem -> relPath)
+    static bool built = false;
+    if (!built) {
+        fs::path texDir = sceneDir / "Textures";
+        if (fs::exists(texDir)) {
+            for (auto& e : fs::directory_iterator(texDir)) {
+                if (!e.is_regular_file()) continue;
+                if (ToLower(e.path().extension().string()) != ".dds") continue;
+                cache.emplace_back(ToLower(e.path().stem().string()),
+                                   (fs::path("Textures") / e.path().filename()).generic_string());
+            }
+        }
+        built = true;
+    }
+    std::string lb = ToLower(base);
+    for (auto& kv : cache) if (kv.first == lb) return kv.second;
+    return "";
+}
+
+// Classifica o sufixo do basename de uma textura nos 4 slots do material.
+enum class Slot { None, BaseColor, Specular, Normal, Emissive };
+static Slot ClassifySuffix(const std::string& base) {
+    std::string b = ToLower(base);
+    auto has = [&](const char* s){ return b.find(s) != std::string::npos; };
+    if (has("basecolor") || has("base_color") || has("albedo") || has("diffuse")) return Slot::BaseColor;
+    if (has("normal"))                                                            return Slot::Normal;
+    if (has("specular") || has("_orm") || has("metalrough"))                      return Slot::Specular;
+    if (has("emissive") || has("emission"))                                       return Slot::Emissive;
+    return Slot::None;
+}
+
+// Heuristica de material masked/two-sided (folhagem/toldos do Bistro) pelo nome.
+static bool LooksMasked(const std::string& name) {
+    std::string n = ToLower(name);
+    const char* kw[] = { "leaf","leaves","foliage","plant","tree","ivy","vine",
+                          "grass","fern","hedge","bush","branch","flower","petal" };
+    for (auto k : kw) if (n.find(k) != std::string::npos) return true;
+    return false;
+}
+
+// ----------------------------------------------------------------------------
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao]\n");
+        return 1;
+    }
+    fs::path inPath = argv[1];
+    fs::path sceneDir = inPath.parent_path();
+    fs::path outBase = (argc >= 3) ? fs::path(argv[2])
+                                   : (sceneDir / inPath.stem());
+
+    std::printf("[Cooker] Carregando FBX: %s\n", inPath.string().c_str());
+
+    ufbx_load_opts opts{};
+    opts.target_axes        = ufbx_axes_right_handed_y_up; // normaliza qualquer eixo -> RH Y-up
+    opts.target_unit_meters = 1.0f;                         // -> metros
+    opts.space_conversion   = UFBX_SPACE_CONVERSION_MODIFY_GEOMETRY; // baka nas matrizes/geometria
+    opts.generate_missing_normals = true;
+
+    ufbx_error err{};
+    ufbx_scene* scene = ufbx_load_file(inPath.string().c_str(), &opts, &err);
+    if (!scene) {
+        std::printf("[Cooker] ERRO ufbx: %s\n", err.description.data ? err.description.data : "desconhecido");
+        return 2;
+    }
+    std::printf("[Cooker] Cena carregada: %zu nos, %zu meshes, %zu materiais\n",
+                scene->nodes.count, scene->meshes.count, scene->materials.count);
+
+    // --- Tabela global de materiais (ufbx_material* -> indice) ---
+    std::vector<Smile::SSceneMaterial> materials;
+    std::unordered_map<const ufbx_material*, uint32_t> matIndex;
+
+    auto ResolveMaterial = [&](const ufbx_material* m) -> uint32_t {
+        if (!m) return Smile::kNoMaterial;
+        auto it = matIndex.find(m);
+        if (it != matIndex.end()) return it->second;
+
+        Smile::SSceneMaterial out{};
+        std::string name(m->name.data ? m->name.data : "", m->name.length);
+        if (name.empty()) name = "Material_" + std::to_string(materials.size());
+        SetStr(out.Name, Smile::kCookedMaxName, name);
+
+        out.BaseColorFactor[0] = out.BaseColorFactor[1] = out.BaseColorFactor[2] = out.BaseColorFactor[3] = 1.0f;
+        out.EmissiveFactor[0] = out.EmissiveFactor[1] = out.EmissiveFactor[2] = 0.0f;
+        out.EmissiveStrength = 1.0f;
+        out.AlphaCutoff = 0.5f;
+
+        std::string base, spec, norm, emis;
+
+        // 1) Texturas referenciadas pelo proprio material (ufbx), classificadas por sufixo.
+        for (size_t t = 0; t < m->textures.count; ++t) {
+            const ufbx_texture* tex = m->textures.data[t].texture;
+            if (!tex) continue;
+            const ufbx_string& fn = tex->relative_filename.length ? tex->relative_filename : tex->filename;
+            if (!fn.length) continue;
+            std::string b = BaseNameNoExt(std::string(fn.data, fn.length));
+            std::string rel = FindDDS(sceneDir, b);
+            if (rel.empty()) continue;
+            switch (ClassifySuffix(b)) {
+                case Slot::BaseColor: if (base.empty()) base = rel; break;
+                case Slot::Specular:  if (spec.empty()) spec = rel; break;
+                case Slot::Normal:    if (norm.empty()) norm = rel; break;
+                case Slot::Emissive:  if (emis.empty()) emis = rel; break;
+                default: break;
+            }
+        }
+        // 2) Fallback pela convencao de nome do material: <Nome>_<Sufixo>.dds
+        if (base.empty()) base = FindDDS(sceneDir, name + "_BaseColor");
+        if (spec.empty()) spec = FindDDS(sceneDir, name + "_Specular");
+        if (norm.empty()) norm = FindDDS(sceneDir, name + "_Normal");
+        if (emis.empty()) emis = FindDDS(sceneDir, name + "_Emissive");
+
+        SetStr(out.BaseColor, Smile::kCookedMaxPath, base);
+        SetStr(out.Specular,  Smile::kCookedMaxPath, spec);
+        SetStr(out.Normal,    Smile::kCookedMaxPath, norm);
+        SetStr(out.Emissive,  Smile::kCookedMaxPath, emis);
+
+        if (LooksMasked(name)) { out.AlphaTest = 1; out.TwoSided = 1; }
+
+        uint32_t idx = static_cast<uint32_t>(materials.size());
+        materials.push_back(out);
+        matIndex.emplace(m, idx);
+        if (base.empty())
+            std::printf("[Cooker]   ! material '%s' sem BaseColor resolvido\n", name.c_str());
+        return idx;
+    };
+
+    // --- Geometria ---
+    std::vector<Smile::SMeshEntry>     entries;
+    std::vector<Smile::SSceneRenderable> renderables;
+    std::vector<uint8_t>               geo; // blob unico (verts + indices intercalados por mesh)
+
+    std::vector<uint32_t> triBuf;
+    size_t totalTris = 0;
+
+    for (size_t ni = 0; ni < scene->nodes.count; ++ni) {
+        const ufbx_node* node = scene->nodes.data[ni];
+        if (!node || !node->mesh) continue;
+        const ufbx_mesh* mesh = node->mesh;
+        triBuf.resize(std::max<size_t>(mesh->max_face_triangles * 3, 3));
+
+        for (size_t pi = 0; pi < mesh->material_parts.count; ++pi) {
+            const ufbx_mesh_part& part = mesh->material_parts.data[pi];
+            if (part.num_triangles == 0) continue;
+
+            // Material desta parte: per-instance (node->materials) tem precedencia.
+            const ufbx_material* mat = nullptr;
+            if (pi < node->materials.count)      mat = node->materials.data[pi];
+            else if (pi < mesh->materials.count) mat = mesh->materials.data[pi];
+            uint32_t matIdx = ResolveMaterial(mat);
+
+            SubMesh sm;
+            for (size_t fi = 0; fi < part.face_indices.count; ++fi) {
+                ufbx_face face = mesh->faces.data[part.face_indices.data[fi]];
+                uint32_t numTri = ufbx_triangulate_face(triBuf.data(), triBuf.size(), mesh, face);
+                for (uint32_t t = 0; t < numTri; ++t) {
+                    uint32_t corner[3] = { triBuf[t*3+0], triBuf[t*3+1], triBuf[t*3+2] };
+                    uint32_t outIdx[3];
+                    for (int c = 0; c < 3; ++c) {
+                        ufbx_vec3 p = ufbx_get_vertex_vec3(&mesh->vertex_position, corner[c]);
+                        ufbx_vec3 n = mesh->vertex_normal.exists
+                                    ? ufbx_get_vertex_vec3(&mesh->vertex_normal, corner[c])
+                                    : ufbx_vec3{0,1,0};
+                        ufbx_vec2 uv = mesh->vertex_uv.exists
+                                    ? ufbx_get_vertex_vec2(&mesh->vertex_uv, corner[c])
+                                    : ufbx_vec2{0,0};
+                        p = ufbx_transform_position(&node->geometry_to_world, p);
+                        n = ufbx_transform_direction(&node->geometry_to_world, n);
+                        // normaliza
+                        double nl = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
+                        if (nl > 1e-12) { n.x/=nl; n.y/=nl; n.z/=nl; }
+                        Vertex v;
+                        v.Position[0] = (float)p.x; v.Position[1] = (float)p.y; v.Position[2] = -(float)p.z; // RH->LH
+                        v.Normal[0]   = (float)n.x; v.Normal[1]   = (float)n.y; v.Normal[2]   = -(float)n.z;
+                        v.TexCoord[0] = (float)uv.x; v.TexCoord[1] = 1.0f - (float)uv.y; // V flip (FBX->D3D)
+                        outIdx[c] = sm.Add(v);
+                    }
+                    if (kReverseWinding) {
+                        sm.Indices.push_back(outIdx[0]);
+                        sm.Indices.push_back(outIdx[2]);
+                        sm.Indices.push_back(outIdx[1]);
+                    } else {
+                        sm.Indices.push_back(outIdx[0]);
+                        sm.Indices.push_back(outIdx[1]);
+                        sm.Indices.push_back(outIdx[2]);
+                    }
+                    ++totalTris;
+                }
+            }
+            if (sm.Vertices.empty() || sm.Indices.empty()) continue;
+
+            Smile::SMeshEntry e{};
+            e.VertexCount = (uint32_t)sm.Vertices.size();
+            e.IndexCount  = (uint32_t)sm.Indices.size();
+            for (int c = 0; c < 3; ++c) { e.AABBMin[c] = sm.Min[c]; e.AABBMax[c] = sm.Max[c]; }
+            e.VertexOffset = geo.size();
+            geo.insert(geo.end(), reinterpret_cast<uint8_t*>(sm.Vertices.data()),
+                       reinterpret_cast<uint8_t*>(sm.Vertices.data()) + sm.Vertices.size()*sizeof(Vertex));
+            e.IndexOffset = geo.size();
+            geo.insert(geo.end(), reinterpret_cast<uint8_t*>(sm.Indices.data()),
+                       reinterpret_cast<uint8_t*>(sm.Indices.data()) + sm.Indices.size()*sizeof(uint32_t));
+
+            uint32_t meshIdx = (uint32_t)entries.size();
+            entries.push_back(e);
+            renderables.push_back(Smile::SSceneRenderable{ meshIdx, matIdx });
+        }
+    }
+
+    ufbx_free_scene(scene);
+
+    std::printf("[Cooker] Meshes: %zu | Renderaveis: %zu | Materiais: %zu | Triangulos: %zu | Geo: %.1f MB\n",
+                entries.size(), renderables.size(), materials.size(), totalTris,
+                geo.size() / (1024.0*1024.0));
+
+    // --- Escreve .smesh ---
+    {
+        fs::path p = outBase; p += ".smesh";
+        FILE* f = std::fopen(p.string().c_str(), "wb");
+        if (!f) { std::printf("[Cooker] ERRO ao abrir %s\n", p.string().c_str()); return 3; }
+        Smile::SMeshHeader h{ Smile::kSMeshMagic, Smile::kCookedVersion, (uint32_t)entries.size(), 0 };
+        std::fwrite(&h, sizeof(h), 1, f);
+        std::fwrite(entries.data(), sizeof(Smile::SMeshEntry), entries.size(), f);
+        std::fwrite(geo.data(), 1, geo.size(), f);
+        std::fclose(f);
+        std::printf("[Cooker] Escrito: %s\n", p.string().c_str());
+    }
+    // --- Escreve .sscene ---
+    {
+        fs::path p = outBase; p += ".sscene";
+        FILE* f = std::fopen(p.string().c_str(), "wb");
+        if (!f) { std::printf("[Cooker] ERRO ao abrir %s\n", p.string().c_str()); return 3; }
+        Smile::SSceneHeader h{ Smile::kSSceneMagic, Smile::kCookedVersion,
+                               (uint32_t)materials.size(), (uint32_t)renderables.size() };
+        std::fwrite(&h, sizeof(h), 1, f);
+        std::fwrite(materials.data(), sizeof(Smile::SSceneMaterial), materials.size(), f);
+        std::fwrite(renderables.data(), sizeof(Smile::SSceneRenderable), renderables.size(), f);
+        std::fclose(f);
+        std::printf("[Cooker] Escrito: %s\n", p.string().c_str());
+    }
+
+    std::printf("[Cooker] OK.\n");
+    return 0;
+}

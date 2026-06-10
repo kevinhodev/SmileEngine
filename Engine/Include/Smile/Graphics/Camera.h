@@ -15,6 +15,11 @@ namespace Smile {
         f32  GetPitch()    const { return Pitch; }
         f32  GetYaw()      const { return Yaw; }
 
+        // Reposiciona a camera (ex.: enquadrar uma cena importada). Pitch/Yaw em graus.
+        void SetPose(const Vec3& P, f32 PitchDeg, f32 YawDeg) {
+            Position = P; Pitch = PitchDeg; Yaw = YawDeg;
+        }
+
     private:
         Vec3 Position   = { 0.0f, 1.0f, -2.5f };
         f32  Pitch = -22.0f;

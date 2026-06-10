@@ -3,6 +3,8 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
+#include <vector>
+#include <algorithm>
 #include <cmath>
 
 namespace Smile {
@@ -66,6 +68,9 @@ namespace Smile {
         // height fog, compostos num passe fullscreen sobre o HDR linear antes do tonemap.
         Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
+        // CSM: shadow maps em cascata p/ o sol direcional (4 cascatas 2048^2, depth array).
+        SunShadows.Initialize(Device.Native(), SRVHeap);
+
         // Inicializa o pos-processamento
         PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
@@ -127,6 +132,12 @@ namespace Smile {
         ActiveMaterial = (_Material && _Material->IsFinalized()) ? _Material : &DefaultMaterial;
     }
 
+    void Renderer::SetUseWater(bool _Use) {
+        if (_Use && !UseWater)
+            LogInfo("Oceano/agua ativados (FFT 256^2 + superficie)");
+        UseWater = _Use;
+    }
+
     void Renderer::BuildDefaultScene() {
         // Cena inicial: uma unica esfera na origem. Material nulo => o draw usa o
         // material ativo (controlado pelo editor via SetMaterial).
@@ -165,15 +176,8 @@ namespace Smile {
         SMILE_HR(ConstantBuffer->Map(0, &NoReadRange, &Ptr));
         MappedFrameBase = reinterpret_cast<u8*>(Ptr);
 
-        // CB por-objeto (b2): N * kMaxObjects slots de 256B.
-        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                             kMaxObjects * sizeof(ObjectConstants);
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                 IID_PPV_ARGS(&ObjectCB)));
-        Ptr = nullptr;
-        SMILE_HR(ObjectCB->Map(0, &NoReadRange, &Ptr));
-        MappedObjectCB = reinterpret_cast<u8*>(Ptr);
+        // CB por-objeto (b2): N * MaxObjects slots de 256B (dimensionado em RecreateObjectCB).
+        RecreateObjectCB();
     }
 
     void Renderer::CreateDepthBuffer() {
@@ -617,39 +621,138 @@ namespace Smile {
 
         // --- Scene geometry ---
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-        CommandList->SetPipelineState(PipelineState.PSO());
 
-        // Globais por-frame (b0, regiao do frame corrente) + tabela IBL (t8..t10).
+        // Globais por-frame (b0, regiao do frame corrente).
         CommandList->SetGraphicsRootConstantBufferView(
             0, ConstantBuffer->GetGPUVirtualAddress() +
                static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-        CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
 
-        // Itera os renderaveis: escreve ObjectConstants no slot do objeto (dentro da
-        // regiao do frame), faz o bind do CBV b2 e do material, e desenha o mesh.
+        // Frustum culling: 6 planos extraidos das COLUNAS da ViewProjection (convencao
+        // vetor-linha clip = v*VP; D3D z em [0,1]). Plano (a,b,c,d): dentro se a*x+b*y+c*z+d >= 0.
+        // left=col0+col3, right=col3-col0, bottom=col1+col3, top=col3-col1, near=col2, far=col3-col2.
+        Vec4 Planes[6];
+        {
+            const Mat44& V = ViewProjection;
+            auto Col = [&](int j) { return Vec4{ V.M[0][j], V.M[1][j], V.M[2][j], V.M[3][j] }; };
+            Vec4 c0 = Col(0), c1 = Col(1), c2 = Col(2), c3 = Col(3);
+            Planes[0] = { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W }; // left
+            Planes[1] = { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W }; // right
+            Planes[2] = { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W }; // bottom
+            Planes[3] = { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W }; // top
+            Planes[4] = { c2.X, c2.Y, c2.Z, c2.W };                     // near (z>=0)
+            Planes[5] = { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W }; // far
+        }
+        auto AABBOutsideFrustum = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
+            for (int i = 0; i < 6; ++i) {
+                const Vec4& p = Planes[i];
+                f32 px = (p.X >= 0.0f) ? Mx.X : Mn.X;
+                f32 py = (p.Y >= 0.0f) ? Mx.Y : Mn.Y;
+                f32 pz = (p.Z >= 0.0f) ? Mx.Z : Mn.Z;
+                if (p.X*px + p.Y*py + p.Z*pz + p.W < 0.0f) return true; // fora deste plano
+            }
+            return false;
+        };
+
+        // 1) Escreve ObjectConstants p/ TODOS os renderaveis visiveis da cena (slot = ordem
+        //    na cena). Casters de sombra podem estar FORA do frustum da camera (atras/ao lado)
+        //    e ainda projetar sombra na area visivel — por isso todos precisam de slot+Model.
+        const Vec3 CamPos = Camera.GetPosition();
         const D3D12_GPU_VIRTUAL_ADDRESS ObjectCBBase = ObjectCB->GetGPUVirtualAddress();
-        const u32 FrameObjectBase = FrameSlot * kMaxObjects; // 1o slot deste frame
-        u32 ObjectIndex = 0;
+        const u32 FrameObjectBase = FrameSlot * MaxObjects;
+        struct AllItem { const FRenderable* R; FMaterial* Mat; u32 Slot; };
+        std::vector<AllItem> AllItems;
+        AllItems.reserve(Scene.Renderables().size());
         for (const FRenderable& R : Scene.Renderables()) {
             if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
-            if (ObjectIndex >= kMaxObjects) break;
-
-            const u32 Slot = FrameObjectBase + ObjectIndex;
+            if (AllItems.size() >= MaxObjects) break;
+            FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
+            const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
             const Mat44 Model = R.Transform.Matrix();
             ObjectConstants OC;
             OC.MVP         = Model * ViewProjection;
             OC.ModelMatrix = Model;
             std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                         &OC, sizeof(ObjectConstants));
+            AllItems.push_back({ &R, Mat, Slot });
+        }
 
+        // 2) Subconjunto visivel pela camera (color/depth pass), ordenado front-to-back
+        //    (maximiza rejeicao por early-Z e casa com o depth pre-pass).
+        struct VisItem { const FRenderable* R; FMaterial* Mat; f32 Dist; u32 Slot; };
+        std::vector<VisItem> VisibleScratch;
+        VisibleScratch.reserve(AllItems.size());
+        for (const AllItem& A : AllItems) {
+            if (UseFrustumCulling && AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
+            const f32 cx = (A.R->AABBMin.X + A.R->AABBMax.X) * 0.5f - CamPos.X;
+            const f32 cy = (A.R->AABBMin.Y + A.R->AABBMax.Y) * 0.5f - CamPos.Y;
+            const f32 cz = (A.R->AABBMin.Z + A.R->AABBMax.Z) * 0.5f - CamPos.Z;
+            VisibleScratch.push_back({ A.R, A.Mat, cx*cx + cy*cy + cz*cz, A.Slot });
+        }
+        std::sort(VisibleScratch.begin(), VisibleScratch.end(),
+                  [](const VisItem& a, const VisItem& b) { return a.Dist < b.Dist; });
+        LastVisibleCount = static_cast<u32>(VisibleScratch.size());
+
+        // 2.5) CSM — depth pass das cascatas do sol. Sempre preenche o CSM CB (b3) e binda a
+        //      array de sombra (t11) p/ o pass principal; renderiza o depth so quando ligado.
+        {
+            const f32 FovY = 60.0f * ToRad; // bate com a Projection da camera
+            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CamPos, FovY, Aspect, SunN, NearZ);
+            if (UseSunShadows) {
+                // Casters = TODOS os renderaveis (culados por cascata dentro do depth pass).
+                std::vector<FSunShadows::FShadowDrawItem> Casters;
+                Casters.reserve(AllItems.size());
+                for (const AllItem& A : AllItems)
+                    Casters.push_back({ A.R->Mesh, A.Mat,
+                                        ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                        A.R->AABBMin, A.R->AABBMax });
+                SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size());
+
+                // O depth pass trocou render target/DSV, viewport e root signature — restaura a cena.
+                auto SceneRTV = UseMSAA ? HDRRTVHeap.CpuHandle(1) : HDRRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                CommandList->SetGraphicsRootConstantBufferView(
+                    0, ConstantBuffer->GetGPUVirtualAddress() +
+                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
+            } else {
+                SunShadows.EnsureReadable(CommandList); // array legivel mesmo sem render
+            }
+            // CSM CB (b3 = param 5) + array de sombra (t11 = param 6) p/ o Triangle.ps.
+            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+        }
+
+        // 3) Depth pre-pass (so opacos; mata o overdraw de shading do pass principal).
+        //    Apenas VS (b2) + depth; masked/two-sided ficam de fora (entram com clip no main).
+        if (UseDepthPrepass) {
+            CommandList->SetPipelineState(PipelineState.PSODepthOnly());
+            for (const VisItem& V : VisibleScratch) {
+                if (V.Mat->TwoSided) continue;
+                CommandList->SetGraphicsRootConstantBufferView(
+                    4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                V.R->Mesh->Draw(CommandList);
+            }
+        }
+
+        // 4) Pass principal: tabela IBL (t8..t10) + material por draw. Com pre-pass, opacos
+        //    usam depth EQUAL (1 shade/pixel); sem pre-pass, depth LESS write ON. Masked =
+        //    PSO two-sided (LESS + clip) nos dois casos.
+        CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
+        ID3D12PipelineState* OpaquePSO = UseDepthPrepass ? PipelineState.PSO() : PipelineState.PSOOpaqueLess();
+        ID3D12PipelineState* CurrentPSO = nullptr;
+        for (const VisItem& V : VisibleScratch) {
+            FMaterial* Mat = V.Mat;
+            ID3D12PipelineState* WantPSO = Mat->TwoSided ? PipelineState.PSOTwoSided() : OpaquePSO;
+            if (WantPSO != CurrentPSO) {
+                CommandList->SetPipelineState(WantPSO);
+                CurrentPSO = WantPSO;
+            }
             CommandList->SetGraphicsRootConstantBufferView(
-                4, ObjectCBBase + static_cast<u64>(Slot) * sizeof(ObjectConstants));
-
-            FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
+                4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
             Mat->Bind(CommandList, SRVHeap);
-
-            R.Mesh->Draw(CommandList);
-            ++ObjectIndex;
+            V.R->Mesh->Draw(CommandList);
         }
 
         // --- Snapshot da cena (pre-agua) p/ refracao/fog (Etapa 3, so sem MSAA) ---

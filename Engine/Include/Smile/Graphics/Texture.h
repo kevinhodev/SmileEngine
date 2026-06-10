@@ -61,6 +61,22 @@ namespace Smile {
                                       FTextureSRVHeap& SRVHeap,
                                       const FTextureCPUData& Data);
 
+        // Carrega uma textura DDS block-compressed (BC1/BC2/BC3/BC4/BC5 via FourCC, ou
+        // qualquer DXGI via header DX10). A cadeia de mips do arquivo eh usada como esta
+        // (sem gerar/decodificar) e subida comprimida pra GPU. sRGB=true escolhe a variante
+        // _UNORM_SRGB (BaseColor/Emissive); false = linear (Normal/Specular/dados).
+        static FTextureCPUData LoadDDSCPU(const std::wstring& Path, bool sRGB);
+        static FTexture        LoadDDS(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                                       FTextureSRVHeap& SRVHeap,
+                                       const std::wstring& Path, bool sRGB);
+
+        // Sobe MUITAS texturas em lote: agrupa as copias por chunks (orcamento de staging)
+        // com 1 ExecuteAndSync por chunk — bem mais rapido que CreateFromCPU por textura
+        // (1 sync cada). Entradas invalidas viram FTexture invalida na mesma posicao.
+        static std::vector<FTexture> CreateBatchFromCPU(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                                                        FTextureSRVHeap& SRVHeap,
+                                                        const std::vector<FTextureCPUData>& Data);
+
         static FTexture CreateDefault(ID3D12Device* Device, FCommandQueue& CmdQueue,
                                       FTextureSRVHeap& SRVHeap,
                                       EDefaultTexture Type);
@@ -70,6 +86,7 @@ namespace Smile {
         void Release(FTextureSRVHeap& SRVHeap);
 
         ID3D12Resource* Resource()  const { return GpuResource.Get(); }
+        DXGI_FORMAT     Format()    const { return TexFormat; }
         u32             SRVSlot()   const { return Slot; }
         u32             Width()     const { return TexWidth; }
         u32             Height()    const { return TexHeight; }
@@ -84,6 +101,14 @@ namespace Smile {
                                const std::vector<FMipData>& Mips,
                                DXGI_FORMAT Format);
 
+        // Cria a textura (default heap), faz o staging e GRAVA as copias + barrier no
+        // command list dado, aloca o SRV, mas NAO sincroniza. Staging vai em StagingOut
+        // (manter vivo ate o caller executar+sincronizar). Base do upload single e batch.
+        static FTexture RecordUpload(ID3D12Device* Device, ID3D12GraphicsCommandList* CommandList,
+                                     FTextureSRVHeap& SRVHeap,
+                                     const std::vector<FMipData>& Mips, DXGI_FORMAT Format,
+                                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& StagingOut);
+
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuResource;
@@ -91,5 +116,6 @@ namespace Smile {
         u32 TexWidth    = 0;
         u32 TexHeight   = 0;
         u32 TexMipCount = 1;
+        DXGI_FORMAT TexFormat = DXGI_FORMAT_R8G8B8A8_UNORM; // formato real (RGBA8 ou BCx)
     };
 }

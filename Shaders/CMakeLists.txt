@@ -8,6 +8,10 @@ smile_compile_shader(Triangle.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
+# Cascaded Shadow Maps (sol direcional) — depth pass das cascatas
+smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+
 smile_compile_shader(IBL/EquirectToCube.cs.hlsl        cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(IBL/MipGen.cs.hlsl                cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(IBL/IrradianceConvolution.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
@@ -62,6 +66,9 @@ add_custom_target(Shaders
         Triangle.ps.hlsl
         Skybox.vs.hlsl
         Skybox.ps.hlsl
+        Shadow/CSMCommon.hlsli
+        Shadow/ShadowDepth.vs.hlsl
+        Shadow/ShadowDepth.ps.hlsl
         IBL/Common.hlsli
         IBL/EquirectToCube.cs.hlsl
         IBL/MipGen.cs.hlsl

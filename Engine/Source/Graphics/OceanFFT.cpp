@@ -276,7 +276,8 @@ namespace Smile {
         CreatePipelines(_Device);
         ComputeH0();
         H0Dirty = true;
-        LogInfo("Oceano FFT na GPU: 256^2, espectro com direcao de vento + foam");
+        // (sem log aqui: o oceano e inicializado sempre, mas so importa quando a agua e
+        //  ativada — o Renderer loga em SetUseWater na 1a ativacao)
     }
 
     // =====================================================================================

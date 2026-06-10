@@ -95,13 +95,13 @@ namespace Smile {
         Mesh.Indices.reserve(Stacks * Slices * 6);
         for (u32 i = 0; i < Stacks; ++i) {
             for (u32 j = 0; j < Slices; ++j) {
-                const u16 a = static_cast<u16>(i       * Cols + j);
-                const u16 b = static_cast<u16>((i + 1) * Cols + j);
+                const u32 a = i       * Cols + j;
+                const u32 b = (i + 1) * Cols + j;
                 Mesh.Indices.push_back(a);
-                Mesh.Indices.push_back(static_cast<u16>(a + 1));
+                Mesh.Indices.push_back(a + 1);
                 Mesh.Indices.push_back(b);
-                Mesh.Indices.push_back(static_cast<u16>(a + 1));
-                Mesh.Indices.push_back(static_cast<u16>(b + 1));
+                Mesh.Indices.push_back(a + 1);
+                Mesh.Indices.push_back(b + 1);
                 Mesh.Indices.push_back(b);
             }
         }

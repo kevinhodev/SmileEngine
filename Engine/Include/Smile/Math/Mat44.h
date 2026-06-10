@@ -70,6 +70,19 @@ namespace Smile {
             return m;
         }
 
+        // Projeção ortográfica LH (D3D z em [0,1]), convenção vetor-linha (out = in * M).
+        // w/h = largura/altura do volume de visão; nearZ/farZ podem ser negativos.
+        static TMat44 OrthographicLH(T w, T h, T nearZ, T farZ) {
+            T q = T(1) / (farZ - nearZ);
+            TMat44 m{};
+            m.M[0][0] = T(2) / w;
+            m.M[1][1] = T(2) / h;
+            m.M[2][2] = q;
+            m.M[3][2] = -nearZ * q;
+            m.M[3][3] = T(1);
+            return m;
+        }
+
         static TMat44 LookAtLH(const TVec3<T>& eye, const TVec3<T>& target, const TVec3<T>& up) {
             TVec3<T> f = (target - eye).Normalized();   // forward
             TVec3<T> r = up.Cross(f).Normalized();       // right = cross(up, forward)

@@ -30,8 +30,17 @@ namespace SmileEditor {
 
     void TextureLoadWorker::Process(quint64 _ReqId, int _Slot,
                                     const QString& _Path, bool _IsNormalMap) {
-        auto Data = std::make_shared<Smile::FTextureCPUData>(
-            Smile::FTexture::LoadCPU(_Path.toStdWString(), _IsNormalMap));
+        std::shared_ptr<Smile::FTextureCPUData> Data;
+        if (_Path.endsWith(QStringLiteral(".dds"), Qt::CaseInsensitive)) {
+            // DDS block-compressed (ex.: texturas Bistro). sRGB p/ BaseColor (slot 0) e
+            // Emissive (slot 4); linear p/ Normal/Specular/dados.
+            const bool sRGB = (_Slot == 0 || _Slot == 4);
+            Data = std::make_shared<Smile::FTextureCPUData>(
+                Smile::FTexture::LoadDDSCPU(_Path.toStdWString(), sRGB));
+        } else {
+            Data = std::make_shared<Smile::FTextureCPUData>(
+                Smile::FTexture::LoadCPU(_Path.toStdWString(), _IsNormalMap));
+        }
         emit Loaded(_ReqId, _Slot, Data);
     }
 }

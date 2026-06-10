@@ -6,6 +6,9 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <iterator>
 
 #pragma comment(lib, "windowscodecs.lib")
 
@@ -106,9 +109,10 @@ namespace Smile {
         }
     }
 
-    FTexture FTexture::Upload(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
-                               FTextureSRVHeap& _SRVHeap,
-                               const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format) {
+    FTexture FTexture::RecordUpload(ID3D12Device* _Device, ID3D12GraphicsCommandList* _CommandList,
+                                    FTextureSRVHeap& _SRVHeap,
+                                    const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
+                                    std::vector<ComPtr<ID3D12Resource>>& _StagingOut) {
         const u32 MipCount = static_cast<u32>(_Mips.size());
         const u32 Width    = _Mips[0].Width;
         const u32 Height   = _Mips[0].Height;
@@ -132,7 +136,6 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&GPUTexture)));
 
-        // GetCopyableFootprints for ALL mips.
         std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> Layouts(MipCount);
         std::vector<UINT>   NumRows(MipCount);
         std::vector<UINT64> RowSize(MipCount);
@@ -141,10 +144,8 @@ namespace Smile {
                                        Layouts.data(), NumRows.data(),
                                        RowSize.data(), &TotalSize);
 
-        // Single staging buffer covering all mips.
         D3D12_HEAP_PROPERTIES UploadHeap{};
         UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
         D3D12_RESOURCE_DESC BufferDesc{};
         BufferDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
         BufferDesc.Width            = TotalSize;
@@ -163,35 +164,28 @@ namespace Smile {
 
         u8* Mapped = nullptr;
         SMILE_HR(Staging->Map(0, nullptr, reinterpret_cast<void**>(&Mapped)));
-
         for (u32 i = 0; i < MipCount; ++i) {
-            const u32 SrcRowPitch = _Mips[i].Width * 4;
+            const u32 SrcRowPitch = static_cast<u32>(RowSize[i]);
             const u8* SrcBase = _Mips[i].Pixels.data();
             u8*       DstBase = Mapped + Layouts[i].Offset;
             const u32 Rows    = NumRows[i];
             for (u32 Row = 0; Row < Rows; ++Row) {
-                const u8* Src = SrcBase + Row * SrcRowPitch;
-                u8*       Dst = DstBase + static_cast<UINT64>(Row) * Layouts[i].Footprint.RowPitch;
-                memcpy(Dst, Src, SrcRowPitch);
+                memcpy(DstBase + static_cast<UINT64>(Row) * Layouts[i].Footprint.RowPitch,
+                       SrcBase + static_cast<UINT64>(Row) * SrcRowPitch, SrcRowPitch);
             }
         }
         Staging->Unmap(0, nullptr);
-
-        _CommandQueue.ResetForRecording();
-        ID3D12GraphicsCommandList* CommandList = _CommandQueue.List();
 
         for (u32 i = 0; i < MipCount; ++i) {
             D3D12_TEXTURE_COPY_LOCATION Src{};
             Src.pResource       = Staging.Get();
             Src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
             Src.PlacedFootprint = Layouts[i];
-
             D3D12_TEXTURE_COPY_LOCATION Dst{};
             Dst.pResource        = GPUTexture.Get();
             Dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
             Dst.SubresourceIndex = i;
-
-            CommandList->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
+            _CommandList->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
         }
 
         D3D12_RESOURCE_BARRIER ResourceBarrier{};
@@ -200,14 +194,9 @@ namespace Smile {
         ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
         ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        CommandList->ResourceBarrier(1, &ResourceBarrier);
-
-        SMILE_HR(CommandList->Close());
-        ID3D12CommandList* Lists[] = { CommandList };
-        _CommandQueue.ExecuteAndSync(Lists, 1);
+        _CommandList->ResourceBarrier(1, &ResourceBarrier);
 
         u32 Slot = _SRVHeap.Allocate(1);
-
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                        = _Format;
         SRVDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -218,11 +207,57 @@ namespace Smile {
         _SRVHeap.CreateSRV(_Device, GPUTexture.Get(), SRVDesc, Slot);
 
         FTexture Result;
-        Result.GpuResource = std::move(GPUTexture);
+        Result.GpuResource = GPUTexture;
         Result.Slot        = Slot;
         Result.TexWidth    = Width;
         Result.TexHeight   = Height;
         Result.TexMipCount = MipCount;
+        Result.TexFormat   = _Format;
+        _StagingOut.push_back(std::move(Staging));
+        return Result;
+    }
+
+    std::vector<FTexture> FTexture::CreateBatchFromCPU(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+                                                       FTextureSRVHeap& _SRVHeap,
+                                                       const std::vector<FTextureCPUData>& _Data) {
+        std::vector<FTexture> Out(_Data.size());
+        constexpr size_t kStagingBudget = 256ull * 1024 * 1024; // ~256 MB por chunk
+
+        size_t i = 0;
+        while (i < _Data.size()) {
+            _CommandQueue.ResetForRecording();
+            ID3D12GraphicsCommandList* CommandList = _CommandQueue.List();
+            std::vector<ComPtr<ID3D12Resource>> Staging;
+            size_t BatchBytes = 0;
+            bool   AnyRecorded = false;
+
+            for (; i < _Data.size(); ++i) {
+                if (!_Data[i].Valid()) continue; // posicao fica invalida
+                Out[i] = RecordUpload(_Device, CommandList, _SRVHeap,
+                                      _Data[i].Mips, _Data[i].Format, Staging);
+                AnyRecorded = true;
+                for (const auto& m : _Data[i].Mips) BatchBytes += m.Pixels.size();
+                if (BatchBytes >= kStagingBudget) { ++i; break; }
+            }
+
+            SMILE_HR(CommandList->Close());
+            ID3D12CommandList* Lists[] = { CommandList };
+            _CommandQueue.ExecuteAndSync(Lists, 1);
+            (void)AnyRecorded;
+        }
+        return Out;
+    }
+
+    FTexture FTexture::Upload(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+                               FTextureSRVHeap& _SRVHeap,
+                               const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format) {
+        _CommandQueue.ResetForRecording();
+        ID3D12GraphicsCommandList* CommandList = _CommandQueue.List();
+        std::vector<ComPtr<ID3D12Resource>> Staging;
+        FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format, Staging);
+        SMILE_HR(CommandList->Close());
+        ID3D12CommandList* Lists[] = { CommandList };
+        _CommandQueue.ExecuteAndSync(Lists, 1);
         return Result;
     }
 
@@ -335,6 +370,130 @@ namespace Smile {
                                      const std::wstring& _Path, bool _IsNormalMap) {
         // Conveniencia sincrona (decode + upload no mesmo thread).
         return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
+    }
+
+    namespace {
+        constexpr u32 MakeFourCC(char a, char b, char c, char d) {
+            return static_cast<u32>(static_cast<u8>(a))
+                 | (static_cast<u32>(static_cast<u8>(b)) << 8)
+                 | (static_cast<u32>(static_cast<u8>(c)) << 16)
+                 | (static_cast<u32>(static_cast<u8>(d)) << 24);
+        }
+
+        // Converte um formato BC linear na variante _SRGB correspondente (BaseColor/Emissive).
+        DXGI_FORMAT ToSRGB(DXGI_FORMAT _Fmt) {
+            switch (_Fmt) {
+                case DXGI_FORMAT_BC1_UNORM: return DXGI_FORMAT_BC1_UNORM_SRGB;
+                case DXGI_FORMAT_BC2_UNORM: return DXGI_FORMAT_BC2_UNORM_SRGB;
+                case DXGI_FORMAT_BC3_UNORM: return DXGI_FORMAT_BC3_UNORM_SRGB;
+                case DXGI_FORMAT_BC7_UNORM: return DXGI_FORMAT_BC7_UNORM_SRGB;
+                default:                    return _Fmt; // BC4/BC5 nao tem sRGB
+            }
+        }
+
+        u32 BlockBytesFor(DXGI_FORMAT _Fmt) {
+            switch (_Fmt) {
+                case DXGI_FORMAT_BC1_UNORM: case DXGI_FORMAT_BC1_UNORM_SRGB:
+                case DXGI_FORMAT_BC4_UNORM: case DXGI_FORMAT_BC4_SNORM:
+                    return 8;
+                default:
+                    return 16; // BC2/BC3/BC5/BC6H/BC7
+            }
+        }
+    }
+
+    FTextureCPUData FTexture::LoadDDSCPU(const std::wstring& _Path, bool _sRGB) {
+        // Worker-safe: so I/O de arquivo + parse de header. Saida em FTextureCPUData com
+        // Format = BCx e Mips contendo os bytes de bloco JA empacotados (sem gerar mips —
+        // o DDS ja traz a cadeia). Em falha retorna Valid()==false sem lancar.
+        FTextureCPUData Data;
+        Data.IsNormalMap = false; // BC ja tem mips; Toksvig nao se aplica
+        try {
+            std::ifstream File(_Path, std::ios::binary | std::ios::ate);
+            if (!File) throw std::runtime_error("nao abriu o arquivo");
+            // Leitura em BLOCO (seekg+read). NUNCA usar istreambuf_iterator: em Debug ele
+            // le byte-a-byte pela iostream (com iterator-debugging) -> ~1s por arquivo de
+            // poucos MB, o que tornava o load da cena absurdamente lento (centenas de s).
+            const std::streamoff Size = File.tellg();
+            if (Size < 128) throw std::runtime_error("arquivo curto demais");
+            File.seekg(0, std::ios::beg);
+            std::vector<u8> Bytes(static_cast<size_t>(Size));
+            File.read(reinterpret_cast<char*>(Bytes.data()), Size);
+            if (!File) throw std::runtime_error("falha na leitura");
+
+            const u8* P = Bytes.data();
+            auto Rd32 = [&](size_t Off) -> u32 {
+                u32 V; std::memcpy(&V, P + Off, 4); return V;
+            };
+            if (Rd32(0) != MakeFourCC('D','D','S',' ')) throw std::runtime_error("magic invalido");
+
+            const u32 Height   = Rd32(12);
+            const u32 Width     = Rd32(16);
+            u32       MipCount  = Rd32(28);
+            if (MipCount == 0) MipCount = 1;
+            const u32 PFFlags  = Rd32(80);
+            const u32 FourCC   = Rd32(84);
+
+            DXGI_FORMAT Fmt = DXGI_FORMAT_UNKNOWN;
+            size_t DataOffset = 128; // 4 (magic) + 124 (DDS_HEADER)
+
+            constexpr u32 DDPF_FOURCC = 0x4;
+            if (!(PFFlags & DDPF_FOURCC)) throw std::runtime_error("DDS nao comprimido (sem FourCC) nao suportado");
+
+            if (FourCC == MakeFourCC('D','X','1','0')) {
+                // DDS_HEADER_DXT10 (20 bytes): dxgiFormat @128
+                Fmt = static_cast<DXGI_FORMAT>(Rd32(128));
+                DataOffset = 148;
+            } else if (FourCC == MakeFourCC('D','X','T','1')) {
+                Fmt = DXGI_FORMAT_BC1_UNORM;
+            } else if (FourCC == MakeFourCC('D','X','T','3')) {
+                Fmt = DXGI_FORMAT_BC2_UNORM;
+            } else if (FourCC == MakeFourCC('D','X','T','5')) {
+                Fmt = DXGI_FORMAT_BC3_UNORM;
+            } else if (FourCC == MakeFourCC('A','T','I','1') || FourCC == MakeFourCC('B','C','4','U')) {
+                Fmt = DXGI_FORMAT_BC4_UNORM;
+            } else if (FourCC == MakeFourCC('A','T','I','2') || FourCC == MakeFourCC('B','C','5','U')) {
+                Fmt = DXGI_FORMAT_BC5_UNORM;
+            } else {
+                throw std::runtime_error("FourCC nao suportado");
+            }
+
+            if (_sRGB) Fmt = ToSRGB(Fmt);
+            const u32 BlockBytes = BlockBytesFor(Fmt);
+
+            std::vector<FMipData>& Mips = Data.Mips;
+            Mips.reserve(MipCount);
+            size_t Off = DataOffset;
+            for (u32 i = 0; i < MipCount; ++i) {
+                const u32 W = std::max(1u, Width  >> i);
+                const u32 H = std::max(1u, Height >> i);
+                const u32 BlocksW = std::max(1u, (W + 3) / 4);
+                const u32 BlocksH = std::max(1u, (H + 3) / 4);
+                const size_t Size = static_cast<size_t>(BlocksW) * BlocksH * BlockBytes;
+                if (Off + Size > Bytes.size()) throw std::runtime_error("dados de mip truncados");
+
+                FMipData Mip;
+                Mip.Width  = W;
+                Mip.Height = H;
+                Mip.Pixels.assign(P + Off, P + Off + Size);
+                Mips.push_back(std::move(Mip));
+                Off += Size;
+            }
+
+            Data.Width  = Width;
+            Data.Height = Height;
+            Data.Format = Fmt;
+            // (sem log por-textura: no load em lote sao centenas; o loader loga o total)
+        } catch (const std::exception& e) {
+            LogError(std::string("Falha ao carregar DDS: ") + e.what());
+            Data.Mips.clear();
+        }
+        return Data;
+    }
+
+    FTexture FTexture::LoadDDS(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+                              FTextureSRVHeap& _SRVHeap, const std::wstring& _Path, bool _sRGB) {
+        return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadDDSCPU(_Path, _sRGB));
     }
 
     FTexture FTexture::CreateDefault(ID3D12Device* _Device, FCommandQueue& _CommandQueue,

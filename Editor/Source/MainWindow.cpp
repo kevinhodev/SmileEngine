@@ -16,8 +16,11 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QDockWidget>
+#include <QFileDialog>
 #include <QFileInfo>
+#include <QMessageBox>
 #include <QFileSystemWatcher>
 #include <QFont>
 #include <QFrame>
@@ -63,13 +66,21 @@ namespace SmileEditor {
                               : level == Smile::LogLevel::Warning ? "[WARN]"
                                                                   : "[INFO]";
 
-            LogOutput->append(QString("<span style='color:#777'>[%1]</span> "
-                                      "<span style='color:%2'><b>%3</b></span> "
-                                      "<span style='color:#b9b5aa'>%4</span>")
+            // Monta o HTML AGORA (msg/string_view nao sobrevive a um post enfileirado).
+            const QString Html = QString("<span style='color:#777'>[%1]</span> "
+                                         "<span style='color:%2'><b>%3</b></span> "
+                                         "<span style='color:#b9b5aa'>%4</span>")
                 .arg(QTime::currentTime().toString("HH:mm:ss"),
                      Color,
                      Tag,
-                     QString::fromUtf8(msg.data(), static_cast<qsizetype>(msg.size()))));
+                     QString::fromUtf8(msg.data(), static_cast<qsizetype>(msg.size())));
+
+            // O Log pode vir de threads worker (ex.: decode de texturas em paralelo).
+            // QTextEdit/QTextDocument so pode ser tocado na thread GUI — marshala via
+            // conexao enfileirada no event loop da GUI (thread-safe).
+            QMetaObject::invokeMethod(LogOutput, [this, Html]() {
+                if (LogOutput) LogOutput->append(Html);
+            }, Qt::QueuedConnection);
         });
 
         statusBar()->setObjectName("SmileStatusBar");
@@ -102,22 +113,48 @@ namespace SmileEditor {
 #endif
         if (QDir(ShadersSourceDir).exists()) {
             ShaderWatcher = new QFileSystemWatcher(this);
-            QStringList ShadersToWatch = {
-                QDir(ShadersSourceDir).filePath("Triangle.vs.hlsl"),
-                QDir(ShadersSourceDir).filePath("Triangle.ps.hlsl")
-            };
-            ShaderWatcher->addPaths(ShadersToWatch);
 
+            // Monitora TODOS os shaders (*.hlsl/*.hlsli) recursivamente — sem lista manual.
+            auto CollectShaders = [](const QString& _Root) {
+                QStringList Files;
+                QDirIterator It(_Root, QStringList{ "*.hlsl", "*.hlsli" },
+                                QDir::Files, QDirIterator::Subdirectories);
+                while (It.hasNext()) Files << It.next();
+                return Files;
+            };
+            const QStringList ShaderFiles = CollectShaders(ShadersSourceDir);
+            if (!ShaderFiles.isEmpty()) ShaderWatcher->addPaths(ShaderFiles);
+
+            // Tambem observa os diretorios (raiz + subpastas) p/ pegar shaders criados depois.
+            QStringList ShaderDirs{ ShadersSourceDir };
+            {
+                QDirIterator D(ShadersSourceDir, QDir::Dirs | QDir::NoDotAndDotDot,
+                               QDirIterator::Subdirectories);
+                while (D.hasNext()) ShaderDirs << D.next();
+            }
+            ShaderWatcher->addPaths(ShaderDirs);
+
+            // Conteudo mudou -> recompila o target Shaders (todos os .cso) e recarrega.
             connect(ShaderWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString& _Path) {
                 TriggerShaderCompileAndReload(_Path);
-
                 QTimer::singleShot(100, this, [this, _Path]() {
-                    if (ShaderWatcher && !ShaderWatcher->files().contains(_Path)) {
-                        ShaderWatcher->addPath(_Path);
-                    }
+                    if (ShaderWatcher && !ShaderWatcher->files().contains(_Path))
+                        ShaderWatcher->addPath(_Path); // re-add apos save atomico (delete+rename)
                 });
             });
-            Smile::LogInfo("Shader Watcher Ativo. Monitorando Pasta: " + ShadersSourceDir.toStdString());
+
+            // Diretorio mudou (arquivo novo/removido) -> adiciona os shaders novos ao watch.
+            connect(ShaderWatcher, &QFileSystemWatcher::directoryChanged, this,
+                    [this, CollectShaders, ShadersSourceDir](const QString&) {
+                const QStringList Now = CollectShaders(ShadersSourceDir);
+                const QStringList Watched = ShaderWatcher->files();
+                for (const QString& F : Now)
+                    if (!Watched.contains(F)) ShaderWatcher->addPath(F);
+            });
+
+            Smile::LogInfo("Shader Watcher Ativo: " +
+                           std::to_string(ShaderFiles.size()) + " Shaders em " +
+                           ShadersSourceDir.toStdString());
         } else {
             Smile::LogWarning("Diretorio de shaders de origem nao encontrado: " + ShadersSourceDir.toStdString());
         }
@@ -152,6 +189,25 @@ namespace SmileEditor {
         Menus->setFixedHeight(24);
 
         auto* FileMenu = Menus->addMenu(tr("Arquivo"));
+
+        // Carrega uma cena cozida (.sscene) gerada pelo SmileCooker (importacao Bistro).
+        auto* LoadSceneAction = FileMenu->addAction(tr("Carregar Cena…"));
+        LoadSceneAction->setShortcut(QKeySequence(tr("Ctrl+O")));
+        connect(LoadSceneAction, &QAction::triggered, this, [this]() {
+            if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized())
+                return;
+            QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
+            QString File = QFileDialog::getOpenFileName(
+                this, tr("Carregar Cena Cozida"), Start,
+                tr("Cena SmileEngine (*.sscene)"));
+            if (File.isEmpty()) return;
+            const bool Ok = Viewport->GetRenderer()->LoadCookedScene(File.toStdWString());
+            if (!Ok)
+                QMessageBox::warning(this, tr("Carregar Cena"),
+                                     tr("Falha ao carregar a cena. Veja o console."));
+        });
+        FileMenu->addSeparator();
+
         auto* ExitAction = FileMenu->addAction(tr("Sair"), this, &QWidget::close);
         ExitAction->setShortcut(QKeySequence::Quit);
 
@@ -199,6 +255,33 @@ namespace SmileEditor {
         connect(VSyncAction, &QAction::toggled, this, [this](bool Enabled) {
             if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
                 Viewport->GetRenderer()->SetVSync(Enabled);
+        });
+
+        // Frustum culling (runtime, default ligado) — corta meshes fora da tela.
+        auto* CullAction = RenderMenu->addAction(tr("Frustum Culling"));
+        CullAction->setCheckable(true);
+        CullAction->setChecked(true);
+        connect(CullAction, &QAction::toggled, this, [this](bool Enabled) {
+            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
+                Viewport->GetRenderer()->SetFrustumCulling(Enabled);
+        });
+
+        // Depth pre-pass (runtime, default ligado) — mata overdraw de shading; toggle p/ medir.
+        auto* PrepassAction = RenderMenu->addAction(tr("Depth Pre-pass"));
+        PrepassAction->setCheckable(true);
+        PrepassAction->setChecked(false); // default OFF: na Bistro custou mais que economizou
+        connect(PrepassAction, &QAction::toggled, this, [this](bool Enabled) {
+            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
+                Viewport->GetRenderer()->SetDepthPrepass(Enabled);
+        });
+
+        // Fusao por material (default desligado) — aplica no proximo "Carregar Cena".
+        auto* MergeAction = RenderMenu->addAction(tr("Fundir por material (recarregar)"));
+        MergeAction->setCheckable(true);
+        MergeAction->setChecked(false);
+        connect(MergeAction, &QAction::toggled, this, [this](bool Enabled) {
+            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
+                Viewport->GetRenderer()->SetMergeByMaterial(Enabled);
         });
 
         auto* HelpMenu = Menus->addMenu(tr("Ajuda"));
@@ -279,7 +362,7 @@ namespace SmileEditor {
     void MainWindow::OnRendererReady() {
         if (!Viewport || !Viewport->GetRenderer()) return;
         if (MaterialPanel) MaterialPanel->InitializeWithRenderer(Viewport->GetRenderer());
-        LoadDefaultHDR();
+
         if (EnvironmentDlg) {
             EnvironmentDlg->InitializeWithRenderer(Viewport->GetRenderer());
             EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
@@ -302,29 +385,6 @@ namespace SmileEditor {
         EnvironmentDlg->show();
         EnvironmentDlg->raise();
         EnvironmentDlg->activateWindow();
-    }
-
-    void MainWindow::LoadDefaultHDR() {
-        if (DefaultHDRLoaded || !Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized()) {
-            return;
-        }
-        DefaultHDRLoaded = true;
-
-#ifdef SMILE_ASSETS_DIR
-        QDir HdrDir(QString::fromUtf8(SMILE_ASSETS_DIR) + "/HDRi");
-        const QStringList Hdrs = HdrDir.entryList(QStringList{ "*.hdr" }, QDir::Files, QDir::Name);
-        if (!Hdrs.isEmpty()) {
-            const QString File = HdrDir.filePath(Hdrs.first());
-            if (Viewport->GetRenderer()->LoadHDREnvironment(File.toStdWString())) {
-                CurrentHDRPath = File;
-                if (EnvironmentDlg) {
-                    EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
-                }
-            } else {
-                Smile::LogError("Falha ao auto-carregar HDR: " + File.toStdString());
-            }
-        }
-#endif
     }
 
     void MainWindow::OnMSAAChanged(int _SampleCount) {
@@ -356,9 +416,18 @@ namespace SmileEditor {
                     .arg(WaterStats.RingRadius);
             }
 
-            FooterStatsLabel->setText(QString("FPS: %1  |  Frame: %2 ms%3")
+            // Visiveis/total da cena (pos frustum culling) — torna o culling tangivel.
+            QString SceneText;
+            if (Renderer->GetDrawCount() > 0) {
+                SceneText = QString("  |  meshes: %1/%2")
+                    .arg(Renderer->GetVisibleCount())
+                    .arg(Renderer->GetDrawCount());
+            }
+
+            FooterStatsLabel->setText(QString("FPS: %1  |  Frame: %2 ms%3%4")
                 .arg(FPS, 0, 'f', 1)
                 .arg(FrameMs, 0, 'f', 2)
+                .arg(SceneText)
                 .arg(WaterText));
         }
     }

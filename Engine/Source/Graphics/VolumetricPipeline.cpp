@@ -1,31 +1,11 @@
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
-#include <fstream>
+#include "Smile/Graphics/ShaderUtils.h"
 #include <vector>
 #include <stdexcept>
 
-#ifndef SMILE_SHADER_DIR
-#error "SMILE_SHADER_DIR nao definido. Verifique o CMake."
-#endif
-
 namespace Smile {
-    namespace {
-        std::vector<u8> LoadCSO(const std::string& _Name) {
-            const std::string FullPath = std::string(SMILE_SHADER_DIR) + "/" + _Name;
-            std::ifstream File(FullPath, std::ios::binary | std::ios::ate);
-            if (!File) {
-                LogError("Falha ao abrir compute shader: " + FullPath);
-                throw std::runtime_error("Compute shader nao encontrado: " + FullPath);
-            }
-            const auto Size = static_cast<size_t>(File.tellg());
-            std::vector<u8> Data(Size);
-            File.seekg(0);
-            File.read(reinterpret_cast<char*>(Data.data()), Size);
-            return Data;
-        }
-    }
-
     void FVolumetricPipeline::Initialize(ID3D12Device* _Device, const std::string& _CSOName,
                                          u32 _NumSRVs, u32 _NumUAVs) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
@@ -101,7 +81,7 @@ namespace Smile {
                                               RootBlob->GetBufferSize(),
                                               IID_PPV_ARGS(&RootSignature)));
 
-        auto CSOBlob = LoadCSO(_CSOName);
+        auto CSOBlob = LoadShaderBytecode(_CSOName);
 
         D3D12_COMPUTE_PIPELINE_STATE_DESC PSODesc{};
         PSODesc.pRootSignature = RootSignature.Get();

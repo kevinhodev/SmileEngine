@@ -36,7 +36,6 @@ namespace SmileEditor {
         void CreateMenuBar();
         void CreateDocks();
         QWidget* CreateViewportChrome();
-        void LoadDefaultHDR();
 
         ViewportWidget*       Viewport    = nullptr;
         QPointer<AboutDialog> AboutDlg;
@@ -49,7 +48,6 @@ namespace SmileEditor {
 
         MaterialEditorPanel*  MaterialPanel    = nullptr;
         QString               CurrentHDRPath;
-        bool                  DefaultHDRLoaded = false;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

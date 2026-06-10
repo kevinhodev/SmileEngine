@@ -1,6 +1,5 @@
 // Atmosphere sky pass: samples the sky-view LUT by world view direction and adds
-// an analytic sun disk attenuated by the transmittance LUT at the camera. Reinhard
-// + gamma to match the scene tonemap chain.
+// an analytic sun disk attenuated by the transmittance LUT at the camera.
 
 #include "AtmosphereCommon.hlsli"
 

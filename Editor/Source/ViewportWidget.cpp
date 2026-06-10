@@ -82,9 +82,11 @@ namespace SmileEditor {
         EnsureRendererIsInitialized();
         if (!Renderer->IsInitialized()) return;
 
-        float DeltaTime = static_cast<float>(FrameTimer.elapsed()) / 1000.0f;
+        // Resolucao de NANOSEGUNDOS: a >200 FPS o dt em ms inteiros (4/5/6ms) fazia o
+        // FPS pular feito louco. nsecsElapsed da precisao sub-ms p/ dt e FPS estaveis.
+        float DeltaTime = static_cast<float>(static_cast<double>(FrameTimer.nsecsElapsed()) / 1.0e9);
         FrameTimer.restart();
-        DeltaTime = Smile::Clamp(DeltaTime, 0.001f, 0.1f);  
+        DeltaTime = Smile::Clamp(DeltaTime, 0.0001f, 0.1f);
 
         Smile::CameraInput CameraInput;
         CameraInput.Look  = MouseLookActive
@@ -101,7 +103,10 @@ namespace SmileEditor {
         Renderer->UpdateCamera(CameraInput, DeltaTime);
         Renderer->RenderFrame();
 
-        LastFPS    = DeltaTime > 0.0f ? 1.0f / DeltaTime : 0.0f;
+        // FPS suavizado por media exponencial (EMA) — leitura estavel em vez do valor
+        // instantaneo 1/dt (que oscila muito frame a frame).
+        const float InstFPS = DeltaTime > 0.0f ? 1.0f / DeltaTime : 0.0f;
+        LastFPS = (LastFPS > 0.0f) ? (LastFPS * 0.96f + InstFPS * 0.04f) : InstFPS;
         MouseDelta = Smile::Vec2::Zero();
         emit FrameReady();
     }

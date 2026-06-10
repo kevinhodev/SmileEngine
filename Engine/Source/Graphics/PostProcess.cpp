@@ -1,32 +1,14 @@
 #include "Smile/Graphics/PostProcess.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Graphics/SwapChain.h"
-#include <fstream>
 #include <vector>
 #include <stdexcept>
 #include <algorithm>
 
-#ifndef SMILE_SHADER_DIR
-#error "SMILE_SHADER_DIR nao definido. Verifique o CMake."
-#endif
-
 namespace Smile {
     namespace {
-        std::vector<u8> LoadShaderBlob(const std::string& _Filename) {
-            const std::string FullPath = std::string(SMILE_SHADER_DIR) + "/" + _Filename;
-            std::ifstream File(FullPath, std::ios::binary | std::ios::ate);
-            if (!File) {
-                LogError("Falha ao abrir shader pos-processamento: " + FullPath);
-                throw std::runtime_error("PostProcess shader nao encontrado: " + FullPath);
-            }
-            const auto Size = static_cast<size_t>(File.tellg());
-            std::vector<u8> Data(Size);
-            File.seekg(0);
-            File.read(reinterpret_cast<char*>(Data.data()), Size);
-            return Data;
-        }
-
         void TransitionResource(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
                                 D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
             if (before == after) return;
@@ -226,11 +208,11 @@ namespace Smile {
     }
 
     void FPostProcessor::BuildPSOs(ID3D12Device* Device) {
-        auto VS = LoadShaderBlob("PostProcess.vs_6_0.cso");
-        auto PSExtract = LoadShaderBlob("BloomExtract.ps_6_0.cso");
-        auto PSDownsample = LoadShaderBlob("BloomDownsample.ps_6_0.cso");
-        auto PSUpsample   = LoadShaderBlob("BloomUpsample.ps_6_0.cso");
-        auto PSTonemap = LoadShaderBlob("FinalTonemap.ps_6_0.cso");
+        auto VS = LoadShaderBytecode("PostProcess.vs_6_0.cso");
+        auto PSExtract = LoadShaderBytecode("BloomExtract.ps_6_0.cso");
+        auto PSDownsample = LoadShaderBytecode("BloomDownsample.ps_6_0.cso");
+        auto PSUpsample   = LoadShaderBytecode("BloomUpsample.ps_6_0.cso");
+        auto PSTonemap = LoadShaderBytecode("FinalTonemap.ps_6_0.cso");
 
         D3D12_RASTERIZER_DESC Raster{};
         Raster.FillMode        = D3D12_FILL_MODE_SOLID;

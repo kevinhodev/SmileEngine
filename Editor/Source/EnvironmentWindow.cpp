@@ -152,6 +152,7 @@ namespace SmileEditor {
         SidebarGroup->setExclusive(true);
 
         Layout->addWidget(AddSidebarButton(QStringLiteral("sun"), tr("Sol"), SunSection));
+        Layout->addWidget(AddSidebarButton(QStringLiteral("moon"), tr("Sombras"), ShadowSection));
         Layout->addWidget(AddSidebarButton(QStringLiteral("cloud-sun"), tr("Céu & Atmosfera"), AtmosphereSection));
         Layout->addWidget(AddSidebarButton(QStringLiteral("cloud"), tr("Nuvens"), CloudSection));
         Layout->addWidget(AddSidebarButton(QStringLiteral("wind"), tr("Névoa"), FogSection));
@@ -212,6 +213,7 @@ namespace SmileEditor {
         ContentLayout->setSpacing(0);
 
         ContentLayout->addWidget(BuildSection(QStringLiteral("sun"), tr("SOL"), BuildSunSection(), &SunSection));
+        ContentLayout->addWidget(BuildSection(QStringLiteral("moon"), tr("SOMBRAS DO SOL"), BuildShadowSection(), &ShadowSection));
         ContentLayout->addWidget(BuildSection(QStringLiteral("orbit"), tr("ATMOSFERA"), BuildAtmosphereSection(), &AtmosphereSection));
         ContentLayout->addWidget(BuildSection(QStringLiteral("cloud"), tr("NUVENS"), BuildCloudSection(), &CloudSection));
         ContentLayout->addWidget(BuildSection(QStringLiteral("wind"), tr("NÉVOA"), BuildFogSection(), &FogSection));
@@ -282,6 +284,36 @@ namespace SmileEditor {
         Layout->addWidget(MakeNumericRow(tr("Elevação"), -5.0, 90.0, 0.5, 1, 45.0, QStringLiteral("°"), &ElevationSpin, SunChanged));
         Layout->addWidget(MakeNumericRow(tr("Intensidade"), 0.0, 10.0, 0.1, 2, 2.5, QString(), &SunIntensitySpin, [this](double Value) {
             if (RendererPtr) RendererPtr->SetSunIntensity(static_cast<float>(Value));
+        }));
+        return Body;
+    }
+
+    QWidget* EnvironmentWindow::BuildShadowSection() {
+        auto* Body = new QWidget(this);
+        auto* Layout = new QVBoxLayout(Body);
+        Layout->setContentsMargins(18, 0, 18, 12);
+        Layout->setSpacing(6);
+
+        Layout->addWidget(MakeToggleRow(tr("Ativar sombras (CSM)"), &ShadowsCheck, true, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetUseSunShadows(Checked);
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Alcance"), 50.0, 5000.0, 50.0, 0, 800.0, QStringLiteral(" u"), &ShadowDistanceSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetSunShadowMaxDistance(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Suavidade"), 0.5, 8.0, 0.25, 2, 2.5, tr(" texels"), &ShadowPenumbraSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetSunShadowPenumbra(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Normal-offset"), 0.0, 8.0, 0.25, 2, 2.5, tr(" texels"), &ShadowNormalOffsetSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetSunShadowNormalOffset(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Bias"), 0.0, 0.005, 0.0001, 4, 0.0006, QString(), &ShadowBiasSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetSunShadowDepthBias(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeNumericRow(tr("Blend cascatas"), 0.0, 0.4, 0.01, 2, 0.1, QString(), &ShadowBlendSpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetSunShadowBlendBand(static_cast<float>(Value));
+        }));
+        Layout->addWidget(MakeToggleRow(tr("Debug: cores das cascatas"), &ShadowDebugCheck, false, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetSunShadowDebug(Checked);
         }));
         return Body;
     }
@@ -636,6 +668,14 @@ namespace SmileEditor {
         if (AtmosphereAmbientCheck) AtmosphereAmbientCheck->setChecked(RendererPtr->GetUseAtmosphereAmbient());
         if (AtmosphereAmbientSpin) AtmosphereAmbientSpin->setValue(RendererPtr->GetAtmosphereAmbientIntensity());
 
+        if (ShadowsCheck) ShadowsCheck->setChecked(RendererPtr->GetUseSunShadows());
+        if (ShadowDistanceSpin) ShadowDistanceSpin->setValue(RendererPtr->GetSunShadowMaxDistance());
+        if (ShadowPenumbraSpin) ShadowPenumbraSpin->setValue(RendererPtr->GetSunShadowPenumbra());
+        if (ShadowNormalOffsetSpin) ShadowNormalOffsetSpin->setValue(RendererPtr->GetSunShadowNormalOffset());
+        if (ShadowBiasSpin) ShadowBiasSpin->setValue(RendererPtr->GetSunShadowDepthBias());
+        if (ShadowBlendSpin) ShadowBlendSpin->setValue(RendererPtr->GetSunShadowBlendBand());
+        if (ShadowDebugCheck) ShadowDebugCheck->setChecked(RendererPtr->GetSunShadowDebug());
+
         if (CloudsCheck) CloudsCheck->setChecked(RendererPtr->GetUseClouds());
         if (CoverageSpin) CoverageSpin->setValue(RendererPtr->GetCloudCoverage());
         if (DensitySpin) DensitySpin->setValue(RendererPtr->GetCloudDensity());
@@ -696,6 +736,14 @@ namespace SmileEditor {
         if (GlareSpin) GlareSpin->setValue(4.0);
         if (AtmosphereAmbientCheck) AtmosphereAmbientCheck->setChecked(true);
         if (AtmosphereAmbientSpin) AtmosphereAmbientSpin->setValue(1.0);
+
+        if (ShadowsCheck) ShadowsCheck->setChecked(true);
+        if (ShadowDistanceSpin) ShadowDistanceSpin->setValue(800.0);
+        if (ShadowPenumbraSpin) ShadowPenumbraSpin->setValue(2.5);
+        if (ShadowNormalOffsetSpin) ShadowNormalOffsetSpin->setValue(2.5);
+        if (ShadowBiasSpin) ShadowBiasSpin->setValue(0.0006);
+        if (ShadowBlendSpin) ShadowBlendSpin->setValue(0.1);
+        if (ShadowDebugCheck) ShadowDebugCheck->setChecked(false);
 
         if (CloudsCheck) CloudsCheck->setChecked(true);
         if (CoverageSpin) CoverageSpin->setValue(0.45);

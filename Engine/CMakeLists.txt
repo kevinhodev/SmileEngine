@@ -27,6 +27,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Mesh.h
     Include/Smile/Graphics/GpuMesh.h
     Include/Smile/Scene/Scene.h
+    Include/Smile/Scene/CookedFormat.h
     Include/Smile/Graphics/TextureSRVHeap.h
     Include/Smile/Graphics/Texture.h
     Include/Smile/Graphics/CubeTexture.h
@@ -40,6 +41,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/VolumetricClouds.h
     Include/Smile/Graphics/Skybox.h
     Include/Smile/Graphics/Fog.h
+    Include/Smile/Graphics/SunShadows.h
+    Include/Smile/Graphics/ShaderUtils.h
     Include/Smile/Graphics/PostProcess.h
     Include/Smile/Graphics/OceanFFT.h
     Include/Smile/Graphics/Water.h
@@ -62,6 +65,7 @@ set(ENGINE_SOURCES
     Source/Graphics/Mesh.cpp
     Source/Graphics/GpuMesh.cpp
     Source/Scene/Scene.cpp
+    Source/Scene/SceneLoader.cpp
     Source/Graphics/TextureSRVHeap.cpp
     Source/Graphics/Texture.cpp
     Source/Graphics/CubeTexture.cpp
@@ -75,6 +79,8 @@ set(ENGINE_SOURCES
     Source/Graphics/VolumetricClouds.cpp
     Source/Graphics/Skybox.cpp
     Source/Graphics/Fog.cpp
+    Source/Graphics/SunShadows.cpp
+    Source/Graphics/ShaderUtils.cpp
     Source/Graphics/PostProcess.cpp
     Source/Graphics/OceanFFT.cpp
     Source/Graphics/Water.cpp

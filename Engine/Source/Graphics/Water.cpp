@@ -2,34 +2,16 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Graphics/ShaderUtils.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <fstream>
 #include <vector>
 #include <cmath>
 #include <stdexcept>
 
-#ifndef SMILE_SHADER_DIR
-#error "SMILE_SHADER_DIR nao definido. Verifique o CMake."
-#endif
-
 namespace Smile {
     namespace {
-        std::vector<u8> LoadShader(const std::string& _Name) {
-            const std::string FullPath = std::string(SMILE_SHADER_DIR) + "/" + _Name;
-            std::ifstream File(FullPath, std::ios::binary | std::ios::ate);
-            if (!File) {
-                LogError("Falha ao abrir shader de agua: " + FullPath);
-                throw std::runtime_error("Water shader nao encontrado: " + FullPath);
-            }
-            const auto Size = static_cast<size_t>(File.tellg());
-            std::vector<u8> Data(Size);
-            File.seekg(0);
-            File.read(reinterpret_cast<char*>(Data.data()), Size);
-            return Data;
-        }
-
         u32 FloatBits(f32 _Value) {
             u32 Result = 0;
             static_assert(sizeof(Result) == sizeof(_Value));
@@ -160,8 +142,8 @@ namespace Smile {
     void FWaterRenderer::BuildPSO(ID3D12Device* _Device, u32 _SampleCount,
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         // NAME_WE no CMake gera .cso flat (sem prefixo de pasta), como Clouds/Atmosphere.
-        auto VS = LoadShader("WaterSurface.vs_6_0.cso");
-        auto PS = LoadShader("WaterSurface.ps_6_0.cso");
+        auto VS = LoadShaderBytecode("WaterSurface.vs_6_0.cso");
+        auto PS = LoadShaderBytecode("WaterSurface.ps_6_0.cso");
 
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -263,7 +245,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateRootSignature(0, Blob->GetBufferPointer(), Blob->GetBufferSize(),
                                               IID_PPV_ARGS(&GenerateDrawsRootSignature)));
 
-        auto CS = LoadShader("WaterGenerateDraws.cs_6_0.cso");
+        auto CS = LoadShaderBytecode("WaterGenerateDraws.cs_6_0.cso");
         D3D12_COMPUTE_PIPELINE_STATE_DESC Desc{};
         Desc.pRootSignature = GenerateDrawsRootSignature.Get();
         Desc.CS             = { CS.data(), CS.size() };

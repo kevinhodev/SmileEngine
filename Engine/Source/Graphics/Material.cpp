@@ -11,7 +11,7 @@ namespace Smile {
         auto WriteSRV = [&](FTexture* _Texture, u32 _LocalSlot) {
             if (!_Texture || !_Texture->IsValid()) return;
             D3D12_SHADER_RESOURCE_VIEW_DESC ResourceDesc{};
-            ResourceDesc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
+            ResourceDesc.Format                        = _Texture->Format(); // RGBA8 ou BCx (DDS)
             ResourceDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
             ResourceDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             ResourceDesc.Texture2D.MipLevels           = _Texture->MipCount();
@@ -82,7 +82,7 @@ namespace Smile {
                                        u32 _LocalSlot, FTexture* _Texture) {
         if (!_Texture || !_Texture->IsValid() || _LocalSlot >= kMaterialTextureSlots) return;
         D3D12_SHADER_RESOURCE_VIEW_DESC Desc{};
-        Desc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
+        Desc.Format                        = _Texture->Format(); // RGBA8 ou BCx (DDS)
         Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
         Desc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         Desc.Texture2D.MipLevels           = _Texture->MipCount();

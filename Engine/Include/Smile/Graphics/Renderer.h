@@ -2,6 +2,8 @@
 
 #include <Windows.h>
 #include <string>
+#include <vector>
+#include <memory>
 #include "Smile/Math/Math.h"
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Graphics/D3D12Device.h"
@@ -18,6 +20,7 @@
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/Fog.h"
+#include "Smile/Graphics/SunShadows.h"
 #include "Smile/Graphics/PostProcess.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
@@ -70,6 +73,31 @@ namespace Smile {
         // o Renderer itera a lista em RenderFrame.
         FScene& GetScene() { return Scene; }
 
+        // Carrega uma cena cozida (.sscene + .smesh ao lado) substituindo a cena atual.
+        // ScenePath aponta p/ o .sscene (ou base sem extensao). Implementado em
+        // Source/Scene/SceneLoader.cpp. Retorna false em falha (arquivo/magic/IO).
+        bool LoadCookedScene(const std::wstring& ScenePath);
+
+        // Texturas default (1x1) usadas p/ preencher slots de material sem mapa, mantendo
+        // todos os descritores da tabela validos. Usadas pelo loader de cena.
+        FTexture& GetDefaultWhite()  { return TexDefaultWhite; }
+        FTexture& GetDefaultNormal() { return TexDefaultNormal; }
+        FTexture& GetDefaultBlack()  { return TexDefaultBlack; }
+
+        // --- Otimizacoes de cena (Fase 4) ---
+        // Frustum culling por AABB de mundo no draw loop (runtime, default ON).
+        void SetFrustumCulling(bool Use) { UseFrustumCulling = Use; }
+        bool GetFrustumCulling() const   { return UseFrustumCulling; }
+        // Depth pre-pass (opacos) — mata overdraw de shading. Toggle p/ medir o ganho.
+        void SetDepthPrepass(bool Use)   { UseDepthPrepass = Use; }
+        bool GetDepthPrepass() const     { return UseDepthPrepass; }
+        u32  GetVisibleCount() const     { return LastVisibleCount; } // diagnostico (pos-cull)
+        u32  GetDrawCount() const        { return static_cast<u32>(Scene.Renderables().size()); }
+        // Fusao por material no load (concatena meshes do mesmo material -> menos draws).
+        // Toma efeito no PROXIMO LoadCookedScene (recarregar a cena).
+        void SetMergeByMaterial(bool Use) { MergeByMaterial = Use; }
+        bool GetMergeByMaterial() const   { return MergeByMaterial; }
+
         bool IsInitialized() const { return Initialized; }
 
         // IBL controls. LoadHDREnvironment returns false on file/IO failure.
@@ -114,8 +142,26 @@ namespace Smile {
         bool GetUseHeightFog() const           { return UseHeightFog; }
         FFogPass& GetFog()                     { return Fog; }
 
+        // CSM (sombra do sol direcional). Toggle + acesso ao subsistema p/ tuning.
+        void SetUseSunShadows(bool Use)        { UseSunShadows = Use; }
+        bool GetUseSunShadows() const          { return UseSunShadows; }
+        FSunShadows& GetSunShadows()           { return SunShadows; }
+        // Forwarders p/ o painel do editor (espelham os setters de FSunShadows).
+        void SetSunShadowMaxDistance(f32 V)    { SunShadows.SetMaxDistance(V); }
+        void SetSunShadowPenumbra(f32 V)       { SunShadows.SetPenumbra(V); }
+        void SetSunShadowNormalOffset(f32 V)   { SunShadows.SetNormalOffset(V); }
+        void SetSunShadowDepthBias(f32 V)      { SunShadows.SetDepthBias(V); }
+        void SetSunShadowBlendBand(f32 V)      { SunShadows.SetBlendBand(V); }
+        void SetSunShadowDebug(bool On)        { SunShadows.SetDebugCascades(On); }
+        f32  GetSunShadowMaxDistance() const   { return SunShadows.GetMaxDistance(); }
+        f32  GetSunShadowPenumbra() const      { return SunShadows.GetPenumbra(); }
+        f32  GetSunShadowNormalOffset() const  { return SunShadows.GetNormalOffset(); }
+        f32  GetSunShadowDepthBias() const     { return SunShadows.GetDepthBias(); }
+        f32  GetSunShadowBlendBand() const     { return SunShadows.GetBlendBand(); }
+        bool GetSunShadowDebug() const         { return SunShadows.GetDebugCascades(); }
+
         // Ocean (port fiel da CryEngine). Toggle + acesso ao subsistema p/ setters do editor.
-        void SetUseWater(bool Use)           { UseWater = Use; }
+        void SetUseWater(bool Use);          // loga "oceano ativado" na 1a ativacao (Renderer.cpp)
         bool GetUseWater() const             { return UseWater; }
         FWaterRenderer& GetWater()           { return Water; }
 
@@ -203,9 +249,27 @@ namespace Smile {
         // Buffer por-objeto: N * kMaxObjects slots de ObjectConstants (256B cada) num
         // upload heap mapeado. Cada renderavel ocupa um slot dentro da regiao do frame;
         // bind via CBV offset por draw.
-        static constexpr u32     kMaxObjects = 1024;
-        ComPtr<ID3D12Resource>   ObjectCB;          // N * kMaxObjects * ObjectConstants (b2)
+        // Capacidade de objetos por frame. Runtime (nao mais constexpr) p/ crescer com a
+        // cena importada — o loader chama RecreateObjectCB com a contagem necessaria.
+        u32                      MaxObjects = 1024;
+        ComPtr<ID3D12Resource>   ObjectCB;          // N * MaxObjects * ObjectConstants (b2)
         u8*                      MappedObjectCB = nullptr;
+        // (Re)cria o ObjectCB dimensionado p/ MaxObjects. Faz Flush da GPU antes (seguro
+        // chamar fora do frame). Definido em SceneLoader.cpp.
+        void RecreateObjectCB();
+
+        // Dono das texturas/materiais da cena importada (enderecos estaveis: os
+        // FRenderable apontam p/ os FMaterial daqui). Liberados ao recarregar.
+        std::vector<std::unique_ptr<FTexture>>  ImportedTextures;
+        std::vector<std::unique_ptr<FMaterial>> ImportedMaterials;
+
+        // Otimizacoes de cena (Fase 4).
+        bool UseFrustumCulling = true;
+        // Default OFF: medido na Bistro, o pre-pass custou ~0,2ms a MAIS (cena draw/vertice-
+        // bound, nao shading-bound). Vale quando o shading de pixel for o gargalo.
+        bool UseDepthPrepass   = false;
+        bool MergeByMaterial   = false;
+        u32  LastVisibleCount  = 0;
 
         ComPtr<ID3D12Resource>   MSAAColorBuffer;
         FDescriptorHeap          MSAARTVHeap;
@@ -226,8 +290,11 @@ namespace Smile {
         bool            UseAtmosphereSky = true; // default outdoor sky
         // Deferred atmospheric fog (aerial perspective froxel + height fog).
         FFogPass        Fog;
-        bool            UseAerialPerspective = true;
-        bool            UseHeightFog         = true;
+        bool            UseAerialPerspective = false; // off por padrao (cena Bistro nao usa)
+        bool            UseHeightFog         = false; // off por padrao
+        // CSM (sombra do sol): 4 cascatas ortográficas. On por padrão (a cena Bistro precisa).
+        FSunShadows     SunShadows;
+        bool            UseSunShadows = true;
         // Scene world-unit -> atmosphere km scale (1 world unit = 1 m).
         static constexpr f32 kKmPerWorldUnit = 0.001f;
         // Volumetric clouds: 3D noise volumes (B1) + raymarch/composite (B2).
@@ -237,7 +304,7 @@ namespace Smile {
         // Ocean: simulacao FFT (CPU, port do CWaterSim) + superficie (projected grid).
         FOceanFFT         Ocean;
         FWaterRenderer    Water;
-        bool              UseWater  = true;
+        bool              UseWater  = false; // desligada p/ economizar FPS enquanto o foco e a cena Bistro
         // Copias da cena (pre-agua) p/ refracao/fog da agua (Etapa 3). Tabela SRV contigua
         // [color(t2), depth(t3)]. So no caminho sem MSAA (depth MSAA nao copia single-sample).
         ComPtr<ID3D12Resource> SceneColorCopy;

@@ -42,6 +42,7 @@ namespace SmileEditor {
         QWidget* BuildContent();
         QFrame* BuildSection(const QString& Icon, const QString& Title, QWidget* Body, QWidget** SectionOut = nullptr);
         QWidget* BuildSunSection();
+        QWidget* BuildShadowSection();
         QWidget* BuildAtmosphereSection();
         QWidget* BuildCloudSection();
         QWidget* BuildFogSection();
@@ -72,6 +73,7 @@ namespace SmileEditor {
 
         QLabel* CurrentPathLabel = nullptr;
         QWidget* SunSection = nullptr;
+        QWidget* ShadowSection = nullptr;
         QWidget* AtmosphereSection = nullptr;
         QWidget* CloudSection = nullptr;
         QWidget* FogSection = nullptr;
@@ -86,6 +88,15 @@ namespace SmileEditor {
         QDoubleSpinBox* GlareSpin = nullptr;
         QCheckBox* AtmosphereAmbientCheck = nullptr;
         QDoubleSpinBox* AtmosphereAmbientSpin = nullptr;
+
+        // CSM (sombra do sol)
+        QCheckBox*      ShadowsCheck = nullptr;
+        QDoubleSpinBox* ShadowDistanceSpin = nullptr;
+        QDoubleSpinBox* ShadowPenumbraSpin = nullptr;
+        QDoubleSpinBox* ShadowNormalOffsetSpin = nullptr;
+        QDoubleSpinBox* ShadowBiasSpin = nullptr;
+        QDoubleSpinBox* ShadowBlendSpin = nullptr;
+        QCheckBox*      ShadowDebugCheck = nullptr;
 
         QCheckBox* CloudsCheck = nullptr;
         QDoubleSpinBox* CoverageSpin = nullptr;

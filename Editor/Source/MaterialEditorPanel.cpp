@@ -370,6 +370,17 @@ namespace SmileEditor {
         SetSlotPointer(_Slot, &SlotTexture[_Slot].value());
         Material.UpdateTextureSlot(Device, SRVHeap, static_cast<Smile::u32>(_Slot), &SlotTexture[_Slot].value());
         UpdateHasFlag(_Slot, true);
+
+        // Flags de convencao p/ DDS importado (Bistro): normal BC5 (so RG) reconstroi Z
+        // e e DirectX; mapa "Specular" (DXT5/BC3 no slot MR) usa packing AO/Rough/Metal.
+        if (_Slot == 1) {
+            const bool IsBC5 = (_Data->Format == DXGI_FORMAT_BC5_UNORM);
+            Material.Constants.NormalReconstructZ = IsBC5 ? 1u : 0u;
+            if (IsBC5) Material.Constants.NormalFlipY = 1u;
+        }
+        if (_Slot == 2 && Path.endsWith(QStringLiteral(".dds"), Qt::CaseInsensitive))
+            Material.Constants.SpecularPacking = 1u;
+
         Material.UpdateConstants();
 
         if (SlotWidgets[_Slot]) {
@@ -408,7 +419,7 @@ namespace SmileEditor {
             this,
             tr("Selecionar Textura — %1").arg(tr(kSlots[_Slot].Name)),
             QString(),
-            tr("Imagens (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;Todos os arquivos (*)"));
+            tr("Imagens (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.dds);;Todos os arquivos (*)"));
         if (!Path.isEmpty())
             ApplyTextureToSlot(_Slot, Path);
     }

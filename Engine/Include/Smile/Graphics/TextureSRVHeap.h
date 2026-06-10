@@ -12,7 +12,10 @@ namespace Smile {
     // materiais sao recarregados em runtime (antes era bump-only e vazava slots).
     class FTextureSRVHeap {
     public:
-        static constexpr u32 kCapacity = 512;
+        // Heap shader-visible: precisa caber as texturas + as tabelas de 8 slots por
+        // material. Uma cena importada (ex.: Bistro = 132 materiais x 8 + ~500 texturas)
+        // estoura 512 facil; subimos com folga (cada descritor ~32-64B -> ~1MB total).
+        static constexpr u32 kCapacity = 16384;
 
         void Initialize(ID3D12Device* Device);
 

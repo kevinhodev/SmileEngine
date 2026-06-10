@@ -39,7 +39,13 @@ namespace Smile {
         u32   HasMetalnessMap         = 0;
         u32   HasRoughnessMap         = 0;
 
-        u8    _Pad[132] = {};
+        // --- Importacao (convencao Bistro/ORCA) ---
+        u32   SpecularPacking         = 0;       // 1 = mapa MR (t2) eh "Specular": R=AO, G=Rough, B=Metal
+        u32   AlphaTest               = 0;       // 1 = clip por opacidade no alpha do BaseColor (folhagem)
+        float AlphaCutoff             = 0.5f;
+        u32   NormalReconstructZ      = 0;       // 1 = normal map BC5 (so RG) -> reconstruir Z; Toksvig=1
+
+        u8    _Pad[116] = {};
     };
     static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants must be 256 bytes");
 
@@ -57,6 +63,10 @@ namespace Smile {
         FTexture* Roughness         = nullptr;
 
         MaterialConstants Constants;
+
+        // Two-sided: usa a PSO sem back-face culling (folhagem/toldos masked do Bistro).
+        // Fica fora de MaterialConstants porque seleciona a PSO, nao alimenta o shader.
+        bool TwoSided = false;
 
         void Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 

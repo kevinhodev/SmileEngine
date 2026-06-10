@@ -12,7 +12,7 @@ namespace Smile {
 
     struct FMesh {
         std::vector<Vertex> Vertices;
-        std::vector<u16>    Indices;
+        std::vector<u32>    Indices; // u32: meshes importados (ex. Bistro) passam de 65k verts
 
         static FMesh CreateCube();
 

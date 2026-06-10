@@ -2,33 +2,14 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Graphics/ShaderUtils.h"
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <vector>
 #include <stdexcept>
 
-#ifndef SMILE_SHADER_DIR
-#error "SMILE_SHADER_DIR nao definido. Verifique o CMake."
-#endif
-
 namespace Smile {
-    namespace {
-        std::vector<u8> LoadShader(const std::string& _Name) {
-            const std::string FullPath = std::string(SMILE_SHADER_DIR) + "/" + _Name;
-            std::ifstream File(FullPath, std::ios::binary | std::ios::ate);
-            if (!File) {
-                LogError("Falha ao abrir shader atmosfera: " + FullPath);
-                throw std::runtime_error("Atmosphere shader nao encontrado: " + FullPath);
-            }
-            const auto Size = static_cast<size_t>(File.tellg());
-            std::vector<u8> Data(Size);
-            File.seekg(0);
-            File.read(reinterpret_cast<char*>(Data.data()), Size);
-            return Data;
-        }
-    }
-
     // ---- FLut2D ------------------------------------------------------------
     void FLut2D::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                         DXGI_FORMAT _Format, u32 _Width, u32 _Height) {
@@ -259,8 +240,8 @@ namespace Smile {
 
     void FAtmosphere::BuildSkyPSO(ID3D12Device* _Device, u32 _SampleCount,
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
-        auto VS = LoadShader("SkyAtmosphere.vs_6_0.cso");
-        auto PS = LoadShader("SkyAtmosphere.ps_6_0.cso");
+        auto VS = LoadShaderBytecode("SkyAtmosphere.vs_6_0.cso");
+        auto PS = LoadShaderBytecode("SkyAtmosphere.ps_6_0.cso");
 
         D3D12_RASTERIZER_DESC Raster{};
         Raster.FillMode        = D3D12_FILL_MODE_SOLID;

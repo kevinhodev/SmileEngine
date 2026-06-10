@@ -1,6 +1,8 @@
 // PBR Pixel Shader — Cook-Torrance BRDF with full PBR texture support.
 // Texture slots (t0-t7) must match Material.h kMaterialTextureSlots order.
 
+#include "Shadow/CSMCommon.hlsli" // CSM do sol: CSMCB (b3), SunShadowMap (t11), ShadowCmp (s2)
+
 // --- Constant Buffers ---
 
 cbuffer FrameCB : register(b0) {
@@ -43,6 +45,12 @@ cbuffer MaterialCB : register(b1) {
     // Separate metalness/roughness maps (t6/t7), as an alternative to the combined MR (t2)
     uint   HasMetalnessMap;
     uint   HasRoughnessMap;
+
+    // --- Import (Bistro/ORCA convention) ---
+    uint   SpecularPacking;    // 1 = MR map (t2) is a "Specular" map: R=AO, G=Roughness, B=Metalness
+    uint   AlphaTest;          // 1 = clip by BaseColor opacity (foliage/awnings)
+    float  AlphaCutoff;
+    uint   NormalReconstructZ; // 1 = BC5 normal map (RG only) → reconstruct Z; Toksvig forced to 1
 };
 
 // --- Texture Slots ---
@@ -341,27 +349,44 @@ float4 main(PSInput input) : SV_TARGET {
         }
     }
 
-    // --- Base Color ---
-    float3 BaseColor = BaseColorFactor.rgb;
-    if (HasAlbedoMap)
-        BaseColor *= AlbedoMap.Sample(MaterialSampler, UV).rgb;
+    // --- Base Color (+ alpha test for masked materials: BaseColor.a = opacity) ---
+    float4 AlbedoSample = HasAlbedoMap ? AlbedoMap.Sample(MaterialSampler, UV) : float4(1.0f, 1.0f, 1.0f, 1.0f);
+    float3 BaseColor    = BaseColorFactor.rgb * AlbedoSample.rgb;
+    if (AlphaTest)
+        clip(AlbedoSample.a * BaseColorFactor.a - AlphaCutoff);
 
     // --- Normal ---
     float3 N         = GeoN;
     float  ToksvigT  = 1.0f; // Toksvig factor from normal map .a; 1.0 = no per-mip variance
     if (HasNormalMap) {
         float4 NrmSample = NormalMap.Sample(MaterialSampler, UV);
-        N        = ApplyNormalMap(GeoN, T, B, NrmSample.rgb);
-        ToksvigT = NrmSample.a;
+        float3 Encoded   = NrmSample.rgb;
+        if (NormalReconstructZ) {
+            // BC5 stores only X,Y in RG. Decode to [-1,1], rebuild Z, re-encode to [0,1]
+            // so ApplyNormalMap (which does *2-1 internally) gets a consistent input.
+            float2 xy = NrmSample.rg * 2.0f - 1.0f;
+            float  z  = sqrt(saturate(1.0f - dot(xy, xy)));
+            Encoded   = float3(NrmSample.rg, z * 0.5f + 0.5f);
+            ToksvigT  = 1.0f; // BC5 has no alpha → no Toksvig variance
+        } else {
+            ToksvigT = NrmSample.a;
+        }
+        N = ApplyNormalMap(GeoN, T, B, Encoded);
     }
 
     // --- Metallic / Roughness ---
     float Metallic  = MetallicFactor;
     float Roughness = RoughnessFactor;
     if (HasMetallicRoughnessMap) {
-        float2 MR = MetallicRoughnessMap.Sample(MaterialSampler, UV).rg;
-        Metallic  *= MR.r;
-        Roughness *= MR.g;
+        float4 MR = MetallicRoughnessMap.Sample(MaterialSampler, UV);
+        if (SpecularPacking) {
+            // Bistro "Specular": R=AO (handled in AO section), G=Roughness, B=Metalness
+            Roughness *= MR.g;
+            Metallic  *= MR.b;
+        } else {
+            Metallic  *= MR.r; // glTF convention: R=Metallic, G=Roughness
+            Roughness *= MR.g;
+        }
     }
     // Separate maps (override/compose on top of the combined MR; factor must be 1.0
     // to pass the texture through, same convention as the combined map above).
@@ -391,7 +416,9 @@ float4 main(PSInput input) : SV_TARGET {
 
     // --- Ambient Occlusion ---
     float AO = 1.0f;
-    if (HasAOMap)
+    if (SpecularPacking && HasMetallicRoughnessMap)
+        AO = lerp(1.0f, MetallicRoughnessMap.Sample(MaterialSampler, UV).r, AOStrength); // Bistro: AO em R
+    else if (HasAOMap)
         AO = lerp(1.0f, AOMap.Sample(MaterialSampler, UV).r, AOStrength);
 
     // --- PBR material derivation ---
@@ -415,6 +442,9 @@ float4 main(PSInput input) : SV_TARGET {
             float3 Lts = float3(dot(Lsun, T), dot(Lsun, B), dot(Lsun, GeoN));
             SunLit    *= TraceParallaxSelfShadow(UV, SurfaceHeight, Lts, dUVdx, dUVdy, ParallaxFadeF);
         }
+        // Cascaded Shadow Maps: oclusão da geometria contra o sol (normal-offset por GeoN,
+        // PCF Poisson rotacionado por pixel via SV_Position).
+        SunLit *= SampleCSM(input.worldPos, GeoN, input.pos.xy);
         Lighting += SunLit;
     }
 
@@ -460,6 +490,14 @@ float4 main(PSInput input) : SV_TARGET {
 
     // --- Compose and tonemap ---
     float3 FinalColor = Lighting + Ambient + Emissive;
+
+    // Debug: overlay de cor chapada por cascata (estilo Unreal/Cry) — independente do brilho
+    // da cena, pra enxergar as faixas mesmo no escuro. Fora de todas as cascatas: sem tint.
+    if (CSM_DebugEnabled()) {
+        int ci = CSM_SelectCascade(input.worldPos, GeoN);
+        if (ci >= 0)
+            FinalColor = lerp(FinalColor, CSM_CascadeColor(ci), 0.45f);
+    }
 
     return float4(FinalColor, 1.0f);
 }

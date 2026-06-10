@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 # Projeto base SmileEngine - Qt 6 + DirectX 12
-project(SmileEngine LANGUAGES CXX)
+project(SmileEngine LANGUAGES C CXX)
 
 # Versao do projeto - usado pelo VersionInfo.h gerado e pela tela About
 set(SMILE_VERSION_MAJOR 0)
@@ -52,3 +52,4 @@ include(CompileShaders)
 add_subdirectory(Engine)
 add_subdirectory(Shaders)
 add_subdirectory(Editor)
+add_subdirectory(Tools/Cooker)
