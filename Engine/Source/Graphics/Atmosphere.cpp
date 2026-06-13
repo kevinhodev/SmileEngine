@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Atmosphere.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -10,7 +11,6 @@
 #include <stdexcept>
 
 namespace Smile {
-    // ---- FLut2D ------------------------------------------------------------
     void FLut2D::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                         DXGI_FORMAT _Format, u32 _Width, u32 _Height) {
         W = _Width; H = _Height; Fmt = _Format;
@@ -64,14 +64,12 @@ namespace Smile {
         State = _After;
     }
 
-    // ---- FAtmosphere -------------------------------------------------------
     void FAtmosphere::Initialize(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
                                  FTextureSRVHeap& _SRVHeap, u32 _SampleCount,
                                  DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (Initialized) return;
         SRVHeapPtr = &_SRVHeap;
 
-        // Default Earth-like atmosphere (Hillaire / Bruneton values, km & km^-1).
         CPUConstants.RayleighScattering = { 0.005802f, 0.013558f, 0.033100f, 8.0f  };
         CPUConstants.MieScattering      = { 0.003996f, 0.003996f, 0.003996f, 1.2f  };
         CPUConstants.MieExtinction      = { 0.004440f, 0.004440f, 0.004440f, 0.8f  };
@@ -87,16 +85,11 @@ namespace Smile {
         const f32 ViewHeight = CPUConstants.PlanetRadii.X + kGroundAltitudeKm;
         CPUConstants.SkyViewSize = { (f32)kSkyViewW, (f32)kSkyViewH, ViewHeight, kGroundAltitudeKm };
 
-        // Sun disk + glare. Disk ~0.7 deg half-angle (slightly above the physical
-        // ~0.27 deg for visibility); the wide soft glare (w) gives the game-like
-        // "big sun" look without a bloom post-process. Tuned in the editor later.
         const f32 SunDiskHalfAngleRad = 0.7f * 3.14159265358979f / 180.0f;
         CPUConstants.SunDisk          = { std::cos(SunDiskHalfAngleRad), 30.0f, 22.0f, 0.0f };
         CPUConstants.InvViewProjNoTrans = Mat44::Identity();
-        // Aerial-perspective froxel: depth covers the scene far-plane (20 km at the
-        // default 0.001 km/world-unit scale). 16 slices, 2 march samples per slice.
         CPUConstants.InvViewProj    = Mat44::Identity();
-        CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f }; // w = km per world unit
+        CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f }; 
         CPUConstants.AerialParams   = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
 
         CreateConstantBuffer(_Device);
@@ -115,13 +108,15 @@ namespace Smile {
         SkyViewPSO.Initialize(_Device, "BakeSkyView.cs_6_0.cso", 2, 1);
         AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
 
+        MoonTexture = FTexture::CreateDefault(_Device, _CmdQueue, _SRVHeap, EDefaultTexture::White);
+
         BuildInputTables(_Device, _SRVHeap);
         BuildSkyRootSignature(_Device);
         BuildSkyPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
 
         Dirty       = true;
         Initialized = true;
-        BakeIfDirty(_Device, _CmdQueue); // transmittance + multi-scatter (once)
+        BakeIfDirty(_Device, _CmdQueue); 
         LogInfo("Atmosfera (Hillaire) inicializada: Transmittance + MultiScatter + SkyView");
     }
 
@@ -148,14 +143,13 @@ namespace Smile {
         void* Ptr = nullptr;
         SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
         MappedBase = reinterpret_cast<u8*>(Ptr);
-        // Popula todas as regioes para que qualquer slot seja valido antes do 1o UpdatePerFrame.
+
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
             std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(AtmosphereConstants),
                         &CPUConstants, sizeof(AtmosphereConstants));
     }
 
     void FAtmosphere::BuildInputTables(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        // Sky-view bake input: [transmittance(t0), multiscatter(t1)].
         SkyViewBakeTableStart = _SRVHeap.Allocate(2);
         {
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(SkyViewBakeTableStart);
@@ -167,31 +161,49 @@ namespace Smile {
             _Device->CopyDescriptors(1, &Dst, &DstCount, 2, Srcs, SrcCounts,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
-        // Sky render input: [skyview(t0), transmittance(t1)].
-        SkyRenderTableStart = _SRVHeap.Allocate(2);
+
+        SkyRenderTableStart = _SRVHeap.Allocate(3);
         {
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(SkyRenderTableStart);
-            D3D12_CPU_DESCRIPTOR_HANDLE Srcs[2] = {
+            D3D12_CPU_DESCRIPTOR_HANDLE Srcs[3] = {
                 _SRVHeap.CpuHandleStaging(SkyView.SRVSlot),
                 _SRVHeap.CpuHandleStaging(Transmittance.SRVSlot),
+                _SRVHeap.CpuHandleStaging(MoonTexture.SRVSlot()),
             };
-            UINT DstCount = 2; UINT SrcCounts[2] = { 1, 1 };
-            _Device->CopyDescriptors(1, &Dst, &DstCount, 2, Srcs, SrcCounts,
+            UINT DstCount = 3; UINT SrcCounts[3] = { 1, 1, 1 };
+            _Device->CopyDescriptors(1, &Dst, &DstCount, 3, Srcs, SrcCounts,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
+    }
+
+    void FAtmosphere::LoadMoonTexture(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
+                                      FTextureSRVHeap& _SRVHeap, const std::wstring& _Path) {
+        if (!Initialized) return;
+        FTexture Tex = FTexture::LoadFromFile(_Device, _CmdQueue, _SRVHeap, _Path, false);
+        if (!Tex.IsValid()) return; 
+
+        MoonTexture.Release(_SRVHeap);
+        MoonTexture   = std::move(Tex);
+        MoonTexLoaded = true;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(SkyRenderTableStart + 2);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(MoonTexture.SRVSlot());
+        UINT DstCount = 1, SrcCount = 1;
+        _Device->CopyDescriptors(1, &Dst, &DstCount, 1, &Src, &SrcCount,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
     void FAtmosphere::BuildSkyRootSignature(ID3D12Device* _Device) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        SRVRange.NumDescriptors                    = 2; // t0 = skyview, t1 = transmittance
+        SRVRange.NumDescriptors                    = 3; 
         SRVRange.BaseShaderRegister                = 0;
         SRVRange.RegisterSpace                     = 0;
         SRVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_ROOT_PARAMETER RootParams[2]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[0].Descriptor.ShaderRegister = 0; // b0
+        RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].Descriptor.RegisterSpace  = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
@@ -254,7 +266,7 @@ namespace Smile {
         D3D12_DEPTH_STENCIL_DESC Depth{};
         Depth.DepthEnable    = TRUE;
         Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        Depth.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        Depth.DepthFunc      = kDepthFuncLessEqual; 
         Depth.StencilEnable  = FALSE;
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC Desc{};
@@ -287,17 +299,61 @@ namespace Smile {
                                      f32 _KmPerWorldUnit) {
         FrameSlot = _FrameSlot;
         Vec3 d = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 0.6f, 0.8f }.Normalized());
-        CPUConstants.SunDir = { d.X, d.Y, d.Z, CPUConstants.SunDir.W }; // keep illuminance
+        CPUConstants.SunDir = { d.X, d.Y, d.Z, CPUConstants.SunDir.W }; 
         CPUConstants.InvViewProjNoTrans = _InvViewProjNoTranslation;
-        // Aerial-perspective froxel inputs (full reconstruction + world->km scale).
         CPUConstants.InvViewProj    = _InvViewProjFull;
         CPUConstants.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
-        // Copia o shadow inteiro p/ a regiao deste frame (inclui SunDisk dos setters).
+
         if (MappedBase) *Mapped() = CPUConstants;
     }
 
+    Vec3 FAtmosphere::SunTransmittance(const Vec3& _DirToSun) const {
+        if (!Initialized) return Vec3{ 1.0f, 1.0f, 1.0f }; 
+
+        const AtmosphereConstants& C = CPUConstants;
+        const f32 bottomR    = C.PlanetRadii.X;
+        const f32 topR       = C.PlanetRadii.Y;
+        const f32 viewHeight = bottomR + kGroundAltitudeKm;
+
+        const f32 cosZ = _DirToSun.Y;
+        if (cosZ <= 0.0f) return Vec3{ 0.0f, 0.0f, 0.0f };
+        const f32 sinZ = std::sqrt(std::max(0.0f, 1.0f - cosZ * cosZ));
+
+        const f32 b    = viewHeight * cosZ;
+        const f32 c    = viewHeight * viewHeight - topR * topR;
+        const f32 disc = b * b - c;
+        if (disc < 0.0f) return Vec3{ 1.0f, 1.0f, 1.0f };
+        const f32 tMax = -b + std::sqrt(disc);
+        if (tMax <= 0.0f) return Vec3{ 1.0f, 1.0f, 1.0f };
+
+        const int steps = std::max(2, (int)C.AtmoSteps.X);
+        const f32 dt    = tMax / (f32)steps;
+
+        f32 odR = 0.0f, odG = 0.0f, odB = 0.0f;
+        for (int i = 0; i < steps; ++i) {
+            const f32 t  = (i + 0.5f) * dt;
+            const f32 px = sinZ * t;
+            const f32 py = viewHeight + cosZ * t;
+            const f32 altitude = std::sqrt(px * px + py * py) - bottomR;
+
+            const f32 densR = std::exp(-altitude / C.RayleighScattering.W);
+            const f32 densM = std::exp(-altitude / C.MieScattering.W);
+            const f32 densO = std::max(0.0f, 1.0f - std::abs(altitude - C.OzoneTent.X) / C.OzoneTent.Y);
+
+            odR += (C.RayleighScattering.X * densR + C.MieExtinction.X * densM + C.OzoneAbsorption.X * densO) * dt;
+            odG += (C.RayleighScattering.Y * densR + C.MieExtinction.Y * densM + C.OzoneAbsorption.Y * densO) * dt;
+            odB += (C.RayleighScattering.Z * densR + C.MieExtinction.Z * densM + C.OzoneAbsorption.Z * densO) * dt;
+        }
+        return Vec3{ std::exp(-odR), std::exp(-odG), std::exp(-odB) };
+    }
+
+    void FAtmosphere::SetNightParams(const Vec3& _DirToMoon, f32 _CosDiskRadius, f32 _DiskBrightness,
+                                     f32 _StarIntensity, f32 _NightFactor, f32 _TimeSec) {
+        CPUConstants.MoonDir    = { _DirToMoon.X, _DirToMoon.Y, _DirToMoon.Z, _CosDiskRadius };
+        CPUConstants.MoonParams = { _DiskBrightness, _StarIntensity, _NightFactor, _TimeSec };
+    }
+
     void FAtmosphere::SetSunDiskHalfAngle(f32 _DegHalfAngle) {
-        // So o shadow; aplicado na regiao do frame no proximo UpdatePerFrame.
         CPUConstants.SunDisk.X = std::cos(_DegHalfAngle * 3.14159265358979f / 180.0f);
     }
 
@@ -332,7 +388,6 @@ namespace Smile {
 
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = this->CBAddr();
 
-        // --- Transmittance LUT (no SRV input; t0 bound to a valid dummy slot) ---
         Transmittance.Transition(CL, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TransmittancePSO.Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr);
@@ -341,7 +396,6 @@ namespace Smile {
         CL->Dispatch((kTransmittanceW + 7) / 8, (kTransmittanceH + 7) / 8, 1);
         Transmittance.Transition(CL, kReadState);
 
-        // --- Multi-Scattering LUT (reads transmittance at t0) ---
         MultiScatter.Transition(CL, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         MultiScatterPSO.Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr);
@@ -373,10 +427,8 @@ namespace Smile {
         AerialPerspectiveVolume.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         AerialPerspectivePSO.Bind(_CommandList);
         _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
-        // Reuse the sky-view bake input table: [transmittance(t0), multiscatter(t1)].
         _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(SkyViewBakeTableStart));
         _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(AerialPerspectiveVolume.UAVSlot(0)));
-        // numthreads(4,4,4) over a 32x32x16 volume.
         _CommandList->Dispatch((kAerialW + 3) / 4, (kAerialH + 3) / 4, (kAerialSlices + 3) / 4);
         AerialPerspectiveVolume.Transition(_CommandList, kReadState);
     }

@@ -3,7 +3,6 @@
 
 namespace Smile {
     void FMaterial::Finalize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        // Re-finalizar: devolve a tabela anterior antes de realocar (evita vazar slots).
         if (SRVTableStart != kInvalidTable)
             _SRVHeap.Free(SRVTableStart, kMaterialTextureSlots);
         SRVTableStart = _SRVHeap.Allocate(kMaterialTextureSlots);
@@ -11,7 +10,7 @@ namespace Smile {
         auto WriteSRV = [&](FTexture* _Texture, u32 _LocalSlot) {
             if (!_Texture || !_Texture->IsValid()) return;
             D3D12_SHADER_RESOURCE_VIEW_DESC ResourceDesc{};
-            ResourceDesc.Format                        = _Texture->Format(); // RGBA8 ou BCx (DDS)
+            ResourceDesc.Format                        = _Texture->Format(); 
             ResourceDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
             ResourceDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             ResourceDesc.Texture2D.MipLevels           = _Texture->MipCount();
@@ -82,7 +81,7 @@ namespace Smile {
                                        u32 _LocalSlot, FTexture* _Texture) {
         if (!_Texture || !_Texture->IsValid() || _LocalSlot >= kMaterialTextureSlots) return;
         D3D12_SHADER_RESOURCE_VIEW_DESC Desc{};
-        Desc.Format                        = _Texture->Format(); // RGBA8 ou BCx (DDS)
+        Desc.Format                        = _Texture->Format(); 
         Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
         Desc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         Desc.Texture2D.MipLevels           = _Texture->MipCount();

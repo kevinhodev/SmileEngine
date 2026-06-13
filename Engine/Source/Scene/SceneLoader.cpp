@@ -1,13 +1,7 @@
-// Loader runtime do formato cozido (.sscene + .smesh) — Fase 3 da importacao.
-// Substitui a cena atual pela cena importada: carrega as texturas DDS (decode em
-// paralelo, upload no thread de render), monta os FMaterial com a convencao Bistro,
-// sobe os meshes (u32) e cria os renderaveis. NUNCA toca em FBX.
-
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
-
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -23,7 +17,7 @@ namespace fs = std::filesystem;
 namespace Smile {
 
     void Renderer::RecreateObjectCB() {
-        CommandQueue.Flush(); // garante que a GPU nao esta lendo o buffer antigo
+        CommandQueue.Flush(); 
         if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
         ObjectCB.Reset();
 
@@ -65,9 +59,8 @@ namespace Smile {
     }
 
     bool Renderer::LoadCookedScene(const std::wstring& _ScenePath) {
-        // --- Resolve caminhos (.sscene/.smesh ao lado) e o diretorio da cena ---
         fs::path in(_ScenePath);
-        fs::path base = in.parent_path() / in.stem(); // remove extensao (.sscene/.smesh) se houver
+        fs::path base = in.parent_path() / in.stem(); 
         fs::path scenePath = base; scenePath += L".sscene";
         fs::path meshPath  = base; meshPath  += L".smesh";
         fs::path sceneDir  = base.parent_path();
@@ -102,22 +95,19 @@ namespace Smile {
 
         const double msRead = MsSince(t0);
 
-        // Ponteiros para as tabelas (layout: header, depois arrays contiguos).
         const auto* mats = reinterpret_cast<const SSceneMaterial*>(sceneBytes.data() + sizeof(SSceneHeader));
         const auto* rnds = reinterpret_cast<const SSceneRenderable*>(
             sceneBytes.data() + sizeof(SSceneHeader) + sizeof(SSceneMaterial) * sh.MaterialCount);
         const auto* entriesRaw = meshBytes.data() + sizeof(SMeshHeader);
         const u8*   geoBase    = meshBytes.data() + sizeof(SMeshHeader) + sizeof(SMeshEntry) * mh.MeshCount;
 
-        // --- Limpa a cena anterior (demo) e os assets importados antes ---
         Scene.Clear();
         for (auto& m : ImportedMaterials) m->Release(SRVHeap);
         ImportedMaterials.clear();
         for (auto& t : ImportedTextures) t->Release(SRVHeap);
         ImportedTextures.clear();
 
-        // --- 1) Coleta de caminhos unicos de textura (rel -> sRGB) ---
-        std::unordered_map<std::string, bool> uniquePaths; // rel -> sRGB
+        std::unordered_map<std::string, bool> uniquePaths; 
         auto consider = [&](const char* rel, bool srgb) {
             if (rel && rel[0]) uniquePaths.emplace(std::string(rel), srgb);
         };
@@ -133,7 +123,6 @@ namespace Smile {
         relList.reserve(uniquePaths.size());
         for (auto& kv : uniquePaths) { relList.push_back(kv.first); srgbList.push_back(kv.second); }
 
-        // --- 2) Decode em paralelo (CPU/IO, thread-safe; sem D3D12) ---
         std::vector<FTextureCPUData> cpuData(relList.size());
         {
             unsigned hw = std::max(1u, std::thread::hardware_concurrency());
@@ -151,7 +140,6 @@ namespace Smile {
         const Clock::time_point tDecodeEnd = Clock::now();
         const double msDecode = MsSince(t0) - msRead;
 
-        // --- 3) Upload EM LOTE (1 sync por chunk, nao 1 por textura) + mapa rel -> FTexture* ---
         std::vector<FTexture> texs =
             FTexture::CreateBatchFromCPU(Device.Native(), CommandQueue, SRVHeap, cpuData);
         const double msTexUpload = MsSince(tDecodeEnd);
@@ -171,7 +159,6 @@ namespace Smile {
             return (it != texByPath.end()) ? it->second : nullptr;
         };
 
-        // --- 4) Materiais ---
         std::vector<FMaterial*> matPtrs(sh.MaterialCount, nullptr);
         for (u32 i = 0; i < sh.MaterialCount; ++i) {
             const SSceneMaterial& sm = mats[i];
@@ -182,9 +169,6 @@ namespace Smile {
             FTexture* normT = getTex(sm.Normal);
             FTexture* emisT = getTex(sm.Emissive);
 
-            // Todos os 8 slots apontam p/ textura valida (real ou default) => nenhum
-            // descritor da tabela fica nao-inicializado. As flags Has* (abaixo) controlam
-            // o que o shader realmente amostra.
             mat->Albedo            = baseT ? baseT : &TexDefaultWhite;
             mat->Normal            = normT ? normT : &TexDefaultNormal;
             mat->MetallicRoughness = specT ? specT : &TexDefaultWhite;
@@ -200,33 +184,38 @@ namespace Smile {
                                                    sm.EmissiveFactor[2], 1.0f };
             mat->Constants.EmissiveStrength = sm.EmissiveStrength;
 
-            mat->Finalize(Device.Native(), SRVHeap); // escreve as 8 SRVs e seta Has* (=1 p/ todas)
+            mat->Finalize(Device.Native(), SRVHeap); 
 
-            // Sobrescreve Has* p/ refletir SO os mapas reais (defaults => 0).
             mat->Constants.HasAlbedoMap            = baseT ? 1u : 0u;
             mat->Constants.HasNormalMap            = normT ? 1u : 0u;
             mat->Constants.HasMetallicRoughnessMap = specT ? 1u : 0u;
-            mat->Constants.HasAOMap                = 0u; // Bistro: AO sai do .r do Specular (packing)
+            mat->Constants.HasAOMap                = 0u; 
             mat->Constants.HasEmissiveMap          = emisT ? 1u : 0u;
             mat->Constants.HasHeightMap            = 0u;
             mat->Constants.HasMetalnessMap         = 0u;
             mat->Constants.HasRoughnessMap         = 0u;
 
-            // Convencao Bistro.
-            mat->Constants.SpecularPacking    = specT ? 1u : 0u; // R=AO, G=Rough, B=Metal
-            mat->Constants.NormalFlipY        = 1u;              // normais DirectX
+            mat->Constants.SpecularPacking    = specT ? 1u : 0u; 
+            mat->Constants.MetallicFactor     = specT ? 1.0f : 0.0f;
+            mat->Constants.RoughnessFactor    = specT ? 1.0f : 0.8f;
+
+            mat->Constants.AOStrength         = 0.0f;
+            mat->Constants.NormalFlipY        = 1u;              
             mat->Constants.NormalReconstructZ =
                 (normT && normT->Format() == DXGI_FORMAT_BC5_UNORM) ? 1u : 0u;
             mat->Constants.AlphaTest          = sm.AlphaTest;
             mat->Constants.AlphaCutoff        = sm.AlphaCutoff;
             mat->TwoSided                     = (sm.TwoSided != 0);
 
+            const bool isFoliage = (sm.AlphaTest != 0u) && (sm.TwoSided != 0);
+            mat->Constants.ShadingModel   = isFoliage ? 1u : 0u;
+            mat->Constants.SubsurfaceColor = { 1.0f, 1.0f, 1.0f, isFoliage ? 0.6f : 0.0f };
+
             mat->UpdateConstants();
             matPtrs[i] = mat.get();
             ImportedMaterials.push_back(std::move(mat));
         }
 
-        // Le todas as entradas de mesh + AABB total da cena.
         std::vector<SMeshEntry> entries(mh.MeshCount);
         f32 aabbMin[3] = {  1e30f,  1e30f,  1e30f };
         f32 aabbMax[3] = { -1e30f, -1e30f, -1e30f };
@@ -243,7 +232,6 @@ namespace Smile {
 
         const Clock::time_point tMeshStart = Clock::now();
         if (!MergeByMaterial) {
-            // --- 5/7a) Sem fusao: 1 mesh + 1 renderavel por entrada (baseline). ---
             std::vector<FMesh> meshesCPU(mh.MeshCount);
             for (u32 i = 0; i < mh.MeshCount; ++i) {
                 const SMeshEntry& e = entries[i];
@@ -266,10 +254,7 @@ namespace Smile {
                 Scene.AddRenderable(out);
             }
         } else {
-            // --- 5/7b) Fusao por material: concatena as entradas de mesmo material num
-            // unico mesh -> poucas centenas de draws (mede o ganho vs baseline). Como a
-            // geometria ja esta em mundo, basta concatenar (indices deslocados pelo base).
-            std::unordered_map<u32, std::vector<u32>> groups; // material -> entradas (via renderaveis)
+            std::unordered_map<u32, std::vector<u32>> groups; 
             groups.reserve(sh.MaterialCount + 1);
             for (u32 i = 0; i < sh.RenderableCount; ++i) {
                 if (rnds[i].MeshIndex >= mh.MeshCount) continue;
@@ -313,12 +298,6 @@ namespace Smile {
 
         const double msMesh = MsSince(tMeshStart);
 
-        // --- 8) Camera: ponto inicial bom da rua do Bistro (valores escolhidos a mao;
-        // o auto-frame pela AABB nao serve porque ela inclui geometria abaixo do piso e
-        // backdrop distante). AABB logada abaixo p/ referencia.
-        LogInfo("Cena AABB: min(" + std::to_string(aabbMin[0]) + ", " + std::to_string(aabbMin[1]) +
-                ", " + std::to_string(aabbMin[2]) + ") max(" + std::to_string(aabbMax[0]) + ", " +
-                std::to_string(aabbMax[1]) + ", " + std::to_string(aabbMax[2]) + ")");
         Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
 
         LogInfo("Cena carregada: " + std::to_string(mh.MeshCount) + " meshes, " +
@@ -330,6 +309,10 @@ namespace Smile {
                 " uploadTex=" + std::to_string((int)msTexUpload) +
                 " meshes=" + std::to_string((int)msMesh) +
                 " | total=" + std::to_string((int)MsSince(t0)));
+
+        BuildRaytracingScene();
+        SetupGIForScene(Vec3{ aabbMin[0], aabbMin[1], aabbMin[2] },
+                        Vec3{ aabbMax[0], aabbMax[1], aabbMax[2] });
         return true;
     }
 }

@@ -6,12 +6,10 @@
 
 namespace Smile {
     namespace {
-        // Roteia as mensagens da D3D12 debug layer (que iriam so para OutputDebugString)
-        // para o Logger da engine, tornando-as visiveis no console/stderr e no painel de log.
-        void CALLBACK D3D12DebugMessageCallback(D3D12_MESSAGE_CATEGORY /*Category*/,
+        void CALLBACK D3D12DebugMessageCallback(D3D12_MESSAGE_CATEGORY,
                                                 D3D12_MESSAGE_SEVERITY _Severity,
-                                                D3D12_MESSAGE_ID /*ID*/,
-                                                LPCSTR _Description, void* /*Context*/) {
+                                                D3D12_MESSAGE_ID,
+                                                LPCSTR _Description, void*) {
             switch (_Severity) {
                 case D3D12_MESSAGE_SEVERITY_CORRUPTION:
                 case D3D12_MESSAGE_SEVERITY_ERROR:
@@ -21,7 +19,7 @@ namespace Smile {
                     LogWarning(std::string("[D3D12] ") + _Description);
                     break;
                 default:
-                    break; // INFO/MESSAGE ignorados (muito ruidosos)
+                    break; 
             }
         }
     }
@@ -61,8 +59,6 @@ namespace Smile {
 
         SMILE_HR(D3D12CreateDevice(Adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&Device)));
 
-        // Bridge: roteia as mensagens da debug layer para o Logger (precisa de
-        // ID3D12InfoQueue1, Win10 20H1+). Sem isso, so apareciam no OutputDebugString.
         if (_EnableDebugLayer) {
             ComPtr<ID3D12InfoQueue1> InfoQueue;
             if (SUCCEEDED(Device.As(&InfoQueue))) {
@@ -78,5 +74,20 @@ namespace Smile {
         }
 
         LogInfo("[D3D12] - Device Criado");
+
+        if (SUCCEEDED(Device.As(&DeviceRT))) {
+            D3D12_FEATURE_DATA_D3D12_OPTIONS5 Options5{};
+            if (SUCCEEDED(Device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5,
+                                                      &Options5, sizeof(Options5)))) {
+                IsRaytracingSupported =
+                    (Options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
+                LogInfo(std::string("[D3D12] - Raytracing Tier: ") +
+                        std::to_string(static_cast<int>(Options5.RaytracingTier)));
+            }
+        }
+        if (IsRaytracingSupported)
+            LogInfo("[D3D12] - DXR Tier 1.1+ disponivel (inline ray tracing / GI habilitavel)");
+        else
+            LogWarning("[D3D12] - DXR indisponivel (Tier < 1.1); GI sera desativada");
     }
 } 

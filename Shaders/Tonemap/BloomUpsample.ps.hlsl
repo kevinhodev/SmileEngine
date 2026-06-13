@@ -16,7 +16,6 @@ struct PSInput {
 float4 main(PSInput input) : SV_TARGET {
     float d = FilterRadius;
 
-    // 9-tap 2D tent upsampler (Bilinear interpolation)
     float3 a = LowResTex.Sample(LinearSampler, input.uv + float2(-d, d)).rgb;
     float3 b = LowResTex.Sample(LinearSampler, input.uv + float2(0, d)).rgb * 2.0;
     float3 c = LowResTex.Sample(LinearSampler, input.uv + float2(d, d)).rgb;
@@ -32,6 +31,5 @@ float4 main(PSInput input) : SV_TARGET {
     float3 upsampled = (a + b + c + d_ + e + f + g + h + i) / 16.0;
     float3 high = HighResTex.Sample(LinearSampler, input.uv).rgb;
 
-    // Additive blend: current level + blurred upsampled lower resolution
     return float4(high + upsampled, 1.0f);
 }

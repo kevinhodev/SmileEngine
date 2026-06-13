@@ -24,8 +24,6 @@ namespace Smile {
 
         void Present();
 
-        // VSync: quando ligado, Present trava no vblank (SyncInterval=1, sem tearing).
-        // Quando desligado, apresenta sem esperar (SyncInterval=0, tearing se suportado).
         void SetVSync(bool Enabled) { VSyncEnabled = Enabled; }
         bool GetVSync() const       { return VSyncEnabled; }
 
@@ -45,6 +43,6 @@ namespace Smile {
         UINT Width  = 0;
         UINT Height = 0;
         bool AllowTearing = false;
-        bool VSyncEnabled = true; // vsync por padrao (trava no refresh do monitor)
+        bool VSyncEnabled = true; 
     };
 } 

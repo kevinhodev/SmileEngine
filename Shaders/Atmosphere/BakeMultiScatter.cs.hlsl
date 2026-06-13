@@ -1,16 +1,9 @@
-// BakeMultiScatter.cs.hlsl
-// Hillaire multiple-scattering LUT (Helmer's compact formulation). For each
-// (sunZenithCos, viewHeight) texel, integrate single scattering with an isotropic
-// phase over a uniform set of sphere directions, accumulating both the scattered
-// luminance L and the multi-scatter transfer factor f_ms, then return the infinite
-// geometric series psi_ms = L / (1 - f_ms). Reads the transmittance LUT at t0.
-
 #include "AtmosphereCommon.hlsli"
 
 Texture2D<float4>   TransmittanceLUT : register(t0);
 RWTexture2D<float4> OutMultiScatter  : register(u0);
 
-#define SQRT_SAMPLES 8   // 64 sphere directions per texel (baked once)
+#define SQRT_SAMPLES 8   
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -38,7 +31,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     for (int si = 0; si < SQRT_SAMPLES; ++si) {
         [loop]
         for (int sj = 0; sj < SQRT_SAMPLES; ++sj) {
-            // Uniform sphere sampling.
             float cosTheta = 1.0f - 2.0f * (si + 0.5f) / (float)SQRT_SAMPLES;
             float sinTheta = sqrt(saturate(1.0f - cosTheta * cosTheta));
             float phi      = 2.0f * PI * (sj + 0.5f) / (float)SQRT_SAMPLES;
@@ -67,15 +59,13 @@ void main(uint3 id : SV_DispatchThreadID) {
                 float3 safeExt = max(ext, 1e-6f);
                 float3 sampleT = exp(-ext * dt);
 
-                // Multi-scatter transfer factor (scattering, no phase).
                 float3 scatterNoPhase = rS + mS;
                 float3 fInt = (scatterNoPhase - scatterNoPhase * sampleT) / safeExt;
                 lumFac += transmittance * fInt;
 
-                // Single scattering with isotropic phase + transmittance to sun.
                 float  sunZenith = dot(up, sunDir);
                 float3 sunT = SampleTransmittanceToTop(TransmittanceLUT, height, sunZenith);
-                // Planet shadow toward the sun.
+
                 float  earthHit = RaySphereNearest(p, sunDir, kBottomR);
                 if (earthHit > 0.0f) sunT = float3(0.0f, 0.0f, 0.0f);
 
@@ -86,7 +76,6 @@ void main(uint3 id : SV_DispatchThreadID) {
                 transmittance *= sampleT;
             }
 
-            // Diffuse ground bounce when the ray hits the planet.
             if (tGround > 0.0f) {
                 float3 gp   = worldPos + tGround * rd;
                 float3 gN   = normalize(gp);
@@ -104,7 +93,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     lumTotal *= invSamples;
     fmsTotal *= invSamples;
 
-    // Stable power series expansion up to 4th order (matching Unreal Engine)
     float3 fms2 = fmsTotal * fmsTotal;
     float3 sumContribution = 1.0f + fmsTotal + fms2 + fmsTotal * fms2 + fms2 * fms2;
     float3 psiMs = lumTotal * sumContribution;

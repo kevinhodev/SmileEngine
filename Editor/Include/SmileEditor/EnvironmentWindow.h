@@ -47,6 +47,7 @@ namespace SmileEditor {
         QWidget* BuildCloudSection();
         QWidget* BuildFogSection();
         QWidget* BuildOceanSection();
+        QWidget* BuildGISection();
         QWidget* BuildEnvironmentSection();
         QWidget* BuildFooter();
 
@@ -78,11 +79,26 @@ namespace SmileEditor {
         QWidget* CloudSection = nullptr;
         QWidget* FogSection = nullptr;
         QWidget* OceanSection = nullptr;
+        QWidget* GISection = nullptr;
         QWidget* EnvironmentSection = nullptr;
 
         QDoubleSpinBox* AzimuthSpin = nullptr;
         QDoubleSpinBox* ElevationSpin = nullptr;
         QDoubleSpinBox* SunIntensitySpin = nullptr;
+        // Time-of-Day (F1): relogio dirige a posicao do sol.
+        QCheckBox*      TODCheck = nullptr;
+        QCheckBox*      TODPauseCheck = nullptr;
+        QDoubleSpinBox* TODHourSpin = nullptr;
+        QDoubleSpinBox* TODDayLengthSpin = nullptr;
+        QDoubleSpinBox* TODLatitudeSpin = nullptr;
+        QDoubleSpinBox* TODDayOfYearSpin = nullptr;
+        QDoubleSpinBox* TODNorthSpin = nullptr;
+        // Noite / lua / estrelas (F2).
+        QCheckBox*      MoonCheck = nullptr;
+        QDoubleSpinBox* MoonIntensitySpin = nullptr;
+        QDoubleSpinBox* StarIntensitySpin = nullptr;
+        QDoubleSpinBox* MoonPhaseSpin = nullptr;
+        QDoubleSpinBox* MoonSizeSpin = nullptr;
         QCheckBox* AtmosphereCheck = nullptr;
         QDoubleSpinBox* SunDiskSpin = nullptr;
         QDoubleSpinBox* GlareSpin = nullptr;
@@ -97,6 +113,42 @@ namespace SmileEditor {
         QDoubleSpinBox* ShadowBiasSpin = nullptr;
         QDoubleSpinBox* ShadowBlendSpin = nullptr;
         QCheckBox*      ShadowDebugCheck = nullptr;
+
+        // GI (DDGI — iluminacao global difusa)
+        QCheckBox*      GICheck = nullptr;
+        QDoubleSpinBox* GIIntensitySpin = nullptr;
+        QCheckBox*      GIChebyshevCheck = nullptr;
+        QCheckBox*      GISkipInactiveCheck = nullptr;
+        QDoubleSpinBox* GIDeactivThreshSpin = nullptr;
+        QCheckBox*      GIFallbackCheck = nullptr;
+        QCheckBox*      GIAdaptiveRaysCheck = nullptr;
+        QDoubleSpinBox* GIMaxRaysSpin = nullptr;
+        QDoubleSpinBox* GIMinRaysSpin = nullptr;
+        QCheckBox*      GIRealHitCheck = nullptr;
+        QCheckBox*      GIRelocationCheck = nullptr;
+        QDoubleSpinBox* GIHysteresisSpin = nullptr;
+        QCheckBox*      GIDebugCheck = nullptr;
+        // Debug DDGI (passe separado: esferas de probe + wireframe do volume)
+        QCheckBox*      GIDebugProbesCheck = nullptr;
+        QComboBox*      GIDebugModeCombo = nullptr;
+        QDoubleSpinBox* GIDebugProbeSizeSpin = nullptr;
+        QCheckBox*      GIDebugVolumeCheck = nullptr;
+        QCheckBox*      GIDebugRaysCheck = nullptr;
+        QDoubleSpinBox* GIDebugRayRadiusSpin = nullptr;
+
+        // Specular GI (reflexoes ray-traced, estilo Lumen)
+        QCheckBox*      ReflectionsCheck = nullptr;
+        QDoubleSpinBox* ReflectionMaxRoughSpin = nullptr;
+        QCheckBox*      ReflectionTemporalCheck = nullptr;
+
+        // AO (GTAO — oclusao de contato em screen-space)
+        QCheckBox*      AOCheck = nullptr;
+        QDoubleSpinBox* AORadiusSpin = nullptr;
+        QDoubleSpinBox* AOIntensitySpin = nullptr;
+        QDoubleSpinBox* AOPowerSpin = nullptr;
+        QDoubleSpinBox* AOFadeStartSpin = nullptr;
+        QDoubleSpinBox* AOFadeEndSpin = nullptr;
+        QCheckBox*      AODebugCheck = nullptr;
 
         QCheckBox* CloudsCheck = nullptr;
         QDoubleSpinBox* CoverageSpin = nullptr;
@@ -144,5 +196,15 @@ namespace SmileEditor {
         QCheckBox* ShowSkyboxCheck = nullptr;
         QDoubleSpinBox* BloomIntensitySpin = nullptr;
         QDoubleSpinBox* ExposureSpin = nullptr;
+        QCheckBox*      TAACheck = nullptr;
+        QDoubleSpinBox* TAABlendSpin = nullptr;
+        QDoubleSpinBox* TAAVarianceSpin = nullptr;
+        QDoubleSpinBox* TAASharpnessSpin = nullptr;
+        QDoubleSpinBox* TAAMotionSpin = nullptr;
+        QDoubleSpinBox* TAAAntiFlickerSpin = nullptr;
+        QDoubleSpinBox* TAADebugSpin = nullptr;
+        QDoubleSpinBox* FlickerModeSpin = nullptr;
+        QDoubleSpinBox* FlickerScaleSpin = nullptr;
+        QDoubleSpinBox* FlickerAlphaSpin = nullptr;
     };
 }

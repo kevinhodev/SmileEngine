@@ -13,7 +13,7 @@
 
 float4 FogApplyMain(float2 pixelXY) {
     int2  px       = int2(pixelXY);
-    float depthNdc = FogSampleDepth(px); // [0,1], 1 = far plane
+    float depthNdc = FogSampleDepth(px); // NDC [0,1] (Reverse-Z: 0=far); reconstrucao via InvViewProj
 
     // Reconstruct world position from depth (full inverse view-proj).
     float2 uv  = pixelXY * ScreenParams.zw;

@@ -66,7 +66,6 @@ namespace SmileEditor {
                               : level == Smile::LogLevel::Warning ? "[WARN]"
                                                                   : "[INFO]";
 
-            // Monta o HTML AGORA (msg/string_view nao sobrevive a um post enfileirado).
             const QString Html = QString("<span style='color:#777'>[%1]</span> "
                                          "<span style='color:%2'><b>%3</b></span> "
                                          "<span style='color:#b9b5aa'>%4</span>")
@@ -75,9 +74,6 @@ namespace SmileEditor {
                      Tag,
                      QString::fromUtf8(msg.data(), static_cast<qsizetype>(msg.size())));
 
-            // O Log pode vir de threads worker (ex.: decode de texturas em paralelo).
-            // QTextEdit/QTextDocument so pode ser tocado na thread GUI — marshala via
-            // conexao enfileirada no event loop da GUI (thread-safe).
             QMetaObject::invokeMethod(LogOutput, [this, Html]() {
                 if (LogOutput) LogOutput->append(Html);
             }, Qt::QueuedConnection);
@@ -114,18 +110,16 @@ namespace SmileEditor {
         if (QDir(ShadersSourceDir).exists()) {
             ShaderWatcher = new QFileSystemWatcher(this);
 
-            // Monitora TODOS os shaders (*.hlsl/*.hlsli) recursivamente — sem lista manual.
             auto CollectShaders = [](const QString& _Root) {
                 QStringList Files;
-                QDirIterator It(_Root, QStringList{ "*.hlsl", "*.hlsli" },
+                QDirIterator Iterator(_Root, QStringList{ "*.hlsl", "*.hlsli" },
                                 QDir::Files, QDirIterator::Subdirectories);
-                while (It.hasNext()) Files << It.next();
+                while (Iterator.hasNext()) Files << Iterator.next();
                 return Files;
             };
             const QStringList ShaderFiles = CollectShaders(ShadersSourceDir);
             if (!ShaderFiles.isEmpty()) ShaderWatcher->addPaths(ShaderFiles);
 
-            // Tambem observa os diretorios (raiz + subpastas) p/ pegar shaders criados depois.
             QStringList ShaderDirs{ ShadersSourceDir };
             {
                 QDirIterator D(ShadersSourceDir, QDir::Dirs | QDir::NoDotAndDotDot,
@@ -134,12 +128,11 @@ namespace SmileEditor {
             }
             ShaderWatcher->addPaths(ShaderDirs);
 
-            // Conteudo mudou -> recompila o target Shaders (todos os .cso) e recarrega.
             connect(ShaderWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString& _Path) {
                 TriggerShaderCompileAndReload(_Path);
                 QTimer::singleShot(100, this, [this, _Path]() {
                     if (ShaderWatcher && !ShaderWatcher->files().contains(_Path))
-                        ShaderWatcher->addPath(_Path); // re-add apos save atomico (delete+rename)
+                        ShaderWatcher->addPath(_Path); 
                 });
             });
 
@@ -363,6 +356,11 @@ namespace SmileEditor {
         if (!Viewport || !Viewport->GetRenderer()) return;
         if (MaterialPanel) MaterialPanel->InitializeWithRenderer(Viewport->GetRenderer());
 
+        // Time-of-Day: textura da lua (LROC color da NASA). Path resolvido via SMILE_ASSETS_DIR
+        // (so o editor o conhece); em falha o renderer segue na lua procedural branca.
+        Viewport->GetRenderer()->LoadMoonTexture(
+            QString(SMILE_ASSETS_DIR "/Textures/Sky/moon_lroc_color_2k.jpg").toStdWString());
+
         if (EnvironmentDlg) {
             EnvironmentDlg->InitializeWithRenderer(Viewport->GetRenderer());
             EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
@@ -416,7 +414,6 @@ namespace SmileEditor {
                     .arg(WaterStats.RingRadius);
             }
 
-            // Visiveis/total da cena (pos frustum culling) — torna o culling tangivel.
             QString SceneText;
             if (Renderer->GetDrawCount() > 0) {
                 SceneText = QString("  |  meshes: %1/%2")
@@ -447,7 +444,7 @@ namespace SmileEditor {
     }
 
     void MainWindow::TriggerShaderCompileAndReload(const QString& _Path) {
-        Smile::LogInfo("Alteracao detectada no shader: " + QFileInfo(_Path).fileName().toStdString());
+        Smile::LogInfo("Alteracao Detectada no Shader: " + QFileInfo(_Path).fileName().toStdString());
 
 #ifdef SMILE_CMAKE_BINARY_DIR
         QString BuildDir = QStringLiteral(SMILE_CMAKE_BINARY_DIR);
@@ -458,17 +455,17 @@ namespace SmileEditor {
         QProcess* CompileProcess = new QProcess(this);
         QStringList Arguments = { "--build", BuildDir, "--target", "Shaders" };
 
-        Smile::LogInfo("Compilando shaders via CMake...");
+        Smile::LogInfo("Compilando Shader via CMake...");
         CompileProcess->start("cmake", Arguments);
 
-        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess](int ExitCode, QProcess::ExitStatus Status) {
-            Q_UNUSED(Status);
-            if (ExitCode == 0) {
+        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess](int _ExitCode, QProcess::ExitStatus _Status) {
+            Q_UNUSED(_Status);
+            if (_ExitCode == 0) {
                 if (Viewport && Viewport->GetRenderer()) {
                     if (Viewport->GetRenderer()->ReloadShaders()) {
-                        statusBar()->showMessage(tr("Shaders recarregados com sucesso."), 3000);
+                        statusBar()->showMessage(tr("Shader Recarregado com Sucesso."), 3000);
                     } else {
-                        statusBar()->showMessage(tr("Erro ao recarregar shaders no renderer."), 3000);
+                        statusBar()->showMessage(tr("Erro ao Recarregar Shader no Renderer."), 3000);
                     }
                 }
             } else {
@@ -476,8 +473,8 @@ namespace SmileEditor {
                 if (Errors.isEmpty()) {
                     Errors = QString::fromUtf8(CompileProcess->readAllStandardOutput());
                 }
-                Smile::LogError("Falha ao compilar shaders via CMake:\n" + Errors.toStdString());
-                statusBar()->showMessage(tr("Falha na compilação do shader."), 3000);
+                Smile::LogError("Falha ao Compilar Shader via CMake:\n" + Errors.toStdString());
+                statusBar()->showMessage(tr("Falha na Compilação do Shader."), 3000);
             }
             CompileProcess->deleteLater();
         });

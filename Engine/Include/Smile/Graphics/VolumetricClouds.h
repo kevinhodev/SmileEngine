@@ -10,7 +10,6 @@
 namespace Smile {
     class FCloudNoise;
 
-    // Matches the CloudCB cbuffer in Shaders/Clouds/CloudRaymarch.cs.hlsl.
     struct alignas(256) CloudConstants {
         Mat44 InvViewProjNoTrans;
         Vec4  CameraPos;    // xyz = camera (atmosphere km-frame), w = view height
@@ -26,9 +25,6 @@ namespace Smile {
         Vec4  AtmoLink;     // x = atmoTopR, y = msOctaves, z = ambientScale, w unused
     };
 
-    // Volumetric clouds (B2 — minimal single-scatter). Ray-marches a spherical
-    // cloud shell into a screen-res RT (compute), then composites it over the sky
-    // with a fullscreen "over" blend gated by the scene depth test.
     class FVolumetricClouds {
     public:
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
@@ -41,21 +37,15 @@ namespace Smile {
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                     u32 Width, u32 Height);
 
-        // Per-frame CB update. Camera is placed at (0, viewHeight, 0) in the
-        // atmosphere km-frame to match the sky.
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjNoTranslation, f32 ViewHeightKm,
                             const Vec3& DirToSun, const Vec3& SunColor, f32 Time,
                             u32 Width, u32 Height);
 
-        // Records the raymarch (compute). Caller sets descriptor heaps.
         void RecordRaymarch(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
-        // Records the composite (graphics). Caller has render/depth targets bound.
         void Composite(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         bool IsInitialized() const { return Initialized; }
 
-        // Live parameter setters (modify CPUConstants; UpdatePerFrame propagates
-        // the whole struct to the mapped CB next frame).
         void SetCoverage(f32 V)         { CPUConstants.CloudParams.X  = V; }
         void SetDensityScale(f32 V)     { CPUConstants.CloudParams.Y  = V; }
         void SetWindSpeed(f32 V)        { CPUConstants.WindParams.X = V; CPUConstants.WindParams.Z = V * 0.4f; }
@@ -87,8 +77,8 @@ namespace Smile {
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
 
-        FVolumetricPipeline RaymarchPSO;        // compute (NumSRVs=2, NumUAVs=1)
-        u32 NoiseTableStart = 0;                // contiguous [base(t0), detail(t1)]
+        FVolumetricPipeline RaymarchPSO;        
+        u32 NoiseTableStart = 0;                
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CloudRT;
         u32 RTSRVSlot = kInvalidSlot;
@@ -99,7 +89,6 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
 
-        // CB double-buffered: kFramesInFlight copias; CPUConstants eh o shadow.
         Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
         u8*             MappedBase = nullptr;
         u32             FrameSlot  = 0;

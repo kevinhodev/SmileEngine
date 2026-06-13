@@ -1,8 +1,3 @@
-// Karis split-sum 2D LUT (NoV x Roughness). Output is RG16F:
-//   R = Fresnel scale, G = Fresnel bias.
-// Sampled in the main PS as BRDFLut.Sample(s, float2(NoV, Roughness)).
-// Dispatch: ceil(size/8) x ceil(size/8) x 1, thread group 8x8x1.
-
 #include "Common.hlsli"
 
 cbuffer PushConstants : register(b0) {
@@ -12,8 +7,6 @@ cbuffer PushConstants : register(b0) {
     uint _Pad2; uint _Pad3; uint _Pad4; uint _Pad5;
 };
 
-// Unused: the root signature reserves a SRV slot we don't need. Declare it so
-// DXC keeps the binding stable across pipelines that share the layout.
 Texture2D<float4> Unused : register(t0);
 SamplerState      LinearClamp : register(s0);
 RWTexture2D<float2> OutputLut : register(u0);
@@ -52,11 +45,9 @@ float2 IntegrateBRDF(float NoV, float roughness) {
 void main(uint3 dispatchID : SV_DispatchThreadID) {
     if (dispatchID.x >= OutputSize || dispatchID.y >= OutputSize) return;
 
-    // Sample at texel center; add 1 to avoid the degenerate NoV=0 row.
     float NoV       = (float(dispatchID.x) + 0.5f) / float(OutputSize);
     float roughness = (float(dispatchID.y) + 0.5f) / float(OutputSize);
 
-    // Touch Unused so DXC doesn't elide the binding.
     float keep = Unused.Load(int3(0, 0, 0)).r * 0.0f;
 
     OutputLut[dispatchID.xy] = IntegrateBRDF(max(NoV, 1e-4f), max(roughness, 0.04f)) + keep;

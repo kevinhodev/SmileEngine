@@ -14,8 +14,6 @@ using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     namespace {
-        // Helper: writes the per-pass root constants and dispatches a 2D grid
-        // over the 6 cube faces.
         void DispatchCubePass(ID3D12GraphicsCommandList* CmdList,
                               FTextureSRVHeap& SRVHeap,
                               const FComputePipeline& Pipeline,
@@ -47,15 +45,13 @@ namespace Smile {
 
     void FHDREnvironment::Initialize(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
                                       FTextureSRVHeap& _SRVHeap) {
-        // Cubemaps (all start in UNORDERED_ACCESS).
         EnvCube.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                       kEnvCubeSize, kEnvCubeMips, /*AllowUAV=*/true);
+                       kEnvCubeSize, kEnvCubeMips, true);
         IrradianceCube.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                              kIrradianceSize, 1, /*AllowUAV=*/true);
+                              kIrradianceSize, 1, true);
         SpecularCube.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                            kSpecularSize, kSpecularMips, /*AllowUAV=*/true);
+                            kSpecularSize, kSpecularMips, true);
 
-        // BRDF LUT 2D
         {
             D3D12_RESOURCE_DESC LutDesc{};
             LutDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -93,18 +89,14 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, BRDFLutResource.Get(), UAVDesc, BRDFLutUAVSlot);
         }
 
-        // Compute pipelines.
-        EquirectToCubePSO.Initialize(_Device, "EquirectToCube.cs_6_0.cso",  /*SourceIsCube=*/false);
-        MipGenPSO        .Initialize(_Device, "MipGen.cs_6_0.cso",                /*SourceIsCube=*/true);
-        IrradiancePSO    .Initialize(_Device, "IrradianceConvolution.cs_6_0.cso", /*SourceIsCube=*/true);
-        SpecularPSO      .Initialize(_Device, "SpecularPrefilter.cs_6_0.cso",     /*SourceIsCube=*/true);
-        BRDFLutPSO       .Initialize(_Device, "BRDFIntegration.cs_6_0.cso",       /*SourceIsCube=*/false);
+        EquirectToCubePSO.Initialize(_Device, "EquirectToCube.cs_6_0.cso",        false);
+        MipGenPSO        .Initialize(_Device, "MipGen.cs_6_0.cso",                true);
+        IrradiancePSO    .Initialize(_Device, "IrradianceConvolution.cs_6_0.cso", true);
+        SpecularPSO      .Initialize(_Device, "SpecularPrefilter.cs_6_0.cso",     true);
+        BRDFLutPSO       .Initialize(_Device, "BRDFIntegration.cs_6_0.cso",       false);
 
-        // One-shot bake of BRDF LUT.
         GenerateBRDFLut(_Device, _CmdQueue, _SRVHeap);
 
-        // Default neutral environment: 1x1 black equirect so the PS always has
-        // valid SRVs even before the user picks an HDR file.
         const float Black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
         u32 EquirectSRV = UploadEquirect2D(_Device, _CmdQueue, _SRVHeap, Black, 1, 1);
         RunIBLChain(_Device, _CmdQueue, _SRVHeap, EquirectSRV);
@@ -120,16 +112,11 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         CmdList->SetDescriptorHeaps(_countof(Heaps), Heaps);
 
-        // The BRDF CS declares Unused t0 — bind any valid SRV. We don't have one
-        // yet (equirect uploaded after this), so temporarily bind the env cube
-        // SRV: it's allocated, formatted as cube, but DXC's view-dim mismatch
-        // only matters if the shader actually reads it, which it doesn't.
-        const u32 Constants[2] = { kBRDFLutSize, 1024u /*NumSamples*/ };
+        const u32 Constants[2] = { kBRDFLutSize, 1024u };
         DispatchLutPass(CmdList, _SRVHeap, BRDFLutPSO,
                         Constants, _countof(Constants),
                         EnvCube.SRVSlot(), BRDFLutUAVSlot, kBRDFLutSize);
 
-        // LUT UAV → SRV.
         D3D12_RESOURCE_BARRIER B{};
         B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         B.Transition.pResource   = BRDFLutResource.Get();
@@ -146,7 +133,6 @@ namespace Smile {
     u32 FHDREnvironment::UploadEquirect2D(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
                                           FTextureSRVHeap& _SRVHeap,
                                           const float* _Pixels, u32 _Width, u32 _Height) {
-        // (Re)create the equirect resource at the requested size.
         Equirect2DResource.Reset();
 
         D3D12_RESOURCE_DESC Desc{};
@@ -165,7 +151,6 @@ namespace Smile {
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
             IID_PPV_ARGS(&Equirect2DResource)));
 
-        // Staging.
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT Layout{};
         UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;
         _Device->GetCopyableFootprints(&Desc, 0, 1, 0, &Layout, &NumRows, &RowSize, &TotalSize);
@@ -196,7 +181,6 @@ namespace Smile {
         }
         Staging->Unmap(0, nullptr);
 
-        // Copy + transition to SHADER_RESOURCE.
         _CmdQueue.ResetForRecording();
         auto* CmdList = _CmdQueue.List();
 
@@ -222,7 +206,6 @@ namespace Smile {
         ID3D12CommandList* Lists[] = { CmdList };
         _CmdQueue.ExecuteAndSync(Lists, 1);
 
-        // Allocate the SRV slot lazily (kept across swaps so the PS bindings stay valid).
         if (Equirect2DSRVSlot == 0) {
             Equirect2DSRVSlot = _SRVHeap.Allocate(1);
         }
@@ -247,15 +230,10 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         CmdList->SetDescriptorHeaps(_countof(Heaps), Heaps);
 
-        // Bring all three cubes (every subresource) into UAV state. The
-        // Transition helper tracks per-subresource state — no-op on the very
-        // first run (already UAV from Create), barriers issued on subsequent
-        // swaps when subresources are split across SRV/UAV (mip-gen ping-pong).
         EnvCube       .Transition(CmdList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         IrradianceCube.Transition(CmdList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         SpecularCube  .Transition(CmdList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        // 1) Equirect → cube (writes env cube mip 0)
         {
             const u32 Constants[1] = { kEnvCubeSize };
             DispatchCubePass(CmdList, _SRVHeap, EquirectToCubePSO,
@@ -263,22 +241,16 @@ namespace Smile {
                              _EquirectSRVSlot, EnvCube.UAVSlot(0), kEnvCubeSize);
         }
 
-        // 2) Generate env cube mip chain. Each pass reads mip i-1 (SRV) and
-        //    writes mip i (UAV) via per-mip subresource transitions. The cube
-        //    SRV views the full chain — we sample at SrcMip via root constant.
         EnvCube.TransitionMip(CmdList, 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         for (u32 Mip = 1; Mip < kEnvCubeMips; ++Mip) {
             const u32 MipSize = kEnvCubeSize >> Mip;
-            const u32 Constants[2] = { MipSize, Mip - 1 /*SrcMip*/ };
+            const u32 Constants[2] = { MipSize, Mip - 1 };
             DispatchCubePass(CmdList, _SRVHeap, MipGenPSO,
                              Constants, _countof(Constants),
                              EnvCube.SRVSlot(), EnvCube.UAVSlot(Mip), MipSize);
-            // Just-written mip → SRV so the next iteration (or specular pass) reads it.
             EnvCube.TransitionMip(CmdList, Mip, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
-        // Whole cube now in NON_PIXEL_SHADER_RESOURCE across all mips.
 
-        // 3) Irradiance convolution
         {
             const u32 Constants[1] = { kIrradianceSize };
             DispatchCubePass(CmdList, _SRVHeap, IrradiancePSO,
@@ -287,8 +259,6 @@ namespace Smile {
         }
         IrradianceCube.Transition(CmdList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-        // 4) Specular prefilter — now benefits from env mip chain via Karis
-        //    solid-angle mip selection inside the shader.
         for (u32 Mip = 0; Mip < kSpecularMips; ++Mip) {
             const u32 MipSize = kSpecularSize >> Mip;
             const float Roughness = (kSpecularMips == 1)
@@ -306,7 +276,6 @@ namespace Smile {
         }
         SpecularCube.Transition(CmdList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-        // env cube → PIXEL_SHADER_RESOURCE so the skybox PS can sample it.
         EnvCube.Transition(CmdList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
         SMILE_HR(CmdList->Close());
@@ -316,7 +285,6 @@ namespace Smile {
 
     bool FHDREnvironment::LoadFromFile(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
                                         FTextureSRVHeap& _SRVHeap, const std::wstring& _Path) {
-        // stb_image takes UTF-8 paths on Windows.
         std::string UTF8;
         {
             int Size = WideCharToMultiByte(CP_UTF8, 0, _Path.c_str(), -1, nullptr, 0, nullptr, nullptr);

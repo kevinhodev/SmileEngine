@@ -38,8 +38,6 @@ namespace Smile {
         }
     }
 
-    // --- Caminho sincrono ---
-
     void FCommandQueue::ResetForRecording() {
         SMILE_HR(UploadAllocator->Reset());
         SMILE_HR(CommandList->Reset(UploadAllocator.Get(), nullptr));
@@ -56,11 +54,8 @@ namespace Smile {
         WaitForValue(FenceValue);
     }
 
-    // --- Caminho per-frame (frames in flight) ---
-
     void FCommandQueue::BeginFrame() {
         CurrentFrame = (CurrentFrame + 1) % kFramesInFlight;
-        // Espera a GPU terminar o ultimo frame que usou este allocator antes de reseta-lo.
         WaitForValue(FrameFenceValues[CurrentFrame]);
         SMILE_HR(FrameAllocators[CurrentFrame]->Reset());
         SMILE_HR(CommandList->Reset(FrameAllocators[CurrentFrame].Get(), nullptr));

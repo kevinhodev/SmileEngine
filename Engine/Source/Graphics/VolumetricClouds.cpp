@@ -1,6 +1,7 @@
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/CloudNoise.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -18,16 +19,15 @@ namespace Smile {
                                        u32 _Width, u32 _Height) {
         if (Initialized) return;
 
-        // Default cloud layer (km): bottom 2 km, top 5 km above the planet surface.
         CPUConstants.PlanetRadii  = { 6360.0f, 6362.0f, 6365.0f, 0.0f };
-        CPUConstants.CloudParams  = { 0.45f, 1.6f, 0.15f, 0.0f }; // coverage, densityScale, noiseScale, time
-        CPUConstants.CloudParams2 = { 0.010f, 0.45f, 6.0f, 0.0f }; // weatherScale, erosion, detailScale, typeBias
+        CPUConstants.CloudParams  = { 0.45f, 1.6f, 0.15f, 0.0f }; 
+        CPUConstants.CloudParams2 = { 0.010f, 0.45f, 6.0f, 0.0f }; 
         CPUConstants.WindParams   = { 0.01f, 0.0f, 0.004f, 0.0f };
-        CPUConstants.MarchParams  = { 128.0f, 6.0f, 0.35f, 40.0f }; // primary, light, ambient, maxDistKm
+        CPUConstants.MarchParams  = { 128.0f, 6.0f, 0.35f, 40.0f }; 
         CPUConstants.SunColor     = { 1.0f, 1.0f, 0.96f, 0.0f };
-        CPUConstants.SunDir       = { 0.0f, 0.6f, 0.8f, 6.0f };    // w = intensity (atmo-coupled)
-        CPUConstants.PhaseParams  = { 0.80f, -0.30f, 0.5f, 0.5f }; // g1, g2, blend, powder
-        CPUConstants.AtmoLink     = { 6460.0f, 3.0f, 1.0f, 0.0f }; // atmoTopR, msOctaves, ambientScale
+        CPUConstants.SunDir       = { 0.0f, 0.6f, 0.8f, 6.0f };    
+        CPUConstants.PhaseParams  = { 0.80f, -0.30f, 0.5f, 0.5f }; 
+        CPUConstants.AtmoLink     = { 6460.0f, 3.0f, 1.0f, 0.0f }; 
         CPUConstants.InvViewProjNoTrans = Mat44::Identity();
 
         CreateConstantBuffer(_Device);
@@ -135,7 +135,6 @@ namespace Smile {
     void FVolumetricClouds::BuildNoiseTable(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                             FCloudNoise& _Noise, u32 _AtmoTransmittanceSRV,
                                             u32 _AtmoMultiScatterSRV) {
-        // Contiguous table: base(t0), detail(t1), weather(t2), transmittance(t3), multiscatter(t4).
         NoiseTableStart = _SRVHeap.Allocate(5);
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(NoiseTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE Srcs[5] = {
@@ -153,7 +152,7 @@ namespace Smile {
     void FVolumetricClouds::BuildCompositeRootSignature(ID3D12Device* _Device) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        SRVRange.NumDescriptors                    = 1; // t0 = cloud RT
+        SRVRange.NumDescriptors                    = 1; 
         SRVRange.BaseShaderRegister                = 0;
         SRVRange.RegisterSpace                     = 0;
         SRVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -193,7 +192,6 @@ namespace Smile {
         Raster.CullMode        = D3D12_CULL_MODE_NONE;
         Raster.DepthClipEnable = TRUE;
 
-        // "Over" blend: final.rgb = src.rgb + dst.rgb * src.a  (src.a = transmittance)
         D3D12_BLEND_DESC Blend{};
         Blend.RenderTarget[0].BlendEnable           = TRUE;
         Blend.RenderTarget[0].SrcBlend              = D3D12_BLEND_ONE;
@@ -207,7 +205,7 @@ namespace Smile {
         D3D12_DEPTH_STENCIL_DESC Depth{};
         Depth.DepthEnable    = TRUE;
         Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        Depth.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL; // only background pixels
+        Depth.DepthFunc      = kDepthFuncLessEqual; 
         Depth.StencilEnable  = FALSE;
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC Desc{};

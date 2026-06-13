@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Water.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -21,49 +22,44 @@ namespace Smile {
     }
 
     void FWaterRenderer::BuildRootSignature(ID3D12Device* _Device) {
-        // t0 = cubemap especular (reflexao IBL, PS).
         D3D12_DESCRIPTOR_RANGE SpecRange{};
         SpecRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SpecRange.NumDescriptors                    = 1;
-        SpecRange.BaseShaderRegister                = 0; // t0
+        SpecRange.BaseShaderRegister                = 0; 
         SpecRange.RegisterSpace                     = 0;
         SpecRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        // t1 = displacement do FFT (VS desloca o vertice + calcula normal; PS le no futuro).
         D3D12_DESCRIPTOR_RANGE FFTRange{};
         FFTRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         FFTRange.NumDescriptors                    = 1;
-        FFTRange.BaseShaderRegister                = 1; // t1
+        FFTRange.BaseShaderRegister                = 1; 
         FFTRange.RegisterSpace                     = 0;
         FFTRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        // t4 = normal mipped derivado do FFT (PS bump + Toksvig).
         D3D12_DESCRIPTOR_RANGE FFTNormalRange{};
         FFTNormalRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         FFTNormalRange.NumDescriptors                    = 1;
-        FFTNormalRange.BaseShaderRegister                = 4; // t4
+        FFTNormalRange.BaseShaderRegister                = 4; 
         FFTNormalRange.RegisterSpace                     = 0;
         FFTNormalRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_DESCRIPTOR_RANGE AtmoSkyViewRange{};
         AtmoSkyViewRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         AtmoSkyViewRange.NumDescriptors                    = 1;
-        AtmoSkyViewRange.BaseShaderRegister                = 5; // t5
+        AtmoSkyViewRange.BaseShaderRegister                = 5; 
         AtmoSkyViewRange.RegisterSpace                     = 0;
         AtmoSkyViewRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        // t2..t3 = scene-color + scene-depth (refracao/fog) — tabela contigua, PS.
         D3D12_DESCRIPTOR_RANGE SceneRange{};
         SceneRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SceneRange.NumDescriptors                    = 2;
-        SceneRange.BaseShaderRegister                = 2; // t2, t3
+        SceneRange.BaseShaderRegister                = 2; 
         SceneRange.RegisterSpace                     = 0;
         SceneRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_ROOT_PARAMETER RootParams[6]{};
-        // b0 = WaterConstants (VS reconstroi o grid; PS faz o shading) -> visivel a todos.
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[0].Descriptor.ShaderRegister = 0; // b0
+        RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].Descriptor.RegisterSpace  = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
 
@@ -75,7 +71,7 @@ namespace Smile {
         RootParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[2].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[2].DescriptorTable.pDescriptorRanges   = &FFTRange;
-        RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL; // VS + PS
+        RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL; 
 
         RootParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
@@ -92,8 +88,6 @@ namespace Smile {
         RootParams[5].DescriptorTable.pDescriptorRanges   = &AtmoSkyViewRange;
         RootParams[5].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // s0 = linear wrap (FFT displacement) -> visivel a VS+PS (o VS amostra o FFT);
-        // s1 = linear clamp (cubemap, so PS).
         D3D12_STATIC_SAMPLER_DESC Samplers[3]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         Samplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -104,20 +98,20 @@ namespace Smile {
         Samplers[0].BorderColor      = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
         Samplers[0].MinLOD           = 0.0f;
         Samplers[0].MaxLOD           = D3D12_FLOAT32_MAX;
-        Samplers[0].ShaderRegister   = 0; // s0
-        Samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // VS amostra o FFT
+        Samplers[0].ShaderRegister   = 0; 
+        Samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; 
 
         Samplers[1]                  = Samplers[0];
         Samplers[1].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         Samplers[1].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         Samplers[1].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        Samplers[1].ShaderRegister   = 1; // s1
+        Samplers[1].ShaderRegister   = 1; 
         Samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         Samplers[2]                  = Samplers[0];
         Samplers[2].Filter           = D3D12_FILTER_ANISOTROPIC;
         Samplers[2].MaxAnisotropy    = 16;
-        Samplers[2].ShaderRegister   = 2; // s2
+        Samplers[2].ShaderRegister   = 2;
         Samplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC Desc{};
@@ -141,7 +135,6 @@ namespace Smile {
 
     void FWaterRenderer::BuildPSO(ID3D12Device* _Device, u32 _SampleCount,
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
-        // NAME_WE no CMake gera .cso flat (sem prefixo de pasta), como Clouds/Atmosphere.
         auto VS = LoadShaderBytecode("WaterSurface.vs_6_0.cso");
         auto PS = LoadShaderBytecode("WaterSurface.ps_6_0.cso");
 
@@ -157,19 +150,19 @@ namespace Smile {
         };
 
         D3D12_BLEND_DESC Blend{};
-        Blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL; // opaco
+        Blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL; 
 
         D3D12_DEPTH_STENCIL_DESC Depth{};
         Depth.DepthEnable    = TRUE;
-        Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL; // superficie escreve depth
-        Depth.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
+        Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL; 
+        Depth.DepthFunc      = kDepthFuncLess; 
         Depth.StencilEnable  = FALSE;
 
         auto CreateWaterPSO = [&](D3D12_FILL_MODE _FillMode,
                                   Microsoft::WRL::ComPtr<ID3D12PipelineState>& _Out) {
             D3D12_RASTERIZER_DESC Raster{};
             Raster.FillMode              = _FillMode;
-            Raster.CullMode              = D3D12_CULL_MODE_NONE; // agua vista dos dois lados
+            Raster.CullMode              = D3D12_CULL_MODE_NONE; 
             Raster.FrontCounterClockwise = FALSE;
             Raster.DepthClipEnable       = TRUE;
 
@@ -198,14 +191,14 @@ namespace Smile {
     void FWaterRenderer::BuildGenerateDrawsPipeline(ID3D12Device* _Device) {
         D3D12_DESCRIPTOR_RANGE SRVRanges[1]{};
         SRVRanges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        SRVRanges[0].NumDescriptors                    = 2; // t0=tile sources, t1=bucket sources
+        SRVRanges[0].NumDescriptors                    = 2; 
         SRVRanges[0].BaseShaderRegister                = 0;
         SRVRanges[0].RegisterSpace                     = 0;
         SRVRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_DESCRIPTOR_RANGE UAVRanges[1]{};
         UAVRanges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-        UAVRanges[0].NumDescriptors                    = 5; // u0=instances, u1=draw args, u2=scratch, u3=tile sources, u4=debug counters
+        UAVRanges[0].NumDescriptors                    = 5; 
         UAVRanges[0].BaseShaderRegister                = 0;
         UAVRanges[0].RegisterSpace                     = 0;
         UAVRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -253,9 +246,6 @@ namespace Smile {
     }
 
     void FWaterRenderer::BuildGrid(ID3D12Device* _Device) {
-        // Grade local em [0,1]^2 reutilizada por todos os tiles da quadtree. z guarda
-        // edge Chebyshev para debug. Os indices sao gerados em subsets estilo Asylum:
-        // lod interno (levelsize 32/16/8) x 81 patterns (3^4 bordas).
         const u32 N = kGridPoints;
         const u32 MeshDim = kGridPoints - 1;
         const f32 Rcp = 1.0f / static_cast<f32>(N - 1);
@@ -274,7 +264,7 @@ namespace Smile {
                 const f32 u = x * Rcp;
                 const f32 fx = std::fabs(u * 2.0f - 1.0f);
                 const f32 fy = std::fabs(v * 2.0f - 1.0f);
-                const f32 edge = (fx > fy) ? fx : fy; // max(fx, fy)
+                const f32 edge = (fx > fy) ? fx : fy; 
                 PushVertex(u, v, edge);
             }
         }
@@ -559,9 +549,6 @@ namespace Smile {
         SMILE_HR(GpuDebugReadbackBuffer->Map(
             0, &DebugReadRange, reinterpret_cast<void**>(&MappedGpuDebugCountersBase)));
 
-        // Layout do heap: [0,1] SRVs (tile sources, draw buckets) + [2..6] UAVs
-        // (instances, draw args, scratch, tile sources, debug counters). A tabela SRV
-        // e bindada em GpuHandle(0) e a UAV em GpuHandle(2) no DispatchGenerateDraws.
         GenerateDrawsHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 7, true);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -721,7 +708,6 @@ namespace Smile {
         BuildGrid(_Device);
         BuildInstanceBuffer(_Device);
 
-        // Upload heap CBV (mapeado persistente — 1 frame in-flight torna seguro reescrever).
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -745,7 +731,6 @@ namespace Smile {
     }
 
     void FWaterRenderer::Resize(ID3D12Device*, u32, u32) {
-        // No-op por ora (as copias de scene-color/depth sao geridas pelo Renderer).
     }
 
     void FWaterRenderer::UpdatePerFrame(u32 _FrameSlot, const Mat44& _ViewProj, const Mat44& _Projection,
@@ -758,7 +743,6 @@ namespace Smile {
         (void)_Projection;
         if (!MappedCBVBase || !MappedDrawBucketsBase) return;
 
-        // Reaponta CB, draw buckets e view de instancia GPU para a regiao deste frame.
         FrameSlot = _FrameSlot;
         MappedCBV = reinterpret_cast<WaterConstants*>(
             MappedCBVBase + static_cast<size_t>(FrameSlot) * sizeof(WaterConstants));
@@ -780,36 +764,25 @@ namespace Smile {
         MappedCBV->CameraPos    = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z, 1.0f };
         MappedCBV->SunDirection = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
         MappedCBV->SunColor     = { _SunColor.X, _SunColor.Y, _SunColor.Z, WaterClarity };
-        // OceanParams0/1: vento, ondas, flow-dir e nivel da agua. z = intensidade da
-        // espuma de costa (so aplicada no caminho com depth da cena).
         MappedCBV->OceanParams0    = { WindDir, WindSpeed, UseFoam ? ShoreFoamIntensity : 0.0f, WavesAmount };
         MappedCBV->OceanParams1    = { WavesSize, Cos, Sin, WaterLevel };
-        // Misc: time, gate de reflexao IBL, intensidade, mip max do cubemap especular.
         MappedCBV->Misc = { _ElapsedTime, _IBLEnabled ? 1.0f : 0.0f, _IBLIntensity, kSpecularMaxMip };
-        // WaterFXParams: subsurface scattering (forca, expoente, escala de altura) + orla.
         MappedCBV->WaterFXParams = { SSSStrength, SSSPower, SSSHeightScale, ShoreFoamWidth };
-        // ShadeParams: FresnelGloss, ReflectionScale, expoente do sun spec, escala do sun spec.
         MappedCBV->ShadeParams  = { FresnelGloss, ReflectionScale, kSunShininess, kSunSpecScale };
-        // OceanFFT: usa FFT?, escala mestre do deslocamento, escala choppy, "up" do normal.
         MappedCBV->OceanFFT     = { UseFFT ? 1.0f : 0.0f, FFTDispScale, FFTChoppyScale, FFTNormalUp };
-        // OceanFade: distancia de inicio e faixa do achatamento (anti-shimmer no horizonte).
         MappedCBV->OceanFade    = { FFTFadeStart, FFTFadeRange, 0.0f, 0.0f };
-        // Bump de detalhe: tilings + escalas de normal; strength/parallax/toggle.
         MappedCBV->BumpParams   = { BumpTilling, BumpDetailTilling, BumpNormalsScale, BumpDetailScale };
         MappedCBV->BumpParams2  = { BumpStrength, ParallaxHeight, UseBump ? 1.0f : 0.0f, BumpFadeDist };
-        // Refracao / fog (depende das copias scene-color/depth pre-agua).
+
         const f32 W = (f32)(_ScreenW ? _ScreenW : 1), H = (f32)(_ScreenH ? _ScreenH : 1);
         MappedCBV->ScreenParams     = { W, H, 1.0f / W, 1.0f / H };
         MappedCBV->DepthParams      = { _NearZ, _FarZ, _HasSceneCopies ? 1.0f : 0.0f,
                                         _UseAtmosphereSky ? 1.0f : 0.0f };
         MappedCBV->RefractionParams = { RefractionBumpScale, SoftIntersectionFactor, FogDensity, ReflectionBumpScale };
         MappedCBV->DebugParams      = { static_cast<f32>(static_cast<u32>(DebugMode)), 0.0f, 0.0f, 0.0f };
-        // densidade do fog tambem empacotada em DeepColorDensity.w.
         MappedCBV->DeepColorDensity = { DeepColor.X, DeepColor.Y, DeepColor.Z, FogDensity };
-        // In-scattering (turquesa) + absorcao por canal + clamp do sun-spec.
         MappedCBV->InScatterColor  = { InScatterColor.X, InScatterColor.Y, InScatterColor.Z, InScatterDensity };
         MappedCBV->AbsorptionColor = { AbsorptionColor.X, AbsorptionColor.Y, AbsorptionColor.Z, SunSpecClamp };
-        // Foam: coverage(limiar J), sharpness, intensidade (0 desliga), distancia de fade.
         MappedCBV->FoamParams = { FoamCoverage, FoamSharpness,
                                   UseFoam ? FoamIntensity : 0.0f, FoamFadeDist };
         MappedCBV->FoamColor  = { FoamColor.X, FoamColor.Y, FoamColor.Z, FoamSpecSuppress };
@@ -924,9 +897,9 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(2, GenerateDrawsHeap.GpuHandle(2));
 
         _CommandList->SetComputeRootDescriptorTable(1, GenerateDrawsHeap.GpuHandle(0));
-        DispatchPass(0u, kSubsetRangeCount); // clear counts, cursors, indirect args and debug counters
+        DispatchPass(0u, kSubsetRangeCount); 
 
-        DispatchPass(4u, SourceCount); // build packed tile sources on GPU
+        DispatchPass(4u, SourceCount); 
 
         D3D12_RESOURCE_BARRIER ToTileSourceSRV[1]{};
         UINT ToTileSourceSRVCount = 0;
@@ -937,12 +910,10 @@ namespace Smile {
             _CommandList->ResourceBarrier(ToTileSourceSRVCount, ToTileSourceSRV);
         }
         GpuTileSourceBufferState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        // O conteudo dos SRVs nao mudou (o descritor independe do estado do recurso),
-        // entao a tabela SRV ja bindada em GpuHandle(0) continua valida.
 
-        DispatchPass(1u, SourceCount);       // count instances per bucket
-        DispatchPass(2u, 1u);                // prefix sum and indirect args
-        DispatchPass(3u, SourceCount);       // scatter packed instances by bucket
+        DispatchPass(1u, SourceCount);      
+        DispatchPass(2u, 1u);               
+        DispatchPass(3u, SourceCount);      
 
         D3D12_RESOURCE_BARRIER ToCopy[1]{};
         UINT ToCopyCount = 0;

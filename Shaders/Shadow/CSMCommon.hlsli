@@ -1,7 +1,3 @@
-// Cascaded Shadow Maps — amostragem no shading da cena (incluído pelo Triangle.ps).
-// Base ortográfica estilo Unreal: WorldToShadow[i] projeta worldPos -> UV[0,1] + depth[0,1]
-// da cascata i. Fase 2: PCF Poisson 16-taps rotacionado por pixel (soft shadows) + blend
-// entre cascatas + normal-offset bias (anti peter-panning).
 #ifndef SMILE_CSM_COMMON
 #define SMILE_CSM_COMMON
 
@@ -17,7 +13,6 @@ cbuffer CSMCB : register(b3) {
 Texture2DArray         SunShadowMap : register(t11);
 SamplerComparisonState ShadowCmp    : register(s2);
 
-// Disco de Poisson 16 pontos em [-1,1] (kernel irregular -> menos banding que grid regular).
 static const float2 kPoisson16[16] = {
     float2(-0.94201624, -0.39906216), float2( 0.94558609, -0.76890725),
     float2(-0.09418410, -0.92938870), float2( 0.34495938,  0.29387760),
@@ -29,22 +24,19 @@ static const float2 kPoisson16[16] = {
     float2( 0.19984126,  0.78641367), float2( 0.14383161, -0.14100790)
 };
 
-// Interleaved Gradient Noise (Jimenez) — ângulo de rotação por pixel p/ dither do kernel.
 float CSM_IGN(float2 p) {
     return frac(52.9829189f * frac(dot(p, float2(0.06711056f, 0.00583715f))));
 }
 
-// PCF Poisson rotacionado numa cascata. uvz já em shadow space [0,1]³.
 float CSM_PCF(float3 uvz, int cascade, float2 screenPos) {
     float refZ     = uvz.z - CSMParams.y;
-    float radiusUV = max(CSMParams2.y, 1.0f) * CSMParams.z; // penumbra (texels) -> UV
+    float radiusUV = max(CSMParams2.y, 1.0f) * CSMParams.z; 
     float a = CSM_IGN(screenPos) * 6.2831853f;
     float s, c; sincos(a, s, c);
     float2x2 rot = float2x2(c, -s, s, c);
     float sum = 0.0f;
     [unroll] for (int k = 0; k < 16; ++k) {
         float2 o = mul(rot, kPoisson16[k]) * radiusUV;
-        // ComparisonFunc LESS_EQUAL -> 1 quando refZ <= storedZ (iluminado).
         sum += SunShadowMap.SampleCmpLevelZero(ShadowCmp, float3(uvz.xy + o, (float)cascade), refZ);
     }
     return sum * (1.0f / 16.0f);
@@ -56,40 +48,35 @@ static bool CSM_InBounds(float3 uvz) {
            uvz.z > 0.0f && uvz.z < 1.0f;
 }
 
-// Visibilidade do sol no ponto: 1 = iluminado, 0 = em sombra. worldNormal = normal geométrica
-// (normal-offset bias). screenPos = pixel (SV_Position.xy) p/ rotacionar o kernel por pixel.
 float SampleCSM(float3 worldPos, float3 worldNormal, float2 screenPos) {
-    if (CSMParams.w < 0.5f) return 1.0f; // sombras desligadas
+    if (CSMParams.w < 0.5f) return 1.0f; 
 
     int   numC = (int)CSMParams.x;
-    float band = CSMParams2.z; // largura da zona de blend (em UV) na borda da cascata
+    float band = CSMParams2.z; 
     [loop] for (int i = 0; i < numC; ++i) {
-        // Normal-offset escalado pelo texel-em-mundo desta cascata.
         float3 p   = worldPos + worldNormal * (CSMTexelWorld[i] * CSMParams2.x);
-        float3 uvz = mul(float4(p, 1.0f), WorldToShadow[i]).xyz; // ortho -> w == 1
-        if (!CSM_InBounds(uvz)) continue; // fora desta cascata: tenta a próxima
+        float3 uvz = mul(float4(p, 1.0f), WorldToShadow[i]).xyz; 
+        if (!CSM_InBounds(uvz)) continue; 
 
         float vis = CSM_PCF(uvz, i, screenPos);
 
-        // Blend p/ a próxima cascata perto da borda (mata a costura/degrau).
         if (band > 0.0f && i + 1 < numC) {
             float2 dd   = min(uvz.xy, 1.0f - uvz.xy);
-            float  edge = min(dd.x, dd.y); // distância à borda mais próxima (UV)
+            float  edge = min(dd.x, dd.y); 
             if (edge < band) {
                 float3 p2   = worldPos + worldNormal * (CSMTexelWorld[i + 1] * CSMParams2.x);
                 float3 uvz2 = mul(float4(p2, 1.0f), WorldToShadow[i + 1]).xyz;
                 if (CSM_InBounds(uvz2)) {
                     float vis2 = CSM_PCF(uvz2, i + 1, screenPos);
-                    vis = lerp(vis2, vis, saturate(edge / band)); // borda -> próxima cascata
+                    vis = lerp(vis2, vis, saturate(edge / band)); 
                 }
             }
         }
         return vis;
     }
-    return 1.0f; // além da última cascata: sem sombra
+    return 1.0f; 
 }
 
-// --- Debug: visualização das cascatas (tint por cascata) ---
 bool CSM_DebugEnabled() { return CSMParams2.w > 0.5f; }
 
 int CSM_SelectCascade(float3 worldPos, float3 worldNormal) {
@@ -110,4 +97,4 @@ float3 CSM_CascadeColor(int i) {
     return float3(1.0f, 1.0f, 1.0f);             // fora de todas
 }
 
-#endif // SMILE_CSM_COMMON
+#endif 

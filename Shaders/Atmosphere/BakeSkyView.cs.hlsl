@@ -1,10 +1,3 @@
-// BakeSkyView.cs.hlsl
-// Hillaire sky-view LUT: a 192x104 lat-long of the sky dome around the camera.
-// For each (viewZenithCos, lightViewCos) texel, reconstruct the view ray in a
-// local frame (up = +Y, sun azimuth = 0) and ray-march single scattering (with
-// Rayleigh + Mie phase and transmittance-to-sun) plus the multi-scattering LUT
-// contribution. Baked every frame (cheap) since it depends on sun + camera height.
-
 #include "AtmosphereCommon.hlsli"
 
 Texture2D<float4>   TransmittanceLUT : register(t0);
@@ -23,7 +16,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     float viewZenithCos, lightViewCos;
     UvToSkyViewParams(viewZenithCos, lightViewCos, viewHeight, uv);
 
-    // Local frame: world up = +Y, sun placed at azimuth 0 in the X-Y plane.
     float sunZenithCos = clamp(SunDir.y, -1.0f, 1.0f);
     float sunZenithSin = sqrt(saturate(1.0f - sunZenithCos * sunZenithCos));
     float3 sunDir = float3(sunZenithSin, sunZenithCos, 0.0f);

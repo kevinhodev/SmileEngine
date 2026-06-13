@@ -7,24 +7,15 @@
 #include <vector>
 
 namespace Smile {
-    // 3D (volume) GPU texture: Width x Height x Depth, optionally N mip levels,
-    // optionally bindable as UAV (one per mip) for compute writes. Modeled on
-    // FCubeTexture — used by the atmosphere aerial-perspective froxel volume and
-    // by the volumetric-cloud noise / shadow volumes.
     class FVolumeTexture {
     public:
-        // Creates a TEXTURE3D resource. When AllowUAV is true the resource starts
-        // in UNORDERED_ACCESS and one Texture3D UAV is allocated per mip in the SRV
-        // heap. The Texture3D SRV is always allocated at VolumeSRVSlot.
         void Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                     DXGI_FORMAT _Format, u32 _Width, u32 _Height, u32 _Depth,
                     u32 _MipLevels, bool _AllowUAV);
 
-        // Transitions all mips to the requested state (tracked internally).
         void Transition(ID3D12GraphicsCommandList* _CommandList,
                         D3D12_RESOURCE_STATES _After);
 
-        // Transitions a single mip slice (a 3D texture mip is one subresource).
         void TransitionMip(ID3D12GraphicsCommandList* _CommandList,
                            u32 _MipSlice, D3D12_RESOURCE_STATES _After);
 
@@ -47,8 +38,6 @@ namespace Smile {
         u32                   TexDepth  = 0;
         u32                   MipLevels = 0;
         DXGI_FORMAT           TexFormat = DXGI_FORMAT_UNKNOWN;
-        // Per-subresource state. A 3D texture has no array slices, so the
-        // subresource index is simply the mip slice.
         std::vector<D3D12_RESOURCE_STATES> MipStates;
     };
 }

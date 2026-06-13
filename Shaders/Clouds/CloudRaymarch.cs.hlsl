@@ -1,9 +1,3 @@
-// CloudRaymarch.cs.hlsl  (Phase B3 — realistic density)
-// Ray-marches the spherical cloud shell using the Schneider/Nubis density model
-// (CloudDensity.hlsli): low-freq shape + weather coverage + height gradient, then
-// high-freq detail erosion. Cheap base density drives empty-space skipping and the
-// light march; the eroded density drives the primary integration.
-
 cbuffer CloudCB : register(b0) {
     row_major float4x4 InvViewProjNoTrans;
     float4 CameraPos;    // xyz = camera (atmosphere km-frame), w = view height
@@ -22,7 +16,7 @@ cbuffer CloudCB : register(b0) {
 Texture3D<float4>   BaseNoise        : register(t0);
 Texture3D<float4>   DetailNoise      : register(t1);
 Texture2D<float4>   WeatherMap       : register(t2);
-Texture2D<float4>   TransmittanceLUT : register(t3); // atmosphere coupling
+Texture2D<float4>   TransmittanceLUT : register(t3); 
 Texture2D<float4>   MultiScatterLUT  : register(t4);
 RWTexture2D<float4> OutClouds        : register(u0);
 
@@ -95,15 +89,13 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     float segLen = tEnd - tStart;
     float dt     = segLen / (float)numSteps;
-    // Reduced jitter amplitude: trades a little banding for much less per-pixel
-    // grain (no temporal accumulation yet to resolve full jitter).
+
     float jitter = Hash(float2(id.xy) + CloudParams.w);
     float t      = tStart + jitter * dt * 0.5f;
     float shellThickness = PlanetRadii.z - PlanetRadii.y;
 
     CloudCtx ctx = MakeCtx();
 
-    // Lighting params (B4 — atmosphere coupling + dual-lobe phase).
     float g1 = PhaseParams.x, g2 = PhaseParams.y, blend = PhaseParams.z, powderStrength = PhaseParams.w;
     float atmoTopR    = AtmoLink.x;
     int   msOctaves   = max(1, (int)AtmoLink.y);
@@ -124,32 +116,24 @@ void main(uint3 id : SV_DispatchThreadID) {
         if (maxDist > 0.0f)
             baseD *= saturate(1.0f - (t - 0.5f * maxDist) / (0.5f * maxDist));
 
-        // Empty-space skip: low-freq base is smooth, so doubling the step is safe.
         if (baseD <= 0.001f) { t += dt * 2.0f; continue; }
 
         float d = CloudErode(baseD, p, hf, DetailNoise, LinearWrapSampler, ctx);
         if (d > 0.001f) {
-            // --- B5: light march toward the sun --------------------------------
-            // Quadratic step distribution (fine near the sample, coarse far away
-            // — UE) so near-cloud self-shadowing keeps detail with few steps.
-            // Adaptive LOD (Cry): fewer shadow steps once the primary transmittance
-            // is already low (the sample is dark, shadow precision matters less).
             int   lSteps = (transmittance < 0.3f) ? max(2, lightSteps / 2) : lightSteps;
-            float lBase  = shellThickness / (float)(lSteps * lSteps); // series spans ~thickness
+            float lBase  = shellThickness / (float)(lSteps * lSteps); 
             float lightOD   = 0.0f;
             float lightDist = 0.0f;
             [loop]
             for (int j = 0; j < lSteps; ++j) {
-                float stepLen = lBase * (2.0f * j + 1.0f); // cumulative dist = (j+1)^2 * lBase
+                float stepLen = lBase * (2.0f * j + 1.0f); 
                 lightDist += stepLen;
                 float3 lp = p + SunDir.xyz * lightDist;
                 float  lhf;
                 lightOD += CloudBaseDensity(lp, BaseNoise, WeatherMap, LinearWrapSampler, ctx, lhf)
                          * ctx.densityScale * stepLen;
             }
-            // Atmosphere coupling: sun color reaching the cloud is the atmospheric
-            // transmittance toward the sun at this altitude; ambient is the physical
-            // sky fill from the multi-scatter LUT.
+
             float  height = length(p);
             float  sunZen = dot(p / max(height, 1e-4f), SunDir.xyz);
             float3 atmoT  = SampleAtmoTransmittance(TransmittanceLUT, LinearClampSampler,
@@ -158,25 +142,22 @@ void main(uint3 id : SV_DispatchThreadID) {
             float sunY = SunDir.y;
             float day = saturate(sunY * 4.0f + 0.2f);
             float lowSun = saturate(1.0f - sunY * 2.5f);
-            float3 zenithCol = float3(0.18f, 0.30f, 0.55f); // Azul Rayleigh
-            float3 horizonCol = float3(0.60f, 0.40f, 0.26f); // Sunset quente
+            float3 zenithCol = float3(0.18f, 0.30f, 0.55f); 
+            float3 horizonCol = float3(0.60f, 0.40f, 0.26f); 
             float3 ambientSky = (zenithCol + (horizonCol - zenithCol) * lowSun) * day * SunColor.rgb;
             float3 ambientGround = ambientSky * 0.35f;
 
-            // 2. Mistura hemisférica baseada na fração de altura da nuvem (hf)
             float3 hemiAmbient = lerp(ambientGround, ambientSky, hf) * ambientScale;
 
-            // 3. Combina o multi-scattering atmosférico corrigido com o domo celeste
             float3 skyAmbient = (SampleAtmoMultiScatter(MultiScatterLUT, LinearClampSampler,
                                             height, sunZen, ctx.bottomR, atmoTopR) * SunColor.rgb 
                      + hemiAmbient) * SunDir.w;
 
-            // Wrenninge multi-scatter octaves of the sun in-scatter.
             float sAtten = 1.0f, eAtten = 1.0f, pAtten = 1.0f;
             float sunScatter = 0.0f;
             [loop]
             for (int n = 0; n < msOctaves; ++n) {
-                float ph = lerp(0.0795f, basePhase, pAtten); // 1/(4pi) isotropic floor
+                float ph = lerp(0.0795f, basePhase, pAtten); 
                 sunScatter += sAtten * ph * exp(-lightOD * eAtten);
                 sAtten *= 0.5f; eAtten *= 0.5f; pAtten *= 0.5f;
             }
@@ -195,10 +176,6 @@ void main(uint3 id : SV_DispatchThreadID) {
         t += dt;
     }
 
-    // --- Aerial perspective (cheap, no froxel) ---------------------------------
-    // Dim the cloud by the atmospheric transmittance along the view ray from the
-    // camera to the cloud entry, and add the sky in-scatter as haze. Distant /
-    // grazing clouds fade into the atmosphere instead of staying bright white.
     if (transmittance < 0.999f) {
         float3 entryPos    = cam + tStart * dir;
         float  camHeight   = length(cam);

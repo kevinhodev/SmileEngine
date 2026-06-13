@@ -1,8 +1,3 @@
-// BakeTransmittance.cs.hlsl
-// Hillaire transmittance LUT: for each (viewHeight, viewZenithCos) texel, ray-march
-// optical depth from the point to the top of the atmosphere and store exp(-depth)
-// (RGB transmittance). Independent of sun direction — baked once when params change.
-
 #include "AtmosphereCommon.hlsli"
 
 RWTexture2D<float4> OutTransmittance : register(u0);
@@ -18,7 +13,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     float viewHeight, viewZenithCos;
     UvToTransmittanceParams(viewHeight, viewZenithCos, uv);
 
-    // Sample point on the +Y axis at the given height; ray makes zenith angle with up.
     float3 ro = float3(0.0f, viewHeight, 0.0f);
     float  sinZ = sqrt(saturate(1.0f - viewZenithCos * viewZenithCos));
     float3 rd = float3(sinZ, viewZenithCos, 0.0f);

@@ -22,7 +22,6 @@ namespace Smile {
     }
 
     void FSunShadows::CreateResources(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        // Texture2DArray de depth: R32_TYPELESS -> DSV (D32_FLOAT) por fatia + 1 SRV array.
         D3D12_HEAP_PROPERTIES HeapProps{};
         HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -47,7 +46,6 @@ namespace Smile {
             &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
             ArrayState, &Clear, IID_PPV_ARGS(&DepthArray)));
 
-        // DSV heap: 1 view por fatia (FirstArraySlice = c).
         DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kNumCascades, false);
         for (u32 c = 0; c < kNumCascades; ++c) {
             D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
@@ -59,7 +57,6 @@ namespace Smile {
             _Device->CreateDepthStencilView(DepthArray.Get(), &DSVDesc, DSVHeap.CpuHandle(c));
         }
 
-        // SRV array (R32_FLOAT) cobrindo as kNumCascades fatias — 1 descritor (t11).
         ShadowSRVSlot_ = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                          = DXGI_FORMAT_R32_FLOAT;
@@ -73,26 +70,20 @@ namespace Smile {
     }
 
     void FSunShadows::BuildRootSignature(ID3D12Device* _Device) {
-        // Layout casado com FMaterial::Bind (params 1 e 2) p/ reusar o bind do material:
-        //   [0] CBV b0  ShadowCascadeCB (LightViewProj)  (VS)
-        //   [1] CBV b1  MaterialConstants (alpha-test)    (PS)
-        //   [2] SRV t0-t7  texturas do material            (PS)
-        //   [3] CBV b2  ObjectConstants (Model)            (VS)
-        //   Static sampler s0  anisotropic wrap            (PS)
         D3D12_DESCRIPTOR_RANGE MatRange{};
         MatRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        MatRange.NumDescriptors                    = 8; // t0..t7
+        MatRange.NumDescriptors                    = 8; 
         MatRange.BaseShaderRegister                = 0;
         MatRange.RegisterSpace                     = 0;
         MatRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_ROOT_PARAMETER RootParams[4]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[0].Descriptor.ShaderRegister = 0; // b0
+        RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
 
         RootParams[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[1].Descriptor.ShaderRegister = 1; // b1
+        RootParams[1].Descriptor.ShaderRegister = 1; 
         RootParams[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -101,7 +92,7 @@ namespace Smile {
         RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[3].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[3].Descriptor.ShaderRegister = 2; // b2
+        RootParams[3].Descriptor.ShaderRegister = 2; 
         RootParams[3].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
@@ -114,7 +105,7 @@ namespace Smile {
         Sampler.BorderColor      = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
         Sampler.MinLOD           = 0.0f;
         Sampler.MaxLOD           = D3D12_FLOAT32_MAX;
-        Sampler.ShaderRegister   = 0; // s0
+        Sampler.ShaderRegister   = 0; 
         Sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC Desc{};
@@ -146,15 +137,11 @@ namespace Smile {
             { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         };
 
-        // Bias de slope no rasterizer (mata acne em superfícies inclinadas; o PCF do PS
-        // soma um bias constante NDC). Tunáveis de calibração.
         D3D12_RASTERIZER_DESC Raster{};
         Raster.FillMode              = D3D12_FILL_MODE_SOLID;
         Raster.CullMode              = D3D12_CULL_MODE_BACK;
         Raster.FrontCounterClockwise = FALSE;
         Raster.DepthClipEnable       = TRUE;
-        // O normal-offset (no PS) faz o grosso do anti-acne → rasterizer só com leve slope
-        // bias (acne em superfícies muito inclinadas), sem const bias (evita peter-panning).
         Raster.DepthBias             = 0;
         Raster.SlopeScaledDepthBias  = 1.0f;
         Raster.DepthBiasClamp        = 0.0f;
@@ -171,20 +158,19 @@ namespace Smile {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc{};
         PSODesc.pRootSignature        = RootSig.Get();
         PSODesc.VS                    = { VS.data(), VS.size() };
-        PSODesc.PS                    = { nullptr, 0 }; // opaco: só depth (sem PS)
+        PSODesc.PS                    = { nullptr, 0 }; 
         PSODesc.BlendState            = Blend;
         PSODesc.SampleMask            = UINT_MAX;
         PSODesc.RasterizerState       = Raster;
         PSODesc.DepthStencilState     = Depth;
         PSODesc.InputLayout           = { InputLayout, _countof(InputLayout) };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        PSODesc.NumRenderTargets      = 0; // depth-only
+        PSODesc.NumRenderTargets      = 0; 
         PSODesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
         PSODesc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&OpaquePSO)));
 
-        // Masked (folhagem): PS faz o alpha-test (clip); two-sided -> cull NONE.
         Raster.CullMode         = D3D12_CULL_MODE_NONE;
         PSODesc.RasterizerState = Raster;
         PSODesc.PS              = { PS.data(), PS.size() };
@@ -220,7 +206,6 @@ namespace Smile {
         MakeBuffer(static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(CSMConstants),
                    CSMCB, MappedCSM);
 
-        // Popula todas as regioes do CSM CB (qualquer slot valido antes do 1o UpdatePerFrame).
         CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
                                  1.0f / static_cast<f32>(kResolution), 0.0f };
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
@@ -234,14 +219,13 @@ namespace Smile {
                                      const Vec3& _CamPos, f32 _FovYRadians, f32 _Aspect,
                                      const Vec3& _DirToSun, f32 _NearZ) {
         FrameSlot = _FrameSlot;
-        (void)_CamPos; // o centro das cascatas vem do sub-frustum via InvView (reservado p/ modo "centered")
+        (void)_CamPos; 
         CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
                                  1.0f / static_cast<f32>(kResolution), _Enabled ? 1.0f : 0.0f };
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
                                  DebugCascades ? 1.0f : 0.0f };
 
         if (_Enabled) {
-            // Splits exponenciais (Unreal ComputeAccumulatedScale): >1 => cascatas menores perto.
             auto Accum = [](f32 E, int Idx, int Count) -> f32 {
                 f32 Cur = 1.0f, Total = 0.0f, Ret = 0.0f;
                 for (int i = 0; i < Count; ++i) { if (i < Idx) Ret += Cur; Total += Cur; Cur *= E; }
@@ -264,7 +248,6 @@ namespace Smile {
                     p.X*M.M[0][2] + p.Y*M.M[1][2] + p.Z*M.M[2][2] + M.M[3][2] };
             };
 
-            // Base de luz: forward = direção de viagem da luz = -DirToSun.
             const Vec3 fwd = Vec3{ -_DirToSun.X, -_DirToSun.Y, -_DirToSun.Z }
                                  .NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
             const Vec3 up0   = (std::fabs(fwd.Y) > 0.99f) ? Vec3{ 0.0f, 0.0f, 1.0f }
@@ -272,12 +255,11 @@ namespace Smile {
             const Vec3 right = up0.Cross(fwd).Normalized();
             const Vec3 up    = fwd.Cross(right);
 
-            // NDC[-1,1] -> UV[0,1] com flip de Y (z inalterado), convenção vetor-linha.
             Mat44 BiasUV = Mat44::Identity();
             BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
             BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
 
-            f32* sf = &CPUConstants.CascadeTexelWorld.X; // texel-em-mundo por cascata (normal-offset)
+            f32* sf = &CPUConstants.CascadeTexelWorld.X; 
             for (int c = 0; c < numC; ++c) {
                 const f32 dn = Splits[c], df = Splits[c + 1];
                 const f32 FarX = tanH*df, FarY = tanV*df, NearX = tanH*dn, NearY = tanV*dn;
@@ -287,7 +269,6 @@ namespace Smile {
                 f32 czv = df - offset;
                 if (czv < dn) czv = dn; if (czv > df) czv = df;
 
-                // Raio = maior distância de um canto do sub-frustum ao centro (0,0,czv).
                 f32 r2 = 0.0f;
                 const f32 cz[2] = { dn, df }, ex[2] = { NearX, FarX }, ey[2] = { NearY, FarY };
                 for (int pl = 0; pl < 2; ++pl)
@@ -300,7 +281,6 @@ namespace Smile {
                 f32 radius = std::ceil(std::sqrt(r2));
                 if (radius < 1.0f) radius = 1.0f;
 
-                // Centro em mundo + texel-snap em light-space (anti-shimmer).
                 const Vec3 centerWorld = TransformPoint(InvView, Vec3{ 0.0f, 0.0f, czv });
                 const f32 texel = 2.0f * radius / static_cast<f32>(kResolution);
                 const f32 cx = std::floor(centerWorld.Dot(right) / texel) * texel;
@@ -314,10 +294,9 @@ namespace Smile {
                 const Mat44 LightViewProj = LightView * LightProj;
 
                 CPUConstants.WorldToShadow[c] = LightViewProj * BiasUV;
-                CascadeViewProj[c]            = LightViewProj; // p/ culling de casters
-                sf[c] = texel; // tamanho de 1 texel em mundo (normal-offset no shader)
+                CascadeViewProj[c]            = LightViewProj; 
+                sf[c] = texel; 
 
-                // CB por-cascata do depth pass (clip ortho cru, sem BiasUV).
                 ShadowCascadeConstants Cascade{ LightViewProj };
                 std::memcpy(MappedCascade +
                                 (static_cast<size_t>(FrameSlot) * kNumCascades + c) *
@@ -361,21 +340,18 @@ namespace Smile {
             _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
             _CommandList->SetGraphicsRootConstantBufferView(0, CascadeCBAddr(c));
 
-            // Culling de casters contra o frustum DESTA cascata (planos das colunas da
-            // LightViewProj; convenção vetor-linha, D3D z[0,1]). Independe da câmera ->
-            // objetos atrás/ao lado da câmera ainda projetam sombra na área visível.
             const Mat44& VP = CascadeViewProj[c];
             const Vec4 c0{ VP.M[0][0], VP.M[1][0], VP.M[2][0], VP.M[3][0] };
             const Vec4 c1{ VP.M[0][1], VP.M[1][1], VP.M[2][1], VP.M[3][1] };
             const Vec4 c2{ VP.M[0][2], VP.M[1][2], VP.M[2][2], VP.M[3][2] };
             const Vec4 c3{ VP.M[0][3], VP.M[1][3], VP.M[2][3], VP.M[3][3] };
             const Vec4 Planes[6] = {
-                { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W }, // left
-                { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W }, // right
-                { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W }, // bottom
-                { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W }, // top
-                { c2.X, c2.Y, c2.Z, c2.W },                     // near (z>=0)
-                { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W }, // far
+                { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W }, 
+                { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W }, 
+                { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W }, 
+                { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W }, 
+                { c2.X, c2.Y, c2.Z, c2.W },                    
+                { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W }, 
             };
             auto Outside = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
                 for (int i = 0; i < 6; ++i) {
@@ -396,8 +372,8 @@ namespace Smile {
                 const bool Masked = It.Mat && It.Mat->TwoSided;
                 ID3D12PipelineState* Want = Masked ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
-                _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB); // b2 (Model)
-                if (Masked) It.Mat->Bind(_CommandList, _SRVHeap);                // b1 + tabela t0-t7
+                _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB); 
+                if (Masked) It.Mat->Bind(_CommandList, _SRVHeap);                
                 It.Mesh->Draw(_CommandList);
             }
         }

@@ -1,9 +1,3 @@
-// BakeBaseNoise.cs.hlsl
-// 128^3 cloud base-shape volume (Nubis/Schneider layout):
-//   R = low-frequency Perlin-Worley (overall cloud shape)
-//   G,B,A = Worley FBM at increasing frequencies (erosion detail)
-// All frequencies divide 128 so the volume tiles seamlessly.
-
 #include "CloudNoiseCommon.hlsli"
 
 cbuffer NoiseParams : register(b0) {

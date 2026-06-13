@@ -14,6 +14,9 @@ namespace Smile {
         IDXGIFactory6*  GetFactory() const { return Factory.Get(); }
         IDXGIAdapter1*  GetAdapter() const { return Adapter.Get(); }
 
+        ID3D12Device5*  Device5() const { return DeviceRT.Get(); }
+
+        bool RaytracingSupported() const { return IsRaytracingSupported; }
         bool TearingSupported() const { return IsTearingSupported; }
 
         const std::wstring& GetAdapterDescription() const { return AdapterDescription; }
@@ -21,10 +24,12 @@ namespace Smile {
 
     private:
         ComPtr<ID3D12Device>  Device;
+        ComPtr<ID3D12Device5> DeviceRT;   
         ComPtr<IDXGIFactory6> Factory;
         ComPtr<IDXGIAdapter1> Adapter;
         std::wstring          AdapterDescription;
         u64                   AdapterDedicatedVideoMemory = 0;
-        bool                  IsTearingSupported = false;
+        bool                  IsTearingSupported    = false;
+        bool                  IsRaytracingSupported = false;
     };
 } 

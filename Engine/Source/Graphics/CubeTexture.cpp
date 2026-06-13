@@ -33,7 +33,6 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
             InitialState, nullptr, IID_PPV_ARGS(&GpuResource)));
 
-        // SRV TextureCube
         FaceSRVSlot = _SRVHeap.Allocate(1);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -45,7 +44,6 @@ namespace Smile {
         SRVDesc.TextureCube.ResourceMinLODClamp = 0.0f;
         _SRVHeap.CreateSRV(_Device, GpuResource.Get(), SRVDesc, FaceSRVSlot);
 
-        // UAVs (Texture2DArray over the 6 faces, one per mip)
         if (_AllowUAV) {
             UAVSlots.resize(_MipLevels);
             for (u32 Mip = 0; Mip < _MipLevels; ++Mip) {
@@ -66,16 +64,10 @@ namespace Smile {
 
     void FCubeTexture::Transition(ID3D12GraphicsCommandList* _CommandList,
                                   D3D12_RESOURCE_STATES _After) {
-        // Fast path: if every subresource already matches, no-op. Otherwise
-        // we emit per-subresource barriers (only for subresources that differ),
-        // then update all states.
         bool AllMatch = true;
         for (auto s : MipStates) if (s != _After) { AllMatch = false; break; }
         if (AllMatch) return;
 
-        // Per-subresource transition. Subresource index uses the D3D12 layout:
-        // subIdx = ArraySlice * MipLevels + MipSlice, which is exactly our
-        // MipStates index — emit a barrier wherever the state differs.
         std::vector<D3D12_RESOURCE_BARRIER> Barriers;
         Barriers.reserve(MipStates.size());
         for (u32 SubIdx = 0; SubIdx < MipStates.size(); ++SubIdx) {
@@ -95,7 +87,6 @@ namespace Smile {
 
     void FCubeTexture::TransitionMip(ID3D12GraphicsCommandList* _CommandList,
                                      u32 _MipSlice, D3D12_RESOURCE_STATES _After) {
-        // Subresource index for cube (single plane): face * MipLevels + mip.
         D3D12_RESOURCE_BARRIER Barriers[6];
         UINT Count = 0;
         for (u32 Face = 0; Face < 6; ++Face) {

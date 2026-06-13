@@ -9,11 +9,6 @@
 namespace Smile {
     class FCommandQueue;
 
-    // Bakes the two cloud noise volumes once on the GPU at startup (same pattern
-    // as the IBL / atmosphere bakes): a 128^3 Perlin-Worley base-shape volume and
-    // a 32^3 Worley detail/erosion volume. Stored as RGBA16F (UAV-write proven by
-    // the IBL/atmosphere paths). Both rest in NON_PIXEL_SHADER_RESOURCE for the
-    // cloud raymarch to sample.
     class FCloudNoise {
     public:
         static constexpr u32 kBaseRes    = 128;
@@ -36,7 +31,6 @@ namespace Smile {
         FComputePipeline BaseNoisePSO;
         FComputePipeline DetailNoisePSO;
 
-        // 2D weather map (R = coverage, G = type, B = wetness).
         Microsoft::WRL::ComPtr<ID3D12Resource> WeatherTex;
         u32 WeatherSRVSlot = 0;
         u32 WeatherUAVSlot = 0;

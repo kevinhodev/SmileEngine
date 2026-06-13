@@ -20,7 +20,7 @@ namespace Smile {
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      ID3D12Resource* ResolvedHDR, D3D12_CPU_DESCRIPTOR_HANDLE SwapChainRTV,
-                     u32 HDRSRVSlot, u32 Width, u32 Height);
+                     u32 HDRSRVSlot, u32 FrameSlot, u32 Width, u32 Height);
         void SetBloomIntensity(f32 Intensity) { if (MappedParams) MappedParams->BloomIntensity = Intensity; }
         f32  GetBloomIntensity() const        { return MappedParams ? MappedParams->BloomIntensity : 0.04f; }
         void SetExposure(f32 Exposure)        { if (MappedParams) MappedParams->Exposure = Exposure; }
@@ -44,14 +44,12 @@ namespace Smile {
         FDescriptorHeap        BloomRTVHeap;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
-        u32 BloomSRVBase = kInvalidSlot; // Contiguous block of SRV slots for all buffers
+        u32 BloomSRVBase = kInvalidSlot; 
 
-        // Tabela contigua [HDR(t0), Bloom(t1)] do tonemap. Construida via CreateSRV
-        // direto nos slots (sem CopyDescriptors). Reconstruida so quando o HDR muda.
         u32 PostTableStart = kInvalidSlot;
         ID3D12Resource* CachedHDRForTable = nullptr;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> CBParams; // For PostParams and level params (Exposure, BloomIntensity, etc.)
+        Microsoft::WRL::ComPtr<ID3D12Resource> CBParams; 
         u8* MappedParamsBase = nullptr;
         PostParams* MappedParams = nullptr;
 

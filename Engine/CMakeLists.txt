@@ -42,6 +42,10 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Skybox.h
     Include/Smile/Graphics/Fog.h
     Include/Smile/Graphics/SunShadows.h
+    Include/Smile/Graphics/RaytracingScene.h
+    Include/Smile/Graphics/DDGI.h
+    Include/Smile/Graphics/DDGIDebug.h
+    Include/Smile/Graphics/AmbientOcclusion.h
     Include/Smile/Graphics/ShaderUtils.h
     Include/Smile/Graphics/PostProcess.h
     Include/Smile/Graphics/OceanFFT.h
@@ -80,10 +84,20 @@ set(ENGINE_SOURCES
     Source/Graphics/Skybox.cpp
     Source/Graphics/Fog.cpp
     Source/Graphics/SunShadows.cpp
+    Source/Graphics/RaytracingScene.cpp
+    Source/Graphics/DDGI.cpp
+    Source/Graphics/DDGIDebug.cpp
+    Source/Graphics/Reflections.cpp
+    Source/Graphics/AmbientOcclusion.cpp
     Source/Graphics/ShaderUtils.cpp
     Source/Graphics/PostProcess.cpp
+    Source/Graphics/TemporalAA.cpp
+    Source/Graphics/FlickerHeatmap.cpp
     Source/Graphics/OceanFFT.cpp
     Source/Graphics/Water.cpp
+    Source/Graphics/Picking.cpp
+    Source/Graphics/SelectionOutline.cpp
+    Source/Graphics/DebugDraw.cpp
     Source/Graphics/Renderer.cpp
 )
 

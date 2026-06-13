@@ -16,19 +16,29 @@
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/HDREnvironment.h"
 #include "Smile/Graphics/Atmosphere.h"
+#include "Smile/Graphics/TimeOfDay.h"
 #include "Smile/Graphics/CloudNoise.h"
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/Fog.h"
 #include "Smile/Graphics/SunShadows.h"
+#include "Smile/Graphics/RaytracingScene.h"
+#include "Smile/Graphics/DDGI.h"
+#include "Smile/Graphics/DDGIDebug.h"
+#include "Smile/Graphics/Reflections.h"
+#include "Smile/Graphics/AmbientOcclusion.h"
 #include "Smile/Graphics/PostProcess.h"
+#include "Smile/Graphics/Picking.h"
+#include "Smile/Graphics/SelectionOutline.h"
+#include "Smile/Graphics/DebugDraw.h"
+#include "Smile/Graphics/TemporalAA.h"
+#include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Scene/Scene.h"
 
 namespace Smile {
-    // Globais por-frame (b0): iguais para todos os objetos da cena.
     struct alignas(256) FrameConstants {
         Vec4  CameraPosition;  // 16 bytes
         Vec4  IBLParams;       // 16 bytes — x=intensity, y=rotation(rad), z=maxMip, w=enabled
@@ -37,9 +47,18 @@ namespace Smile {
         Vec4  SunColor;        // 16 bytes — rgb = color, w = unused
         Vec4  SkyAmbientColor;    // 16 bytes — rgb = sky (zenith) ambient, w = enabled (0/1)
         Vec4  GroundAmbientColor; // 16 bytes — rgb = ground (nadir) ambient, w = intensity
+
+        Vec4  DDGIGridMin;        // 16 bytes — xyz = origem do grid (mundo), w = espacamento
+        Vec4  DDGIGridCount;      // 16 bytes — xyz = nº de probes por eixo, w = enabled (0=off,1=on,2=debug)
+        Vec4  DDGIParams;         // 16 bytes — x = intensity, y = tileSize, z = atlasW, w = atlasH
+        Vec4  DDGIDistParams;     // 16 bytes — x = distTile, y = distAtlasW, z = distAtlasH, w = chebyshev (0/1)
+
+        Vec4  ReflectionParams;   // 16 bytes — x = maxRoughnessToTrace, y = roughnessFadeLength, z = enabled (0/1), w = -
+
+        Vec4  MoonDirection;      // 16 bytes — xyz = direction TO moon (normalized), w = intensity
+        Vec4  MoonColor;          // 16 bytes — rgb = cor do luar (fria, tingida pela transmitancia), w = -
     };
 
-    // Constantes por-objeto (b2): escritas uma vez por renderavel, por frame.
     struct alignas(256) ObjectConstants {
         Mat44 MVP;          // 64 bytes — Model * View * Projection
         Mat44 ModelMatrix;  // 64 bytes — world (para worldPos/worldNormal)
@@ -60,7 +79,6 @@ namespace Smile {
         void SetMSAA(u32 SampleCount);
         bool ReloadShaders();
 
-        // VSync (pacing do Present). On = trava no refresh; Off = FPS livre.
         void SetVSync(bool Enabled) { SwapChain.SetVSync(Enabled); }
         bool GetVSync() const       { return SwapChain.GetVSync(); }
 
@@ -69,38 +87,44 @@ namespace Smile {
 
         void SetMaterial(FMaterial* Material);
 
-        // Cena multi-objeto. O editor pode adicionar meshes/renderaveis aqui;
-        // o Renderer itera a lista em RenderFrame.
         FScene& GetScene() { return Scene; }
 
-        // Carrega uma cena cozida (.sscene + .smesh ao lado) substituindo a cena atual.
-        // ScenePath aponta p/ o .sscene (ou base sem extensao). Implementado em
-        // Source/Scene/SceneLoader.cpp. Retorna false em falha (arquivo/magic/IO).
         bool LoadCookedScene(const std::wstring& ScenePath);
 
-        // Texturas default (1x1) usadas p/ preencher slots de material sem mapa, mantendo
-        // todos os descritores da tabela validos. Usadas pelo loader de cena.
         FTexture& GetDefaultWhite()  { return TexDefaultWhite; }
         FTexture& GetDefaultNormal() { return TexDefaultNormal; }
         FTexture& GetDefaultBlack()  { return TexDefaultBlack; }
 
-        // --- Otimizacoes de cena (Fase 4) ---
-        // Frustum culling por AABB de mundo no draw loop (runtime, default ON).
+
         void SetFrustumCulling(bool Use) { UseFrustumCulling = Use; }
         bool GetFrustumCulling() const   { return UseFrustumCulling; }
-        // Depth pre-pass (opacos) — mata overdraw de shading. Toggle p/ medir o ganho.
+
         void SetDepthPrepass(bool Use)   { UseDepthPrepass = Use; }
         bool GetDepthPrepass() const     { return UseDepthPrepass; }
-        u32  GetVisibleCount() const     { return LastVisibleCount; } // diagnostico (pos-cull)
+        u32  GetVisibleCount() const     { return LastVisibleCount; } 
         u32  GetDrawCount() const        { return static_cast<u32>(Scene.Renderables().size()); }
-        // Fusao por material no load (concatena meshes do mesmo material -> menos draws).
-        // Toma efeito no PROXIMO LoadCookedScene (recarregar a cena).
+
         void SetMergeByMaterial(bool Use) { MergeByMaterial = Use; }
         bool GetMergeByMaterial() const   { return MergeByMaterial; }
 
         bool IsInitialized() const { return Initialized; }
 
-        // IBL controls. LoadHDREnvironment returns false on file/IO failure.
+        void RequestPick(u32 X, u32 Y) { ObjectPicker.RequestPick(X, Y); }
+        bool TryGetPickResult(int& OutIndex) { return ObjectPicker.TryResolve(OutIndex); }
+        void SetSelectedObject(int Index) { SelectedIndex = Index; }
+        int  GetSelectedObject() const    { return SelectedIndex; }
+        void ClearSelection()             { SelectedIndex = -1; }
+        void SetOutlineColor(const Vec3& C) { SelectionOutline.SetColor(C); }
+        void SetOutlineThickness(f32 T)     { SelectionOutline.SetThickness(T); }
+        void SetOutlineIntensity(f32 I)     { SelectionOutline.SetIntensity(I); }
+        void SetOutlineFill(f32 F)          { SelectionOutline.SetFillStrength(F); } 
+
+        FDebugDraw& GetDebugDraw() { return DebugDraw; }
+        bool WorldToScreen(const Vec3& World, f32& OutX, f32& OutY) const;
+        bool ScreenToRay(u32 X, u32 Y, Vec3& OutOrigin, Vec3& OutDir) const;
+        Vec3 GetOutlineColor() const        { return const_cast<FSelectionOutline&>(SelectionOutline).GetColor(); }
+        f32  GetOutlineThickness() const    { return const_cast<FSelectionOutline&>(SelectionOutline).GetThickness(); }
+
         bool LoadHDREnvironment(const std::wstring& Path);
         void SetIBLIntensity(f32 Intensity)  { IBLIntensity = Intensity; }
         void SetIBLRotation(f32 Radians)     { IBLRotation  = Radians; }
@@ -109,8 +133,6 @@ namespace Smile {
         f32  GetIBLRotation()  const         { return IBLRotation; }
         bool GetShowSkybox()   const         { return ShowSkybox; }
 
-        // Directional sun (unified light: drives PBR scene + atmosphere + clouds).
-        // Direction is the world-space direction TOWARD the sun (will be normalized).
         void SetSunDirection(const Vec3& Dir);
         void SetSunColor(const Vec3& Color)  { SunColorRGB = Color; }
         void SetSunIntensity(f32 Intensity)  { SunIntensity = Intensity; }
@@ -118,35 +140,55 @@ namespace Smile {
         Vec3 GetSunColor()     const         { return SunColorRGB; }
         f32  GetSunIntensity() const         { return SunIntensity; }
 
-        // Post-processing controls
+        FTimeOfDay&       GetTimeOfDay()       { return TimeOfDay; }
+        const FTimeOfDay& GetTimeOfDay() const { return TimeOfDay; }
+
+        void LoadMoonTexture(const std::wstring& Path);
+
         void SetBloomIntensity(f32 V)        { PostProcessor.SetBloomIntensity(V); }
         f32  GetBloomIntensity() const       { return PostProcessor.GetBloomIntensity(); }
         void SetExposure(f32 V)              { PostProcessor.SetExposure(V); }
         f32  GetExposure() const             { return PostProcessor.GetExposure(); }
 
-        // Scene depth exposed as an SRV (R32_FLOAT) for the atmosphere/cloud passes.
+        void SetUseTAA(bool V)               { UseTAA = V; TAARanLastFrame = false; }
+        bool GetUseTAA() const               { return UseTAA; }
+        void SetTAABlend(f32 V)              { TAAHistoryBlend = V; }
+        f32  GetTAABlend() const             { return TAAHistoryBlend; }
+        void SetTAAVarianceGamma(f32 V)      { TAAVarianceGamma = V; }
+        f32  GetTAAVarianceGamma() const     { return TAAVarianceGamma; }
+        void SetTAASharpness(f32 V)          { TAASharpness = V; }
+        f32  GetTAASharpness() const         { return TAASharpness; }
+        void SetTAAMotionBlend(f32 V)        { TAAMotionBlend = V; }
+        f32  GetTAAMotionBlend() const       { return TAAMotionBlend; }
+        void SetTAAAntiFlicker(f32 V)        { TAAAntiFlicker = V; }
+        f32  GetTAAAntiFlicker() const       { return TAAAntiFlicker; }
+        void SetTAADebug(u32 Mode)           { TAADebugMode = Mode; }
+        u32  GetTAADebug() const             { return TAADebugMode; }
+
+        void SetFlickerMode(u32 Mode)        { if (Mode > 0 && FlickerMode == 0) FlickerResetPending = true; FlickerMode = Mode; }
+        u32  GetFlickerMode() const          { return FlickerMode; }
+        void SetFlickerScale(f32 V)          { FlickerScale = V; }
+        f32  GetFlickerScale() const         { return FlickerScale; }
+        void SetFlickerAlpha(f32 V)          { FlickerAlpha = V; }
+        f32  GetFlickerAlpha() const         { return FlickerAlpha; }
+
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
-        // Atmosphere sky toggle (coexists with the HDR skybox). When on, the
-        // physical sky replaces the HDR cubemap background.
         void SetUseAtmosphereSky(bool Use)   { UseAtmosphereSky = Use; }
         bool GetUseAtmosphereSky() const     { return UseAtmosphereSky; }
         void SetUseClouds(bool Use)          { UseClouds = Use; }
         bool GetUseClouds() const            { return UseClouds; }
 
-        // Deferred atmospheric fog (UE5): aerial-perspective froxel + exponential
-        // height fog. Replaces the old ad-hoc water/horizon fog.
         void SetUseAerialPerspective(bool Use) { UseAerialPerspective = Use; }
         bool GetUseAerialPerspective() const   { return UseAerialPerspective; }
         void SetUseHeightFog(bool Use)         { UseHeightFog = Use; }
         bool GetUseHeightFog() const           { return UseHeightFog; }
         FFogPass& GetFog()                     { return Fog; }
 
-        // CSM (sombra do sol direcional). Toggle + acesso ao subsistema p/ tuning.
+
         void SetUseSunShadows(bool Use)        { UseSunShadows = Use; }
         bool GetUseSunShadows() const          { return UseSunShadows; }
         FSunShadows& GetSunShadows()           { return SunShadows; }
-        // Forwarders p/ o painel do editor (espelham os setters de FSunShadows).
         void SetSunShadowMaxDistance(f32 V)    { SunShadows.SetMaxDistance(V); }
         void SetSunShadowPenumbra(f32 V)       { SunShadows.SetPenumbra(V); }
         void SetSunShadowNormalOffset(f32 V)   { SunShadows.SetNormalOffset(V); }
@@ -160,36 +202,32 @@ namespace Smile {
         f32  GetSunShadowBlendBand() const     { return SunShadows.GetBlendBand(); }
         bool GetSunShadowDebug() const         { return SunShadows.GetDebugCascades(); }
 
-        // Ocean (port fiel da CryEngine). Toggle + acesso ao subsistema p/ setters do editor.
-        void SetUseWater(bool Use);          // loga "oceano ativado" na 1a ativacao (Renderer.cpp)
+        void SetUseWater(bool Use);          
         bool GetUseWater() const             { return UseWater; }
         FWaterRenderer& GetWater()           { return Water; }
 
-        // --- Sky & Clouds editor controls ---
-        // Sun placed by azimuth (around +Y) and elevation (from the horizon), deg.
         void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
         void SetSunDiskSize(f32 HalfAngleDeg) { Atmosphere.SetSunDiskHalfAngle(HalfAngleDeg); }
         void SetSunGlare(f32 Intensity)       { Atmosphere.SetSunGlare(Intensity); }
         f32  GetSunDiskSize() const           { return Atmosphere.GetSunDiskHalfAngle(); }
         f32  GetSunGlare() const              { return Atmosphere.GetSunGlare(); }
 
-        void SetCloudCoverage(f32 V)          { CloudVolumetrics.SetCoverage(V); }
-        void SetCloudDensity(f32 V)           { CloudVolumetrics.SetDensityScale(V); }
-        void SetCloudAltitude(f32 BottomKm, f32 ThicknessKm) { CloudVolumetrics.SetAltitude(BottomKm, ThicknessKm); }
-        void SetCloudWind(f32 V)              { CloudVolumetrics.SetWindSpeed(V); }
-        void SetCloudPhaseG(f32 V)            { CloudVolumetrics.SetPhaseG(V); }
-        void SetCloudPowder(f32 V)            { CloudVolumetrics.SetPowder(V); }
-        void SetCloudErosion(f32 V)           { CloudVolumetrics.SetErosion(V); }
-        f32  GetCloudCoverage() const         { return CloudVolumetrics.GetCoverage(); }
-        f32  GetCloudDensity() const          { return CloudVolumetrics.GetDensityScale(); }
-        f32  GetCloudWind() const             { return CloudVolumetrics.GetWindSpeed(); }
-        f32  GetCloudPhaseG() const           { return CloudVolumetrics.GetPhaseG(); }
-        f32  GetCloudPowder() const           { return CloudVolumetrics.GetPowder(); }
-        f32  GetCloudErosion() const          { return CloudVolumetrics.GetErosion(); }
-        f32  GetCloudBottomAltitude() const   { return CloudVolumetrics.GetBottomAltitude(); }
-        f32  GetCloudThickness() const        { return CloudVolumetrics.GetThickness(); }
+        void SetCloudCoverage(f32 V)          { VolumetricClouds.SetCoverage(V); }
+        void SetCloudDensity(f32 V)           { VolumetricClouds.SetDensityScale(V); }
+        void SetCloudAltitude(f32 BottomKm, f32 ThicknessKm) { VolumetricClouds.SetAltitude(BottomKm, ThicknessKm); }
+        void SetCloudWind(f32 V)              { VolumetricClouds.SetWindSpeed(V); }
+        void SetCloudPhaseG(f32 V)            { VolumetricClouds.SetPhaseG(V); }
+        void SetCloudPowder(f32 V)            { VolumetricClouds.SetPowder(V); }
+        void SetCloudErosion(f32 V)           { VolumetricClouds.SetErosion(V); }
+        f32  GetCloudCoverage() const         { return VolumetricClouds.GetCoverage(); }
+        f32  GetCloudDensity() const          { return VolumetricClouds.GetDensityScale(); }
+        f32  GetCloudWind() const             { return VolumetricClouds.GetWindSpeed(); }
+        f32  GetCloudPhaseG() const           { return VolumetricClouds.GetPhaseG(); }
+        f32  GetCloudPowder() const           { return VolumetricClouds.GetPowder(); }
+        f32  GetCloudErosion() const          { return VolumetricClouds.GetErosion(); }
+        f32  GetCloudBottomAltitude() const   { return VolumetricClouds.GetBottomAltitude(); }
+        f32  GetCloudThickness() const        { return VolumetricClouds.GetThickness(); }
 
-        // Atmosphere-derived hemispheric ambient for the PBR scene (A4).
         void SetUseAtmosphereAmbient(bool Use)      { UseAtmosphereAmbient = Use; }
         bool GetUseAtmosphereAmbient() const        { return UseAtmosphereAmbient; }
         void SetAtmosphereAmbientIntensity(f32 I)   { AtmoAmbientIntensity = I; }
@@ -204,13 +242,84 @@ namespace Smile {
         FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
         FTextureSRVHeap&    GetSRVHeap()       { return SRVHeap; }
 
+        FRaytracingScene&   GetRaytracingScene() { return RaytracingScene; }
+
+        void SetUseGI(bool Use)        { UseGI = Use; }
+        bool GetUseGI() const          { return UseGI; }
+        void SetGIIntensity(f32 V)     { DDGI.SetIntensity(V); }
+        f32  GetGIIntensity() const    { return const_cast<FDDGI&>(DDGI).GetIntensity(); }
+        void SetGIDebug(bool On)       { GIDebug = On; }   
+        bool GetGIDebug() const        { return GIDebug; }
+        void SetGIChebyshev(bool On)   { GIChebyshev = On; } 
+        bool GetGIChebyshev() const    { return GIChebyshev; }
+        void SetGISkipInactiveProbes(bool On) { GISkipInactiveProbes = On; }
+        bool GetGISkipInactiveProbes() const  { return GISkipInactiveProbes; }
+        void SetGISkipInactiveFallback(bool On) { GISkipInactiveFallback = On; } 
+        bool GetGISkipInactiveFallback() const  { return GISkipInactiveFallback; }
+        void SetGIDeactivationThreshold(f32 V) { DDGI.SetDeactivationThreshold(V); }
+        f32  GetGIDeactivationThreshold() const { return const_cast<FDDGI&>(DDGI).GetDeactivationThreshold(); }
+        void SetGIAdaptiveRays(bool On) { DDGI.SetAdaptiveRays(On); }
+        bool GetGIAdaptiveRays() const  { return const_cast<FDDGI&>(DDGI).GetAdaptiveRays(); }
+        void SetGIMaxRays(int V) { DDGI.SetMaxRays(V); } 
+        int  GetGIMaxRays() const { return const_cast<FDDGI&>(DDGI).GetMaxRays(); }
+        void SetGIMinRays(int V) { DDGI.SetMinRays(V); }
+        int  GetGIMinRays() const { return const_cast<FDDGI&>(DDGI).GetMinRays(); }
+        void SetGIRealHitShading(bool On) { DDGI.SetRealHitShading(On); } 
+        bool GetGIRealHitShading() const  { return const_cast<FDDGI&>(DDGI).GetRealHitShading(); }
+        void SetGIRelocation(bool On)  { DDGI.SetRelocation(On); } 
+        bool GetGIRelocation() const   { return const_cast<FDDGI&>(DDGI).GetRelocation(); }
+        void SetGIHysteresis(f32 V)    { DDGI.SetHysteresis(V); } 
+        f32  GetGIHysteresis() const   { return const_cast<FDDGI&>(DDGI).GetHysteresis(); }
+        FDDGI& GetDDGI()               { return DDGI; }
+
+        void SetGIDebugProbes(bool On) { DDGIDebugPass.SetEnabled(On); }
+        bool GetGIDebugProbes() const  { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetEnabled(); }
+        void SetGIDebugMode(u32 M)     { DDGIDebugPass.SetMode(static_cast<FDDGIDebug::EMode>(M)); }
+        u32  GetGIDebugMode() const    { return static_cast<u32>(const_cast<FDDGIDebug&>(DDGIDebugPass).GetMode()); }
+        void SetGIDebugProbeSize(f32 V){ DDGIDebugPass.SetProbeRadius(V); }
+        f32  GetGIDebugProbeSize() const { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetProbeRadius(); }
+        void SetGIDebugShowVolume(bool On) { DDGIDebugPass.SetShowVolume(On); }
+        bool GetGIDebugShowVolume() const  { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetShowVolume(); }
+        void SetGIDebugShowRays(bool On)   { DDGIDebugPass.SetShowRays(On); }
+        bool GetGIDebugShowRays() const    { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetShowRays(); }
+        void SetGIDebugRayRadius(f32 V)    { DDGIDebugPass.SetRayRadius(V); }
+        f32  GetGIDebugRayRadius() const   { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetRayRadius(); }
+
+        void SetUseReflections(bool V)     { UseReflections = V; }
+        bool GetUseReflections() const     { return UseReflections; }
+        void SetReflectionMaxRoughness(f32 V)  { Reflections.SetMaxRoughness(V); }
+        f32  GetReflectionMaxRoughness() const { return const_cast<FReflections&>(Reflections).GetMaxRoughness(); }
+        void SetReflectionRoughnessFade(f32 V) { Reflections.SetRoughnessFade(V); }
+        f32  GetReflectionRoughnessFade() const{ return const_cast<FReflections&>(Reflections).GetRoughnessFade(); }
+        void SetReflectionTemporal(bool V) { Reflections.SetTemporal(V); }   // acumulacao temporal (F3)
+        bool GetReflectionTemporal() const { return const_cast<FReflections&>(Reflections).GetTemporal(); }
+        FReflections& GetReflections()     { return Reflections; }
+
+        void SetUseAO(bool Use)        { UseAO = Use; }
+        bool GetUseAO() const          { return UseAO; }
+        void SetAODebug(bool On)       { AODebug = On; }   
+        bool GetAODebug() const        { return AODebug; }
+        void SetAORadius(f32 V)        { AO.SetRadius(V); }
+        f32  GetAORadius() const       { return const_cast<FAmbientOcclusion&>(AO).GetRadius(); }
+        void SetAOIntensity(f32 V)     { AO.SetIntensity(V); }
+        f32  GetAOIntensity() const    { return const_cast<FAmbientOcclusion&>(AO).GetIntensity(); }
+        void SetAOPower(f32 V)         { AO.SetPower(V); }
+        f32  GetAOPower() const        { return const_cast<FAmbientOcclusion&>(AO).GetPower(); }
+        void SetAOFadeStart(f32 V)     { AO.SetFadeStart(V); }
+        f32  GetAOFadeStart() const    { return const_cast<FAmbientOcclusion&>(AO).GetFadeStart(); }
+        void SetAOFadeEnd(f32 V)       { AO.SetFadeEnd(V); }
+        f32  GetAOFadeEnd() const      { return const_cast<FAmbientOcclusion&>(AO).GetFadeEnd(); }
+        FAmbientOcclusion& GetAO()     { return AO; }
+
     private:
         void BuildDefaultScene();
+        void BuildRaytracingScene();
+        void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
         void CreateDepthBuffer();
         void CreateConstantBuffer();
         void CreateMSAABuffers();
         void CreateHDRBuffers();
-        void CreateSceneCopies(); // scene-color + scene-depth p/ refracao da agua (Etapa 3)
+        void CreateSceneCopies(); 
         void CreateDefaultMaterial();
         void CreateIBLDescriptorTable();
 
@@ -230,43 +339,41 @@ namespace Smile {
         FMaterial  DefaultMaterial;
         FMaterial* ActiveMaterial = nullptr;
 
-        // Cena multi-objeto (biblioteca de meshes + renderaveis).
         FScene Scene;
 
         ComPtr<ID3D12Resource>   DepthBuffer;
         FDescriptorHeap          DSVHeap;
-        // Depth-as-SRV (R32_FLOAT view over the R32_TYPELESS depth resource).
-        // Allocated once; re-pointed at the resource whenever depth is recreated.
+
         static constexpr u32     kInvalidSlot = 0xFFFFFFFFu;
         u32                      DepthSRVSlot = kInvalidSlot;
 
-        // CBs por-frame, double-buffered (kFramesInFlight copias contiguas). Indexados
-        // pelo CommandQueue.FrameIndex() para nao sobrescrever dados que a GPU ainda le
-        // quando os frames in flight estiverem ligados.
-        ComPtr<ID3D12Resource>   ConstantBuffer;   // N * FrameConstants (b0)
+        ComPtr<ID3D12Resource>   NormalBuffer;
+        FDescriptorHeap          NormalRTVHeap;
+        u32                      NormalSRVSlot = kInvalidSlot;
+        D3D12_RESOURCE_STATES    NormalBufferState = D3D12_RESOURCE_STATE_COMMON;
+        void CreateNormalBuffer();
+
+        ComPtr<ID3D12Resource>   ReflectionGBuffer;
+        FDescriptorHeap          ReflectionGBufferRTVHeap;
+        u32                      ReflectionGBufferSRVSlot = kInvalidSlot;
+        D3D12_RESOURCE_STATES    ReflectionGBufferState = D3D12_RESOURCE_STATE_COMMON;
+
+        void CreateReflectionGBuffer();
+        void SetupReflectionsForScene();
+
+        ComPtr<ID3D12Resource>   ConstantBuffer;   
         u8*                      MappedFrameBase = nullptr;
 
-        // Buffer por-objeto: N * kMaxObjects slots de ObjectConstants (256B cada) num
-        // upload heap mapeado. Cada renderavel ocupa um slot dentro da regiao do frame;
-        // bind via CBV offset por draw.
-        // Capacidade de objetos por frame. Runtime (nao mais constexpr) p/ crescer com a
-        // cena importada — o loader chama RecreateObjectCB com a contagem necessaria.
         u32                      MaxObjects = 1024;
-        ComPtr<ID3D12Resource>   ObjectCB;          // N * MaxObjects * ObjectConstants (b2)
+        ComPtr<ID3D12Resource>   ObjectCB;          
         u8*                      MappedObjectCB = nullptr;
-        // (Re)cria o ObjectCB dimensionado p/ MaxObjects. Faz Flush da GPU antes (seguro
-        // chamar fora do frame). Definido em SceneLoader.cpp.
+     
         void RecreateObjectCB();
 
-        // Dono das texturas/materiais da cena importada (enderecos estaveis: os
-        // FRenderable apontam p/ os FMaterial daqui). Liberados ao recarregar.
         std::vector<std::unique_ptr<FTexture>>  ImportedTextures;
         std::vector<std::unique_ptr<FMaterial>> ImportedMaterials;
 
-        // Otimizacoes de cena (Fase 4).
         bool UseFrustumCulling = true;
-        // Default OFF: medido na Bistro, o pre-pass custou ~0,2ms a MAIS (cena draw/vertice-
-        // bound, nao shading-bound). Vale quando o shading de pixel for o gargalo.
         bool UseDepthPrepass   = false;
         bool MergeByMaterial   = false;
         u32  LastVisibleCount  = 0;
@@ -275,59 +382,93 @@ namespace Smile {
         FDescriptorHeap          MSAARTVHeap;
         u32                      MSAASampleCount = 1;
 
-        // HDR targets & post processing
         ComPtr<ID3D12Resource>   HDRColorBuffer;
         ComPtr<ID3D12Resource>   HDRMSAAColorBuffer;
         FDescriptorHeap          HDRRTVHeap;
         u32                      HDRSRVSlot = kInvalidSlot;
         FPostProcessor           PostProcessor;
 
-        // IBL: HDR environment chain + skybox renderer.
+        FObjectPicker            ObjectPicker;
+        FSelectionOutline        SelectionOutline;
+        int                      SelectedIndex = -1;
+
+        FDebugDraw               DebugDraw;
+        Mat44                    LastViewProj{}; 
+
+        FTemporalAA              TemporalAA;
+        bool                     UseTAA           = true;
+        f32                      TAAHistoryBlend  = 0.9f;
+        f32                      TAAVarianceGamma = 1.25f; 
+        f32                      TAASharpness     = 0.2f;  
+        f32                      TAAMotionBlend   = 0.7f;
+        f32                      TAAAntiFlicker   = 0.6f;  
+        u32                      TAADebugMode     = 0;  
+        Mat44                    PrevViewProj{};        
+        bool                     TAARanLastFrame = false; 
+
+        FFlickerHeatmap          Flicker;
+        u32                      FlickerMode         = 0;      
+        f32                      FlickerScale        = 0.30f;  
+        f32                      FlickerAlpha        = 0.08f;  
+        bool                     FlickerResetPending = false;  
+
         FHDREnvironment HDREnv;
         FSkybox         Skybox;
-        // Physical atmosphere (Hillaire): LUTs + sky-view + sky render.
         FAtmosphere     Atmosphere;
-        bool            UseAtmosphereSky = true; // default outdoor sky
-        // Deferred atmospheric fog (aerial perspective froxel + height fog).
+        bool            UseAtmosphereSky = true;
+
         FFogPass        Fog;
-        bool            UseAerialPerspective = false; // off por padrao (cena Bistro nao usa)
-        bool            UseHeightFog         = false; // off por padrao
-        // CSM (sombra do sol): 4 cascatas ortográficas. On por padrão (a cena Bistro precisa).
+        bool            UseAerialPerspective = false; 
+        bool            UseHeightFog         = false; 
+
         FSunShadows     SunShadows;
         bool            UseSunShadows = true;
-        // Scene world-unit -> atmosphere km scale (1 world unit = 1 m).
+ 
+        FRaytracingScene RaytracingScene;
+        FDDGI            DDGI;
+        FDDGIDebug       DDGIDebugPass; 
+        bool             UseGI       = true;
+        bool             GIDebug     = false; 
+        bool             GIChebyshev = true;  
+        bool             GISkipInactiveProbes = true; 
+        bool             GISkipInactiveFallback = false; 
+
+        FReflections     Reflections;
+        bool             UseReflections = true;
+
+        FAmbientOcclusion AO;
+        bool              UseAO   = true;
+        bool              AODebug = false; 
         static constexpr f32 kKmPerWorldUnit = 0.001f;
-        // Volumetric clouds: 3D noise volumes (B1) + raymarch/composite (B2).
+
         FCloudNoise       CloudNoise;
-        FVolumetricClouds CloudVolumetrics;
+        FVolumetricClouds VolumetricClouds;
         bool              UseClouds = true;
-        // Ocean: simulacao FFT (CPU, port do CWaterSim) + superficie (projected grid).
+
         FOceanFFT         Ocean;
         FWaterRenderer    Water;
-        bool              UseWater  = false; // desligada p/ economizar FPS enquanto o foco e a cena Bistro
-        // Copias da cena (pre-agua) p/ refracao/fog da agua (Etapa 3). Tabela SRV contigua
-        // [color(t2), depth(t3)]. So no caminho sem MSAA (depth MSAA nao copia single-sample).
+        bool              UseWater  = false; 
+
         ComPtr<ID3D12Resource> SceneColorCopy;
         ComPtr<ID3D12Resource> SceneDepthCopy;
         u32                    SceneCopyTableStart = kInvalidSlot;
         D3D12_RESOURCE_STATES  SceneColorCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
         D3D12_RESOURCE_STATES  SceneDepthCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
+
         bool            ShowSkybox    = true;
         f32             IBLIntensity  = 1.0f;
-        f32             IBLRotation   = 0.0f; // radians, Y axis
-        // Contiguous IBL descriptor table slot (irradiance, prefiltered, BRDF LUT).
+        f32             IBLRotation   = 0.0f; 
         u32             IBLTableStart = 0;
 
-        // Directional sun (default: late-morning sun, warm white).
-        Vec3 SunDir       = { 0.3f, 0.6f, 0.5f }; // direction TO sun (normalized in setter/use)
+        Vec3 SunDir       = { 0.3f, 0.6f, 0.5f }; 
         Vec3 SunColorRGB  = { 1.0f, 0.96f, 0.9f };
         f32  SunIntensity = 2.5f;
 
-        // Atmosphere-derived ambient (A4). On by default so the scene matches the sky.
+        FTimeOfDay TimeOfDay;
+
         bool UseAtmosphereAmbient  = true;
         f32  AtmoAmbientIntensity  = 1.0f;
 
-        // Per-frame time, fed from UpdateCamera's delta.
         f32  ElapsedTime   = 0.0f;
         f32  LastDeltaTime = 0.0f;
         u32  FrameIndex    = 0;

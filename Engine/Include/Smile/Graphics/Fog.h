@@ -7,12 +7,6 @@
 #include <wrl/client.h>
 
 namespace Smile {
-    // Deferred atmospheric fog pass (UE5-faithful): exponential height fog (two
-    // layers + directional inscattering + start/cutoff distance) composited with
-    // the aerial-perspective froxel from FAtmosphere. Runs as a fullscreen
-    // "over" blend (One / SrcAlpha) on the linear HDR scene color, after the
-    // clouds and before the bloom + tonemap post pass. Reads scene depth as an
-    // SRV (Texture2D non-MSAA, Texture2DMS sample-0 under MSAA — two PS variants).
     struct alignas(256) FogConstants {
         Vec4  ExponentialFogParameters;     // x=collapsed density1, y=falloff1, z=maxObserverHeight, w=startDistance
         Vec4  ExponentialFogParameters2;    // x=collapsed density2, y=falloff2, z=density2, w=fogHeight2
@@ -29,27 +23,17 @@ namespace Smile {
 
     class FFogPass {
     public:
-        // Builds the root signature, both PS permutations (non-MSAA / MSAA depth),
-        // the constant buffer, and allocates nothing in the SRV heap (the depth and
-        // aerial-volume SRVs are bound directly by slot each frame). RTFormat is the
-        // HDR scene color format.
         void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat);
 
-        // Per-frame constants. Collapsed fog densities are derived here from the
-        // camera height. AerialDepthKm comes from FAtmosphere.
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
                             const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
                             const Vec3& DirToSun, f32 NearZ, f32 FarZ,
                             u32 Width, u32 Height, bool UseAerial, bool UseHeightFog,
                             f32 AerialDepthKm);
 
-        // Records the fullscreen fog draw. The caller has bound the HDR scene color
-        // as a single render target (no DSV), set viewport/scissor and descriptor
-        // heaps, and transitioned scene depth to a shader-readable state.
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      u32 DepthSRVSlot, u32 AerialVolumeSRVSlot, bool IsMSAA);
 
-        // Artist-facing setters (CB-only; applied on the next UpdatePerFrame).
         void SetDensity(f32 V)        { Density = V; }
         void SetHeightFalloff(f32 V)  { HeightFalloff = V; }
         void SetFogHeight(f32 V)      { FogHeight = V; }
@@ -76,14 +60,13 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;     // non-MSAA depth
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO_MS;  // MSAA depth (Texture2DMS)
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;     
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO_MS;  
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer; // N * FogConstants
+        Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
         u8*  MappedBase = nullptr;
         u32  FrameSlot  = 0;
 
-        // Artist parameters (engine/world units; up axis = +Y).
         f32  Density        = 0.0002f;
         f32  HeightFalloff  = 0.0005f;
         f32  FogHeight      = 0.0f;
@@ -91,11 +74,11 @@ namespace Smile {
         f32  MaxOpacity     = 0.85f;
         f32  StartDistance  = 0.0f;
         f32  CutoffDistance = 0.0f;
-        // Second layer (off by default).
+
         f32  Density2       = 0.0f;
         f32  HeightFalloff2 = 0.0005f;
         f32  FogHeight2     = 0.0f;
-        // Directional inscattering (subtle warm glow toward the sun).
+
         Vec3 DirColor          = { 0.7f, 0.5f, 0.35f };
         f32  DirExponent       = 4.0f;
         f32  DirStartDistance  = 0.0f;

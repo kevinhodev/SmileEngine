@@ -8,9 +8,36 @@ smile_compile_shader(Triangle.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
+# Depth pre-pass com saida de normal geometrica (G-buffer leve p/ o GTAO)
+smile_compile_shader(DepthNormal.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+
 # Cascaded Shadow Maps (sol direcional) — depth pass das cascatas
 smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+
+# GI (DDGI) — trace via DXR 1.1 inline ray tracing (RayQuery, SM 6.5) + update dos probes
+smile_compile_shader(GI/DDGITrace.cs.hlsl      cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIUpdate.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIUpdateDist.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIRelocate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+# Debug do DDGI (passe grafico separado): esferas de probe + wireframe do volume + stats
+smile_compile_shader(GI/DDGIDebugProbes.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIDebugProbes.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIDebugVolume.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIDebugVolume.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIDebugRays.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIDebugRays.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIDebugStats.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+
+# Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
+smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl     cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionResolve.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionTemporal.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+
+# AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
+smile_compile_shader(AO/GTAO.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(AO/GTAOBlur.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 smile_compile_shader(IBL/EquirectToCube.cs.hlsl        cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(IBL/MipGen.cs.hlsl                cs_6_0 main SHADER_OUTPUTS)
@@ -58,17 +85,55 @@ smile_compile_shader(Tonemap/BloomDownsample.ps.hlsl      ps_6_0 main SHADER_OUT
 smile_compile_shader(Tonemap/BloomUpsample.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Tonemap/FinalTonemap.ps.hlsl         ps_6_0 main SHADER_OUTPUTS)
 
+# TAA — resolve temporal (reprojecao so-camera + Karis tonemap-weighted blend)
+smile_compile_shader(Tonemap/TAAResolve.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
+# Debug — heatmap de flicker temporal (variancia por pixel)
+smile_compile_shader(Tonemap/FlickerHeatmap.ps.hlsl       ps_6_0 main SHADER_OUTPUTS)
+
+# Selecao no editor — picking (GPU ID-buffer, estilo hit-proxy) + outline (mascara + edge-detect)
+smile_compile_shader(Selection/SelectionGeom.vs.hlsl      vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Selection/ObjectID.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Selection/SelectionMask.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Selection/SelectionOutline.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
+
+# DebugDraw: servico de desenho 3D imediato p/ tooling do editor (gizmo etc.)
+smile_compile_shader(Gizmo/DebugDraw.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/DebugDraw.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
+
 
 add_custom_target(Shaders
     DEPENDS ${SHADER_OUTPUTS}
     SOURCES
+        Common/DepthConfig.hlsli
         Triangle.vs.hlsl
         Triangle.ps.hlsl
+        DepthNormal.ps.hlsl
         Skybox.vs.hlsl
         Skybox.ps.hlsl
         Shadow/CSMCommon.hlsli
         Shadow/ShadowDepth.vs.hlsl
         Shadow/ShadowDepth.ps.hlsl
+        GI/DDGICommon.hlsli
+        GI/HitShading.hlsli
+        GI/DDGITrace.cs.hlsl
+        GI/DDGIUpdate.cs.hlsl
+        GI/DDGIUpdateDist.cs.hlsl
+        GI/DDGIRelocate.cs.hlsl
+        GI/DDGIDebugProbes.vs.hlsl
+        GI/DDGIDebugProbes.ps.hlsl
+        GI/DDGIDebugVolume.vs.hlsl
+        GI/DDGIDebugVolume.ps.hlsl
+        GI/DDGIDebugRays.vs.hlsl
+        GI/DDGIDebugRays.ps.hlsl
+        GI/DDGIDebugStats.cs.hlsl
+        Reflections/GGXSample.hlsli
+        Reflections/ReflectionTrace.cs.hlsl
+        Reflections/ReflectionResolve.cs.hlsl
+        Reflections/ReflectionTemporal.cs.hlsl
+        Reflections/ReflectionComposite.ps.hlsl
+        AO/GTAOCommon.hlsli
+        AO/GTAO.cs.hlsl
+        AO/GTAOBlur.cs.hlsl
         IBL/Common.hlsli
         IBL/EquirectToCube.cs.hlsl
         IBL/MipGen.cs.hlsl
@@ -112,6 +177,14 @@ add_custom_target(Shaders
         Tonemap/BloomDownsample.ps.hlsl
         Tonemap/BloomUpsample.ps.hlsl
         Tonemap/FinalTonemap.ps.hlsl
+        Tonemap/TAAResolve.ps.hlsl
+        Tonemap/FlickerHeatmap.ps.hlsl
+        Selection/SelectionGeom.vs.hlsl
+        Selection/ObjectID.ps.hlsl
+        Selection/SelectionMask.ps.hlsl
+        Selection/SelectionOutline.ps.hlsl
+        Gizmo/DebugDraw.vs.hlsl
+        Gizmo/DebugDraw.ps.hlsl
 )
 
 # Mantem a pasta Shaders visivel no Visual Studio com seus .hlsl

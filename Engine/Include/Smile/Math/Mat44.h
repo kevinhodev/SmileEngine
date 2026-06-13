@@ -55,7 +55,6 @@ namespace Smile {
             return m;
         }
 
-        // Projeção perspectiva LH com FOV vertical em radianos
         static TMat44 PerspectiveFovLH(T fovY, T aspect, T nearZ, T farZ) {
             T h = T(1) / std::tan(fovY * T(0.5));
             T w = h / aspect;
@@ -70,8 +69,20 @@ namespace Smile {
             return m;
         }
 
-        // Projeção ortográfica LH (D3D z em [0,1]), convenção vetor-linha (out = in * M).
-        // w/h = largura/altura do volume de visão; nearZ/farZ podem ser negativos.
+        static TMat44 PerspectiveFovReverseZLH(T fovY, T aspect, T nearZ, T farZ) {
+            T h = T(1) / std::tan(fovY * T(0.5));
+            T w = h / aspect;
+            T q = nearZ / (nearZ - farZ);
+
+            TMat44 m{};
+            m.M[0][0] = w;
+            m.M[1][1] = h;
+            m.M[2][2] = q;
+            m.M[2][3] = T(1);
+            m.M[3][2] = -farZ * q;
+            return m;
+        }
+
         static TMat44 OrthographicLH(T w, T h, T nearZ, T farZ) {
             T q = T(1) / (farZ - nearZ);
             TMat44 m{};
@@ -84,9 +95,9 @@ namespace Smile {
         }
 
         static TMat44 LookAtLH(const TVec3<T>& eye, const TVec3<T>& target, const TVec3<T>& up) {
-            TVec3<T> f = (target - eye).Normalized();   // forward
-            TVec3<T> r = up.Cross(f).Normalized();       // right = cross(up, forward)
-            TVec3<T> u = f.Cross(r);                     // corrected up = cross(forward, right)
+            TVec3<T> f = (target - eye).Normalized();   
+            TVec3<T> r = up.Cross(f).Normalized();       
+            TVec3<T> u = f.Cross(r);                     
 
             TMat44 m = Identity();
             m.M[0][0] = r.X;  m.M[0][1] = u.X;  m.M[0][2] = f.X;
@@ -124,7 +135,6 @@ namespace Smile {
             return t;
         }
 
-        // Generic 4x4 inverse via cofactor expansion. Returns identity on singular.
         TMat44 Inverse() const {
             const T* m = &M[0][0];
             T inv[16];

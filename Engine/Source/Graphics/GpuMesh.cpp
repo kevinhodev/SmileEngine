@@ -4,7 +4,6 @@
 
 namespace Smile {
     namespace {
-        // Cria um buffer em upload heap e copia os bytes de _Src para ele.
         Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(
             ID3D12Device* _Device, const void* _Src, UINT _Size) {
             D3D12_HEAP_PROPERTIES HeapProps{};
@@ -67,9 +66,6 @@ namespace Smile {
             ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
             ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
             Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
-            // Buffers no D3D12 sao sempre criados em COMMON (initial state e ignorado p/
-            // buffers, gera warning se != COMMON). O CopyBufferRegion promove COMMON->COPY_DEST
-            // implicitamente; a barrier pos-copia (COPY_DEST->VB/IB) e valida na sequencia.
             SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
                      &ResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
                      IID_PPV_ARGS(&Buffer)));
@@ -83,7 +79,8 @@ namespace Smile {
                                        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& _StagingOut) {
         const UINT VertexBufferSize = static_cast<UINT>(_Mesh.Vertices.size() * sizeof(Vertex));
         const UINT IndexBufferSize  = static_cast<UINT>(_Mesh.Indices.size()  * sizeof(u32));
-        IndexCount = static_cast<u32>(_Mesh.Indices.size());
+        IndexCount  = static_cast<u32>(_Mesh.Indices.size());
+        DefaultHeap = true; 
         if (VertexBufferSize == 0 || IndexBufferSize == 0) { IndexCount = 0; return; }
 
         VertexBuffer = CreateDefaultBuffer(_Device, VertexBufferSize);

@@ -1,7 +1,5 @@
-// PBR Pixel Shader — Cook-Torrance BRDF with full PBR texture support.
-// Texture slots (t0-t7) must match Material.h kMaterialTextureSlots order.
-
 #include "Shadow/CSMCommon.hlsli" // CSM do sol: CSMCB (b3), SunShadowMap (t11), ShadowCmp (s2)
+#include "GI/DDGICommon.hlsli"     // DDGI: SampleDDGIIrradiance (GI difusa indireta, atlas t12)
 
 // --- Constant Buffers ---
 
@@ -13,6 +11,20 @@ cbuffer FrameCB : register(b0) {
     float4 SunColor;       // rgb = color, w = unused
     float4 SkyAmbientColor;    // rgb = sky (zenith) ambient, w = enabled (0/1)
     float4 GroundAmbientColor; // rgb = ground (nadir) ambient, w = intensity
+    float4 DDGIGridMin;        // xyz = origem do grid (mundo), w = espacamento
+    float4 DDGIGridCount;      // xyz = nº de probes por eixo, w = enabled (0=off,1=on,2=debug)
+    float4 DDGIParams;         // x = intensity, y = tileSize, z = atlasW, w = atlasH
+    float4 DDGIDistParams;     // x = distTile, y = distAtlasW, z = distAtlasH, w = chebyshev (0/1)
+    // Specular GI (reflexoes RT): quando ligado, o forward exporta o G-buffer (SV_Target1) e
+    // reduz o specular ambiente por (1-combineAlpha) (o RT o substitui via composite).
+    float4 ReflectionParams;   // x = maxRoughnessToTrace, y = roughnessFadeLength, z = enabled (0/1), w = -
+    float4 MoonDirection;      // xyz = direction TO moon (normalized), w = moonlight intensity (0 = off)
+    float4 MoonColor;          // rgb = cor do luar (fria, tingida pela transmitancia), w = -
+};
+
+struct PSOutput {
+    float4 color   : SV_Target0;
+    float4 gbuffer : SV_Target1;
 };
 
 cbuffer MaterialCB : register(b1) {
@@ -51,7 +63,15 @@ cbuffer MaterialCB : register(b1) {
     uint   AlphaTest;          // 1 = clip by BaseColor opacity (foliage/awnings)
     float  AlphaCutoff;
     uint   NormalReconstructZ; // 1 = BC5 normal map (RG only) → reconstruct Z; Toksvig forced to 1
+
+    // Shading model: 0 = DefaultLit, 1 = Foliage (transmissao two-sided estilo Unreal).
+    uint   ShadingModel;
+    // Transmissao da folha: rgb = tint (1,1,1 => usa o albedo), a = forca (0 = off).
+    float4 SubsurfaceColor;
 };
+
+#define SHADINGMODEL_DEFAULTLIT 0u
+#define SHADINGMODEL_FOLIAGE    1u
 
 // --- Texture Slots ---
 
@@ -67,6 +87,11 @@ Texture2D RoughnessMap         : register(t7); // R = roughness  (separate from 
 TextureCube IrradianceMap      : register(t8);  // diffuse irradiance cube
 TextureCube PrefilteredMap     : register(t9);  // GGX prefiltered specular cube (mip = roughness * maxMip)
 Texture2D   BRDFLut            : register(t10); // Karis split-sum LUT (RG16F: F0 scale, F0 bias)
+// t11 = SunShadowMap (CSMCommon.hlsli)
+Texture2D<float4> DDGIIrradianceAtlas : register(t12); // DDGI: atlas octaedrico de irradiancia
+Texture2D<float4> DDGIDistanceAtlas   : register(t13); // DDGI: atlas de distancia (Chebyshev, Fase 2)
+Buffer<float4>    DDGIProbeData        : register(t15); // DDGI: xyz=offset relocacao, w=state (0/1)
+Texture2D<float>  SceneAO             : register(t14); // GTAO: oclusao de contato (screen-space)
 
 SamplerState MaterialSampler   : register(s0); // anisotropic wrap (materials)
 SamplerState IBLSampler        : register(s1); // trilinear clamp   (cube + LUT)
@@ -78,6 +103,10 @@ struct PSInput {
     float3 worldPos    : TEXCOORD0;
     float3 worldNormal : TEXCOORD1;
     float2 uv          : TEXCOORD2;
+    // Gerado pela rasterizacao: true na face da frente, false na de tras. So varia em
+    // geometria two-sided (folhagem/toldos do Bistro), onde a face de tras precisa ter a
+    // normal invertida — senao metade das folhas fica com NdotL negativo = preta/chapada.
+    bool   frontFace   : SV_IsFrontFace;
 };
 
 #define USE_KULLA_CONTY_ENERGY_CONSERVATION 1
@@ -166,24 +195,6 @@ float3 ApplyNormalMap(float3 N, float3 T, float3 B, float3 SampledNormal) {
     return normalize(mul(n, TBN));
 }
 
-
-// --- Parallax Occlusion Mapping ---------------------------------------------
-// Synthesis of the three engines studied:
-//   • Flax  — linear ray-march + single secant intersection, tangent space,
-//             SampleGrad for correct mips (MaterialGenerator.Textures.cpp:255).
-//   • Unreal— view-dependent step count and the soft self-shadow loop
-//             (ParallaxOcclusionMapping material function).
-//   • Cry   — quality scaling idea (HasHeightMap gate ≈ off/on tier) and the
-//             grazing-angle step ramp (shadeLib.txt:1136 / CommonZPasscfi:289).
-// Convention: height map R in [0,1], 1 = surface top, 0 = deepest. All vectors
-// in tangent space; Vts = surface→camera dir (Vts.z = N·V).
-//
-// 'fade' (0..1) scales displacement toward 0 at distance/grazing (see ParallaxFade)
-// so the height field melts into the plain normal map instead of swimming.
-
-// Mip-derived fade factor: 1 = full POM, 0 = flat. High mip (far away OR grazing,
-// where the UV derivatives stretch) fades out — the trick Unreal/Cry use to hide
-// the swimming/streaking artifacts at shallow angles and distance.
 float ParallaxFade(float2 dUVdx, float2 dUVdy) {
     float2 texSize;
     HeightMap.GetDimensions(texSize.x, texSize.y);
@@ -247,9 +258,6 @@ float2 ParallaxOcclusionMapping(float2 uv, float3 Vts, float2 dUVdx, float2 dUVd
     return uv + finalOffset;
 }
 
-// Soft self-shadow: march from the hit point toward the light and accumulate the
-// largest occluder penetration as a faked penumbra (adapted from Unreal's loop).
-// Returns 1 = fully lit, 0 = fully shadowed.
 float TraceParallaxSelfShadow(float2 uv, float surfaceHeight, float3 Lts,
                               float2 dUVdx, float2 dUVdy, float fade) {
     if (Lts.z <= 0.0f) return 0.0f;              // light below the local horizon
@@ -271,61 +279,74 @@ float TraceParallaxSelfShadow(float2 uv, float surfaceHeight, float3 Lts,
     return 1.0f - saturate(shadow);
 }
 
+float3 FoliageTransmission(float3 N, float3 V, float3 L, float3 Radiance, float3 TransColor) {
+    const float Wrap    = 0.5f;
+    float  WrapNoL = saturate((-dot(N, L) + Wrap) / ((1.0f + Wrap) * (1.0f + Wrap)));
+    float  VoL     = dot(V, L);
+    float  Scatter = D_GGX(0.6f * 0.6f, saturate(-VoL)); // pico ao olhar pro sol pela folha
+    return Radiance * (WrapNoL * Scatter) * TransColor;
+}
 
-// --- Cook-Torrance direct lighting for a single light -----------------------
-// Factored out so the unified directional sun and the secondary point light share
-// the exact same BRDF (incl. Kulla-Conty energy compensation). Radiance already
-// folds in light color/intensity/attenuation. Returns the lit contribution.
 float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
                    float3 DiffuseColor, float3 SpecularColor,
-                   float Metallic, float Roughness, float a2) {
+                   float Metallic, float Roughness, float a2, float3 TransColor) {
+    float3 Result = float3(0.0f, 0.0f, 0.0f);
+    
     float NoL = saturate(dot(N, L));
-    if (NoL <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
+    if (NoL > 0.0f) {
+        float3 H   = normalize(L + V);
+        float  NoV = saturate(dot(N, V));
+        float  NoH = saturate(dot(N, H));
+        float  VoH = saturate(dot(V, H));
 
-    float3 H   = normalize(L + V);
-    float  NoV = saturate(dot(N, V));
-    float  NoH = saturate(dot(N, H));
-    float  VoH = saturate(dot(V, H));
+        float D = D_GGX(a2, NoH);
+        #if USE_EXACT_SMITH
+            float Vis = Vis_SmithJointExact(a2, NoV, NoL);
+        #else
+            float Vis = Vis_SmithJointApprox(a2, NoV, NoL);
+        #endif
+        float3 F = F_Schlick(SpecularColor, VoH);
+        float3 Specular = (D * Vis) * F;
 
-    float D = D_GGX(a2, NoH);
-    #if USE_EXACT_SMITH
-        float Vis = Vis_SmithJointExact(a2, NoV, NoL);
-    #else
-        float Vis = Vis_SmithJointApprox(a2, NoV, NoL);
-    #endif
-    float3 F = F_Schlick(SpecularColor, VoH);
-    float3 Specular = (D * Vis) * F;
+        float3 Kd = 1.0f - Metallic;
 
-    float3 Kd = 1.0f - Metallic;
+        #if USE_KULLA_CONTY_ENERGY_CONSERVATION
+            // 1. Specular multiple-scattering energy compensation (Kulla-Conty)
+            float E_val, Ef_val;
+            GGXEnergyLookup(Roughness, NoV, E_val, Ef_val);
+            float3 W = 1.0f + SpecularColor * ((1.0f - E_val) / max(E_val, 1e-5f));
+            Specular *= W;
 
-    #if USE_KULLA_CONTY_ENERGY_CONSERVATION
-        // 1. Specular multiple-scattering energy compensation (Kulla-Conty)
-        float E_val, Ef_val;
-        GGXEnergyLookup(Roughness, NoV, E_val, Ef_val);
-        float3 W = 1.0f + SpecularColor * ((1.0f - E_val) / max(E_val, 1e-5f));
-        Specular *= W;
+            // 2. Diffuse-Specular energy preservation (split-sum)
+            float3 F90    = saturate(50.0f * SpecularColor.g);
+            float3 E_spec = W * (E_val * SpecularColor + Ef_val * (F90 - SpecularColor));
+            float  DiffuseScale = 1.0f - saturate(dot(E_spec, float3(0.2126f, 0.7152f, 0.0722f)));
+            Kd *= DiffuseScale;
+        #else
+            Kd *= (1.0f - F);
+        #endif
 
-        // 2. Diffuse-Specular energy preservation (split-sum)
-        float3 F90    = saturate(50.0f * SpecularColor.g);
-        float3 E_spec = W * (E_val * SpecularColor + Ef_val * (F90 - SpecularColor));
-        float  DiffuseScale = 1.0f - saturate(dot(E_spec, float3(0.2126f, 0.7152f, 0.0722f)));
-        Kd *= DiffuseScale;
-    #else
-        Kd *= (1.0f - F);
-    #endif
+        #if USE_BURLEY_DIFFUSE
+            float3 Diffuse = Kd * Diffuse_Burley(DiffuseColor, Roughness, NoV, NoL, VoH);
+        #else
+            float3 Diffuse = (Kd * DiffuseColor) / PI;
+        #endif
 
-    #if USE_BURLEY_DIFFUSE
-        float3 Diffuse = Kd * Diffuse_Burley(DiffuseColor, Roughness, NoV, NoL, VoH);
-    #else
-        float3 Diffuse = (Kd * DiffuseColor) / PI;
-    #endif
+        Result += (Diffuse + Specular) * Radiance * NoL;
+    }
 
-    return (Diffuse + Specular) * Radiance * NoL;
+    // --- Transmissao de folhagem (luz atravessando por trás) ---
+    if (any(TransColor > 0.0f))
+        Result += FoliageTransmission(N, V, L, Radiance, TransColor);
+
+    return Result;
 }
 
 
-float4 main(PSInput input) : SV_TARGET {
+PSOutput main(PSInput input) {
     float3 GeoN = normalize(input.worldNormal);
+
+    if (!input.frontFace) GeoN = -GeoN;
 
     // --- Tangent basis (built once, shared by POM + normal mapping) ---
     float3 dPdx  = ddx(input.worldPos);
@@ -388,21 +409,11 @@ float4 main(PSInput input) : SV_TARGET {
             Roughness *= MR.g;
         }
     }
-    // Separate maps (override/compose on top of the combined MR; factor must be 1.0
-    // to pass the texture through, same convention as the combined map above).
+
     if (HasMetalnessMap) Metallic  *= MetalnessMap.Sample(MaterialSampler, UV).r;
     if (HasRoughnessMap) Roughness *= RoughnessMap.Sample(MaterialSampler, UV).r;
-    Roughness = max(Roughness, 0.04f); // avoid mirror-perfect surfaces
+    Roughness = max(Roughness, 0.04f); 
 
-    // --- Specular Anti-Aliasing (Karis SAA + Toksvig combined in α² space) ---
-    // Both contributions accumulate as variances on α² (microfacet variance):
-    //   • Karis: per-pixel normal derivative captures screen-space normal change.
-    //     0.25 cap prevents over-darkening from high-frequency normal map noise.
-    //   • Toksvig: mip-level normal variance encoded as .a during normal map
-    //     mipgen. T=1 (mip 0) contributes 0; lower T (high mips, blended via
-    //     bilinear) contributes (1 - T²).
-    // Final α² = α²_base + kernel_karis + toksvig_var, clamped, then converted
-    // back to perceptual roughness via sqrt(sqrt(...)) for the rest of the PS.
     {
         float3 dNdx = ddx(N);
         float3 dNdy = ddy(N);
@@ -421,48 +432,63 @@ float4 main(PSInput input) : SV_TARGET {
     else if (HasAOMap)
         AO = lerp(1.0f, AOMap.Sample(MaterialSampler, UV).r, AOStrength);
 
-    // --- PBR material derivation ---
+    float ssao  = (AlphaTest != 0u) ? 1.0f : SceneAO.Load(int3((int2)input.pos.xy, 0));
+    float AOAll = AO * ssao;
+
+    if (Time.w > 0.5f) { PSOutput dbg; dbg.color = float4(ssao, ssao, ssao, 1.0f); dbg.gbuffer = float4(0, 0, 1, 0); return dbg; }
+
     float3 DiffuseColor  = BaseColor * (1.0f - Metallic);
     float3 SpecularColor = lerp(float3(0.04f, 0.04f, 0.04f), BaseColor, Metallic);
+
+    float3 TransColor = (ShadingModel == SHADINGMODEL_FOLIAGE)
+        ? BaseColor * SubsurfaceColor.rgb * SubsurfaceColor.a
+        : float3(0.0f, 0.0f, 0.0f);
 
     float a   = Roughness * Roughness;
     float a2  = a * a;
     float NoV = saturate(dot(N, V)); // shared with the ambient/IBL block below
 
-    // --- Direct lighting --------------------------------------------------------
-    // Single directional sun, unified with the atmosphere and clouds.
+    float ReflectCombine = ReflectionParams.z > 0.5f
+        ? saturate((ReflectionParams.x - Roughness) / max(ReflectionParams.y, 1e-4f))
+        : 0.0f;
+    float SpecAmbientScale = 1.0f - ReflectCombine;
+
     float3 Lighting = float3(0.0f, 0.0f, 0.0f);
     {
         float3 Lsun        = normalize(SunDirection.xyz);
         float3 SunRadiance = SunColor.rgb * SunDirection.w; // w = intensity
         float3 SunLit      = BRDF_Direct(N, V, Lsun, SunRadiance,
-                                         DiffuseColor, SpecularColor, Metallic, Roughness, a2);
+                                         DiffuseColor, SpecularColor, Metallic, Roughness, a2, TransColor);
         // POM soft self-shadow toward the sun.
         if (ParallaxSelfShadow && HasHeightMap && ParallaxFadeF > 0.0f && dot(GeoN, Lsun) > 0.0f) {
             float3 Lts = float3(dot(Lsun, T), dot(Lsun, B), dot(Lsun, GeoN));
             SunLit    *= TraceParallaxSelfShadow(UV, SurfaceHeight, Lts, dUVdx, dUVdy, ParallaxFadeF);
         }
-        // Cascaded Shadow Maps: oclusão da geometria contra o sol (normal-offset por GeoN,
-        // PCF Poisson rotacionado por pixel via SV_Position).
-        SunLit *= SampleCSM(input.worldPos, GeoN, input.pos.xy);
-        Lighting += SunLit;
+
+        float3 MoonLit = float3(0.0f, 0.0f, 0.0f);
+        if (MoonDirection.w > 0.0f) {
+            float3 Lmoon        = normalize(MoonDirection.xyz);
+            float3 MoonRadiance = MoonColor.rgb * MoonDirection.w;
+            MoonLit = BRDF_Direct(N, V, Lmoon, MoonRadiance,
+                                  DiffuseColor, SpecularColor, Metallic, Roughness, a2, TransColor);
+        }
+
+        Lighting += (SunLit + MoonLit) * SampleCSM(input.worldPos, GeoN, input.pos.xy);
     }
 
     // --- Ambient ---
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);
 
-    // Atmosphere-derived hemispheric diffuse ambient (A4). When on, it supplies
-    // the sky diffuse (and replaces the IBL diffuse to avoid double-counting),
-    // keeping the IBL specular for environment reflections.
+    bool UseGI = DDGIGridCount.w > 0.5f;
+
     bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
-    if (UseAtmoAmbient) {
+    if (UseAtmoAmbient && !UseGI) {
         float  hemi       = saturate(N.y * 0.5f + 0.5f);
         float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
         float3 KdAmb      = (1.0f - Metallic);
-        Ambient += KdAmb * DiffuseColor * ambientCol * AO * GroundAmbientColor.w;
+        Ambient += KdAmb * DiffuseColor * ambientCol * AOAll * GroundAmbientColor.w;
     }
 
-    // --- Image-Based Lighting (split-sum) ---
     if (IBLParams.w > 0.5f) {
         float3 RotN = RotateY(N, IBLParams.y);
         float3 R    = reflect(-V, N);
@@ -477,10 +503,44 @@ float4 main(PSInput input) : SV_TARGET {
         float  Mip         = Roughness * IBLParams.z;
         float3 Prefiltered = PrefilteredMap.SampleLevel(IBLSampler, RotR, Mip).rgb;
         float2 BRDF        = BRDFLut.SampleLevel(IBLSampler, float2(NoV, Roughness), 0.0f).rg;
-        float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y);
+        float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y) * SpecAmbientScale;
 
-        float3 IBLContrib = UseAtmoAmbient ? SpecularIBL : (DiffuseIBL + SpecularIBL);
-        Ambient += IBLContrib * AO * IBLParams.x;
+        float3 IBLContrib = (UseGI || UseAtmoAmbient) ? SpecularIBL : (DiffuseIBL + SpecularIBL);
+        Ambient += IBLContrib * AOAll * IBLParams.x;
+    }
+
+    // --- DDGI (difusa indireta) ---
+    float3 DbgGI = float3(0.0f, 0.0f, 0.0f);
+    if (UseGI) {
+        float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
+        // DDGIDistParams.w empacota flags: bit0 = Chebyshev, bit1 = pular inativas, bit2 = fallback.
+        int  giFlags      = (int)DDGIDistParams.w;
+        bool useChebyshev = (giFlags & 1) != 0;
+        bool skip         = (giFlags & 2) != 0;
+        bool fallback     = (giFlags & 4) != 0;
+        uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+        float3 gi;
+        if (useChebyshev) {
+            // Fase 2: Chebyshev (usa o atlas de distancia p/ matar o light-leak).
+            float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
+            gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
+                     input.worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                     (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, 0.25f,
+                     DDGIProbeData, skipMode);
+        } else {
+            gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, input.worldPos, N,
+                     DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                     (int)DDGIParams.y, atlasInvSize);
+        }
+        DbgGI = gi; 
+        
+        float3 KdGI = (1.0f - Metallic);
+        Ambient += KdGI * DiffuseColor * gi * DDGIParams.x * AOAll;
+
+        if (IBLParams.w <= 0.5f) {
+            float3 Fa = F_SchlickRoughness(SpecularColor, NoV, Roughness);
+            Ambient += Fa * gi * DDGIParams.x * AOAll * SpecAmbientScale;
+        }
     }
 
     // --- Emissive ---
@@ -491,6 +551,12 @@ float4 main(PSInput input) : SV_TARGET {
     // --- Compose and tonemap ---
     float3 FinalColor = Lighting + Ambient + Emissive;
 
+    // Debug DDGI: mostra a irradiancia dos probes direto (DDGIGridCount.w == 2). Preto =
+    // atlas vazio (trace/update); colorido = atlas com conteudo (bug na injecao/magnitude).
+    if (DDGIGridCount.w > 1.5f) {
+        PSOutput dbg; dbg.color = float4(DbgGI, 1.0f); dbg.gbuffer = float4(0, 0, 1, 0); return dbg;
+    }
+
     // Debug: overlay de cor chapada por cascata (estilo Unreal/Cry) — independente do brilho
     // da cena, pra enxergar as faixas mesmo no escuro. Fora de todas as cascatas: sem tint.
     if (CSM_DebugEnabled()) {
@@ -499,5 +565,9 @@ float4 main(PSInput input) : SV_TARGET {
             FinalColor = lerp(FinalColor, CSM_CascadeColor(ci), 0.45f);
     }
 
-    return float4(FinalColor, 1.0f);
+    // MRT: cor HDR + G-buffer de reflexao (normal de shading octa-encoded, roughness, metallic).
+    PSOutput o;
+    o.color   = float4(FinalColor, 1.0f);
+    o.gbuffer = float4(DDGI_OctEncode(N) * 0.5f + 0.5f, Roughness, Metallic);
+    return o;
 }

@@ -1,6 +1,8 @@
 #ifndef SMILE_WATER_COMMON_HLSLI
 #define SMILE_WATER_COMMON_HLSLI
 
+#include "../Common/DepthConfig.hlsli"
+
 // CB do oceano — casa campo-a-campo com FWaterRenderer::WaterConstants (Water.h).
 // Matrizes row_major: convencao row-vector da engine (mul(v, M)).
 cbuffer WaterCB : register(b0) {
@@ -67,10 +69,14 @@ SamplerState      AnisoWrap      : register(s2);
 Texture2D<float4> SceneColor : register(t2);
 Texture2D<float>  SceneDepth : register(t3);
 
-// Profundidade NDC[0,1] (LH) -> view-space Z (linear). Mesma proj de PerspectiveFovLH.
+// Profundidade NDC[0,1] (LH) -> view-space Z (linear). Mesma proj da camera.
 float LinearizeDepth(float ndcZ) {
     float n = DepthParams.x, f = DepthParams.y;
+#if SMILE_REVERSE_Z
+    return n * f / (ndcZ * (f - n) + n); // Reverse-Z: ndc(near)=1, ndc(far)=0
+#else
     return n * f / (f - ndcZ * (f - n));
+#endif
 }
 
 // Profundidade linear da cena no UV de tela (point/Load — sem interpolar bordas).

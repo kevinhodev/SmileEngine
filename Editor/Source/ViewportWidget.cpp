@@ -1,6 +1,7 @@
 #include "SmileEditor/ViewportWidget.h"
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Input/CameraInput.h"
+#include "Smile/Core/Logger.h"
 #include <QShowEvent>
 #include <QResizeEvent>
 #include <QHideEvent>
@@ -24,6 +25,7 @@ namespace SmileEditor {
 
         setFocusPolicy(Qt::StrongFocus);
         setMinimumSize(320, 200);
+        setMouseTracking(true); // hover do gizmo precisa de mouse-move sem botao pressionado
 
         // Interval 0: renderiza continuamente (dispara quando a fila de eventos esvazia,
         // sem starvar input/resize). O pacing fica a cargo do Present: com VSync ligado
@@ -101,7 +103,28 @@ namespace SmileEditor {
         CameraInput.Speed = IsHeld(Qt::Key_Shift) ? 4.0f : 1.0f;
 
         Renderer->UpdateCamera(CameraInput, DeltaTime);
+        // Gizmo (editor-side): submete as setas ao DebugDraw da Engine ANTES do RenderFrame, que
+        // as desenha e limpa. Geometria world-space -> projetada com a VP do frame (sem lag).
+        GizmoCtrl.Submit(*Renderer);
         Renderer->RenderFrame();
+
+        // Picking: coleta o resultado de um clique recente (readback assincrono pronto alguns
+        // frames depois). Atualiza a selecao e loga o objeto (validacao da Fase 1).
+        int PickedIndex = -1;
+        if (Renderer->TryGetPickResult(PickedIndex)) {
+            if (PickedIndex >= 0) {
+                Renderer->SetSelectedObject(PickedIndex);
+                const auto& Renderables = Renderer->GetScene().Renderables();
+                if (PickedIndex < static_cast<int>(Renderables.size())) {
+                    Smile::LogInfo("Selecionado [" + std::to_string(PickedIndex) + "] " +
+                                   Renderables[static_cast<size_t>(PickedIndex)].Name);
+                }
+            } else {
+                Renderer->ClearSelection();
+                Smile::LogInfo("Selecao limpa (clique no vazio)");
+            }
+            emit ObjectSelected(PickedIndex);
+        }
 
         // FPS suavizado por media exponencial (EMA) — leitura estavel em vez do valor
         // instantaneo 1/dt (que oscila muito frame a frame).
@@ -132,6 +155,21 @@ namespace SmileEditor {
             IgnoreNextMove = true;
             setFocus();
         }
+        // Clique esquerdo (fora do modo camera) = picking. O backbuffer/IDTarget tem o tamanho
+        // logico do widget (Resize usa size() logico), entao a posicao do evento mapeia 1:1.
+        // O passe de ID roda no proximo frame; o resultado e coletado em OnRenderTimer.
+        else if (_Event->button() == Qt::LeftButton && !MouseLookActive) {
+            if (Renderer && Renderer->IsInitialized()) {
+                const QPointF P = _Event->position();
+                const unsigned int Px = static_cast<unsigned int>(P.x() > 0.0 ? P.x() : 0.0);
+                const unsigned int Py = static_cast<unsigned int>(P.y() > 0.0 ? P.y() : 0.0);
+                // 1) Tenta pegar um handle do gizmo. Se pegou, comeca o arraste e NAO faz picking.
+                // 2) Senao, picking normal (seleciona o objeto sob o cursor).
+                if (!GizmoCtrl.OnMousePress(*Renderer, Px, Py))
+                    Renderer->RequestPick(Px, Py);
+            }
+            setFocus();
+        }
         QWidget::mousePressEvent(_Event);
     }
 
@@ -141,11 +179,22 @@ namespace SmileEditor {
             MouseDelta      = Smile::Vec2::Zero();
             unsetCursor();
         }
+        else if (_Event->button() == Qt::LeftButton) {
+            GizmoCtrl.OnMouseRelease(); // fim do arraste do gizmo (no-op se nao estava arrastando)
+        }
         QWidget::mouseReleaseEvent(_Event);
     }
 
     void ViewportWidget::mouseMoveEvent(QMouseEvent* _Event) {
         if (!MouseLookActive) {
+            // Sem camera-look: roteia pro gizmo. Arrastando -> move o objeto; senao -> hover (destaca
+            // o eixo sob o cursor). Coords logicas = pixels do backbuffer (1:1).
+            if (Renderer && Renderer->IsInitialized()) {
+                const QPointF P = _Event->position();
+                const unsigned int Px = static_cast<unsigned int>(P.x() > 0.0 ? P.x() : 0.0);
+                const unsigned int Py = static_cast<unsigned int>(P.y() > 0.0 ? P.y() : 0.0);
+                GizmoCtrl.OnMouseMove(*Renderer, Px, Py); // arraste se ativo, senao hover
+            }
             QWidget::mouseMoveEvent(_Event);
             return;
         }

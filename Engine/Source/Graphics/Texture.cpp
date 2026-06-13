@@ -31,10 +31,6 @@ namespace Smile {
     }
 
     namespace {
-        // Average a 2x2 footprint of an RGBA8 source mip into one RGBA8 destination
-        // texel using straight linear averaging on the 8-bit values. Adequate for
-        // color/MR/AO/height/emissive — these aren't sRGB-decoded but the difference
-        // vs proper sRGB-linear averaging is invisible on PBR content.
         void DownsampleColor2x2(const u8* Src, u32 SrcW, u32 SrcH,
                                 u8* Dst, u32 DstW, u32 DstH) {
             for (u32 y = 0; y < DstH; ++y) {
@@ -54,12 +50,6 @@ namespace Smile {
             }
         }
 
-        // Normal-aware downsample: decodes 4 source normals from [0,1] to [-1,1],
-        // averages them as vectors, re-normalizes, and re-encodes. The Toksvig
-        // factor T = |sum|/N is written to alpha — the PS uses (1 - T²) as an
-        // additive variance to roughness². Source RGB encodes the tangent-space
-        // normal; alpha is overwritten with Toksvig.
-        // Returns the average T over the destination mip (for logging).
         float DownsampleNormal2x2(const u8* Src, u32 SrcW, u32 SrcH,
                                   u8* Dst, u32 DstW, u32 DstH) {
             double TSum = 0.0;
@@ -76,22 +66,20 @@ namespace Smile {
                         Src + (sy1 * SrcW + sx0) * 4,
                         Src + (sy1 * SrcW + sx1) * 4,
                     };
-                    // Decode and sum.
+
                     float nx = 0, ny = 0, nz = 0;
                     for (int i = 0; i < 4; ++i) {
                         float vx = P[i][0] / 255.0f * 2.0f - 1.0f;
                         float vy = P[i][1] / 255.0f * 2.0f - 1.0f;
                         float vz = P[i][2] / 255.0f * 2.0f - 1.0f;
-                        // Normalize each input to be safe — some normal maps
-                        // come out of JPG slightly denormalized.
                         float len = std::sqrt(vx*vx + vy*vy + vz*vz);
                         if (len > 1e-6f) { vx /= len; vy /= len; vz /= len; }
                         nx += vx; ny += vy; nz += vz;
                     }
                     float sumLen = std::sqrt(nx*nx + ny*ny + nz*nz);
-                    float T = sumLen / 4.0f; // = |sum| / N (each input has length 1)
+                    float T = sumLen / 4.0f; 
                     if (T < 1e-4f) T = 1e-4f;
-                    // Renormalize the average vector for the output normal.
+
                     float invLen = 1.0f / sumLen;
                     float ox = nx * invLen;
                     float oy = ny * invLen;
@@ -221,7 +209,7 @@ namespace Smile {
                                                        FTextureSRVHeap& _SRVHeap,
                                                        const std::vector<FTextureCPUData>& _Data) {
         std::vector<FTexture> Out(_Data.size());
-        constexpr size_t kStagingBudget = 256ull * 1024 * 1024; // ~256 MB por chunk
+        constexpr size_t kStagingBudget = 256ull * 1024 * 1024; 
 
         size_t i = 0;
         while (i < _Data.size()) {
@@ -232,7 +220,7 @@ namespace Smile {
             bool   AnyRecorded = false;
 
             for (; i < _Data.size(); ++i) {
-                if (!_Data[i].Valid()) continue; // posicao fica invalida
+                if (!_Data[i].Valid()) continue; 
                 Out[i] = RecordUpload(_Device, CommandList, _SRVHeap,
                                       _Data[i].Mips, _Data[i].Format, Staging);
                 AnyRecorded = true;
@@ -270,8 +258,6 @@ namespace Smile {
     }
 
     FTextureCPUData FTexture::LoadCPU(const std::wstring& _Path, bool _IsNormalMap) {
-        // Roda no worker thread: somente CPU (WIC + mips), NENHUMA chamada D3D12.
-        // Captura excecoes para nao cruzar a fronteira do thread; falha => Valid()==false.
         FTextureCPUData Data;
         Data.IsNormalMap = _IsNormalMap;
         Data.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -296,7 +282,6 @@ namespace Smile {
             UINT Width = 0, Height = 0;
             SMILE_HR(Converter->GetSize(&Width, &Height));
 
-            // Mip 0
             std::vector<FMipData>& Mips = Data.Mips;
             Mips.reserve(16);
             FMipData Mip0;
@@ -307,15 +292,12 @@ namespace Smile {
                                             static_cast<UINT>(Mip0.Pixels.size()),
                                             Mip0.Pixels.data()));
 
-            // For normal maps, force the alpha of mip 0 to 1.0 (T = 1: no variance).
-            // JPG/PNG normal maps don't carry a meaningful alpha — we own it now.
             if (_IsNormalMap) {
                 for (size_t i = 0; i < Mip0.Pixels.size(); i += 4)
                     Mip0.Pixels[i + 3] = 255;
             }
             Mips.push_back(std::move(Mip0));
 
-            // Build the full mip chain. Stop when both dims hit 1.
             u32 W = Width, H = Height;
             float MinT = 1.0f;
             while (W > 1 || H > 1) {
@@ -354,21 +336,20 @@ namespace Smile {
             }
         } catch (const std::exception& e) {
             LogError(std::string("Falha ao decodificar textura: ") + e.what());
-            Data.Mips.clear(); // garante Valid()==false
+            Data.Mips.clear(); 
         }
         return Data;
     }
 
     FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
                                      FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data) {
-        if (!_Data.Valid()) return FTexture{}; // textura invalida; caller mantem fallback
+        if (!_Data.Valid()) return FTexture{}; 
         return Upload(_Device, _CommandQueue, _SRVHeap, _Data.Mips, _Data.Format);
     }
 
     FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
                                      FTextureSRVHeap& _SRVHeap,
                                      const std::wstring& _Path, bool _IsNormalMap) {
-        // Conveniencia sincrona (decode + upload no mesmo thread).
         return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
     }
 
@@ -380,14 +361,13 @@ namespace Smile {
                  | (static_cast<u32>(static_cast<u8>(d)) << 24);
         }
 
-        // Converte um formato BC linear na variante _SRGB correspondente (BaseColor/Emissive).
         DXGI_FORMAT ToSRGB(DXGI_FORMAT _Fmt) {
             switch (_Fmt) {
                 case DXGI_FORMAT_BC1_UNORM: return DXGI_FORMAT_BC1_UNORM_SRGB;
                 case DXGI_FORMAT_BC2_UNORM: return DXGI_FORMAT_BC2_UNORM_SRGB;
                 case DXGI_FORMAT_BC3_UNORM: return DXGI_FORMAT_BC3_UNORM_SRGB;
                 case DXGI_FORMAT_BC7_UNORM: return DXGI_FORMAT_BC7_UNORM_SRGB;
-                default:                    return _Fmt; // BC4/BC5 nao tem sRGB
+                default:                    return _Fmt; 
             }
         }
 
@@ -397,23 +377,18 @@ namespace Smile {
                 case DXGI_FORMAT_BC4_UNORM: case DXGI_FORMAT_BC4_SNORM:
                     return 8;
                 default:
-                    return 16; // BC2/BC3/BC5/BC6H/BC7
+                    return 16;
             }
         }
     }
 
     FTextureCPUData FTexture::LoadDDSCPU(const std::wstring& _Path, bool _sRGB) {
-        // Worker-safe: so I/O de arquivo + parse de header. Saida em FTextureCPUData com
-        // Format = BCx e Mips contendo os bytes de bloco JA empacotados (sem gerar mips —
-        // o DDS ja traz a cadeia). Em falha retorna Valid()==false sem lancar.
         FTextureCPUData Data;
-        Data.IsNormalMap = false; // BC ja tem mips; Toksvig nao se aplica
+        Data.IsNormalMap = false; 
         try {
             std::ifstream File(_Path, std::ios::binary | std::ios::ate);
             if (!File) throw std::runtime_error("nao abriu o arquivo");
-            // Leitura em BLOCO (seekg+read). NUNCA usar istreambuf_iterator: em Debug ele
-            // le byte-a-byte pela iostream (com iterator-debugging) -> ~1s por arquivo de
-            // poucos MB, o que tornava o load da cena absurdamente lento (centenas de s).
+
             const std::streamoff Size = File.tellg();
             if (Size < 128) throw std::runtime_error("arquivo curto demais");
             File.seekg(0, std::ios::beg);
@@ -435,13 +410,12 @@ namespace Smile {
             const u32 FourCC   = Rd32(84);
 
             DXGI_FORMAT Fmt = DXGI_FORMAT_UNKNOWN;
-            size_t DataOffset = 128; // 4 (magic) + 124 (DDS_HEADER)
+            size_t DataOffset = 128; 
 
             constexpr u32 DDPF_FOURCC = 0x4;
             if (!(PFFlags & DDPF_FOURCC)) throw std::runtime_error("DDS nao comprimido (sem FourCC) nao suportado");
 
             if (FourCC == MakeFourCC('D','X','1','0')) {
-                // DDS_HEADER_DXT10 (20 bytes): dxgiFormat @128
                 Fmt = static_cast<DXGI_FORMAT>(Rd32(128));
                 DataOffset = 148;
             } else if (FourCC == MakeFourCC('D','X','T','1')) {
@@ -483,7 +457,6 @@ namespace Smile {
             Data.Width  = Width;
             Data.Height = Height;
             Data.Format = Fmt;
-            // (sem log por-textura: no load em lote sao centenas; o loader loga o total)
         } catch (const std::exception& e) {
             LogError(std::string("Falha ao carregar DDS: ") + e.what());
             Data.Mips.clear();
@@ -508,7 +481,6 @@ namespace Smile {
                 Mip.Pixels = { 255, 255, 255, 255 };
                 break;
             case EDefaultTexture::FlatNormal:
-                // RGB = (0.5, 0.5, 1.0) = +Z normal; alpha = 1.0 (Toksvig: no variance).
                 Mip.Pixels = { 128, 128, 255, 255 };
                 break;
             case EDefaultTexture::Black:

@@ -22,20 +22,18 @@ namespace Smile {
     }
 
     void FFogPass::BuildRootSignature(ID3D12Device* _Device) {
-        // t0 = scene depth, t1 = aerial-perspective volume — bound as two separate
-        // single-descriptor tables so they need not be contiguous in the heap.
         D3D12_DESCRIPTOR_RANGE DepthRange{};
         DepthRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         DepthRange.NumDescriptors                    = 1;
-        DepthRange.BaseShaderRegister                = 0; // t0
+        DepthRange.BaseShaderRegister                = 0; 
         DepthRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_DESCRIPTOR_RANGE AerialRange = DepthRange;
-        AerialRange.BaseShaderRegister = 1; // t1
+        AerialRange.BaseShaderRegister = 1; 
 
         D3D12_ROOT_PARAMETER RootParams[3]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[0].Descriptor.ShaderRegister = 0; // b0
+        RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -58,7 +56,7 @@ namespace Smile {
         Sampler.BorderColor      = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
         Sampler.MinLOD           = 0.0f;
         Sampler.MaxLOD           = D3D12_FLOAT32_MAX;
-        Sampler.ShaderRegister   = 0; // s0
+        Sampler.ShaderRegister   = 0; 
         Sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC Desc{};
@@ -90,7 +88,6 @@ namespace Smile {
         Raster.CullMode        = D3D12_CULL_MODE_NONE;
         Raster.DepthClipEnable = TRUE;
 
-        // "Over" blend: final.rgb = src.rgb + dst.rgb * src.a (src.a = transmittance).
         D3D12_BLEND_DESC Blend{};
         Blend.RenderTarget[0].BlendEnable           = TRUE;
         Blend.RenderTarget[0].SrcBlend              = D3D12_BLEND_ONE;
@@ -118,7 +115,6 @@ namespace Smile {
         PSODesc.NumRenderTargets      = 1;
         PSODesc.RTVFormats[0]         = _RTFormat;
         PSODesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
-        // The fog pass always renders on the single-sample (resolved) HDR target.
         PSODesc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&PSO)));

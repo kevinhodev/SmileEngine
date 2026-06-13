@@ -67,8 +67,6 @@ namespace Smile {
     }
 
     void FSwapChain::Present() {
-        // VSync ligado: SyncInterval=1 (espera o vblank); a flag de tearing eh invalida
-        // com SyncInterval>0. Desligado: SyncInterval=0 + tearing (se suportado) p/ FPS livre.
         UINT SyncInterval, Flags;
         if (VSyncEnabled) {
             SyncInterval = 1;

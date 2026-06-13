@@ -7,11 +7,6 @@
 #include <cstring>
 
 namespace Smile {
-
-    // =====================================================================================
-    // Espectro inicial H0 (CPU, 1x ou ao mudar vento/amplitude)
-    // =====================================================================================
-
     f32 FOceanFFT::FrandGaussian() {
         if (GaussianHasLast) {
             GaussianHasLast = false;
@@ -30,8 +25,6 @@ namespace Smile {
         return x1 * w;
     }
 
-    // Phillips. pW = -(cos(wind), sin(wind)); o vento vem do usuario, com damping
-    // suave contra o vento para direcionalidade.
     f32 FOceanFFT::ComputePhillips(f32 kx, f32 ky) const {
         const f32 k2 = kx * kx + ky * ky;
         if (k2 == 0.0f) return 0.0f;
@@ -51,7 +44,6 @@ namespace Smile {
         return P;
     }
 
-    // Preenche o staging de H0: (h0(k).x, h0(k).y, omega(k), 0) sobre (N+1)^2.
     void FOceanFFT::ComputeH0() {
         if (!H0StagingMapped) return;
 
@@ -116,10 +108,6 @@ namespace Smile {
         }
     }
 
-    // =====================================================================================
-    // Setup GPU
-    // =====================================================================================
-
     Microsoft::WRL::ComPtr<ID3D12Resource> FOceanFFT::Create2D(
         ID3D12Device* _Device, DXGI_FORMAT _Format, u32 _Width, u32 _Height, u32 _Mips,
         bool _AllowUAV, D3D12_RESOURCE_STATES _InitialState) {
@@ -144,7 +132,6 @@ namespace Smile {
     }
 
     void FOceanFFT::CreateTextures(ID3D12Device* _Device) {
-        // H0 (N+1)^2 RGBA32F (SRV only) + staging UPLOAD persistente.
         H0Tex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, M, M, 1, false,
                          D3D12_RESOURCE_STATE_COPY_DEST);
         H0State = D3D12_RESOURCE_STATE_COPY_DEST;
@@ -170,7 +157,6 @@ namespace Smile {
             SMILE_HR(H0Staging->Map(0, nullptr, reinterpret_cast<void**>(&H0StagingMapped)));
         }
 
-        // Espectros + scratch (RG32F, UAV) e mapas (RGBA32F, UAV).
         SpecH    = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         SpecD    = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         FFTTemp  = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -276,13 +262,7 @@ namespace Smile {
         CreatePipelines(_Device);
         ComputeH0();
         H0Dirty = true;
-        // (sem log aqui: o oceano e inicializado sempre, mas so importa quando a agua e
-        //  ativada — o Renderer loga em SetUseWater na 1a ativacao)
     }
-
-    // =====================================================================================
-    // Per-frame: pipeline de compute
-    // =====================================================================================
 
     void FOceanFFT::TransitionTex(ID3D12GraphicsCommandList* _CL, ID3D12Resource* _R,
                                   D3D12_RESOURCE_STATES& _State, D3D12_RESOURCE_STATES _Target,

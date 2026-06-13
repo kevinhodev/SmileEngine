@@ -12,11 +12,9 @@ namespace Smile {
 
     struct FMesh {
         std::vector<Vertex> Vertices;
-        std::vector<u32>    Indices; // u32: meshes importados (ex. Bistro) passam de 65k verts
+        std::vector<u32>    Indices; 
 
         static FMesh CreateCube();
-
-        // UV sphere centered at origin. Default radius 0.5 matches the cube's extent.
         static FMesh CreateSphere(u32 Slices = 64, u32 Stacks = 32, f32 Radius = 0.5f);
     };
 } 

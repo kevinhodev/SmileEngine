@@ -1,7 +1,3 @@
-// BakeDetailNoise.cs.hlsl
-// 32^3 high-frequency Worley detail volume used to erode the cloud edges.
-//   R,G,B = single-octave Worley at increasing frequencies (all divide 32).
-
 #include "CloudNoiseCommon.hlsli"
 
 cbuffer NoiseParams : register(b0) {

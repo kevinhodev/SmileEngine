@@ -24,7 +24,7 @@ namespace Smile {
                                                   const std::vector<FMesh>& _Meshes) {
         std::vector<FGpuMesh*> Out;
         Out.reserve(_Meshes.size());
-        constexpr size_t kStagingBudget = 256ull * 1024 * 1024; // ~256 MB de staging por chunk
+        constexpr size_t kStagingBudget = 256ull * 1024 * 1024; 
 
         size_t i = 0;
         while (i < _Meshes.size()) {
@@ -46,7 +46,7 @@ namespace Smile {
 
             SMILE_HR(CommandList->Close());
             ID3D12CommandList* Lists[] = { CommandList };
-            _Queue.ExecuteAndSync(Lists, 1); // staging deste chunk liberado ao sair do escopo
+            _Queue.ExecuteAndSync(Lists, 1);
         }
         return Out;
     }

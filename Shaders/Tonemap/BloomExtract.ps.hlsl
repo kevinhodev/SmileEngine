@@ -14,8 +14,6 @@ float4 main(PSInput input) : SV_TARGET {
     float3 color = HDRColor.Sample(LinearSampler, input.uv).rgb;
     float l = Luma(color);
     
-    // Extract pixels with luminance > 1.0.
-    // We use a slight knee/soft transition to avoid harsh aliasing around bright edges.
     float threshold = 1.0f;
     float knee = 0.1f;
     float soft = l - threshold + knee;

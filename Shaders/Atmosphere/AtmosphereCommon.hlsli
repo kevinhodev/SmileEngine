@@ -1,17 +1,8 @@
-// AtmosphereCommon.hlsli
-// Shared math for the Hillaire "Scalable and Production Ready Sky and Atmosphere"
-// model: density profiles, phase functions, ray-sphere intersection, the
-// Bruneton/Hillaire non-linear transmittance-LUT parameterization, and the
-// scattering-coefficient sampler. All distances in kilometers, scattering
-// coefficients in km^-1. The planet center is the origin; "up" at p is
-// normalize(p), altitude is length(p) - bottomRadius.
-
 #ifndef SMILE_ATMOSPHERE_COMMON_HLSLI
 #define SMILE_ATMOSPHERE_COMMON_HLSLI
 
 static const float PI = 3.14159265358979323846f;
 
-// Matches Smile::AtmosphereConstants (Atmosphere.h) field-for-field.
 cbuffer AtmosphereCB : register(b0) {
     float4 RayleighScattering; // rgb km^-1, w = Rayleigh density scale height (km)
     float4 MieScattering;      // rgb km^-1, w = Mie density scale height (km)
@@ -26,10 +17,13 @@ cbuffer AtmosphereCB : register(b0) {
     float4 SkyViewSize;        // x = skyW, y = skyH, z = camera view height (km), w = ground altitude (km)
     float4 SunDisk;            // x = cos(half angle), y = disk intensity, z = sun illuminance (sky-view), w unused
     row_major float4x4 InvViewProjNoTrans; // sky PS world-ray reconstruction
-    // --- Aerial perspective froxel (A3) ---
+
     row_major float4x4 InvViewProj; // FULL inverse view-proj (with translation)
     float4 CameraWorldPos;          // xyz = camera world pos (scene units), w = km per world unit
     float4 AerialParams;            // x = volume depth (km), y = slice count, z = start depth (km), w = samples/slice
+
+    float4 MoonDir;                 // xyz = dir TO moon (world), w = cos(raio angular do disco)
+    float4 MoonParams;              // x = brilho do disco, y = intensidade estrelas, z = night factor, w = tempo (cintilacao)
 };
 
 #define kKmPerWorldUnit (CameraWorldPos.w)
@@ -38,7 +32,6 @@ cbuffer AtmosphereCB : register(b0) {
 #define kAerialStartKm  (AerialParams.z)
 #define kAerialSamples  (AerialParams.w)
 
-// Convenience aliases for the packed scalars.
 #define kRayleighScaleH (RayleighScattering.w)
 #define kMieScaleH      (MieScattering.w)
 #define kMiePhaseG      (MieExtinction.w)
@@ -52,11 +45,9 @@ cbuffer AtmosphereCB : register(b0) {
 #define kSunIlluminance (SunDisk.z)
 #define kSunGlareInt    (SunDisk.w)
 
-// Static samplers provided by FVolumetricPipeline (s0 = linear clamp, s1 = wrap).
 SamplerState LinearClampSampler : register(s0);
 SamplerState LinearWrapSampler  : register(s1);
 
-// --- Phase functions --------------------------------------------------------
 float RayleighPhase(float cosTheta) {
     return (3.0f / (16.0f * PI)) * (1.0f + cosTheta * cosTheta);
 }
@@ -69,7 +60,6 @@ float MiePhaseHG(float g, float cosTheta) {
 
 float UniformPhase() { return 1.0f / (4.0f * PI); }
 
-// --- Medium (scattering / extinction at an altitude) ------------------------
 void SampleMedium(float altitudeKm, out float3 rayleighScatter,
                   out float3 mieScatter, out float3 extinction) {
     float densR = exp(-altitudeKm / kRayleighScaleH);
@@ -85,8 +75,6 @@ void SampleMedium(float altitudeKm, out float3 rayleighScatter,
     extinction = rayleighExt + mieExt + ozoneExt;
 }
 
-// --- Ray / sphere (sphere centered at origin) -------------------------------
-// Nearest non-negative intersection distance, or -1 if the ray misses / is behind.
 float RaySphereNearest(float3 ro, float3 rd, float radius) {
     float b    = dot(ro, rd);
     float c    = dot(ro, ro) - radius * radius;
@@ -99,7 +87,6 @@ float RaySphereNearest(float3 ro, float3 rd, float radius) {
     return (t0 < 0.0f) ? t1 : t0;
 }
 
-// Far intersection distance (exit point); -1 if the ray misses.
 float RaySphereFar(float3 ro, float3 rd, float radius) {
     float b    = dot(ro, rd);
     float c    = dot(ro, ro) - radius * radius;
@@ -108,7 +95,6 @@ float RaySphereFar(float3 ro, float3 rd, float radius) {
     return -b + sqrt(disc);
 }
 
-// --- Transmittance-LUT parameterization (Bruneton 2017 / Hillaire) ----------
 void UvToTransmittanceParams(out float viewHeight, out float viewZenithCos, float2 uv) {
     float xMu = uv.x;
     float xR  = uv.y;
@@ -139,23 +125,17 @@ float2 TransmittanceParamsToUv(float viewHeight, float viewZenithCos) {
     return float2(xMu, xR);
 }
 
-// Transmittance from a point (height/zenith) to the top of the atmosphere.
 float3 SampleTransmittanceToTop(Texture2D<float4> tlut, float viewHeight, float viewZenithCos) {
     float2 uv = TransmittanceParamsToUv(viewHeight, viewZenithCos);
     return tlut.SampleLevel(LinearClampSampler, uv, 0.0f).rgb;
 }
 
-// --- Multi-scattering LUT sampling ------------------------------------------
-// Parameterized by (sunZenithCos in x, normalized altitude in y).
 float3 SampleMultiScatterLUT(Texture2D<float4> mslut, float viewHeight, float sunZenithCos) {
     float u = saturate(sunZenithCos * 0.5f + 0.5f);
     float v = saturate((viewHeight - kBottomR) / max(kTopR - kBottomR, 1e-4f));
     return mslut.SampleLevel(LinearClampSampler, float2(u, v), 0.0f).rgb;
 }
 
-// --- Sky-View LUT parameterization (Hillaire) -------------------------------
-// u encodes azimuth relative to the sun (folded by symmetry), v encodes view
-// zenith with a non-linear split at the horizon to pack texels near it.
 void UvToSkyViewParams(out float viewZenithCos, out float lightViewCos,
                        float viewHeight, float2 uv) {
     float vHorizon = sqrt(max(0.0f, viewHeight * viewHeight - kBottomR * kBottomR));
@@ -206,4 +186,4 @@ float2 SkyViewParamsToUv(float viewZenithCos, float lightViewCos, float viewHeig
     return float2(u, v);
 }
 
-#endif // SMILE_ATMOSPHERE_COMMON_HLSLI
+#endif 

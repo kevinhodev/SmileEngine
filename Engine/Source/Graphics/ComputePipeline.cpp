@@ -6,12 +6,7 @@
 #include <stdexcept>
 
 namespace Smile {
-    void FComputePipeline::Initialize(ID3D12Device* _Device, const std::string& _CSOName,
-                                       bool /*_SourceIsCube*/) {
-        // Root signature: b0 (root constants, 8 dwords) + descriptor table SRV(t0)
-        // + descriptor table UAV(u0) + static sampler s0. SRV view dimension is
-        // declared in the shader itself (Texture2D vs TextureCube); the root sig
-        // only allocates a slot, so the same layout works for both source types.
+    void FComputePipeline::Initialize(ID3D12Device* _Device, const std::string& _CSOName, bool) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SRVRange.NumDescriptors                    = 1;
