@@ -4,7 +4,11 @@
 set(SHADER_OUTPUTS "")
 
 smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(Triangle.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+
+# Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
+smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GBufferDebug.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(DeferredLighting.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
@@ -30,9 +34,11 @@ smile_compile_shader(GI/DDGIDebugRays.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugStats.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 
 # Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
-smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl     cs_6_6 main SHADER_OUTPUTS)
-smile_compile_shader(Reflections/ReflectionResolve.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionResolve.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionTemporal.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionSpatial.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
@@ -56,7 +62,6 @@ smile_compile_shader(Atmosphere/BakeAerialPerspective.cs.hlsl cs_6_0 main SHADER
 # Fog deferido (UE5): aerial perspective froxel + exponential height fog
 smile_compile_shader(Fog/FogFullscreen.vs.hlsl            vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/FogFullscreen.ps.hlsl            ps_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(Fog/FogFullscreenMS.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
 
 # Nuvens volumetricas — bake de ruido 3D + raymarch + composite
 smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
@@ -105,8 +110,12 @@ add_custom_target(Shaders
     DEPENDS ${SHADER_OUTPUTS}
     SOURCES
         Common/DepthConfig.hlsli
+        GBuffer.hlsli
+        GBuffer.ps.hlsl
+        GBufferDebug.ps.hlsl
+        DeferredLighting.ps.hlsl
+        BRDF.hlsli
         Triangle.vs.hlsl
-        Triangle.ps.hlsl
         DepthNormal.ps.hlsl
         Skybox.vs.hlsl
         Skybox.ps.hlsl
@@ -128,8 +137,10 @@ add_custom_target(Shaders
         GI/DDGIDebugStats.cs.hlsl
         Reflections/GGXSample.hlsli
         Reflections/ReflectionTrace.cs.hlsl
+        Reflections/ReflectionTraceMirror.cs.hlsl
         Reflections/ReflectionResolve.cs.hlsl
         Reflections/ReflectionTemporal.cs.hlsl
+        Reflections/ReflectionSpatial.cs.hlsl
         Reflections/ReflectionComposite.ps.hlsl
         AO/GTAOCommon.hlsli
         AO/GTAO.cs.hlsl
@@ -151,7 +162,6 @@ add_custom_target(Shaders
         Fog/FogApply.hlsli
         Fog/FogFullscreen.vs.hlsl
         Fog/FogFullscreen.ps.hlsl
-        Fog/FogFullscreenMS.ps.hlsl
         Clouds/CloudNoiseCommon.hlsli
         Clouds/CloudDensity.hlsli
         Clouds/CloudLighting.hlsli

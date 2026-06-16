@@ -8,12 +8,12 @@ float3 CubeFaceToDirection(uint face, float2 uv) {
     t.y = -t.y;
     float3 dir;
     switch (face) {
-        case 0: dir = float3( 1.0f, t.y, -t.x); break; // +X
-        case 1: dir = float3(-1.0f, t.y,  t.x); break; // -X
-        case 2: dir = float3( t.x, 1.0f, -t.y); break; // +Y (top — t.y already inverted)
-        case 3: dir = float3( t.x,-1.0f,  t.y); break; // -Y
-        case 4: dir = float3( t.x, t.y,  1.0f); break; // +Z
-        default: dir = float3(-t.x, t.y, -1.0f); break; // -Z
+        case 0: dir = float3( 1.0f, t.y, -t.x); break; 
+        case 1: dir = float3(-1.0f, t.y,  t.x); break;
+        case 2: dir = float3( t.x, 1.0f, -t.y); break; 
+        case 3: dir = float3( t.x,-1.0f,  t.y); break; 
+        case 4: dir = float3( t.x, t.y,  1.0f); break; 
+        default: dir = float3(-t.x, t.y, -1.0f); break; 
     }
     return normalize(dir);
 }

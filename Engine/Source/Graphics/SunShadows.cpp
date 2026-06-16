@@ -139,7 +139,10 @@ namespace Smile {
 
         D3D12_RASTERIZER_DESC Raster{};
         Raster.FillMode              = D3D12_FILL_MODE_SOLID;
-        Raster.CullMode              = D3D12_CULL_MODE_BACK;
+        // Shadow casters are treated as two-sided occluders. Several Bistro interior shells are
+        // single-sided with normals facing inward; backface-culling them in the light view lets
+        // sunlight pass through walls even though the RT/DDGI path can still hit those triangles.
+        Raster.CullMode              = D3D12_CULL_MODE_NONE;
         Raster.FrontCounterClockwise = FALSE;
         Raster.DepthClipEnable       = TRUE;
         Raster.DepthBias             = 0;
@@ -369,11 +372,11 @@ namespace Smile {
                 const FShadowDrawItem& It = _Items[k];
                 if (!It.Mesh) continue;
                 if (Outside(It.AABBMin, It.AABBMax)) continue;
-                const bool Masked = It.Mat && It.Mat->TwoSided;
-                ID3D12PipelineState* Want = Masked ? MaskedPSO.Get() : OpaquePSO.Get();
+                const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
+                ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
                 _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB); 
-                if (Masked) It.Mat->Bind(_CommandList, _SRVHeap);                
+                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);                
                 It.Mesh->Draw(_CommandList);
             }
         }

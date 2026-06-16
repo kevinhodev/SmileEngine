@@ -1,6 +1,3 @@
-// Fullscreen triangle for the atmosphere sky pass. The PS reconstructs the world
-// view direction from clip-space position + InvViewProjNoTrans (AtmosphereCB).
-
 #include "../Common/DepthConfig.hlsli"
 
 struct VSOutput {
@@ -17,7 +14,7 @@ VSOutput main(uint vid : SV_VertexID) {
     float2 p = corners[vid];
 
     VSOutput o;
-    o.pos    = float4(p, SMILE_NDC_FAR, 1.0f); // far plane (Reverse-Z: 0)
+    o.pos    = float4(p, SMILE_NDC_FAR, 1.0f); 
     o.clipXY = p;
     return o;
 }

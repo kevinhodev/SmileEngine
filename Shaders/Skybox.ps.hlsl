@@ -1,11 +1,7 @@
-// Samples the environment cubemap using a view direction reconstructed from
-// the inverse view-projection (translation removed so the sky stays at infinity).
-// Applies Reinhard + gamma to match the main PS tonemap chain.
-
 cbuffer SkyboxCB : register(b0) {
     row_major float4x4 InvViewProjNoTranslation;
     float IBLIntensity;
-    float IBLRotation;   // radians, Y axis
+    float IBLRotation;   
     float _Pad0;
     float _Pad1;
 };
@@ -24,7 +20,6 @@ float3 RotateY(float3 v, float angle) {
 }
 
 float4 main(PSInput input) : SV_TARGET {
-    // Reconstruct world direction: point on far plane through (clipXY, 1).
     float4 worldFar = mul(float4(input.clipXY, 1.0f, 1.0f), InvViewProjNoTranslation);
     float3 dir = normalize(worldFar.xyz);
     dir = RotateY(dir, IBLRotation);

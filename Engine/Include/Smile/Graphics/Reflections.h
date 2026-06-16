@@ -26,7 +26,8 @@ namespace Smile {
         Vec4  TraceParams;       // x=frameIndex, y=maxRayDist, z=skyIntensity, w=normalBias
         Vec4  HalfScreenParams;  // halfW, halfH, 1/halfW, 1/halfH (trace e half-res; Fase 2b)
         Mat44 PrevViewProj;      // VP (sem jitter) do frame anterior — reprojeção do temporal (Fase 3)
-        Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), zw=-
+        Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), z=spatialRadius, w=mirrorMaxRoughness
+        Vec4  DebugParams;       // x = modo de debug do reflexo (0=off, 1=acumulacao, 2=mascara espelho)
     };
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
@@ -80,6 +81,12 @@ namespace Smile {
         bool GetTemporal() const      { return Temporal; }
         void SetMaxFrames(f32 V)      { MaxFrames = V; }
         f32  GetMaxFrames() const     { return MaxFrames; }
+        void SetSpatialRadius(f32 V)  { SpatialRadius = V; }
+        f32  GetSpatialRadius() const { return SpatialRadius; }
+        void SetFullResMaxRough(f32 V)  { FullResMaxRough = V; }
+        f32  GetFullResMaxRough() const { return FullResMaxRough; }
+        void SetDebugMode(u32 V)      { DebugMode = V; }
+        u32  GetDebugMode() const     { return DebugMode; }
 
     private:
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
@@ -89,9 +96,11 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;    // 8 SRV, 2 UAV [radiance, raydata], heap-directly-indexed
+        FVolumetricPipeline TracePSO;       // 8 SRV, 2 UAV [radiance, raydata], heap-directly-indexed
+        FVolumetricPipeline TraceMirrorPSO; // 8 SRV (== trace), 1 UAV [resolved]; full-res near-mirror
         FVolumetricPipeline ResolvePSO;  // 4 SRV [radiance, raydata, depth, gbuf], 1 UAV [resolved]
         FVolumetricPipeline TemporalPSO; // 4 SRV [resolved, gbuf, depth, histPrev], 1 UAV [histCurr]
+        FVolumetricPipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRS;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
 
@@ -101,10 +110,12 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> RayData;
         Microsoft::WRL::ComPtr<ID3D12Resource> Resolved;
         Microsoft::WRL::ComPtr<ID3D12Resource> History[2];
+        Microsoft::WRL::ComPtr<ID3D12Resource> Denoised; // saida do spatial; lida pelo composite
         D3D12_RESOURCE_STATES RadianceState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RayDataState  = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ResolvedState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES HistoryState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+        D3D12_RESOURCE_STATES DenoisedState = D3D12_RESOURCE_STATE_COMMON;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 RadianceSRVSlot     = kInvalidSlot;
@@ -113,13 +124,16 @@ namespace Smile {
         u32 ResolvedUAVSlot     = kInvalidSlot;
         u32 HistorySRVSlot[2]   = { kInvalidSlot, kInvalidSlot };
         u32 HistoryUAVSlot[2]   = { kInvalidSlot, kInvalidSlot };
+        u32 DenoisedSRVSlot     = kInvalidSlot;
+        u32 DenoisedUAVSlot     = kInvalidSlot;
         u32 TraceUAVTable       = kInvalidSlot; // 2 UAVs contiguos [radiance, raydata]
         u32 TraceTableStart     = kInvalidSlot; // 8 SRVs [TLAS,skyview,inst,irrad,verts,idx,depth,gbuf]
         u32 ResolveTableStart   = kInvalidSlot; // 4 SRVs [radiance, raydata, depth, gbuf]
         // Por paridade (curr=0/1): temporal le History[1-curr] e escreve History[curr]; composite
         // le History[curr]. 2 tabelas pre-montadas (sem CopyDescriptors por frame).
         u32 TemporalTable[2]    = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [resolved, gbuf, depth, hist[1-curr]]
-        u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [hist[curr], gbuf, depth, brdfLut]
+        u32 SpatialTable[2]     = { kInvalidSlot, kInvalidSlot }; // 3 SRVs [hist[curr], gbuf, depth]
+        u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [denoised, gbuf, depth, brdfLut]
         u32  FrameParity        = 0;     // alterna a cada RecordTrace
         u32  CurrParity         = 0;     // paridade usada neste frame (trace->composite)
         bool NeedsHistoryClear  = false; // limpa os 2 history no 1o RecordTrace pos-setup
@@ -150,5 +164,8 @@ namespace Smile {
         bool Temporal            = true;  // acumulacao temporal (off = só resolve espacial)
         f32  MaxFrames           = 12.0f; // frames acumulados (Lumen default)
         f32  NeighborhoodGamma   = 1.0f;  // γ do neighborhood clamp (↑ = menos ruido, + ghosting)
+        f32  SpatialRadius       = 8.0f;  // raio max (px) do denoise espacial pos-temporal na borda
+        f32  FullResMaxRough     = 0.4f;  // <= isto -> trace full-res (espelho exato <0.05, senao GGX); resto half-res
+        u32  DebugMode           = 0;     // 0=off, 1=acumulacao (frames), 2=mascara espelho (overlay)
     };
 }

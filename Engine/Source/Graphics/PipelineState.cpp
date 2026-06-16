@@ -1,4 +1,5 @@
 #include "Smile/Graphics/PipelineState.h"
+#include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -162,12 +163,11 @@ namespace Smile {
                                               RootBlob->GetBufferSize(),
                                               IID_PPV_ARGS(&RootSignature)));
 
-        RecreatePSO(_Device, 1);
+        RecreatePSO(_Device);
     }
 
-    void FPipelineState::RecreatePSO(ID3D12Device* _Device, u32 _SampleCount) {
+    void FPipelineState::RecreatePSO(ID3D12Device* _Device) {
         auto VertexShaderBlob = LoadShaderBytecode("Triangle.vs_6_0.cso");
-        auto PixelShaderBlob  = LoadShaderBytecode("Triangle.ps_6_0.cso");
 
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -208,48 +208,23 @@ namespace Smile {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc{};
         PSODesc.pRootSignature        = RootSignature.Get();
         PSODesc.VS                    = { VertexShaderBlob.data(), VertexShaderBlob.size() };
-        PSODesc.PS                    = { PixelShaderBlob.data(), PixelShaderBlob.size() };
-        PSODesc.BlendState            = BlendDesc;
+        PSODesc.PS                    = { nullptr, 0 };
         PSODesc.SampleMask            = UINT_MAX;
-        PSODesc.RasterizerState       = RasterizerDesc;
-        PSODesc.DepthStencilState     = DepthEqual;
+        PSODesc.RasterizerState       = RasterizerDesc;       // cull back
         PSODesc.InputLayout           = { InputLayout, _countof(InputLayout) };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        PSODesc.NumRenderTargets      = 1;
-        PSODesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
         PSODesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
-        PSODesc.SampleDesc            = { _SampleCount, 0 };
+        PSODesc.SampleDesc            = { 1, 0 };
 
-        const bool MRT = (_SampleCount == 1);
-        if (MRT) {
-            PSODesc.NumRenderTargets = 2;
-            PSODesc.RTVFormats[1]    = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        }
-
-        ComPtr<ID3D12PipelineState> NewPSO;
-        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSO)));
-        PipelineState = NewPSO;
-
-        RasterizerDesc.CullMode   = D3D12_CULL_MODE_NONE;
-        PSODesc.RasterizerState   = RasterizerDesc;
-        PSODesc.DepthStencilState = DepthLess;
-        ComPtr<ID3D12PipelineState> NewPSOTwoSided;
-        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOTwoSided)));
-        PipelineStateTwoSided = NewPSOTwoSided;
-
-        RasterizerDesc.CullMode   = D3D12_CULL_MODE_BACK;
-        PSODesc.RasterizerState   = RasterizerDesc;
-        PSODesc.DepthStencilState = DepthLess;
-        ComPtr<ID3D12PipelineState> NewPSOOpaqueLess;
-        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOOpaqueLess)));
-        PipelineStateOpaqueLess = NewPSOOpaqueLess;
-
-        PSODesc.NumRenderTargets  = 1;                      
-        PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;     
-        PSODesc.PS                = { nullptr, 0 };
+        // Z-prepass (depth-only): escreve o depth opaco; o geometry pass usa depth EQUAL p/ matar
+        // o overdraw no shader gordo do G-buffer (POM etc.). Sem cor (writemask 0, sem PS).
         D3D12_BLEND_DESC NoColor  = BlendDesc;
-        NoColor.RenderTarget[0].RenderTargetWriteMask = 0; 
+        NoColor.RenderTarget[0].RenderTargetWriteMask = 0;
         PSODesc.BlendState        = NoColor;
+        PSODesc.DepthStencilState = DepthLess;                // escreve depth
+        PSODesc.NumRenderTargets  = 1;
+        PSODesc.RTVFormats[0]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
         ComPtr<ID3D12PipelineState> NewPSODepth;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepth)));
         PipelineStateDepthOnly = NewPSODepth;
@@ -264,5 +239,66 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> NewPSODepthNormal;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthNormal)));
         PipelineStateDepthNormal = NewPSODepthNormal;
+
+        // --- Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs) -------------------------
+        // Opaco: depth EQUAL (reusa o depth do prepass). Two-sided/alpha-test (folhagem): nao
+        // entram no prepass, entao escrevem o proprio depth (depth LESS + write).
+        auto GBufferPSBlob = LoadShaderBytecode("GBuffer.ps_6_0.cso");
+        PSODesc.VS                = { VertexShaderBlob.data(), VertexShaderBlob.size() };
+        PSODesc.PS                = { GBufferPSBlob.data(), GBufferPSBlob.size() };
+        PSODesc.BlendState        = BlendDesc;     // opaco, escreve todos os canais
+        PSODesc.DepthStencilState = DepthEqual;    // le o depth do prepass, nao escreve
+        PSODesc.NumRenderTargets  = FGBuffer::kTargetCount + 1; // +1 = velocity (motion vector)
+        PSODesc.RTVFormats[0]     = FGBuffer::kFormatA;
+        PSODesc.RTVFormats[1]     = FGBuffer::kFormatB;
+        PSODesc.RTVFormats[2]     = FGBuffer::kFormatC;
+        PSODesc.RTVFormats[3]     = DXGI_FORMAT_R16G16_FLOAT; // SV_Target3 = motion vector (UV)
+        PSODesc.DSVFormat         = DXGI_FORMAT_D32_FLOAT;
+        PSODesc.SampleDesc        = { 1, 0 };
+
+        RasterizerDesc.CullMode   = D3D12_CULL_MODE_BACK;
+        PSODesc.RasterizerState   = RasterizerDesc;
+        ComPtr<ID3D12PipelineState> NewPSOGBuffer;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBuffer)));
+        PipelineStateGBuffer = NewPSOGBuffer;
+
+        RasterizerDesc.CullMode   = D3D12_CULL_MODE_NONE; // folhagem / alpha-test two-sided
+        PSODesc.RasterizerState   = RasterizerDesc;
+        PSODesc.DepthStencilState = DepthLess;            // escreve o proprio depth
+        ComPtr<ID3D12PipelineState> NewPSOGBufferTwoSided;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSided)));
+        PipelineStateGBufferTwoSided = NewPSOGBufferTwoSided;
+
+        // --- Deferred lighting: fullscreen (PostProcess.vs), le o G-buffer e ilumina -> HDR. ----
+        // Usa a root signature principal (a tabela de material e religada p/ [A,B,C,Depth]).
+        auto LightVSBlob = LoadShaderBytecode("PostProcess.vs_6_0.cso");
+        auto LightPSBlob = LoadShaderBytecode("DeferredLighting.ps_6_0.cso");
+
+        D3D12_RASTERIZER_DESC LightRaster{};
+        LightRaster.FillMode        = D3D12_FILL_MODE_SOLID;
+        LightRaster.CullMode        = D3D12_CULL_MODE_NONE;
+        LightRaster.DepthClipEnable = TRUE;
+
+        D3D12_DEPTH_STENCIL_DESC LightDepth{};
+        LightDepth.DepthEnable   = FALSE;
+        LightDepth.StencilEnable = FALSE;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC LightDesc{};
+        LightDesc.pRootSignature        = RootSignature.Get();
+        LightDesc.VS                    = { LightVSBlob.data(), LightVSBlob.size() };
+        LightDesc.PS                    = { LightPSBlob.data(), LightPSBlob.size() };
+        LightDesc.BlendState            = BlendDesc;
+        LightDesc.SampleMask            = UINT_MAX;
+        LightDesc.RasterizerState       = LightRaster;
+        LightDesc.DepthStencilState     = LightDepth;
+        LightDesc.InputLayout           = { nullptr, 0 };
+        LightDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        LightDesc.NumRenderTargets      = 1;
+        LightDesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        LightDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+        LightDesc.SampleDesc            = { 1, 0 };
+        ComPtr<ID3D12PipelineState> NewPSODeferredLighting;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&LightDesc, IID_PPV_ARGS(&NewPSODeferredLighting)));
+        PipelineStateDeferredLighting = NewPSODeferredLighting;
     }
 }

@@ -29,10 +29,10 @@ namespace Smile {
     public:
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                         FCloudNoise& Noise, u32 AtmoTransmittanceSRV, u32 AtmoMultiScatterSRV,
-                        u32 SampleCount, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
+                        DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
                         u32 Width, u32 Height);
 
-        void RecreateComposite(ID3D12Device* Device, u32 SampleCount,
+        void RecreateComposite(ID3D12Device* Device,
                                DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                     u32 Width, u32 Height);
@@ -72,7 +72,7 @@ namespace Smile {
         void BuildNoiseTable(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, FCloudNoise& Noise,
                              u32 AtmoTransmittanceSRV, u32 AtmoMultiScatterSRV);
         void BuildCompositeRootSignature(ID3D12Device* Device);
-        void BuildCompositePSO(ID3D12Device* Device, u32 SampleCount,
+        void BuildCompositePSO(ID3D12Device* Device,
                                DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;

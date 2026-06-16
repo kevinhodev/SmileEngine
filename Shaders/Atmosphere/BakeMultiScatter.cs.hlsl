@@ -24,8 +24,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     int   msSteps = max(4, (int)AtmoSteps.y);
     float invPhase = UniformPhase();
 
-    float3 lumTotal = float3(0.0f, 0.0f, 0.0f); // 2nd-order scattered luminance
-    float3 fmsTotal = float3(0.0f, 0.0f, 0.0f); // multi-scatter transfer factor
+    float3 lumTotal = float3(0.0f, 0.0f, 0.0f); 
+    float3 fmsTotal = float3(0.0f, 0.0f, 0.0f); 
 
     [loop]
     for (int si = 0; si < SQRT_SAMPLES; ++si) {

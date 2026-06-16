@@ -4,26 +4,26 @@
 static const float PI = 3.14159265358979323846f;
 
 cbuffer AtmosphereCB : register(b0) {
-    float4 RayleighScattering; // rgb km^-1, w = Rayleigh density scale height (km)
-    float4 MieScattering;      // rgb km^-1, w = Mie density scale height (km)
-    float4 MieExtinction;      // rgb km^-1, w = Mie phase anisotropy g
-    float4 OzoneAbsorption;    // rgb km^-1, w = unused
-    float4 OzoneTent;          // x = center altitude (km), y = half-width (km)
-    float4 GroundAlbedo;       // rgb (0..1), w = unused
-    float4 PlanetRadii;        // x = bottom (planet) km, y = top (atmosphere) km
-    float4 SunDir;             // xyz = direction TO sun (world), w = sun illuminance
-    float4 AtmoSteps;          // x = transmittance, y = multiscatter, z = sky-view steps
-    float4 LutSize;            // x = transW, y = transH, z = multiW, w = multiH
-    float4 SkyViewSize;        // x = skyW, y = skyH, z = camera view height (km), w = ground altitude (km)
-    float4 SunDisk;            // x = cos(half angle), y = disk intensity, z = sun illuminance (sky-view), w unused
-    row_major float4x4 InvViewProjNoTrans; // sky PS world-ray reconstruction
+    float4 RayleighScattering; 
+    float4 MieScattering;      
+    float4 MieExtinction;      
+    float4 OzoneAbsorption;   
+    float4 OzoneTent;          
+    float4 GroundAlbedo;      
+    float4 PlanetRadii;       
+    float4 SunDir;             
+    float4 AtmoSteps;          
+    float4 LutSize;            
+    float4 SkyViewSize;        
+    float4 SunDisk;            
+    row_major float4x4 InvViewProjNoTrans; 
 
-    row_major float4x4 InvViewProj; // FULL inverse view-proj (with translation)
-    float4 CameraWorldPos;          // xyz = camera world pos (scene units), w = km per world unit
-    float4 AerialParams;            // x = volume depth (km), y = slice count, z = start depth (km), w = samples/slice
+    row_major float4x4 InvViewProj; 
+    float4 CameraWorldPos;          
+    float4 AerialParams;            
 
-    float4 MoonDir;                 // xyz = dir TO moon (world), w = cos(raio angular do disco)
-    float4 MoonParams;              // x = brilho do disco, y = intensidade estrelas, z = night factor, w = tempo (cintilacao)
+    float4 MoonDir;                 
+    float4 MoonParams;              
 };
 
 #define kKmPerWorldUnit (CameraWorldPos.w)
@@ -69,9 +69,9 @@ void SampleMedium(float altitudeKm, out float3 rayleighScatter,
     rayleighScatter = RayleighScattering.rgb * densR;
     mieScatter      = MieScattering.rgb      * densM;
 
-    float3 rayleighExt = rayleighScatter;                 // Rayleigh: no absorption
+    float3 rayleighExt = rayleighScatter;                 
     float3 mieExt      = MieExtinction.rgb   * densM;
-    float3 ozoneExt    = OzoneAbsorption.rgb * densO;     // ozone: absorption only
+    float3 ozoneExt    = OzoneAbsorption.rgb * densO;     
     extinction = rayleighExt + mieExt + ozoneExt;
 }
 

@@ -9,9 +9,9 @@
 namespace Smile {
     class FSkybox {
     public:
-        void Initialize(ID3D12Device* Device, u32 SampleCount,
+        void Initialize(ID3D12Device* Device,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
-        void Recreate(ID3D12Device* Device, u32 SampleCount,
+        void Recreate(ID3D12Device* Device,
                       DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         void Render(u32 FrameSlot,
@@ -33,7 +33,7 @@ namespace Smile {
         static_assert(sizeof(SkyboxConstants) == 256, "SkyboxConstants must be 256 bytes");
 
         void BuildRootSignature(ID3D12Device* Device);
-        void BuildPSO(ID3D12Device* Device, u32 SampleCount,
+        void BuildPSO(ID3D12Device* Device,
                       DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSignature;

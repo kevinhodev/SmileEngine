@@ -1,5 +1,3 @@
-// VS do serviço de DebugDraw (overlay 3D imediato): projeta a geometria submetida (world-space)
-// pela ViewProj do frame. Cor por-vértice. Usado pela tooling do editor (gizmo etc.).
 cbuffer DebugDrawCB : register(b0) {
     row_major float4x4 ViewProj;
 };

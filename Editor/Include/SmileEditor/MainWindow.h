@@ -27,7 +27,6 @@ namespace SmileEditor {
     private slots:
         void OnHelpAbout();
         void OnOpenEnvironmentWindow();
-        void OnMSAAChanged(int sampleCount);
         void OnRendererReady();
         void UpdateStats();
         void TriggerShaderCompileAndReload(const QString& Path);
@@ -40,7 +39,6 @@ namespace SmileEditor {
         ViewportWidget*       Viewport    = nullptr;
         QPointer<AboutDialog> AboutDlg;
         QPointer<EnvironmentWindow> EnvironmentDlg;
-        QActionGroup*         MSAAGroup   = nullptr;
         QMenu*                WindowMenu  = nullptr;
 
         QLabel*               FooterStatsLabel = nullptr;

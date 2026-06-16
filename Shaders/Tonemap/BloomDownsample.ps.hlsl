@@ -2,7 +2,7 @@ Texture2D SourceTex : register(t0);
 SamplerState LinearSampler : register(s0);
 
 cbuffer DownsampleCB : register(b0) {
-    float2 TexelSize; // x = 1/w, y = 1/h
+    float2 TexelSize; 
     float2 Padding;
 };
 
@@ -15,7 +15,6 @@ float4 main(PSInput input) : SV_TARGET {
     float x = TexelSize.x;
     float y = TexelSize.y;
 
-    // 13-tap bilinear box filter (Anti-aliasing downsampler)
     float3 a = SourceTex.Sample(LinearSampler, input.uv + float2(-2*x, 2*y)).rgb;
     float3 b = SourceTex.Sample(LinearSampler, input.uv + float2(0, 2*y)).rgb;
     float3 c = SourceTex.Sample(LinearSampler, input.uv + float2(2*x, 2*y)).rgb;
@@ -34,7 +33,6 @@ float4 main(PSInput input) : SV_TARGET {
     float3 l = SourceTex.Sample(LinearSampler, input.uv + float2(0, -2*y)).rgb;
     float3 m = SourceTex.Sample(LinearSampler, input.uv + float2(2*x, -2*y)).rgb;
 
-    // Weighted average
     float3 color = (a+c+k+m)*0.03125f + (b+f+h+l)*0.0625f + (d+e+i+j)*0.125f + g*0.125f;
     return float4(color, 1.0f);
 }

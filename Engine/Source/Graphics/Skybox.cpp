@@ -60,7 +60,7 @@ namespace Smile {
                                               IID_PPV_ARGS(&RootSignature)));
     }
 
-    void FSkybox::BuildPSO(ID3D12Device* _Device, u32 _SampleCount,
+    void FSkybox::BuildPSO(ID3D12Device* _Device,
                             DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         auto VS = LoadShaderBytecode("Skybox.vs_6_0.cso");
         auto PS = LoadShaderBytecode("Skybox.ps_6_0.cso");
@@ -93,15 +93,15 @@ namespace Smile {
         Desc.NumRenderTargets      = 1;
         Desc.RTVFormats[0]         = _RTFormat;
         Desc.DSVFormat             = _DSFormat;
-        Desc.SampleDesc            = { _SampleCount, 0 };
+        Desc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&PSO)));
     }
 
-    void FSkybox::Initialize(ID3D12Device* _Device, u32 _SampleCount,
+    void FSkybox::Initialize(ID3D12Device* _Device,
                               DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         BuildRootSignature(_Device);
-        BuildPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildPSO(_Device, _RTFormat, _DSFormat);
 
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
@@ -120,9 +120,9 @@ namespace Smile {
         SMILE_HR(CBV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBVBase)));
     }
 
-    void FSkybox::Recreate(ID3D12Device* _Device, u32 _SampleCount,
+    void FSkybox::Recreate(ID3D12Device* _Device,
                             DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
-        BuildPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildPSO(_Device, _RTFormat, _DSFormat);
     }
 
     void FSkybox::Render(u32 _FrameSlot,

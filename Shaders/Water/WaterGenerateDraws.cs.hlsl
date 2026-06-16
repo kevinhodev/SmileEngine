@@ -47,8 +47,8 @@ cbuffer GenerateDrawsCB : register(b0) {
     float4 ViewProjRow1;
     float4 ViewProjRow2;
     float4 ViewProjRow3;
-    float4 BuildWorldParams; // x=rootX y=rootZ z=leafSize w=waterLevel
-    float4 BuildCullParams;  // x=boundsPad y=enableFrustumCull
+    float4 BuildWorldParams; 
+    float4 BuildCullParams; 
 };
 
 StructuredBuffer<FTileSource> TileSources : register(t0);

@@ -1,14 +1,8 @@
 #include "OceanFFTCommon.hlsli"
 
-// Normal (mip 0) + Jacobiano (foam) a partir do mapa de deslocamento.
-// - Normal: derivada central da altura (.z = -h), igual ao BuildNormalMipChain antigo.
-// - Jacobiano: J = det(I + scale*grad(D_horizontal)); J<1 = cristas dobrando -> espuma.
-//   (porte de creategradients.comp do Asylum / folding map da Cry).
-// O .xyz do deslocamento e preservado; so o .w (J) e novo -> escreve OceanTex completo
-// num resource separado do DispIn (evita aliasing SRV/UAV no mesmo recurso).
-Texture2D<float4>   DispIn     : register(t0); // (Dx, Dz, -h, 0)
-RWTexture2D<float4> OceanOut   : register(u0); // (Dx, Dz, -h, J)
-RWTexture2D<float4> NormalMip0 : register(u1); // (nx, ny, nz, ToksvigT=1)
+Texture2D<float4>   DispIn     : register(t0); 
+RWTexture2D<float4> OceanOut   : register(u0); 
+RWTexture2D<float4> NormalMip0 : register(u1); 
 
 [numthreads(16, 16, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -27,11 +21,9 @@ void main(uint3 id : SV_DispatchThreadID) {
     float4 dD = DispIn.Load(int3(Dn,  0));
     float4 dU = DispIn.Load(int3(Up,  0));
 
-    // Normal da altura (.z). Derivada central; "up" tunavel (NormalUp).
     float3 nrm = normalize(float3(dL.z - dR.z, NormalUp, dD.z - dU.z));
     NormalMip0[loc] = float4(nrm, 1.0f);
 
-    // Jacobiano da deformacao horizontal (.x = Dx, .y = Dz).
     float dDxdx = (dR.x - dL.x) * 0.5f;
     float dDzdz = (dU.y - dD.y) * 0.5f;
     float dDxdz = (dU.x - dD.x) * 0.5f;

@@ -65,10 +65,10 @@ namespace Smile {
         static constexpr f32 kGroundAltitudeKm = 0.5f;
 
         void Initialize(ID3D12Device* Device, FCommandQueue& CmdQueue,
-                        FTextureSRVHeap& SRVHeap, u32 SampleCount,
+                        FTextureSRVHeap& SRVHeap,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
-        void RecreateSky(ID3D12Device* Device, u32 SampleCount,
+        void RecreateSky(ID3D12Device* Device,
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation,
@@ -112,7 +112,7 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
         void BuildInputTables(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         void BuildSkyRootSignature(ID3D12Device* Device);
-        void BuildSkyPSO(ID3D12Device* Device, u32 SampleCount,
+        void BuildSkyPSO(ID3D12Device* Device,
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Bake(ID3D12Device* Device, FCommandQueue& CmdQueue);
 

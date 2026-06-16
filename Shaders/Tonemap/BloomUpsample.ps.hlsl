@@ -3,8 +3,8 @@ Texture2D HighResTex : register(t1);
 SamplerState LinearSampler : register(s0);
 
 cbuffer UpsampleCB : register(b0) {
-    float2 TexelSize; // unused but matches 256-byte aligned offset struct
-    float FilterRadius; // control blur width / tent radius
+    float2 TexelSize; 
+    float FilterRadius; 
     float Padding;
 };
 

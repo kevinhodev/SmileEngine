@@ -129,12 +129,58 @@ static Slot ClassifySuffix(const std::string& base) {
 }
 
 // Heuristica de material masked/two-sided (folhagem/toldos do Bistro) pelo nome.
-static bool LooksMasked(const std::string& name) {
-    std::string n = ToLower(name);
-    const char* kw[] = { "leaf","leaves","foliage","plant","tree","ivy","vine",
-                          "grass","fern","hedge","bush","branch","flower","petal" };
-    for (auto k : kw) if (n.find(k) != std::string::npos) return true;
+// Tokeniza o nome do material em palavras: separa em nao-alfanumerico, em fronteiras camelCase
+// (minuscula->maiuscula) e letra<->digito; tudo minusculo. Ex.: "Emissive_StreetLight" ->
+// {emissive, street, light}. Match por TOKEN INTEIRO evita o classico "street" conter "tree".
+static std::vector<std::string> Tokenize(const std::string& name) {
+    std::vector<std::string> toks;
+    std::string cur;
+    auto flush = [&]() { if (!cur.empty()) { toks.push_back(cur); cur.clear(); } };
+    for (size_t i = 0; i < name.size(); ++i) {
+        char c = name[i];
+        bool alnum = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+        if (!alnum) { flush(); continue; }
+        if (!cur.empty()) {
+            char p = name[i - 1];
+            bool boundary = (p >= 'a' && p <= 'z') && (c >= 'A' && c <= 'Z');      // camelCase
+            bool digitSwap = (((p >= '0' && p <= '9') ? 1 : 0) != ((c >= '0' && c <= '9') ? 1 : 0));
+            if (boundary || digitSwap) flush();
+        }
+        cur.push_back(static_cast<char>((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c));
+    }
+    flush();
+    return toks;
+}
+
+static bool HasToken(const std::vector<std::string>& toks, std::initializer_list<const char*> kws) {
+    for (const auto& t : toks)
+        for (const char* k : kws)
+            if (t == k) return true;
     return false;
+}
+
+// Superficies duras: vetam o shading model de FOLHAGEM (nao o glow de subsurface em calcada/tronco/
+// poste). NAO vetam cutout — uma corrente num poste ainda e cutout.
+static bool IsHardSurface(const std::vector<std::string>& toks) {
+    return HasToken(toks, { "street","road","pavement","cobble","cobblestone","stone","concrete",
+                            "brick","asphalt","wall","floor","ground","metal","wood","trunk","sign",
+                            "pivot","support","bulb","glass","plaster","pot","pots" });
+}
+
+// Vegetacao -> shading model folhagem (+ cutout). Vetado por superficie dura (ex.: calcada c/ folhas).
+static bool LooksFoliage(const std::vector<std::string>& toks) {
+    if (IsHardSurface(toks)) return false;
+    return HasToken(toks, { "leaf","leaves","leafs","foliage","plant","plants","ivy","ivies","vine",
+                            "vines","grass","fern","ferns","hedge","hedges","bush","bushes","branch",
+                            "branches","flower","flowers","petal","petals","shrub","shrubs" });
+}
+
+// Cutout (alpha-test + two-sided) SEM ser folhagem: SO geometria perfurada/vazada de verdade —
+// correntes, grades, telas, arames. NAO inclui tecido (toldo/cortina/pano sao OPACOS, nao recortam)
+// nem "mesh" (ambiguo: pode ser so o nome do 3D mesh). NAO vetado por superficie dura.
+static bool LooksCutout(const std::vector<std::string>& toks) {
+    return HasToken(toks, { "chain","chains","fence","fences","grate","grates","grille","grilles",
+                            "grill","wire","wires","net","nets","lattice","grid" });
 }
 
 // ----------------------------------------------------------------------------
@@ -214,7 +260,14 @@ int main(int argc, char** argv) {
         SetStr(out.Normal,    Smile::kCookedMaxPath, norm);
         SetStr(out.Emissive,  Smile::kCookedMaxPath, emis);
 
-        if (LooksMasked(name)) { out.AlphaTest = 1; out.TwoSided = 1; }
+        {
+            const std::vector<std::string> toks = Tokenize(name);
+            const bool foliage = LooksFoliage(toks);
+            const bool cutout  = foliage || LooksCutout(toks); // folhagem tambem e cutout
+            out.Foliage   = foliage ? 1u : 0u;
+            out.AlphaTest = cutout  ? 1u : 0u;
+            out.TwoSided  = cutout  ? 1u : 0u;
+        }
 
         uint32_t idx = static_cast<uint32_t>(materials.size());
         materials.push_back(out);

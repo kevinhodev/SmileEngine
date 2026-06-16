@@ -1,16 +1,16 @@
 cbuffer CloudCB : register(b0) {
     row_major float4x4 InvViewProjNoTrans;
-    float4 CameraPos;    // xyz = camera (atmosphere km-frame), w = view height
-    float4 SunDir;       // xyz = direction TO sun, w = sun intensity
-    float4 SunColor;     // rgb, w unused
-    float4 PlanetRadii;  // x = bottomR, y = cloudInnerR, z = cloudOuterR (km)
-    float4 CloudParams;  // x = coverage, y = densityScale, z = noiseScale, w = time
-    float4 CloudParams2; // x = weatherScale, y = erosionStrength, z = detailScale, w = cloudTypeBias
-    float4 WindParams;   // xyz = wind velocity (km/s), w unused
-    float4 MarchParams;  // x = primary steps, y = light steps, z = ambient, w = maxDistKm
-    float4 ScreenParams; // x = rtW, y = rtH, z = 1/rtW, w = 1/rtH
-    float4 PhaseParams;  // x = g1, y = g2, z = blend, w = powderStrength
-    float4 AtmoLink;     // x = atmoTopR, y = msOctaves, z = ambientScale, w unused
+    float4 CameraPos;    
+    float4 SunDir;       
+    float4 SunColor;     
+    float4 PlanetRadii;  
+    float4 CloudParams;  
+    float4 CloudParams2; 
+    float4 WindParams;   
+    float4 MarchParams;  
+    float4 ScreenParams; 
+    float4 PhaseParams;  
+    float4 AtmoLink;     
 };
 
 Texture3D<float4>   BaseNoise        : register(t0);

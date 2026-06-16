@@ -45,7 +45,7 @@ Princípios de design observados no código:
   `FAtmosphere`), classes "sistema" sem prefixo (`Renderer`, `Camera` via `FCamera`).
 - **Padrão de subsistema uniforme.** Quase todo subsistema segue o ciclo:
   `Initialize(...)` → `UpdatePerFrame(...)` → `Record*Pass(CommandList, SRVHeap)` →
-  `Recreate*(...)` (em mudança de MSAA) → `Resize(...)`.
+  `Recreate*(...)` (hot-reload de shader) → `Resize(...)`.
 - **Um único heap CBV/SRV/UAV compartilhado** (`FTextureSRVHeap`, 512 slots) shader-visible,
   usado por toda a engine. Slots são alocados de forma *bump-pointer* e nunca liberados.
 - **Bakes únicos no startup** para LUTs caras (IBL, atmosfera, ruído de nuvens), seguindo
@@ -235,9 +235,8 @@ chama `Renderer::UpdateCamera(...)` + `Renderer::RenderFrame()` e emite `FrameRe
   │ 6. [Nuvens]  RecordRaymarch (compute) → Composite "over" com depth gate   │
   └───────────────────────────────────┬───────────────────────────────────────┘
                                        ▼
-  ┌─────────────────────────────── MSAA? ────────────────────────────────────┐
-  │  sim ─► ResolveSubresource (MSAA → resolved HDR)                          │
-  │  não ─► Barrier HDR → PIXEL_SHADER_RESOURCE                               │
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ 6b. Barrier HDR → PIXEL_SHADER_RESOURCE                                    │
   └───────────────────────────────────┬───────────────────────────────────────┘
                                        ▼
   ┌─────────────────────────────────────────────────────────────────────────┐
@@ -257,14 +256,13 @@ chama `Renderer::UpdateCamera(...)` + `Renderer::RenderFrame()` e emite `FrameRe
 
 | Buffer | Formato | Papel |
 |--------|---------|-------|
-| `HDRColorBuffer` | `R16G16B16A16_FLOAT` | alvo HDR resolvido (cena toda renderiza aqui) |
-| `HDRMSAAColorBuffer` | idem, multisample | alvo HDR multisample (se MSAA > 1) → resolve p/ o acima |
+| `HDRColorBuffer` | `R16G16B16A16_FLOAT` | alvo HDR único (cena toda renderiza aqui) |
 | `DepthBuffer` | `R32_TYPELESS` (DSV `D32_FLOAT` + SRV `R32_FLOAT`) | depth, **também exposto como SRV** p/ atmosfera/nuvens lerem profundidade |
-| `MSAAColorBuffer` | `R8G8B8A8_UNORM` | legado (formato do swapchain); HDR é o caminho atual |
 | Backbuffer | `R8G8B8A8_UNORM` | saída final LDR após tonemap |
 
-**Pipeline HDR completo:** toda a cena renderiza em float16 linear → resolve MSAA →
-Bloom + tonemap ACES escrevem o LDR direto no swapchain. `NearZ=0.1`, `FarZ=20000`
+**Sem MSAA:** o anti-aliasing é feito por TAA (single-sample em todo o pipeline). Toda a
+cena renderiza em float16 linear → Bloom + tonemap ACES escrevem o LDR direto no
+swapchain. `NearZ=0.1`, `FarZ=20000`
 (far estendido para alcançar o horizonte). FOV 60°, perspectiva **LH**.
 
 ### Frame de coordenadas da atmosfera/nuvens
@@ -422,8 +420,11 @@ Shaders/
 ```
 
 - **Perfis:** `vs_6_0` / `ps_6_0` / `cs_6_0` (DXC, SM 6.0).
-- **Hot-reload:** `MainWindow` observa `Triangle.vs/ps.hlsl` via `QFileSystemWatcher`;
-  ao mudar, recompila e chama `Renderer::ReloadShaders()` (recria só o PSO da cena).
+- **Hot-reload:** `MainWindow` observa todos os `.hlsl`/`.hlsli` via `QFileSystemWatcher`;
+  ao mudar, recompila (`cmake --target Shaders`) e chama `Renderer::ReloadShaders(stem)`,
+  passando o nome do `.cso` alterado (ex.: `WaterSurface.ps`). O `Renderer` mantém uma
+  tabela `stem → recriação` e recria apenas o PSO afetado; stem não mapeado ou `.hlsli`
+  (include compartilhado) cai em reload completo (`RecreateAllPSOs`).
   Stylesheets `.qss` do Editor também têm hot-reload.
 - O `.cso` é nomeado `<nome>.<perfil>.cso` e carregado por `LoadShaderBlob` a partir de
   `SMILE_SHADER_DIR`.
@@ -505,10 +506,10 @@ Siga o "contrato de subsistema" existente (copie `FAtmosphere`/`FVolumetricCloud
 
 1. **Header** com:
    - `struct alignas(256) XxxConstants` casando o `cbuffer` HLSL.
-   - `Initialize(device, cmdQueue, srvHeap, sampleCount, rtFormat, dsFormat, ...)`.
+   - `Initialize(device, cmdQueue, srvHeap, rtFormat, dsFormat, ...)`.
    - `UpdatePerFrame(...)` (escreve em `CPUConstants`, copia para o CB mapeado).
    - `Record*Pass(commandList, srvHeap)` (compute) e/ou `Render*(commandList, ...)` (gráfico).
-   - `Recreate*(device, sampleCount, rt, ds)` para mudança de MSAA + `Resize(...)`.
+   - `Recreate*(device, rt, ds)` p/ hot-reload de shader + `Resize(...)`.
    - `bool IsInitialized()`.
 2. **Recursos:** aloque SRV/UAV no `FTextureSRVHeap` compartilhado; monte tabelas
    contíguas com `CopyDescriptors`. Use `FVolumetricPipeline` para compute parametrizável.
@@ -518,10 +519,11 @@ Siga o "contrato de subsistema" existente (copie `FAtmosphere`/`FVolumetricCloud
 5. **Integração no `Renderer`:**
    - membro por valor + flag `UseXxx`;
    - chamar `Xxx.Initialize(...)` em `Renderer::Initialize` (passando formatos HDR
-     `R16G16B16A16_FLOAT` / `D32_FLOAT` e `MSAASampleCount`);
+     `R16G16B16A16_FLOAT` / `D32_FLOAT`);
    - `Xxx.UpdatePerFrame(...)` no topo de `RenderFrame`;
    - inserir os `Record*/Render*` na posição certa do frame graph (§5);
-   - propagar `Recreate*` em `SetMSAA` e `Resize` em `Resize`.
+   - se tiver PSO gráfico, expor `Recreate*` e registrá-lo na tabela de hot-reload de
+     `Renderer::ReloadShaders` (e em `RecreateAllPSOs`); propagar `Resize` em `Resize`.
 6. **Editor:** adicione setters no `Renderer` e ligue num painel Qt (modelo dos painéis
    existentes), ou estenda `SkyCloudPanel`.
 
@@ -529,8 +531,8 @@ Siga o "contrato de subsistema" existente (copie `FAtmosphere`/`FVolumetricCloud
 
 - **Tudo é HDR linear** até o tonemap. RTs intermediários devem ser `R16G16B16A16_FLOAT`;
   não escreva sRGB antes do `FinalTonemap`.
-- **MSAA** exige um caminho de resolve e PSOs recriáveis (`SampleDesc.Count` no PSO). Todo
-  subsistema gráfico precisa de `Recreate*` para reagir ao `SetMSAA`.
+- **Sem MSAA:** todo o pipeline é single-sample (`SampleDesc.Count = 1`); o anti-aliasing
+  fica por conta do TAA. Não reintroduza `SampleDesc.Count > 1` em PSOs/RTs.
 - **Profundidade como SRV:** o depth é `R32_TYPELESS` (DSV `D32` + SRV `R32`). Para passes
   que precisam de depth (oclusão volumétrica), use `Renderer::GetDepthSRVSlot()`.
 - **Frame de km da atmosfera/nuvens** é separado das unidades da cena — cuidado ao

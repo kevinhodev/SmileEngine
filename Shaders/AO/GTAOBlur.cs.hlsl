@@ -1,7 +1,3 @@
-// Blur bilateral depth-aware do AO (denoise sem temporal — o engine nao tem TAA).
-// Separavel: rodado 2x (horizontal depois vertical) via blurDir no CB. Preserva bordas
-// pesando por similaridade de profundidade linear. Fase A.
-
 #include "GTAOCommon.hlsli"
 
 Texture2D<float>   DepthTex : register(t0);
@@ -25,7 +21,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         [unroll] for (int s = -1; s <= 1; s += 2) {
             int2 p = clamp(ipx + dir * (k * s), int2(0, 0), int2((int)W - 1, (int)H - 1));
             float dd = GTAO_LinearizeDepth(DepthTex.Load(int3(p, 0)));
-            // Peso: gaussiano espacial * similaridade de profundidade (relativa).
+ 
             float wd = exp2(-abs(dd - cd) * 16.0f / max(cd, 1.0f));
             float w  = wd * (1.0f - float(k) * 0.18f);
             sum  += AOIn.Load(int3(p, 0)) * w;

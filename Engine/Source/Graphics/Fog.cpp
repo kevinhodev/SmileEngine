@@ -81,7 +81,6 @@ namespace Smile {
     void FFogPass::BuildPSOs(ID3D12Device* _Device, DXGI_FORMAT _RTFormat) {
         auto VS   = LoadShaderBytecode("FogFullscreen.vs_6_0.cso");
         auto PS   = LoadShaderBytecode("FogFullscreen.ps_6_0.cso");
-        auto PSMS = LoadShaderBytecode("FogFullscreenMS.ps_6_0.cso");
 
         D3D12_RASTERIZER_DESC Raster{};
         Raster.FillMode        = D3D12_FILL_MODE_SOLID;
@@ -118,9 +117,6 @@ namespace Smile {
         PSODesc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&PSO)));
-
-        PSODesc.PS = { PSMS.data(), PSMS.size() };
-        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&PSO_MS)));
     }
 
     void FFogPass::CreateConstantBuffer(ID3D12Device* _Device) {
@@ -189,10 +185,10 @@ namespace Smile {
     }
 
     void FFogPass::Execute(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
-                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot, bool _IsMSAA) {
+                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot) {
         if (!Initialized) return;
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
-        _CommandList->SetPipelineState(_IsMSAA ? PSO_MS.Get() : PSO.Get());
+        _CommandList->SetPipelineState(PSO.Get());
         _CommandList->SetGraphicsRootConstantBufferView(0, CBAddr());
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(_DepthSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_AerialVolumeSRVSlot));

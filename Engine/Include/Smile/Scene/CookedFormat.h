@@ -5,7 +5,7 @@
 namespace Smile {
     constexpr u32 kSMeshMagic    = 0x48534D53u; 
     constexpr u32 kSSceneMagic   = 0x4E435353u; 
-    constexpr u32 kCookedVersion = 1u;
+    constexpr u32 kCookedVersion = 2u; // v2: +SSceneMaterial::Foliage (shading model desacoplado de masked)
 
     constexpr u32 kCookedMaxPath = 256u;
     constexpr u32 kCookedMaxName = 128u;
@@ -44,7 +44,9 @@ namespace Smile {
         f32  EmissiveStrength;
         u32  AlphaTest;   // 1 = material masked (clip por opacidade)
         f32  AlphaCutoff;
-        u32  TwoSided;    // 1 = sem back-face cull (folhagem/toldos)
+        u32  TwoSided;    // 1 = sem back-face cull (folhagem/toldos/cutouts)
+        u32  Foliage;     // 1 = shading model folhagem (transmissao two-sided). Desacoplado de
+                          // AlphaTest/TwoSided: um cutout (corrente, grade) e masked mas NAO folhagem.
     };
 
     struct SSceneRenderable {

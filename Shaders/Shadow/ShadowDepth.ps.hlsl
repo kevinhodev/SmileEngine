@@ -1,10 +1,3 @@
-// Pixel shader do depth pass das cascatas — usado SÓ por materiais masked (folhagem):
-// faz o alpha-test (clip) p/ a sombra respeitar a opacidade das folhas. Materiais
-// opacos usam um PSO SEM pixel shader (mais barato). Sem saída de cor (só depth).
-//
-// O cbuffer MaterialCB replica EXATAMENTE o layout de MaterialConstants (Material.h /
-// Triangle.ps.hlsl) para casar offset-a-offset — só usamos os campos do alpha-test.
-
 cbuffer MaterialCB : register(b1) {
     float4 BaseColorFactor;
     float  MetallicFactor;

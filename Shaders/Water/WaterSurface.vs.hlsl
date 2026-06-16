@@ -1,15 +1,12 @@
 #include "WaterCommon.hlsli"
 
-// Local tile vertex: xy in [0,1], z = Chebyshev edge value.
 struct VSInput {
     float3 GridPos       : POSITION;
-    uint   InstanceData0 : TEXCOORD0; // nodeX/nodeZ/nodeScaleLOD/internalLOD
-    uint   InstanceData1 : TEXCOORD1; // subset range: internal LOD + edge pattern
-    uint   InstanceData2 : TEXCOORD2; // morph/subset pattern/debug coverage
+    uint   InstanceData0 : TEXCOORD0; 
+    uint   InstanceData1 : TEXCOORD1; 
+    uint   InstanceData2 : TEXCOORD2; 
 };
 
-// World-space quadtree tile. This replaces the old projected grid/ray-plane
-// intersection path, so the horizon is no longer a stretched screen-space ring.
 VSOutput main(VSInput IN) {
     VSOutput o;
 
@@ -27,8 +24,7 @@ VSOutput main(VSInput IN) {
     float geomorph = (float)(IN.InstanceData2 & 0xFFu) / 255.0f;
     float tileSize = QuadTreeParams.z * exp2((float)nodeScaleLOD);
     float2 tileOrigin = QuadTreeParams.xy + float2(nodeX, nodeZ) * tileSize;
-    // Geomorph em borda compartilhada abre crack: vizinhos podem estar em LOD/morph
-    // diferentes. Pinamos a borda e deixamos o morph atuar no interior do tile.
+
     geomorph *= saturate((1.0 - IN.GridPos.z) * 16.0);
     float nextLodStep = min(exp2(internalLod + 1.0) / 32.0, 1.0);
     float2 coarseUV = saturate(floor(localUV / nextLodStep + 0.5) * nextLodStep);

@@ -1,15 +1,10 @@
 #ifndef SMILE_GGX_SAMPLE_HLSLI
 #define SMILE_GGX_SAMPLE_HLSLI
 
-// Amostragem GGX VNDF (porte fiel do MonteCarlo.ush da UE 5.7) p/ o Specular GI glossy (Fase 2).
-// VNDF "spherical caps" (Dupuy & Benyoub 2023) + bounded sampling (Eto & Tokuyoshi 2023) — menos
-// raios rejeitados em roughness alta. Isotropico (sem anisotropia na F2a). + helpers do resolve.
-
 #ifndef SMILE_PI
 #define SMILE_PI 3.14159265358979f
 #endif
 
-// Base ortonormal a partir da normal (Frisvad/Duff, sem normalizacao). z = N.
 float3x3 GGX_TangentBasis(float3 N) {
     float Sign = N.z >= 0.0f ? 1.0f : -1.0f;
     float a = -rcp(Sign + N.z);
@@ -19,20 +14,16 @@ float3x3 GGX_TangentBasis(float3 N) {
     return float3x3(Tx, Ty, N);
 }
 
-// GGX NDF isotropico. a2 = alpha² (alpha = roughness²). NoH = dot(N, H).
 float GGX_D(float a2, float NoH) {
     float d = (NoH * a2 - NoH) * NoH + 1.0f;
     return a2 / (SMILE_PI * d * d);
 }
 
-// Amostra o micronormal H (em tangent space, z=N) pela VNDF. V em tangent space. alpha = roughness².
-// Retorna float4(H, pdf da direcao refletida). Porte de ImportanceSampleVisibleGGX (isotropico).
 float4 GGX_SampleVNDF(float2 E, float alpha, float3 V) {
     float2 Alpha = float2(alpha, alpha);
     float3 Vh = normalize(float3(Alpha * V.xy, V.z));
 
     float Phi = (2.0f * SMILE_PI) * E.x;
-    // Bounded VNDF (Eq. 5): limita o cap p/ direcoes que refletem acima do horizonte.
     float aa = saturate(alpha);
     float s = 1.0f + length(V.xy);
     float aa2 = aa * aa, s2 = s * s;
@@ -43,7 +34,6 @@ float4 GGX_SampleVNDF(float2 E, float alpha, float3 V) {
     float3 H = float3(SinTheta * cos(Phi), SinTheta * sin(Phi), Z) + Vh;
     H = normalize(float3(Alpha * H.xy, max(0.0f, H.z)));
 
-    // PDF (VisibleGGXPDF isotropico, com o mesmo k do bounded sampling).
     float a2  = alpha * alpha;
     float NoV = V.z, NoH = H.z, VoH = dot(V, H);
     float d   = (NoH * a2 - NoH) * NoH + 1.0f;
@@ -51,8 +41,6 @@ float4 GGX_SampleVNDF(float2 E, float alpha, float3 V) {
     float pdf = 2.0f * VoH * D / (k * NoV + sqrt(NoV * (NoV - NoV * a2) + a2));
     return float4(H, pdf);
 }
-
-// --- Helpers do resolve (reconstrucao espacial) ---
 
 uint GGX_PCG(uint v) {
     v = v * 747796405u + 2891336453u;
@@ -71,16 +59,12 @@ float2 GGX_Hammersley(uint i, uint n, uint2 random) {
     return float2(e1, e2);
 }
 
-// Jitter 4-rooks (porte do GetScreenTileJitter do Lumen): dado um texel HALF-res, retorna qual
-// dos 4 pixels full-res (offset 0/1 em x,y) ele amostra neste frame. Rotaciona por frame -> ao
-// longo de 4 frames cobre os 4 pixels do bloco 2x2 (a acumulacao temporal da F3 completa o full-res).
 int2 RefTileJitter(uint2 HalfCoord, uint Frame) {
     uint2 Cell = HalfCoord % 2u;
     uint Lin = (Cell.x + Cell.y * 2u + Frame) % 4u;
     return int2((Lin & 0x2u) ? 1 : 0, (Lin & 0x1u) ? 0 : 1);
 }
 
-// Mapeia [0,1]² -> disco unitario (concentric, Shirley). Usado p/ os offsets dos vizinhos.
 float2 GGX_ConcentricDisk(float2 E) {
     float2 p = 2.0f * E - 1.0f;
     if (p.x == 0.0f && p.y == 0.0f) return float2(0.0f, 0.0f);
@@ -90,4 +74,4 @@ float2 GGX_ConcentricDisk(float2 E) {
     return r * float2(cos(theta), sin(theta));
 }
 
-#endif // SMILE_GGX_SAMPLE_HLSLI
+#endif 

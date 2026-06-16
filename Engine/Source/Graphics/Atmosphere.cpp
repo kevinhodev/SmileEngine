@@ -65,7 +65,7 @@ namespace Smile {
     }
 
     void FAtmosphere::Initialize(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
-                                 FTextureSRVHeap& _SRVHeap, u32 _SampleCount,
+                                 FTextureSRVHeap& _SRVHeap,
                                  DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (Initialized) return;
         SRVHeapPtr = &_SRVHeap;
@@ -112,7 +112,7 @@ namespace Smile {
 
         BuildInputTables(_Device, _SRVHeap);
         BuildSkyRootSignature(_Device);
-        BuildSkyPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildSkyPSO(_Device, _RTFormat, _DSFormat);
 
         Dirty       = true;
         Initialized = true;
@@ -250,7 +250,7 @@ namespace Smile {
                                               IID_PPV_ARGS(&SkyRootSig)));
     }
 
-    void FAtmosphere::BuildSkyPSO(ID3D12Device* _Device, u32 _SampleCount,
+    void FAtmosphere::BuildSkyPSO(ID3D12Device* _Device,
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         auto VS = LoadShaderBytecode("SkyAtmosphere.vs_6_0.cso");
         auto PS = LoadShaderBytecode("SkyAtmosphere.ps_6_0.cso");
@@ -282,15 +282,15 @@ namespace Smile {
         Desc.NumRenderTargets      = 1;
         Desc.RTVFormats[0]         = _RTFormat;
         Desc.DSVFormat             = _DSFormat;
-        Desc.SampleDesc            = { _SampleCount, 0 };
+        Desc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&SkyPSO)));
     }
 
-    void FAtmosphere::RecreateSky(ID3D12Device* _Device, u32 _SampleCount,
+    void FAtmosphere::RecreateSky(ID3D12Device* _Device,
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (!Initialized) return;
-        BuildSkyPSO(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildSkyPSO(_Device, _RTFormat, _DSFormat);
     }
 
     void FAtmosphere::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun,

@@ -42,6 +42,7 @@ namespace Smile {
 
         History[0].Reset();
         History[1].Reset();
+        DisplayTex.Reset();
 
         D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -69,17 +70,26 @@ namespace Smile {
             HistoryState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
+        SMILE_HR(Device->CreateCommittedResource(
+            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
+            IID_PPV_ARGS(&DisplayTex)));
+        DisplayState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
         if (!HistoryRTVHeap.Native())
-            HistoryRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
+            HistoryRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 3, false);
 
         D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
         RTVDesc.Format        = kHDRFormat;
         RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         for (int i = 0; i < 2; ++i)
             Device->CreateRenderTargetView(History[i].Get(), &RTVDesc, HistoryRTVHeap.CpuHandle(i));
+        Device->CreateRenderTargetView(DisplayTex.Get(), &RTVDesc, HistoryRTVHeap.CpuHandle(2));
 
         if (HistorySRVBase == kInvalidSlot)
             HistorySRVBase = SRVHeap.Allocate(2);
+        if (DisplaySRVSlot == kInvalidSlot)
+            DisplaySRVSlot = SRVHeap.Allocate(1);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                  = kHDRFormat;
@@ -88,16 +98,18 @@ namespace Smile {
         SRVDesc.Texture2D.MipLevels     = 1;
         for (int i = 0; i < 2; ++i)
             SRVHeap.CreateSRV(Device, History[i].Get(), SRVDesc, HistorySRVBase + i);
+        SRVHeap.CreateSRV(Device, DisplayTex.Get(), SRVDesc, DisplaySRVSlot);
 
         HistoryIndex    = 0;
         LastOutputIndex = 0;
     }
 
     void FTemporalAA::SetupInputs(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
-                                  ID3D12Resource* HDRInput, ID3D12Resource* Depth) {
+                                  ID3D12Resource* HDRInput, ID3D12Resource* Depth,
+                                  ID3D12Resource* VelocityTex) {
         if (!Initialized) return;
         if (ResolveTableBase == kInvalidSlot)
-            ResolveTableBase = SRVHeap.Allocate(6); 
+            ResolveTableBase = SRVHeap.Allocate(8); // 2 paridades x 4 slots [HDR, history, depth, velocity]
 
         D3D12_SHADER_RESOURCE_VIEW_DESC HDRSrv{};
         HDRSrv.Format                  = kHDRFormat;
@@ -106,20 +118,24 @@ namespace Smile {
         HDRSrv.Texture2D.MipLevels     = 1;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC DepthSrv = HDRSrv;
-        DepthSrv.Format = DXGI_FORMAT_R32_FLOAT; 
+        DepthSrv.Format = DXGI_FORMAT_R32_FLOAT;
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC VelSrv = HDRSrv;
+        VelSrv.Format = DXGI_FORMAT_R16G16_FLOAT;
 
         for (u32 i = 0; i < 2; ++i) {
-            const u32 base = ResolveTableBase + i * 3;
+            const u32 base = ResolveTableBase + i * 4;
             SRVHeap.CreateSRV(Device, HDRInput,            HDRSrv,   base + 0);
             SRVHeap.CreateSRV(Device, History[1 - i].Get(), HDRSrv,  base + 1);
             SRVHeap.CreateSRV(Device, Depth,               DepthSrv, base + 2);
+            SRVHeap.CreateSRV(Device, VelocityTex,         VelSrv,   base + 3);
         }
     }
 
     void FTemporalAA::BuildRootSignature(ID3D12Device* Device) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        SRVRange.NumDescriptors                    = 3;
+        SRVRange.NumDescriptors                    = 4; // t0 HDR, t1 history, t2 depth, t3 velocity
         SRVRange.BaseShaderRegister                = 0;
         SRVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -169,6 +185,7 @@ namespace Smile {
 
         D3D12_BLEND_DESC Blend{};
         Blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        Blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL; // SV_Target1 = debug
 
         D3D12_DEPTH_STENCIL_DESC Depth{};
         Depth.DepthEnable    = FALSE;
@@ -184,8 +201,9 @@ namespace Smile {
         PSODesc.DepthStencilState     = Depth;
         PSODesc.InputLayout           = { nullptr, 0 };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        PSODesc.NumRenderTargets      = 1;
+        PSODesc.NumRenderTargets      = 2;             // [0] history (feedback), [1] debug
         PSODesc.RTVFormats[0]         = kHDRFormat;
+        PSODesc.RTVFormats[1]         = kHDRFormat;
         PSODesc.SampleDesc            = { 1, 0 };
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&ResolvePSO)));
     }
@@ -211,7 +229,8 @@ namespace Smile {
     void FTemporalAA::Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                               u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
                               f32 HistoryBlend, bool HistoryValid, f32 VarianceGamma, f32 Sharpness,
-                              f32 MotionBlend, f32 AntiFlicker, u32 DebugMode) {
+                              f32 MotionBlend, f32 AntiFlicker, f32 StationaryMargin,
+                              const Vec3& CameraPosition, f32 NearZ, f32 FarZ, u32 DebugMode) {
         if (!Initialized || Width == 0 || Height == 0) return;
 
         const u32 curr = HistoryIndex;
@@ -222,12 +241,15 @@ namespace Smile {
         C.Params0      = { 1.0f / static_cast<f32>(Width), 1.0f / static_cast<f32>(Height),
                            HistoryBlend, HistoryValid ? 1.0f : 0.0f };
         C.Params1      = { VarianceGamma, Sharpness, static_cast<f32>(DebugMode), MotionBlend };
-        C.Params2      = { AntiFlicker, 0.0f, 0.0f, 0.0f };
+        C.Params2      = { AntiFlicker, StationaryMargin, NearZ, FarZ };
+        C.CameraPos    = { CameraPosition.X, CameraPosition.Y, CameraPosition.Z, 1.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(TAAConstants),
                     &C, sizeof(TAAConstants));
 
         Transition(CommandList, History[curr].Get(), HistoryState[curr], D3D12_RESOURCE_STATE_RENDER_TARGET);
         HistoryState[curr] = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        Transition(CommandList, DisplayTex.Get(), DisplayState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        DisplayState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
         D3D12_VIEWPORT VP{}; VP.Width = static_cast<FLOAT>(Width); VP.Height = static_cast<FLOAT>(Height);
         VP.MinDepth = 0.0f; VP.MaxDepth = 1.0f;
@@ -235,14 +257,15 @@ namespace Smile {
         CommandList->RSSetViewports(1, &VP);
         CommandList->RSSetScissorRects(1, &Sc);
 
-        auto RTV = HistoryRTVHeap.CpuHandle(curr);
-        CommandList->OMSetRenderTargets(1, &RTV, FALSE, nullptr);
+        // MRT: SV_Target0 -> history[curr] (feedback), SV_Target1 -> DisplayTex (so tela).
+        D3D12_CPU_DESCRIPTOR_HANDLE RTVs[2] = { HistoryRTVHeap.CpuHandle(curr), HistoryRTVHeap.CpuHandle(2) };
+        CommandList->OMSetRenderTargets(2, RTVs, FALSE, nullptr);
 
         CommandList->SetGraphicsRootSignature(RootSig.Get());
         CommandList->SetPipelineState(ResolvePSO.Get());
         CommandList->SetGraphicsRootConstantBufferView(
             0, CB->GetGPUVirtualAddress() + static_cast<u64>(FrameSlot) * sizeof(TAAConstants));
-        CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(ResolveTableBase + curr * 3));
+        CommandList->SetGraphicsRootDescriptorTable(1, SRVHeap.GpuHandle(ResolveTableBase + curr * 4));
 
         CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         CommandList->IASetVertexBuffers(0, 0, nullptr);
@@ -252,8 +275,11 @@ namespace Smile {
         Transition(CommandList, History[curr].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         HistoryState[curr] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        Transition(CommandList, DisplayTex.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        DisplayState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         LastOutputIndex = curr;
-        HistoryIndex    = 1 - curr; 
+        HistoryIndex    = 1 - curr;
     }
 }

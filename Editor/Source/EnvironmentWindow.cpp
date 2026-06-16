@@ -284,7 +284,7 @@ namespace SmileEditor {
         };
         Layout->addWidget(MakeNumericRow(tr("Azimute"), -180.0, 180.0, 1.0, 1, 0.0, QStringLiteral("°"), &AzimuthSpin, SunChanged));
         Layout->addWidget(MakeNumericRow(tr("Elevação"), -5.0, 90.0, 0.5, 1, 45.0, QStringLiteral("°"), &ElevationSpin, SunChanged));
-        Layout->addWidget(MakeNumericRow(tr("Intensidade"), 0.0, 10.0, 0.1, 2, 2.5, QString(), &SunIntensitySpin, [this](double Value) {
+        Layout->addWidget(MakeNumericRow(tr("Intensidade"), 0.0, 10.0, 0.1, 2, 5, QString(), &SunIntensitySpin, [this](double Value) {
             if (RendererPtr) RendererPtr->SetSunIntensity(static_cast<float>(Value));
         }));
 
@@ -589,7 +589,7 @@ namespace SmileEditor {
         Layout->addWidget(MakeToggleRow(tr("Relocação de probes (anti-leak/parede)"), &GIRelocationCheck, true, [this](bool Checked) {
             if (RendererPtr) RendererPtr->SetGIRelocation(Checked);
         }));
-        Layout->addWidget(MakeNumericRow(tr("Estabilidade temporal (anti-flicker)"), 0.80, 0.99, 0.01, 2, 0.97, QString(), &GIHysteresisSpin, [this](double Value) {
+        Layout->addWidget(MakeNumericRow(tr("Estabilidade temporal (anti-flicker)"), 0.80, 0.99, 0.01, 2, 0.99, QString(), &GIHysteresisSpin, [this](double Value) {
             if (RendererPtr) RendererPtr->SetGIHysteresis(static_cast<float>(Value));
         }));
         Layout->addWidget(MakeToggleRow(tr("Debug: ver irradiância dos probes"), &GIDebugCheck, false, [this](bool Checked) {
@@ -645,6 +645,54 @@ namespace SmileEditor {
         Layout->addWidget(MakeToggleRow(tr("Reflexão: acumulação temporal"), &ReflectionTemporalCheck, true, [this](bool Checked) {
             if (RendererPtr) RendererPtr->SetReflectionTemporal(Checked);
         }));
+
+        // Debug do reflexo (overlay sobre os pixels com reflexo): 0=off, 1=acumulacao, 2=mascara espelho.
+        {
+            auto* ModeRow = new QWidget(Body);
+            ModeRow->setObjectName("EnvironmentControlRow");
+            auto* ModeLayout = new QHBoxLayout(ModeRow);
+            ModeLayout->setContentsMargins(0, 0, 0, 0);
+            ModeLayout->setSpacing(14);
+            auto* ModeLabel = new QLabel(tr("Reflexão: debug"), ModeRow);
+            ModeLabel->setObjectName("EnvironmentRowLabel");
+            ModeLayout->addWidget(ModeLabel, 1);
+            auto* ReflDebugCombo = new QComboBox(ModeRow);
+            ReflDebugCombo->setObjectName("EnvironmentCombo");
+            ReflDebugCombo->addItems(QStringList{ tr("Desligado"), tr("Acumulação (frames)"),
+                                                  tr("Máscara espelho") });
+            ReflDebugCombo->setFixedWidth(156);
+            ModeLayout->addWidget(ReflDebugCombo);
+            ModeLayout->addSpacing(200);
+            connect(ReflDebugCombo, &QComboBox::currentIndexChanged, this, [this](int Index) {
+                if (RendererPtr) RendererPtr->SetReflectionDebugMode(static_cast<Smile::u32>(Index));
+            });
+            Layout->addWidget(ModeRow);
+        }
+
+        // Deferred (migracao G-buffer, Fase 1): visualiza um canal do G-buffer em fullscreen.
+        {
+            auto* ModeRow = new QWidget(Body);
+            ModeRow->setObjectName("EnvironmentControlRow");
+            auto* ModeLayout = new QHBoxLayout(ModeRow);
+            ModeLayout->setContentsMargins(0, 0, 0, 0);
+            ModeLayout->setSpacing(14);
+            auto* ModeLabel = new QLabel(tr("G-Buffer: debug"), ModeRow);
+            ModeLabel->setObjectName("EnvironmentRowLabel");
+            ModeLayout->addWidget(ModeLabel, 1);
+            auto* GBufferDebugCombo = new QComboBox(ModeRow);
+            GBufferDebugCombo->setObjectName("EnvironmentCombo");
+            GBufferDebugCombo->addItems(QStringList{ tr("Desligado"), tr("BaseColor"), tr("Normal"),
+                                                     tr("Roughness"), tr("Metallic"), tr("Emissive"),
+                                                     tr("AO (material)"), tr("Shading model"),
+                                                     tr("Motion vector") });
+            GBufferDebugCombo->setFixedWidth(156);
+            ModeLayout->addWidget(GBufferDebugCombo);
+            ModeLayout->addSpacing(200);
+            connect(GBufferDebugCombo, &QComboBox::currentIndexChanged, this, [this](int Index) {
+                if (RendererPtr) RendererPtr->SetGBufferDebug(static_cast<Smile::u32>(Index));
+            });
+            Layout->addWidget(ModeRow);
+        }
 
         // --- AO (GTAO): oclusao de contato em screen-space, aplicada ao indireto ---
         Layout->addWidget(MakeToggleRow(tr("Ativar AO de contato (GTAO)"), &AOCheck, true, [this](bool Checked) {
@@ -713,6 +761,17 @@ namespace SmileEditor {
         Layout->addWidget(MakeNumericRow(tr("Exposição"), 0.01, 10.0, 0.05, 2, 1.0, QString(), &ExposureSpin, [this](double Value) {
             if (RendererPtr) RendererPtr->SetExposure(static_cast<float>(Value));
         }));
+        // FSR2 (AMD FidelityFX): upscaler/AA temporal. Substitui o TAA custom quando ligado.
+        // So tem efeito em build Release (em Debug o FFsr2Pass e stub). Ligado por padrao.
+        Layout->addWidget(MakeToggleRow(tr("FSR2 (substitui o TAA)"), &Fsr2Check, true, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetUseFsr2(Checked);
+        }));
+        // Qualidade do FSR2 = quanto a cena renderiza abaixo do display (FSR2 faz o upscale):
+        // 0=Native(1:1) 1=Quality(1.5x) 2=Balanced(1.7x) 3=Performance(2x) 4=UltraPerf(3x).
+        // ↑ = mais FPS, menos nitidez. Native = so AA temporal (sem ganho de perf).
+        Layout->addWidget(MakeNumericRow(tr("FSR2 qualidade (0=nativo→4=ultra)"), 0.0, 4.0, 1.0, 0, 0.0, QString(), &Fsr2QualitySpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetFsr2Quality(static_cast<int>(Value + 0.5));
+        }));
         // TAA: anti-aliasing temporal (acumula a cor; mata o serrilhado e o shimmer da DDGI).
         // Mutuamente exclusivo com MSAA. Blend = fracao de history (mais alto = mais estavel/lento).
         Layout->addWidget(MakeToggleRow(tr("Anti-aliasing temporal (TAA)"), &TAACheck, true, [this](bool Checked) {
@@ -738,6 +797,19 @@ namespace SmileEditor {
         Layout->addWidget(MakeNumericRow(tr("Anti-cintilamento (glint)"), 0.0, 1.0, 0.05, 2, 0.60, QString(), &TAAAntiFlickerSpin, [this](double Value) {
             if (RendererPtr) RendererPtr->SetTAAAntiFlicker(static_cast<float>(Value));
         }));
+        // Margem estacionaria do AABB (ref Flax): afrouxa o clamp do history em arestas finas com
+        // a camera parada, matando o shimmer residual. 0 = off (clamp apertado de sempre).
+        Layout->addWidget(MakeNumericRow(tr("Margem estacionária (parado)"), 0.0, 8.0, 0.5, 1, 4.0, QString(), &TAAStationarySpin, [this](double Value) {
+            if (RendererPtr) RendererPtr->SetTAAStationaryMargin(static_cast<float>(Value));
+        }));
+        // Supersampling (SSAA): renderiza a cena em swapchain*escala e faz downsample pro display.
+        // 1.0=nativo, 1.5≈2.25x pixels, 2.0=4x pixels. Mata serrilhado/shimmer sub-pixel; custa GPU.
+        {
+            QDoubleSpinBox* RenderScaleSpin = nullptr;
+            Layout->addWidget(MakeNumericRow(tr("Supersampling (escala)"), 1.0, 2.0, 0.25, 2, 1.0, QString(), &RenderScaleSpin, [this](double Value) {
+                if (RendererPtr) RendererPtr->SetRenderScale(static_cast<float>(Value));
+            }));
+        }
         // Debug TAA: 0=off 1=offset reproj(px) 2=|atual-history| 3=dist clamp 4=peso history
         // 5=sigma 6=só history 7=só atual. (a saída passa pelo bloom/tonemap — leitura relativa)
         Layout->addWidget(MakeNumericRow(tr("Debug TAA (0=off)"), 0.0, 7.0, 1.0, 0, 0.0, QString(), &TAADebugSpin, [this](double Value) {
@@ -990,6 +1062,7 @@ namespace SmileEditor {
         if (TAASharpnessSpin) TAASharpnessSpin->setValue(RendererPtr->GetTAASharpness());
         if (TAAMotionSpin) TAAMotionSpin->setValue(RendererPtr->GetTAAMotionBlend());
         if (TAAAntiFlickerSpin) TAAAntiFlickerSpin->setValue(RendererPtr->GetTAAAntiFlicker());
+        if (TAAStationarySpin) TAAStationarySpin->setValue(RendererPtr->GetTAAStationaryMargin());
         if (TAADebugSpin) TAADebugSpin->setValue(RendererPtr->GetTAADebug());
         if (FlickerModeSpin) FlickerModeSpin->setValue(RendererPtr->GetFlickerMode());
         if (FlickerScaleSpin) FlickerScaleSpin->setValue(RendererPtr->GetFlickerScale());
@@ -999,7 +1072,7 @@ namespace SmileEditor {
     void EnvironmentWindow::SetDefaults() {
         if (AzimuthSpin) AzimuthSpin->setValue(30.0);
         if (ElevationSpin) ElevationSpin->setValue(3.0);
-        if (SunIntensitySpin) SunIntensitySpin->setValue(2.5);
+        if (SunIntensitySpin) SunIntensitySpin->setValue(5);
         if (AtmosphereCheck) AtmosphereCheck->setChecked(true);
         if (SunDiskSpin) SunDiskSpin->setValue(0.7);
         if (GlareSpin) GlareSpin->setValue(4.0);
@@ -1088,6 +1161,7 @@ namespace SmileEditor {
         if (TAASharpnessSpin) TAASharpnessSpin->setValue(0.20);
         if (TAAMotionSpin) TAAMotionSpin->setValue(0.70);
         if (TAAAntiFlickerSpin) TAAAntiFlickerSpin->setValue(0.60);
+        if (TAAStationarySpin) TAAStationarySpin->setValue(4.0);
         if (TAADebugSpin) TAADebugSpin->setValue(0);
         if (FlickerModeSpin) FlickerModeSpin->setValue(0);
         if (FlickerScaleSpin) FlickerScaleSpin->setValue(0.30);

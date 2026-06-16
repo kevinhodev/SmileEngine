@@ -23,9 +23,9 @@ namespace Smile {
             Depth        = 9,
         };
 
-        void Initialize(ID3D12Device* Device, u32 SampleCount,
+        void Initialize(ID3D12Device* Device,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
-        void Recreate(ID3D12Device* Device, u32 SampleCount,
+        void Recreate(ID3D12Device* Device,
                       DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Resize(ID3D12Device* Device, u32 Width, u32 Height); 
 
@@ -182,7 +182,7 @@ namespace Smile {
         static_assert(sizeof(WaterConstants) % 256 == 0, "WaterConstants deve ser multiplo de 256");
 
         void BuildRootSignature(ID3D12Device* Device);
-        void BuildPSO(ID3D12Device* Device, u32 SampleCount,
+        void BuildPSO(ID3D12Device* Device,
                       DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void BuildGenerateDrawsPipeline(ID3D12Device* Device);
         void BuildGrid(ID3D12Device* Device);

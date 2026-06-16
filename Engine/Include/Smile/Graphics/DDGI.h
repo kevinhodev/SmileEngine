@@ -154,7 +154,7 @@ namespace Smile {
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
         f32  Intensity    = 1.0f;
-        f32  Hysteresis   = 0.97f;  
+        f32  Hysteresis   = 0.99f;  
         f32  SkyIntensity = 1.0f;
         f32  NormalBias   = 0.2f;   
         f32  MaxRayDist   = 0.0f;  

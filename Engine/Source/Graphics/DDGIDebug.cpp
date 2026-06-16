@@ -75,7 +75,7 @@ namespace Smile {
                                               IID_PPV_ARGS(&RootSignature)));
     }
 
-    void FDDGIDebug::BuildPSOs(ID3D12Device* _Device, u32 _SampleCount,
+    void FDDGIDebug::BuildPSOs(ID3D12Device* _Device,
                                DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         auto ProbeVS  = LoadShaderBytecode("DDGIDebugProbes.vs_6_0.cso");
         auto ProbePS  = LoadShaderBytecode("DDGIDebugProbes.ps_6_0.cso");
@@ -112,7 +112,7 @@ namespace Smile {
         Desc.NumRenderTargets      = 1;
         Desc.RTVFormats[0]         = _RTFormat;
         Desc.DSVFormat             = _DSFormat;
-        Desc.SampleDesc            = { _SampleCount, 0 };
+        Desc.SampleDesc            = { 1, 0 };
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&ProbePSO)));
 
         Desc.VS                    = { VolumeVS.data(), VolumeVS.size() };
@@ -130,10 +130,10 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&RaysPSO)));
     }
 
-    void FDDGIDebug::Initialize(ID3D12Device* _Device, u32 _SampleCount,
+    void FDDGIDebug::Initialize(ID3D12Device* _Device,
                                 DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         BuildRootSignature(_Device);
-        BuildPSOs(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildPSOs(_Device, _RTFormat, _DSFormat);
 
         StatsPSO.Initialize(_Device, "DDGIDebugStats.cs_6_0.cso", 1, 1);
 
@@ -153,9 +153,9 @@ namespace Smile {
         SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBBase)));
     }
 
-    void FDDGIDebug::Recreate(ID3D12Device* _Device, u32 _SampleCount,
+    void FDDGIDebug::Recreate(ID3D12Device* _Device,
                               DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
-        BuildPSOs(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildPSOs(_Device, _RTFormat, _DSFormat);
     }
 
     void FDDGIDebug::SetupForScene(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap, u32 _NumProbes) {

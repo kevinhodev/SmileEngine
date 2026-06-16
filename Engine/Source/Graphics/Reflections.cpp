@@ -33,8 +33,10 @@ namespace Smile {
 
     void FReflections::Initialize(ID3D12Device* _Device) {
         TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_6.cso", 8, 2, true);
+        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 8, 1, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 4, 1, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 4, 1, false);
+        SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 3, 1, false);
         CreateCompositePipeline(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
@@ -144,19 +146,23 @@ namespace Smile {
         Free(ResolvedUAVSlot, 1);
         Free(HistorySRVSlot[0], 1); Free(HistorySRVSlot[1], 1);
         Free(HistoryUAVSlot[0], 1); Free(HistoryUAVSlot[1], 1);
+        Free(DenoisedSRVSlot, 1); Free(DenoisedUAVSlot, 1);
         Free(TraceUAVTable, 2);
         Free(TraceTableStart, 8);
         Free(ResolveTableStart, 4);
         Free(TemporalTable[0], 4); Free(TemporalTable[1], 4);
+        Free(SpatialTable[0], 3); Free(SpatialTable[1], 3);
         Free(CompositeTable[0], 4); Free(CompositeTable[1], 4);
         Radiance.Reset();
         RayData.Reset();
         Resolved.Reset();
         History[0].Reset(); History[1].Reset();
+        Denoised.Reset();
         RadianceState = D3D12_RESOURCE_STATE_COMMON;
         RayDataState  = D3D12_RESOURCE_STATE_COMMON;
         ResolvedState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
+        DenoisedState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
     }
 
@@ -177,9 +183,11 @@ namespace Smile {
         Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         RadianceState = RayDataState = ResolvedState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
-        NeedsHistoryClear = true; FrameParity = 0; 
+        DenoisedState = D3D12_RESOURCE_STATE_COMMON;
+        NeedsHistoryClear = true; FrameParity = 0;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
         Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -196,6 +204,7 @@ namespace Smile {
         ResolvedUAVSlot = _SRVHeap.Allocate(1);
         HistorySRVSlot[0] = _SRVHeap.Allocate(1); HistorySRVSlot[1] = _SRVHeap.Allocate(1);
         HistoryUAVSlot[0] = _SRVHeap.Allocate(1); HistoryUAVSlot[1] = _SRVHeap.Allocate(1);
+        DenoisedSRVSlot = _SRVHeap.Allocate(1); DenoisedUAVSlot = _SRVHeap.Allocate(1);
         _SRVHeap.CreateSRV(_Device, Radiance.Get(), Srv, RadianceSRVSlot);
         _SRVHeap.CreateSRV(_Device, RayData.Get(),  Srv, RayDataSRVSlot);
         _SRVHeap.CreateSRV(_Device, Resolved.Get(), Srv, ResolvedSRVSlot);
@@ -204,6 +213,8 @@ namespace Smile {
         _SRVHeap.CreateSRV(_Device, History[1].Get(), Srv, HistorySRVSlot[1]);
         _SRVHeap.CreateUAV(_Device, History[0].Get(), Uav, HistoryUAVSlot[0]);
         _SRVHeap.CreateUAV(_Device, History[1].Get(), Uav, HistoryUAVSlot[1]);
+        _SRVHeap.CreateSRV(_Device, Denoised.Get(), Srv, DenoisedSRVSlot);
+        _SRVHeap.CreateUAV(_Device, Denoised.Get(), Uav, DenoisedUAVSlot);
 
         TraceUAVTable = _SRVHeap.Allocate(2);
         _SRVHeap.CreateUAV(_Device, Radiance.Get(), Uav, TraceUAVTable);
@@ -250,10 +261,22 @@ namespace Smile {
             };
             _Device->CopyDescriptors(1, &TDst2, &Four, 4, TSrc2, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+            // Spatial le o History[curr] (recem-acumulado) + gbuf + depth -> Denoised.
+            SpatialTable[curr] = _SRVHeap.Allocate(3);
+            D3D12_CPU_DESCRIPTOR_HANDLE SDst = _SRVHeap.CpuHandle(SpatialTable[curr]);
+            D3D12_CPU_DESCRIPTOR_HANDLE SSrc[3] = {
+                _SRVHeap.CpuHandleStaging(HistorySRVSlot[curr]),
+                _SRVHeap.CpuHandleStaging(_GBufferSlot),
+                _SRVHeap.CpuHandleStaging(_DepthSlot),
+            };
+            UINT Three = 3;
+            _Device->CopyDescriptors(1, &SDst, &Three, 3, SSrc, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            // Composite le o Denoised (saida do spatial), nao mais o History[curr] direto.
             CompositeTable[curr] = _SRVHeap.Allocate(4);
             D3D12_CPU_DESCRIPTOR_HANDLE CDst2 = _SRVHeap.CpuHandle(CompositeTable[curr]);
             D3D12_CPU_DESCRIPTOR_HANDLE CSrc2[4] = {
-                _SRVHeap.CpuHandleStaging(HistorySRVSlot[curr]),
+                _SRVHeap.CpuHandleStaging(DenoisedSRVSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_BRDFLutSlot),
@@ -280,7 +303,9 @@ namespace Smile {
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
         CPU.PrevViewProj    = _PrevViewProj;
-        CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, 0.0f, 0.0f };
+        CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, SpatialRadius,
+                                FullResMaxRough };
+        CPU.DebugParams     = { (f32)DebugMode, MaxFrames, 0.0f, 0.0f }; // y = cap real p/ debug acumulacao
         CPU.CameraPos       = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z, 1.0f };
         CPU.ScreenParams    = { (f32)_Width, (f32)_Height, 1.0f / (f32)_Width, 1.0f / (f32)_Height };
         CPU.ReflectParams   = { MaxRoughnessToTrace, RoughnessFadeLength,
@@ -338,6 +363,21 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVSlot));
         _CL->Dispatch(FGX, FGY, 1);
 
+        // Mirror full-res: traca os pixels quase-espelho em resolucao cheia e sobrescreve o
+        // Resolved (cromado fino fica nitido/estavel, sem o shimmer do half-res). Reusa as 8 SRVs
+        // do trace e o UAV do Resolved. O UAV barrier garante que o resolve terminou antes.
+        {
+            D3D12_RESOURCE_BARRIER UB{};
+            UB.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            UB.UAV.pResource = Resolved.Get();
+            _CL->ResourceBarrier(1, &UB);
+        }
+        TraceMirrorPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTableStart));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVSlot));
+        _CL->Dispatch(FGX, FGY, 1);
+
         const u32 curr = FrameParity, prev = 1u - FrameParity;
         CurrParity = curr;
 
@@ -361,7 +401,18 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(HistoryUAVSlot[curr]));
         _CL->Dispatch(FGX, FGY, 1);
 
-        Transition(_CL, History[curr].Get(), HistoryState[curr], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // Denoise espacial pos-temporal: History[curr] (acumulado) -> Denoised. Limpa as bordas
+        // (acumulacao baixa) sem borrar o interior convergido. O History[curr] segue intacto p/
+        // virar History[prev] no proximo frame (sem feedback do blur na acumulacao).
+        Transition(_CL, History[curr].Get(), HistoryState[curr], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, Denoised.Get(),      DenoisedState,      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        SpatialPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpatialTable[curr]));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DenoisedUAVSlot));
+        _CL->Dispatch(FGX, FGY, 1);
+
+        Transition(_CL, Denoised.Get(), DenoisedState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         FrameParity ^= 1u;
     }
 

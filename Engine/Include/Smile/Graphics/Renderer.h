@@ -14,6 +14,8 @@
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/Material.h"
+#include "Smile/Graphics/GBuffer.h"
+#include "Smile/Graphics/GBufferDebug.h"
 #include "Smile/Graphics/HDREnvironment.h"
 #include "Smile/Graphics/Atmosphere.h"
 #include "Smile/Graphics/TimeOfDay.h"
@@ -32,6 +34,7 @@
 #include "Smile/Graphics/SelectionOutline.h"
 #include "Smile/Graphics/DebugDraw.h"
 #include "Smile/Graphics/TemporalAA.h"
+#include "Smile/Graphics/Fsr2Pass.h"
 #include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
@@ -57,11 +60,16 @@ namespace Smile {
 
         Vec4  MoonDirection;      // 16 bytes — xyz = direction TO moon (normalized), w = intensity
         Vec4  MoonColor;          // 16 bytes — rgb = cor do luar (fria, tingida pela transmitancia), w = -
+
+        Mat44 InvViewProj;        // 64 bytes — inversa FULL da view-proj (jittered); deferred lighting
+                                  // reconstroi worldPos do depth. Append no fim: nao mexe nos offsets acima.
     };
 
     struct alignas(256) ObjectConstants {
-        Mat44 MVP;          // 64 bytes — Model * View * Projection
-        Mat44 ModelMatrix;  // 64 bytes — world (para worldPos/worldNormal)
+        Mat44 MVP;            // 64 bytes — Model * View * Projection (jittered, p/ SV_POSITION)
+        Mat44 ModelMatrix;    // 64 bytes — world (para worldPos/worldNormal)
+        Mat44 CurMVPNoJitter; // 64 bytes — Model * ViewProjUnjittered (atual) — motion vector
+        Mat44 PrevMVP;        // 64 bytes — PrevModel * PrevViewProjUnjittered — motion vector
     };
 
     class Renderer {
@@ -76,8 +84,10 @@ namespace Smile {
         void Shutdown();
 
         void Resize(u32 Width, u32 Height);
-        void SetMSAA(u32 SampleCount);
-        bool ReloadShaders();
+        // Recarrega os PSOs cujo shader mudou. ChangedStem = nome do .cso sem perfil
+        // nem extensao (ex.: "WaterSurface.ps"). Vazio (ou stem nao mapeado / .hlsli
+        // incluido por varios shaders) => reload completo.
+        bool ReloadShaders(const std::string& ChangedStem = "");
 
         void SetVSync(bool Enabled) { SwapChain.SetVSync(Enabled); }
         bool GetVSync() const       { return SwapChain.GetVSync(); }
@@ -89,7 +99,9 @@ namespace Smile {
 
         FScene& GetScene() { return Scene; }
 
-        bool LoadCookedScene(const std::wstring& ScenePath);
+        // Additive=true acrescenta a cena cozida sobre a atual (ex.: interior por cima
+        // do exterior da Bistro) sem limpar meshes/materiais/camera ja carregados.
+        bool LoadCookedScene(const std::wstring& ScenePath, bool Additive = false);
 
         FTexture& GetDefaultWhite()  { return TexDefaultWhite; }
         FTexture& GetDefaultNormal() { return TexDefaultNormal; }
@@ -109,7 +121,18 @@ namespace Smile {
 
         bool IsInitialized() const { return Initialized; }
 
-        void RequestPick(u32 X, u32 Y) { ObjectPicker.RequestPick(X, Y); }
+        // Supersampling (SSAA): a cena renderiza em RenderWidth/Height = swapchain * RenderScale;
+        // o PostProcessor faz o downsample pro backbuffer nativo. >1.0 = mais amostras/pixel.
+        void SetRenderScale(f32 V); // recria os RTs internos (so a cena; backbuffer fica nativo)
+        f32  GetRenderScale() const { return RenderScale; }
+        u32  RenderWidth()  const { return static_cast<u32>(SwapChain.GetWidth()  * RenderScale + 0.5f); }
+        u32  RenderHeight() const { return static_cast<u32>(SwapChain.GetHeight() * RenderScale + 0.5f); }
+
+        // Picking: o ID pass roda em res interna -> escala a coord do mouse (nativa) por RenderScale.
+        void RequestPick(u32 X, u32 Y) {
+            ObjectPicker.RequestPick(static_cast<u32>(X * RenderScale + 0.5f),
+                                     static_cast<u32>(Y * RenderScale + 0.5f));
+        }
         bool TryGetPickResult(int& OutIndex) { return ObjectPicker.TryResolve(OutIndex); }
         void SetSelectedObject(int Index) { SelectedIndex = Index; }
         int  GetSelectedObject() const    { return SelectedIndex; }
@@ -162,8 +185,27 @@ namespace Smile {
         f32  GetTAAMotionBlend() const       { return TAAMotionBlend; }
         void SetTAAAntiFlicker(f32 V)        { TAAAntiFlicker = V; }
         f32  GetTAAAntiFlicker() const       { return TAAAntiFlicker; }
+        void SetTAAStationaryMargin(f32 V)   { TAAStationaryMargin = V; }
+        f32  GetTAAStationaryMargin() const  { return TAAStationaryMargin; }
         void SetTAADebug(u32 Mode)           { TAADebugMode = Mode; }
         u32  GetTAADebug() const             { return TAADebugMode; }
+
+        // FSR2 (substitui o TAA quando ligado). So funciona em build Release (Debug = stub).
+        void SetUseFsr2(bool V) {
+            UseFsr2 = V; TAARanLastFrame = false;
+            // FSR2 = render menor + upscale; desligado volta ao nativo. So mexe no scale se o
+            // contexto existe (Release) — em Debug (stub) nao mexe p/ nao borrar via post chain.
+            if (Fsr2.IsInitialized()) SetRenderScale(V ? Fsr2Ratio() : 1.0f);
+        }
+        bool GetUseFsr2() const              { return UseFsr2; }
+        bool Fsr2Available() const           { return Fsr2.IsInitialized(); }
+        // Qualidade do FSR2: 0=Native(1.0) 1=Quality(1.5x) 2=Balanced(1.7x) 3=Performance(2.0x)
+        // 4=UltraPerf(3.0x). Dirige o RenderScale (render res < display = upscale + perf).
+        void SetFsr2Quality(int Mode) {
+            Fsr2Quality = Mode < 0 ? 0 : (Mode > 4 ? 4 : Mode);
+            if (UseFsr2 && Fsr2.IsInitialized()) SetRenderScale(Fsr2Ratio());
+        }
+        int  GetFsr2Quality() const          { return Fsr2Quality; }
 
         void SetFlickerMode(u32 Mode)        { if (Mode > 0 && FlickerMode == 0) FlickerResetPending = true; FlickerMode = Mode; }
         u32  GetFlickerMode() const          { return FlickerMode; }
@@ -173,6 +215,11 @@ namespace Smile {
         f32  GetFlickerAlpha() const         { return FlickerAlpha; }
 
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
+
+        // Deferred (migracao em andamento) — debug do G-buffer: 0=off, 1=BaseColor, 2=Normal,
+        // 3=Roughness, 4=Metallic, 5=Emissive, 6=AO, 7=ShadingModel.
+        void SetGBufferDebug(u32 Mode)       { GBufferDebugMode = Mode; }
+        u32  GetGBufferDebug() const         { return GBufferDebugMode; }
 
         void SetUseAtmosphereSky(bool Use)   { UseAtmosphereSky = Use; }
         bool GetUseAtmosphereSky() const     { return UseAtmosphereSky; }
@@ -236,7 +283,6 @@ namespace Smile {
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
         f32  GetPitch()     const { return Camera.GetPitch(); }
         f32  GetYaw()       const { return Camera.GetYaw(); }
-        u32  GetMSAA()      const { return MSAASampleCount; }
 
         const FD3D12Device& GetDevice()  const { return Device; }
         FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
@@ -293,6 +339,8 @@ namespace Smile {
         f32  GetReflectionRoughnessFade() const{ return const_cast<FReflections&>(Reflections).GetRoughnessFade(); }
         void SetReflectionTemporal(bool V) { Reflections.SetTemporal(V); }   // acumulacao temporal (F3)
         bool GetReflectionTemporal() const { return const_cast<FReflections&>(Reflections).GetTemporal(); }
+        void SetReflectionDebugMode(u32 V) { Reflections.SetDebugMode(V); }  // 0=off,1=accum,2=mirror-mask
+        u32  GetReflectionDebugMode() const{ return const_cast<FReflections&>(Reflections).GetDebugMode(); }
         FReflections& GetReflections()     { return Reflections; }
 
         void SetUseAO(bool Use)        { UseAO = Use; }
@@ -312,14 +360,16 @@ namespace Smile {
         FAmbientOcclusion& GetAO()     { return AO; }
 
     private:
+        void RecreateAllPSOs();
         void BuildDefaultScene();
         void BuildRaytracingScene();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
         void CreateDepthBuffer();
         void CreateConstantBuffer();
-        void CreateMSAABuffers();
         void CreateHDRBuffers();
-        void CreateSceneCopies(); 
+        void CreateSceneCopies();
+        void CreateVelocityBuffer();
+        void RecreateInternalTargets(); // recria RTs de cena em RenderWidth/Height (resize + render scale)
         void CreateDefaultMaterial();
         void CreateIBLDescriptorTable();
 
@@ -353,13 +403,24 @@ namespace Smile {
         D3D12_RESOURCE_STATES    NormalBufferState = D3D12_RESOURCE_STATE_COMMON;
         void CreateNormalBuffer();
 
-        ComPtr<ID3D12Resource>   ReflectionGBuffer;
-        FDescriptorHeap          ReflectionGBufferRTVHeap;
-        u32                      ReflectionGBufferSRVSlot = kInvalidSlot;
-        D3D12_RESOURCE_STATES    ReflectionGBufferState = D3D12_RESOURCE_STATE_COMMON;
-
-        void CreateReflectionGBuffer();
         void SetupReflectionsForScene();
+
+        // Deferred shading: o G-buffer e a unica fonte de geometria opaca. GBufferB (OctNormal +
+        // Roughness + Metallic) e byte-a-byte o antigo ReflectionGBuffer -> as reflexoes leem dele.
+        FGBuffer       GBuffer;
+        FGBufferDebug  GBufferDebugPass;
+        u32            GBufferDebugMode = 0;
+
+        // Motion vector buffer (RG16F): escrito no geometry pass (SV_Target3), lido pelo TAA.
+        // RT proprio (lifecycle desacoplado das transicoes do GBuffer, que fazem ping-pong p/ as
+        // reflexoes). Velocidade em UV = curUV(sem jitter) - prevUV.
+        ComPtr<ID3D12Resource>   VelocityBuffer;
+        FDescriptorHeap          VelocityRTVHeap;   // 1 RTV
+        u32                      VelocitySRVSlot = 0xFFFFFFFFu;
+        D3D12_RESOURCE_STATES    VelocityState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        // Transform por-objeto do frame anterior, indexado pelo indice da cena (Scene.Renderables()).
+        // Estatico -> PrevModel == Model -> motion vector reduz ao termo de camera.
+        std::vector<Mat44>       PrevModels;
 
         ComPtr<ID3D12Resource>   ConstantBuffer;   
         u8*                      MappedFrameBase = nullptr;
@@ -376,14 +437,10 @@ namespace Smile {
         bool UseFrustumCulling = true;
         bool UseDepthPrepass   = false;
         bool MergeByMaterial   = false;
+        f32  RenderScale       = 1.0f; // SSAA: cena em swapchain*RenderScale; backbuffer nativo
         u32  LastVisibleCount  = 0;
 
-        ComPtr<ID3D12Resource>   MSAAColorBuffer;
-        FDescriptorHeap          MSAARTVHeap;
-        u32                      MSAASampleCount = 1;
-
         ComPtr<ID3D12Resource>   HDRColorBuffer;
-        ComPtr<ID3D12Resource>   HDRMSAAColorBuffer;
         FDescriptorHeap          HDRRTVHeap;
         u32                      HDRSRVSlot = kInvalidSlot;
         FPostProcessor           PostProcessor;
@@ -401,10 +458,21 @@ namespace Smile {
         f32                      TAAVarianceGamma = 1.25f; 
         f32                      TAASharpness     = 0.2f;  
         f32                      TAAMotionBlend   = 0.7f;
-        f32                      TAAAntiFlicker   = 0.6f;  
-        u32                      TAADebugMode     = 0;  
-        Mat44                    PrevViewProj{};        
-        bool                     TAARanLastFrame = false; 
+        f32                      TAAAntiFlicker   = 0.6f;
+        f32                      TAAStationaryMargin = 4.0f; // margem do AABB do history parado (ref Flax); 0 desliga
+        u32                      TAADebugMode     = 0;
+        Mat44                    PrevViewProj{};
+        bool                     TAARanLastFrame = false;
+
+        // FSR2 (AMD FidelityFX) — substitui o TAA custom. Fase 1: so ciclo de vida do contexto.
+        // Ativo so em build Release (em Debug FFsr2Pass e stub). Dispatch vem na Fase 2.
+        FFsr2Pass                Fsr2;
+        bool                     UseFsr2 = true;  // FSR2 ligado por padrao (substitui o TAA em Release)
+        int                      Fsr2Quality = 0; // 0=Native 1=Quality 2=Balanced 3=Perf 4=Ultra
+        f32 Fsr2Ratio() const {
+            static const f32 R[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
+            return R[Fsr2Quality < 0 ? 0 : (Fsr2Quality > 4 ? 4 : Fsr2Quality)];
+        }
 
         FFlickerHeatmap          Flicker;
         u32                      FlickerMode         = 0;      
@@ -462,7 +530,7 @@ namespace Smile {
 
         Vec3 SunDir       = { 0.3f, 0.6f, 0.5f }; 
         Vec3 SunColorRGB  = { 1.0f, 0.96f, 0.9f };
-        f32  SunIntensity = 2.5f;
+        f32  SunIntensity = 5.0f;
 
         FTimeOfDay TimeOfDay;
 

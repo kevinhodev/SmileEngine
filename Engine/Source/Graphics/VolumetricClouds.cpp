@@ -14,7 +14,7 @@ namespace Smile {
 
     void FVolumetricClouds::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                        FCloudNoise& _Noise, u32 _AtmoTransmittanceSRV,
-                                       u32 _AtmoMultiScatterSRV, u32 _SampleCount,
+                                       u32 _AtmoMultiScatterSRV,
                                        DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat,
                                        u32 _Width, u32 _Height) {
         if (Initialized) return;
@@ -36,7 +36,7 @@ namespace Smile {
         RaymarchPSO.Initialize(_Device, "CloudRaymarch.cs_6_0.cso", 5, 1);
         BuildNoiseTable(_Device, _SRVHeap, _Noise, _AtmoTransmittanceSRV, _AtmoMultiScatterSRV);
         BuildCompositeRootSignature(_Device);
-        BuildCompositePSO(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildCompositePSO(_Device, _RTFormat, _DSFormat);
 
         Initialized = true;
         LogInfo("Nuvens volumetricas inicializadas (B2: raymarch single-scatter + composite)");
@@ -182,7 +182,7 @@ namespace Smile {
                                               IID_PPV_ARGS(&CompositeRootSig)));
     }
 
-    void FVolumetricClouds::BuildCompositePSO(ID3D12Device* _Device, u32 _SampleCount,
+    void FVolumetricClouds::BuildCompositePSO(ID3D12Device* _Device,
                                               DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         auto VS = LoadShaderBytecode("CloudComposite.vs_6_0.cso");
         auto PS = LoadShaderBytecode("CloudComposite.ps_6_0.cso");
@@ -221,15 +221,15 @@ namespace Smile {
         Desc.NumRenderTargets      = 1;
         Desc.RTVFormats[0]         = _RTFormat;
         Desc.DSVFormat             = _DSFormat;
-        Desc.SampleDesc            = { _SampleCount, 0 };
+        Desc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&CompositePSO)));
     }
 
-    void FVolumetricClouds::RecreateComposite(ID3D12Device* _Device, u32 _SampleCount,
+    void FVolumetricClouds::RecreateComposite(ID3D12Device* _Device,
                                               DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (!Initialized) return;
-        BuildCompositePSO(_Device, _SampleCount, _RTFormat, _DSFormat);
+        BuildCompositePSO(_Device, _RTFormat, _DSFormat);
     }
 
     void FVolumetricClouds::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvVP, f32 _ViewHeightKm,

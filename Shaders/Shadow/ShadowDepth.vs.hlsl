@@ -1,14 +1,10 @@
-// Vertex shader do depth pass das cascatas CSM. Reusa o ObjectCB (b2) já preenchido
-// pelo Renderer (lê só ModelMatrix) e aplica a LightViewProj da cascata corrente (b0).
-// Passa uv para o alpha-test de folhagem (PS opcional; ignorado quando não há PS).
-
 cbuffer ShadowCascadeCB : register(b0) {
-    row_major float4x4 LightViewProj; // world -> clip da cascata (ortho)
+    row_major float4x4 LightViewProj; 
 };
 
 cbuffer ObjectCB : register(b2) {
-    row_major float4x4 MVP;         // (não usado aqui)
-    row_major float4x4 ModelMatrix; // local -> world
+    row_major float4x4 MVP;         
+    row_major float4x4 ModelMatrix; 
 };
 
 struct VSInput {

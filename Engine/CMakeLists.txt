@@ -33,6 +33,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/CubeTexture.h
     Include/Smile/Graphics/VolumeTexture.h
     Include/Smile/Graphics/Material.h
+    Include/Smile/Graphics/GBuffer.h
+    Include/Smile/Graphics/GBufferDebug.h
     Include/Smile/Graphics/ComputePipeline.h
     Include/Smile/Graphics/VolumetricPipeline.h
     Include/Smile/Graphics/HDREnvironment.h
@@ -48,6 +50,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/AmbientOcclusion.h
     Include/Smile/Graphics/ShaderUtils.h
     Include/Smile/Graphics/PostProcess.h
+    Include/Smile/Graphics/Fsr2Pass.h
     Include/Smile/Graphics/OceanFFT.h
     Include/Smile/Graphics/Water.h
     Include/Smile/Graphics/Renderer.h
@@ -75,6 +78,8 @@ set(ENGINE_SOURCES
     Source/Graphics/CubeTexture.cpp
     Source/Graphics/VolumeTexture.cpp
     Source/Graphics/Material.cpp
+    Source/Graphics/GBuffer.cpp
+    Source/Graphics/GBufferDebug.cpp
     Source/Graphics/ComputePipeline.cpp
     Source/Graphics/VolumetricPipeline.cpp
     Source/Graphics/HDREnvironment.cpp
@@ -92,6 +97,7 @@ set(ENGINE_SOURCES
     Source/Graphics/ShaderUtils.cpp
     Source/Graphics/PostProcess.cpp
     Source/Graphics/TemporalAA.cpp
+    Source/Graphics/Fsr2Pass.cpp
     Source/Graphics/FlickerHeatmap.cpp
     Source/Graphics/OceanFFT.cpp
     Source/Graphics/Water.cpp
@@ -130,6 +136,26 @@ target_link_libraries(SmileEngine
         windowscodecs
         ole32
 )
+
+# === FSR2 (AMD FidelityFX Super Resolution 2) — upscaler/AA temporal ============================
+# SDK buildado externamente (static libs, Release /MD). Linkado SO em config != Debug para nao
+# conflitar com o CRT /MDd do Debug; em Debug o Fsr2Pass compila como stub (SMILE_FSR2_ENABLED=0).
+# Os shaders (DXIL das permutacoes) ja vem embutidos no lib dx12 — nada em runtime.
+# Ver memory/ref-fsr2-integration.md.
+set(SMILE_FSR2_ROOT "D:/Engines/FidelityFX-FSR2" CACHE PATH "Raiz do SDK FidelityFX-FSR2")
+set(_fsr2_inc    "${SMILE_FSR2_ROOT}/src/ffx-fsr2-api")
+set(_fsr2_libdir "${SMILE_FSR2_ROOT}/bin/ffx_fsr2_api")
+if(EXISTS "${_fsr2_inc}/ffx_fsr2.h" AND EXISTS "${_fsr2_libdir}/ffx_fsr2_api_dx12_x64.lib")
+    message(STATUS "FSR2 encontrado: ${SMILE_FSR2_ROOT} (ativo apenas em Release)")
+    target_include_directories(SmileEngine PRIVATE "${_fsr2_inc}")
+    target_compile_definitions(SmileEngine PRIVATE SMILE_FSR2_ENABLED=$<IF:$<CONFIG:Debug>,0,1>)
+    target_link_libraries(SmileEngine PUBLIC
+        $<$<NOT:$<CONFIG:Debug>>:${_fsr2_libdir}/ffx_fsr2_api_x64.lib>
+        $<$<NOT:$<CONFIG:Debug>>:${_fsr2_libdir}/ffx_fsr2_api_dx12_x64.lib>)
+else()
+    message(WARNING "FSR2 nao encontrado em ${SMILE_FSR2_ROOT} — Fsr2Pass compila como stub")
+    target_compile_definitions(SmileEngine PRIVATE SMILE_FSR2_ENABLED=0)
+endif()
 
 # Organizacao no Visual Studio (filters por pasta)
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${ENGINE_HEADERS} ${ENGINE_SOURCES})

@@ -1,5 +1,3 @@
-// PS do serviço de DebugDraw: cor sólida (unlit). Desenhado pós-tonemap no backbuffer LDR, sem
-// depth (sempre por cima), então a cor vai direta.
 struct VSOutput {
     float4 pos   : SV_POSITION;
     float3 color : COLOR;

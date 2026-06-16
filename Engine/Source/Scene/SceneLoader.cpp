@@ -58,7 +58,7 @@ namespace Smile {
         }
     }
 
-    bool Renderer::LoadCookedScene(const std::wstring& _ScenePath) {
+    bool Renderer::LoadCookedScene(const std::wstring& _ScenePath, bool _Additive) {
         fs::path in(_ScenePath);
         fs::path base = in.parent_path() / in.stem(); 
         fs::path scenePath = base; scenePath += L".sscene";
@@ -101,11 +101,15 @@ namespace Smile {
         const auto* entriesRaw = meshBytes.data() + sizeof(SMeshHeader);
         const u8*   geoBase    = meshBytes.data() + sizeof(SMeshHeader) + sizeof(SMeshEntry) * mh.MeshCount;
 
-        Scene.Clear();
-        for (auto& m : ImportedMaterials) m->Release(SRVHeap);
-        ImportedMaterials.clear();
-        for (auto& t : ImportedTextures) t->Release(SRVHeap);
-        ImportedTextures.clear();
+        // Em carga aditiva preservamos meshes/materiais/texturas ja carregados; so
+        // limpamos a cena anterior no modo de substituicao (padrao).
+        if (!_Additive) {
+            Scene.Clear();
+            for (auto& m : ImportedMaterials) m->Release(SRVHeap);
+            ImportedMaterials.clear();
+            for (auto& t : ImportedTextures) t->Release(SRVHeap);
+            ImportedTextures.clear();
+        }
 
         std::unordered_map<std::string, bool> uniquePaths; 
         auto consider = [&](const char* rel, bool srgb) {
@@ -207,7 +211,9 @@ namespace Smile {
             mat->Constants.AlphaCutoff        = sm.AlphaCutoff;
             mat->TwoSided                     = (sm.TwoSided != 0);
 
-            const bool isFoliage = (sm.AlphaTest != 0u) && (sm.TwoSided != 0);
+            // Folhagem agora vem de um flag PROPRIO (decidido por keyword de vegetacao no cooker),
+            // desacoplado de masked/two-sided — um cutout (corrente/grade) e masked mas DefaultLit.
+            const bool isFoliage = (sm.Foliage != 0u);
             mat->Constants.ShadingModel   = isFoliage ? 1u : 0u;
             mat->Constants.SubsurfaceColor = { 1.0f, 1.0f, 1.0f, isFoliage ? 0.6f : 0.0f };
 
@@ -217,15 +223,8 @@ namespace Smile {
         }
 
         std::vector<SMeshEntry> entries(mh.MeshCount);
-        f32 aabbMin[3] = {  1e30f,  1e30f,  1e30f };
-        f32 aabbMax[3] = { -1e30f, -1e30f, -1e30f };
-        for (u32 i = 0; i < mh.MeshCount; ++i) {
+        for (u32 i = 0; i < mh.MeshCount; ++i)
             std::memcpy(&entries[i], entriesRaw + sizeof(SMeshEntry) * i, sizeof(SMeshEntry));
-            for (int c = 0; c < 3; ++c) {
-                aabbMin[c] = std::min(aabbMin[c], entries[i].AABBMin[c]);
-                aabbMax[c] = std::max(aabbMax[c], entries[i].AABBMax[c]);
-            }
-        }
         auto matOf = [&](u32 mi) -> FMaterial* {
             return (mi != kNoMaterial && mi < sh.MaterialCount) ? matPtrs[mi] : nullptr;
         };
@@ -241,7 +240,6 @@ namespace Smile {
                 std::memcpy(meshesCPU[i].Indices.data(), geoBase + e.IndexOffset, e.IndexCount * sizeof(u32));
             }
             std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), CommandQueue, meshesCPU);
-            if (sh.RenderableCount > MaxObjects) { MaxObjects = sh.RenderableCount; RecreateObjectCB(); }
             for (u32 i = 0; i < sh.RenderableCount; ++i) {
                 const SSceneRenderable& r = rnds[i];
                 if (r.MeshIndex >= mh.MeshCount) continue;
@@ -282,9 +280,6 @@ namespace Smile {
                 gMin.push_back(Vec3{ mn[0], mn[1], mn[2] });
                 gMax.push_back(Vec3{ mx[0], mx[1], mx[2] });
             }
-            if (static_cast<u32>(meshesCPU.size()) > MaxObjects) {
-                MaxObjects = static_cast<u32>(meshesCPU.size()); RecreateObjectCB();
-            }
             std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), CommandQueue, meshesCPU);
             for (size_t k = 0; k < meshPtrs.size(); ++k) {
                 FRenderable out;
@@ -298,7 +293,17 @@ namespace Smile {
 
         const double msMesh = MsSince(tMeshStart);
 
-        Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
+        // Dimensiona o ObjectCB pelo total de renderaveis da cena (cobre carga aditiva,
+        // onde os renderaveis do interior se somam aos do exterior ja presentes).
+        if (static_cast<u32>(Scene.Renderables().size()) > MaxObjects) {
+            MaxObjects = static_cast<u32>(Scene.Renderables().size());
+            RecreateObjectCB();
+        }
+
+        // Em carga aditiva mantemos a camera onde o usuario deixou; so reposicionamos
+        // na entrada de uma cena nova (substituicao).
+        if (!_Additive)
+            Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
 
         LogInfo("Cena carregada: " + std::to_string(mh.MeshCount) + " meshes, " +
                 std::to_string(sh.MaterialCount) + " materiais, " +
@@ -310,9 +315,21 @@ namespace Smile {
                 " meshes=" + std::to_string((int)msMesh) +
                 " | total=" + std::to_string((int)MsSince(t0)));
 
+        // AABB de uniao sobre TODA a cena (exterior + interior em carga aditiva), para
+        // o volume de GI cobrir tudo que esta carregado.
+        Vec3 sceneMin{  1e30f,  1e30f,  1e30f };
+        Vec3 sceneMax{ -1e30f, -1e30f, -1e30f };
+        for (const FRenderable& r : Scene.Renderables()) {
+            sceneMin.X = std::min(sceneMin.X, r.AABBMin.X);
+            sceneMin.Y = std::min(sceneMin.Y, r.AABBMin.Y);
+            sceneMin.Z = std::min(sceneMin.Z, r.AABBMin.Z);
+            sceneMax.X = std::max(sceneMax.X, r.AABBMax.X);
+            sceneMax.Y = std::max(sceneMax.Y, r.AABBMax.Y);
+            sceneMax.Z = std::max(sceneMax.Z, r.AABBMax.Z);
+        }
+
         BuildRaytracingScene();
-        SetupGIForScene(Vec3{ aabbMin[0], aabbMin[1], aabbMin[2] },
-                        Vec3{ aabbMax[0], aabbMax[1], aabbMax[2] });
+        SetupGIForScene(sceneMin, sceneMax);
         return true;
     }
 }

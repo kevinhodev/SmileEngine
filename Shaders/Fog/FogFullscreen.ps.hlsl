@@ -1,4 +1,3 @@
-// FogFullscreen.ps.hlsl — deferred fog apply, non-MSAA scene depth.
 #include "FogCommon.hlsli"
 
 Texture2D<float> SceneDepth : register(t0);

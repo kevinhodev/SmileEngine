@@ -13,15 +13,15 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     float2 uv  = (float2(id.xy) + 0.5f) / VolWH;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float4 farH = mul(float4(ndc, SMILE_NDC_FAR, 1.0f), InvViewProj); // far plane (Reverse-Z: 0)
+    float4 farH = mul(float4(ndc, SMILE_NDC_FAR, 1.0f), InvViewProj); 
     float3 farW = farH.xyz / farH.w;
     float3 worldDir = normalize(farW - CameraWorldPos.xyz);
     
     float sliceN = ((float)id.z + 0.5f) / Slices;
-    sliceN *= sliceN;                               // squared (inverse of sqrt sampler)
+    sliceN *= sliceN;                               
     float kmPerWU = max(kKmPerWorldUnit, 1e-9f);
     float startKm = kAerialStartKm;
-    float tKm     = startKm + sliceN * (kAerialDepthKm - startKm); // distance in km
+    float tKm     = startKm + sliceN * (kAerialDepthKm - startKm); 
 
     float3 camKm = float3(CameraWorldPos.x * kmPerWU,
                           kBottomR + CameraWorldPos.y * kmPerWU,

@@ -4,10 +4,10 @@
 #define SMILE_CSM_MAX_CASCADES 4
 
 cbuffer CSMCB : register(b3) {
-    row_major float4x4 WorldToShadow[SMILE_CSM_MAX_CASCADES]; // world -> shadow UV+depth por cascata
-    float4 CSMTexelWorld; // x..w = tamanho de 1 texel em mundo, por cascata (p/ normal-offset)
-    float4 CSMParams;     // x = numCascades, y = depthBias (NDC z), z = invShadowRes, w = enabled
-    float4 CSMParams2;    // x = normal-offset (texels), y = penumbra (texels), z = blend band, w = -
+    row_major float4x4 WorldToShadow[SMILE_CSM_MAX_CASCADES]; 
+    float4 CSMTexelWorld;
+    float4 CSMParams;     
+    float4 CSMParams2;   
 };
 
 Texture2DArray         SunShadowMap : register(t11);
@@ -90,11 +90,11 @@ int CSM_SelectCascade(float3 worldPos, float3 worldNormal) {
 }
 
 float3 CSM_CascadeColor(int i) {
-    if (i == 0) return float3(1.0f, 0.4f, 0.4f); // vermelho  — cascata mais próxima
-    if (i == 1) return float3(0.4f, 1.0f, 0.4f); // verde
-    if (i == 2) return float3(0.4f, 0.6f, 1.0f); // azul
-    if (i == 3) return float3(1.0f, 1.0f, 0.4f); // amarelo   — cascata mais distante
-    return float3(1.0f, 1.0f, 1.0f);             // fora de todas
+    if (i == 0) return float3(1.0f, 0.4f, 0.4f); 
+    if (i == 1) return float3(0.4f, 1.0f, 0.4f); 
+    if (i == 2) return float3(0.4f, 0.6f, 1.0f); 
+    if (i == 3) return float3(1.0f, 1.0f, 0.4f); 
+    return float3(1.0f, 1.0f, 1.0f);             
 }
 
 #endif 

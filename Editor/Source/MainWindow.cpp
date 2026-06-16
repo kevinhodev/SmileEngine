@@ -199,6 +199,23 @@ namespace SmileEditor {
                 QMessageBox::warning(this, tr("Carregar Cena"),
                                      tr("Falha ao carregar a cena. Veja o console."));
         });
+        // Carrega uma segunda cena cozida POR CIMA da atual, sem limpar (ex.: o interior
+        // da Bistro alinhado com o exterior ja carregado).
+        auto* AddSceneAction = FileMenu->addAction(tr("Adicionar Cena…"));
+        AddSceneAction->setShortcut(QKeySequence(tr("Ctrl+Shift+O")));
+        connect(AddSceneAction, &QAction::triggered, this, [this]() {
+            if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized())
+                return;
+            QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
+            QString File = QFileDialog::getOpenFileName(
+                this, tr("Adicionar Cena Cozida"), Start,
+                tr("Cena SmileEngine (*.sscene)"));
+            if (File.isEmpty()) return;
+            const bool Ok = Viewport->GetRenderer()->LoadCookedScene(File.toStdWString(), /*Additive=*/true);
+            if (!Ok)
+                QMessageBox::warning(this, tr("Adicionar Cena"),
+                                     tr("Falha ao adicionar a cena. Veja o console."));
+        });
         FileMenu->addSeparator();
 
         auto* ExitAction = FileMenu->addAction(tr("Sair"), this, &QWidget::close);
@@ -219,27 +236,6 @@ namespace SmileEditor {
 
         auto* ProjectMenu = Menus->addMenu(tr("Projeto"));
         auto* RenderMenu  = ProjectMenu->addMenu(tr("Renderização"));
-        auto* MSAAMenu    = RenderMenu->addMenu(tr("MSAA"));
-
-        MSAAGroup = new QActionGroup(this);
-        MSAAGroup->setExclusive(true);
-
-        struct { const char* Label; int Count; } MSAAOptions[] = {
-            { "Desativado (1x)", 1 },
-            { "2x",              2 },
-            { "4x",              4 },
-            { "8x",              8 },
-        };
-        for (auto& Option : MSAAOptions) {
-            auto* Action = MSAAMenu->addAction(tr(Option.Label));
-            Action->setCheckable(true);
-            Action->setData(Option.Count);
-            MSAAGroup->addAction(Action);
-            if (Option.Count == 1) Action->setChecked(true);
-        }
-        connect(MSAAGroup, &QActionGroup::triggered, this, [this](QAction* Action) {
-            OnMSAAChanged(Action->data().toInt());
-        });
 
         // VSync: liga/desliga o trava-no-vblank do Present (default ligado).
         auto* VSyncAction = RenderMenu->addAction(tr("VSync"));
@@ -385,12 +381,6 @@ namespace SmileEditor {
         EnvironmentDlg->activateWindow();
     }
 
-    void MainWindow::OnMSAAChanged(int _SampleCount) {
-        if (Viewport && Viewport->GetRenderer()) {
-            Viewport->GetRenderer()->SetMSAA(static_cast<Smile::u32>(_SampleCount));
-        }
-    }
-
     void MainWindow::UpdateStats() {
         if (!Viewport) return;
         auto* Renderer = Viewport->GetRenderer();
@@ -458,11 +448,17 @@ namespace SmileEditor {
         Smile::LogInfo("Compilando Shader via CMake...");
         CompileProcess->start("cmake", Arguments);
 
-        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess](int _ExitCode, QProcess::ExitStatus _Status) {
+        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess, _Path](int _ExitCode, QProcess::ExitStatus _Status) {
             Q_UNUSED(_Status);
             if (_ExitCode == 0) {
                 if (Viewport && Viewport->GetRenderer()) {
-                    if (Viewport->GetRenderer()->ReloadShaders()) {
+                    // .hlsli (include) afeta varios shaders -> stem vazio forca reload completo.
+                    // Caso contrario, deriva o stem do .cso: "WaterSurface.ps.hlsl" -> "WaterSurface.ps".
+                    const QFileInfo ShaderInfo(_Path);
+                    const bool IsInclude = ShaderInfo.suffix().compare("hlsli", Qt::CaseInsensitive) == 0;
+                    const std::string ChangedStem =
+                        IsInclude ? std::string() : ShaderInfo.completeBaseName().toStdString();
+                    if (Viewport->GetRenderer()->ReloadShaders(ChangedStem)) {
                         statusBar()->showMessage(tr("Shader Recarregado com Sucesso."), 3000);
                     } else {
                         statusBar()->showMessage(tr("Erro ao Recarregar Shader no Renderer."), 3000);

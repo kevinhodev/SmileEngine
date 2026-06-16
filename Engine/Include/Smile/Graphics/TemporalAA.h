@@ -25,7 +25,8 @@ namespace Smile {
             Mat44 PrevViewProj;  // frame anterior, FULL
             Vec4  Params0;       // xy = 1/screenSize, z = history blend (0..1), w = history valido (0/1)
             Vec4  Params1;       // x = variance gamma, y = sharpness, z = debug mode, w = motion blend
-            Vec4  Params2;       // x = anti-flicker (clamp do atual a caixa), yzw = reservado
+            Vec4  Params2;       // x = anti-flicker (clamp do atual a caixa), y = margem estacionaria do AABB, zw = reservado
+            Vec4  CameraPos;     // xyz = posicao da camera (world), p/ rejeicao de history por disoclusao
         };
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
@@ -34,19 +35,26 @@ namespace Smile {
         // (Re)constroi as tabelas de entrada do resolve [HDR(t0), history-prev(t1), depth(t2)].
         // Chamar apos (re)criar o HDR color buffer e o depth (Initialize/Resize do Renderer).
         void SetupInputs(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
-                         ID3D12Resource* HDRInput, ID3D12Resource* Depth);
+                         ID3D12Resource* HDRInput, ID3D12Resource* Depth, ID3D12Resource* VelocityTex);
 
         // Roda o resolve: escreve history[curr] a partir do HDR atual + history[prev] + depth.
         // O HDR e o depth precisam estar legiveis (PIXEL_SHADER_RESOURCE) na entrada.
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
                      f32 HistoryBlend, bool HistoryValid, f32 VarianceGamma, f32 Sharpness,
-                     f32 MotionBlend, f32 AntiFlicker, u32 DebugMode);
+                     f32 MotionBlend, f32 AntiFlicker, f32 StationaryMargin,
+                     const Vec3& CameraPosition, f32 NearZ, f32 FarZ, u32 DebugMode);
 
         // Output do ultimo Execute (history[curr]) — entrada do post-process. Fica em
         // PIXEL_SHADER_RESOURCE apos Execute.
         ID3D12Resource* OutputResource() const { return History[LastOutputIndex].Get(); }
         u32             OutputSRVSlot() const  { return HistorySRVBase + LastOutputIndex; }
+
+        // Alvo de display (SV_Target1): a imagem que vai pra tela — cor com sharpen pos-resolve
+        // (ou a viz de debug quando DebugMode > 0). Fica FORA do feedback do history; o Renderer
+        // sempre exibe isto, enquanto OutputResource() (SV_Target0) acumula a cor limpa.
+        ID3D12Resource* DisplayOutputResource() const { return DisplayTex.Get(); }
+        u32             DisplayOutputSRVSlot() const  { return DisplaySRVSlot; }
 
         bool IsInitialized() const { return Initialized; }
 
@@ -65,7 +73,14 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> History[2];
         D3D12_RESOURCE_STATES                  HistoryState[2] = {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE };
-        FDescriptorHeap                        HistoryRTVHeap; // 2 RTVs
+        FDescriptorHeap                        HistoryRTVHeap; // 3 RTVs: [0],[1] history, [2] display
+
+        // Alvo de display (SV_Target1). Single-buffer: escrito e lido no mesmo frame, fora do
+        // ping-pong do history. Carrega a cor com sharpen pos-resolve (ou a viz de debug).
+        // RTV no slot 2 do HistoryRTVHeap.
+        Microsoft::WRL::ComPtr<ID3D12Resource> DisplayTex;
+        D3D12_RESOURCE_STATES                  DisplayState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        u32                                    DisplaySRVSlot = kInvalidSlot;
 
         // SRV individual por history buffer (entrada do post-process). 2 slots contiguos.
         u32 HistorySRVBase = kInvalidSlot;

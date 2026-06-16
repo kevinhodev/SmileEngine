@@ -20,8 +20,8 @@ namespace Smile {
             Stability      = 4, 
         };
 
-        void Initialize(ID3D12Device* Device, u32 SampleCount, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
-        void Recreate(ID3D12Device* Device, u32 SampleCount, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
+        void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
+        void Recreate(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 NumProbes);
 
         void Render(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
@@ -55,7 +55,7 @@ namespace Smile {
         static_assert(sizeof(DDGIDebugConstants) == 256, "DDGIDebugConstants must be 256 bytes");
 
         void BuildRootSignature(ID3D12Device* Device);
-        void BuildPSOs(ID3D12Device* Device, u32 SampleCount, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
+        void BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSignature;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> ProbePSO;  

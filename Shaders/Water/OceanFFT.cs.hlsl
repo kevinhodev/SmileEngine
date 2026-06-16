@@ -1,9 +1,5 @@
 #include "OceanFFTCommon.hlsli"
 
-// FFT 1D em memoria compartilhada com transpose-on-write (porte de fourier_fft.comp
-// do Asylum). Um grupo por linha/coluna, 256 threads. Le em (z,x), escreve em (x,z)
-// -> transpoe. Chamado 2x por campo (horizontal depois vertical), reusando o scratch.
-// Sem normalizacao por N (quirk fiel da Cry; createdisplacement aplica o sign-flip).
 Texture2D<float2>   ReadBuf  : register(t0);
 RWTexture2D<float2> WriteBuf : register(u0);
 
@@ -16,20 +12,18 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID) {
     int z = int(gid.x);
     int x = int(tid.x);
 
-    // STEP 1: carrega linha/coluna com bit-reversal.
     uint nj = (reversebits(uint(x)) >> (32u - LOG2_DISP_MAP_SIZE)) & (DISP_MAP_SIZE - 1u);
     PingPong[0][nj] = ReadBuf.Load(int3(z, x, 0));
 
     GroupMemoryBarrierWithGroupSync();
 
-    // STEP 2: butterflies.
     int src = 0;
     [loop] for (int s = 1; s <= int(LOG2_DISP_MAP_SIZE); ++s) {
-        int m  = int(1u << uint(s)); // altura do grupo butterfly
-        int mh = m >> 1;            // meia-altura
+        int m  = int(1u << uint(s)); 
+        int mh = m >> 1;           
         int k  = (x * (int(DISP_MAP_SIZE) / m)) & (int(DISP_MAP_SIZE) - 1);
-        int i  = (x & ~(m - 1));    // inicio do grupo butterfly
-        int j  = (x & (mh - 1));    // indice dentro do grupo
+        int i  = (x & ~(m - 1));    
+        int j  = (x & (mh - 1));    
 
         float  theta = (OCEAN_TWOPI * float(k)) / N;
         float2 W_N_k = float2(cos(theta), sin(theta));
@@ -43,6 +37,5 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID) {
         GroupMemoryBarrierWithGroupSync();
     }
 
-    // STEP 3: escreve transposto.
     WriteBuf[int2(x, z)] = PingPong[src][x];
 }

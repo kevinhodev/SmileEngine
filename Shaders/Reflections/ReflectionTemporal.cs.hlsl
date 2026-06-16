@@ -1,20 +1,10 @@
-// Specular GI — passe TEMPORAL (acumulação entre frames, Fase 3). Porte do LumenReflectionDenoiser
-// Temporal: estabiliza o glossy/half-res acumulando ao longo dos frames. Duas peças-chave:
-//  (1) REPROJEÇÃO PARALLAX-AWARE — reprojeta pela POSIÇÃO VIRTUAL do reflexo (superfície + dir de
-//      reflexão × distância do hit), não pela superfície. Assim o conteúdo refletido é rastreado
-//      onde ele estava na tela no frame anterior (o reflexo tem "profundidade", move diferente da
-//      superfície). hitDist=0 (miss) degrada p/ reprojeção da superfície.
-//  (2) NEIGHBORHOOD CLAMP (YCoCg) — recorta o history à caixa de variância da vizinhança atual
-//      (média ± γ·σ) -> rejeita ghosting de desoclusão/movimento.
-// Acumula até MaxFrames (contador por pixel em .a); blend = 1/frames. Ping-pong de history.
-
-#include "../GI/DDGICommon.hlsli" // DDGI_OctDecode
+#include "../GI/DDGICommon.hlsli" 
 
 cbuffer ReflectionCB : register(b0) {
     row_major float4x4 InvViewProj;
     float4 CameraPos;
-    float4 ScreenParams;     // W, H, 1/W, 1/H
-    float4 ReflectParams;    // x = maxRoughnessToTrace, y = roughnessFadeLength, ...
+    float4 ScreenParams;     
+    float4 ReflectParams;    
     float4 GridMinSpacing;
     float4 GridCount;
     float4 AtlasParams;
@@ -22,16 +12,16 @@ cbuffer ReflectionCB : register(b0) {
     float4 SunColor;
     float4 TraceParams;
     float4 HalfScreenParams;
-    row_major float4x4 PrevViewProj; // VP (sem jitter) do frame anterior
-    float4 TemporalParams;   // x = maxFramesAccumulated, y = neighborhoodClampScale (γ)
+    row_major float4x4 PrevViewProj; 
+    float4 TemporalParams;   
 };
 
-Texture2D<float4> Resolved    : register(t0); // rgb = radiancia reconstruida, a = hitDist
+Texture2D<float4> Resolved    : register(t0); 
 Texture2D<float4> GBuffer     : register(t1);
 Texture2D<float>  Depth       : register(t2);
-Texture2D<float4> HistoryPrev : register(t3); // rgb = acumulado, a = nº de frames acumulados
+Texture2D<float4> HistoryPrev : register(t3); 
 
-RWTexture2D<float4> RWHistory : register(u0); // saída (vira entrada do composite)
+RWTexture2D<float4> RWHistory : register(u0); 
 
 SamplerState LinearClamp : register(s0);
 
@@ -55,24 +45,22 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float  combineAlpha = saturate((ReflectParams.x - roughness) / max(ReflectParams.y, 1e-4f));
     float  deviceZ   = Depth.Load(int3(px, 0)).r;
 
-    float4 current = Resolved.Load(int3(px, 0)); // rgb + hitDist
+    float4 current = Resolved.Load(int3(px, 0)); 
     if (deviceZ <= 0.0f || combineAlpha <= 0.0f) {
         RWHistory[px] = float4(current.rgb, 0.0f);
         return;
     }
 
-    // Geometria do pixel.
-    float3 N = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
     float2 uv  = (px + 0.5f) * ScreenParams.zw;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     float4 wH  = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
     float3 worldPos = wH.xyz / wH.w;
-    float3 V = normalize(CameraPos.xyz - worldPos);
 
-    // (1) Reprojeção parallax: posição virtual do reflexo = superfície + R × distância do hit.
+    float3 N = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
+    float3 V = normalize(CameraPos.xyz - worldPos);
     float3 R = reflect(-V, N);
-    float3 virtualPos = worldPos + R * current.a;
-    float4 prevClip = mul(float4(virtualPos, 1.0f), PrevViewProj);
+    float3 reprojPos = (roughness < 0.15f) ? (worldPos + R * current.a) : worldPos;
+    float4 prevClip = mul(float4(reprojPos, 1.0f), PrevViewProj);
     float3 history = current.rgb;
     float  frames  = 0.0f;
     if (prevClip.w > 0.0f) {
@@ -85,15 +73,25 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
-    // (2) Neighborhood clamp (YCoCg): caixa de variância 3×3 da radiância atual.
-    float3 m1 = 0.0f, m2 = 0.0f;
+    const float planeThresh = max(length(worldPos - CameraPos.xyz) * 0.05f, 1e-3f);
+    float3 cC = RGBToYCoCg(max(current.rgb, 0.0f));
+    float3 m1 = cC, m2 = cC * cC;       
+    float  wn = 1.0f;
     [unroll] for (int y = -1; y <= 1; ++y)
     [unroll] for (int x = -1; x <= 1; ++x) {
+        if (x == 0 && y == 0) continue;
         int2 c = clamp(px + int2(x, y), int2(0, 0), int2((int)ScreenParams.x - 1, (int)ScreenParams.y - 1));
+        float cz = Depth.Load(int3(c, 0)).r;
+        if (cz <= 0.0f) continue;                         
+        float2 cuv  = (c + 0.5f) * ScreenParams.zw;
+        float2 cndc = float2(cuv.x * 2.0f - 1.0f, 1.0f - cuv.y * 2.0f);
+        float4 cwH  = mul(float4(cndc, cz, 1.0f), InvViewProj);
+        float3 cWorld = cwH.xyz / cwH.w;
+        if (length(cWorld - worldPos) > planeThresh) continue;   
         float3 s = RGBToYCoCg(max(Resolved.Load(int3(c, 0)).rgb, 0.0f));
-        m1 += s; m2 += s * s;
+        m1 += s; m2 += s * s; wn += 1.0f;
     }
-    m1 /= 9.0f; m2 /= 9.0f;
+    m1 /= wn; m2 /= wn;
     float3 sigma  = sqrt(max(m2 - m1 * m1, 0.0f));
     float  gamma  = TemporalParams.y;
     float3 boxMin = m1 - gamma * sigma;
@@ -101,10 +99,11 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float3 histYCoCg = clamp(RGBToYCoCg(history), boxMin, boxMax);
     history = max(YCoCgToRGB(histYCoCg), 0.0f);
 
-    // Acumula: contador por pixel; blend = 1/frames.
+    float3 curRGB = max(YCoCgToRGB(clamp(RGBToYCoCg(max(current.rgb, 0.0f)), boxMin, boxMax)), 0.0f);
+
     frames = min(frames + 1.0f, TemporalParams.x);
     float  alpha  = 1.0f / frames;
-    float3 result = lerp(history, current.rgb, alpha);
+    float3 result = lerp(history, curRGB, alpha);
 
     RWHistory[px] = float4(result, frames);
 }

@@ -196,12 +196,15 @@ namespace SmileEditor {
         QCheckBox* ShowSkyboxCheck = nullptr;
         QDoubleSpinBox* BloomIntensitySpin = nullptr;
         QDoubleSpinBox* ExposureSpin = nullptr;
+        QCheckBox*      Fsr2Check = nullptr;
+        QDoubleSpinBox* Fsr2QualitySpin = nullptr;
         QCheckBox*      TAACheck = nullptr;
         QDoubleSpinBox* TAABlendSpin = nullptr;
         QDoubleSpinBox* TAAVarianceSpin = nullptr;
         QDoubleSpinBox* TAASharpnessSpin = nullptr;
         QDoubleSpinBox* TAAMotionSpin = nullptr;
         QDoubleSpinBox* TAAAntiFlickerSpin = nullptr;
+        QDoubleSpinBox* TAAStationarySpin = nullptr;
         QDoubleSpinBox* TAADebugSpin = nullptr;
         QDoubleSpinBox* FlickerModeSpin = nullptr;
         QDoubleSpinBox* FlickerScaleSpin = nullptr;

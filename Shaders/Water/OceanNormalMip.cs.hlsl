@@ -1,9 +1,5 @@
 #include "OceanFFTCommon.hlsli"
 
-// Downsample da normal com Toksvig (porte do BuildNormalMipChain antigo p/ GPU).
-// Media vetorial dos 4 texels do mip de origem ponderada por T; T do destino =
-// |soma|/4 (variancia da normal) -> alpha, consumido pelo specular-AA do PS.
-// Despachado uma vez por nivel de mip (origem = mip i-1, destino = mip i).
 Texture2D<float4>   SrcMip : register(t0);
 RWTexture2D<float4> DstMip : register(u0);
 

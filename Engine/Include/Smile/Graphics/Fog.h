@@ -32,7 +32,7 @@ namespace Smile {
                             f32 AerialDepthKm);
 
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
-                     u32 DepthSRVSlot, u32 AerialVolumeSRVSlot, bool IsMSAA);
+                     u32 DepthSRVSlot, u32 AerialVolumeSRVSlot);
 
         void SetDensity(f32 V)        { Density = V; }
         void SetHeightFalloff(f32 V)  { HeightFalloff = V; }
@@ -60,8 +60,7 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;     
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO_MS;  
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
         u8*  MappedBase = nullptr;

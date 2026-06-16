@@ -2,7 +2,7 @@
 
 cbuffer PushConstants : register(b0) {
     uint OutputSize;
-    uint NumSamples; // 1024 is plenty for a one-shot bake
+    uint NumSamples; 
     uint _Pad0; uint _Pad1;
     uint _Pad2; uint _Pad3; uint _Pad4; uint _Pad5;
 };
