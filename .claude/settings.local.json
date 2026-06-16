@@ -47,7 +47,13 @@
       "Bash(rm -f D:/Engines/SmileEngine/build/taa_frames/*.png)",
       "Bash(C:/Users/user/AppData/Local/Programs/Python/Python314/Lib/site-packages/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe -loglevel error -ss 2.0 -i C:/Users/user/AppData/Local/Packages/Microsoft.ScreenSketch_8wekyb3d8bbwe/TempState/Recordings/20260616-0051-33.4932920.mp4 -frames:v 16 -start_number 60 D:/Engines/SmileEngine/build/taa_frames/f_%03d.png)",
       "Bash(echo \"EXIT extract: $?\")",
-      "Bash(C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe -c 'import numpy; print\\('\\\\''numpy'\\\\'', numpy.__version__\\)')"
+      "Bash(C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe -c 'import numpy; print\\('\\\\''numpy'\\\\'', numpy.__version__\\)')",
+      "Bash(cmake --build . --target SmileEditor --config Debug)",
+      "Bash(ls \"C:/Qt/6.10.2/msvc2022_64/lib/cmake\" 2>/dev/null | grep -i \"quick\\\\|qml\" ; echo \"---qml dlls---\"; ls \"C:/Qt/6.10.2/msvc2022_64/bin\" 2>/dev/null | grep -i \"quick\\\\|qml\" | head)",
+      "Bash(cmake --build build --target SmileEditor --config Debug)",
+      "WebSearch",
+      "WebFetch(domain:martin.rpdev.net)",
+      "PowerShell(cmake --build \"D:/Engines/SmileEngine/build\" --target SmileEditor --config Debug 2>&1)"
     ]
   }
 }

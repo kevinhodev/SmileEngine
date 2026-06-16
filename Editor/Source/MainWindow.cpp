@@ -1,10 +1,16 @@
 #include "SmileEditor/MainWindow.h"
 #include "SmileEditor/AboutDialog.h"
 #include "SmileEditor/EnvironmentWindow.h"
+#include "SmileEditor/LogBridge.h"
 #include "SmileEditor/LucideIcon.h"
+#include "SmileEditor/MenuBridge.h"
+#include "SmileEditor/NativeWindowFilter.h"
+#include "SmileEditor/QmlHost.h"
 #include "SmileEditor/SmileLogo.h"
+#include "SmileEditor/SmileLogoImageProvider.h"
+#include "SmileEditor/StatusBridge.h"
+#include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
-#include "SmileEditor/MaterialEditorPanel.h"
 #include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
@@ -18,11 +24,11 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QFileSystemWatcher>
-#include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -31,9 +37,10 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QProcess>
+#include <QQuickWidget>
+#include <QShortcut>
 #include <QSizePolicy>
 #include <QStatusBar>
-#include <QTextEdit>
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -53,37 +60,23 @@ namespace SmileEditor {
         setDockNestingEnabled(true);
         setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
 
-        CreateMenuBar();
+        // Precisa existir antes de CreateDocks (o ConsolePanel.qml liga nele) e do sink de log.
+        ConsoleLog = new LogBridge(this);
+        WindowBr   = new WindowBridge(this); // botoes de janela da MainBar.qml
+        Menus      = new MenuBridge(this);   // menus da MainBar.qml (precisa existir antes dela)
+
+        CreateTopBar();
         setCentralWidget(CreateViewportChrome());
         CreateDocks();
+        WireMenuActions(); // conecta os menus depois que Viewport e ConsoleDock existem
 
+        // O LogBridge normaliza nivel->cor/tag e marshala para a thread da GUI; o ConsolePanel.qml
+        // escuta LineAdded e preenche a ListView.
         Smile::SetLogSink([this](Smile::LogLevel level, std::string_view msg) {
-            if (!LogOutput) return;
-            const char* Color = level == Smile::LogLevel::Error   ? "#ff5f57"
-                              : level == Smile::LogLevel::Warning ? "#f3b43f"
-                                                                  : "#a7b5ff";
-            const char* Tag   = level == Smile::LogLevel::Error   ? "[ERR]"
-                              : level == Smile::LogLevel::Warning ? "[WARN]"
-                                                                  : "[INFO]";
-
-            const QString Html = QString("<span style='color:#777'>[%1]</span> "
-                                         "<span style='color:%2'><b>%3</b></span> "
-                                         "<span style='color:#b9b5aa'>%4</span>")
-                .arg(QTime::currentTime().toString("HH:mm:ss"),
-                     Color,
-                     Tag,
-                     QString::fromUtf8(msg.data(), static_cast<qsizetype>(msg.size())));
-
-            QMetaObject::invokeMethod(LogOutput, [this, Html]() {
-                if (LogOutput) LogOutput->append(Html);
-            }, Qt::QueuedConnection);
+            if (ConsoleLog) ConsoleLog->Append(level, msg);
         });
 
-        statusBar()->setObjectName("SmileStatusBar");
-        FooterStatsLabel = new QLabel(tr("FPS: --  |  Frame: -- ms"), this);
-        FooterStatsLabel->setObjectName("FooterStatsLabel");
-        statusBar()->addPermanentWidget(FooterStatsLabel);
-        statusBar()->showMessage(tr("Pronto"));
+        CreateStatusBar();
 
         connect(Viewport, &ViewportWidget::FrameReady,          this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
@@ -153,133 +146,108 @@ namespace SmileEditor {
         }
     }
 
-    void MainWindow::CreateMenuBar() {
-        auto* TopBar = new QWidget(this);
-        TopBar->setObjectName("SmileTopBar");
-        TopBar->setFixedHeight(36);
+    MainWindow::~MainWindow() {
+        if (WinFilter) {
+            qApp->removeNativeEventFilter(WinFilter);
+            delete WinFilter;
+        }
+    }
 
-        auto* Layout = new QHBoxLayout(TopBar);
-        Layout->setContentsMargins(8, 0, 10, 0);
-        Layout->setSpacing(8);
-        Layout->setAlignment(Qt::AlignVCenter);
+    void MainWindow::changeEvent(QEvent* _Event) {
+        QMainWindow::changeEvent(_Event);
+        // Atualiza o icone maximizar/restaurar da MainBar quando o estado da janela muda
+        // (botao, double-click no caption, Aero Snap).
+        if (_Event->type() == QEvent::WindowStateChange && WindowBr)
+            WindowBr->NotifyWindowStateChanged();
+    }
 
-        auto* Logo = new QLabel(TopBar);
-        Logo->setObjectName("SmileTopLogo");
-        Logo->setFixedSize(22, 22);
-        Logo->setPixmap(MakeSmileLogoPixmap(22));
-        Logo->setScaledContents(true);
-        Layout->addWidget(Logo, 0, Qt::AlignVCenter);
+    void MainWindow::CreateTopBar() {
+        // Barra unificada em QML: windowBridge (min/max/fechar + zonas do hit-test), menuBridge
+        // (menus) e smilelogo (logo procedural da engine como image provider).
+        QQuickWidget* Bar = CreateQmlPanel(
+            QStringLiteral("MainBar.qml"),
+            { { QStringLiteral("windowBridge"), WindowBr },
+              { QStringLiteral("menuBridge"),   Menus } },
+            this,
+            { { QStringLiteral("smilelogo"), new SmileLogoImageProvider() } });
+        Bar->setObjectName("MainBar");
+        setMenuWidget(Bar);
 
-        auto* Brand = new QLabel(tr("Smile Engine"), TopBar);
-        Brand->setObjectName("SmileBrandLabel");
-        Brand->setFixedHeight(24);
-        Brand->setAlignment(Qt::AlignVCenter);
-        Layout->addWidget(Brand, 0, Qt::AlignVCenter);
+        // Frameless nativo (Slate-style): instala o filtro no HWND e recalcula o frame/sombra.
+        // winId() realiza a janela nativa; o filtro precisa estar ativo antes do primeiro show.
+        WinFilter = new NativeWindowFilter(winId(), WindowBr);
+        qApp->installNativeEventFilter(WinFilter);
+        NativeWindowFilter::EnableFrameless(winId());
+    }
 
-        auto* Menus = new QMenuBar(TopBar);
-        Menus->setObjectName("SmileMenuBar");
-        Menus->setNativeMenuBar(false);
-        Menus->setFixedHeight(24);
+    void MainWindow::CreateStatusBar() {
+        StatusBr = new StatusBridge(this);
+        QQuickWidget* Bar = CreateQmlPanel(
+            QStringLiteral("StatusBar.qml"),
+            { { QStringLiteral("statusModel"), StatusBr } },
+            this);
+        Bar->setObjectName("StatusBar");
 
-        auto* FileMenu = Menus->addMenu(tr("Arquivo"));
+        // Hospeda no slot do QStatusBar (sempre no rodape, abaixo dos docks). addWidget com
+        // stretch=1 ocupa a largura toda; nao usamos mais showMessage nativo.
+        QStatusBar* Sb = statusBar();
+        Sb->setObjectName("SmileStatusBar");
+        Sb->setSizeGripEnabled(false);
+        Sb->setContentsMargins(0, 0, 0, 0);
+        Sb->addWidget(Bar, 1);
+    }
 
-        // Carrega uma cena cozida (.sscene) gerada pelo SmileCooker (importacao Bistro).
-        auto* LoadSceneAction = FileMenu->addAction(tr("Carregar Cena…"));
-        LoadSceneAction->setShortcut(QKeySequence(tr("Ctrl+O")));
-        connect(LoadSceneAction, &QAction::triggered, this, [this]() {
-            if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized())
-                return;
-            QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
-            QString File = QFileDialog::getOpenFileName(
-                this, tr("Carregar Cena Cozida"), Start,
-                tr("Cena SmileEngine (*.sscene)"));
+    void MainWindow::WireMenuActions() {
+        // Renderer pronto (ou nullptr). As acoes de cena/render so valem com a engine inicializada.
+        auto RendererReady = [this]() -> Smile::Renderer* {
+            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
+                return Viewport->GetRenderer();
+            return nullptr;
+        };
+
+        // ---- Arquivo ----
+        connect(Menus, &MenuBridge::LoadSceneRequested, this, [this, RendererReady]() {
+            auto* R = RendererReady(); if (!R) return;
+            const QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
+            const QString File = QFileDialog::getOpenFileName(
+                this, tr("Carregar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            const bool Ok = Viewport->GetRenderer()->LoadCookedScene(File.toStdWString());
-            if (!Ok)
+            if (!R->LoadCookedScene(File.toStdWString()))
                 QMessageBox::warning(this, tr("Carregar Cena"),
                                      tr("Falha ao carregar a cena. Veja o console."));
         });
-        // Carrega uma segunda cena cozida POR CIMA da atual, sem limpar (ex.: o interior
-        // da Bistro alinhado com o exterior ja carregado).
-        auto* AddSceneAction = FileMenu->addAction(tr("Adicionar Cena…"));
-        AddSceneAction->setShortcut(QKeySequence(tr("Ctrl+Shift+O")));
-        connect(AddSceneAction, &QAction::triggered, this, [this]() {
-            if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized())
-                return;
-            QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
-            QString File = QFileDialog::getOpenFileName(
-                this, tr("Adicionar Cena Cozida"), Start,
-                tr("Cena SmileEngine (*.sscene)"));
+        connect(Menus, &MenuBridge::AddSceneRequested, this, [this, RendererReady]() {
+            auto* R = RendererReady(); if (!R) return;
+            const QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
+            const QString File = QFileDialog::getOpenFileName(
+                this, tr("Adicionar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            const bool Ok = Viewport->GetRenderer()->LoadCookedScene(File.toStdWString(), /*Additive=*/true);
-            if (!Ok)
+            if (!R->LoadCookedScene(File.toStdWString(), /*Additive=*/true))
                 QMessageBox::warning(this, tr("Adicionar Cena"),
                                      tr("Falha ao adicionar a cena. Veja o console."));
         });
-        FileMenu->addSeparator();
+        connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
 
-        auto* ExitAction = FileMenu->addAction(tr("Sair"), this, &QWidget::close);
-        ExitAction->setShortcut(QKeySequence::Quit);
-
-        auto* EditMenu = Menus->addMenu(tr("Editar"));
-        EditMenu->addAction(tr("Desfazer"))->setEnabled(false);
-        EditMenu->addAction(tr("Refazer"))->setEnabled(false);
-
-        WindowMenu = Menus->addMenu(tr("Janela"));
-        auto* EnvironmentAction = WindowMenu->addAction(
-            MakeLucideIcon(QStringLiteral("cloud-sun"), QColor(221, 216, 202), 18),
-            tr("Ambiente & Céu"),
-            this,
-            &MainWindow::OnOpenEnvironmentWindow);
-        EnvironmentAction->setShortcut(QKeySequence(tr("Ctrl+Shift+A")));
-        WindowMenu->addSeparator();
-
-        auto* ProjectMenu = Menus->addMenu(tr("Projeto"));
-        auto* RenderMenu  = ProjectMenu->addMenu(tr("Renderização"));
-
-        // VSync: liga/desliga o trava-no-vblank do Present (default ligado).
-        auto* VSyncAction = RenderMenu->addAction(tr("VSync"));
-        VSyncAction->setCheckable(true);
-        VSyncAction->setChecked(true);
-        connect(VSyncAction, &QAction::toggled, this, [this](bool Enabled) {
-            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
-                Viewport->GetRenderer()->SetVSync(Enabled);
+        // ---- Janela ----
+        connect(Menus, &MenuBridge::OpenEnvironmentRequested, this, &MainWindow::OnOpenEnvironmentWindow);
+        connect(Menus, &MenuBridge::ToggleConsoleRequested, this, [this]() {
+            if (ConsoleDock) ConsoleDock->setVisible(!ConsoleDock->isVisible());
         });
 
-        // Frustum culling (runtime, default ligado) — corta meshes fora da tela.
-        auto* CullAction = RenderMenu->addAction(tr("Frustum Culling"));
-        CullAction->setCheckable(true);
-        CullAction->setChecked(true);
-        connect(CullAction, &QAction::toggled, this, [this](bool Enabled) {
-            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
-                Viewport->GetRenderer()->SetFrustumCulling(Enabled);
-        });
+        // ---- Ajuda ----
+        connect(Menus, &MenuBridge::AboutRequested, this, &MainWindow::OnHelpAbout);
 
-        // Depth pre-pass (runtime, default ligado) — mata overdraw de shading; toggle p/ medir.
-        auto* PrepassAction = RenderMenu->addAction(tr("Depth Pre-pass"));
-        PrepassAction->setCheckable(true);
-        PrepassAction->setChecked(false); // default OFF: na Bistro custou mais que economizou
-        connect(PrepassAction, &QAction::toggled, this, [this](bool Enabled) {
-            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
-                Viewport->GetRenderer()->SetDepthPrepass(Enabled);
-        });
-
-        // Fusao por material (default desligado) — aplica no proximo "Carregar Cena".
-        auto* MergeAction = RenderMenu->addAction(tr("Fundir por material (recarregar)"));
-        MergeAction->setCheckable(true);
-        MergeAction->setChecked(false);
-        connect(MergeAction, &QAction::toggled, this, [this](bool Enabled) {
-            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
-                Viewport->GetRenderer()->SetMergeByMaterial(Enabled);
-        });
-
-        auto* HelpMenu = Menus->addMenu(tr("Ajuda"));
-        HelpMenu->addAction(tr("Sobre o Smile Engine..."), this, &MainWindow::OnHelpAbout);
-        Layout->addWidget(Menus, 0, Qt::AlignVCenter);
-
-        Layout->addStretch(1);
-
-        setMenuWidget(TopBar);
+        // ---- Atalhos globais (ApplicationShortcut: valem com o foco no viewport, nao so na barra).
+        // Disparam o mesmo caminho dos menus (chamam o MenuBridge -> sinal -> handler acima).
+        auto AddShortcut = [this](const QKeySequence& Seq, auto Slot) {
+            auto* Sc = new QShortcut(Seq, this);
+            Sc->setContext(Qt::ApplicationShortcut);
+            connect(Sc, &QShortcut::activated, this, Slot);
+        };
+        AddShortcut(QKeySequence(tr("Ctrl+O")),       [this]{ Menus->loadScene(); });
+        AddShortcut(QKeySequence(tr("Ctrl+Shift+O")), [this]{ Menus->addScene(); });
+        AddShortcut(QKeySequence(tr("Ctrl+Shift+A")), [this]{ Menus->openEnvironment(); });
+        AddShortcut(QKeySequence::Quit,               [this]{ close(); });
     }
 
     QWidget* MainWindow::CreateViewportChrome() {
@@ -300,57 +268,42 @@ namespace SmileEditor {
     }
 
     void MainWindow::CreateDocks() {
-        auto RegisterDock = [this](QDockWidget* Dock) {
-            if (!WindowMenu) return;
-            QAction* ToggleAction = Dock->toggleViewAction();
-            ToggleAction->setText(Dock->windowTitle());
-            WindowMenu->addAction(ToggleAction);
-        };
-
-        auto* MaterialDock = new QDockWidget(tr("Recursos"), this);
-        MaterialDock->setObjectName("ResourcesDock");
-        MaterialDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
-        MaterialDock->setFeatures(QDockWidget::DockWidgetMovable |
-                                  QDockWidget::DockWidgetFloatable |
-                                  QDockWidget::DockWidgetClosable);
-
-        MaterialPanel = new MaterialEditorPanel(MaterialDock);
-        MaterialDock->setWidget(MaterialPanel);
-        addDockWidget(Qt::RightDockWidgetArea, MaterialDock);
-        MaterialDock->setMinimumWidth(300);
-        RegisterDock(MaterialDock);
-
-        auto* ConsoleDock = new QDockWidget(tr("Console"), this);
+        ConsoleDock = new QDockWidget(tr("Console"), this);
         ConsoleDock->setObjectName("ConsoleDock");
         ConsoleDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
         ConsoleDock->setFeatures(QDockWidget::DockWidgetMovable |
                                  QDockWidget::DockWidgetFloatable |
                                  QDockWidget::DockWidgetClosable);
 
-        auto* Container = new QWidget(ConsoleDock);
-        Container->setObjectName("ConsolePanel");
-        auto* Layout = new QVBoxLayout(Container);
-        Layout->setContentsMargins(8, 6, 8, 8);
-        Layout->setSpacing(6);
+        // Console em QML (ConsolePanel.qml), alimentado pela LogBridge via context property.
+        QQuickWidget* Console = CreateQmlPanel(
+            QStringLiteral("ConsolePanel.qml"),
+            { { QStringLiteral("logModel"), ConsoleLog } },
+            ConsoleDock);
+        Console->setObjectName("ConsolePanel");
 
-        LogOutput = new QTextEdit(Container);
-        LogOutput->setObjectName("LogOutput");
-        LogOutput->setReadOnly(true);
-        LogOutput->setFont(QFont("Consolas", 9));
-        LogOutput->document()->setMaximumBlockCount(500);
-        Layout->addWidget(LogOutput, 1);
+        ConsoleDock->setWidget(Console);
 
-        ConsoleDock->setWidget(Container);
+        // Barra de titulo virou 100% QML (dentro do ConsolePanel): esconde a nativa com um
+        // title bar widget de altura zero. Perde-se arrastar/flutuar nativo (decisao do projeto);
+        // fechar vem do menu QML -> CloseRequested -> close() do dock.
+        auto* EmptyTitleBar = new QWidget(ConsoleDock);
+        EmptyTitleBar->setFixedHeight(0);
+        ConsoleDock->setTitleBarWidget(EmptyTitleBar);
+        connect(ConsoleLog, &LogBridge::CloseRequested, ConsoleDock, &QDockWidget::close);
+
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
-        ConsoleDock->resize(ConsoleDock->width(), 210);
-        RegisterDock(ConsoleDock);
+        // Piso pra nunca colapsar a ponto de sumir; o tamanho de abertura vem do resizeDocks.
+        Console->setMinimumHeight(120);
+        // resizeDocks e a API confiavel pra altura inicial (resize() no dock e ignorado pelo layout).
+        resizeDocks({ ConsoleDock }, { 160 }, Qt::Vertical);
 
-        resizeDocks({ MaterialDock }, { 320 }, Qt::Horizontal);
+        // Reflete o estado do dock no check do menu "Janela" (inclui o fechar via menu do console).
+        connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
     }
 
     void MainWindow::OnRendererReady() {
         if (!Viewport || !Viewport->GetRenderer()) return;
-        if (MaterialPanel) MaterialPanel->InitializeWithRenderer(Viewport->GetRenderer());
 
         // Time-of-Day: textura da lua (LROC color da NASA). Path resolvido via SMILE_ASSETS_DIR
         // (so o editor o conhece); em falha o renderer segue na lua procedural branca.
@@ -382,41 +335,36 @@ namespace SmileEditor {
     }
 
     void MainWindow::UpdateStats() {
-        if (!Viewport) return;
+        if (!Viewport || !StatusBr) return;
         auto* Renderer = Viewport->GetRenderer();
         if (!Renderer || !Renderer->IsInitialized()) return;
 
-        float FPS = Viewport->GetFPS();
+        const float FPS = Viewport->GetFPS();
         const float FrameMs = FPS > 0.0f ? 1000.0f / FPS : 0.0f;
 
-        if (FooterStatsLabel) {
+        // Textos SEM separador inicial — a StatusBar.qml os junta com "  |  ".
+        QString OceanText;
+        if (Renderer->GetUseWater()) {
             const auto& WaterStats = Renderer->GetWater().GetDebugStats();
-            QString WaterText;
-            if (Renderer->GetUseWater()) {
-                WaterText = QString("  |  Ocean GPU: %1/%2 tiles  |  cull F:%3 C:%4 O:%5  |  draws:%6 L:%7 R:%8")
-                    .arg(WaterStats.ValidTileCount)
-                    .arg(WaterStats.CandidateCount)
-                    .arg(WaterStats.FrustumCulledCount)
-                    .arg(WaterStats.CoveredByFinerCount)
-                    .arg(WaterStats.OutOfBoundsCount)
-                    .arg(WaterStats.DrawCommandCount)
-                    .arg(WaterStats.LevelCount)
-                    .arg(WaterStats.RingRadius);
-            }
-
-            QString SceneText;
-            if (Renderer->GetDrawCount() > 0) {
-                SceneText = QString("  |  meshes: %1/%2")
-                    .arg(Renderer->GetVisibleCount())
-                    .arg(Renderer->GetDrawCount());
-            }
-
-            FooterStatsLabel->setText(QString("FPS: %1  |  Frame: %2 ms%3%4")
-                .arg(FPS, 0, 'f', 1)
-                .arg(FrameMs, 0, 'f', 2)
-                .arg(SceneText)
-                .arg(WaterText));
+            OceanText = QString("Ocean GPU: %1/%2 tiles  |  cull F:%3 C:%4 O:%5  |  draws:%6 L:%7 R:%8")
+                .arg(WaterStats.ValidTileCount)
+                .arg(WaterStats.CandidateCount)
+                .arg(WaterStats.FrustumCulledCount)
+                .arg(WaterStats.CoveredByFinerCount)
+                .arg(WaterStats.OutOfBoundsCount)
+                .arg(WaterStats.DrawCommandCount)
+                .arg(WaterStats.LevelCount)
+                .arg(WaterStats.RingRadius);
         }
+
+        QString SceneText;
+        if (Renderer->GetDrawCount() > 0) {
+            SceneText = QString("meshes: %1/%2")
+                .arg(Renderer->GetVisibleCount())
+                .arg(Renderer->GetDrawCount());
+        }
+
+        StatusBr->SetStats(FPS, FrameMs, SceneText, OceanText);
     }
 
     void MainWindow::OnHelpAbout() {
@@ -459,9 +407,9 @@ namespace SmileEditor {
                     const std::string ChangedStem =
                         IsInclude ? std::string() : ShaderInfo.completeBaseName().toStdString();
                     if (Viewport->GetRenderer()->ReloadShaders(ChangedStem)) {
-                        statusBar()->showMessage(tr("Shader Recarregado com Sucesso."), 3000);
+                        if (StatusBr) StatusBr->ShowMessage(tr("Shader Recarregado com Sucesso."), 3000);
                     } else {
-                        statusBar()->showMessage(tr("Erro ao Recarregar Shader no Renderer."), 3000);
+                        if (StatusBr) StatusBr->ShowMessage(tr("Erro ao Recarregar Shader no Renderer."), 3000);
                     }
                 }
             } else {
@@ -470,7 +418,7 @@ namespace SmileEditor {
                     Errors = QString::fromUtf8(CompileProcess->readAllStandardOutput());
                 }
                 Smile::LogError("Falha ao Compilar Shader via CMake:\n" + Errors.toStdString());
-                statusBar()->showMessage(tr("Falha na Compilação do Shader."), 3000);
+                if (StatusBr) StatusBr->ShowMessage(tr("Falha na Compilação do Shader."), 3000);
             }
             CompileProcess->deleteLater();
         });

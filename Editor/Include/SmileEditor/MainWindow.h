@@ -7,22 +7,30 @@
 class QActionGroup;
 class QLabel;
 class QMenu;
-class QTextEdit;
 class QFileSystemWatcher;
 class QWidget;
+class QEvent;
+class QDockWidget;
 
 namespace SmileEditor {
     class ViewportWidget;
     class AboutDialog;
-    class MaterialEditorPanel;
     class EnvironmentWindow;
+    class LogBridge;
+    class WindowBridge;
+    class NativeWindowFilter;
+    class MenuBridge;
+    class StatusBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
 
     public:
         explicit MainWindow(QWidget* parent = nullptr);
-        ~MainWindow() override = default;
+        ~MainWindow() override;
+
+    protected:
+        void changeEvent(QEvent* event) override; // notifica o WindowBridge em max/restore
 
     private slots:
         void OnHelpAbout();
@@ -32,19 +40,23 @@ namespace SmileEditor {
         void TriggerShaderCompileAndReload(const QString& Path);
 
     private:
-        void CreateMenuBar();
+        void CreateTopBar();      // barra unificada QML (MainBar.qml + EditorMenuBar.qml)
+        void WireMenuActions();   // conecta os sinais do MenuBridge a logica + atalhos globais
+        void CreateStatusBar();   // barra de status QML (StatusBar.qml) no slot do QStatusBar
         void CreateDocks();
         QWidget* CreateViewportChrome();
 
         ViewportWidget*       Viewport    = nullptr;
         QPointer<AboutDialog> AboutDlg;
         QPointer<EnvironmentWindow> EnvironmentDlg;
-        QMenu*                WindowMenu  = nullptr;
 
-        QLabel*               FooterStatsLabel = nullptr;
-        QTextEdit*            LogOutput   = nullptr;
+        StatusBridge*         StatusBr    = nullptr; // ponte C++ -> StatusBar.qml
+        LogBridge*            ConsoleLog  = nullptr; // ponte C++ -> ConsolePanel.qml
+        WindowBridge*         WindowBr    = nullptr; // ponte C++ -> MainBar.qml (botoes de janela)
+        NativeWindowFilter*   WinFilter   = nullptr; // frameless nativo (Slate-style)
+        MenuBridge*           Menus       = nullptr; // ponte C++ -> EditorMenuBar.qml
+        QDockWidget*          ConsoleDock = nullptr; // p/ toggle/estado no menu Janela
 
-        MaterialEditorPanel*  MaterialPanel    = nullptr;
         QString               CurrentHDRPath;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;

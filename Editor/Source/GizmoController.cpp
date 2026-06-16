@@ -33,19 +33,19 @@ namespace SmileEditor {
         return std::max(0.001f, Dist * std::tan(kFovY * 0.5f) * kSizeFrac);
     }
 
-    GizmoController::EAxis GizmoController::HitTest(Smile::Renderer& R, u32 X, u32 Y) const {
+    GizmoController::EAxis GizmoController::HitTest(Smile::Renderer& _Renderer, u32 _X, u32 _Y) const {
         Vec3 Pivot; int Idx;
-        if (!GetPivot(R, Pivot, Idx)) return EAxis::None;
-        const float Scale = ScaleFor(R, Pivot);
+        if (!GetPivot(_Renderer, Pivot, Idx)) return EAxis::None;
+        const float Scale = ScaleFor(_Renderer, Pivot);
         float px0, py0;
-        if (!R.WorldToScreen(Pivot, px0, py0)) return EAxis::None;
+        if (!_Renderer.WorldToScreen(Pivot, px0, py0)) return EAxis::None;
 
         const EAxis Ids[3] = { EAxis::X, EAxis::Y, EAxis::Z };
-        const float fx = static_cast<float>(X), fy = static_cast<float>(Y);
+        const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
         float Best = kHitRadius; EAxis BestAxis = EAxis::None;
         for (int i = 0; i < 3; ++i) {
             float px1, py1;
-            if (!R.WorldToScreen(Pivot + AxisDir(Ids[i]) * Scale, px1, py1)) continue;
+            if (!_Renderer.WorldToScreen(Pivot + AxisDir(Ids[i]) * Scale, px1, py1)) continue;
             const float dx = px1 - px0, dy = py1 - py0;
             const float len2 = dx*dx + dy*dy;
             float t = (len2 > 1e-6f) ? (((fx - px0)*dx + (fy - py0)*dy) / len2) : 0.0f;
@@ -67,13 +67,13 @@ namespace SmileEditor {
         return (b*e - d) / denom;
     }
 
-    void GizmoController::Submit(Smile::Renderer& R) {
+    void GizmoController::Submit(Smile::Renderer& _Renderer) {
         if (!Enabled) return;
         Vec3 Pivot; int Idx;
-        if (!GetPivot(R, Pivot, Idx)) return;
-        const float Scale = ScaleFor(R, Pivot);
+        if (!GetPivot(_Renderer, Pivot, Idx)) return;
+        const float Scale = ScaleFor(_Renderer, Pivot);
 
-        Smile::FDebugDraw& DD = R.GetDebugDraw();
+        Smile::FDebugDraw& DebugDraw = _Renderer.GetDebugDraw();
         const Vec3 Axis[3]    = { Vec3::UnitX(), Vec3::UnitY(), Vec3::UnitZ() };
         const Vec3 BaseCol[3] = { {1.0f,0.25f,0.25f}, {0.30f,1.0f,0.30f}, {0.35f,0.55f,1.0f} };
         const EAxis Ids[3]    = { EAxis::X, EAxis::Y, EAxis::Z };
@@ -84,7 +84,7 @@ namespace SmileEditor {
         for (int i = 0; i < 3; ++i) {
             const Vec3 d   = Axis[i];
             const Vec3 col = (Highlighted == Ids[i]) ? Hi : BaseCol[i];
-            DD.Line(Pivot, Pivot + d * ShaftEnd, col);
+            DebugDraw.Line(Pivot, Pivot + d * ShaftEnd, col);
             // Ponta (piramide de 4 faces).
             const Vec3 u = (i == 0) ? Vec3::UnitY() : Vec3::UnitX();
             const Vec3 v = (i == 2) ? Vec3::UnitY() : Vec3::UnitZ();
@@ -93,7 +93,7 @@ namespace SmileEditor {
             const Vec3 c[4] = { bc + u*HeadR + v*HeadR, bc - u*HeadR + v*HeadR,
                                 bc - u*HeadR - v*HeadR, bc + u*HeadR - v*HeadR };
             for (int s = 0; s < 4; ++s)
-                DD.Triangle(tip, c[s], c[(s + 1) & 3], col);
+                DebugDraw.Triangle(tip, c[s], c[(s + 1) & 3], col);
         }
     }
 

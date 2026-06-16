@@ -16,7 +16,7 @@ namespace Smile {
         BuildPSOs(Device, RTFormat);
         CreateBuffers(Device);
         Initialized = true;
-        LogInfo("FDebugDraw (desenho 3D imediato p/ tooling do editor) inicializado");
+        LogInfo("DebugDraw Inicializado");
     }
 
     void FDebugDraw::Line(const Vec3& A, const Vec3& B, const Vec3& C) {

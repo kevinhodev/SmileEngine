@@ -10,10 +10,14 @@ set(EDITOR_HEADERS
     Include/SmileEditor/SmileLogo.h
     Include/SmileEditor/LucideIcon.h
     Include/SmileEditor/EnvironmentWindow.h
-    Include/SmileEditor/TextureSlotWidget.h
-    Include/SmileEditor/TextureLoadWorker.h
-    Include/SmileEditor/MaterialEditorPanel.h
     Include/SmileEditor/GizmoController.h
+    Include/SmileEditor/LogBridge.h
+    Include/SmileEditor/QmlHost.h
+    Include/SmileEditor/WindowBridge.h
+    Include/SmileEditor/NativeWindowFilter.h
+    Include/SmileEditor/SmileLogoImageProvider.h
+    Include/SmileEditor/MenuBridge.h
+    Include/SmileEditor/StatusBridge.h
 )
 
 set(EDITOR_SOURCES
@@ -25,10 +29,13 @@ set(EDITOR_SOURCES
     Source/SmileLogo.cpp
     Source/LucideIcon.cpp
     Source/EnvironmentWindow.cpp
-    Source/TextureSlotWidget.cpp
-    Source/TextureLoadWorker.cpp
-    Source/MaterialEditorPanel.cpp
     Source/GizmoController.cpp
+    Source/LogBridge.cpp
+    Source/QmlHost.cpp
+    Source/WindowBridge.cpp
+    Source/NativeWindowFilter.cpp
+    Source/MenuBridge.cpp
+    Source/StatusBridge.cpp
 )
 
 # WIN32 = subsistema Windows (sem console preto atras)
@@ -49,7 +56,16 @@ target_link_libraries(SmileEditor
         Qt6::Gui
         Qt6::Svg
         Qt6::Widgets
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickWidgets
+        Qt6::QuickControls2
 )
+
+# Barra de titulo frameless (Slate-style): DwmExtendFrameIntoClientArea + hit-test nativo.
+if(WIN32)
+    target_link_libraries(SmileEditor PRIVATE dwmapi user32)
+endif()
 
 # Define o diretório de origem do editor para busca de stylesheets em desenvolvimento
 target_compile_definitions(SmileEditor
@@ -76,7 +92,7 @@ if(WIN32)
                     --no-translations
                     --no-system-d3d-compiler
                     --no-opengl-sw
-                    --no-quick-import
+                    --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/Qml"
                     "$<TARGET_FILE:SmileEditor>"
             COMMENT "Executando windeployqt para o SmileEditor"
         )
@@ -90,6 +106,14 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Styles"
                 "$<TARGET_FILE_DIR:SmileEditor>/Editor/Styles"
         COMMENT "Copiando stylesheets QSS para o diretorio de build"
+    )
+
+    # Copia a pasta de Qml (deploy fallback; em dev carregamos do source dir p/ hot-reload)
+    add_custom_command(TARGET SmileEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/Qml"
+                "$<TARGET_FILE_DIR:SmileEditor>/Editor/Qml"
+        COMMENT "Copiando paineis QML para o diretorio de build"
     )
 endif()
 

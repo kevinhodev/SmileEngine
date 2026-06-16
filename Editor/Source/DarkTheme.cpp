@@ -26,9 +26,7 @@ namespace SmileEditor {
             StylesDir + "/global.qss",
             StylesDir + "/MainWindow.qss",
             StylesDir + "/EnvironmentWindow.qss",
-            StylesDir + "/AboutDialog.qss",
-            StylesDir + "/MaterialEditorPanel.qss",
-            StylesDir + "/TextureSlotWidget.qss"
+            StylesDir + "/AboutDialog.qss"
         };
     }
 
