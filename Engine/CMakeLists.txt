@@ -47,6 +47,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/RaytracingScene.h
     Include/Smile/Graphics/DDGI.h
     Include/Smile/Graphics/DDGIDebug.h
+    Include/Smile/Graphics/ReSTIRGI.h
+    Include/Smile/Graphics/NrdDenoiser.h
     Include/Smile/Graphics/AmbientOcclusion.h
     Include/Smile/Graphics/ShaderUtils.h
     Include/Smile/Graphics/PostProcess.h
@@ -92,6 +94,8 @@ set(ENGINE_SOURCES
     Source/Graphics/RaytracingScene.cpp
     Source/Graphics/DDGI.cpp
     Source/Graphics/DDGIDebug.cpp
+    Source/Graphics/ReSTIRGI.cpp
+    Source/Graphics/NrdDenoiser.cpp
     Source/Graphics/Reflections.cpp
     Source/Graphics/AmbientOcclusion.cpp
     Source/Graphics/ShaderUtils.cpp
@@ -155,6 +159,24 @@ if(EXISTS "${_fsr2_inc}/ffx_fsr2.h" AND EXISTS "${_fsr2_libdir}/ffx_fsr2_api_dx1
 else()
     message(WARNING "FSR2 nao encontrado em ${SMILE_FSR2_ROOT} — Fsr2Pass compila como stub")
     target_compile_definitions(SmileEngine PRIVATE SMILE_FSR2_ENABLED=0)
+endif()
+
+# === NRD (NVIDIA Real-time Denoising) — denoiser do ReSTIR GI (RELAX_DIFFUSE) ===================
+# Caminho D3D12 DIRETO (sem NRI): linka a import lib + a DLL fica ao lado do exe. NRD usa
+# AllocationCallbacks proprios, entao a MESMA DLL Release serve p/ Debug+Release da engine (nao
+# tem conflito de CRT como o FSR2). Exposto via SMILE_NRD_ROOT. Ver memory/project_restir_gi_roadmap.
+set(SMILE_NRD_ROOT "D:/Engines/NRD" CACHE PATH "Raiz do NRD SDK")
+set(_nrd_inc "${SMILE_NRD_ROOT}/Include")
+set(_nrd_lib "${SMILE_NRD_ROOT}/_Bin/Release/NRD.lib")
+set(SMILE_NRD_DLL "${SMILE_NRD_ROOT}/_Bin/Release/NRD.dll" CACHE FILEPATH "NRD.dll p/ copiar ao lado do exe")
+if(EXISTS "${_nrd_inc}/NRD.h" AND EXISTS "${_nrd_lib}")
+    message(STATUS "NRD encontrado: ${SMILE_NRD_ROOT}")
+    target_include_directories(SmileEngine PRIVATE "${_nrd_inc}")
+    target_compile_definitions(SmileEngine PUBLIC SMILE_NRD_ENABLED=1)
+    target_link_libraries(SmileEngine PUBLIC "${_nrd_lib}")
+else()
+    message(WARNING "NRD nao encontrado em ${SMILE_NRD_ROOT} — NrdDenoiser compila como stub")
+    target_compile_definitions(SmileEngine PUBLIC SMILE_NRD_ENABLED=0)
 endif()
 
 # Organizacao no Visual Studio (filters por pasta)

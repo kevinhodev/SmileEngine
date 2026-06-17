@@ -47,6 +47,23 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity) {
     return SkyViewLUT.SampleLevel(LinearClamp, uv, 0.0f).rgb * skyIntensity;
 }
 
+// Normal geometrica (orientada contra o raio) no ponto de hit — usada pelo ReSTIR GI p/ o Jacobiano
+// de reconexao (n2). Aditivo; nao altera ShadeSurfaceHit (caminho das reflexoes intacto).
+float3 HitGeomNormal(uint instId, uint tri, float2 bary, float3x4 worldToObject, float3 rayDir) {
+    InstanceGeo geo = Instances[instId];
+    uint i0 = Indices[geo.IndexBase + tri * 3 + 0] + geo.VertexBase;
+    uint i1 = Indices[geo.IndexBase + tri * 3 + 1] + geo.VertexBase;
+    uint i2 = Indices[geo.IndexBase + tri * 3 + 2] + geo.VertexBase;
+    float3 nObj = Vertices[i0].Normal * (1.0f - bary.x - bary.y)
+                + Vertices[i1].Normal * bary.x
+                + Vertices[i2].Normal * bary.y;
+    float3 nWrld = mul(nObj, (float3x3)worldToObject);
+    float  nLen  = length(nWrld);
+    float3 geomN = (nLen > 1e-5f) ? (nWrld / nLen) : normalize(-rayDir);
+    bool   backface = (geo.TwoSided == 0) && (dot(geomN, rayDir) > 0.0f);
+    return backface ? -geomN : geomN;
+}
+
 float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObject,
                        float3 rayOrigin, float3 rayDir, float hitDist,
                        FHitShadeParams P, out float outSignedDist) {

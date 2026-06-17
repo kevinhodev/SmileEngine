@@ -27,6 +27,8 @@
 #include "Smile/Graphics/RaytracingScene.h"
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/DDGIDebug.h"
+#include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
 #include "Smile/Graphics/AmbientOcclusion.h"
 #include "Smile/Graphics/PostProcess.h"
@@ -331,6 +333,18 @@ namespace Smile {
         void SetGIDebugRayRadius(f32 V)    { DDGIDebugPass.SetRayRadius(V); }
         f32  GetGIDebugRayRadius() const   { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetRayRadius(); }
 
+        // ReSTIR GI (final-gather difuso por pixel sobre o DDGI). Experimental — default OFF; quando
+        // ligado, substitui o difuso do DDGI no deferred (o DDGI segue como cache no trace).
+        void SetUseReSTIRGI(bool V)        { UseReSTIRGI = V; }
+        bool GetUseReSTIRGI() const        { return UseReSTIRGI; }
+        void SetReSTIRSpatial(bool V)      { ReSTIRGI.SetSpatial(V); }
+        bool GetReSTIRSpatial() const      { return const_cast<FReSTIRGI&>(ReSTIRGI).GetSpatial(); }
+        void SetReSTIRVisibility(bool V)   { ReSTIRGI.SetVisibility(V); }
+        bool GetReSTIRVisibility() const   { return const_cast<FReSTIRGI&>(ReSTIRGI).GetVisibility(); }
+        // NRD como denoiser do ReSTIR GI (Fase C). Off = ReSTIR cru no deferred.
+        void SetUseNrdDenoise(bool V)      { UseNrdDenoise = V; }
+        bool GetUseNrdDenoise() const      { return UseNrdDenoise; }
+
         void SetUseReflections(bool V)     { UseReflections = V; }
         bool GetUseReflections() const     { return UseReflections; }
         void SetReflectionMaxRoughness(f32 V)  { Reflections.SetMaxRoughness(V); }
@@ -501,6 +515,13 @@ namespace Smile {
         bool             GISkipInactiveProbes = true; 
         bool             GISkipInactiveFallback = false; 
 
+        FReSTIRGI        ReSTIRGI;
+        bool             UseReSTIRGI = false; // experimental; default OFF (nao toca o estado padrao)
+        FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (RELAX_DIFFUSE) — Fase B/C
+        bool             UseNrdDenoise = false; // NRD como denoiser do ReSTIR (Fase C)
+        Mat44            NrdPrevView{};        // prev view/proj NAO-jitteradas p/ a reprojecao do NRD
+        Mat44            NrdPrevProj{};
+
         FReflections     Reflections;
         bool             UseReflections = true;
 
@@ -511,7 +532,7 @@ namespace Smile {
 
         FCloudNoise       CloudNoise;
         FVolumetricClouds VolumetricClouds;
-        bool              UseClouds = true;
+        bool              UseClouds = false; // off por padrao: caro e ainda nao otimizado
 
         FOceanFFT         Ocean;
         FWaterRenderer    Water;

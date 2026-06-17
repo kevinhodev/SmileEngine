@@ -35,6 +35,10 @@ Texture2D<float4> DDGIDistanceAtlas   : register(t13);
 Buffer<float4>    DDGIProbeData        : register(t15);
 Texture2D<float>  SceneAO             : register(t14);
 
+// ReSTIR GI: irradiancia difusa por pixel (final-gather sobre o DDGI). Ativa via ReflectionParams.w.
+// Quando ligada, substitui o termo difuso do DDGI; o DDGI segue como cache no trace (multi-bounce).
+Texture2D<float4> ReSTIRGITex         : register(t16);
+
 SamplerState IBLSampler : register(s1); 
 
 struct VSOutput {
@@ -106,6 +110,7 @@ float4 main(VSOutput input) : SV_Target {
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);
 
     bool UseGI         = DDGIGridCount.w > 0.5f;
+    bool UseReSTIR     = ReflectionParams.w > 0.5f; // ReSTIR GI ativo -> substitui o difuso do DDGI
     bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
 
     if (UseAtmoAmbient && !UseGI) {
@@ -136,33 +141,40 @@ float4 main(VSOutput input) : SV_Target {
     }
 
     float3 DbgGI = float3(0.0f, 0.0f, 0.0f);
-    if (UseGI) {
-        float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
-        int  giFlags      = (int)DDGIDistParams.w;
-        bool useChebyshev = (giFlags & 1) != 0;
-        bool skip         = (giFlags & 2) != 0;
-        bool fallback     = (giFlags & 4) != 0;
-        uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+    if (UseGI || UseReSTIR) {
         float3 gi;
-        if (useChebyshev) {
-            float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
-            gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
-                     worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                     (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, 0.25f,
-                     DDGIProbeData, skipMode);
+        if (UseReSTIR) {
+            // ReSTIR full-res no A0-A3 (Load por pixel); o A4 passa p/ meia-res + upsample bilateral.
+            gi = ReSTIRGITex.Load(int3(px, 0)).rgb;
         } else {
-            gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-                     DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                     (int)DDGIParams.y, atlasInvSize);
+            float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
+            int  giFlags      = (int)DDGIDistParams.w;
+            bool useChebyshev = (giFlags & 1) != 0;
+            bool skip         = (giFlags & 2) != 0;
+            bool fallback     = (giFlags & 4) != 0;
+            uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+            if (useChebyshev) {
+                float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
+                gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
+                         worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                         (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, 0.25f,
+                         DDGIProbeData, skipMode);
+            } else {
+                gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
+                         DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                         (int)DDGIParams.y, atlasInvSize);
+            }
         }
         DbgGI = gi;
 
+        // Intensidade do GI: usa o slider do DDGI quando ha grid; senao (ReSTIR sem DDGI) cai em 1.
+        float giIntensity = (UseGI && DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
         float3 KdGI = (1.0f - Metallic);
-        Ambient += KdGI * DiffuseColor * gi * DDGIParams.x * AOAll;
+        Ambient += KdGI * DiffuseColor * gi * giIntensity * AOAll;
 
         if (IBLParams.w <= 0.5f) {
             float3 Fa = F_SchlickRoughness(SpecularColor, NoV, Roughness);
-            Ambient += Fa * gi * DDGIParams.x * AOAll * SpecAmbientScale;
+            Ambient += Fa * gi * giIntensity * AOAll * SpecAmbientScale;
         }
     }
 

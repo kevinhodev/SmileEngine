@@ -43,6 +43,6 @@ namespace Smile {
         UINT Width  = 0;
         UINT Height = 0;
         bool AllowTearing = false;
-        bool VSyncEnabled = true; 
+        bool VSyncEnabled = false; // off por padrao
     };
 } 

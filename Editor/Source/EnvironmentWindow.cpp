@@ -393,7 +393,7 @@ namespace SmileEditor {
         Layout->setContentsMargins(18, 0, 18, 12);
         Layout->setSpacing(6);
 
-        Layout->addWidget(MakeToggleRow(tr("Nuvens volumétricas"), &CloudsCheck, true, [this](bool Checked) {
+        Layout->addWidget(MakeToggleRow(tr("Nuvens volumétricas"), &CloudsCheck, false, [this](bool Checked) {
             if (RendererPtr) RendererPtr->SetUseClouds(Checked);
         }));
         Layout->addWidget(MakeNumericRow(tr("Cobertura"), 0.0, 1.0, 0.01, 2, 0.45, QString(), &CoverageSpin, [this](double Value) {
@@ -561,6 +561,19 @@ namespace SmileEditor {
         }));
         Layout->addWidget(MakeNumericRow(tr("Intensidade"), 0.0, 8.0, 0.05, 2, 1.0, QString(), &GIIntensitySpin, [this](double Value) {
             if (RendererPtr) RendererPtr->SetGIIntensity(static_cast<float>(Value));
+        }));
+        // ReSTIR GI: final-gather difuso por pixel sobre o DDGI (cache). Experimental, default OFF.
+        Layout->addWidget(MakeToggleRow(tr("Ativar ReSTIR GI (experimental)"), &ReSTIRGICheck, false, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetUseReSTIRGI(Checked);
+        }));
+        Layout->addWidget(MakeToggleRow(tr("ReSTIR: reuso espacial"), &ReSTIRSpatialCheck, true, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetReSTIRSpatial(Checked);
+        }));
+        Layout->addWidget(MakeToggleRow(tr("ReSTIR: visibility ray (anti-leak)"), &ReSTIRVisibilityCheck, false, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetReSTIRVisibility(Checked);
+        }));
+        Layout->addWidget(MakeToggleRow(tr("usar NRD (RELAX) como denoiser"), &UseNrdCheck, false, [this](bool Checked) {
+            if (RendererPtr) RendererPtr->SetUseNrdDenoise(Checked);
         }));
         Layout->addWidget(MakeToggleRow(tr("Visibilidade (Chebyshev, anti-leak)"), &GIChebyshevCheck, true, [this](bool Checked) {
             if (RendererPtr) RendererPtr->SetGIChebyshev(Checked);
@@ -995,6 +1008,10 @@ namespace SmileEditor {
         if (GIDebugRaysCheck) GIDebugRaysCheck->setChecked(RendererPtr->GetGIDebugShowRays());
         if (GIDebugRayRadiusSpin) GIDebugRayRadiusSpin->setValue(RendererPtr->GetGIDebugRayRadius());
 
+        if (ReSTIRGICheck) ReSTIRGICheck->setChecked(RendererPtr->GetUseReSTIRGI());
+        if (ReSTIRSpatialCheck) ReSTIRSpatialCheck->setChecked(RendererPtr->GetReSTIRSpatial());
+        if (ReSTIRVisibilityCheck) ReSTIRVisibilityCheck->setChecked(RendererPtr->GetReSTIRVisibility());
+        if (UseNrdCheck) UseNrdCheck->setChecked(RendererPtr->GetUseNrdDenoise());
         if (ReflectionsCheck) ReflectionsCheck->setChecked(RendererPtr->GetUseReflections());
         if (ReflectionMaxRoughSpin) ReflectionMaxRoughSpin->setValue(RendererPtr->GetReflectionMaxRoughness());
         if (ReflectionTemporalCheck) ReflectionTemporalCheck->setChecked(RendererPtr->GetReflectionTemporal());

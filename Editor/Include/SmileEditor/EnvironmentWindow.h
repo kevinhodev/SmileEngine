@@ -136,6 +136,12 @@ namespace SmileEditor {
         QCheckBox*      GIDebugRaysCheck = nullptr;
         QDoubleSpinBox* GIDebugRayRadiusSpin = nullptr;
 
+        // ReSTIR GI (final-gather difuso por pixel sobre o DDGI) — experimental
+        QCheckBox*      ReSTIRGICheck = nullptr;
+        QCheckBox*      ReSTIRSpatialCheck = nullptr;
+        QCheckBox*      ReSTIRVisibilityCheck = nullptr;
+        QCheckBox*      UseNrdCheck = nullptr;
+
         // Specular GI (reflexoes ray-traced, estilo Lumen)
         QCheckBox*      ReflectionsCheck = nullptr;
         QDoubleSpinBox* ReflectionMaxRoughSpin = nullptr;

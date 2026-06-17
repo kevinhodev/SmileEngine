@@ -1,0 +1,87 @@
+#ifndef SMILE_RESTIR_RESERVOIR_HLSLI
+#define SMILE_RESTIR_RESERVOIR_HLSLI
+
+// Reservoir do ReSTIR GI (Ouyang et al. 2021) + helpers de WRS, compartilhado pelo Pass A (trace +
+// temporal) e Pass B (spatial). A amostra e o ponto secundario (x2, n2) e sua radiancia (Lo).
+
+#ifndef SMILE_PI
+#define SMILE_PI 3.14159265358979f
+#endif
+
+float ReSTIR_Luminance(float3 c) { return dot(c, float3(0.2126f, 0.7152f, 0.0722f)); }
+
+// RNG por pixel (PCG) com estado, p/ a selecao estocastica do WRS.
+uint  RngSeed(uint2 px, uint frame) { return GGX_PCG(px.x + GGX_PCG(px.y + GGX_PCG(frame))); }
+float RngNext(inout uint s) { s = GGX_PCG(s); return (s & 0x00FFFFFFu) / 16777216.0f; }
+
+struct Reservoir {
+    float3 x1;   // ponto visivel (validacao temporal/espacial)
+    float3 x2;   // ponto da amostra (hit)
+    float3 n2;   // normal no ponto da amostra (Jacobiano de reconexao)
+    float3 Lo;   // radiancia em x2 na direcao de x1
+    float  M;    // contagem de amostras
+    float  W;    // peso de contribuicao nao-enviesado
+    float  wSum; // soma dos pesos de resampling
+};
+
+void ResInit(out Reservoir r) {
+    r.x1 = 0; r.x2 = 0; r.n2 = 0; r.Lo = 0; r.M = 0; r.W = 0; r.wSum = 0;
+}
+
+// pHat alvo p/ o pixel (x1,n1) dada a amostra (x2,Lo): luminancia*cosTheta1 (albedo cancela).
+float TargetPHat(float3 x1, float3 n1, float3 x2, float3 Lo) {
+    float3 d = x2 - x1;
+    float  l = length(d);
+    if (l < 1e-4f) return 0.0f;
+    float cosT = saturate(dot(n1, d / l));
+    return ReSTIR_Luminance(Lo) * cosT;
+}
+
+// Adiciona um candidato (M=1) com peso de resampling w.
+void ResUpdate(inout Reservoir r, float3 x2c, float3 n2c, float3 Loc, float w, inout uint rng) {
+    r.wSum += w;
+    r.M    += 1.0f;
+    if (w > 0.0f && RngNext(rng) * r.wSum <= w) { r.x2 = x2c; r.n2 = n2c; r.Lo = Loc; }
+}
+
+// Funde um reservoir inteiro (other) no atual. pHatOther = pHat (do pixel atual) p/ a amostra de
+// other; J = Jacobiano de reconexao (1 no reuso temporal; calculado no espacial).
+void ResMerge(inout Reservoir r, Reservoir other, float pHatOther, float J, inout uint rng) {
+    float w = pHatOther * other.W * other.M * J;
+    r.wSum += w;
+    r.M    += other.M;
+    if (w > 0.0f && RngNext(rng) * r.wSum <= w) { r.x2 = other.x2; r.n2 = other.n2; r.Lo = other.Lo; }
+}
+
+// Jacobiano de reconexao (Ouyang 2021): reusar a amostra x2 (normal n2) de um pixel visivel x1Src
+// no pixel x1Dst. J = (cosPhiDst/cosPhiSrc) * (|x2-x1Src|^2 / |x2-x1Dst|^2). Clampado pelo caller.
+float ReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 x2, float3 n2) {
+    float3 dDst = x2 - x1Dst; float lDst2 = dot(dDst, dDst);
+    float3 dSrc = x2 - x1Src; float lSrc2 = dot(dSrc, dSrc);
+    if (lDst2 < 1e-8f || lSrc2 < 1e-8f) return 0.0f;
+    float lDst = sqrt(lDst2), lSrc = sqrt(lSrc2);
+    float cosDst = abs(dot(n2, -dDst / lDst));
+    float cosSrc = abs(dot(n2, -dSrc / lSrc));
+    if (cosSrc < 1e-4f) return 0.0f;
+    return (cosDst / cosSrc) * (lSrc2 / lDst2);
+}
+
+// Finaliza W = wSum / (M * pHat(selecionado)).
+void ResFinalizeW(inout Reservoir r, float3 x1, float3 n1) {
+    float pHatSel = TargetPHat(x1, n1, r.x2, r.Lo);
+    r.W = (pHatSel > 0.0f && r.M > 0.0f) ? (r.wSum / (r.M * pHatSel)) : 0.0f;
+}
+
+// Resolve a irradiancia: gi = Lo * cosTheta1 * W / pi (= (1/pi) * E). maxLuma > 0 aplica firefly
+// clamp na SAIDA (o brilho vem de wSum/M·W, nao de Lo — clampar Lo so normaliza a cor).
+float3 ResResolve(Reservoir r, float3 x1, float3 n1, float maxLuma) {
+    float3 d = r.x2 - x1;
+    float  l = length(d);
+    float  cosSel = (l > 1e-4f) ? saturate(dot(n1, d / l)) : 0.0f;
+    float3 gi = r.Lo * cosSel * r.W / SMILE_PI;
+    float  gl = ReSTIR_Luminance(gi);
+    if (maxLuma > 0.0f && gl > maxLuma) gi *= maxLuma / gl;
+    return gi;
+}
+
+#endif

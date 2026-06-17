@@ -21,6 +21,7 @@ endif()
 #   PROFILE    - perfil DXC, ex.: vs_6_0, ps_6_0
 #   ENTRY      - funcao de entrada (geralmente "main")
 #   OUT_VAR    - nome de variavel onde o caminho do .cso gerado eh anexado
+#   ARGN       - (opcional) flags extras passadas ao DXC (ex.: -I <dir>, -D MACRO=val)
 function(smile_compile_shader HLSL_FILE PROFILE ENTRY OUT_VAR)
     get_filename_component(SHADER_NAME ${HLSL_FILE} NAME_WE)
     set(SHADER_INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/${HLSL_FILE}")
@@ -28,8 +29,8 @@ function(smile_compile_shader HLSL_FILE PROFILE ENTRY OUT_VAR)
     file(GLOB_RECURSE SHADER_INCLUDE_DEPS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/*.hlsli")
 
-    # Flags: debug em Debug, otimizacao em Release
-    set(DXC_FLAGS -T ${PROFILE} -E ${ENTRY} -Fo ${SHADER_OUTPUT})
+    # Flags: debug em Debug, otimizacao em Release. ARGN = flags extras (ex.: -I p/ o NRD.hlsli).
+    set(DXC_FLAGS -T ${PROFILE} -E ${ENTRY} -Fo ${SHADER_OUTPUT} ${ARGN})
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_CONFIGURATION_TYPES)
         # Multi-config (VS): adiciona -Zi/-Od via expressao de geracao
         list(APPEND DXC_FLAGS

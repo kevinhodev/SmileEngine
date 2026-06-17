@@ -100,7 +100,9 @@ namespace Smile {
 
         if (Device.RaytracingSupported()) {
             DDGI.Initialize(Device.Native());
-            Reflections.Initialize(Device.Native()); 
+            ReSTIRGI.Initialize(Device.Native());
+            Nrd.Initialize(Device.Native()); // B1: cria instancia RELAX_DIFFUSE + loga InstanceDesc
+            Reflections.Initialize(Device.Native());
             DDGIDebugPass.Initialize(Device.Native(),
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         }
@@ -338,6 +340,29 @@ namespace Smile {
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), HDREnv.BRDFLutSRV());
+
+        // ReSTIR GI: GITexture full-res. Re-setup junto com as reflexoes (mesmo lifecycle: depth/
+        // gbuffer recriados no resize invalidam a tabela do trace). Reusa os mesmos slots do DDGI.
+        ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
+                             DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
+        ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
+            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
+            DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot);
+
+        // NRD: pool/IO textures em GI-res (= render res; ReSTIR e full-res). Independente do SRVHeap
+        // da engine (heaps proprios — isolamento/blindagem).
+        Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
+
+        // Fase C: pack pipeline + UAVs das IN do NRD + SRV da OUT, no SRVHeap da engine.
+        if (Nrd.IsReady()) {
+            ReSTIRGI.SetupNrdPack(Device.Native(), SRVHeap,
+                Nrd.IoResource(FNrdDenoiser::IO_VIEWZ),
+                Nrd.IoResource(FNrdDenoiser::IO_NORMAL_ROUGHNESS),
+                Nrd.IoResource(FNrdDenoiser::IO_MV),
+                Nrd.IoResource(FNrdDenoiser::IO_DIFF_RADIANCE_HITDIST),
+                Nrd.IoResource(FNrdDenoiser::IO_OUT));
+        }
     }
 
     void Renderer::CreateHDRBuffers() {
@@ -803,8 +828,13 @@ namespace Smile {
         }
 
         const bool ReflectionsActive = UseReflections && Reflections.IsReady();
+        const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady();
+        const bool NrdMode           = ReSTIRGIActive && Nrd.IsReady() && UseNrdDenoise;
+        ReSTIRGI.SetUseNrd(NrdMode); // afeta o estado final da GITexture no RecordTrace + a tabela t16
+        // ReflectionParams.w (antes livre) = flag "ReSTIR GI ativo" lido pelo DeferredLighting.
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
-                                       ReflectionsActive ? 1.0f : 0.0f, 0.0f };
+                                       ReflectionsActive ? 1.0f : 0.0f,
+                                       ReSTIRGIActive ? 1.0f : 0.0f };
         ++FrameIndex;
 
         Mat44 ViewNoTrans = View;
@@ -903,6 +933,12 @@ namespace Smile {
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
                                        KeyColor, FrameIndex, 1.0f, 0.2f, Reflections.GetRealHitShading());
+        }
+
+        if (ReSTIRGIActive) {
+            ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
+                                    RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
+                                    FrameIndex, 1.0f, 0.2f, View);
         }
 
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
@@ -1149,6 +1185,54 @@ namespace Smile {
             VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
+        // === ReSTIR GI: trace (compute) -> GITexture, ANTES do deferred lighting ================
+        // Depth/GBuffer (DEPTH_WRITE/RENDER_TARGET apos o geometry pass) -> NON_PIXEL p/ o compute
+        // ler; restaura depois, pois o deferred lighting faz as suas proprias transicoes p/ PIXEL.
+        if (ReSTIRGIActive) {
+            D3D12_RESOURCE_BARRIER DBar{};
+            DBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            DBar.Transition.pResource   = DepthBuffer.Get();
+            DBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            DBar.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &DBar);
+            GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            // Velocity (PIXEL apos o geometry pass) -> NON_PIXEL p/ o compute do reuso temporal.
+            D3D12_RESOURCE_BARRIER VBar{};
+            VBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            VBar.Transition.pResource   = VelocityBuffer.Get();
+            VBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            VBar.Transition.StateBefore = VelocityState;
+            VBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &VBar);
+            VelocityState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+            ReSTIRGI.RecordTrace(CommandList, SRVHeap);
+
+            // Fase C: pack (GITex+gbuf+depth+vel -> IN do NRD) -> NRD RELAX -> OUT. depth/gbuffer/
+            // velocity seguem em NON_PIXEL aqui (so restaurados abaixo). O NRD liga heap proprio.
+            if (NrdMode) {
+                Nrd.TransitionInputsToWrite(CommandList);
+                ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
+                Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
+                             Vec2{ 0.0f, 0.0f }, Vec2{ 0.0f, 0.0f }, FrameIndex);
+                Nrd.Denoise(CommandList);
+                Nrd.TransitionOutputToRead(CommandList);
+                ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
+            }
+
+            DBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            CommandList->ResourceBarrier(1, &DBar);
+            GBuffer.TransitionToWrite(CommandList);
+            // Restaura velocity p/ leitura no pixel shader (TAA/FSR2/debug leem depois).
+            VBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            VBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &VBar);
+            VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+
         // === Deferred: lighting fullscreen — le o G-buffer+depth e ilumina -> HDR ===============
         {
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -1180,6 +1264,11 @@ namespace Smile {
             {
                 const u32 AOTable = AO.IsReady() ? AO.AOSRVSlot() : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(8, SRVHeap.GpuHandle(AOTable));
+            }
+            {
+                // Param 9 (t16): GITexture do ReSTIR; fallback p/ tabela valida quando inativo.
+                const u32 ReSTIRTable = ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
             }
             CommandList->SetPipelineState(PipelineState.PSODeferredLighting());
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1413,6 +1502,8 @@ namespace Smile {
         }
 
         PrevViewProj = ViewProjUnjittered;
+        NrdPrevProj  = ProjUnjittered; // prev NAO-jitteradas p/ a reprojecao do NRD no proximo frame
+        NrdPrevView  = View;
 
         if (FlickerMode > 0 && Flicker.IsInitialized()) {
             Flicker.Execute(CommandList, SRVHeap, PostInputSRV, static_cast<f32>(FlickerMode),
@@ -1463,6 +1554,7 @@ namespace Smile {
     void Renderer::Shutdown() {
         if (!Initialized) return;
         CommandQueue.Flush();
+        Nrd.Shutdown();  // destroi a instancia NRD antes do device cair
         Fsr2.Shutdown(); // libera as texturas internas do FSR2 antes do device cair
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);

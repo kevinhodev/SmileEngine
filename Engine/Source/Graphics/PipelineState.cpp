@@ -12,7 +12,7 @@
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[9]{};
+        D3D12_ROOT_PARAMETER RootParams[10]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -98,6 +98,21 @@ namespace Smile {
         RootParams[8].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[8].DescriptorTable.pDescriptorRanges   = &AORange;
         RootParams[8].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // ReSTIR GI (t16): GITexture difusa por pixel. Tabela com 1 SRV; ligada so quando o ReSTIR
+        // esta pronto (senao cai num fallback valido, como GI/AO). Os outros PSOs que compartilham
+        // esta root sig (GBuffer/DepthNormal) nao referenciam t16 -> param extra e inofensivo.
+        D3D12_DESCRIPTOR_RANGE ReSTIRGIRange{};
+        ReSTIRGIRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ReSTIRGIRange.NumDescriptors                    = 1;
+        ReSTIRGIRange.BaseShaderRegister                = 16;
+        ReSTIRGIRange.RegisterSpace                     = 0;
+        ReSTIRGIRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[9].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[9].DescriptorTable.pDescriptorRanges   = &ReSTIRGIRange;
+        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;
