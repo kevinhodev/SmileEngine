@@ -812,254 +812,530 @@ void SetMinRays(int);               // piso de raios quando adaptativo (padrão:
 
 ---
 
-## 15. ReSTIR GI — Visão Geral
+## 15. ReSTIR GI — Para Leigos
 
-ReSTIR GI é um estimador de GI difusa por pixel baseado em **Weighted Reservoir Sampling (WRS)** com reuso temporal e espacial. Cada pixel mantém um reservatório `{x1, x2, n2, Lo, M, W}` que representa a melhor amostra de iluminação secundária encontrada até agora.
+Antes de entrar no código, esta seção explica o problema e a solução em linguagem simples.
 
-A técnica reduz a variância em relação a path tracing simples ao reutilizar amostras de pixels vizinhos e do frame anterior, amplificando efetivamente 1 raio/pixel em dezenas de amostras equivalentes.
+### O problema: luz que ricocheteou
 
-### Os três passes
+Quando a luz do sol entra por uma janela e ilumina o chão, parte dessa luz bate no chão e vai colorir as paredes próximas. Essa luz "de segundo bounce" é o que faz a cena parecer real — sem ela, as sombras ficam completamente negras e tudo parece render de videogame dos anos 90.
+
+Para calcular isso corretamente, você precisaria rastrear cada raio de luz por todas as suas reflexões — o que é o que o path tracing faz. O problema: uma GPU rápida consegue lançar uns poucos raios por pixel por frame e ainda manter 60 FPS. Raios demais = imagem granulada (ruidosa). Poucos raios = ruído inaceitável.
+
+### A sacada do ReSTIR: reutilizar o que os outros já descobriram
+
+Imagine que você está tentando descobrir qual é o melhor restaurante da cidade. Você poderia visitar todos aleatoriamente — mas isso levaria uma vida. Ou você poderia **perguntar para os seus vizinhos** o que eles descobriram, e usar a resposta deles somada à sua própria pesquisa.
+
+ReSTIR faz exatamente isso com amostras de luz:
+
+- Cada pixel lança **apenas 1 raio** por frame e encontra uma fonte de luz indireta.
+- Em vez de descartar isso após o frame, guarda num **reservatório** — uma memória compacta da "melhor amostra que vi até agora".
+- No próximo frame, **herda** o reservatório do mesmo pixel no frame anterior (via motion vector), adicionando a nova amostra ao histórico.
+- Além disso, **rouba** os reservatórios de 4 pixels vizinhos próximos, combinando todas as descobertas.
+
+O resultado: cada pixel se comporta como se tivesse lançado dezenas de raios, mas o custo real é de 1–2 raios por pixel.
+
+### O reservatório: o coração do sistema
+
+Um reservatório guarda 6 campos:
 
 ```
-Pass A — ReSTIRGITrace.cs.hlsl
-  Por pixel:
-  1. Traça 1 raio cosseno-hemisférico → (x2, n2, Lo)
-  2. ShadeSurfaceHit: sol + DDGI bounce no hit
-  3. Funde com o reservatório do frame anterior (motion vector)
-  4. Resolve irradiância (fallback quando spatial está OFF)
+x1  — onde EU estou no mundo (posição do pixel)
+x2  — onde a luz indireta está vindo (o ponto iluminado que descobri)
+n2  — normal da superfície em x2 (preciso para o Jacobiano)
+Lo  — quanta luz está saindo de x2 em direção a x1
+M   — quantas amostras contribuíram para este reservatório (histórico)
+W   — peso final: quão "boa" é esta amostra para este pixel
+```
 
-Pass B — ReSTIRGISpatial.cs.hlsl
-  Por pixel:
-  1. Lê reservatório do Pass A (pós-temporal)
-  2. Funde k vizinhos (padrão: 4) no raio de 16 px
-     com Jacobiano de reconexão (Ouyang 2021)
-  3. Visibility ray opcional para x2 selecionado
-  4. Resolve irradiância final → GITexture
+O truque matemático é o **WRS (Weighted Reservoir Sampling)**: ao adicionar uma nova amostra, você faz uma aposta proporcional ao peso da nova candidata. Se ela ganhar, substitui a seleção atual. Isso garante que a seleção final seja sempre proporcional à distribuição de importância desejada — sem precisar guardar todas as amostras.
 
-Fase C — ReSTIRNrdPack.cs.hlsl + NRD RELAX
-  Empacota GITexture + GBuffer + depth + velocity
-  para os inputs do NVIDIA NRD RELAX_DIFFUSE.
-  NRD RELAX denoise em separado; saída via NrdOutSRV.
+### O Jacobiano de reconexão: o problema de roubar vizinhos
+
+Quando o pixel A quer usar a amostra do vizinho B, há um problema sutil: a amostra foi descoberta a partir de um ângulo diferente. Se B está a 1 metro de A no espaço da tela, mas o ponto iluminado `x2` está a 5 metros de distância, o ângulo que A vê `x2` é muito parecido com o que B vê — tudo ok. Mas se `x2` está logo atrás da parede, o ângulo muda drasticamente — a amostra vale muito menos para A do que valia para B.
+
+O **Jacobiano de reconexão** é um fator de correção que ajusta o peso da amostra para compensar essa diferença de ângulo/distância:
+
+```
+J = (cos do ângulo de chegada em A / cos do ângulo de chegada em B)
+  * (distância ao quadrado de B até x2 / distância ao quadrado de A até x2)
+```
+
+Se `J ≈ 1`, a amostra transfere bem. Se `J >> 1` ou `J << 1`, a geometria é muito diferente e a amostra não é boa candidata.
+
+### Como o DDGI entra aqui
+
+O ReSTIR GI usa o DDGI como um **cache de radiância multi-bounce**. Quando o raio do ReSTIR acerta uma superfície em `x2`, em vez de parar ali, o shader de shading no hit consulta o atlas de irradiância do DDGI para ter a luz indireta que já chegou em `x2` de bounces anteriores. Assim:
+
+- **DDGI:** resolve bounces de baixa frequência de forma estável (grade de probes, atualiza a 64 raios/probe/frame)
+- **ReSTIR GI:** resolve o first-gather por pixel com alta frequência e precisão espacial, usando o DDGI como base
+
+---
+
+## 16. ReSTIR GI — Visão Geral Técnica
+
+### Pipeline completo
+
+```
+[GPU, todo frame]
+
+Pass A — ReSTIRGITrace.cs.hlsl         (1 raio/pixel, 64 threads por tile 8×8)
+  ├─ Trace 1 raio cosseno-hemisférico → hit em x2
+  ├─ ShadeSurfaceHit: sol + DDGI bounce em x2 → Lo (radiância)
+  ├─ Cria reservatório inicial {x1, x2, n2, Lo, M=1, W}
+  ├─ Reuso temporal: funde com Res[frame-1] via motion vector
+  └─ Grava Res[frame_atual] em 4 texturas ping-pong + GIOut (fallback)
+
+Pass B — ReSTIRGISpatial.cs.hlsl       (sem raios extras, 64 threads por tile 8×8)
+  ├─ Lê Res[frame_atual] do Pass A
+  ├─ Funde k=4 vizinhos (raio 16px) com Jacobiano de reconexão
+  ├─ Visibility ray opcional: testa oclusão de x1→x2 selecionado
+  └─ Resolve gi = Lo * cos(θ) * W / π → sobrescreve GIOut
+
+Fase C — ReSTIRNrdPack.cs.hlsl + NRD RELAX (opcional, UseNrd=false por padrão)
+  ├─ Empacota GITexture + GBuffer + depth + velocity para NRD
+  └─ NRD RELAX denoise → NrdOutSRV
+
+Deferred Lighting — DeferredLighting.ps.hlsl
+  └─ Lê GITexture (ou NrdOutSRV) em t16 → Kd * albedo * gi * AO
 ```
 
 ### Estrutura do reservatório
 
-```
-Reservoir {
-    x1   : ponto visível (posição do pixel no mundo)
-    x2   : ponto da amostra (hit do raio secundário)
-    n2   : normal geométrica em x2 (para o Jacobiano de reconexão)
-    Lo   : radiância em x2 na direção de x1
-    M    : contagem de amostras (aumenta com reuso; clampado em MCap=20)
-    W    : peso de contribuição não-enviesado = wSum / (M * pHat(selecionado))
-    wSum : soma interna dos pesos WRS (não persiste entre passes)
-}
-```
-
----
-
-## 16. ReSTIR GI — Pipeline e Shaders
-
-### 16.1 `ReSTIRReservoir.hlsli`
-
-Implementa as operações matemáticas do WRS.
-
-**`TargetPHat(x1, n1, x2, Lo)`**
-PDF alvo para o pixel `(x1, n1)` dada a amostra `(x2, Lo)`:
-```
-pHat = luminance(Lo) * saturate(dot(n1, normalize(x2 - x1)))
-```
-Proporcional à irradiância esperada. O albedo cancela (tratado na resolução).
-
-**`ResUpdate`** — adiciona 1 candidato ao reservatório (WRS step):
-```
-wSum += w;  M += 1;
-if (rand() * wSum <= w) → seleciona candidato
-```
-
-**`ResMerge`** — funde outro reservatório no atual. O peso escalado pelo Jacobiano:
-```
-w = pHat(x2_other, no_pixel_atual) * other.W * other.M * J
-```
-
-**`ReconnectionJacobian(x1Dst, x1Src, x2, n2)`**
-Jacobiano de reconexão (Ouyang 2021). Corrige o change-of-variable ao reutilizar a amostra `x2` gerada a partir de `x1Src` em um pixel diferente `x1Dst`:
-```
-J = (cos(φ_dst) / cos(φ_src)) * (|x2 - x1Src|² / |x2 - x1Dst|²)
-```
-onde `φ` é o ângulo entre `n2` e a direção `x2 → x1`. Clampado em `[0.1, 10]` para evitar divergência.
-
-**`ResResolve(r, x1, n1, maxLuma)`**
-Extrai a irradiância do reservatório:
-```
-gi = Lo * cos(θ₁) * W / π    (= (1/π) * E)
-```
-Aplica firefly clamp na luminância de saída se `maxLuma > 0`.
-
----
-
-### 16.2 `ReSTIRGITrace.cs.hlsl` — Pass A
-
-**Dispatch:** `⌈W/8⌉ × ⌈H/8⌉ × 1`, grupo `8×8×1`
-
-**Passo 1 — Sample inicial:**
-```hlsl
-// Amostragem cosseno-hemisférica (método de Malley)
-float2 E   = GGX_Rand2(px, frame);          // 2D pseudo-aleatório por pixel
-float  rr  = sqrt(E.x);                     // raio no disco de Malley
-float  phi = 2π * E.y;
-float  cosT = sqrt(1 - E.x);               // cosTheta
-float3 dir = TangentBasis(N) * float3(rr*cos(φ), rr*sin(φ), cosT);
-
-// Trace inline + ShadeSurfaceHit (sol + DDGI bounce)
-// Firefly clamp: Lo = Lo * min(1, maxLuma / luminance(Lo))
-```
-
-**Passo 2 — Reuso temporal:**
-```hlsl
-float2 vel = Velocity[px];                  // motion vector (curUV - prevUV)
-float2 prevUv = uv - vel;
-if (dentro_da_tela) {
-    prev = lerReservoir(PrevResA/B/C/D[ppx]);
-    prev.M = min(prev.M, MCap);             // cap histórico = 20
-    posReject = posRejectScale * dist(camera, x1);
-    if (length(prev.x1 - x1) < posReject)  // aceita se posição próxima
-        ResMerge(r, prev, pHat, J=1.0);    // J=1: mesma superfície reprojetada
-}
-```
-
-**Passo 3 — Escrita:**
-Grava `{x1, x2, n2, Lo, M, W}` em 4 texturas ping-pong (`CurrResA/B/C/D`), além de `gi = ResResolve(...)` em `GIOut` (sobrescrito pelo Pass B quando spatial está ativo).
-
----
-
-### 16.3 `ReSTIRGISpatial.cs.hlsl` — Pass B
-
-**Dispatch:** `⌈W/8⌉ × ⌈H/8⌉ × 1`, grupo `8×8×1`
-
-Lê os reservatórios do Pass A e funde `K` vizinhos (padrão 4) dentro de raio de 16 px:
-
-```hlsl
-// Vizinhos em disco concentrico (distribuição uniforme).
-for (int i = 0; i < K; ++i) {
-    float2 E   = GGX_Rand2(px, frame * 7 + i * 131);
-    int2   qpx = px + round(GGX_ConcentricDisk(E) * radius);
-
-    // Rejeições:
-    if (dot(n_vizinho, n_pixel) < normalReject)  continue; // normal (padrão: 0.9)
-    if (length(x1_vizinho - x1_pixel) > posReject) continue; // posição
-
-    float J    = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2);
-    J = clamp(J, 0.1, 10.0);
-    ResMerge(rs, nb, pHat(x2_vizinho), J, rng);
-}
-```
-
-**Visibility ray opcional (`UseVisibility = true`):**
-```hlsl
-// Testa oclusão entre x1 e a amostra x2 SELECIONADA.
-// Se ocluído → W = 0 (gi = 0 para esse pixel).
-// NRD borra o 0/1 estocástico → sombra de contato suave.
-// Descartado por padrão (caro: 1 shadow ray/pixel extra).
-if (len(x2 - x1) > 0.15) {
-    vray.TMax = len - 0.05;     // > TMin (0.02) garantido
-    if (hit) rs.W = 0.0;
-}
-```
-
----
-
-### 16.4 `ReSTIRNrdPack.cs.hlsl` — Fase C
-
-Empacota os dados para o denoiser NVIDIA NRD RELAX_DIFFUSE:
-
-| Output NRD | Fonte | Encoding |
-|---|---|---|
-| `IN_VIEWZ` | depth → worldPos → view.z linear | float R32 |
-| `IN_NORMAL_ROUGHNESS` | GBuffer oct-normal + roughness | `NRD_FrontEnd_PackNormalAndRoughness` → R10G10B10A2 |
-| `IN_MV` | velocity (curUV - prevUV) | RG32F |
-| `IN_DIFF_RADIANCE_HITDIST` | GITexture (rgb=gi, a=hitDist) | `RELAX_FrontEnd_PackRadianceAndHitDist` |
-
-O NRD usa `motionVectorScale = (-1, -1, 0)` para inverter o sinal do MV. O céu recebe `viewZ = 1e8` para ser ignorado pelo denoiser (fora do `denoisingRange`).
-
----
-
-## 17. ReSTIR GI — Estruturas e Recursos GPU
-
-### `ReSTIRGIConstants` (`Engine/Include/Smile/Graphics/ReSTIRGI.h`)
-
 ```cpp
-struct alignas(256) ReSTIRGIConstants {
-    Mat44 InvViewProj;      // para reconstruir worldPos do depth
-    Vec4  CameraPos;
-    Vec4  ScreenParams;     // W, H, 1/W, 1/H
-    Vec4  GridMinSpacing;   // DDGI: origem + espaçamento
-    Vec4  GridCount;        // DDGI: countXYZ
-    Vec4  AtlasParams;      // DDGI: tile, W, H
-    Vec4  SunDirIntensity;
-    Vec4  SunColor;
-    Vec4  TraceParams;      // frameIndex, maxRayDist, skyIntensity, normalBias
-    Vec4  ShadeParams;      // realHitShading, albedoLOD, fireflyMaxLuma
-    Vec4  ReuseParams;      // MCap, posRejectScale, visibility(0/1), temporal(0/1)
-    Vec4  SpatialParams;    // radius(px), count, spatial(0/1), normalReject
-    Mat44 View;             // worldPos → view.z para o NRD pack
+// ReSTIRReservoir.hlsli
+struct Reservoir {
+    float3 x1;    // ponto visível (posição do pixel no mundo)
+    float3 x2;    // ponto da amostra (hit do raio secundário)
+    float3 n2;    // normal geométrica em x2 (para o Jacobiano de reconexão)
+    float3 Lo;    // radiância em x2 na direção de x1
+    float  M;     // contagem de amostras (histórico; clampado em MCap=20)
+    float  W;     // peso não-enviesado = wSum / (M * pHat(x2 selecionado))
+    float  wSum;  // acumulador interno (não persiste entre passes)
 };
 ```
+
+### Mapeamento nas 4 texturas ping-pong
+
+| Textura | Formato | Conteúdo |
+|---|---|---|
+| `ResA[p]` | R32G32B32A32_FLOAT | `x1.xyz`, `M` |
+| `ResB[p]` | R32G32B32A32_FLOAT | `x2.xyz`, `W` |
+| `ResC[p]` | R16G16B16A16_FLOAT | `Lo.rgb` |
+| `ResD[p]` | R16G16B16A16_FLOAT | `n2.xyz` |
+
+`p = FrameParity = FrameIndex & 1`. Pass A lê `Res*[1-p]` (frame anterior) e escreve `Res*[p]`.
+
+---
+
+## 17. ReSTIR GI — Matemática e Shaders em Detalhe
+
+### 17.1 `ReSTIRReservoir.hlsli` — A Fundação Matemática
+
+#### PDF alvo: `TargetPHat`
+
+O WRS precisa de uma função de importância para decidir quais amostras são valiosas. A PDF alvo do ReSTIR GI é:
+
+```hlsl
+float TargetPHat(float3 x1, float3 n1, float3 x2, float3 Lo) {
+    float3 d = x2 - x1;
+    float  l = length(d);
+    float cosT = saturate(dot(n1, d / l));   // quanto x2 contribui para x1
+    return luminance(Lo) * cosT;
+}
+```
+
+Essa função é proporcional à irradiância esperada em `x1` vinda de `x2`: quanto mais brilhante `Lo` e mais alinhado com a normal, mais valiosa. O albedo *não* entra aqui — cancela na resolução final.
+
+#### Inserção WRS: `ResUpdate`
+
+```hlsl
+void ResUpdate(inout Reservoir r, float3 x2, float3 n2, float3 Lo, float w, inout uint rng) {
+    r.wSum += w;
+    r.M    += 1.0;
+    // A probabilidade de selecionar este candidato = w / wSum
+    if (w > 0.0 && RngNext(rng) * r.wSum <= w)
+        { r.x2 = x2; r.n2 = n2; r.Lo = Lo; }
+}
+```
+
+Invariante matemático: após processar N candidatos, a probabilidade de qualquer candidato `i` estar selecionado é `w_i / sum(w_0..N-1)`. Isso é exatamente amostragem por importância sem precisar guardar todos os candidatos.
+
+#### Fusão de reservatórios: `ResMerge`
+
+Para combinar dois reservatórios (temporal ou espacial), convertemos o reservatório `other` em um candidato com peso equivalente:
+
+```hlsl
+void ResMerge(inout Reservoir r, Reservoir other, float pHatOther, float J, inout uint rng) {
+    // Peso efetivo = pHat do candidato (no pixel atual) * W_other * M_other * J
+    float w = pHatOther * other.W * other.M * J;
+    r.wSum += w;
+    r.M    += other.M;
+    if (w > 0.0 && RngNext(rng) * r.wSum <= w)
+        { r.x2 = other.x2; r.n2 = other.n2; r.Lo = other.Lo; }
+}
+```
+
+O produto `other.W * other.M` reconstrói o `wSum` original de `other` de forma não-enviesada: `W = wSum / (M * pHat)` → `wSum = W * M * pHat`. Multiplicar pelo `pHat` do pixel atual (em vez do original) é o que habilita o reuso cross-pixel.
+
+#### Jacobiano de reconexão: `ReconnectionJacobian`
+
+O Jacobiano corrige a mudança de variável quando reutilizamos a amostra `x2` de um pixel `x1Src` em outro pixel `x1Dst`:
+
+```hlsl
+float ReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 x2, float3 n2) {
+    float3 dDst = x2 - x1Dst; float lDst2 = dot(dDst, dDst);
+    float3 dSrc = x2 - x1Src; float lSrc2 = dot(dSrc, dSrc);
+    float lDst = sqrt(lDst2), lSrc = sqrt(lSrc2);
+    float cosDst = abs(dot(n2, -dDst / lDst));  // cos do ângulo de chegada em Dst
+    float cosSrc = abs(dot(n2, -dSrc / lSrc));  // cos do ângulo de chegada em Src
+    return (cosDst / cosSrc) * (lSrc2 / lDst2);
+}
+```
+
+**Intuição:** A amostra foi gerada com probabilidade proporcional ao ângulo sólido de `x1Src`. Ao usá-la em `x1Dst`, o ângulo sólido mudou. O Jacobiano corrige essa diferença para manter o estimador não-enviesado. Clampado em `[0.1, 10]` para evitar divergência numérica.
+
+No reuso **temporal**, `J = 1.0` porque assumimos que a superfície não se moveu entre frames — `x1Src ≈ x1Dst` após reprojeção.
+
+#### Finalização do peso: `ResFinalizeW`
+
+```hlsl
+void ResFinalizeW(inout Reservoir r, float3 x1, float3 n1) {
+    float pHatSel = TargetPHat(x1, n1, r.x2, r.Lo);
+    r.W = (pHatSel > 0.0 && r.M > 0.0) ? (r.wSum / (r.M * pHatSel)) : 0.0;
+}
+```
+
+`W` é o peso de Monte Carlo não-enviesado. Ele garante que `E[Lo * cosT * W] = E[Lo * cosT / pdf_real]` — o estimador converge para o valor correto independente de quais amostras foram fundidas.
+
+#### Resolução da irradiância: `ResResolve`
+
+```hlsl
+float3 ResResolve(Reservoir r, float3 x1, float3 n1, float maxLuma) {
+    float3 d    = r.x2 - x1;
+    float  cosT = saturate(dot(n1, normalize(d)));
+    float3 gi   = r.Lo * cosT * r.W / PI;  // = (1/π) * E
+    // Firefly clamp na saída (não em Lo — preserva a cor, só limita o brilho)
+    float gl = luminance(gi);
+    if (maxLuma > 0.0 && gl > maxLuma) gi *= maxLuma / gl;
+    return gi;
+}
+```
+
+O fator `1/π` vem da integral da BRDF Lambertiana: `f_d = albedo/π`, então `L_o = f_d * E = (albedo/π) * E`. Como o albedo é aplicado no deferred (`KdGI * DiffuseColor * gi`), o `gi` aqui é `E/π` sem o albedo.
+
+---
+
+### 17.2 `ReSTIRGITrace.cs.hlsl` — Pass A: Trace + Temporal
+
+**Dispatch:** `⌈W/8⌉ × ⌈H/8⌉ × 1`, grupo `8×8×1`
+
+#### Passo 1: Reconstrução de posição no mundo
+
+```hlsl
+float deviceZ = Depth.Load(int3(px, 0)).r;
+float4 wH     = mul(float4(ndc, deviceZ, 1.0), InvViewProj);
+float3 x1     = wH.xyz / wH.w;          // posição world-space do pixel
+float3 N      = DDGI_OctDecode(gb.rg * 2 - 1); // normal do GBuffer
+```
+
+#### Passo 2: Amostragem cosseno-hemisférica (método de Malley)
+
+```hlsl
+float2 E   = GGX_Rand2(px, frameIndex);   // 2D pseudo-aleatório por pixel+frame
+float  rr  = sqrt(E.x);                   // raio no disco (CDF invertida)
+float  phi = 2π * E.y;                    // azimute uniforme
+float  cosT = sqrt(1.0 - E.x);           // cos(theta) = sqrt(1-r²)
+float3 d   = float3(rr*cos(φ), rr*sin(φ), cosT); // tangent space
+float3 dir = normalize(mul(d, TangentBasis(N)));  // world space
+```
+
+A distribuição resultante é proporcional a `cos(θ)` — a PDF é `cos(θ)/π`. Isso significa que raios mais próximos da normal têm mais probabilidade de ser lançados, o que é ótimo para difuso Lambertiano.
+
+#### Passo 3: Ray trace + shading
+
+```hlsl
+ray.Origin    = x1 + N * normalBias;       // offset para evitar self-intersection
+ray.Direction = dir;
+ray.TMax      = maxRayDist;
+RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
+q.TraceRayInline(Scene, ...);
+
+if (hit) {
+    Lo = ShadeSurfaceHit(...);  // sol + DDGI bounce no hit (HitShading.hlsli)
+    n2 = HitGeomNormal(...);    // normal geométrica para o Jacobiano
+    x2 = origin + dir * hitDist;
+} else {
+    Lo = ShadeSky(dir, ...);    // sky view LUT da atmosfera
+    x2 = origin + dir * maxRayDist;
+    n2 = -dir;
+}
+```
+
+**Firefly clamp** antes de criar o reservatório:
+```hlsl
+float lum = luminance(Lo);
+if (fireflyMax > 0 && lum > fireflyMax) Lo *= fireflyMax / lum;
+```
+Isso previne que amostras de luz muito brilhante (janelas, lâmpadas) dominem o estimador e criem pontos brilhantes estocásticos. O clamp é aplicado em `Lo` (não na saída) para preservar a cor.
+
+#### Passo 4: Criação do reservatório inicial
+
+```hlsl
+float pHat = TargetPHat(x1, N, x2, Lo);
+float pSrc = max(cosT, 1e-4) / PI;         // PDF da amostragem cosseno-hemisférica
+float wInit = (pSrc > 0) ? (pHat / pSrc) : 0; // peso de resampling
+ResUpdate(r, x2, n2, Lo, wInit, rng);
+```
+
+O peso `pHat / pSrc` é o peso de resampling clássico: quanto melhor a amostra é para este pixel relativo à distribuição com que foi gerada, maior o peso.
+
+#### Passo 5: Reuso temporal
+
+```hlsl
+float2 vel    = Velocity.Load(int3(px, 0)).rg; // motion vector
+float2 prevUv = uv - vel;
+if (all(prevUv > 0) && all(prevUv < 1)) {
+    int2 ppx = int2(prevUv * screenSize);
+    // Lê o reservatório do pixel correspondente no frame anterior
+    Reservoir prev = { PrevResA[ppx].xyz, PrevResB[ppx].xyz, PrevResD[ppx].xyz,
+                       PrevResC[ppx].rgb, min(PrevResA[ppx].w, MCap), PrevResB[ppx].w };
+
+    float camDist   = length(cameraPos - x1);
+    float posReject = posRejectScale * max(camDist, 1.0); // tolerância proporcional à distância
+    if (length(prev.x1 - x1) < posReject)  // aceita se a posição reprojetada está próxima
+        ResMerge(r, prev, TargetPHat(x1, N, prev.x2, prev.Lo), J=1.0, rng);
+}
+```
+
+`MCap = 20` limita quantas amostras históricas podem ser acumuladas. Sem esse cap, o histórico cresceria indefinidamente e o sistema ficaria incapaz de se adaptar a mudanças na cena (ghosting).
+
+---
+
+### 17.3 `ReSTIRGISpatial.cs.hlsl` — Pass B: Reuso Espacial
+
+**Dispatch:** `⌈W/8⌉ × ⌈H/8⌉ × 1`, grupo `8×8×1`
+
+O Pass B lê os reservatórios do Pass A e funde k vizinhos dentro de um disco:
+
+#### Seleção e rejeição de vizinhos
+
+```hlsl
+float2 E   = GGX_Rand2(px, frame * 7 + i * 131);  // semente diferente do Pass A
+int2   qpx = px + int2(round(GGX_ConcentricDisk(E) * radius));
+
+// Rejeição 1 — normal divergente (superfícies diferentes)
+float4 qgb = GBuffer.Load(int3(qpx, 0));
+float3 qn1 = DDGI_OctDecode(qgb.rg * 2 - 1);
+if (dot(qn1, n1) < normalReject) continue;  // padrão: 0.9 = ~26 graus
+
+// Rejeição 2 — posição muito diferente (depth discontinuity)
+if (length(qa.xyz - x1) > posReject) continue;
+```
+
+As rejeições são essenciais para não misturar GI de superfícies diferentes (ex: vizinho na parede vs pixel no chão).
+
+#### Fusão com Jacobiano
+
+```hlsl
+float J = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2);
+J = clamp(J, 0.1, 10.0);  // estabilidade numérica
+float pHat = TargetPHat(x1, n1, nb.x2, nb.Lo);
+ResMerge(rs, nb, pHat, J, rng);
+```
+
+O `J` amplifica ou atenua o peso do vizinho baseado em quão bem a amostra dele se transfere para este pixel.
+
+#### Visibility ray (opcional, `UseVisibility = false` por padrão)
+
+```hlsl
+if (UseVisibility && rs.W > 0) {
+    float3 toS = rs.x2 - x1;
+    float  len = length(toS);
+    if (len > 0.15) {  // garante TMax > TMin (DXR: TMax > TMin ou UB)
+        RayDesc vray = { x1 + n1*normalBias, toS/len, 0.02, len - 0.05 };
+        // RAY_FLAG_CULL_BACK_FACING: mesmas flags do trace inicial, para evitar
+        // que backfaces sejam oclusores fantasmas que a amostra original nunca viu
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> vq;
+        vq.TraceRayInline(...);
+        if (hit) rs.W = 0.0;  // ocluído → zera contribuição
+    }
+}
+```
+
+Com `UseVisibility = true`, o GI adquire "sombras de contato suaves": quando `x2` está ocluído, o pixel recebe `gi = 0`. O NRD borra esse 0/1 estocástico em um gradiente suave — o mesmo efeito do AO de bounce real, mas derivado da visibilidade de GI. O custo é um raio extra por pixel.
+
+---
+
+### 17.4 `ReSTIRNrdPack.cs.hlsl` — Fase C: Integração NRD
+
+O NVIDIA NRD RELAX é um denoiser temporal especializado para GI difusa. Ele precisa de inputs específicos com encodings exatos:
+
+```hlsl
+// IN_VIEWZ: profundidade linear positiva (câmera → ponto)
+// Céu → 1e8 (> denoisingRange → ignorado pelo NRD)
+float4 viewPos = mul(float4(worldPos, 1.0), View);
+OutViewZ[px]   = abs(viewPos.z);
+
+// IN_NORMAL_ROUGHNESS: normal R10G10B10A2 + roughness (encoding NRD exato)
+// O encode deve usar NRD_FrontEnd_PackNormalAndRoughness do NRD.hlsli
+// para que o decode interno do NRD seja compatível bit a bit
+OutNormalRough[px] = NRD_FrontEnd_PackNormalAndRoughness(N, roughness, 0.0);
+
+// IN_MV: motion vector (curUV - prevUV)
+// NRD usa motionVectorScale=(-1,-1,0) para inverter o sinal
+OutMv[px] = Velocity.Load(int3(px, 0)).rg;
+
+// IN_DIFF_RADIANCE_HITDIST: radiância + distância do hit (para filtragem hitDist-aware)
+// hitDist vem do Pass A (preservado no .a do GIOut ao longo do Pass B)
+OutDiffRadHit[px] = RELAX_FrontEnd_PackRadianceAndHitDist(gi.rgb, gi.a, true);
+```
+
+O `hitDist` é fundamental para o RELAX: ele usa a distância do hit para ajustar o raio de denoising — pixels com hits próximos (GI de curto alcance) recebem filtro mais estreito do que pixels com hits distantes. Sem isso o denoiser borraria detalhes de GI próximos indevidamente.
+
+---
+
+### 17.5 Integração no `DeferredLighting.ps.hlsl`
+
+O ReSTIR GI substitui o termo difuso do DDGI quando `UseReSTIR = true` (`ReflectionParams.w > 0.5`):
+
+```hlsl
+bool UseGI     = DDGIGridCount.w > 0.5;   // DDGI grid ativo
+bool UseReSTIR = ReflectionParams.w > 0.5; // ReSTIR GI substitui o difuso do DDGI
+
+if (UseGI || UseReSTIR) {
+    float3 gi;
+    if (UseReSTIR) {
+        gi = ReSTIRGITex.Load(int3(px, 0)).rgb; // lê direto por pixel
+    } else {
+        gi = SampleDDGIIrradianceCheb(...);      // interpola a grade de probes
+    }
+    // Aplica sobre a superfície: Kd * albedo * gi * intensity * AO
+    Ambient += (1.0 - Metallic) * DiffuseColor * gi * giIntensity * AOAll;
+
+    // Quando não há IBL, adiciona também o especular derivado do GI
+    if (IBLParams.w <= 0.5) {
+        float3 Fa = F_SchlickRoughness(SpecularColor, NoV, Roughness);
+        Ambient += Fa * gi * giIntensity * AOAll * SpecAmbientScale;
+    }
+}
+```
+
+**Hierarquia de iluminação indireta difusa:**
+
+| Modo | Difuso | Especular |
+|---|---|---|
+| Só IBL | `IrradianceMap` (cubemap) | `PrefilteredMap` + BRDF LUT |
+| DDGI sem ReSTIR | `SampleDDGIIrradianceCheb` (grade de probes) | IBL (se disponível) |
+| ReSTIR GI (ativo) | `ReSTIRGITex` (per-pixel full-res) | IBL (se disponível) |
+| Atmosfera + ReSTIR | Hemisférico Hillaire para difuso | ReSTIR GI para especular aproximado |
+
+Quando o DDGI está ativo mas o ReSTIR não, o DDGI continua sendo o único fornecedor de GI difusa. O ReSTIR usa o DDGI como cache de bounces no hit shading, mas expõe sua própria textura de saída para o deferred.
+
+---
+
+### 17.6 Estado Ping-Pong e Barreiras D3D12
+
+O `RecordTrace` em `ReSTIRGI.cpp` gerencia as transições de estado explicitamente:
+
+```
+Frame p (FrameParity = p):
+
+  Pass A:
+    Res*[1-p] → NON_PIXEL_SHADER_RESOURCE   (leitura: reservatórios do frame anterior)
+    Res*[p]   → UNORDERED_ACCESS             (escrita: reservatórios do frame atual)
+    GITexture → UNORDERED_ACCESS             (escrita: resolve inicial)
+
+  Pass B (se Spatial=true):
+    Res*[p]   → NON_PIXEL_SHADER_RESOURCE   (leitura: reservatórios do Pass A)
+    UAV barrier na GITexture               (Pass A escreveu .rgb; Pass B lê .a e sobrescreve .rgb)
+    GITexture → UNORDERED_ACCESS             (escrita: resolve final)
+
+  Após passes:
+    GITexture → PIXEL_SHADER_RESOURCE       (sem NRD: deferred PS lê em t16)
+             → NON_PIXEL_SHADER_RESOURCE    (com NRD: NrdPack compute lê)
+
+  FrameParity ^= 1  (alterna para o próximo frame)
+```
+
+A UAV barrier entre Pass A e Pass B é necessária porque ambos usam `GITexture` como UAV. Pass A escreve `{rgb=gi_fallback, a=hitDist}`; Pass B lê `.a` (hitDist, preservado) e sobrescreve `.rgb` com o gi espacial.
+
+---
+
+## 18. ReSTIR GI — Recursos GPU, API e Configuração
 
 ### Recursos GPU
 
 | Recurso | Formato | Tamanho | Propósito |
 |---|---|---|---|
-| `GITexture` | R16G16B16A16_FLOAT | W×H | Saída de GI (rgb=irradiância, a=hitDist para NRD) |
-| `ResA[2]` | R32G32B32A32_FLOAT | W×H | x1.xyz, M (ping-pong por paridade de frame) |
-| `ResB[2]` | R32G32B32A32_FLOAT | W×H | x2.xyz, W |
-| `ResC[2]` | R16G16B16A16_FLOAT | W×H | Lo.rgb |
-| `ResD[2]` | R16G16B16A16_FLOAT | W×H | n2.xyz |
+| `GITexture` | R16G16B16A16_FLOAT | W×H | rgb=irradiância final, a=hitDist para NRD |
+| `ResA[2]` | R32G32B32A32_FLOAT | W×H | x1.xyz + M (precisão total: posição para rejeição) |
+| `ResB[2]` | R32G32B32A32_FLOAT | W×H | x2.xyz + W (precisão total: posição para Jacobiano) |
+| `ResC[2]` | R16G16B16A16_FLOAT | W×H | Lo.rgb (half: suficiente para radiância) |
+| `ResD[2]` | R16G16B16A16_FLOAT | W×H | n2.xyz (half: normal para Jacobiano) |
 
-O ping-pong usa `FrameParity = FrameIndex & 1`. Pass A lê `Res*[1-p]` (frame anterior) e escreve `Res*[p]` (frame atual).
+`ResA` e `ResB` usam `R32` (float completo) porque `x1`, `x2` são posições world-space que precisam de precisão suficiente para rejeição por posição e cálculo do Jacobiano. `ResC` e `ResD` usam `R16` pois radiância e normais têm tolerância a pequenos erros de quantização.
 
----
+### `ReSTIRGIConstants`
 
-## 18. ReSTIR GI — API e Configuração
+```cpp
+struct alignas(256) ReSTIRGIConstants {
+    Mat44 InvViewProj;      // reconstrução worldPos do depth
+    Vec4  CameraPos;        // xyz = câmera
+    Vec4  ScreenParams;     // W, H, 1/W, 1/H
+    Vec4  GridMinSpacing;   // DDGI: xyz=origem, w=espaçamento
+    Vec4  GridCount;        // DDGI: xyz=countXYZ
+    Vec4  AtlasParams;      // DDGI: x=tile(6), y=atlasW, z=atlasH
+    Vec4  SunDirIntensity;  // xyz=direção ao sol, w=intensidade
+    Vec4  SunColor;         // rgb=cor do sol
+    Vec4  TraceParams;      // x=frameIndex, y=maxRayDist, z=skyIntensity, w=normalBias
+    Vec4  ShadeParams;      // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma
+    Vec4  ReuseParams;      // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
+    Vec4  SpatialParams;    // x=radius(px), y=count, z=spatial(0/1), w=normalReject
+    Mat44 View;             // worldPos → view.z (NRD pack)
+};
+```
 
 ### API (`Engine/Include/Smile/Graphics/ReSTIRGI.h`)
 
 ```cpp
-// Passa os parâmetros do DDGI para o ReSTIR (grade, atlas). Chamar após SetupForScene do DDGI.
+// Sincroniza parâmetros do DDGI. Chamar após FDDGI::SetupForScene.
 void SetGIParams(GridMin, Spacing, GridCount, AtlasTile, AtlasW, AtlasH, MaxRayDist);
 
-// (Re)cria as texturas de reservatório quando a resolução muda.
+// (Re)cria texturas de reservatório. Chamar em cada resize de tela.
 void SetupForResize(Device, SRVHeap, Width, Height,
                     TlasSlot, SkyViewSlot, InstanceSlot, IrradSlot,
                     VertexSlot, IndexSlot, DepthSlot, GBufferSlot, VelocitySlot);
 
-// Grava Pass A + Pass B (+ Fase C se UseNrd).
+// Grava Pass A + Pass B no command list.
 void RecordTrace(CommandList, SRVHeap);
 
-// Configura o NRD pack (chamar após Nrd.SetupForResize).
-void SetupNrdPack(Device, SRVHeap,
-                  NrdInViewZ, NrdInNormalRough, NrdInMv, NrdInDiffRadHit, NrdOut);
-void RecordNrdPack(CommandList, SRVHeap);
+// Configura o NRD pack (chamar após NrdDenoiser::SetupForResize).
+void SetupNrdPack(Device, SRVHeap, NrdInViewZ, NrdInNormalRough, NrdInMv, NrdInDiffRadHit, NrdOut);
+void RecordNrdPack(CommandList, SRVHeap);  // grava Fase C
 
-// Toggles
-void SetRealHitShading(bool);  // shading completo nos hits do trace (padrão: true)
-void SetTemporal(bool);        // reuso temporal via MV (padrão: true)
+// Retorna o slot SRV para o deferred: NrdOut quando UseNrd, GITexture caso contrário.
+u32  GITexSRVSlot() const;
+
+// Toggles principais
+void SetRealHitShading(bool);  // shading completo nos hits vs. albedo flat (padrão: true)
+void SetTemporal(bool);        // reuso temporal via motion vector (padrão: true)
 void SetSpatial(bool);         // reuso espacial k-vizinhos (padrão: true)
-void SetVisibility(bool);      // shadow ray de visibilidade no resolve (padrão: false)
-void SetUseNrd(bool);          // denoising via NRD RELAX (padrão: false)
+void SetVisibility(bool);      // shadow ray no resolve espacial (padrão: false — caro)
+void SetUseNrd(bool);          // denoising NRD RELAX (padrão: false)
 ```
 
-### Parâmetros tuníveis (privados com defaults)
+### Parâmetros tuníveis
 
-| Parâmetro | Padrão | Impacto |
+| Parâmetro | Padrão | Efeito |
 |---|---|---|
-| `MCap` | 20 | Máximo de amostras acumuladas; maior = mais estável, mais ghosting |
-| `FireflyMax` | 8.0 | Teto de luminância de saída (0 = desativado) |
-| `AlbedoLOD` | 2.0 | MIP de albedo nos hits (economiza largura de banda) |
-| `SpatialRadius` | 16 px | Raio de busca dos vizinhos espaciais |
-| `SpatialCount` | 4 | Número de vizinhos fundidos por pixel |
-| `NormalReject` | 0.9 | `dot(n_q, n_r)` mínimo para aceitar vizinho |
-| `PosRejectScale` | 0.01 | Fração da distância câmera-pixel para rejeição por posição |
+| `MCap` | 20 | Histórico máximo de amostras. Maior → mais estável mas mais ghosting em câmera/cena em movimento |
+| `FireflyMax` | 8.0 | Teto de luminância de `Lo` antes de criar o reservatório. 0 = desativado |
+| `AlbedoLOD` | 2.0 | Nível de MIP da textura de albedo nos hits do trace. Economiza largura de banda |
+| `SpatialRadius` | 16 px | Raio do disco de busca de vizinhos no Pass B |
+| `SpatialCount` | 4 | Número de vizinhos fundidos por pixel. Mais → menos ruído, mais custo |
+| `NormalReject` | 0.9 | `cos` mínimo entre normais para aceitar vizinho (~26°) |
+| `PosRejectScale` | 0.01 | Tolerância de posição = `scale * dist(cam, pixel)`. Proporcional à distância evita rejeição excessiva em longas distâncias |
 
 ---
 
