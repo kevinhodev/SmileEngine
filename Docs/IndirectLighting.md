@@ -1,26 +1,40 @@
 # Iluminação Indireta — SmileEngine
 
-O sistema de iluminação indireta da SmileEngine é baseado em **Image-Based Lighting (IBL)** com a aproximação *split-sum* de Karis. Todo o pré-processamento roda em compute shaders na GPU, permitindo trocar o ambiente HDR em tempo real pelo editor.
+A SmileEngine possui três sistemas de iluminação indireta complementares:
+
+- **IBL** (Image-Based Lighting) — ambiente estático pré-filtrado a partir de um HDR; difuso + especular via split-sum de Karis.
+- **DDGI** (Dynamic Diffuse Global Illumination) — grade de probes com ray tracing inline DXR; iluminação indireta difusa dinâmica de múltiplos bounces.
+- **ReSTIR GI** — final-gather por pixel sobre o cache DDGI, com reuso temporal e espacial de reservatórios (Ouyang 2021); denoising opcional via NVIDIA NRD RELAX.
+
+IBL e o ambient atmosférico da engine Hillaire vivem na branch principal. DDGI e ReSTIR GI estão na branch `feature/FFT-Oceanv2`.
 
 ---
 
 ## Sumário
 
-1. [Visão Geral](#1-visão-geral)
-2. [Pipeline de Pré-processamento](#2-pipeline-de-pré-processamento)
-3. [Recursos GPU](#3-recursos-gpu)
-4. [Shaders de Pré-processamento](#4-shaders-de-pré-processamento)
-5. [Aplicação em Runtime (Pixel Shader)](#5-aplicação-em-runtime-pixel-shader)
+1. [Visão Geral — IBL](#1-visão-geral--ibl)
+2. [Pipeline de Pré-processamento IBL](#2-pipeline-de-pré-processamento-ibl)
+3. [Recursos GPU — IBL](#3-recursos-gpu--ibl)
+4. [Shaders de Pré-processamento IBL](#4-shaders-de-pré-processamento-ibl)
+5. [Aplicação IBL em Runtime (Pixel Shader)](#5-aplicação-ibl-em-runtime-pixel-shader)
 6. [Ambient Hemisférico da Atmosfera](#6-ambient-hemisférico-da-atmosfera)
-7. [Integração com o Renderer](#7-integração-com-o-renderer)
-8. [Estruturas de Dados](#8-estruturas-de-dados)
-9. [API Pública](#9-api-pública)
-10. [Constantes de Configuração](#10-constantes-de-configuração)
-11. [Mapa de Arquivos](#11-mapa-de-arquivos)
+7. [Integração IBL com o Renderer](#7-integração-ibl-com-o-renderer)
+8. [Estruturas de Dados — IBL](#8-estruturas-de-dados--ibl)
+9. [API Pública — IBL](#9-api-pública--ibl)
+10. [Constantes de Configuração — IBL](#10-constantes-de-configuração--ibl)
+11. [DDGI — Visão Geral](#11-ddgi--visão-geral)
+12. [DDGI — Pipeline e Shaders](#12-ddgi--pipeline-e-shaders)
+13. [DDGI — Estruturas e Recursos GPU](#13-ddgi--estruturas-e-recursos-gpu)
+14. [DDGI — API e Configuração](#14-ddgi--api-e-configuração)
+15. [ReSTIR GI — Visão Geral](#15-restir-gi--visão-geral)
+16. [ReSTIR GI — Pipeline e Shaders](#16-restir-gi--pipeline-e-shaders)
+17. [ReSTIR GI — Estruturas e Recursos GPU](#17-restir-gi--estruturas-e-recursos-gpu)
+18. [ReSTIR GI — API e Configuração](#18-restir-gi--api-e-configuração)
+19. [Mapa de Arquivos](#19-mapa-de-arquivos)
 
 ---
 
-## 1. Visão Geral
+## 1. Visão Geral — IBL
 
 A iluminação indireta aproxima a contribuição de toda a luz ambiental do ambiente (difusa + especular) sobre uma superfície PBR sem rastrear raios explicitamente. A abordagem usa a **aproximação split-sum**:
 
@@ -46,7 +60,7 @@ O `BRDFLut` é gerado apenas uma vez na inicialização (independente do arquivo
 
 ---
 
-## 2. Pipeline de Pré-processamento
+## 2. Pipeline de Pré-processamento IBL
 
 ```
 Arquivo .hdr (RGBE / Radiance)
@@ -75,7 +89,7 @@ BRDFLut [128², RG16F]
 
 ---
 
-## 3. Recursos GPU
+## 3. Recursos GPU — IBL
 
 ### EnvCube
 - **Resolução:** 1024 × 1024 × 6  
@@ -111,7 +125,7 @@ BRDFLut [128², RG16F]
 
 ---
 
-## 4. Shaders de Pré-processamento
+## 4. Shaders de Pré-processamento IBL
 
 Todos os shaders vivem em `Shaders/IBL/`. Compartilham os utilitários matemáticos de `Common.hlsli`.
 
@@ -262,7 +276,7 @@ float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y);
 
 ---
 
-## 5. Aplicação em Runtime (Pixel Shader)
+## 5. Aplicação IBL em Runtime (Pixel Shader)
 
 **Arquivo:** `Shaders/Triangle.ps.hlsl`, linhas 437–456
 
@@ -349,7 +363,7 @@ O renderer deriva `SkyAmbientColor` e `GroundAmbientColor` em CPU a partir das L
 
 ---
 
-## 7. Integração com o Renderer
+## 7. Integração IBL com o Renderer
 
 ### Inicialização (`Renderer::Initialize`)
 
@@ -413,7 +427,7 @@ SRVHeap
 
 ---
 
-## 8. Estruturas de Dados
+## 8. Estruturas de Dados — IBL
 
 ### `FrameConstants` (`Engine/Include/Smile/Graphics/Renderer.h`)
 
@@ -478,7 +492,7 @@ O rastreamento por sub-recurso (`MipStates`) permite barreiras precisas no pipel
 
 ---
 
-## 9. API Pública
+## 9. API Pública — IBL
 
 ### `Renderer` (`Engine/Include/Smile/Graphics/Renderer.h`)
 
@@ -521,7 +535,7 @@ bool HasHDRLoaded()  const;
 
 ---
 
-## 10. Constantes de Configuração
+## 10. Constantes de Configuração — IBL
 
 Definidas em `Engine/Include/Smile/Graphics/HDREnvironment.h`:
 
@@ -537,15 +551,529 @@ Definidas em `Engine/Include/Smile/Graphics/HDREnvironment.h`:
 
 ---
 
-## 11. Mapa de Arquivos
+---
+
+## 11. DDGI — Visão Geral
+
+DDGI (Dynamic Diffuse Global Illumination) implementa uma grade 3D de **probes de irradiância** que propagam luz indireta difusa em tempo real usando **DXR Inline Ray Tracing**. Cada probe rastreia 64 raios por frame, acumula a radiância em um atlas octahedral e disponibiliza a irradiância para o pixel shader via interpolação trilinear.
+
+### Fluxo por frame
+
+```
+DDGI::RecordUpdate
+  ├─ DDGITrace     — 64 raios / probe (1 thread / raio); grava ProbesTrace
+  ├─ DDGIUpdate    — acumula irradiância no IrradAtlas (6×6 px / probe)
+  ├─ DDGIUpdateDist— acumula distância média + variância no DistAtlas (14×14 px / probe)
+  └─ DDGIRelocate  — reposiciona probes ocultos; ajusta ray count adaptativo
+```
+
+### Características técnicas
+
+- **Distribuição de raios:** Sequência de Fibonacci esférica rotacionada aleatoriamente por frame (`DDGI_RandomRotation`). A rotação garante que amostras acumuladas ao longo dos frames cubram o hemisfério uniformemente sem padrões fixos.
+- **Real hit shading:** Ao acertar uma superfície, o shader traça um raio de sombra em direção ao sol e amostra o `IrradAtlas` para iluminação indireta do bounce — iluminação multi-bounce real em vez de simples albedo.
+- **Chebyshev visibility:** O atlas de distância armazena `(mean, mean²)` por probe. Na amostragem, o teste de Chebyshev pondera a contribuição de cada probe pela probabilidade de visibilidade, eliminando bleeding de luz através de paredes.
+- **Relocalização de probes:** Probes dentro de geometria detectam via razão backface > 25% e se deslocam até `spacing × 0.45` em direção à superfície visível mais próxima. Probes irreparavelmente ocultos (backface > `DeactivationThreshold`) são marcados como inativos (`ProbeData.w < 0`).
+- **Ray count adaptativo:** Probes próximos a geometria recebem mais raios (até 256); probes em espaço aberto recebem menos (mínimo 8), economizando orçamento de trace.
+
+---
+
+## 12. DDGI — Pipeline e Shaders
+
+### 12.1 `DDGICommon.hlsli`
+
+Utilitários compartilhados por todos os shaders DDGI e pelo ReSTIR GI.
+
+**`DDGI_SphericalFibonacci(i, n)`**
+Gera a direção `i` de uma sequência de Fibonacci esférica com `n` amostras. Produz distribuição quasi-uniforme sobre a esfera sem clustering nos polos.
+
+**`DDGI_RandomRotation(frame)`**
+Constrói uma rotação 3D pseudo-aleatória por hash do índice de frame (3 ângulos independentes). Aplicada ao banco de raios Fibonacci a cada frame para convergência ao longo do tempo.
+
+**`DDGI_OctEncode / DDGI_OctDecode`**
+Codificação octahedral de normais: mapeia `float3` normalizado para `float2 ∈ [-1,1]²`. Usada como mapeamento UV para amostrar as tiles do atlas de irradiância e distância.
+
+**`SampleDDGIIrradiance`** e **`SampleDDGIIrradianceCheb`**
+Interpolação trilinear nos 8 probes vizinhos da grade. A versão Cheb adiciona:
+- Peso pelo fator de visibilidade de Chebyshev (distância média vs. variância)
+- Peso por `backface` para penalizar probes atrás da superfície
+- Skip/fallback de probes inativos (`ProbeData.w < 0`)
+
+**`DDGI_TileOrigin(coord, count, tile)`**
+Calcula o offset em pixels da tile de um probe no atlas plano 2D. O atlas empacota os probes como `tileCol = x + z * countX`, `tileRow = y`.
+
+---
+
+### 12.2 `DDGITrace.cs.hlsl`
+
+**Dispatch:** `numProbes × 1 × 1`, grupo `64×1×1` (1 grupo por probe, 1 thread por raio)
+
+Cada thread traça 1 raio usando `RayQuery` (DXR Inline):
+
+```hlsl
+// Ray count adaptativo: threads "ociosas" gravam DDGI_RAY_UNUSED e saem.
+int stride = DDGI_RAYS / max(rayCount, 1);
+if ((rayIdx % stride) != 0) { ProbesTrace[...] = float4(0,0,0,DDGI_RAY_UNUSED); return; }
+
+// Posição do probe com offset de relocalização aplicado.
+float3 probePos = DDGI_ProbeWorldPos(pc, ...) + ProbeData[probeIdx].xyz;
+
+// Direção Fibonacci rotacionada pelo frame.
+float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, frameIndex);
+
+// Trace inline.
+RayQuery<RAY_FLAG_NONE> q;
+q.TraceRayInline(Scene, RAY_FLAG_NONE, 0xFF, ray);
+while (q.Proceed()) {}
+
+// Hit → ShadeSurfaceHit (sol + DDGI bounce); Miss → ShadeSky.
+ProbesTrace[int2(rayIdx, probeIdx)] = float4(radiance, signedDist);
+// signedDist < 0 = backface hit (usado pelo Relocate e Update).
+```
+
+**`HitShading.hlsli` — `ShadeSurfaceHit`**
+Shading completo no ponto de hit do raio de probe:
+1. Interpola normal e UV da malha (buffer de vértices/índices via `InstanceGeo`)
+2. Amostra textura de albedo com LOD fixo (`AlbedoLOD = 4`)
+3. Traça raio de sombra para o sol (`RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH`)
+4. Amostra `IrradAtlas` para iluminação indireta do bounce atual
+
+Resultado: `albedo * (Edirect/π + indirect)` — a equação do renderizador difuso de 1 bounce.
+
+---
+
+### 12.3 `DDGIUpdate.cs.hlsl`
+
+**Dispatch:** `numProbes × 1 × 1`, grupo `6×6×1` (1 grupo por probe, 1 thread por texel da tile)
+
+Cada thread processa um texel da tile octahedral de irradiância (`6×6 px`):
+
+```hlsl
+// Decodifica a direção do texel.
+float3 texelDir = DDGI_OctDecode(octUV * 2 - 1);
+
+// Acumula raios com peso cosseno (dot produto com texelDir).
+for (int r = 0; r < 64; ++r) {
+    float w = max(0, dot(texelDir, DDGI_RayDirection(r, 64, frame)));
+    sum += ProbesTrace[r, probe].rgb * w;
+    wsum += w;
+}
+
+// Detecção de oclusão: probe dentro de geometria → apaga irradiância.
+bool occluded = backfaceCount > realCount * 0.35;
+
+// Blend temporal (hysteresis = 0.99 padrão → convergência lenta = estável).
+blended = lerp(newResult, prev, hysteresis);
+```
+
+A irradiância é armazenada em gamma `DDGI_IRRADIANCE_GAMMA = 1.5` para comprimir a faixa dinâmica no atlas e expandir na amostragem. O valor 1.5 (entre linear e sRGB) é um trade-off entre precisão em sombras e qualidade em luzes brilhantes.
+
+---
+
+### 12.4 `DDGIUpdateDist.cs.hlsl`
+
+**Dispatch:** `numProbes × 1 × 1`, grupo `14×14×1`
+
+Mesma lógica do Update, mas armazena `(mean_dist, mean_dist²)` por texel da tile de distância (`14×14 px`). O peso angular usa `DDGI_DIST_SHARP = 50.0` (elevado a 50ª potência) para concentrar contribuição nos raios quase alinhados com o texelDir, produzindo um octmap de distância mais nítido.
+
+Os valores `(μ, μ²)` permitem calcular a variância `σ² = μ² - μ²` para o teste de Chebyshev na amostragem.
+
+---
+
+### 12.5 `DDGIRelocate.cs.hlsl`
+
+**Dispatch:** `⌈numProbes/64⌉ × 1 × 1`, grupo `64×1×1`
+
+Por probe, analisa os raios do `ProbesTrace` do frame atual:
+
+```
+backRatio = backfaceCount / realCount
+
+Se backRatio > 25%:
+    move probe em direção ao hit front-face mais distante (sai da geometria)
+Senão se closestFront < spacing * 0.30:
+    recua do obstáculo próximo
+
+Offset clampado a spacing * 0.45 (nunca ultrapassa a célula da grade).
+Suavizado: lerp(offset, target, 0.25) por frame.
+
+Inativação: backRatio > DeactivationThreshold && backfaceCount >= 6
+    → ProbeData.w = -1 (sinaliza skip nas amostragens).
+
+Ray count adaptativo:
+    closestFront / spacing < 0.5  → 256 raios
+    < 1.0                         → 128
+    < 2.0                         →  64
+    < 4.0                         →  32
+    < 8.0                         →  16
+    senão                         →   8
+```
+
+---
+
+## 13. DDGI — Estruturas e Recursos GPU
+
+### `DDGIConstants` (`Engine/Include/Smile/Graphics/DDGI.h`)
+
+```cpp
+struct alignas(256) DDGIConstants {
+    Vec4 GridMinSpacing;  // xyz = origem do grid (world), w = espaçamento entre probes
+    Vec4 GridCountRays;   // xyz = nº de probes por eixo (X,Y,Z), w = raios por probe
+    Vec4 AtlasParams;     // x = tile size (6), y = atlasW, z = atlasH, w = numProbes total
+    Vec4 SunDirIntensity; // xyz = direção ao sol (normalizado), w = intensidade
+    Vec4 SunColorHyst;    // rgb = cor do sol, w = hysteresis (blend temporal, 0=instante/1=nunca)
+    Vec4 TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = normalBias
+    Vec4 DistAtlasParams; // x = dist tile size (14), y = dist atlasW, z = dist atlasH, w = realHitShading
+    Vec4 MiscParams;      // x = relocationEnabled, y = deactivationThreshold, z = maxRays, w = minRays
+};
+```
+
+### Recursos GPU
+
+| Recurso | Tipo | Formato | Tamanho | Propósito |
+|---|---|---|---|---|
+| `IrradAtlas` | Texture2D | R16G16B16A16_FLOAT | `(countX*countZ*6) × (countY*6)` | Irradiância por probe (tile octahedral 6×6) |
+| `DistAtlas` | Texture2D | R16G16_FLOAT | `(countX*countZ*14) × (countY*14)` | Distância média+variância (tile 14×14) |
+| `ProbesTrace` | Texture2D | R16G16B16A16_FLOAT | `64 × numProbes` | Buffer de raios do frame atual (rgb=radiance, a=signedDist) |
+| `ProbeDataBuf` | Buffer\<float4\> | R32G32B32A32_FLOAT | `numProbes` | xyz=offset de relocalização, w=status (≥0=ativo, <0=inativo) |
+| `ProbeRayCountBuf` | Buffer\<uint\> | R32_UINT | `numProbes` | Ray count adaptativo por probe (8–256) |
+| `MergedVertexBuf` | StructuredBuffer\<DDGIVertex\> | — | todos os meshes | Vértices fundidos da cena para hit shading |
+| `MergedIndexBuf` | Buffer\<uint\> | R32_UINT | todos os tris | Índices fundidos |
+| `InstanceGeoBuf` | StructuredBuffer\<InstanceGeo\> | — | num meshes | Metadados por instância (albedo, base vertex/index, etc.) |
+
+### `InstanceGeo` e `DDGIVertex`
+
+```hlsl
+struct InstanceGeo {
+    float4 BaseColor;   // cor base da instância
+    uint   VertexBase;  // offset no MergedVertexBuf
+    uint   IndexBase;   // offset no MergedIndexBuf
+    uint   AlbedoIndex; // índice no ResourceDescriptorHeap (bindless)
+    uint   HasAlbedo;   // se 0, usa só BaseColor
+    uint   TwoSided;    // se 1, não inverte normal em backfaces
+};
+
+struct DDGIVertex {
+    float3 Position;
+    float3 Normal;
+    float2 TexCoord;
+};
+```
+
+### Layout do Atlas
+
+O atlas é um texture 2D plano com tiles de probes organizados por `(X + Z*countX, Y)`:
+
+```
+tileCol = probeX + probeZ * countX
+tileRow = probeY
+
+Pixel de um texel (oc) na tile do probe (x,y,z):
+  px = tileCol * tileSize + oc.x
+  py = tileRow * tileSize + oc.y
+```
+
+---
+
+## 14. DDGI — API e Configuração
+
+### API (`Engine/Include/Smile/Graphics/DDGI.h`)
+
+```cpp
+// Configura a grade a partir do AABB da cena. Calcula spacing, countXYZ e aloca os atlases.
+void SetupForScene(Device, Queue, SRVHeap, Scene, AABBMin, AABBMax,
+                   TlasSRVSlot, SkyViewSRVSlot);
+
+// Atualiza o constant buffer antes de RecordUpdate.
+void UpdatePerFrame(FrameSlot, DirToSun, SunIntensity, SunColor, FrameIndex);
+
+// Grava os 4 compute passes no command list.
+void RecordUpdate(CommandList, SRVHeap);
+
+// Parâmetros de qualidade
+void SetIntensity(f32);              // escala global da irradiância DDGI
+void SetHysteresis(f32);            // blend temporal (padrão: 0.99)
+void SetRealHitShading(bool);       // shading completo nos hits vs. albedo puro
+void SetRelocation(bool);           // liga/desliga relocalização de probes
+void SetDeactivationThreshold(f32); // razão backface para desativar probe (padrão: 0.20)
+void SetAdaptiveRays(bool);         // ray count adaptativo por probe
+void SetMaxRays(int);               // teto de raios quando adaptativo (padrão: 64)
+void SetMinRays(int);               // piso de raios quando adaptativo (padrão: 16)
+```
+
+### Constantes fixas
+
+| Constante | Valor | Significado |
+|---|---|---|
+| `kRaysPerProbe` | 64 | Banco de raios Fibonacci; o adaptativo usa subconjuntos |
+| `kTileSize` | 6 | Resolução da tile de irradiância (px por probe) |
+| `kDistTileSize` | 14 | Resolução da tile de distância (px por probe) |
+| `kRelocateConvergeFrames` | 180 | Frames de relocalização após `SetRelocation(true)` |
+| `kReclassifyFrames` | 6 | Frames de re-classificação após mudança de parâmetro |
+
+---
+
+## 15. ReSTIR GI — Visão Geral
+
+ReSTIR GI é um estimador de GI difusa por pixel baseado em **Weighted Reservoir Sampling (WRS)** com reuso temporal e espacial. Cada pixel mantém um reservatório `{x1, x2, n2, Lo, M, W}` que representa a melhor amostra de iluminação secundária encontrada até agora.
+
+A técnica reduz a variância em relação a path tracing simples ao reutilizar amostras de pixels vizinhos e do frame anterior, amplificando efetivamente 1 raio/pixel em dezenas de amostras equivalentes.
+
+### Os três passes
+
+```
+Pass A — ReSTIRGITrace.cs.hlsl
+  Por pixel:
+  1. Traça 1 raio cosseno-hemisférico → (x2, n2, Lo)
+  2. ShadeSurfaceHit: sol + DDGI bounce no hit
+  3. Funde com o reservatório do frame anterior (motion vector)
+  4. Resolve irradiância (fallback quando spatial está OFF)
+
+Pass B — ReSTIRGISpatial.cs.hlsl
+  Por pixel:
+  1. Lê reservatório do Pass A (pós-temporal)
+  2. Funde k vizinhos (padrão: 4) no raio de 16 px
+     com Jacobiano de reconexão (Ouyang 2021)
+  3. Visibility ray opcional para x2 selecionado
+  4. Resolve irradiância final → GITexture
+
+Fase C — ReSTIRNrdPack.cs.hlsl + NRD RELAX
+  Empacota GITexture + GBuffer + depth + velocity
+  para os inputs do NVIDIA NRD RELAX_DIFFUSE.
+  NRD RELAX denoise em separado; saída via NrdOutSRV.
+```
+
+### Estrutura do reservatório
+
+```
+Reservoir {
+    x1   : ponto visível (posição do pixel no mundo)
+    x2   : ponto da amostra (hit do raio secundário)
+    n2   : normal geométrica em x2 (para o Jacobiano de reconexão)
+    Lo   : radiância em x2 na direção de x1
+    M    : contagem de amostras (aumenta com reuso; clampado em MCap=20)
+    W    : peso de contribuição não-enviesado = wSum / (M * pHat(selecionado))
+    wSum : soma interna dos pesos WRS (não persiste entre passes)
+}
+```
+
+---
+
+## 16. ReSTIR GI — Pipeline e Shaders
+
+### 16.1 `ReSTIRReservoir.hlsli`
+
+Implementa as operações matemáticas do WRS.
+
+**`TargetPHat(x1, n1, x2, Lo)`**
+PDF alvo para o pixel `(x1, n1)` dada a amostra `(x2, Lo)`:
+```
+pHat = luminance(Lo) * saturate(dot(n1, normalize(x2 - x1)))
+```
+Proporcional à irradiância esperada. O albedo cancela (tratado na resolução).
+
+**`ResUpdate`** — adiciona 1 candidato ao reservatório (WRS step):
+```
+wSum += w;  M += 1;
+if (rand() * wSum <= w) → seleciona candidato
+```
+
+**`ResMerge`** — funde outro reservatório no atual. O peso escalado pelo Jacobiano:
+```
+w = pHat(x2_other, no_pixel_atual) * other.W * other.M * J
+```
+
+**`ReconnectionJacobian(x1Dst, x1Src, x2, n2)`**
+Jacobiano de reconexão (Ouyang 2021). Corrige o change-of-variable ao reutilizar a amostra `x2` gerada a partir de `x1Src` em um pixel diferente `x1Dst`:
+```
+J = (cos(φ_dst) / cos(φ_src)) * (|x2 - x1Src|² / |x2 - x1Dst|²)
+```
+onde `φ` é o ângulo entre `n2` e a direção `x2 → x1`. Clampado em `[0.1, 10]` para evitar divergência.
+
+**`ResResolve(r, x1, n1, maxLuma)`**
+Extrai a irradiância do reservatório:
+```
+gi = Lo * cos(θ₁) * W / π    (= (1/π) * E)
+```
+Aplica firefly clamp na luminância de saída se `maxLuma > 0`.
+
+---
+
+### 16.2 `ReSTIRGITrace.cs.hlsl` — Pass A
+
+**Dispatch:** `⌈W/8⌉ × ⌈H/8⌉ × 1`, grupo `8×8×1`
+
+**Passo 1 — Sample inicial:**
+```hlsl
+// Amostragem cosseno-hemisférica (método de Malley)
+float2 E   = GGX_Rand2(px, frame);          // 2D pseudo-aleatório por pixel
+float  rr  = sqrt(E.x);                     // raio no disco de Malley
+float  phi = 2π * E.y;
+float  cosT = sqrt(1 - E.x);               // cosTheta
+float3 dir = TangentBasis(N) * float3(rr*cos(φ), rr*sin(φ), cosT);
+
+// Trace inline + ShadeSurfaceHit (sol + DDGI bounce)
+// Firefly clamp: Lo = Lo * min(1, maxLuma / luminance(Lo))
+```
+
+**Passo 2 — Reuso temporal:**
+```hlsl
+float2 vel = Velocity[px];                  // motion vector (curUV - prevUV)
+float2 prevUv = uv - vel;
+if (dentro_da_tela) {
+    prev = lerReservoir(PrevResA/B/C/D[ppx]);
+    prev.M = min(prev.M, MCap);             // cap histórico = 20
+    posReject = posRejectScale * dist(camera, x1);
+    if (length(prev.x1 - x1) < posReject)  // aceita se posição próxima
+        ResMerge(r, prev, pHat, J=1.0);    // J=1: mesma superfície reprojetada
+}
+```
+
+**Passo 3 — Escrita:**
+Grava `{x1, x2, n2, Lo, M, W}` em 4 texturas ping-pong (`CurrResA/B/C/D`), além de `gi = ResResolve(...)` em `GIOut` (sobrescrito pelo Pass B quando spatial está ativo).
+
+---
+
+### 16.3 `ReSTIRGISpatial.cs.hlsl` — Pass B
+
+**Dispatch:** `⌈W/8⌉ × ⌈H/8⌉ × 1`, grupo `8×8×1`
+
+Lê os reservatórios do Pass A e funde `K` vizinhos (padrão 4) dentro de raio de 16 px:
+
+```hlsl
+// Vizinhos em disco concentrico (distribuição uniforme).
+for (int i = 0; i < K; ++i) {
+    float2 E   = GGX_Rand2(px, frame * 7 + i * 131);
+    int2   qpx = px + round(GGX_ConcentricDisk(E) * radius);
+
+    // Rejeições:
+    if (dot(n_vizinho, n_pixel) < normalReject)  continue; // normal (padrão: 0.9)
+    if (length(x1_vizinho - x1_pixel) > posReject) continue; // posição
+
+    float J    = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2);
+    J = clamp(J, 0.1, 10.0);
+    ResMerge(rs, nb, pHat(x2_vizinho), J, rng);
+}
+```
+
+**Visibility ray opcional (`UseVisibility = true`):**
+```hlsl
+// Testa oclusão entre x1 e a amostra x2 SELECIONADA.
+// Se ocluído → W = 0 (gi = 0 para esse pixel).
+// NRD borra o 0/1 estocástico → sombra de contato suave.
+// Descartado por padrão (caro: 1 shadow ray/pixel extra).
+if (len(x2 - x1) > 0.15) {
+    vray.TMax = len - 0.05;     // > TMin (0.02) garantido
+    if (hit) rs.W = 0.0;
+}
+```
+
+---
+
+### 16.4 `ReSTIRNrdPack.cs.hlsl` — Fase C
+
+Empacota os dados para o denoiser NVIDIA NRD RELAX_DIFFUSE:
+
+| Output NRD | Fonte | Encoding |
+|---|---|---|
+| `IN_VIEWZ` | depth → worldPos → view.z linear | float R32 |
+| `IN_NORMAL_ROUGHNESS` | GBuffer oct-normal + roughness | `NRD_FrontEnd_PackNormalAndRoughness` → R10G10B10A2 |
+| `IN_MV` | velocity (curUV - prevUV) | RG32F |
+| `IN_DIFF_RADIANCE_HITDIST` | GITexture (rgb=gi, a=hitDist) | `RELAX_FrontEnd_PackRadianceAndHitDist` |
+
+O NRD usa `motionVectorScale = (-1, -1, 0)` para inverter o sinal do MV. O céu recebe `viewZ = 1e8` para ser ignorado pelo denoiser (fora do `denoisingRange`).
+
+---
+
+## 17. ReSTIR GI — Estruturas e Recursos GPU
+
+### `ReSTIRGIConstants` (`Engine/Include/Smile/Graphics/ReSTIRGI.h`)
+
+```cpp
+struct alignas(256) ReSTIRGIConstants {
+    Mat44 InvViewProj;      // para reconstruir worldPos do depth
+    Vec4  CameraPos;
+    Vec4  ScreenParams;     // W, H, 1/W, 1/H
+    Vec4  GridMinSpacing;   // DDGI: origem + espaçamento
+    Vec4  GridCount;        // DDGI: countXYZ
+    Vec4  AtlasParams;      // DDGI: tile, W, H
+    Vec4  SunDirIntensity;
+    Vec4  SunColor;
+    Vec4  TraceParams;      // frameIndex, maxRayDist, skyIntensity, normalBias
+    Vec4  ShadeParams;      // realHitShading, albedoLOD, fireflyMaxLuma
+    Vec4  ReuseParams;      // MCap, posRejectScale, visibility(0/1), temporal(0/1)
+    Vec4  SpatialParams;    // radius(px), count, spatial(0/1), normalReject
+    Mat44 View;             // worldPos → view.z para o NRD pack
+};
+```
+
+### Recursos GPU
+
+| Recurso | Formato | Tamanho | Propósito |
+|---|---|---|---|
+| `GITexture` | R16G16B16A16_FLOAT | W×H | Saída de GI (rgb=irradiância, a=hitDist para NRD) |
+| `ResA[2]` | R32G32B32A32_FLOAT | W×H | x1.xyz, M (ping-pong por paridade de frame) |
+| `ResB[2]` | R32G32B32A32_FLOAT | W×H | x2.xyz, W |
+| `ResC[2]` | R16G16B16A16_FLOAT | W×H | Lo.rgb |
+| `ResD[2]` | R16G16B16A16_FLOAT | W×H | n2.xyz |
+
+O ping-pong usa `FrameParity = FrameIndex & 1`. Pass A lê `Res*[1-p]` (frame anterior) e escreve `Res*[p]` (frame atual).
+
+---
+
+## 18. ReSTIR GI — API e Configuração
+
+### API (`Engine/Include/Smile/Graphics/ReSTIRGI.h`)
+
+```cpp
+// Passa os parâmetros do DDGI para o ReSTIR (grade, atlas). Chamar após SetupForScene do DDGI.
+void SetGIParams(GridMin, Spacing, GridCount, AtlasTile, AtlasW, AtlasH, MaxRayDist);
+
+// (Re)cria as texturas de reservatório quando a resolução muda.
+void SetupForResize(Device, SRVHeap, Width, Height,
+                    TlasSlot, SkyViewSlot, InstanceSlot, IrradSlot,
+                    VertexSlot, IndexSlot, DepthSlot, GBufferSlot, VelocitySlot);
+
+// Grava Pass A + Pass B (+ Fase C se UseNrd).
+void RecordTrace(CommandList, SRVHeap);
+
+// Configura o NRD pack (chamar após Nrd.SetupForResize).
+void SetupNrdPack(Device, SRVHeap,
+                  NrdInViewZ, NrdInNormalRough, NrdInMv, NrdInDiffRadHit, NrdOut);
+void RecordNrdPack(CommandList, SRVHeap);
+
+// Toggles
+void SetRealHitShading(bool);  // shading completo nos hits do trace (padrão: true)
+void SetTemporal(bool);        // reuso temporal via MV (padrão: true)
+void SetSpatial(bool);         // reuso espacial k-vizinhos (padrão: true)
+void SetVisibility(bool);      // shadow ray de visibilidade no resolve (padrão: false)
+void SetUseNrd(bool);          // denoising via NRD RELAX (padrão: false)
+```
+
+### Parâmetros tuníveis (privados com defaults)
+
+| Parâmetro | Padrão | Impacto |
+|---|---|---|
+| `MCap` | 20 | Máximo de amostras acumuladas; maior = mais estável, mais ghosting |
+| `FireflyMax` | 8.0 | Teto de luminância de saída (0 = desativado) |
+| `AlbedoLOD` | 2.0 | MIP de albedo nos hits (economiza largura de banda) |
+| `SpatialRadius` | 16 px | Raio de busca dos vizinhos espaciais |
+| `SpatialCount` | 4 | Número de vizinhos fundidos por pixel |
+| `NormalReject` | 0.9 | `dot(n_q, n_r)` mínimo para aceitar vizinho |
+| `PosRejectScale` | 0.01 | Fração da distância câmera-pixel para rejeição por posição |
+
+---
+
+## 19. Mapa de Arquivos
+
+### Branch `main`
 
 ```
 SmileEngine/
 ├── Engine/
 │   ├── Include/Smile/Graphics/
-│   │   ├── HDREnvironment.h      — classe principal; constantes IBL; API
+│   │   ├── HDREnvironment.h      — classe principal IBL; constantes; API
 │   │   ├── CubeTexture.h         — wrapper GPU cubemap; UAVs por mip
-│   │   ├── Renderer.h            — FrameConstants; API pública IBL
+│   │   ├── Renderer.h            — FrameConstants; API pública IBL/atmosfera
 │   │   └── Skybox.h              — renderização do fundo EnvCube
 │   └── Source/Graphics/
 │       ├── HDREnvironment.cpp    — pipeline de geração IBL; upload RGBE
@@ -562,4 +1090,41 @@ SmileEngine/
     ├── Triangle.ps.hlsl            — PBR pixel shader; aplicação IBL (L437-456)
     ├── Skybox.ps.hlsl              — amostragem EnvCube como fundo
     └── Skybox.vs.hlsl              — triângulo fullscreen para skybox
+```
+
+### Branch `feature/FFT-Oceanv2`
+
+```
+SmileEngine/
+├── Engine/
+│   ├── Include/Smile/Graphics/
+│   │   ├── DDGI.h          — grade de probes; DDGIConstants; API; constantes kRaysPerProbe etc.
+│   │   ├── DDGIDebug.h     — visualização de probes, raios, volume e stats
+│   │   ├── ReSTIRGI.h      — reservatórios ping-pong; ReSTIRGIConstants; API toggles
+│   │   ├── Reflections.h   — reflexos ray traced (especular); integra DDGI como cache
+│   │   └── TemporalAA.h    — TAA com jitter Halton; usado junto com ReSTIR GI
+│   └── Source/Graphics/
+│       ├── DDGI.cpp        — SetupForScene; merging de geometria; RecordUpdate
+│       ├── DDGIDebug.cpp   — renders de debug por modo
+│       ├── ReSTIRGI.cpp    — alocação de reservatórios; tabelas de descritores; RecordTrace
+│       └── NrdDenoiser.cpp — integração com NVIDIA NRD (setup + execute)
+│
+└── Shaders/
+    └── GI/
+        ├── DDGICommon.hlsli          — SphericalFibonacci, rotação aleatória, oct encode/decode,
+        │                               SampleDDGIIrradiance, SampleDDGIIrradianceCheb
+        ├── HitShading.hlsli          — ShadeSurfaceHit, ShadeSky, HitGeomNormal
+        ├── DDGITrace.cs.hlsl         — trace de raios por probe (64 threads/probe)
+        ├── DDGIUpdate.cs.hlsl        — acumulação de irradiância com hysteresis (6×6/probe)
+        ├── DDGIUpdateDist.cs.hlsl    — acumulação de distância mean+var (14×14/probe)
+        ├── DDGIRelocate.cs.hlsl      — relocalização + deactivação + ray count adaptativo
+        ├── DDGIDebugProbes.ps.hlsl   — esferas de probe coloridas por irradiância
+        ├── DDGIDebugProbes.vs.hlsl
+        ├── DDGIDebugRays.vs.hlsl     — segmentos de raios do último frame
+        ├── DDGIDebugVolume.vs.hlsl   — wireframe da grade 3D
+        ├── DDGIDebugStats.cs.hlsl    — contadores de probes ativos/inativos
+        ├── ReSTIRReservoir.hlsli     — WRS, ResMerge, ReconnectionJacobian, ResResolve
+        ├── ReSTIRGITrace.cs.hlsl     — Pass A: trace + temporal (8×8/tile)
+        ├── ReSTIRGISpatial.cs.hlsl   — Pass B: reuso espacial k-vizinhos + visibility (8×8/tile)
+        └── ReSTIRNrdPack.cs.hlsl     — Fase C: empacotamento inputs NRD RELAX (8×8/tile)
 ```
