@@ -1,8 +1,3 @@
-// CloudNoiseCommon.hlsli
-// Tileable Perlin and Worley (cellular) noise for the Nubis/Schneider cloud
-// noise volumes. All noise wraps over the given frequency so the baked 3D
-// textures sample seamlessly with wrap addressing.
-
 #ifndef SMILE_CLOUD_NOISE_COMMON_HLSLI
 #define SMILE_CLOUD_NOISE_COMMON_HLSLI
 
@@ -13,12 +8,10 @@ float3 Hash33(float3 p) {
     return frac(sin(p) * 43758.5453123f);
 }
 
-// Wrap a cell coordinate into [0, freq) for tiling.
 float3 WrapCell(float3 cell, float freq) {
     return cell - freq * floor(cell / freq);
 }
 
-// Tileable Worley (cellular) noise. Returns ~[0,1], billowy (high near features).
 float WorleyNoise(float3 uvw, float freq) {
     float3 p  = uvw * freq;
     float3 id = floor(p);
@@ -40,7 +33,6 @@ float WorleyNoise(float3 uvw, float freq) {
     return 1.0f - saturate(sqrt(minDist));
 }
 
-// Tileable gradient (Perlin) noise. Returns ~[0,1].
 float3 RandGrad(float3 cell, float freq) {
     float3 h = Hash33(WrapCell(cell, freq)) * 2.0f - 1.0f;
     return normalize(h + 1e-5f);
@@ -71,7 +63,6 @@ float PerlinNoise(float3 uvw, float freq) {
     return nxyz * 0.5f + 0.5f;
 }
 
-// FBM helpers (3 octaves).
 float WorleyFBM(float3 uvw, float freq) {
     return WorleyNoise(uvw, freq)        * 0.625f
          + WorleyNoise(uvw, freq * 2.0f) * 0.25f
@@ -88,11 +79,10 @@ float Remap(float v, float lo, float hi, float nlo, float nhi) {
     return nlo + (v - lo) / max(hi - lo, 1e-5f) * (nhi - nlo);
 }
 
-// Schneider Perlin-Worley: dilate Perlin by the inverted Worley FBM.
 float PerlinWorley(float3 uvw, float freq) {
     float perlin = PerlinFBM(uvw, freq);
     float worley = WorleyFBM(uvw, freq);
     return saturate(Remap(perlin, worley - 1.0f, 1.0f, 0.0f, 1.0f));
 }
 
-#endif // SMILE_CLOUD_NOISE_COMMON_HLSLI
+#endif 

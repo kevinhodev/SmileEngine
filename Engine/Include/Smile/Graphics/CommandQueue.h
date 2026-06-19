@@ -6,27 +6,35 @@
 namespace Smile {
     class FCommandQueue {
     public:
+        static constexpr u32 kFramesInFlight = 2;
+
         void Initialize(ID3D12Device* Device, D3D12_COMMAND_LIST_TYPE Type);
 
+        void ResetForRecording();
         void ExecuteAndSync(ID3D12CommandList* const* CommandLists, UINT Count);
-
         void Flush();
 
+        void BeginFrame();
+        void EndFrame(ID3D12CommandList* const* CommandLists, UINT Count);
+
+        u32 FrameIndex() const { return CurrentFrame; }
+
         ID3D12CommandQueue*        Native()    const { return CommandQueue.Get(); }
-        ID3D12CommandAllocator*    Allocator() const { return CommandAllocator.Get(); }
         ID3D12GraphicsCommandList* List()      const { return CommandList.Get(); }
 
-        void ResetForRecording();
-
     private:
-        void Signal();
-        void WaitForFence();
+        void Signal();                 
+        void WaitForValue(UINT64 Value);
 
         ComPtr<ID3D12CommandQueue>        CommandQueue;
-        ComPtr<ID3D12CommandAllocator>    CommandAllocator;
+        ComPtr<ID3D12CommandAllocator>    UploadAllocator;
+        ComPtr<ID3D12CommandAllocator>    FrameAllocators[kFramesInFlight];
         ComPtr<ID3D12GraphicsCommandList> CommandList;
         ComPtr<ID3D12Fence>               Fence;
+
         UINT64 FenceValue = 0;
-        HANDLE FenceEvent = nullptr;
+        UINT64 FrameFenceValues[kFramesInFlight] = {};
+        u32    CurrentFrame = kFramesInFlight - 1; 
+        HANDLE FenceEvent   = nullptr;
     };
-} 
+}

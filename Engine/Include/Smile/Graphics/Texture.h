@@ -18,25 +18,51 @@ namespace Smile {
         ORM,
     };
 
+    struct FMipData {
+        std::vector<u8> Pixels;
+        u32             Width  = 0;
+        u32             Height = 0;
+    };
+
+    struct FTextureCPUData {
+        std::vector<FMipData> Mips;
+        u32         Width   = 0;
+        u32         Height  = 0;
+        DXGI_FORMAT Format  = DXGI_FORMAT_R8G8B8A8_UNORM;
+        bool        IsNormalMap = false;
+        bool Valid() const { return !Mips.empty(); }
+    };
+
     class FTexture {
     public:
-        // Loads a texture from file (JPG/PNG/BMP/TIFF via WIC) and generates a
-        // full mip chain via 2x2 box filtering. When IsNormalMap=true, mips are
-        // built using vector-aware averaging + re-normalization, and the alpha
-        // channel of each mip stores the Toksvig variance factor (T = |sum|/N).
-        // T = 1.0 at mip 0 (no loss) and < 1.0 at higher mips where normals
-        // disagreed within the source 2x2 footprint. The PS reads .a and bumps
-        // roughness accordingly to suppress specular aliasing.
         static FTexture LoadFromFile(ID3D12Device* Device, FCommandQueue& CmdQueue,
                                      FTextureSRVHeap& SRVHeap,
                                      const std::wstring& Path,
                                      bool IsNormalMap = false);
 
+        static FTextureCPUData LoadCPU(const std::wstring& Path, bool IsNormalMap = false);
+
+        static FTexture CreateFromCPU(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                                      FTextureSRVHeap& SRVHeap,
+                                      const FTextureCPUData& Data);
+
+        static FTextureCPUData LoadDDSCPU(const std::wstring& Path, bool sRGB);
+        static FTexture        LoadDDS(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                                       FTextureSRVHeap& SRVHeap,
+                                       const std::wstring& Path, bool sRGB);
+
+        static std::vector<FTexture> CreateBatchFromCPU(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                                                        FTextureSRVHeap& SRVHeap,
+                                                        const std::vector<FTextureCPUData>& Data);
+
         static FTexture CreateDefault(ID3D12Device* Device, FCommandQueue& CmdQueue,
                                       FTextureSRVHeap& SRVHeap,
                                       EDefaultTexture Type);
 
+        void Release(FTextureSRVHeap& SRVHeap);
+
         ID3D12Resource* Resource()  const { return GpuResource.Get(); }
+        DXGI_FORMAT     Format()    const { return TexFormat; }
         u32             SRVSlot()   const { return Slot; }
         u32             Width()     const { return TexWidth; }
         u32             Height()    const { return TexHeight; }
@@ -44,24 +70,23 @@ namespace Smile {
         bool            IsValid()   const { return GpuResource != nullptr; }
 
     private:
-        // One mip level of CPU-side pixel data, R8G8B8A8.
-        struct FMipData {
-            std::vector<u8> Pixels;
-            u32             Width  = 0;
-            u32             Height = 0;
-        };
-
-        // Uploads all mip levels of a single texture in one staging buffer +
-        // one ExecuteAndSync. Caller owns the FMipData chain.
         static FTexture Upload(ID3D12Device* Device, FCommandQueue& CmdQueue,
                                FTextureSRVHeap& SRVHeap,
                                const std::vector<FMipData>& Mips,
                                DXGI_FORMAT Format);
 
+        static FTexture RecordUpload(ID3D12Device* Device, ID3D12GraphicsCommandList* CommandList,
+                                     FTextureSRVHeap& SRVHeap,
+                                     const std::vector<FMipData>& Mips, DXGI_FORMAT Format,
+                                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& StagingOut);
+
+        static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
+
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuResource;
-        u32 Slot        = 0;
+        u32 Slot        = kInvalidSlot;
         u32 TexWidth    = 0;
         u32 TexHeight   = 0;
         u32 TexMipCount = 1;
+        DXGI_FORMAT TexFormat = DXGI_FORMAT_R8G8B8A8_UNORM; 
     };
 }

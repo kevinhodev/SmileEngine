@@ -1,0 +1,230 @@
+QFrame#EnvironmentWindowRoot {
+    background: rgba(12, 13, 13, 244);
+    border: 1px solid #3a3b37;
+    border-radius: 10px;
+}
+
+QWidget#EnvironmentTitleBar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #171817, stop:1 #101110);
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    border-bottom: 1px solid #2b2c29;
+}
+
+QLabel#EnvironmentTitle {
+    color: #f4efe3;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+QToolButton#EnvironmentWindowButton,
+QToolButton#EnvironmentCloseButton {
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+}
+
+QToolButton#EnvironmentWindowButton:hover {
+    background: #242520;
+}
+
+QToolButton#EnvironmentCloseButton:hover {
+    background: #4c1d18;
+}
+
+QWidget#EnvironmentWindowBody {
+    background: rgba(13, 14, 14, 238);
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+
+QFrame#EnvironmentSidebar {
+    background: rgba(20, 21, 21, 220);
+    border: 1px solid #242522;
+    border-radius: 7px;
+}
+
+QPushButton#EnvironmentNavButton {
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    color: #bcb7ad;
+    text-align: left;
+    padding: 0 14px;
+    font-size: 14px;
+}
+
+QPushButton#EnvironmentNavButton:hover {
+    background: #1d1f1d;
+    color: #f0e6cf;
+}
+
+QPushButton#EnvironmentNavButton:checked {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #262720, stop:1 #20211f);
+    color: #ffc229;
+}
+
+QPushButton#EnvironmentResetButton {
+    background: #20211f;
+    border: 1px solid #2b2c28;
+    border-radius: 6px;
+    color: #d9d2c3;
+    text-align: left;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+QPushButton#EnvironmentResetButton:hover {
+    border-color: #936b14;
+    color: #ffd35d;
+}
+
+QFrame#EnvironmentContentPanel {
+    background: rgba(20, 22, 22, 210);
+    border: 1px solid #30312d;
+    border-radius: 7px;
+}
+
+QScrollArea#EnvironmentContentScroll,
+QWidget#EnvironmentContentWidget {
+    background: transparent;
+    border: none;
+}
+
+QFrame#EnvironmentSection {
+    background: rgba(29, 31, 31, 206);
+    border-bottom: 1px solid #30312d;
+}
+
+QWidget#EnvironmentSectionHeader {
+    background: transparent;
+}
+
+QLabel#EnvironmentSectionTitle {
+    color: #f0e8d7;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QToolButton#EnvironmentCollapseButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+}
+
+QToolButton#EnvironmentCollapseButton:hover {
+    background: #252620;
+}
+
+QWidget#EnvironmentSectionBody {
+    background: transparent;
+}
+
+QWidget#EnvironmentControlRow {
+    min-height: 38px;
+    max-height: 38px;
+}
+
+QLabel#EnvironmentRowLabel {
+    color: #dfd9cc;
+    font-size: 13px;
+}
+
+QDoubleSpinBox#EnvironmentValueSpin,
+QComboBox#EnvironmentCombo {
+    background: rgba(15, 16, 16, 230);
+    color: #e7e1d3;
+    border: 1px solid #2f302d;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+QDoubleSpinBox#EnvironmentValueSpin:focus,
+QComboBox#EnvironmentCombo:focus {
+    border-color: #bd8411;
+}
+
+QSlider#EnvironmentSlider::groove:horizontal {
+    height: 3px;
+    background: #0b0c0c;
+    border: none;
+    border-radius: 2px;
+}
+
+QSlider#EnvironmentSlider::sub-page:horizontal {
+    background: #ffc229;
+    border-radius: 2px;
+}
+
+QSlider#EnvironmentSlider::add-page:horizontal {
+    background: #0b0c0c;
+    border-radius: 2px;
+}
+
+QSlider#EnvironmentSlider::handle:horizontal {
+    background: #ffc229;
+    border: 1px solid #ffd96f;
+    width: 12px;
+    height: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}
+
+QCheckBox#EnvironmentToggle {
+    spacing: 0;
+}
+
+QCheckBox#EnvironmentToggle::indicator {
+    width: 38px;
+    height: 19px;
+    border-radius: 10px;
+    border: 1px solid #34352f;
+    background: #1d1e1b;
+}
+
+QCheckBox#EnvironmentToggle::indicator:checked {
+    background: #ffc229;
+    border-color: #be8611;
+}
+
+QWidget#EnvironmentHDRRow {
+    min-height: 46px;
+}
+
+QLabel#EnvironmentHDRLabel {
+    background: rgba(15, 16, 16, 220);
+    border: 1px solid #2f302d;
+    border-radius: 5px;
+    color: #c8c1b3;
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+QPushButton#EnvironmentMiniButton {
+    background: #20211f;
+    border: 1px solid #2b2c28;
+    border-radius: 5px;
+    color: #ddd6c8;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+QPushButton#EnvironmentMiniButton:hover {
+    border-color: #936b14;
+    color: #ffd35d;
+}
+
+QWidget#EnvironmentFooter {
+    background: rgba(19, 20, 20, 232);
+    border-top: 1px solid #30312d;
+    border-bottom-left-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+
+QLabel#EnvironmentFooterText {
+    color: #aaa399;
+    font-size: 12px;
+}

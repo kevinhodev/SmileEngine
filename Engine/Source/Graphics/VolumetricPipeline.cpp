@@ -1,33 +1,13 @@
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
-#include <fstream>
+#include "Smile/Graphics/ShaderUtils.h"
 #include <vector>
 #include <stdexcept>
 
-#ifndef SMILE_SHADER_DIR
-#error "SMILE_SHADER_DIR nao definido. Verifique o CMake."
-#endif
-
 namespace Smile {
-    namespace {
-        std::vector<u8> LoadCSO(const std::string& _Name) {
-            const std::string FullPath = std::string(SMILE_SHADER_DIR) + "/" + _Name;
-            std::ifstream File(FullPath, std::ios::binary | std::ios::ate);
-            if (!File) {
-                LogError("Falha ao abrir compute shader: " + FullPath);
-                throw std::runtime_error("Compute shader nao encontrado: " + FullPath);
-            }
-            const auto Size = static_cast<size_t>(File.tellg());
-            std::vector<u8> Data(Size);
-            File.seekg(0);
-            File.read(reinterpret_cast<char*>(Data.data()), Size);
-            return Data;
-        }
-    }
-
     void FVolumetricPipeline::Initialize(ID3D12Device* _Device, const std::string& _CSOName,
-                                         u32 _NumSRVs, u32 _NumUAVs) {
+                                         u32 _NumSRVs, u32 _NumUAVs, bool _HeapDirectlyIndexed) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SRVRange.NumDescriptors                    = _NumSRVs;
@@ -43,24 +23,22 @@ namespace Smile {
         UAVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_ROOT_PARAMETER RootParams[3]{};
-        // b0 = root CBV
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].Descriptor.RegisterSpace  = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
-        // SRV table (t0..)
+
         RootParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[1].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[1].DescriptorTable.pDescriptorRanges   = &SRVRange;
         RootParams[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
-        // UAV table (u0..)
+
         RootParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[2].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[2].DescriptorTable.pDescriptorRanges   = &UAVRange;
         RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
-        // s0 = linear clamp
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         Samplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         Samplers[0].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -73,7 +51,7 @@ namespace Smile {
         Samplers[0].ShaderRegister   = 0;
         Samplers[0].RegisterSpace    = 0;
         Samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-        // s1 = linear wrap
+
         Samplers[1]                  = Samplers[0];
         Samplers[1].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         Samplers[1].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -85,7 +63,9 @@ namespace Smile {
         RootSigDesc.pParameters       = RootParams;
         RootSigDesc.NumStaticSamplers = _countof(Samplers);
         RootSigDesc.pStaticSamplers   = Samplers;
-        RootSigDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+        RootSigDesc.Flags             = _HeapDirectlyIndexed
+            ? D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+            : D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
         Microsoft::WRL::ComPtr<ID3DBlob> RootBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> ErrorBlob;
@@ -101,7 +81,7 @@ namespace Smile {
                                               RootBlob->GetBufferSize(),
                                               IID_PPV_ARGS(&RootSignature)));
 
-        auto CSOBlob = LoadCSO(_CSOName);
+        auto CSOBlob = LoadShaderBytecode(_CSOName);
 
         D3D12_COMPUTE_PIPELINE_STATE_DESC PSODesc{};
         PSODesc.pRootSignature = RootSignature.Get();

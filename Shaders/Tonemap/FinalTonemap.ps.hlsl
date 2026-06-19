@@ -13,7 +13,6 @@ struct PSInput {
     float2 uv  : TEXCOORD0;
 };
 
-// Stephen Hill ACES Fit (PBR/HDR color to sRGB display color)
 static const float3x3 ACESInputMat = {
     0.59719f, 0.35458f, 0.04823f,
     0.07608f, 0.90834f, 0.01558f,
@@ -43,13 +42,10 @@ float4 main(PSInput input) : SV_TARGET {
     float3 hdrColor = FullResHDR.Sample(LinearSampler, input.uv).rgb;
     float3 bloomColor = BloomTex.Sample(LinearSampler, input.uv).rgb;
 
-    // Combine HDR + Bloom
     float3 color = hdrColor * Exposure + bloomColor * BloomIntensity;
 
-    // Apply ACES Filmic curve
     float3 tonemapped = ACESFilm(color);
 
-    // Convert to display space (Gamma 2.2)
     float3 srgb = pow(tonemapped, 1.0f / 2.2f);
 
     return float4(srgb, 1.0f);

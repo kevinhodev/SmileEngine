@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <memory>
 #include "Smile/Math/Math.h"
+#include "SmileEditor/GizmoController.h"
 
 class QTimer;
 class QPaintEngine;
@@ -42,6 +43,7 @@ namespace SmileEditor {
     signals:
         void FrameReady();
         void RendererInitialized(); // emitted once when D3D12 renderer is ready
+        void ObjectSelected(int sceneIndex); // clique no viewport: indice na cena (-1 = vazio)
 
     private slots:
         void OnRenderTimer();
@@ -52,6 +54,7 @@ namespace SmileEditor {
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
         std::unique_ptr<Smile::Renderer> Renderer;
+        GizmoController GizmoCtrl; // logica do gizmo de translacao (editor-side)
         QTimer*       RedrawTimer       = nullptr;
         bool          Initialized       = false;
 

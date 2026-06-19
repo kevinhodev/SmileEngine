@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 # Projeto base SmileEngine - Qt 6 + DirectX 12
-project(SmileEngine LANGUAGES CXX)
+project(SmileEngine LANGUAGES C CXX)
 
 # Versao do projeto - usado pelo VersionInfo.h gerado e pela tela About
 set(SMILE_VERSION_MAJOR 0)
@@ -41,7 +41,8 @@ if(MSVC)
 endif()
 
 # Localiza Qt 6
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Widgets)
+# Quick/Qml/QuickWidgets: migracao incremental da UI do Editor para QML (ilhas QQuickWidget)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Svg Widgets Qml Quick QuickWidgets QuickControls2)
 qt_standard_project_setup()
 
 # Modulo cmake interno: utilitario para compilar shaders HLSL
@@ -52,3 +53,4 @@ include(CompileShaders)
 add_subdirectory(Engine)
 add_subdirectory(Shaders)
 add_subdirectory(Editor)
+add_subdirectory(Tools/Cooker)

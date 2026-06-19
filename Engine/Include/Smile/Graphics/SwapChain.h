@@ -24,6 +24,9 @@ namespace Smile {
 
         void Present();
 
+        void SetVSync(bool Enabled) { VSyncEnabled = Enabled; }
+        bool GetVSync() const       { return VSyncEnabled; }
+
         UINT CurrentIndex() const { return SwapChain->GetCurrentBackBufferIndex(); }
         ID3D12Resource* CurrentBackBuffer() const { return Buffers[CurrentIndex()].Get(); }
         D3D12_CPU_DESCRIPTOR_HANDLE CurrentRTV() const { return RTVHeap.CpuHandle(CurrentIndex()); }
@@ -40,5 +43,6 @@ namespace Smile {
         UINT Width  = 0;
         UINT Height = 0;
         bool AllowTearing = false;
+        bool VSyncEnabled = false; // off por padrao
     };
 } 

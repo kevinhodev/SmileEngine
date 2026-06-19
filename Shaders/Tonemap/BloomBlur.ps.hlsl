@@ -2,7 +2,7 @@ Texture2D InputTex : register(t0);
 SamplerState LinearSampler : register(s0);
 
 cbuffer BlurCB : register(b0) {
-    float4 Direction; // xy = direction, zw = padding/unused
+    float4 Direction; 
 };
 
 struct PSInput {

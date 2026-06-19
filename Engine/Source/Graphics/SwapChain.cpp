@@ -67,8 +67,14 @@ namespace Smile {
     }
 
     void FSwapChain::Present() {
-        const UINT SyncInterval = AllowTearing ? 0 : 1;
-        const UINT Flags        = AllowTearing ? DXGI_PRESENT_ALLOW_TEARING : 0;
+        UINT SyncInterval, Flags;
+        if (VSyncEnabled) {
+            SyncInterval = 1;
+            Flags        = 0;
+        } else {
+            SyncInterval = 0;
+            Flags        = AllowTearing ? DXGI_PRESENT_ALLOW_TEARING : 0;
+        }
         SMILE_HR(SwapChain->Present(SyncInterval, Flags));
     }
 } 

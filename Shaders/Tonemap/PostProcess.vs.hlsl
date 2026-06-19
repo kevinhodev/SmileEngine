@@ -1,6 +1,3 @@
-// Fullscreen triangle vertex shader for post-processing passes.
-// Generates a full screen quad from a single triangle with UV coordinates.
-
 struct VSOutput {
     float4 pos : SV_POSITION;
     float2 uv  : TEXCOORD0;

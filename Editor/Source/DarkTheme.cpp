@@ -4,6 +4,7 @@
 #include <QStyleFactory>
 #include <QColor>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QCoreApplication>
 #include <QDebug>
@@ -24,9 +25,8 @@ namespace SmileEditor {
         return QStringList {
             StylesDir + "/global.qss",
             StylesDir + "/MainWindow.qss",
-            StylesDir + "/AboutDialog.qss",
-            StylesDir + "/MaterialEditorPanel.qss",
-            StylesDir + "/TextureSlotWidget.qss"
+            StylesDir + "/EnvironmentWindow.qss",
+            StylesDir + "/AboutDialog.qss"
         };
     }
 
@@ -49,19 +49,19 @@ namespace SmileEditor {
         } else {
             _App.setStyleSheet(R"(
                 QToolTip {
-                    color: #DCDCDC;
-                    background-color: #252526;
-                    border: 1px solid #3C3C3C;
+                    color: #ddd8ca;
+                    background-color: #151512;
+                    border: 1px solid #3a3321;
                 }
                 QMainWindow::separator {
-                    background: #3C3C3C;
+                    background: #20211f;
                     width: 1px;
                     height: 1px;
                 }
                 QDockWidget::title {
-                    background: #2D2D30;
+                    background: #171816;
                     padding: 4px;
-                    border-bottom: 1px solid #3C3C3C;
+                    border-bottom: 1px solid #292820;
                 }
             )");
         }
@@ -72,15 +72,15 @@ namespace SmileEditor {
 
         QPalette Palette;
 
-        const QColor WindowBg(30, 30, 30);          
-        const QColor BaseBg(37, 37, 38);            
-        const QColor AltBaseBg(45, 45, 48);         
-        const QColor Text(220, 220, 220);           
-        const QColor DisabledText(120, 120, 120);   
-        const QColor Button(60, 60, 60);            
-        const QColor Highlight(14, 99, 156);        
-        const QColor HighlightText(255, 255, 255);
-        const QColor Link(64, 156, 255);
+        const QColor WindowBg(8, 9, 9);
+        const QColor BaseBg(16, 17, 15);
+        const QColor AltBaseBg(24, 25, 22);
+        const QColor Text(221, 216, 202);
+        const QColor DisabledText(102, 99, 91);
+        const QColor Button(25, 26, 23);
+        const QColor Highlight(212, 154, 17);
+        const QColor HighlightText(10, 10, 9);
+        const QColor Link(255, 211, 93);
 
         Palette.setColor(QPalette::Window,          WindowBg);
         Palette.setColor(QPalette::WindowText,      Text);
@@ -91,7 +91,7 @@ namespace SmileEditor {
         Palette.setColor(QPalette::Text,            Text);
         Palette.setColor(QPalette::Button,          Button);
         Palette.setColor(QPalette::ButtonText,      Text);
-        Palette.setColor(QPalette::BrightText,      Qt::red);
+        Palette.setColor(QPalette::BrightText,      QColor(255, 95, 87));
         Palette.setColor(QPalette::Link,            Link);
         Palette.setColor(QPalette::Highlight,       Highlight);
         Palette.setColor(QPalette::HighlightedText, HighlightText);
@@ -100,7 +100,7 @@ namespace SmileEditor {
         Palette.setColor(QPalette::Disabled, QPalette::WindowText,      DisabledText);
         Palette.setColor(QPalette::Disabled, QPalette::Text,            DisabledText);
         Palette.setColor(QPalette::Disabled, QPalette::ButtonText,      DisabledText);
-        Palette.setColor(QPalette::Disabled, QPalette::Highlight,       QColor(80, 80, 80));
+        Palette.setColor(QPalette::Disabled, QPalette::Highlight,       QColor(58, 52, 35));
         Palette.setColor(QPalette::Disabled, QPalette::HighlightedText, DisabledText);
 
         _App.setPalette(Palette);

@@ -9,11 +9,10 @@ namespace Smile {
         if (Initialized) return;
 
         BaseNoise.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                         kBaseRes, kBaseRes, kBaseRes, 1, /*AllowUAV*/ true);
+                         kBaseRes, kBaseRes, kBaseRes, 1, true);
         DetailNoise.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                           kDetailRes, kDetailRes, kDetailRes, 1, /*AllowUAV*/ true);
+                           kDetailRes, kDetailRes, kDetailRes, 1, true);
 
-        // 2D weather map (RGBA16F for UAV-store safety, like the noise volumes).
         {
             D3D12_RESOURCE_DESC Desc{};
             Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -62,31 +61,28 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         CL->SetDescriptorHeaps(1, Heaps);
 
-        // --- Base noise (128^3) ---
         BaseNoise.Transition(CL, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         BaseNoisePSO.Bind(CL);
         u32 BaseRes = kBaseRes;
         CL->SetComputeRoot32BitConstants(0, 1, &BaseRes, 0);
-        CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(BaseNoise.SRVSlot()));   // dummy t0
+        CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(BaseNoise.SRVSlot()));   
         CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(BaseNoise.UAVSlot(0)));
         CL->Dispatch(kBaseRes / 8, kBaseRes / 8, kBaseRes / 8);
         BaseNoise.Transition(CL, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        // --- Detail noise (32^3) ---
         DetailNoise.Transition(CL, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         DetailNoisePSO.Bind(CL);
         u32 DetailRes = kDetailRes;
         CL->SetComputeRoot32BitConstants(0, 1, &DetailRes, 0);
-        CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(DetailNoise.SRVSlot())); // dummy t0
+        CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(DetailNoise.SRVSlot()));
         CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DetailNoise.UAVSlot(0)));
         CL->Dispatch(kDetailRes / 8, kDetailRes / 8, kDetailRes / 8);
         DetailNoise.Transition(CL, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        // --- Weather map (512^2) ---
         WeatherPSO.Bind(CL);
-        u32 WeatherParams[2] = { kWeatherRes, 1337u }; // resolution, seed
+        u32 WeatherParams[2] = { kWeatherRes, 1337u };
         CL->SetComputeRoot32BitConstants(0, 2, WeatherParams, 0);
-        CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(WeatherSRVSlot)); // dummy t0
+        CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(WeatherSRVSlot)); 
         CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(WeatherUAVSlot));
         CL->Dispatch(kWeatherRes / 8, kWeatherRes / 8, 1);
         {

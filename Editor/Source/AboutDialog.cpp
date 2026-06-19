@@ -1,4 +1,5 @@
 #include "SmileEditor/AboutDialog.h"
+#include "SmileEditor/SmileLogo.h"
 #include "Smile/Core/VersionInfo.h"
 #include <QApplication>
 #include <QClipboard>
@@ -17,14 +18,14 @@
 
 namespace SmileEditor {
     namespace {
-        constexpr const char* kAccent     = "#0E639C";
-        constexpr const char* kAccentDark = "#094771";
-        constexpr const char* kBgWindow   = "#1E1E1E";
-        constexpr const char* kBgPanel    = "#252526";
-        constexpr const char* kBgPanelAlt = "#2D2D30";
-        constexpr const char* kBorder     = "#3C3C3C";
-        constexpr const char* kText       = "#DCDCDC";
-        constexpr const char* kTextMuted  = "#9A9A9A";
+        constexpr const char* kAccent     = "#D9A514";
+        constexpr const char* kAccentDark = "#7A5305";
+        constexpr const char* kBgWindow   = "#080909";
+        constexpr const char* kBgPanel    = "#10110F";
+        constexpr const char* kBgPanelAlt = "#181916";
+        constexpr const char* kBorder     = "#292A24";
+        constexpr const char* kText       = "#DDD8CA";
+        constexpr const char* kTextMuted  = "#9A958A";
 
         QString CompilerString() {
         #if defined(_MSC_VER)
@@ -116,10 +117,12 @@ namespace SmileEditor {
         Layout->setContentsMargins(20, 14, 20, 14);
         Layout->setSpacing(18);
 
-        auto* Logo = new QLabel(QStringLiteral("S"), Header);
+        auto* Logo = new QLabel(Header);
         Logo->setObjectName("AboutLogo");
         Logo->setFixedSize(64, 64);
         Logo->setAlignment(Qt::AlignCenter);
+        Logo->setPixmap(MakeSmileLogoPixmap(64));
+        Logo->setScaledContents(true);
         Layout->addWidget(Logo);
 
         auto* TextBox = new QVBoxLayout();
@@ -130,7 +133,7 @@ namespace SmileEditor {
         Title->setObjectName("AboutTitle");
         TextBox->addWidget(Title);
 
-        auto* Subtitle = new QLabel(tr("Game Engine"), Header);
+        auto* Subtitle = new QLabel(tr("Real-Time 3D Engine"), Header);
         Subtitle->setObjectName("AboutSubtitle");
         TextBox->addWidget(Subtitle);
 

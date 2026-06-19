@@ -36,7 +36,6 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
             InitialState, nullptr, IID_PPV_ARGS(&GpuResource)));
 
-        // SRV Texture3D
         VolumeSRVSlot = _SRVHeap.Allocate(1);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -48,7 +47,6 @@ namespace Smile {
         SRVDesc.Texture3D.ResourceMinLODClamp = 0.0f;
         _SRVHeap.CreateSRV(_Device, GpuResource.Get(), SRVDesc, VolumeSRVSlot);
 
-        // UAVs (Texture3D, one per mip; WSize halves per mip, min 1)
         if (_AllowUAV) {
             UAVSlots.resize(_MipLevels);
             for (u32 Mip = 0; Mip < _MipLevels; ++Mip) {

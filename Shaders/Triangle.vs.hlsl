@@ -1,8 +1,8 @@
-cbuffer TransformCB : register(b0) {
-    row_major float4x4 MVP;
+cbuffer ObjectCB : register(b2) {
+    row_major float4x4 MVP;            
     row_major float4x4 ModelMatrix;
-    float4 CameraPosition;
-    // (remaining FrameConstants fields — IBLParams, Time, Sun* — unused by the VS)
+    row_major float4x4 CurMVPNoJitter; 
+    row_major float4x4 PrevMVP;       
 };
 
 struct VSInput {
@@ -16,6 +16,8 @@ struct VSOutput {
     float3 worldPos    : TEXCOORD0;
     float3 worldNormal : TEXCOORD1;
     float2 uv          : TEXCOORD2;
+    float4 curClip     : TEXCOORD3; 
+    float4 prevClip    : TEXCOORD4; 
 };
 
 VSOutput main(VSInput input) {
@@ -24,5 +26,7 @@ VSOutput main(VSInput input) {
     o.worldPos    = mul(float4(input.pos, 1.0f), ModelMatrix).xyz;
     o.worldNormal = mul(input.normal, (float3x3)ModelMatrix);
     o.uv          = input.uv;
+    o.curClip     = mul(float4(input.pos, 1.0f), CurMVPNoJitter);
+    o.prevClip    = mul(float4(input.pos, 1.0f), PrevMVP);
     return o;
 }

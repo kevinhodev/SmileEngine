@@ -1,7 +1,3 @@
-// Cosine-weighted convolution of an environment cubemap into an irradiance
-// cubemap. Output is small (32x32x6) so brute-force phi/theta is fine.
-// Dispatch: ceil(size/8) x ceil(size/8) x 6, thread group 8x8x1.
-
 #include "Common.hlsli"
 
 cbuffer PushConstants : register(b0) {
@@ -20,8 +16,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID) {
 
     float2 uv  = (float2(dispatchID.xy) + 0.5f) / float(OutputSize);
     float3 N   = CubeFaceToDirection(dispatchID.z, uv);
-
-    // Tangent frame around N.
+    
     float3 up        = abs(N.y) < 0.999f ? float3(0,1,0) : float3(0,0,1);
     float3 tangent   = normalize(cross(up, N));
     float3 bitangent = cross(N, tangent);
@@ -39,7 +34,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID) {
             float3 sampleVec = tangent * tangentSample.x
                              + bitangent * tangentSample.y
                              + N * tangentSample.z;
-            // cos(theta) * sin(theta) = the solid-angle weight for the hemisphere integral.
+
             irradiance += EnvCube.SampleLevel(LinearClamp, sampleVec, 0.0f).rgb
                         * cos(theta) * sin(theta);
             sampleCount += 1.0f;

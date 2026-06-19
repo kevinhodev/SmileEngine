@@ -7,13 +7,24 @@ namespace Smile {
     class FPipelineState {
     public:
         void Initialize(ID3D12Device* Device);
-        void RecreatePSO(ID3D12Device* Device, u32 SampleCount);
+        void RecreatePSO(ID3D12Device* Device);
 
         ID3D12RootSignature* GetRootSignature() const { return RootSignature.Get(); }
-        ID3D12PipelineState* PSO()           const { return PipelineState.Get(); }
+        ID3D12PipelineState* PSODepthOnly()  const { return PipelineStateDepthOnly.Get(); }
+        ID3D12PipelineState* PSODepthNormal() const { return PipelineStateDepthNormal.Get(); }
+        // Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs). Depth EQUAL (le o depth ja
+        // estabelecido). TwoSided = cull none p/ folhagem/alpha-test.
+        ID3D12PipelineState* PSOGBuffer()         const { return PipelineStateGBuffer.Get(); }
+        ID3D12PipelineState* PSOGBufferTwoSided() const { return PipelineStateGBufferTwoSided.Get(); }
+        // Deferred lighting fullscreen (le o G-buffer -> HDR), na root signature principal.
+        ID3D12PipelineState* PSODeferredLighting() const { return PipelineStateDeferredLighting.Get(); }
 
     private:
         ComPtr<ID3D12RootSignature> RootSignature;
-        ComPtr<ID3D12PipelineState> PipelineState;
+        ComPtr<ID3D12PipelineState> PipelineStateDepthOnly;
+        ComPtr<ID3D12PipelineState> PipelineStateDepthNormal;
+        ComPtr<ID3D12PipelineState> PipelineStateGBuffer;
+        ComPtr<ID3D12PipelineState> PipelineStateGBufferTwoSided;
+        ComPtr<ID3D12PipelineState> PipelineStateDeferredLighting;
     };
 } 

@@ -1,43 +1,18 @@
 #include "Smile/Graphics/PipelineState.h"
+#include "Smile/Graphics/GBuffer.h"
+#include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Graphics/SwapChain.h"
 #include <d3d12.h>
 #include <fstream>
 #include <vector>
 #include <string>
 
-#ifndef SMILE_SHADER_DIR
-#error "SMILE_SHADER_DIR nao definido. Verifique o CMake."
-#endif
-
 namespace Smile {
-    namespace {
-        std::vector<u8> LoadShaderBlob(const std::string& _Filename) {
-            const std::string FullPath = std::string(SMILE_SHADER_DIR) + "/" + _Filename;
-
-            std::ifstream File(FullPath, std::ios::binary | std::ios::ate);
-            if (!File) {
-                LogError(std::string("Falha ao abrir shader: ") + FullPath);
-                throw std::runtime_error("Shader nao encontrado: " + FullPath);
-            }
-            const auto Size = static_cast<size_t>(File.tellg());
-            std::vector<u8> Data(Size);
-            File.seekg(0);
-            File.read(reinterpret_cast<char*>(Data.data()), Size);
-            return Data;
-        }
-    }
-
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        // Root layout:
-        //   [0] CBV  b0          FrameConstants (all)
-        //   [1] CBV  b1          MaterialConstants (PS)
-        //   [2] SRV table t0-t7  material textures (PS)
-        //   [3] SRV table t8-t10 IBL: irradiance cube, prefiltered cube, BRDF LUT (PS)
-        //   Static sampler s0    anisotropic wrap (materials)
-        //   Static sampler s1    linear clamp     (cubemaps + LUT)
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[10]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -52,7 +27,7 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE MaterialRange{};
         MaterialRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         MaterialRange.NumDescriptors                    = 8;
-        MaterialRange.BaseShaderRegister                = 0; // t0..t7
+        MaterialRange.BaseShaderRegister                = 0; 
         MaterialRange.RegisterSpace                     = 0;
         MaterialRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -64,7 +39,7 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE IBLRange{};
         IBLRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         IBLRange.NumDescriptors                    = 3;
-        IBLRange.BaseShaderRegister                = 8; // t8..t10
+        IBLRange.BaseShaderRegister                = 8; 
         IBLRange.RegisterSpace                     = 0;
         IBLRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -73,8 +48,73 @@ namespace Smile {
         RootParams[3].DescriptorTable.pDescriptorRanges   = &IBLRange;
         RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        D3D12_STATIC_SAMPLER_DESC StaticSamplers[2]{};
-        // s0 — material sampler (anisotropic wrap)
+        RootParams[4].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[4].Descriptor.ShaderRegister = 2;
+        RootParams[4].Descriptor.RegisterSpace  = 0;
+        RootParams[4].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        RootParams[5].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[5].Descriptor.ShaderRegister = 3;
+        RootParams[5].Descriptor.RegisterSpace  = 0;
+        RootParams[5].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_DESCRIPTOR_RANGE ShadowRange{};
+        ShadowRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ShadowRange.NumDescriptors                    = 1;
+        ShadowRange.BaseShaderRegister                = 11; 
+        ShadowRange.RegisterSpace                     = 0;
+        ShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[6].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[6].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[6].DescriptorTable.pDescriptorRanges   = &ShadowRange;
+        RootParams[6].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_DESCRIPTOR_RANGE DDGIRanges[2]{};
+        DDGIRanges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DDGIRanges[0].NumDescriptors                    = 2;
+        DDGIRanges[0].BaseShaderRegister                = 12; 
+        DDGIRanges[0].RegisterSpace                     = 0;
+        DDGIRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        DDGIRanges[1].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DDGIRanges[1].NumDescriptors                    = 1;
+        DDGIRanges[1].BaseShaderRegister                = 15; 
+        DDGIRanges[1].RegisterSpace                     = 0;
+        DDGIRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[7].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[7].DescriptorTable.NumDescriptorRanges = 2;
+        RootParams[7].DescriptorTable.pDescriptorRanges   = DDGIRanges;
+        RootParams[7].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_DESCRIPTOR_RANGE AORange{};
+        AORange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        AORange.NumDescriptors                    = 1;
+        AORange.BaseShaderRegister                = 14; 
+        AORange.RegisterSpace                     = 0;
+        AORange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[8].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[8].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[8].DescriptorTable.pDescriptorRanges   = &AORange;
+        RootParams[8].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // ReSTIR GI (t16): GITexture difusa por pixel. Tabela com 1 SRV; ligada so quando o ReSTIR
+        // esta pronto (senao cai num fallback valido, como GI/AO). Os outros PSOs que compartilham
+        // esta root sig (GBuffer/DepthNormal) nao referenciam t16 -> param extra e inofensivo.
+        D3D12_DESCRIPTOR_RANGE ReSTIRGIRange{};
+        ReSTIRGIRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ReSTIRGIRange.NumDescriptors                    = 1;
+        ReSTIRGIRange.BaseShaderRegister                = 16;
+        ReSTIRGIRange.RegisterSpace                     = 0;
+        ReSTIRGIRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[9].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[9].DescriptorTable.pDescriptorRanges   = &ReSTIRGIRange;
+        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;
         StaticSamplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         StaticSamplers[0].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -87,7 +127,7 @@ namespace Smile {
         StaticSamplers[0].ShaderRegister   = 0;
         StaticSamplers[0].RegisterSpace    = 0;
         StaticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-        // s1 — IBL sampler (trilinear clamp)
+
         StaticSamplers[1].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         StaticSamplers[1].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         StaticSamplers[1].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -100,6 +140,19 @@ namespace Smile {
         StaticSamplers[1].ShaderRegister   = 1;
         StaticSamplers[1].RegisterSpace    = 0;
         StaticSamplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        StaticSamplers[2].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+        StaticSamplers[2].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        StaticSamplers[2].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        StaticSamplers[2].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        StaticSamplers[2].MaxAnisotropy    = 1;
+        StaticSamplers[2].ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        StaticSamplers[2].BorderColor      = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+        StaticSamplers[2].MinLOD           = 0.0f;
+        StaticSamplers[2].MaxLOD           = D3D12_FLOAT32_MAX;
+        StaticSamplers[2].ShaderRegister   = 2;
+        StaticSamplers[2].RegisterSpace    = 0;
+        StaticSamplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC RootSignatureDesc{};
         RootSignatureDesc.NumParameters     = _countof(RootParams);
@@ -125,12 +178,11 @@ namespace Smile {
                                               RootBlob->GetBufferSize(),
                                               IID_PPV_ARGS(&RootSignature)));
 
-        RecreatePSO(_Device, 1);
+        RecreatePSO(_Device);
     }
 
-    void FPipelineState::RecreatePSO(ID3D12Device* _Device, u32 _SampleCount) {
-        auto VertexShaderBlob = LoadShaderBlob("Triangle.vs_6_0.cso");
-        auto PixelShaderBlob  = LoadShaderBlob("Triangle.ps_6_0.cso");
+    void FPipelineState::RecreatePSO(ID3D12Device* _Device) {
+        auto VertexShaderBlob = LoadShaderBytecode("Triangle.vs_6_0.cso");
 
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -156,30 +208,112 @@ namespace Smile {
         BlendDesc.RenderTarget[0].LogicOp               = D3D12_LOGIC_OP_NOOP;
         BlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-        D3D12_DEPTH_STENCIL_DESC DepthDesc{};
-        DepthDesc.DepthEnable    = TRUE;
-        DepthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-        DepthDesc.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
-        DepthDesc.StencilEnable  = FALSE;
+        D3D12_DEPTH_STENCIL_DESC DepthEqual{};
+        DepthEqual.DepthEnable    = TRUE;
+        DepthEqual.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        DepthEqual.DepthFunc      = D3D12_COMPARISON_FUNC_EQUAL;
+        DepthEqual.StencilEnable  = FALSE;
+
+        D3D12_DEPTH_STENCIL_DESC DepthLess{};
+        DepthLess.DepthEnable    = TRUE;
+        DepthLess.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        DepthLess.DepthFunc      = kDepthFuncLess;
+        DepthLess.StencilEnable  = FALSE;
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc{};
         PSODesc.pRootSignature        = RootSignature.Get();
         PSODesc.VS                    = { VertexShaderBlob.data(), VertexShaderBlob.size() };
-        PSODesc.PS                    = { PixelShaderBlob.data(), PixelShaderBlob.size() };
-        PSODesc.BlendState            = BlendDesc;
+        PSODesc.PS                    = { nullptr, 0 };
         PSODesc.SampleMask            = UINT_MAX;
-        PSODesc.RasterizerState       = RasterizerDesc;
-        PSODesc.DepthStencilState     = DepthDesc;
+        PSODesc.RasterizerState       = RasterizerDesc;       // cull back
         PSODesc.InputLayout           = { InputLayout, _countof(InputLayout) };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        PSODesc.NumRenderTargets      = 1;
-        PSODesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
         PSODesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
-        PSODesc.SampleDesc            = { _SampleCount, 0 };
+        PSODesc.SampleDesc            = { 1, 0 };
 
-        ComPtr<ID3D12PipelineState> NewPSO;
-        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSO)));
+        // Z-prepass (depth-only): escreve o depth opaco; o geometry pass usa depth EQUAL p/ matar
+        // o overdraw no shader gordo do G-buffer (POM etc.). Sem cor (writemask 0, sem PS).
+        D3D12_BLEND_DESC NoColor  = BlendDesc;
+        NoColor.RenderTarget[0].RenderTargetWriteMask = 0;
+        PSODesc.BlendState        = NoColor;
+        PSODesc.DepthStencilState = DepthLess;                // escreve depth
+        PSODesc.NumRenderTargets  = 1;
+        PSODesc.RTVFormats[0]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
+        ComPtr<ID3D12PipelineState> NewPSODepth;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepth)));
+        PipelineStateDepthOnly = NewPSODepth;
 
-        PipelineState = NewPSO;
+        auto NormalPSBlob = LoadShaderBytecode("DepthNormal.ps_6_0.cso");
+        PSODesc.VS                = { VertexShaderBlob.data(), VertexShaderBlob.size() };
+        PSODesc.PS                = { NormalPSBlob.data(), NormalPSBlob.size() };
+        PSODesc.BlendState        = BlendDesc; 
+        PSODesc.DepthStencilState = DepthLess; 
+        PSODesc.RTVFormats[0]     = DXGI_FORMAT_R10G10B10A2_UNORM;
+        PSODesc.SampleDesc        = { 1, 0 };
+        ComPtr<ID3D12PipelineState> NewPSODepthNormal;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthNormal)));
+        PipelineStateDepthNormal = NewPSODepthNormal;
+
+        // --- Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs) -------------------------
+        // Opaco: depth EQUAL (reusa o depth do prepass). Two-sided/alpha-test (folhagem): nao
+        // entram no prepass, entao escrevem o proprio depth (depth LESS + write).
+        auto GBufferPSBlob = LoadShaderBytecode("GBuffer.ps_6_0.cso");
+        PSODesc.VS                = { VertexShaderBlob.data(), VertexShaderBlob.size() };
+        PSODesc.PS                = { GBufferPSBlob.data(), GBufferPSBlob.size() };
+        PSODesc.BlendState        = BlendDesc;     // opaco, escreve todos os canais
+        PSODesc.DepthStencilState = DepthEqual;    // le o depth do prepass, nao escreve
+        PSODesc.NumRenderTargets  = FGBuffer::kTargetCount + 1; // +1 = velocity (motion vector)
+        PSODesc.RTVFormats[0]     = FGBuffer::kFormatA;
+        PSODesc.RTVFormats[1]     = FGBuffer::kFormatB;
+        PSODesc.RTVFormats[2]     = FGBuffer::kFormatC;
+        PSODesc.RTVFormats[3]     = DXGI_FORMAT_R16G16_FLOAT; // SV_Target3 = motion vector (UV)
+        PSODesc.DSVFormat         = DXGI_FORMAT_D32_FLOAT;
+        PSODesc.SampleDesc        = { 1, 0 };
+
+        RasterizerDesc.CullMode   = D3D12_CULL_MODE_BACK;
+        PSODesc.RasterizerState   = RasterizerDesc;
+        ComPtr<ID3D12PipelineState> NewPSOGBuffer;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBuffer)));
+        PipelineStateGBuffer = NewPSOGBuffer;
+
+        RasterizerDesc.CullMode   = D3D12_CULL_MODE_NONE; // folhagem / alpha-test two-sided
+        PSODesc.RasterizerState   = RasterizerDesc;
+        PSODesc.DepthStencilState = DepthLess;            // escreve o proprio depth
+        ComPtr<ID3D12PipelineState> NewPSOGBufferTwoSided;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSided)));
+        PipelineStateGBufferTwoSided = NewPSOGBufferTwoSided;
+
+        // --- Deferred lighting: fullscreen (PostProcess.vs), le o G-buffer e ilumina -> HDR. ----
+        // Usa a root signature principal (a tabela de material e religada p/ [A,B,C,Depth]).
+        auto LightVSBlob = LoadShaderBytecode("PostProcess.vs_6_0.cso");
+        auto LightPSBlob = LoadShaderBytecode("DeferredLighting.ps_6_0.cso");
+
+        D3D12_RASTERIZER_DESC LightRaster{};
+        LightRaster.FillMode        = D3D12_FILL_MODE_SOLID;
+        LightRaster.CullMode        = D3D12_CULL_MODE_NONE;
+        LightRaster.DepthClipEnable = TRUE;
+
+        D3D12_DEPTH_STENCIL_DESC LightDepth{};
+        LightDepth.DepthEnable   = FALSE;
+        LightDepth.StencilEnable = FALSE;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC LightDesc{};
+        LightDesc.pRootSignature        = RootSignature.Get();
+        LightDesc.VS                    = { LightVSBlob.data(), LightVSBlob.size() };
+        LightDesc.PS                    = { LightPSBlob.data(), LightPSBlob.size() };
+        LightDesc.BlendState            = BlendDesc;
+        LightDesc.SampleMask            = UINT_MAX;
+        LightDesc.RasterizerState       = LightRaster;
+        LightDesc.DepthStencilState     = LightDepth;
+        LightDesc.InputLayout           = { nullptr, 0 };
+        LightDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        LightDesc.NumRenderTargets      = 1;
+        LightDesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        LightDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+        LightDesc.SampleDesc            = { 1, 0 };
+        ComPtr<ID3D12PipelineState> NewPSODeferredLighting;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&LightDesc, IID_PPV_ARGS(&NewPSODeferredLighting)));
+        PipelineStateDeferredLighting = NewPSODeferredLighting;
     }
 }

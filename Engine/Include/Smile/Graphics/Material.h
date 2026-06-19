@@ -23,7 +23,6 @@ namespace Smile {
         float NormalStrength          = 1.0f;
         u32   NormalFlipY             = 0;       // 0 = normal map OpenGL/GL (default); 1 = DirectX
 
-        // Parallax Occlusion Mapping (height map in texture slot 5)
         u32   HasHeightMap            = 0;
         float HeightScale             = 0.05f;   // max UV displacement at depth 1
         float ParallaxMinSteps        = 8.0f;    // samples head-on
@@ -35,11 +34,18 @@ namespace Smile {
         u32   ParallaxRefine          = 0;       // 1 = binary-search refine the hit (sharper)
         u32   ParallaxRefineSteps     = 5;       // binary-search iterations (1 = cheapest)
 
-        // Separate metalness/roughness maps (slots 6/7), alternative to combined MR (slot 2)
         u32   HasMetalnessMap         = 0;
         u32   HasRoughnessMap         = 0;
 
-        u8    _Pad[132] = {};
+        u32   SpecularPacking         = 0;       // 1 = mapa MR (t2) eh "Specular": R=AO, G=Rough, B=Metal
+        u32   AlphaTest               = 0;       // 1 = clip por opacidade no alpha do BaseColor (folhagem)
+        float AlphaCutoff             = 0.5f;
+        u32   NormalReconstructZ      = 0;       // 1 = normal map BC5 (so RG) -> reconstruir Z; Toksvig=1
+
+        u32   ShadingModel            = 0;       // 0 = DefaultLit, 1 = Foliage (two-sided + transmissao)
+        Vec4  SubsurfaceColor         = { 1.0f, 1.0f, 1.0f, 0.0f };
+
+        u8    _Pad[96] = {};
     };
     static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants must be 256 bytes");
 
@@ -58,7 +64,11 @@ namespace Smile {
 
         MaterialConstants Constants;
 
+        bool TwoSided = false;
+
         void Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
+
+        void Release(FTextureSRVHeap& SRVHeap);
 
         void Bind(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap) const;
 
@@ -69,9 +79,14 @@ namespace Smile {
 
         bool IsFinalized() const { return CBV != nullptr; }
 
+        u32  AlbedoDescriptorIndex() const { return SRVTableStart; }
+        bool HasAlbedoTexture()      const { return Constants.HasAlbedoMap != 0; }
+
     private:
+        static constexpr u32 kInvalidTable = 0xFFFFFFFFu;
+
         Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
-        MaterialConstants* MappedCBV = nullptr; 
-        u32 SRVTableStart            = 0;       
+        MaterialConstants* MappedCBV = nullptr;
+        u32 SRVTableStart            = kInvalidTable;
     };
 } 
