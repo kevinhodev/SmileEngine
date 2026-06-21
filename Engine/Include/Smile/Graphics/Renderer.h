@@ -527,7 +527,7 @@ namespace Smile {
 
         FAmbientOcclusion AO;
         bool              UseAO   = true;
-        bool              AODebug = false; 
+        bool              AODebug = false;
         static constexpr f32 kKmPerWorldUnit = 0.001f;
 
         FCloudNoise       CloudNoise;

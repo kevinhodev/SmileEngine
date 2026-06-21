@@ -822,7 +822,7 @@ namespace Smile {
                                          DDGI.DistAtlasH(), GIFlags };
         } else {
             MappedCB->DDGIGridMin    = { 0.0f, 0.0f, 0.0f, 1.0f };
-            MappedCB->DDGIGridCount  = { 0.0f, 0.0f, 0.0f, 0.0f }; 
+            MappedCB->DDGIGridCount  = { 0.0f, 0.0f, 0.0f, 0.0f };
             MappedCB->DDGIParams     = { 0.0f, 6.0f, 1.0f, 1.0f };
             MappedCB->DDGIDistParams = { 14.0f, 1.0f, 1.0f, 0.0f };
         }
@@ -1079,7 +1079,7 @@ namespace Smile {
                 CommandList->SetPipelineState(PipelineState.PSODepthOnly());
             }
             for (const VisItem& V : VisibleScratch) {
-                if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest) continue;
+                if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
                 CommandList->SetGraphicsRootConstantBufferView(
                     4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
                 V.R->Mesh->Draw(CommandList);
@@ -1165,6 +1165,7 @@ namespace Smile {
             ID3D12PipelineState* CurGeomPSO = nullptr;
             for (const VisItem& V : VisibleScratch) {
                 FMaterial* Mat = V.Mat;
+                if (Mat->Blend) continue; // translucido -> passe forward (alpha-blend), nao no GBuffer
                 const bool TwoSided = Mat->TwoSided || Mat->Constants.AlphaTest;
                 ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
                                                      : PipelineState.PSOGBuffer();

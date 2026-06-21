@@ -111,21 +111,24 @@ namespace Smile {
             ImportedTextures.clear();
         }
 
-        std::unordered_map<std::string, bool> uniquePaths; 
-        auto consider = [&](const char* rel, bool srgb) {
-            if (rel && rel[0]) uniquePaths.emplace(std::string(rel), srgb);
+        struct TexLoad { bool srgb; bool isNormal; };
+        std::unordered_map<std::string, TexLoad> uniquePaths;
+        auto consider = [&](const char* rel, bool srgb, bool isNormal) {
+            if (rel && rel[0]) uniquePaths.emplace(std::string(rel), TexLoad{ srgb, isNormal });
         };
         for (u32 i = 0; i < sh.MaterialCount; ++i) {
-            consider(mats[i].BaseColor, true);
-            consider(mats[i].Emissive, true);
-            consider(mats[i].Specular, false);
-            consider(mats[i].Normal,   false);
+            consider(mats[i].BaseColor, true,  false);
+            consider(mats[i].Emissive,  true,  false);
+            consider(mats[i].Specular,  false, false);
+            consider(mats[i].Normal,    false, true);
+            consider(mats[i].Metalness, false, false);
+            consider(mats[i].Roughness, false, false);
         }
 
         std::vector<std::string> relList;
-        std::vector<bool>        srgbList;
+        std::vector<TexLoad>     flagList;
         relList.reserve(uniquePaths.size());
-        for (auto& kv : uniquePaths) { relList.push_back(kv.first); srgbList.push_back(kv.second); }
+        for (auto& kv : uniquePaths) { relList.push_back(kv.first); flagList.push_back(kv.second); }
 
         std::vector<FTextureCPUData> cpuData(relList.size());
         {
@@ -134,7 +137,12 @@ namespace Smile {
             auto worker = [&](unsigned tid) {
                 for (size_t i = tid; i < relList.size(); i += nthreads) {
                     std::wstring full = (sceneDir / fs::path(relList[i])).wstring();
-                    cpuData[i] = FTexture::LoadDDSCPU(full, srgbList[i]);
+                    // DDS = formato BC pre-cozido; qualquer outra extensao (PNG/TGA/...) vai pelo WIC.
+                    std::string ext = fs::path(relList[i]).extension().string();
+                    for (char& c : ext) if (c >= 'A' && c <= 'Z') c += 32;
+                    cpuData[i] = (ext == ".dds")
+                        ? FTexture::LoadDDSCPU(full, flagList[i].srgb)
+                        : FTexture::LoadCPU(full, flagList[i].isNormal, flagList[i].srgb);
                 }
             };
             std::vector<std::thread> pool;
@@ -168,19 +176,21 @@ namespace Smile {
             const SSceneMaterial& sm = mats[i];
             auto mat = std::make_unique<FMaterial>();
 
-            FTexture* baseT = getTex(sm.BaseColor);
-            FTexture* specT = getTex(sm.Specular);
-            FTexture* normT = getTex(sm.Normal);
-            FTexture* emisT = getTex(sm.Emissive);
+            FTexture* baseT  = getTex(sm.BaseColor);
+            FTexture* specT  = getTex(sm.Specular);
+            FTexture* normT  = getTex(sm.Normal);
+            FTexture* emisT  = getTex(sm.Emissive);
+            FTexture* metalT = getTex(sm.Metalness);
+            FTexture* roughT = getTex(sm.Roughness);
 
-            mat->Albedo            = baseT ? baseT : &TexDefaultWhite;
-            mat->Normal            = normT ? normT : &TexDefaultNormal;
-            mat->MetallicRoughness = specT ? specT : &TexDefaultWhite;
+            mat->Albedo            = baseT  ? baseT  : &TexDefaultWhite;
+            mat->Normal            = normT  ? normT  : &TexDefaultNormal;
+            mat->MetallicRoughness = specT  ? specT  : &TexDefaultWhite;
             mat->AO                = &TexDefaultWhite;
-            mat->Emissive          = emisT ? emisT : &TexDefaultBlack;
+            mat->Emissive          = emisT  ? emisT  : &TexDefaultBlack;
             mat->Height            = &TexDefaultWhite;
-            mat->Metalness         = &TexDefaultWhite;
-            mat->Roughness         = &TexDefaultWhite;
+            mat->Metalness         = metalT ? metalT : &TexDefaultWhite;
+            mat->Roughness         = roughT ? roughT : &TexDefaultWhite;
 
             mat->Constants.BaseColorFactor = Vec4{ sm.BaseColorFactor[0], sm.BaseColorFactor[1],
                                                    sm.BaseColorFactor[2], sm.BaseColorFactor[3] };
@@ -193,15 +203,21 @@ namespace Smile {
             mat->Constants.HasAlbedoMap            = baseT ? 1u : 0u;
             mat->Constants.HasNormalMap            = normT ? 1u : 0u;
             mat->Constants.HasMetallicRoughnessMap = specT ? 1u : 0u;
-            mat->Constants.HasAOMap                = 0u; 
+            mat->Constants.HasAOMap                = 0u;
             mat->Constants.HasEmissiveMap          = emisT ? 1u : 0u;
             mat->Constants.HasHeightMap            = 0u;
-            mat->Constants.HasMetalnessMap         = 0u;
-            mat->Constants.HasRoughnessMap         = 0u;
+            mat->Constants.HasMetalnessMap         = metalT ? 1u : 0u;
+            mat->Constants.HasRoughnessMap         = roughT ? 1u : 0u;
 
-            mat->Constants.SpecularPacking    = specT ? 1u : 0u; 
-            mat->Constants.MetallicFactor     = specT ? 1.0f : 0.0f;
-            mat->Constants.RoughnessFactor    = specT ? 1.0f : 0.8f;
+            // O fator multiplica o mapa no shader (Metallic = Factor * map.r); precisa ser 1 quando
+            // existe mapa (packed Specular OU Metalness/Roughness separados) p/ nao zerar o produto.
+            // Sem mapa, usa o fator cozido do material (ex.: vidro rough=0 reflexivo, lampada ~0.4).
+            mat->Constants.SpecularPacking    = specT ? 1u : 0u;
+            mat->Constants.MetallicFactor     = (specT || metalT) ? 1.0f : sm.MetallicFactor;
+            mat->Constants.RoughnessFactor    = (specT || roughT) ? 1.0f : sm.RoughnessFactor;
+
+            // Translucido (alpha-blend no passe forward); o alpha vem de BaseColorFactor.w (× textura).
+            mat->Blend = (sm.Blend != 0u);
 
             mat->Constants.AOStrength         = 0.0f;
             mat->Constants.NormalFlipY        = 1u;              

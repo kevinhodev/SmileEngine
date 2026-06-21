@@ -55,7 +55,15 @@
       "WebFetch(domain:martin.rpdev.net)",
       "PowerShell(cmake --build \"D:/Engines/SmileEngine/build\" --target SmileEditor --config Debug 2>&1)",
       "WebFetch(domain:deepwiki.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(py -c \"import PIL; print\\('PIL', PIL.__version__\\)\")",
+      "Bash(py -c \"import numpy; print\\('numpy', numpy.__version__\\)\")",
+      "PowerShell(cmake --build build --config Release --target SmileCooker SmileEditor -- -m 2>&1)",
+      "PowerShell(cmake --build build --config Release --target SmileCooker SmileEditor -- -m -v:m 2>&1 | Select-String -Pattern \"error|Error C|fatal|FAILED|\\\\.exe$|SmileCooker\\\\.vcxproj|SmileEditor\\\\.vcxproj|Build succeeded|warning C\" | Select-Object -Last 30; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell($exe = \"build\\\\bin\\\\Release\\\\SmileCooker.exe\"; \"cooker mtime: $\\(\\(Get-Item $exe\\).LastWriteTime\\)\"; & $exe \"Assets\\\\Scenes\\\\main_sponza\\\\NewSponza_Main_Yup_003.fbx\" 2>&1)",
+      "Bash(py -)",
+      "Bash(cd /d/Engines/SmileEngine && find Engine -iname \"Logger.*\" -o -iname \"HResultCheck.*\" | grep -iv build; echo \"=== logs recentes ===\"; find . -iname \"*.log\" 2>/dev/null | grep -iv build | head)",
+      "Bash(grep -iv \"//\")"
     ]
   }
 }

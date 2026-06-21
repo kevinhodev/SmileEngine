@@ -257,10 +257,11 @@ namespace Smile {
         GpuResource.Reset();
     }
 
-    FTextureCPUData FTexture::LoadCPU(const std::wstring& _Path, bool _IsNormalMap) {
+    FTextureCPUData FTexture::LoadCPU(const std::wstring& _Path, bool _IsNormalMap, bool _sRGB) {
         FTextureCPUData Data;
         Data.IsNormalMap = _IsNormalMap;
-        Data.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
+        // Mesmos bytes RGBA decodificados por WIC; so a view muda (sRGB faz a HW linearizar no sample).
+        Data.Format      = _sRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
         try {
             auto Factory = GetWICFactory();
 

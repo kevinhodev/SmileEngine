@@ -65,6 +65,7 @@ namespace Smile {
         MaterialConstants Constants;
 
         bool TwoSided = false;
+        bool Blend    = false; // translucido -> desenhado no passe forward (alpha-blend), nao no GBuffer
 
         void Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 

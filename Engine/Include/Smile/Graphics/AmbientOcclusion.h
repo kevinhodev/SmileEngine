@@ -85,7 +85,7 @@ namespace Smile {
 
         f32 Radius    = 0.6f; 
         f32 Intensity = 1.0f;
-        f32 Power     = 2.0f;
+        f32 Power     = 1.1f;
         int NumDir    = 3;     
         int NumSteps  = 8;
 
