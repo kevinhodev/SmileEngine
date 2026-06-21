@@ -206,6 +206,8 @@ namespace Smile {
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, 0.0f };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
+        // {A,B,C} = default do nrd::ReblurSettings (igual ao driver) — NAO divergir do FNrdDenoiser.
+        CPU.NrdHitDistParams = { 3.0f, 0.1f, 20.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }

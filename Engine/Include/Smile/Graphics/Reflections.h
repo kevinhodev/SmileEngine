@@ -28,6 +28,8 @@ namespace Smile {
         Mat44 PrevViewProj;      // VP (sem jitter) do frame anterior — reprojeção do temporal (Fase 3)
         Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), z=spatialRadius, w=mirrorMaxRoughness
         Vec4  DebugParams;       // x = modo de debug do reflexo (0=off, 1=acumulacao, 2=mascara espelho)
+        Mat44 View;              // worldPos -> view.z (IN_VIEWZ); usado pelo pack especular do NRD
+        Vec4  NrdSpecParams;     // xyz = ReblurHitDistanceParameters {A,B,C} (igual ao driver NRD)
     };
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
@@ -55,11 +57,24 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
                             const Vec3& CameraPos, u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
-                            f32 NormalBias, bool RealHitShading);
+                            f32 NormalBias, bool RealHitShading, const Mat44& View);
 
         // Grava o trace (compute) -> radiancia (UAV). Caller ja setou os descriptor heaps e
         // transicionou depth/gbuffer p/ legiveis por shader. Deixa a radiancia legivel por PS.
+        // Com UseNrd: para no Resolved (Trace->Resolve->Mirror) e o NRD faz o denoise; sem UseNrd:
+        // segue o denoiser caseiro (Resolve->Temporal->Spatial).
         void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+
+        // NRD (unificado): cria o UAV da IN_SPEC (pack escreve) + SRV da OUT_SPEC (composite le) e a
+        // tabela do composite-NRD. Chamar apos SetupForResize e Nrd.SetupForResize.
+        void SetupNrdSpec(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                          ID3D12Resource* NrdInSpec, ID3D12Resource* NrdOutSpec);
+        // Empacota o especular (Resolved -> IN_SPEC do NRD). Caller transicionou a IN_SPEC p/ UAV
+        // (Nrd.TransitionInputsToWrite) e o Resolved ja esta NON_PIXEL (fim do RecordTrace c/ UseNrd).
+        void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+
+        void SetUseNrd(bool V) { UseNrd = V; }
+        bool GetUseNrd() const { return UseNrd; }
 
         // Grava o composite (fullscreen, blend aditivo no HDR). HdrRtv = RTV do HDR color (ja em
         // RENDER_TARGET). Caller restaura RT/viewport/root sig depois se precisar.
@@ -101,6 +116,7 @@ namespace Smile {
         FVolumetricPipeline ResolvePSO;  // 4 SRV [radiance, raydata, depth, gbuf], 1 UAV [resolved]
         FVolumetricPipeline TemporalPSO; // 4 SRV [resolved, gbuf, depth, histPrev], 1 UAV [histCurr]
         FVolumetricPipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
+        FVolumetricPipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRS;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
 
@@ -134,6 +150,14 @@ namespace Smile {
         u32 TemporalTable[2]    = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [resolved, gbuf, depth, hist[1-curr]]
         u32 SpatialTable[2]     = { kInvalidSlot, kInvalidSlot }; // 3 SRVs [hist[curr], gbuf, depth]
         u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [denoised, gbuf, depth, brdfLut]
+        // NRD unificado: pack especular + composite lendo a OUT_SPEC do NRD em vez do Denoised caseiro.
+        u32 SpecPackSrvTable    = kInvalidSlot;                   // 3 SRVs [resolved, gbuf, depth]
+        u32 SpecPackUAVSlot     = kInvalidSlot;                   // UAV da IN_SPEC do NRD
+        u32 NrdOutSpecSRV       = kInvalidSlot;                   // SRV da OUT_SPEC do NRD
+        u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 4 SRVs [nrdOutSpec, gbuf, depth, brdfLut]
+        u32 DepthSlotCached     = kInvalidSlot;
+        u32 GBufferSlotCached   = kInvalidSlot;
+        u32 BRDFLutSlotCached   = kInvalidSlot;
         u32  FrameParity        = 0;     // alterna a cada RecordTrace
         u32  CurrParity         = 0;     // paridade usada neste frame (trace->composite)
         bool NeedsHistoryClear  = false; // limpa os 2 history no 1o RecordTrace pos-setup
@@ -160,6 +184,7 @@ namespace Smile {
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)
         bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
+        bool UseNrd              = false; // denoise via NRD REBLUR especular (unificado c/ o GI)
         // Temporal (Fase 3).
         bool Temporal            = true;  // acumulacao temporal (off = só resolve espacial)
         f32  MaxFrames           = 12.0f; // frames acumulados (Lumen default)

@@ -1,8 +1,11 @@
-// ReSTIR GI -> NRD: empacota os inputs do RELAX_DIFFUSE (Fase C0).
+// ReSTIR GI -> NRD: empacota os inputs comuns + o sinal DIFUSO do REBLUR_DIFFUSE_SPECULAR (Fase C0).
+// O sinal ESPECULAR (reflexao) e empacotado por ReflectionNrdPack; MV/NormalRough/ViewZ aqui sao
+// compartilhados pelos dois sinais.
 //   IN_VIEWZ              = view.z linear (positivo); ceu = grande (> denoisingRange) p/ ser ignorado
 //   IN_NORMAL_ROUGHNESS  = NRD_FrontEnd_PackNormalAndRoughness (R10G10B10A2 — casa com o decode do NRD)
 //   IN_MV                = velocity (curUV - prevUV); o NRD usa motionVectorScale=(-1,-1,0) p/ inverter
-//   IN_DIFF_RADIANCE_HITDIST = RELAX_FrontEnd_PackRadianceAndHitDist (identidade: rgb=gi, a=hitDist)
+//   IN_DIFF_RADIANCE_HITDIST = REBLUR_FrontEnd_PackRadianceAndNormHitDist (hitDist NORMALIZADO via
+//                              REBLUR_FrontEnd_GetNormHitDist com NrdHitDistParams = {A,B,C} = ReblurSettings)
 //
 // Inclui o NRD.hlsli (via -I D:/Engines/NRD/Shaders) p/ o encode normal/roughness bater EXATAMENTE
 // com o decode interno do NRD. Os macros de encoding sao fixados aqui (normal=R10G10B10A2, rough=linear).
@@ -26,6 +29,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ReuseParams;
     float4 SpatialParams;
     row_major float4x4 View;        // anexado p/ o pack: worldPos -> view.z (IN_VIEWZ)
+    float4 NrdHitDistParams;        // xyz = ReblurHitDistanceParameters {A,B,C} (igual ao C++)
 };
 
 Texture2D<float4> GITex    : register(t0); // rgb = gi (radiancia), a = hitDist
@@ -64,8 +68,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     float4 gi = GITex.Load(int3(px, 0));
 
+    // REBLUR exige hit distance NORMALIZADO ([0;1]) via a mesma curva (NrdHitDistParams) configurada
+    // no ReblurSettings do driver. Sinal DIFUSO -> roughness = 1.0 (lobe difuso = espalhamento maximo);
+    // usar a roughness da superficie aqui colapsaria a normalizacao.
+    float normHitDist = REBLUR_FrontEnd_GetNormHitDist(gi.a, viewZ, NrdHitDistParams.xyz, 1.0f);
+
     OutViewZ[px]       = viewZ;
     OutNormalRough[px] = NRD_FrontEnd_PackNormalAndRoughness(N, rough, 0.0f);
     OutMv[px]          = Velocity.Load(int3(px, 0)).rg;
-    OutDiffRadHit[px]  = RELAX_FrontEnd_PackRadianceAndHitDist(gi.rgb, gi.a, true);
+    OutDiffRadHit[px]  = REBLUR_FrontEnd_PackRadianceAndNormHitDist(gi.rgb, normHitDist, true);
 }

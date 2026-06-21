@@ -25,6 +25,7 @@ namespace Smile {
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Mat44 View;            // anexado p/ o pack do NRD (worldPos -> view.z = IN_VIEWZ)
+        Vec4  NrdHitDistParams;// xyz = ReblurHitDistanceParameters {A,B,C} (igual ao driver NRD)
     };
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.

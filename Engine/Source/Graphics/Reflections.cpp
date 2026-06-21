@@ -37,6 +37,7 @@ namespace Smile {
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 4, 1, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 4, 1, false);
         SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 3, 1, false);
+        NrdPackPSO.Initialize(_Device, "ReflectionNrdPack.cs_6_0.cso", 3, 1, false);
         CreateCompositePipeline(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
@@ -153,6 +154,10 @@ namespace Smile {
         Free(TemporalTable[0], 4); Free(TemporalTable[1], 4);
         Free(SpatialTable[0], 3); Free(SpatialTable[1], 3);
         Free(CompositeTable[0], 4); Free(CompositeTable[1], 4);
+        Free(SpecPackSrvTable, 3);
+        Free(SpecPackUAVSlot, 1);
+        Free(NrdOutSpecSRV, 1);
+        Free(CompositeTableNrd[0], 4); Free(CompositeTableNrd[1], 4);
         Radiance.Reset();
         RayData.Reset();
         Resolved.Reset();
@@ -178,6 +183,7 @@ namespace Smile {
 
         Width = _Width; Height = _Height;
         HalfWidth = (_Width + 1) / 2; HalfHeight = (_Height + 1) / 2;
+        DepthSlotCached = _DepthSlot; GBufferSlotCached = _GBufferSlot; BRDFLutSlotCached = _BRDFLutSlot;
         Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
         RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
         Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
@@ -284,7 +290,55 @@ namespace Smile {
             _Device->CopyDescriptors(1, &CDst2, &Four, 4, CSrc2, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
 
+        // NRD: tabela do pack especular [Resolved, GBuffer, Depth]. A UAV da IN_SPEC e a SRV da
+        // OUT_SPEC sao montadas em SetupNrdSpec (dependem dos recursos do FNrdDenoiser).
+        SpecPackSrvTable = _SRVHeap.Allocate(3);
+        D3D12_CPU_DESCRIPTOR_HANDLE PDst = _SRVHeap.CpuHandle(SpecPackSrvTable);
+        D3D12_CPU_DESCRIPTOR_HANDLE PSrc[3] = {
+            _SRVHeap.CpuHandleStaging(ResolvedSRVSlot),
+            _SRVHeap.CpuHandleStaging(_GBufferSlot),
+            _SRVHeap.CpuHandleStaging(_DepthSlot),
+        };
+        UINT Three2 = 3; UINT Ones3[3] = { 1,1,1 };
+        _Device->CopyDescriptors(1, &PDst, &Three2, 3, PSrc, Ones3, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
         Ready = true;
+    }
+
+    void FReflections::SetupNrdSpec(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                    ID3D12Resource* _NrdInSpec, ID3D12Resource* _NrdOutSpec) {
+        if (!Ready || !_NrdInSpec || !_NrdOutSpec) return;
+
+        // UAV da IN_SPEC do NRD (o pack escreve aqui).
+        SpecPackUAVSlot = _SRVHeap.Allocate(1);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
+        Uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        Uav.Format        = kRadianceFormat; // RGBA16F (== IoFormat IO_SPEC_RADIANCE_HITDIST)
+        _SRVHeap.CreateUAV(_Device, _NrdInSpec, Uav, SpecPackUAVSlot);
+
+        // SRV da OUT_SPEC do NRD (o composite le aqui em vez do Denoised caseiro).
+        NrdOutSpecSRV = _SRVHeap.Allocate(1);
+        D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
+        Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        Srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        Srv.Format                  = kRadianceFormat;
+        Srv.Texture2D.MipLevels     = 1;
+        _SRVHeap.CreateSRV(_Device, _NrdOutSpec, Srv, NrdOutSpecSRV);
+
+        // Composite-NRD: [OUT_SPEC, GBuffer, Depth, BRDFLut]. Identico p/ as 2 paridades (a OUT do NRD
+        // nao e ping-pong), entao CurrParity nao importa neste caminho.
+        UINT Four = 4; UINT Ones[4] = { 1,1,1,1 };
+        for (u32 i = 0; i < 2; ++i) {
+            CompositeTableNrd[i] = _SRVHeap.Allocate(4);
+            D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(CompositeTableNrd[i]);
+            D3D12_CPU_DESCRIPTOR_HANDLE Src[4] = {
+                _SRVHeap.CpuHandleStaging(NrdOutSpecSRV),
+                _SRVHeap.CpuHandleStaging(GBufferSlotCached),
+                _SRVHeap.CpuHandleStaging(DepthSlotCached),
+                _SRVHeap.CpuHandleStaging(BRDFLutSlotCached),
+            };
+            _Device->CopyDescriptors(1, &Dst, &Four, 4, Src, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
     }
 
     void FReflections::SetGIParams(const Vec3& _GridMin, f32 _Spacing, const Vec3& _GridCount,
@@ -298,11 +352,16 @@ namespace Smile {
     void FReflections::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Mat44& _PrevViewProj,
                                       const Vec3& _CameraPos, u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
-                                      f32 _SkyIntensity, f32 _NormalBias, bool _RealHitShading) {
+                                      f32 _SkyIntensity, f32 _NormalBias, bool _RealHitShading,
+                                      const Mat44& _View) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
         CPU.PrevViewProj    = _PrevViewProj;
+        CPU.View            = _View;
+        // xyz = {A,B,C} default do nrd::ReblurSettings (igual ao driver) — NAO divergir do FNrdDenoiser.
+        // w = UseNrd: avisa o composite que a OUT_SPEC esta em YCoCg (desempacotar p/ linear).
+        CPU.NrdSpecParams   = { 3.0f, 0.1f, 20.0f, UseNrd ? 1.0f : 0.0f };
         CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, SpatialRadius,
                                 FullResMaxRough };
         CPU.DebugParams     = { (f32)DebugMode, MaxFrames, 0.0f, 0.0f }; // y = cap real p/ debug acumulacao
@@ -378,6 +437,16 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVSlot));
         _CL->Dispatch(FGX, FGY, 1);
 
+        // NRD: para no Resolved (radiancia crua + hitDist). O denoise especular fica a cargo do NRD
+        // (RecordNrdPack -> Nrd.Denoise). Deixa o Resolved legivel pelo pack (compute) e pula o
+        // denoiser caseiro (Temporal/Spatial).
+        if (UseNrd) {
+            Transition(_CL, Resolved.Get(), ResolvedState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            CurrParity = FrameParity;
+            FrameParity ^= 1u;
+            return;
+        }
+
         const u32 curr = FrameParity, prev = 1u - FrameParity;
         CurrParity = curr;
 
@@ -416,6 +485,16 @@ namespace Smile {
         FrameParity ^= 1u;
     }
 
+    void FReflections::RecordNrdPack(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+        if (!Ready || SpecPackUAVSlot == kInvalidSlot) return;
+        const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
+        NrdPackPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpecPackSrvTable));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(SpecPackUAVSlot));
+        _CL->Dispatch(GX, GY, 1);
+    }
+
     void FReflections::RecordComposite(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap,
                                        D3D12_CPU_DESCRIPTOR_HANDLE _HdrRtv, u32 _Width, u32 _Height) {
         if (!Ready) return;
@@ -427,7 +506,9 @@ namespace Smile {
         _CL->SetGraphicsRootSignature(CompositeRS.Get());
         _CL->SetPipelineState(CompositePSO.Get());
         _CL->SetGraphicsRootConstantBufferView(0, CBAddr());
-        _CL->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(CompositeTable[CurrParity]));
+        const u32 CompTable = (UseNrd && CompositeTableNrd[CurrParity] != kInvalidSlot)
+                            ? CompositeTableNrd[CurrParity] : CompositeTable[CurrParity];
+        _CL->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(CompTable));
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->DrawInstanced(3, 1, 0, 0);
     }

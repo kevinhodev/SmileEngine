@@ -46,8 +46,13 @@ namespace Smile {
         void TransitionOutputToRead(ID3D12GraphicsCommandList* CL);
 
         // IO textures (a engine cria SRV/UAV proprios nelas: UAV p/ o pack escrever, SRV do OUT p/ o
-        // deferred ler). Indices casam com EIo abaixo.
-        enum EIo { IO_MV = 0, IO_NORMAL_ROUGHNESS, IO_VIEWZ, IO_DIFF_RADIANCE_HITDIST, IO_OUT, IO_COUNT };
+        // deferred/composite ler). Indices casam com EIo abaixo. REBLUR_DIFFUSE_SPECULAR: 2 sinais
+        // (difuso = ReSTIR GI; especular = reflexao) compartilham MV/NormalRough/ViewZ.
+        enum EIo {
+            IO_MV = 0, IO_NORMAL_ROUGHNESS, IO_VIEWZ,
+            IO_DIFF_RADIANCE_HITDIST, IO_SPEC_RADIANCE_HITDIST,
+            IO_OUT_DIFF, IO_OUT_SPEC, IO_COUNT
+        };
         ID3D12Resource* IoResource(EIo Which) const;
 
         u32 Width() const  { return RtWidth; }

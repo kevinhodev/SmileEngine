@@ -63,7 +63,18 @@
       "PowerShell($exe = \"build\\\\bin\\\\Release\\\\SmileCooker.exe\"; \"cooker mtime: $\\(\\(Get-Item $exe\\).LastWriteTime\\)\"; & $exe \"Assets\\\\Scenes\\\\main_sponza\\\\NewSponza_Main_Yup_003.fbx\" 2>&1)",
       "Bash(py -)",
       "Bash(cd /d/Engines/SmileEngine && find Engine -iname \"Logger.*\" -o -iname \"HResultCheck.*\" | grep -iv build; echo \"=== logs recentes ===\"; find . -iname \"*.log\" 2>/dev/null | grep -iv build | head)",
-      "Bash(grep -iv \"//\")"
+      "Bash(grep -iv \"//\")",
+      "WebFetch(domain:research.nvidia.com)",
+      "Bash(command -v pdftotext)",
+      "Bash(command -v gs)",
+      "Bash(command -v qpdf)",
+      "Bash(command -v python)",
+      "Bash(command -v python3)",
+      "Bash(command -v pdfinfo)",
+      "Bash(pdfinfo \"lin2026restirptenhanced.pdf\")",
+      "Bash(pdftotext \"lin2026restirptenhanced.pdf\" \"restir_enhanced.txt\")",
+      "Bash(wc -l restir_enhanced.txt)",
+      "Bash(wc -c restir_enhanced.txt)"
     ]
   }
 }

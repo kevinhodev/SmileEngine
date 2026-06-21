@@ -146,6 +146,12 @@ float4 main(VSOutput input) : SV_Target {
         if (UseReSTIR) {
             // ReSTIR full-res no A0-A3 (Load por pixel); o A4 passa p/ meia-res + upsample bilateral.
             gi = ReSTIRGITex.Load(int3(px, 0)).rgb;
+            // ReflectionParams.w == 2 -> saida do NRD REBLUR em YCoCg: desempacota p/ linear
+            // (_NRD_YCoCgToLinear). Sem isto a cena fica avermelhada (YCoCg lido como RGB).
+            if (ReflectionParams.w > 1.5f) {
+                float t = gi.x - gi.z;
+                gi = max(float3(t + gi.y, gi.x + gi.z, t - gi.y), 0.0f);
+            }
         } else {
             float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
             int  giFlags      = (int)DDGIDistParams.w;

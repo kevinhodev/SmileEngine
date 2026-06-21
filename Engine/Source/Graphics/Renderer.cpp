@@ -355,13 +355,18 @@ namespace Smile {
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
         // Fase C: pack pipeline + UAVs das IN do NRD + SRV da OUT, no SRVHeap da engine.
+        // REBLUR_DIFFUSE_SPECULAR: o pack do GI escreve o sinal DIFUSO + os inputs comuns; o pack da
+        // reflexao (SetupNrdSpec) escreve o sinal ESPECULAR. Uma instancia NRD denoisa os dois.
         if (Nrd.IsReady()) {
             ReSTIRGI.SetupNrdPack(Device.Native(), SRVHeap,
                 Nrd.IoResource(FNrdDenoiser::IO_VIEWZ),
                 Nrd.IoResource(FNrdDenoiser::IO_NORMAL_ROUGHNESS),
                 Nrd.IoResource(FNrdDenoiser::IO_MV),
                 Nrd.IoResource(FNrdDenoiser::IO_DIFF_RADIANCE_HITDIST),
-                Nrd.IoResource(FNrdDenoiser::IO_OUT));
+                Nrd.IoResource(FNrdDenoiser::IO_OUT_DIFF));
+            Reflections.SetupNrdSpec(Device.Native(), SRVHeap,
+                Nrd.IoResource(FNrdDenoiser::IO_SPEC_RADIANCE_HITDIST),
+                Nrd.IoResource(FNrdDenoiser::IO_OUT_SPEC));
         }
     }
 
@@ -831,10 +836,12 @@ namespace Smile {
         const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady();
         const bool NrdMode           = ReSTIRGIActive && Nrd.IsReady() && UseNrdDenoise;
         ReSTIRGI.SetUseNrd(NrdMode); // afeta o estado final da GITexture no RecordTrace + a tabela t16
-        // ReflectionParams.w (antes livre) = flag "ReSTIR GI ativo" lido pelo DeferredLighting.
+        Reflections.SetUseNrd(NrdMode); // NRD denoisa o especular junto; off = denoiser caseiro (fallback)
+        // ReflectionParams.w = flag ReSTIR GI: 0=off, 1=on (raw), 2=on + NRD (saida REBLUR em YCoCg ->
+        // o DeferredLighting desempacota). ReflectionParams.z = reflexoes ativas (mantido).
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        ReflectionsActive ? 1.0f : 0.0f,
-                                       ReSTIRGIActive ? 1.0f : 0.0f };
+                                       ReSTIRGIActive ? (NrdMode ? 2.0f : 1.0f) : 0.0f };
         ++FrameIndex;
 
         Mat44 ViewNoTrans = View;
@@ -932,7 +939,8 @@ namespace Smile {
         if (ReflectionsActive) {
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
-                                       KeyColor, FrameIndex, 1.0f, 0.2f, Reflections.GetRealHitShading());
+                                       KeyColor, FrameIndex, 1.0f, 0.2f, Reflections.GetRealHitShading(),
+                                       View);
         }
 
         if (ReSTIRGIActive) {
@@ -1210,11 +1218,15 @@ namespace Smile {
 
             ReSTIRGI.RecordTrace(CommandList, SRVHeap);
 
-            // Fase C: pack (GITex+gbuf+depth+vel -> IN do NRD) -> NRD RELAX -> OUT. depth/gbuffer/
+            // NRD unificado (REBLUR_DIFFUSE_SPECULAR): packing dos 2 sinais -> 1 Denoise. depth/gbuffer/
             // velocity seguem em NON_PIXEL aqui (so restaurados abaixo). O NRD liga heap proprio.
+            //   difuso = ReSTIR GI (RecordNrdPack); especular = reflexao (RecordTrace para no Resolved
+            //   c/ UseNrd, e RecordNrdPack escreve a IN_SPEC). Os inputs comuns sao do pack do GI.
             if (NrdMode) {
+                if (ReflectionsActive) Reflections.RecordTrace(CommandList, SRVHeap); // -> Resolved (NON_PIXEL)
                 Nrd.TransitionInputsToWrite(CommandList);
                 ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
+                if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
                 Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
                              Vec2{ 0.0f, 0.0f }, Vec2{ 0.0f, 0.0f }, FrameIndex);
                 Nrd.Denoise(CommandList);
@@ -1326,7 +1338,9 @@ namespace Smile {
             Barrier(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, ReadState);
             GBuffer.TransitionToRead(CommandList, ReadState); // GBufferB = normal+rough+metal das reflexoes
 
-            Reflections.RecordTrace(CommandList, SRVHeap);
+            // Com NRD: o trace+resolve+denoise ja rodaram no bloco do ReSTIR GI (1 Denoise unificado);
+            // aqui so o composite (le a OUT_SPEC do NRD). Sem NRD: caminho caseiro completo.
+            if (!NrdMode) Reflections.RecordTrace(CommandList, SRVHeap);
             Reflections.RecordComposite(CommandList, SRVHeap, HDRRTVHeap.CpuHandle(0),
                                         RenderWidth(), RenderHeight());
 

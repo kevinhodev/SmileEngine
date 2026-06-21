@@ -76,7 +76,9 @@ namespace {
             case E::IO_NORMAL_ROUGHNESS:      return DXGI_FORMAT_R10G10B10A2_UNORM;
             case E::IO_VIEWZ:                 return DXGI_FORMAT_R32_FLOAT;
             case E::IO_DIFF_RADIANCE_HITDIST: return DXGI_FORMAT_R16G16B16A16_FLOAT;
-            case E::IO_OUT:                   return DXGI_FORMAT_R16G16B16A16_FLOAT;
+            case E::IO_SPEC_RADIANCE_HITDIST: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+            case E::IO_OUT_DIFF:              return DXGI_FORMAT_R16G16B16A16_FLOAT;
+            case E::IO_OUT_SPEC:              return DXGI_FORMAT_R16G16B16A16_FLOAT;
             default:                          return DXGI_FORMAT_R16G16B16A16_FLOAT;
         }
     }
@@ -115,7 +117,7 @@ namespace Smile {
 
         nrd::DenoiserDesc denoiser{};
         denoiser.identifier = 0;
-        denoiser.denoiser   = nrd::Denoiser::RELAX_DIFFUSE;
+        denoiser.denoiser   = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
         nrd::InstanceCreationDesc icd{};
         icd.allocationCallbacks = { NrdAlloc, NrdRealloc, NrdFree, nullptr };
         icd.denoisers           = &denoiser;
@@ -135,17 +137,18 @@ namespace Smile {
         CbSpace        = d.constantBufferAndSamplersSpaceIndex;
         CbReg          = d.constantBufferRegisterIndex;
         SamplerBaseReg = d.samplersBaseRegisterIndex;
-        LogInfo("NRD RELAX_DIFFUSE: pipelines=" + std::to_string(d.pipelinesNum) +
+        LogInfo("NRD REBLUR_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
                 " perm=" + std::to_string(d.permanentPoolSize) +
                 " trans=" + std::to_string(d.transientPoolSize) +
                 " samplers=" + std::to_string(d.samplersNum) +
                 " cbMax=" + std::to_string(d.constantBufferMaxDataSize));
 
-        // RELAX: liga o anti-firefly proprio (vem OFF por padrao) — mata os fireflies residuais que
-        // o firefly clamp do ReSTIR nao pega. SetDenoiserSettings 1x (nao precisa por frame).
-        nrd::RelaxSettings relax{};
-        relax.enableAntiFirefly = true;
-        nrd::SetDenoiserSettings(*Instance, 0, &relax);
+        // REBLUR: anti-firefly ja vem ON por padrao. hitDistanceParameters default {A=3, B=0.1, C=20};
+        // os MESMOS valores vao pro CB do pack (REBLUR_FrontEnd_GetNormHitDist) — divergencia causa
+        // ghosting/over-blur. SetDenoiserSettings 1x (nao precisa por frame).
+        nrd::ReblurSettings reblur{};
+        reblur.enableAntiFirefly = true;
+        nrd::SetDenoiserSettings(*Instance, 0, &reblur);
 
         BuildRootSignature(_Device);
         BuildPipelines(_Device);
@@ -335,7 +338,9 @@ namespace Smile {
             case RT::IN_NORMAL_ROUGHNESS:      return &Io[IO_NORMAL_ROUGHNESS];
             case RT::IN_VIEWZ:                 return &Io[IO_VIEWZ];
             case RT::IN_DIFF_RADIANCE_HITDIST: return &Io[IO_DIFF_RADIANCE_HITDIST];
-            case RT::OUT_DIFF_RADIANCE_HITDIST:return &Io[IO_OUT];
+            case RT::IN_SPEC_RADIANCE_HITDIST: return &Io[IO_SPEC_RADIANCE_HITDIST];
+            case RT::OUT_DIFF_RADIANCE_HITDIST:return &Io[IO_OUT_DIFF];
+            case RT::OUT_SPEC_RADIANCE_HITDIST:return &Io[IO_OUT_SPEC];
             case RT::PERMANENT_POOL: return (indexInPool < PermPool.size())  ? &PermPool[indexInPool]  : nullptr;
             case RT::TRANSIENT_POOL: return (indexInPool < TransPool.size()) ? &TransPool[indexInPool] : nullptr;
             default: return nullptr;
@@ -400,9 +405,9 @@ namespace Smile {
             assert(dd.resourcesNum <= TableStride && "NRD dispatch excede a tabela");
 
             // --- Resolve recursos: SRVs em [0..PerSetTex-1], UAVs em [PerSetTex..] ---
-            // Default-fill com descritores validos (Io[IO_OUT]) p/ slots nao usados.
-            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvSrc(PerSetTex, StagingCpu(Io[IO_OUT].SrvStaging));
-            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> uavSrc(PerSetUav, StagingCpu(Io[IO_OUT].UavStaging));
+            // Default-fill com descritores validos (Io[IO_OUT_DIFF]) p/ slots nao usados.
+            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvSrc(PerSetTex, StagingCpu(Io[IO_OUT_DIFF].SrvStaging));
+            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> uavSrc(PerSetUav, StagingCpu(Io[IO_OUT_DIFF].UavStaging));
             std::vector<D3D12_RESOURCE_BARRIER> barriers;
             u32 srvIdx = 0, uavIdx = 0;
             for (uint32_t ri = 0; ri < dd.resourcesNum; ++ri) {
@@ -485,7 +490,8 @@ namespace Smile {
     void FNrdDenoiser::TransitionInputsToWrite(ID3D12GraphicsCommandList* _CL) {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
-        const EIo ins[4] = { IO_MV, IO_NORMAL_ROUGHNESS, IO_VIEWZ, IO_DIFF_RADIANCE_HITDIST };
+        const EIo ins[5] = { IO_MV, IO_NORMAL_ROUGHNESS, IO_VIEWZ,
+                             IO_DIFF_RADIANCE_HITDIST, IO_SPEC_RADIANCE_HITDIST };
         std::vector<D3D12_RESOURCE_BARRIER> bs;
         for (EIo e : ins) {
             FNrdTexture& t = Io[e];
@@ -504,12 +510,18 @@ namespace Smile {
     void FNrdDenoiser::TransitionOutputToRead(ID3D12GraphicsCommandList* _CL) {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
-        FNrdTexture& t = Io[IO_OUT];
-        if (!t.Res || t.State == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) return;
-        D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        b.Transition.StateBefore = t.State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        _CL->ResourceBarrier(1, &b); t.State = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        // OUT_DIFF -> lido pelo deferred (GI); OUT_SPEC -> lido pelo composite da reflexao. Ambos PIXEL.
+        const EIo outs[2] = { IO_OUT_DIFF, IO_OUT_SPEC };
+        std::vector<D3D12_RESOURCE_BARRIER> bs;
+        for (EIo e : outs) {
+            FNrdTexture& t = Io[e];
+            if (!t.Res || t.State == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) continue;
+            D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = t.State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            bs.push_back(b); t.State = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+        if (!bs.empty()) _CL->ResourceBarrier((UINT)bs.size(), bs.data());
 #else
         (void)_CL;
 #endif
