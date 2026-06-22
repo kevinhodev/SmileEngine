@@ -126,7 +126,6 @@ namespace Smile {
         // Supersampling (SSAA): a cena renderiza em RenderWidth/Height = swapchain * RenderScale;
         // o PostProcessor faz o downsample pro backbuffer nativo. >1.0 = mais amostras/pixel.
         void SetRenderScale(f32 V); // recria os RTs internos (so a cena; backbuffer fica nativo)
-        f32  GetRenderScale() const { return RenderScale; }
         u32  RenderWidth()  const { return static_cast<u32>(SwapChain.GetWidth()  * RenderScale + 0.5f); }
         u32  RenderHeight() const { return static_cast<u32>(SwapChain.GetHeight() * RenderScale + 0.5f); }
 
@@ -151,46 +150,12 @@ namespace Smile {
         f32  GetOutlineThickness() const    { return const_cast<FSelectionOutline&>(SelectionOutline).GetThickness(); }
 
         bool LoadHDREnvironment(const std::wstring& Path);
-        void SetIBLIntensity(f32 Intensity)  { IBLIntensity = Intensity; }
-        void SetIBLRotation(f32 Radians)     { IBLRotation  = Radians; }
-        void SetShowSkybox(bool Show)        { ShowSkybox   = Show; }
-        f32  GetIBLIntensity() const         { return IBLIntensity; }
-        f32  GetIBLRotation()  const         { return IBLRotation; }
-        bool GetShowSkybox()   const         { return ShowSkybox; }
 
         void SetSunDirection(const Vec3& Dir);
         void SetSunColor(const Vec3& Color)  { SunColorRGB = Color; }
-        void SetSunIntensity(f32 Intensity)  { SunIntensity = Intensity; }
-        Vec3 GetSunDirection() const         { return SunDir; }
         Vec3 GetSunColor()     const         { return SunColorRGB; }
-        f32  GetSunIntensity() const         { return SunIntensity; }
-
-        FTimeOfDay&       GetTimeOfDay()       { return TimeOfDay; }
-        const FTimeOfDay& GetTimeOfDay() const { return TimeOfDay; }
 
         void LoadMoonTexture(const std::wstring& Path);
-
-        void SetBloomIntensity(f32 V)        { PostProcessor.SetBloomIntensity(V); }
-        f32  GetBloomIntensity() const       { return PostProcessor.GetBloomIntensity(); }
-        void SetExposure(f32 V)              { PostProcessor.SetExposure(V); }
-        f32  GetExposure() const             { return PostProcessor.GetExposure(); }
-
-        void SetUseTAA(bool V)               { UseTAA = V; TAARanLastFrame = false; }
-        bool GetUseTAA() const               { return UseTAA; }
-        void SetTAABlend(f32 V)              { TAAHistoryBlend = V; }
-        f32  GetTAABlend() const             { return TAAHistoryBlend; }
-        void SetTAAVarianceGamma(f32 V)      { TAAVarianceGamma = V; }
-        f32  GetTAAVarianceGamma() const     { return TAAVarianceGamma; }
-        void SetTAASharpness(f32 V)          { TAASharpness = V; }
-        f32  GetTAASharpness() const         { return TAASharpness; }
-        void SetTAAMotionBlend(f32 V)        { TAAMotionBlend = V; }
-        f32  GetTAAMotionBlend() const       { return TAAMotionBlend; }
-        void SetTAAAntiFlicker(f32 V)        { TAAAntiFlicker = V; }
-        f32  GetTAAAntiFlicker() const       { return TAAAntiFlicker; }
-        void SetTAAStationaryMargin(f32 V)   { TAAStationaryMargin = V; }
-        f32  GetTAAStationaryMargin() const  { return TAAStationaryMargin; }
-        void SetTAADebug(u32 Mode)           { TAADebugMode = Mode; }
-        u32  GetTAADebug() const             { return TAADebugMode; }
 
         // FSR2 (substitui o TAA quando ligado). So funciona em build Release (Debug = stub).
         void SetUseFsr2(bool V) {
@@ -207,80 +172,19 @@ namespace Smile {
             Fsr2Quality = Mode < 0 ? 0 : (Mode > 4 ? 4 : Mode);
             if (UseFsr2 && Fsr2.IsInitialized()) SetRenderScale(Fsr2Ratio());
         }
-        int  GetFsr2Quality() const          { return Fsr2Quality; }
-
         void SetFlickerMode(u32 Mode)        { if (Mode > 0 && FlickerMode == 0) FlickerResetPending = true; FlickerMode = Mode; }
-        u32  GetFlickerMode() const          { return FlickerMode; }
-        void SetFlickerScale(f32 V)          { FlickerScale = V; }
-        f32  GetFlickerScale() const         { return FlickerScale; }
-        void SetFlickerAlpha(f32 V)          { FlickerAlpha = V; }
-        f32  GetFlickerAlpha() const         { return FlickerAlpha; }
 
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
-        // Deferred (migracao em andamento) — debug do G-buffer: 0=off, 1=BaseColor, 2=Normal,
-        // 3=Roughness, 4=Metallic, 5=Emissive, 6=AO, 7=ShadingModel.
-        void SetGBufferDebug(u32 Mode)       { GBufferDebugMode = Mode; }
-        u32  GetGBufferDebug() const         { return GBufferDebugMode; }
-
-        void SetUseAtmosphereSky(bool Use)   { UseAtmosphereSky = Use; }
-        bool GetUseAtmosphereSky() const     { return UseAtmosphereSky; }
-        void SetUseClouds(bool Use)          { UseClouds = Use; }
-        bool GetUseClouds() const            { return UseClouds; }
-
-        void SetUseAerialPerspective(bool Use) { UseAerialPerspective = Use; }
-        bool GetUseAerialPerspective() const   { return UseAerialPerspective; }
-        void SetUseHeightFog(bool Use)         { UseHeightFog = Use; }
-        bool GetUseHeightFog() const           { return UseHeightFog; }
         FFogPass& GetFog()                     { return Fog; }
 
-
-        void SetUseSunShadows(bool Use)        { UseSunShadows = Use; }
-        bool GetUseSunShadows() const          { return UseSunShadows; }
         FSunShadows& GetSunShadows()           { return SunShadows; }
-        void SetSunShadowMaxDistance(f32 V)    { SunShadows.SetMaxDistance(V); }
-        void SetSunShadowPenumbra(f32 V)       { SunShadows.SetPenumbra(V); }
-        void SetSunShadowNormalOffset(f32 V)   { SunShadows.SetNormalOffset(V); }
-        void SetSunShadowDepthBias(f32 V)      { SunShadows.SetDepthBias(V); }
-        void SetSunShadowBlendBand(f32 V)      { SunShadows.SetBlendBand(V); }
-        void SetSunShadowDebug(bool On)        { SunShadows.SetDebugCascades(On); }
-        f32  GetSunShadowMaxDistance() const   { return SunShadows.GetMaxDistance(); }
-        f32  GetSunShadowPenumbra() const      { return SunShadows.GetPenumbra(); }
-        f32  GetSunShadowNormalOffset() const  { return SunShadows.GetNormalOffset(); }
-        f32  GetSunShadowDepthBias() const     { return SunShadows.GetDepthBias(); }
-        f32  GetSunShadowBlendBand() const     { return SunShadows.GetBlendBand(); }
-        bool GetSunShadowDebug() const         { return SunShadows.GetDebugCascades(); }
 
-        void SetUseWater(bool Use);          
+        void SetUseWater(bool Use);
         bool GetUseWater() const             { return UseWater; }
         FWaterRenderer& GetWater()           { return Water; }
 
         void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
-        void SetSunDiskSize(f32 HalfAngleDeg) { Atmosphere.SetSunDiskHalfAngle(HalfAngleDeg); }
-        void SetSunGlare(f32 Intensity)       { Atmosphere.SetSunGlare(Intensity); }
-        f32  GetSunDiskSize() const           { return Atmosphere.GetSunDiskHalfAngle(); }
-        f32  GetSunGlare() const              { return Atmosphere.GetSunGlare(); }
-
-        void SetCloudCoverage(f32 V)          { VolumetricClouds.SetCoverage(V); }
-        void SetCloudDensity(f32 V)           { VolumetricClouds.SetDensityScale(V); }
-        void SetCloudAltitude(f32 BottomKm, f32 ThicknessKm) { VolumetricClouds.SetAltitude(BottomKm, ThicknessKm); }
-        void SetCloudWind(f32 V)              { VolumetricClouds.SetWindSpeed(V); }
-        void SetCloudPhaseG(f32 V)            { VolumetricClouds.SetPhaseG(V); }
-        void SetCloudPowder(f32 V)            { VolumetricClouds.SetPowder(V); }
-        void SetCloudErosion(f32 V)           { VolumetricClouds.SetErosion(V); }
-        f32  GetCloudCoverage() const         { return VolumetricClouds.GetCoverage(); }
-        f32  GetCloudDensity() const          { return VolumetricClouds.GetDensityScale(); }
-        f32  GetCloudWind() const             { return VolumetricClouds.GetWindSpeed(); }
-        f32  GetCloudPhaseG() const           { return VolumetricClouds.GetPhaseG(); }
-        f32  GetCloudPowder() const           { return VolumetricClouds.GetPowder(); }
-        f32  GetCloudErosion() const          { return VolumetricClouds.GetErosion(); }
-        f32  GetCloudBottomAltitude() const   { return VolumetricClouds.GetBottomAltitude(); }
-        f32  GetCloudThickness() const        { return VolumetricClouds.GetThickness(); }
-
-        void SetUseAtmosphereAmbient(bool Use)      { UseAtmosphereAmbient = Use; }
-        bool GetUseAtmosphereAmbient() const        { return UseAtmosphereAmbient; }
-        void SetAtmosphereAmbientIntensity(f32 I)   { AtmoAmbientIntensity = I; }
-        f32  GetAtmosphereAmbientIntensity() const  { return AtmoAmbientIntensity; }
 
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
         f32  GetPitch()     const { return Camera.GetPitch(); }
@@ -292,85 +196,10 @@ namespace Smile {
 
         FRaytracingScene&   GetRaytracingScene() { return RaytracingScene; }
 
-        void SetUseGI(bool Use)        { UseGI = Use; }
-        bool GetUseGI() const          { return UseGI; }
-        void SetGIIntensity(f32 V)     { DDGI.SetIntensity(V); }
-        f32  GetGIIntensity() const    { return const_cast<FDDGI&>(DDGI).GetIntensity(); }
-        void SetGIDebug(bool On)       { GIDebug = On; }   
-        bool GetGIDebug() const        { return GIDebug; }
-        void SetGIChebyshev(bool On)   { GIChebyshev = On; } 
-        bool GetGIChebyshev() const    { return GIChebyshev; }
-        void SetGISkipInactiveProbes(bool On) { GISkipInactiveProbes = On; }
-        bool GetGISkipInactiveProbes() const  { return GISkipInactiveProbes; }
-        void SetGISkipInactiveFallback(bool On) { GISkipInactiveFallback = On; } 
-        bool GetGISkipInactiveFallback() const  { return GISkipInactiveFallback; }
-        void SetGIDeactivationThreshold(f32 V) { DDGI.SetDeactivationThreshold(V); }
-        f32  GetGIDeactivationThreshold() const { return const_cast<FDDGI&>(DDGI).GetDeactivationThreshold(); }
-        void SetGIAdaptiveRays(bool On) { DDGI.SetAdaptiveRays(On); }
-        bool GetGIAdaptiveRays() const  { return const_cast<FDDGI&>(DDGI).GetAdaptiveRays(); }
-        void SetGIMaxRays(int V) { DDGI.SetMaxRays(V); } 
-        int  GetGIMaxRays() const { return const_cast<FDDGI&>(DDGI).GetMaxRays(); }
-        void SetGIMinRays(int V) { DDGI.SetMinRays(V); }
-        int  GetGIMinRays() const { return const_cast<FDDGI&>(DDGI).GetMinRays(); }
-        void SetGIRealHitShading(bool On) { DDGI.SetRealHitShading(On); } 
-        bool GetGIRealHitShading() const  { return const_cast<FDDGI&>(DDGI).GetRealHitShading(); }
-        void SetGIRelocation(bool On)  { DDGI.SetRelocation(On); } 
-        bool GetGIRelocation() const   { return const_cast<FDDGI&>(DDGI).GetRelocation(); }
-        void SetGIHysteresis(f32 V)    { DDGI.SetHysteresis(V); } 
-        f32  GetGIHysteresis() const   { return const_cast<FDDGI&>(DDGI).GetHysteresis(); }
         FDDGI& GetDDGI()               { return DDGI; }
 
-        void SetGIDebugProbes(bool On) { DDGIDebugPass.SetEnabled(On); }
-        bool GetGIDebugProbes() const  { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetEnabled(); }
-        void SetGIDebugMode(u32 M)     { DDGIDebugPass.SetMode(static_cast<FDDGIDebug::EMode>(M)); }
-        u32  GetGIDebugMode() const    { return static_cast<u32>(const_cast<FDDGIDebug&>(DDGIDebugPass).GetMode()); }
-        void SetGIDebugProbeSize(f32 V){ DDGIDebugPass.SetProbeRadius(V); }
-        f32  GetGIDebugProbeSize() const { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetProbeRadius(); }
-        void SetGIDebugShowVolume(bool On) { DDGIDebugPass.SetShowVolume(On); }
-        bool GetGIDebugShowVolume() const  { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetShowVolume(); }
-        void SetGIDebugShowRays(bool On)   { DDGIDebugPass.SetShowRays(On); }
-        bool GetGIDebugShowRays() const    { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetShowRays(); }
-        void SetGIDebugRayRadius(f32 V)    { DDGIDebugPass.SetRayRadius(V); }
-        f32  GetGIDebugRayRadius() const   { return const_cast<FDDGIDebug&>(DDGIDebugPass).GetRayRadius(); }
-
-        // ReSTIR GI (final-gather difuso por pixel sobre o DDGI). Experimental — default OFF; quando
-        // ligado, substitui o difuso do DDGI no deferred (o DDGI segue como cache no trace).
-        void SetUseReSTIRGI(bool V)        { UseReSTIRGI = V; }
-        bool GetUseReSTIRGI() const        { return UseReSTIRGI; }
-        void SetReSTIRSpatial(bool V)      { ReSTIRGI.SetSpatial(V); }
-        bool GetReSTIRSpatial() const      { return const_cast<FReSTIRGI&>(ReSTIRGI).GetSpatial(); }
-        void SetReSTIRVisibility(bool V)   { ReSTIRGI.SetVisibility(V); }
-        bool GetReSTIRVisibility() const   { return const_cast<FReSTIRGI&>(ReSTIRGI).GetVisibility(); }
-        // NRD como denoiser do ReSTIR GI (Fase C). Off = ReSTIR cru no deferred.
-        void SetUseNrdDenoise(bool V)      { UseNrdDenoise = V; }
-        bool GetUseNrdDenoise() const      { return UseNrdDenoise; }
-
-        void SetUseReflections(bool V)     { UseReflections = V; }
-        bool GetUseReflections() const     { return UseReflections; }
-        void SetReflectionMaxRoughness(f32 V)  { Reflections.SetMaxRoughness(V); }
-        f32  GetReflectionMaxRoughness() const { return const_cast<FReflections&>(Reflections).GetMaxRoughness(); }
-        void SetReflectionRoughnessFade(f32 V) { Reflections.SetRoughnessFade(V); }
-        f32  GetReflectionRoughnessFade() const{ return const_cast<FReflections&>(Reflections).GetRoughnessFade(); }
-        void SetReflectionTemporal(bool V) { Reflections.SetTemporal(V); }   // acumulacao temporal (F3)
-        bool GetReflectionTemporal() const { return const_cast<FReflections&>(Reflections).GetTemporal(); }
-        void SetReflectionDebugMode(u32 V) { Reflections.SetDebugMode(V); }  // 0=off,1=accum,2=mirror-mask
-        u32  GetReflectionDebugMode() const{ return const_cast<FReflections&>(Reflections).GetDebugMode(); }
         FReflections& GetReflections()     { return Reflections; }
 
-        void SetUseAO(bool Use)        { UseAO = Use; }
-        bool GetUseAO() const          { return UseAO; }
-        void SetAODebug(bool On)       { AODebug = On; }   
-        bool GetAODebug() const        { return AODebug; }
-        void SetAORadius(f32 V)        { AO.SetRadius(V); }
-        f32  GetAORadius() const       { return const_cast<FAmbientOcclusion&>(AO).GetRadius(); }
-        void SetAOIntensity(f32 V)     { AO.SetIntensity(V); }
-        f32  GetAOIntensity() const    { return const_cast<FAmbientOcclusion&>(AO).GetIntensity(); }
-        void SetAOPower(f32 V)         { AO.SetPower(V); }
-        f32  GetAOPower() const        { return const_cast<FAmbientOcclusion&>(AO).GetPower(); }
-        void SetAOFadeStart(f32 V)     { AO.SetFadeStart(V); }
-        f32  GetAOFadeStart() const    { return const_cast<FAmbientOcclusion&>(AO).GetFadeStart(); }
-        void SetAOFadeEnd(f32 V)       { AO.SetFadeEnd(V); }
-        f32  GetAOFadeEnd() const      { return const_cast<FAmbientOcclusion&>(AO).GetFadeEnd(); }
         FAmbientOcclusion& GetAO()     { return AO; }
 
     private:

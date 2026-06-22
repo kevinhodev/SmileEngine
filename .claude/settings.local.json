@@ -75,7 +75,12 @@
       "Bash(pdftotext \"lin2026restirptenhanced.pdf\" \"restir_enhanced.txt\")",
       "Bash(wc -l restir_enhanced.txt)",
       "Bash(wc -c restir_enhanced.txt)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(git show *)",
+      "Read(//tmp/**)",
+      "Bash(git ls-tree *)",
+      "Bash(grep -oE \"[A-Za-z_][A-Za-z0-9_]*->\\(Set|Get|Use|Enable|Is|Apply\\)[A-Za-z0-9_]+\" /tmp/EnvWin.cpp | sort | uniq -c | sort -rn | head -80)",
+      "Bash(cd /d/Engines/SmileEngine *)"
     ]
   }
 }

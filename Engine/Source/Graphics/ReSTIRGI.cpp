@@ -9,8 +9,8 @@ using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     namespace {
-        constexpr DXGI_FORMAT kGIFormat  = DXGI_FORMAT_R16G16B16A16_FLOAT; // gi + Lo + n2
-        constexpr DXGI_FORMAT kResFormat = DXGI_FORMAT_R32G32B32A32_FLOAT; // reservoir x1/x2 + M/W
+        constexpr DXGI_FORMAT kGIFormat  = DXGI_FORMAT_R16G16B16A16_FLOAT; 
+        constexpr DXGI_FORMAT kResFormat = DXGI_FORMAT_R32G32B32A32_FLOAT; 
 
         ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H, DXGI_FORMAT _Fmt) {
             D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -32,11 +32,8 @@ namespace Smile {
     }
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
-        // Pass A: 13 SRV, 5 UAV, heap-directly-indexed (albedo bindless no hit).
         TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 13, 5, true);
-        // Pass B (spatial): 7 SRV [TLAS, currA..D, gbuf, depth], 1 UAV [GITex].
         SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 7, 1, false);
-        // NRD pack (Fase C): 4 SRV [GITex, gbuf, depth, vel], 4 UAV [viewZ, normalRough, mv, radHit].
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
         CreateConstantBuffer(_Device);
         Initialized = true;
@@ -140,7 +137,6 @@ namespace Smile {
 
         for (u32 p = 0; p < 2; ++p) {
             const u32 prev = 1u - p;
-            // Pass A SRV table (13). CopyDescriptors LE da staging (shader-visible e write-only).
             TraceTable[p] = _SRVHeap.Allocate(13);
             D3D12_CPU_DESCRIPTOR_HANDLE TSrc[13] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
@@ -159,7 +155,6 @@ namespace Smile {
             };
             CopyTable(TraceTable[p], TSrc, 13);
 
-            // Pass A UAV table (5): [GITex, currA, currB, currC, currD].
             TraceUAVTable[p] = _SRVHeap.Allocate(5);
             D3D12_CPU_DESCRIPTOR_HANDLE USrc[5] = {
                 _SRVHeap.CpuHandleStaging(GITexUAV),
@@ -170,7 +165,6 @@ namespace Smile {
             };
             CopyTable(TraceUAVTable[p], USrc, 5);
 
-            // Pass B SRV table (7): [TLAS, currA, currB, currC, currD, gbuf, depth].
             SpatialTable[p] = _SRVHeap.Allocate(7);
             D3D12_CPU_DESCRIPTOR_HANDLE SSrc[7] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
@@ -206,7 +200,6 @@ namespace Smile {
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, 0.0f };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
-        // {A,B,C} = default do nrd::ReblurSettings (igual ao driver) — NAO divergir do FNrdDenoiser.
         CPU.NrdHitDistParams = { 3.0f, 0.1f, 20.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
@@ -252,7 +245,6 @@ namespace Smile {
             NeedsClear = false;
         }
 
-        // === Pass A: trace + temporal ===========================================================
         Transition(_CL, ResA[prev].Get(), ResAState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, ResB[prev].Get(), ResBState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, ResC[prev].Get(), ResCState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -269,9 +261,7 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable[p]));
         _CL->Dispatch(GX, GY, 1);
 
-        // === Pass B: reuso espacial + resolve (sobrescreve a GITexture) ==========================
         if (Spatial) {
-            // curr reservoir UAV -> leitura; barrier UAV na GITexture (Pass A escreveu, Pass B le .a).
             Transition(_CL, ResA[p].Get(), ResAState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Transition(_CL, ResB[p].Get(), ResBState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Transition(_CL, ResC[p].Get(), ResCState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -288,7 +278,6 @@ namespace Smile {
             _CL->Dispatch(GX, GY, 1);
         }
 
-        // Com NRD: o pack (compute) le a GITexture -> NON_PIXEL. Sem NRD: o deferred (PS) le -> PIXEL.
         Transition(_CL, GITexture.Get(), GITextureState,
                    UseNrd ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
                           : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

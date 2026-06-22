@@ -16,7 +16,7 @@ namespace Smile {
 
     namespace {
         constexpr u32         kInvalidSlot = 0xFFFFFFFFu;
-        constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; // mesmo do post chain
+        constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; 
 
         void Transition(ID3D12GraphicsCommandList* Cmd, ID3D12Resource* Res,
                         D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
@@ -34,12 +34,12 @@ namespace Smile {
     struct FFsr2Pass::Impl {
         FfxFsr2Context    Context{};
         bool              Created = false;
-        std::vector<char> Scratch;             // deve sobreviver enquanto o contexto existir
+        std::vector<char> Scratch;             
         u32 RW = 0, RH = 0, SW = 0, SH = 0;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Output;
         D3D12_RESOURCE_STATES OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        u32  OutputSRV   = kInvalidSlot;        // alocado uma vez, reusado entre resizes
+        u32  OutputSRV   = kInvalidSlot;        
         bool FirstDispatch = true;
 
         void DestroyContext() {
@@ -57,7 +57,6 @@ namespace Smile {
         if (!Device || RenderW == 0 || RenderH == 0 || DisplayW == 0 || DisplayH == 0) return false;
         P->DestroyContext();
 
-        // --- Contexto FSR2 ---
         const size_t ScratchSize = ffxFsr2GetScratchMemorySizeDX12();
         P->Scratch.resize(ScratchSize);
 
@@ -69,8 +68,6 @@ namespace Smile {
         }
 
         FfxFsr2ContextDescription Desc{};
-        // HDR: HDRColorBuffer e R16F linear pre-tonemap. DEPTH_INVERTED: a engine usa Reverse-Z.
-        // AUTO_EXPOSURE: por enquanto sem textura de exposicao (FSR2 calcula a propria).
         Desc.flags         = FFX_FSR2_ENABLE_HIGH_DYNAMIC_RANGE
                            | FFX_FSR2_ENABLE_DEPTH_INVERTED
                            | FFX_FSR2_ENABLE_AUTO_EXPOSURE;
@@ -86,7 +83,6 @@ namespace Smile {
             P->Scratch.clear(); return false;
         }
 
-        // --- Textura de output (display-res, UAV p/ o FSR2 escrever + SRV p/ o post chain ler) ---
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC TexDesc{};
         TexDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -144,31 +140,26 @@ namespace Smile {
                              f32 DeltaTimeSec, bool Reset) {
         if (!P || !P->Created || !Cmd || !Color || !Depth || !Velocity) return;
 
-        // Output: PIXEL_SHADER_RESOURCE -> UNORDERED_ACCESS para o FSR2 escrever.
         Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-        // Inputs: o chamador ja os colocou em NON_PIXEL_SHADER_RESOURCE (= COMPUTE_READ).
         FfxFsr2DispatchDescription D{};
         D.commandList   = ffxGetCommandListDX12(Cmd);
         D.color         = ffxGetResourceDX12(&P->Context, Color,    L"FSR2_Color",    FFX_RESOURCE_STATE_COMPUTE_READ);
         D.depth         = ffxGetResourceDX12(&P->Context, Depth,    L"FSR2_Depth",    FFX_RESOURCE_STATE_COMPUTE_READ);
         D.motionVectors = ffxGetResourceDX12(&P->Context, Velocity, L"FSR2_Velocity", FFX_RESOURCE_STATE_COMPUTE_READ);
-        D.exposure                   = FfxResource{};   // AUTO_EXPOSURE -> nao fornecida
-        D.reactive                   = FfxResource{};   // Fase 4
-        D.transparencyAndComposition = FfxResource{};   // Fase 4
+        D.exposure                   = FfxResource{};   
+        D.reactive                   = FfxResource{};  
+        D.transparencyAndComposition = FfxResource{};   
         D.output        = ffxGetResourceDX12(&P->Context, P->Output.Get(), L"FSR2_Output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        D.jitterOffset      = { JitterX, JitterY };           // o MESMO jitter aplicado a projecao
-        // velocity da engine = curUV - prevUV (UV, y-down). FSR2 reprojeta esperando o vetor
-        // apontando para o frame ANTERIOR em pixels -> negar + UV->pixels. GOTCHA #1: se o smear
-        // sair na direcao oposta ao movimento, inverter o sinal aqui (ou no GBuffer.ps).
+        D.jitterOffset      = { JitterX, JitterY };           
         D.motionVectorScale = { -static_cast<float>(P->RW), -static_cast<float>(P->RH) };
         D.renderSize        = { P->RW, P->RH };
-        D.enableSharpening  = false;                          // RCAS fica p/ Fase 4
+        D.enableSharpening  = false;                          
         D.sharpness         = 0.0f;
-        D.frameTimeDelta    = (DeltaTimeSec > 0.0f ? DeltaTimeSec : 1.0f / 60.0f) * 1000.0f; // ms
-        D.preExposure       = 1.0f;                           // deve ser > 0
+        D.frameTimeDelta    = (DeltaTimeSec > 0.0f ? DeltaTimeSec : 1.0f / 60.0f) * 1000.0f; 
+        D.preExposure       = 1.0f;                           
         D.reset             = Reset || P->FirstDispatch;
         D.cameraNear        = NearZ;
         D.cameraFar         = FarZ;
@@ -178,7 +169,6 @@ namespace Smile {
         if (Err != FFX_OK)
             LogError("FSR2: ffxFsr2ContextDispatch falhou (codigo " + std::to_string(Err) + ")");
 
-        // Output: UNORDERED_ACCESS -> PIXEL_SHADER_RESOURCE para o post chain ler.
         Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         P->FirstDispatch = false;
@@ -191,8 +181,7 @@ namespace Smile {
     u32 FFsr2Pass::DisplayW() const { return P ? P->SW : 0; }
     u32 FFsr2Pass::DisplayH() const { return P ? P->SH : 0; }
 
-#else  // ============================ stub (Debug ou SDK ausente) ================================
-
+#else
     struct FFsr2Pass::Impl {};
     FFsr2Pass::FFsr2Pass()  = default;
     FFsr2Pass::~FFsr2Pass() = default;

@@ -43,7 +43,7 @@ namespace Smile {
         CreateDepthBuffer();
         CreateNormalBuffer();
         GBuffer.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        GBuffer.WriteDepthSRV(Device.Native(), SRVHeap, DepthBuffer.Get()); // 4o slot contiguo = depth
+        GBuffer.WriteDepthSRV(Device.Native(), SRVHeap, DepthBuffer.Get()); 
         GBufferDebugPass.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
         CreateHDRBuffers();
         CreateVelocityBuffer();
@@ -81,14 +81,11 @@ namespace Smile {
 
         SelectionOutline.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
-        // Servico de DebugDraw (overlay 3D pos-tonemap; tooling do editor desenha por aqui).
         DebugDraw.Initialize(Device.Native(), FSwapChain::kFormat);
 
         TemporalAA.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
         TemporalAA.SetupInputs(Device.Native(), SRVHeap, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get());
 
-        // FSR2: cria contexto + textura de output. Render res = RenderWidth/Height; display = swapchain.
-        // No-op em Debug (stub). Ativado por UseFsr2 no render loop (substitui o TAA).
         Fsr2.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
                         SwapChain.GetWidth(), SwapChain.GetHeight());
 
@@ -101,7 +98,7 @@ namespace Smile {
         if (Device.RaytracingSupported()) {
             DDGI.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
-            Nrd.Initialize(Device.Native()); // B1: cria instancia RELAX_DIFFUSE + loga InstanceDesc
+            Nrd.Initialize(Device.Native()); 
             Reflections.Initialize(Device.Native());
             DDGIDebugPass.Initialize(Device.Native(),
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
@@ -335,14 +332,11 @@ namespace Smile {
         if (!GBuffer.IsInitialized() || DepthSRVSlot == kInvalidSlot) return;
         Reflections.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                                 DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
-        // GBufferB (slot 1) = OctNormal+Roughness+Metallic, identico ao antigo ReflectionGBuffer.
         Reflections.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), HDREnv.BRDFLutSRV());
 
-        // ReSTIR GI: GITexture full-res. Re-setup junto com as reflexoes (mesmo lifecycle: depth/
-        // gbuffer recriados no resize invalidam a tabela do trace). Reusa os mesmos slots do DDGI.
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
@@ -350,13 +344,8 @@ namespace Smile {
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot);
 
-        // NRD: pool/IO textures em GI-res (= render res; ReSTIR e full-res). Independente do SRVHeap
-        // da engine (heaps proprios — isolamento/blindagem).
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
-        // Fase C: pack pipeline + UAVs das IN do NRD + SRV da OUT, no SRVHeap da engine.
-        // REBLUR_DIFFUSE_SPECULAR: o pack do GI escreve o sinal DIFUSO + os inputs comuns; o pack da
-        // reflexao (SetupNrdSpec) escreve o sinal ESPECULAR. Uma instancia NRD denoisa os dois.
         if (Nrd.IsReady()) {
             ReSTIRGI.SetupNrdPack(Device.Native(), SRVHeap,
                 Nrd.IoResource(FNrdDenoiser::IO_VIEWZ),
@@ -439,7 +428,7 @@ namespace Smile {
         ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
-        const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f }; // velocidade zero = parado
+        const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f }; 
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = DXGI_FORMAT_R16G16_FLOAT;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
@@ -533,10 +522,6 @@ namespace Smile {
         try {
             CommandQueue.Flush();
 
-            // Tabela stem -> recriacao. Cada entrada lista os .cso (sem perfil/extensao)
-            // que aquele PSO consome e como reconstrui-lo. Grupo A: subsistemas que ja
-            // expoem um ponto de recriacao isolado do PSO. Para estender ao Grupo B,
-            // adicione aqui uma entrada apontando para o novo ReloadShaders do subsistema.
             constexpr DXGI_FORMAT RT = DXGI_FORMAT_R16G16B16A16_FLOAT;
             constexpr DXGI_FORMAT DS = DXGI_FORMAT_D32_FLOAT;
             ID3D12Device* Dev = Device.Native();
@@ -562,14 +547,12 @@ namespace Smile {
                             DDGIDebugPass.Recreate(Dev, RT, DS); } },
             };
 
-            // Sem stem (ex.: .hlsli incluido por varios shaders) => reload completo.
             if (_ChangedStem.empty()) {
                 RecreateAllPSOs();
                 LogInfo("Shaders recarregados (reload completo)");
                 return true;
             }
 
-            // Procura a entrada que consome esse .cso e recria so ela.
             for (const auto& Entry : Table) {
                 if (std::find(Entry.Stems.begin(), Entry.Stems.end(), _ChangedStem)
                         != Entry.Stems.end()) {
@@ -579,7 +562,6 @@ namespace Smile {
                 }
             }
 
-            // Stem nao mapeado (Grupo B ainda nao coberto) => fallback de reload completo.
             RecreateAllPSOs();
             LogInfo("Shader '" + _ChangedStem + "' nao mapeado; reload completo aplicado");
             return true;
@@ -597,7 +579,6 @@ namespace Smile {
     }
 
     void Renderer::SetRenderScale(f32 _Scale) {
-        // <1.0 = render menor que o display (FSR2 faz o upscale); >1.0 = SSAA (downsample).
         _Scale = _Scale < 0.33f ? 0.33f : (_Scale > 2.0f ? 2.0f : _Scale);
         if (_Scale == RenderScale) return;
         RenderScale = _Scale;
@@ -606,9 +587,6 @@ namespace Smile {
         RecreateInternalTargets();
     }
 
-    // Recria os RTs de CENA na resolucao interna (swapchain * RenderScale). Backbuffer e modulos
-    // de saida (PostProcessor, SelectionOutline) ficam na res NATIVA — o PostProcessor amostra o
-    // HDR interno via UV e escreve no backbuffer nativo, fazendo o downsample (SSAA).
     void Renderer::RecreateInternalTargets() {
         const u32 RW = RenderWidth(),        RH = RenderHeight();
         const u32 SW = SwapChain.GetWidth(), SH = SwapChain.GetHeight();
@@ -624,15 +602,14 @@ namespace Smile {
         Water.Resize(Device.Native(), RW, RH);
         CreateSceneCopies();
 
-        PostProcessor.Resize(Device.Native(), SRVHeap, SW, SH);    // NATIVO (downsample)
+        PostProcessor.Resize(Device.Native(), SRVHeap, SW, SH);    
         ObjectPicker.Resize(Device.Native(), RW, RH);
-        SelectionOutline.Resize(Device.Native(), SRVHeap, SW, SH); // NATIVO (desenha no backbuffer)
+        SelectionOutline.Resize(Device.Native(), SRVHeap, SW, SH); 
 
         TemporalAA.Resize(Device.Native(), SRVHeap, RW, RH);
         TemporalAA.SetupInputs(Device.Native(), SRVHeap, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get());
         TAARanLastFrame = false;
 
-        // Contexto + output FSR2 dependem das resolucoes -> recria no resize/render-scale (idempotente).
         Fsr2.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
         Flicker.Resize(Device.Native(), SRVHeap, RW, RH);
         FlickerResetPending = true;
@@ -713,16 +690,12 @@ namespace Smile {
             : Mat44::PerspectiveFovLH(60.0f * ToRad, Aspect, NearZ, FarZ);
 
         Mat44 Projection = ProjUnjittered;
-        // FSR2 e mutuamente exclusivo com o TAA custom: ligado, ele cuida do AA temporal.
         const bool Fsr2Active = UseFsr2 && Fsr2.IsInitialized();
         const bool TAAActive  = UseTAA && !Fsr2Active && TemporalAA.IsInitialized();
-        // Jitter aplicado a projecao; o MESMO offset (pixels) vai depois pro dispatch do FSR2.
         f32 JitterPxX = 0.0f, JitterPxY = 0.0f;
-        f32 ProjJitterYSign = 1.0f; // sinal do termo Y do jitter na projecao
+        f32 ProjJitterYSign = 1.0f; 
         if (Fsr2Active) {
-            Fsr2.GetJitter(FrameIndex, JitterPxX, JitterPxY); // sequencia/fase proprias do FSR2
-            // Convencao do FSR2: projecao recebe +2jx/w e -2jy/h (Y NEGADO); o dispatch recebe
-            // (jx,jy) cru. Sem o sinal a reconstrucao nunca converge em Y -> shimmer global.
+            Fsr2.GetJitter(FrameIndex, JitterPxX, JitterPxY); 
             ProjJitterYSign = -1.0f;
         } else if (TAAActive) {
             const u32 kJitterPhases = 8;
@@ -835,10 +808,8 @@ namespace Smile {
         const bool ReflectionsActive = UseReflections && Reflections.IsReady();
         const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady();
         const bool NrdMode           = ReSTIRGIActive && Nrd.IsReady() && UseNrdDenoise;
-        ReSTIRGI.SetUseNrd(NrdMode); // afeta o estado final da GITexture no RecordTrace + a tabela t16
-        Reflections.SetUseNrd(NrdMode); // NRD denoisa o especular junto; off = denoiser caseiro (fallback)
-        // ReflectionParams.w = flag ReSTIR GI: 0=off, 1=on (raw), 2=on + NRD (saida REBLUR em YCoCg ->
-        // o DeferredLighting desempacota). ReflectionParams.z = reflexoes ativas (mantido).
+        ReSTIRGI.SetUseNrd(NrdMode); 
+        Reflections.SetUseNrd(NrdMode); 
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        ReflectionsActive ? 1.0f : 0.0f,
                                        ReSTIRGIActive ? (NrdMode ? 2.0f : 1.0f) : 0.0f };
@@ -851,7 +822,7 @@ namespace Smile {
         const Mat44 InvVPNoTrans = (ViewNoTrans * Projection).Inverse();
         const Mat44 InvViewProjFull = ViewProjection.Inverse();
         const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
-        MappedCB->InvViewProj = InvViewProjFull; // deferred lighting reconstroi worldPos do depth
+        MappedCB->InvViewProj = InvViewProjFull; 
 
         Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans,
                                   InvViewProjFull, CameraPosition, kKmPerWorldUnit);
@@ -992,7 +963,7 @@ namespace Smile {
         {
             const std::vector<FRenderable>& RList = Scene.Renderables();
             AllItems.reserve(RList.size());
-            const size_t PrevCount = PrevModels.size(); // tamanho antes do resize: distingue objeto novo
+            const size_t PrevCount = PrevModels.size();
             PrevModels.resize(RList.size(), Mat44::Identity());
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
@@ -1001,9 +972,6 @@ namespace Smile {
                 FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
                 const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
                 const Mat44 Model = R.Transform.Matrix();
-                // Motion vector: matrizes SEM jitter. PrevModel do frame anterior (estatico => igual
-                // ao atual => so o termo de camera). Objeto novo (si >= PrevCount) -> PrevModel = Model
-                // (velocidade zero, sem spike no 1o frame). PrevViewProj ja e a VP unjittered anterior.
                 const Mat44 PrevModel = (si < PrevCount) ? PrevModels[si] : Model;
                 ObjectConstants OC;
                 OC.MVP            = Model * ViewProjection;
@@ -1016,7 +984,7 @@ namespace Smile {
                     SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
-                PrevModels[si] = Model; // vira o PrevModel do proximo frame
+                PrevModels[si] = Model; 
             }
         }
 
@@ -1063,8 +1031,6 @@ namespace Smile {
         }
 
         const bool AOWillRun = UseAO && AO.IsReady();
-        // Deferred: o prepass roda sempre — estabelece o depth opaco que o geometry pass usa em
-        // depth EQUAL. Com AO ligado escreve tambem a NormalBuffer (PSODepthNormal).
         const bool DoPrepass = true;
         if (DoPrepass) {
             if (AOWillRun) {
@@ -1142,9 +1108,8 @@ namespace Smile {
             }
         }
 
-        // === Deferred: geometry pass — preenche o G-buffer (opaco depth-EQUAL, folhagem depth-write) ===
         {
-            GBuffer.TransitionToWrite(CommandList); // RENDER_TARGET
+            GBuffer.TransitionToWrite(CommandList);
             if (VelocityState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
                 D3D12_RESOURCE_BARRIER VB{};
                 VB.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1155,7 +1120,6 @@ namespace Smile {
                 CommandList->ResourceBarrier(1, &VB);
                 VelocityState = D3D12_RESOURCE_STATE_RENDER_TARGET;
             }
-            // 4 RTs: [A, B, C, Velocity]. SV_Target3 = motion vector.
             D3D12_CPU_DESCRIPTOR_HANDLE GBufRTVs[FGBuffer::kTargetCount + 1] = {
                 GBuffer.RTVHandle(0), GBuffer.RTVHandle(1), GBuffer.RTVHandle(2),
                 VelocityRTVHeap.CpuHandle(0) };
@@ -1173,7 +1137,7 @@ namespace Smile {
             ID3D12PipelineState* CurGeomPSO = nullptr;
             for (const VisItem& V : VisibleScratch) {
                 FMaterial* Mat = V.Mat;
-                if (Mat->Blend) continue; // translucido -> passe forward (alpha-blend), nao no GBuffer
+                if (Mat->Blend) continue;
                 const bool TwoSided = Mat->TwoSided || Mat->Constants.AlphaTest;
                 ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
                                                      : PipelineState.PSOGBuffer();
@@ -1183,7 +1147,6 @@ namespace Smile {
                 Mat->Bind(CommandList, SRVHeap);
                 V.R->Mesh->Draw(CommandList);
             }
-            // Velocity -> leitura (PSR): permanece assim o resto do frame (debug / TAA leem dela).
             D3D12_RESOURCE_BARRIER VB{};
             VB.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             VB.Transition.pResource   = VelocityBuffer.Get();
@@ -1194,9 +1157,6 @@ namespace Smile {
             VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
-        // === ReSTIR GI: trace (compute) -> GITexture, ANTES do deferred lighting ================
-        // Depth/GBuffer (DEPTH_WRITE/RENDER_TARGET apos o geometry pass) -> NON_PIXEL p/ o compute
-        // ler; restaura depois, pois o deferred lighting faz as suas proprias transicoes p/ PIXEL.
         if (ReSTIRGIActive) {
             D3D12_RESOURCE_BARRIER DBar{};
             DBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1206,7 +1166,6 @@ namespace Smile {
             DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &DBar);
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            // Velocity (PIXEL apos o geometry pass) -> NON_PIXEL p/ o compute do reuso temporal.
             D3D12_RESOURCE_BARRIER VBar{};
             VBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             VBar.Transition.pResource   = VelocityBuffer.Get();
@@ -1218,12 +1177,8 @@ namespace Smile {
 
             ReSTIRGI.RecordTrace(CommandList, SRVHeap);
 
-            // NRD unificado (REBLUR_DIFFUSE_SPECULAR): packing dos 2 sinais -> 1 Denoise. depth/gbuffer/
-            // velocity seguem em NON_PIXEL aqui (so restaurados abaixo). O NRD liga heap proprio.
-            //   difuso = ReSTIR GI (RecordNrdPack); especular = reflexao (RecordTrace para no Resolved
-            //   c/ UseNrd, e RecordNrdPack escreve a IN_SPEC). Os inputs comuns sao do pack do GI.
             if (NrdMode) {
-                if (ReflectionsActive) Reflections.RecordTrace(CommandList, SRVHeap); // -> Resolved (NON_PIXEL)
+                if (ReflectionsActive) Reflections.RecordTrace(CommandList, SRVHeap); 
                 Nrd.TransitionInputsToWrite(CommandList);
                 ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
                 if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
@@ -1239,14 +1194,13 @@ namespace Smile {
             DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
             CommandList->ResourceBarrier(1, &DBar);
             GBuffer.TransitionToWrite(CommandList);
-            // Restaura velocity p/ leitura no pixel shader (TAA/FSR2/debug leem depois).
+
             VBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             VBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &VBar);
             VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
-        // === Deferred: lighting fullscreen — le o G-buffer+depth e ilumina -> HDR ===============
         {
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             D3D12_RESOURCE_BARRIER DepthBar{};
@@ -1258,14 +1212,13 @@ namespace Smile {
             CommandList->ResourceBarrier(1, &DepthBar);
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr); // sem depth no lighting
+            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr); 
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
             CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
             CommandList->SetGraphicsRootConstantBufferView(
                 0, ConstantBuffer->GetGPUVirtualAddress() +
                    static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-            // Tabela de material (param 2) religada p/ [GBufferA, GBufferB, GBufferC, Depth] (t0-t3).
             CommandList->SetGraphicsRootDescriptorTable(2, SRVHeap.GpuHandle(GBuffer.SRVTableStart()));
             CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
@@ -1279,7 +1232,6 @@ namespace Smile {
                 CommandList->SetGraphicsRootDescriptorTable(8, SRVHeap.GpuHandle(AOTable));
             }
             {
-                // Param 9 (t16): GITexture do ReSTIR; fallback p/ tabela valida quando inativo.
                 const u32 ReSTIRTable = ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
             }
@@ -1289,7 +1241,6 @@ namespace Smile {
             CommandList->IASetIndexBuffer(nullptr);
             CommandList->DrawInstanced(3, 1, 0, 0);
 
-            // Restaura estados "resting": depth -> DEPTH_WRITE, G-buffer -> RENDER_TARGET.
             DepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
             CommandList->ResourceBarrier(1, &DepthBar);
@@ -1336,10 +1287,8 @@ namespace Smile {
             const D3D12_RESOURCE_STATES ReadState =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             Barrier(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, ReadState);
-            GBuffer.TransitionToRead(CommandList, ReadState); // GBufferB = normal+rough+metal das reflexoes
+            GBuffer.TransitionToRead(CommandList, ReadState); 
 
-            // Com NRD: o trace+resolve+denoise ja rodaram no bloco do ReSTIR GI (1 Denoise unificado);
-            // aqui so o composite (le a OUT_SPEC do NRD). Sem NRD: caminho caseiro completo.
             if (!NrdMode) Reflections.RecordTrace(CommandList, SRVHeap);
             Reflections.RecordComposite(CommandList, SRVHeap, HDRRTVHeap.CpuHandle(0),
                                         RenderWidth(), RenderHeight());
@@ -1432,8 +1381,6 @@ namespace Smile {
             CommandList->ResourceBarrier(1, &DepthBarrier);
         }
 
-        // === Deferred: visualizacao de debug do G-buffer (o geometry pass ja rodou) =============
-        // Sobrescreve o HDR com o canal escolhido. So quando GBufferDebugMode > 0.
         if (GBufferDebugMode > 0 && GBuffer.IsInitialized() && GBufferDebugPass.IsInitialized()) {
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             auto HDRDbgRTV = HDRRTVHeap.CpuHandle(0);
@@ -1441,7 +1388,7 @@ namespace Smile {
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
             GBufferDebugPass.Execute(CommandList, SRVHeap, GBuffer.SRVTableStart(), VelocitySRVSlot, GBufferDebugMode);
-            GBuffer.TransitionToWrite(CommandList); // volta p/ RENDER_TARGET p/ o proximo frame
+            GBuffer.TransitionToWrite(CommandList); 
         }
 
         {
@@ -1474,15 +1421,10 @@ namespace Smile {
             ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
             CommandList->ResourceBarrier(1, &ResourceBarrier);
 
-            // O history (OutputResource, SV_Target0) acumula a cor LIMPA sem sharpen; a tela usa
-            // sempre o alvo de display (SV_Target1), que carrega o sharpen pos-resolve — ou, em
-            // DebugMode > 0, a visualizacao de debug. Assim o sharpen sai do feedback do TAA.
             PostInput    = TemporalAA.DisplayOutputResource();
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             TAARanLastFrame = true;
         } else if (Fsr2Active) {
-            // Inputs -> NON_PIXEL_SHADER_RESOURCE (= COMPUTE_READ que o FSR2 declara).
-            // HDR ja esta em PSR (transicionado acima); Depth em DEPTH_WRITE; Velocity em PSR.
             D3D12_RESOURCE_BARRIER In[3]{};
             for (auto& B : In) {
                 B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1497,7 +1439,6 @@ namespace Smile {
             Fsr2.Dispatch(CommandList, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get(),
                           JitterPxX, JitterPxY, NearZ, FarZ, 60.0f * ToRad, LastDeltaTime, false);
 
-            // Volta aos estados de origem (HDR/Velocity -> PSR; Depth -> DEPTH_WRITE).
             D3D12_RESOURCE_BARRIER Out[3]{};
             for (auto& B : Out) {
                 B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1517,7 +1458,7 @@ namespace Smile {
         }
 
         PrevViewProj = ViewProjUnjittered;
-        NrdPrevProj  = ProjUnjittered; // prev NAO-jitteradas p/ a reprojecao do NRD no proximo frame
+        NrdPrevProj  = ProjUnjittered; 
         NrdPrevView  = View;
 
         if (FlickerMode > 0 && Flicker.IsInitialized()) {
@@ -1569,8 +1510,8 @@ namespace Smile {
     void Renderer::Shutdown() {
         if (!Initialized) return;
         CommandQueue.Flush();
-        Nrd.Shutdown();  // destroi a instancia NRD antes do device cair
-        Fsr2.Shutdown(); // libera as texturas internas do FSR2 antes do device cair
+        Nrd.Shutdown();  
+        Fsr2.Shutdown(); 
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);
             MappedFrameBase = nullptr;
