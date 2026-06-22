@@ -9,7 +9,6 @@ set(EDITOR_HEADERS
     Include/SmileEditor/AboutDialog.h
     Include/SmileEditor/SmileLogo.h
     Include/SmileEditor/LucideIcon.h
-    Include/SmileEditor/EnvironmentWindow.h
     Include/SmileEditor/GizmoController.h
     Include/SmileEditor/LogBridge.h
     Include/SmileEditor/QmlHost.h
@@ -28,7 +27,6 @@ set(EDITOR_SOURCES
     Source/AboutDialog.cpp
     Source/SmileLogo.cpp
     Source/LucideIcon.cpp
-    Source/EnvironmentWindow.cpp
     Source/GizmoController.cpp
     Source/LogBridge.cpp
     Source/QmlHost.cpp

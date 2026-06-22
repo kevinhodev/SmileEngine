@@ -124,11 +124,6 @@ MenuBar {
     DarkMenu {
         title: "Janela"
         MItem {
-            text: "Ambiente & Céu"; shortcutText: "Ctrl+Shift+A"
-            onTriggered: menuBridge.openEnvironment()
-        }
-        MSep {}
-        MItem {
             text: "Console"; checkColumn: true
             markVisible: menuBridge.consoleVisible // estado real do dock (pode fechar sozinho)
             onTriggered: menuBridge.toggleConsole()

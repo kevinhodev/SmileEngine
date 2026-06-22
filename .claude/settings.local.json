@@ -74,7 +74,8 @@
       "Bash(pdfinfo \"lin2026restirptenhanced.pdf\")",
       "Bash(pdftotext \"lin2026restirptenhanced.pdf\" \"restir_enhanced.txt\")",
       "Bash(wc -l restir_enhanced.txt)",
-      "Bash(wc -c restir_enhanced.txt)"
+      "Bash(wc -c restir_enhanced.txt)",
+      "Bash(git rm *)"
     ]
   }
 }

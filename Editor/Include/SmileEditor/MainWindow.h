@@ -15,7 +15,6 @@ class QDockWidget;
 namespace SmileEditor {
     class ViewportWidget;
     class AboutDialog;
-    class EnvironmentWindow;
     class LogBridge;
     class WindowBridge;
     class NativeWindowFilter;
@@ -34,7 +33,6 @@ namespace SmileEditor {
 
     private slots:
         void OnHelpAbout();
-        void OnOpenEnvironmentWindow();
         void OnRendererReady();
         void UpdateStats();
         void TriggerShaderCompileAndReload(const QString& Path);
@@ -48,7 +46,6 @@ namespace SmileEditor {
 
         ViewportWidget*       Viewport    = nullptr;
         QPointer<AboutDialog> AboutDlg;
-        QPointer<EnvironmentWindow> EnvironmentDlg;
 
         StatusBridge*         StatusBr    = nullptr; // ponte C++ -> StatusBar.qml
         LogBridge*            ConsoleLog  = nullptr; // ponte C++ -> ConsolePanel.qml
@@ -56,8 +53,6 @@ namespace SmileEditor {
         NativeWindowFilter*   WinFilter   = nullptr; // frameless nativo (Slate-style)
         MenuBridge*           Menus       = nullptr; // ponte C++ -> EditorMenuBar.qml
         QDockWidget*          ConsoleDock = nullptr; // p/ toggle/estado no menu Janela
-
-        QString               CurrentHDRPath;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

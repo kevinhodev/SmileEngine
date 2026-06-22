@@ -25,7 +25,6 @@ namespace SmileEditor {
         return QStringList {
             StylesDir + "/global.qss",
             StylesDir + "/MainWindow.qss",
-            StylesDir + "/EnvironmentWindow.qss",
             StylesDir + "/AboutDialog.qss"
         };
     }

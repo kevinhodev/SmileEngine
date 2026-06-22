@@ -1,6 +1,5 @@
 #include "SmileEditor/MainWindow.h"
 #include "SmileEditor/AboutDialog.h"
-#include "SmileEditor/EnvironmentWindow.h"
 #include "SmileEditor/LogBridge.h"
 #include "SmileEditor/LucideIcon.h"
 #include "SmileEditor/MenuBridge.h"
@@ -229,7 +228,6 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
 
         // ---- Janela ----
-        connect(Menus, &MenuBridge::OpenEnvironmentRequested, this, &MainWindow::OnOpenEnvironmentWindow);
         connect(Menus, &MenuBridge::ToggleConsoleRequested, this, [this]() {
             if (ConsoleDock) ConsoleDock->setVisible(!ConsoleDock->isVisible());
         });
@@ -246,7 +244,6 @@ namespace SmileEditor {
         };
         AddShortcut(QKeySequence(tr("Ctrl+O")),       [this]{ Menus->loadScene(); });
         AddShortcut(QKeySequence(tr("Ctrl+Shift+O")), [this]{ Menus->addScene(); });
-        AddShortcut(QKeySequence(tr("Ctrl+Shift+A")), [this]{ Menus->openEnvironment(); });
         AddShortcut(QKeySequence::Quit,               [this]{ close(); });
     }
 
@@ -309,29 +306,6 @@ namespace SmileEditor {
         // (so o editor o conhece); em falha o renderer segue na lua procedural branca.
         Viewport->GetRenderer()->LoadMoonTexture(
             QString(SMILE_ASSETS_DIR "/Textures/Sky/moon_lroc_color_2k.jpg").toStdWString());
-
-        if (EnvironmentDlg) {
-            EnvironmentDlg->InitializeWithRenderer(Viewport->GetRenderer());
-            EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
-        }
-    }
-
-    void MainWindow::OnOpenEnvironmentWindow() {
-        if (!EnvironmentDlg) {
-            EnvironmentDlg = new EnvironmentWindow(this);
-            EnvironmentDlg->setAttribute(Qt::WA_DeleteOnClose, false);
-            connect(EnvironmentDlg, &EnvironmentWindow::HDRChanged, this, [this](const QString& Path) {
-                CurrentHDRPath = Path;
-            });
-        }
-
-        if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized()) {
-            EnvironmentDlg->InitializeWithRenderer(Viewport->GetRenderer());
-        }
-        EnvironmentDlg->SetCurrentHDRPath(CurrentHDRPath);
-        EnvironmentDlg->show();
-        EnvironmentDlg->raise();
-        EnvironmentDlg->activateWindow();
     }
 
     void MainWindow::UpdateStats() {
