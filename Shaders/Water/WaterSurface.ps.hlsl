@@ -1,7 +1,50 @@
 #include "WaterCommon.hlsli"
 
-TextureCube SpecularCube : register(t0);
+TextureCube  SpecularCube : register(t0);
 SamplerState LinearClamp  : register(s1);
+
+// Raios da atmosfera em km (devem coincidir com AtmosphereConstants no C++)
+static const float kAtmoBotR    = 6360.0f;
+static const float kAtmoTopR    = 6460.0f;
+// Altura do observador ao nível do oceano (= PlanetRadii.x + kGroundAltitudeKm)
+static const float kAtmoViewH   = 6360.5f;
+static const float kWaterPI     = 3.14159265f;
+
+// Parametrização idêntica à SkyViewParamsToUv em AtmosphereCommon.hlsli
+float2 WaterSkyViewToUv(float viewZenithCos, float lightViewCos, float viewHeight) {
+    float vHorizon           = sqrt(max(0.0f, viewHeight * viewHeight - kAtmoBotR * kAtmoBotR));
+    float cosBeta            = vHorizon / max(viewHeight, 1e-4f);
+    float beta               = acos(clamp(cosBeta, -1.0f, 1.0f));
+    float zenithHorizonAngle = kWaterPI - beta;
+
+    float viewZenithAngle = acos(clamp(viewZenithCos, -1.0f, 1.0f));
+    float u, v;
+    if (viewZenithAngle < zenithHorizonAngle) {
+        float coord = viewZenithAngle / max(zenithHorizonAngle, 1e-4f);
+        coord = 1.0f - coord;
+        coord = 1.0f - sqrt(max(0.0f, coord));
+        v = coord * 0.5f;
+    } else {
+        float coord = (viewZenithAngle - zenithHorizonAngle) / max(beta, 1e-4f);
+        coord = sqrt(max(0.0f, coord));
+        v = coord * 0.5f + 0.5f;
+    }
+    float coord = -lightViewCos * 0.5f + 0.5f;
+    u = sqrt(max(0.0f, coord));
+    return float2(u, v);
+}
+
+// Amostra a sky view LUT para a direção de reflexo R
+float3 SampleAtmoSkyView(float3 R) {
+    float3 up      = float3(0.0f, 1.0f, 0.0f);
+    float3 sunDir3 = normalize(SunDirection.xyz);
+    float  viewZenithCos = dot(R, up);
+    float3 viewHoriz     = R - up * viewZenithCos;
+    float3 sunHoriz      = sunDir3 - up * dot(sunDir3, up);
+    float  lightViewCos  = dot(normalize(viewHoriz + 1e-6f), normalize(sunHoriz + 1e-6f));
+    float2 uv = WaterSkyViewToUv(viewZenithCos, lightViewCos, kAtmoViewH);
+    return AtmoSkyViewTex.SampleLevel(LinearClamp, uv, 0.0f).rgb;
+}
 
 float4 main(VSOutput IN) : SV_Target {
     int debugMode = (int)floor(DebugParams.x + 0.5f);
@@ -103,13 +146,18 @@ float4 main(VSOutput IN) : SV_Target {
     
     float3 R = reflect(-V, Nrefl);
     float3 reflection;
-    if (Misc.y > 0.5) {
+    if (DepthParams.w > 0.5) {
+        // Atmosfera Bruneton ativa: usa a sky-view LUT gerada em tempo real
+        reflection = SampleAtmoSkyView(R);
+    } else if (Misc.y > 0.5) {
+        // IBL estático (HDR carregado): usa o cubo pré-filtrado
         float lod = reflectionRoughness * Misc.w;
         reflection = SpecularCube.SampleLevel(LinearClamp, R, lod).rgb * Misc.z;
     } else {
+        // Fallback analítico quando nenhum dos dois está ativo
         reflection = AnalyticSky(R);
     }
-    reflection *= ShadeParams.y; 
+    reflection *= ShadeParams.y;
     
     float F = FresnelSchlick(0.02, NoV, ShadeParams.x);
     if (debugMode == 5) {

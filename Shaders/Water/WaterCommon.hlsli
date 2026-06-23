@@ -54,8 +54,9 @@ float3 WaterFFTNormalFromDisplacement(float2 worldXZ, float worldStep, float nor
     return normalize(float3(hL - hR, max(normalUp * 0.65, 1.0), hD - hU));
 }
 
-Texture2D<float4> WaterNormalTex : register(t4);
-SamplerState      AnisoWrap      : register(s2);
+Texture2D<float4> WaterNormalTex  : register(t4);
+Texture2D<float4> AtmoSkyViewTex  : register(t5);
+SamplerState      AnisoWrap       : register(s2);
 
 Texture2D<float4> SceneColor : register(t2);
 Texture2D<float>  SceneDepth : register(t3);

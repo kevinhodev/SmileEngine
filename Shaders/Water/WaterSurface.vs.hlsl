@@ -60,11 +60,9 @@ VSOutput main(VSInput IN) {
         normal = normalize(lerp(float3(0.0, 1.0, 0.0), normal, farNormalFade));
     }
 
-    float2 flowDir = OceanParams1.yz;
-    float2 trans = Misc.x * OceanParams0.y * 0.0025 * flowDir;
     float2 vTex = worldPos.xz * 0.005;
-    o.baseTC.xy = vTex * BumpParams.x + trans;
-    o.baseTC.zw = vTex * (2.0 * BumpParams.x * BumpParams.y) + trans * 2.0;
+    o.baseTC.xy = vTex * BumpParams.x;
+    o.baseTC.zw = vTex * (2.0 * BumpParams.x * BumpParams.y);
     o.debugData = float4(tileSize, subsetPattern, internalLod, geomorph);
     o.tileUV = localUV;
 
