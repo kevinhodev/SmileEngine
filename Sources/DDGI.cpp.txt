@@ -1,0 +1,469 @@
+#include "Smile/Graphics/DDGI.h"
+#include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Scene/Scene.h"
+#include "Smile/Graphics/Material.h"
+#include "Smile/Graphics/Mesh.h"
+#include "Smile/Core/HResultCheck.h"
+#include "Smile/Core/Logger.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+
+namespace Smile {
+    namespace {
+        constexpr DXGI_FORMAT kAtlasFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+        ComPtr<ID3D12Resource> CreateTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
+                                           DXGI_FORMAT _Fmt) {
+            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+            D3D12_RESOURCE_DESC Desc{};
+            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            Desc.Width            = _W;
+            Desc.Height           = _H;
+            Desc.DepthOrArraySize = 1;
+            Desc.MipLevels        = 1;
+            Desc.Format           = _Fmt;
+            Desc.SampleDesc       = { 1, 0 };
+            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            ComPtr<ID3D12Resource> Tex;
+            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
+                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
+            return Tex;
+        }
+
+        struct DDGIInstanceGeo {
+            Vec4 BaseColor;    
+            u32  VertexBase;   
+            u32  IndexBase;    
+            u32  AlbedoIndex = 0; 
+            u32  HasAlbedo   = 0; 
+            u32  TwoSided    = 0; 
+            u32  Pad0 = 0, Pad1 = 0, Pad2 = 0; 
+        };
+
+        ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
+                                                   D3D12_RESOURCE_STATES _State,
+                                                   D3D12_RESOURCE_FLAGS _Flags = D3D12_RESOURCE_FLAG_NONE) {
+            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+            D3D12_RESOURCE_DESC Desc{};
+            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            Desc.Width            = _Size;
+            Desc.Height           = 1;
+            Desc.DepthOrArraySize = 1;
+            Desc.MipLevels        = 1;
+            Desc.Format           = DXGI_FORMAT_UNKNOWN;
+            Desc.SampleDesc       = { 1, 0 };
+            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            Desc.Flags            = _Flags;
+            ComPtr<ID3D12Resource> Buf;
+            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
+                     _State, nullptr, IID_PPV_ARGS(&Buf)));
+            return Buf;
+        }
+
+        ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* _Device, UINT64 _Size,
+                                                  u8** _MappedOut) {
+            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+            D3D12_RESOURCE_DESC Desc{};
+            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            Desc.Width            = _Size;
+            Desc.Height           = 1;
+            Desc.DepthOrArraySize = 1;
+            Desc.MipLevels        = 1;
+            Desc.Format           = DXGI_FORMAT_UNKNOWN;
+            Desc.SampleDesc       = { 1, 0 };
+            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            ComPtr<ID3D12Resource> Buf;
+            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
+                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Buf)));
+            if (_MappedOut) {
+                D3D12_RANGE NoRead{ 0, 0 };
+                SMILE_HR(Buf->Map(0, &NoRead, reinterpret_cast<void**>(_MappedOut)));
+            }
+            return Buf;
+        }
+    }
+
+    void FDDGI::Initialize(ID3D12Device* _Device) {
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 8, 1, true);
+        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 1, 1);
+        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 1, 1);
+        RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
+        CreateConstantBuffer(_Device);
+        Initialized = true;
+    }
+
+    void FDDGI::CreateConstantBuffer(ID3D12Device* _Device) {
+        const UINT64 Size = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(DDGIConstants);
+        CB = CreateUploadBuffer(_Device, Size, &MappedCB);
+    }
+
+    void FDDGI::ReleaseSceneResources(FTextureSRVHeap& _SRVHeap) {
+        auto FreeSlot = [&](u32& Slot, u32 Count) {
+            if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
+        };
+        FreeSlot(AtlasSRVSlot, 1);
+        FreeSlot(AtlasUAVSlot, 1);
+        FreeSlot(DistSRVSlot, 1);
+        FreeSlot(DistUAVSlot, 1);
+        FreeSlot(ProbesTraceSRVSlot, 1);
+        FreeSlot(ProbesTraceUAVSlot, 1);
+        FreeSlot(InstanceSRVSlot, 1);
+        FreeSlot(VertexSRVSlot, 1);
+        FreeSlot(IndexSRVSlot, 1);
+        FreeSlot(ProbeDataSRVSlot, 1);
+        FreeSlot(ProbeRayCountSRVSlot, 1);
+        FreeSlot(ProbeDataUAVSlot, 2); 
+        ProbeRayCountUAVSlot = kInvalidSlot;
+        FreeSlot(TraceTableStart, 8);
+        FreeSlot(SceneGITableStart_, 3);
+        IrradAtlas.Reset();
+        DistAtlas.Reset();
+        ProbesTrace.Reset();
+        InstanceGeoBuf.Reset();
+        MergedVertexBuf.Reset();
+        MergedIndexBuf.Reset();
+        ProbeDataBuf.Reset();
+        ProbeRayCountBuf.Reset();
+        AtlasState         = D3D12_RESOURCE_STATE_COMMON;
+        DistState          = D3D12_RESOURCE_STATE_COMMON;
+        ProbesState        = D3D12_RESOURCE_STATE_COMMON;
+        ProbeDataState     = D3D12_RESOURCE_STATE_COMMON;
+        ProbeRayCountState = D3D12_RESOURCE_STATE_COMMON;
+        Ready = false;
+    }
+
+    void FDDGI::SetupForScene(ID3D12Device* _Device, FCommandQueue& _Queue,
+                              FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
+                              const Vec3& _AABBMin, const Vec3& _AABBMax,
+                              u32 _TlasSRVSlot, u32 _SkyViewSRVSlot) {
+        if (!Initialized) return;
+        ReleaseSceneResources(_SRVHeap);
+
+        const u32 NumRenderables = static_cast<u32>(_Scene.Renderables().size());
+        if (NumRenderables == 0 || _TlasSRVSlot == kInvalidSlot) {
+            LogWarning("[GI] - DDGI: Cena sem Geometria/TLAS; Volume nao Criado");
+            return;
+        }
+
+        Vec3 ext = { std::max(_AABBMax.X - _AABBMin.X, 0.1f),
+                     std::max(_AABBMax.Y - _AABBMin.Y, 0.1f),
+                     std::max(_AABBMax.Z - _AABBMin.Z, 0.1f) };
+        f32 maxExt = std::max(ext.X, std::max(ext.Y, ext.Z));
+        const int kTargetMax = 24, kMaxPerAxis = 32;
+        SpacingV = std::max(maxExt / (kTargetMax - 1), 0.5f);
+        auto axisCount = [&](f32 e) {
+            int n = static_cast<int>(std::ceil(e / SpacingV)) + 1;
+            return std::clamp(n, 2, kMaxPerAxis);
+        };
+        CountX = axisCount(ext.X); CountY = axisCount(ext.Y); CountZ = axisCount(ext.Z);
+        GridMinV = { _AABBMin.X - 0.5f * SpacingV, _AABBMin.Y - 0.5f * SpacingV,
+                     _AABBMin.Z - 0.5f * SpacingV };
+        NumProbes       = static_cast<u32>(CountX) * CountY * CountZ;
+        AtlasWidth      = static_cast<u32>(CountX) * CountZ * kTileSize;
+        AtlasHeight     = static_cast<u32>(CountY) * kTileSize;
+        DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * kDistTileSize;
+        DistAtlasHeight = static_cast<u32>(CountY) * kDistTileSize;
+        MaxRayDist      = std::sqrt(ext.X * ext.X + ext.Y * ext.Y + ext.Z * ext.Z) * 1.5f;
+
+        IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat);
+        DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT);
+        ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat);
+
+        std::unordered_map<const FGpuMesh*, std::pair<u32, u32>> MeshBase; 
+        std::vector<const FGpuMesh*> UniqueMeshes;
+        u32 TotalVerts = 0, TotalIndices = 0;
+        for (u32 i = 0; i < NumRenderables; ++i) {
+            const FGpuMesh* M = _Scene.Renderables()[i].Mesh;
+            if (!M || !M->IsValid() || MeshBase.count(M)) continue;
+            MeshBase[M] = { TotalVerts, TotalIndices };
+            UniqueMeshes.push_back(M);
+            TotalVerts   += M->VertexCount();
+            TotalIndices += M->GetIndexCount();
+        }
+        const u32 VertElems = std::max(TotalVerts, 1u);
+        const u32 IdxElems  = std::max(TotalIndices, 1u);
+        MergedVertexBuf = CreateDefaultBuffer(_Device,
+            static_cast<UINT64>(VertElems) * sizeof(Vertex), D3D12_RESOURCE_STATE_COPY_DEST);
+        MergedIndexBuf  = CreateDefaultBuffer(_Device,
+            static_cast<UINT64>(IdxElems) * sizeof(u32), D3D12_RESOURCE_STATE_COPY_DEST);
+        ProbeDataBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(Vec4),
+            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
+            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+        u8* GeoMapped = nullptr;
+        InstanceGeoBuf = CreateUploadBuffer(_Device,
+            static_cast<UINT64>(NumRenderables) * sizeof(DDGIInstanceGeo), &GeoMapped);
+        for (u32 i = 0; i < NumRenderables; ++i) {
+            const FRenderable& R = _Scene.Renderables()[i];
+            DDGIInstanceGeo g{};
+            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f }; 
+            if (R.Material) {
+                g.BaseColor = R.Material->Constants.BaseColorFactor;
+                g.TwoSided  = R.Material->TwoSided ? 1u : 0u; 
+                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
+                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
+                    g.HasAlbedo   = 1;
+                }
+            }
+            auto It = R.Mesh ? MeshBase.find(R.Mesh) : MeshBase.end();
+            if (It != MeshBase.end()) { g.VertexBase = It->second.first; g.IndexBase = It->second.second; }
+            std::memcpy(GeoMapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
+        }
+        InstanceGeoBuf->Unmap(0, nullptr);
+
+        AtlasSRVSlot       = _SRVHeap.Allocate(1);
+        AtlasUAVSlot       = _SRVHeap.Allocate(1);
+        DistSRVSlot        = _SRVHeap.Allocate(1);
+        DistUAVSlot        = _SRVHeap.Allocate(1);
+        ProbesTraceSRVSlot = _SRVHeap.Allocate(1);
+        ProbesTraceUAVSlot = _SRVHeap.Allocate(1);
+        InstanceSRVSlot    = _SRVHeap.Allocate(1);
+        VertexSRVSlot      = _SRVHeap.Allocate(1);
+        IndexSRVSlot       = _SRVHeap.Allocate(1);
+        ProbeDataSRVSlot     = _SRVHeap.Allocate(1);
+        ProbeRayCountSRVSlot = _SRVHeap.Allocate(1);
+
+        const u32 RelocUAVBase = _SRVHeap.Allocate(2);
+        ProbeDataUAVSlot     = RelocUAVBase;
+        ProbeRayCountUAVSlot = RelocUAVBase + 1;
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC Tex2DSrv{};
+        Tex2DSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        Tex2DSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        Tex2DSrv.Format                  = kAtlasFormat;
+        Tex2DSrv.Texture2D.MipLevels     = 1;
+        _SRVHeap.CreateSRV(_Device, IrradAtlas.Get(),  Tex2DSrv, AtlasSRVSlot);
+        _SRVHeap.CreateSRV(_Device, ProbesTrace.Get(), Tex2DSrv, ProbesTraceSRVSlot);
+        Tex2DSrv.Format = DXGI_FORMAT_R16G16_FLOAT;
+        _SRVHeap.CreateSRV(_Device, DistAtlas.Get(), Tex2DSrv, DistSRVSlot);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC Tex2DUav{};
+        Tex2DUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        Tex2DUav.Format        = kAtlasFormat;
+        _SRVHeap.CreateUAV(_Device, IrradAtlas.Get(),  Tex2DUav, AtlasUAVSlot);
+        _SRVHeap.CreateUAV(_Device, ProbesTrace.Get(), Tex2DUav, ProbesTraceUAVSlot);
+        Tex2DUav.Format = DXGI_FORMAT_R16G16_FLOAT;
+        _SRVHeap.CreateUAV(_Device, DistAtlas.Get(), Tex2DUav, DistUAVSlot);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC BufSrv{};
+        BufSrv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+        BufSrv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        BufSrv.Format                     = DXGI_FORMAT_UNKNOWN;
+        BufSrv.Buffer.FirstElement        = 0;
+        BufSrv.Buffer.NumElements         = NumRenderables;
+        BufSrv.Buffer.StructureByteStride = sizeof(DDGIInstanceGeo);
+        _SRVHeap.CreateSRV(_Device, InstanceGeoBuf.Get(), BufSrv, InstanceSRVSlot);
+
+        BufSrv.Buffer.NumElements         = VertElems;
+        BufSrv.Buffer.StructureByteStride = sizeof(Vertex);
+        _SRVHeap.CreateSRV(_Device, MergedVertexBuf.Get(), BufSrv, VertexSRVSlot);
+
+        BufSrv.Format                     = DXGI_FORMAT_R32_UINT;
+        BufSrv.Buffer.NumElements         = IdxElems;
+        BufSrv.Buffer.StructureByteStride = 0;
+        _SRVHeap.CreateSRV(_Device, MergedIndexBuf.Get(), BufSrv, IndexSRVSlot);
+
+        BufSrv.Format                     = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        BufSrv.Buffer.NumElements         = NumProbes;
+        BufSrv.Buffer.StructureByteStride = 0;
+        _SRVHeap.CreateSRV(_Device, ProbeDataBuf.Get(), BufSrv, ProbeDataSRVSlot);
+
+        BufSrv.Format                     = DXGI_FORMAT_R32_UINT;
+        BufSrv.Buffer.NumElements         = NumProbes;
+        BufSrv.Buffer.StructureByteStride = 0;
+        _SRVHeap.CreateSRV(_Device, ProbeRayCountBuf.Get(), BufSrv, ProbeRayCountSRVSlot);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC BufUav{};
+        BufUav.ViewDimension       = D3D12_UAV_DIMENSION_BUFFER;
+        BufUav.Format              = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        BufUav.Buffer.FirstElement = 0;
+        BufUav.Buffer.NumElements  = NumProbes;
+        _SRVHeap.CreateUAV(_Device, ProbeDataBuf.Get(), BufUav, ProbeDataUAVSlot);
+        BufUav.Format              = DXGI_FORMAT_R32_UINT;
+        _SRVHeap.CreateUAV(_Device, ProbeRayCountBuf.Get(), BufUav, ProbeRayCountUAVSlot);
+
+        TraceTableStart = _SRVHeap.Allocate(8);
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
+            _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
+            _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
+            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
+            _SRVHeap.CpuHandleStaging(VertexSRVSlot),
+            _SRVHeap.CpuHandleStaging(IndexSRVSlot),
+            _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
+            _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
+        };
+        UINT DstCount = 8; UINT SrcCounts[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
+        _Device->CopyDescriptors(1, &Dst, &DstCount, 8, Src, SrcCounts,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        SceneGITableStart_ = _SRVHeap.Allocate(3);
+        D3D12_CPU_DESCRIPTOR_HANDLE GDst = _SRVHeap.CpuHandle(SceneGITableStart_);
+        D3D12_CPU_DESCRIPTOR_HANDLE GSrc[3] = {
+            _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
+            _SRVHeap.CpuHandleStaging(DistSRVSlot),
+            _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
+        };
+        UINT GDstCount = 3; UINT GSrcCounts[3] = { 1, 1, 1 };
+        _Device->CopyDescriptors(1, &GDst, &GDstCount, 3, GSrc, GSrcCounts,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        CPU.GridMinSpacing  = { GridMinV.X, GridMinV.Y, GridMinV.Z, SpacingV };
+        CPU.GridCountRays   = { (f32)CountX, (f32)CountY, (f32)CountZ, (f32)kRaysPerProbe };
+        CPU.AtlasParams     = { (f32)kTileSize, (f32)AtlasWidth, (f32)AtlasHeight, (f32)NumProbes };
+        CPU.DistAtlasParams = { (f32)kDistTileSize, (f32)DistAtlasWidth, (f32)DistAtlasHeight, 0.0f };
+
+        _Queue.ResetForRecording();
+        ID3D12GraphicsCommandList* CL = _Queue.List();
+        ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
+        CL->SetDescriptorHeaps(1, Heaps);
+
+        auto PushBarrier = [](std::vector<D3D12_RESOURCE_BARRIER>& V, ID3D12Resource* R,
+                              D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = R;
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = Before;
+            B.Transition.StateAfter  = After;
+            V.push_back(B);
+        };
+        std::vector<D3D12_RESOURCE_BARRIER> ToCopy, FromCopy;
+        for (const FGpuMesh* M : UniqueMeshes) {
+            if (!M->IsDefaultHeap()) continue;
+            PushBarrier(ToCopy,   M->VertexResource(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            PushBarrier(ToCopy,   M->IndexResource(),  D3D12_RESOURCE_STATE_INDEX_BUFFER,               D3D12_RESOURCE_STATE_COPY_SOURCE);
+            PushBarrier(FromCopy, M->VertexResource(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            PushBarrier(FromCopy, M->IndexResource(),  D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        }
+        if (!ToCopy.empty()) CL->ResourceBarrier(static_cast<UINT>(ToCopy.size()), ToCopy.data());
+        for (const FGpuMesh* M : UniqueMeshes) {
+            const auto Base = MeshBase[M];
+            CL->CopyBufferRegion(MergedVertexBuf.Get(), static_cast<UINT64>(Base.first) * sizeof(Vertex),
+                                 M->VertexResource(), 0, static_cast<UINT64>(M->VertexCount()) * sizeof(Vertex));
+            CL->CopyBufferRegion(MergedIndexBuf.Get(), static_cast<UINT64>(Base.second) * sizeof(u32),
+                                 M->IndexResource(), 0, static_cast<UINT64>(M->GetIndexCount()) * sizeof(u32));
+        }
+
+        PushBarrier(FromCopy, MergedVertexBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        PushBarrier(FromCopy, MergedIndexBuf.Get(),  D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        CL->ResourceBarrier(static_cast<UINT>(FromCopy.size()), FromCopy.data());
+
+        Transition(CL, IrradAtlas.Get(), AtlasState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(CL, DistAtlas.Get(),  DistState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        const float Zero[4] = { 0, 0, 0, 0 };
+        CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(AtlasUAVSlot),
+                                          _SRVHeap.CpuHandleStaging(AtlasUAVSlot),
+                                          IrradAtlas.Get(), Zero, 0, nullptr);
+        CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(DistUAVSlot),
+                                          _SRVHeap.CpuHandleStaging(DistUAVSlot),
+                                          DistAtlas.Get(), Zero, 0, nullptr);
+
+        Transition(CL, ProbeDataBuf.Get(), ProbeDataState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(ProbeDataUAVSlot),
+                                          _SRVHeap.CpuHandleStaging(ProbeDataUAVSlot),
+                                          ProbeDataBuf.Get(), Zero, 0, nullptr);
+
+        Transition(CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        const UINT RayCountInit[4] = { 64, 64, 64, 64 };
+        CL->ClearUnorderedAccessViewUint(_SRVHeap.GpuHandle(ProbeRayCountUAVSlot),
+                                         _SRVHeap.CpuHandleStaging(ProbeRayCountUAVSlot),
+                                         ProbeRayCountBuf.Get(), RayCountInit, 0, nullptr);
+        Transition(CL, IrradAtlas.Get(),   AtlasState,     kAtlasRead);
+        Transition(CL, DistAtlas.Get(),    DistState,      kAtlasRead);
+        Transition(CL, ProbeDataBuf.Get(), ProbeDataState, kAtlasRead); 
+        Transition(CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        SMILE_HR(CL->Close());
+        ID3D12CommandList* Lists[] = { CL };
+        _Queue.ExecuteAndSync(Lists, 1);
+
+        Ready = true;
+        RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0; 
+        LogInfo("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
+                "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
+                "), spacing " + std::to_string(SpacingV) + ", atlas " +
+                std::to_string(AtlasWidth) + "x" + std::to_string(AtlasHeight));
+    }
+
+    void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,
+                               const Vec3& _SunColor, u32 _FrameIndex) {
+        if (!Ready) return;
+        FrameSlot = _FrameSlot;
+        CPU.SunDirIntensity = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, _SunIntensity };
+        CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z, Hysteresis };
+        CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity, NormalBias };
+        CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
+
+        const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
+        const f32 EffMin = AdaptiveRays ? (f32)MinRays : 64.0f;
+        CPU.MiscParams      = { Relocation ? 1.0f : 0.0f, DeactivationThreshold, EffMax, EffMin };
+        std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
+                    &CPU, sizeof(DDGIConstants));
+    }
+
+    void FDDGI::Transition(ID3D12GraphicsCommandList* _CL, ID3D12Resource* _Res,
+                           D3D12_RESOURCE_STATES& _State, D3D12_RESOURCE_STATES _After) {
+        if (_State == _After) return;
+        D3D12_RESOURCE_BARRIER B{};
+        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        B.Transition.pResource   = _Res;
+        B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        B.Transition.StateBefore = _State;
+        B.Transition.StateAfter  = _After;
+        _CL->ResourceBarrier(1, &B);
+        _State = _After;
+    }
+
+    void FDDGI::RecordUpdate(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+        if (!Ready) return;
+
+        Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        TracePSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTableStart));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbesTraceUAVSlot));
+        _CL->Dispatch(NumProbes, 1, 1);
+
+        Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+        UpdatePSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(AtlasUAVSlot));
+        _CL->Dispatch(NumProbes, 1, 1);
+
+        Transition(_CL, DistAtlas.Get(), DistState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        UpdateDistPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DistUAVSlot));
+        _CL->Dispatch(NumProbes, 1, 1);
+
+        if (RelocateFramesLeft > 0) {
+            --RelocateFramesLeft;
+            Transition(_CL, ProbeDataBuf.Get(),     ProbeDataState,     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            RelocatePSO.Bind(_CL);
+            _CL->SetComputeRootConstantBufferView(0, CBAddr());
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbeDataUAVSlot)); 
+            _CL->Dispatch((NumProbes + 63) / 64, 1, 1);
+            Transition(_CL, ProbeDataBuf.Get(),     ProbeDataState,     kAtlasRead); 
+            Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+
+        Transition(_CL, IrradAtlas.Get(), AtlasState, kAtlasRead);
+        Transition(_CL, DistAtlas.Get(),  DistState,  kAtlasRead);
+    }
+}
