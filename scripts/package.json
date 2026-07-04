@@ -1,0 +1,12 @@
+{
+  "name": "smileengine-trends",
+  "version": "1.0.0",
+  "description": "Google Trends analysis for game engine content strategy",
+  "main": "trends.js",
+  "scripts": {
+    "start": "node trends.js"
+  },
+  "dependencies": {
+    "google-trends-api": "^4.9.2"
+  }
+}
