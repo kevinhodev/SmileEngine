@@ -1,18 +1,21 @@
-// ReSTIR PT — Pass A (F2: candidato com BSDF completo + reconnection shift com Jacobiano).
+// ReSTIR PT — Pass A (F2b: random replay + hybrid shift).
 //
-// Por pixel: (1) x1 do G-buffer; (2) 1 candidato indireto amostrando o BSDF COMPLETO de x1
-// (difuso OU especular, one-sample MIS), com Lo = radiancia COMPLETA multi-bounce saindo de x2;
-// (3) reuso temporal reprojetando o reservoir do frame anterior (WRS, reconnection shift com
-// Jacobiano, MCap); (4) resolve BRDF-aware. O DIRETO do sol em x1 e o emissivo ficam FORA do
-// reservoir (deterministicos) e sao somados no resolve. Saida full-radiance -> deferred
-// (ReflectionParams.w==3). Reservoir {x1,xk,nk,Lo,M,W} empacotado em 64B ping-pong.
+// Por pixel: (1) x1 do G-buffer; (2) 1 candidato via walk hibrido (PTShift.hlsli): prefixo
+// replayavel ate o primeiro vertice conectavel x_{k-1} -> reconexao em x_k -> sufixo Lo; a luz
+// dos vertices do prefixo (e de caminhos sem reconexao) soma DIRETO no frame (Cemit, fora do
+// reservoir); (3) reuso temporal: hybrid shift da amostra reprojetada (replay do prefixo com o
+// seed FONTE + reconexao + Jacobiano); (4) resolve com o C rastreado do vencedor. O DIRETO do
+// sol em x1 e o emissivo ficam FORA do reservoir (deterministicos). Saida full-radiance ->
+// deferred (ReflectionParams.w==3). Reservoir 64B ping-pong (q3 = x_{k-1} + kb).
 //
-// INVARIANTE anti-firefly (a licao da 1a tentativa do F2): o reservoir persistido esta SEMPRE no
-// dominio do pixel que o escreveu — o Jacobiano do shift entra UMA vez, no peso do merge, e o x1
-// e re-ancorado antes do pack. Persistir o x1 de origem faria o proximo frame recalcular J contra
-// um x1 cada vez mais defasado = Jacobiano composto/duplicado frame a frame = fireflies.
-// Especular liso (roughness < ShiftParams.y) nao reconecta (quase-delta); fica p/ o replay (F2b).
-// Debug (DebugParams.x==1): media progressiva do estimador de 1 amostra (ground truth).
+// INVARIANTE anti-firefly (licao da 1a tentativa do F2): o reservoir persistido esta SEMPRE no
+// dominio do pixel que o escreveu — o Jacobiano do shift entra UMA vez, no peso do merge, e
+// x1/x_{k-1} sao re-ancorados antes do pack. Persistir a base de origem faria o proximo frame
+// recalcular J contra uma base cada vez mais defasada = Jacobiano composto = fireflies.
+//
+// Debug (DebugParams.x): 1 = media progressiva do estimador de 1 amostra (ground truth);
+// 2 = heatmap de kb (verde=reconexao direta, amarelo/laranja=replay, vermelho=sem reconexao);
+// 3 = canario de auto-replay (residuo |C_shift - C_cand| do proprio pixel; deve ser preto).
 
 #include "../GI/DDGICommon.hlsli"
 #include "../GBuffer.hlsli"
@@ -44,6 +47,7 @@ SamplerState LinearWrap  : register(s1);
 #include "PTRayUtil.hlsli"
 #include "PTMaterial.hlsli"
 #include "PTPathTrace.hlsli"
+#include "PTShift.hlsli"
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
@@ -83,135 +87,100 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // --- (0) Direto do sol em x1 + emissivo (fora do reservoir, deterministico) --------------
     float3 direct = s1.Emissive + PT_SunNEE(s1, V, seed, 0);
 
-    // --- (1) Candidato indireto: amostra o BSDF COMPLETO de x1 (difuso OU especular) ---------
-    // F2: importance sampling do BSDF em x1 -> reconecta em x2 com BSDF completo => o indireto
-    // glossy/especular de x1 volta (o F1 so reconectava o lobe difuso).
-    FPTBsdfSample bs = PTSampleBsdf(s1, V, seed, 0);
-    uint subSeed = GGX_PCG(seed ^ 0xA511E9B3u); // seed do sub-caminho (replay do F2b)
-
-    // Criterios de connectability compartilhados pelo candidato e pelo reuso temporal.
-    float camDist  = length(CameraPos.xyz - s1.Pos);
-    float roughMin = ShiftParams.y;
-    float minDist  = max(ShiftParams.x * camDist, 1e-3f); // footprint κ (Enhanced §4): reconexao
-                                                          // mais curta que isso => J instavel
+    // --- (1) Candidato: walk hibrido (prefixo replayavel -> reconexao em x_k -> sufixo) ------
+    FPTCandidate cand = PT_TraceCandidate(s1, V, seed);
 
     PTReservoir r; PTResInit(r);
     r.x1 = s1.Pos;
-    float3 giSingle = float3(0.0f, 0.0f, 0.0f); // estimador de 1 amostra do indireto (debug)
+    float3 Csel = float3(0.0f, 0.0f, 0.0f); // contribuicao (neste pixel) do sample vencedor
 
-    if (bs.Valid) {
-        RayDesc ray;
-        ray.Origin    = s1.Pos + s1.N * max(TraceParams.w, 1e-3f);
-        ray.Direction = bs.Dir;
-        ray.TMin      = 0.0f;
-        ray.TMax      = TraceParams.y;
-        RayQuery<RAY_FLAG_NONE> q;
-        q.TraceRayInline(Scene, RAY_FLAG_NONE, 0xFF, ray);
-        SMILE_RT_PROCEED(q)
-
-        float3 xk, nk, Lo;
-        float  hitK;
-        if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-            hitK = q.CommittedRayT();
-            FPTSurface h = PTFetchHitSurface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
-                                             q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
-                                             ray.Origin, ray.Direction, hitK, PathParams.w);
-            xk = h.Pos; nk = h.N;
-            float subFirst;
-            Lo = h.Emissive + PT_PathRadiance(h, -bs.Dir, subSeed,
-                                              max((uint)PathParams.x, 1u) - 1u, (uint)PathParams.y,
-                                              /*enableRR=*/true, subFirst);
-        } else {
-            hitK = TraceParams.y;
-            xk = ray.Origin + bs.Dir * hitK; // ponto distante na direcao do ceu
-            nk = -bs.Dir;
-            Lo = ShadeSky(bs.Dir, normalize(SunDirIntensity.xyz), TraceParams.z);
-        }
-
-        // Firefly clamp no Lo por CANAL (clamp por luminancia deixa passar outlier saturado:
-        // Lo azul puro com luminancia 25 tem canal B ~350 — as bolinhas coloridas do Bistro).
-        { float mc = max(Lo.r, max(Lo.g, Lo.b)), mx = PathParams.z;
-          if (mx > 0.0f && mc > mx) Lo *= mx / mc; }
-
-        // Connectability (GRIS §7.5 + Enhanced §4): so reconecta o lobe ESPECULAR se x1 for
-        // rugoso o bastante — reconexao em superficie lisa da pHat quase-delta e W estoura.
-        // Reconexao mais curta que o footprint tambem e vetada (Jacobiano hipersensivel).
-        bool connectable = (bs.Lobe == PT_LOBE_DIFFUSE || s1.Roughness >= roughMin)
-                         && (hitK > minDist);
-
-        if (connectable) {
-            // Direcao de reconexao CONSISTENTE (mesma no peso e no pHat) — evita o descasamento
-            // bs.Dir vs (xk-x1) que amplificava fireflies no especular.
-            float3 wr  = xk - s1.Pos;
-            float  lwr = length(wr);
-            if (lwr > 1e-4f) {
-                float3 omega = wr / lwr;
-                float  pdf   = PT_BsdfPdf(s1, V, omega);
-                if (pdf > 1e-5f) {
-                    // Contribuicao de reconexao (roughness clampada >= roughMin, ver PTMaterial):
-                    // o MESMO f~ usado no pHat do merge/finalize/resolve — target e contribuicao
-                    // nunca divergem. pdf = pdf REAL do sampling (roughness verdadeira).
-                    float3 Finit = PT_ReconnectContribution(s1, V, xk, Lo);
-                    float  wInit = PT_Lum(Finit) / pdf;            // pHat/pdf
-                    PTResUpdate(r, s1.Pos, xk, nk, Lo, hitK, subSeed, wInit, rng);
-                    giSingle = Finit / pdf;                        // estimador de 1 amostra
-                }
-            }
-        }
+    if (cand.HasSample) {
+        float wInit = PT_Lum(cand.Crecon) / cand.pdfRecon; // pHat/pdf
+        if (PTResUpdate(r, s1.Pos, cand.xkm1, cand.xk, cand.nk, cand.Lo, cand.hit1, cand.kb,
+                        seed, wInit, rng))
+            Csel = cand.Crecon;
     }
 
-    // Estimador de 1 amostra (ground truth p/ o debug — antes do reuso temporal).
-    float3 Lsingle = direct + giSingle;
+    // Estimador de 1 amostra (ground truth p/ o debug — antes do reuso temporal). O prefixo
+    // (Cemit) ja e pdf-dividido; so a reconexao divide pelo pdf da direcao.
+    float3 Lsingle = direct + cand.Cemit
+                   + (cand.HasSample ? cand.Crecon / cand.pdfRecon : float3(0.0f, 0.0f, 0.0f));
 
-    // --- (2) Reuso temporal (reprojecao por motion vector + Jacobiano de reconexao) ----------
-    // SEM gate em r.M: o historico sobrevive mesmo quando o candidato do frame e invalido/vetado
-    // (com gate, todo frame que amostrava o lobe especular numa superficie lisa resetava M=0).
+    // --- (2) Reuso temporal: hybrid shift da amostra reprojetada ------------------------------
+    // Sem gate em r.M: o historico sobrevive a frames de candidato invalido/nao-conectavel.
     if (ReuseParams.z > 0.5f) {
         float2 prevUv = uv - Velocity.Load(int3(px, 0)).rg;
         if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
             int2 ppx = int2(prevUv * ScreenParams.xy);
             uint pidx = (uint)ppx.y * W + (uint)ppx.x;
             PTReservoir prev = PTResUnpack(PrevReservoir[pidx]);
+            float camDist   = length(CameraPos.xyz - s1.Pos);
             float posReject = ReuseParams.y * max(camDist, 1.0f);
-            if (prev.M > 0.0f && length(prev.x1 - s1.Pos) < posReject
-                && length(prev.xk - s1.Pos) > minDist) {
+            if (prev.M > 0.0f && length(prev.x1 - s1.Pos) < posReject) {
                 prev.M = min(prev.M, ReuseParams.x); // MCap
-                // pHat BRDF-aware do pixel ATUAL p/ a amostra de prev. prev.x1 = superficie do
-                // pixel de ONTEM (re-ancorado la) => J ~ 1 em reproject de mesma superficie.
-                // J fora da faixa = geometria incompativel: REJEITA o merge (clampar enviesa o
-                // peso p/ cima e vira firefly).
-                float pHatPrev = PT_PHatBrdf(s1, V, prev.xk, prev.Lo);
-                float J = PTReconnectionJacobian(s1.Pos, prev.x1, prev.xk, prev.nk);
-                if (J > 0.125f && J < 8.0f)
-                    PTResMerge(r, prev, pHatPrev, J, rng);
+                // Shift completo: replay do prefixo (kb bounces, seed FONTE) + reconexao.
+                // prev.xkm1 = base re-ancorada ONTEM => J ~ 1 em reproject de mesma superficie.
+                // J fora da faixa = geometria incompativel: REJEITA (clampar enviesa p/ cima).
+                FPTShift sh = PT_HybridShift(s1, V, prev);
+                if (sh.Ok && sh.J > 0.125f && sh.J < 8.0f) {
+                    if (PTResMerge(r, prev, PT_Lum(sh.C), sh.J, rng)) {
+                        Csel   = sh.C;
+                        r.xkm1 = sh.xkm1; // re-ancora a base replayada no destino
+                        r.hitK = sh.hit1;
+                    }
+                }
             }
         }
     }
 
-    // --- (3) Resolve final (vector weights: contribuicao RGB completa / pHat escalar) --------
-    float  pHatSel  = PT_PHatBrdf(s1, V, r.xk, r.Lo);
-    PTResFinalizeW(r, pHatSel);
+    // --- (3) Resolve final (vector weights: C RGB do vencedor / pHat = luminancia dele) ------
+    PTResFinalizeW(r, PT_Lum(Csel));
 
-    // RE-ANCORA o reservoir no dominio do pixel atual antes de persistir: o Jacobiano do shift ja
-    // entrou no peso do merge (e portanto em W). Sem isso o proximo frame recalcula J contra um x1
-    // ancestral = Jacobiano composto frame a frame = a fonte primaria dos fireflies do F2 v1.
-    r.x1   = s1.Pos;
-    r.hitK = (r.M > 0.0f) ? length(r.xk - s1.Pos) : 0.0f;
+    // RE-ANCORA x1 no pixel atual antes de persistir (xkm1/hitK ja foram re-ancorados na
+    // selecao): o Jacobiano do shift ja entrou no peso do merge (e portanto em W). Sem isso o
+    // proximo frame recalcula J contra uma base ancestral = Jacobiano composto = fireflies.
+    r.x1 = s1.Pos;
 
-    float3 indirect = PT_ReconnectContribution(s1, V, r.xk, r.Lo) * r.W;
-    { float mc = max(indirect.r, max(indirect.g, indirect.b)), mx = PathParams.z;
-      if (mx > 0.0f && mc > mx) indirect *= mx / mc; } // clamp por CANAL (vector weights)
-    float3 L = direct + indirect;
+    float3 gi = Csel * r.W;
+    { float mc = max(gi.r, max(gi.g, gi.b)), mx = PathParams.z;
+      if (mx > 0.0f && mc > mx) gi *= mx / mc; } // clamp por CANAL
+    float3 L = direct + gi + cand.Cemit;         // Cemit ja clampado no walk
 
-    // Debug: media progressiva do estimador de 1 amostra (ground truth).
-    if ((uint)DebugParams.x == PT_DEBUG_ACCUM) {
+    // --- Debug ---------------------------------------------------------------------------------
+    uint dbg = (uint)DebugParams.x;
+    if (dbg == PT_DEBUG_ACCUM) {
+        // Media progressiva do estimador de 1 amostra (ground truth).
         float  n    = DebugParams.y;
         float3 prev = (n > 0.5f) ? Accum[px].rgb : float3(0.0f, 0.0f, 0.0f);
         float3 avg  = prev + (Lsingle - prev) / (n + 1.0f);
         Accum[px] = float4(avg, 1.0f);
         L = avg;
+    } else if (dbg == PT_DEBUG_KMAP) {
+        // Heatmap do vertice de reconexao do CANDIDATO deste frame.
+        L = !cand.HasSample ? float3(1.0f, 0.0f, 0.0f)                  // sem reconexao (Cemit)
+          : (cand.kb == 0   ? float3(0.0f, 1.0f, 0.0f)                  // reconecta em x2 (F2a)
+          : (cand.kb == 1   ? float3(1.0f, 1.0f, 0.0f)                  // 1 bounce de replay
+                            : float3(1.0f, 0.4f, 0.0f)));               // 2+ bounces de replay
+    } else if (dbg == PT_DEBUG_CANARY) {
+        // Auto-replay: o shift do candidato p/ o PROPRIO pixel deve reproduzir Crecon bit-exato
+        // (mesmo seed, mesmas dims, mesmos raios). Residuo relativo em vermelho; falha do shift
+        // em azul. Tela preta = replay integro.
+        L = float3(0.0f, 0.0f, 0.0f);
+        if (cand.HasSample) {
+            PTReservoir self; PTResInit(self);
+            self.x1 = s1.Pos; self.xkm1 = cand.xkm1; self.xk = cand.xk; self.nk = cand.nk;
+            self.Lo = cand.Lo; self.hitK = cand.hit1; self.seed = seed; self.kb = cand.kb;
+            self.M = 1.0f; self.W = 1.0f;
+            FPTShift sh = PT_HybridShift(s1, V, self);
+            if (!sh.Ok) {
+                L = float3(0.0f, 0.0f, 1.0f);
+            } else {
+                float e = PT_Lum(abs(sh.C - cand.Crecon)) / max(PT_Lum(cand.Crecon), 1e-4f);
+                L = float3(saturate(e * 50.0f), 0.0f, 0.0f);
+            }
+        }
     }
 
-    PTOut[px] = float4(L, r.hitK); // r.hitK = |xk-x1| da amostra selecionada (hitDist do GI p/ F4)
+    PTOut[px] = float4(L, r.hitK); // r.hitK = |x2-x1| da amostra selecionada (hitDist p/ o F4)
     CurrReservoir[idx] = PTResPack(r);
 }

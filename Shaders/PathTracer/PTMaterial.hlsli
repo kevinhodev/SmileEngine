@@ -154,9 +154,4 @@ float3 PT_ReconnectContribution(FPTSurface s1, float3 V, float3 xk, float3 Lo) {
     return PT_EvalBsdf(sr, V, d / l) * Lo; // PT_EvalBsdf ja embute f*cos
 }
 
-// Target function do F2: luminancia da contribuicao de reconexao (inclui o BRDF de x1).
-float PT_PHatBrdf(FPTSurface s1, float3 V, float3 xk, float3 Lo) {
-    return PT_Luminance(PT_ReconnectContribution(s1, V, xk, Lo));
-}
-
 #endif

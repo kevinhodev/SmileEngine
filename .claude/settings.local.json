@@ -103,7 +103,20 @@
       "Bash('C:/Program Files \\(x86\\)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe' -T cs_6_6 -E main -O3 -Fo __TRACKED_VAR__/PTInitial_f2b.cso PathTracer/PTInitial.cs.hlsl)",
       "PowerShell(Get-Command dxc -ErrorAction SilentlyContinue)",
       "PowerShell(& \"C:\\\\Program Files \\(x86\\)\\\\Windows Kits\\\\10\\\\bin\\\\10.0.22621.0\\\\x86\\\\dxc.exe\" -T cs_6_6 -E main \"D:\\\\Engines\\\\SmileEngine\\\\Shaders\\\\PathTracer\\\\PTInitial.cs.hlsl\" -Fo \"$env:TEMP\\\\PTInitial_test.cso\")",
-      "PowerShell(& \"C:\\\\Program Files \\(x86\\)\\\\Windows Kits\\\\10\\\\bin\\\\10.0.22621.0\\\\x86\\\\dxc.exe\" -T cs_6_6 -E main \"D:\\\\Engines\\\\SmileEngine\\\\Shaders\\\\PathTracer\\\\PTInitial.cs.hlsl\" -Fo \"$env:TEMP\\\\PTInitial_test.cso\"; if \\($?\\) { \"OK\" })"
+      "PowerShell(& \"C:\\\\Program Files \\(x86\\)\\\\Windows Kits\\\\10\\\\bin\\\\10.0.22621.0\\\\x86\\\\dxc.exe\" -T cs_6_6 -E main \"D:\\\\Engines\\\\SmileEngine\\\\Shaders\\\\PathTracer\\\\PTInitial.cs.hlsl\" -Fo \"$env:TEMP\\\\PTInitial_test.cso\"; if \\($?\\) { \"OK\" })",
+      "PowerShell(python -c \"import pypdf; r = pypdf.PdfReader\\(r'C:\\\\Users\\\\user\\\\Downloads\\\\sig22_GRIS.pdf'\\); print\\(len\\(r.pages\\)\\)\")",
+      "PowerShell($cands = @\\(\"py\"\\); foreach \\($c in $cands\\) { $cmd = Get-Command $c -ErrorAction SilentlyContinue; if \\($cmd\\) { Write-Output \"$c -> $\\($cmd.Source\\)\" } }; Get-ChildItem \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Programs\\\\Python\" -ErrorAction SilentlyContinue | Select-Object Name)",
+      "PowerShell(py -X utf8 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Engines-SmileEngine\\\\f807b148-27c9-4ac1-b59b-13c747dd3141\\\\scratchpad\\\\extract_gris.py\" | Out-File \"$env:TEMP\\\\gris_pairwise.txt\" -Encoding utf8; \\(Get-Content \"$env:TEMP\\\\gris_pairwise.txt\" | Measure-Object -Line\\).Lines)",
+      "PowerShell($t = [IO.File]::ReadAllText\\(\"$env:TEMP\\\\gris_pairwise.txt\"\\); $t = $t -replace \"`0\",\"\"; [IO.File]::WriteAllText\\(\"$env:TEMP\\\\gris_pairwise2.txt\", $t\\); Select-String -Path \"$env:TEMP\\\\gris_pairwise2.txt\" -Pattern \"PAGE|[Pp]airwise\" | Select-Object -First 20 | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line\\)\" })",
+      "Bash(python -c ' *)",
+      "Bash(where.exe python3 *)",
+      "Read(//c/Program Files/**)",
+      "Bash(pdftotext -layout \"C:/Users/user/Downloads/lin2026restirptenhanced.pdf\" enhanced.txt)",
+      "Bash(pdftotext -layout \"C:/Users/user/Downloads/sig22_GRIS.pdf\" gris.txt)",
+      "Bash(ls \"C:/Program Files/Git/mingw64/bin/\" | grep -i pdf)",
+      "Bash(py -m pip install pypdfium2 pillow --quiet)",
+      "Bash(py -c ' *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

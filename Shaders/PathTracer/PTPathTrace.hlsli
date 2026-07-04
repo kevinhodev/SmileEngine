@@ -42,30 +42,47 @@ float3 PT_SunNEE(FPTSurface s, float3 V, uint seed, uint bounce) {
     return PT_EvalBsdf(s, V, dir) * Esun;
 }
 
-// Radiancia de um caminho a partir da superficie primaria s (a emissao de s fica com o caller —
-// no F0 ela vem do proprio G-buffer). outFirstDist = |x2-x1| do 1o bounce (hitDist p/ o NRD).
-// enableRR: Russian roulette so no sampling inicial; o replay (F2) chama com false.
+// Cauda de terminacao no DDGI (radiance cache): albedo * irradiancia do atlas (convencao E/pi,
+// identica ao ShadeSurfaceHit).
+float3 PT_DDGITail(FPTSurface h) {
+    return h.Albedo * SampleDDGIIrradiance(IrradAtlas, LinearClamp, h.Pos, h.N,
+                                           GridMinSpacing.xyz, GridMinSpacing.w,
+                                           (int3)GridCount.xyz, (int)AtlasParams.x,
+                                           float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z));
+}
+
+// Radiancia de um caminho a partir da superficie s (a emissao de s fica com o caller).
+// outFirstDist = |x2-x1| do 1o bounce (hitDist p/ o NRD).
+// enableRR: Russian roulette so no sampling inicial; o replay (F2b) nunca entra aqui.
+// bounceBase (F2b): offset GLOBAL das dims — o caminho inteiro usa UM seed e indices de bounce
+// globais, entao qualquer prefixo e replayavel bit-exato e o sufixo (a partir de bounceBase)
+// nunca colide com as dims do prefixo. maxBounces==0 = vertice terminal (NEE + cauda DDGI).
 float3 PT_PathRadiance(FPTSurface s, float3 V, uint seed, uint maxBounces, uint rrStartBounce,
-                       bool enableRR, out float outFirstDist) {
+                       bool enableRR, uint bounceBase, out float outFirstDist) {
+    outFirstDist = TraceParams.y;
+    if (maxBounces == 0)
+        return PT_SunNEE(s, V, seed, bounceBase) + PT_DDGITail(s);
+
     float3 L = float3(0.0f, 0.0f, 0.0f);
     float3 T = float3(1.0f, 1.0f, 1.0f);
-    outFirstDist = TraceParams.y;
 
     [loop]
     for (uint bounce = 0; bounce < maxBounces; ++bounce) {
+        uint gb = bounceBase + bounce; // indice global da dim deste vertice
+
         // NEE do sol neste vertice (bounce 0 em x1 = luz direta unificada no mesmo estimador).
-        L += T * PT_SunNEE(s, V, seed, bounce);
+        L += T * PT_SunNEE(s, V, seed, gb);
 
         // Russian roulette (Enhanced §6.2.4: NUNCA no replay — a dim RR sai da parametrizacao).
-        if (enableRR && bounce >= rrStartBounce) {
+        if (enableRR && gb >= rrStartBounce) {
             float p = clamp(max(T.x, max(T.y, T.z)), 0.05f, 0.95f);
-            if (PTRand(seed, bounce, PT_DIM_RR) >= p)
+            if (PTRand(seed, gb, PT_DIM_RR) >= p)
                 break;
             T /= p;
         }
 
         // Continuacao por BSDF (um lobe).
-        FPTBsdfSample bs = PTSampleBsdf(s, V, seed, bounce);
+        FPTBsdfSample bs = PTSampleBsdf(s, V, seed, gb);
         if (!bs.Valid)
             break;
 
@@ -93,14 +110,8 @@ float3 PT_PathRadiance(FPTSurface s, float3 V, uint seed, uint maxBounces, uint 
             outFirstDist = hitT;
 
         if (bounce + 1 == maxBounces) {
-            // Ultimo vertice: sol via NEE + cauda multi-bounce via DDGI (mesma convencao do
-            // ShadeSurfaceHit: albedo * (Edirect/pi + irradiancia do atlas)).
-            float3 tail = PT_SunNEE(h, -bs.Dir, seed, bounce + 1);
-            tail += h.Albedo * SampleDDGIIrradiance(IrradAtlas, LinearClamp, h.Pos, h.N,
-                                                    GridMinSpacing.xyz, GridMinSpacing.w,
-                                                    (int3)GridCount.xyz, (int)AtlasParams.x,
-                                                    float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z));
-            L += T * tail;
+            // Ultimo vertice: sol via NEE + cauda multi-bounce via DDGI.
+            L += T * (PT_SunNEE(h, -bs.Dir, seed, gb + 1) + PT_DDGITail(h));
             break;
         }
 

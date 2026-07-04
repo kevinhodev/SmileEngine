@@ -3,10 +3,11 @@
 
 // ReSTIR PT — reservoir de caminho empacotado (64B) em StructuredBuffer ping-pong + WRS.
 //
-// F1 usa o SUBCONJUNTO de reconexao: a amostra e o primeiro vertice indireto x_k (=x2) e a
-// radiancia Lo que sai dele em direcao a x1 (o sufixo COMPLETO multi-bounce). A matematica de
-// WRS/Jacobiano/pHat e a mesma do ReSTIR GI (Ouyang 2021) — reaproveitada aqui. Os campos q3 e o
-// PathSeed ficam reservados p/ o random replay + lobe indices do F2 (sem re-layout depois).
+// F2b: a amostra e um caminho na parametrizacao HIBRIDA — kb bounces em PSS (random replay com o
+// seed armazenado) ate x_{k-1}, reconexao em x_k (area/solid angle), e a radiancia Lo que sai de
+// x_k (sufixo completo, nunca replayado). kb=0 degenera na reconexao pura da F1/F2a (x_k = x2).
+// O reservoir persistido esta SEMPRE re-ancorado no pixel que o escreveu (x1 e x_{k-1} do
+// destino) — o Jacobiano do shift entra uma unica vez, no peso do merge.
 //
 // Requer: DDGICommon.hlsli (DDGI_OctEncode/Decode), Reflections/GGXSample.hlsli (GGX_PCG).
 
@@ -15,22 +16,24 @@
 
 struct PTReservoir {
     float3 x1;   // ponto primario (validacao temporal/espacial)
-    float3 xk;   // vertice de reconexao (F1: primeiro vertice indireto x2)
+    float3 xkm1; // base da reconexao x_{k-1} (= x1 quando kb == 0)
+    float3 xk;   // vertice de reconexao
     float3 nk;   // normal em xk (Jacobiano de reconexao)
-    float3 Lo;   // radiancia que sai de xk rumo a x1 (sufixo completo)
-    float  hitK; // |xk - x1| (hitDist do GI p/ o NRD, F4)
+    float3 Lo;   // radiancia que sai de xk rumo a x_{k-1} (sufixo completo)
+    float  hitK; // |x2 - x1| do caminho (hitDist do GI p/ o NRD, F4)
     float  M;    // contagem de amostras
     float  W;    // peso de contribuicao nao-enviesado
     float  wSum; // soma dos pesos de resampling
-    uint   seed; // seed do random replay (reservado F2)
+    uint   seed; // seed do caminho de ORIGEM (replay do prefixo, dims globais por bounce)
+    uint   kb;   // nº de bounces replayados antes da reconexao (0 = reconecta em x2)
 };
 
-// 64B: q0 = x1|M, q1 = xk|W, q2 = Lo(3xf16)+hitK(f16) | nk oct(2xf16) | seed, q3 = reservado F2.
+// 64B: q0 = x1|M, q1 = xk|W, q2 = Lo(3xf16)+hitK(f16) | nk oct(2xf16) | seed, q3 = xkm1|kb.
 struct PTReservoirPacked {
     float4 q0; // x1.xyz (f32), M
     float4 q1; // xk.xyz (f32), W
     uint4  q2; // x=f16(Lo.r,Lo.g), y=f16(Lo.b,hitK), z=f16(nkOct.x,nkOct.y), w=seed
-    uint4  q3; // reservado (F2: pdf_wk, lobe indices, bits de tecnica)
+    uint4  q3; // xyz = asuint(xkm1) (f32 — posicao, NUNCA half), w = kb
 };
 
 float PT_Lum(float3 c) { return dot(c, float3(0.2126f, 0.7152f, 0.0722f)); }
@@ -42,7 +45,8 @@ uint  PTResRngSeed(uint2 px, uint frame, uint salt) {
 float PTResRngNext(inout uint s) { s = GGX_PCG(s); return (s & 0x00FFFFFFu) / 16777216.0f; }
 
 void PTResInit(out PTReservoir r) {
-    r.x1 = 0; r.xk = 0; r.nk = 0; r.Lo = 0; r.hitK = 0; r.M = 0; r.W = 0; r.wSum = 0; r.seed = 0;
+    r.x1 = 0; r.xkm1 = 0; r.xk = 0; r.nk = 0; r.Lo = 0; r.hitK = 0;
+    r.M = 0; r.W = 0; r.wSum = 0; r.seed = 0; r.kb = 0;
 }
 
 PTReservoirPacked PTResPack(PTReservoir r) {
@@ -54,7 +58,7 @@ PTReservoirPacked PTResPack(PTReservoir r) {
     p.q2.y = f32tof16(r.Lo.b) | (f32tof16(r.hitK) << 16);
     p.q2.z = f32tof16(nkOct.x) | (f32tof16(nkOct.y) << 16);
     p.q2.w = r.seed;
-    p.q3 = uint4(0, 0, 0, 0);
+    p.q3 = uint4(asuint(r.xkm1.x), asuint(r.xkm1.y), asuint(r.xkm1.z), r.kb);
     return p;
 }
 
@@ -67,43 +71,43 @@ PTReservoir PTResUnpack(PTReservoirPacked p) {
     float2 nkOct = float2(f16tof32(p.q2.z & 0xFFFFu), f16tof32(p.q2.z >> 16));
     r.nk = DDGI_OctDecode(nkOct);
     r.seed = p.q2.w;
+    r.xkm1 = float3(asfloat(p.q3.x), asfloat(p.q3.y), asfloat(p.q3.z));
+    r.kb   = p.q3.w;
     r.wSum = 0.0f; // nao persistido (recomputado por frame)
     return r;
 }
 
-// pHat alvo p/ (x1,n1) dada a amostra (xk,Lo): luminancia * cosTheta1 (albedo difuso cancela).
-float PTTargetPHat(float3 x1, float3 n1, float3 xk, float3 Lo) {
-    float3 d = xk - x1;
-    float  l = length(d);
-    if (l < 1e-4f) return 0.0f;
-    float cosT = saturate(dot(n1, d / l));
-    return PT_Lum(Lo) * cosT;
-}
-
-// Adiciona um candidato (M=1) com peso de resampling w. x1C = o primario do pixel atual. NOTA:
-// o reservoir persistido e SEMPRE re-ancorado no x1 do pixel que o escreve (PTInitial faz
-// r.x1 = s1.Pos apos o finalize) — W ja embute o Jacobiano do shift aplicado no merge, entao o
-// proximo frame deve calcular J contra o x1 de ONTEM, nunca contra o x1 ancestral da amostra
-// (isso comporia o Jacobiano frame a frame = fireflies).
-void PTResUpdate(inout PTReservoir r, float3 x1C, float3 xkC, float3 nkC, float3 LoC, float hitC,
-                 uint seedC, float w, inout uint rng) {
+// Adiciona um candidato (M=1) com peso de resampling w; retorna true se ele foi SELECIONADO
+// (o caller rastreia a contribuicao C do vencedor p/ o finalize/resolve). NOTA: o reservoir
+// persistido e SEMPRE re-ancorado no pixel que o escreve (x1 = s1.Pos, xkm1 = base replayada no
+// destino) — W ja embute o Jacobiano do shift aplicado no merge, entao o proximo frame calcula
+// J contra a base de ONTEM, nunca contra a base ancestral (isso comporia o Jacobiano frame a
+// frame = fireflies).
+bool PTResUpdate(inout PTReservoir r, float3 x1C, float3 xkm1C, float3 xkC, float3 nkC,
+                 float3 LoC, float hitC, uint kbC, uint seedC, float w, inout uint rng) {
     r.wSum += w;
     r.M    += 1.0f;
     if (w > 0.0f && PTResRngNext(rng) * r.wSum <= w) {
-        r.x1 = x1C; r.xk = xkC; r.nk = nkC; r.Lo = LoC; r.hitK = hitC; r.seed = seedC;
+        r.x1 = x1C; r.xkm1 = xkm1C; r.xk = xkC; r.nk = nkC; r.Lo = LoC;
+        r.hitK = hitC; r.kb = kbC; r.seed = seedC;
+        return true;
     }
+    return false;
 }
 
-// Funde um reservoir inteiro (other) no atual. pHatOther = pHat (do pixel atual) p/ a amostra de
-// other; J = Jacobiano do shift other.x1 -> x1 atual (rejeitado pelo caller se fora da faixa).
-void PTResMerge(inout PTReservoir r, PTReservoir other, float pHatOther, float J, inout uint rng) {
+// Funde um reservoir inteiro (other) no atual; retorna true se a amostra de other foi
+// selecionada. pHatOther = pHat (no pixel atual, via shift) p/ a amostra de other; J = Jacobiano
+// do shift other.xkm1 -> base atual (rejeitado pelo caller se fora da faixa).
+bool PTResMerge(inout PTReservoir r, PTReservoir other, float pHatOther, float J, inout uint rng) {
     float w = pHatOther * other.W * other.M * J;
     r.wSum += w;
     r.M    += other.M;
     if (w > 0.0f && PTResRngNext(rng) * r.wSum <= w) {
-        r.x1 = other.x1; r.xk = other.xk; r.nk = other.nk;
-        r.Lo = other.Lo; r.hitK = other.hitK; r.seed = other.seed;
+        r.x1 = other.x1; r.xkm1 = other.xkm1; r.xk = other.xk; r.nk = other.nk;
+        r.Lo = other.Lo; r.hitK = other.hitK; r.kb = other.kb; r.seed = other.seed;
+        return true;
     }
+    return false;
 }
 
 // Jacobiano de reconexao (Ouyang 2021 / GRIS Eq. 52 em solid angle): reusar xk (normal nk) de um
