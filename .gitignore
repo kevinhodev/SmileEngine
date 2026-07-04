@@ -32,3 +32,9 @@ CMakeSettings.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Google Trends cookie (credencial de sessão, nunca commitar)
+scripts/.google-cookie
+
+# Node (scripts auxiliares)
+node_modules/
