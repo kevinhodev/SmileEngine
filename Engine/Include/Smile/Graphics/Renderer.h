@@ -127,8 +127,11 @@ namespace Smile {
         // Supersampling (SSAA): a cena renderiza em RenderWidth/Height = swapchain * RenderScale;
         // o PostProcessor faz o downsample pro backbuffer nativo. >1.0 = mais amostras/pixel.
         void SetRenderScale(f32 V); // recria os RTs internos (so a cena; backbuffer fica nativo)
+        f32  GetRenderScale() const { return RenderScale; }
         u32  RenderWidth()  const { return static_cast<u32>(SwapChain.GetWidth()  * RenderScale + 0.5f); }
         u32  RenderHeight() const { return static_cast<u32>(SwapChain.GetHeight() * RenderScale + 0.5f); }
+        u32  OutputWidth()  const { return SwapChain.GetWidth(); }
+        u32  OutputHeight() const { return SwapChain.GetHeight(); }
 
         // Picking: o ID pass roda em res interna -> escala a coord do mouse (nativa) por RenderScale.
         void RequestPick(u32 X, u32 Y) {
@@ -173,7 +176,15 @@ namespace Smile {
             Fsr2Quality = Mode < 0 ? 0 : (Mode > 4 ? 4 : Mode);
             if (UseFsr2 && Fsr2.IsInitialized()) SetRenderScale(Fsr2Ratio());
         }
+        int  GetFsr2Quality() const          { return Fsr2Quality; }
+        void SetUseTAA(bool V)               { UseTAA = V; TAARanLastFrame = false; }
+        bool GetUseTAA() const               { return UseTAA; }
         void SetFlickerMode(u32 Mode)        { if (Mode > 0 && FlickerMode == 0) FlickerResetPending = true; FlickerMode = Mode; }
+        u32  GetFlickerMode() const          { return FlickerMode; }
+
+        // View modes/debug views exposed to the editor viewport toolbar.
+        void SetGBufferDebugMode(u32 Mode)   { GBufferDebugMode = Mode > 8 ? 8 : Mode; }
+        u32  GetGBufferDebugMode() const     { return GBufferDebugMode; }
 
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
@@ -198,15 +209,27 @@ namespace Smile {
         FRaytracingScene&   GetRaytracingScene() { return RaytracingScene; }
 
         FDDGI& GetDDGI()               { return DDGI; }
+        void SetUseGI(bool V)           { UseGI = V; }
+        bool GetUseGI() const           { return UseGI; }
 
         FReflections& GetReflections()     { return Reflections; }
+        void SetUseReflections(bool V)     { UseReflections = V; }
+        bool GetUseReflections() const     { return UseReflections; }
 
         // ReSTIR PT (experimental): ON desliga Reflections/GTAO/ReSTIR-GI; DDGI e NRD ficam.
         void SetUsePathTracer(bool V)  { UsePathTracer = V; }
         bool GetUsePathTracer() const  { return UsePathTracer; }
         FReSTIRPT& GetReSTIRPT()       { return ReSTIRPT; }
 
+        void SetUseReSTIRGI(bool V)    { UseReSTIRGI = V; }
+        bool GetUseReSTIRGI() const    { return UseReSTIRGI; }
+
+        void SetUseNrdDenoise(bool V)  { UseNrdDenoise = V; }
+        bool GetUseNrdDenoise() const  { return UseNrdDenoise; }
+
         FAmbientOcclusion& GetAO()     { return AO; }
+        void SetUseAO(bool V)          { UseAO = V; }
+        bool GetUseAO() const          { return UseAO; }
 
     private:
         void RecreateAllPSOs();

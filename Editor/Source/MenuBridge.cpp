@@ -11,10 +11,4 @@ namespace SmileEditor {
         ConsoleVis = _V;
         emit ConsoleVisibleChanged();
     }
-
-    void MenuBridge::SetPathTracerEnabled(bool _V) {
-        if (PathTracerOn == _V) return;
-        PathTracerOn = _V;
-        emit PathTracerEnabledChanged();
-    }
 }

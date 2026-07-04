@@ -1,0 +1,903 @@
+import QtQuick
+import QtQuick.Controls
+
+// Janela de configuracoes do editor. A pagina de Renderizacao esta funcional; as demais
+// categorias preservam a estrutura da referencia e recebem conteudo nas proximas iteracoes.
+Rectangle {
+    id: root
+    color: "#141511"
+    border.color: "#2e2f28"
+    border.width: 1
+    implicitWidth: 960
+    implicitHeight: 640
+
+    property int selectedPage: 0
+    property string searchText: ""
+
+    readonly property color bg: "#141511"
+    readonly property color sidebarBg: "#10110f"
+    readonly property color cardBg: "#1a1b15"
+    readonly property color hoverBg: "#22231c"
+    readonly property color borderColor: "#2a2b24"
+    readonly property color divider: "#23241d"
+    readonly property color textPrimary: "#e6e2d8"
+    readonly property color textNormal: "#c8c2b4"
+    readonly property color textSecondary: "#9a958a"
+    readonly property color textMuted: "#6c6a61"
+    readonly property color blue: "#5b9dff"
+    readonly property color blueBg: "#16233f"
+    readonly property color blueBorder: "#27406e"
+    readonly property color green: "#9ac055"
+
+    function pageTitle() {
+        const titles = [
+            "Renderização", "Iluminação global", "Path tracer", "Reflexos e denoise",
+            "Água — FFT", "Pós-processo", "Sombras e céu", "Interface", "Atalhos", "Projeto"
+        ]
+        return titles[selectedPage]
+    }
+
+    function pageSubtitle() {
+        if (selectedPage === 0)
+            return "Upscaling, anti-aliasing e resolução interna do viewport"
+        return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
+    }
+
+    function matchesSearch(label) {
+        return searchText.length === 0 ||
+               label.toLocaleLowerCase().indexOf(searchText.toLocaleLowerCase()) >= 0
+    }
+
+    component WindowButton: Rectangle {
+        id: windowButton
+        property string glyph
+        property bool danger: false
+        signal tapped()
+        width: 46
+        height: 40
+        color: winHover.hovered ? (danger ? "#c42b1c" : "#23241d") : "transparent"
+        Text {
+            anchors.centerIn: parent
+            text: windowButton.glyph
+            color: winHover.hovered && windowButton.danger ? "#ffffff" : "#9a958a"
+            font.family: "Segoe UI Symbol"
+            font.pixelSize: windowButton.glyph === "□" ? 14 : 16
+        }
+        HoverHandler { id: winHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: windowButton.tapped() }
+    }
+
+    component Toggle: Item {
+        id: toggle
+        property bool checked: false
+        property bool interactive: true
+        signal toggled()
+        implicitWidth: 36
+        implicitHeight: 20
+        opacity: interactive ? 1.0 : 0.48
+
+        Rectangle {
+            anchors.fill: parent
+            radius: height / 2
+            color: toggle.checked ? root.blue : "#23241d"
+            border.color: toggle.checked ? root.blue : "#33342c"
+            border.width: 1
+            Rectangle {
+                width: 14; height: 14; radius: 7
+                y: 3
+                x: toggle.checked ? 19 : 3
+                color: toggle.checked ? "#f2efe6" : root.textMuted
+                Behavior on x { NumberAnimation { duration: 100 } }
+            }
+        }
+        HoverHandler {
+            cursorShape: toggle.interactive ? Qt.PointingHandCursor : Qt.ArrowCursor
+        }
+        TapHandler {
+            enabled: toggle.interactive
+            onTapped: toggle.toggled()
+        }
+    }
+
+    component NavItem: Rectangle {
+        id: nav
+        property int page
+        property string glyph
+        property string label
+        property bool beta: false
+
+        width: 216
+        height: 30
+        radius: 6
+        visible: root.matchesSearch(label)
+        color: root.selectedPage === page ? root.blueBg : (navHover.hovered ? "#1a1b15" : "transparent")
+        border.color: root.selectedPage === page ? root.blueBorder : "transparent"
+        border.width: 1
+
+        Rectangle {
+            visible: root.selectedPage === nav.page
+            x: 0; y: 4
+            width: 3; height: 22; radius: 1.5
+            color: root.blue
+        }
+        Text {
+            x: 12
+            anchors.verticalCenter: parent.verticalCenter
+            text: nav.glyph
+            color: root.selectedPage === nav.page ? root.blue : "#8f8a7d"
+            font.family: "Segoe UI Symbol"
+            font.pixelSize: 14
+        }
+        Text {
+            id: navLabel
+            x: 34
+            anchors.verticalCenter: parent.verticalCenter
+            text: nav.label
+            color: root.selectedPage === nav.page ? root.textPrimary : "#b9b5aa"
+            font.family: "Segoe UI"
+            font.pixelSize: 12
+        }
+        Rectangle {
+            visible: nav.beta
+            anchors.left: navLabel.right
+            anchors.leftMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            width: 34; height: 14; radius: 7
+            color: "#33260f"
+            border.color: "#57431a"
+            Text {
+                anchors.centerIn: parent
+                text: "beta"
+                color: "#d8a03a"
+                font.family: "Segoe UI"
+                font.pixelSize: 10
+            }
+        }
+        HoverHandler { id: navHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: root.selectedPage = nav.page }
+    }
+
+    component Card: Rectangle {
+        property string title
+        radius: 8
+        color: root.cardBg
+        border.color: root.borderColor
+        border.width: 1
+        Text {
+            x: 20; y: 18
+            text: parent.title
+            color: root.textPrimary
+            font.family: "Segoe UI"
+            font.pixelSize: 13
+            font.weight: Font.Medium
+        }
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            y: 40
+            height: 1
+            color: root.divider
+        }
+    }
+
+    component StatusRow: Item {
+        id: statusRow
+        property string label
+        property string value
+        height: 20
+        Text {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: statusRow.label
+            color: root.textMuted
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+        Text {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: statusRow.value
+            color: root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+    }
+
+    component RayStatusRow: Item {
+        id: rayRow
+        property string label
+        property bool active: false
+        height: 24
+        Rectangle {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            width: 7; height: 7; radius: 3.5
+            color: rayRow.active ? root.green : root.textMuted
+        }
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 16
+            anchors.verticalCenter: parent.verticalCenter
+            text: rayRow.label
+            color: root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 12
+        }
+        Text {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: rayRow.active ? "ligado" : "desligado"
+            color: root.textMuted
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+    }
+
+    // Barra de titulo.
+    Rectangle {
+        id: titleBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: 40
+        color: root.bg
+
+        Image {
+            x: 16
+            anchors.verticalCenter: parent.verticalCenter
+            source: "image://smilelogo/32"
+            sourceSize: Qt.size(32, 32)
+            width: 20; height: 20
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            x: 42
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Configurações — SmileEngine"
+            color: root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 12
+        }
+
+        MouseArea {
+            anchors.left: parent.left
+            anchors.right: windowButtons.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            property bool moving: false
+            onPressed: moving = false
+            onPositionChanged: {
+                if (pressed && !moving) {
+                    moving = true
+                    settingsWindow.startSystemMove()
+                }
+            }
+            onReleased: moving = false
+            onDoubleClicked: settingsWindow.toggleMaximize()
+        }
+
+        Row {
+            id: windowButtons
+            anchors.right: parent.right
+            anchors.top: parent.top
+            WindowButton { glyph: "−"; onTapped: settingsWindow.minimize() }
+            WindowButton {
+                glyph: settingsWindow.maximized ? "❐" : "□"
+                onTapped: settingsWindow.toggleMaximize()
+            }
+            WindowButton { glyph: "×"; danger: true; onTapped: settingsWindow.close() }
+        }
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 1
+            color: root.divider
+        }
+    }
+
+    // Sidebar.
+    Rectangle {
+        id: sidebar
+        anchors.left: parent.left
+        anchors.top: titleBar.bottom
+        anchors.bottom: footer.top
+        width: 240
+        color: root.sidebarBg
+
+        Rectangle {
+            x: 12; y: 16
+            width: 216; height: 30; radius: 6
+            color: "#1a1b15"
+            border.color: root.borderColor
+            border.width: 1
+            Text {
+                x: 11
+                anchors.verticalCenter: parent.verticalCenter
+                text: "⌕"
+                color: root.textMuted
+                font.family: "Segoe UI Symbol"
+                font.pixelSize: 16
+            }
+            TextField {
+                id: searchField
+                x: 30; y: 1
+                width: parent.width - 36
+                height: 28
+                padding: 0
+                placeholderText: "Buscar configuração…"
+                placeholderTextColor: root.textMuted
+                color: root.textNormal
+                selectionColor: root.blue
+                selectedTextColor: "#10110f"
+                font.family: "Segoe UI"
+                font.pixelSize: 11
+                background: null
+                onTextChanged: root.searchText = text
+            }
+        }
+
+        Text {
+            x: 20; y: 70
+            text: "Gráficos"
+            color: root.textMuted
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+        Column {
+            x: 12; y: 84
+            spacing: 4
+            NavItem { page: 0; glyph: "▣"; label: "Renderização" }
+            NavItem { page: 1; glyph: "☼"; label: "Iluminação global" }
+            NavItem { page: 2; glyph: "⌁"; label: "Path tracer"; beta: true }
+            NavItem { page: 3; glyph: "◇"; label: "Reflexos e denoise" }
+            NavItem { page: 4; glyph: "≋"; label: "Água — FFT" }
+            NavItem { page: 5; glyph: "☷"; label: "Pós-processo" }
+            NavItem { page: 6; glyph: "☾"; label: "Sombras e céu" }
+        }
+
+        Text {
+            x: 20; y: 338
+            text: "Editor"
+            color: root.textMuted
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+        Column {
+            x: 12; y: 352
+            spacing: 4
+            NavItem { page: 7; glyph: "▤"; label: "Interface" }
+            NavItem { page: 8; glyph: "⌨"; label: "Atalhos" }
+            NavItem { page: 9; glyph: "▰"; label: "Projeto" }
+        }
+
+        Rectangle {
+            x: 12
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            width: 216; height: 52; radius: 8
+            color: "#1a1b15"
+            border.color: root.borderColor
+            border.width: 1
+            Text {
+                x: 14; y: 9
+                text: "Preset ativo"
+                color: root.textMuted
+                font.family: "Segoe UI"
+                font.pixelSize: 11
+            }
+            Text {
+                x: 14; y: 27
+                text: "Ultra — RT completo"
+                color: root.textNormal
+                font.family: "Segoe UI"
+                font.pixelSize: 12
+            }
+            Text {
+                anchors.right: parent.right
+                anchors.rightMargin: 13
+                anchors.verticalCenter: parent.verticalCenter
+                text: "›"
+                color: root.textMuted
+                font.family: "Segoe UI Symbol"
+                font.pixelSize: 18
+            }
+        }
+
+        Rectangle {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: root.divider
+        }
+    }
+
+    // Conteudo da pagina.
+    Item {
+        id: pageArea
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: titleBar.bottom
+        anchors.bottom: footer.top
+
+        Text {
+            x: 24; y: 22
+            text: root.pageTitle()
+            color: root.textPrimary
+            font.family: "Segoe UI"
+            font.pixelSize: 20
+            font.weight: Font.Medium
+        }
+        Text {
+            x: 24; y: 49
+            text: root.pageSubtitle()
+            color: root.textSecondary
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+        Rectangle {
+            anchors.right: parent.right
+            anchors.rightMargin: 24
+            y: 28
+            width: Math.min(220, gpuLabel.implicitWidth + 28)
+            height: 22
+            radius: 11
+            color: "#1a1b15"
+            border.color: root.borderColor
+            border.width: 1
+            Text {
+                id: gpuLabel
+                anchors.centerIn: parent
+                width: parent.width - 20
+                text: viewportModel.gpuName + " · DX12"
+                color: root.textSecondary
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+                font.family: "Segoe UI"
+                font.pixelSize: 11
+            }
+        }
+
+        Item {
+            id: renderingPage
+            visible: root.selectedPage === 0
+            anchors.fill: parent
+
+            readonly property int rightW: 180
+            readonly property int gap: 16
+            readonly property int leftW: width - 48 - rightW - gap
+
+            Card {
+                id: upscalingCard
+                x: 24; y: 84
+                width: renderingPage.leftW
+                height: 272
+                title: "Upscaling e anti-aliasing"
+
+                Text {
+                    x: 20; y: 55
+                    text: "FSR 2"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: viewportModel.fsr2Available
+                          ? "Substitui o TAA quando ativo"
+                          : "Disponível apenas em build Release"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.fsr2Enabled
+                    interactive: viewportModel.fsr2Available
+                    onToggled: viewportModel.SetFsr2Enabled(!checked)
+                }
+
+                Text {
+                    x: 20; y: 106
+                    text: "Qualidade do FSR 2"
+                    color: viewportModel.fsr2Available ? root.textNormal : root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Rectangle {
+                    id: qualitySelector
+                    x: 20; y: 126
+                    width: parent.width - 40
+                    height: 26
+                    radius: 6
+                    color: "#23241d"
+                    border.color: root.borderColor
+                    border.width: 1
+                    opacity: viewportModel.fsr2Available ? 1.0 : 0.48
+
+                    Row {
+                        anchors.fill: parent
+                        Repeater {
+                            model: ["Nativo", "Qualidade", "Balanceado", "Performance", "Ultra"]
+                            delegate: Rectangle {
+                                required property string modelData
+                                required property int index
+                                width: qualitySelector.width / 5
+                                height: qualitySelector.height
+                                radius: 6
+                                color: viewportModel.fsr2Quality === index ? root.blueBg
+                                                                          : (qualityHover.hovered ? "#2a2b24" : "transparent")
+                                border.color: viewportModel.fsr2Quality === index ? root.blueBorder : "transparent"
+                                border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    color: viewportModel.fsr2Quality === index ? root.blue : root.textSecondary
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 10
+                                }
+                                HoverHandler {
+                                    id: qualityHover
+                                    enabled: viewportModel.fsr2Available
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                                TapHandler {
+                                    enabled: viewportModel.fsr2Available
+                                    onTapped: viewportModel.SetFsr2Quality(index)
+                                }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    x: 20; y: 163
+                    text: "Render interno " + viewportModel.internalResolution +
+                          " · saída " + viewportModel.outputResolution
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                }
+
+                Text {
+                    x: 20; y: 190
+                    text: "Render scale (SSAA)"
+                    color: root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Rectangle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 183
+                    width: 54; height: 22; radius: 4
+                    color: "#23241d"
+                    border.color: root.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: viewportModel.renderScale.toFixed(2).replace(".", ",") + "×"
+                        color: root.textPrimary
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                    }
+                }
+                Slider {
+                    id: renderScaleSlider
+                    x: 20; y: 207
+                    width: parent.width - 60
+                    height: 18
+                    from: 0.5
+                    to: 2.0
+                    stepSize: 0.05
+                    value: viewportModel.renderScale
+                    onPressedChanged: {
+                        if (!pressed) viewportModel.SetRenderScale(value)
+                    }
+                    background: Rectangle {
+                        x: renderScaleSlider.leftPadding
+                        y: renderScaleSlider.topPadding + renderScaleSlider.availableHeight / 2 - height / 2
+                        width: renderScaleSlider.availableWidth
+                        height: 4
+                        radius: 2
+                        color: "#23241d"
+                        Rectangle {
+                            width: renderScaleSlider.visualPosition * parent.width
+                            height: parent.height
+                            radius: 2
+                            color: root.blue
+                        }
+                    }
+                    handle: Rectangle {
+                        x: renderScaleSlider.leftPadding +
+                           renderScaleSlider.visualPosition * (renderScaleSlider.availableWidth - width)
+                        y: renderScaleSlider.topPadding + renderScaleSlider.availableHeight / 2 - height / 2
+                        width: 14; height: 14; radius: 7
+                        color: "#f2efe6"
+                        border.color: root.blue
+                        border.width: 1.5
+                    }
+                }
+                Text {
+                    x: 20; y: 229
+                    text: "0,5×"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                }
+                Text {
+                    anchors.horizontalCenter: renderScaleSlider.horizontalCenter
+                    y: 229
+                    text: "1,0×"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                }
+                Text {
+                    anchors.right: renderScaleSlider.right
+                    y: 229
+                    text: "2,0×"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                }
+
+                Text {
+                    x: 20; y: 251
+                    text: "TAA"
+                    color: viewportModel.fsr2Enabled ? root.textMuted : root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 70
+                    y: 251
+                    text: viewportModel.fsr2Enabled ? "desligado — FSR 2 controla a resolução" : ""
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 246
+                    checked: viewportModel.taaEnabled && !viewportModel.fsr2Enabled
+                    interactive: !viewportModel.fsr2Enabled
+                    onToggled: viewportModel.SetTAAEnabled(!checked)
+                }
+            }
+
+            Card {
+                x: 24; y: 368
+                width: renderingPage.leftW
+                height: 146
+                title: "Cena e geometria"
+
+                Text {
+                    x: 20; y: 56
+                    text: "Frustum culling"
+                    color: root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Text {
+                    x: 158; y: 56
+                    text: "descarta o que está fora da câmera"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right; anchors.rightMargin: 20; y: 50
+                    checked: viewportModel.frustumCullingEnabled
+                    onToggled: viewportModel.SetFrustumCullingEnabled(!checked)
+                }
+
+                Text {
+                    x: 20; y: 88
+                    text: "Depth prepass"
+                    color: root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Text {
+                    x: 158; y: 88
+                    text: "pré-passe de profundidade"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right; anchors.rightMargin: 20; y: 82
+                    checked: viewportModel.depthPrepassEnabled
+                    onToggled: viewportModel.SetDepthPrepassEnabled(!checked)
+                }
+
+                Text {
+                    x: 20; y: 120
+                    text: "Mesclar por material"
+                    color: root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Text {
+                    x: 158; y: 120
+                    text: "agrupa draws por material"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right; anchors.rightMargin: 20; y: 114
+                    checked: viewportModel.mergeByMaterialEnabled
+                    onToggled: viewportModel.SetMergeByMaterialEnabled(!checked)
+                }
+            }
+
+            Card {
+                x: 24 + renderingPage.leftW + renderingPage.gap
+                y: 84
+                width: renderingPage.rightW
+                height: 170
+                title: "Desempenho"
+
+                Text {
+                    x: 16; y: 54
+                    text: Math.round(viewportModel.fps)
+                    color: root.blue
+                    font.family: "Segoe UI"
+                    font.pixelSize: 28
+                    font.weight: Font.Medium
+                }
+                Text {
+                    x: 66; y: 70
+                    text: "fps"
+                    color: root.textSecondary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Text {
+                    x: 16; y: 90
+                    text: viewportModel.frameTimeMs.toFixed(1).replace(".", ",") + " ms por frame"
+                    color: root.textSecondary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Rectangle { x: 0; y: 112; width: parent.width; height: 1; color: root.divider }
+                StatusRow {
+                    x: 16; y: 119; width: parent.width - 32
+                    label: "Draws visíveis"
+                    value: viewportModel.visibleDrawCount + " / " + viewportModel.totalDrawCount
+                }
+                StatusRow {
+                    x: 16; y: 141; width: parent.width - 32
+                    label: "Res. interna"
+                    value: viewportModel.internalResolution
+                }
+            }
+
+            Card {
+                x: 24 + renderingPage.leftW + renderingPage.gap
+                y: 266
+                width: renderingPage.rightW
+                height: 210
+                title: "Ray tracing"
+
+                Column {
+                    x: 16; y: 46
+                    width: parent.width - 32
+                    RayStatusRow { width: parent.width; label: "DDGI"; active: viewportModel.ddgiEnabled }
+                    RayStatusRow { width: parent.width; label: "ReSTIR GI"; active: viewportModel.restirGIEnabled }
+                    RayStatusRow { width: parent.width; label: "NRD REBLUR"; active: viewportModel.nrdEnabled }
+                    RayStatusRow { width: parent.width; label: "Reflexos RT"; active: viewportModel.reflectionsEnabled }
+                    RayStatusRow { width: parent.width; label: "Path tracer"; active: viewportModel.pathTracerEnabled }
+                }
+                Rectangle { x: 0; y: 168; width: parent.width; height: 1; color: root.divider }
+                StatusRow {
+                    x: 16; y: 178; width: parent.width - 32
+                    label: "VRAM dedicada"
+                    value: viewportModel.vramText
+                }
+            }
+        }
+
+        Item {
+            visible: root.selectedPage !== 0
+            anchors.fill: parent
+            Rectangle {
+                anchors.centerIn: parent
+                width: Math.min(430, parent.width - 80)
+                height: 150
+                radius: 10
+                color: root.cardBg
+                border.color: root.borderColor
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: 30
+                    text: root.pageTitle()
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 18
+                }
+                Text {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 18
+                    width: parent.width - 60
+                    text: "A estrutura desta página já está reservada. Os controles serão adicionados durante a refatoração."
+                    color: root.textSecondary
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+            }
+        }
+    }
+
+    // Rodape.
+    Rectangle {
+        id: footer
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: 48
+        color: root.bg
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 1
+            color: root.divider
+        }
+        Text {
+            x: 264
+            anchors.verticalCenter: parent.verticalCenter
+            text: "As alterações são aplicadas em tempo real no viewport"
+            color: root.textMuted
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+        Rectangle {
+            id: resetButton
+            anchors.right: applyButton.left
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            width: 140; height: 28; radius: 6
+            color: resetHover.hovered ? "#23241d" : "transparent"
+            border.color: "#33342c"
+            border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: "Restaurar padrões"
+                color: root.textNormal
+                font.family: "Segoe UI"
+                font.pixelSize: 12
+            }
+            HoverHandler { id: resetHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: viewportModel.ResetRenderSettings() }
+        }
+        Rectangle {
+            id: applyButton
+            anchors.right: parent.right
+            anchors.rightMargin: 24
+            anchors.verticalCenter: parent.verticalCenter
+            width: 78; height: 28; radius: 6
+            color: applyHover.hovered ? "#70adff" : root.blue
+            Text {
+                anchors.centerIn: parent
+                text: "Aplicar"
+                color: "#10110f"
+                font.family: "Segoe UI"
+                font.pixelSize: 12
+                font.weight: Font.Medium
+            }
+            HoverHandler { id: applyHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: settingsWindow.close() }
+        }
+    }
+}

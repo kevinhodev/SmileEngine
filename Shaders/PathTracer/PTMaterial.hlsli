@@ -15,7 +15,8 @@
 
 struct FPTBsdfSample {
     float3 Dir;     // direcao de continuacao (mundo)
-    float3 Weight;  // f * cos / (pdf_dir * pLobe) — multiplicador do throughput
+    float3 Weight;  // f * cos / pdf — multiplicador do throughput (RGB)
+    float  Pdf;     // pdf de solid-angle da direcao amostrada (one-sample MIS entre lobes)
     uint   Lobe;
     bool   Valid;
 };
@@ -71,46 +72,91 @@ float3 PT_EvalBsdf(FPTSurface s, float3 V, float3 L) {
     return f;
 }
 
-// Amostra UM lobe do BSDF. Weight ja embute f*cos/pdf e a probabilidade do lobe.
+float PT_SmithG1(float a2, float nov) {
+    return 2.0f * nov / max(nov + sqrt(a2 + (1.0f - a2) * nov * nov), 1e-6f);
+}
+
+// pdf de solid-angle COMBINADO (one-sample MIS difuso+especular) da direcao L. Usada p/ montar
+// o peso f*cos/pdf de forma consistente entre o sampling inicial e o resolve (unbiased).
+float PT_BsdfPdf(FPTSurface s, float3 V, float3 L) {
+    float nol = dot(s.N, L);
+    float nov = saturate(dot(s.N, V));
+    float pSpec = PT_SpecProb(s);
+
+    float pdfDiff = max(nol, 0.0f) / SMILE_PI;
+    float pdfSpec = 0.0f;
+    if (nol > 0.0f && nov > 0.0f) {
+        float3 H   = normalize(V + L);
+        float  noh = saturate(dot(s.N, H));
+        float  a   = s.Roughness * s.Roughness;
+        float  a2  = a * a;
+        float  D   = GGX_D(a2, noh);
+        pdfSpec = D * PT_SmithG1(a2, nov) / (4.0f * nov); // pdf VNDF da direcao refletida
+    }
+    return (1.0f - pSpec) * pdfDiff + pSpec * pdfSpec;
+}
+
+// Amostra UM lobe do BSDF. Weight = f*cos/pdf EXATO (usa PT_EvalBsdf + PT_BsdfPdf), garantindo
+// que o sampling inicial e o resolve sejam consistentes (ReSTIR unbiased). Pdf tambem exposto.
 FPTBsdfSample PTSampleBsdf(FPTSurface s, float3 V, uint seed, uint bounce) {
     // Consome as dims SEMPRE, na mesma ordem (contrato do replay).
     float  uLobe = PTRand(seed, bounce, PT_DIM_LOBE);
     float2 u     = PTRand2(seed, bounce, PT_DIM_BSDF_U);
 
     FPTBsdfSample o;
-    o.Valid = false;
-    o.Dir   = s.N;
+    o.Valid  = false;
+    o.Dir    = s.N;
     o.Weight = float3(0.0f, 0.0f, 0.0f);
+    o.Pdf    = 0.0f;
 
     float pSpec = PT_SpecProb(s);
     float3x3 basis = GGX_TangentBasis(s.N);
 
     if (uLobe < pSpec) {
-        // GGX especular via VNDF: amostra H no espaco tangente e reflete V.
         o.Lobe = PT_LOBE_SPECULAR;
         float3 Vt = mul(basis, V); // mundo -> tangente (basis ortonormal: mul(M,v) = M*v)
         if (Vt.z <= 0.0f) return o;
         float  a  = s.Roughness * s.Roughness;
         float4 Hp = GGX_SampleVNDF(u, a, Vt);
         float3 Lt = reflect(-Vt, Hp.xyz);
-        if (Lt.z <= 0.0f || Hp.w <= 0.0f) return o;
-        // Peso do VNDF: f*cos/pdf = F * G2/G1 — aproximado por F (padrao em tempo real).
-        float voh = saturate(dot(Vt, Hp.xyz));
-        o.Dir    = normalize(mul(Lt, basis)); // tangente -> mundo
-        o.Weight = PT_FresnelSchlick(PT_SpecularF0(s), voh) / pSpec;
-        o.Valid  = true;
+        if (Lt.z <= 0.0f) return o;
+        o.Dir = normalize(mul(Lt, basis)); // tangente -> mundo
     } else {
-        // Lambert via hemisferio cosseno (Malley). f*cos/pdf = albedo difuso.
         o.Lobe = PT_LOBE_DIFFUSE;
         float  r    = sqrt(u.x);
         float  phi  = 2.0f * SMILE_PI * u.y;
         float  cosT = sqrt(saturate(1.0f - u.x));
-        float3 d    = float3(r * cos(phi), r * sin(phi), cosT);
-        o.Dir    = normalize(mul(d, basis));
-        o.Weight = PT_DiffuseAlbedo(s) / (1.0f - pSpec);
-        o.Valid  = true;
+        o.Dir = normalize(mul(float3(r * cos(phi), r * sin(phi), cosT), basis));
     }
+
+    o.Pdf = PT_BsdfPdf(s, V, o.Dir);
+    if (o.Pdf <= 1e-6f) return o;
+    o.Weight = PT_EvalBsdf(s, V, o.Dir) / o.Pdf; // f*cos/pdf exato
+    o.Valid  = true;
     return o;
+}
+
+// Contribuicao (RGB) de reconectar x1 -> xk: BSDF em x1 na direcao de xk, vezes a radiancia Lo
+// que sai de xk. Base do target function BRDF-aware do F2 (glossy volta).
+//
+// Roughness clampada por BAIXO em ShiftParams.y: a reconexao trata o lobe especular como se a
+// superficie tivesse roughness >= roughMin, limitando o pico do D (com roughness 0.04 o D chega
+// a ~1e5 — qualquer xk difuso que cruze a direcao de espelho quando a camera mexe explodia o
+// peso do merge). Isso mantem target e contribuicao SIMETRICOS com o veto de connectability do
+// candidato; o especular liso de verdade nao e representavel por reconexao (quase-delta) e fica
+// p/ o random replay / hybrid shift (F2b).
+float3 PT_ReconnectContribution(FPTSurface s1, float3 V, float3 xk, float3 Lo) {
+    float3 d = xk - s1.Pos;
+    float  l = length(d);
+    if (l < 1e-4f) return float3(0.0f, 0.0f, 0.0f);
+    FPTSurface sr = s1;
+    sr.Roughness = max(s1.Roughness, ShiftParams.y);
+    return PT_EvalBsdf(sr, V, d / l) * Lo; // PT_EvalBsdf ja embute f*cos
+}
+
+// Target function do F2: luminancia da contribuicao de reconexao (inclui o BRDF de x1).
+float PT_PHatBrdf(FPTSurface s1, float3 V, float3 xk, float3 Lo) {
+    return PT_Luminance(PT_ReconnectContribution(s1, V, xk, Lo));
 }
 
 #endif

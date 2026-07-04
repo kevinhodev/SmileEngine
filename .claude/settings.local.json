@@ -80,7 +80,30 @@
       "Read(//tmp/**)",
       "Bash(git ls-tree *)",
       "Bash(grep -oE \"[A-Za-z_][A-Za-z0-9_]*->\\(Set|Get|Use|Enable|Is|Apply\\)[A-Za-z0-9_]+\" /tmp/EnvWin.cpp | sort | uniq -c | sort -rn | head -80)",
-      "Bash(cd /d/Engines/SmileEngine *)"
+      "Bash(cd /d/Engines/SmileEngine *)",
+      "Bash(python -c \"import pypdf; print\\(pypdf.__version__\\)\")",
+      "Bash(pip list *)",
+      "Bash(py -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(where python3 *)",
+      "Bash(pdftotext -f 1 -l 30 C:/Users/user/Downloads/sig22_GRIS.pdf C:/Users/user/AppData/Local/Temp/claude/D--Engines-SmileEngine/344ce2bb-1999-406b-a96c-9f49f81c576e/scratchpad/gris_p1-30.txt)",
+      "Bash(pdftotext -f 1 -l 30 C:/Users/user/Downloads/lin2026restirptenhanced.pdf C:/Users/user/AppData/Local/Temp/claude/D--Engines-SmileEngine/344ce2bb-1999-406b-a96c-9f49f81c576e/scratchpad/enhanced_p1-30.txt)",
+      "Bash(pdftotext -f 24 -l 90 C:/Users/user/Downloads/sig22_GRIS.pdf C:/Users/user/AppData/Local/Temp/claude/D--Engines-SmileEngine/344ce2bb-1999-406b-a96c-9f49f81c576e/scratchpad/gris_supp.txt)",
+      "PowerShell(cmake --build \"D:/Engines/SmileEngine/build\" --config Release --target Shaders 2>&1)",
+      "PowerShell(cmake \"D:/Engines/SmileEngine/build\" 2>&1)",
+      "PowerShell(cmake --build \"D:/Engines/SmileEngine/build\" --config Release --target SmileEngine 2>&1)",
+      "PowerShell(cmake --build \"D:/Engines/SmileEngine/build\" --config Release --target SmileEditor 2>&1)",
+      "Bash(git add *)",
+      "Bash(git commit -m '@ *)",
+      "Bash(git commit --amend -m 'ReSTIR PT F0: megakernel de path tracing DI+GI unificado *)",
+      "Bash('C:/Program Files \\(x86\\)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe' -T cs_6_6 -E main -O3 -Fo __TRACKED_VAR__/PTInitial_f1.cso PathTracer/PTInitial.cs.hlsl)",
+      "Bash(git commit -m 'ReSTIR PT F1: reservoir temporal \\(64B\\) + reconnection shift *)",
+      "Bash('C:/Program Files \\(x86\\)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe' -T cs_6_6 -E main -O3 -Fo __TRACKED_VAR__/PTInitial_f2.cso PathTracer/PTInitial.cs.hlsl)",
+      "mcp__visualize__read_me",
+      "Bash(cd \"D:/Engines/SmileEngine/Shaders\")",
+      "Bash('C:/Program Files \\(x86\\)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe' -T cs_6_6 -E main -O3 -Fo __TRACKED_VAR__/PTInitial_f2b.cso PathTracer/PTInitial.cs.hlsl)",
+      "PowerShell(Get-Command dxc -ErrorAction SilentlyContinue)",
+      "PowerShell(& \"C:\\\\Program Files \\(x86\\)\\\\Windows Kits\\\\10\\\\bin\\\\10.0.22621.0\\\\x86\\\\dxc.exe\" -T cs_6_6 -E main \"D:\\\\Engines\\\\SmileEngine\\\\Shaders\\\\PathTracer\\\\PTInitial.cs.hlsl\" -Fo \"$env:TEMP\\\\PTInitial_test.cso\")",
+      "PowerShell(& \"C:\\\\Program Files \\(x86\\)\\\\Windows Kits\\\\10\\\\bin\\\\10.0.22621.0\\\\x86\\\\dxc.exe\" -T cs_6_6 -E main \"D:\\\\Engines\\\\SmileEngine\\\\Shaders\\\\PathTracer\\\\PTInitial.cs.hlsl\" -Fo \"$env:TEMP\\\\PTInitial_test.cso\"; if \\($?\\) { \"OK\" })"
     ]
   }
 }

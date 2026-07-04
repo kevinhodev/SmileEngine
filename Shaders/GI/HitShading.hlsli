@@ -146,4 +146,4 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     return albedo * (Edirect / SMILE_PI + indirect);
 }
 
-#endif I
+#endif

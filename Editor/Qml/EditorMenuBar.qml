@@ -133,9 +133,8 @@ MenuBar {
     DarkMenu {
         title: "Opções"
         MItem {
-            text: "Path Tracer (experimental)"; checkColumn: true
-            markVisible: menuBridge.pathTracerEnabled // estado real do Renderer (via MainWindow)
-            onTriggered: menuBridge.togglePathTracer()
+            text: "Configurações…"; shortcutText: "Ctrl+,"
+            onTriggered: menuBridge.openSettings()
         }
     }
 

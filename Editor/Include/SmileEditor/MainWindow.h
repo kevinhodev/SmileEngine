@@ -11,6 +11,7 @@ class QFileSystemWatcher;
 class QWidget;
 class QEvent;
 class QDockWidget;
+class QDialog;
 
 namespace SmileEditor {
     class ViewportWidget;
@@ -36,6 +37,7 @@ namespace SmileEditor {
         void OnRendererReady();
         void UpdateStats();
         void TriggerShaderCompileAndReload(const QString& Path);
+        void ShowSettings();
 
     private:
         void CreateTopBar();      // barra unificada QML (MainBar.qml + EditorMenuBar.qml)
@@ -46,6 +48,7 @@ namespace SmileEditor {
 
         ViewportWidget*       Viewport    = nullptr;
         QPointer<AboutDialog> AboutDlg;
+        QPointer<QDialog>     SettingsDlg;
 
         StatusBridge*         StatusBr    = nullptr; // ponte C++ -> StatusBar.qml
         LogBridge*            ConsoleLog  = nullptr; // ponte C++ -> ConsolePanel.qml

@@ -80,24 +80,29 @@ float PTTargetPHat(float3 x1, float3 n1, float3 xk, float3 Lo) {
     return PT_Lum(Lo) * cosT;
 }
 
-// Adiciona um candidato (M=1) com peso de resampling w.
-void PTResUpdate(inout PTReservoir r, float3 xkC, float3 nkC, float3 LoC, float hitC,
+// Adiciona um candidato (M=1) com peso de resampling w. x1C = o primario do pixel atual. NOTA:
+// o reservoir persistido e SEMPRE re-ancorado no x1 do pixel que o escreve (PTInitial faz
+// r.x1 = s1.Pos apos o finalize) — W ja embute o Jacobiano do shift aplicado no merge, entao o
+// proximo frame deve calcular J contra o x1 de ONTEM, nunca contra o x1 ancestral da amostra
+// (isso comporia o Jacobiano frame a frame = fireflies).
+void PTResUpdate(inout PTReservoir r, float3 x1C, float3 xkC, float3 nkC, float3 LoC, float hitC,
                  uint seedC, float w, inout uint rng) {
     r.wSum += w;
     r.M    += 1.0f;
     if (w > 0.0f && PTResRngNext(rng) * r.wSum <= w) {
-        r.xk = xkC; r.nk = nkC; r.Lo = LoC; r.hitK = hitC; r.seed = seedC;
+        r.x1 = x1C; r.xk = xkC; r.nk = nkC; r.Lo = LoC; r.hitK = hitC; r.seed = seedC;
     }
 }
 
 // Funde um reservoir inteiro (other) no atual. pHatOther = pHat (do pixel atual) p/ a amostra de
-// other; J = Jacobiano de reconexao (1 no reuso temporal; calculado no espacial, F3).
+// other; J = Jacobiano do shift other.x1 -> x1 atual (rejeitado pelo caller se fora da faixa).
 void PTResMerge(inout PTReservoir r, PTReservoir other, float pHatOther, float J, inout uint rng) {
     float w = pHatOther * other.W * other.M * J;
     r.wSum += w;
     r.M    += other.M;
     if (w > 0.0f && PTResRngNext(rng) * r.wSum <= w) {
-        r.xk = other.xk; r.nk = other.nk; r.Lo = other.Lo; r.hitK = other.hitK; r.seed = other.seed;
+        r.x1 = other.x1; r.xk = other.xk; r.nk = other.nk;
+        r.Lo = other.Lo; r.hitK = other.hitK; r.seed = other.seed;
     }
 }
 
@@ -114,22 +119,10 @@ float PTReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 xk, float3 nk) {
     return (cosDst / cosSrc) * (lSrc2 / lDst2);
 }
 
-// Finaliza W = wSum / (M * pHat(selecionado)).
-void PTResFinalizeW(inout PTReservoir r, float3 x1, float3 n1) {
-    float pHatSel = PTTargetPHat(x1, n1, r.xk, r.Lo);
+// Finaliza W = wSum / (M * pHatSel). No F2 o caller passa o pHat BRDF-aware (PT_PHatBrdf) do
+// pixel atual p/ a amostra selecionada — mantem W consistente com o target function usado no merge.
+void PTResFinalizeW(inout PTReservoir r, float pHatSel) {
     r.W = (pHatSel > 0.0f && r.M > 0.0f) ? (r.wSum / (r.M * pHatSel)) : 0.0f;
-}
-
-// Resolve o indireto SEM albedo: E/pi = Lo * cosTheta1 * W / pi. O caller multiplica pelo albedo
-// difuso de x1. maxLuma > 0 aplica firefly clamp na SAIDA.
-float3 PTResResolve(PTReservoir r, float3 x1, float3 n1, float maxLuma) {
-    float3 d = r.xk - x1;
-    float  l = length(d);
-    float  cosSel = (l > 1e-4f) ? saturate(dot(n1, d / l)) : 0.0f;
-    float3 gi = r.Lo * cosSel * r.W / SMILE_PI;
-    float  gl = PT_Lum(gi);
-    if (maxLuma > 0.0f && gl > maxLuma) gi *= maxLuma / gl;
-    return gi;
 }
 
 #endif

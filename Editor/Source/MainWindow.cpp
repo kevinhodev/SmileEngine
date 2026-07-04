@@ -22,6 +22,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
+#include <QDialog>
 #include <QDockWidget>
 #include <QEvent>
 #include <QFileDialog>
@@ -231,14 +232,8 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::ToggleConsoleRequested, this, [this]() {
             if (ConsoleDock) ConsoleDock->setVisible(!ConsoleDock->isVisible());
         });
-
-        // ---- Opções ----
-        connect(Menus, &MenuBridge::TogglePathTracerRequested, this, [this, RendererReady]() {
-            auto* R = RendererReady(); if (!R) return;
-            const bool On = !R->GetUsePathTracer();
-            R->SetUsePathTracer(On);
-            Menus->SetPathTracerEnabled(On); // reflete no check do menu
-        });
+        connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
+        connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
 
         // ---- Ajuda ----
         connect(Menus, &MenuBridge::AboutRequested, this, &MainWindow::OnHelpAbout);
@@ -252,6 +247,7 @@ namespace SmileEditor {
         };
         AddShortcut(QKeySequence(tr("Ctrl+O")),       [this]{ Menus->loadScene(); });
         AddShortcut(QKeySequence(tr("Ctrl+Shift+O")), [this]{ Menus->addScene(); });
+        AddShortcut(QKeySequence(tr("Ctrl+,")),       [this]{ ShowSettings(); });
         AddShortcut(QKeySequence::Quit,               [this]{ close(); });
     }
 
@@ -267,6 +263,15 @@ namespace SmileEditor {
 
         Viewport = new ViewportWidget(Shell);
         Viewport->setObjectName("MainViewport");
+
+        QQuickWidget* Toolbar = CreateQmlPanel(
+            QStringLiteral("ViewportToolbar.qml"),
+            { { QStringLiteral("viewportModel"), Viewport } },
+            Shell);
+        Toolbar->setObjectName("ViewportToolbar");
+        Toolbar->setFixedHeight(36);
+        Toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        Layout->addWidget(Toolbar);
         Layout->addWidget(Viewport, 1);
 
         return Shell;
@@ -361,6 +366,49 @@ namespace SmileEditor {
         AboutDlg->show();
         AboutDlg->raise();
         AboutDlg->activateWindow();
+    }
+
+    void MainWindow::ShowSettings() {
+        if (!SettingsDlg) {
+            auto* Dialog = new QDialog(this);
+            Dialog->setObjectName(QStringLiteral("SettingsWindow"));
+            Dialog->setWindowTitle(tr("Configurações — SmileEngine"));
+            Dialog->setWindowIcon(windowIcon());
+            Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
+                                   Qt::WindowMinMaxButtonsHint);
+            Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+            Dialog->resize(960, 640);
+            Dialog->setMinimumSize(960, 640);
+
+            auto* SettingsWindowBridge = new WindowBridge(Dialog, Dialog);
+            QQuickWidget* Panel = CreateQmlPanel(
+                QStringLiteral("SettingsWindow.qml"),
+                { { QStringLiteral("viewportModel"), Viewport },
+                  { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
+                Dialog,
+                { { QStringLiteral("smilelogo"), new SmileLogoImageProvider() } });
+            Panel->setObjectName(QStringLiteral("SettingsPanel"));
+
+            auto* DialogLayout = new QVBoxLayout(Dialog);
+            DialogLayout->setContentsMargins(0, 0, 0, 0);
+            DialogLayout->setSpacing(0);
+            DialogLayout->addWidget(Panel);
+
+            SettingsDlg = Dialog;
+        }
+
+        if (SettingsDlg->isMinimized()) SettingsDlg->showNormal();
+        else                            SettingsDlg->show();
+
+        // Centraliza apenas quando a janela ainda nao ganhou uma posicao util do window manager.
+        if (!SettingsDlg->property("smilePositioned").toBool()) {
+            const QPoint Center = frameGeometry().center();
+            SettingsDlg->move(Center.x() - SettingsDlg->width() / 2,
+                              Center.y() - SettingsDlg->height() / 2);
+            SettingsDlg->setProperty("smilePositioned", true);
+        }
+        SettingsDlg->raise();
+        SettingsDlg->activateWindow();
     }
 
     void MainWindow::TriggerShaderCompileAndReload(const QString& _Path) {

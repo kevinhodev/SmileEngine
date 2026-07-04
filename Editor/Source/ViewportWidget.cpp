@@ -10,9 +10,24 @@
 #include <QMouseEvent>
 #include <QTimer>
 #include <QCursor>
+#include <QLocale>
 
 namespace SmileEditor {
     static constexpr float kMouseSensitivity = 0.15f;  
+
+    namespace {
+        constexpr const char* kGBufferLabels[] = {
+            "",
+            "Base Color",
+            "World Normal",
+            "Roughness",
+            "Metallic",
+            "Emissive",
+            "Ambient Occlusion",
+            "Shading Model",
+            "Motion Vectors"
+        };
+    }
 
     ViewportWidget::ViewportWidget(QWidget* _Parent)
         : QWidget(_Parent),
@@ -44,6 +59,241 @@ namespace SmileEditor {
 
     QPaintEngine* ViewportWidget::paintEngine() const {
         return nullptr;
+    }
+
+    QString ViewportWidget::GetViewModeLabel() const {
+        switch (CurrentViewMode) {
+        case PathTracer:
+            return QStringLiteral("Path tracer");
+        case GBuffer:
+            if (CurrentGBufferMode >= 1 && CurrentGBufferMode <= 8)
+                return QString::fromLatin1(kGBufferLabels[CurrentGBufferMode]);
+            return QStringLiteral("GBuffer");
+        case ReflectionHeatmap:
+            return QStringLiteral("Heatmap");
+        case Lit:
+        default:
+            return QStringLiteral("Lit");
+        }
+    }
+
+    bool ViewportWidget::IsDDGIEnabled() const {
+        return Renderer && Renderer->GetUseGI();
+    }
+
+    bool ViewportWidget::IsReSTIRGIEnabled() const {
+        return Renderer && Renderer->GetUseReSTIRGI();
+    }
+
+    bool ViewportWidget::IsGTAOEnabled() const {
+        return Renderer && Renderer->GetUseAO();
+    }
+
+    bool ViewportWidget::AreReflectionsEnabled() const {
+        return Renderer && Renderer->GetUseReflections();
+    }
+
+    bool ViewportWidget::IsNrdEnabled() const {
+        return Renderer && Renderer->GetUseNrdDenoise();
+    }
+
+    bool ViewportWidget::IsPathTracerEnabled() const {
+        return Renderer && Renderer->GetUsePathTracer();
+    }
+
+    bool ViewportWidget::IsFsr2Enabled() const {
+        return Renderer && Renderer->Fsr2Available() && Renderer->GetUseFsr2();
+    }
+
+    bool ViewportWidget::IsFsr2Available() const {
+        return Renderer && Renderer->IsInitialized() && Renderer->Fsr2Available();
+    }
+
+    int ViewportWidget::GetFsr2Quality() const {
+        return Renderer ? Renderer->GetFsr2Quality() : 0;
+    }
+
+    double ViewportWidget::GetRenderScale() const {
+        return Renderer ? static_cast<double>(Renderer->GetRenderScale()) : 1.0;
+    }
+
+    bool ViewportWidget::IsTAAEnabled() const {
+        return Renderer && Renderer->GetUseTAA();
+    }
+
+    bool ViewportWidget::IsFrustumCullingEnabled() const {
+        return Renderer && Renderer->GetFrustumCulling();
+    }
+
+    bool ViewportWidget::IsDepthPrepassEnabled() const {
+        return Renderer && Renderer->GetDepthPrepass();
+    }
+
+    bool ViewportWidget::IsMergeByMaterialEnabled() const {
+        return Renderer && Renderer->GetMergeByMaterial();
+    }
+
+    double ViewportWidget::GetFrameTimeMs() const {
+        return LastFPS > 0.0f ? 1000.0 / static_cast<double>(LastFPS) : 0.0;
+    }
+
+    int ViewportWidget::GetVisibleDrawCount() const {
+        return Renderer ? static_cast<int>(Renderer->GetVisibleCount()) : 0;
+    }
+
+    int ViewportWidget::GetTotalDrawCount() const {
+        return Renderer ? static_cast<int>(Renderer->GetDrawCount()) : 0;
+    }
+
+    QString ViewportWidget::GetInternalResolution() const {
+        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        return QStringLiteral("%1×%2").arg(Renderer->RenderWidth()).arg(Renderer->RenderHeight());
+    }
+
+    QString ViewportWidget::GetOutputResolution() const {
+        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        return QStringLiteral("%1×%2").arg(Renderer->OutputWidth()).arg(Renderer->OutputHeight());
+    }
+
+    QString ViewportWidget::GetGPUName() const {
+        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("Inicializando GPU…");
+        return QString::fromStdWString(Renderer->GetDevice().GetAdapterDescription());
+    }
+
+    QString ViewportWidget::GetVRAMText() const {
+        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        const double GiB = static_cast<double>(
+            Renderer->GetDevice().GetAdapterDedicatedVideoMemory()) / (1024.0 * 1024.0 * 1024.0);
+        return QLocale(QLocale::Portuguese, QLocale::Brazil).toString(GiB, 'f', 1) +
+               QStringLiteral(" GB");
+    }
+
+    void ViewportWidget::SelectLit() {
+        if (!Renderer) return;
+        Renderer->SetUsePathTracer(false);
+        Renderer->SetGBufferDebugMode(0);
+        Renderer->SetFlickerMode(0);
+        CurrentViewMode = Lit;
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SelectPathTracer() {
+        if (!Renderer) return;
+        Renderer->SetUsePathTracer(true);
+        Renderer->SetGBufferDebugMode(0);
+        Renderer->SetFlickerMode(0);
+        CurrentViewMode = PathTracer;
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SelectGBuffer(int _Mode) {
+        if (!Renderer) return;
+        const int Mode = qBound(1, _Mode, 8);
+        Renderer->SetUsePathTracer(false);
+        Renderer->SetFlickerMode(0);
+        Renderer->SetGBufferDebugMode(static_cast<Smile::u32>(Mode));
+        CurrentGBufferMode = Mode;
+        CurrentViewMode = GBuffer;
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SelectReflectionHeatmap() {
+        if (!Renderer) return;
+        Renderer->SetUsePathTracer(false);
+        Renderer->SetGBufferDebugMode(0);
+        // Ainda nao ha um heatmap exclusivo dos raios de reflexao. O heatmap temporal
+        // existente e a visualizacao funcional mais proxima para este slot do mockup.
+        Renderer->SetFlickerMode(2);
+        CurrentViewMode = ReflectionHeatmap;
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleDDGI() {
+        if (!Renderer) return;
+        Renderer->SetUseGI(!Renderer->GetUseGI());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleReSTIRGI() {
+        if (!Renderer) return;
+        Renderer->SetUseReSTIRGI(!Renderer->GetUseReSTIRGI());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleGTAO() {
+        if (!Renderer) return;
+        Renderer->SetUseAO(!Renderer->GetUseAO());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleReflections() {
+        if (!Renderer) return;
+        Renderer->SetUseReflections(!Renderer->GetUseReflections());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleNrd() {
+        if (!Renderer) return;
+        Renderer->SetUseNrdDenoise(!Renderer->GetUseNrdDenoise());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetFsr2Enabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetUseFsr2(_Enabled && Renderer->Fsr2Available());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetFsr2Quality(int _Quality) {
+        if (!Renderer) return;
+        Renderer->SetFsr2Quality(_Quality);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetRenderScale(double _Scale) {
+        if (!Renderer) return;
+        Renderer->SetRenderScale(static_cast<float>(_Scale));
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetTAAEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetUseTAA(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetFrustumCullingEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetFrustumCulling(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetDepthPrepassEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetDepthPrepass(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetMergeByMaterialEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetMergeByMaterial(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ResetRenderSettings() {
+        if (!Renderer) return;
+        Renderer->SetFsr2Quality(1);
+        Renderer->SetUseFsr2(Renderer->Fsr2Available());
+        if (!Renderer->Fsr2Available()) Renderer->SetRenderScale(1.0f);
+        Renderer->SetUseTAA(true);
+        Renderer->SetFrustumCulling(true);
+        Renderer->SetDepthPrepass(false);
+        Renderer->SetMergeByMaterial(false);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::RequestSettings() {
+        emit SettingsRequested();
     }
 
     void ViewportWidget::EnsureRendererIsInitialized() {
