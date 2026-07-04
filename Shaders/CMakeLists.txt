@@ -149,6 +149,7 @@ add_custom_target(Shaders
         PathTracer/PTRayUtil.hlsli
         PathTracer/PTMaterial.hlsli
         PathTracer/PTPathTrace.hlsli
+        PathTracer/PTReservoir.hlsli
         PathTracer/PTInitial.cs.hlsl
         Reflections/GGXSample.hlsli
         Reflections/ReflectionTrace.cs.hlsl

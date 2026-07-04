@@ -71,19 +71,26 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO; // 11 SRV, 2 UAV, heap-directly-indexed (PTInitial)
+        FVolumetricPipeline TracePSO; // 12 SRV, 3 UAV, heap-directly-indexed (PTInitial)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> PTOutput;  // RGBA16F: radiancia + hitDist
         Microsoft::WRL::ComPtr<ID3D12Resource> AccumTex;  // RGBA32F: media progressiva (debug)
+        // Reservoir de caminho ping-pong (StructuredBuffer, 64B/pixel). prev = [1-p], curr = [p].
+        Microsoft::WRL::ComPtr<ID3D12Resource> ReservoirBuf[2];
         D3D12_RESOURCE_STATES PTOutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES AccumState    = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES ReservoirState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 PTOutSRV   = kInvalidSlot;
         u32 PTOutUAV   = kInvalidSlot;
         u32 AccumUAV   = kInvalidSlot;
-        u32 TraceTable    = kInvalidSlot; // 11 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbufA..C,vel]
-        u32 TraceUAVTable = kInvalidSlot; // 2 UAVs [PTOut, Accum]
+        u32 ReservoirSRV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 ReservoirUAV[2] = { kInvalidSlot, kInvalidSlot };
+        // Por paridade p: TraceTable[p] = 12 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbufA..C,vel,
+        // prevReservoir(=[1-p])]; TraceUAVTable[p] = 3 UAVs [PTOut, Accum, currReservoir(=[p])].
+        u32 TraceTable[2]    = { kInvalidSlot, kInvalidSlot };
+        u32 TraceUAVTable[2] = { kInvalidSlot, kInvalidSlot };
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB  = nullptr;
@@ -96,6 +103,7 @@ namespace Smile {
         f32  GIMaxRayDist = 0.0f;
 
         u32  Width = 0, Height = 0;
+        u32  FrameParity = 0;
         bool NeedsClear  = false;
         bool Initialized = false;
         bool Ready       = false;
