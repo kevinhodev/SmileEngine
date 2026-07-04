@@ -131,6 +131,15 @@ MenuBar {
     }
 
     DarkMenu {
+        title: "Opções"
+        MItem {
+            text: "Path Tracer (experimental)"; checkColumn: true
+            markVisible: menuBridge.pathTracerEnabled // estado real do Renderer (via MainWindow)
+            onTriggered: menuBridge.togglePathTracer()
+        }
+    }
+
+    DarkMenu {
         title: "Ajuda"
         MItem { text: "Sobre o Smile Engine…"; onTriggered: menuBridge.about() }
     }

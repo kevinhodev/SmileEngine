@@ -38,15 +38,24 @@ namespace Smile {
             return Tex;
         }
 
+        // Espelho C++ do InstanceGeo de DDGICommon.hlsli (80 bytes) — mudar em lockstep.
+        // Flags: 1=AlphaTest (FORCE_NON_OPAQUE na TLAS), 2=HasEmissiveMap, 4=Foliage, 8=HasMrMap.
         struct DDGIInstanceGeo {
-            Vec4 BaseColor;    
-            u32  VertexBase;   
-            u32  IndexBase;    
-            u32  AlbedoIndex = 0; 
-            u32  HasAlbedo   = 0; 
-            u32  TwoSided    = 0; 
-            u32  Pad0 = 0, Pad1 = 0, Pad2 = 0; 
+            Vec4 BaseColor;
+            u32  VertexBase  = 0;
+            u32  IndexBase   = 0;
+            u32  AlbedoIndex = 0;
+            u32  HasAlbedo   = 0;
+            u32  TwoSided    = 0;
+            u32  Flags       = 0;
+            f32  AlphaCutoff = 0.5f;
+            f32  RoughnessFactor = 0.5f;
+            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; // rgb = fator*strength; w = MetallicFactor
+            u32  EmissiveMapIndex = 0;
+            u32  MrMapIndex       = 0;
+            u32  GeoPad0 = 0, GeoPad1 = 0;
         };
+        static_assert(sizeof(DDGIInstanceGeo) == 80, "DDGIInstanceGeo deve casar com o HLSL (80B)");
 
         ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                    D3D12_RESOURCE_STATES _State,
@@ -205,13 +214,34 @@ namespace Smile {
         for (u32 i = 0; i < NumRenderables; ++i) {
             const FRenderable& R = _Scene.Renderables()[i];
             DDGIInstanceGeo g{};
-            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f }; 
+            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
             if (R.Material) {
-                g.BaseColor = R.Material->Constants.BaseColorFactor;
-                g.TwoSided  = R.Material->TwoSided ? 1u : 0u; 
+                const MaterialConstants& MC = R.Material->Constants;
+                g.BaseColor = MC.BaseColorFactor;
+                g.TwoSided  = R.Material->TwoSided ? 1u : 0u;
                 if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
                     g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
                     g.HasAlbedo   = 1;
+                }
+                // Campos p/ o ReSTIR PT (emissivo, alpha-test, metal/rough por instancia).
+                g.AlphaCutoff     = MC.AlphaCutoff;
+                g.RoughnessFactor = MC.RoughnessFactor;
+                g.EmissiveFactor  = { MC.EmissiveFactor.X * MC.EmissiveStrength,
+                                      MC.EmissiveFactor.Y * MC.EmissiveStrength,
+                                      MC.EmissiveFactor.Z * MC.EmissiveStrength,
+                                      MC.MetallicFactor };
+                if (MC.AlphaTest)        g.Flags |= 1u;
+                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
+                if (R.Material->IsFinalized()) {
+                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
+                    if (MC.HasEmissiveMap) {
+                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
+                        g.Flags |= 2u;
+                    }
+                    if (MC.HasMetallicRoughnessMap) {
+                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
+                        g.Flags |= 8u;
+                    }
                 }
             }
             auto It = R.Mesh ? MeshBase.find(R.Mesh) : MeshBase.end();

@@ -232,6 +232,14 @@ namespace SmileEditor {
             if (ConsoleDock) ConsoleDock->setVisible(!ConsoleDock->isVisible());
         });
 
+        // ---- Opções ----
+        connect(Menus, &MenuBridge::TogglePathTracerRequested, this, [this, RendererReady]() {
+            auto* R = RendererReady(); if (!R) return;
+            const bool On = !R->GetUsePathTracer();
+            R->SetUsePathTracer(On);
+            Menus->SetPathTracerEnabled(On); // reflete no check do menu
+        });
+
         // ---- Ajuda ----
         connect(Menus, &MenuBridge::AboutRequested, this, &MainWindow::OnHelpAbout);
 

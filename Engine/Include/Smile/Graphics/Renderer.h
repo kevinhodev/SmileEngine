@@ -28,6 +28,7 @@
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/DDGIDebug.h"
 #include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/ReSTIRPT.h"
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
 #include "Smile/Graphics/AmbientOcclusion.h"
@@ -200,6 +201,11 @@ namespace Smile {
 
         FReflections& GetReflections()     { return Reflections; }
 
+        // ReSTIR PT (experimental): ON desliga Reflections/GTAO/ReSTIR-GI; DDGI e NRD ficam.
+        void SetUsePathTracer(bool V)  { UsePathTracer = V; }
+        bool GetUsePathTracer() const  { return UsePathTracer; }
+        FReSTIRPT& GetReSTIRPT()       { return ReSTIRPT; }
+
         FAmbientOcclusion& GetAO()     { return AO; }
 
     private:
@@ -346,6 +352,10 @@ namespace Smile {
 
         FReSTIRGI        ReSTIRGI;
         bool             UseReSTIRGI = false; // experimental; default OFF (nao toca o estado padrao)
+        // ReSTIR PT (path tracing completo, GRIS + Enhanced). ON desliga Reflections/GTAO/ReSTIR-GI
+        // (o PT e superset); DDGI fica como radiance cache de terminacao.
+        FReSTIRPT        ReSTIRPT;
+        bool             UsePathTracer = false; // experimental; default OFF
         FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (RELAX_DIFFUSE) — Fase B/C
         bool             UseNrdDenoise = false; // NRD como denoiser do ReSTIR (Fase C)
         Mat44            NrdPrevView{};        // prev view/proj NAO-jitteradas p/ a reprojecao do NRD

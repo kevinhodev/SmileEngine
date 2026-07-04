@@ -91,7 +91,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ray.TMax      = TraceParams.y;
     RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
     q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, ray);
-    while (q.Proceed()) {}
+    SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
     P.GridMin        = GridMinSpacing.xyz;  P.Spacing      = GridMinSpacing.w;

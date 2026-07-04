@@ -10,6 +10,8 @@ namespace SmileEditor {
         Q_OBJECT
         // Estado do dock do Console refletido no check do menu "Janela".
         Q_PROPERTY(bool consoleVisible READ ConsoleVisible NOTIFY ConsoleVisibleChanged)
+        // Estado do ReSTIR PT refletido no check do menu "Opções".
+        Q_PROPERTY(bool pathTracerEnabled READ PathTracerEnabled NOTIFY PathTracerEnabledChanged)
 
     public:
         explicit MenuBridge(QObject* parent = nullptr);
@@ -17,12 +19,16 @@ namespace SmileEditor {
         bool ConsoleVisible() const { return ConsoleVis; }
         void SetConsoleVisible(bool v); // MainWindow chama (visibilityChanged do dock)
 
+        bool PathTracerEnabled() const { return PathTracerOn; }
+        void SetPathTracerEnabled(bool v); // MainWindow chama apos aplicar no Renderer
+
     public slots:
         void loadScene()        { emit LoadSceneRequested(); }
         void addScene()         { emit AddSceneRequested(); }
         void about()            { emit AboutRequested(); }
         void quit()             { emit QuitRequested(); }
         void toggleConsole()    { emit ToggleConsoleRequested(); }
+        void togglePathTracer() { emit TogglePathTracerRequested(); }
         void setVSync(bool on)            { emit VSyncToggled(on); }
         void setFrustumCulling(bool on)   { emit FrustumCullingToggled(on); }
         void setDepthPrepass(bool on)     { emit DepthPrepassToggled(on); }
@@ -34,6 +40,8 @@ namespace SmileEditor {
         void AboutRequested();
         void QuitRequested();
         void ToggleConsoleRequested();
+        void TogglePathTracerRequested();
+        void PathTracerEnabledChanged();
         void VSyncToggled(bool on);
         void FrustumCullingToggled(bool on);
         void DepthPrepassToggled(bool on);
@@ -41,6 +49,7 @@ namespace SmileEditor {
         void ConsoleVisibleChanged();
 
     private:
-        bool ConsoleVis = true;
+        bool ConsoleVis   = true;
+        bool PathTracerOn = false;
     };
 }

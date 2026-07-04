@@ -199,6 +199,10 @@ namespace Smile {
             Inst.InstanceMask                        = 0xFF;
             Inst.InstanceContributionToHitGroupIndex = 0;
             Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+            // Folhagem/alpha-test: candidatos nao-opacos passam pelo AlphaTestPass no shader
+            // (SMILE_RT_PROCEED em HitShading.hlsli) — sem isto os cards viram quads solidos.
+            if (R.Material && R.Material->Constants.AlphaTest)
+                Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
             Inst.AccelerationStructure               = It->second;
             Instances.push_back(Inst);
         }

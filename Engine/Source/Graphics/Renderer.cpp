@@ -98,7 +98,8 @@ namespace Smile {
         if (Device.RaytracingSupported()) {
             DDGI.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
-            Nrd.Initialize(Device.Native()); 
+            ReSTIRPT.Initialize(Device.Native());
+            Nrd.Initialize(Device.Native());
             Reflections.Initialize(Device.Native());
             DDGIDebugPass.Initialize(Device.Native(),
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
@@ -343,6 +344,14 @@ namespace Smile {
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot);
+
+        ReSTIRPT.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
+                             DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
+        ReSTIRPT.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
+            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
+            DepthSRVSlot, GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2),
+            VelocitySRVSlot);
 
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
@@ -805,14 +814,20 @@ namespace Smile {
             MappedCB->DDGIDistParams = { 14.0f, 1.0f, 1.0f, 0.0f };
         }
 
-        const bool ReflectionsActive = UseReflections && Reflections.IsReady();
-        const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady();
+        // ReSTIR PT e superset (multi-bounce specular + DI + AO implicito): ON desliga
+        // Reflections/ReSTIR-GI (e GTAO adiante, via AOWillRun). DDGI fica como cache de cauda.
+        const bool PathTracerActive  = UsePathTracer && ReSTIRPT.IsReady();
+        const bool ReflectionsActive = UseReflections && Reflections.IsReady() && !PathTracerActive;
+        const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady() && !PathTracerActive;
         const bool NrdMode           = ReSTIRGIActive && Nrd.IsReady() && UseNrdDenoise;
-        ReSTIRGI.SetUseNrd(NrdMode); 
-        Reflections.SetUseNrd(NrdMode); 
+        ReSTIRGI.SetUseNrd(NrdMode);
+        Reflections.SetUseNrd(NrdMode);
+        // ReflectionParams.w: 0=off, 1=ReSTIR GI cru, 2=ReSTIR GI via NRD (YCoCg), 3=ReSTIR PT
+        // (passthrough full-radiance no deferred).
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        ReflectionsActive ? 1.0f : 0.0f,
-                                       ReSTIRGIActive ? (NrdMode ? 2.0f : 1.0f) : 0.0f };
+                                       PathTracerActive ? 3.0f
+                                           : (ReSTIRGIActive ? (NrdMode ? 2.0f : 1.0f) : 0.0f) };
         ++FrameIndex;
 
         Mat44 ViewNoTrans = View;
@@ -918,6 +933,12 @@ namespace Smile {
             ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
                                     RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
                                     FrameIndex, 1.0f, 0.2f, View);
+        }
+
+        if (PathTracerActive) {
+            ReSTIRPT.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
+                                    RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
+                                    FrameIndex, 1.0f, 0.2f, View, ViewProjUnjittered);
         }
 
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
@@ -1030,7 +1051,7 @@ namespace Smile {
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
-        const bool AOWillRun = UseAO && AO.IsReady();
+        const bool AOWillRun = UseAO && AO.IsReady() && !PathTracerActive; // AO implicito no PT
         const bool DoPrepass = true;
         if (DoPrepass) {
             if (AOWillRun) {
@@ -1157,6 +1178,39 @@ namespace Smile {
             VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
+        if (PathTracerActive) {
+            // ReSTIR PT: compute le depth + G-buffer (x1) + velocity (F1). Mesmas transicoes do
+            // bloco ReSTIR GI abaixo (mutuamente exclusivos — o gating desliga o GI quando PT on).
+            D3D12_RESOURCE_BARRIER DBar{};
+            DBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            DBar.Transition.pResource   = DepthBuffer.Get();
+            DBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            DBar.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &DBar);
+            GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            D3D12_RESOURCE_BARRIER VBar{};
+            VBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            VBar.Transition.pResource   = VelocityBuffer.Get();
+            VBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            VBar.Transition.StateBefore = VelocityState;
+            VBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &VBar);
+            VelocityState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+            ReSTIRPT.RecordTrace(CommandList, SRVHeap);
+
+            DBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            CommandList->ResourceBarrier(1, &DBar);
+            GBuffer.TransitionToWrite(CommandList);
+
+            VBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            VBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &VBar);
+            VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+
         if (ReSTIRGIActive) {
             D3D12_RESOURCE_BARRIER DBar{};
             DBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1232,7 +1286,8 @@ namespace Smile {
                 CommandList->SetGraphicsRootDescriptorTable(8, SRVHeap.GpuHandle(AOTable));
             }
             {
-                const u32 ReSTIRTable = ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
+                const u32 ReSTIRTable = PathTracerActive ? ReSTIRPT.OutputSRVSlot()
+                                      : (ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart);
                 CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
             }
             CommandList->SetPipelineState(PipelineState.PSODeferredLighting());

@@ -9,14 +9,28 @@
 #define DDGI_IRRADIANCE_GAMMA 1.5f
 #endif
 
+// Flags do InstanceGeo (bitmask em Flags).
+#define INSTGEO_FLAG_ALPHATEST 1u  // clip por albedo.a vs AlphaCutoff (folhagem; FORCE_NON_OPAQUE na TLAS)
+#define INSTGEO_FLAG_EMISSIVE  2u  // tem mapa emissivo (EmissiveMapIndex valido)
+#define INSTGEO_FLAG_FOLIAGE   4u  // ShadingModel Foliage (two-sided + transmissao no PT)
+#define INSTGEO_FLAG_MRMAP     8u  // tem mapa metallic-roughness (MrMapIndex valido; G=rough, B=metal)
+
+// 80 bytes — casa campo-a-campo com DDGIInstanceGeo (DDGI.cpp). Campos alem do BaseColor/geometria
+// alimentam o ReSTIR PT (emissivo, alpha-test, metal/rough); os shaders antigos ignoram os novos.
 struct InstanceGeo {
-    float4 BaseColor;   
-    uint   VertexBase;  
-    uint   IndexBase;   
-    uint   AlbedoIndex; 
-    uint   HasAlbedo;   
-    uint   TwoSided;    
-    uint   Pad0; uint Pad1; uint Pad2;
+    float4 BaseColor;
+    uint   VertexBase;
+    uint   IndexBase;
+    uint   AlbedoIndex;
+    uint   HasAlbedo;
+    uint   TwoSided;
+    uint   Flags;
+    float  AlphaCutoff;
+    float  RoughnessFactor;
+    float4 EmissiveFactor; // rgb = EmissiveFactor * EmissiveStrength; w = MetallicFactor
+    uint   EmissiveMapIndex;
+    uint   MrMapIndex;
+    uint   GeoPad0; uint GeoPad1;
 };
 
 struct DDGIVertex {

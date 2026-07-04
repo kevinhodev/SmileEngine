@@ -64,7 +64,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
 
     RayQuery<RAY_FLAG_NONE> q;
     q.TraceRayInline(Scene, RAY_FLAG_NONE, 0xFF, ray);
-    while (q.Proceed()) {}
+    SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
     P.GridMin        = GridMinSpacing.xyz;  P.Spacing      = spacing;
