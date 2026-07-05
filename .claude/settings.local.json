@@ -120,7 +120,8 @@
       "Bash(cmake --build build --config Release)",
       "Bash(grep -n \"NrdPrevProj\\\\|NrdPrevView\" Engine/Source/Graphics/Renderer.cpp; echo ---; grep -n \"REBLUR_BackEnd_UnpackRadianceAndNormHitDist\\\\|_NRD_YCoCgToLinear\\\\|NRD_USE_YCOCG\" \"D:/Engines/NRD/Shaders/Include/NRD.hlsli\" | head)",
       "Bash(find /d/Engines/NRD/Shaders -name \"NRD.hlsli\" 2>/dev/null | head -3; grep -rn \"REBLUR_BackEnd_UnpackRadianceAndNormHitDist\" /d/Engines/NRD/Shaders --include=\"NRD.hlsli\" | head -3)",
-      "Bash(sed -i '/Include\\\\/Smile\\\\/Graphics\\\\/ReSTIRPT\\\\.h/d;/Source\\\\/Graphics\\\\/ReSTIRPT\\\\.cpp/d' Engine/CMakeLists.txt)"
+      "Bash(sed -i '/Include\\\\/Smile\\\\/Graphics\\\\/ReSTIRPT\\\\.h/d;/Source\\\\/Graphics\\\\/ReSTIRPT\\\\.cpp/d' Engine/CMakeLists.txt)",
+      "Bash(ls /d/Engines/)"
     ]
   }
 }

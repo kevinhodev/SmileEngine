@@ -46,6 +46,28 @@ struct VSOutput {
     float2 uv  : TEXCOORD0;
 };
 
+// Amostra o indireto do DDGI respeitando os flags do frame (Chebyshev/skip de probes inativos).
+// Caminho UNICO p/ geometria e folhagem — com os pisos defensivos do Chebyshev (DDGICommon),
+// folhagem densa nao crusha mais a preto e nao precisa de sampling separado.
+float3 SampleSceneDDGI(float3 worldPos, float3 N) {
+    float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
+    int  giFlags      = (int)DDGIDistParams.w;
+    bool useChebyshev = (giFlags & 1) != 0;
+    bool skip         = (giFlags & 2) != 0;
+    bool fallback     = (giFlags & 4) != 0;
+    uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+    if (useChebyshev) {
+        float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
+        return SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
+                   worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                   (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, 0.25f,
+                   DDGIProbeData, skipMode);
+    }
+    return SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
+               DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+               (int)DDGIParams.y, atlasInvSize);
+}
+
 float4 main(VSOutput input) : SV_Target {
     int2  px       = int2(input.pos.xy);
     float rawDepth = SceneDepth.Load(int3(px, 0));
@@ -143,7 +165,18 @@ float4 main(VSOutput input) : SV_Target {
     float3 DbgGI = float3(0.0f, 0.0f, 0.0f);
     if (UseGI || UseReSTIR) {
         float3 gi;
-        if (UseReSTIR) {
+        // Folhagem (two-sided, estilo UE "two-sided foliage"): indireto = frente + 0.6*tras
+        // (transmissao pela folha — mesmo fator do TransColor no direto e do SubsurfaceColor
+        // do loader). ADITIVO, nao media: hera colada na parede tem o lado -N preto (dentro do
+        // predio) e a media derrubava o indireto pela metade. Mantem o Chebyshev do caminho
+        // comum: os pisos defensivos (DDGICommon) ja evitam o colapso a preto que motivava
+        // pula-lo, e SEM ele a trilinear mistura probes de DENTRO da parede (hera mais escura
+        // que a propria parede). Folhagem segue FORA do gather per-pixel do ReSTIR (se auto-
+        // oclui em folhagem densa; o Lumen pula screen traces backface pelo mesmo motivo).
+        bool foliageFill = IsFoliage && UseGI;
+        if (foliageFill) {
+            gi = SampleSceneDDGI(worldPos, N) + 0.6f * SampleSceneDDGI(worldPos, -N);
+        } else if (UseReSTIR) {
             // ReSTIR full-res no A0-A3 (Load por pixel); o A4 passa p/ meia-res + upsample bilateral.
             gi = ReSTIRGITex.Load(int3(px, 0)).rgb;
             // ReflectionParams.w == 2 -> saida do NRD REBLUR em YCoCg: desempacota p/ linear
@@ -153,23 +186,7 @@ float4 main(VSOutput input) : SV_Target {
                 gi = max(float3(t + gi.y, gi.x + gi.z, t - gi.y), 0.0f);
             }
         } else {
-            float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
-            int  giFlags      = (int)DDGIDistParams.w;
-            bool useChebyshev = (giFlags & 1) != 0;
-            bool skip         = (giFlags & 2) != 0;
-            bool fallback     = (giFlags & 4) != 0;
-            uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
-            if (useChebyshev) {
-                float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
-                gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
-                         worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                         (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, 0.25f,
-                         DDGIProbeData, skipMode);
-            } else {
-                gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-                         DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                         (int)DDGIParams.y, atlasInvSize);
-            }
+            gi = SampleSceneDDGI(worldPos, N);
         }
         DbgGI = gi;
 

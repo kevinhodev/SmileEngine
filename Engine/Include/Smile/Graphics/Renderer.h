@@ -370,7 +370,7 @@ namespace Smile {
         FReSTIRGI        ReSTIRGI;
         bool             UseReSTIRGI = false; // experimental; default OFF (nao toca o estado padrao)
         FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (RELAX_DIFFUSE) — Fase B/C
-        bool             UseNrdDenoise = true; // NRD como denoiser do ReSTIR (Fase C)
+        bool             UseNrdDenoise = false; // NRD como denoiser do ReSTIR (Fase C)
         Mat44            NrdPrevView{};        // prev view/proj NAO-jitteradas p/ a reprojecao do NRD
         Mat44            NrdPrevProj{};
 

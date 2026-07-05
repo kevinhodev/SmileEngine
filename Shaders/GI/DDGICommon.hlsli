@@ -182,17 +182,16 @@ float3 SampleDDGIIrradianceCheb(
             }
         }
 
-        float3 trilin = lerp(1.0f - frac, frac, (float3)off);
-        float  w      = trilin.x * trilin.y * trilin.z;
-        if (w <= 0.0f) continue;
-
         float3 probePos    = DDGI_ProbeWorldPos(c, gridMin, spacing);
         float3 probeToPoint = biasPos - probePos;
         float  distToProbe = length(probeToPoint);
         float3 dirPP       = probeToPoint / max(distToProbe, 1e-4f);
-        
+
+        // Pesos DEFENSIVOS com piso (receita do Flax, DDGI.hlsl): backface e Chebyshev se
+        // auto-sabotam em geometria densa/fina (miolo de sebe, cantos, frestas) — os pisos
+        // garantem que wsum nunca colapsa a zero => nunca retorna preto absoluto, so escurece.
         float backface = dot(-dirPP, N) * 0.5f + 0.5f;
-        w *= (backface * backface + 0.05f);
+        float w = backface * backface + 0.05f;
 
         int2   distOrigin = DDGI_TileOrigin(c, count, distTile);
         float2 md = DDGI_SampleProbeRG(distAtlas, samp, distOrigin, distTile, distInvSize, dirPP);
@@ -201,9 +200,18 @@ float3 SampleDDGIIrradianceCheb(
             float variance = abs(mean * mean - mean2);
             float d        = distToProbe - mean;
             float cheb     = variance / (variance + d * d);
-            w *= max(cheb * cheb * cheb, 0.0f);
+            w *= max(cheb * cheb * cheb, 0.05f);
         }
-        if (w <= 0.0f) continue;
+        w = max(w, 1e-6f);
+
+        // Curva de crush suave p/ pesos baixos ("inject a small portion of light"): mantem a
+        // penalizacao dos probes ocluidos sem a transicao dura do corte a zero.
+        const float minWeightThreshold = 0.2f;
+        if (w < minWeightThreshold)
+            w *= (w * w) / (minWeightThreshold * minWeightThreshold);
+
+        float3 trilin = lerp(1.0f - frac, frac, (float3)off);
+        w *= max(trilin.x * trilin.y * trilin.z, 0.001f);
 
         int2   irrOrigin = DDGI_TileOrigin(c, count, irrTile);
         float3 irr = DDGI_SampleProbe(irrAtlas, samp, irrOrigin, irrTile, irrInvSize, N);
