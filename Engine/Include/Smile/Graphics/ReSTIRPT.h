@@ -71,26 +71,35 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO; // 12 SRV, 3 UAV, heap-directly-indexed (PTInitial)
+        FVolumetricPipeline TracePSO;   // 12 SRV, 4 UAV, heap-directly-indexed (PTInitial)
+        FVolumetricPipeline SpatialPSO; // 12 SRV, 1 UAV, heap-directly-indexed (PTSpatial, F3)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> PTOutput;  // RGBA16F: radiancia + hitDist
         Microsoft::WRL::ComPtr<ID3D12Resource> AccumTex;  // RGBA32F: media progressiva (debug)
+        Microsoft::WRL::ComPtr<ID3D12Resource> PTLitTex;  // RGBA16F: direto+Cemit (Pass A -> B, F3)
         // Reservoir de caminho ping-pong (StructuredBuffer, 64B/pixel). prev = [1-p], curr = [p].
         Microsoft::WRL::ComPtr<ID3D12Resource> ReservoirBuf[2];
         D3D12_RESOURCE_STATES PTOutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES AccumState    = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES PTLitState    = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ReservoirState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 PTOutSRV   = kInvalidSlot;
         u32 PTOutUAV   = kInvalidSlot;
         u32 AccumUAV   = kInvalidSlot;
+        u32 PTLitSRV   = kInvalidSlot;
+        u32 PTLitUAV   = kInvalidSlot;
         u32 ReservoirSRV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ReservoirUAV[2] = { kInvalidSlot, kInvalidSlot };
         // Por paridade p: TraceTable[p] = 12 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbufA..C,vel,
-        // prevReservoir(=[1-p])]; TraceUAVTable[p] = 3 UAVs [PTOut, Accum, currReservoir(=[p])].
+        // prevReservoir(=[1-p])]; TraceUAVTable[p] = 4 UAVs [PTOut, Accum, currReservoir(=[p]), PTLit].
+        // SpatialTable[p] = 12 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbufA..C,currReservoir(=[p]),
+        // PTLit]; SpatialUAVTable = 1 UAV [PTOut] (igual nas duas paridades).
         u32 TraceTable[2]    = { kInvalidSlot, kInvalidSlot };
         u32 TraceUAVTable[2] = { kInvalidSlot, kInvalidSlot };
+        u32 SpatialTable[2]  = { kInvalidSlot, kInvalidSlot };
+        u32 SpatialUAVTable  = kInvalidSlot;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB  = nullptr;
@@ -119,6 +128,10 @@ namespace Smile {
         f32  FireflyMax        = 25.0f; // teto de luminancia por caminho (0 = off)
         f32  AlbedoLOD         = 2.0f;
         f32  SunAngularRadiusDeg = 0.6f;
+        f32  SpatialSigma      = 16.0f; // F3: sigma gaussiano da busca de vizinhos (px)
+        f32  SpatialCount      = 3.0f;  // F3: vizinhos por pixel (max 4)
+        bool SpatialOn         = true;  // F3: reuso espacial (Pass B)
+        f32  NormalReject      = 0.9f;  // F3: cos minimo entre normais p/ aceitar vizinho
         u32  DebugMode         = 0;    // 0 = off, 1 = acumulacao progressiva
     };
 }

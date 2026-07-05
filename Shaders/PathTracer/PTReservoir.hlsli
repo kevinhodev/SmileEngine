@@ -23,14 +23,17 @@ struct PTReservoir {
     float  hitK; // |x2 - x1| do caminho (hitDist do GI p/ o NRD, F4)
     float  M;    // contagem de amostras
     float  W;    // peso de contribuicao nao-enviesado
+    float  pHat; // F3: target (luminancia de C) da amostra selecionada NO dominio do proprio
+                 // pixel — cache p/ o pairwise MIS espacial (evita re-shiftar o vizinho p/ ele mesmo)
     float  wSum; // soma dos pesos de resampling
     uint   seed; // seed do caminho de ORIGEM (replay do prefixo, dims globais por bounce)
     uint   kb;   // nº de bounces replayados antes da reconexao (0 = reconecta em x2)
 };
 
-// 64B: q0 = x1|M, q1 = xk|W, q2 = Lo(3xf16)+hitK(f16) | nk oct(2xf16) | seed, q3 = xkm1|kb.
+// 64B: q0 = x1|(M,pHat f16x2), q1 = xk|W, q2 = Lo(3xf16)+hitK(f16) | nk oct(2xf16) | seed,
+// q3 = xkm1|kb. M e inteiro pequeno (<= MCap+1) e pHat e clampado no finalize — f16 basta.
 struct PTReservoirPacked {
-    float4 q0; // x1.xyz (f32), M
+    float4 q0; // x1.xyz (f32), w = asfloat(f16(M) | f16(pHat) << 16)
     float4 q1; // xk.xyz (f32), W
     uint4  q2; // x=f16(Lo.r,Lo.g), y=f16(Lo.b,hitK), z=f16(nkOct.x,nkOct.y), w=seed
     uint4  q3; // xyz = asuint(xkm1) (f32 — posicao, NUNCA half), w = kb
@@ -46,12 +49,12 @@ float PTResRngNext(inout uint s) { s = GGX_PCG(s); return (s & 0x00FFFFFFu) / 16
 
 void PTResInit(out PTReservoir r) {
     r.x1 = 0; r.xkm1 = 0; r.xk = 0; r.nk = 0; r.Lo = 0; r.hitK = 0;
-    r.M = 0; r.W = 0; r.wSum = 0; r.seed = 0; r.kb = 0;
+    r.M = 0; r.W = 0; r.pHat = 0; r.wSum = 0; r.seed = 0; r.kb = 0;
 }
 
 PTReservoirPacked PTResPack(PTReservoir r) {
     PTReservoirPacked p;
-    p.q0 = float4(r.x1, r.M);
+    p.q0 = float4(r.x1, asfloat(f32tof16(r.M) | (f32tof16(r.pHat) << 16)));
     p.q1 = float4(r.xk, r.W);
     float2 nkOct = DDGI_OctEncode(r.nk);
     p.q2.x = f32tof16(r.Lo.r) | (f32tof16(r.Lo.g) << 16);
@@ -64,7 +67,10 @@ PTReservoirPacked PTResPack(PTReservoir r) {
 
 PTReservoir PTResUnpack(PTReservoirPacked p) {
     PTReservoir r;
-    r.x1 = p.q0.xyz; r.M = p.q0.w;
+    r.x1   = p.q0.xyz;
+    uint mp = asuint(p.q0.w);
+    r.M    = f16tof32(mp & 0xFFFFu);
+    r.pHat = f16tof32(mp >> 16);
     r.xk = p.q1.xyz; r.W = p.q1.w;
     r.Lo = float3(f16tof32(p.q2.x & 0xFFFFu), f16tof32(p.q2.x >> 16), f16tof32(p.q2.y & 0xFFFFu));
     r.hitK = f16tof32(p.q2.y >> 16);
@@ -125,8 +131,11 @@ float PTReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 xk, float3 nk) {
 
 // Finaliza W = wSum / (M * pHatSel). No F2 o caller passa o pHat BRDF-aware (PT_PHatBrdf) do
 // pixel atual p/ a amostra selecionada — mantem W consistente com o target function usado no merge.
+// Cacheia pHatSel no reservoir (clampado p/ caber em f16): e o p̂_j(y_j) que o pairwise MIS
+// espacial (F3) precisa do vizinho sem re-shiftar a amostra dele p/ ele mesmo.
 void PTResFinalizeW(inout PTReservoir r, float pHatSel) {
-    r.W = (pHatSel > 0.0f && r.M > 0.0f) ? (r.wSum / (r.M * pHatSel)) : 0.0f;
+    r.W    = (pHatSel > 0.0f && r.M > 0.0f) ? (r.wSum / (r.M * pHatSel)) : 0.0f;
+    r.pHat = min(pHatSel, 1.0e4f);
 }
 
 #endif

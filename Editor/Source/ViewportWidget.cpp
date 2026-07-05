@@ -183,7 +183,7 @@ namespace SmileEditor {
         Renderer->SetGBufferDebugMode(0);
         Renderer->SetFlickerMode(0);
         CurrentViewMode = PathTracer;
-        //Renderer->GetReSTIRPT().SetDebugMode(3);
+        Renderer->GetReSTIRPT().SetDebugMode(0);
         emit ViewSettingsChanged();
     }
 

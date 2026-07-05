@@ -30,10 +30,11 @@ cbuffer PTCB : register(b0) {
 #define PT_RECONNECT_ROUGH_MIN  0.2f      // roughness minima em x_{k-1} p/ reconectar
 
 // Modos de debug (DebugParams.x).
-#define PT_DEBUG_OFF    0
-#define PT_DEBUG_ACCUM  1                 // media progressiva com camera parada (ground truth)
-#define PT_DEBUG_KMAP   2                 // F2b: heatmap do vertice de reconexao (kb do candidato)
-#define PT_DEBUG_CANARY 3                 // F2b: residuo do auto-replay (deve ser preto)
+#define PT_DEBUG_OFF     0
+#define PT_DEBUG_ACCUM   1                // media progressiva com camera parada (ground truth)
+#define PT_DEBUG_KMAP    2                // F2b: heatmap do vertice de reconexao (kb do candidato)
+#define PT_DEBUG_CANARY  3                // F2b: residuo do auto-replay (deve ser preto)
+#define PT_DEBUG_SPATIAL 4                // F3: r=vizinhos rejeitados, g=m_c, b=energia dos vizinhos
 
 float PT_Luminance(float3 c) { return dot(c, float3(0.2126f, 0.7152f, 0.0722f)); }
 

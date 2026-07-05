@@ -152,7 +152,9 @@ struct FPTShift {
     float  J;    // Jacobiano de reconexao (base fonte -> base destino)
 };
 
-FPTShift PT_HybridShift(FPTSurface s1, float3 V, PTReservoir smp) {
+// forceVis: o temporal reprojeta a MESMA superficie (kb==0 dispensa o visibility ray); o
+// espacial (F3) reconecta a partir de um x1 de OUTRO pixel — sem o raio haveria light leak.
+FPTShift PT_HybridShift(FPTSurface s1, float3 V, PTReservoir smp, bool forceVis) {
     FPTShift o;
     o.Ok = false; o.C = float3(0.0f, 0.0f, 0.0f);
     o.xkm1 = s1.Pos; o.hit1 = 0.0f; o.J = 0.0f;
@@ -200,9 +202,9 @@ FPTShift PT_HybridShift(FPTSurface s1, float3 V, PTReservoir smp) {
     if (smp.kb == 0)
         o.hit1 = l;
 
-    if (smp.kb > 0) {
-        // A base moveu de verdade (replay): visibility ray da reconexao evita light leak.
-        // kb==0 e reproject de mesma superficie — dispensa (mesma escolha da F1/F2a).
+    if (smp.kb > 0 || forceVis) {
+        // A base moveu de verdade (replay ou vizinho espacial): visibility ray da reconexao
+        // evita light leak. kb==0 temporal e reproject de mesma superficie — dispensa (F1/F2a).
         float3 dir  = d / l;
         float  ndl  = dot(s.N, dir);
         float3 side = (ndl >= 0.0f) ? s.N : -s.N;

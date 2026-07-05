@@ -116,7 +116,8 @@
       "Bash(ls \"C:/Program Files/Git/mingw64/bin/\" | grep -i pdf)",
       "Bash(py -m pip install pypdfium2 pillow --quiet)",
       "Bash(py -c ' *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(cmake --build build --config Release)"
     ]
   }
 }

@@ -38,6 +38,7 @@ StructuredBuffer<PTReservoirPacked> PrevReservoir : register(t11);
 RWTexture2D<float4>                 PTOut         : register(u0); // rgb = radiancia full, a = |xk-x1|
 RWTexture2D<float4>                 Accum         : register(u1); // debug: media progressiva
 RWStructuredBuffer<PTReservoirPacked> CurrReservoir : register(u2);
+RWTexture2D<float4>                 PTLit         : register(u3); // F3: direto(x1) + Cemit (fora do reservoir)
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
@@ -60,6 +61,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float deviceZ = Depth.Load(int3(px, 0)).r;
     if (deviceZ <= 0.0f) {
         PTOut[px] = float4(0.0f, 0.0f, 0.0f, 0.0f); // ceu: o deferred descarta antes do passthrough
+        PTLit[px] = float4(0.0f, 0.0f, 0.0f, 0.0f);
         PTReservoir empty; PTResInit(empty);
         CurrReservoir[idx] = PTResPack(empty);
         return;
@@ -121,7 +123,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 // Shift completo: replay do prefixo (kb bounces, seed FONTE) + reconexao.
                 // prev.xkm1 = base re-ancorada ONTEM => J ~ 1 em reproject de mesma superficie.
                 // J fora da faixa = geometria incompativel: REJEITA (clampar enviesa p/ cima).
-                FPTShift sh = PT_HybridShift(s1, V, prev);
+                FPTShift sh = PT_HybridShift(s1, V, prev, false);
                 if (sh.Ok && sh.J > 0.125f && sh.J < 8.0f) {
                     if (PTResMerge(r, prev, PT_Lum(sh.C), sh.J, rng)) {
                         Csel   = sh.C;
@@ -140,6 +142,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // selecao): o Jacobiano do shift ja entrou no peso do merge (e portanto em W). Sem isso o
     // proximo frame recalcula J contra uma base ancestral = Jacobiano composto = fireflies.
     r.x1 = s1.Pos;
+
+    // F3: quando o Pass B (spatial) vai rodar, PTOut carrega SO o GI do canonico (C_sel*W,
+    // JA clampado — evita INF no f16 e mantem o teto de firefly do F2) e PTLit carrega o resto
+    // (direto + Cemit); o Pass B combina os vizinhos com pairwise MIS e escreve o final.
+    // SpatialParams.z ja vem 0 do C++ quando um modo de debug do Pass A esta ativo.
+    bool spatialOn = (SpatialParams.z > 0.5f);
 
     float3 gi = Csel * r.W;
     { float mc = max(gi.r, max(gi.g, gi.b)), mx = PathParams.z;
@@ -171,7 +179,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             self.x1 = s1.Pos; self.xkm1 = cand.xkm1; self.xk = cand.xk; self.nk = cand.nk;
             self.Lo = cand.Lo; self.hitK = cand.hit1; self.seed = seed; self.kb = cand.kb;
             self.M = 1.0f; self.W = 1.0f;
-            FPTShift sh = PT_HybridShift(s1, V, self);
+            FPTShift sh = PT_HybridShift(s1, V, self, false);
             if (!sh.Ok) {
                 L = float3(0.0f, 0.0f, 1.0f);
             } else {
@@ -181,6 +189,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         }
     }
 
-    PTOut[px] = float4(L, r.hitK); // r.hitK = |x2-x1| da amostra selecionada (hitDist p/ o F4)
+    PTLit[px] = float4(direct + cand.Cemit, 0.0f);
+    PTOut[px] = spatialOn ? float4(gi, r.hitK)  // Pass B le como C_c*W_c (vector weights)
+                          : float4(L, r.hitK);  // r.hitK = |x2-x1| selecionado (hitDist, F4)
     CurrReservoir[idx] = PTResPack(r);
 }

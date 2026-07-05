@@ -53,7 +53,8 @@ namespace Smile {
     }
 
     void FReSTIRPT::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "PTInitial.cs_6_6.cso", 12, 3, true);
+        TracePSO.Initialize(_Device, "PTInitial.cs_6_6.cso", 12, 4, true);
+        SpatialPSO.Initialize(_Device, "PTSpatial.cs_6_6.cso", 12, 1, true);
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
@@ -91,14 +92,18 @@ namespace Smile {
         Free(PTOutSRV, 1);
         Free(PTOutUAV, 1);
         Free(AccumUAV, 1);
+        Free(PTLitSRV, 1);
+        Free(PTLitUAV, 1);
+        Free(SpatialUAVTable, 1);
         for (u32 i = 0; i < 2; ++i) {
             Free(ReservoirSRV[i], 1); Free(ReservoirUAV[i], 1);
-            Free(TraceTable[i], 12);  Free(TraceUAVTable[i], 3);
+            Free(TraceTable[i], 12);  Free(TraceUAVTable[i], 4);
+            Free(SpatialTable[i], 12);
             ReservoirBuf[i].Reset();
             ReservoirState[i] = D3D12_RESOURCE_STATE_COMMON;
         }
-        PTOutput.Reset(); AccumTex.Reset();
-        PTOutputState = AccumState = D3D12_RESOURCE_STATE_COMMON;
+        PTOutput.Reset(); AccumTex.Reset(); PTLitTex.Reset();
+        PTOutputState = AccumState = PTLitState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
     }
 
@@ -116,10 +121,11 @@ namespace Smile {
         Width = _Width; Height = _Height;
         PTOutput = CreateUAVTex2D(_Device, Width, Height, kPTOutFormat);
         AccumTex = CreateUAVTex2D(_Device, Width, Height, kAccumFormat);
+        PTLitTex = CreateUAVTex2D(_Device, Width, Height, kPTOutFormat);
         const u32 Pixels = Width * Height;
         for (u32 i = 0; i < 2; ++i)
             ReservoirBuf[i] = CreateStructuredBuffer(_Device, Pixels, kReservoirStride);
-        PTOutputState = AccumState = D3D12_RESOURCE_STATE_COMMON;
+        PTOutputState = AccumState = PTLitState = D3D12_RESOURCE_STATE_COMMON;
         ReservoirState[0] = ReservoirState[1] = D3D12_RESOURCE_STATE_COMMON;
         NeedsClear  = true;
         FrameParity = 0;
@@ -142,6 +148,12 @@ namespace Smile {
         AccumUAV = _SRVHeap.Allocate(1);
         Uav.Format = kAccumFormat;
         _SRVHeap.CreateUAV(_Device, AccumTex.Get(), Uav, AccumUAV);
+
+        PTLitSRV = _SRVHeap.Allocate(1);
+        PTLitUAV = _SRVHeap.Allocate(1);
+        Srv.Format = kPTOutFormat; Uav.Format = kPTOutFormat;
+        _SRVHeap.CreateSRV(_Device, PTLitTex.Get(), Srv, PTLitSRV);
+        _SRVHeap.CreateUAV(_Device, PTLitTex.Get(), Uav, PTLitUAV);
 
         // Views dos reservoirs (StructuredBuffer, stride 64B).
         D3D12_SHADER_RESOURCE_VIEW_DESC RSrv{};
@@ -188,14 +200,38 @@ namespace Smile {
             };
             CopyTable(TraceTable[p], TSrc, 12);
 
-            TraceUAVTable[p] = _SRVHeap.Allocate(3);
-            D3D12_CPU_DESCRIPTOR_HANDLE USrc[3] = {
+            TraceUAVTable[p] = _SRVHeap.Allocate(4);
+            D3D12_CPU_DESCRIPTOR_HANDLE USrc[4] = {
                 _SRVHeap.CpuHandleStaging(PTOutUAV),
                 _SRVHeap.CpuHandleStaging(AccumUAV),
                 _SRVHeap.CpuHandleStaging(ReservoirUAV[p]),
+                _SRVHeap.CpuHandleStaging(PTLitUAV),
             };
-            CopyTable(TraceUAVTable[p], USrc, 3);
+            CopyTable(TraceUAVTable[p], USrc, 4);
+
+            // Pass B (F3): mesmo prefixo de cena/G-buffer do trace, mas le o reservoir do
+            // FRAME ATUAL ([p], escrito pelo Pass A) e o PTLit; sem velocity.
+            SpatialTable[p] = _SRVHeap.Allocate(12);
+            D3D12_CPU_DESCRIPTOR_HANDLE SSrc[12] = {
+                _SRVHeap.CpuHandleStaging(_TlasSlot),
+                _SRVHeap.CpuHandleStaging(_SkyViewSlot),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
+                _SRVHeap.CpuHandleStaging(_IrradSlot),
+                _SRVHeap.CpuHandleStaging(_VertexSlot),
+                _SRVHeap.CpuHandleStaging(_IndexSlot),
+                _SRVHeap.CpuHandleStaging(_DepthSlot),
+                _SRVHeap.CpuHandleStaging(_GBufASlot),
+                _SRVHeap.CpuHandleStaging(_GBufBSlot),
+                _SRVHeap.CpuHandleStaging(_GBufCSlot),
+                _SRVHeap.CpuHandleStaging(ReservoirSRV[p]),
+                _SRVHeap.CpuHandleStaging(PTLitSRV),
+            };
+            CopyTable(SpatialTable[p], SSrc, 12);
         }
+
+        SpatialUAVTable = _SRVHeap.Allocate(1);
+        D3D12_CPU_DESCRIPTOR_HANDLE SU[1] = { _SRVHeap.CpuHandleStaging(PTOutUAV) };
+        CopyTable(SpatialUAVTable, SU, 1);
 
         Ready = true;
     }
@@ -229,8 +265,11 @@ namespace Smile {
         CPU.SunColorCosRadius  = { _SunColor.X, _SunColor.Y, _SunColor.Z, CosSunRadius };
         CPU.TraceParams        = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _NormalBias };
         CPU.PathParams         = { MaxBounces, RrStartBounce, FireflyMax, AlbedoLOD };
+        // SpatialParams.z avisa o Pass A se o Pass B VAI rodar (PTOut = so GI do canonico).
+        // Modos de debug do Pass A (1-3) desligam o spatial; o mapa espacial (4) mantem.
+        const bool SpatialRuns = SpatialOn && (DebugMode == 0 || DebugMode == 4);
         CPU.ReuseParams        = { 20.0f, 0.01f, 1.0f, 0.0f };
-        CPU.SpatialParams      = { 16.0f, 3.0f, 1.0f, 0.9f };
+        CPU.SpatialParams      = { SpatialSigma, SpatialCount, SpatialRuns ? 1.0f : 0.0f, NormalReject };
         CPU.ShiftParams        = { 0.02f, 0.2f, 0.0f, 0.0f };
         CPU.NrdHitDistParams   = { 3.0f, 0.1f, 20.0f, 0.0f };
         CPU.DebugParams        = { (f32)DebugMode, (f32)AccumFrames, 0.0f, 0.0f };
@@ -280,6 +319,7 @@ namespace Smile {
 
         Transition(_CL, PTOutput.Get(), PTOutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, AccumTex.Get(), AccumState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, PTLitTex.Get(), PTLitState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, ReservoirBuf[prev].Get(), ReservoirState[prev],
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, ReservoirBuf[p].Get(), ReservoirState[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -289,6 +329,25 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[p]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable[p]));
         _CL->Dispatch(GX, GY, 1);
+
+        // Pass B (F3): reuso espacial pairwise MIS. Le o reservoir atual + PTLit como SRV e
+        // reescreve PTOut in-place (UAV barrier entre os passes). Mesma condicao do CB
+        // (SpatialParams.z) — Pass A escreveu so o GI do canonico em PTOut nesse caso.
+        if (SpatialOn && (DebugMode == 0 || DebugMode == 4)) {
+            Transition(_CL, ReservoirBuf[p].Get(), ReservoirState[p],
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Transition(_CL, PTLitTex.Get(), PTLitState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            D3D12_RESOURCE_BARRIER Uav{};
+            Uav.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            Uav.UAV.pResource = PTOutput.Get();
+            _CL->ResourceBarrier(1, &Uav);
+
+            SpatialPSO.Bind(_CL);
+            _CL->SetComputeRootConstantBufferView(0, CBAddr());
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpatialTable[p]));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(SpatialUAVTable));
+            _CL->Dispatch(GX, GY, 1);
+        }
 
         // O deferred (pixel shader) le PTOut como passthrough (ReflectionParams.w == 3).
         Transition(_CL, PTOutput.Get(), PTOutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
