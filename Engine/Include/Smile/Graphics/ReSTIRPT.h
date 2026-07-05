@@ -54,9 +54,23 @@ namespace Smile {
 
         void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
+        // F4 — NRD (REBLUR_DIFFUSE_SPECULAR, mesma instancia do ReSTIR GI/reflexoes; mutuamente
+        // exclusivos). SetupNrd cria as views nos IO do FNrdDenoiser; o pack preenche TODOS os
+        // inputs (comuns + diff + spec); o composite le OUT_DIFF/OUT_SPEC como UAV, remodula e
+        // soma o PTLit em PTFinal (o deferred le PTFinal quando UseNrd).
+        void SetupNrd(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                      ID3D12Resource* ViewZ, ID3D12Resource* NormalRough, ID3D12Resource* Mv,
+                      ID3D12Resource* DiffIn, ID3D12Resource* SpecIn,
+                      ID3D12Resource* OutDiff, ID3D12Resource* OutSpec);
+        void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+        void RecordComposite(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+        // Gate final aqui (inclui debug): OutputSRVSlot/CB/records ficam consistentes entre si.
+        void SetUseNrd(bool V) { UseNrd = V && NrdSetup && DebugMode == 0; }
+        bool GetUseNrd() const { return UseNrd; }
+
         bool IsReady() const { return Ready; }
-        // Tabela t16 do deferred (root param 9): a radiancia final do PT.
-        u32  OutputSRVSlot() const { return PTOutSRV; }
+        // Tabela t16 do deferred (root param 9): a radiancia final do PT (pos-NRD quando ativo).
+        u32  OutputSRVSlot() const { return UseNrd ? PTFinalSRV : PTOutSRV; }
 
         // Tunaveis.
         void SetMaxBounces(f32 V)   { MaxBounces = V; }
@@ -71,18 +85,27 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;   // 12 SRV, 4 UAV, heap-directly-indexed (PTInitial)
-        FVolumetricPipeline SpatialPSO; // 12 SRV, 1 UAV, heap-directly-indexed (PTSpatial, F3)
+        FVolumetricPipeline TracePSO;     // 12 SRV, 5 UAV, heap-directly-indexed (PTInitial)
+        FVolumetricPipeline SpatialPSO;   // 12 SRV, 2 UAV, heap-directly-indexed (PTSpatial, F3)
+        FVolumetricPipeline NrdPackPSO;   // 6 SRV, 5 UAV (PTNrdPack, F4)
+        FVolumetricPipeline CompositePSO; // 4 SRV, 3 UAV (PTComposite, F4)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> PTOutput;  // RGBA16F: radiancia + hitDist
         Microsoft::WRL::ComPtr<ID3D12Resource> AccumTex;  // RGBA32F: media progressiva (debug)
         Microsoft::WRL::ComPtr<ID3D12Resource> PTLitTex;  // RGBA16F: direto+Cemit (Pass A -> B, F3)
+        Microsoft::WRL::ComPtr<ID3D12Resource> PTGiDiffTex; // RGBA16F: parcela difusa do gi (F4)
+        Microsoft::WRL::ComPtr<ID3D12Resource> PTFinalTex;  // RGBA16F: saida pos-NRD (F4)
         // Reservoir de caminho ping-pong (StructuredBuffer, 64B/pixel). prev = [1-p], curr = [p].
         Microsoft::WRL::ComPtr<ID3D12Resource> ReservoirBuf[2];
         D3D12_RESOURCE_STATES PTOutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES AccumState    = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES PTLitState    = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES PTGiDiffState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES PTFinalState  = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ReservoirState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+        // OUT do NRD (estado rastreado pelo driver do NRD; so usamos UAV barrier).
+        ID3D12Resource* NrdOutDiffRes = nullptr;
+        ID3D12Resource* NrdOutSpecRes = nullptr;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 PTOutSRV   = kInvalidSlot;
@@ -90,16 +113,30 @@ namespace Smile {
         u32 AccumUAV   = kInvalidSlot;
         u32 PTLitSRV   = kInvalidSlot;
         u32 PTLitUAV   = kInvalidSlot;
+        u32 PTGiDiffSRV = kInvalidSlot;
+        u32 PTGiDiffUAV = kInvalidSlot;
+        u32 PTFinalSRV  = kInvalidSlot;
+        u32 PTFinalUAV  = kInvalidSlot;
         u32 ReservoirSRV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ReservoirUAV[2] = { kInvalidSlot, kInvalidSlot };
         // Por paridade p: TraceTable[p] = 12 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbufA..C,vel,
-        // prevReservoir(=[1-p])]; TraceUAVTable[p] = 4 UAVs [PTOut, Accum, currReservoir(=[p]), PTLit].
-        // SpatialTable[p] = 12 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbufA..C,currReservoir(=[p]),
-        // PTLit]; SpatialUAVTable = 1 UAV [PTOut] (igual nas duas paridades).
+        // prevReservoir(=[1-p])]; TraceUAVTable[p] = 5 UAVs [PTOut, Accum, currReservoir(=[p]),
+        // PTLit, PTGiDiff]. SpatialTable[p] = 12 SRVs [...cena/gbuffer..., currReservoir(=[p]),
+        // PTLit]; SpatialUAVTable = 2 UAVs [PTOut, PTGiDiff] (igual nas duas paridades).
+        // F4: NrdPackSrv = 6 [PTOut, PTGiDiff, gbufA, gbufB, depth, vel]; NrdPackUav = 5
+        // [ViewZ, NormalRough, MV, DiffIn, SpecIn]; CompositeSrv = 4 [PTLit, gbufA, gbufB, depth];
+        // CompositeUav = 3 [PTFinal, OutDiff, OutSpec].
         u32 TraceTable[2]    = { kInvalidSlot, kInvalidSlot };
         u32 TraceUAVTable[2] = { kInvalidSlot, kInvalidSlot };
         u32 SpatialTable[2]  = { kInvalidSlot, kInvalidSlot };
         u32 SpatialUAVTable  = kInvalidSlot;
+        u32 NrdPackSrvTable    = kInvalidSlot;
+        u32 NrdPackUavTable    = kInvalidSlot;
+        u32 CompositeSrvTable  = kInvalidSlot;
+        u32 CompositeUavTable  = kInvalidSlot;
+        // Slots do frame (guardados no SetupForResize p/ montar as tabelas do NRD depois).
+        u32 GBufASlot = kInvalidSlot, GBufBSlot = kInvalidSlot;
+        u32 DepthSlot = kInvalidSlot, VelocitySlot = kInvalidSlot;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB  = nullptr;
@@ -116,6 +153,8 @@ namespace Smile {
         bool NeedsClear  = false;
         bool Initialized = false;
         bool Ready       = false;
+        bool NrdSetup    = false; // SetupNrd concluido (views nos IO do denoiser)
+        bool UseNrd      = false; // decidido por frame no Renderer (PT ativo + NRD pronto + debug off)
 
         // Acumulacao progressiva (debug): zera quando a camera mexe (ViewProj nao-jitterada muda).
         Mat44 PrevVPUnjit{};

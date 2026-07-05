@@ -117,7 +117,9 @@
       "Bash(py -m pip install pypdfium2 pillow --quiet)",
       "Bash(py -c ' *)",
       "Bash(git commit -m ' *)",
-      "Bash(cmake --build build --config Release)"
+      "Bash(cmake --build build --config Release)",
+      "Bash(grep -n \"NrdPrevProj\\\\|NrdPrevView\" Engine/Source/Graphics/Renderer.cpp; echo ---; grep -n \"REBLUR_BackEnd_UnpackRadianceAndNormHitDist\\\\|_NRD_YCoCgToLinear\\\\|NRD_USE_YCOCG\" \"D:/Engines/NRD/Shaders/Include/NRD.hlsli\" | head)",
+      "Bash(find /d/Engines/NRD/Shaders -name \"NRD.hlsli\" 2>/dev/null | head -3; grep -rn \"REBLUR_BackEnd_UnpackRadianceAndNormHitDist\" /d/Engines/NRD/Shaders --include=\"NRD.hlsli\" | head -3)"
     ]
   }
 }

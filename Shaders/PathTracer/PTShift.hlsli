@@ -24,16 +24,17 @@
 
 // Resultado do walk do candidato (sampling inicial).
 struct FPTCandidate {
-    bool   HasSample; // caminho tem vertice de reconexao => vai p/ o reservoir
-    uint   kb;        // bounces replayados antes da reconexao (0 = reconecta em x2)
-    float3 xkm1;      // base da reconexao x_{k-1} (= x1 quando kb == 0)
-    float3 xk;        // vertice de reconexao
-    float3 nk;        // normal em xk
-    float3 Lo;        // radiancia saindo de xk (sufixo completo, firefly-clampada por canal)
-    float3 Crecon;    // T_pre * f~_recon * Lo — contribuicao do sample NESTE pixel
-    float  pdfRecon;  // pdf solid-angle da direcao de reconexao em x_{k-1} (roughness REAL)
-    float  hit1;      // |x2 - x1| (hitDist p/ o NRD)
-    float3 Cemit;     // luz do prefixo + caminhos nao-conectaveis (soma direta no frame)
+    bool   HasSample;  // caminho tem vertice de reconexao => vai p/ o reservoir
+    uint   kb;         // bounces replayados antes da reconexao (0 = reconecta em x2)
+    float3 xkm1;       // base da reconexao x_{k-1} (= x1 quando kb == 0)
+    float3 xk;         // vertice de reconexao
+    float3 nk;         // normal em xk
+    float3 Lo;         // radiancia saindo de xk (sufixo completo, firefly-clampada por canal)
+    float3 Crecon;     // T_pre * f~_recon * Lo — contribuicao do sample NESTE pixel
+    float3 CreconDiff; // F4: parcela DIFUSA de Crecon (pelo lobe do 1o segmento; split em kb==0)
+    float  pdfRecon;   // pdf solid-angle da direcao de reconexao em x_{k-1} (roughness REAL)
+    float  hit1;       // |x2 - x1| (hitDist p/ o NRD)
+    float3 Cemit;      // luz do prefixo + caminhos nao-conectaveis (soma direta no frame)
 };
 
 FPTCandidate PT_TraceCandidate(FPTSurface s1, float3 V, uint seed) {
@@ -41,6 +42,7 @@ FPTCandidate PT_TraceCandidate(FPTSurface s1, float3 V, uint seed) {
     o.HasSample = false; o.kb = 0;
     o.xkm1 = s1.Pos; o.xk = float3(0.0f, 0.0f, 0.0f); o.nk = float3(0.0f, 0.0f, 0.0f);
     o.Lo = float3(0.0f, 0.0f, 0.0f); o.Crecon = float3(0.0f, 0.0f, 0.0f);
+    o.CreconDiff = float3(0.0f, 0.0f, 0.0f);
     o.pdfRecon = 0.0f; o.hit1 = 0.0f; o.Cemit = float3(0.0f, 0.0f, 0.0f);
 
     uint  maxBounces = max((uint)PathParams.x, 1u);
@@ -49,12 +51,15 @@ FPTCandidate PT_TraceCandidate(FPTSurface s1, float3 V, uint seed) {
     float3 T = float3(1.0f, 1.0f, 1.0f); // throughput do prefixo (f*cos/pdf acumulado)
     FPTSurface s = s1;
     float3 Vv = V;
+    uint lobe0 = PT_LOBE_DIFFUSE; // lobe do 1o segmento (classifica diff/spec p/ o NRD, F4)
 
     [loop]
     for (uint j = 0; j < maxBounces; ++j) {
         // SEM RR na fase de busca: qualquer bounce daqui pode virar prefixo de replay, e o
         // replay nao pode depender de decisao baseada em throughput (que muda no destino).
         FPTBsdfSample bs = PTSampleBsdf(s, Vv, seed, j);
+        if (j == 0)
+            lobe0 = bs.Lobe;
         if (!bs.Valid)
             break; // caminho morre; Cemit ja coletado segue p/ o clamp no fim
 
@@ -129,7 +134,12 @@ FPTCandidate PT_TraceCandidate(FPTSurface s1, float3 V, uint seed) {
         float  lwr = length(wr);
         if (lwr > 1e-4f) {
             o.pdfRecon = PT_BsdfPdf(s, Vv, wr / lwr);
-            o.Crecon   = T * PT_ReconnectContribution(s, Vv, o.xk, o.Lo);
+            float3 fDiff;
+            o.Crecon = T * PT_ReconnectContribution(s, Vv, o.xk, o.Lo, fDiff);
+            // Classificacao diff/spec pelo 1o SEGMENTO: kb==0 => a reconexao e em x1 e o eval
+            // mistura os lobes (usa o split); kb>0 => o lobe amostrado no bounce 0 decide tudo.
+            o.CreconDiff = (o.kb == 0) ? T * fDiff
+                         : ((lobe0 == PT_LOBE_DIFFUSE) ? o.Crecon : float3(0.0f, 0.0f, 0.0f));
         }
         if (o.pdfRecon <= 1e-5f)
             o.HasSample = false; // reconexao degenerada: descarta (raro; documentado)
@@ -145,29 +155,33 @@ FPTCandidate PT_TraceCandidate(FPTSurface s1, float3 V, uint seed) {
 
 // Resultado do hybrid shift de uma amostra de reservoir p/ o pixel atual.
 struct FPTShift {
-    bool   Ok;   // shift definido (replay reproduziu o prefixo + reconexao valida)
-    float3 C;    // T'_pre * f~_recon * Lo no pixel destino (contribuicao/pHat)
-    float3 xkm1; // base replayada no destino (re-ancoragem do reservoir)
-    float  hit1; // |x2' - x1| no destino
-    float  J;    // Jacobiano de reconexao (base fonte -> base destino)
+    bool   Ok;    // shift definido (replay reproduziu o prefixo + reconexao valida)
+    float3 C;     // T'_pre * f~_recon * Lo no pixel destino (contribuicao/pHat)
+    float3 Cdiff; // F4: parcela DIFUSA de C (lobe do 1o segmento; split quando kb==0)
+    float3 xkm1;  // base replayada no destino (re-ancoragem do reservoir)
+    float  hit1;  // |x2' - x1| no destino
+    float  J;     // Jacobiano de reconexao (base fonte -> base destino)
 };
 
 // forceVis: o temporal reprojeta a MESMA superficie (kb==0 dispensa o visibility ray); o
 // espacial (F3) reconecta a partir de um x1 de OUTRO pixel — sem o raio haveria light leak.
 FPTShift PT_HybridShift(FPTSurface s1, float3 V, PTReservoir smp, bool forceVis) {
     FPTShift o;
-    o.Ok = false; o.C = float3(0.0f, 0.0f, 0.0f);
+    o.Ok = false; o.C = float3(0.0f, 0.0f, 0.0f); o.Cdiff = float3(0.0f, 0.0f, 0.0f);
     o.xkm1 = s1.Pos; o.hit1 = 0.0f; o.J = 0.0f;
 
     float3 T = float3(1.0f, 1.0f, 1.0f);
     FPTSurface s = s1;
     float3 Vv = V;
+    uint lobe0 = PT_LOBE_DIFFUSE; // lobe do 1o segmento replayado (classificacao NRD, F4)
 
     // Random replay do prefixo: MESMO seed do fonte, mesmas dims globais. Sem NEE (a luz do
     // prefixo nao pertence ao sample — Cemit e por-frame) e sem RR (dim fora da parametrizacao).
     [loop]
     for (uint j = 0; j < smp.kb; ++j) {
         FPTBsdfSample bs = PTSampleBsdf(s, Vv, smp.seed, j);
+        if (j == 0)
+            lobe0 = bs.Lobe;
         if (!bs.Valid)
             return o;
 
@@ -212,7 +226,10 @@ FPTShift PT_HybridShift(FPTSurface s1, float3 V, PTReservoir smp, bool forceVis)
             return o;
     }
 
-    o.C    = T * PT_ReconnectContribution(s, Vv, smp.xk, smp.Lo);
+    float3 fDiff;
+    o.C     = T * PT_ReconnectContribution(s, Vv, smp.xk, smp.Lo, fDiff);
+    o.Cdiff = (smp.kb == 0) ? T * fDiff
+            : ((lobe0 == PT_LOBE_DIFFUSE) ? o.C : float3(0.0f, 0.0f, 0.0f));
     o.J    = PTReconnectionJacobian(s.Pos, smp.xkm1, smp.xk, smp.nk);
     o.xkm1 = s.Pos;
     o.Ok   = true;

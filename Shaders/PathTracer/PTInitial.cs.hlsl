@@ -39,6 +39,7 @@ RWTexture2D<float4>                 PTOut         : register(u0); // rgb = radia
 RWTexture2D<float4>                 Accum         : register(u1); // debug: media progressiva
 RWStructuredBuffer<PTReservoirPacked> CurrReservoir : register(u2);
 RWTexture2D<float4>                 PTLit         : register(u3); // F3: direto(x1) + Cemit (fora do reservoir)
+RWTexture2D<float4>                 PTGiDiff      : register(u4); // F4: parcela DIFUSA do gi (split p/ o NRD)
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
@@ -62,6 +63,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     if (deviceZ <= 0.0f) {
         PTOut[px] = float4(0.0f, 0.0f, 0.0f, 0.0f); // ceu: o deferred descarta antes do passthrough
         PTLit[px] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        PTGiDiff[px] = float4(0.0f, 0.0f, 0.0f, 0.0f);
         PTReservoir empty; PTResInit(empty);
         CurrReservoir[idx] = PTResPack(empty);
         return;
@@ -94,13 +96,16 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     PTReservoir r; PTResInit(r);
     r.x1 = s1.Pos;
-    float3 Csel = float3(0.0f, 0.0f, 0.0f); // contribuicao (neste pixel) do sample vencedor
+    float3 Csel     = float3(0.0f, 0.0f, 0.0f); // contribuicao (neste pixel) do sample vencedor
+    float3 CselDiff = float3(0.0f, 0.0f, 0.0f); // parcela difusa dela (split p/ o NRD, F4)
 
     if (cand.HasSample) {
         float wInit = PT_Lum(cand.Crecon) / cand.pdfRecon; // pHat/pdf
         if (PTResUpdate(r, s1.Pos, cand.xkm1, cand.xk, cand.nk, cand.Lo, cand.hit1, cand.kb,
-                        seed, wInit, rng))
-            Csel = cand.Crecon;
+                        seed, wInit, rng)) {
+            Csel     = cand.Crecon;
+            CselDiff = cand.CreconDiff;
+        }
     }
 
     // Estimador de 1 amostra (ground truth p/ o debug — antes do reuso temporal). O prefixo
@@ -126,9 +131,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 FPTShift sh = PT_HybridShift(s1, V, prev, false);
                 if (sh.Ok && sh.J > 0.125f && sh.J < 8.0f) {
                     if (PTResMerge(r, prev, PT_Lum(sh.C), sh.J, rng)) {
-                        Csel   = sh.C;
-                        r.xkm1 = sh.xkm1; // re-ancora a base replayada no destino
-                        r.hitK = sh.hit1;
+                        Csel     = sh.C;
+                        CselDiff = sh.Cdiff;
+                        r.xkm1   = sh.xkm1; // re-ancora a base replayada no destino
+                        r.hitK   = sh.hit1;
                     }
                 }
             }
@@ -143,16 +149,20 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // proximo frame recalcula J contra uma base ancestral = Jacobiano composto = fireflies.
     r.x1 = s1.Pos;
 
-    // F3: quando o Pass B (spatial) vai rodar, PTOut carrega SO o GI do canonico (C_sel*W,
-    // JA clampado — evita INF no f16 e mantem o teto de firefly do F2) e PTLit carrega o resto
-    // (direto + Cemit); o Pass B combina os vizinhos com pairwise MIS e escreve o final.
-    // SpatialParams.z ja vem 0 do C++ quando um modo de debug do Pass A esta ativo.
+    // F3/F4: quando o Pass B (spatial) e/ou o NRD vao rodar, PTOut carrega SO o GI do canonico
+    // (C_sel*W, JA clampado — evita INF no f16 e mantem o teto de firefly do F2), PTGiDiff a
+    // parcela difusa dele (mesma escala de clamp) e PTLit o resto (direto + Cemit). O Pass B
+    // combina os vizinhos; o pack do NRD separa diff/spec destas texturas. SpatialParams.z e
+    // ReuseParams.w ja vem 0 do C++ quando um modo de debug do Pass A esta ativo.
     bool spatialOn = (SpatialParams.z > 0.5f);
+    bool nrdOn     = (ReuseParams.w > 0.5f);
+    bool giOnly    = spatialOn || nrdOn;
 
-    float3 gi = Csel * r.W;
+    float3 gi     = Csel * r.W;
+    float3 giDiff = CselDiff * r.W;
     { float mc = max(gi.r, max(gi.g, gi.b)), mx = PathParams.z;
-      if (mx > 0.0f && mc > mx) gi *= mx / mc; } // clamp por CANAL
-    float3 L = direct + gi + cand.Cemit;         // Cemit ja clampado no walk
+      if (mx > 0.0f && mc > mx) { gi *= mx / mc; giDiff *= mx / mc; } } // clamp por CANAL
+    float3 L = direct + gi + cand.Cemit;                                // Cemit ja clampado no walk
 
     // --- Debug ---------------------------------------------------------------------------------
     uint dbg = (uint)DebugParams.x;
@@ -189,8 +199,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         }
     }
 
-    PTLit[px] = float4(direct + cand.Cemit, 0.0f);
-    PTOut[px] = spatialOn ? float4(gi, r.hitK)  // Pass B le como C_c*W_c (vector weights)
-                          : float4(L, r.hitK);  // r.hitK = |x2-x1| selecionado (hitDist, F4)
+    PTLit[px]    = float4(direct + cand.Cemit, 0.0f);
+    PTGiDiff[px] = float4(giDiff, 0.0f);
+    PTOut[px] = giOnly ? float4(gi, r.hitK)  // Pass B/pack leem como C_c*W_c (+ split difuso)
+                       : float4(L, r.hitK);  // r.hitK = |x2-x1| selecionado (hitDist, F4)
     CurrReservoir[idx] = PTResPack(r);
 }

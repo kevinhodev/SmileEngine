@@ -18,7 +18,7 @@ cbuffer PTCB : register(b0) {
     float4 SunColorCosRadius;             // rgb = cor do sol, w = cos(raio angular) p/ sombra suave
     float4 TraceParams;                   // x=frameIndex, y=maxRayDist, z=skyIntensity, w=normalBias
     float4 PathParams;                    // x=maxBounces, y=rrStartBounce, z=fireflyMax, w=albedoLOD
-    float4 ReuseParams;                   // F1: x=MCap, y=posRejectScale, z=temporal(0/1)
+    float4 ReuseParams;                   // F1: x=MCap, y=posRejectScale, z=temporal(0/1), w=useNrd(0/1) F4
     float4 SpatialParams;                 // F3: x=sigma(px), y=count, z=spatial(0/1), w=normalReject
     float4 ShiftParams;                   // F2: x=kFootprint, y=reconnectRoughMin
     float4 NrdHitDistParams;              // F4: xyz = ReblurHitDistanceParameters {A,B,C}
@@ -37,6 +37,18 @@ cbuffer PTCB : register(b0) {
 #define PT_DEBUG_SPATIAL 4                // F3: r=vizinhos rejeitados, g=m_c, b=energia dos vizinhos
 
 float PT_Luminance(float3 c) { return dot(c, float3(0.2126f, 0.7152f, 0.0722f)); }
+
+// Env-BRDF analitico (Karis/Lazarov) — fator de DE/REmodulacao do canal especular do NRD (F4).
+// A precisao da aproximacao e irrelevante: pack divide e composite multiplica pelo MESMO fator
+// (o erro cancela); so importa capturar a variacao espacial de F0/roughness p/ "braquear" o sinal.
+float3 PT_EnvBRDF(float3 f0, float nov, float rough) {
+    const float4 c0 = float4(-1.0f, -0.0275f, -0.572f, 0.022f);
+    const float4 c1 = float4( 1.0f,  0.0425f,  1.04f, -0.04f);
+    float4 r = rough * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28f * nov)) * r.x + r.y;
+    float2 AB = float2(-1.04f, 1.04f) * a004 + r.zw;
+    return f0 * AB.x + AB.y;
+}
 
 // Reconstroi a posicao de mundo do depth (mesma convencao do DeferredLighting).
 float3 PT_WorldPosFromDepth(uint2 px, float deviceZ) {

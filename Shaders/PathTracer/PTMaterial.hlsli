@@ -43,19 +43,22 @@ float PT_SmithGGXVis(float a2, float nov, float nol) {
     return 0.5f / max(gv + gl, 1e-5f);
 }
 
-// f * |cos| p/ NEE (avalia os DOIS lobes — barato comparado ao shadow ray).
+// f * |cos| p/ NEE (avalia os DOIS lobes — barato comparado ao shadow ray), com a parcela
+// DIFUSA separada em outDiff (F4: o NRD denoisa difuso/especular em canais distintos).
 // Folhagem: frente = Lambert normal; atras = transmissao difusa (albedo*0.6), estilo deferred.
-float3 PT_EvalBsdf(FPTSurface s, float3 V, float3 L) {
+float3 PT_EvalBsdfSplit(FPTSurface s, float3 V, float3 L, out float3 outDiff) {
     float ndl = dot(s.N, L);
     float3 diffAlb = PT_DiffuseAlbedo(s);
+    outDiff = float3(0.0f, 0.0f, 0.0f);
 
     if (ndl <= 0.0f) {
         if (s.Foliage)
-            return diffAlb * 0.6f / SMILE_PI * saturate(-ndl); // transmissao pela folha
-        return float3(0.0f, 0.0f, 0.0f);
+            outDiff = diffAlb * 0.6f / SMILE_PI * saturate(-ndl); // transmissao pela folha
+        return outDiff;
     }
 
-    float3 f = diffAlb / SMILE_PI * ndl;
+    outDiff = diffAlb / SMILE_PI * ndl;
+    float3 f = outDiff;
 
     float nov = saturate(dot(s.N, V));
     if (nov > 0.0f) {
@@ -70,6 +73,11 @@ float3 PT_EvalBsdf(FPTSurface s, float3 V, float3 L) {
         f += D * Vis * F * ndl;
     }
     return f;
+}
+
+float3 PT_EvalBsdf(FPTSurface s, float3 V, float3 L) {
+    float3 unusedDiff;
+    return PT_EvalBsdfSplit(s, V, L, unusedDiff);
 }
 
 float PT_SmithG1(float a2, float nov) {
@@ -145,13 +153,20 @@ FPTBsdfSample PTSampleBsdf(FPTSurface s, float3 V, uint seed, uint bounce) {
 // peso do merge). Isso mantem target e contribuicao SIMETRICOS com o veto de connectability do
 // candidato; o especular liso de verdade nao e representavel por reconexao (quase-delta) e fica
 // p/ o random replay / hybrid shift (F2b).
-float3 PT_ReconnectContribution(FPTSurface s1, float3 V, float3 xk, float3 Lo) {
+// outDiff = parcela DIFUSA da contribuicao (split exato via PT_EvalBsdfSplit). F4: o NRD denoisa
+// difuso/especular em canais separados; a classificacao e pelo lobe do 1o segmento do caminho, e
+// na reconexao em x1 (kb==0) o eval mistura os dois lobes — dai o split.
+float3 PT_ReconnectContribution(FPTSurface s1, float3 V, float3 xk, float3 Lo, out float3 outDiff) {
+    outDiff = float3(0.0f, 0.0f, 0.0f);
     float3 d = xk - s1.Pos;
     float  l = length(d);
     if (l < 1e-4f) return float3(0.0f, 0.0f, 0.0f);
     FPTSurface sr = s1;
     sr.Roughness = max(s1.Roughness, ShiftParams.y);
-    return PT_EvalBsdf(sr, V, d / l) * Lo; // PT_EvalBsdf ja embute f*cos
+    float3 fDiff;
+    float3 f = PT_EvalBsdfSplit(sr, V, d / l, fDiff); // ja embute f*cos
+    outDiff = fDiff * Lo;
+    return f * Lo;
 }
 
 #endif

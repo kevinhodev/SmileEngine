@@ -365,6 +365,16 @@ namespace Smile {
             Reflections.SetupNrdSpec(Device.Native(), SRVHeap,
                 Nrd.IoResource(FNrdDenoiser::IO_SPEC_RADIANCE_HITDIST),
                 Nrd.IoResource(FNrdDenoiser::IO_OUT_SPEC));
+            // ReSTIR PT (F4): mesma instancia REBLUR_DIFFUSE_SPECULAR — PT e GI/reflexoes sao
+            // mutuamente exclusivos; com PT ativo o pack dele preenche TODOS os inputs.
+            ReSTIRPT.SetupNrd(Device.Native(), SRVHeap,
+                Nrd.IoResource(FNrdDenoiser::IO_VIEWZ),
+                Nrd.IoResource(FNrdDenoiser::IO_NORMAL_ROUGHNESS),
+                Nrd.IoResource(FNrdDenoiser::IO_MV),
+                Nrd.IoResource(FNrdDenoiser::IO_DIFF_RADIANCE_HITDIST),
+                Nrd.IoResource(FNrdDenoiser::IO_SPEC_RADIANCE_HITDIST),
+                Nrd.IoResource(FNrdDenoiser::IO_OUT_DIFF),
+                Nrd.IoResource(FNrdDenoiser::IO_OUT_SPEC));
         }
     }
 
@@ -820,8 +830,10 @@ namespace Smile {
         const bool ReflectionsActive = UseReflections && Reflections.IsReady() && !PathTracerActive;
         const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady() && !PathTracerActive;
         const bool NrdMode           = ReSTIRGIActive && Nrd.IsReady() && UseNrdDenoise;
+        const bool PtNrdMode         = PathTracerActive && Nrd.IsReady() && UseNrdDenoise;
         ReSTIRGI.SetUseNrd(NrdMode);
         Reflections.SetUseNrd(NrdMode);
+        ReSTIRPT.SetUseNrd(PtNrdMode); // gate final (debug) dentro do setter
         // ReflectionParams.w: 0=off, 1=ReSTIR GI cru, 2=ReSTIR GI via NRD (YCoCg), 3=ReSTIR PT
         // (passthrough full-radiance no deferred).
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
@@ -1199,6 +1211,20 @@ namespace Smile {
             VelocityState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
             ReSTIRPT.RecordTrace(CommandList, SRVHeap);
+
+            // F4: pack -> Denoise -> composite (mesma sequencia do bloco ReSTIR GI abaixo).
+            // RE-BIND do SRVHeap apos o Denoise (o NRD liga heap proprio); o composite le
+            // OUT_DIFF/OUT_SPEC como UAV, entao NAO chamamos TransitionOutputToRead.
+            if (ReSTIRPT.GetUseNrd()) {
+                Nrd.TransitionInputsToWrite(CommandList);
+                ReSTIRPT.RecordNrdPack(CommandList, SRVHeap);
+                Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
+                             Vec2{ 0.0f, 0.0f }, Vec2{ 0.0f, 0.0f }, FrameIndex);
+                Nrd.Denoise(CommandList);
+                ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
+                ReSTIRPT.RecordComposite(CommandList, SRVHeap);
+            }
 
             DBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;

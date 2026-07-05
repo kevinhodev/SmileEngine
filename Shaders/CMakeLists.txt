@@ -32,6 +32,8 @@ smile_compile_shader(GI/ReSTIRNrdPack.cs.hlsl   cs_6_6 main SHADER_OUTPUTS -I "D
 # ReSTIR PT — path tracing completo (GRIS/Enhanced), atras de UsePathTracer
 smile_compile_shader(PathTracer/PTInitial.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(PathTracer/PTSpatial.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(PathTracer/PTNrdPack.cs.hlsl   cs_6_6 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
+smile_compile_shader(PathTracer/PTComposite.cs.hlsl cs_6_6 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 # Debug do DDGI (passe grafico separado): esferas de probe + wireframe do volume + stats
 smile_compile_shader(GI/DDGIDebugProbes.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugProbes.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
@@ -154,6 +156,8 @@ add_custom_target(Shaders
         PathTracer/PTShift.hlsli
         PathTracer/PTInitial.cs.hlsl
         PathTracer/PTSpatial.cs.hlsl
+        PathTracer/PTNrdPack.cs.hlsl
+        PathTracer/PTComposite.cs.hlsl
         Reflections/GGXSample.hlsli
         Reflections/ReflectionTrace.cs.hlsl
         Reflections/ReflectionTraceMirror.cs.hlsl

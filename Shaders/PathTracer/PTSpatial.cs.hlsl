@@ -40,7 +40,8 @@ Texture2D<float4>               GBufferC   : register(t9);
 StructuredBuffer<PTReservoirPacked> Reservoirs : register(t10); // saida do Pass A (mesmo frame)
 Texture2D<float4>               LitTex     : register(t11);     // direto(x1) + Cemit do Pass A
 
-RWTexture2D<float4> PTOut : register(u0); // in: C_c*W_c do Pass A; out: radiancia final
+RWTexture2D<float4> PTOut    : register(u0); // in: C_c*W_c do Pass A; out: final (ou gi, se NRD)
+RWTexture2D<float4> PTGiDiff : register(u1); // F4: in: parcela difusa do canonico; out: idem combinado
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
@@ -86,9 +87,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float3 V      = normalize(CameraPos.xyz - s1.Pos);
     uint   frame  = (uint)TraceParams.x;
 
-    PTReservoir rc = PTResUnpack(Reservoirs[px.y * W + px.x]);
-    float3 giC     = PTOut[px].rgb; // C_c * W_c (Pass A, sem clamp)
-    float  hitK    = PTOut[px].a;
+    PTReservoir rc  = PTResUnpack(Reservoirs[px.y * W + px.x]);
+    float3 giC      = PTOut[px].rgb;    // C_c * W_c (Pass A, clampado)
+    float3 giCDiff  = PTGiDiff[px].rgb; // parcela difusa (mesma escala)
+    float  hitK     = PTOut[px].a;
 
     // --- Selecao de vizinhos (gaussiana, rejeicao geometrica ANTES dos shifts) ----------------
     uint  count  = min((uint)SpatialParams.y, PT_SPATIAL_MAX);
@@ -144,7 +146,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float pHatC  = rc.pHat;           // p̂_c(y_c) cacheado (0 = canonico sem amostra)
     bool  hasC   = (Mc > 0.0f) && (pHatC > 0.0f);
     float mcSum  = 0.0f;              // termos do MIS do canonico (um por vizinho)
-    float3 LgiN  = float3(0.0f, 0.0f, 0.0f); // soma vetorial dos vizinhos
+    float3 LgiN     = float3(0.0f, 0.0f, 0.0f); // soma vetorial dos vizinhos
+    float3 LgiNDiff = float3(0.0f, 0.0f, 0.0f); // parcela difusa dela (split NRD, F4)
     uint  nShiftOk = 0;
 
     [loop]
@@ -162,7 +165,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 float denom = Mc * pFwd * fw.J + (MS - Mc) * rn.pHat;
                 if (denom > 0.0f && pFwd > 0.0f) {
                     float mj = (Mi / MS) * (MS - Mc) * rn.pHat / denom;
-                    LgiN += mj * fw.C * (rn.W * fw.J);      // vector weight: C em RGB
+                    LgiN     += mj * fw.C     * (rn.W * fw.J); // vector weight: C em RGB
+                    LgiNDiff += mj * fw.Cdiff * (rn.W * fw.J);
                     ++nShiftOk;
                 }
             }
@@ -186,13 +190,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
 
     float mc = (MS > 0.0f) ? (Mc / MS + mcSum) : 0.0f; // sem vizinhos: mc = 1 => passthrough
-    float3 Lgi = mc * giC + LgiN;
+    float3 Lgi     = mc * giC     + LgiN;
+    float3 LgiDiff = mc * giCDiff + LgiNDiff;
 
-    // Firefly clamp por CANAL (movido do Pass A — o clamp final e da imagem combinada).
+    // Firefly clamp por CANAL (a mesma escala nos dois p/ manter diff <= combinado).
     { float mcc = max(Lgi.r, max(Lgi.g, Lgi.b)), mx = PathParams.z;
-      if (mx > 0.0f && mcc > mx) Lgi *= mx / mcc; }
+      if (mx > 0.0f && mcc > mx) { Lgi *= mx / mcc; LgiDiff *= mx / mcc; } }
 
-    float3 L = LitTex.Load(int3(px, 0)).rgb + Lgi;
+    // F4: com NRD ligado, PTOut/PTGiDiff seguem carregando SO o GI (o pack separa diff/spec e o
+    // composite soma o PTLit depois do denoise); sem NRD, PTOut ja e a imagem final.
+    bool nrdOn = (ReuseParams.w > 0.5f);
+    float3 L = nrdOn ? Lgi : (LitTex.Load(int3(px, 0)).rgb + Lgi);
 
     if ((uint)DebugParams.x == PT_DEBUG_SPATIAL) {
         float rejected = (nTried > 0) ? 1.0f - (float)nAccept / (float)nTried : 0.0f;
@@ -200,5 +208,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         L = float3(rejected, saturate(mc), saturate(fracN));
     }
 
-    PTOut[px] = float4(L, hitK);
+    PTGiDiff[px] = float4(LgiDiff, 0.0f);
+    PTOut[px]    = float4(L, hitK);
 }
