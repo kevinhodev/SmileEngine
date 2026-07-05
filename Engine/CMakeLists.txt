@@ -48,7 +48,6 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/DDGI.h
     Include/Smile/Graphics/DDGIDebug.h
     Include/Smile/Graphics/ReSTIRGI.h
-    Include/Smile/Graphics/ReSTIRPT.h
     Include/Smile/Graphics/NrdDenoiser.h
     Include/Smile/Graphics/AmbientOcclusion.h
     Include/Smile/Graphics/ShaderUtils.h
@@ -96,7 +95,6 @@ set(ENGINE_SOURCES
     Source/Graphics/DDGI.cpp
     Source/Graphics/DDGIDebug.cpp
     Source/Graphics/ReSTIRGI.cpp
-    Source/Graphics/ReSTIRPT.cpp
     Source/Graphics/NrdDenoiser.cpp
     Source/Graphics/Reflections.cpp
     Source/Graphics/AmbientOcclusion.cpp

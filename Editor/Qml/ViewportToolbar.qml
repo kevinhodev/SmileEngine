@@ -342,7 +342,7 @@ Rectangle {
         x: viewModeButton.x + leftTools.x
         y: root.height
         width: 280
-        height: 416
+        height: 368
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: if (gBufferPopup.opened) gBufferPopup.close()
@@ -370,14 +370,7 @@ Rectangle {
                 onTapped: { viewportModel.SelectLit(); viewModesPopup.close() }
             }
             ModeRow {
-                x: 8; y: 60; width: 264; height: 44
-                label: "Path tracer"; shortcutText: "Alt+2"; beta: true
-                sublabel: "desliga Reflexos RT, GTAO e ReSTIR GI"
-                selected: viewportModel.viewMode === 1
-                onTapped: { viewportModel.SelectPathTracer(); viewModesPopup.close() }
-            }
-            ModeRow {
-                x: 8; y: 108; width: 264; height: 28
+                x: 8; y: 60; width: 264; height: 28
                 label: "Buffers do GBuffer"; hasSubmenu: true
                 selected: viewportModel.viewMode === 2
                 onTapped: {
@@ -386,63 +379,63 @@ Rectangle {
                 }
             }
             ModeRow {
-                x: 8; y: 138; width: 264; height: 28
+                x: 8; y: 90; width: 264; height: 28
                 label: "Heatmap de reflexos"; shortcutText: "Alt+5"
                 selected: viewportModel.viewMode === 3
                 onTapped: { viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
             }
 
-            Rectangle { x: 14; y: 170; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 122; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 180
+                x: 14; y: 132
                 text: "Iluminação global"
                 color: root.textMuted
                 font.family: "Segoe UI"
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 198; width: 264; height: 28
+                x: 8; y: 150; width: 264; height: 28
                 label: "DDGI"; detail: "radiance cache"
                 checked: viewportModel.ddgiEnabled
                 onToggled: viewportModel.ToggleDDGI()
             }
             ToggleRow {
-                x: 8; y: 226; width: 264; height: 28
+                x: 8; y: 178; width: 264; height: 28
                 label: "ReSTIR GI"
                 checked: viewportModel.restirGIEnabled
                 onToggled: viewportModel.ToggleReSTIRGI()
             }
             ToggleRow {
-                x: 8; y: 254; width: 264; height: 28
+                x: 8; y: 206; width: 264; height: 28
                 label: "GTAO"
                 checked: viewportModel.gtaoEnabled
                 onToggled: viewportModel.ToggleGTAO()
             }
 
-            Rectangle { x: 14; y: 286; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 238; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 296
+                x: 14; y: 248
                 text: "Reflexos e denoise"
                 color: root.textMuted
                 font.family: "Segoe UI"
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 314; width: 264; height: 28
+                x: 8; y: 266; width: 264; height: 28
                 label: "Reflexos RT"
                 checked: viewportModel.reflectionsEnabled
                 onToggled: viewportModel.ToggleReflections()
             }
             ToggleRow {
-                x: 8; y: 342; width: 264; height: 28
+                x: 8; y: 294; width: 264; height: 28
                 label: "NRD REBLUR"; detail: "difuso + especular"
                 checked: viewportModel.nrdEnabled
                 onToggled: viewportModel.ToggleNrd()
             }
 
-            Rectangle { x: 14; y: 374; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 326; width: 252; height: 1; color: "#23241d" }
             Rectangle {
-                x: 8; y: 380; width: 264; height: 28; radius: 5
+                x: 8; y: 332; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? "#22231c" : "transparent"
                 Text {
                     x: 8
@@ -487,7 +480,7 @@ Rectangle {
         id: gBufferPopup
         popupType: Popup.Window
         x: viewModesPopup.x + viewModesPopup.width - 4
-        y: root.height + 104
+        y: root.height + 56
         width: 196
         height: 236
         padding: 6
@@ -549,11 +542,6 @@ Rectangle {
         sequence: "Alt+1"
         context: Qt.ApplicationShortcut
         onActivated: viewportModel.SelectLit()
-    }
-    Shortcut {
-        sequence: "Alt+2"
-        context: Qt.ApplicationShortcut
-        onActivated: viewportModel.SelectPathTracer()
     }
     Shortcut {
         sequence: "Alt+5"

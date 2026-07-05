@@ -27,7 +27,6 @@ namespace SmileEditor {
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool nrdEnabled READ IsNrdEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool pathTracerEnabled READ IsPathTracerEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool fsr2Enabled READ IsFsr2Enabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool fsr2Available READ IsFsr2Available NOTIFY RendererInitialized)
         Q_PROPERTY(int fsr2Quality READ GetFsr2Quality NOTIFY ViewSettingsChanged)
@@ -46,9 +45,10 @@ namespace SmileEditor {
         Q_PROPERTY(QString vramText READ GetVRAMText NOTIFY RendererInitialized)
 
     public:
+        // Valores explicitos preservados (o QML compara viewMode com inteiros fixos; o 1 era o
+        // path tracer experimental, removido).
         enum ViewMode {
             Lit = 0,
-            PathTracer = 1,
             GBuffer = 2,
             ReflectionHeatmap = 3
         };
@@ -67,7 +67,6 @@ namespace SmileEditor {
         bool              IsGTAOEnabled() const;
         bool              AreReflectionsEnabled() const;
         bool              IsNrdEnabled() const;
-        bool              IsPathTracerEnabled() const;
         bool              IsFsr2Enabled() const;
         bool              IsFsr2Available() const;
         int               GetFsr2Quality() const;
@@ -85,7 +84,6 @@ namespace SmileEditor {
         QString           GetVRAMText() const;
 
         Q_INVOKABLE void SelectLit();
-        Q_INVOKABLE void SelectPathTracer();
         Q_INVOKABLE void SelectGBuffer(int mode);
         Q_INVOKABLE void SelectReflectionHeatmap();
         Q_INVOKABLE void ToggleDDGI();

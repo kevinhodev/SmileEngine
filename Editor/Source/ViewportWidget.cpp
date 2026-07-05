@@ -63,8 +63,6 @@ namespace SmileEditor {
 
     QString ViewportWidget::GetViewModeLabel() const {
         switch (CurrentViewMode) {
-        case PathTracer:
-            return QStringLiteral("Path tracer");
         case GBuffer:
             if (CurrentGBufferMode >= 1 && CurrentGBufferMode <= 8)
                 return QString::fromLatin1(kGBufferLabels[CurrentGBufferMode]);
@@ -95,10 +93,6 @@ namespace SmileEditor {
 
     bool ViewportWidget::IsNrdEnabled() const {
         return Renderer && Renderer->GetUseNrdDenoise();
-    }
-
-    bool ViewportWidget::IsPathTracerEnabled() const {
-        return Renderer && Renderer->GetUsePathTracer();
     }
 
     bool ViewportWidget::IsFsr2Enabled() const {
@@ -170,27 +164,15 @@ namespace SmileEditor {
 
     void ViewportWidget::SelectLit() {
         if (!Renderer) return;
-        Renderer->SetUsePathTracer(false);
         Renderer->SetGBufferDebugMode(0);
         Renderer->SetFlickerMode(0);
         CurrentViewMode = Lit;
         emit ViewSettingsChanged();
     }
 
-    void ViewportWidget::SelectPathTracer() {
-        if (!Renderer) return;
-        Renderer->SetUsePathTracer(true);
-        Renderer->SetGBufferDebugMode(0);
-        Renderer->SetFlickerMode(0);
-        CurrentViewMode = PathTracer;
-        Renderer->GetReSTIRPT().SetDebugMode(0);
-        emit ViewSettingsChanged();
-    }
-
     void ViewportWidget::SelectGBuffer(int _Mode) {
         if (!Renderer) return;
         const int Mode = qBound(1, _Mode, 8);
-        Renderer->SetUsePathTracer(false);
         Renderer->SetFlickerMode(0);
         Renderer->SetGBufferDebugMode(static_cast<Smile::u32>(Mode));
         CurrentGBufferMode = Mode;
@@ -200,7 +182,6 @@ namespace SmileEditor {
 
     void ViewportWidget::SelectReflectionHeatmap() {
         if (!Renderer) return;
-        Renderer->SetUsePathTracer(false);
         Renderer->SetGBufferDebugMode(0);
         // Ainda nao ha um heatmap exclusivo dos raios de reflexao. O heatmap temporal
         // existente e a visualizacao funcional mais proxima para este slot do mockup.

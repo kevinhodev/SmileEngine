@@ -794,7 +794,6 @@ Rectangle {
                     RayStatusRow { width: parent.width; label: "ReSTIR GI"; active: viewportModel.restirGIEnabled }
                     RayStatusRow { width: parent.width; label: "NRD REBLUR"; active: viewportModel.nrdEnabled }
                     RayStatusRow { width: parent.width; label: "Reflexos RT"; active: viewportModel.reflectionsEnabled }
-                    RayStatusRow { width: parent.width; label: "Path tracer"; active: viewportModel.pathTracerEnabled }
                 }
                 Rectangle { x: 0; y: 168; width: parent.width; height: 1; color: root.divider }
                 StatusRow {

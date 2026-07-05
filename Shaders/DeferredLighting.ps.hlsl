@@ -51,11 +51,6 @@ float4 main(VSOutput input) : SV_Target {
     float rawDepth = SceneDepth.Load(int3(px, 0));
     if (rawDepth <= 0.0f) discard;
 
-    // ReflectionParams.w == 3 -> ReSTIR PT ativo: a textura (t16) ja traz a radiancia COMPLETA
-    // (direto + indireto + emissivo). Passthrough barato; o ceu ja foi descartado acima.
-    if (ReflectionParams.w > 2.5f)
-        return float4(ReSTIRGITex.Load(int3(px, 0)).rgb, 1.0f);
-
     float2 ndc = float2(input.uv.x * 2.0f - 1.0f, 1.0f - input.uv.y * 2.0f);
     float4 wH  = mul(float4(ndc, rawDepth, 1.0f), InvViewProj);
     float3 worldPos = wH.xyz / wH.w;
