@@ -34,6 +34,8 @@ using Smile::Vertex;
 
 // --- RH(Y-up) -> LH(Y-up): inverter winding (par com a negacao de Z nas posicoes).
 // Se a cena sair "inside-out" (culling invertido), trocar p/ false e rebuildar.
+// Nos ESPELHADOS (det(geometry_to_world) < 0) invertem o winding de novo, por no —
+// mesmo criterio do IsOddNegativeScale da Unreal (FbxMesh.cpp do Interchange).
 static constexpr bool kReverseWinding = true;
 
 // ----------------------------------------------------------------------------
@@ -342,6 +344,13 @@ int main(int argc, char** argv) {
         const ufbx_mesh* mesh = node->mesh;
         triBuf.resize(std::max<size_t>(mesh->max_face_triangles * 3, 3));
 
+        // Normais em mundo pela inversa-transposta (correta sob escala nao-uniforme; a matriz
+        // direta entortaria a normal). Tambem ja flipa a normal se o no for espelhado.
+        const ufbx_matrix normalMat = ufbx_matrix_for_normals(&node->geometry_to_world);
+        // No espelhado inverte o winding daquele no (XOR com a inversao global RH->LH).
+        const bool mirrored = ufbx_matrix_determinant(&node->geometry_to_world) < 0.0f;
+        const bool reverseWinding = kReverseWinding != mirrored;
+
         for (size_t pi = 0; pi < mesh->material_parts.count; ++pi) {
             const ufbx_mesh_part& part = mesh->material_parts.data[pi];
             if (part.num_triangles == 0) continue;
@@ -368,7 +377,7 @@ int main(int argc, char** argv) {
                                     ? ufbx_get_vertex_vec2(&mesh->vertex_uv, corner[c])
                                     : ufbx_vec2{0,0};
                         p = ufbx_transform_position(&node->geometry_to_world, p);
-                        n = ufbx_transform_direction(&node->geometry_to_world, n);
+                        n = ufbx_transform_direction(&normalMat, n);
                         // normaliza
                         double nl = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
                         if (nl > 1e-12) { n.x/=nl; n.y/=nl; n.z/=nl; }
@@ -378,7 +387,7 @@ int main(int argc, char** argv) {
                         v.TexCoord[0] = (float)uv.x; v.TexCoord[1] = 1.0f - (float)uv.y; // V flip (FBX->D3D)
                         outIdx[c] = sm.Add(v);
                     }
-                    if (kReverseWinding) {
+                    if (reverseWinding) {
                         sm.Indices.push_back(outIdx[0]);
                         sm.Indices.push_back(outIdx[2]);
                         sm.Indices.push_back(outIdx[1]);

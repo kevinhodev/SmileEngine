@@ -5,7 +5,9 @@
 namespace Smile {
     constexpr u32 kSMeshMagic    = 0x48534D53u; 
     constexpr u32 kSSceneMagic   = 0x4E435353u; 
-    constexpr u32 kCookedVersion = 4u; // v4: +fatores PBR lidos do material (Metallic/RoughnessFactor) + Blend (alpha translucido)
+    constexpr u32 kCookedVersion = 5u; // v5: normais pela inversa-transposta + winding por no espelhado; tambem
+                                       //     invalida cozidos anteriores a "fator neutro com textura" no emissivo
+                                       // v4: +fatores PBR lidos do material (Metallic/RoughnessFactor) + Blend (alpha translucido)
                                        // v3: +Metalness/Roughness separados (PBR metal/rough nao-packed, ex.: Sponza PNG)
                                        // v2: +SSceneMaterial::Foliage (shading model desacoplado de masked)
 
