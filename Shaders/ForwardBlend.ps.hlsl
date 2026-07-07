@@ -106,9 +106,11 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
     if (useChebyshev) {
         float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
+        float3 V = normalize(CameraPosition.xyz - worldPos);
+        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w);
         return SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
                    worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                   (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, 0.25f,
+                   (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
                    DDGIProbeData, skipMode);
     }
     return SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,

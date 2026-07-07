@@ -147,12 +147,19 @@ float2 DDGI_SampleProbeRG(Texture2D<float4> distAtlas, SamplerState samp, int2 t
     return distAtlas.SampleLevel(samp, px * atlasInvSize, 0.0f).rg;
 }
 
+// Self-shadow bias do paper (e do Flax, GetDDGISurfaceBias): desloca o ponto de amostragem na
+// normal E na direcao da camera — o componente de view e o que evita dark banding/shadow leak
+// em parede vista de raspao, onde bias so-normal nao tira o ponto da zona de auto-oclusao.
+float3 DDGI_SurfaceBias(float3 N, float3 V, float spacing) {
+    return (N * 0.2f + V * 0.8f) * (0.75f * spacing * 0.2f);
+}
+
 float3 SampleDDGIIrradianceCheb(
         Texture2D<float4> irrAtlas, Texture2D<float4> distAtlas, SamplerState samp,
         float3 worldPos, float3 N, float3 gridMin, float spacing, int3 count,
-        int irrTile, float2 irrInvSize, int distTile, float2 distInvSize, float normalBias,
+        int irrTile, float2 irrInvSize, int distTile, float2 distInvSize, float3 biasVec,
         Buffer<float4> probeData, uint skipMode) {
-    float3 biasPos = worldPos + N * (spacing * normalBias);
+    float3 biasPos = worldPos + biasVec;
     float3 g    = (biasPos - gridMin) / spacing;
     int3   base = (int3)floor(g);
     float3 frac = saturate(g - (float3)base);
