@@ -1093,6 +1093,20 @@ namespace Smile {
                     4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
                 V.R->Mesh->Draw(CommandList);
             }
+
+            // Masked/two-sided no prepass (GTAO F4, estilo UE masked prepass): cull NONE +
+            // alpha-clip no PS. O GTAO passa a ver folhagem/grades (fim dos speckles de AO do
+            // fundo) e elas projetam AO; o G-buffer two-sided roda LESS_EQUAL sobre esse depth.
+            CommandList->SetPipelineState(AOWillRun ? PipelineState.PSODepthNormalMasked()
+                                                    : PipelineState.PSODepthOnlyMasked());
+            for (const VisItem& V : VisibleScratch) {
+                if (V.Mat->Blend) continue;
+                if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
+                CommandList->SetGraphicsRootConstantBufferView(
+                    4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                V.Mat->Bind(CommandList, SRVHeap);
+                V.R->Mesh->Draw(CommandList);
+            }
         }
 
         if (AO.IsReady()) {

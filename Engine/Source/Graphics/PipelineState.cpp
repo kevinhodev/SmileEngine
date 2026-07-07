@@ -255,6 +255,27 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthNormal)));
         PipelineStateDepthNormal = NewPSODepthNormal;
 
+        // Variantes masked/two-sided do prepass (GTAO F4): cull NONE (cards de folhagem) + PS
+        // com alpha-clip condicional (AlphaTest=0 em two-sided opaco -> so rasteriza os 2 lados).
+        auto DepthNormalMaskedPSBlob = LoadShaderBytecode("DepthNormalMasked.ps_6_0.cso");
+        auto DepthMaskedPSBlob       = LoadShaderBytecode("DepthMasked.ps_6_0.cso");
+
+        D3D12_RASTERIZER_DESC RasterizerNone = RasterizerDesc;
+        RasterizerNone.CullMode = D3D12_CULL_MODE_NONE;
+
+        PSODesc.RasterizerState = RasterizerNone;
+        PSODesc.PS              = { DepthNormalMaskedPSBlob.data(), DepthNormalMaskedPSBlob.size() };
+        ComPtr<ID3D12PipelineState> NewPSODepthNormalMasked;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthNormalMasked)));
+        PipelineStateDepthNormalMasked = NewPSODepthNormalMasked;
+
+        PSODesc.PS            = { DepthMaskedPSBlob.data(), DepthMaskedPSBlob.size() };
+        PSODesc.BlendState    = NoColor;
+        PSODesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        ComPtr<ID3D12PipelineState> NewPSODepthOnlyMasked;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthOnlyMasked)));
+        PipelineStateDepthOnlyMasked = NewPSODepthOnlyMasked;
+
         // --- Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs) -------------------------
         // Opaco: depth EQUAL (reusa o depth do prepass). Two-sided/alpha-test (folhagem): nao
         // entram no prepass, entao escrevem o proprio depth (depth LESS + write).
@@ -279,7 +300,12 @@ namespace Smile {
 
         RasterizerDesc.CullMode   = D3D12_CULL_MODE_NONE; // folhagem / alpha-test two-sided
         PSODesc.RasterizerState   = RasterizerDesc;
-        PSODesc.DepthStencilState = DepthLess;            // escreve o proprio depth
+        // Masked/two-sided agora TAMBEM entram no prepass (F4): o depth deles ja existe, entao
+        // LESS_EQUAL p/ passar no empate (LESS estrito descartava tudo); write mantido p/ o
+        // caso do prepass desligado.
+        D3D12_DEPTH_STENCIL_DESC DepthLessEqual = DepthLess;
+        DepthLessEqual.DepthFunc  = kDepthFuncLessEqual;
+        PSODesc.DepthStencilState = DepthLessEqual;
         ComPtr<ID3D12PipelineState> NewPSOGBufferTwoSided;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSided)));
         PipelineStateGBufferTwoSided = NewPSOGBufferTwoSided;
