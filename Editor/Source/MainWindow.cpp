@@ -8,6 +8,7 @@
 #include "SmileEditor/SmileLogo.h"
 #include "SmileEditor/SmileLogoImageProvider.h"
 #include "SmileEditor/StatusBridge.h"
+#include "SmileEditor/TimeOfDayBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/DarkTheme.h"
@@ -64,6 +65,7 @@ namespace SmileEditor {
         ConsoleLog = new LogBridge(this);
         WindowBr   = new WindowBridge(this); // botoes de janela da MainBar.qml
         Menus      = new MenuBridge(this);   // menus da MainBar.qml (precisa existir antes dela)
+        TodBridge  = new TimeOfDayBridge(this); // painel Time of Day (renderer chega depois)
 
         CreateTopBar();
         setCentralWidget(CreateViewportChrome());
@@ -232,6 +234,9 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::ToggleConsoleRequested, this, [this]() {
             if (ConsoleDock) ConsoleDock->setVisible(!ConsoleDock->isVisible());
         });
+        connect(Menus, &MenuBridge::ToggleTimeOfDayRequested, this, [this]() {
+            if (TodDock) TodDock->setVisible(!TodDock->isVisible());
+        });
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
 
@@ -310,6 +315,33 @@ namespace SmileEditor {
 
         // Reflete o estado do dock no check do menu "Janela" (inclui o fechar via menu do console).
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
+
+        // ---- Time of Day (dock lateral direito, painel 100% QML) ----
+        TodDock = new QDockWidget(tr("Time of Day"), this);
+        TodDock->setObjectName("TimeOfDayDock");
+        TodDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+        TodDock->setFeatures(QDockWidget::DockWidgetMovable |
+                             QDockWidget::DockWidgetFloatable |
+                             QDockWidget::DockWidgetClosable);
+
+        QQuickWidget* TodPanel = CreateQmlPanel(
+            QStringLiteral("TimeOfDayPanel.qml"),
+            { { QStringLiteral("todModel"), TodBridge } },
+            TodDock);
+        TodPanel->setObjectName("TimeOfDayPanel");
+        TodDock->setWidget(TodPanel);
+
+        // Mesmo padrao do console: header desenhado no QML, title bar nativa some.
+        auto* TodEmptyTitleBar = new QWidget(TodDock);
+        TodEmptyTitleBar->setFixedHeight(0);
+        TodDock->setTitleBarWidget(TodEmptyTitleBar);
+        connect(TodBridge, &TimeOfDayBridge::CloseRequested, TodDock, &QDockWidget::close);
+
+        addDockWidget(Qt::RightDockWidgetArea, TodDock);
+        TodPanel->setMinimumWidth(280);
+        resizeDocks({ TodDock }, { 320 }, Qt::Horizontal);
+
+        connect(TodDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetTimeOfDayVisible);
     }
 
     void MainWindow::OnRendererReady() {
@@ -319,6 +351,13 @@ namespace SmileEditor {
         // (so o editor o conhece); em falha o renderer segue na lua procedural branca.
         Viewport->GetRenderer()->LoadMoonTexture(
             QString(SMILE_ASSETS_DIR "/Textures/Sky/moon_lroc_color_2k.jpg").toStdWString());
+
+        // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
+        if (TodBridge) {
+            TodBridge->SetRenderer(Viewport->GetRenderer());
+            connect(Viewport, &ViewportWidget::FrameReady,
+                    TodBridge, &TimeOfDayBridge::Refresh, Qt::UniqueConnection);
+        }
     }
 
     void MainWindow::UpdateStats() {

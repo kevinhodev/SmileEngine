@@ -21,6 +21,7 @@ namespace SmileEditor {
     class NativeWindowFilter;
     class MenuBridge;
     class StatusBridge;
+    class TimeOfDayBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -56,6 +57,8 @@ namespace SmileEditor {
         NativeWindowFilter*   WinFilter   = nullptr; // frameless nativo (Slate-style)
         MenuBridge*           Menus       = nullptr; // ponte C++ -> EditorMenuBar.qml
         QDockWidget*          ConsoleDock = nullptr; // p/ toggle/estado no menu Janela
+        TimeOfDayBridge*      TodBridge   = nullptr; // ponte C++ -> TimeOfDayPanel.qml
+        QDockWidget*          TodDock     = nullptr; // dock lateral do painel Time of Day
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

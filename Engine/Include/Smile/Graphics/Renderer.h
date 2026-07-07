@@ -160,6 +160,11 @@ namespace Smile {
         void SetSunDirection(const Vec3& Dir);
         void SetSunColor(const Vec3& Color)  { SunColorRGB = Color; }
         Vec3 GetSunColor()     const         { return SunColorRGB; }
+        Vec3 GetSunDirection() const         { return SunDir; }
+
+        // Estado do Time-of-Day, exposto p/ o painel TOD do editor (leitura e escrita).
+        FTimeOfDay&       GetTimeOfDay()       { return TimeOfDay; }
+        const FTimeOfDay& GetTimeOfDay() const { return TimeOfDay; }
 
         void LoadMoonTexture(const std::wstring& Path);
 

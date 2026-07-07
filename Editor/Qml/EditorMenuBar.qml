@@ -128,6 +128,11 @@ MenuBar {
             markVisible: menuBridge.consoleVisible // estado real do dock (pode fechar sozinho)
             onTriggered: menuBridge.toggleConsole()
         }
+        MItem {
+            text: "Time of Day"; checkColumn: true
+            markVisible: menuBridge.timeOfDayVisible
+            onTriggered: menuBridge.toggleTimeOfDay()
+        }
     }
 
     DarkMenu {
