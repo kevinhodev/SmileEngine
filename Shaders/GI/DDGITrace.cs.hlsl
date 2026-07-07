@@ -83,6 +83,10 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         radiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                    q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
                                    ray.Origin, ray.Direction, q.CommittedRayT(), P, signedDist);
+        // Backface: encurta a distancia (RTXGI usa 0.2x) — o UpdateDist usa abs(), entao a media
+        // de distancia perto/dentro de geometria cai e o Chebyshev escurece mais agressivo ali.
+        // So aqui no DDGI: o HitShading e compartilhado e reflexoes/ReSTIR precisam do hitT real.
+        if (signedDist < 0.0f) signedDist *= 0.2f;
     } else {
         radiance   = ShadeSky(dir, sunDir, P.SkyIntensity);
         signedDist = maxT;
