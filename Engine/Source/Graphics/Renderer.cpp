@@ -823,7 +823,14 @@ namespace Smile {
         const Mat44 InvVPNoTrans = (ViewNoTrans * Projection).Inverse();
         const Mat44 InvViewProjFull = ViewProjection.Inverse();
         const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
-        MappedCB->InvViewProj = InvViewProjFull; 
+        MappedCB->InvViewProj = InvViewProjFull;
+
+        // Mip bias global (AMD FSR2: log2(render/display) - 1) para recuperar detalhe de textura
+        // no upscale. So quando o FSR2 esta de fato upscalando; nativo/SSAA ficam sem bias.
+        const f32 MipBias = (Fsr2Active && RenderWidth() < OutputWidth())
+            ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
+            : 0.0f;
+        MappedCB->RenderParams = { MipBias, 0.0f, 0.0f, 0.0f };
 
         Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans,
                                   InvViewProjFull, CameraPosition, kKmPerWorldUnit);

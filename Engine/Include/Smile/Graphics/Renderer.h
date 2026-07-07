@@ -65,6 +65,9 @@ namespace Smile {
 
         Mat44 InvViewProj;        // 64 bytes — inversa FULL da view-proj (jittered); deferred lighting
                                   // reconstroi worldPos do depth. Append no fim: nao mexe nos offsets acima.
+
+        Vec4  RenderParams;       // 16 bytes (c18) — x = mip bias global de textura (FSR2 upscale:
+                                  // log2(render/display) - 1; 0 quando nativo/SSAA), yzw = -
     };
 
     struct alignas(256) ObjectConstants {

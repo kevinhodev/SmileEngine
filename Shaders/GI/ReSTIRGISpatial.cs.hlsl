@@ -101,7 +101,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         nb.M = qa.w; nb.W = qb.w; nb.wSum = 0.0f;
 
         float J = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2); // dst=atual, src=vizinho
-        J = clamp(J, 0.1f, 10.0f);
+        // Rejeita (nao clampa) Jacobiano extremo: clampar mantem o sample com peso errado
+        // (firefly/escurecimento em quinas). RTXDI/kajiya descartam o vizinho nesse caso.
+        if (J < 0.1f || J > 10.0f) continue;
         float pHat = TargetPHat(x1, n1, nb.x2, nb.Lo);
         ResMerge(rs, nb, pHat, J, rng);
     }

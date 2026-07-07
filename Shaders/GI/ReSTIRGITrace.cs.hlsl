@@ -71,7 +71,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float4 wH  = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
     float3 x1  = wH.xyz / wH.w;
 
-    uint rng = RngSeed(px, (uint)TraceParams.x);
+    // Salt no seed: sem ele, RngSeed(px, frame) == s0 do GGX_Rand2(px, frame) usado na direcao do
+    // raio (mesma cadeia PCG) — a selecao do WRS ficaria correlacionada com o sample inicial.
+    uint rng = RngSeed(px, (uint)TraceParams.x ^ 0xA511E9B3u);
 
     // --- (1) Sample inicial: raio cosseno-hemisferico (Malley) -------------------------------
     float2 E    = GGX_Rand2(px, (uint)TraceParams.x);
@@ -150,7 +152,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             float4 pd = PrevResD.Load(int3(ppx, 0));
             float camDist   = length(CameraPos.xyz - x1);
             float posReject = ReuseParams.y * max(camDist, 1.0f);
-            if (pa.w > 0.0f && length(pa.xyz - x1) < posReject) {
+            // Rejeicao por plano alem da radial: a reprojecao pode cair numa superficie quase
+            // paralela (quina/glancing) dentro do raio radial mas fora do plano da atual.
+            float planeDist = abs(dot(N, pa.xyz - x1));
+            if (pa.w > 0.0f && length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject) {
                 Reservoir prev;
                 prev.x1 = pa.xyz; prev.x2 = pb.xyz; prev.n2 = pd.xyz; prev.Lo = pc.rgb;
                 prev.M  = min(pa.w, ReuseParams.x); // MCap
