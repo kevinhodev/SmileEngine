@@ -51,7 +51,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
 
     float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, spacing) + ProbeData[probeIdx].xyz;
 
-    float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x);
+    float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x, (uint)probeIdx);
 
     float3 sunDir = normalize(SunDirIntensity.xyz);
     float  maxT   = TraceParams.y;

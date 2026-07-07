@@ -43,7 +43,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         if (tr.a < -1e8f) continue; 
         ++realCount;
         if (tr.a < 0.0f) { ++backfaceCount; continue; } 
-        float3 rdir = DDGI_RayDirection(r, DDGI_RAYS, frame);
+        float3 rdir = DDGI_RayDirection(r, DDGI_RAYS, frame, (uint)probeIdx);
         float  w    = max(0.0f, dot(texelDir, rdir));
         if (w <= 0.0f) continue;
         sum  += tr.rgb * w;

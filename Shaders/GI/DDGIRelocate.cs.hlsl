@@ -55,7 +55,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         float  d   = ProbesTrace[int2(r, probeIdx)].a;
         if (d < -1e8f) continue; 
         ++realCount;
-        float3 dir = DDGI_RayDirection(r, DDGI_RAYS, frame);
+        float3 dir = DDGI_RayDirection(r, DDGI_RAYS, frame, (uint)probeIdx);
         if (d < 0.0f) {
             backfaceCount++;
         } else {

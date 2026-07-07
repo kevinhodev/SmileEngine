@@ -45,7 +45,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     for (int r = 0; r < DDGI_RAYS; ++r) {
         float ad = ProbesTrace[int2(r, probeIdx)].a;
         if (ad < -1e8f) continue; 
-        float3 rdir = DDGI_RayDirection(r, DDGI_RAYS, frame);
+        float3 rdir = DDGI_RayDirection(r, DDGI_RAYS, frame, (uint)probeIdx);
         float  w    = pow(max(0.0f, dot(texelDir, rdir)), DDGI_DIST_SHARP);
         if (w <= 0.0f) continue;
 

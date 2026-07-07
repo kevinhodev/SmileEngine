@@ -63,8 +63,12 @@ float3x3 DDGI_RandomRotation(uint frame) {
     return mul(rz, mul(ry, rx));
 }
 
-float3 DDGI_RayDirection(int rayIdx, int numRays, uint frame) {
-    float3x3 rot = DDGI_RandomRotation(frame);
+// Rotacao por frame E por probe (Flax randomiza por-probe via quaternion): com rotacao unica
+// por frame todos os probes amostram as MESMAS direcoes e o alias fica sincronizado no grid
+// inteiro (flicker estruturado). Trace/Update/UpdateDist/Relocate do mesmo frame tem que passar
+// o MESMO (frame, probeIdx) p/ reconstruir as direcoes tracadas.
+float3 DDGI_RayDirection(int rayIdx, int numRays, uint frame, uint probeIdx) {
+    float3x3 rot = DDGI_RandomRotation(frame + probeIdx * 2654435761u);
     return normalize(mul(rot, DDGI_SphericalFibonacci((float)rayIdx, (float)numRays)));
 }
 
