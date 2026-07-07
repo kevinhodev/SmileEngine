@@ -89,8 +89,9 @@ namespace Smile {
         CPUConstants.SunDisk          = { std::cos(SunDiskHalfAngleRad), 30.0f, 22.0f, 0.0f };
         CPUConstants.InvViewProjNoTrans = Mat44::Identity();
         CPUConstants.InvViewProj    = Mat44::Identity();
-        CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f }; 
+        CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f };
         CPUConstants.AerialParams   = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
+        CPUConstants.StarAxis       = { 0.0f, 1.0f, 0.0f, 0.0f };
 
         CreateConstantBuffer(_Device);
 
@@ -351,6 +352,11 @@ namespace Smile {
                                      f32 _StarIntensity, f32 _NightFactor, f32 _TimeSec) {
         CPUConstants.MoonDir    = { _DirToMoon.X, _DirToMoon.Y, _DirToMoon.Z, _CosDiskRadius };
         CPUConstants.MoonParams = { _DiskBrightness, _StarIntensity, _NightFactor, _TimeSec };
+    }
+
+    void FAtmosphere::SetStarRotation(const Vec3& _PoleAxis, f32 _AngleRad) {
+        const Vec3 A = _PoleAxis.NormalizedSafe(Vec3{ 0.0f, 1.0f, 0.0f });
+        CPUConstants.StarAxis = { A.X, A.Y, A.Z, _AngleRad };
     }
 
     void FAtmosphere::SetSunDiskHalfAngle(f32 _DegHalfAngle) {

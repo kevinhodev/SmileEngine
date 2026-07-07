@@ -739,6 +739,16 @@ namespace Smile {
             const Vec3 T = Atmosphere.SunTransmittance(SunN);
             EffectiveSunColor = { SunColorRGB.X * T.X, SunColorRGB.Y * T.Y, SunColorRGB.Z * T.Z };
         }
+        // Fade no horizonte (janela dusk/dawn estilo Cry): no horizonte o sol ainda tem ~15% no
+        // vermelho, e a key light vira lua em SunY<=0 — sem zerar ANTES da troca, a direcao do
+        // CSM flipa com luz visivel (pop). Banda [0, 0.03] em sin(elevacao) ~ 0..1.7 graus.
+        {
+            const f32 hf = std::clamp(SunN.Y / 0.03f, 0.0f, 1.0f);
+            const f32 HorizonFade = hf * hf * (3.0f - 2.0f * hf);
+            EffectiveSunColor = { EffectiveSunColor.X * HorizonFade,
+                                  EffectiveSunColor.Y * HorizonFade,
+                                  EffectiveSunColor.Z * HorizonFade };
+        }
         MappedCB->SunColor       = { EffectiveSunColor.X, EffectiveSunColor.Y, EffectiveSunColor.Z, 0.0f };
 
         const Vec3 MoonN = TimeOfDay.MoonDirection();
@@ -763,6 +773,19 @@ namespace Smile {
         const f32 MoonDiskBright = MoonOn ? (Atmosphere.HasMoonTexture() ? 2.5f : 5.0f) : 0.0f;
         Atmosphere.SetNightParams(MoonN, CosMoonRadius, MoonDiskBright,
                                   TimeOfDay.StarIntensity, NightFactor, ElapsedTime);
+
+        // Estrelas: polo celeste pela latitude/north-offset do TOD; rotacao diurna de 15 graus/h
+        // dirigida pelo relogio (pausa e acelera junto com sol/lua). TOD off mantem o giro lento
+        // em tempo real antigo.
+        {
+            const f32  LatR  = TimeOfDay.LatitudeDeg    * ToRad;
+            const f32  NoR   = TimeOfDay.NorthOffsetDeg * ToRad;
+            const Vec3 Pole  = { std::cos(LatR) * std::sin(NoR), std::sin(LatR),
+                                 std::cos(LatR) * std::cos(NoR) };
+            const f32  Angle = TimeOfDay.Enabled ? (TimeOfDay.TimeHours * 15.0f * ToRad)
+                                                 : (ElapsedTime * 0.004f);
+            Atmosphere.SetStarRotation(Pole, Angle);
+        }
 
         const bool KeyIsMoon  = (SunN.Y <= 0.0f);
         const Vec3 KeyDir     = KeyIsMoon ? MoonN : SunN;

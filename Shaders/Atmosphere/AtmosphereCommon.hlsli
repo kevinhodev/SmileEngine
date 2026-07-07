@@ -22,8 +22,9 @@ cbuffer AtmosphereCB : register(b0) {
     float4 CameraWorldPos;          
     float4 AerialParams;            
 
-    float4 MoonDir;                 
-    float4 MoonParams;              
+    float4 MoonDir;
+    float4 MoonParams;
+    float4 StarAxis;
 };
 
 #define kKmPerWorldUnit (CameraWorldPos.w)

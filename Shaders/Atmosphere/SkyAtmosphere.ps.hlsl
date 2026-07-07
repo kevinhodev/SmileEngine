@@ -16,15 +16,20 @@ float3 Hash33(float3 p) {
 }
 
 float3 StarField(float3 dir, float time) {
-    float a = time * 0.004f;
-    float c = cos(a), s = sin(a);
-    float3 d = float3(c * dir.x + s * dir.z, dir.y, -s * dir.x + c * dir.z);
+    // Rotacao diurna em torno do polo celeste (StarAxis.xyz = polo pela latitude do TOD),
+    // angulo StarAxis.w dirigido pelo relogio do TOD — pausa/acelera junto com sol e lua.
+    float3 axis = StarAxis.xyz;
+    float  a    = StarAxis.w;
+    float  c    = cos(a), s = sin(a);
+    float3 d = dir * c + cross(axis, dir) * s + axis * dot(axis, dir) * (1.0f - c);
 
     const float density = 200.0f;
     float3 cell   = floor(d * density);
     float3 rnd    = Hash33(cell);
-    float  present = step(0.992f, rnd.x);              
-    float3 starDir = normalize(cell + 0.5f + (rnd - 0.5f) * 0.8f); 
+    float  present = step(0.992f, rnd.x);
+    // Jitter <= 0.2 celula: com raio visivel ~0.28 celula a estrela nao cruza a borda da
+    // celula vizinha (0.8 deixava o centro cair fora da propria celula -> estrela cortada).
+    float3 starDir = normalize(cell + 0.5f + (rnd - 0.5f) * 0.4f);
 
     float3 delta = starDir - d;
     float  core  = exp(-dot(delta, delta) * 1.2e6f);  
@@ -34,7 +39,9 @@ float3 StarField(float3 dir, float time) {
     return present * core * bright * twinkle * tint;
 }
 
-float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, float brightness) {
+float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, float brightness,
+                out float coverage) {
+    coverage = 0.0f;
     float cosToMoon = dot(viewDir, moonDir);
     if (cosToMoon <= cosRadius) return float3(0.0f, 0.0f, 0.0f);
 
@@ -60,8 +67,9 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
 
     float  ndl        = dot(normal, sunDir);
     float  lit        = smoothstep(-0.05f, 0.18f, ndl); 
-    float  earthshine = 0.03f;                        
-    float  edge       = smoothstep(1.0f, 0.92f, rr);    
+    float  earthshine = 0.03f;
+    float  edge       = smoothstep(1.0f, 0.92f, rr);
+    coverage = edge;
     return (lit + earthshine) * edge * brightness * albedo;
 }
 
@@ -82,7 +90,13 @@ float4 main(PSInput input) : SV_TARGET {
     float3 L  = SkyViewLUT.SampleLevel(LinearClampSampler, uv, 0.0f).rgb;
 
     float  cosToSun = dot(viewDir, sunDir);
-    float3 sunTrans = SampleTransmittanceToTop(TransmittanceLUT, kViewHeight, dot(up, sunDir));
+    // Transmitancia do disco ao longo do raio de VISTA + sombra analitica do planeta (UE
+    // GetAtmosphereTransmittance): corta o disco no horizonte virtual e mata o disco fantasma
+    // com o sol logo abaixo do horizonte (a borda do LUT nunca chega a zero de proposito).
+    float3 camPos   = float3(0.0f, kViewHeight, 0.0f);
+    float3 sunTrans = (RaySphereNearest(camPos, viewDir, kBottomR) > 0.0f)
+                    ? (float3)0.0f
+                    : SampleTransmittanceToTop(TransmittanceLUT, kViewHeight, viewZenithCos);
 
     float core = smoothstep(kSunDiskCos, lerp(kSunDiskCos, 1.0f, 0.5f), cosToSun);
     float glare = pow(saturate(cosToSun), 350.0f);
@@ -94,8 +108,10 @@ float4 main(PSInput input) : SV_TARGET {
         float3 viewTrans = SampleTransmittanceToTop(TransmittanceLUT, kViewHeight, viewZenithCos);
         float  aboveHorizon = smoothstep(-0.02f, 0.06f, viewDir.y);
 
-        float3 stars = StarField(viewDir, MoonParams.w) * MoonParams.y;
-        float3 moon  = MoonDisk(viewDir, MoonDir.xyz, MoonDir.w, sunDir, MoonParams.x);
+        float  moonCover;
+        float3 moon  = MoonDisk(viewDir, MoonDir.xyz, MoonDir.w, sunDir, MoonParams.x, moonCover);
+        // Mascara pela cobertura do disco: sem ela as estrelas vazam pela parte escura da lua.
+        float3 stars = StarField(viewDir, MoonParams.w) * MoonParams.y * (1.0f - moonCover);
 
         L += (stars + moon) * viewTrans * (night * aboveHorizon);
     }
