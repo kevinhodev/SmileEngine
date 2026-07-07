@@ -68,8 +68,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     const float radiusWorld = Params.x;
     const float falloffEnd  = max(Params.w, 1e-3f);
+    // Min = numStep px (UE: max(min(r,256), NUMTAPS)): ao longe o raio projetado colapsa e os
+    // passos viram sub-pixel -> auto-oclusao que flicka com o ruido temporal.
     float radiusPix = radiusWorld * ProjA.y / max(P.z, 1e-3f) * 0.5f * ScreenParams.y;
-    radiusPix = clamp(radiusPix, 2.0f, 256.0f);
+    radiusPix = clamp(radiusPix, max(Params2.y, 2.0f), 256.0f);
 
     const int   numDir  = max((int)Params2.x, 1);
     const int   numStep = max((int)Params2.y, 1);
@@ -90,10 +92,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float cosP = -1.0f;
         float cosN = -1.0f;
         [loop] for (int s = 1; s <= numStep; ++s) {
-            const float  t   = (float(s) - stepNoise) / float(numStep);
-            const float2 off = dir * t * radiusPix;
+            // Offset min de s px (UE: max(SearchRadius*(fi+off), fi+1)) + round em vez de
+            // truncar: passo nunca cai no proprio pixel (auto-oclusao instavel ao longe;
+            // amostras alem do raio em mundo sao anuladas pelo falloff, nao pelo clamp aqui).
+            const float  t    = (float(s) - stepNoise) / float(numStep);
+            const float2 off  = dir * max(t * radiusPix, float(s));
+            const int2   iOff = int2(round(off));
 
-            int2 spP = clamp(ipx + int2(off), int2(0, 0), int2((int)W - 1, (int)H - 1));
+            int2 spP = clamp(ipx + iOff, int2(0, 0), int2((int)W - 1, (int)H - 1));
             {
                 float sd = DepthTex.Load(int3(spP, 0));
                 if (!SmileIsSky(sd)) {
@@ -104,7 +110,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
                     cosP = (cosA > cosP) ? cosA : lerp(cosA, cosP, kThickness);
                 }
             }
-            int2 spN = clamp(ipx - int2(off), int2(0, 0), int2((int)W - 1, (int)H - 1));
+            int2 spN = clamp(ipx - iOff, int2(0, 0), int2((int)W - 1, (int)H - 1));
             {
                 float sd = DepthTex.Load(int3(spN, 0));
                 if (!SmileIsSky(sd)) {
