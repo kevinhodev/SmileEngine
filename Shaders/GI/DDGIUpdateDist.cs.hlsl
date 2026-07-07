@@ -32,7 +32,11 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     float2 octUV    = ((float2)local + 0.5f) / (float)tile;
     float3 texelDir = DDGI_OctDecode(octUV * 2.0f - 1.0f);
 
-    float distMax = GridMinSpacing.w * 4.0f;
+    // Clamp na convencao do paper (G3D): 1.5 * ||spacing do grid|| = 1.5*sqrt(3)*spacing ~= 2.6.
+    // Cobre a diagonal da gaiola 2x2x2 (sqrt(3)*spacing) + bias/offset com folga; hits alem disso
+    // nao interessam ao Chebyshev (o ponto amostrado esta sempre dentro da gaiola) e so inflavam
+    // media/variancia, deixando o teste permissivo demais (leak atraves de parede) com 4.0.
+    float distMax = GridMinSpacing.w * 2.6f;
 
     uint  frame = (uint)TraceParams.x;
     float sumD = 0.0f, sumD2 = 0.0f, wsum = 0.0f;
