@@ -46,6 +46,26 @@ struct VSOutput {
     float2 uv  : TEXCOORD0;
 };
 
+// GTAO F3 — toggles p/ A/B (0 = comportamento antigo: AO escalar cheio em tudo)
+#define GTAO_MULTIBOUNCE    1
+#define GTAO_SPEC_OCCLUSION 1
+
+// Multibounce do Jimenez (GTAO paper / UE AOMultiBounce em BRDF.ush): aproxima a luz que
+// rebate DENTRO da area ocluida — superficie clara devolve energia e o canto nao vira carvao.
+float3 AOMultiBounce(float3 baseColor, float ao) {
+    float3 a =  2.0404f * baseColor - 0.3324f;
+    float3 b = -4.7951f * baseColor + 0.6417f;
+    float3 c =  2.7552f * baseColor + 0.6903f;
+    return max(ao, ((ao * a + b) * ao + c) * ao);
+}
+
+// Specular occlusion do Lagarde (Moving Frostbite to PBR, listing 26): deriva a oclusao do
+// lobo especular a partir do AO difuso — lobo estreito (roughness baixa) e rasante escapa
+// da oclusao; aplicar o AO difuso cheio no especular escurece demais.
+float SpecularOcclusionFromAO(float noV, float roughness, float ao) {
+    return saturate(pow(abs(noV + ao), exp2(-16.0f * roughness - 1.0f)) - 1.0f + ao);
+}
+
 // Amostra o indireto do DDGI respeitando os flags do frame (Chebyshev/skip de probes inativos).
 // Caminho UNICO p/ geometria e folhagem — com os pisos defensivos do Chebyshev (DDGICommon),
 // folhagem densa nao crusha mais a preto e nao precisa de sampling separado.
@@ -108,6 +128,19 @@ float4 main(VSOutput input) : SV_Target {
     float a2  = a * a;
     float NoV = saturate(dot(N, V));
 
+    // AO por lobo: difuso ganha multibounce (tinge com o albedo em vez de escurecer a preto),
+    // especular ganha a occlusion derivada do Lagarde em vez do AO difuso cheio.
+#if GTAO_MULTIBOUNCE
+    float3 AODiffuse = AOMultiBounce(DiffuseColor, AOAll);
+#else
+    float3 AODiffuse = float3(AOAll, AOAll, AOAll);
+#endif
+#if GTAO_SPEC_OCCLUSION
+    float AOSpec = SpecularOcclusionFromAO(NoV, Roughness, AOAll);
+#else
+    float AOSpec = AOAll;
+#endif
+
     float ReflectCombine = ReflectionParams.z > 0.5f
         ? saturate((ReflectionParams.x - Roughness) / max(ReflectionParams.y, 1e-4f))
         : 0.0f;
@@ -141,7 +174,7 @@ float4 main(VSOutput input) : SV_Target {
         float  hemi       = saturate(N.y * 0.5f + 0.5f);
         float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
         float3 KdAmb      = (1.0f - Metallic);
-        Ambient += KdAmb * DiffuseColor * ambientCol * AOAll * GroundAmbientColor.w;
+        Ambient += KdAmb * DiffuseColor * ambientCol * AODiffuse * GroundAmbientColor.w;
     }
 
     if (IBLParams.w > 0.5f) {
@@ -160,8 +193,9 @@ float4 main(VSOutput input) : SV_Target {
         float2 BRDF        = BRDFLut.SampleLevel(IBLSampler, float2(NoV, Roughness), 0.0f).rg;
         float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y) * SpecAmbientScale;
 
-        float3 IBLContrib = (UseGI || UseAtmoAmbient) ? SpecularIBL : (DiffuseIBL + SpecularIBL);
-        Ambient += IBLContrib * AOAll * IBLParams.x;
+        float3 IBLContrib = SpecularIBL * AOSpec;
+        if (!(UseGI || UseAtmoAmbient)) IBLContrib += DiffuseIBL * AODiffuse;
+        Ambient += IBLContrib * IBLParams.x;
     }
 
     float3 DbgGI = float3(0.0f, 0.0f, 0.0f);
@@ -195,11 +229,11 @@ float4 main(VSOutput input) : SV_Target {
         // Intensidade do GI: usa o slider do DDGI quando ha grid; senao (ReSTIR sem DDGI) cai em 1.
         float giIntensity = (UseGI && DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
         float3 KdGI = (1.0f - Metallic);
-        Ambient += KdGI * DiffuseColor * gi * giIntensity * AOAll;
+        Ambient += KdGI * DiffuseColor * gi * giIntensity * AODiffuse;
 
         if (IBLParams.w <= 0.5f) {
             float3 Fa = F_SchlickRoughness(SpecularColor, NoV, Roughness);
-            Ambient += Fa * gi * giIntensity * AOAll * SpecAmbientScale;
+            Ambient += Fa * gi * giIntensity * AOSpec * SpecAmbientScale;
         }
     }
 

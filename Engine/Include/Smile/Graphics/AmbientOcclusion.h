@@ -107,7 +107,9 @@ namespace Smile {
         f32 FadeStart = 50.0f;
         f32 FadeEnd   = 300.0f;
 
-        bool HalfRes = true;
+        // A/B no Bistro 2026-07-07: meia-res ganhou so ~2 FPS; full-res fica como default
+        // e o toggle do editor segue disponivel p/ cenas onde o AO pese mais.
+        bool HalfRes = false;
 
         bool Initialized = false;
         bool Ready       = false; 
