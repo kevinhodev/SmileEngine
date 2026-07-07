@@ -20,12 +20,18 @@ static const float kThickness = 0.75f;
 
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
+    // Meia-res (Params3.z=2, estilo UE): o grid cobre o alvo AO reduzido, mas TODA a
+    // geometria (depth/normal/offsets/raio) segue em coordenada full-res do depth —
+    // cada texel AO representa o pixel full par correspondente. Escala 1 = full-res.
+    const uint scale = max((uint)Params3.z, 1u);
     const uint W = (uint)ScreenParams.x;
     const uint H = (uint)ScreenParams.y;
-    if (tid.x >= W || tid.y >= H) return;
+    const uint AOW = (W + scale - 1u) / scale;
+    const uint AOH = (H + scale - 1u) / scale;
+    if (tid.x >= AOW || tid.y >= AOH) return;
 
-    const int2  ipx = int2(tid.xy);
-    const float2 px = float2(tid.xy);
+    const int2  ipx = int2(tid.xy * scale);
+    const float2 px = float2(ipx);
     const float rawD = DepthTex.Load(int3(ipx, 0));
 #if GTAO_DEBUG == 4
     AOOut[tid.xy] = SmileIsSky(rawD) ? 1.0f : 0.0f; return; // branco = sem depth opaco aqui

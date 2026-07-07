@@ -46,6 +46,10 @@ namespace Smile {
         f32  GetFadeStart() const{ return FadeStart; }
         void SetFadeEnd(f32 V)   { FadeEnd = V; }
         f32  GetFadeEnd() const  { return FadeEnd; }
+        // Meia-res (estilo UE): main+blur em W/2 x H/2 e upsample bilateral p/ o AO0
+        // full-res final. As duas cadeias ficam alocadas; o toggle e por frame.
+        void SetHalfRes(bool V)  { HalfRes = V; }
+        bool GetHalfRes() const  { return HalfRes; }
 
     private:
         void CreateConstantBuffer(ID3D12Device* Device);
@@ -58,22 +62,33 @@ namespace Smile {
                    static_cast<UINT64>(FrameSlot * 2 + Variant) * sizeof(GTAOConstants);
         }
 
-        FVolumetricPipeline MainPSO; 
-        FVolumetricPipeline BlurPSO; 
+        FVolumetricPipeline MainPSO;
+        FVolumetricPipeline BlurPSO;
+        FVolumetricPipeline UpsamplePSO;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
-        Microsoft::WRL::ComPtr<ID3D12Resource> AO0; 
-        Microsoft::WRL::ComPtr<ID3D12Resource> AO1; 
+        Microsoft::WRL::ComPtr<ID3D12Resource> AO0; // full-res, SEMPRE o final (t14 do lighting)
+        Microsoft::WRL::ComPtr<ID3D12Resource> AO1; // full-res, ping-pong do blur em modo full
+        Microsoft::WRL::ComPtr<ID3D12Resource> AOH0; // meia-res, ping-pong do modo half
+        Microsoft::WRL::ComPtr<ID3D12Resource> AOH1;
         u32 AO0SRVSlot     = kInvalidSlot;
         u32 AO0UAVSlot     = kInvalidSlot;
         u32 AO1SRVSlot     = kInvalidSlot;
         u32 AO1UAVSlot     = kInvalidSlot;
-        u32 MainTable      = kInvalidSlot; 
-        u32 BlurTable0     = kInvalidSlot; 
-        u32 BlurTable1     = kInvalidSlot; 
+        u32 AOH0SRVSlot    = kInvalidSlot;
+        u32 AOH0UAVSlot    = kInvalidSlot;
+        u32 AOH1SRVSlot    = kInvalidSlot;
+        u32 AOH1UAVSlot    = kInvalidSlot;
+        u32 MainTable      = kInvalidSlot;
+        u32 BlurTable0     = kInvalidSlot;
+        u32 BlurTable1     = kInvalidSlot;
+        u32 BlurTableH0    = kInvalidSlot; // depth + AOH0 (blur H e input do upsample)
+        u32 BlurTableH1    = kInvalidSlot; // depth + AOH1 (blur V)
 
-        D3D12_RESOURCE_STATES AO0State = D3D12_RESOURCE_STATE_COMMON;
-        D3D12_RESOURCE_STATES AO1State = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES AO0State  = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES AO1State  = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES AOH0State = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES AOH1State = D3D12_RESOURCE_STATE_COMMON;
         static constexpr D3D12_RESOURCE_STATES kAORead =
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
@@ -89,8 +104,10 @@ namespace Smile {
         int NumDir    = 3;     
         int NumSteps  = 8;
 
-        f32 FadeStart = 50.0f;  
-        f32 FadeEnd   = 300.0f;  
+        f32 FadeStart = 50.0f;
+        f32 FadeEnd   = 300.0f;
+
+        bool HalfRes = true;
 
         bool Initialized = false;
         bool Ready       = false; 

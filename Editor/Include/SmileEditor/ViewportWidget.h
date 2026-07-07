@@ -25,6 +25,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool nrdEnabled READ IsNrdEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool fsr2Enabled READ IsFsr2Enabled NOTIFY ViewSettingsChanged)
@@ -65,6 +66,7 @@ namespace SmileEditor {
         bool              IsDDGIEnabled() const;
         bool              IsReSTIRGIEnabled() const;
         bool              IsGTAOEnabled() const;
+        bool              IsGTAOHalfRes() const;
         bool              AreReflectionsEnabled() const;
         bool              IsNrdEnabled() const;
         bool              IsFsr2Enabled() const;
@@ -89,6 +91,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
         Q_INVOKABLE void ToggleGTAO();
+        Q_INVOKABLE void ToggleGTAOHalfRes();
         Q_INVOKABLE void ToggleReflections();
         Q_INVOKABLE void ToggleNrd();
         Q_INVOKABLE void SetFsr2Enabled(bool enabled);

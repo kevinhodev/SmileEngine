@@ -87,6 +87,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetUseAO();
     }
 
+    bool ViewportWidget::IsGTAOHalfRes() const {
+        return Renderer && Renderer->GetAO().GetHalfRes();
+    }
+
     bool ViewportWidget::AreReflectionsEnabled() const {
         return Renderer && Renderer->GetUseReflections();
     }
@@ -205,6 +209,13 @@ namespace SmileEditor {
     void ViewportWidget::ToggleGTAO() {
         if (!Renderer) return;
         Renderer->SetUseAO(!Renderer->GetUseAO());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleGTAOHalfRes() {
+        if (!Renderer) return;
+        auto& AO = Renderer->GetAO();
+        AO.SetHalfRes(!AO.GetHalfRes());
         emit ViewSettingsChanged();
     }
 

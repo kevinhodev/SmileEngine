@@ -51,8 +51,9 @@ smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_
 smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
-smile_compile_shader(AO/GTAO.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(AO/GTAOBlur.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(AO/GTAO.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(AO/GTAOBlur.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(AO/GTAOUpsample.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 smile_compile_shader(IBL/EquirectToCube.cs.hlsl        cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(IBL/MipGen.cs.hlsl                cs_6_0 main SHADER_OUTPUTS)
