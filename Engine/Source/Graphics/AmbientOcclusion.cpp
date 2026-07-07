@@ -152,7 +152,9 @@ namespace Smile {
         CPU.ProjA        = { _M00, _M11, _M22, _M32 };
         CPU.ScreenParams = { (f32)_Width, (f32)_Height, 1.0f / (f32)_Width, 1.0f / (f32)_Height };
         CPU.Params       = { Radius, Intensity, Power, Radius };
-        CPU.Params2      = { (f32)NumDir, (f32)NumSteps, (f32)_FrameIndex, 0.0f };
+        // % 12 = periodo do ciclo temporal do shader (rot 6 frames x offset 4 frames);
+        // mantem o f32 exato independente do tempo de sessao.
+        CPU.Params2      = { (f32)NumDir, (f32)NumSteps, (f32)(_FrameIndex % 12u), 0.0f };
         CPU.Params3      = { FadeStart, FadeEnd, 0.0f, 0.0f };
         CPU.ViewMatrix   = _View;
 

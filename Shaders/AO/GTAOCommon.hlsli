@@ -27,7 +27,7 @@ float3 GTAO_ViewPos(float2 px, float rawDepth) {
     return float3(xv, yv, zv);
 }
 
-float GTAO_IGN(float2 px, float frame) {
+float GTAO_IGN(float2 px) {
     return frac(52.9829189f * frac(0.06711056f * px.x + 0.00583715f * px.y));
 }
 

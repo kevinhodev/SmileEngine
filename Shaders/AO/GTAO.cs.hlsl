@@ -5,8 +5,18 @@
 #define GTAO_DEBUG 0
 
 Texture2D<float>   DepthTex  : register(t0);
-Texture2D<float4>  NormalTex : register(t1); 
+Texture2D<float4>  NormalTex : register(t1);
 RWTexture2D<float> AOOut     : register(u0);
+
+// Rotacao temporal (UE GetGTAOShaderParameters): ciclo embaralhado de 6 frames gira as
+// direcoes dentro do setor PI/numDir e ciclo de 4 desloca o passo radial; periodo 12,
+// o TAA acumula. Rots {60,300,180,240,120,0}*(PI/360) sobre o setor => fracoes do setor.
+static const float kTemporalRot[6] = { 1.0f/6.0f, 5.0f/6.0f, 3.0f/6.0f, 4.0f/6.0f, 2.0f/6.0f, 0.0f };
+static const float kTemporalOff[4] = { 0.1f, 0.6f, 0.35f, 0.85f };
+
+// Thickness heuristic (UE r.GTAO.ThicknessBlend=0.5 => 1-0.5^2): horizonte decai atras de
+// oclusores finos em vez de persistir como parede infinita.
+static const float kThickness = 0.75f;
 
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -63,20 +73,24 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     const int   numDir  = max((int)Params2.x, 1);
     const int   numStep = max((int)Params2.y, 1);
-    const float noise   = GTAO_IGN(px, Params2.z);
-    const float r2      = falloffEnd * falloffEnd;
+    const uint  frame   = (uint)Params2.z;
+    const float ign      = GTAO_IGN(px);
+    const float dirNoise = frac(ign + kTemporalRot[frame % 6u]);
+    float       stepNoise = frac(ign + kTemporalOff[frame % 4u]);
+    const float r2          = falloffEnd * falloffEnd;
+    const float attenFactor = 2.0f / r2;
 
     float occlusion = 0.0f;
 
     [loop] for (int d = 0; d < numDir; ++d) {
-        const float  phi = (float(d) + noise) * (GTAO_PI / float(numDir));
+        const float  phi = (float(d) + dirNoise) * (GTAO_PI / float(numDir));
         const float2 dir = float2(cos(phi), sin(phi));            
         const float3 sliceDirVS = normalize(float3(dir.x, -dir.y, 0.0f)); 
 
-        float cosP = -1.0f; 
+        float cosP = -1.0f;
         float cosN = -1.0f;
         [loop] for (int s = 1; s <= numStep; ++s) {
-            const float  t   = (float(s) - noise) / float(numStep); 
+            const float  t   = (float(s) - stepNoise) / float(numStep);
             const float2 off = dir * t * radiusPix;
 
             int2 spP = clamp(ipx + int2(off), int2(0, 0), int2((int)W - 1, (int)H - 1));
@@ -86,8 +100,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
                     float3 D = GTAO_ViewPos(float2(spP), sd) - P;
                     float  dist2 = dot(D, D);
                     float  cosA  = dot(D * rsqrt(max(dist2, 1e-8f)), V);
-                    float  fall  = saturate(1.0f - dist2 / r2);
-                    cosP = max(cosP, lerp(-1.0f, cosA, fall));
+                    cosA = lerp(cosA, cosP, saturate(dist2 * attenFactor));
+                    cosP = (cosA > cosP) ? cosA : lerp(cosA, cosP, kThickness);
                 }
             }
             int2 spN = clamp(ipx - int2(off), int2(0, 0), int2((int)W - 1, (int)H - 1));
@@ -97,11 +111,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
                     float3 D = GTAO_ViewPos(float2(spN), sd) - P;
                     float  dist2 = dot(D, D);
                     float  cosA  = dot(D * rsqrt(max(dist2, 1e-8f)), V);
-                    float  fall  = saturate(1.0f - dist2 / r2);
-                    cosN = max(cosN, lerp(-1.0f, cosA, fall));
+                    cosA = lerp(cosA, cosN, saturate(dist2 * attenFactor));
+                    cosN = (cosA > cosN) ? cosA : lerp(cosA, cosN, kThickness);
                 }
             }
         }
+        stepNoise = frac(stepNoise + 0.617f);
 
         float3 planeN = cross(V, sliceDirVS);
         float  planeLen = length(planeN);
