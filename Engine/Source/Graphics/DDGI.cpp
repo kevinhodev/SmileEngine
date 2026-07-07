@@ -177,10 +177,12 @@ namespace Smile {
         GridMinV = { _AABBMin.X - 0.5f * SpacingV, _AABBMin.Y - 0.5f * SpacingV,
                      _AABBMin.Z - 0.5f * SpacingV };
         NumProbes       = static_cast<u32>(CountX) * CountY * CountZ;
-        AtlasWidth      = static_cast<u32>(CountX) * CountZ * kTileSize;
-        AtlasHeight     = static_cast<u32>(CountY) * kTileSize;
-        DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * kDistTileSize;
-        DistAtlasHeight = static_cast<u32>(CountY) * kDistTileSize;
+        // Tiles com 1px de borda octaedrica de cada lado (stride = tile+2; ver DDGI_TileOrigin).
+        // Pior caso 32x32x32: 1024 tiles * 16px = 16384 = limite exato de textura do D3D12.
+        AtlasWidth      = static_cast<u32>(CountX) * CountZ * (kTileSize + 2);
+        AtlasHeight     = static_cast<u32>(CountY) * (kTileSize + 2);
+        DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * (kDistTileSize + 2);
+        DistAtlasHeight = static_cast<u32>(CountY) * (kDistTileSize + 2);
         MaxRayDist      = std::sqrt(ext.X * ext.X + ext.Y * ext.Y + ext.Z * ext.Z) * 1.5f;
 
         IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat);

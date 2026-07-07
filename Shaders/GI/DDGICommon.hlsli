@@ -97,10 +97,14 @@ int3 DDGI_ProbeCoord(int idx, int3 count) {
     return int3(x, y, z);
 }
 
+// Origem do INTERIOR do tile: cada tile tem 1px de borda octaedrica de cada lado (stride =
+// tile+2, como paper/RTXGI/Flax) — a borda recebe copia com o fold do octaedro (tabelas nos
+// passes de update) p/ o bilinear ser continuo na costura em vez do clamp achatar o anel externo.
 int2 DDGI_TileOrigin(int3 c, int3 count, int tile) {
     int tileCol = c.x + c.z * count.x;
     int tileRow = c.y;
-    return int2(tileCol * tile, tileRow * tile);
+    int stride  = tile + 2;
+    return int2(tileCol * stride, tileRow * stride) + 1;
 }
 
 float3 DDGI_ProbeWorldPos(int3 c, float3 gridMin, float spacing) {
@@ -109,11 +113,10 @@ float3 DDGI_ProbeWorldPos(int3 c, float3 gridMin, float spacing) {
 
 float3 DDGI_SampleProbe(Texture2D<float4> atlas, SamplerState samp, int2 tileOriginPx,
                         int tile, float2 atlasInvSize, float3 dir) {
-    float2 oct = DDGI_OctEncode(dir) * 0.5f + 0.5f;           
-    float2 t   = clamp(oct * tile, 0.5f, (float)tile - 0.5f); 
-    float2 px  = (float2)tileOriginPx + t;
+    float2 oct = DDGI_OctEncode(dir) * 0.5f + 0.5f;
+    float2 px  = (float2)tileOriginPx + oct * tile; // sem clamp: bilinear cruza p/ a borda copiada
     float3 s   = atlas.SampleLevel(samp, px * atlasInvSize, 0.0f).rgb;
-    return pow(max(s, 0.0f), DDGI_IRRADIANCE_GAMMA);          
+    return pow(max(s, 0.0f), DDGI_IRRADIANCE_GAMMA);
 }
 
 float3 SampleDDGIIrradiance(Texture2D<float4> atlas, SamplerState samp, float3 worldPos,
@@ -146,8 +149,7 @@ float3 SampleDDGIIrradiance(Texture2D<float4> atlas, SamplerState samp, float3 w
 float2 DDGI_SampleProbeRG(Texture2D<float4> distAtlas, SamplerState samp, int2 tileOriginPx,
                           int tile, float2 atlasInvSize, float3 dir) {
     float2 oct = DDGI_OctEncode(dir) * 0.5f + 0.5f;
-    float2 t   = clamp(oct * tile, 0.5f, (float)tile - 0.5f);
-    float2 px  = (float2)tileOriginPx + t;
+    float2 px  = (float2)tileOriginPx + oct * tile; // sem clamp: bilinear cruza p/ a borda copiada
     return distAtlas.SampleLevel(samp, px * atlasInvSize, 0.0f).rg;
 }
 
