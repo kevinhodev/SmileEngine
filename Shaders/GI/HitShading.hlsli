@@ -112,13 +112,14 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     bool   backface = (geo.TwoSided == 0) && (dot(geomN, rayDir) > 0.0f);
     outSignedDist   = backface ? -hitDist : hitDist;
 
+    float2 uv = Vertices[i0].TexCoord * (1.0f - bary.x - bary.y)
+              + Vertices[i1].TexCoord * bary.x
+              + Vertices[i2].TexCoord * bary.y;
+
     float3 hitN = normalize(-rayDir);
     if (P.RealHitShading) {
         hitN = backface ? -geomN : geomN;
         if (geo.HasAlbedo != 0) {
-            float2 uv = Vertices[i0].TexCoord * (1.0f - bary.x - bary.y)
-                      + Vertices[i1].TexCoord * bary.x
-                      + Vertices[i2].TexCoord * bary.y;
             Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
             albedo *= albedoTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).rgb;
         }
@@ -143,7 +144,18 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
                                            P.GridMin, P.Spacing, P.Count,
                                            P.AtlasTile, P.AtlasInvSize);
 
-    return albedo * (Edirect / SMILE_PI + indirect);
+    // Emissivo do hit (mesma formula do GBuffer.ps: factor*strength ja bakeado no InstanceGeo,
+    // x mapa quando ha) — sem isto, superficies emissivas nao alimentam GI nem aparecem em
+    // reflexoes/ReSTIR. O mapa e obrigatorio quando existe (factor costuma ser 1 e o mapa e
+    // quase todo preto — so o factor estouraria a superficie inteira). Sem gate no
+    // RealHitShading: o branch e coerente por instancia e a maioria tem flag 0.
+    float3 emissive = geo.EmissiveFactor.rgb;
+    if ((geo.Flags & INSTGEO_FLAG_EMISSIVE) != 0u) {
+        Texture2D<float4> emissiveTex = ResourceDescriptorHeap[geo.EmissiveMapIndex];
+        emissive *= emissiveTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).rgb;
+    }
+
+    return albedo * (Edirect / SMILE_PI + indirect) + emissive;
 }
 
 #endif
