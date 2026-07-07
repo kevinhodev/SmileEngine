@@ -531,7 +531,8 @@ namespace Smile {
                 std::function<void()>    Recreate;
             };
             const std::vector<ShaderReloadEntry> Table = {
-                { { "Triangle.vs", "GBuffer.ps", "DeferredLighting.ps", "DepthNormal.ps" },
+                { { "Triangle.vs", "GBuffer.ps", "DeferredLighting.ps", "DepthNormal.ps",
+                    "ForwardBlend.ps" },
                   [&] { PipelineState.RecreatePSO(Dev); } },
                 { { "Skybox.vs", "Skybox.ps" },
                   [&] { Skybox.Recreate(Dev, RT, DS); } },
@@ -1016,10 +1017,13 @@ namespace Smile {
             if (UseSunShadows) {
                 std::vector<FSunShadows::FShadowDrawItem> Casters;
                 Casters.reserve(AllItems.size());
-                for (const AllItem& A : AllItems)
+                for (const AllItem& A : AllItems) {
+                    // Translucido nao projeta sombra opaca (vidro deixa o sol entrar).
+                    if (A.Mat && A.Mat->Blend) continue;
                     Casters.push_back({ A.R->Mesh, A.Mat,
                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                         A.R->AABBMin, A.R->AABBMax });
+                }
                 SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size());
 
                 auto SceneRTV = HDRRTVHeap.CpuHandle(0);
@@ -1316,7 +1320,41 @@ namespace Smile {
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
-        
+        // --- Forward de translucidos (materiais Blend: vidro): por cima do HDR ja iluminado ----
+        // (deferred + reflexos), depth read-only contra o opaco, back-to-front (VisibleScratch ja
+        // esta ordenado front-to-back; iterar reverso da a ordem certa p/ alpha-blend).
+        {
+            bool AnyBlend = false;
+            for (const VisItem& V : VisibleScratch)
+                if (V.Mat->Blend) { AnyBlend = true; break; }
+            if (AnyBlend) {
+                auto SceneRTV = HDRRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                CommandList->SetGraphicsRootConstantBufferView(
+                    0, ConstantBuffer->GetGPUVirtualAddress() +
+                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
+                CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
+                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+                {
+                    const u32 GITable = (UseGI && DDGI.IsReady()) ? DDGI.SceneGITableStart() : IBLTableStart;
+                    CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
+                }
+                CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
+                for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
+                    if (!It->Mat->Blend) continue;
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
+                    It->Mat->Bind(CommandList, SRVHeap);
+                    It->R->Mesh->Draw(CommandList);
+                }
+            }
+        }
+
+
         if (UseWater && Water.IsInitialized() && WaterHasDepth) {
             CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
 

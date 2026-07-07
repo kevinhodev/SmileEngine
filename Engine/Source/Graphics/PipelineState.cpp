@@ -284,6 +284,33 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSided)));
         PipelineStateGBufferTwoSided = NewPSOGBufferTwoSided;
 
+        // --- Forward de translucidos (materiais Blend: vidro): sobre o HDR ja iluminado. -------
+        // Blend PREMULTIPLICADO (SrcBlend=ONE): o shader pesa o tinte por alpha e soma o especular
+        // inteiro. Depth read-only (testa contra o opaco, nao escreve) e cull none (two-sided).
+        auto ForwardBlendPSBlob = LoadShaderBytecode("ForwardBlend.ps_6_0.cso");
+
+        D3D12_BLEND_DESC PremulBlend = BlendDesc;
+        PremulBlend.RenderTarget[0].BlendEnable    = TRUE;
+        PremulBlend.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
+        PremulBlend.RenderTarget[0].DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
+        PremulBlend.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
+        PremulBlend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+
+        D3D12_DEPTH_STENCIL_DESC DepthReadOnly = DepthLess;
+        DepthReadOnly.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+        PSODesc.PS                = { ForwardBlendPSBlob.data(), ForwardBlendPSBlob.size() };
+        PSODesc.BlendState        = PremulBlend;
+        PSODesc.DepthStencilState = DepthReadOnly;
+        PSODesc.NumRenderTargets  = 1;
+        PSODesc.RTVFormats[0]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[2]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[3]     = DXGI_FORMAT_UNKNOWN;
+        ComPtr<ID3D12PipelineState> NewPSOForwardBlend;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOForwardBlend)));
+        PipelineStateForwardBlend = NewPSOForwardBlend;
+
         // --- Deferred lighting: fullscreen (PostProcess.vs), le o G-buffer e ilumina -> HDR. ----
         // Usa a root signature principal (a tabela de material e religada p/ [A,B,C,Depth]).
         auto LightVSBlob = LoadShaderBytecode("PostProcess.vs_6_0.cso");

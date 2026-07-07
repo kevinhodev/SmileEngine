@@ -9,6 +9,8 @@ smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GBufferDebug.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(DeferredLighting.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+# Passe forward de translucidos (materiais Blend: vidro etc.), por cima do HDR iluminado
+smile_compile_shader(ForwardBlend.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 

@@ -18,6 +18,9 @@ namespace Smile {
         ID3D12PipelineState* PSOGBufferTwoSided() const { return PipelineStateGBufferTwoSided.Get(); }
         // Deferred lighting fullscreen (le o G-buffer -> HDR), na root signature principal.
         ID3D12PipelineState* PSODeferredLighting() const { return PipelineStateDeferredLighting.Get(); }
+        // Forward de translucidos (materiais Blend): alpha-blend premultiplicado sobre o HDR,
+        // depth read-only, cull none (vidro two-sided).
+        ID3D12PipelineState* PSOForwardBlend() const { return PipelineStateForwardBlend.Get(); }
 
     private:
         ComPtr<ID3D12RootSignature> RootSignature;
@@ -26,5 +29,6 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> PipelineStateGBuffer;
         ComPtr<ID3D12PipelineState> PipelineStateGBufferTwoSided;
         ComPtr<ID3D12PipelineState> PipelineStateDeferredLighting;
+        ComPtr<ID3D12PipelineState> PipelineStateForwardBlend;
     };
 } 

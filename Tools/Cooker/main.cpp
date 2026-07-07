@@ -203,6 +203,16 @@ static bool LooksCutout(const std::vector<std::string>& toks) {
                             "grill","wire","wires","net","nets","lattice","grid" });
 }
 
+// Vidro -> translucido (Blend, passe forward). Override por NOME porque o FBX nao carrega
+// transmissao (todo vidro do Bistro vem com opacity=1) — mesmo espirito dos overrides que o
+// Falcor faz no .pyscene (specularTransmission=1, IoR 1.55). Vidro EMISSIVO fica de fora:
+// cooka opaco p/ manter o glow no caminho deferred (lanterna/spotlight). SO o token "glass";
+// "window" pegaria caixilho/moldura opaca junto.
+static bool LooksGlass(const std::vector<std::string>& toks) {
+    if (HasToken(toks, { "emissive", "emission" })) return false;
+    return HasToken(toks, { "glass" });
+}
+
 // ----------------------------------------------------------------------------
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -320,6 +330,15 @@ int main(int argc, char** argv) {
             out.Foliage   = foliage ? 1u : 0u;
             out.AlphaTest = cutout  ? 1u : 0u;
             out.TwoSided  = cutout  ? 1u : 0u;
+
+            // Vidro: translucido no passe forward. Alpha fixo 0.4 (transmissao ~janela comum);
+            // o especular vem do Fresnel no shader, nao do alpha. Two-sided (lamina fina).
+            if (LooksGlass(toks)) {
+                out.Blend     = 1u;
+                out.AlphaTest = 0u; // mutuamente exclusivo com blend
+                out.TwoSided  = 1u;
+                out.BaseColorFactor[3] = std::min(out.BaseColorFactor[3], 0.4f);
+            }
         }
 
         uint32_t idx = static_cast<uint32_t>(materials.size());
