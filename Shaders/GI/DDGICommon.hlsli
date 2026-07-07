@@ -182,7 +182,12 @@ float3 SampleDDGIIrradianceCheb(
             }
         }
 
-        float3 probePos    = DDGI_ProbeWorldPos(c, gridMin, spacing);
+        // Posicao REAL do probe (grid + offset de relocacao): o trace dispara os raios e o
+        // dist atlas mede distancias a partir do probe relocado — o Chebyshev e o peso de
+        // backface tem que usar a mesma origem, senao o teste de visibilidade compara contra
+        // a posicao errada exatamente nos probes que foram movidos por estar perto de parede.
+        float3 probePos    = DDGI_ProbeWorldPos(c, gridMin, spacing)
+                           + probeData[DDGI_ProbeLinear(c, count)].xyz;
         float3 probeToPoint = biasPos - probePos;
         float  distToProbe = length(probeToPoint);
         float3 dirPP       = probeToPoint / max(distToProbe, 1e-4f);
