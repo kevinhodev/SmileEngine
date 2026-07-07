@@ -15,6 +15,7 @@ cbuffer DDGICB : register(b0) {
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
+Buffer<float4>      ProbeData   : register(t1); // w>=1 = probe recem-ativado/relocado
 RWTexture2D<float2> DistAtlas   : register(u0);
 
 [numthreads(DDGI_DIST_TILE, DDGI_DIST_TILE, 1)]
@@ -59,6 +60,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
 
     int2   texel = tileOrigin + local;
     float2 prev  = DistAtlas[texel];
-    float  hyst  = SunColorHyst.w;
+    // Probe recem-ativado/relocado: distancias antigas sao de outra posicao — reset (hyst 0).
+    float  hyst  = (ProbeData[probeIdx].w >= 1.0f) ? 0.0f : SunColorHyst.w;
     DistAtlas[texel] = lerp(result, prev, hyst);
 }

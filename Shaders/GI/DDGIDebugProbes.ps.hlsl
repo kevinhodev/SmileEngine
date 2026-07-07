@@ -51,14 +51,16 @@ float4 main(VSOut i) : SV_Target {
     } else if (mode == 2) {
         color = Heat(i.extra.x);
     } else if (mode == 3) {
-        float w = i.extra.w; 
-        if (w < 0.0f)        color = float3(0.10f, 0.25f, 1.0f);  
-        else if (w > 0.20f)  color = float3(0.10f, 0.90f, 1.0f);  
-        else                 color = float3(1.0f, 0.55f, 0.0f);   
+        float w = i.extra.w;
+        if (w >= 1.0f) w -= 1.0f; // decodifica marca "recem-ativado" (w = 1 + backRatio)
+        if (w < 0.0f)        color = float3(0.10f, 0.25f, 1.0f);
+        else if (w > 0.20f)  color = float3(0.10f, 0.90f, 1.0f);
+        else                 color = float3(1.0f, 0.55f, 0.0f);
     } else {
        float w = i.extra.w;
-        if (w < 0.0f) color = float3(0.18f, 0.18f, 0.22f);           
-        else          color = Heat(saturate(w / max(DebugParams.w, 1e-3f))); 
+        if (w >= 1.0f) w -= 1.0f; // decodifica marca "recem-ativado" (w = 1 + backRatio)
+        if (w < 0.0f) color = float3(0.18f, 0.18f, 0.22f);
+        else          color = Heat(saturate(w / max(DebugParams.w, 1e-3f)));
     }
     
     float shade = 0.55f + 0.45f * saturate(dot(N, normalize(float3(0.4f, 0.8f, 0.35f))));

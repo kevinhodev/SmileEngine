@@ -102,8 +102,8 @@ namespace Smile {
 
     void FDDGI::Initialize(ID3D12Device* _Device) {
         TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 8, 1, true);
-        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 1, 1);
-        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 1, 1);
+        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
+        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
         RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
         CreateConstantBuffer(_Device);
         Initialized = true;
@@ -133,6 +133,7 @@ namespace Smile {
         ProbeRayCountUAVSlot = kInvalidSlot;
         FreeSlot(TraceTableStart, 8);
         FreeSlot(SceneGITableStart_, 3);
+        FreeSlot(UpdateTableStart, 2);
         IrradAtlas.Reset();
         DistAtlas.Reset();
         ProbesTrace.Reset();
@@ -348,6 +349,18 @@ namespace Smile {
         _Device->CopyDescriptors(1, &GDst, &GDstCount, 3, GSrc, GSrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+        // Tabela dos passes de blend (Update/UpdateDist): t0 = ProbesTrace, t1 = ProbeData
+        // (w>=1 = probe recem-ativado/relocado -> hysteresis 0 naquele frame).
+        UpdateTableStart = _SRVHeap.Allocate(2);
+        D3D12_CPU_DESCRIPTOR_HANDLE UDst = _SRVHeap.CpuHandle(UpdateTableStart);
+        D3D12_CPU_DESCRIPTOR_HANDLE USrc[2] = {
+            _SRVHeap.CpuHandleStaging(ProbesTraceSRVSlot),
+            _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
+        };
+        UINT UDstCount = 2; UINT USrcCounts[2] = { 1, 1 };
+        _Device->CopyDescriptors(1, &UDst, &UDstCount, 2, USrc, USrcCounts,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
         CPU.GridMinSpacing  = { GridMinV.X, GridMinV.Y, GridMinV.Z, SpacingV };
         CPU.GridCountRays   = { (f32)CountX, (f32)CountY, (f32)CountZ, (f32)kRaysPerProbe };
         CPU.AtlasParams     = { (f32)kTileSize, (f32)AtlasWidth, (f32)AtlasHeight, (f32)NumProbes };
@@ -437,6 +450,9 @@ namespace Smile {
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
         const f32 EffMin = AdaptiveRays ? (f32)MinRays : 64.0f;
         CPU.MiscParams      = { Relocation ? 1.0f : 0.0f, DeactivationThreshold, EffMax, EffMin };
+        // Marca de "recem-ativado" so quando o Relocate ainda tem >=1 frame agendado DEPOIS
+        // deste (a marca precisa do proximo Relocate p/ o auto-demote; orfa = hyst 0 eterno).
+        CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }
@@ -469,14 +485,14 @@ namespace Smile {
 
         UpdatePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(AtlasUAVSlot));
         _CL->Dispatch(NumProbes, 1, 1);
 
         Transition(_CL, DistAtlas.Get(), DistState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         UpdateDistPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DistUAVSlot));
         _CL->Dispatch(NumProbes, 1, 1);
 

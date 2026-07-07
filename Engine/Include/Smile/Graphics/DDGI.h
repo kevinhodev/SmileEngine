@@ -19,7 +19,8 @@ namespace Smile {
         Vec4 SunColorHyst;    // rgb = cor do sol, w = hysteresis (blend temporal)
         Vec4 TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = normalBias
         Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH, w = realHitShading
-        Vec4 MiscParams;      // x = relocationEnabled (Fase 2), yzw = -
+        Vec4 MiscParams;      // x = relocationEnabled (Fase 2), y = deactivThresh, z = maxRays, w = minRays
+        Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), yzw = -
     };
 
     class FDDGI {
@@ -128,8 +129,9 @@ namespace Smile {
         u32 ProbeDataUAVSlot   = kInvalidSlot;
         u32 ProbeRayCountSRVSlot = kInvalidSlot;
         u32 ProbeRayCountUAVSlot = kInvalidSlot;
-        u32 TraceTableStart    = kInvalidSlot;   
-        u32 SceneGITableStart_ = kInvalidSlot;  
+        u32 TraceTableStart    = kInvalidSlot;
+        u32 SceneGITableStart_ = kInvalidSlot;
+        u32 UpdateTableStart   = kInvalidSlot;   // [ProbesTrace, ProbeData] p/ Update/UpdateDist
 
         D3D12_RESOURCE_STATES AtlasState     = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES DistState      = D3D12_RESOURCE_STATE_COMMON;

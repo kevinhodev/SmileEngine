@@ -13,6 +13,7 @@ cbuffer DDGICB : register(b0) {
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
+Buffer<float4>      ProbeData   : register(t1); // w>=1 = probe recem-ativado/relocado
 RWTexture2D<float4> IrradAtlas  : register(u0);
 
 [numthreads(DDGI_TILE, DDGI_TILE, 1)]
@@ -57,7 +58,9 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int2   texel = tileOrigin + local;
     float3 prev  = IrradAtlas[texel].rgb; 
     
-    float  hyst    = SunColorHyst.w;
+    // Probe recem-ativado/relocado (marcado pelo Relocate): historia e do lugar antigo (ou
+    // preto de dentro da parede) — descarta e toma a estimativa nova inteira.
+    float  hyst    = (ProbeData[probeIdx].w >= 1.0f) ? 0.0f : SunColorHyst.w;
     float3 blended = lerp(result, prev, hyst);
     IrradAtlas[texel] = float4(blended, 1.0f);
 }
