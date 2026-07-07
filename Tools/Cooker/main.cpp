@@ -331,13 +331,16 @@ int main(int argc, char** argv) {
             out.AlphaTest = cutout  ? 1u : 0u;
             out.TwoSided  = cutout  ? 1u : 0u;
 
-            // Vidro: translucido no passe forward. Alpha fixo 0.4 (transmissao ~janela comum);
-            // o especular vem do Fresnel no shader, nao do alpha. Two-sided (lamina fina).
+            // Vidro: translucido no passe forward. Alpha por tipo: janela/vitrine 0.4 (lamina
+            // fina, transmissao alta); GARRAFA 0.75 (vidro grosso e escuro, quase opaco — a 0.4
+            // a garrafa de vinho praticamente sumia). O especular vem do Fresnel no shader,
+            // nao do alpha. Two-sided (lamina fina).
             if (LooksGlass(toks)) {
                 out.Blend     = 1u;
                 out.AlphaTest = 0u; // mutuamente exclusivo com blend
                 out.TwoSided  = 1u;
-                out.BaseColorFactor[3] = std::min(out.BaseColorFactor[3], 0.4f);
+                const float glassAlpha = HasToken(toks, { "bottle", "bottles" }) ? 0.75f : 0.4f;
+                out.BaseColorFactor[3] = std::min(out.BaseColorFactor[3], glassAlpha);
             }
         }
 
