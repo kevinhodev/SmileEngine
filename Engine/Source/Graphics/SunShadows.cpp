@@ -224,13 +224,14 @@ namespace Smile {
 
     void FSunShadows::UpdatePerFrame(u32 _FrameSlot, bool _Enabled, const Mat44& _View,
                                      const Vec3& _CamPos, f32 _FovYRadians, f32 _Aspect,
-                                     const Vec3& _DirToSun, f32 _NearZ) {
+                                     const Vec3& _DirToSun, f32 _NearZ, f32 _NoiseFrame) {
         FrameSlot = _FrameSlot;
-        (void)_CamPos; 
+        (void)_CamPos;
         CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
                                  1.0f / static_cast<f32>(kResolution), _Enabled ? 1.0f : 0.0f };
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
                                  DebugCascades ? 1.0f : 0.0f };
+        CPUConstants.Params3 = { _NoiseFrame, 0.0f, 0.0f, 0.0f };
 
         if (_Enabled) {
             auto Accum = [](f32 E, int Idx, int Count) -> f32 {

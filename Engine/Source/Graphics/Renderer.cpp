@@ -1067,7 +1067,11 @@ namespace Smile {
         LastVisibleCount = static_cast<u32>(VisibleScratch.size());
 
         {
-            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CameraPosition, FovY, Aspect, KeyDir, NearZ);
+            // Ruido do PCF animado so quando ha acumulador temporal pra integra-lo;
+            // sem TAA/FSR2 o padrao estatico e o menor mal (animado viraria shimmer).
+            const f32 ShadowNoiseFrame = (TAAActive || Fsr2Active)
+                ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
+            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CameraPosition, FovY, Aspect, KeyDir, NearZ, ShadowNoiseFrame);
             if (UseSunShadows) {
                 std::vector<FSunShadows::FShadowDrawItem> Casters;
                 Casters.reserve(AllItems.size());

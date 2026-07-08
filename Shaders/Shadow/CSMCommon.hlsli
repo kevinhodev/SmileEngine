@@ -4,10 +4,11 @@
 #define SMILE_CSM_MAX_CASCADES 4
 
 cbuffer CSMCB : register(b3) {
-    row_major float4x4 WorldToShadow[SMILE_CSM_MAX_CASCADES]; 
+    row_major float4x4 WorldToShadow[SMILE_CSM_MAX_CASCADES];
     float4 CSMTexelWorld;
-    float4 CSMParams;     
-    float4 CSMParams2;   
+    float4 CSMParams;
+    float4 CSMParams2;
+    float4 CSMParams3;    // x = frame do ruido (0 quando TAA/FSR2 off), yzw reservado
 };
 
 Texture2DArray         SunShadowMap : register(t11);
@@ -30,8 +31,12 @@ float CSM_IGN(float2 p) {
 
 float CSM_PCF(float3 uvz, int cascade, float2 screenPos) {
     float refZ     = uvz.z - CSMParams.y;
-    float radiusUV = max(CSMParams2.y, 1.0f) * CSMParams.z; 
-    float a = CSM_IGN(screenPos) * 6.2831853f;
+    // Penumbra ~constante em mundo: o raio em texels da cascata i encolhe pela razao
+    // texel0/texelI (piso 1 texel), senao a penumbra salta ~4x a cada troca de cascata
+    // e a migracao com a camera fica visivel ("sombra respirando").
+    float texels   = max(CSMParams2.y * (CSMTexelWorld[0] / CSMTexelWorld[cascade]), 1.0f);
+    float radiusUV = texels * CSMParams.z;
+    float a = CSM_IGN(screenPos + 5.588238f * CSMParams3.x) * 6.2831853f;
     float s, c; sincos(a, s, c);
     float2x2 rot = float2x2(c, -s, s, c);
     float sum = 0.0f;

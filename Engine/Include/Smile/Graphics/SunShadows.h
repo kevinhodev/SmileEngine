@@ -16,6 +16,7 @@ namespace Smile {
         Vec4  CascadeTexelWorld; // x..w = tamanho de 1 texel em mundo, por cascata (normal-offset)
         Vec4  Params;            // x = numCascades, y = depthBias (NDC z), z = 1/res, w = enabled
         Vec4  Params2;           // x = normal-offset (em texels), yzw reservado
+        Vec4  Params3;           // x = frame do ruido do PCF (0 = estatico, sem TAA/FSR2)
     };
 
     struct alignas(256) ShadowCascadeConstants {
@@ -38,7 +39,8 @@ namespace Smile {
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
         void UpdatePerFrame(u32 FrameSlot, bool Enabled, const Mat44& View, const Vec3& CamPos,
-                            f32 FovYRadians, f32 Aspect, const Vec3& DirToSun, f32 NearZ);
+                            f32 FovYRadians, f32 Aspect, const Vec3& DirToSun, f32 NearZ,
+                            f32 NoiseFrame);
 
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              const FShadowDrawItem* Items, size_t Count);
