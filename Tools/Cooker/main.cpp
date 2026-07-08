@@ -215,14 +215,23 @@ static bool LooksGlass(const std::vector<std::string>& toks) {
 
 // ----------------------------------------------------------------------------
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao]\n");
+    // --opaque-glass: vidro cooka OPACO (entra no G-buffer -> reflexoes RT pintam nele) em vez
+    // de translucido. P/ cenas de casca oca (Emerald Square: predios vazios atras da janela);
+    // cenas com interior real atras do vidro (Bistro) ficam no default translucido.
+    bool opaqueGlass = false;
+    std::vector<fs::path> positional;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--opaque-glass") { opaqueGlass = true; continue; }
+        positional.emplace_back(argv[i]);
+    }
+    if (positional.empty()) {
+        std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao] [--opaque-glass]\n");
         return 1;
     }
-    fs::path inPath = argv[1];
+    fs::path inPath = positional[0];
     fs::path sceneDir = inPath.parent_path();
-    fs::path outBase = (argc >= 3) ? fs::path(argv[2])
-                                   : (sceneDir / inPath.stem());
+    fs::path outBase = (positional.size() >= 2) ? positional[1]
+                                                : (sceneDir / inPath.stem());
 
     std::printf("[Cooker] Carregando FBX: %s\n", inPath.string().c_str());
 
@@ -336,11 +345,22 @@ int main(int argc, char** argv) {
             // a garrafa de vinho praticamente sumia). O especular vem do Fresnel no shader,
             // nao do alpha. Two-sided (lamina fina).
             if (LooksGlass(toks)) {
-                out.Blend     = 1u;
-                out.AlphaTest = 0u; // mutuamente exclusivo com blend
-                out.TwoSided  = 1u;
-                const float glassAlpha = HasToken(toks, { "bottle", "bottles" }) ? 0.75f : 0.4f;
-                out.BaseColorFactor[3] = std::min(out.BaseColorFactor[3], glassAlpha);
+                if (opaqueGlass) {
+                    // --opaque-glass: janela-espelho — opaco no G-buffer, reflexoes RT pintam o
+                    // ceu/rua (look da Falcor p/ casca oca). Liso e dieletrico; alpha restaurado.
+                    out.Blend     = 0u;
+                    out.AlphaTest = 0u;
+                    out.TwoSided  = 0u;
+                    out.BaseColorFactor[3] = 1.0f;
+                    out.MetallicFactor  = 0.0f;
+                    out.RoughnessFactor = std::min(out.RoughnessFactor, 0.08f);
+                } else {
+                    out.Blend     = 1u;
+                    out.AlphaTest = 0u; // mutuamente exclusivo com blend
+                    out.TwoSided  = 1u;
+                    const float glassAlpha = HasToken(toks, { "bottle", "bottles" }) ? 0.75f : 0.4f;
+                    out.BaseColorFactor[3] = std::min(out.BaseColorFactor[3], glassAlpha);
+                }
             }
         }
 
