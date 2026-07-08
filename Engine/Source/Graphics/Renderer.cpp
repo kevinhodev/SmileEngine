@@ -770,7 +770,10 @@ namespace Smile {
 
         const f32 MoonHalfAngleRad = 0.5f * ToRad * TimeOfDay.MoonDiskSize;
         const f32 CosMoonRadius    = std::cos(MoonHalfAngleRad);
-        const f32 MoonDiskBright = MoonOn ? (Atmosphere.HasMoonTexture() ? 2.5f : 5.0f) : 0.0f;
+        // x2 sem textura: o disco procedural branco depende do brilho pra ter presenca.
+        const f32 MoonDiskBright = MoonOn
+            ? TimeOfDay.MoonDiskBrightness * (Atmosphere.HasMoonTexture() ? 1.0f : 2.0f)
+            : 0.0f;
         Atmosphere.SetNightParams(MoonN, CosMoonRadius, MoonDiskBright,
                                   TimeOfDay.StarIntensity, NightFactor, ElapsedTime);
 

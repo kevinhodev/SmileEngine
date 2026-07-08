@@ -593,6 +593,15 @@ Rectangle {
                     boundValue: todModel.moonDiskSize
                     onMoved: v => todModel.moonDiskSize = v
                 }
+                SliderRow {
+                    enabled: todModel.moonEnabled
+                    opacity: todModel.moonEnabled ? 1.0 : 0.4
+                    label: "Brilho do disco"
+                    valueText: root.fmt(todModel.moonDiskBrightness)
+                    from: 0.1; to: 6
+                    boundValue: todModel.moonDiskBrightness
+                    onMoved: v => todModel.moonDiskBrightness = v
+                }
             }
 
             // ---- Estrelas ----

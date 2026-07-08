@@ -37,6 +37,9 @@ namespace Smile {
         f32  MoonPhaseOffsetHours = 12.0f;
         f32  MoonIntensity      = 0.25f; // forca do luar (2a direcional); "artistico", nao fisico
         f32  MoonDiskSize       = 1.5f;  // tamanho angular relativo do disco da lua no ceu
+        // Luminancia do disco. Baixa de proposito: >~2 cai no ombro do tonemap e esmaga o
+        // contraste dos mares da textura pra branco (a lua real de dia e ~2x o ceu, nao 10x).
+        f32  MoonDiskBrightness = 1.6f;
         f32  StarIntensity      = 1.0f;  // brilho das estrelas procedurais
 
         // Avanca o relogio pelo dt real (so quando Enabled && Running). Faz wrap em 24h.

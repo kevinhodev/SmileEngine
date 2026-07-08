@@ -27,6 +27,7 @@ namespace SmileEditor {
         Q_PROPERTY(double moonPhaseOffsetHours READ MoonPhaseOffsetHours WRITE SetMoonPhaseOffsetHours NOTIFY StateChanged)
         Q_PROPERTY(double moonIntensity READ MoonIntensity WRITE SetMoonIntensity NOTIFY StateChanged)
         Q_PROPERTY(double moonDiskSize READ MoonDiskSize WRITE SetMoonDiskSize NOTIFY StateChanged)
+        Q_PROPERTY(double moonDiskBrightness READ MoonDiskBrightness WRITE SetMoonDiskBrightness NOTIFY StateChanged)
         Q_PROPERTY(double starIntensity READ StarIntensity WRITE SetStarIntensity NOTIFY StateChanged)
         // Sol manual (TOD desligado): az/el em graus, escreve via Renderer::SetSunAzimuthElevation.
         Q_PROPERTY(double manualAzimuthDeg READ ManualAzimuthDeg WRITE SetManualAzimuthDeg NOTIFY StateChanged)
@@ -54,6 +55,7 @@ namespace SmileEditor {
         double MoonPhaseOffsetHours() const;
         double MoonIntensity() const;
         double MoonDiskSize() const;
+        double MoonDiskBrightness() const;
         double StarIntensity() const;
         double ManualAzimuthDeg() const  { return ManualAz; }
         double ManualElevationDeg() const { return ManualEl; }
@@ -73,6 +75,7 @@ namespace SmileEditor {
         void SetMoonPhaseOffsetHours(double V);
         void SetMoonIntensity(double V);
         void SetMoonDiskSize(double V);
+        void SetMoonDiskBrightness(double V);
         void SetStarIntensity(double V);
         void SetManualAzimuthDeg(double V);
         void SetManualElevationDeg(double V);

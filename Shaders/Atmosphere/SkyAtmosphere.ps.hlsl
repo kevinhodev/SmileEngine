@@ -62,8 +62,9 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
     float2 muv = float2(0.5f + atan2(nx, nz) / (2.0f * PI),
                         0.5f - asin(clamp(ny, -1.0f, 1.0f)) / PI);
     float3 albedo = MoonTex.SampleLevel(LinearClampSampler, muv, 0.0f).rgb;
-    albedo = pow(max(albedo, 0.0f), 2.2f);              
-    albedo = max((float3)0.0f, 0.13f + (albedo - 0.13f) * 1.5f);
+    albedo = pow(max(albedo, 0.0f), 2.2f);
+    // Contraste dos mares reforcado: o color map LROC e raso e o tonemap ainda comprime.
+    albedo = max((float3)0.0f, 0.13f + (albedo - 0.13f) * 1.8f);
 
     float  ndl        = dot(normal, sunDir);
     // Terminator estreito: a lua real tem transicao dia/noite dura (sem atmosfera); a banda
@@ -133,6 +134,12 @@ float4 main(PSInput input) : SV_TARGET {
         float  cosToMoon = saturate(dot(viewDir, coronaDir));
         float  corona    = (pow(cosToMoon, 8000.0f) * 0.35f + pow(cosToMoon, 600.0f) * 0.025f)
                          * kMoonCorona * night;
+        // Atenua a corona DENTRO do disco de forma radial: 1.0 na borda (continua com o glow de
+        // fora, sem degrau) caindo a ~30% no centro — protege a textura dos mares sem criar o
+        // "buraco preto" que a mascara uniforme por coverage criava na parte escura.
+        float  cosDisk  = dot(viewDir, moonDirN);
+        float  interior = saturate((cosDisk - MoonDir.w) / max(1.0f - MoonDir.w, 1e-6f));
+        corona *= 1.0f - 0.7f * sqrt(interior);
 
         L += (moon + (float3)corona) * viewTrans * aboveHorizon;
     }

@@ -45,6 +45,7 @@ namespace SmileEditor {
     double TimeOfDayBridge::MoonPhaseOffsetHours() const { return TodOfConst(Renderer).MoonPhaseOffsetHours; }
     double TimeOfDayBridge::MoonIntensity() const  { return TodOfConst(Renderer).MoonIntensity; }
     double TimeOfDayBridge::MoonDiskSize() const   { return TodOfConst(Renderer).MoonDiskSize; }
+    double TimeOfDayBridge::MoonDiskBrightness() const { return TodOfConst(Renderer).MoonDiskBrightness; }
     double TimeOfDayBridge::StarIntensity() const  { return TodOfConst(Renderer).StarIntensity; }
 
     double TimeOfDayBridge::SunElevationDeg() const {
@@ -142,6 +143,10 @@ namespace SmileEditor {
     }
     void TimeOfDayBridge::SetMoonDiskSize(double _V) {
         TodOf(Renderer).MoonDiskSize = (float)std::clamp(_V, 0.1, 8.0);
+        emit StateChanged();
+    }
+    void TimeOfDayBridge::SetMoonDiskBrightness(double _V) {
+        TodOf(Renderer).MoonDiskBrightness = (float)std::clamp(_V, 0.1, 6.0);
         emit StateChanged();
     }
     void TimeOfDayBridge::SetStarIntensity(double _V) {
