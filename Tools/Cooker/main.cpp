@@ -137,15 +137,36 @@ static std::string FindTexture(const fs::path& sceneDir, const std::string& base
 enum class Slot { None, BaseColor, Specular, Normal, Emissive, Metalness, Roughness };
 static Slot ClassifySuffix(const std::string& base) {
     std::string b = ToLower(base);
-    auto has = [&](const char* s){ return b.find(s) != std::string::npos; };
-    if (has("basecolor") || has("base_color") || has("albedo") || has("diffuse")) return Slot::BaseColor;
-    if (has("normal"))                                                            return Slot::Normal;
-    if (has("emissive") || has("emission"))                                       return Slot::Emissive;
-    if (has("_orm") || has("metalrough") || has("metallicroughness"))             return Slot::Specular;
-    if (has("roughness") || has("_rough"))                                        return Slot::Roughness;
-    if (has("metalness") || has("metallic") || has("_metal"))                     return Slot::Metalness;
-    if (has("specular"))                                                          return Slot::Specular;
-    return Slot::None;
+    // Ganha o token que TERMINA mais a direita (sufixo real), com desempate p/ o match mais longo.
+    // Substring simples em ordem fixa classificava "Emissive_Light_2_Inst_Specular" como Emissive
+    // (contem "emissive") — a lanterna da Emerald Square emitia o proprio spec map (verde puro,
+    // G=roughness do packing Falcor) e a textura emissiva real ficava de fora. O desempate por
+    // comprimento mantem "MetallicRoughness" no slot packed (Specular), nao em Roughness.
+    struct KV { const char* k; Slot s; };
+    static const KV kMap[] = {
+        { "basecolor",         Slot::BaseColor }, { "base_color", Slot::BaseColor },
+        { "albedo",            Slot::BaseColor }, { "diffuse",    Slot::BaseColor },
+        { "normal",            Slot::Normal    },
+        { "emissive",          Slot::Emissive  }, { "emission",   Slot::Emissive  },
+        { "_orm",              Slot::Specular  }, { "metalrough", Slot::Specular  },
+        { "metallicroughness", Slot::Specular  }, { "specular",   Slot::Specular  },
+        { "roughness",         Slot::Roughness }, { "_rough",     Slot::Roughness },
+        { "metalness",         Slot::Metalness }, { "metallic",   Slot::Metalness },
+        { "_metal",            Slot::Metalness },
+    };
+    Slot   best     = Slot::None;
+    size_t bestEnd  = 0;
+    size_t bestLen  = 0;
+    for (const KV& kv : kMap) {
+        const size_t len = std::strlen(kv.k);
+        const size_t pos = b.rfind(kv.k);
+        if (pos == std::string::npos) continue;
+        const size_t end = pos + len;
+        if (end > bestEnd || (end == bestEnd && len > bestLen)) {
+            best = kv.s; bestEnd = end; bestLen = len;
+        }
+    }
+    return best;
 }
 
 // Heuristica de material masked/two-sided (folhagem/toldos do Bistro) pelo nome.
