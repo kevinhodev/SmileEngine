@@ -23,8 +23,10 @@ void main(uint3 id : SV_DispatchThreadID) {
     float startKm = kAerialStartKm;
     float tKm     = startKm + sliceN * (kAerialDepthKm - startKm); 
 
+    // SkyViewSize.w = altitude do chao (0.5km): mesmo offset do sky-view LUT, senao fog e ceu
+    // discordam levemente no horizonte.
     float3 camKm = float3(CameraWorldPos.x * kmPerWU,
-                          kBottomR + CameraWorldPos.y * kmPerWU,
+                          kBottomR + SkyViewSize.w + CameraWorldPos.y * kmPerWU,
                           CameraWorldPos.z * kmPerWU);
 
     float3 sunDir = normalize(SunDir.xyz);

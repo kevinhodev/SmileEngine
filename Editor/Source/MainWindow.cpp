@@ -352,6 +352,11 @@ namespace SmileEditor {
         Viewport->GetRenderer()->LoadMoonTexture(
             QString(SMILE_ASSETS_DIR "/Textures/Sky/moon_lroc_color_2k.jpg").toStdWString());
 
+        // Catalogo de estrelas real (Yale BSC cozido pelo Tools/CookStars.py); sem o asset o
+        // renderer segue no hash procedural.
+        Viewport->GetRenderer()->LoadStarCatalog(
+            QString(SMILE_ASSETS_DIR "/Sky/stars.sstars").toStdWString());
+
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {
             TodBridge->SetRenderer(Viewport->GetRenderer());

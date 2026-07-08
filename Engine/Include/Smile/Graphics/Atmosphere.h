@@ -35,6 +35,10 @@ namespace Smile {
         Vec4 MoonParams;         // x = brilho do disco, y = intensidade estrelas, z = night factor, w = tempo (cintilacao)
         Vec4 StarAxis;           // xyz = polo celeste (mundo), w = angulo da rotacao diurna (rad)
         Vec4 NightSky;           // x = iluminancia da lua no scattering (2a luz), y = corona, zw = livres
+
+        Mat44 ViewProjNoTrans;   // view-proj SEM translacao — projeta o quad das estrelas
+        Mat44 StarMatrix;        // frame do catalogo (polo=+Y) -> mundo, com rotacao diurna
+        Vec4  StarView;          // x = viewport W, y = viewport H, z = catalogo ativo, w = livre
     };
 
     struct FLut2D {
@@ -74,7 +78,9 @@ namespace Smile {
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation,
-                            const Mat44& InvViewProjFull, const Vec3& CameraWorldPos, f32 KmPerWorldUnit);
+                            const Mat44& ViewProjNoTranslation, const Mat44& InvViewProjFull,
+                            const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
+                            f32 ViewportW, f32 ViewportH);
 
         void SetNightParams(const Vec3& DirToMoon, f32 CosDiskRadius, f32 DiskBrightness,
                             f32 StarIntensity, f32 NightFactor, f32 TimeSec);
@@ -114,6 +120,13 @@ namespace Smile {
                              FTextureSRVHeap& SRVHeap, const std::wstring& Path);
         bool HasMoonTexture() const { return MoonTexLoaded; }
 
+        // Catalogo de estrelas real (Assets/Sky/stars.sstars, Yale BSC via HYG). Com ele ativo o
+        // hash procedural do sky pass desliga e RenderStars desenha um quad de ~2px por estrela.
+        void LoadStarCatalog(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                             const std::wstring& Path);
+        bool HasStarCatalog() const { return StarCount > 0; }
+        void RenderStars(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
+
         Vec3 SunTransmittance(const Vec3& DirToSun) const;
 
     private:
@@ -124,6 +137,7 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
         void BuildInputTables(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         void BuildSkyRootSignature(ID3D12Device* Device);
+        void BuildStarPipeline(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void BuildSkyPSO(ID3D12Device* Device,
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Bake(ID3D12Device* Device, FCommandQueue& CmdQueue);
@@ -149,8 +163,17 @@ namespace Smile {
         u32 AmbientUAVSlot  = 0;
         u32 AmbientRecorded = 0; // integracoes gravadas; valido apos >= kFramesInFlight
 
-        u32 SkyViewBakeTableStart = 0; 
-        u32 SkyRenderTableStart   = 0; 
+        u32 SkyViewBakeTableStart = 0;
+        u32 SkyRenderTableStart   = 0;
+
+        DXGI_FORMAT SkyRTFormat = DXGI_FORMAT_UNKNOWN; // formatos do sky pass (p/ PSOs tardios)
+        DXGI_FORMAT SkyDSFormat = DXGI_FORMAT_UNKNOWN;
+
+        Microsoft::WRL::ComPtr<ID3D12Resource>      StarBuffer; // upload heap, N x FStar (20B)
+        u32                                         StarCount = 0;
+        u32                                         StarTableStart = 0; // [stars SRV, transmittance SRV]
+        Microsoft::WRL::ComPtr<ID3D12RootSignature> StarRootSig;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> StarPSO;
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> SkyRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> SkyPSO;

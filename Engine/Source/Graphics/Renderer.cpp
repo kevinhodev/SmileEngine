@@ -642,6 +642,11 @@ namespace Smile {
         Atmosphere.LoadMoonTexture(Device.Native(), CommandQueue, SRVHeap, _Path);
     }
 
+    void Renderer::LoadStarCatalog(const std::wstring& _Path) {
+        if (!Initialized || !Atmosphere.IsInitialized()) return;
+        Atmosphere.LoadStarCatalog(Device.Native(), SRVHeap, _Path);
+    }
+
     bool Renderer::WorldToScreen(const Vec3& _W, f32& _Sx, f32& _Sy) const {
         const Mat44& M = LastViewProj;
         const f32 cx = _W.X*M.M[0][0] + _W.Y*M.M[1][0] + _W.Z*M.M[2][0] + M.M[3][0];
@@ -862,7 +867,8 @@ namespace Smile {
         ViewNoTrans.M[3][0] = 0.0f;
         ViewNoTrans.M[3][1] = 0.0f;
         ViewNoTrans.M[3][2] = 0.0f;
-        const Mat44 InvVPNoTrans = (ViewNoTrans * Projection).Inverse();
+        const Mat44 VPNoTrans    = ViewNoTrans * Projection;
+        const Mat44 InvVPNoTrans = VPNoTrans.Inverse();
         const Mat44 InvViewProjFull = ViewProjection.Inverse();
         const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
         MappedCB->InvViewProj = InvViewProjFull;
@@ -874,8 +880,9 @@ namespace Smile {
             : 0.0f;
         MappedCB->RenderParams = { MipBias, 0.0f, 0.0f, 0.0f };
 
-        Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans,
-                                  InvViewProjFull, CameraPosition, kKmPerWorldUnit);
+        Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans, VPNoTrans,
+                                  InvViewProjFull, CameraPosition, kKmPerWorldUnit,
+                                  static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()));
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm());
@@ -944,6 +951,9 @@ namespace Smile {
             Atmosphere.RecordSkyViewBake(CommandList);
             Atmosphere.RecordSkyAmbientIntegration(CommandList);
             Atmosphere.RenderSky(CommandList, SRVHeap);
+            // Estrelas do catalogo: passe aditivo proprio, so quando a noite contribui.
+            if (NightFactor > 0.001f && TimeOfDay.StarIntensity > 0.0f)
+                Atmosphere.RenderStars(CommandList, SRVHeap);
         } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
             Skybox.Render(FrameSlot, CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
                           InvVPNoTrans, IBLIntensity, IBLRotation);

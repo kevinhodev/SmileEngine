@@ -72,6 +72,8 @@ smile_compile_shader(Atmosphere/SkyAtmosphere.vs.hlsl     vs_6_0 main SHADER_OUT
 smile_compile_shader(Atmosphere/SkyAtmosphere.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/BakeAerialPerspective.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/IntegrateSkyAmbient.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/StarField.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/StarField.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 
 # Fog deferido (UE5): aerial perspective froxel + exponential height fog
 smile_compile_shader(Fog/FogFullscreen.vs.hlsl            vs_6_0 main SHADER_OUTPUTS)
@@ -174,6 +176,8 @@ add_custom_target(Shaders
         Atmosphere/SkyAtmosphere.ps.hlsl
         Atmosphere/BakeAerialPerspective.cs.hlsl
         Atmosphere/IntegrateSkyAmbient.cs.hlsl
+        Atmosphere/StarField.vs.hlsl
+        Atmosphere/StarField.ps.hlsl
         Fog/FogCommon.hlsli
         Fog/FogApply.hlsli
         Fog/FogFullscreen.vs.hlsl

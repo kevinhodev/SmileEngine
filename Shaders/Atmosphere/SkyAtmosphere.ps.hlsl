@@ -144,7 +144,9 @@ float4 main(PSInput input) : SV_TARGET {
         L += (moon + (float3)corona) * viewTrans * aboveHorizon;
     }
 
-    if (night > 0.001f) {
+    // Hash procedural so como FALLBACK: com o catalogo real carregado (Assets/Sky/stars.sstars)
+    // as estrelas viram um passe proprio (StarField.vs/ps) depois do ceu.
+    if (night > 0.001f && kStarCatalogOn < 0.5f) {
         float3 viewTrans = SampleTransmittanceToTop(TransmittanceLUT, kViewHeight, viewZenithCos);
         // Mascara pela cobertura do disco: sem ela as estrelas vazam pela parte escura da lua.
         float3 stars = StarField(viewDir, MoonParams.w) * MoonParams.y * (1.0f - moonCover);

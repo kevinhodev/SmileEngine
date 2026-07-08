@@ -167,6 +167,7 @@ namespace Smile {
         const FTimeOfDay& GetTimeOfDay() const { return TimeOfDay; }
 
         void LoadMoonTexture(const std::wstring& Path);
+        void LoadStarCatalog(const std::wstring& Path);
 
         // FSR2 (substitui o TAA quando ligado). So funciona em build Release (Debug = stub).
         void SetUseFsr2(bool V) {
