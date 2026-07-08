@@ -36,6 +36,13 @@ void main(uint3 id : SV_DispatchThreadID) {
     float rPhase = RayleighPhase(cosSunView);
     float mPhase = MiePhaseHG(kMiePhaseG, cosSunView);
 
+    // Lua = 2a luz atmosferica. Aqui os froxels vivem em world-space (sem a dobra azimutal do
+    // sky-view LUT), entao a lua usa as fases direcionais completas.
+    float3 moonDir     = normalize(MoonDir.xyz);
+    float  cosMoonView = dot(worldDir, moonDir);
+    float  rPhaseMoon  = RayleighPhase(cosMoonView);
+    float  mPhaseMoon  = MiePhaseHG(kMiePhaseG, cosMoonView);
+
     float3 L            = float3(0.0f, 0.0f, 0.0f);
     float3 transmittance = float3(1.0f, 1.0f, 1.0f);
 
@@ -60,13 +67,24 @@ void main(uint3 id : SV_DispatchThreadID) {
         float3 psiMs        = SampleMultiScatterLUT(MultiScatterLUT, hgt, sunZen);
         float3 multiScatter = (rS + mS) * psiMs;
 
-        float3 inScatter = earthShadow * sunTrans * phaseScatter + multiScatter;
+        float3 inScatter = kSunIlluminance *
+                           (earthShadow * sunTrans * phaseScatter + multiScatter);
+
+        if (kMoonSkyIll > 0.0f) {
+            float  moonZen    = dot(up, moonDir);
+            float3 moonTrans  = SampleTransmittanceToTop(TransmittanceLUT, hgt, moonZen);
+            float  moonShadow = (RaySphereNearest(p, moonDir, kBottomR) > 0.0f) ? 0.0f : 1.0f;
+            float3 psiMsMoon  = SampleMultiScatterLUT(MultiScatterLUT, hgt, moonZen);
+            float3 inScatterM = moonShadow * moonTrans * (rS * rPhaseMoon + mS * mPhaseMoon)
+                              + (rS + mS) * psiMsMoon;
+            inScatter += kMoonSkyIll * inScatterM;
+        }
+
         float3 sInt      = (inScatter - inScatter * sampleT) / safeExt;
         L += transmittance * sInt;
 
         transmittance *= sampleT;
     }
-    L *= kSunIlluminance;
 
     float avgT = dot(transmittance, float3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f));
     OutAerial[id] = float4(L, avgT);

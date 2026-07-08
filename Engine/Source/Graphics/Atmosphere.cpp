@@ -92,6 +92,7 @@ namespace Smile {
         CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f };
         CPUConstants.AerialParams   = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
         CPUConstants.StarAxis       = { 0.0f, 1.0f, 0.0f, 0.0f };
+        CPUConstants.NightSky       = { 0.0f, 0.0f, 0.0f, 0.0f };
 
         CreateConstantBuffer(_Device);
 
@@ -357,6 +358,11 @@ namespace Smile {
     void FAtmosphere::SetStarRotation(const Vec3& _PoleAxis, f32 _AngleRad) {
         const Vec3 A = _PoleAxis.NormalizedSafe(Vec3{ 0.0f, 1.0f, 0.0f });
         CPUConstants.StarAxis = { A.X, A.Y, A.Z, _AngleRad };
+    }
+
+    void FAtmosphere::SetMoonSkyLight(f32 _SkyIllumScale, f32 _CoronaIntensity) {
+        CPUConstants.NightSky.X = CPUConstants.SunDisk.Z * std::max(_SkyIllumScale, 0.0f);
+        CPUConstants.NightSky.Y = std::max(_CoronaIntensity, 0.0f);
     }
 
     void FAtmosphere::SetSunDiskHalfAngle(f32 _DegHalfAngle) {

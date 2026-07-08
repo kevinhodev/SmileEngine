@@ -34,6 +34,7 @@ namespace Smile {
         Vec4 MoonDir;            // xyz = direction TO moon (world), w = cos(raio angular do disco)
         Vec4 MoonParams;         // x = brilho do disco, y = intensidade estrelas, z = night factor, w = tempo (cintilacao)
         Vec4 StarAxis;           // xyz = polo celeste (mundo), w = angulo da rotacao diurna (rad)
+        Vec4 NightSky;           // x = iluminancia da lua no scattering (2a luz), y = corona, zw = livres
     };
 
     struct FLut2D {
@@ -78,6 +79,9 @@ namespace Smile {
         void SetNightParams(const Vec3& DirToMoon, f32 CosDiskRadius, f32 DiskBrightness,
                             f32 StarIntensity, f32 NightFactor, f32 TimeSec);
         void SetStarRotation(const Vec3& PoleAxis, f32 AngleRad);
+        // Lua como 2a luz atmosferica: SkyIllumScale = fracao da iluminancia do SOL usada no
+        // scattering do luar (fase/intensidade ja fatoradas pelo chamador); Corona = halo 0..1.
+        void SetMoonSkyLight(f32 SkyIllumScale, f32 CoronaIntensity);
 
         void SetSunDiskHalfAngle(f32 DegHalfAngle);
         void SetSunGlare(f32 Intensity);

@@ -20,6 +20,19 @@ void main(uint3 id : SV_DispatchThreadID) {
     float sunZenithSin = sqrt(saturate(1.0f - sunZenithCos * sunZenithCos));
     float3 sunDir = float3(sunZenithSin, sunZenithCos, 0.0f);
 
+    // Lua = 2a luz atmosferica (estilo Light0/Light1 da UE), trazida pro frame do LUT
+    // (X = azimute do sol) preservando o azimute relativo sol->lua.
+    float3 moonDir;
+    {
+        float  cosZm = clamp(MoonDir.y, -1.0f, 1.0f);
+        float  sinZm = sqrt(saturate(1.0f - cosZm * cosZm));
+        float2 sunH  = SunDir.xz  / max(length(SunDir.xz),  1e-5f);
+        float2 moonH = MoonDir.xz / max(length(MoonDir.xz), 1e-5f);
+        float  cosRel = dot(sunH, moonH);
+        float  sinRel = sunH.x * moonH.y - sunH.y * moonH.x;
+        moonDir = float3(sinZm * cosRel, cosZm, sinZm * sinRel);
+    }
+
     float viewZenithSin = sqrt(saturate(1.0f - viewZenithCos * viewZenithCos));
     float lightViewSin  = sqrt(saturate(1.0f - lightViewCos * lightViewCos));
     float3 viewDir = float3(viewZenithSin * lightViewCos,
@@ -63,13 +76,27 @@ void main(uint3 id : SV_DispatchThreadID) {
             float3 psiMs        = SampleMultiScatterLUT(MultiScatterLUT, height, sunZen);
             float3 multiScatter = (rS + mS) * psiMs;
 
-            float3 inScatter = earthShadow * sunTrans * phaseScatter + multiScatter;
+            float3 inScatter = kSunIlluminance *
+                               (earthShadow * sunTrans * phaseScatter + multiScatter);
+
+            if (kMoonSkyIll > 0.0f) {
+                // Fase UNIFORME de proposito: o LUT e dobrado no azimute do sol, um lobo
+                // direcional da lua apareceria espelhado (brilho fantasma). O lobo Mie da lua
+                // vive na corona per-pixel do sky pass, posicionada corretamente.
+                float  moonZen    = dot(up, moonDir);
+                float3 moonTrans  = SampleTransmittanceToTop(TransmittanceLUT, height, moonZen);
+                float  moonShadow = (RaySphereNearest(p, moonDir, kBottomR) > 0.0f) ? 0.0f : 1.0f;
+                float3 psiMsMoon  = SampleMultiScatterLUT(MultiScatterLUT, height, moonZen);
+                float3 inScatterM = moonShadow * moonTrans * (rS + mS) * UniformPhase()
+                                  + (rS + mS) * psiMsMoon;
+                inScatter += kMoonSkyIll * inScatterM;
+            }
+
             float3 sInt = (inScatter - inScatter * sampleT) / safeExt;
             L += transmittance * sInt;
 
             transmittance *= sampleT;
         }
-        L *= kSunIlluminance;
     }
 
     OutSkyView[id.xy] = float4(L, 1.0f);

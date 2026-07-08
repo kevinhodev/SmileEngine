@@ -66,7 +66,9 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
     albedo = max((float3)0.0f, 0.13f + (albedo - 0.13f) * 1.5f);
 
     float  ndl        = dot(normal, sunDir);
-    float  lit        = smoothstep(-0.05f, 0.18f, ndl); 
+    // Terminator estreito: a lua real tem transicao dia/noite dura (sem atmosfera); a banda
+    // antiga (-0.05..0.18) borrava as fases. Disco iluminado ~uniforme = Lommel-Seeliger, ok.
+    float  lit        = smoothstep(-0.015f, 0.04f, ndl);
     float  earthshine = 0.03f;
     float  edge       = smoothstep(1.0f, 0.92f, rr);
     coverage = edge;
@@ -103,17 +105,31 @@ float4 main(PSInput input) : SV_TARGET {
 
     L += sunTrans * (kSunDiskInt * core + kSunGlareInt * glare);
 
-    float night = MoonParams.z;
+    float night        = MoonParams.z;
+    float aboveHorizon = smoothstep(-0.02f, 0.06f, viewDir.y);
+    float moonCover    = 0.0f;
+
+    // Lua SEM gate de noite: de dia o ceu claro a lava naturalmente (aditivo sobre o LUT),
+    // como na vida real e na Cry. So estrelas e corona sao coisas de noite.
+    if (MoonParams.x > 0.0f) {
+        float3 viewTrans = SampleTransmittanceToTop(TransmittanceLUT, kViewHeight, viewZenithCos);
+        float3 moon = MoonDisk(viewDir, MoonDir.xyz, MoonDir.w, sunDir, MoonParams.x, moonCover);
+
+        // Corona (inner + outer, estilo Cry): halo do luar em volta do disco. Tambem carrega o
+        // lobo direcional do ceu de luar — o sky-view LUT usa fase uniforme p/ a lua de
+        // proposito (a dobra azimutal espelharia o lobo).
+        float  cosToMoon = saturate(dot(viewDir, normalize(MoonDir.xyz)));
+        float  corona    = (pow(cosToMoon, 4000.0f) * 1.2f + pow(cosToMoon, 200.0f) * 0.10f)
+                         * kMoonCorona * night;
+
+        L += (moon + (float3)corona) * viewTrans * aboveHorizon;
+    }
+
     if (night > 0.001f) {
         float3 viewTrans = SampleTransmittanceToTop(TransmittanceLUT, kViewHeight, viewZenithCos);
-        float  aboveHorizon = smoothstep(-0.02f, 0.06f, viewDir.y);
-
-        float  moonCover;
-        float3 moon  = MoonDisk(viewDir, MoonDir.xyz, MoonDir.w, sunDir, MoonParams.x, moonCover);
         // Mascara pela cobertura do disco: sem ela as estrelas vazam pela parte escura da lua.
         float3 stars = StarField(viewDir, MoonParams.w) * MoonParams.y * (1.0f - moonCover);
-
-        L += (stars + moon) * viewTrans * (night * aboveHorizon);
+        L += stars * viewTrans * (night * aboveHorizon);
     }
 
     return float4(L, 1.0f);

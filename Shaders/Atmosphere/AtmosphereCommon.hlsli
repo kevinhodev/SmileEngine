@@ -25,6 +25,7 @@ cbuffer AtmosphereCB : register(b0) {
     float4 MoonDir;
     float4 MoonParams;
     float4 StarAxis;
+    float4 NightSky;
 };
 
 #define kKmPerWorldUnit (CameraWorldPos.w)
@@ -45,6 +46,8 @@ cbuffer AtmosphereCB : register(b0) {
 #define kSunDiskInt     (SunDisk.y)
 #define kSunIlluminance (SunDisk.z)
 #define kSunGlareInt    (SunDisk.w)
+#define kMoonSkyIll     (NightSky.x)
+#define kMoonCorona     (NightSky.y)
 
 SamplerState LinearClampSampler : register(s0);
 SamplerState LinearWrapSampler  : register(s1);

@@ -774,6 +774,12 @@ namespace Smile {
         Atmosphere.SetNightParams(MoonN, CosMoonRadius, MoonDiskBright,
                                   TimeOfDay.StarIntensity, NightFactor, ElapsedTime);
 
+        // Lua como 2a luz atmosferica no sky-view/aerial LUT (ceu azulado de luar). Escala em
+        // fracao da iluminancia do sol: 0.05 * MoonIntensity(0.25 default) * fase ~ 1.25% do ceu
+        // diurno com lua cheia — estilizado (real seria ~1/400000, invisivel sem auto-exposure).
+        const f32 MoonSkyScale = MoonOn ? (0.05f * TimeOfDay.MoonIntensity * MoonIllum) : 0.0f;
+        Atmosphere.SetMoonSkyLight(MoonSkyScale, MoonOn ? MoonIllum : 0.0f);
+
         // Estrelas: polo celeste pela latitude/north-offset do TOD; rotacao diurna de 15 graus/h
         // dirigida pelo relogio (pausa e acelera junto com sol/lua). TOD off mantem o giro lento
         // em tempo real antigo.
