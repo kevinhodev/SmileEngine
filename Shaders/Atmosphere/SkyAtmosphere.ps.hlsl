@@ -69,10 +69,11 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
     // Terminator estreito: a lua real tem transicao dia/noite dura (sem atmosfera); a banda
     // antiga (-0.05..0.18) borrava as fases. Disco iluminado ~uniforme = Lommel-Seeliger, ok.
     float  lit        = smoothstep(-0.015f, 0.04f, ndl);
-    float  earthshine = 0.03f;
-    float  edge       = smoothstep(1.0f, 0.92f, rr);
+    float  edge = smoothstep(1.0f, 0.92f, rr);
     coverage = edge;
-    return (lit + earthshine) * edge * brightness * albedo;
+    // Sem earthshine: a olho nu a parte escura e invisivel contra o ceu; ela continua tapando
+    // as estrelas atras (coverage cobre o disco inteiro), entao vira silhueta como na vida real.
+    return lit * edge * brightness * albedo;
 }
 
 float4 main(PSInput input) : SV_TARGET {
