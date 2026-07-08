@@ -1,7 +1,10 @@
-// ReSTIR GI — Pass B: reuso ESPACIAL + resolve (BIASED). Le o reservoir do Pass A (pos-temporal),
-// funde k vizinhos com o Jacobiano de reconexao (Ouyang 2021), rejeicao por normal/posicao, e
-// resolve a irradiancia -> GITexture. NAO realimenta o reservoir temporal (evita acumulo de bias).
-// Sem MIS/correcao de bias (vem no M6). Visibility ray opcional (x1->x2).
+// ReSTIR GI — Pass B: reuso ESPACIAL + resolve. Le o reservoir do Pass A (pos-temporal), funde k
+// vizinhos com o Jacobiano de reconexao (Ouyang 2021), rejeicao por normal/posicao, e resolve a
+// irradiancia -> GITexture. NAO realimenta o reservoir temporal (evita acumulo de bias).
+// COM correcao de bias (M6, Ouyang Alg.4): o denominador do W usa Z = soma dos M so dos
+// participantes cujo pHat do sample vencedor e > 0 no dominio DELES — vizinho que nao poderia
+// ter gerado o sample nao vota no peso (antes: M total cego = escurecia quina/borda).
+// Visibility ray opcional (x1->x2).
 
 // Debug: pinta de VERMELHO (10,0,0) os pixels cuja conexao selecionada foi morta pelo visibility
 // ray, em vez de zerar W. Ligar = 1 + rebuild do target Shaders + reabrir o editor; testar com
@@ -64,6 +67,14 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     uint rng = RngSeed(px, (uint)TraceParams.x ^ 0x9E3779B9u);
 
+    // Participantes do WRS (self + ate K vizinhos aceitos), guardados p/ o Z da correcao de
+    // bias: precisamos re-testar o sample VENCEDOR no dominio de cada um depois da selecao.
+    const int kMaxCand = 9; // 1 self + K (default 4; folga p/ slider futuro)
+    float3 candX1[kMaxCand];
+    float3 candN1[kMaxCand];
+    float  candM [kMaxCand];
+    int    candCount = 0;
+
     // Reservoir espacial: comeca com a propria amostra do pixel.
     Reservoir rs; ResInit(rs); rs.x1 = x1;
     {
@@ -72,12 +83,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         self.M = a.w; self.W = b.w; self.wSum = 0.0f;
         float pHatSelf = TargetPHat(x1, n1, self.x2, self.Lo);
         ResMerge(rs, self, pHatSelf, 1.0f, rng);
+        candX1[0] = x1; candN1[0] = n1; candM[0] = self.M; candCount = 1;
     }
 
     float camDist   = length(CameraPos.xyz - x1);
     float posReject = ReuseParams.y * max(camDist, 1.0f);
     float radius    = SpatialParams.x;
-    int   K         = (int)SpatialParams.y;
+    int   K         = min((int)SpatialParams.y, kMaxCand - 1);
     float normalRej = SpatialParams.w;
 
     for (int i = 0; i < K; ++i) {
@@ -112,9 +124,23 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         if (J < 0.1f || J > 10.0f) continue;
         float pHat = TargetPHat(x1, n1, nb.x2, nb.Lo);
         ResMerge(rs, nb, pHat, J, rng);
+        candX1[candCount] = nb.x1; candN1[candCount] = qn1; candM[candCount] = nb.M;
+        ++candCount;
     }
 
-    ResFinalizeW(rs, x1, n1);
+    // Correcao de bias (M6, Ouyang Alg.4): em vez de W = wSum/(M_total * pHat), o denominador
+    // usa Z = soma dos M so dos participantes p/ os quais o sample VENCEDOR tem pHat > 0 no
+    // dominio deles (acima do horizonte do vizinho). Sem isto, vizinho que nunca poderia gerar
+    // o sample ainda "votava" no denominador -> W subestimado -> escurecimento em quina/borda.
+    // (No temporal do Pass A a correcao e no-op: a reprojecao ja garante mesma superficie.)
+    {
+        float pHatSel = TargetPHat(x1, n1, rs.x2, rs.Lo);
+        float Z = 0.0f;
+        for (int c = 0; c < candCount; ++c) {
+            if (TargetPHat(candX1[c], candN1[c], rs.x2, rs.Lo) > 0.0f) Z += candM[c];
+        }
+        rs.W = (pHatSel > 0.0f && Z > 0.0f) ? (rs.wSum / (Z * pHatSel)) : 0.0f;
+    }
 
     // Shading visibility (opcional): testa a conexao x1->x2 da amostra SELECIONADA. Se ocluida, o
     // indireto deste pixel cai -> o NRD borra esse 0/1 estocastico num gradiente = sombra de contato
