@@ -3,6 +3,12 @@
 // resolve a irradiancia -> GITexture. NAO realimenta o reservoir temporal (evita acumulo de bias).
 // Sem MIS/correcao de bias (vem no M6). Visibility ray opcional (x1->x2).
 
+// Debug: pinta de VERMELHO (10,0,0) os pixels cuja conexao selecionada foi morta pelo visibility
+// ray, em vez de zerar W. Ligar = 1 + rebuild do target Shaders + reabrir o editor; testar com
+// "ReSTIR visibility" ON e NRD REBLUR OFF (o denoiser borraria os pontos). Esperado: pontos
+// esparsos re-sorteados por frame em volta de oclusores finos (postes/cadeiras/quinas).
+#define RESTIR_DEBUG_VIS_KILLS 0
+
 #include "DDGICommon.hlsli"
 #include "../Reflections/GGXSample.hlsli"
 
@@ -141,7 +147,14 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                      RAY_FLAG_CULL_NON_OPAQUE> vq;
             vq.TraceRayInline(Scene, VisFlags, 0xFF, vray);
             vq.Proceed();
-            if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) rs.W = 0.0f;
+            if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+#if RESTIR_DEBUG_VIS_KILLS
+                GIOut[px] = float4(10.0f, 0.0f, 0.0f, hitDist); // kill -> vermelho puro
+                return;
+#else
+                rs.W = 0.0f;
+#endif
+            }
         }
     }
 
