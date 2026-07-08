@@ -231,7 +231,9 @@ namespace Smile {
                                  1.0f / static_cast<f32>(kResolution), _Enabled ? 1.0f : 0.0f };
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
                                  DebugCascades ? 1.0f : 0.0f };
-        CPUConstants.Params3 = { _NoiseFrame, 0.0f, 0.0f, 0.0f };
+        const f32 PcssTan = SunAngularSizeDeg > 0.0f
+            ? std::tan(0.5f * SunAngularSizeDeg * 3.14159265f / 180.0f) : 0.0f;
+        CPUConstants.Params3 = { _NoiseFrame, PcssTan, MaxPenumbraTexels, 0.0f };
         CPUConstants.BiasScale = { CascadeBiasScale[0], CascadeBiasScale[1],
                                    CascadeBiasScale[2], CascadeBiasScale[3] };
 
@@ -273,7 +275,8 @@ namespace Smile {
             BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
             BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
 
-            f32* sf = &CPUConstants.CascadeTexelWorld.X; 
+            f32* sf = &CPUConstants.CascadeTexelWorld.X;
+            f32* dr = &CPUConstants.DepthRangeWorld.X;
             for (int c = 0; c < numC; ++c) {
                 const f32 dn = Splits[c], df = Splits[c + 1];
                 const f32 FarX = tanH*df, FarY = tanV*df, NearX = tanH*dn, NearY = tanV*dn;
@@ -337,6 +340,7 @@ namespace Smile {
                 CPUConstants.WorldToShadow[c] = LightViewProj * BiasUV;
                 CascadeViewProj[c]            = LightViewProj;
                 sf[c] = texel;
+                dr[c] = 2.0f * radius + CasterPullback; // range do ortho em mundo (PCSS)
 
                 UpdateMask |= (1u << c);
                 CacheValid[c]   = Cacheable;

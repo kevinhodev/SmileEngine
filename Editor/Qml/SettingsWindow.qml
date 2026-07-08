@@ -896,7 +896,7 @@ Rectangle {
             Card {
                 x: 24; y: 84
                 width: shadowsPage.colW
-                height: 258
+                height: 312
                 title: "Sombras do sol (CSM)"
 
                 Text {
@@ -939,16 +939,27 @@ Rectangle {
                     valueText: (viewportModel.shadowDepthBias * 10000).toFixed(1).replace(".", ",") + "e-4"
                     onCommitted: (v) => viewportModel.SetShadowDepthBias(v)
                 }
+                ShadowSlider {
+                    x: 20; y: 212
+                    width: parent.width - 40
+                    label: "Tamanho angular do sol (PCSS)"
+                    from: 0; to: 2.0; step: 0.01
+                    value: viewportModel.shadowSunAngle
+                    valueText: viewportModel.shadowSunAngle < 0.005
+                               ? "off"
+                               : viewportModel.shadowSunAngle.toFixed(2).replace(".", ",") + "°"
+                    onCommitted: (v) => viewportModel.SetShadowSunAngle(v)
+                }
 
                 Text {
-                    x: 20; y: 218
+                    x: 20; y: 272
                     text: "Debug de cascatas"
                     color: root.textNormal
                     font.family: "Segoe UI"
                     font.pixelSize: 12
                 }
                 Text {
-                    x: 158; y: 218
+                    x: 158; y: 272
                     text: "tinge a cena pela cascata usada"
                     color: root.textMuted
                     font.family: "Segoe UI"
@@ -957,7 +968,7 @@ Rectangle {
                 Toggle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
-                    y: 212
+                    y: 266
                     checked: viewportModel.shadowDebugCascades
                     onToggled: viewportModel.SetShadowDebugCascades(!checked)
                 }

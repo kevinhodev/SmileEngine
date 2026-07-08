@@ -16,8 +16,9 @@ namespace Smile {
         Vec4  CascadeTexelWorld; // x..w = tamanho de 1 texel em mundo, por cascata (normal-offset)
         Vec4  Params;            // x = numCascades, y = depthBias (NDC z), z = 1/res, w = enabled
         Vec4  Params2;           // x = normal-offset (em texels), yzw reservado
-        Vec4  Params3;           // x = frame do ruido do PCF (0 = estatico, sem TAA/FSR2)
+        Vec4  Params3;           // x = frame do ruido do PCF, y = tan(meio-angulo do sol; 0 = PCSS off), z = penumbra max (texels)
         Vec4  BiasScale;         // multiplicador do depth bias por cascata (default 1,1,1,1)
+        Vec4  DepthRangeWorld;   // extensao em mundo do range de depth do ortho, por cascata (PCSS)
     };
 
     struct alignas(256) ShadowCascadeConstants {
@@ -77,6 +78,12 @@ namespace Smile {
         void SetCascadeBiasScale(u32 C, f32 S) { if (C < kNumCascades) CascadeBiasScale[C] = S; }
         f32  GetCascadeBiasScale(u32 C) const  { return C < kNumCascades ? CascadeBiasScale[C] : 1.0f; }
 
+        // PCSS (contact hardening, cascata 0). Tamanho angular do sol em graus; 0 = off.
+        void SetSunAngularSize(f32 Deg)   { SunAngularSizeDeg = Deg; }
+        f32  GetSunAngularSize() const    { return SunAngularSizeDeg; }
+        void SetMaxPenumbraTexels(f32 T)  { MaxPenumbraTexels = T; }
+        f32  GetMaxPenumbraTexels() const { return MaxPenumbraTexels; }
+
     private:
         void InvalidateCache() { for (u32 c = 0; c < kNumCascades; ++c) CacheValid[c] = false; }
 
@@ -131,5 +138,7 @@ namespace Smile {
         f32  CachedRadius[kNumCascades] = {};   // raio (com folga) da esfera congelada
         f32  MinCasterTexels = 2.0f;            // caster menor que N texels da cascata nao desenha (0 = off)
         f32  CascadeBiasScale[kNumCascades] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        f32  SunAngularSizeDeg = 0.53f;         // diametro angular do sol (PCSS); 0 = penumbra fixa
+        f32  MaxPenumbraTexels = 8.0f;          // teto do kernel PCSS = raio do blocker search
     };
 }

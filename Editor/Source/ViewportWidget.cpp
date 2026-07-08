@@ -346,6 +346,16 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    double ViewportWidget::GetShadowSunAngle() const {
+        return Renderer ? Renderer->GetSunShadows().GetSunAngularSize() : 0.53;
+    }
+
+    void ViewportWidget::SetShadowSunAngle(double _Degrees) {
+        if (!Renderer) return;
+        Renderer->GetSunShadows().SetSunAngularSize(static_cast<Smile::f32>(_Degrees));
+        emit ViewSettingsChanged();
+    }
+
     void ViewportWidget::SetDepthPrepassEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetDepthPrepass(_Enabled);

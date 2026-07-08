@@ -43,6 +43,7 @@ namespace SmileEditor {
         Q_PROPERTY(double shadowDepthBias READ GetShadowDepthBias NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ViewSettingsChanged)
         Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double shadowSunAngle READ GetShadowSunAngle NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool mergeByMaterialEnabled READ IsMergeByMaterialEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
@@ -92,6 +93,7 @@ namespace SmileEditor {
         double            GetShadowDepthBias() const;
         double            GetShadowMinCasterTexels() const;
         QVariantList      GetShadowCascadeBias() const;
+        double            GetShadowSunAngle() const;
         bool              IsDepthPrepassEnabled() const;
         bool              IsMergeByMaterialEnabled() const;
         double            GetFrameTimeMs() const;
@@ -124,6 +126,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SetShadowDepthBias(double bias);
         Q_INVOKABLE void SetShadowMinCasterTexels(double texels);
         Q_INVOKABLE void SetShadowCascadeBiasScale(int cascade, double scale);
+        Q_INVOKABLE void SetShadowSunAngle(double degrees);
         Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
         Q_INVOKABLE void SetMergeByMaterialEnabled(bool enabled);
         Q_INVOKABLE void ResetRenderSettings();

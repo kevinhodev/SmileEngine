@@ -8,8 +8,9 @@ cbuffer CSMCB : register(b3) {
     float4 CSMTexelWorld;
     float4 CSMParams;
     float4 CSMParams2;
-    float4 CSMParams3;    // x = frame do ruido (0 quando TAA/FSR2 off), yzw reservado
+    float4 CSMParams3;    // x = frame do ruido (0 quando TAA/FSR2 off), y = tan(meio-angulo do sol; 0 = PCSS off), z = penumbra max em texels, w reservado
     float4 CSMBiasScale;  // multiplicador do depth bias por cascata
+    float4 CSMDepthRangeWorld; // extensao em mundo do range de depth do ortho, por cascata (PCSS)
 };
 
 Texture2DArray         SunShadowMap : register(t11);
@@ -31,21 +32,45 @@ float CSM_IGN(float2 p) {
 }
 
 float CSM_PCF(float3 uvz, int cascade, float2 screenPos) {
-    float refZ     = uvz.z - CSMParams.y * CSMBiasScale[cascade];
-    // Penumbra ~constante em mundo: o raio em texels da cascata i encolhe pela razao
-    // texel0/texelI (piso 1 texel), senao a penumbra salta ~4x a cada troca de cascata
-    // e a migracao com a camera fica visivel ("sombra respirando").
-    float texels   = max(CSMParams2.y * (CSMTexelWorld[0] / CSMTexelWorld[cascade]), 1.0f);
-    float radiusUV = texels * CSMParams.z;
+    float refZ = uvz.z - CSMParams.y * CSMBiasScale[cascade];
     float a = CSM_IGN(screenPos + 5.588238f * CSMParams3.x) * 6.2831853f;
     float s, c; sincos(a, s, c);
     float2x2 rot = float2x2(c, -s, s, c);
-    float sum = 0.0f;
+
+    // Penumbra ~constante em mundo: o raio em texels da cascata i encolhe pela razao
+    // texel0/texelI (piso 1 texel), senao a penumbra salta ~4x a cada troca de cascata
+    // e a migracao com a camera fica visivel ("sombra respirando").
+    float texels = max(CSMParams2.y * (CSMTexelWorld[0] / CSMTexelWorld[cascade]), 1.0f);
+
+    // PCSS (contact hardening) nas cascatas 0-1: blocker search estima a distancia media
+    // dos oclusores e a penumbra cresce com ela (penumbra = dist * tan(meio-angulo do
+    // sol)); no contato o kernel colapsa pra 1 texel = sombra firme. Cascatas 2-3 seguem
+    // no raio fixo (penumbra variavel nao e legivel a centenas de metros). O teto do
+    // kernel e em texels da PROPRIA cascata (padrao UE) — na fronteira 0->1 sombras
+    // muito difusas podem abrir um degrau sutil de suavidade, mascarado pelo blend band.
+    if (cascade <= 1 && CSMParams3.y > 0.0f) {
+        const int R = (int)(1.0f / CSMParams.z);
+        float searchUV = CSMParams3.z * CSMParams.z; // raio de busca = penumbra maxima
+        float sum = 0.0f, cnt = 0.0f;
+        [unroll] for (int k = 0; k < 16; ++k) {
+            float2 uv = uvz.xy + mul(rot, kPoisson16[k]) * searchUV;
+            int2   t  = clamp(int2(uv * (float)R), int2(0, 0), int2(R - 1, R - 1));
+            float  d  = SunShadowMap.Load(int4(t, cascade, 0)).r;
+            if (d < refZ) { sum += d; cnt += 1.0f; }
+        }
+        if (cnt < 0.5f) return 1.0f; // nenhum oclusor no raio de busca = totalmente lit
+        float avgBlocker = sum / cnt;
+        float distWorld  = (refZ - avgBlocker) * CSMDepthRangeWorld[cascade];
+        texels = clamp(distWorld * CSMParams3.y / CSMTexelWorld[cascade], 1.0f, CSMParams3.z);
+    }
+
+    float radiusUV = texels * CSMParams.z;
+    float vis = 0.0f;
     [unroll] for (int k = 0; k < 16; ++k) {
         float2 o = mul(rot, kPoisson16[k]) * radiusUV;
-        sum += SunShadowMap.SampleCmpLevelZero(ShadowCmp, float3(uvz.xy + o, (float)cascade), refZ);
+        vis += SunShadowMap.SampleCmpLevelZero(ShadowCmp, float3(uvz.xy + o, (float)cascade), refZ);
     }
-    return sum * (1.0f / 16.0f);
+    return vis * (1.0f / 16.0f);
 }
 
 static bool CSM_InBounds(float3 uvz) {
