@@ -121,7 +121,16 @@ float4 main(PSInput input) : SV_TARGET {
         // proposito (a dobra azimutal espelharia o lobo).
         // Aureole apertado (~0.75 grau, fracao do brilho do disco) + halo largo (~2.7 graus) na
         // ordem do brilho do ceu de luar — a versao forte (pow200*0.10) virava uma bola gigante.
-        float  cosToMoon = saturate(dot(viewDir, normalize(MoonDir.xyz)));
+        // Centro no LIMBO ILUMINADO: o halo real e luz do lado claro espalhada no caminho, entao
+        // abraca a banda clara; desloca com a fase (cheia = centrado, crescente fina = ~0.7 raio).
+        float3 moonDirN = normalize(MoonDir.xyz);
+        float3 litTan   = sunDir - moonDirN * dot(sunDir, moonDirN); // dir do limbo claro no ceu
+        float  litLen   = length(litTan);
+        float  sinRad   = sqrt(saturate(1.0f - MoonDir.w * MoonDir.w)); // raio angular do disco
+        float  shift    = sinRad * 0.7f * (1.0f - saturate(kMoonCorona));
+        float3 coronaDir = normalize(moonDirN +
+                                     (litLen > 1e-4f ? litTan / litLen : (float3)0.0f) * shift);
+        float  cosToMoon = saturate(dot(viewDir, coronaDir));
         float  corona    = (pow(cosToMoon, 8000.0f) * 0.35f + pow(cosToMoon, 600.0f) * 0.025f)
                          * kMoonCorona * night;
 
