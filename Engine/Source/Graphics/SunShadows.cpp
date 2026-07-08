@@ -144,7 +144,11 @@ namespace Smile {
         // sunlight pass through walls even though the RT/DDGI path can still hit those triangles.
         Raster.CullMode              = D3D12_CULL_MODE_NONE;
         Raster.FrontCounterClockwise = FALSE;
-        Raster.DepthClipEnable       = TRUE;
+        // Shadow pancaking: casters entre o sol e o near plane do ortho seriam clipados
+        // (vazando luz com sol baixo); com depth clip off o hardware clampa a profundidade
+        // deles pra 0, achatando-os no near plane — mesma solucao do Flax (PSO de shadow
+        // depth) e equivalente ao clamp de VS da Unreal (bClampToNearPlane).
+        Raster.DepthClipEnable       = FALSE;
         Raster.DepthBias             = 0;
         Raster.SlopeScaledDepthBias  = 1.0f;
         Raster.DepthBiasClamp        = 0.0f;
@@ -348,16 +352,17 @@ namespace Smile {
             const Vec4 c1{ VP.M[0][1], VP.M[1][1], VP.M[2][1], VP.M[3][1] };
             const Vec4 c2{ VP.M[0][2], VP.M[1][2], VP.M[2][2], VP.M[3][2] };
             const Vec4 c3{ VP.M[0][3], VP.M[1][3], VP.M[2][3], VP.M[3][3] };
-            const Vec4 Planes[6] = {
-                { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W }, 
-                { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W }, 
-                { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W }, 
-                { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W }, 
-                { c2.X, c2.Y, c2.Z, c2.W },                    
-                { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W }, 
+            // Sem o plano near: com pancaking (depth clip off) casters atras do near plane
+            // ainda projetam sombra (achatados nele), entao nao podem ser descartados aqui.
+            const Vec4 Planes[5] = {
+                { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W },
+                { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W },
+                { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W },
+                { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W },
+                { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W },
             };
             auto Outside = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
-                for (int i = 0; i < 6; ++i) {
+                for (int i = 0; i < 5; ++i) {
                     const Vec4& p = Planes[i];
                     const f32 px = (p.X >= 0.0f) ? Mx.X : Mn.X;
                     const f32 py = (p.Y >= 0.0f) ? Mx.Y : Mn.Y;

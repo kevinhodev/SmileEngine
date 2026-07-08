@@ -691,9 +691,12 @@ namespace Smile {
 
         const f32 NearZ = 0.1f;
         const f32 FarZ  = UseWater ? 20000.0f : 4000.0f;
+        // FOV unico do frame: projecao, CSM, AO e FSR2 precisam concordar (o fitting das
+        // cascatas assume exatamente o frustum da camera).
+        const f32 FovY  = 60.0f * ToRad;
         const Mat44 ProjUnjittered = kReverseZ
-            ? Mat44::PerspectiveFovReverseZLH(60.0f * ToRad, Aspect, NearZ, FarZ)
-            : Mat44::PerspectiveFovLH(60.0f * ToRad, Aspect, NearZ, FarZ);
+            ? Mat44::PerspectiveFovReverseZLH(FovY, Aspect, NearZ, FarZ)
+            : Mat44::PerspectiveFovLH(FovY, Aspect, NearZ, FarZ);
 
         Mat44 Projection = ProjUnjittered;
         const bool Fsr2Active = UseFsr2 && Fsr2.IsInitialized();
@@ -1064,7 +1067,6 @@ namespace Smile {
         LastVisibleCount = static_cast<u32>(VisibleScratch.size());
 
         {
-            const f32 FovY = 60.0f * ToRad; 
             SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CameraPosition, FovY, Aspect, KeyDir, NearZ);
             if (UseSunShadows) {
                 std::vector<FSunShadows::FShadowDrawItem> Casters;
@@ -1149,7 +1151,7 @@ namespace Smile {
                 DB.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 CommandList->ResourceBarrier(1, &DB);
 
-                const f32 TanHalf = std::tan(0.5f * 60.0f * ToRad);
+                const f32 TanHalf = std::tan(0.5f * FovY);
                 const f32 M11 = 1.0f / TanHalf;
                 const f32 M00 = M11 / Aspect;
                 const f32 M22 = Projection.M[2][2];
@@ -1549,7 +1551,7 @@ namespace Smile {
             CommandList->ResourceBarrier(3, In);
 
             Fsr2.Dispatch(CommandList, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get(),
-                          JitterPxX, JitterPxY, NearZ, FarZ, 60.0f * ToRad, LastDeltaTime, false);
+                          JitterPxX, JitterPxY, NearZ, FarZ, FovY, LastDeltaTime, false);
 
             D3D12_RESOURCE_BARRIER Out[3]{};
             for (auto& B : Out) {

@@ -60,15 +60,21 @@ float SampleCSM(float3 worldPos, float3 worldNormal, float2 screenPos) {
 
         float vis = CSM_PCF(uvz, i, screenPos);
 
-        if (band > 0.0f && i + 1 < numC) {
+        if (band > 0.0f) {
             float2 dd   = min(uvz.xy, 1.0f - uvz.xy);
-            float  edge = min(dd.x, dd.y); 
+            float  edge = min(dd.x, dd.y);
             if (edge < band) {
-                float3 p2   = worldPos + worldNormal * (CSMTexelWorld[i + 1] * CSMParams2.x);
-                float3 uvz2 = mul(float4(p2, 1.0f), WorldToShadow[i + 1]).xyz;
-                if (CSM_InBounds(uvz2)) {
-                    float vis2 = CSM_PCF(uvz2, i + 1, screenPos);
-                    vis = lerp(vis2, vis, saturate(edge / band)); 
+                if (i + 1 < numC) {
+                    float3 p2   = worldPos + worldNormal * (CSMTexelWorld[i + 1] * CSMParams2.x);
+                    float3 uvz2 = mul(float4(p2, 1.0f), WorldToShadow[i + 1]).xyz;
+                    if (CSM_InBounds(uvz2)) {
+                        float vis2 = CSM_PCF(uvz2, i + 1, screenPos);
+                        vis = lerp(vis2, vis, saturate(edge / band));
+                    }
+                } else {
+                    // Ultima cascata: fade pra iluminado na borda, em vez de corte seco
+                    // da sombra em ShadowMaxDistance.
+                    vis = lerp(1.0f, vis, saturate(edge / band));
                 }
             }
         }
