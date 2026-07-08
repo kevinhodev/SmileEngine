@@ -232,8 +232,14 @@ namespace Smile {
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
                                  DebugCascades ? 1.0f : 0.0f };
         CPUConstants.Params3 = { _NoiseFrame, 0.0f, 0.0f, 0.0f };
+        CPUConstants.BiasScale = { CascadeBiasScale[0], CascadeBiasScale[1],
+                                   CascadeBiasScale[2], CascadeBiasScale[3] };
 
-        if (_Enabled) {
+        UpdateMask = 0;
+        if (!_Enabled) {
+            InvalidateCache(); // cena/estado podem mudar enquanto off; re-fita tudo ao religar
+        } else {
+            ++UpdateCounter;
             auto Accum = [](f32 E, int Idx, int Count) -> f32 {
                 f32 Cur = 1.0f, Total = 0.0f, Ret = 0.0f;
                 for (int i = 0; i < Count; ++i) { if (i < Idx) Ret += Cur; Total += Cur; Cur *= E; }
@@ -286,10 +292,37 @@ namespace Smile {
                             const f32 d = x*x + y*y + z*z;
                             if (d > r2) r2 = d;
                         }
-                f32 radius = std::ceil(std::sqrt(r2));
-                if (radius < 1.0f) radius = 1.0f;
+                f32 idealRadius = std::ceil(std::sqrt(r2));
+                if (idealRadius < 1.0f) idealRadius = 1.0f;
+
+                // Cascatas distantes cacheadas ganham 10% de folga na esfera: tolera o
+                // drift da camera entre re-renderizacoes sem perder cobertura.
+                constexpr f32 kCacheSlack = 1.10f;
+                const bool Cacheable = CacheEnabled && c >= 2;
+                const f32  radius = Cacheable ? std::ceil(idealRadius * kCacheSlack) : idealRadius;
 
                 const Vec3 centerWorld = TransformPoint(InvView, Vec3{ 0.0f, 0.0f, czv });
+
+                if (Cacheable && CacheValid[c]) {
+                    // Round-robin defasado: c2 nos frames pares, c3 a cada 4 (fase 1) —
+                    // nunca as duas no mesmo frame (estilo update-rate do Flax).
+                    const u64 Period = (c == 2) ? 2u : 4u;
+                    const u64 Phase  = (c == 2) ? 0u : 1u;
+                    bool Refresh = (UpdateCounter % Period) == Phase;
+                    // Sol girou alem de ~0.05 graus (TOD rapido derruba o cache, correto).
+                    constexpr f32 kSunDirCos = 0.99999962f;
+                    if (!Refresh && CachedFwd[c].Dot(fwd) < kSunDirCos) Refresh = true;
+                    if (!Refresh) {
+                        // Esfera ideal escapou da congelada (teleporte/voo rapido).
+                        const Vec3 d{ centerWorld.X - CachedCenter[c].X,
+                                      centerWorld.Y - CachedCenter[c].Y,
+                                      centerWorld.Z - CachedCenter[c].Z };
+                        const f32 slack = CachedRadius[c] - idealRadius;
+                        if (slack < 0.0f || d.Dot(d) > slack * slack) Refresh = true;
+                    }
+                    if (!Refresh) continue; // congelada: WorldToShadow/texel do CB ficam como estao
+                }
+
                 const f32 texel = 2.0f * radius / static_cast<f32>(kResolution);
                 const f32 cx = std::floor(centerWorld.Dot(right) / texel) * texel;
                 const f32 cy = std::floor(centerWorld.Dot(up)    / texel) * texel;
@@ -302,8 +335,14 @@ namespace Smile {
                 const Mat44 LightViewProj = LightView * LightProj;
 
                 CPUConstants.WorldToShadow[c] = LightViewProj * BiasUV;
-                CascadeViewProj[c]            = LightViewProj; 
-                sf[c] = texel; 
+                CascadeViewProj[c]            = LightViewProj;
+                sf[c] = texel;
+
+                UpdateMask |= (1u << c);
+                CacheValid[c]   = Cacheable;
+                CachedFwd[c]    = fwd;
+                CachedCenter[c] = snapped;
+                CachedRadius[c] = radius;
 
                 ShadowCascadeConstants Cascade{ LightViewProj };
                 std::memcpy(MappedCascade +
@@ -343,6 +382,7 @@ namespace Smile {
         _CommandList->RSSetScissorRects(1, &SC);
 
         for (u32 c = 0; c < kNumCascades; ++c) {
+            if (!(UpdateMask & (1u << c))) continue; // cascata congelada: depth do update anterior segue valido
             auto DSV = DSVHeap.CpuHandle(c);
             _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
             _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -373,10 +413,22 @@ namespace Smile {
                 return false;
             };
 
+            // Caster menor que N texels da cascata nao contribui sombra legivel — pula
+            // (corta micro-objetos das cascatas distantes, estilo min caster size da Cry/UE).
+            const f32 MinExtent = MinCasterTexels * (&CPUConstants.CascadeTexelWorld.X)[c];
+
             ID3D12PipelineState* Cur = nullptr;
             for (size_t k = 0; k < _Count; ++k) {
                 const FShadowDrawItem& It = _Items[k];
                 if (!It.Mesh) continue;
+                if (MinExtent > 0.0f) {
+                    const f32 ExX = It.AABBMax.X - It.AABBMin.X;
+                    const f32 ExY = It.AABBMax.Y - It.AABBMin.Y;
+                    const f32 ExZ = It.AABBMax.Z - It.AABBMin.Z;
+                    f32 MaxExt = ExX > ExY ? ExX : ExY;
+                    if (ExZ > MaxExt) MaxExt = ExZ;
+                    if (MaxExt < MinExtent) continue;
+                }
                 if (Outside(It.AABBMin, It.AABBMax)) continue;
                 const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
                 ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();

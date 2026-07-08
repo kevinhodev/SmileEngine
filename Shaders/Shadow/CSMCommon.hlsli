@@ -9,6 +9,7 @@ cbuffer CSMCB : register(b3) {
     float4 CSMParams;
     float4 CSMParams2;
     float4 CSMParams3;    // x = frame do ruido (0 quando TAA/FSR2 off), yzw reservado
+    float4 CSMBiasScale;  // multiplicador do depth bias por cascata
 };
 
 Texture2DArray         SunShadowMap : register(t11);
@@ -30,7 +31,7 @@ float CSM_IGN(float2 p) {
 }
 
 float CSM_PCF(float3 uvz, int cascade, float2 screenPos) {
-    float refZ     = uvz.z - CSMParams.y;
+    float refZ     = uvz.z - CSMParams.y * CSMBiasScale[cascade];
     // Penumbra ~constante em mundo: o raio em texels da cascata i encolhe pela razao
     // texel0/texelI (piso 1 texel), senao a penumbra salta ~4x a cada troca de cascata
     // e a migracao com a camera fica visivel ("sombra respirando").
@@ -100,12 +101,13 @@ int CSM_SelectCascade(float3 worldPos, float3 worldNormal) {
     return -1;
 }
 
+// Paleta daltonico-safe (vermelho-verde): azul / ciano / laranja / magenta.
 float3 CSM_CascadeColor(int i) {
-    if (i == 0) return float3(1.0f, 0.4f, 0.4f); 
-    if (i == 1) return float3(0.4f, 1.0f, 0.4f); 
-    if (i == 2) return float3(0.4f, 0.6f, 1.0f); 
-    if (i == 3) return float3(1.0f, 1.0f, 0.4f); 
-    return float3(1.0f, 1.0f, 1.0f);             
+    if (i == 0) return float3(0.30f, 0.50f, 1.00f);
+    if (i == 1) return float3(0.30f, 1.00f, 1.00f);
+    if (i == 2) return float3(1.00f, 0.60f, 0.20f);
+    if (i == 3) return float3(1.00f, 0.30f, 1.00f);
+    return float3(1.0f, 1.0f, 1.0f);
 }
 
 #endif 

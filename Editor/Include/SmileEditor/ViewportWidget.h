@@ -5,6 +5,7 @@
 #include <QPoint>
 #include <QElapsedTimer>
 #include <QString>
+#include <QVariantList>
 #include <memory>
 #include "Smile/Math/Math.h"
 #include "SmileEditor/GizmoController.h"
@@ -35,6 +36,13 @@ namespace SmileEditor {
         Q_PROPERTY(double renderScale READ GetRenderScale NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool sunShadowsEnabled READ AreSunShadowsEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool shadowCacheEnabled READ IsShadowCacheEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool shadowDebugCascades READ IsShadowDebugCascades NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double shadowMaxDistance READ GetShadowMaxDistance NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double shadowDepthBias READ GetShadowDepthBias NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool mergeByMaterialEnabled READ IsMergeByMaterialEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
@@ -77,6 +85,13 @@ namespace SmileEditor {
         double            GetRenderScale() const;
         bool              IsTAAEnabled() const;
         bool              IsFrustumCullingEnabled() const;
+        bool              AreSunShadowsEnabled() const;
+        bool              IsShadowCacheEnabled() const;
+        bool              IsShadowDebugCascades() const;
+        double            GetShadowMaxDistance() const;
+        double            GetShadowDepthBias() const;
+        double            GetShadowMinCasterTexels() const;
+        QVariantList      GetShadowCascadeBias() const;
         bool              IsDepthPrepassEnabled() const;
         bool              IsMergeByMaterialEnabled() const;
         double            GetFrameTimeMs() const;
@@ -102,6 +117,13 @@ namespace SmileEditor {
         Q_INVOKABLE void SetRenderScale(double scale);
         Q_INVOKABLE void SetTAAEnabled(bool enabled);
         Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);
+        Q_INVOKABLE void SetSunShadowsEnabled(bool enabled);
+        Q_INVOKABLE void SetShadowCacheEnabled(bool enabled);
+        Q_INVOKABLE void SetShadowDebugCascades(bool enabled);
+        Q_INVOKABLE void SetShadowMaxDistance(double distance);
+        Q_INVOKABLE void SetShadowDepthBias(double bias);
+        Q_INVOKABLE void SetShadowMinCasterTexels(double texels);
+        Q_INVOKABLE void SetShadowCascadeBiasScale(int cascade, double scale);
         Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
         Q_INVOKABLE void SetMergeByMaterialEnabled(bool enabled);
         Q_INVOKABLE void ResetRenderSettings();

@@ -199,6 +199,8 @@ namespace Smile {
         FFogPass& GetFog()                     { return Fog; }
 
         FSunShadows& GetSunShadows()           { return SunShadows; }
+        void SetUseSunShadows(bool Use)        { UseSunShadows = Use; }
+        bool GetUseSunShadows() const          { return UseSunShadows; }
 
         void SetUseWater(bool Use);
         bool GetUseWater() const             { return UseWater; }

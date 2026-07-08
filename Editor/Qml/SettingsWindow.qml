@@ -40,6 +40,8 @@ Rectangle {
     function pageSubtitle() {
         if (selectedPage === 0)
             return "Upscaling, anti-aliasing e resolução interna do viewport"
+        if (selectedPage === 6)
+            return "Sombras do sol (CSM): cascatas, cache, bias e debug"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
     }
 
@@ -96,6 +98,80 @@ Rectangle {
         TapHandler {
             enabled: toggle.interactive
             onTapped: toggle.toggled()
+        }
+    }
+
+    component ShadowSlider: Item {
+        id: srow
+        property string label
+        property real from: 0
+        property real to: 1
+        property real step: 0.01
+        property real value: 0
+        property string valueText: ""
+        signal committed(real v)
+        height: 46
+
+        Text {
+            x: 0; y: 0
+            text: srow.label
+            color: root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 12
+        }
+        Rectangle {
+            anchors.right: parent.right
+            y: -2
+            width: 62; height: 20; radius: 4
+            color: "#23241d"
+            border.color: root.borderColor
+            Text {
+                anchors.centerIn: parent
+                text: srow.valueText
+                color: root.textPrimary
+                font.family: "Segoe UI"
+                font.pixelSize: 10
+            }
+        }
+        Slider {
+            id: sctl
+            x: 0; y: 20
+            width: parent.width - 70
+            height: 18
+            from: srow.from
+            to: srow.to
+            stepSize: srow.step
+            onMoved: srow.committed(value)
+            background: Rectangle {
+                x: sctl.leftPadding
+                y: sctl.topPadding + sctl.availableHeight / 2 - height / 2
+                width: sctl.availableWidth
+                height: 4
+                radius: 2
+                color: "#23241d"
+                Rectangle {
+                    width: sctl.visualPosition * parent.width
+                    height: parent.height
+                    radius: 2
+                    color: root.blue
+                }
+            }
+            handle: Rectangle {
+                x: sctl.leftPadding + sctl.visualPosition * (sctl.availableWidth - width)
+                y: sctl.topPadding + sctl.availableHeight / 2 - height / 2
+                width: 14; height: 14; radius: 7
+                color: "#f2efe6"
+                border.color: root.blue
+                border.width: 1.5
+            }
+        }
+        // O binding declarativo quebraria no primeiro drag; religa quando solta (padrao do painel TOD).
+        Binding {
+            target: sctl
+            property: "value"
+            value: srow.value
+            when: !sctl.pressed
+            restoreMode: Binding.RestoreBindingOrValue
         }
     }
 
@@ -810,7 +886,152 @@ Rectangle {
         }
 
         Item {
-            visible: root.selectedPage !== 0
+            id: shadowsPage
+            visible: root.selectedPage === 6
+            anchors.fill: parent
+
+            readonly property int gap: 16
+            readonly property int colW: (width - 48 - gap) / 2
+
+            Card {
+                x: 24; y: 84
+                width: shadowsPage.colW
+                height: 258
+                title: "Sombras do sol (CSM)"
+
+                Text {
+                    x: 20; y: 55
+                    text: "Sombras dinâmicas"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "4 cascatas · 2048² · PCF Poisson 16 taps"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.sunShadowsEnabled
+                    onToggled: viewportModel.SetSunShadowsEnabled(!checked)
+                }
+
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Distância máxima"
+                    from: 100; to: 3000; step: 50
+                    value: viewportModel.shadowMaxDistance
+                    valueText: Math.round(viewportModel.shadowMaxDistance) + " m"
+                    onCommitted: (v) => viewportModel.SetShadowMaxDistance(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 160
+                    width: parent.width - 40
+                    label: "Bias de profundidade"
+                    from: 0; to: 0.003; step: 0.0001
+                    value: viewportModel.shadowDepthBias
+                    valueText: (viewportModel.shadowDepthBias * 10000).toFixed(1).replace(".", ",") + "e-4"
+                    onCommitted: (v) => viewportModel.SetShadowDepthBias(v)
+                }
+
+                Text {
+                    x: 20; y: 218
+                    text: "Debug de cascatas"
+                    color: root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Text {
+                    x: 158; y: 218
+                    text: "tinge a cena pela cascata usada"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 212
+                    checked: viewportModel.shadowDebugCascades
+                    onToggled: viewportModel.SetShadowDebugCascades(!checked)
+                }
+            }
+
+            Card {
+                x: 24 + shadowsPage.colW + shadowsPage.gap
+                y: 84
+                width: shadowsPage.colW
+                height: 420
+                title: "Cascatas — custo e bias"
+
+                Text {
+                    x: 20; y: 55
+                    text: "Cache round-robin"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "cascatas 2/3 re-renderizam a cada 2/4 frames"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.shadowCacheEnabled
+                    onToggled: viewportModel.SetShadowCacheEnabled(!checked)
+                }
+
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Caster mínimo (texels da cascata)"
+                    from: 0; to: 8; step: 0.5
+                    value: viewportModel.shadowMinCasterTexels
+                    valueText: viewportModel.shadowMinCasterTexels.toFixed(1).replace(".", ",") + " tx"
+                    onCommitted: (v) => viewportModel.SetShadowMinCasterTexels(v)
+                }
+
+                Text {
+                    x: 20; y: 164
+                    text: "Bias por cascata (multiplicador)"
+                    color: root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Column {
+                    x: 20; y: 188
+                    width: parent.width - 40
+                    spacing: 8
+                    Repeater {
+                        model: ["Cascata 0 — perto", "Cascata 1", "Cascata 2", "Cascata 3 — longe"]
+                        delegate: ShadowSlider {
+                            required property string modelData
+                            required property int index
+                            width: parent.width
+                            label: modelData
+                            from: 0.25; to: 4.0; step: 0.05
+                            value: Number(viewportModel.shadowCascadeBias[index])
+                            valueText: "×" + Number(viewportModel.shadowCascadeBias[index]).toFixed(2).replace(".", ",")
+                            onCommitted: (v) => viewportModel.SetShadowCascadeBiasScale(index, v)
+                        }
+                    }
+                }
+            }
+        }
+
+        Item {
+            visible: root.selectedPage !== 0 && root.selectedPage !== 6
             anchors.fill: parent
             Rectangle {
                 anchors.centerIn: parent

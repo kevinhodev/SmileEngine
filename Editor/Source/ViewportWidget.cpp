@@ -272,6 +272,80 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    bool ViewportWidget::AreSunShadowsEnabled() const {
+        return Renderer && Renderer->GetUseSunShadows();
+    }
+
+    bool ViewportWidget::IsShadowCacheEnabled() const {
+        return Renderer && Renderer->GetSunShadows().GetCascadeCache();
+    }
+
+    bool ViewportWidget::IsShadowDebugCascades() const {
+        return Renderer && Renderer->GetSunShadows().GetDebugCascades();
+    }
+
+    double ViewportWidget::GetShadowMaxDistance() const {
+        return Renderer ? Renderer->GetSunShadows().GetMaxDistance() : 800.0;
+    }
+
+    double ViewportWidget::GetShadowDepthBias() const {
+        return Renderer ? Renderer->GetSunShadows().GetDepthBias() : 0.0006;
+    }
+
+    double ViewportWidget::GetShadowMinCasterTexels() const {
+        return Renderer ? Renderer->GetSunShadows().GetMinCasterTexels() : 2.0;
+    }
+
+    QVariantList ViewportWidget::GetShadowCascadeBias() const {
+        QVariantList List;
+        for (Smile::u32 c = 0; c < Smile::FSunShadows::kNumCascades; ++c)
+            List.append(Renderer ? Renderer->GetSunShadows().GetCascadeBiasScale(c) : 1.0);
+        return List;
+    }
+
+    void ViewportWidget::SetSunShadowsEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetUseSunShadows(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetShadowCacheEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetSunShadows().SetCascadeCache(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetShadowDebugCascades(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetSunShadows().SetDebugCascades(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetShadowMaxDistance(double _Distance) {
+        if (!Renderer) return;
+        Renderer->GetSunShadows().SetMaxDistance(static_cast<Smile::f32>(_Distance));
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetShadowDepthBias(double _Bias) {
+        if (!Renderer) return;
+        Renderer->GetSunShadows().SetDepthBias(static_cast<Smile::f32>(_Bias));
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetShadowMinCasterTexels(double _Texels) {
+        if (!Renderer) return;
+        Renderer->GetSunShadows().SetMinCasterTexels(static_cast<Smile::f32>(_Texels));
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetShadowCascadeBiasScale(int _Cascade, double _Scale) {
+        if (!Renderer || _Cascade < 0) return;
+        Renderer->GetSunShadows().SetCascadeBiasScale(static_cast<Smile::u32>(_Cascade),
+                                                      static_cast<Smile::f32>(_Scale));
+        emit ViewSettingsChanged();
+    }
+
     void ViewportWidget::SetDepthPrepassEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetDepthPrepass(_Enabled);
