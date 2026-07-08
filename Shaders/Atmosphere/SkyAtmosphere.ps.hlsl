@@ -118,8 +118,10 @@ float4 main(PSInput input) : SV_TARGET {
         // Corona (inner + outer, estilo Cry): halo do luar em volta do disco. Tambem carrega o
         // lobo direcional do ceu de luar — o sky-view LUT usa fase uniforme p/ a lua de
         // proposito (a dobra azimutal espelharia o lobo).
+        // Aureole apertado (~0.75 grau, fracao do brilho do disco) + halo largo (~2.7 graus) na
+        // ordem do brilho do ceu de luar — a versao forte (pow200*0.10) virava uma bola gigante.
         float  cosToMoon = saturate(dot(viewDir, normalize(MoonDir.xyz)));
-        float  corona    = (pow(cosToMoon, 4000.0f) * 1.2f + pow(cosToMoon, 200.0f) * 0.10f)
+        float  corona    = (pow(cosToMoon, 8000.0f) * 0.35f + pow(cosToMoon, 600.0f) * 0.025f)
                          * kMoonCorona * night;
 
         L += (moon + (float3)corona) * viewTrans * aboveHorizon;
