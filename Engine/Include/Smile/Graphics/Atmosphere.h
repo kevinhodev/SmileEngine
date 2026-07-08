@@ -91,6 +91,12 @@ namespace Smile {
         void RecordSkyViewBake(ID3D12GraphicsCommandList* CommandList);
         void RecordAerialPerspectiveBake(ID3D12GraphicsCommandList* CommandList);
 
+        // Ambient fisico: CS integra o SkyView LUT cos-weighted (ceu + chao virtual) num buffer
+        // 2x float4 copiado p/ readback — a CPU le com kFramesInFlight de latencia e escreve nos
+        // slots SkyAmbientColor/GroundAmbientColor do FrameConstants (consumidores intactos).
+        void RecordSkyAmbientIntegration(ID3D12GraphicsCommandList* CommandList);
+        bool GetSkyAmbient(u32 FrameSlot, Vec3& OutSky, Vec3& OutGround) const;
+
         void RenderSky(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         void BakeIfDirty(ID3D12Device* Device, FCommandQueue& CmdQueue);
@@ -135,6 +141,13 @@ namespace Smile {
 
         FVolumeTexture      AerialPerspectiveVolume;
         FVolumetricPipeline AerialPerspectivePSO;
+
+        FVolumetricPipeline IntegrateAmbientPSO;
+        Microsoft::WRL::ComPtr<ID3D12Resource> AmbientBuffer;   // DEFAULT, 2x float4, UAV
+        Microsoft::WRL::ComPtr<ID3D12Resource> AmbientReadback; // READBACK ring (kFramesInFlight)
+        u8* AmbientMapped   = nullptr;
+        u32 AmbientUAVSlot  = 0;
+        u32 AmbientRecorded = 0; // integracoes gravadas; valido apos >= kFramesInFlight
 
         u32 SkyViewBakeTableStart = 0; 
         u32 SkyRenderTableStart   = 0; 

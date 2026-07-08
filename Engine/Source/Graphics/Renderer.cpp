@@ -805,14 +805,23 @@ namespace Smile {
         const Vec3 KeyCloudCol = { KeyColor.X * CloudDim, KeyColor.Y * CloudDim, KeyColor.Z * CloudDim };
 
         {
-            auto Sat = [](f32 X) { return X < 0.0f ? 0.0f : (X > 1.0f ? 1.0f : X); };
-            const f32 SunY   = SunN.Y;
-            const f32 Day    = Sat(SunY * 4.0f + 0.2f);   
-            const f32 LowSun = Sat(1.0f - SunY * 2.5f);   
-            const Vec3 Zenith  = { 0.18f, 0.30f, 0.55f }; 
-            const Vec3 Horizon = { 0.60f, 0.40f, 0.26f }; 
-            const Vec3 Sky    = (Zenith + (Horizon - Zenith) * LowSun) * Day;
-            const Vec3 Ground = Sky * 0.35f;
+            // Ambient FISICO: integracao cos-weighted do SkyView LUT (CS + readback, ver
+            // FAtmosphere::RecordSkyAmbientIntegration) — segue crepusculo, transmitancia e o
+            // ceu de luar automaticamente. A curva pintada a mao fica so de fallback (primeiros
+            // frames antes do readback aquecer, ou atmosfera desligada).
+            Vec3 Sky, Ground;
+            const bool Physical = UseAtmosphereSky && Atmosphere.IsInitialized() &&
+                                  Atmosphere.GetSkyAmbient(FrameSlot, Sky, Ground);
+            if (!Physical) {
+                auto Sat = [](f32 X) { return X < 0.0f ? 0.0f : (X > 1.0f ? 1.0f : X); };
+                const f32 SunY   = SunN.Y;
+                const f32 Day    = Sat(SunY * 4.0f + 0.2f);
+                const f32 LowSun = Sat(1.0f - SunY * 2.5f);
+                const Vec3 Zenith  = { 0.18f, 0.30f, 0.55f };
+                const Vec3 Horizon = { 0.60f, 0.40f, 0.26f };
+                Sky    = (Zenith + (Horizon - Zenith) * LowSun) * Day;
+                Ground = Sky * 0.35f;
+            }
             MappedCB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
                                              UseAtmosphereAmbient ? 1.0f : 0.0f };
             MappedCB->GroundAmbientColor = { Ground.X, Ground.Y, Ground.Z, AtmoAmbientIntensity };
@@ -932,7 +941,8 @@ namespace Smile {
         }
 
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
-            Atmosphere.RecordSkyViewBake(CommandList); 
+            Atmosphere.RecordSkyViewBake(CommandList);
+            Atmosphere.RecordSkyAmbientIntegration(CommandList);
             Atmosphere.RenderSky(CommandList, SRVHeap);
         } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
             Skybox.Render(FrameSlot, CommandList, SRVHeap, HDREnv.EnvCubeSRV(),

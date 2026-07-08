@@ -109,6 +109,51 @@ namespace Smile {
         MultiScatterPSO.Initialize(_Device, "BakeMultiScatter.cs_6_0.cso", 1, 1);
         SkyViewPSO.Initialize(_Device, "BakeSkyView.cs_6_0.cso", 2, 1);
         AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
+        IntegrateAmbientPSO.Initialize(_Device, "IntegrateSkyAmbient.cs_6_0.cso", 1, 1);
+
+        // Buffer do ambient (2x float4) + readback ring p/ a CPU ler com latencia segura.
+        {
+            constexpr u64 kAmbientBytes = 2 * sizeof(f32) * 4;
+
+            D3D12_HEAP_PROPERTIES DefHeap{};
+            DefHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+            D3D12_RESOURCE_DESC BufDesc{};
+            BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            BufDesc.Width            = kAmbientBytes;
+            BufDesc.Height           = 1;
+            BufDesc.DepthOrArraySize = 1;
+            BufDesc.MipLevels        = 1;
+            BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
+            BufDesc.SampleDesc       = { 1, 0 };
+            BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            BufDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            SMILE_HR(_Device->CreateCommittedResource(
+                &DefHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                IID_PPV_ARGS(&AmbientBuffer)));
+
+            AmbientUAVSlot = _SRVHeap.Allocate(1);
+            D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
+            UAVDesc.Format                      = DXGI_FORMAT_UNKNOWN;
+            UAVDesc.ViewDimension               = D3D12_UAV_DIMENSION_BUFFER;
+            UAVDesc.Buffer.NumElements          = 2;
+            UAVDesc.Buffer.StructureByteStride  = sizeof(f32) * 4;
+            _SRVHeap.CreateUAV(_Device, AmbientBuffer.Get(), UAVDesc, AmbientUAVSlot);
+
+            D3D12_HEAP_PROPERTIES RbHeap{};
+            RbHeap.Type = D3D12_HEAP_TYPE_READBACK;
+            BufDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * kAmbientBytes;
+            BufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+            SMILE_HR(_Device->CreateCommittedResource(
+                &RbHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                IID_PPV_ARGS(&AmbientReadback)));
+            D3D12_RANGE All{ 0, static_cast<SIZE_T>(BufDesc.Width) };
+            void* Ptr = nullptr;
+            SMILE_HR(AmbientReadback->Map(0, &All, &Ptr));
+            AmbientMapped = reinterpret_cast<u8*>(Ptr);
+            std::memset(AmbientMapped, 0, static_cast<size_t>(BufDesc.Width));
+        }
 
         MoonTexture = FTexture::CreateDefault(_Device, _CmdQueue, _SRVHeap, EDefaultTexture::White);
 
@@ -431,6 +476,46 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(SkyView.UAVSlot));
         _CommandList->Dispatch((kSkyViewW + 7) / 8, (kSkyViewH + 7) / 8, 1);
         SkyView.Transition(_CommandList, kReadState);
+    }
+
+    void FAtmosphere::RecordSkyAmbientIntegration(ID3D12GraphicsCommandList* _CommandList) {
+        if (!Initialized || !AmbientBuffer) return;
+
+        // SkyView ja esta em kReadState (RecordSkyViewBake roda antes no mesmo command list).
+        IntegrateAmbientPSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
+        _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(SkyView.SRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(AmbientUAVSlot));
+        _CommandList->Dispatch(1, 1, 1);
+
+        constexpr u64 kAmbientBytes = 2 * sizeof(f32) * 4;
+        D3D12_RESOURCE_BARRIER B{};
+        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        B.Transition.pResource   = AmbientBuffer.Get();
+        B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        B.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        _CommandList->ResourceBarrier(1, &B);
+
+        _CommandList->CopyBufferRegion(AmbientReadback.Get(),
+                                       static_cast<UINT64>(FrameSlot) * kAmbientBytes,
+                                       AmbientBuffer.Get(), 0, kAmbientBytes);
+
+        std::swap(B.Transition.StateBefore, B.Transition.StateAfter);
+        _CommandList->ResourceBarrier(1, &B);
+
+        ++AmbientRecorded;
+    }
+
+    bool FAtmosphere::GetSkyAmbient(u32 _FrameSlot, Vec3& _OutSky, Vec3& _OutGround) const {
+        // O slot _FrameSlot foi escrito ha kFramesInFlight frames e a fence dele ja foi esperada
+        // (CommandQueue::BeginFrame) — leitura segura, latencia invisivel p/ ambient.
+        if (!AmbientMapped || AmbientRecorded < FCommandQueue::kFramesInFlight) return false;
+        constexpr size_t kAmbientBytes = 2 * sizeof(f32) * 4;
+        const f32* P = reinterpret_cast<const f32*>(AmbientMapped + _FrameSlot * kAmbientBytes);
+        _OutSky    = Vec3{ P[0], P[1], P[2] };
+        _OutGround = Vec3{ P[4], P[5], P[6] };
+        return true;
     }
 
     void FAtmosphere::RecordAerialPerspectiveBake(ID3D12GraphicsCommandList* _CommandList) {
