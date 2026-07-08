@@ -220,6 +220,8 @@ namespace Smile {
         void SetUseGI(bool V)           { UseGI = V; }
         bool GetUseGI() const           { return UseGI; }
 
+        FReSTIRGI&       GetReSTIRGI()       { return ReSTIRGI; }
+        const FReSTIRGI& GetReSTIRGI() const { return ReSTIRGI; }
         FReflections& GetReflections()     { return Reflections; }
         void SetUseReflections(bool V)     { UseReflections = V; }
         bool GetUseReflections() const     { return UseReflections; }

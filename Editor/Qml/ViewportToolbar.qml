@@ -224,10 +224,12 @@ Rectangle {
         property string label
         property string detail: ""
         property bool checked: false
+        property bool interactive: true
         signal toggled()
 
         radius: 5
-        color: toggleHover.hovered ? "#22231c" : "transparent"
+        opacity: interactive ? 1.0 : 0.48
+        color: toggleHover.hovered && interactive ? "#22231c" : "transparent"
 
         Text {
             id: toggleLabel
@@ -235,7 +237,7 @@ Rectangle {
             anchors.leftMargin: 26
             anchors.verticalCenter: parent.verticalCenter
             text: toggleRow.label
-            color: toggleHover.hovered ? root.textPrimary : root.textNormal
+            color: toggleHover.hovered && toggleRow.interactive ? root.textPrimary : root.textNormal
             font.family: "Segoe UI"
             font.pixelSize: 12
         }
@@ -265,8 +267,14 @@ Rectangle {
                 Behavior on x { NumberAnimation { duration: 100 } }
             }
         }
-        HoverHandler { id: toggleHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: toggleRow.toggled() }
+        HoverHandler {
+            id: toggleHover
+            cursorShape: toggleRow.interactive ? Qt.PointingHandCursor : Qt.ArrowCursor
+        }
+        TapHandler {
+            enabled: toggleRow.interactive
+            onTapped: toggleRow.toggled()
+        }
     }
 
     Row {
@@ -342,7 +350,7 @@ Rectangle {
         x: viewModeButton.x + leftTools.x
         y: root.height
         width: 280
-        height: 396
+        height: 424
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: if (gBufferPopup.opened) gBufferPopup.close()
@@ -407,41 +415,48 @@ Rectangle {
             }
             ToggleRow {
                 x: 8; y: 206; width: 264; height: 28
+                label: "ReSTIR visibility"; detail: "raio extra"
+                checked: viewportModel.restirGIVisibilityEnabled
+                interactive: viewportModel.restirGIEnabled
+                onToggled: viewportModel.ToggleReSTIRGIVisibility()
+            }
+            ToggleRow {
+                x: 8; y: 234; width: 264; height: 28
                 label: "GTAO"
                 checked: viewportModel.gtaoEnabled
                 onToggled: viewportModel.ToggleGTAO()
             }
             ToggleRow {
-                x: 8; y: 234; width: 264; height: 28
+                x: 8; y: 262; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
                 checked: viewportModel.gtaoHalfRes
                 onToggled: viewportModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 266; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 294; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 276
+                x: 14; y: 304
                 text: "Reflexos e denoise"
                 color: root.textMuted
                 font.family: "Segoe UI"
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 294; width: 264; height: 28
+                x: 8; y: 322; width: 264; height: 28
                 label: "Reflexos RT"
                 checked: viewportModel.reflectionsEnabled
                 onToggled: viewportModel.ToggleReflections()
             }
             ToggleRow {
-                x: 8; y: 322; width: 264; height: 28
+                x: 8; y: 350; width: 264; height: 28
                 label: "NRD REBLUR"; detail: "difuso + especular"
                 checked: viewportModel.nrdEnabled
                 onToggled: viewportModel.ToggleNrd()
             }
 
-            Rectangle { x: 14; y: 354; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 382; width: 252; height: 1; color: "#23241d" }
             Rectangle {
-                x: 8; y: 360; width: 264; height: 28; radius: 5
+                x: 8; y: 388; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? "#22231c" : "transparent"
                 Text {
                     x: 8

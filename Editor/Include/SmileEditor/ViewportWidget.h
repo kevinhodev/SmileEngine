@@ -24,6 +24,7 @@ namespace SmileEditor {
         Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
@@ -65,6 +66,7 @@ namespace SmileEditor {
         QString           GetViewModeLabel() const;
         bool              IsDDGIEnabled() const;
         bool              IsReSTIRGIEnabled() const;
+        bool              IsReSTIRGIVisibilityEnabled() const;
         bool              IsGTAOEnabled() const;
         bool              IsGTAOHalfRes() const;
         bool              AreReflectionsEnabled() const;
@@ -90,6 +92,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SelectReflectionHeatmap();
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
+        Q_INVOKABLE void ToggleReSTIRGIVisibility();
         Q_INVOKABLE void ToggleGTAO();
         Q_INVOKABLE void ToggleGTAOHalfRes();
         Q_INVOKABLE void ToggleReflections();

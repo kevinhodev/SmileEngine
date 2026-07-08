@@ -143,7 +143,8 @@ namespace Smile {
         bool Temporal       = true;
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
-        bool Visibility     = false;  // visibility ray no resolve espacial — caro; off por padrao
+        bool Visibility     = false;  // visibility ray no resolve espacial (raio extra, ~1ms) — off por
+                                      // padrao: efeito sutil em cena estatica; toggle no editor p/ A/B
         f32  MCap           = 20.0f;
         f32  PosRejectScale = 0.01f;
         f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off)

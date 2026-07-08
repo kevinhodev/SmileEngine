@@ -792,6 +792,11 @@ Rectangle {
                     width: parent.width - 32
                     RayStatusRow { width: parent.width; label: "DDGI"; active: viewportModel.ddgiEnabled }
                     RayStatusRow { width: parent.width; label: "ReSTIR GI"; active: viewportModel.restirGIEnabled }
+                    RayStatusRow {
+                        width: parent.width
+                        label: "Visibility ray"
+                        active: viewportModel.restirGIEnabled && viewportModel.restirGIVisibilityEnabled
+                    }
                     RayStatusRow { width: parent.width; label: "NRD REBLUR"; active: viewportModel.nrdEnabled }
                     RayStatusRow { width: parent.width; label: "Reflexos RT"; active: viewportModel.reflectionsEnabled }
                 }

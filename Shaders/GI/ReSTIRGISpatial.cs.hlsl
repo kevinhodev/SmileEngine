@@ -114,19 +114,31 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // indireto deste pixel cai -> o NRD borra esse 0/1 estocastico num gradiente = sombra de contato
     // SUAVE (estilo AO do bounce). Igual a shading visibility do RTXDI (DI). Sem reuso do resultado.
     if (ReuseParams.z > 0.5f && rs.W > 0.0f) {
-        float3 toS = rs.x2 - x1;
+        // Direcao e comprimento medidos da origem JA biased: como o bias (0.2) e maior que a
+        // folga do TMax (0.05), medir do x1 cru fazia o raio alcancar a superficie do proprio
+        // x2 e comitar -> falsa oclusao na maioria das amostras (cosseno concentra na normal).
+        float3 org = x1 + n1 * max(TraceParams.w, 1e-3f);
+        float3 toS = rs.x2 - org;
         float  len = length(toS);
         // Pula conexoes curtas: garante TMax > TMin (senao = UB no DXR) e elas sao triviais.
         if (len > 0.15f) {
             RayDesc vray;
-            vray.Origin    = x1 + n1 * max(TraceParams.w, 1e-3f);
+            vray.Origin    = org;
             vray.Direction = toS / len;
             vray.TMin      = 0.02f;
-            vray.TMax      = len - 0.05f; // > TMin garantido (len > 0.15)
-            // MESMAS flags do trace inicial (CULL_BACK) — senao backfaces viram oclusores fantasmas
-            // que a amostra original nunca viu, causando escurecimento espurio.
-            const uint VisFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
-            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> vq;
+            vray.TMax      = len - 0.05f; // > TMin garantido (len > 0.15); para antes do x2
+            // MESMAS flags do trace inicial (CULL_BACK) — senao backfaces viram oclusores
+            // fantasmas que a amostra original nunca viu. CULL_NON_OPAQUE: sem o loop de
+            // candidatos (AlphaTestPass nao esta bindado neste pass), um candidato masked
+            // deixava a traversal INACABADA e paredes opacas ainda nao visitadas eram perdidas
+            // (leak). Custo: folhagem nao oclui o re-teste (falha suave, coerente com a
+            // porosidade dela); o teste exato via SMILE_RT_PROCEED fica p/ o M6.
+            const uint VisFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+                                  RAY_FLAG_CULL_BACK_FACING_TRIANGLES |
+                                  RAY_FLAG_CULL_NON_OPAQUE;
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+                     RAY_FLAG_CULL_BACK_FACING_TRIANGLES |
+                     RAY_FLAG_CULL_NON_OPAQUE> vq;
             vq.TraceRayInline(Scene, VisFlags, 0xFF, vray);
             vq.Proceed();
             if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) rs.W = 0.0f;
