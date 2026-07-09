@@ -4,7 +4,9 @@
 #include "Smile/Graphics/VolumeTexture.h"
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/Texture.h"
 #include <d3d12.h>
+#include <string>
 
 namespace Smile {
     class FCommandQueue;
@@ -18,13 +20,31 @@ namespace Smile {
         void Initialize(ID3D12Device* Device, FCommandQueue& CmdQueue,
                         FTextureSRVHeap& SRVHeap);
 
+        // Re-bakea SO o weather map procedural com os parametros atuais (seed/celulas).
+        // Chamador garante GPU ociosa (Flush) antes.
+        void RebakeWeather(FCommandQueue& CmdQueue, FTextureSRVHeap& SRVHeap);
+
+        // Weather map autorado (textura pintada, canais R=cobertura G=tipo B=peak height)
+        // substitui o procedural; ClearWeatherOverride volta ao bakeado.
+        bool LoadWeatherOverride(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                                 FTextureSRVHeap& SRVHeap, const std::wstring& Path);
+        void ClearWeatherOverride(FTextureSRVHeap& SRVHeap);
+        bool HasWeatherOverride() const { return OverrideActive; }
+
+        void SetSeed(u32 V)     { WeatherSeed = V; }
+        u32  GetSeed() const    { return WeatherSeed; }
+        void SetCellMult(u32 V) { WeatherCellMult = V < 1u ? 1u : (V > 8u ? 8u : V); }
+        u32  GetCellMult() const{ return WeatherCellMult; }
+
         u32  BaseNoiseSRV()   const { return BaseNoise.SRVSlot(); }
         u32  DetailNoiseSRV() const { return DetailNoise.SRVSlot(); }
-        u32  WeatherSRV()     const { return WeatherSRVSlot; }
+        u32  WeatherSRV()     const { return OverrideActive ? WeatherOverride.SRVSlot()
+                                                            : WeatherSRVSlot; }
         bool IsInitialized()  const { return Initialized; }
 
     private:
         void Bake(FCommandQueue& CmdQueue, FTextureSRVHeap& SRVHeap);
+        void RecordWeatherBake(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
         FVolumeTexture   BaseNoise;
         FVolumeTexture   DetailNoise;
@@ -36,6 +56,12 @@ namespace Smile {
         u32 WeatherUAVSlot = 0;
         D3D12_RESOURCE_STATES WeatherState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         FComputePipeline WeatherPSO;
+
+        u32 WeatherSeed     = 1337;
+        u32 WeatherCellMult = 3;
+
+        FTexture WeatherOverride;
+        bool     OverrideActive = false;
 
         bool Initialized = false;
     };

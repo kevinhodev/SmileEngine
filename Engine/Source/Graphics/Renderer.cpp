@@ -588,6 +588,48 @@ namespace Smile {
         RecreateInternalTargets();
     }
 
+    void Renderer::SetCloudsHalfRes(bool _HalfRes) {
+        if (VolumetricClouds.GetHalfRes() == _HalfRes) return;
+        VolumetricClouds.SetHalfRes(_HalfRes);
+        if (!Initialized || !VolumetricClouds.IsInitialized()) return;
+        CommandQueue.Flush();
+        VolumetricClouds.Resize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+    }
+
+    void Renderer::SetCloudWeatherSeed(u32 _Seed) {
+        CloudNoise.SetSeed(_Seed);
+        if (!Initialized || !CloudNoise.IsInitialized()) return;
+        CommandQueue.Flush();
+        CloudNoise.ClearWeatherOverride(SRVHeap); // mexer no procedural desativa a autorada
+        CloudNoise.RebakeWeather(CommandQueue, SRVHeap);
+        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+    }
+
+    void Renderer::SetCloudWeatherCells(u32 _Mult) {
+        CloudNoise.SetCellMult(_Mult);
+        if (!Initialized || !CloudNoise.IsInitialized()) return;
+        CommandQueue.Flush();
+        CloudNoise.ClearWeatherOverride(SRVHeap);
+        CloudNoise.RebakeWeather(CommandQueue, SRVHeap);
+        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+    }
+
+    bool Renderer::LoadCloudWeatherTexture(const std::wstring& _Path) {
+        if (!Initialized || !CloudNoise.IsInitialized()) return false;
+        CommandQueue.Flush();
+        if (!CloudNoise.LoadWeatherOverride(Device.Native(), CommandQueue, SRVHeap, _Path))
+            return false;
+        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+        return true;
+    }
+
+    void Renderer::ClearCloudWeatherTexture() {
+        if (!Initialized || !CloudNoise.HasWeatherOverride()) return;
+        CommandQueue.Flush();
+        CloudNoise.ClearWeatherOverride(SRVHeap);
+        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+    }
+
     void Renderer::RecreateInternalTargets() {
         const u32 RW = RenderWidth(),        RH = RenderHeight();
         const u32 SW = SwapChain.GetWidth(), SH = SwapChain.GetHeight();
@@ -812,12 +854,14 @@ namespace Smile {
         const f32  CloudDim   = KeyIsMoon ? (MoonW / std::max(SunIntensity, 1e-3f)) : 1.0f;
         const Vec3 KeyCloudCol = { KeyColor.X * CloudDim, KeyColor.Y * CloudDim, KeyColor.Z * CloudDim };
 
+        Vec3 SkyAmbient, GroundAmbient; // tambem alimentam o ambient das nuvens volumetricas
         {
             // Ambient FISICO: integracao cos-weighted do SkyView LUT (CS + readback, ver
             // FAtmosphere::RecordSkyAmbientIntegration) — segue crepusculo, transmitancia e o
             // ceu de luar automaticamente. A curva pintada a mao fica so de fallback (primeiros
             // frames antes do readback aquecer, ou atmosfera desligada).
-            Vec3 Sky, Ground;
+            Vec3& Sky    = SkyAmbient;
+            Vec3& Ground = GroundAmbient;
             const bool Physical = UseAtmosphereSky && Atmosphere.IsInitialized() &&
                                   Atmosphere.GetSkyAmbient(FrameSlot, Sky, Ground);
             if (!Physical) {
@@ -889,9 +933,11 @@ namespace Smile {
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm());
-        const f32 CloudViewHeight = 6360.0f + FAtmosphere::kGroundAltitudeKm;
-        VolumetricClouds.UpdatePerFrame(FrameSlot, InvVPNoTrans, CloudViewHeight, KeyDir, KeyCloudCol,
-                                        ElapsedTime, RenderWidth(), RenderHeight());
+        const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kGroundAltitudeKm;
+        VolumetricClouds.UpdatePerFrame(FrameSlot, InvVPNoTrans, InvViewProjFull,
+                                        ViewProjUnjittered, CameraPosition, kKmPerWorldUnit,
+                                        CloudGroundRadius, KeyDir, KeyCloudCol,
+                                        SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex);
 
         const Mat44 WaterViewProj    = ViewProjection;
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
@@ -1468,8 +1514,26 @@ namespace Smile {
         }
 
         if (UseClouds && VolumetricClouds.IsInitialized()) {
-            VolumetricClouds.RecordRaymarch(CommandList, SRVHeap);
-            VolumetricClouds.Composite(CommandList, SRVHeap);
+            // Depth vira SRV: o raymarch clampa a marcha na geometria e o composite faz
+            // upsample bilateral — nuvem aparece ENTRE camera e chao/predios em voo.
+            D3D12_RESOURCE_BARRIER CloudDepthBarrier{};
+            CloudDepthBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            CloudDepthBarrier.Transition.pResource   = DepthBuffer.Get();
+            CloudDepthBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            CloudDepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            CloudDepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &CloudDepthBarrier);
+
+            VolumetricClouds.RecordRaymarch(CommandList, SRVHeap, DepthSRVSlot);
+
+            auto CloudRTV = HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &CloudRTV, FALSE, nullptr); // sem DSV: depth e SRV
+            VolumetricClouds.Composite(CommandList, SRVHeap, DepthSRVSlot);
+
+            CloudDepthBarrier.Transition.StateBefore = CloudDepthBarrier.Transition.StateAfter;
+            CloudDepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            CommandList->ResourceBarrier(1, &CloudDepthBarrier);
         }
 
         if (Device.RaytracingSupported() && DDGIDebugPass.GetEnabled() && DDGI.IsReady()) {

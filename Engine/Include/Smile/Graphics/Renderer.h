@@ -206,6 +206,23 @@ namespace Smile {
         bool GetUseWater() const             { return UseWater; }
         FWaterRenderer& GetWater()           { return Water; }
 
+        void SetUseClouds(bool Use)          { if (Use && !UseClouds) VolumetricClouds.InvalidateHistory();
+                                               UseClouds = Use; }
+        bool GetUseClouds() const            { return UseClouds; }
+        FVolumetricClouds& GetVolumetricClouds() { return VolumetricClouds; }
+        const FVolumetricClouds& GetVolumetricClouds() const { return VolumetricClouds; }
+        void SetCloudsHalfRes(bool HalfRes); // recria o RT das nuvens (flush da fila)
+
+        // Weather map das nuvens: parametros do bake procedural + textura autorada.
+        // Setters re-bakeam na hora (flush + dispatch sincrono, ~ms).
+        void SetCloudWeatherSeed(u32 Seed);
+        u32  GetCloudWeatherSeed() const  { return CloudNoise.GetSeed(); }
+        void SetCloudWeatherCells(u32 Mult);
+        u32  GetCloudWeatherCells() const { return CloudNoise.GetCellMult(); }
+        bool LoadCloudWeatherTexture(const std::wstring& Path);
+        void ClearCloudWeatherTexture();
+        bool CloudWeatherAuthored() const { return CloudNoise.HasWeatherOverride(); }
+
         void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
 
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
