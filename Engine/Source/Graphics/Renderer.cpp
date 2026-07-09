@@ -939,6 +939,30 @@ namespace Smile {
                                         CloudGroundRadius, KeyDir, KeyCloudCol,
                                         SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex);
 
+        {
+            // Sombra das nuvens no chao: params p/ o deferred lighting + SRV copiado no
+            // slot t4 da tabela do G-buffer (por frame: barato e nunca envelhece).
+            const f32 KeyY = KeyDir.Y > 0.05f ? KeyDir.Y : 0.05f;
+            const bool CloudShadowOn = UseClouds && VolumetricClouds.IsInitialized() &&
+                                       VolumetricClouds.GetShadowsEnabled() && KeyDir.Y > 0.02f;
+            MappedCB->CloudShadowParams  = { VolumetricClouds.ShadowCenterX(),
+                                             VolumetricClouds.ShadowCenterZ(),
+                                             VolumetricClouds.ShadowInvExtent(),
+                                             CloudShadowOn ? VolumetricClouds.GetShadowStrength()
+                                                           : 0.0f };
+            MappedCB->CloudShadowParams2 = { kKmPerWorldUnit,
+                                             VolumetricClouds.GetBottomAltitude(),
+                                             KeyDir.X / KeyY, KeyDir.Z / KeyY };
+            if (VolumetricClouds.IsInitialized()) {
+                D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(GBuffer.SRVTableStart() + 4);
+                D3D12_CPU_DESCRIPTOR_HANDLE Src =
+                    SRVHeap.CpuHandleStaging(VolumetricClouds.ShadowSRV());
+                UINT One = 1;
+                Device.Native()->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            }
+        }
+
         const Mat44 WaterViewProj    = ViewProjection;
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
         const bool WaterHasDepth = SceneColorCopy && SceneDepthCopy;
@@ -1011,6 +1035,11 @@ namespace Smile {
         if (Atmosphere.IsInitialized()) {
             Atmosphere.RecordAerialPerspectiveBake(CommandList);
         }
+
+        // Shadow map das nuvens: bakeado ANTES do deferred lighting, que o consome (t4 da
+        // tabela do G-buffer) p/ atenuar a key light no chao.
+        if (UseClouds && VolumetricClouds.IsInitialized())
+            VolumetricClouds.RecordShadowMap(CommandList, SRVHeap);
 
         if (UseGI && DDGI.IsReady()) {
             DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex);

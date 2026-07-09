@@ -5,6 +5,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/ShaderUtils.h"
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -40,6 +41,40 @@ namespace Smile {
 
         BuildRaymarchPipeline(_Device);
         TemporalPSO.Initialize(_Device, "CloudTemporal.cs_6_0.cso", 2, 1);
+        ShadowPSO.Initialize(_Device, "CloudShadowMap.cs_6_0.cso", 5, 1);
+
+        // Shadow map das nuvens: resolucao fixa (independe da tela), criado uma vez.
+        {
+            D3D12_RESOURCE_DESC SDesc{};
+            SDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            SDesc.Width            = kShadowRes;
+            SDesc.Height           = kShadowRes;
+            SDesc.DepthOrArraySize = 1;
+            SDesc.MipLevels        = 1;
+            SDesc.Format           = DXGI_FORMAT_R16_FLOAT;
+            SDesc.SampleDesc       = { 1, 0 };
+            SDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            SDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            D3D12_HEAP_PROPERTIES SHeap{};
+            SHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+            ShadowState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            SMILE_HR(_Device->CreateCommittedResource(
+                &SHeap, D3D12_HEAP_FLAG_NONE, &SDesc, ShadowState, nullptr,
+                IID_PPV_ARGS(&ShadowTex)));
+
+            ShadowSRVSlot = _SRVHeap.Allocate(1);
+            ShadowUAVSlot = _SRVHeap.Allocate(1);
+            D3D12_SHADER_RESOURCE_VIEW_DESC SSrv{};
+            SSrv.Format                    = DXGI_FORMAT_R16_FLOAT;
+            SSrv.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
+            SSrv.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            SSrv.Texture2D.MipLevels       = 1;
+            _SRVHeap.CreateSRV(_Device, ShadowTex.Get(), SSrv, ShadowSRVSlot);
+            D3D12_UNORDERED_ACCESS_VIEW_DESC SUav{};
+            SUav.Format        = DXGI_FORMAT_R16_FLOAT;
+            SUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            _SRVHeap.CreateUAV(_Device, ShadowTex.Get(), SUav, ShadowUAVSlot);
+        }
         BuildNoiseTable(_Device, _SRVHeap, _Noise, _AtmoTransmittanceSRV, _AtmoMultiScatterSRV);
         BuildCompositeRootSignature(_Device);
         BuildCompositePSO(_Device, _RTFormat, _DSFormat);
@@ -410,6 +445,13 @@ namespace Smile {
         const f32 Km = _KmPerWorldUnit;
         CPUConstants.CamWorld  = { _CamWorldPos.X, _CamWorldPos.Y, _CamWorldPos.Z, Km };
         CPUConstants.CloudMisc = { (f32)FullWidth, (f32)FullHeight, 0.0f, 0.0f };
+
+        // Shadow map: grade centrada na camera, snapada ao texel (senao a sombra "nada"
+        // ao andar — mesmo truque do scrolling de CSM).
+        const f32 Texel = kShadowExtentKm / (f32)kShadowRes;
+        CPUConstants.CloudShadowCB = { std::floor(_CamWorldPos.X * Km / Texel) * Texel,
+                                       std::floor(_CamWorldPos.Z * Km / Texel) * Texel,
+                                       kShadowExtentKm, (f32)kShadowRes };
         CPUConstants.CameraPos = { _CamWorldPos.X * Km,
                                    _GroundRadiusKm + _CamWorldPos.Y * Km,
                                    _CamWorldPos.Z * Km,
@@ -438,6 +480,39 @@ namespace Smile {
         B.Transition.StateAfter  = _After;
         _CommandList->ResourceBarrier(1, &B);
         HistState[_Index] = _After;
+    }
+
+    void FVolumetricClouds::RecordShadowMap(ID3D12GraphicsCommandList* _CommandList,
+                                            FTextureSRVHeap& _SRVHeap) {
+        if (!Initialized || !ShadowTex || !ShadowsEnabled) return;
+
+        if (ShadowState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = ShadowTex.Get();
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = ShadowState;
+            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            _CommandList->ResourceBarrier(1, &B);
+            ShadowState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+
+        ShadowPSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
+        _CommandList->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(NoiseTableStart));
+        _CommandList->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ShadowUAVSlot));
+        _CommandList->Dispatch((kShadowRes + 7) / 8, (kShadowRes + 7) / 8, 1);
+
+        {
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = ShadowTex.Get();
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = ShadowState;
+            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            _CommandList->ResourceBarrier(1, &B);
+            ShadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
     }
 
     void FVolumetricClouds::RecordRaymarch(ID3D12GraphicsCommandList* _CommandList,

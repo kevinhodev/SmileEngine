@@ -18,7 +18,9 @@ namespace Smile {
         if (!RTVHeap.Native())
             RTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kTargetCount, false);
         if (SRVSlotBase == kInvalidSlot)
-            SRVSlotBase = _SRVHeap.Allocate(kTargetCount + 1); // +1 = depth (4o slot contiguo)
+            SRVSlotBase = _SRVHeap.Allocate(kTargetCount + 2); // +1 = depth (4o slot contiguo);
+                                                               // +2 = shadow map das nuvens (t4
+                                                               // do deferred, Renderer copia)
         CreateTargets(_Device, _SRVHeap, _Width, _Height);
     }
 

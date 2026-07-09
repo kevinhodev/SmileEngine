@@ -16,15 +16,19 @@ cbuffer FrameCB : register(b0) {
     float4 DDGIParams;         
     float4 DDGIDistParams;    
     float4 ReflectionParams;   
-    float4 MoonDirection;      
+    float4 MoonDirection;
     float4 MoonColor;
-    row_major float4x4 InvViewProj; 
+    row_major float4x4 InvViewProj;
+    float4 RenderParams;       // nao usado aqui; mantem os offsets do FrameConstants
+    float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = forca (0 = off)
+    float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
 };
 
-Texture2D        GBufferA   : register(t0); 
-Texture2D        GBufferB   : register(t1); 
-Texture2D        GBufferC   : register(t2); 
+Texture2D        GBufferA   : register(t0);
+Texture2D        GBufferB   : register(t1);
+Texture2D        GBufferC   : register(t2);
 Texture2D<float> SceneDepth : register(t3);
+Texture2D<float> CloudShadowMap : register(t4); // transmitancia das nuvens p/ a key light
 
 TextureCube IrradianceMap  : register(t8);
 TextureCube PrefilteredMap : register(t9);
@@ -161,7 +165,22 @@ float4 main(VSOutput input) : SV_Target {
                                   DiffuseColor, SpecularColor, Metallic, Roughness, a2, TransColor);
         }
 
-        Lighting += (SunLit + MoonLit) * SampleCSM(worldPos, N, input.pos.xy);
+        // Sombra das nuvens: projeta o ponto ate a base da camada na direcao da key light
+        // e amostra a transmitancia bakeada (CloudShadowMap.cs). Aplicada junto do CSM —
+        // nuvem escurece sol E luar (a key light dominante e quem dirige o bake).
+        float cloudShadow = 1.0f;
+        if (CloudShadowParams.w > 0.0f) {
+            float  kKm   = CloudShadowParams2.x;
+            float2 hitKm = worldPos.xz * kKm + CloudShadowParams2.zw *
+                           max(CloudShadowParams2.y - worldPos.y * kKm, 0.0f);
+            float2 suv   = (hitKm - CloudShadowParams.xy) * CloudShadowParams.z + 0.5f;
+            if (all(suv > 0.0f) && all(suv < 1.0f)) {
+                float T = CloudShadowMap.SampleLevel(IBLSampler, suv, 0.0f).r;
+                cloudShadow = lerp(1.0f, T, CloudShadowParams.w);
+            }
+        }
+
+        Lighting += (SunLit + MoonLit) * SampleCSM(worldPos, N, input.pos.xy) * cloudShadow;
     }
 
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);

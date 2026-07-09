@@ -1222,8 +1222,39 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 330
+                height: 418
                 title: "Forma e iluminação"
+
+                Text {
+                    x: 20; y: 316
+                    text: "Sombra das nuvens no chão"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 335
+                    text: "shadow map 512² projetado da camada"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 315
+                    checked: viewportModel.cloudShadows
+                    onToggled: viewportModel.SetCloudShadowsEnabled(!checked)
+                }
+                ShadowSlider {
+                    x: 20; y: 362
+                    width: parent.width - 40
+                    label: "Intensidade da sombra"
+                    from: 0; to: 1; step: 0.01
+                    value: viewportModel.cloudShadowStrength
+                    valueText: Math.round(viewportModel.cloudShadowStrength * 100) + " %"
+                    onCommitted: (v) => viewportModel.SetCloudShadowStrength(v)
+                }
 
                 ShadowSlider {
                     x: 20; y: 56

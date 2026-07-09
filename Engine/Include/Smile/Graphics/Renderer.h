@@ -68,6 +68,11 @@ namespace Smile {
 
         Vec4  RenderParams;       // 16 bytes (c18) — x = mip bias global de textura (FSR2 upscale:
                                   // log2(render/display) - 1; 0 quando nativo/SSAA), yzw = -
+
+        Vec4  CloudShadowParams;  // 16 bytes — xy = centro XZ do shadow map de nuvens (km),
+                                  // z = 1/extent (km), w = forca (0 = off)
+        Vec4  CloudShadowParams2; // 16 bytes — x = km/unidade de mundo, y = altura da base (km),
+                                  // zw = keyDir.xz/keyDir.y (projecao ate a base da camada)
     };
 
     struct alignas(256) ObjectConstants {

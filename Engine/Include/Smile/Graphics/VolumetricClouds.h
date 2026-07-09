@@ -30,6 +30,7 @@ namespace Smile {
         Mat44 InvViewProjWorld;// inversa full (jittered) p/ reconstruir world pos do depth
         Vec4  CamWorld;        // xyz = camera em unidades de mundo, w = km por unidade de mundo
         Vec4  CloudMisc;       // x = largura full-res, y = altura full-res, zw unused
+        Vec4  CloudShadowCB;   // xy = centro XZ do shadow map (km), z = extent (km), w = resolucao
     };
 
     class FVolumetricClouds {
@@ -50,6 +51,10 @@ namespace Smile {
                             const Vec3& DirToSun, const Vec3& SunColor,
                             const Vec3& SkyAmbient, const Vec3& GroundAmbient,
                             f32 Time, u32 FrameIndex);
+
+        // Bake do shadow map das nuvens (grade XZ na base da camada, marcha p/ a key light).
+        // Gravar ANTES do deferred lighting — que o consome p/ atenuar o sol no chao.
+        void RecordShadowMap(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         // DepthSRVSlot: depth da cena como SRV (raymarch clampa a marcha na geometria;
         // composite faz upsample bilateral). Chamador transiciona o depth p/ leitura antes.
@@ -78,6 +83,16 @@ namespace Smile {
         // Troca a fonte do weather map (procedural re-bakeado ou textura autorada):
         // recopia a entrada t2 da tabela de descriptors e invalida a historia temporal.
         void SetWeatherSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Slot);
+
+        // Sombra das nuvens no chao.
+        void SetShadowsEnabled(bool V)     { ShadowsEnabled = V; }
+        bool GetShadowsEnabled() const     { return ShadowsEnabled; }
+        void SetShadowStrength(f32 V)      { ShadowStrength = V; }
+        f32  GetShadowStrength() const     { return ShadowStrength; }
+        u32  ShadowSRV() const             { return ShadowSRVSlot; }
+        f32  ShadowCenterX() const         { return CPUConstants.CloudShadowCB.X; }
+        f32  ShadowCenterZ() const         { return CPUConstants.CloudShadowCB.Y; }
+        f32  ShadowInvExtent() const       { return 1.0f / kShadowExtentKm; }
         void SetCoverage(f32 V)         { CPUConstants.CloudParams.X  = V; }
         void SetDensityScale(f32 V)     { CPUConstants.CloudParams.Y  = V; }
         void SetWindSpeed(f32 V)        { CPUConstants.WindParams.X = V; CPUConstants.WindParams.Z = V * 0.4f; }
@@ -112,12 +127,24 @@ namespace Smile {
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
 
+        static constexpr u32 kShadowRes      = 512;
+        static constexpr f32 kShadowExtentKm = 40.0f;
+
         // Raymarch tem root sig propria (tabela extra p/ o depth da cena, handle direto —
         // sem copia de descriptor que envelhece no resize). Temporal usa o pipeline comum.
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RaymarchRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> RaymarchPSOState;
         FVolumetricPipeline TemporalPSO;
+        FVolumetricPipeline ShadowPSO;
         u32 NoiseTableStart = 0;
+
+        // Shadow map das nuvens (transmitancia p/ a key light numa grade XZ em mundo).
+        Microsoft::WRL::ComPtr<ID3D12Resource> ShadowTex;
+        u32 ShadowSRVSlot = kInvalidSlot;
+        u32 ShadowUAVSlot = kInvalidSlot;
+        D3D12_RESOURCE_STATES ShadowState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        bool ShadowsEnabled = true;
+        f32  ShadowStrength = 1.0f;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CloudRT;
         u32 RTSRVSlot = kInvalidSlot;

@@ -517,6 +517,26 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    bool ViewportWidget::AreCloudShadowsEnabled() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetShadowsEnabled() : true;
+    }
+
+    void ViewportWidget::SetCloudShadowsEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetShadowsEnabled(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudShadowStrength() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetShadowStrength() : 1.0;
+    }
+
+    void ViewportWidget::SetCloudShadowStrength(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetShadowStrength(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
     double ViewportWidget::GetCloudBottomKm() const {
         return Renderer ? Renderer->GetVolumetricClouds().GetBottomAltitude() : 2.0;
     }

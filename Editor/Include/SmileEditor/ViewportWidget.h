@@ -59,6 +59,8 @@ namespace SmileEditor {
         Q_PROPERTY(int cloudWeatherSeed READ GetCloudWeatherSeed NOTIFY ViewSettingsChanged)
         Q_PROPERTY(int cloudWeatherCells READ GetCloudWeatherCells NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudWeatherAuthored READ IsCloudWeatherAuthored NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool cloudShadows READ AreCloudShadowsEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudShadowStrength READ GetCloudShadowStrength NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double cloudBottomKm READ GetCloudBottomKm NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double cloudThicknessKm READ GetCloudThicknessKm NOTIFY ViewSettingsChanged)
         Q_PROPERTY(int cloudMarchSteps READ GetCloudMarchSteps NOTIFY ViewSettingsChanged)
@@ -127,6 +129,8 @@ namespace SmileEditor {
         int               GetCloudWeatherSeed() const;
         int               GetCloudWeatherCells() const;
         bool              IsCloudWeatherAuthored() const;
+        bool              AreCloudShadowsEnabled() const;
+        double            GetCloudShadowStrength() const;
         double            GetCloudBottomKm() const;
         double            GetCloudThicknessKm() const;
         int               GetCloudMarchSteps() const;
@@ -179,6 +183,8 @@ namespace SmileEditor {
         Q_INVOKABLE void SetCloudWeatherCells(int mult);
         Q_INVOKABLE void LoadCloudWeatherTexture();  // abre QFileDialog
         Q_INVOKABLE void ClearCloudWeatherTexture();
+        Q_INVOKABLE void SetCloudShadowsEnabled(bool enabled);
+        Q_INVOKABLE void SetCloudShadowStrength(double value);
         Q_INVOKABLE void SetCloudAltitude(double bottomKm, double thicknessKm);
         Q_INVOKABLE void SetCloudMarchSteps(int steps);
         Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
