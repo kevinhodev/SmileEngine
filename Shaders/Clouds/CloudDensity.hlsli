@@ -5,6 +5,7 @@ struct CloudCtx {
     float bottomR, innerR, outerR;
     float coverage, densityScale, noiseScale;
     float weatherScale, erosionStrength, detailScale, cloudTypeBias;
+    float peakStrength; // quanto o canal B do weather (peak height) modula o topo
     float3 wind;
 };
 
@@ -34,10 +35,16 @@ float CloudBaseDensity(float3 p, Texture3D<float4> baseNoise, Texture2D<float4> 
 
     float2 wuv = p.xz * c.weatherScale;
     float4 w   = weather.SampleLevel(samp, wuv, 0.0f);
-    float coverage  = saturate(w.r * (0.5f + c.coverage));   
+    float coverage  = saturate(w.r * (0.5f + c.coverage));
     float cloudType = saturate(w.g + c.cloudTypeBias);
 
-    float gradient = CloudHeightGradient(heightFrac, cloudType);
+    // Canal B = peak height (Nubis): topo da nuvem varia por regiao do weather map —
+    // regioes com B baixo terminam mais cedo na camada; B alto ocupa a casca toda.
+    float peakH = lerp(1.0f, lerp(0.35f, 1.0f, w.b), c.peakStrength);
+    float hNorm = heightFrac / max(peakH, 1e-3f);
+    if (hNorm >= 1.0f) return 0.0f;
+
+    float gradient = CloudHeightGradient(hNorm, cloudType);
     if (gradient <= 0.0f) return 0.0f;
 
     float3 sp   = float3(p.x, height - c.bottomR, p.z) * c.noiseScale + c.wind;

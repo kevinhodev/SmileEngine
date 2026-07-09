@@ -84,6 +84,7 @@ smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUT
 smile_compile_shader(Clouds/BakeDetailNoise.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/BakeWeather.cs.hlsl           cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudRaymarch.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/CloudTemporal.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudComposite.vs.hlsl        vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudComposite.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 
@@ -189,6 +190,7 @@ add_custom_target(Shaders
         Clouds/BakeDetailNoise.cs.hlsl
         Clouds/BakeWeather.cs.hlsl
         Clouds/CloudRaymarch.cs.hlsl
+        Clouds/CloudTemporal.cs.hlsl
         Clouds/CloudComposite.vs.hlsl
         Clouds/CloudComposite.ps.hlsl
         Water/WaterCommon.hlsli
