@@ -44,6 +44,24 @@ namespace SmileEditor {
         Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ViewSettingsChanged)
         Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double shadowSunAngle READ GetShadowSunAngle NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool cloudsEnabled READ AreCloudsEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool cloudsHalfRes READ AreCloudsHalfRes NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool cloudsTemporal READ AreCloudsTemporal NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudCoverage READ GetCloudCoverage NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudDensity READ GetCloudDensity NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudWindSpeed READ GetCloudWindSpeed NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudErosion READ GetCloudErosion NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudPhaseG READ GetCloudPhaseG NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudPowder READ GetCloudPowder NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudAmbient READ GetCloudAmbient NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudTypeBias READ GetCloudTypeBias NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudPeakVariation READ GetCloudPeakVariation NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int cloudWeatherSeed READ GetCloudWeatherSeed NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int cloudWeatherCells READ GetCloudWeatherCells NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool cloudWeatherAuthored READ IsCloudWeatherAuthored NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudBottomKm READ GetCloudBottomKm NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double cloudThicknessKm READ GetCloudThicknessKm NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int cloudMarchSteps READ GetCloudMarchSteps NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool mergeByMaterialEnabled READ IsMergeByMaterialEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
@@ -94,6 +112,24 @@ namespace SmileEditor {
         double            GetShadowMinCasterTexels() const;
         QVariantList      GetShadowCascadeBias() const;
         double            GetShadowSunAngle() const;
+        bool              AreCloudsEnabled() const;
+        bool              AreCloudsHalfRes() const;
+        bool              AreCloudsTemporal() const;
+        double            GetCloudCoverage() const;
+        double            GetCloudDensity() const;
+        double            GetCloudWindSpeed() const;
+        double            GetCloudErosion() const;
+        double            GetCloudPhaseG() const;
+        double            GetCloudPowder() const;
+        double            GetCloudAmbient() const;
+        double            GetCloudTypeBias() const;
+        double            GetCloudPeakVariation() const;
+        int               GetCloudWeatherSeed() const;
+        int               GetCloudWeatherCells() const;
+        bool              IsCloudWeatherAuthored() const;
+        double            GetCloudBottomKm() const;
+        double            GetCloudThicknessKm() const;
+        int               GetCloudMarchSteps() const;
         bool              IsDepthPrepassEnabled() const;
         bool              IsMergeByMaterialEnabled() const;
         double            GetFrameTimeMs() const;
@@ -127,6 +163,24 @@ namespace SmileEditor {
         Q_INVOKABLE void SetShadowMinCasterTexels(double texels);
         Q_INVOKABLE void SetShadowCascadeBiasScale(int cascade, double scale);
         Q_INVOKABLE void SetShadowSunAngle(double degrees);
+        Q_INVOKABLE void SetCloudsEnabled(bool enabled);
+        Q_INVOKABLE void SetCloudsHalfRes(bool halfRes);
+        Q_INVOKABLE void SetCloudsTemporal(bool enabled);
+        Q_INVOKABLE void SetCloudCoverage(double value);
+        Q_INVOKABLE void SetCloudDensity(double value);
+        Q_INVOKABLE void SetCloudWindSpeed(double value);
+        Q_INVOKABLE void SetCloudErosion(double value);
+        Q_INVOKABLE void SetCloudPhaseG(double value);
+        Q_INVOKABLE void SetCloudPowder(double value);
+        Q_INVOKABLE void SetCloudAmbient(double value);
+        Q_INVOKABLE void SetCloudTypeBias(double value);
+        Q_INVOKABLE void SetCloudPeakVariation(double value);
+        Q_INVOKABLE void SetCloudWeatherSeed(int seed);
+        Q_INVOKABLE void SetCloudWeatherCells(int mult);
+        Q_INVOKABLE void LoadCloudWeatherTexture();  // abre QFileDialog
+        Q_INVOKABLE void ClearCloudWeatherTexture();
+        Q_INVOKABLE void SetCloudAltitude(double bottomKm, double thicknessKm);
+        Q_INVOKABLE void SetCloudMarchSteps(int steps);
         Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
         Q_INVOKABLE void SetMergeByMaterialEnabled(bool enabled);
         Q_INVOKABLE void ResetRenderSettings();

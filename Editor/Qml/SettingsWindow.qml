@@ -32,7 +32,8 @@ Rectangle {
     function pageTitle() {
         const titles = [
             "Renderização", "Iluminação global", "Path tracer", "Reflexos e denoise",
-            "Água — FFT", "Pós-processo", "Sombras e céu", "Interface", "Atalhos", "Projeto"
+            "Água — FFT", "Pós-processo", "Sombras e céu", "Nuvens volumétricas",
+            "Interface", "Atalhos", "Projeto"
         ]
         return titles[selectedPage]
     }
@@ -42,6 +43,8 @@ Rectangle {
             return "Upscaling, anti-aliasing e resolução interna do viewport"
         if (selectedPage === 6)
             return "Sombras do sol (CSM): cascatas, cache, bias e debug"
+        if (selectedPage === 7)
+            return "Raymarch de nuvens na atmosfera: cobertura, forma, iluminação e custo"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
     }
 
@@ -231,6 +234,28 @@ Rectangle {
         }
         HoverHandler { id: navHover; cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: root.selectedPage = nav.page }
+    }
+
+    component ActionButton: Rectangle {
+        id: abtn
+        property string label
+        signal tapped()
+        width: abtnText.implicitWidth + 26
+        height: 26
+        radius: 6
+        color: abtnHover.hovered ? "#23241d" : "transparent"
+        border.color: "#33342c"
+        border.width: 1
+        Text {
+            id: abtnText
+            anchors.centerIn: parent
+            text: abtn.label
+            color: root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+        HoverHandler { id: abtnHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: abtn.tapped() }
     }
 
     component Card: Rectangle {
@@ -432,21 +457,22 @@ Rectangle {
             NavItem { page: 4; glyph: "≋"; label: "Água — FFT" }
             NavItem { page: 5; glyph: "☷"; label: "Pós-processo" }
             NavItem { page: 6; glyph: "☾"; label: "Sombras e céu" }
+            NavItem { page: 7; glyph: "☁"; label: "Nuvens volumétricas" }
         }
 
         Text {
-            x: 20; y: 338
+            x: 20; y: 372
             text: "Editor"
             color: root.textMuted
             font.family: "Segoe UI"
             font.pixelSize: 11
         }
         Column {
-            x: 12; y: 352
+            x: 12; y: 386
             spacing: 4
-            NavItem { page: 7; glyph: "▤"; label: "Interface" }
-            NavItem { page: 8; glyph: "⌨"; label: "Atalhos" }
-            NavItem { page: 9; glyph: "▰"; label: "Projeto" }
+            NavItem { page: 8; glyph: "▤"; label: "Interface" }
+            NavItem { page: 9; glyph: "⌨"; label: "Atalhos" }
+            NavItem { page: 10; glyph: "▰"; label: "Projeto" }
         }
 
         Rectangle {
@@ -1041,8 +1067,275 @@ Rectangle {
             }
         }
 
+        Flickable {
+            id: cloudsPage
+            visible: root.selectedPage === 7
+            anchors.fill: parent
+            anchors.topMargin: 84
+            contentWidth: width
+            contentHeight: cloudsCol.height + 40
+            clip: true
+            ScrollBar.vertical: ThinScrollBar { revealed: cloudsPageHover.hovered }
+            HoverHandler { id: cloudsPageHover }
+
+            Column {
+                id: cloudsCol
+                x: 24
+                width: cloudsPage.width - 48
+                spacing: 16
+
+            Card {
+                width: parent.width
+                height: 330
+                title: "Camada de nuvens"
+
+                Text {
+                    x: 20; y: 55
+                    text: "Nuvens volumétricas"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "raymarch acoplado à atmosfera"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.cloudsEnabled
+                    onToggled: viewportModel.SetCloudsEnabled(!checked)
+                }
+
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Cobertura"
+                    from: 0; to: 1; step: 0.01
+                    value: viewportModel.cloudCoverage
+                    valueText: Math.round(viewportModel.cloudCoverage * 100) + " %"
+                    onCommitted: (v) => viewportModel.SetCloudCoverage(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 160
+                    width: parent.width - 40
+                    label: "Densidade (extinção /km)"
+                    from: 0.1; to: 10.0; step: 0.1
+                    value: viewportModel.cloudDensity
+                    valueText: viewportModel.cloudDensity.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetCloudDensity(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 212
+                    width: parent.width - 40
+                    label: "Altitude da base"
+                    from: 0.5; to: 8.0; step: 0.1
+                    value: viewportModel.cloudBottomKm
+                    valueText: viewportModel.cloudBottomKm.toFixed(1).replace(".", ",") + " km"
+                    onCommitted: (v) => viewportModel.SetCloudAltitude(v, viewportModel.cloudThicknessKm)
+                }
+                ShadowSlider {
+                    x: 20; y: 264
+                    width: parent.width - 40
+                    label: "Espessura da camada"
+                    from: 0.5; to: 8.0; step: 0.1
+                    value: viewportModel.cloudThicknessKm
+                    valueText: viewportModel.cloudThicknessKm.toFixed(1).replace(".", ",") + " km"
+                    onCommitted: (v) => viewportModel.SetCloudAltitude(viewportModel.cloudBottomKm, v)
+                }
+            }
+
+            Card {
+                width: parent.width
+                height: 336
+                title: "Distribuição — weather map"
+
+                ShadowSlider {
+                    x: 20; y: 56
+                    width: parent.width - 40
+                    label: "Células do padrão (re-bakea na hora)"
+                    from: 1; to: 8; step: 1
+                    value: viewportModel.cloudWeatherCells
+                    valueText: viewportModel.cloudWeatherCells + "×"
+                    onCommitted: (v) => viewportModel.SetCloudWeatherCells(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Semente"
+                    from: 0; to: 9999; step: 1
+                    value: viewportModel.cloudWeatherSeed
+                    valueText: viewportModel.cloudWeatherSeed + ""
+                    onCommitted: (v) => viewportModel.SetCloudWeatherSeed(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 160
+                    width: parent.width - 40
+                    label: "Viés de tipo (stratus ↔ cumulonimbus)"
+                    from: -0.5; to: 0.5; step: 0.01
+                    value: viewportModel.cloudTypeBias
+                    valueText: (viewportModel.cloudTypeBias >= 0 ? "+" : "") +
+                               viewportModel.cloudTypeBias.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetCloudTypeBias(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 212
+                    width: parent.width - 40
+                    label: "Variação de topo (peak height, canal B)"
+                    from: 0; to: 1; step: 0.01
+                    value: viewportModel.cloudPeakVariation
+                    valueText: Math.round(viewportModel.cloudPeakVariation * 100) + " %"
+                    onCommitted: (v) => viewportModel.SetCloudPeakVariation(v)
+                }
+
+                Row {
+                    x: 20; y: 268
+                    spacing: 10
+                    ActionButton {
+                        label: "Semente aleatória"
+                        onTapped: viewportModel.SetCloudWeatherSeed(Math.floor(Math.random() * 10000))
+                    }
+                    ActionButton {
+                        label: "Carregar textura…"
+                        onTapped: viewportModel.LoadCloudWeatherTexture()
+                    }
+                    ActionButton {
+                        label: "Voltar ao procedural"
+                        visible: viewportModel.cloudWeatherAuthored
+                        onTapped: viewportModel.ClearCloudWeatherTexture()
+                    }
+                }
+                Text {
+                    x: 20; y: 306
+                    text: viewportModel.cloudWeatherAuthored
+                          ? "fonte: textura autorada — R = cobertura · G = tipo · B = altura de topo"
+                          : "fonte: procedural (seed " + viewportModel.cloudWeatherSeed + ")"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                }
+            }
+
+            Card {
+                width: parent.width
+                height: 330
+                title: "Forma e iluminação"
+
+                ShadowSlider {
+                    x: 20; y: 56
+                    width: parent.width - 40
+                    label: "Erosão de detalhe"
+                    from: 0; to: 1; step: 0.01
+                    value: viewportModel.cloudErosion
+                    valueText: Math.round(viewportModel.cloudErosion * 100) + " %"
+                    onCommitted: (v) => viewportModel.SetCloudErosion(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Vento"
+                    from: 0; to: 0.05; step: 0.001
+                    value: viewportModel.cloudWindSpeed
+                    valueText: Math.round(viewportModel.cloudWindSpeed * 1000) + " m/s"
+                    onCommitted: (v) => viewportModel.SetCloudWindSpeed(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 160
+                    width: parent.width - 40
+                    label: "Anisotropia da fase (g)"
+                    from: 0; to: 0.95; step: 0.01
+                    value: viewportModel.cloudPhaseG
+                    valueText: viewportModel.cloudPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetCloudPhaseG(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 212
+                    width: parent.width - 40
+                    label: "Powder (auto-sombra de borda)"
+                    from: 0; to: 1; step: 0.01
+                    value: viewportModel.cloudPowder
+                    valueText: Math.round(viewportModel.cloudPowder * 100) + " %"
+                    onCommitted: (v) => viewportModel.SetCloudPowder(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 264
+                    width: parent.width - 40
+                    label: "Ambiente do céu"
+                    from: 0; to: 3.0; step: 0.05
+                    value: viewportModel.cloudAmbient
+                    valueText: "×" + viewportModel.cloudAmbient.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetCloudAmbient(v)
+                }
+            }
+
+            Card {
+                width: parent.width
+                height: 216
+                title: "Desempenho"
+
+                Text {
+                    x: 20; y: 55
+                    text: "Meia resolução"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "raymarch em ½ res + upsample bilinear"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.cloudsHalfRes
+                    onToggled: viewportModel.SetCloudsHalfRes(!checked)
+                }
+
+                Text {
+                    x: 20; y: 97
+                    text: "Reprojeção temporal"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 116
+                    text: "acumula frames; integra o ruído do jitter"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 96
+                    checked: viewportModel.cloudsTemporal
+                    onToggled: viewportModel.SetCloudsTemporal(!checked)
+                }
+
+                ShadowSlider {
+                    x: 20; y: 150
+                    width: parent.width - 40
+                    label: "Passos do raymarch"
+                    from: 32; to: 256; step: 8
+                    value: viewportModel.cloudMarchSteps
+                    valueText: viewportModel.cloudMarchSteps + ""
+                    onCommitted: (v) => viewportModel.SetCloudMarchSteps(v)
+                }
+            }
+            } // Column cloudsCol
+        }
+
         Item {
-            visible: root.selectedPage !== 0 && root.selectedPage !== 6
+            visible: root.selectedPage !== 0 && root.selectedPage !== 6 && root.selectedPage !== 7
             anchors.fill: parent
             Rectangle {
                 anchors.centerIn: parent

@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QCursor>
 #include <QLocale>
+#include <QFileDialog>
 
 namespace SmileEditor {
     static constexpr float kMouseSensitivity = 0.15f;  
@@ -353,6 +354,191 @@ namespace SmileEditor {
     void ViewportWidget::SetShadowSunAngle(double _Degrees) {
         if (!Renderer) return;
         Renderer->GetSunShadows().SetSunAngularSize(static_cast<Smile::f32>(_Degrees));
+        emit ViewSettingsChanged();
+    }
+
+    bool ViewportWidget::AreCloudsEnabled() const {
+        return Renderer ? Renderer->GetUseClouds() : false;
+    }
+
+    void ViewportWidget::SetCloudsEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetUseClouds(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    bool ViewportWidget::AreCloudsHalfRes() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetHalfRes() : true;
+    }
+
+    bool ViewportWidget::AreCloudsTemporal() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetUseTemporal() : true;
+    }
+
+    void ViewportWidget::SetCloudsTemporal(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetUseTemporal(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetCloudsHalfRes(bool _HalfRes) {
+        if (!Renderer) return;
+        Renderer->SetCloudsHalfRes(_HalfRes);
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudCoverage() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetCoverage() : 0.45;
+    }
+
+    void ViewportWidget::SetCloudCoverage(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetCoverage(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudDensity() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetDensityScale() : 1.6;
+    }
+
+    void ViewportWidget::SetCloudDensity(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetDensityScale(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudWindSpeed() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetWindSpeed() : 0.01;
+    }
+
+    void ViewportWidget::SetCloudWindSpeed(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetWindSpeed(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudErosion() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetErosion() : 0.45;
+    }
+
+    void ViewportWidget::SetCloudErosion(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetErosion(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudPhaseG() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetPhaseG() : 0.8;
+    }
+
+    void ViewportWidget::SetCloudPhaseG(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetPhaseG(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudPowder() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetPowder() : 0.5;
+    }
+
+    void ViewportWidget::SetCloudPowder(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetPowder(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudAmbient() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetAmbientScale() : 1.0;
+    }
+
+    void ViewportWidget::SetCloudAmbient(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetAmbientScale(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudTypeBias() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetCloudTypeBias() : 0.0;
+    }
+
+    void ViewportWidget::SetCloudTypeBias(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetCloudTypeBias(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudPeakVariation() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetPeakVariation() : 1.0;
+    }
+
+    void ViewportWidget::SetCloudPeakVariation(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetPeakVariation(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    int ViewportWidget::GetCloudWeatherSeed() const {
+        return Renderer ? static_cast<int>(Renderer->GetCloudWeatherSeed()) : 1337;
+    }
+
+    void ViewportWidget::SetCloudWeatherSeed(int _Seed) {
+        if (!Renderer) return;
+        Renderer->SetCloudWeatherSeed(static_cast<Smile::u32>(_Seed < 0 ? 0 : _Seed));
+        emit ViewSettingsChanged();
+    }
+
+    int ViewportWidget::GetCloudWeatherCells() const {
+        return Renderer ? static_cast<int>(Renderer->GetCloudWeatherCells()) : 3;
+    }
+
+    void ViewportWidget::SetCloudWeatherCells(int _Mult) {
+        if (!Renderer) return;
+        Renderer->SetCloudWeatherCells(static_cast<Smile::u32>(_Mult < 1 ? 1 : _Mult));
+        emit ViewSettingsChanged();
+    }
+
+    bool ViewportWidget::IsCloudWeatherAuthored() const {
+        return Renderer ? Renderer->CloudWeatherAuthored() : false;
+    }
+
+    void ViewportWidget::LoadCloudWeatherTexture() {
+        if (!Renderer) return;
+        const QString Path = QFileDialog::getOpenFileName(
+            this, tr("Weather map (R=cobertura, G=tipo, B=altura de topo)"), QString(),
+            tr("Imagens (*.png *.jpg *.jpeg *.tga *.bmp)"));
+        if (Path.isEmpty()) return;
+        Renderer->LoadCloudWeatherTexture(Path.toStdWString());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ClearCloudWeatherTexture() {
+        if (!Renderer) return;
+        Renderer->ClearCloudWeatherTexture();
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCloudBottomKm() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetBottomAltitude() : 2.0;
+    }
+
+    double ViewportWidget::GetCloudThicknessKm() const {
+        return Renderer ? Renderer->GetVolumetricClouds().GetThickness() : 3.0;
+    }
+
+    void ViewportWidget::SetCloudAltitude(double _BottomKm, double _ThicknessKm) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetAltitude(static_cast<Smile::f32>(_BottomKm),
+                                                    static_cast<Smile::f32>(_ThicknessKm));
+        emit ViewSettingsChanged();
+    }
+
+    int ViewportWidget::GetCloudMarchSteps() const {
+        return Renderer ? static_cast<int>(Renderer->GetVolumetricClouds().GetMarchSteps()) : 128;
+    }
+
+    void ViewportWidget::SetCloudMarchSteps(int _Steps) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricClouds().SetMarchSteps(static_cast<Smile::f32>(_Steps));
         emit ViewSettingsChanged();
     }
 
