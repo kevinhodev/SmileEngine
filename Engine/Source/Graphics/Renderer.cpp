@@ -768,6 +768,11 @@ namespace Smile {
             Projection.M[2][0] += JitterPxX * 2.0f / static_cast<f32>(RenderWidth());
             Projection.M[2][1] += ProjJitterYSign * JitterPxY * 2.0f / static_cast<f32>(RenderHeight());
         }
+        // Offset que o jitter aplica ao sample rasterizado, no espaco UV (y invertido: ndc y-up ->
+        // uv y-down). Consumido pela reprojecao do ReSTIR GI (delta prev-curr) e pelo NRD (pixels).
+        const Vec2 JitterUv{ JitterPxX / static_cast<f32>(RenderWidth()),
+                             -ProjJitterYSign * JitterPxY / static_cast<f32>(RenderHeight()) };
+        const Vec2 JitterPx{ JitterPxX, -ProjJitterYSign * JitterPxY };
         const Mat44 ViewProjection = View * Projection;
         const Mat44 ViewProjUnjittered = View * ProjUnjittered;
         LastViewProj = ViewProjUnjittered; 
@@ -1066,7 +1071,7 @@ namespace Smile {
         if (ReSTIRGIActive) {
             ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
                                     RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
-                                    FrameIndex, 1.0f, 0.2f, View);
+                                    FrameIndex, 1.0f, 0.2f, View, PrevJitterUv - JitterUv);
         }
 
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
@@ -1404,7 +1409,7 @@ namespace Smile {
                 ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
                 if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
                 Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
-                             Vec2{ 0.0f, 0.0f }, Vec2{ 0.0f, 0.0f }, FrameIndex);
+                             JitterPx, PrevJitterPx, FrameIndex);
                 Nrd.Denoise(CommandList);
                 Nrd.TransitionOutputToRead(CommandList);
                 ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
@@ -1734,8 +1739,10 @@ namespace Smile {
         }
 
         PrevViewProj = ViewProjUnjittered;
-        NrdPrevProj  = ProjUnjittered; 
+        NrdPrevProj  = ProjUnjittered;
         NrdPrevView  = View;
+        PrevJitterUv = JitterUv;
+        PrevJitterPx = JitterPx;
 
         if (FlickerMode > 0 && Flicker.IsInitialized()) {
             Flicker.Execute(CommandList, SRVHeap, PostInputSRV, static_cast<f32>(FlickerMode),

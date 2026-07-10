@@ -28,6 +28,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ShadeParams;
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=radius(px), y=count, z=spatial(0/1), w=normalReject
+    float4 JitterParams;            // xy = prevJitterUv - currJitterUv (so o Pass A usa; layout comum)
 };
 
 RaytracingAccelerationStructure Scene  : register(t0);
@@ -54,7 +55,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float deviceZ = Depth.Load(int3(px, 0)).r;
     if (deviceZ <= 0.0f) { GIOut[px] = float4(0.0f, 0.0f, 0.0f, 0.0f); return; }
 
-    float hitDist = GIOut[px].a; // preserva o hitDist escrito pelo Pass A (p/ o NRD na Fase C)
+    float hitDist = GIOut[px].a; // hitDist do Pass A — so fallback qdo o WRS espacial fica vazio
 
     float4 gb = GBuffer.Load(int3(px, 0));
     float3 n1 = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
@@ -185,5 +186,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
 
     float3 gi = ResResolve(rs, x1, n1, ShadeParams.z);
-    GIOut[px] = float4(gi, hitDist);
+    // hitDist do NRD segue a amostra VENCEDORA (um vizinho pode ter trocado x2); ver Pass A.
+    float selDist = (rs.wSum > 0.0f) ? length(rs.x2 - x1) : hitDist;
+    GIOut[px] = float4(gi, selDist);
 }

@@ -28,6 +28,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ShadeParams;
     float4 ReuseParams;
     float4 SpatialParams;
+    float4 JitterParams;            // nao usado aqui; mantem o layout comum do ReSTIRCB
     row_major float4x4 View;        // anexado p/ o pack: worldPos -> view.z (IN_VIEWZ)
     float4 NrdHitDistParams;        // xyz = ReblurHitDistanceParameters {A,B,C} (igual ao C++)
 };

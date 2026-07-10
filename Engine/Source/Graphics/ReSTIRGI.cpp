@@ -184,7 +184,7 @@ namespace Smile {
     void FReSTIRGI::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Vec3& _CameraPos,
                                    u32 _Width, u32 _Height, const Vec3& _SunDir, f32 _SunIntensity,
                                    const Vec3& _SunColor, u32 _FrameIndex, f32 _SkyIntensity,
-                                   f32 _NormalBias, const Mat44& _View) {
+                                   f32 _NormalBias, const Mat44& _View, const Vec2& _JitterDeltaUv) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
@@ -200,6 +200,7 @@ namespace Smile {
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, 0.0f };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
+        CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y, 0.0f, 0.0f };
         CPU.NrdHitDistParams = { 3.0f, 0.1f, 20.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));

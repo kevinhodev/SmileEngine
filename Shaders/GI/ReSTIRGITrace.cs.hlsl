@@ -22,6 +22,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
+    float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao no espaco jittered)
 };
 
 RaytracingAccelerationStructure Scene      : register(t0);
@@ -143,7 +144,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // --- (2) Reuso temporal ------------------------------------------------------------------
     if (ReuseParams.w > 0.5f) {
         float2 vel    = Velocity.Load(int3(px, 0)).rg;
-        float2 prevUv = uv - vel;
+        // Velocity e unjittered (contrato do FSR2), mas o raster e jittered: sem compensar
+        // prevJitter - currJitter, a busca no historico desloca ate 1 texel por frame.
+        float2 prevUv = uv - vel + JitterParams.xy;
         if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
             int2 ppx = int2(prevUv * ScreenParams.xy);
             float4 pa = PrevResA.Load(int3(ppx, 0));
@@ -170,7 +173,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ResFinalizeW(r, x1, N);
     float3 gi = ResResolve(r, x1, N, ShadeParams.z);
 
-    GIOut[px]    = float4(gi, hitDist);
+    // hitDist p/ o NRD = distancia da amostra VENCEDORA do WRS (o temporal pode trocar x2; o hitT
+    // do raio inicial guiaria o denoiser com um caminho diferente do da radiancia resolvida).
+    // Fallback pro raio inicial quando nada foi selecionado (wSum=0 deixa x2 zerado).
+    float selDist = (r.wSum > 0.0f) ? length(r.x2 - x1) : hitDist;
+    GIOut[px]    = float4(gi, selDist);
     CurrResA[px] = float4(r.x1, r.M);
     CurrResB[px] = float4(r.x2, r.W);
     CurrResC[px] = float4(r.Lo, 0.0f);

@@ -24,6 +24,7 @@ namespace Smile {
         Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
+        Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
         Mat44 View;            // anexado p/ o pack do NRD (worldPos -> view.z = IN_VIEWZ)
         Vec4  NrdHitDistParams;// xyz = ReblurHitDistanceParameters {A,B,C} (igual ao driver NRD)
     };
@@ -46,7 +47,7 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity, f32 NormalBias,
-                            const Mat44& View);
+                            const Mat44& View, const Vec2& JitterDeltaUv);
 
         void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 

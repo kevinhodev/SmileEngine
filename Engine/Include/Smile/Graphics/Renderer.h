@@ -426,6 +426,9 @@ namespace Smile {
         bool             UseNrdDenoise = false; // NRD como denoiser do ReSTIR (Fase C)
         Mat44            NrdPrevView{};        // prev view/proj NAO-jitteradas p/ a reprojecao do NRD
         Mat44            NrdPrevProj{};
+        Vec2             PrevJitterUv{ 0.0f, 0.0f }; // jitter do frame anterior em UV (y ja invertido
+                                                     // p/ uv y-down) — reprojecao do ReSTIR GI
+        Vec2             PrevJitterPx{ 0.0f, 0.0f }; // idem em pixels — cameraJitterPrev do NRD
 
         FReflections     Reflections;
         bool             UseReflections = true;
