@@ -346,6 +346,41 @@ namespace Smile {
 
         BuildRaytracingScene();
         SetupGIForScene(sceneMin, sceneMax);
+
+        // F1 (TEMPORARIO ate o painel de luzes do editor, F2): tres luzes de teste perto do
+        // spawn da camera p/ validar o caminho puntual no A/B — 2 point coloridas + 1 spot.
+        // Sem sombra local ainda (F3): luz vazando parede e esperado.
+        if (!_Additive && Scene.Lights().empty()) {
+            FLight P1;
+            P1.Name = "Teste point quente";
+            P1.Position = { -10.0f, 2.5f, 0.0f };
+            P1.Color = { 1.0f, 0.55f, 0.25f };
+            P1.Intensity = 20.0f;
+            P1.AttenuationRadius = 12.0f;
+            Scene.AddLight(P1);
+
+            FLight P2;
+            P2.Name = "Teste point fria";
+            P2.Position = { -16.0f, 2.0f, 4.0f };
+            P2.Color = { 0.3f, 0.6f, 1.0f };
+            P2.Intensity = 15.0f;
+            P2.AttenuationRadius = 10.0f;
+            Scene.AddLight(P2);
+
+            FLight S1;
+            S1.Name = "Teste spot";
+            S1.Type = ELightType::Spot;
+            S1.Position  = { -12.0f, 6.0f, -2.0f };
+            S1.Direction = { 0.2f, -1.0f, 0.1f };
+            S1.Color = { 1.0f, 0.95f, 0.85f };
+            S1.Intensity = 60.0f;
+            S1.AttenuationRadius = 18.0f;
+            S1.InnerConeDeg = 20.0f;
+            S1.OuterConeDeg = 35.0f;
+            Scene.AddLight(S1);
+
+            LogInfo("F1 luzes: 3 luzes de teste adicionadas (2 point + 1 spot).");
+        }
         return true;
     }
 }

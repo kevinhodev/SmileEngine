@@ -73,6 +73,18 @@ namespace Smile {
                                   // z = 1/extent (km), w = forca (0 = off)
         Vec4  CloudShadowParams2; // 16 bytes — x = km/unidade de mundo, y = altura da base (km),
                                   // zw = keyDir.xz/keyDir.y (projecao ate a base da camada)
+
+        Vec4  LightParams;        // 16 bytes — x = nº de luzes puntuais no buffer t17, yzw = -
+    };
+
+    // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
+    // (StructuredBuffer t17, root SRV). 4 float4 por luz; SpotParams.yzw reservado p/ as
+    // fases seguintes (indice de sombra F3, source length F4).
+    struct FGPULight {
+        Vec4 PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
+        Vec4 ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
+        Vec4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
+        Vec4 SpotParams;        // x = 1/(cosInner - cosOuter), yzw = reservado
     };
 
     struct alignas(256) ObjectConstants {
@@ -323,8 +335,14 @@ namespace Smile {
         // Estatico -> PrevModel == Model -> motion vector reduz ao termo de camera.
         std::vector<Mat44>       PrevModels;
 
-        ComPtr<ID3D12Resource>   ConstantBuffer;   
+        ComPtr<ID3D12Resource>   ConstantBuffer;
         u8*                      MappedFrameBase = nullptr;
+
+        // Luzes puntuais: upload persistente com kMaxLights por frame em voo, escrito no
+        // RenderFrame (coleta+cull da FScene) e lido pelo deferred lighting via root SRV t17.
+        static constexpr u32     kMaxLights = 256;
+        ComPtr<ID3D12Resource>   LightBuffer;
+        u8*                      MappedLightBase = nullptr;
 
         u32                      MaxObjects = 1024;
         ComPtr<ID3D12Resource>   ObjectCB;          

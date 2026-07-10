@@ -3,6 +3,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
+#include "Smile/Scene/Light.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,10 +42,16 @@ namespace Smile {
         std::vector<FRenderable>&       Renderables()       { return RenderableList; }
         const std::vector<FRenderable>& Renderables() const { return RenderableList; }
 
+        FLight& AddLight(const FLight& Light);
+
+        std::vector<FLight>&       Lights()       { return LightList; }
+        const std::vector<FLight>& Lights() const { return LightList; }
+
         void Clear();
 
     private:
         std::vector<std::unique_ptr<FGpuMesh>> MeshLibrary;
         std::vector<FRenderable>               RenderableList;
+        std::vector<FLight>                    LightList;
     };
 }

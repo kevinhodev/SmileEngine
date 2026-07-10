@@ -12,7 +12,7 @@
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[10]{};
+        D3D12_ROOT_PARAMETER RootParams[11]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -113,6 +113,14 @@ namespace Smile {
         RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[9].DescriptorTable.pDescriptorRanges   = &ReSTIRGIRange;
         RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // Luzes puntuais (t17): StructuredBuffer<FGPULight> como ROOT SRV — endereco de GPU
+        // direto, sem passar pelo descriptor heap. So o deferred lighting referencia t17; os
+        // outros PSOs desta root sig nao acessam o registro, entao nao precisam do bind.
+        RootParams[10].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        RootParams[10].Descriptor.ShaderRegister = 17;
+        RootParams[10].Descriptor.RegisterSpace  = 0;
+        RootParams[10].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;

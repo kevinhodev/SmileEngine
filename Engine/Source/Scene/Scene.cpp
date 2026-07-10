@@ -56,8 +56,14 @@ namespace Smile {
         return RenderableList.back();
     }
 
+    FLight& FScene::AddLight(const FLight& _Light) {
+        LightList.push_back(_Light);
+        return LightList.back();
+    }
+
     void FScene::Clear() {
         RenderableList.clear();
         MeshLibrary.clear();
+        LightList.clear();
     }
 }

@@ -22,7 +22,19 @@ cbuffer FrameCB : register(b0) {
     float4 RenderParams;       // nao usado aqui; mantem os offsets do FrameConstants
     float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = forca (0 = off)
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
+    float4 LightParams;        // x = nº de luzes puntuais no buffer t17, yzw = -
 };
+
+// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.yzw reservado
+// (indice de sombra na F3, source length na F4).
+struct FGPULight {
+    float4 PosInvRadius;      // xyz = posicao, w = 1/raio de atenuacao
+    float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulb (distancia minima)
+    float4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
+    float4 SpotParams;        // x = 1/(cosInner - cosOuter)
+};
+
+StructuredBuffer<FGPULight> Lights : register(t17);
 
 Texture2D        GBufferA   : register(t0);
 Texture2D        GBufferB   : register(t1);
@@ -181,6 +193,44 @@ float4 main(VSOutput input) : SV_Target {
         }
 
         Lighting += (SunLit + MoonLit) * SampleCSM(worldPos, N, input.pos.xy) * cloudShadow;
+    }
+
+    // Luzes puntuais (point/spot): inverse-square com janela de raio da Unreal
+    // ((1-(d/r)^4)^2 — a luz morre exatamente no raio de atenuacao, sem pop de culling)
+    // + piso de "bulb" da Cry (distancia minima = SourceRadius: superficie encostada na
+    // luz nao estoura a branco) + mascara de cone quadratica no spot (UE/Flax identicas).
+    // SEM sombra na F1 (luz vaza parede) — sombras locais chegam na F3.
+    {
+        uint NumLights = (uint)LightParams.x;
+        [loop]
+        for (uint li = 0; li < NumLights; ++li) {
+            FGPULight Lp = Lights[li];
+
+            float3 ToLight = Lp.PosInvRadius.xyz - worldPos;
+            float  DistSqr = dot(ToLight, ToLight);
+            float  InvR    = Lp.PosInvRadius.w;
+
+            float Window = DistSqr * InvR * InvR;          // (d/r)^2
+            Window = saturate(1.0f - Window * Window);     // 1-(d/r)^4
+            Window *= Window;
+            if (Window <= 0.0f) continue;
+
+            float  Dist     = sqrt(DistSqr);
+            float3 L        = ToLight / max(Dist, 1e-4f);
+            float  DClamped = max(Dist, Lp.ColorSourceRadius.w);
+            float  Atten    = Window / (DClamped * DClamped);
+
+            if (Lp.DirCosOuter.w > -1.5f) {
+                float SpotMask = saturate((dot(-L, Lp.DirCosOuter.xyz) - Lp.DirCosOuter.w)
+                                          * Lp.SpotParams.x);
+                Atten *= SpotMask * SpotMask;
+            }
+            if (Atten <= 0.0f) continue;
+
+            Lighting += BRDF_Direct(N, V, L, Lp.ColorSourceRadius.rgb * Atten,
+                                    DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                                    TransColor);
+        }
     }
 
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);

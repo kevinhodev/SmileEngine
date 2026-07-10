@@ -218,6 +218,16 @@ namespace Smile {
         SMILE_HR(ConstantBuffer->Map(0, &NoReadRange, &Ptr));
         MappedFrameBase = reinterpret_cast<u8*>(Ptr);
 
+        // Buffer de luzes puntuais (root SRV t17 do deferred lighting): mesmo ciclo de vida
+        // do FrameCB — upload persistente, um slice de kMaxLights por frame em voo.
+        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
+                             kMaxLights * sizeof(FGPULight);
+        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
+                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                 IID_PPV_ARGS(&LightBuffer)));
+        SMILE_HR(LightBuffer->Map(0, &NoReadRange, &Ptr));
+        MappedLightBase = reinterpret_cast<u8*>(Ptr);
+
         RecreateObjectCB();
     }
 
@@ -1083,10 +1093,62 @@ namespace Smile {
                 f32 px = (p.X >= 0.0f) ? Mx.X : Mn.X;
                 f32 py = (p.Y >= 0.0f) ? Mx.Y : Mn.Y;
                 f32 pz = (p.Z >= 0.0f) ? Mx.Z : Mn.Z;
-                if (p.X*px + p.Y*py + p.Z*pz + p.W < 0.0f) return true; 
+                if (p.X*px + p.Y*py + p.Z*pz + p.W < 0.0f) return true;
             }
             return false;
         };
+
+        // Luzes puntuais: coleta as ativas da cena, cull esfera-vs-frustum pelo raio de
+        // atenuacao (a janela (1-(d/r)^4)^2 no shader garante contribuicao zero fora do raio,
+        // entao o corte nao pipoca) e sobe pro slice do frame no LightBuffer (root SRV t17).
+        // O teste de esfera precisa de planos NORMALIZADOS (os do AABB acima usam so o sinal).
+        {
+            Vec4 NPlanes[6];
+            for (int i = 0; i < 6; ++i) {
+                const Vec4& p   = Planes[i];
+                const f32   len = std::sqrt(p.X*p.X + p.Y*p.Y + p.Z*p.Z);
+                const f32   inv = len > 1e-6f ? 1.0f / len : 0.0f;
+                NPlanes[i] = { p.X*inv, p.Y*inv, p.Z*inv, p.W*inv };
+            }
+
+            FGPULight* DstLights = reinterpret_cast<FGPULight*>(
+                MappedLightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULight));
+            u32 NumLights = 0;
+            for (const FLight& L : Scene.Lights()) {
+                if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
+                if (NumLights >= kMaxLights) break;
+
+                bool Outside = false;
+                for (int i = 0; i < 6 && !Outside; ++i) {
+                    const Vec4& p = NPlanes[i];
+                    Outside = (p.X*L.Position.X + p.Y*L.Position.Y + p.Z*L.Position.Z + p.W)
+                              < -L.AttenuationRadius;
+                }
+                if (Outside) continue;
+
+                FGPULight G;
+                G.PosInvRadius      = { L.Position.X, L.Position.Y, L.Position.Z,
+                                        1.0f / L.AttenuationRadius };
+                G.ColorSourceRadius = { L.Color.X * L.Intensity, L.Color.Y * L.Intensity,
+                                        L.Color.Z * L.Intensity,
+                                        std::max(L.SourceRadius, 0.01f) };
+                if (L.Type == ELightType::Spot) {
+                    const Vec3 D = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                    const f32 OuterDeg  = std::clamp(L.OuterConeDeg, 1.0f, 89.0f);
+                    const f32 InnerDeg  = std::clamp(L.InnerConeDeg, 0.0f, OuterDeg);
+                    const f32 CosOuter  = std::cos(OuterDeg * ToRad);
+                    const f32 CosInner  = std::cos(InnerDeg * ToRad);
+                    G.DirCosOuter = { D.X, D.Y, D.Z, CosOuter };
+                    G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
+                                      0.0f, 0.0f, 0.0f };
+                } else {
+                    G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f }; // -2 = sem mascara de cone
+                    G.SpotParams  = { 0.0f, 0.0f, 0.0f, 0.0f };
+                }
+                DstLights[NumLights++] = G;
+            }
+            MappedCB->LightParams = { static_cast<f32>(NumLights), 0.0f, 0.0f, 0.0f };
+        }
 
 
         const Vec3 CamPos = Camera.GetPosition();
@@ -1394,6 +1456,9 @@ namespace Smile {
                 const u32 ReSTIRTable = ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
             }
+            CommandList->SetGraphicsRootShaderResourceView(
+                10, LightBuffer->GetGPUVirtualAddress() +
+                    static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight));
             CommandList->SetPipelineState(PipelineState.PSODeferredLighting());
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             CommandList->IASetVertexBuffers(0, 0, nullptr);
