@@ -9,6 +9,7 @@
 #include "SmileEditor/SmileLogoImageProvider.h"
 #include "SmileEditor/StatusBridge.h"
 #include "SmileEditor/TimeOfDayBridge.h"
+#include "SmileEditor/LightsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/DarkTheme.h"
@@ -66,6 +67,7 @@ namespace SmileEditor {
         WindowBr   = new WindowBridge(this); // botoes de janela da MainBar.qml
         Menus      = new MenuBridge(this);   // menus da MainBar.qml (precisa existir antes dela)
         TodBridge  = new TimeOfDayBridge(this); // painel Time of Day (renderer chega depois)
+        LightsBr   = new LightsBridge(this);    // painel de Luzes (renderer chega depois)
 
         CreateTopBar();
         setCentralWidget(CreateViewportChrome());
@@ -217,6 +219,7 @@ namespace SmileEditor {
             if (!R->LoadCookedScene(File.toStdWString()))
                 QMessageBox::warning(this, tr("Carregar Cena"),
                                      tr("Falha ao carregar a cena. Veja o console."));
+            else if (LightsBr) LightsBr->OnSceneLoaded(File, /*Additive=*/false);
         });
         connect(Menus, &MenuBridge::AddSceneRequested, this, [this, RendererReady]() {
             auto* R = RendererReady(); if (!R) return;
@@ -227,6 +230,7 @@ namespace SmileEditor {
             if (!R->LoadCookedScene(File.toStdWString(), /*Additive=*/true))
                 QMessageBox::warning(this, tr("Adicionar Cena"),
                                      tr("Falha ao adicionar a cena. Veja o console."));
+            else if (LightsBr) LightsBr->OnSceneLoaded(File, /*Additive=*/true);
         });
         connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
 
@@ -236,6 +240,9 @@ namespace SmileEditor {
         });
         connect(Menus, &MenuBridge::ToggleTimeOfDayRequested, this, [this]() {
             if (TodDock) TodDock->setVisible(!TodDock->isVisible());
+        });
+        connect(Menus, &MenuBridge::ToggleLightsRequested, this, [this]() {
+            if (LightsDock) LightsDock->setVisible(!LightsDock->isVisible());
         });
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
@@ -342,6 +349,35 @@ namespace SmileEditor {
         resizeDocks({ TodDock }, { 320 }, Qt::Horizontal);
 
         connect(TodDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetTimeOfDayVisible);
+
+        // ---- Luzes (dock lateral direito, tabificado com o Time of Day) ----
+        LightsDock = new QDockWidget(tr("Luzes"), this);
+        LightsDock->setObjectName("LightsDock");
+        LightsDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+        LightsDock->setFeatures(QDockWidget::DockWidgetMovable |
+                                QDockWidget::DockWidgetFloatable |
+                                QDockWidget::DockWidgetClosable);
+
+        QQuickWidget* LightsPanel = CreateQmlPanel(
+            QStringLiteral("LightsPanel.qml"),
+            { { QStringLiteral("lightsModel"), LightsBr } },
+            LightsDock);
+        LightsPanel->setObjectName("LightsPanel");
+        LightsDock->setWidget(LightsPanel);
+
+        auto* LightsEmptyTitleBar = new QWidget(LightsDock);
+        LightsEmptyTitleBar->setFixedHeight(0);
+        LightsDock->setTitleBarWidget(LightsEmptyTitleBar);
+        connect(LightsBr, &LightsBridge::CloseRequested, LightsDock, &QDockWidget::close);
+
+        addDockWidget(Qt::RightDockWidgetArea, LightsDock);
+        LightsPanel->setMinimumWidth(280);
+        // Compartilha a coluna direita com o TOD em abas (padrao Unreal de docks empilhados);
+        // o TOD fica na frente por ser o painel mais usado ate aqui.
+        tabifyDockWidget(TodDock, LightsDock);
+        TodDock->raise();
+
+        connect(LightsDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetLightsVisible);
     }
 
     void MainWindow::OnRendererReady() {
@@ -362,6 +398,14 @@ namespace SmileEditor {
             TodBridge->SetRenderer(Viewport->GetRenderer());
             connect(Viewport, &ViewportWidget::FrameReady,
                     TodBridge, &TimeOfDayBridge::Refresh, Qt::UniqueConnection);
+        }
+
+        // Painel de Luzes: idem — o Refresh por frame sincroniza selecao por clique no
+        // viewport e o arraste do gizmo com o painel.
+        if (LightsBr) {
+            LightsBr->SetRenderer(Viewport->GetRenderer());
+            connect(Viewport, &ViewportWidget::FrameReady,
+                    LightsBr, &LightsBridge::Refresh, Qt::UniqueConnection);
         }
     }
 

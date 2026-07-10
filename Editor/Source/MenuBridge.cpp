@@ -17,4 +17,10 @@ namespace SmileEditor {
         TimeOfDayVis = _V;
         emit TimeOfDayVisibleChanged();
     }
+
+    void MenuBridge::SetLightsVisible(bool _V) {
+        if (LightsVis == _V) return;
+        LightsVis = _V;
+        emit LightsVisibleChanged();
+    }
 }

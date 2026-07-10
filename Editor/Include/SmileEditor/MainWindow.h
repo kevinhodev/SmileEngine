@@ -22,6 +22,7 @@ namespace SmileEditor {
     class MenuBridge;
     class StatusBridge;
     class TimeOfDayBridge;
+    class LightsBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -59,6 +60,8 @@ namespace SmileEditor {
         QDockWidget*          ConsoleDock = nullptr; // p/ toggle/estado no menu Janela
         TimeOfDayBridge*      TodBridge   = nullptr; // ponte C++ -> TimeOfDayPanel.qml
         QDockWidget*          TodDock     = nullptr; // dock lateral do painel Time of Day
+        LightsBridge*         LightsBr    = nullptr; // ponte C++ -> LightsPanel.qml
+        QDockWidget*          LightsDock  = nullptr; // dock lateral do painel de Luzes
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

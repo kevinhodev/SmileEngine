@@ -161,6 +161,12 @@ namespace Smile {
         void SetSelectedObject(int Index) { SelectedIndex = Index; }
         int  GetSelectedObject() const    { return SelectedIndex; }
         void ClearSelection()             { SelectedIndex = -1; }
+
+        // Selecao de LUZ (independente da selecao de renderavel; o editor mantem as duas
+        // mutuamente exclusivas). Indice em Scene.Lights(); -1 = nenhuma.
+        void SetSelectedLight(int Index)  { SelectedLightIdx = Index; }
+        int  GetSelectedLight() const     { return SelectedLightIdx; }
+        void ClearLightSelection()        { SelectedLightIdx = -1; }
         void SetOutlineColor(const Vec3& C) { SelectionOutline.SetColor(C); }
         void SetOutlineThickness(f32 T)     { SelectionOutline.SetThickness(T); }
         void SetOutlineIntensity(f32 I)     { SelectionOutline.SetIntensity(I); }
@@ -375,6 +381,7 @@ namespace Smile {
         FObjectPicker            ObjectPicker;
         FSelectionOutline        SelectionOutline;
         int                      SelectedIndex = -1;
+        int                      SelectedLightIdx = -1;
 
         FDebugDraw               DebugDraw;
         Mat44                    LastViewProj{}; 

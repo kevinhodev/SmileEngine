@@ -12,6 +12,7 @@
 #include <QCursor>
 #include <QLocale>
 #include <QFileDialog>
+#include <cmath>
 
 namespace SmileEditor {
     static constexpr float kMouseSensitivity = 0.15f;  
@@ -656,6 +657,9 @@ namespace SmileEditor {
         // frames depois). Atualiza a selecao e loga o objeto (validacao da Fase 1).
         int PickedIndex = -1;
         if (Renderer->TryGetPickResult(PickedIndex)) {
+            // Um pick por GPU resolvido significa que o clique NAO foi num marker de luz
+            // (senao nem teria virado RequestPick) -> a selecao de luz sai em ambos os casos.
+            Renderer->ClearLightSelection();
             if (PickedIndex >= 0) {
                 Renderer->SetSelectedObject(PickedIndex);
                 const auto& Renderables = Renderer->GetScene().Renderables();
@@ -690,6 +694,24 @@ namespace SmileEditor {
         QWidget::keyReleaseEvent(_Event);
     }
 
+    int ViewportWidget::PickLightMarker(unsigned int _X, unsigned int _Y) const {
+        if (!Renderer || !Renderer->IsInitialized()) return -1;
+        constexpr float kPickRadiusPx = 14.0f;
+        const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
+
+        const auto& Lights = Renderer->GetScene().Lights();
+        float Best = kPickRadiusPx;
+        int   BestIdx = -1;
+        for (int i = 0; i < static_cast<int>(Lights.size()); ++i) {
+            float sx, sy;
+            if (!Renderer->WorldToScreen(Lights[static_cast<size_t>(i)].Position, sx, sy))
+                continue;
+            const float d = std::sqrt((fx - sx) * (fx - sx) + (fy - sy) * (fy - sy));
+            if (d < Best) { Best = d; BestIdx = i; }
+        }
+        return BestIdx;
+    }
+
     void ViewportWidget::mousePressEvent(QMouseEvent* _Event) {
         if (_Event->button() == Qt::RightButton) {
             MouseLookActive = true;
@@ -708,9 +730,20 @@ namespace SmileEditor {
                 const unsigned int Px = static_cast<unsigned int>(P.x() > 0.0 ? P.x() : 0.0);
                 const unsigned int Py = static_cast<unsigned int>(P.y() > 0.0 ? P.y() : 0.0);
                 // 1) Tenta pegar um handle do gizmo. Se pegou, comeca o arraste e NAO faz picking.
-                // 2) Senao, picking normal (seleciona o objeto sob o cursor).
-                if (!GizmoCtrl.OnMousePress(*Renderer, Px, Py))
-                    Renderer->RequestPick(Px, Py);
+                // 2) Senao, tenta um marker de LUZ (teste 2D em tela — luz nao esta no ID-buffer).
+                // 3) Senao, picking normal por GPU (seleciona o objeto sob o cursor).
+                if (!GizmoCtrl.OnMousePress(*Renderer, Px, Py)) {
+                    const int LightHit = PickLightMarker(Px, Py);
+                    if (LightHit >= 0) {
+                        Renderer->SetSelectedLight(LightHit);
+                        Renderer->ClearSelection(); // selecoes exclusivas
+                        const auto& Lights = Renderer->GetScene().Lights();
+                        Smile::LogInfo("Luz selecionada [" + std::to_string(LightHit) + "] " +
+                                       Lights[static_cast<size_t>(LightHit)].Name);
+                    } else {
+                        Renderer->RequestPick(Px, Py);
+                    }
+                }
             }
             setFocus();
         }

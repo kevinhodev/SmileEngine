@@ -154,7 +154,8 @@
       "PowerShell(git -C D:\\\\Engines\\\\SmileEngine check-ignore -v Assets/Scenes/Bistro/BistroExterior.smesh)",
       "PowerShell(git -C D:\\\\Engines\\\\SmileEngine ls-files Assets/Scenes/Bistro)",
       "PowerShell(git -C D:\\\\Engines\\\\SmileEngine add Tools/Cooker/main.cpp Engine/Include/Smile/Scene/CookedFormat.h)",
-      "PowerShell(git -C D:\\\\Engines\\\\SmileEngine log --oneline -3)"
+      "PowerShell(git -C D:\\\\Engines\\\\SmileEngine log --oneline -3)",
+      "PowerShell(cmake --build build --target Shaders --config Debug 2>&1)"
     ]
   }
 }

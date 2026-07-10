@@ -18,6 +18,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/MenuBridge.h
     Include/SmileEditor/StatusBridge.h
     Include/SmileEditor/TimeOfDayBridge.h
+    Include/SmileEditor/LightsBridge.h
 )
 
 set(EDITOR_SOURCES
@@ -36,6 +37,7 @@ set(EDITOR_SOURCES
     Source/MenuBridge.cpp
     Source/StatusBridge.cpp
     Source/TimeOfDayBridge.cpp
+    Source/LightsBridge.cpp
 )
 
 # WIN32 = subsistema Windows (sem console preto atras)

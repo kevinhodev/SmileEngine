@@ -133,6 +133,11 @@ MenuBar {
             markVisible: menuBridge.timeOfDayVisible
             onTriggered: menuBridge.toggleTimeOfDay()
         }
+        MItem {
+            text: "Luzes"; checkColumn: true
+            markVisible: menuBridge.lightsVisible
+            onTriggered: menuBridge.toggleLights()
+        }
     }
 
     DarkMenu {

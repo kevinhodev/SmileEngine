@@ -16,9 +16,34 @@ namespace SmileEditor {
         constexpr float kFovY      = 60.0f * 3.14159265f / 180.0f; // bate com a Projection da camera
         constexpr float kSizeFrac  = 0.18f;  // tamanho da seta ~18% da meia-altura da tela
         constexpr float kHitRadius = 9.0f;   // pixels
+        constexpr float kPi        = 3.14159265f;
+
+        // Circulo wireframe generico (centro, dois eixos do plano, raio) no DebugDraw.
+        void DrawCircle(Smile::FDebugDraw& DD, const Vec3& C, const Vec3& U, const Vec3& V,
+                        float R, const Vec3& Col, int Segs = 40) {
+            Vec3 Prev = C + U * R;
+            for (int s = 1; s <= Segs; ++s) {
+                const float a = (2.0f * kPi * s) / Segs;
+                const Vec3 P = C + (U * std::cos(a) + V * std::sin(a)) * R;
+                DD.Line(Prev, P, Col);
+                Prev = P;
+            }
+        }
     }
 
-    bool GizmoController::GetPivot(Smile::Renderer& R, Vec3& OutPivot, int& OutIdx) const {
+    bool GizmoController::GetPivot(Smile::Renderer& R, Vec3& OutPivot, int& OutIdx,
+                                   bool& OutIsLight) const {
+        // Luz selecionada tem prioridade (o editor mantem as duas selecoes exclusivas).
+        const int LightIdx = R.GetSelectedLight();
+        const auto& Lights = R.GetScene().Lights();
+        if (LightIdx >= 0 && LightIdx < static_cast<int>(Lights.size())) {
+            OutIdx     = LightIdx;
+            OutIsLight = true;
+            OutPivot   = Lights[static_cast<size_t>(LightIdx)].Position;
+            return true;
+        }
+
+        OutIsLight = false;
         OutIdx = R.GetSelectedObject();
         if (OutIdx < 0) return false;
         const auto& List = R.GetScene().Renderables();
@@ -34,8 +59,8 @@ namespace SmileEditor {
     }
 
     GizmoController::EAxis GizmoController::HitTest(Smile::Renderer& _Renderer, u32 _X, u32 _Y) const {
-        Vec3 Pivot; int Idx;
-        if (!GetPivot(_Renderer, Pivot, Idx)) return EAxis::None;
+        Vec3 Pivot; int Idx; bool IsLight;
+        if (!GetPivot(_Renderer, Pivot, Idx, IsLight)) return EAxis::None;
         const float Scale = ScaleFor(_Renderer, Pivot);
         float px0, py0;
         if (!_Renderer.WorldToScreen(Pivot, px0, py0)) return EAxis::None;
@@ -67,10 +92,70 @@ namespace SmileEditor {
         return (b*e - d) / denom;
     }
 
+    void GizmoController::SubmitLightShapes(Smile::Renderer& R) const {
+        const auto& Lights = R.GetScene().Lights();
+        if (Lights.empty()) return;
+
+        Smile::FDebugDraw& DD = R.GetDebugDraw();
+        const int Selected = R.GetSelectedLight();
+
+        for (int i = 0; i < static_cast<int>(Lights.size()); ++i) {
+            const Smile::FLight& L = Lights[static_cast<size_t>(i)];
+
+            // Marker (estrela 3D pequena, constante em tela) em TODAS as luzes — cor da propria
+            // luz; apagada fica cinza. E o alvo do clique de selecao no viewport.
+            const float S = ScaleFor(R, L.Position) * 0.10f;
+            const Vec3 MCol = L.Enabled
+                ? Vec3{ std::max(L.Color.X, 0.15f), std::max(L.Color.Y, 0.15f),
+                        std::max(L.Color.Z, 0.15f) }
+                : Vec3{ 0.35f, 0.35f, 0.35f };
+            const Vec3 P = L.Position;
+            DD.Line(P - Vec3::UnitX() * S, P + Vec3::UnitX() * S, MCol);
+            DD.Line(P - Vec3::UnitY() * S, P + Vec3::UnitY() * S, MCol);
+            DD.Line(P - Vec3::UnitZ() * S, P + Vec3::UnitZ() * S, MCol);
+            // diagonais curtas dao leitura de "estrela"/bulbo
+            const float D2 = S * 0.55f;
+            DD.Line(P - Vec3{ D2, D2, 0.0f }, P + Vec3{ D2, D2, 0.0f }, MCol);
+            DD.Line(P - Vec3{ 0.0f, D2, D2 }, P + Vec3{ 0.0f, D2, D2 }, MCol);
+
+            if (i != Selected) continue;
+
+            // Selecionada: a forma do volume de influencia, na cor da luz.
+            if (L.Type == Smile::ELightType::Point) {
+                // 3 grandes circulos (XY/XZ/YZ) no raio de atenuacao.
+                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitY(), L.AttenuationRadius, MCol);
+                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitZ(), L.AttenuationRadius, MCol);
+                DrawCircle(DD, P, Vec3::UnitY(), Vec3::UnitZ(), L.AttenuationRadius, MCol);
+            } else {
+                // Spot: 4 arestas + tampa no alcance, cone interno mais fraco (so a tampa).
+                const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                const Vec3 U = Dir.GetOrthogonal();
+                const Vec3 V = Dir.Cross(U).Normalized();
+                const float Range = L.AttenuationRadius;
+                const float TanO = std::tan(std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * kPi / 180.0f);
+                const float TanI = std::tan(std::clamp(L.InnerConeDeg, 0.0f, L.OuterConeDeg) * kPi / 180.0f);
+                const Vec3 CapC = P + Dir * Range;
+                const float CapR = Range * TanO;
+                DrawCircle(DD, CapC, U, V, CapR, MCol, 32);
+                for (int e = 0; e < 4; ++e) {
+                    const float a = (2.0f * kPi * e) / 4.0f;
+                    const Vec3 Rim = CapC + (U * std::cos(a) + V * std::sin(a)) * CapR;
+                    DD.Line(P, Rim, MCol);
+                }
+                const Vec3 DimCol = MCol * 0.45f;
+                DrawCircle(DD, CapC, U, V, Range * TanI, DimCol, 32);
+            }
+        }
+    }
+
     void GizmoController::Submit(Smile::Renderer& _Renderer) {
         if (!Enabled) return;
-        Vec3 Pivot; int Idx;
-        if (!GetPivot(_Renderer, Pivot, Idx)) return;
+
+        // Visualizacao das luzes independe de haver selecao (markers sempre visiveis).
+        SubmitLightShapes(_Renderer);
+
+        Vec3 Pivot; int Idx; bool IsLight;
+        if (!GetPivot(_Renderer, Pivot, Idx, IsLight)) return;
         const float Scale = ScaleFor(_Renderer, Pivot);
 
         Smile::FDebugDraw& DebugDraw = _Renderer.GetDebugDraw();
@@ -103,15 +188,18 @@ namespace SmileEditor {
         if (Axis == EAxis::None) return false;
         Vec3 O, Dir;
         if (!R.ScreenToRay(X, Y, O, Dir)) return false;
-        Vec3 Pivot; int Idx;
-        if (!GetPivot(R, Pivot, Idx)) return false;
+        Vec3 Pivot; int Idx; bool IsLight;
+        if (!GetPivot(R, Pivot, Idx, IsLight)) return false;
 
         Active         = Axis;
         Hovered        = Axis;
         Dragging       = true;
         DragIdx        = Idx;
+        DragIsLight    = IsLight;
         DragStartPivot = Pivot;
-        DragStartPos   = R.GetScene().Renderables()[static_cast<size_t>(Idx)].Transform.Position;
+        DragStartPos   = IsLight
+            ? R.GetScene().Lights()[static_cast<size_t>(Idx)].Position
+            : R.GetScene().Renderables()[static_cast<size_t>(Idx)].Transform.Position;
         DragStartT     = AxisParam(O, Dir, AxisDir(Axis), Pivot);
         return true;
     }
@@ -126,6 +214,13 @@ namespace SmileEditor {
         const float T = AxisParam(O, Dir, A, DragStartPivot);
         const Vec3 NewPos = DragStartPos + A * (T - DragStartT);
 
+        if (DragIsLight) {
+            auto& Lights = R.GetScene().Lights();
+            if (DragIdx >= static_cast<int>(Lights.size())) return;
+            Lights[static_cast<size_t>(DragIdx)].Position = NewPos;
+            return;
+        }
+
         auto& List = R.GetScene().Renderables();
         if (DragIdx >= static_cast<int>(List.size())) return;
         Smile::FRenderable& Rn = List[static_cast<size_t>(DragIdx)];
@@ -136,8 +231,9 @@ namespace SmileEditor {
     }
 
     void GizmoController::OnMouseRelease() {
-        Dragging = false;
-        Active   = EAxis::None;
-        DragIdx  = -1;
+        Dragging    = false;
+        Active      = EAxis::None;
+        DragIdx     = -1;
+        DragIsLight = false;
     }
 }

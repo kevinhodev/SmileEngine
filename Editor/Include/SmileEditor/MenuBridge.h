@@ -11,6 +11,7 @@ namespace SmileEditor {
         // Estado dos docks refletido nos checks do menu "Janela".
         Q_PROPERTY(bool consoleVisible READ ConsoleVisible NOTIFY ConsoleVisibleChanged)
         Q_PROPERTY(bool timeOfDayVisible READ TimeOfDayVisible NOTIFY TimeOfDayVisibleChanged)
+        Q_PROPERTY(bool lightsVisible READ LightsVisible NOTIFY LightsVisibleChanged)
 
     public:
         explicit MenuBridge(QObject* parent = nullptr);
@@ -19,6 +20,8 @@ namespace SmileEditor {
         void SetConsoleVisible(bool v); // MainWindow chama (visibilityChanged do dock)
         bool TimeOfDayVisible() const { return TimeOfDayVis; }
         void SetTimeOfDayVisible(bool v);
+        bool LightsVisible() const { return LightsVis; }
+        void SetLightsVisible(bool v);
 
     public slots:
         void loadScene()        { emit LoadSceneRequested(); }
@@ -28,6 +31,7 @@ namespace SmileEditor {
         void quit()             { emit QuitRequested(); }
         void toggleConsole()    { emit ToggleConsoleRequested(); }
         void toggleTimeOfDay()  { emit ToggleTimeOfDayRequested(); }
+        void toggleLights()     { emit ToggleLightsRequested(); }
         void setVSync(bool on)            { emit VSyncToggled(on); }
         void setFrustumCulling(bool on)   { emit FrustumCullingToggled(on); }
         void setDepthPrepass(bool on)     { emit DepthPrepassToggled(on); }
@@ -41,7 +45,9 @@ namespace SmileEditor {
         void QuitRequested();
         void ToggleConsoleRequested();
         void ToggleTimeOfDayRequested();
+        void ToggleLightsRequested();
         void TimeOfDayVisibleChanged();
+        void LightsVisibleChanged();
         void VSyncToggled(bool on);
         void FrustumCullingToggled(bool on);
         void DepthPrepassToggled(bool on);
@@ -51,5 +57,6 @@ namespace SmileEditor {
     private:
         bool ConsoleVis   = true;
         bool TimeOfDayVis = true;
+        bool LightsVis    = true;
     };
 }
