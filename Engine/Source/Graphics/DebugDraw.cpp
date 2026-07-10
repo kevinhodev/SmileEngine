@@ -1,5 +1,5 @@
 #include "Smile/Graphics/DebugDraw.h"
-#include "Smile/Graphics/CommandQueue.h" 
+#include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -8,7 +8,7 @@
 
 namespace Smile {
     static constexpr u32 kFIF      = FCommandQueue::kFramesInFlight;
-    static constexpr u32 kVBStride = sizeof(f32) * 6; 
+    static constexpr u32 kVBStride = sizeof(f32) * 6;
 
     void FDebugDraw::Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat) {
         if (Initialized) return;
@@ -23,6 +23,10 @@ namespace Smile {
         LineVerts.push_back({ { A.X, A.Y, A.Z }, { C.X, C.Y, C.Z } });
         LineVerts.push_back({ { B.X, B.Y, B.Z }, { C.X, C.Y, C.Z } });
     }
+    void FDebugDraw::LineOccluded(const Vec3& A, const Vec3& B, const Vec3& C) {
+        LineOccVerts.push_back({ { A.X, A.Y, A.Z }, { C.X, C.Y, C.Z } });
+        LineOccVerts.push_back({ { B.X, B.Y, B.Z }, { C.X, C.Y, C.Z } });
+    }
     void FDebugDraw::Triangle(const Vec3& A, const Vec3& B, const Vec3& C, const Vec3& Col) {
         TriVerts.push_back({ { A.X, A.Y, A.Z }, { Col.X, Col.Y, Col.Z } });
         TriVerts.push_back({ { B.X, B.Y, B.Z }, { Col.X, Col.Y, Col.Z } });
@@ -30,15 +34,42 @@ namespace Smile {
     }
 
     void FDebugDraw::BuildRootSignature(ID3D12Device* Device) {
-        D3D12_ROOT_PARAMETER P{};
-        P.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        P.Descriptor.ShaderRegister = 0; 
-        P.ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+        // b0 visivel em VS (matriz) e PS (params/bias do teste de depth); t0 = depth da cena
+        // pro caminho ocluivel (os PSOs sem teste simplesmente nao referenciam a tabela).
+        D3D12_ROOT_PARAMETER P[2]{};
+        P[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        P[0].Descriptor.ShaderRegister = 0;
+        P[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+
+        D3D12_DESCRIPTOR_RANGE DepthRange{};
+        DepthRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DepthRange.NumDescriptors                    = 1;
+        DepthRange.BaseShaderRegister                = 0;
+        DepthRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        P[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        P[1].DescriptorTable.NumDescriptorRanges = 1;
+        P[1].DescriptorTable.pDescriptorRanges   = &DepthRange;
+        P[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_STATIC_SAMPLER_DESC PointClamp{};
+        PointClamp.Filter           = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        PointClamp.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        PointClamp.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        PointClamp.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        PointClamp.MaxAnisotropy    = 1;
+        PointClamp.ComparisonFunc   = D3D12_COMPARISON_FUNC_ALWAYS;
+        PointClamp.MinLOD           = 0.0f;
+        PointClamp.MaxLOD           = D3D12_FLOAT32_MAX;
+        PointClamp.ShaderRegister   = 0;
+        PointClamp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC Desc{};
-        Desc.NumParameters = 1;
-        Desc.pParameters   = &P;
-        Desc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        Desc.NumParameters     = _countof(P);
+        Desc.pParameters       = P;
+        Desc.NumStaticSamplers = 1;
+        Desc.pStaticSamplers   = &PointClamp;
+        Desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
         ComPtr<ID3DBlob> Blob, Err;
         HRESULT Hr = D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1, &Blob, &Err);
@@ -51,8 +82,9 @@ namespace Smile {
     }
 
     void FDebugDraw::BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat) {
-        auto VS = LoadShaderBytecode("DebugDraw.vs_6_0.cso");
-        auto PS = LoadShaderBytecode("DebugDraw.ps_6_0.cso");
+        auto VS    = LoadShaderBytecode("DebugDraw.vs_6_0.cso");
+        auto PS    = LoadShaderBytecode("DebugDraw.ps_6_0.cso");
+        auto PSOcc = LoadShaderBytecode("DebugDrawOccluded.ps_6_0.cso");
 
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -65,7 +97,7 @@ namespace Smile {
         Raster.DepthClipEnable = TRUE;
 
         D3D12_DEPTH_STENCIL_DESC Depth{};
-        Depth.DepthEnable    = FALSE; 
+        Depth.DepthEnable    = FALSE;
         Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
         D3D12_BLEND_DESC Blend{};
@@ -87,6 +119,10 @@ namespace Smile {
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&LinePSO)));
 
+        PSODesc.PS = { PSOcc.data(), PSOcc.size() };
+        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&LineOccPSO)));
+
+        PSODesc.PS                    = { PS.data(), PS.size() };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&TriPSO)));
     }
@@ -103,33 +139,46 @@ namespace Smile {
         Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         D3D12_RANGE NoRead{ 0, 0 };
 
-        Desc.Width = 256ull * kFIF; 
+        Desc.Width = 256ull * kFIF;
         SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
                  D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
         SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
 
-        Desc.Width = static_cast<u64>(kMaxVerts) * kVBStride * kFIF; 
+        Desc.Width = static_cast<u64>(kMaxVerts) * kVBStride * kFIF;
         SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
                  D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&VB)));
         SMILE_HR(VB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedVB)));
     }
 
     void FDebugDraw::Render(ID3D12GraphicsCommandList* CmdList, u32 FrameSlot, const Mat44& ViewProj,
-                            D3D12_CPU_DESCRIPTOR_HANDLE BackbufferRTV, u32 Width, u32 Height) {
+                            D3D12_CPU_DESCRIPTOR_HANDLE BackbufferRTV, u32 Width, u32 Height,
+                            D3D12_GPU_DESCRIPTOR_HANDLE DepthSRV) {
         if (!Initialized || Empty()) return;
         const u32 Slot = FrameSlot % kFIF;
 
+        // Sem SRV de depth nao ha como testar: as ocluiveis caem fora neste frame.
+        u32 numOcc = DepthSRV.ptr ? static_cast<u32>(LineOccVerts.size()) : 0;
+
         u32 numLine = static_cast<u32>(LineVerts.size());
         u32 numTri  = static_cast<u32>(TriVerts.size());
-        if (numLine + numTri > kMaxVerts) { 
-            if (numLine > kMaxVerts) numLine = kMaxVerts;
-            numTri = std::min(numTri, kMaxVerts - numLine);
-        }
+        if (numOcc > kMaxVerts) numOcc = kMaxVerts;
+        if (numOcc + numLine > kMaxVerts) numLine = kMaxVerts - numOcc;
+        numTri = std::min(numTri, kMaxVerts - numOcc - numLine);
 
+        // VB do frame: [ocluiveis | linhas | triangulos] — ocluiveis desenham primeiro,
+        // gizmo/markers por cima.
         u8* VBSlot = MappedVB + static_cast<size_t>(Slot) * kMaxVerts * kVBStride;
-        if (numLine) std::memcpy(VBSlot, LineVerts.data(), numLine * kVBStride);
-        if (numTri)  std::memcpy(VBSlot + numLine * kVBStride, TriVerts.data(), numTri * kVBStride);
-        std::memcpy(MappedCB + static_cast<size_t>(Slot) * 256, &ViewProj, sizeof(Mat44));
+        if (numOcc)  std::memcpy(VBSlot, LineOccVerts.data(), numOcc * kVBStride);
+        if (numLine) std::memcpy(VBSlot + numOcc * kVBStride, LineVerts.data(), numLine * kVBStride);
+        if (numTri)  std::memcpy(VBSlot + (numOcc + numLine) * kVBStride, TriVerts.data(), numTri * kVBStride);
+
+        struct { Mat44 M; f32 Params[4]; } CBData;
+        CBData.M = ViewProj;
+        CBData.Params[0] = Width  > 0 ? 1.0f / static_cast<f32>(Width)  : 0.0f;
+        CBData.Params[1] = Height > 0 ? 1.0f / static_cast<f32>(Height) : 0.0f;
+        CBData.Params[2] = 2e-5f; // bias NDC do teste de depth (linha encostada nao serrilha)
+        CBData.Params[3] = 0.0f;
+        std::memcpy(MappedCB + static_cast<size_t>(Slot) * 256, &CBData, sizeof(CBData));
 
         CmdList->OMSetRenderTargets(1, &BackbufferRTV, FALSE, nullptr);
         D3D12_VIEWPORT VP{}; VP.Width = static_cast<FLOAT>(Width); VP.Height = static_cast<FLOAT>(Height);
@@ -144,18 +193,24 @@ namespace Smile {
         D3D12_VERTEX_BUFFER_VIEW VBV{};
         VBV.BufferLocation = VB->GetGPUVirtualAddress() + static_cast<u64>(Slot) * kMaxVerts * kVBStride;
         VBV.StrideInBytes  = kVBStride;
-        VBV.SizeInBytes    = (numLine + numTri) * kVBStride;
+        VBV.SizeInBytes    = (numOcc + numLine + numTri) * kVBStride;
         CmdList->IASetVertexBuffers(0, 1, &VBV);
 
+        if (numOcc) {
+            CmdList->SetGraphicsRootDescriptorTable(1, DepthSRV);
+            CmdList->SetPipelineState(LineOccPSO.Get());
+            CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+            CmdList->DrawInstanced(numOcc, 1, 0, 0);
+        }
         if (numLine) {
             CmdList->SetPipelineState(LinePSO.Get());
             CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-            CmdList->DrawInstanced(numLine, 1, 0, 0);
+            CmdList->DrawInstanced(numLine, 1, numOcc, 0);
         }
         if (numTri) {
             CmdList->SetPipelineState(TriPSO.Get());
             CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            CmdList->DrawInstanced(numTri, 1, numLine, 0); 
+            CmdList->DrawInstanced(numTri, 1, numOcc + numLine, 0);
         }
     }
 }

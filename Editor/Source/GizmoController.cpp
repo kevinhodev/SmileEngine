@@ -19,13 +19,16 @@ namespace SmileEditor {
         constexpr float kPi        = 3.14159265f;
 
         // Circulo wireframe generico (centro, dois eixos do plano, raio) no DebugDraw.
+        // Occluded = linhas depth-testadas (somem atras da geometria) — volumes de luz usam
+        // isso pro wire "parar" no chao em vez de atravessar (leitura honesta do alcance).
         void DrawCircle(Smile::FDebugDraw& DD, const Vec3& C, const Vec3& U, const Vec3& V,
-                        float R, const Vec3& Col, int Segs = 40) {
+                        float R, const Vec3& Col, int Segs = 40, bool Occluded = false) {
             Vec3 Prev = C + U * R;
             for (int s = 1; s <= Segs; ++s) {
                 const float a = (2.0f * kPi * s) / Segs;
                 const Vec3 P = C + (U * std::cos(a) + V * std::sin(a)) * R;
-                DD.Line(Prev, P, Col);
+                if (Occluded) DD.LineOccluded(Prev, P, Col);
+                else          DD.Line(Prev, P, Col);
                 Prev = P;
             }
         }
@@ -120,12 +123,14 @@ namespace SmileEditor {
 
             if (i != Selected) continue;
 
-            // Selecionada: a forma do volume de influencia, na cor da luz.
+            // Selecionada: a forma do volume de influencia, na cor da luz — depth-testada
+            // (LineOccluded): o wire some onde entra na geometria, entao ele casa visualmente
+            // com onde a luz de fato alcanca em vez de atravessar o chao.
             if (L.Type == Smile::ELightType::Point) {
                 // 3 grandes circulos (XY/XZ/YZ) no raio de atenuacao.
-                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitY(), L.AttenuationRadius, MCol);
-                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitZ(), L.AttenuationRadius, MCol);
-                DrawCircle(DD, P, Vec3::UnitY(), Vec3::UnitZ(), L.AttenuationRadius, MCol);
+                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitY(), L.AttenuationRadius, MCol, 40, true);
+                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitZ(), L.AttenuationRadius, MCol, 40, true);
+                DrawCircle(DD, P, Vec3::UnitY(), Vec3::UnitZ(), L.AttenuationRadius, MCol, 40, true);
             } else {
                 // Spot: cone INSCRITO na esfera de atenuacao (estilo DrawWireSphereCappedCone
                 // da UE). A luz morre a Range da POSICAO (janela esferica (1-(d/r)^4)^2), entao
@@ -141,11 +146,11 @@ namespace SmileEditor {
 
                 const Vec3  CapC = P + Dir * (Range * std::cos(OuterRad));
                 const float CapR = Range * std::sin(OuterRad);
-                DrawCircle(DD, CapC, U, V, CapR, MCol, 32);
+                DrawCircle(DD, CapC, U, V, CapR, MCol, 32, true);
                 for (int e = 0; e < 4; ++e) {
                     const float a = (2.0f * kPi * e) / 4.0f;
                     const Vec3 Rim = CapC + (U * std::cos(a) + V * std::sin(a)) * CapR;
-                    DD.Line(P, Rim, MCol);
+                    DD.LineOccluded(P, Rim, MCol);
                 }
                 // Calota esferica: arcos de -theta..+theta nos planos Dir/U e Dir/V.
                 const Vec3 Planes[2] = { U, V };
@@ -155,14 +160,14 @@ namespace SmileEditor {
                     for (int s = 1; s <= kArcSegs; ++s) {
                         const float t = -OuterRad + (2.0f * OuterRad * s) / kArcSegs;
                         const Vec3 Pt = P + (Dir * std::cos(t) + Pl * std::sin(t)) * Range;
-                        DD.Line(Prev, Pt, MCol);
+                        DD.LineOccluded(Prev, Pt, MCol);
                         Prev = Pt;
                     }
                 }
                 // Cone interno (onde o falloff angular comeca), mais fraco.
                 const Vec3 DimCol = MCol * 0.45f;
                 DrawCircle(DD, P + Dir * (Range * std::cos(InnerRad)), U, V,
-                           Range * std::sin(InnerRad), DimCol, 32);
+                           Range * std::sin(InnerRad), DimCol, 32, true);
             }
         }
     }

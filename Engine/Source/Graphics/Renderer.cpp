@@ -1774,10 +1774,29 @@ namespace Smile {
         }
 
         if (DebugDraw.IsInitialized() && !DebugDraw.Empty()) {
+            // Linhas ocluiveis (volumes de luz do editor) testam contra o depth da cena no PS:
+            // o depth (res de render) vira SRV so durante o draw e volta a DEPTH_WRITE.
+            const bool WantDepth = DebugDraw.HasOccluded() && DepthSRVSlot != kInvalidSlot;
+            D3D12_RESOURCE_BARRIER DebugDepthBar{};
+            DebugDepthBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            DebugDepthBar.Transition.pResource   = DepthBuffer.Get();
+            DebugDepthBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            if (WantDepth) {
+                DebugDepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                DebugDepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                CommandList->ResourceBarrier(1, &DebugDepthBar);
+            }
             DebugDraw.Render(CommandList, FrameSlot, ViewProjUnjittered, SwapChain.CurrentRTV(),
-                             SwapChain.GetWidth(), SwapChain.GetHeight());
+                             SwapChain.GetWidth(), SwapChain.GetHeight(),
+                             WantDepth ? SRVHeap.GpuHandle(DepthSRVSlot)
+                                       : D3D12_GPU_DESCRIPTOR_HANDLE{});
+            if (WantDepth) {
+                DebugDepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                DebugDepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                CommandList->ResourceBarrier(1, &DebugDepthBar);
+            }
         }
-        DebugDraw.Clear(); 
+        DebugDraw.Clear();
 
         BackBufferBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         BackBufferBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
