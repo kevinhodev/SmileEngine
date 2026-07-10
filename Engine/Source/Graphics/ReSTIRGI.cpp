@@ -197,7 +197,7 @@ namespace Smile {
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z, 0.0f };
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _NormalBias };
-        CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, 0.0f };
+        CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, ValidateInterval };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
         CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y, 0.0f, 0.0f };

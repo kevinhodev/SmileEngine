@@ -40,6 +40,10 @@ namespace Smile {
         // PROPRIO; o caller deve RE-LIGAR o SRVHeap da engine depois.
         void Denoise(ID3D12GraphicsCommandList* CL);
 
+        // Invalida o historico de acumulacao: o proximo SetFrame usa CLEAR_AND_RESTART.
+        // Chamar quando o sinal de entrada muda de natureza (toggle ReSTIR/NRD, corte de camera).
+        void InvalidateHistory() { NeedsClear = true; }
+
         // Sincroniza o tracking interno com escritas externas (pack): IN -> UAV antes do pack,
         // OUT -> PIXEL apos o Denoise (p/ o deferred ler).
         void TransitionInputsToWrite(ID3D12GraphicsCommandList* CL);

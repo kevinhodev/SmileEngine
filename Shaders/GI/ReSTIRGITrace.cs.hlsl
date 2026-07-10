@@ -1,8 +1,9 @@
 // ReSTIR GI — Pass A: trace + reservoir TEMPORAL (+ resolve quando o spatial esta OFF).
 //
 // Por pixel: (1) gera 1 sample inicial (raio cosseno-hemisferico -> x2/n2/Lo), (2) reusa o reservoir
-// do frame anterior reprojetado por motion vector (WRS merge, J=1 = mesma superficie), (3) grava o
-// reservoir {x1,x2,n2,Lo,M,W} em 4 tex ping-pong p/ o proximo frame E p/ o reuso espacial (Pass B).
+// do frame anterior reprojetado por motion vector (WRS merge, J=1 = mesma superficie), com re-shade
+// periodico da amostra (1/N px/frame) p/ iluminacao dinamica nao envelhecer no reservoir, (3) grava
+// o reservoir {x1,x2,n2,Lo,M,W} em 4 tex ping-pong p/ o proximo frame E p/ o reuso espacial (Pass B).
 // Resolve a irradiancia aqui tambem (gi = Lo*cosTheta1*W/pi); o Pass B sobrescreve quando ativo.
 // Referencia: Ouyang et al. 2021 (ReSTIR GI). Convencao: gi = (1/pi)*E (com M=1 reduz a gi=L_i).
 
@@ -19,7 +20,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 SunDirIntensity;
     float4 SunColor;
     float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity, w=normalBias
-    float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma
+    float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
     float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao no espaco jittered)
@@ -163,8 +164,58 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 prev.x1 = pa.xyz; prev.x2 = pb.xyz; prev.n2 = pd.xyz; prev.Lo = pc.rgb;
                 prev.M  = min(pa.w, ReuseParams.x); // MCap
                 prev.W  = pb.w; prev.wSum = 0.0f;
-                float pHatPrev = TargetPHat(x1, N, prev.x2, prev.Lo); // J=1 (mesma superficie)
-                ResMerge(r, prev, pHatPrev, 1.0f, rng);
+
+                // Validacao periodica da amostra temporal (estilo RTXDI): Lo foi shaded no frame
+                // em que a amostra nasceu e a iluminacao muda continuamente (TimeOfDay anima o
+                // sol) — sem re-shade, radiancia velha sobrevive indefinidamente no reservoir
+                // (MCap limita contagem, nao idade). Valida 1/N dos pixels por frame, com fase
+                // por hash do pixel (senao a tela validaria em onda): re-traca x1 -> x2; mesmo
+                // hit = Lo re-shaded; oclusor novo ou geometria movida = descarta a amostra.
+                bool prevValid = true;
+                uint validN = (uint)ShadeParams.w;
+                if (validN > 0u &&
+                    ((uint)TraceParams.x + GGX_PCG(px.x + GGX_PCG(px.y))) % validN == 0u) {
+                    float3 vorg = x1 + N * max(TraceParams.w, 1e-3f);
+                    float3 toS  = prev.x2 - vorg;
+                    float  len  = length(toS);
+                    if (len > 1e-3f) {
+                        RayDesc vray;
+                        vray.Origin    = vorg;
+                        vray.Direction = toS / len;
+                        vray.TMin      = 0.0f;
+                        vray.TMax      = TraceParams.y;
+                        RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> vq;
+                        vq.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, vray);
+                        SMILE_RT_PROCEED(vq)
+                        if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+                            float t = vq.CommittedRayT();
+                            if (abs(t - len) <= max(0.02f * len, 0.05f)) {
+                                float vsd;
+                                prev.Lo = ShadeSurfaceHit(vq.CommittedInstanceID(),
+                                                          vq.CommittedPrimitiveIndex(),
+                                                          vq.CommittedTriangleBarycentrics(),
+                                                          vq.CommittedWorldToObject3x4(),
+                                                          vorg, vray.Direction, t, P, vsd);
+                            } else {
+                                prevValid = false;
+                            }
+                        } else if (len >= 0.98f * TraceParams.y) {
+                            prev.Lo = ShadeSky(vray.Direction, sunDir, P.SkyIntensity); // era ceu
+                        } else {
+                            prevValid = false; // superficie sumiu (geometria movida)
+                        }
+                        if (prevValid) { // mesmo firefly clamp do sample inicial
+                            float lum = ReSTIR_Luminance(prev.Lo);
+                            if (ShadeParams.z > 0.0f && lum > ShadeParams.z)
+                                prev.Lo *= ShadeParams.z / lum;
+                        }
+                    }
+                }
+
+                if (prevValid) {
+                    float pHatPrev = TargetPHat(x1, N, prev.x2, prev.Lo); // J=1 (mesma superficie)
+                    ResMerge(r, prev, pHatPrev, 1.0f, rng);
+                }
             }
         }
     }

@@ -262,10 +262,18 @@ namespace Smile {
         void SetUseReflections(bool V)     { UseReflections = V; }
         bool GetUseReflections() const     { return UseReflections; }
 
-        void SetUseReSTIRGI(bool V)    { UseReSTIRGI = V; }
+        // Religar invalida o historico: reservoirs/acumulacao guardam radiancia do frame em que
+        // o toggle desligou (sol/emissivos/DDGI antigos sobreviveriam por tempo indeterminado).
+        void SetUseReSTIRGI(bool V) {
+            if (V && !UseReSTIRGI) { ReSTIRGI.InvalidateHistory(); Nrd.InvalidateHistory(); }
+            UseReSTIRGI = V;
+        }
         bool GetUseReSTIRGI() const    { return UseReSTIRGI; }
 
-        void SetUseNrdDenoise(bool V)  { UseNrdDenoise = V; }
+        void SetUseNrdDenoise(bool V) {
+            if (V && !UseNrdDenoise) Nrd.InvalidateHistory();
+            UseNrdDenoise = V;
+        }
         bool GetUseNrdDenoise() const  { return UseNrdDenoise; }
 
         FAmbientOcclusion& GetAO()     { return AO; }

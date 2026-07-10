@@ -21,7 +21,7 @@ namespace Smile {
         Vec4  SunDirIntensity; // xyz = direcao P/ o sol (norm.), w = intensidade
         Vec4  SunColor;        // rgb = cor do sol
         Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = normalBias
-        Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD
+        Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD, z = fireflyMax, w = validateInterval
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
@@ -68,9 +68,14 @@ namespace Smile {
         // Tabela t16 do deferred: NRD OUT quando o NRD esta ligado, senao a GITexture crua.
         u32  GITexSRVSlot() const { return (UseNrd && NrdOutSRV != kInvalidSlot) ? NrdOutSRV : GITexSRV; }
 
+        // Invalida o historico temporal: arma o clear dos reservoirs no proximo RecordTrace.
+        // Chamar em toggles e mudancas discretas de cena/iluminacao (o continuo — sol do
+        // TimeOfDay — e coberto pela validacao periodica no shader, ver ValidateInterval).
+        void InvalidateHistory()   { NeedsClear = true; }
+
         void SetRealHitShading(bool V) { RealHit = V; }
         bool GetRealHitShading() const { return RealHit; }
-        void SetTemporal(bool V)   { Temporal = V; }
+        void SetTemporal(bool V)   { if (V && !Temporal) NeedsClear = true; Temporal = V; }
         bool GetTemporal() const   { return Temporal; }
         void SetSpatial(bool V)    { Spatial = V; }
         bool GetSpatial() const    { return Spatial; }
@@ -148,6 +153,8 @@ namespace Smile {
                                       // padrao: efeito sutil em cena estatica; toggle no editor p/ A/B
         f32  MCap           = 20.0f;
         f32  PosRejectScale = 0.01f;
+        f32  ValidateInterval = 8.0f; // re-shade da amostra temporal em 1/N dos px por frame
+                                      // (radiancia envelhece com sol dinamico); 0 = off
         f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off)
         f32  SpatialRadius  = 16.0f;  // raio (px) dos vizinhos
         f32  SpatialCount   = 4.0f;   // nº de vizinhos
