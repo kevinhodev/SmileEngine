@@ -79,6 +79,10 @@ namespace SmileEditor {
         const auto* L = SelOf(Renderer);
         return L ? L->Enabled : false;
     }
+    bool LightsBridge::CastShadows() const {
+        const auto* L = SelOf(Renderer);
+        return L ? L->CastShadows : true;
+    }
     QColor LightsBridge::Color() const {
         const auto* L = SelOf(Renderer);
         if (!L) return QColor(255, 255, 255);
@@ -127,6 +131,11 @@ namespace SmileEditor {
         auto* L = SelOf(Renderer); if (!L || L->Enabled == _V) return;
         L->Enabled = _V;
         Touch(true); // estado aparece na lista
+    }
+    void LightsBridge::SetCastShadows(bool _V) {
+        auto* L = SelOf(Renderer); if (!L || L->CastShadows == _V) return;
+        L->CastShadows = _V;
+        Touch(false);
     }
     void LightsBridge::SetColor(const QColor& _V) {
         auto* L = SelOf(Renderer); if (!L) return;
@@ -353,6 +362,7 @@ namespace SmileEditor {
             L.InnerConeDeg      = (float)O.value(QStringLiteral("innerConeDeg")).toDouble(L.InnerConeDeg);
             L.OuterConeDeg      = (float)O.value(QStringLiteral("outerConeDeg")).toDouble(L.OuterConeDeg);
             L.Enabled           = O.value(QStringLiteral("enabled")).toBool(true);
+            L.CastShadows       = O.value(QStringLiteral("castShadows")).toBool(true);
             Lights.push_back(L);
             ++Loaded;
             // Mantem os sequenciais de nome a frente dos "Point N"/"Spot N" carregados.
@@ -382,6 +392,7 @@ namespace SmileEditor {
             O[QStringLiteral("innerConeDeg")] = L.InnerConeDeg;
             O[QStringLiteral("outerConeDeg")] = L.OuterConeDeg;
             O[QStringLiteral("enabled")]      = L.Enabled;
+            O[QStringLiteral("castShadows")]  = L.CastShadows;
             Arr.append(O);
         }
         QJsonObject Root;

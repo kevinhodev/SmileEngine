@@ -32,6 +32,7 @@ namespace SmileEditor {
         Q_PROPERTY(QString name READ Name WRITE SetName NOTIFY LightChanged)
         Q_PROPERTY(int lightType READ LightType NOTIFY LightChanged) // 0=point, 1=spot
         Q_PROPERTY(bool lightEnabled READ LightEnabled WRITE SetLightEnabled NOTIFY LightChanged)
+        Q_PROPERTY(bool castShadows READ CastShadows WRITE SetCastShadows NOTIFY LightChanged)
         Q_PROPERTY(QColor color READ Color WRITE SetColor NOTIFY LightChanged)
         Q_PROPERTY(double intensity READ Intensity WRITE SetIntensity NOTIFY LightChanged)
         Q_PROPERTY(double radius READ Radius WRITE SetRadius NOTIFY LightChanged)
@@ -60,6 +61,7 @@ namespace SmileEditor {
         QString Name() const;
         int     LightType() const;
         bool    LightEnabled() const;
+        bool    CastShadows() const;
         QColor  Color() const;
         double  Intensity() const;
         double  Radius() const;
@@ -74,6 +76,7 @@ namespace SmileEditor {
 
         void SetName(const QString& V);
         void SetLightEnabled(bool V);
+        void SetCastShadows(bool V);
         void SetColor(const QColor& V);
         void SetIntensity(double V);
         void SetRadius(double V);

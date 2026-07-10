@@ -30,5 +30,8 @@ namespace Smile {
         f32  OuterConeDeg = 40.0f;      // spot: cone externo (contribuicao zero)
 
         bool Enabled = true;
+        // F3: projeta sombras (spot; budget FLocalShadows::kMaxShadows por frame — os mais
+        // proximos da camera ganham slice). Point ainda nao suporta (cubemap vem depois).
+        bool CastShadows = true;
     };
 }

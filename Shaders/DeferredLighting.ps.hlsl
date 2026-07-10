@@ -22,19 +22,34 @@ cbuffer FrameCB : register(b0) {
     float4 RenderParams;       // nao usado aqui; mantem os offsets do FrameConstants
     float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = forca (0 = off)
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
-    float4 LightParams;        // x = nº de luzes puntuais no buffer t17, yzw = -
+    float4 LightParams;        // x = nº de luzes puntuais no buffer t17,
+                               // y = 1/res do atlas de sombra local, z = bias (NDC z), w = -
 };
 
-// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.yzw reservado
-// (indice de sombra na F3, source length na F4).
+// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.zw reservado
+// (source length na F4).
 struct FGPULight {
     float4 PosInvRadius;      // xyz = posicao, w = 1/raio de atenuacao
     float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulb (distancia minima)
     float4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
-    float4 SpotParams;        // x = 1/(cosInner - cosOuter)
+    float4 SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem)
+    row_major float4x4 ShadowMatrix; // world -> UVZ do slice (dividir por w: perspectiva)
 };
 
 StructuredBuffer<FGPULight> Lights : register(t17);
+Texture2DArray LocalShadowMap      : register(t18); // atlas D32 dos spots sombreados (F3a)
+
+// PCF 3x3 no slice do atlas (ShadowCmp s2 do CSMCommon). uvz ja dividido por w.
+float LocalShadowPCF(float3 uvz, float slice) {
+    float refZ = uvz.z - LightParams.z;
+    float t    = LightParams.y; // 1/res
+    float vis  = 0.0f;
+    [unroll] for (int y = -1; y <= 1; ++y)
+        [unroll] for (int x = -1; x <= 1; ++x)
+            vis += LocalShadowMap.SampleCmpLevelZero(
+                       ShadowCmp, float3(uvz.xy + float2(x, y) * t, slice), refZ);
+    return vis * (1.0f / 9.0f);
+}
 
 Texture2D        GBufferA   : register(t0);
 Texture2D        GBufferB   : register(t1);
@@ -224,6 +239,19 @@ float4 main(VSOutput input) : SV_Target {
                 float SpotMask = saturate((dot(-L, Lp.DirCosOuter.xyz) - Lp.DirCosOuter.w)
                                           * Lp.SpotParams.x);
                 Atten *= SpotMask * SpotMask;
+            }
+            if (Atten <= 0.0f) continue;
+
+            // Sombra local (F3a: spot com slice no atlas): projeta pelo ShadowMatrix
+            // (perspectiva -> divide por w), normal offset pequeno contra acne de contato.
+            if (Lp.SpotParams.y >= 0.0f) {
+                float4 sp  = mul(float4(worldPos + N * 0.02f, 1.0f), Lp.ShadowMatrix);
+                if (sp.w > 0.0f) {
+                    float3 uvz = sp.xyz / sp.w;
+                    if (all(uvz.xy > 0.0f) && all(uvz.xy < 1.0f) &&
+                        uvz.z > 0.0f && uvz.z < 1.0f)
+                        Atten *= LocalShadowPCF(uvz, Lp.SpotParams.y);
+                }
             }
             if (Atten <= 0.0f) continue;
 

@@ -12,7 +12,7 @@
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[11]{};
+        D3D12_ROOT_PARAMETER RootParams[12]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -121,6 +121,19 @@ namespace Smile {
         RootParams[10].Descriptor.ShaderRegister = 17;
         RootParams[10].Descriptor.RegisterSpace  = 0;
         RootParams[10].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // Atlas de sombras locais (t18): Texture2DArray D32 dos spots sombreados (F3a).
+        D3D12_DESCRIPTOR_RANGE LocalShadowRange{};
+        LocalShadowRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        LocalShadowRange.NumDescriptors                    = 1;
+        LocalShadowRange.BaseShaderRegister                = 18;
+        LocalShadowRange.RegisterSpace                     = 0;
+        LocalShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[11].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[11].DescriptorTable.pDescriptorRanges   = &LocalShadowRange;
+        RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;

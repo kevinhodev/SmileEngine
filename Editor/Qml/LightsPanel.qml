@@ -748,7 +748,33 @@ Rectangle {
                     onMoved: v => lightsModel.sourceRadius = v
                 }
 
-                // ---- Spot: cones + direcao ----
+                // ---- Spot: sombras + cones + direcao ----
+                Item {
+                    visible: lightsModel.lightType === 1
+                    width: parent.width
+                    height: 24
+                    Text {
+                        y: 4
+                        text: "Projeta sombras"
+                        color: root.textNormal
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                    }
+                    Text {
+                        y: 5
+                        x: 96
+                        text: "· 8 mais próximas/quadro"
+                        color: root.textMuted
+                        font.family: "Segoe UI"
+                        font.pixelSize: 9
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        y: 2
+                        checked: lightsModel.castShadows
+                        onToggled: lightsModel.castShadows = !checked
+                    }
+                }
                 SliderRow {
                     visible: lightsModel.lightType === 1
                     label: "Cone interno"

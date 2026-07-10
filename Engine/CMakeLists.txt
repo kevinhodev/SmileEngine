@@ -91,6 +91,7 @@ set(ENGINE_SOURCES
     Source/Graphics/Skybox.cpp
     Source/Graphics/Fog.cpp
     Source/Graphics/SunShadows.cpp
+    Source/Graphics/LocalShadows.cpp
     Source/Graphics/RaytracingScene.cpp
     Source/Graphics/DDGI.cpp
     Source/Graphics/DDGIDebug.cpp

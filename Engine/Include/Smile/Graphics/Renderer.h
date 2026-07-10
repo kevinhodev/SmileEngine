@@ -24,6 +24,7 @@
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/Fog.h"
 #include "Smile/Graphics/SunShadows.h"
+#include "Smile/Graphics/LocalShadows.h"
 #include "Smile/Graphics/RaytracingScene.h"
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/DDGIDebug.h"
@@ -74,17 +75,19 @@ namespace Smile {
         Vec4  CloudShadowParams2; // 16 bytes — x = km/unidade de mundo, y = altura da base (km),
                                   // zw = keyDir.xz/keyDir.y (projecao ate a base da camada)
 
-        Vec4  LightParams;        // 16 bytes — x = nº de luzes puntuais no buffer t17, yzw = -
+        Vec4  LightParams;        // 16 bytes — x = nº de luzes puntuais no buffer t17,
+                                  // y = 1/res do atlas de sombra local, z = bias (NDC), w = -
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
-    // (StructuredBuffer t17, root SRV). 4 float4 por luz; SpotParams.yzw reservado p/ as
-    // fases seguintes (indice de sombra F3, source length F4).
+    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes); SpotParams.zw
+    // reservado p/ a F4 (source length).
     struct FGPULight {
-        Vec4 PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
-        Vec4 ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
-        Vec4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
-        Vec4 SpotParams;        // x = 1/(cosInner - cosOuter), yzw = reservado
+        Vec4  PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
+        Vec4  ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
+        Vec4  DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
+        Vec4  SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem)
+        Mat44 ShadowMatrix;      // world -> UVZ do slice (perspectiva: dividir por w no shader)
     };
 
     struct alignas(256) ObjectConstants {
@@ -425,6 +428,8 @@ namespace Smile {
 
         FSunShadows     SunShadows;
         bool            UseSunShadows = true;
+
+        FLocalShadows   LocalShadows; // sombras de spot (F3a); budget kMaxShadows/frame
  
         FRaytracingScene RaytracingScene;
         FDDGI            DDGI;

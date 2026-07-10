@@ -74,6 +74,7 @@ namespace Smile {
         Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
         SunShadows.Initialize(Device.Native(), SRVHeap);
+        LocalShadows.Initialize(Device.Native(), SRVHeap);
 
         PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
@@ -1107,6 +1108,10 @@ namespace Smile {
         // atenuacao (a janela (1-(d/r)^4)^2 no shader garante contribuicao zero fora do raio,
         // entao o corte nao pipoca) e sobe pro slice do frame no LightBuffer (root SRV t17).
         // O teste de esfera precisa de planos NORMALIZADOS (os do AABB acima usam so o sinal).
+        // Sombras locais (F3a): spots visiveis com CastShadows disputam kMaxShadows slices do
+        // atlas por distancia a camera; escolhidos ganham matriz + slice no FGPULight e viram
+        // jobs do depth pass (gravado depois do CSM, quando os casters ja existem).
+        std::vector<FLocalShadows::FShadowJob> LocalShadowJobs;
         {
             Vec4 NPlanes[6];
             for (int i = 0; i < 6; ++i) {
@@ -1119,7 +1124,13 @@ namespace Smile {
             FGPULight* DstLights = reinterpret_cast<FGPULight*>(
                 MappedLightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULight));
             u32 NumLights = 0;
-            for (const FLight& L : Scene.Lights()) {
+
+            struct ShadowCand { u32 Gpu; u32 LightIdx; f32 Dist2; };
+            std::vector<ShadowCand> ShadowCands;
+
+            const auto& SceneLights = Scene.Lights();
+            for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
+                const FLight& L = SceneLights[li];
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
                 if (NumLights >= kMaxLights) break;
 
@@ -1137,6 +1148,7 @@ namespace Smile {
                 G.ColorSourceRadius = { L.Color.X * L.Intensity, L.Color.Y * L.Intensity,
                                         L.Color.Z * L.Intensity,
                                         std::max(L.SourceRadius, 0.01f) };
+                G.ShadowMatrix      = Mat44::Identity();
                 if (L.Type == ELightType::Spot) {
                     const Vec3 D = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
                     const f32 OuterDeg  = std::clamp(L.OuterConeDeg, 1.0f, 89.0f);
@@ -1145,14 +1157,49 @@ namespace Smile {
                     const f32 CosInner  = std::cos(InnerDeg * ToRad);
                     G.DirCosOuter = { D.X, D.Y, D.Z, CosOuter };
                     G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
-                                      0.0f, 0.0f, 0.0f };
+                                      -1.0f, 0.0f, 0.0f };
+                    if (L.CastShadows && LocalShadows.IsInitialized()) {
+                        const Vec3 ToCam = L.Position - CameraPosition;
+                        ShadowCands.push_back({ NumLights, li, ToCam.LengthSq() });
+                    }
                 } else {
                     G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f }; // -2 = sem mascara de cone
-                    G.SpotParams  = { 0.0f, 0.0f, 0.0f, 0.0f };
+                    G.SpotParams  = { 0.0f, -1.0f, 0.0f, 0.0f };
                 }
                 DstLights[NumLights++] = G;
             }
-            MappedCB->LightParams = { static_cast<f32>(NumLights), 0.0f, 0.0f, 0.0f };
+
+            std::sort(ShadowCands.begin(), ShadowCands.end(),
+                      [](const ShadowCand& a, const ShadowCand& b) { return a.Dist2 < b.Dist2; });
+            const u32 NumShadowed = std::min<u32>(static_cast<u32>(ShadowCands.size()),
+                                                  FLocalShadows::kMaxShadows);
+            for (u32 s = 0; s < NumShadowed; ++s) {
+                const FLight& L = SceneLights[ShadowCands[s].LightIdx];
+                const Vec3 D  = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
+                                                       : Vec3{ 0.0f, 1.0f, 0.0f };
+                const f32 OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * ToRad;
+                const f32 NearP    = 0.05f;
+                const f32 FarP     = std::max(L.AttenuationRadius, NearP * 2.0f);
+                const Mat44 LView = Mat44::LookAtLH(L.Position, L.Position + D, Up);
+                const Mat44 LProj = Mat44::PerspectiveFovLH(2.0f * OuterRad, 1.0f, NearP, FarP);
+                const Mat44 LVP   = LView * LProj;
+
+                // NDC -> UV (mesma convencao do WorldToShadow do CSM); o w fica pro shader
+                // dividir (projecao perspectiva).
+                Mat44 BiasUV = Mat44::Identity();
+                BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
+                BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
+
+                FGPULight& G  = DstLights[ShadowCands[s].Gpu];
+                G.ShadowMatrix = LVP * BiasUV;
+                G.SpotParams.Y = static_cast<f32>(s);
+                LocalShadowJobs.push_back({ LVP, L.Position, FarP, s });
+            }
+
+            MappedCB->LightParams = { static_cast<f32>(NumLights),
+                                      1.0f / static_cast<f32>(FLocalShadows::kResolution),
+                                      LocalShadows.GetDepthBias(), 0.0f };
         }
 
 
@@ -1240,6 +1287,37 @@ namespace Smile {
 
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+        }
+
+        // Sombras das luzes locais (F3a: spot): um slice do atlas por job, casters filtrados
+        // por esfera da luz. Depois restaura o estado de cena (o passe troca root sig/RT/
+        // viewport). Sem jobs, so garante o array legivel pro deferred lighting (t18).
+        if (!LocalShadowJobs.empty()) {
+            std::vector<FLocalShadows::FShadowDrawItem> LocalCasters;
+            LocalCasters.reserve(AllItems.size());
+            for (const AllItem& A : AllItems) {
+                if (A.Mat && A.Mat->Blend) continue; // vidro nao projeta sombra opaca
+                LocalCasters.push_back({ A.R->Mesh, A.Mat,
+                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                         A.R->AABBMin, A.R->AABBMax });
+            }
+            LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
+                                         LocalCasters.data(), LocalCasters.size(),
+                                         LocalShadowJobs.data(),
+                                         static_cast<u32>(LocalShadowJobs.size()));
+
+            auto SceneRTV = HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            CommandList->SetGraphicsRootConstantBufferView(
+                0, ConstantBuffer->GetGPUVirtualAddress() +
+                   static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
+            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+        } else if (LocalShadows.IsInitialized()) {
+            LocalShadows.EnsureReadable(CommandList);
         }
 
         const bool AOWillRun = UseAO && AO.IsReady();
@@ -1464,6 +1542,11 @@ namespace Smile {
             CommandList->SetGraphicsRootShaderResourceView(
                 10, LightBuffer->GetGPUVirtualAddress() +
                     static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight));
+            {
+                const u32 LocalShadowTable = LocalShadows.IsInitialized()
+                    ? LocalShadows.ShadowSRVSlot() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(11, SRVHeap.GpuHandle(LocalShadowTable));
+            }
             CommandList->SetPipelineState(PipelineState.PSODeferredLighting());
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             CommandList->IASetVertexBuffers(0, 0, nullptr);
