@@ -127,23 +127,42 @@ namespace SmileEditor {
                 DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitZ(), L.AttenuationRadius, MCol);
                 DrawCircle(DD, P, Vec3::UnitY(), Vec3::UnitZ(), L.AttenuationRadius, MCol);
             } else {
-                // Spot: 4 arestas + tampa no alcance, cone interno mais fraco (so a tampa).
+                // Spot: cone INSCRITO na esfera de atenuacao (estilo DrawWireSphereCappedCone
+                // da UE). A luz morre a Range da POSICAO (janela esferica (1-(d/r)^4)^2), entao
+                // as arestas tem comprimento Range e a tampa fica em Range*cos(theta) com raio
+                // Range*sin(theta) — tampa a Range AO LONGO DO EIXO com raio tan() desenhava
+                // cantos onde a luz e zero. Calota esferica em 2 planos fecha a leitura.
                 const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
                 const Vec3 U = Dir.GetOrthogonal();
                 const Vec3 V = Dir.Cross(U).Normalized();
-                const float Range = L.AttenuationRadius;
-                const float TanO = std::tan(std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * kPi / 180.0f);
-                const float TanI = std::tan(std::clamp(L.InnerConeDeg, 0.0f, L.OuterConeDeg) * kPi / 180.0f);
-                const Vec3 CapC = P + Dir * Range;
-                const float CapR = Range * TanO;
+                const float Range    = L.AttenuationRadius;
+                const float OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * kPi / 180.0f;
+                const float InnerRad = std::clamp(L.InnerConeDeg, 0.0f, L.OuterConeDeg) * kPi / 180.0f;
+
+                const Vec3  CapC = P + Dir * (Range * std::cos(OuterRad));
+                const float CapR = Range * std::sin(OuterRad);
                 DrawCircle(DD, CapC, U, V, CapR, MCol, 32);
                 for (int e = 0; e < 4; ++e) {
                     const float a = (2.0f * kPi * e) / 4.0f;
                     const Vec3 Rim = CapC + (U * std::cos(a) + V * std::sin(a)) * CapR;
                     DD.Line(P, Rim, MCol);
                 }
+                // Calota esferica: arcos de -theta..+theta nos planos Dir/U e Dir/V.
+                const Vec3 Planes[2] = { U, V };
+                for (const Vec3& Pl : Planes) {
+                    Vec3 Prev = P + (Dir * std::cos(-OuterRad) + Pl * std::sin(-OuterRad)) * Range;
+                    constexpr int kArcSegs = 16;
+                    for (int s = 1; s <= kArcSegs; ++s) {
+                        const float t = -OuterRad + (2.0f * OuterRad * s) / kArcSegs;
+                        const Vec3 Pt = P + (Dir * std::cos(t) + Pl * std::sin(t)) * Range;
+                        DD.Line(Prev, Pt, MCol);
+                        Prev = Pt;
+                    }
+                }
+                // Cone interno (onde o falloff angular comeca), mais fraco.
                 const Vec3 DimCol = MCol * 0.45f;
-                DrawCircle(DD, CapC, U, V, Range * TanI, DimCol, 32);
+                DrawCircle(DD, P + Dir * (Range * std::cos(InnerRad)), U, V,
+                           Range * std::sin(InnerRad), DimCol, 32);
             }
         }
     }
