@@ -16,22 +16,6 @@ namespace SmileEditor {
         constexpr float kFovY      = 60.0f * 3.14159265f / 180.0f; // bate com a Projection da camera
         constexpr float kSizeFrac  = 0.18f;  // tamanho da seta ~18% da meia-altura da tela
         constexpr float kHitRadius = 9.0f;   // pixels
-        constexpr float kPi        = 3.14159265f;
-
-        // Circulo wireframe generico (centro, dois eixos do plano, raio) no DebugDraw.
-        // Occluded = linhas depth-testadas (somem atras da geometria) — volumes de luz usam
-        // isso pro wire "parar" no chao em vez de atravessar (leitura honesta do alcance).
-        void DrawCircle(Smile::FDebugDraw& DD, const Vec3& C, const Vec3& U, const Vec3& V,
-                        float R, const Vec3& Col, int Segs = 40, bool Occluded = false) {
-            Vec3 Prev = C + U * R;
-            for (int s = 1; s <= Segs; ++s) {
-                const float a = (2.0f * kPi * s) / Segs;
-                const Vec3 P = C + (U * std::cos(a) + V * std::sin(a)) * R;
-                if (Occluded) DD.LineOccluded(Prev, P, Col);
-                else          DD.Line(Prev, P, Col);
-                Prev = P;
-            }
-        }
     }
 
     bool GizmoController::GetPivot(Smile::Renderer& R, Vec3& OutPivot, int& OutIdx,
@@ -105,69 +89,26 @@ namespace SmileEditor {
         for (int i = 0; i < static_cast<int>(Lights.size()); ++i) {
             const Smile::FLight& L = Lights[static_cast<size_t>(i)];
 
-            // Marker (estrela 3D pequena, constante em tela) em TODAS as luzes — cor da propria
-            // luz; apagada fica cinza. E o alvo do clique de selecao no viewport.
-            const float S = ScaleFor(R, L.Position) * 0.10f;
+            // Icone billboard (lampada/spot, glifo SDF) em TODAS as luzes — cor da propria luz,
+            // cinza quando apagada; a selecionada ganha o anel branco. Tamanho constante em
+            // tela (ScaleFor ja escala por distancia), ~44px de altura a 1080p (calibrado na
+            // referencia dos viewport icons do Flax). E o alvo do clique de selecao.
+            // O wireframe do volume (esfera/cone) saiu de cena por ora — decisao do usuario
+            // 2026-07-10; o caminho LineOccluded segue disponivel pra quando ele voltar.
+            const float S = ScaleFor(R, L.Position) * 0.22f;
             const Vec3 MCol = L.Enabled
                 ? Vec3{ std::max(L.Color.X, 0.15f), std::max(L.Color.Y, 0.15f),
                         std::max(L.Color.Z, 0.15f) }
                 : Vec3{ 0.35f, 0.35f, 0.35f };
-            const Vec3 P = L.Position;
-            DD.Line(P - Vec3::UnitX() * S, P + Vec3::UnitX() * S, MCol);
-            DD.Line(P - Vec3::UnitY() * S, P + Vec3::UnitY() * S, MCol);
-            DD.Line(P - Vec3::UnitZ() * S, P + Vec3::UnitZ() * S, MCol);
-            // diagonais curtas dao leitura de "estrela"/bulbo
-            const float D2 = S * 0.55f;
-            DD.Line(P - Vec3{ D2, D2, 0.0f }, P + Vec3{ D2, D2, 0.0f }, MCol);
-            DD.Line(P - Vec3{ 0.0f, D2, D2 }, P + Vec3{ 0.0f, D2, D2 }, MCol);
+            const bool IsSel = (i == Selected);
+            DD.Icon(L.Position, S, MCol,
+                    L.Type == Smile::ELightType::Spot ? 1u : 0u, IsSel);
 
-            if (i != Selected) continue;
-
-            // Selecionada: a forma do volume de influencia, na cor da luz — depth-testada
-            // (LineOccluded): o wire some onde entra na geometria, entao ele casa visualmente
-            // com onde a luz de fato alcanca em vez de atravessar o chao.
-            if (L.Type == Smile::ELightType::Point) {
-                // 3 grandes circulos (XY/XZ/YZ) no raio de atenuacao.
-                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitY(), L.AttenuationRadius, MCol, 40, true);
-                DrawCircle(DD, P, Vec3::UnitX(), Vec3::UnitZ(), L.AttenuationRadius, MCol, 40, true);
-                DrawCircle(DD, P, Vec3::UnitY(), Vec3::UnitZ(), L.AttenuationRadius, MCol, 40, true);
-            } else {
-                // Spot: cone INSCRITO na esfera de atenuacao (estilo DrawWireSphereCappedCone
-                // da UE). A luz morre a Range da POSICAO (janela esferica (1-(d/r)^4)^2), entao
-                // as arestas tem comprimento Range e a tampa fica em Range*cos(theta) com raio
-                // Range*sin(theta) — tampa a Range AO LONGO DO EIXO com raio tan() desenhava
-                // cantos onde a luz e zero. Calota esferica em 2 planos fecha a leitura.
+            // Spot selecionado: toco curto indicando a direcao (unico feedback do apontamento
+            // sem o wire do volume; some junto com a selecao).
+            if (IsSel && L.Type == Smile::ELightType::Spot) {
                 const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
-                const Vec3 U = Dir.GetOrthogonal();
-                const Vec3 V = Dir.Cross(U).Normalized();
-                const float Range    = L.AttenuationRadius;
-                const float OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * kPi / 180.0f;
-                const float InnerRad = std::clamp(L.InnerConeDeg, 0.0f, L.OuterConeDeg) * kPi / 180.0f;
-
-                const Vec3  CapC = P + Dir * (Range * std::cos(OuterRad));
-                const float CapR = Range * std::sin(OuterRad);
-                DrawCircle(DD, CapC, U, V, CapR, MCol, 32, true);
-                for (int e = 0; e < 4; ++e) {
-                    const float a = (2.0f * kPi * e) / 4.0f;
-                    const Vec3 Rim = CapC + (U * std::cos(a) + V * std::sin(a)) * CapR;
-                    DD.LineOccluded(P, Rim, MCol);
-                }
-                // Calota esferica: arcos de -theta..+theta nos planos Dir/U e Dir/V.
-                const Vec3 Planes[2] = { U, V };
-                for (const Vec3& Pl : Planes) {
-                    Vec3 Prev = P + (Dir * std::cos(-OuterRad) + Pl * std::sin(-OuterRad)) * Range;
-                    constexpr int kArcSegs = 16;
-                    for (int s = 1; s <= kArcSegs; ++s) {
-                        const float t = -OuterRad + (2.0f * OuterRad * s) / kArcSegs;
-                        const Vec3 Pt = P + (Dir * std::cos(t) + Pl * std::sin(t)) * Range;
-                        DD.LineOccluded(Prev, Pt, MCol);
-                        Prev = Pt;
-                    }
-                }
-                // Cone interno (onde o falloff angular comeca), mais fraco.
-                const Vec3 DimCol = MCol * 0.45f;
-                DrawCircle(DD, P + Dir * (Range * std::cos(InnerRad)), U, V,
-                           Range * std::sin(InnerRad), DimCol, 32, true);
+                DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f), MCol);
             }
         }
     }

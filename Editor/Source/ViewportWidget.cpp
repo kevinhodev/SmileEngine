@@ -696,7 +696,7 @@ namespace SmileEditor {
 
     int ViewportWidget::PickLightMarker(unsigned int _X, unsigned int _Y) const {
         if (!Renderer || !Renderer->IsInitialized()) return -1;
-        constexpr float kPickRadiusPx = 14.0f;
+        constexpr float kPickRadiusPx = 22.0f; // ~raio do icone billboard (~44px de altura)
         const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
 
         const auto& Lights = Renderer->GetScene().Lights();

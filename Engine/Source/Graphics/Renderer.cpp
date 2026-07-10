@@ -1786,8 +1786,11 @@ namespace Smile {
                 DebugDepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
                 CommandList->ResourceBarrier(1, &DebugDepthBar);
             }
+            // Eixos da camera em mundo (colunas da view row-vector) p/ os billboards de icone.
+            const Vec3 CamRight{ View.M[0][0], View.M[1][0], View.M[2][0] };
+            const Vec3 CamUp   { View.M[0][1], View.M[1][1], View.M[2][1] };
             DebugDraw.Render(CommandList, FrameSlot, ViewProjUnjittered, SwapChain.CurrentRTV(),
-                             SwapChain.GetWidth(), SwapChain.GetHeight(),
+                             SwapChain.GetWidth(), SwapChain.GetHeight(), CamRight, CamUp,
                              WantDepth ? SRVHeap.GpuHandle(DepthSRVSlot)
                                        : D3D12_GPU_DESCRIPTOR_HANDLE{});
             if (WantDepth) {

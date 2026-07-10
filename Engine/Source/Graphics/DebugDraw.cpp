@@ -33,6 +33,18 @@ namespace Smile {
         TriVerts.push_back({ { C.X, C.Y, C.Z }, { Col.X, Col.Y, Col.Z } });
     }
 
+    void FDebugDraw::Icon(const Vec3& C, f32 HalfSize, const Vec3& Col, u32 Type, bool Selected) {
+        if (IconVerts.size() + 6 > kMaxIconVerts) return;
+        const f32 T = static_cast<f32>(Type);
+        const f32 S = Selected ? 1.0f : 0.0f;
+        auto Push = [&](f32 Cx, f32 Cy) {
+            IconVerts.push_back({ { C.X, C.Y, C.Z }, { Col.X, Col.Y, Col.Z },
+                                  { Cx, Cy }, { HalfSize, T, S } });
+        };
+        Push(-1.0f, -1.0f); Push(1.0f, -1.0f); Push(1.0f, 1.0f);
+        Push(-1.0f, -1.0f); Push(1.0f,  1.0f); Push(-1.0f, 1.0f);
+    }
+
     void FDebugDraw::BuildRootSignature(ID3D12Device* Device) {
         // b0 visivel em VS (matriz) e PS (params/bias do teste de depth); t0 = depth da cena
         // pro caminho ocluivel (os PSOs sem teste simplesmente nao referenciam a tabela).
@@ -125,6 +137,33 @@ namespace Smile {
         PSODesc.PS                    = { PS.data(), PS.size() };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&TriPSO)));
+
+        // Icones de luz: billboards alpha-blended com glifo SDF (layout de vertice proprio).
+        auto IconVS = LoadShaderBytecode("LightIcon.vs_6_0.cso");
+        auto IconPS = LoadShaderBytecode("LightIcon.ps_6_0.cso");
+
+        D3D12_INPUT_ELEMENT_DESC IconLayout[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "COLOR",    0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 1, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        };
+
+        D3D12_BLEND_DESC IconBlend{};
+        IconBlend.RenderTarget[0].BlendEnable           = TRUE;
+        IconBlend.RenderTarget[0].SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+        IconBlend.RenderTarget[0].DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+        IconBlend.RenderTarget[0].BlendOp               = D3D12_BLEND_OP_ADD;
+        IconBlend.RenderTarget[0].SrcBlendAlpha         = D3D12_BLEND_ONE;
+        IconBlend.RenderTarget[0].DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+        IconBlend.RenderTarget[0].BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+        IconBlend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+        PSODesc.VS          = { IconVS.data(), IconVS.size() };
+        PSODesc.PS          = { IconPS.data(), IconPS.size() };
+        PSODesc.BlendState  = IconBlend;
+        PSODesc.InputLayout = { IconLayout, _countof(IconLayout) };
+        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&IconPSO)));
     }
 
     void FDebugDraw::CreateBuffers(ID3D12Device* Device) {
@@ -148,10 +187,16 @@ namespace Smile {
         SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
                  D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&VB)));
         SMILE_HR(VB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedVB)));
+
+        Desc.Width = static_cast<u64>(kMaxIconVerts) * sizeof(IconVertex) * kFIF;
+        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
+                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&IconVB)));
+        SMILE_HR(IconVB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedIconVB)));
     }
 
     void FDebugDraw::Render(ID3D12GraphicsCommandList* CmdList, u32 FrameSlot, const Mat44& ViewProj,
                             D3D12_CPU_DESCRIPTOR_HANDLE BackbufferRTV, u32 Width, u32 Height,
+                            const Vec3& CamRight, const Vec3& CamUp,
                             D3D12_GPU_DESCRIPTOR_HANDLE DepthSRV) {
         if (!Initialized || Empty()) return;
         const u32 Slot = FrameSlot % kFIF;
@@ -161,23 +206,29 @@ namespace Smile {
 
         u32 numLine = static_cast<u32>(LineVerts.size());
         u32 numTri  = static_cast<u32>(TriVerts.size());
+        u32 numIcon = static_cast<u32>(IconVerts.size());
         if (numOcc > kMaxVerts) numOcc = kMaxVerts;
         if (numOcc + numLine > kMaxVerts) numLine = kMaxVerts - numOcc;
         numTri = std::min(numTri, kMaxVerts - numOcc - numLine);
 
         // VB do frame: [ocluiveis | linhas | triangulos] — ocluiveis desenham primeiro,
-        // gizmo/markers por cima.
+        // gizmo/markers por cima. Icones tem VB proprio (stride diferente).
         u8* VBSlot = MappedVB + static_cast<size_t>(Slot) * kMaxVerts * kVBStride;
         if (numOcc)  std::memcpy(VBSlot, LineOccVerts.data(), numOcc * kVBStride);
         if (numLine) std::memcpy(VBSlot + numOcc * kVBStride, LineVerts.data(), numLine * kVBStride);
         if (numTri)  std::memcpy(VBSlot + (numOcc + numLine) * kVBStride, TriVerts.data(), numTri * kVBStride);
 
-        struct { Mat44 M; f32 Params[4]; } CBData;
+        u8* IconSlot = MappedIconVB + static_cast<size_t>(Slot) * kMaxIconVerts * sizeof(IconVertex);
+        if (numIcon) std::memcpy(IconSlot, IconVerts.data(), numIcon * sizeof(IconVertex));
+
+        struct { Mat44 M; f32 Params[4]; f32 CamR[4]; f32 CamU[4]; } CBData;
         CBData.M = ViewProj;
         CBData.Params[0] = Width  > 0 ? 1.0f / static_cast<f32>(Width)  : 0.0f;
         CBData.Params[1] = Height > 0 ? 1.0f / static_cast<f32>(Height) : 0.0f;
         CBData.Params[2] = 2e-5f; // bias NDC do teste de depth (linha encostada nao serrilha)
         CBData.Params[3] = 0.0f;
+        CBData.CamR[0] = CamRight.X; CBData.CamR[1] = CamRight.Y; CBData.CamR[2] = CamRight.Z; CBData.CamR[3] = 0.0f;
+        CBData.CamU[0] = CamUp.X;    CBData.CamU[1] = CamUp.Y;    CBData.CamU[2] = CamUp.Z;    CBData.CamU[3] = 0.0f;
         std::memcpy(MappedCB + static_cast<size_t>(Slot) * 256, &CBData, sizeof(CBData));
 
         CmdList->OMSetRenderTargets(1, &BackbufferRTV, FALSE, nullptr);
@@ -211,6 +262,17 @@ namespace Smile {
             CmdList->SetPipelineState(TriPSO.Get());
             CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             CmdList->DrawInstanced(numTri, 1, numOcc + numLine, 0);
+        }
+        if (numIcon) {
+            D3D12_VERTEX_BUFFER_VIEW IconVBV{};
+            IconVBV.BufferLocation = IconVB->GetGPUVirtualAddress() +
+                                     static_cast<u64>(Slot) * kMaxIconVerts * sizeof(IconVertex);
+            IconVBV.StrideInBytes  = sizeof(IconVertex);
+            IconVBV.SizeInBytes    = numIcon * static_cast<u32>(sizeof(IconVertex));
+            CmdList->IASetVertexBuffers(0, 1, &IconVBV);
+            CmdList->SetPipelineState(IconPSO.Get());
+            CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            CmdList->DrawInstanced(numIcon, 1, 0, 0);
         }
     }
 }

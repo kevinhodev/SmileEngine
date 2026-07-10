@@ -123,6 +123,8 @@ smile_compile_shader(Selection/SelectionOutline.ps.hlsl   ps_6_0 main SHADER_OUT
 smile_compile_shader(Gizmo/DebugDraw.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Gizmo/DebugDraw.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Gizmo/DebugDrawOccluded.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/LightIcon.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/LightIcon.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
 
 add_custom_target(Shaders
@@ -221,6 +223,8 @@ add_custom_target(Shaders
         Gizmo/DebugDraw.vs.hlsl
         Gizmo/DebugDraw.ps.hlsl
         Gizmo/DebugDrawOccluded.ps.hlsl
+        Gizmo/LightIcon.vs.hlsl
+        Gizmo/LightIcon.ps.hlsl
 )
 
 # Mantem a pasta Shaders visivel no Visual Studio com seus .hlsl
