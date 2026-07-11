@@ -281,7 +281,12 @@ namespace Smile {
         FReSTIRGI&       GetReSTIRGI()       { return ReSTIRGI; }
         const FReSTIRGI& GetReSTIRGI() const { return ReSTIRGI; }
         FReflections& GetReflections()     { return Reflections; }
-        void SetUseReflections(bool V)     { UseReflections = V; }
+        // Borda de subida invalida o historico do NRD: com reflexoes off o spec acumula sinal
+        // zero — religar sem reset arrastaria esse historico vazio pro especular real.
+        void SetUseReflections(bool V) {
+            if (V && !UseReflections) Nrd.InvalidateHistory();
+            UseReflections = V;
+        }
         bool GetUseReflections() const     { return UseReflections; }
 
         // Religar invalida o historico: reservoirs/acumulacao guardam radiancia do frame em que

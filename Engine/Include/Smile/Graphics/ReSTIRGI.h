@@ -50,8 +50,8 @@ namespace Smile {
                             const Mat44& View, const Vec2& JitterDeltaUv,
                             u32 PunctualLightCount = 0);
 
-        // F5: copia o SRV do buffer de luzes puntuais do frame pro t13 das DUAS tabelas de
-        // trace (ping-pong). Por frame.
+        // F5: copia o SRV do buffer de luzes puntuais do frame pro t13 da tabela de trace da
+        // paridade CORRENTE (a outra pertence ao frame em voo — descriptor versioning).
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                   u32 StagingSlot);
 

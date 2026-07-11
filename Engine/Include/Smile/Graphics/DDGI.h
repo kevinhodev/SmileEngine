@@ -39,9 +39,10 @@ namespace Smile {
                             const Vec3& SunColor, u32 FrameIndex, u32 PunctualLightCount = 0);
 
         // F5: copia o SRV do buffer de luzes puntuais do frame (slot de staging do Renderer)
-        // pro t8 da tabela de trace. Por frame — o buffer tem um slice por frame em voo.
+        // pro t8 da tabela de trace DO FrameSlot (tabela versionada por frame em voo — a do
+        // frame anterior ainda pode estar sendo lida pela GPU).
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
-                                  u32 StagingSlot);
+                                  u32 StagingSlot, u32 FrameSlot);
 
         void RecordUpdate(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
@@ -134,7 +135,10 @@ namespace Smile {
         u32 ProbeDataUAVSlot   = kInvalidSlot;
         u32 ProbeRayCountSRVSlot = kInvalidSlot;
         u32 ProbeRayCountUAVSlot = kInvalidSlot;
-        u32 TraceTableStart    = kInvalidSlot;
+        // Tabela do trace versionada por frame em voo: o t8 (luzes) e reescrito todo frame e o
+        // frame anterior ainda pode estar lendo a tabela dele no heap shader-visible.
+        static constexpr u32 kTraceTables = 2; // == FCommandQueue::kFramesInFlight (assert no .cpp)
+        u32 TraceTable[kTraceTables] = { kInvalidSlot, kInvalidSlot };
         u32 SceneGITableStart_ = kInvalidSlot;
         u32 UpdateTableStart   = kInvalidSlot;   // [ProbesTrace, ProbeData] p/ Update/UpdateDist
 

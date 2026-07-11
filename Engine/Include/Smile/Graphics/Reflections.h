@@ -60,10 +60,10 @@ namespace Smile {
                             f32 NormalBias, bool RealHitShading, const Mat44& View,
                             u32 PunctualLightCount = 0);
 
-        // F5: copia o SRV do buffer de luzes puntuais do frame pro t8 da tabela de trace
-        // (compartilhada pelo trace glossy e pelo mirror). Por frame.
+        // F5: copia o SRV do buffer de luzes puntuais do frame pro t8 da tabela de trace DO
+        // FrameSlot (compartilhada pelo trace glossy e pelo mirror; versionada por frame em voo).
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
-                                  u32 StagingSlot);
+                                  u32 StagingSlot, u32 FrameSlot);
 
         // Grava o trace (compute) -> radiancia (UAV). Caller ja setou os descriptor heaps e
         // transicionou depth/gbuffer p/ legiveis por shader. Deixa a radiancia legivel por PS.
@@ -78,6 +78,11 @@ namespace Smile {
         // Empacota o especular (Resolved -> IN_SPEC do NRD). Caller transicionou a IN_SPEC p/ UAV
         // (Nrd.TransitionInputsToWrite) e o Resolved ja esta NON_PIXEL (fim do RecordTrace c/ UseNrd).
         void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+
+        // Sem reflexoes ativas: escreve sinal especular ZERO valido na IN_SPEC. O REBLUR combinado
+        // (DIFFUSE_SPECULAR) le a IN_SPEC todo frame; textura recem-criada nunca escrita = conteudo
+        // indefinido entrando no historico. Caller ja transicionou p/ UAV (TransitionInputsToWrite).
+        void RecordNrdSpecZero(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
         void SetUseNrd(bool V) { UseNrd = V; }
         bool GetUseNrd() const { return UseNrd; }
@@ -149,7 +154,11 @@ namespace Smile {
         u32 DenoisedSRVSlot     = kInvalidSlot;
         u32 DenoisedUAVSlot     = kInvalidSlot;
         u32 TraceUAVTable       = kInvalidSlot; // 2 UAVs contiguos [radiance, raydata]
-        u32 TraceTableStart     = kInvalidSlot; // 8 SRVs [TLAS,skyview,inst,irrad,verts,idx,depth,gbuf]
+        // 8 SRVs [TLAS,skyview,inst,irrad,verts,idx,depth,gbuf] + t8 (luzes, por frame). Uma
+        // tabela por frame em voo: o t8 muda todo frame e a do frame anterior ainda pode estar
+        // sendo lida pela GPU (descriptor versioning).
+        static constexpr u32 kTraceTables = 2; // == FCommandQueue::kFramesInFlight (assert no .cpp)
+        u32 TraceTable[kTraceTables] = { kInvalidSlot, kInvalidSlot };
         u32 ResolveTableStart   = kInvalidSlot; // 4 SRVs [radiance, raydata, depth, gbuf]
         // Por paridade (curr=0/1): temporal le History[1-curr] e escreve History[curr]; composite
         // le History[curr]. 2 tabelas pre-montadas (sem CopyDescriptors por frame).
@@ -159,6 +168,7 @@ namespace Smile {
         // NRD unificado: pack especular + composite lendo a OUT_SPEC do NRD em vez do Denoised caseiro.
         u32 SpecPackSrvTable    = kInvalidSlot;                   // 3 SRVs [resolved, gbuf, depth]
         u32 SpecPackUAVSlot     = kInvalidSlot;                   // UAV da IN_SPEC do NRD
+        ID3D12Resource* NrdInSpec = nullptr;                      // nao-owned (FNrdDenoiser); p/ o clear
         u32 NrdOutSpecSRV       = kInvalidSlot;                   // SRV da OUT_SPEC do NRD
         u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 4 SRVs [nrdOutSpec, gbuf, depth, brdfLut]
         u32 DepthSlotCached     = kInvalidSlot;

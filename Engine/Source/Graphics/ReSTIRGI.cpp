@@ -185,14 +185,15 @@ namespace Smile {
     void FReSTIRGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                          u32 _StagingSlot) {
         if (!Ready) return;
-        // As DUAS tabelas ping-pong apontam pro mesmo buffer de luzes do frame.
-        for (u32 p = 0; p < 2; ++p) {
-            D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[p] + 13);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
-            UINT One = 1;
-            _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        }
+        // SO a tabela da paridade DESTE frame: a outra foi bindada pelo frame anterior, que com
+        // 2 frames em voo ainda pode estar lendo o heap shader-visible — reescrever descriptor
+        // em uso pela GPU e UB (descriptor versioning). A tabela corrente foi usada pela ultima
+        // vez ha >=2 frames, ja coberta pelo fence do FrameSlot.
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[FrameParity] + 13);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
+        UINT One = 1;
+        _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
     void FReSTIRGI::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Vec3& _CameraPos,
@@ -247,18 +248,20 @@ namespace Smile {
         CurrParity = p;
 
         if (NeedsClear) {
+            // SO o conjunto prev: o trace escreve TODO pixel do curr incondicionalmente, e
+            // clear+dispatch no mesmo recurso sem UAV barrier e WAW nao ordenado (o clear
+            // poderia terminar DEPOIS do dispatch). A transition prev->SRV logo abaixo ja
+            // ordena o clear contra a leitura.
             const float Zero[4] = { 0, 0, 0, 0 };
             auto ClearRes = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& St, u32 UavSlot) {
                 Transition(_CL, R, St, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 _CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(UavSlot),
                                                    _SRVHeap.CpuHandleStaging(UavSlot), R, Zero, 0, nullptr);
             };
-            for (u32 i = 0; i < 2; ++i) {
-                ClearRes(ResA[i].Get(), ResAState[i], ResAUAV[i]);
-                ClearRes(ResB[i].Get(), ResBState[i], ResBUAV[i]);
-                ClearRes(ResC[i].Get(), ResCState[i], ResCUAV[i]);
-                ClearRes(ResD[i].Get(), ResDState[i], ResDUAV[i]);
-            }
+            ClearRes(ResA[prev].Get(), ResAState[prev], ResAUAV[prev]);
+            ClearRes(ResB[prev].Get(), ResBState[prev], ResBUAV[prev]);
+            ClearRes(ResC[prev].Get(), ResCState[prev], ResCUAV[prev]);
+            ClearRes(ResD[prev].Get(), ResDState[prev], ResDUAV[prev]);
             NeedsClear = false;
         }
 

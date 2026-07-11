@@ -131,7 +131,7 @@ namespace Smile {
         FreeSlot(ProbeRayCountSRVSlot, 1);
         FreeSlot(ProbeDataUAVSlot, 2); 
         ProbeRayCountUAVSlot = kInvalidSlot;
-        FreeSlot(TraceTableStart, 9);
+        for (u32 i = 0; i < kTraceTables; ++i) FreeSlot(TraceTable[i], 9);
         FreeSlot(SceneGITableStart_, 3);
         FreeSlot(UpdateTableStart, 2);
         IrradAtlas.Reset();
@@ -325,8 +325,8 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, ProbeRayCountBuf.Get(), BufUav, ProbeRayCountUAVSlot);
 
         // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
-        TraceTableStart = _SRVHeap.Allocate(9);
-        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart);
+        // Uma tabela por frame em voo: o t8 muda todo frame e a tabela do frame anterior ainda
+        // pode estar sendo lida pela GPU (descriptor versioning).
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
@@ -338,8 +338,12 @@ namespace Smile {
             _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
         };
         UINT DstCount = 8; UINT SrcCounts[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
-        _Device->CopyDescriptors(1, &Dst, &DstCount, 8, Src, SrcCounts,
-                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        for (u32 i = 0; i < kTraceTables; ++i) {
+            TraceTable[i] = _SRVHeap.Allocate(9);
+            D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[i]);
+            _Device->CopyDescriptors(1, &Dst, &DstCount, 8, Src, SrcCounts,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
 
         SceneGITableStart_ = _SRVHeap.Allocate(3);
         D3D12_CPU_DESCRIPTOR_HANDLE GDst = _SRVHeap.CpuHandle(SceneGITableStart_);
@@ -442,9 +446,12 @@ namespace Smile {
     }
 
     void FDDGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
-                                     u32 _StagingSlot) {
+                                     u32 _StagingSlot, u32 _FrameSlot) {
+        static_assert(kTraceTables == FCommandQueue::kFramesInFlight,
+                      "tabela de trace versionada por frame em voo");
         if (!Ready) return;
-        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart + 8);
+        // Escreve so na tabela DESTE FrameSlot: a outra pertence ao frame em voo.
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[_FrameSlot] + 8);
         D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
         UINT One = 1;
         _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
@@ -490,7 +497,7 @@ namespace Smile {
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTableStart));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbesTraceUAVSlot));
         _CL->Dispatch(NumProbes, 1, 1);
 

@@ -149,7 +149,7 @@ namespace Smile {
         Free(HistoryUAVSlot[0], 1); Free(HistoryUAVSlot[1], 1);
         Free(DenoisedSRVSlot, 1); Free(DenoisedUAVSlot, 1);
         Free(TraceUAVTable, 2);
-        Free(TraceTableStart, 9);
+        for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 9);
         Free(ResolveTableStart, 4);
         Free(TemporalTable[0], 4); Free(TemporalTable[1], 4);
         Free(SpatialTable[0], 3); Free(SpatialTable[1], 3);
@@ -157,6 +157,7 @@ namespace Smile {
         Free(SpecPackSrvTable, 3);
         Free(SpecPackUAVSlot, 1);
         Free(NrdOutSpecSRV, 1);
+        NrdInSpec = nullptr;
         Free(CompositeTableNrd[0], 4); Free(CompositeTableNrd[1], 4);
         Radiance.Reset();
         RayData.Reset();
@@ -227,8 +228,8 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, RayData.Get(),  Uav, TraceUAVTable + 1);
 
         // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
-        TraceTableStart = _SRVHeap.Allocate(9);
-        D3D12_CPU_DESCRIPTOR_HANDLE TDst = _SRVHeap.CpuHandle(TraceTableStart);
+        // Uma tabela por frame em voo: o t8 muda todo frame e a tabela do frame anterior ainda
+        // pode estar sendo lida pela GPU (descriptor versioning).
         D3D12_CPU_DESCRIPTOR_HANDLE TSrc[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSlot),
@@ -240,8 +241,12 @@ namespace Smile {
             _SRVHeap.CpuHandleStaging(_GBufferSlot),
         };
         UINT TDstCount = 8; UINT TSrcCounts[8] = { 1,1,1,1,1,1,1,1 };
-        _Device->CopyDescriptors(1, &TDst, &TDstCount, 8, TSrc, TSrcCounts,
-                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        for (u32 i = 0; i < kTraceTables; ++i) {
+            TraceTable[i] = _SRVHeap.Allocate(9);
+            D3D12_CPU_DESCRIPTOR_HANDLE TDst = _SRVHeap.CpuHandle(TraceTable[i]);
+            _Device->CopyDescriptors(1, &TDst, &TDstCount, 8, TSrc, TSrcCounts,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
 
         ResolveTableStart = _SRVHeap.Allocate(4);
         D3D12_CPU_DESCRIPTOR_HANDLE RDst = _SRVHeap.CpuHandle(ResolveTableStart);
@@ -310,7 +315,8 @@ namespace Smile {
                                     ID3D12Resource* _NrdInSpec, ID3D12Resource* _NrdOutSpec) {
         if (!Ready || !_NrdInSpec || !_NrdOutSpec) return;
 
-        // UAV da IN_SPEC do NRD (o pack escreve aqui).
+        // UAV da IN_SPEC do NRD (o pack escreve aqui; o RecordNrdSpecZero limpa via ponteiro).
+        NrdInSpec = _NrdInSpec;
         SpecPackUAVSlot = _SRVHeap.Allocate(1);
         D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
         Uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -385,9 +391,12 @@ namespace Smile {
     }
 
     void FReflections::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
-                                            u32 _StagingSlot) {
+                                            u32 _StagingSlot, u32 _FrameSlot) {
+        static_assert(kTraceTables == FCommandQueue::kFramesInFlight,
+                      "tabela de trace versionada por frame em voo");
         if (!Ready) return;
-        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart + 8);
+        // Escreve so na tabela DESTE FrameSlot: a outra pertence ao frame em voo.
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[_FrameSlot] + 8);
         D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
         UINT One = 1;
         _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
@@ -421,7 +430,7 @@ namespace Smile {
         Transition(_CL, RayData.Get(),  RayDataState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTableStart));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable));
         _CL->Dispatch(HGX, HGY, 1);
 
@@ -446,7 +455,7 @@ namespace Smile {
         }
         TraceMirrorPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTableStart));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVSlot));
         _CL->Dispatch(FGX, FGY, 1);
 
@@ -506,6 +515,17 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpecPackSrvTable));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(SpecPackUAVSlot));
         _CL->Dispatch(GX, GY, 1);
+    }
+
+    void FReflections::RecordNrdSpecZero(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+        if (SpecPackUAVSlot == kInvalidSlot || !NrdInSpec) return;
+        // Radiancia 0 + hitT 0 = "sem sinal especular" valido pro REBLUR (vs. lixo indefinido).
+        // Ordenacao: TransitionInputsToWrite (antes) e a transition UAV->SRV do proprio NRD
+        // (depois) ja serializam o clear contra leituras — sem UAV barrier extra.
+        const float Zero[4] = { 0, 0, 0, 0 };
+        _CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(SpecPackUAVSlot),
+                                           _SRVHeap.CpuHandleStaging(SpecPackUAVSlot),
+                                           NrdInSpec, Zero, 0, nullptr);
     }
 
     void FReflections::RecordComposite(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap,

@@ -1115,13 +1115,13 @@ namespace Smile {
         }
 
         if (UseGI && DDGI.IsReady()) {
-            DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
+            DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex, GILightCount);
             DDGI.RecordUpdate(CommandList, SRVHeap);
         }
 
         if (ReflectionsActive) {
-            Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
+            Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
                                        KeyColor, FrameIndex, 1.0f, 0.2f, Reflections.GetRealHitShading(),
@@ -1570,7 +1570,10 @@ namespace Smile {
                 if (ReflectionsActive) Reflections.RecordTrace(CommandList, SRVHeap); 
                 Nrd.TransitionInputsToWrite(CommandList);
                 ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
+                // O REBLUR combinado le a IN_SPEC todo frame: sem reflexoes, escreve sinal
+                // especular zero valido (senao o denoiser consome conteudo indefinido).
                 if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
+                else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
                 Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
                              JitterPx, PrevJitterPx, FrameIndex);
                 Nrd.Denoise(CommandList);
