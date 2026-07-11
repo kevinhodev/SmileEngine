@@ -1,17 +1,22 @@
 #ifndef SMILE_GI_HITSHADING_HLSLI
 #define SMILE_GI_HITSHADING_HLSLI
 
-#include "DDGICommon.hlsli" 
+#include "DDGICommon.hlsli"
+#include "../LightsCommon.hlsli"
 
+// Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, Vertices,
+// Indices, SkyViewLUT, IrradAtlas, LinearClamp/Wrap e — F5 — SceneLights
+// (StructuredBuffer<FPunctualLight> com TODAS as luzes ativas, sem frustum cull).
 struct FHitShadeParams {
     float3 GridMin;       float Spacing;
     int3   Count;         int   AtlasTile;
     float2 AtlasInvSize;
     float3 SunDir;        float SunIntensity;
-    float3 SunColor;      float NormalBias;     
-    float  SkyIntensity;  float MaxRayDist;     
-    float  AlbedoLOD;     
+    float3 SunColor;      float NormalBias;
+    float  SkyIntensity;  float MaxRayDist;
+    float  AlbedoLOD;
     bool   RealHitShading;
+    int    NumLights;     // luzes puntuais no SceneLights (F5)
 };
 
 static const float kSkyBottomR = 6360.0f;
@@ -139,6 +144,26 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         vis = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
     }
     float3 Edirect = P.SunColor * P.SunIntensity * vis * ndl;
+
+    // F5: luzes puntuais no hit — mesma atenuacao do deferred (LightsCommon) + shadow ray
+    // inline SO pra luz que contribui de verdade (a janela de raio + cone ja zeram a
+    // maioria por hit). E a visibilidade RT que impede o poste de vazar parede no GI.
+    [loop] for (int li = 0; li < P.NumLights; ++li) {
+        float3 Ll; float distL;
+        float3 contrib = PunctualLightIncoming(SceneLights[li], hitPos, Ll, distL)
+                       * saturate(dot(hitN, Ll));
+        if (dot(contrib, float3(0.2126f, 0.7152f, 0.0722f)) < 1e-3f) continue;
+
+        RayDesc lray;
+        lray.Origin    = hitPos + hitN * max(P.NormalBias, 1e-3f);
+        lray.Direction = Ll;
+        lray.TMin      = 0.01f;
+        lray.TMax      = max(distL - 0.05f, 0.02f);
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
+        lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, lray);
+        SMILE_RT_PROCEED(lq)
+        if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += contrib;
+    }
 
     float3 indirect = SampleDDGIIrradiance(IrradAtlas, LinearClamp, hitPos, hitN,
                                            P.GridMin, P.Spacing, P.Count,

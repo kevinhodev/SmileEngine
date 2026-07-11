@@ -92,6 +92,17 @@ namespace Smile {
         Mat44 ShadowMatrix;      // world -> UVZ do slice (perspectiva: dividir por w no shader)
     };
 
+    // Luz puntual COMPACTA pro mundo indireto (F5) — espelha o FPunctualLight do
+    // LightsCommon.hlsli (DDGI/reflexoes/ReSTIR leem nos hits de RT). Sem matriz de sombra:
+    // a visibilidade la e por shadow ray inline. Lista SEM frustum cull (luz atras da camera
+    // ilumina GI).
+    struct FGPULightGI {
+        Vec4 PosInvRadius;
+        Vec4 ColorSourceRadius;
+        Vec4 DirCosOuter;
+        Vec4 SpotParams;
+    };
+
     struct alignas(256) ObjectConstants {
         Mat44 MVP;            // 64 bytes — Model * View * Projection (jittered, p/ SV_POSITION)
         Mat44 ModelMatrix;    // 64 bytes — world (para worldPos/worldNormal)
@@ -362,6 +373,13 @@ namespace Smile {
         static constexpr u32     kMaxLights = 256;
         ComPtr<ID3D12Resource>   LightBuffer;
         u8*                      MappedLightBase = nullptr;
+
+        // F5: lista compacta pro mundo indireto (sem cull/sombra), um slice por frame em voo,
+        // com um SRV de staging por slice — copiado por frame pras tabelas de trace do
+        // DDGI/reflexoes/ReSTIR (SetPunctualLightsSRV de cada um).
+        ComPtr<ID3D12Resource>   GILightBuffer;
+        u8*                      MappedGILightBase = nullptr;
+        u32                      GILightSRVSlot[FCommandQueue::kFramesInFlight] = {};
 
         u32                      MaxObjects = 1024;
         ComPtr<ID3D12Resource>   ObjectCB;          

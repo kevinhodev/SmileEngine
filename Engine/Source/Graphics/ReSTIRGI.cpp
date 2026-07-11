@@ -32,7 +32,7 @@ namespace Smile {
     }
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 13, 5, true);
+        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true); // t13 = luzes (F5)
         SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 7, 1, false);
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
         CreateConstantBuffer(_Device);
@@ -74,7 +74,7 @@ namespace Smile {
         for (u32 i = 0; i < 2; ++i) {
             Free(ResASRV[i], 1); Free(ResBSRV[i], 1); Free(ResCSRV[i], 1); Free(ResDSRV[i], 1);
             Free(ResAUAV[i], 1); Free(ResBUAV[i], 1); Free(ResCUAV[i], 1); Free(ResDUAV[i], 1);
-            Free(TraceTable[i], 13); Free(TraceUAVTable[i], 5); Free(SpatialTable[i], 7);
+            Free(TraceTable[i], 14); Free(TraceUAVTable[i], 5); Free(SpatialTable[i], 7);
             ResA[i].Reset(); ResB[i].Reset(); ResC[i].Reset(); ResD[i].Reset();
             ResAState[i] = ResBState[i] = ResCState[i] = ResDState[i] = D3D12_RESOURCE_STATE_COMMON;
         }
@@ -137,7 +137,8 @@ namespace Smile {
 
         for (u32 p = 0; p < 2; ++p) {
             const u32 prev = 1u - p;
-            TraceTable[p] = _SRVHeap.Allocate(13);
+            // t0..t12 fixos + t13 = luzes puntuais (F5; copiado por frame).
+            TraceTable[p] = _SRVHeap.Allocate(14);
             D3D12_CPU_DESCRIPTOR_HANDLE TSrc[13] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
                 _SRVHeap.CpuHandleStaging(_SkyViewSlot),
@@ -181,10 +182,24 @@ namespace Smile {
         Ready = true;
     }
 
+    void FReSTIRGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                         u32 _StagingSlot) {
+        if (!Ready) return;
+        // As DUAS tabelas ping-pong apontam pro mesmo buffer de luzes do frame.
+        for (u32 p = 0; p < 2; ++p) {
+            D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[p] + 13);
+            D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
+            UINT One = 1;
+            _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
+    }
+
     void FReSTIRGI::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Vec3& _CameraPos,
                                    u32 _Width, u32 _Height, const Vec3& _SunDir, f32 _SunIntensity,
                                    const Vec3& _SunColor, u32 _FrameIndex, f32 _SkyIntensity,
-                                   f32 _NormalBias, const Mat44& _View, const Vec2& _JitterDeltaUv) {
+                                   f32 _NormalBias, const Mat44& _View, const Vec2& _JitterDeltaUv,
+                                   u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
@@ -200,7 +215,8 @@ namespace Smile {
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, ValidateInterval };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
-        CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y, 0.0f, 0.0f };
+        CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y,
+                                static_cast<f32>(_PunctualLightCount), 0.0f }; // z = luzes (F5)
         CPU.NrdHitDistParams = { 3.0f, 0.1f, 20.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));

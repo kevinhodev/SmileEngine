@@ -32,8 +32,8 @@ namespace Smile {
     }
 
     void FReflections::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_6.cso", 8, 2, true);
-        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 8, 1, true);
+        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_6.cso", 9, 2, true);       // t8 = luzes (F5)
+        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 9, 1, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 4, 1, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 4, 1, false);
         SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 3, 1, false);
@@ -149,7 +149,7 @@ namespace Smile {
         Free(HistoryUAVSlot[0], 1); Free(HistoryUAVSlot[1], 1);
         Free(DenoisedSRVSlot, 1); Free(DenoisedUAVSlot, 1);
         Free(TraceUAVTable, 2);
-        Free(TraceTableStart, 8);
+        Free(TraceTableStart, 9);
         Free(ResolveTableStart, 4);
         Free(TemporalTable[0], 4); Free(TemporalTable[1], 4);
         Free(SpatialTable[0], 3); Free(SpatialTable[1], 3);
@@ -226,7 +226,8 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, Radiance.Get(), Uav, TraceUAVTable);
         _SRVHeap.CreateUAV(_Device, RayData.Get(),  Uav, TraceUAVTable + 1);
 
-        TraceTableStart = _SRVHeap.Allocate(8);
+        // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
+        TraceTableStart = _SRVHeap.Allocate(9);
         D3D12_CPU_DESCRIPTOR_HANDLE TDst = _SRVHeap.CpuHandle(TraceTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE TSrc[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSlot),
@@ -353,7 +354,7 @@ namespace Smile {
                                       const Vec3& _CameraPos, u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
                                       f32 _SkyIntensity, f32 _NormalBias, bool _RealHitShading,
-                                      const Mat44& _View) {
+                                      const Mat44& _View, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
@@ -365,7 +366,9 @@ namespace Smile {
         CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, SpatialRadius,
                                 FullResMaxRough };
         CPU.DebugParams     = { (f32)DebugMode, MaxFrames, 0.0f, 0.0f }; // y = cap real p/ debug acumulacao
-        CPU.CameraPos       = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z, 1.0f };
+        // w = nº de luzes puntuais no t8 (F5) — o componente era constante 1.0, livre.
+        CPU.CameraPos       = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z,
+                                static_cast<f32>(_PunctualLightCount) };
         CPU.ScreenParams    = { (f32)_Width, (f32)_Height, 1.0f / (f32)_Width, 1.0f / (f32)_Height };
         CPU.ReflectParams   = { MaxRoughnessToTrace, RoughnessFadeLength,
                                 _RealHitShading ? 1.0f : 0.0f, AlbedoLOD };
@@ -379,6 +382,16 @@ namespace Smile {
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReflectionConstants),
                     &CPU, sizeof(ReflectionConstants));
+    }
+
+    void FReflections::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                            u32 _StagingSlot) {
+        if (!Ready) return;
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart + 8);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
+        UINT One = 1;
+        _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
     void FReflections::Transition(ID3D12GraphicsCommandList* _CL, ID3D12Resource* _Res,

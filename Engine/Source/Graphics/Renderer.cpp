@@ -229,6 +229,28 @@ namespace Smile {
         SMILE_HR(LightBuffer->Map(0, &NoReadRange, &Ptr));
         MappedLightBase = reinterpret_cast<u8*>(Ptr);
 
+        // F5: lista compacta pro mundo indireto (DDGI/reflexoes/ReSTIR) + 1 SRV de staging
+        // por slice de frame (copiado pras tabelas de trace a cada frame).
+        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
+                             kMaxLights * sizeof(FGPULightGI);
+        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
+                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                 IID_PPV_ARGS(&GILightBuffer)));
+        SMILE_HR(GILightBuffer->Map(0, &NoReadRange, &Ptr));
+        MappedGILightBase = reinterpret_cast<u8*>(Ptr);
+
+        for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i) {
+            GILightSRVSlot[i] = SRVHeap.Allocate(1);
+            D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
+            Srv.Format                     = DXGI_FORMAT_UNKNOWN;
+            Srv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            Srv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+            Srv.Buffer.FirstElement        = static_cast<UINT64>(i) * kMaxLights;
+            Srv.Buffer.NumElements         = kMaxLights;
+            Srv.Buffer.StructureByteStride = sizeof(FGPULightGI);
+            SRVHeap.CreateSRV(Device.Native(), GILightBuffer.Get(), Srv, GILightSRVSlot[i]);
+        }
+
         RecreateObjectCB();
     }
 
@@ -1057,22 +1079,61 @@ namespace Smile {
         if (UseClouds && VolumetricClouds.IsInitialized())
             VolumetricClouds.RecordShadowMap(CommandList, SRVHeap);
 
+        // F5: lista de luzes do MUNDO INDIRETO (DDGI/reflexoes/ReSTIR) — TODAS as ativas, SEM
+        // frustum cull (luz atras da camera ilumina GI) e sem shadow map (visibilidade nos
+        // hits e por shadow ray inline). O descriptor do slice do frame e copiado pras
+        // tabelas de trace de cada consumidor.
+        u32 GILightCount = 0;
+        {
+            FGPULightGI* Dst = reinterpret_cast<FGPULightGI*>(
+                MappedGILightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULightGI));
+            for (const FLight& L : Scene.Lights()) {
+                if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
+                if (GILightCount >= kMaxLights) break;
+
+                FGPULightGI G;
+                G.PosInvRadius      = { L.Position.X, L.Position.Y, L.Position.Z,
+                                        1.0f / L.AttenuationRadius };
+                G.ColorSourceRadius = { L.Color.X * L.Intensity, L.Color.Y * L.Intensity,
+                                        L.Color.Z * L.Intensity,
+                                        std::max(L.SourceRadius, 0.01f) };
+                if (L.Type == ELightType::Spot) {
+                    const Vec3 D = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                    const f32 OuterDeg = std::clamp(L.OuterConeDeg, 1.0f, 89.0f);
+                    const f32 InnerDeg = std::clamp(L.InnerConeDeg, 0.0f, OuterDeg);
+                    const f32 CosOuter = std::cos(OuterDeg * ToRad);
+                    const f32 CosInner = std::cos(InnerDeg * ToRad);
+                    G.DirCosOuter = { D.X, D.Y, D.Z, CosOuter };
+                    G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
+                                      0.0f, 0.0f, 0.0f };
+                } else {
+                    G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f };
+                    G.SpotParams  = { 0.0f, 0.0f, 0.0f, 0.0f };
+                }
+                Dst[GILightCount++] = G;
+            }
+        }
+
         if (UseGI && DDGI.IsReady()) {
-            DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex);
+            DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
+            DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex, GILightCount);
             DDGI.RecordUpdate(CommandList, SRVHeap);
         }
 
         if (ReflectionsActive) {
+            Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
                                        KeyColor, FrameIndex, 1.0f, 0.2f, Reflections.GetRealHitShading(),
-                                       View);
+                                       View, GILightCount);
         }
 
         if (ReSTIRGIActive) {
+            ReSTIRGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
             ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
                                     RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
-                                    FrameIndex, 1.0f, 0.2f, View, PrevJitterUv - JitterUv);
+                                    FrameIndex, 1.0f, 0.2f, View, PrevJitterUv - JitterUv,
+                                    GILightCount);
         }
 
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());

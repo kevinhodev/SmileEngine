@@ -57,7 +57,13 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
                             const Vec3& CameraPos, u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
-                            f32 NormalBias, bool RealHitShading, const Mat44& View);
+                            f32 NormalBias, bool RealHitShading, const Mat44& View,
+                            u32 PunctualLightCount = 0);
+
+        // F5: copia o SRV do buffer de luzes puntuais do frame pro t8 da tabela de trace
+        // (compartilhada pelo trace glossy e pelo mirror). Por frame.
+        void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                  u32 StagingSlot);
 
         // Grava o trace (compute) -> radiancia (UAV). Caller ja setou os descriptor heaps e
         // transicionou depth/gbuffer p/ legiveis por shader. Deixa a radiancia legivel por PS.

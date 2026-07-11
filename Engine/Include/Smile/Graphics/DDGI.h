@@ -36,7 +36,12 @@ namespace Smile {
                            u32 TlasSRVSlot, u32 SkyViewSRVSlot);
 
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, f32 SunIntensity,
-                            const Vec3& SunColor, u32 FrameIndex);
+                            const Vec3& SunColor, u32 FrameIndex, u32 PunctualLightCount = 0);
+
+        // F5: copia o SRV do buffer de luzes puntuais do frame (slot de staging do Renderer)
+        // pro t8 da tabela de trace. Por frame — o buffer tem um slice por frame em voo.
+        void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                  u32 StagingSlot);
 
         void RecordUpdate(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 

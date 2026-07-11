@@ -3,14 +3,15 @@
 #define DDGI_RAYS 64 
 
 cbuffer DDGICB : register(b0) {
-    float4 GridMinSpacing;  
-    float4 GridCountRays;   
-    float4 AtlasParams;     
+    float4 GridMinSpacing;
+    float4 GridCountRays;
+    float4 AtlasParams;
     float4 SunDirIntensity;
-    float4 SunColorHyst;    
-    float4 TraceParams;     
-    float4 DistAtlasParams; 
-    float4 MiscParams;      
+    float4 SunColorHyst;
+    float4 TraceParams;
+    float4 DistAtlasParams;
+    float4 MiscParams;
+    float4 MiscParams2;     // y = nº de luzes puntuais no SceneLights (F5)
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -19,8 +20,11 @@ StructuredBuffer<InstanceGeo>   Instances   : register(t2);
 Texture2D<float4>               IrradAtlas  : register(t3); 
 StructuredBuffer<DDGIVertex>    Vertices    : register(t4); 
 Buffer<uint>                    Indices     : register(t5); 
-Buffer<float4>                  ProbeData   : register(t6); 
-Buffer<uint>                    ProbeRayCount:register(t7); 
+Buffer<float4>                  ProbeData   : register(t6);
+Buffer<uint>                    ProbeRayCount:register(t7);
+
+#include "../LightsCommon.hlsli"
+StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais no GI
 
 RWTexture2D<float4>             ProbesTrace : register(u0);
 
@@ -73,8 +77,9 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.SunDir         = sunDir;              P.SunIntensity = SunDirIntensity.w;
     P.SunColor       = SunColorHyst.rgb;    P.NormalBias   = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = maxT;
-    P.AlbedoLOD      = 4.0f; 
+    P.AlbedoLOD      = 4.0f;
     P.RealHitShading = DistAtlasParams.w > 0.5f;
+    P.NumLights      = (int)MiscParams2.y;
 
     float3 radiance;
     float  signedDist;

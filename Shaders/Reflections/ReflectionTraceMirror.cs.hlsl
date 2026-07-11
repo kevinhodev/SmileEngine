@@ -24,9 +24,12 @@ Texture2D<float4>               IrradAtlas : register(t3);
 StructuredBuffer<DDGIVertex>    Vertices   : register(t4);
 Buffer<uint>                    Indices    : register(t5);
 Texture2D<float>                Depth      : register(t6);
-Texture2D<float4>               GBuffer    : register(t7); 
+Texture2D<float4>               GBuffer    : register(t7);
 
-RWTexture2D<float4>             RWResolved : register(u0); 
+#include "../LightsCommon.hlsli"
+StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais nos hits
+
+RWTexture2D<float4>             RWResolved : register(u0);
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
@@ -94,6 +97,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
     P.AlbedoLOD      = ReflectParams.w;
     P.RealHitShading = ReflectParams.z > 0.5f;
+    P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
 
     float3 radiance;
     float  hitDist = TraceParams.y;

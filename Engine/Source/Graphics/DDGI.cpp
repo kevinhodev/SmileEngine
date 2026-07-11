@@ -101,7 +101,7 @@ namespace Smile {
     }
 
     void FDDGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 8, 1, true);
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); // t8 = luzes (F5)
         UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
         UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
         RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
@@ -131,7 +131,7 @@ namespace Smile {
         FreeSlot(ProbeRayCountSRVSlot, 1);
         FreeSlot(ProbeDataUAVSlot, 2); 
         ProbeRayCountUAVSlot = kInvalidSlot;
-        FreeSlot(TraceTableStart, 8);
+        FreeSlot(TraceTableStart, 9);
         FreeSlot(SceneGITableStart_, 3);
         FreeSlot(UpdateTableStart, 2);
         IrradAtlas.Reset();
@@ -324,7 +324,8 @@ namespace Smile {
         BufUav.Format              = DXGI_FORMAT_R32_UINT;
         _SRVHeap.CreateUAV(_Device, ProbeRayCountBuf.Get(), BufUav, ProbeRayCountUAVSlot);
 
-        TraceTableStart = _SRVHeap.Allocate(8);
+        // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
+        TraceTableStart = _SRVHeap.Allocate(9);
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
@@ -440,8 +441,18 @@ namespace Smile {
                 std::to_string(AtlasWidth) + "x" + std::to_string(AtlasHeight));
     }
 
+    void FDDGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                     u32 _StagingSlot) {
+        if (!Ready) return;
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart + 8);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
+        UINT One = 1;
+        _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
     void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,
-                               const Vec3& _SunColor, u32 _FrameIndex) {
+                               const Vec3& _SunColor, u32 _FrameIndex, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.SunDirIntensity = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, _SunIntensity };
@@ -454,7 +465,8 @@ namespace Smile {
         CPU.MiscParams      = { Relocation ? 1.0f : 0.0f, DeactivationThreshold, EffMax, EffMin };
         // Marca de "recem-ativado" so quando o Relocate ainda tem >=1 frame agendado DEPOIS
         // deste (a marca precisa do proximo Relocate p/ o auto-demote; orfa = hyst 0 eterno).
-        CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f,
+                                static_cast<f32>(_PunctualLightCount), 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }

@@ -47,7 +47,13 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity, f32 NormalBias,
-                            const Mat44& View, const Vec2& JitterDeltaUv);
+                            const Mat44& View, const Vec2& JitterDeltaUv,
+                            u32 PunctualLightCount = 0);
+
+        // F5: copia o SRV do buffer de luzes puntuais do frame pro t13 das DUAS tabelas de
+        // trace (ping-pong). Por frame.
+        void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                  u32 StagingSlot);
 
         void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 

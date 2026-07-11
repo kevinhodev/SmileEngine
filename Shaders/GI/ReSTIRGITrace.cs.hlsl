@@ -23,7 +23,8 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
-    float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao no espaco jittered)
+    float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao no espaco
+                                    // jittered), z = nº de luzes puntuais no SceneLights (F5)
 };
 
 RaytracingAccelerationStructure Scene      : register(t0);
@@ -39,6 +40,9 @@ Texture2D<float4>               PrevResA   : register(t9);  // x1.xyz, M
 Texture2D<float4>               PrevResB   : register(t10); // x2.xyz, W
 Texture2D<float4>               PrevResC   : register(t11); // Lo.rgb
 Texture2D<float4>               PrevResD   : register(t12); // n2.xyz
+
+#include "../LightsCommon.hlsli"
+StructuredBuffer<FPunctualLight> SceneLights : register(t13); // F5: luzes puntuais nos hits
 
 RWTexture2D<float4>             GIOut    : register(u0); // rgb=gi, a=hitDist (NRD)
 RWTexture2D<float4>            CurrResA : register(u1);
@@ -106,6 +110,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
     P.AlbedoLOD      = ShadeParams.y;
     P.RealHitShading = ShadeParams.x > 0.5f;
+    P.NumLights      = (int)JitterParams.z; // F5
 
     float3 Lo, x2, n2;
     float  hitDist;
