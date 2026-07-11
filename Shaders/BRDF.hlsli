@@ -115,4 +115,62 @@ float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
     return Result;
 }
 
-#endif 
+// F4 (luzes de area "soft", estilo UE/Flax): variante do BRDF_Direct com direcoes SEPARADAS —
+// difuso usa o CENTRO da fonte (Ld: e de la que vem a energia media), especular usa o
+// representative point na superficie da fonte (Ls) com o fator de normalizacao do lobo
+// alargado (SpecEnergy) — o highlight cresce com o tamanho aparente da fonte em vez de
+// estourar. Sol/lua e caminhos sem area seguem no BRDF_Direct.
+float3 BRDF_DirectArea(float3 N, float3 V, float3 Ld, float3 Ls, float SpecEnergy,
+                       float3 Radiance, float3 DiffuseColor, float3 SpecularColor,
+                       float Metallic, float Roughness, float a2, float3 TransColor) {
+    float3 Result = float3(0.0f, 0.0f, 0.0f);
+
+    float NoLd = saturate(dot(N, Ld));
+    float NoLs = saturate(dot(N, Ls));
+    if (NoLd > 0.0f || NoLs > 0.0f) {
+        float3 H   = normalize(Ls + V);
+        float  NoV = saturate(dot(N, V));
+        float  NoH = saturate(dot(N, H));
+        float  VoH = saturate(dot(V, H));
+
+        float D = D_GGX(a2, NoH);
+        #if USE_EXACT_SMITH
+            float Vis = Vis_SmithJointExact(a2, NoV, NoLs);
+        #else
+            float Vis = Vis_SmithJointApprox(a2, NoV, NoLs);
+        #endif
+        float3 F = F_Schlick(SpecularColor, VoH);
+        float3 Specular = (D * Vis) * F * SpecEnergy;
+
+        float3 Kd = 1.0f - Metallic;
+
+        #if USE_KULLA_CONTY_ENERGY_CONSERVATION
+            float E_val, Ef_val;
+            GGXEnergyLookup(Roughness, NoV, E_val, Ef_val);
+            float3 W = 1.0f + SpecularColor * ((1.0f - E_val) / max(E_val, 1e-5f));
+            Specular *= W;
+
+            float3 F90    = saturate(50.0f * SpecularColor.g);
+            float3 E_spec = W * (E_val * SpecularColor + Ef_val * (F90 - SpecularColor));
+            float  DiffuseScale = 1.0f - saturate(dot(E_spec, float3(0.2126f, 0.7152f, 0.0722f)));
+            Kd *= DiffuseScale;
+        #else
+            Kd *= (1.0f - F);
+        #endif
+
+        #if USE_BURLEY_DIFFUSE
+            float3 Diffuse = Kd * Diffuse_Burley(DiffuseColor, Roughness, NoV, NoLd, VoH);
+        #else
+            float3 Diffuse = (Kd * DiffuseColor) / BRDF_PI;
+        #endif
+
+        Result += Diffuse * Radiance * NoLd + Specular * Radiance * NoLs;
+    }
+
+    if (any(TransColor > 0.0f))
+        Result += FoliageTransmission(N, V, Ld, Radiance, TransColor);
+
+    return Result;
+}
+
+#endif

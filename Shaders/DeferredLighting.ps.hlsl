@@ -69,6 +69,28 @@ float LocalShadowPCF(float2 uv, float refZ, float slice) {
     return vis * (1.0f / 9.0f);
 }
 
+// F4 — representative point na ESFERA da fonte (porte da parte de esfera do
+// AreaLightSpecular do Flax / UE): desloca a direcao do especular pro ponto da esfera mais
+// proximo do raio refletido e devolve a normalizacao de energia do lobo alargado (sem ela o
+// highlight de fonte grande estoura). Difuso/atenuacao/sombra seguem usando o CENTRO.
+float AreaSphereSpecular(float SourceRadius, float Roughness, float3 ToLightCenter,
+                         float3 V, float3 N, out float3 Ls) {
+    float  m = Roughness * Roughness;
+    float3 r = reflect(-V, N);
+    float  invDist = rsqrt(dot(ToLightCenter, ToLightCenter));
+
+    float sphereAngle = saturate(SourceRadius * invDist);
+    float e = m / saturate(m + 0.5f * sphereAngle);
+    float energy = e * e;
+
+    float3 closestPointOnRay = dot(ToLightCenter, r) * r;
+    float3 centerToRay = closestPointOnRay - ToLightCenter;
+    float3 closest = ToLightCenter + centerToRay *
+        saturate(SourceRadius * rsqrt(max(dot(centerToRay, centerToRay), 1e-8f)));
+    Ls = normalize(closest);
+    return energy;
+}
+
 // Sombra de POINT: o vetor luz->pixel escolhe a face do cubo no hardware; a profundidade de
 // referencia usa o EIXO DOMINANTE (viewZ da face que vai responder — mesma projecao de 90
 // graus com que as faces foram renderizadas), entao nao precisa de matriz por luz. PCF de
@@ -319,9 +341,15 @@ float4 main(VSOutput input) : SV_Target {
             }
             if (Atten <= 0.0f) continue;
 
-            Lighting += BRDF_Direct(N, V, L, Lp.ColorSourceRadius.rgb * Atten,
-                                    DiffuseColor, SpecularColor, Metallic, Roughness, a2,
-                                    TransColor);
+            // F4: especular de area — SourceRadius alarga o highlight (representative point);
+            // o difuso segue no centro (L) e a energia do lobo e renormalizada.
+            float3 Ls;
+            float  SpecEnergy = AreaSphereSpecular(Lp.ColorSourceRadius.w, Roughness,
+                                                   ToLight, V, N, Ls);
+            Lighting += BRDF_DirectArea(N, V, L, Ls, SpecEnergy,
+                                        Lp.ColorSourceRadius.rgb * Atten,
+                                        DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                                        TransColor);
         }
     }
 

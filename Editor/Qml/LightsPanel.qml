@@ -741,9 +741,9 @@ Rectangle {
                     onMoved: v => lightsModel.radius = v
                 }
                 SliderRow {
-                    label: "Bulbo (raio da fonte)"
+                    label: "Raio da fonte (área)"
                     valueText: root.fmt(lightsModel.sourceRadius, 2) + " m"
-                    from: 0.01; to: 0.5
+                    from: 0.01; to: 1.5
                     boundValue: lightsModel.sourceRadius
                     onMoved: v => lightsModel.sourceRadius = v
                 }
