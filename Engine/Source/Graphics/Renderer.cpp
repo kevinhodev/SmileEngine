@@ -1185,7 +1185,9 @@ namespace Smile {
                 const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
                                                        : Vec3{ 0.0f, 1.0f, 0.0f };
                 const f32 OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * ToRad;
-                const f32 NearP    = 0.05f;
+                // Mesmo near do shader (LightParams2.y): o refZ linear reconstruido la
+                // precisa bater 1:1 com a projecao usada aqui.
+                const f32 NearP    = FLocalShadows::kPointNear;
                 const f32 FarP     = std::max(L.AttenuationRadius, NearP * 2.0f);
                 const Mat44 LView = Mat44::LookAtLH(L.Position, L.Position + D, Up);
                 const Mat44 LProj = Mat44::PerspectiveFovLH(2.0f * OuterRad, 1.0f, NearP, FarP);

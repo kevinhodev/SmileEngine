@@ -26,7 +26,9 @@ namespace Smile {
         static constexpr u32 kResolution     = 1024;
         static constexpr u32 kMaxCubeShadows = 4;
         static constexpr u32 kCubeResolution = 512;
-        static constexpr f32 kPointNear      = 0.05f; // near das 6 faces (formula do refZ no shader)
+        static constexpr f32 kPointNear      = 0.05f; // near de TODAS as projecoes locais (spot e
+                                                      // faces do cubo) — o shader reconstroi o refZ
+                                                      // linear com ele (LightParams2.y)
 
         struct FShadowDrawItem {
             const FGpuMesh*           Mesh;
@@ -95,7 +97,9 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource>      SliceCB; // Mat44 por slice por frame em voo
         u8*                                         MappedSlice = nullptr;
 
-        f32  DepthBias   = 0.0015f; // bias constante em NDC z (soma ao slope-scaled do PSO)
+        f32  DepthBias   = 0.02f; // bias constante em METROS (o shader converte pra NDC pelo
+                                  // caminho linear; + termo relativo por distancia no shader).
+                                  // Bias NDC constante em perspectiva = peter-panning na borda.
         bool Initialized = false;
     };
 }

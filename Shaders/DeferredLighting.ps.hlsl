@@ -41,15 +41,31 @@ StructuredBuffer<FGPULight> Lights : register(t17);
 Texture2DArray   LocalShadowMap    : register(t18); // atlas D32 dos spots sombreados (F3a)
 TextureCubeArray LocalCubeShadow   : register(t19); // cube array dos points sombreados (F3b)
 
-// PCF 3x3 no slice do atlas (ShadowCmp s2 do CSMCommon). uvz ja dividido por w.
-float LocalShadowPCF(float3 uvz, float slice) {
-    float refZ = uvz.z - LightParams.z;
-    float t    = LightParams.y; // 1/res
-    float vis  = 0.0f;
+// Depth NDC (LH, 0..1) da projecao das sombras locais a partir da distancia LINEAR ao longo
+// do eixo da face/cone. O bias e aplicado em ESPACO LINEAR antes desta conversao: bias
+// constante em NDC numa projecao perspectiva com near pequeno vale centimetros perto da luz
+// e METROS na borda do alcance (peter-panning longe, acne perto).
+float LocalNdcDepth(float viewZ, float farP) {
+    float nearP = LightParams2.y;
+    float fRng  = farP / max(farP - nearP, 1e-4f);
+    return fRng - (fRng * nearP) / max(viewZ, nearP);
+}
+
+// Bias em metros: constante + termo relativo (a incerteza do depth cresce com a distancia,
+// junto com o texel projetado).
+float LocalShadowBias(float viewZ) {
+    return LightParams.z + viewZ * 0.008f;
+}
+
+// PCF 3x3 no slice do atlas (ShadowCmp s2 do CSMCommon). uv ja dividido por w; refZ vem
+// pre-calculado do caminho linear (LocalNdcDepth).
+float LocalShadowPCF(float2 uv, float refZ, float slice) {
+    float t   = LightParams.y; // 1/res
+    float vis = 0.0f;
     [unroll] for (int y = -1; y <= 1; ++y)
         [unroll] for (int x = -1; x <= 1; ++x)
             vis += LocalShadowMap.SampleCmpLevelZero(
-                       ShadowCmp, float3(uvz.xy + float2(x, y) * t, slice), refZ);
+                       ShadowCmp, float3(uv + float2(x, y) * t, slice), refZ);
     return vis * (1.0f / 9.0f);
 }
 
@@ -61,10 +77,8 @@ float LocalCubeShadowPCF(float3 lightToPixel, float cube, float farP) {
     float3 ad    = abs(lightToPixel);
     float  viewZ = max(ad.x, max(ad.y, ad.z));
 
-    float nearP = LightParams2.y;
-    float fRng  = farP / max(farP - nearP, 1e-4f);
-    float refZ  = fRng - (fRng * nearP) / max(viewZ, nearP); // NDC z da face (LH, 0..1)
-    refZ -= LightParams.z * 2.0f; // bias um pouco maior: 90 graus + 512 = texel gordo
+    // Bias linear (x1.5: 90 graus + 512 = texel mais gordo que o do spot) -> NDC da face.
+    float refZ = LocalNdcDepth(viewZ - LocalShadowBias(viewZ) * 1.5f, farP);
 
     float3 dir = normalize(lightToPixel);
     float3 T   = normalize(cross(dir, abs(dir.y) > 0.9f ? float3(1.0f, 0.0f, 0.0f)
@@ -285,8 +299,16 @@ float4 main(VSOutput input) : SV_Target {
                     if (sp.w > 0.0f) {
                         float3 uvz = sp.xyz / sp.w;
                         if (all(uvz.xy > 0.0f) && all(uvz.xy < 1.0f) &&
-                            uvz.z > 0.0f && uvz.z < 1.0f)
-                            Atten *= LocalShadowPCF(uvz, Lp.SpotParams.y);
+                            uvz.z > 0.0f && uvz.z < 1.0f) {
+                            // refZ pelo caminho LINEAR (dist ao longo do eixo do cone),
+                            // com bias em metros — nao pelo uvz.z (bias NDC ~ peter-panning).
+                            float viewZ = dot(offPos - Lp.PosInvRadius.xyz,
+                                              Lp.DirCosOuter.xyz);
+                            float farP  = max(1.0f / Lp.PosInvRadius.w,
+                                              LightParams2.y * 2.0f);
+                            float refZ  = LocalNdcDepth(viewZ - LocalShadowBias(viewZ), farP);
+                            Atten *= LocalShadowPCF(uvz.xy, refZ, Lp.SpotParams.y);
+                        }
                     }
                 } else {
                     Atten *= LocalCubeShadowPCF(offPos - Lp.PosInvRadius.xyz,
