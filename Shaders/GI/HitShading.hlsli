@@ -12,7 +12,8 @@ struct FHitShadeParams {
     int3   Count;         int   AtlasTile;
     float2 AtlasInvSize;
     float3 SunDir;        float SunIntensity;
-    float3 SunColor;      float NormalBias;
+    float3 SunColor;      float ShadowRayBias; // origem dos shadow rays no hit (anti-acne;
+                                               // 0.2 historico — calibrar vs offset robusto)
     float  SkyIntensity;  float MaxRayDist;
     float  AlbedoLOD;
     bool   RealHitShading;
@@ -134,8 +135,8 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     float vis = 1.0f;
     if (ndl > 0.0f) {
         RayDesc sray;
-        sray.Origin    = hitPos + hitN * max(P.NormalBias, 1e-3f);
-        sray.Direction = P.SunDir;
+        sray.Origin    = hitPos + hitN * max(P.ShadowRayBias, 1e-3f);
+        sray.Direction = P.SunDir; // direcional: a direcao nao depende da origem deslocada
         sray.TMin      = 0.01f;
         sray.TMax      = P.MaxRayDist;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
@@ -154,11 +155,18 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
                        * saturate(dot(hitN, Ll));
         if (dot(contrib, float3(0.2126f, 0.7152f, 0.0722f)) < 1e-3f) continue;
 
+        // Segmento medido da origem EFETIVA (deslocada pelo ShadowRayBias): com origem em
+        // hitPos+N*b mas direcao/TMax calculados de hitPos, origem/direcao/comprimento
+        // descreviam segmentos diferentes — com luz proxima (b=0.2!) o erro angular e grande.
+        // O shading (contrib) continua medido do hitPos real; so o raio usa o segmento efetivo.
+        float3 lorg = hitPos + hitN * max(P.ShadowRayBias, 1e-3f);
+        float3 toL  = (hitPos + Ll * distL) - lorg;
+        float  lenL = max(length(toL), 1e-4f);
         RayDesc lray;
-        lray.Origin    = hitPos + hitN * max(P.NormalBias, 1e-3f);
-        lray.Direction = Ll;
+        lray.Origin    = lorg;
+        lray.Direction = toL / lenL;
         lray.TMin      = 0.01f;
-        lray.TMax      = max(distL - 0.05f, 0.02f);
+        lray.TMax      = max(lenL - 0.05f, 0.02f);
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
         lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, lray);
         SMILE_RT_PROCEED(lq)

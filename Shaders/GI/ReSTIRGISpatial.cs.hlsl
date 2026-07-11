@@ -14,6 +14,7 @@
 
 #include "DDGICommon.hlsli"
 #include "../Reflections/GGXSample.hlsli"
+#include "../RayOffset.hlsli"
 
 cbuffer ReSTIRCB : register(b0) {
     row_major float4x4 InvViewProj;
@@ -24,7 +25,8 @@ cbuffer ReSTIRCB : register(b0) {
     float4 AtlasParams;
     float4 SunDirIntensity;
     float4 SunColor;
-    float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity, w=normalBias
+    float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
+                                    // (nao usado aqui; visibility usa OffsetRayGBuffer)
     float4 ShadeParams;
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=radius(px), y=count, z=spatial(0/1), w=normalReject
@@ -147,10 +149,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // indireto deste pixel cai -> o NRD borra esse 0/1 estocastico num gradiente = sombra de contato
     // SUAVE (estilo AO do bounce). Igual a shading visibility do RTXDI (DI). Sem reuso do resultado.
     if (ReuseParams.z > 0.5f && rs.W > 0.0f) {
-        // Direcao e comprimento medidos da origem JA biased: como o bias (0.2) e maior que a
-        // folga do TMax (0.05), medir do x1 cru fazia o raio alcancar a superficie do proprio
-        // x2 e comitar -> falsa oclusao na maioria das amostras (cosseno concentra na normal).
-        float3 org = x1 + n1 * max(TraceParams.w, 1e-3f);
+        // Direcao e comprimento medidos da origem efetiva (offset robusto anti self-hit). O
+        // x2 fica protegido pela folga do TMax (para 0.05 antes da superficie dele); a origem
+        // pelo TMin + offset.
+        float3 org = OffsetRayGBuffer(x1, n1, camDist);
         float3 toS = rs.x2 - org;
         float  len = length(toS);
         // Pula conexoes curtas: garante TMax > TMin (senao = UB no DXR) e elas sao triviais.

@@ -75,7 +75,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.Count          = count;               P.AtlasTile    = (int)AtlasParams.x;
     P.AtlasInvSize   = float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z);
     P.SunDir         = sunDir;              P.SunIntensity = SunDirIntensity.w;
-    P.SunColor       = SunColorHyst.rgb;    P.NormalBias   = TraceParams.w;
+    P.SunColor       = SunColorHyst.rgb;    P.ShadowRayBias = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = maxT;
     P.AlbedoLOD      = 4.0f;
     P.RealHitShading = DistAtlasParams.w > 0.5f;

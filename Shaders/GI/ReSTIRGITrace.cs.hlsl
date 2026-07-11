@@ -9,6 +9,7 @@
 
 #include "DDGICommon.hlsli"
 #include "../Reflections/GGXSample.hlsli"
+#include "../RayOffset.hlsli"
 
 cbuffer ReSTIRCB : register(b0) {
     row_major float4x4 InvViewProj;
@@ -19,7 +20,9 @@ cbuffer ReSTIRCB : register(b0) {
     float4 AtlasParams;
     float4 SunDirIntensity;
     float4 SunColor;
-    float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity, w=normalBias
+    float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity,
+                                    // w=shadowRayBias (SO sombras no hit; a origem dos raios
+                                    // que saem do G-buffer usa OffsetRayGBuffer)
     float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
@@ -76,6 +79,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     float4 wH  = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
     float3 x1  = wH.xyz / wH.w;
+    float  camDist = length(CameraPos.xyz - x1);
 
     // Salt no seed: sem ele, RngSeed(px, frame) == s0 do GGX_Rand2(px, frame) usado na direcao do
     // raio (mesma cadeia PCG) — a selecao do WRS ficaria correlacionada com o sample inicial.
@@ -92,8 +96,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     float3 sunDir = normalize(SunDirIntensity.xyz);
 
+    // Offset APENAS numerico (anti self-hit): o normal-bias de 0.2 aqui contaminava a medida —
+    // x2 ficava deslocado do x1 usado por pHat/resolve (gi = Lo*cos'/cos, ~1.9x em contatos) e
+    // o hitT do NRD nunca caia abaixo de ~0.2. Com offset ~mm, x2 e o hit real p/ todo efeito.
     RayDesc ray;
-    ray.Origin    = x1 + N * max(TraceParams.w, 1e-3f);
+    ray.Origin    = OffsetRayGBuffer(x1, N, camDist);
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
@@ -106,7 +113,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.Count          = (int3)GridCount.xyz; P.AtlasTile    = (int)AtlasParams.x;
     P.AtlasInvSize   = float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z);
     P.SunDir         = sunDir;              P.SunIntensity = SunDirIntensity.w;
-    P.SunColor       = SunColor.rgb;        P.NormalBias   = TraceParams.w;
+    P.SunColor       = SunColor.rgb;        P.ShadowRayBias = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
     P.AlbedoLOD      = ShadeParams.y;
     P.RealHitShading = ShadeParams.x > 0.5f;
@@ -159,7 +166,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             float4 pb = PrevResB.Load(int3(ppx, 0));
             float4 pc = PrevResC.Load(int3(ppx, 0));
             float4 pd = PrevResD.Load(int3(ppx, 0));
-            float camDist   = length(CameraPos.xyz - x1);
             float posReject = ReuseParams.y * max(camDist, 1.0f);
             // Rejeicao por plano alem da radial: a reprojecao pode cair numa superficie quase
             // paralela (quina/glancing) dentro do raio radial mas fora do plano da atual.
@@ -180,7 +186,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 uint validN = (uint)ShadeParams.w;
                 if (validN > 0u &&
                     ((uint)TraceParams.x + GGX_PCG(px.x + GGX_PCG(px.y))) % validN == 0u) {
-                    float3 vorg = x1 + N * max(TraceParams.w, 1e-3f);
+                    float3 vorg = OffsetRayGBuffer(x1, N, camDist);
                     float3 toS  = prev.x2 - vorg;
                     float  len  = length(toS);
                     if (len > 1e-3f) {

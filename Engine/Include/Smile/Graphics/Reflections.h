@@ -23,7 +23,8 @@ namespace Smile {
         Vec4  AtlasParams;       // DDGI irradiance atlas (tile, W, H)
         Vec4  SunDirIntensity;   // xyz = dir TO sun, w = intensity
         Vec4  SunColor;          // rgb = sun color
-        Vec4  TraceParams;       // x=frameIndex, y=maxRayDist, z=skyIntensity, w=normalBias
+        Vec4  TraceParams;       // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
+                                 // (so sombras no hit; origem do raio usa offset robusto)
         Vec4  HalfScreenParams;  // halfW, halfH, 1/halfW, 1/halfH (trace e half-res; Fase 2b)
         Mat44 PrevViewProj;      // VP (sem jitter) do frame anterior — reprojeção do temporal (Fase 3)
         Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), z=spatialRadius, w=mirrorMaxRoughness
@@ -57,7 +58,7 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
                             const Vec3& CameraPos, u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
-                            f32 NormalBias, bool RealHitShading, const Mat44& View,
+                            f32 ShadowRayBias, bool RealHitShading, const Mat44& View,
                             u32 PunctualLightCount = 0);
 
         // F5: copia o SRV do buffer de luzes puntuais do frame pro t8 da tabela de trace DO

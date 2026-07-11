@@ -359,7 +359,7 @@ namespace Smile {
     void FReflections::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Mat44& _PrevViewProj,
                                       const Vec3& _CameraPos, u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
-                                      f32 _SkyIntensity, f32 _NormalBias, bool _RealHitShading,
+                                      f32 _SkyIntensity, f32 _ShadowRayBias, bool _RealHitShading,
                                       const Mat44& _View, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
@@ -383,7 +383,7 @@ namespace Smile {
         CPU.AtlasParams     = GIAtlasParams;
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z, 0.0f };
-        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _NormalBias };
+        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReflectionConstants),

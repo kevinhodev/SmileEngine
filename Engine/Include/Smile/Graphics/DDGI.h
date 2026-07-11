@@ -17,7 +17,8 @@ namespace Smile {
         Vec4 AtlasParams;     // x = tile size, y = atlasW, z = atlasH, w = numProbes
         Vec4 SunDirIntensity; // xyz = direcao P/ o sol, w = intensidade do sol
         Vec4 SunColorHyst;    // rgb = cor do sol, w = hysteresis (blend temporal)
-        Vec4 TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = normalBias
+        Vec4 TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
+                              // (raios do DDGI partem de probes; o bias so desloca sombras no hit)
         Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH, w = realHitShading
         Vec4 MiscParams;      // x = relocationEnabled (Fase 2), y = deactivThresh, z = maxRays, w = minRays
         Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), yzw = -

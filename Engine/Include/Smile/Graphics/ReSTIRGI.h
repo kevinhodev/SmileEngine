@@ -20,7 +20,8 @@ namespace Smile {
         Vec4  AtlasParams;     // DDGI irradiancia: x = tile, y = W, z = H
         Vec4  SunDirIntensity; // xyz = direcao P/ o sol (norm.), w = intensidade
         Vec4  SunColor;        // rgb = cor do sol
-        Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = normalBias
+        Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
+                               // (so sombras no hit; origem de raio do G-buffer usa offset robusto)
         Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD, z = fireflyMax, w = validateInterval
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
@@ -46,7 +47,7 @@ namespace Smile {
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
-                            const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity, f32 NormalBias,
+                            const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity, f32 ShadowRayBias,
                             const Mat44& View, const Vec2& JitterDeltaUv,
                             u32 PunctualLightCount = 0);
 

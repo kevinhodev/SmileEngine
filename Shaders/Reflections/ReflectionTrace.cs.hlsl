@@ -1,5 +1,6 @@
-#include "../GI/DDGICommon.hlsli" 
-#include "GGXSample.hlsli"        
+#include "../GI/DDGICommon.hlsli"
+#include "GGXSample.hlsli"
+#include "../RayOffset.hlsli"
 
 cbuffer ReflectionCB : register(b0) {
     row_major float4x4 InvViewProj; 
@@ -84,8 +85,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
         float3 sunDir = normalize(SunDirIntensity.xyz);
 
+        // Offset robusto (so anti self-hit): o bias 0.2 na origem deslocava o reflexo de
+        // contato e inflava o hitT entregue ao NRD/temporal.
         RayDesc ray;
-        ray.Origin    = worldPos + N * max(TraceParams.w, 1e-3f);
+        ray.Origin    = OffsetRayGBuffer(worldPos, N, length(CameraPos.xyz - worldPos));
         ray.Direction = R;
         ray.TMin      = 0.0f;
         ray.TMax      = TraceParams.y;
@@ -99,7 +102,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.Count          = (int3)GridCount.xyz; P.AtlasTile    = (int)AtlasParams.x;
         P.AtlasInvSize   = float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z);
         P.SunDir         = sunDir;              P.SunIntensity = SunDirIntensity.w;
-        P.SunColor       = SunColor.rgb;        P.NormalBias   = TraceParams.w;
+        P.SunColor       = SunColor.rgb;        P.ShadowRayBias = TraceParams.w;
         P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
         P.AlbedoLOD      = ReflectParams.w;
         P.RealHitShading = ReflectParams.z > 0.5f;

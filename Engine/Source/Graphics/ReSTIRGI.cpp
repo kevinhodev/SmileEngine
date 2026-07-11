@@ -199,7 +199,7 @@ namespace Smile {
     void FReSTIRGI::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Vec3& _CameraPos,
                                    u32 _Width, u32 _Height, const Vec3& _SunDir, f32 _SunIntensity,
                                    const Vec3& _SunColor, u32 _FrameIndex, f32 _SkyIntensity,
-                                   f32 _NormalBias, const Mat44& _View, const Vec2& _JitterDeltaUv,
+                                   f32 _ShadowRayBias, const Mat44& _View, const Vec2& _JitterDeltaUv,
                                    u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
@@ -212,7 +212,7 @@ namespace Smile {
         CPU.AtlasParams     = GIAtlasParams;
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z, 0.0f };
-        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _NormalBias };
+        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, ValidateInterval };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
