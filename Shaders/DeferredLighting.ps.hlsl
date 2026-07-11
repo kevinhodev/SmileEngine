@@ -24,6 +24,7 @@ cbuffer FrameCB : register(b0) {
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     float4 LightParams;        // x = nº de luzes puntuais no buffer t17,
                                // y = 1/res do atlas de sombra local, z = bias (NDC z), w = -
+    float4 LightParams2;       // x = 1/res do cube shadow (point), y = near das faces, zw = -
 };
 
 // Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.zw reservado
@@ -37,7 +38,8 @@ struct FGPULight {
 };
 
 StructuredBuffer<FGPULight> Lights : register(t17);
-Texture2DArray LocalShadowMap      : register(t18); // atlas D32 dos spots sombreados (F3a)
+Texture2DArray   LocalShadowMap    : register(t18); // atlas D32 dos spots sombreados (F3a)
+TextureCubeArray LocalCubeShadow   : register(t19); // cube array dos points sombreados (F3b)
 
 // PCF 3x3 no slice do atlas (ShadowCmp s2 do CSMCommon). uvz ja dividido por w.
 float LocalShadowPCF(float3 uvz, float slice) {
@@ -49,6 +51,37 @@ float LocalShadowPCF(float3 uvz, float slice) {
             vis += LocalShadowMap.SampleCmpLevelZero(
                        ShadowCmp, float3(uvz.xy + float2(x, y) * t, slice), refZ);
     return vis * (1.0f / 9.0f);
+}
+
+// Sombra de POINT: o vetor luz->pixel escolhe a face do cubo no hardware; a profundidade de
+// referencia usa o EIXO DOMINANTE (viewZ da face que vai responder — mesma projecao de 90
+// graus com que as faces foram renderizadas), entao nao precisa de matriz por luz. PCF de
+// 4 taps em grade rotacionada na base tangente da direcao.
+float LocalCubeShadowPCF(float3 lightToPixel, float cube, float farP) {
+    float3 ad    = abs(lightToPixel);
+    float  viewZ = max(ad.x, max(ad.y, ad.z));
+
+    float nearP = LightParams2.y;
+    float fRng  = farP / max(farP - nearP, 1e-4f);
+    float refZ  = fRng - (fRng * nearP) / max(viewZ, nearP); // NDC z da face (LH, 0..1)
+    refZ -= LightParams.z * 2.0f; // bias um pouco maior: 90 graus + 512 = texel gordo
+
+    float3 dir = normalize(lightToPixel);
+    float3 T   = normalize(cross(dir, abs(dir.y) > 0.9f ? float3(1.0f, 0.0f, 0.0f)
+                                                        : float3(0.0f, 1.0f, 0.0f)));
+    float3 B   = cross(dir, T);
+    float  ang = 2.0f * LightParams2.x; // ~1 texel angular da face
+
+    static const float2 kOfs[4] = {
+        float2(-0.5f, -1.5f), float2( 1.5f, -0.5f),
+        float2(-1.5f,  0.5f), float2( 0.5f,  1.5f)
+    };
+    float vis = 0.0f;
+    [unroll] for (int k = 0; k < 4; ++k) {
+        float3 d = dir + (T * kOfs[k].x + B * kOfs[k].y) * ang;
+        vis += LocalCubeShadow.SampleCmpLevelZero(ShadowCmp, float4(d, cube), refZ);
+    }
+    return vis * 0.25f;
 }
 
 Texture2D        GBufferA   : register(t0);
@@ -242,15 +275,24 @@ float4 main(VSOutput input) : SV_Target {
             }
             if (Atten <= 0.0f) continue;
 
-            // Sombra local (F3a: spot com slice no atlas): projeta pelo ShadowMatrix
-            // (perspectiva -> divide por w), normal offset pequeno contra acne de contato.
+            // Sombra local: spot projeta pelo ShadowMatrix (slice 2D, F3a); point vai pelo
+            // cube array com refZ do eixo dominante (F3b). Normal offset pequeno nos dois
+            // contra acne de contato.
             if (Lp.SpotParams.y >= 0.0f) {
-                float4 sp  = mul(float4(worldPos + N * 0.02f, 1.0f), Lp.ShadowMatrix);
-                if (sp.w > 0.0f) {
-                    float3 uvz = sp.xyz / sp.w;
-                    if (all(uvz.xy > 0.0f) && all(uvz.xy < 1.0f) &&
-                        uvz.z > 0.0f && uvz.z < 1.0f)
-                        Atten *= LocalShadowPCF(uvz, Lp.SpotParams.y);
+                float3 offPos = worldPos + N * 0.02f;
+                if (Lp.DirCosOuter.w > -1.5f) {
+                    float4 sp = mul(float4(offPos, 1.0f), Lp.ShadowMatrix);
+                    if (sp.w > 0.0f) {
+                        float3 uvz = sp.xyz / sp.w;
+                        if (all(uvz.xy > 0.0f) && all(uvz.xy < 1.0f) &&
+                            uvz.z > 0.0f && uvz.z < 1.0f)
+                            Atten *= LocalShadowPCF(uvz, Lp.SpotParams.y);
+                    }
+                } else {
+                    Atten *= LocalCubeShadowPCF(offPos - Lp.PosInvRadius.xyz,
+                                                Lp.SpotParams.y,
+                                                max(1.0f / Lp.PosInvRadius.w,
+                                                    LightParams2.y * 2.0f));
                 }
             }
             if (Atten <= 0.0f) continue;

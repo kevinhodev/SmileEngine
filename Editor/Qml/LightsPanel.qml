@@ -748,9 +748,8 @@ Rectangle {
                     onMoved: v => lightsModel.sourceRadius = v
                 }
 
-                // ---- Spot: sombras + cones + direcao ----
+                // ---- Sombras (spot: atlas 2D; point: cubemap) ----
                 Item {
-                    visible: lightsModel.lightType === 1
                     width: parent.width
                     height: 24
                     Text {
@@ -763,7 +762,8 @@ Rectangle {
                     Text {
                         y: 5
                         x: 96
-                        text: "· 8 mais próximas/quadro"
+                        text: lightsModel.lightType === 1 ? "· 8 spots/quadro"
+                                                          : "· 4 points/quadro"
                         color: root.textMuted
                         font.family: "Segoe UI"
                         font.pixelSize: 9

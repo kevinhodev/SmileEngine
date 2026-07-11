@@ -77,6 +77,8 @@ namespace Smile {
 
         Vec4  LightParams;        // 16 bytes — x = nº de luzes puntuais no buffer t17,
                                   // y = 1/res do atlas de sombra local, z = bias (NDC), w = -
+        Vec4  LightParams2;       // 16 bytes — x = 1/res do cube shadow (point), y = near das
+                                  // faces do cubo (formula do refZ), zw = -
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl

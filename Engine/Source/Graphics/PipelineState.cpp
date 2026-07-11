@@ -122,10 +122,11 @@ namespace Smile {
         RootParams[10].Descriptor.RegisterSpace  = 0;
         RootParams[10].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // Atlas de sombras locais (t18): Texture2DArray D32 dos spots sombreados (F3a).
+        // Sombras locais: t18 = atlas 2D dos spots (F3a), t19 = cube array dos points (F3b) —
+        // descritores contiguos no heap (FLocalShadows aloca os 2 SRVs juntos).
         D3D12_DESCRIPTOR_RANGE LocalShadowRange{};
         LocalShadowRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        LocalShadowRange.NumDescriptors                    = 1;
+        LocalShadowRange.NumDescriptors                    = 2;
         LocalShadowRange.BaseShaderRegister                = 18;
         LocalShadowRange.RegisterSpace                     = 0;
         LocalShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;

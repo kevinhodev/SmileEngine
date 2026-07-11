@@ -1111,7 +1111,8 @@ namespace Smile {
         // Sombras locais (F3a): spots visiveis com CastShadows disputam kMaxShadows slices do
         // atlas por distancia a camera; escolhidos ganham matriz + slice no FGPULight e viram
         // jobs do depth pass (gravado depois do CSM, quando os casters ja existem).
-        std::vector<FLocalShadows::FShadowJob> LocalShadowJobs;
+        std::vector<FLocalShadows::FShadowJob>     LocalShadowJobs;
+        std::vector<FLocalShadows::FCubeShadowJob> LocalCubeJobs;
         {
             Vec4 NPlanes[6];
             for (int i = 0; i < 6; ++i) {
@@ -1127,6 +1128,7 @@ namespace Smile {
 
             struct ShadowCand { u32 Gpu; u32 LightIdx; f32 Dist2; };
             std::vector<ShadowCand> ShadowCands;
+            std::vector<ShadowCand> CubeCands; // points com CastShadows (budget proprio)
 
             const auto& SceneLights = Scene.Lights();
             for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
@@ -1165,6 +1167,10 @@ namespace Smile {
                 } else {
                     G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f }; // -2 = sem mascara de cone
                     G.SpotParams  = { 0.0f, -1.0f, 0.0f, 0.0f };
+                    if (L.CastShadows && LocalShadows.IsInitialized()) {
+                        const Vec3 ToCam = L.Position - CameraPosition;
+                        CubeCands.push_back({ NumLights, li, ToCam.LengthSq() });
+                    }
                 }
                 DstLights[NumLights++] = G;
             }
@@ -1197,9 +1203,23 @@ namespace Smile {
                 LocalShadowJobs.push_back({ LVP, L.Position, FarP, s });
             }
 
-            MappedCB->LightParams = { static_cast<f32>(NumLights),
-                                      1.0f / static_cast<f32>(FLocalShadows::kResolution),
-                                      LocalShadows.GetDepthBias(), 0.0f };
+            // Points sombreados (F3b): mesmo criterio de distancia, budget proprio de cubos.
+            // O lookup nao usa matriz (eixo dominante no shader) — so o indice do cubo.
+            std::sort(CubeCands.begin(), CubeCands.end(),
+                      [](const ShadowCand& a, const ShadowCand& b) { return a.Dist2 < b.Dist2; });
+            const u32 NumCubes = std::min<u32>(static_cast<u32>(CubeCands.size()),
+                                               FLocalShadows::kMaxCubeShadows);
+            for (u32 c = 0; c < NumCubes; ++c) {
+                const FLight& L = SceneLights[CubeCands[c].LightIdx];
+                DstLights[CubeCands[c].Gpu].SpotParams.Y = static_cast<f32>(c);
+                LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, c });
+            }
+
+            MappedCB->LightParams  = { static_cast<f32>(NumLights),
+                                       1.0f / static_cast<f32>(FLocalShadows::kResolution),
+                                       LocalShadows.GetDepthBias(), 0.0f };
+            MappedCB->LightParams2 = { 1.0f / static_cast<f32>(FLocalShadows::kCubeResolution),
+                                       FLocalShadows::kPointNear, 0.0f, 0.0f };
         }
 
 
@@ -1289,10 +1309,10 @@ namespace Smile {
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
-        // Sombras das luzes locais (F3a: spot): um slice do atlas por job, casters filtrados
+        // Sombras das luzes locais (F3): slices de spot + cubos de point, casters filtrados
         // por esfera da luz. Depois restaura o estado de cena (o passe troca root sig/RT/
-        // viewport). Sem jobs, so garante o array legivel pro deferred lighting (t18).
-        if (!LocalShadowJobs.empty()) {
+        // viewport). Sem jobs, so garante os arrays legiveis pro deferred lighting (t18/t19).
+        if (!LocalShadowJobs.empty() || !LocalCubeJobs.empty()) {
             std::vector<FLocalShadows::FShadowDrawItem> LocalCasters;
             LocalCasters.reserve(AllItems.size());
             for (const AllItem& A : AllItems) {
@@ -1304,7 +1324,9 @@ namespace Smile {
             LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
                                          LocalCasters.data(), LocalCasters.size(),
                                          LocalShadowJobs.data(),
-                                         static_cast<u32>(LocalShadowJobs.size()));
+                                         static_cast<u32>(LocalShadowJobs.size()),
+                                         LocalCubeJobs.data(),
+                                         static_cast<u32>(LocalCubeJobs.size()));
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);

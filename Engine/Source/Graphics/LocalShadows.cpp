@@ -6,6 +6,7 @@
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <algorithm>
 #include <cstring>
 
 namespace Smile {
@@ -55,7 +56,30 @@ namespace Smile {
             _Device->CreateDepthStencilView(DepthArray.Get(), &DSVDesc, DSVHeap.CpuHandle(s));
         }
 
-        ShadowSRVSlot_ = _SRVHeap.Allocate(1);
+        // Cube array dos points (F3b): mesma textura D32, 6 faces por luz, vista como
+        // TextureCubeArray no SRV (cube e um conceito de view, o recurso e um array 2D).
+        Desc.Width            = kCubeResolution;
+        Desc.Height           = kCubeResolution;
+        Desc.DepthOrArraySize = static_cast<UINT16>(kMaxCubeShadows * 6);
+        CubeState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+            CubeState, &Clear, IID_PPV_ARGS(&CubeArray)));
+
+        CubeDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kMaxCubeShadows * 6, false);
+        for (u32 s = 0; s < kMaxCubeShadows * 6; ++s) {
+            D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
+            DSVDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
+            DSVDesc.ViewDimension                  = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+            DSVDesc.Texture2DArray.MipSlice        = 0;
+            DSVDesc.Texture2DArray.FirstArraySlice = s;
+            DSVDesc.Texture2DArray.ArraySize       = 1;
+            _Device->CreateDepthStencilView(CubeArray.Get(), &DSVDesc, CubeDSVHeap.CpuHandle(s));
+        }
+
+        // SRVs CONTIGUOS: spot em Slot, cube em Slot+1 — a tabela t18..t19 do root param
+        // do deferred lighting aponta pro primeiro e cobre os dois.
+        ShadowSRVSlot_ = _SRVHeap.Allocate(2);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                         = DXGI_FORMAT_R32_FLOAT;
         SRVDesc.Shader4ComponentMapping        = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -65,6 +89,16 @@ namespace Smile {
         SRVDesc.Texture2DArray.FirstArraySlice = 0;
         SRVDesc.Texture2DArray.ArraySize       = kMaxShadows;
         _SRVHeap.CreateSRV(_Device, DepthArray.Get(), SRVDesc, ShadowSRVSlot_);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC CubeSRV{};
+        CubeSRV.Format                          = DXGI_FORMAT_R32_FLOAT;
+        CubeSRV.Shader4ComponentMapping         = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        CubeSRV.ViewDimension                   = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+        CubeSRV.TextureCubeArray.MostDetailedMip = 0;
+        CubeSRV.TextureCubeArray.MipLevels       = 1;
+        CubeSRV.TextureCubeArray.First2DArrayFace = 0;
+        CubeSRV.TextureCubeArray.NumCubes         = kMaxCubeShadows;
+        _SRVHeap.CreateSRV(_Device, CubeArray.Get(), CubeSRV, ShadowSRVSlot_ + 1);
     }
 
     void FLocalShadows::BuildRootSignature(ID3D12Device* _Device) {
@@ -185,7 +219,7 @@ namespace Smile {
         D3D12_RESOURCE_DESC Desc{};
         Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
         Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                kMaxShadows * 256; // 1 Mat44 por slice, alinhado a 256
+                                (kMaxShadows + kMaxCubeShadows * 6) * 256; // 1 Mat44/slice+face
         Desc.Height           = 1;
         Desc.DepthOrArraySize = 1;
         Desc.MipLevels        = 1;
@@ -215,42 +249,36 @@ namespace Smile {
         ArrayState = _After;
     }
 
+    void FLocalShadows::TransitionCube(ID3D12GraphicsCommandList* _CommandList,
+                                       D3D12_RESOURCE_STATES _After) {
+        if (CubeState == _After) return;
+        D3D12_RESOURCE_BARRIER Barrier{};
+        Barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        Barrier.Transition.pResource   = CubeArray.Get();
+        Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        Barrier.Transition.StateBefore = CubeState;
+        Barrier.Transition.StateAfter  = _After;
+        _CommandList->ResourceBarrier(1, &Barrier);
+        CubeState = _After;
+    }
+
     void FLocalShadows::RecordDepthPass(ID3D12GraphicsCommandList* _CommandList,
                                         FTextureSRVHeap& _SRVHeap, u32 _FrameSlot,
                                         const FShadowDrawItem* _Items, size_t _Count,
-                                        const FShadowJob* _Jobs, u32 _JobCount) {
+                                        const FShadowJob* _Jobs, u32 _JobCount,
+                                        const FCubeShadowJob* _CubeJobs, u32 _CubeJobCount) {
         if (!Initialized) return;
-        if (_JobCount == 0) { TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); return; }
+        if (_JobCount == 0 && _CubeJobCount == 0) { EnsureReadable(_CommandList); return; }
 
-        TransitionArray(_CommandList, D3D12_RESOURCE_STATE_DEPTH_WRITE);
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
 
-        D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
-                           static_cast<FLOAT>(kResolution), 0.0f, 1.0f };
-        D3D12_RECT     SC{ 0, 0, static_cast<LONG>(kResolution), static_cast<LONG>(kResolution) };
-        _CommandList->RSSetViewports(1, &VP);
-        _CommandList->RSSetScissorRects(1, &SC);
-
-        for (u32 j = 0; j < _JobCount && j < kMaxShadows; ++j) {
-            const FShadowJob& Job = _Jobs[j];
-            const u32 Slice = Job.Slice < kMaxShadows ? Job.Slice : 0;
-
-            const size_t CBOffset =
-                (static_cast<size_t>(_FrameSlot) * kMaxShadows + Slice) * 256;
-            std::memcpy(MappedSlice + CBOffset, &Job.ViewProj, sizeof(Mat44));
-
-            auto DSV = DSVHeap.CpuHandle(Slice);
-            _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
-            _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-            _CommandList->SetGraphicsRootConstantBufferView(
-                0, SliceCB->GetGPUVirtualAddress() + CBOffset);
-
-            // Cull de casters: AABB vs esfera de influencia da luz (o cone exato cortaria
-            // mais, mas a esfera ja elimina o grosso e nunca corta caster errado).
-            const f32 R2 = Job.Radius * Job.Radius;
+        // Desenha os casters de um slice ja com DSV/CB setados. Cull AABB vs esfera da luz
+        // (o frustum exato de face/cone cortaria mais, mas a esfera nunca corta errado).
+        auto DrawSlice = [&](const Vec3& LightPos, f32 Radius) {
+            const f32 R2 = Radius * Radius;
             auto OutsideSphere = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
                 f32 D2 = 0.0f;
-                const f32 P[3] = { Job.LightPos.X, Job.LightPos.Y, Job.LightPos.Z };
+                const f32 P[3]  = { LightPos.X, LightPos.Y, LightPos.Z };
                 const f32 Lo[3] = { Mn.X, Mn.Y, Mn.Z };
                 const f32 Hi[3] = { Mx.X, Mx.Y, Mx.Z };
                 for (int a = 0; a < 3; ++a) {
@@ -272,12 +300,97 @@ namespace Smile {
                 if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);
                 It.Mesh->Draw(_CommandList);
             }
+        };
+
+        // Slots do SliceCB por frame: [0..kMaxShadows) = spots; depois 6 por cubo.
+        const size_t FrameCBBase =
+            static_cast<size_t>(_FrameSlot) * (kMaxShadows + kMaxCubeShadows * 6) * 256;
+
+        // ---- Spots (F3a) ----
+        if (_JobCount > 0) {
+            TransitionArray(_CommandList, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+            D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
+                               static_cast<FLOAT>(kResolution), 0.0f, 1.0f };
+            D3D12_RECT     SC{ 0, 0, static_cast<LONG>(kResolution), static_cast<LONG>(kResolution) };
+            _CommandList->RSSetViewports(1, &VP);
+            _CommandList->RSSetScissorRects(1, &SC);
+
+            for (u32 j = 0; j < _JobCount && j < kMaxShadows; ++j) {
+                const FShadowJob& Job = _Jobs[j];
+                const u32 Slice = Job.Slice < kMaxShadows ? Job.Slice : 0;
+
+                const size_t CBOffset = FrameCBBase + static_cast<size_t>(Slice) * 256;
+                std::memcpy(MappedSlice + CBOffset, &Job.ViewProj, sizeof(Mat44));
+
+                auto DSV = DSVHeap.CpuHandle(Slice);
+                _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
+                _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+                _CommandList->SetGraphicsRootConstantBufferView(
+                    0, SliceCB->GetGPUVirtualAddress() + CBOffset);
+
+                DrawSlice(Job.LightPos, Job.Radius);
+            }
+
+            TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
 
-        TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // ---- Points (F3b): 6 faces de 90 graus por luz, convencao de faces D3D ----
+        if (_CubeJobCount > 0) {
+            TransitionCube(_CommandList, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+            D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kCubeResolution),
+                               static_cast<FLOAT>(kCubeResolution), 0.0f, 1.0f };
+            D3D12_RECT     SC{ 0, 0, static_cast<LONG>(kCubeResolution),
+                               static_cast<LONG>(kCubeResolution) };
+            _CommandList->RSSetViewports(1, &VP);
+            _CommandList->RSSetScissorRects(1, &SC);
+
+            static const Vec3 kFaceFwd[6] = {
+                {  1.0f, 0.0f, 0.0f }, { -1.0f, 0.0f, 0.0f },
+                {  0.0f, 1.0f, 0.0f }, {  0.0f,-1.0f, 0.0f },
+                {  0.0f, 0.0f, 1.0f }, {  0.0f, 0.0f,-1.0f },
+            };
+            static const Vec3 kFaceUp[6] = {
+                { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f },
+                { 0.0f, 0.0f,-1.0f }, { 0.0f, 0.0f, 1.0f },
+                { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f },
+            };
+            constexpr f32 kHalfPi = 1.57079632679f;
+
+            for (u32 j = 0; j < _CubeJobCount && j < kMaxCubeShadows; ++j) {
+                const FCubeShadowJob& Job = _CubeJobs[j];
+                const u32 Cube = Job.CubeIndex < kMaxCubeShadows ? Job.CubeIndex : 0;
+                const f32 FarP = std::max(Job.Radius, kPointNear * 2.0f);
+
+                const Mat44 Proj = Mat44::PerspectiveFovLH(kHalfPi, 1.0f, kPointNear, FarP);
+
+                for (u32 f = 0; f < 6; ++f) {
+                    const Mat44 FaceVP =
+                        Mat44::LookAtLH(Job.LightPos, Job.LightPos + kFaceFwd[f], kFaceUp[f]) * Proj;
+
+                    const u32 CBSlot  = kMaxShadows + Cube * 6 + f;
+                    const size_t CBOffset = FrameCBBase + static_cast<size_t>(CBSlot) * 256;
+                    std::memcpy(MappedSlice + CBOffset, &FaceVP, sizeof(Mat44));
+
+                    auto DSV = CubeDSVHeap.CpuHandle(Cube * 6 + f);
+                    _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
+                    _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+                    _CommandList->SetGraphicsRootConstantBufferView(
+                        0, SliceCB->GetGPUVirtualAddress() + CBOffset);
+
+                    DrawSlice(Job.LightPos, FarP);
+                }
+            }
+
+            TransitionCube(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+
+        EnsureReadable(_CommandList);
     }
 
     void FLocalShadows::EnsureReadable(ID3D12GraphicsCommandList* _CommandList) {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        TransitionCube(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 }
