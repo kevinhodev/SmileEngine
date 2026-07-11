@@ -53,33 +53,9 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity) {
     return SkyViewLUT.SampleLevel(LinearClamp, uv, 0.0f).rgb * skyIntensity;
 }
 
-// Alpha-test de candidatos do RayQuery: instancias com AlphaTest sao marcadas FORCE_NON_OPAQUE na
-// TLAS (RaytracingScene.cpp) e cada candidato nao-opaco amostra albedo.a vs cutoff. Sem isto,
-// cards de folhagem seriam quads solidos (partes transparentes pretas + auto-sombra chapada).
-// Requer heap-directly-indexed (ResourceDescriptorHeap) — todos os shaders de trace da cena tem.
-bool AlphaTestPass(uint instId, uint tri, float2 bary) {
-    InstanceGeo geo = Instances[instId];
-    if ((geo.Flags & INSTGEO_FLAG_ALPHATEST) == 0u || geo.HasAlbedo == 0u)
-        return true; // sem alpha-test -> trata como opaco
-    uint i0 = Indices[geo.IndexBase + tri * 3 + 0] + geo.VertexBase;
-    uint i1 = Indices[geo.IndexBase + tri * 3 + 1] + geo.VertexBase;
-    uint i2 = Indices[geo.IndexBase + tri * 3 + 2] + geo.VertexBase;
-    float2 uv = Vertices[i0].TexCoord * (1.0f - bary.x - bary.y)
-              + Vertices[i1].TexCoord * bary.x
-              + Vertices[i2].TexCoord * bary.y;
-    Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
-    return albedoTex.SampleLevel(LinearWrap, uv, 0.0f).a >= geo.AlphaCutoff;
-}
-
-// Drena a traversal honrando o alpha-test: opacos auto-comitam; candidatos nao-opacos so comitam
-// se passarem no teste. Com ACCEPT_FIRST_HIT_AND_END_SEARCH o commit encerra a busca (shadow ray).
-#define SMILE_RT_PROCEED(q)                                                                 \
-    while (q.Proceed()) {                                                                   \
-        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&                           \
-            AlphaTestPass(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(),             \
-                          q.CandidateTriangleBarycentrics()))                               \
-            q.CommitNonOpaqueTriangleHit();                                                 \
-    }
+// Alpha-test dos candidatos do RayQuery (AlphaTestPass + SMILE_RT_PROCEED) — extraido p/
+// RTAlphaTest.hlsli p/ passes de visibilidade pura poderem incluir so ele (ReSTIRGISpatial).
+#include "RTAlphaTest.hlsli"
 
 // Normal geometrica (orientada contra o raio) no ponto de hit — usada pelo ReSTIR GI p/ o Jacobiano
 // de reconexao (n2). Aditivo; nao altera ShadeSurfaceHit (caminho das reflexoes intacto).

@@ -155,7 +155,16 @@
       "PowerShell(git -C D:\\\\Engines\\\\SmileEngine ls-files Assets/Scenes/Bistro)",
       "PowerShell(git -C D:\\\\Engines\\\\SmileEngine add Tools/Cooker/main.cpp Engine/Include/Smile/Scene/CookedFormat.h)",
       "PowerShell(git -C D:\\\\Engines\\\\SmileEngine log --oneline -3)",
-      "PowerShell(cmake --build build --target Shaders --config Debug 2>&1)"
+      "PowerShell(cmake --build build --target Shaders --config Debug 2>&1)",
+      "PowerShell(cmake --build build --target SmileEngine --config Release 2>&1)",
+      "PowerShell(cmake --build build --target SmileEditor --config Release 2>&1)",
+      "PowerShell(git stash push -u -m \"P3: ShadowRayBias + OffsetRayGBuffer \\(Wachter/Binder\\) nas origens de raio\" -- Shaders Engine)",
+      "PowerShell(git stash apply)",
+      "PowerShell(git add Shaders Engine)",
+      "PowerShell(git stash drop 'stash@{0}')",
+      "PowerShell(cmake --build build --target Shaders --config Release; Write-Host \"EXIT: $LASTEXITCODE\"; Get-ChildItem build/bin/Shaders/ReSTIRGITrace.cs_6_6.cso, build/bin/Shaders/ReSTIRGISpatial.cs_6_6.cso | Select-Object Name, LastWriteTime)",
+      "PowerShell(git add Shaders)",
+      "PowerShell(cmake --build build --target Shaders --config Release; Write-Host \"SHADERS: $LASTEXITCODE\"; cmake --build build --target SmileEngine --config Release 2>&1 | Select-String -Pattern \"error|vcxproj ->\" | Select-Object -Last 3; cmake --build build --target SmileEditor --config Release 2>&1 | Select-String -Pattern \"error|SmileEditor.vcxproj ->\" | Select-Object -Last 3)"
     ]
   }
 }

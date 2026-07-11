@@ -33,7 +33,9 @@ namespace Smile {
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
         TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true); // t13 = luzes (F5)
-        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 7, 1, false);
+        // t7..t9 = Instances/Vertices/Indices (alpha-test dos visibility rays, M6);
+        // heap-indexed pelo ResourceDescriptorHeap do AlphaTestPass.
+        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
         CreateConstantBuffer(_Device);
         Initialized = true;
@@ -74,7 +76,7 @@ namespace Smile {
         for (u32 i = 0; i < 2; ++i) {
             Free(ResASRV[i], 1); Free(ResBSRV[i], 1); Free(ResCSRV[i], 1); Free(ResDSRV[i], 1);
             Free(ResAUAV[i], 1); Free(ResBUAV[i], 1); Free(ResCUAV[i], 1); Free(ResDUAV[i], 1);
-            Free(TraceTable[i], 14); Free(TraceUAVTable[i], 5); Free(SpatialTable[i], 7);
+            Free(TraceTable[i], 14); Free(TraceUAVTable[i], 5); Free(SpatialTable[i], 10);
             ResA[i].Reset(); ResB[i].Reset(); ResC[i].Reset(); ResD[i].Reset();
             ResAState[i] = ResBState[i] = ResCState[i] = ResDState[i] = D3D12_RESOURCE_STATE_COMMON;
         }
@@ -166,8 +168,9 @@ namespace Smile {
             };
             CopyTable(TraceUAVTable[p], USrc, 5);
 
-            SpatialTable[p] = _SRVHeap.Allocate(7);
-            D3D12_CPU_DESCRIPTOR_HANDLE SSrc[7] = {
+            // t7..t9 = geometria p/ o alpha-test dos visibility rays (M6).
+            SpatialTable[p] = _SRVHeap.Allocate(10);
+            D3D12_CPU_DESCRIPTOR_HANDLE SSrc[10] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
                 _SRVHeap.CpuHandleStaging(ResASRV[p]),
                 _SRVHeap.CpuHandleStaging(ResBSRV[p]),
@@ -175,8 +178,11 @@ namespace Smile {
                 _SRVHeap.CpuHandleStaging(ResDSRV[p]),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
+                _SRVHeap.CpuHandleStaging(_VertexSlot),
+                _SRVHeap.CpuHandleStaging(_IndexSlot),
             };
-            CopyTable(SpatialTable[p], SSrc, 7);
+            CopyTable(SpatialTable[p], SSrc, 10);
         }
 
         Ready = true;

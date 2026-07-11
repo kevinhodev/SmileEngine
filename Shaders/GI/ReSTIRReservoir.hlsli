@@ -45,12 +45,18 @@ void ResUpdate(inout Reservoir r, float3 x2c, float3 n2c, float3 Loc, float w, i
 }
 
 // Funde um reservoir inteiro (other) no atual. pHatOther = pHat (do pixel atual) p/ a amostra de
-// other; J = Jacobiano de reconexao (calculado no temporal E no espacial; o caller rejeita J extremo).
-void ResMerge(inout Reservoir r, Reservoir other, float pHatOther, float J, inout uint rng) {
+// other; J = Jacobiano de reconexao (calculado no temporal E no espacial; o caller rejeita J
+// extremo). Retorna true se a amostra de other foi adotada (o espacial rastreia o dominio
+// vencedor p/ o peso MIS da correcao de bias).
+bool ResMerge(inout Reservoir r, Reservoir other, float pHatOther, float J, inout uint rng) {
     float w = pHatOther * other.W * other.M * J;
     r.wSum += w;
     r.M    += other.M;
-    if (w > 0.0f && RngNext(rng) * r.wSum <= w) { r.x2 = other.x2; r.n2 = other.n2; r.Lo = other.Lo; }
+    if (w > 0.0f && RngNext(rng) * r.wSum <= w) {
+        r.x2 = other.x2; r.n2 = other.n2; r.Lo = other.Lo;
+        return true;
+    }
+    return false;
 }
 
 // Jacobiano de reconexao (Ouyang 2021): reusar a amostra x2 (normal n2) de um pixel visivel x1Src

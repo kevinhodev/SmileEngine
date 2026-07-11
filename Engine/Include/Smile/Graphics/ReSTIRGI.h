@@ -96,8 +96,8 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;   // 13 SRV, 5 UAV, heap-directly-indexed (Pass A)
-        FVolumetricPipeline SpatialPSO; // 7 SRV, 1 UAV (Pass B)
+        FVolumetricPipeline TracePSO;   // 14 SRV, 5 UAV, heap-directly-indexed (Pass A)
+        FVolumetricPipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
         FVolumetricPipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> GITexture;
@@ -156,8 +156,9 @@ namespace Smile {
         bool Temporal       = true;
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
-        bool Visibility     = false;  // visibility ray no resolve espacial (raio extra, ~1ms) — off por
-                                      // padrao: efeito sutil em cena estatica; toggle no editor p/ A/B
+        bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
+                                      // visibilidade nos pesos MIS da correcao de bias (ate K raios).
+                                      // Off por padrao (custo); toggle no editor p/ A/B
         f32  MCap           = 20.0f;
         f32  PosRejectScale = 0.01f;
         f32  ValidateInterval = 8.0f; // re-shade da amostra temporal em 1/N dos px por frame
