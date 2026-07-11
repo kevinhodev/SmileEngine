@@ -36,8 +36,8 @@ cbuffer ReSTIRCB : register(b0) {
 RaytracingAccelerationStructure Scene  : register(t0);
 Texture2D<float4>               ResA   : register(t1); // x1.xyz, M
 Texture2D<float4>               ResB   : register(t2); // x2.xyz, W
-Texture2D<float4>               ResC   : register(t3); // Lo.rgb
-Texture2D<float4>               ResD   : register(t4); // n2.xyz
+Texture2D<float4>               ResC   : register(t3); // Lo.rgb  (a = n1.oct.x, so o temporal usa)
+Texture2D<float4>               ResD   : register(t4); // n2.xyz  (a = n1.oct.y, so o temporal usa)
 Texture2D<float4>               GBuffer : register(t5);
 Texture2D<float>                Depth   : register(t6);
 

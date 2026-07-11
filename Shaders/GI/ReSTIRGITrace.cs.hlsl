@@ -1,9 +1,10 @@
 // ReSTIR GI — Pass A: trace + reservoir TEMPORAL (+ resolve quando o spatial esta OFF).
 //
 // Por pixel: (1) gera 1 sample inicial (raio cosseno-hemisferico -> x2/n2/Lo), (2) reusa o reservoir
-// do frame anterior reprojetado por motion vector (WRS merge, J=1 = mesma superficie), com re-shade
-// periodico da amostra (1/N px/frame) p/ iluminacao dinamica nao envelhecer no reservoir, (3) grava
-// o reservoir {x1,x2,n2,Lo,M,W} em 4 tex ping-pong p/ o proximo frame E p/ o reuso espacial (Pass B).
+// do frame anterior reprojetado por motion vector (WRS merge com Jacobiano de reconexao + rejeicao
+// por posicao/plano/normal), com re-shade periodico da amostra (1/N px/frame) p/ iluminacao dinamica
+// nao envelhecer no reservoir, (3) grava o reservoir {x1,x2,n2,Lo,M,W} + n1 oct em 4 tex ping-pong
+// p/ o proximo frame E p/ o reuso espacial (Pass B).
 // Resolve a irradiancia aqui tambem (gi = Lo*cosTheta1*W/pi); o Pass B sobrescreve quando ativo.
 // Referencia: Ouyang et al. 2021 (ReSTIR GI). Convencao: gi = (1/pi)*E (com M=1 reduz a gi=L_i).
 
@@ -41,8 +42,8 @@ Texture2D<float4>               GBuffer    : register(t7);
 Texture2D<float2>               Velocity   : register(t8);
 Texture2D<float4>               PrevResA   : register(t9);  // x1.xyz, M
 Texture2D<float4>               PrevResB   : register(t10); // x2.xyz, W
-Texture2D<float4>               PrevResC   : register(t11); // Lo.rgb
-Texture2D<float4>               PrevResD   : register(t12); // n2.xyz
+Texture2D<float4>               PrevResC   : register(t11); // Lo.rgb, a = n1.oct.x
+Texture2D<float4>               PrevResD   : register(t12); // n2.xyz, a = n1.oct.y
 
 #include "../LightsCommon.hlsli"
 StructuredBuffer<FPunctualLight> SceneLights : register(t13); // F5: luzes puntuais nos hits
@@ -170,7 +171,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             // Rejeicao por plano alem da radial: a reprojecao pode cair numa superficie quase
             // paralela (quina/glancing) dentro do raio radial mas fora do plano da atual.
             float planeDist = abs(dot(N, pa.xyz - x1));
-            if (pa.w > 0.0f && length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject) {
+            // Rejeicao por NORMAL do pixel anterior (oct em ResC.a/ResD.a): posicao compativel
+            // nao garante mesma orientacao (quina de 90º cabe no raio radial E no plano em
+            // glancing). Mesmo threshold do reuso espacial (SpatialParams.w).
+            float3 prevN1 = DDGI_OctDecode(float2(pc.a, pd.a));
+            if (pa.w > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
+                length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject) {
                 Reservoir prev;
                 prev.x1 = pa.xyz; prev.x2 = pb.xyz; prev.n2 = pd.xyz; prev.Lo = pc.rgb;
                 prev.M  = min(pa.w, ReuseParams.x); // MCap
@@ -207,6 +213,16 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                                           vq.CommittedTriangleBarycentrics(),
                                                           vq.CommittedWorldToObject3x4(),
                                                           vorg, vray.Direction, t, P, vsd);
+                                // Geometria pode ter se movido DENTRO da tolerancia: refresca
+                                // x2/n2 pro hit re-tracado, senao a radiancia nova fica
+                                // associada a geometria velha (Jacobiano/reuso espacial
+                                // operariam sobre um ponto que nao existe mais).
+                                prev.x2 = vorg + vray.Direction * t;
+                                prev.n2 = HitGeomNormal(vq.CommittedInstanceID(),
+                                                        vq.CommittedPrimitiveIndex(),
+                                                        vq.CommittedTriangleBarycentrics(),
+                                                        vq.CommittedWorldToObject3x4(),
+                                                        vray.Direction);
                             } else {
                                 prevValid = false;
                             }
@@ -224,8 +240,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 }
 
                 if (prevValid) {
-                    float pHatPrev = TargetPHat(x1, N, prev.x2, prev.Lo); // J=1 (mesma superficie)
-                    ResMerge(r, prev, pHatPrev, 1.0f, rng);
+                    // Jacobiano TEMPORAL: a aceitacao tolera prev.x1 divergindo ate ~1% da
+                    // camDist — com segmento indireto curto (contatos) isso muda a medida de
+                    // verdade (J=1 era aproximacao enviesada). Mesma politica do espacial:
+                    // J extremo REJEITA (clampar mantem o sample com peso errado).
+                    float J = ReconnectionJacobian(x1, prev.x1, prev.x2, prev.n2);
+                    if (J >= 0.1f && J <= 10.0f) {
+                        float pHatPrev = TargetPHat(x1, N, prev.x2, prev.Lo);
+                        ResMerge(r, prev, pHatPrev, J, rng);
+                    }
                 }
             }
         }
@@ -239,9 +262,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // do raio inicial guiaria o denoiser com um caminho diferente do da radiancia resolvida).
     // Fallback pro raio inicial quando nada foi selecionado (wSum=0 deixa x2 zerado).
     float selDist = (r.wSum > 0.0f) ? length(r.x2 - x1) : hitDist;
+    float2 n1Oct = DDGI_OctEncode(N); // n1 no historico p/ a rejeicao por normal do temporal
     GIOut[px]    = float4(gi, selDist);
     CurrResA[px] = float4(r.x1, r.M);
     CurrResB[px] = float4(r.x2, r.W);
-    CurrResC[px] = float4(r.Lo, 0.0f);
-    CurrResD[px] = float4(r.n2, 0.0f);
+    CurrResC[px] = float4(r.Lo, n1Oct.x);
+    CurrResD[px] = float4(r.n2, n1Oct.y);
 }
