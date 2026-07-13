@@ -33,7 +33,9 @@ float StreakPattern(float u, float v, float presence) {
 }
 
 float4 main(VSOutput input) : SV_Target {
-    const float rain = RainParams0.x * CurtainParams.x;
+    // F4: CurtainParams.x ja vem pre-multiplicado pelo RainAmount INSTANTANEO no CPU —
+    // RainParams0.x agora e o molhado acumulado (Wetness) e nao serve pra cortina.
+    const float rain = CurtainParams.x;
     if (rain <= 0.001f) discard;
 
     int2 px = int2(input.pos.xy);

@@ -827,6 +827,23 @@ namespace Smile {
         const Vec3 SunN          = SunDir.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
         MappedCB->SunDirection   = { SunN.X, SunN.Y, SunN.Z, SunIntensity };
 
+        // Chuva F4: acumulo/secagem do molhado — o chao encharca em ~5 s e seca em ~30 s.
+        // A superficie (wetness/pocas) usa Weather.Wetness; a cortina e os aneis de gota usam
+        // o RainAmount instantaneo: para de chover -> gotas somem na hora, chao seca devagar.
+        {
+            const f32 Target = Weather.RainAmount;
+            const f32 Tau    = (Target > Weather.Wetness) ? 5.0f : 30.0f;
+            Weather.Wetness += (Target - Weather.Wetness) *
+                               (1.0f - std::exp(-std::max(LastDeltaTime, 0.0f) / Tau));
+            if (Target <= 0.001f && Weather.Wetness < 0.005f) Weather.Wetness = 0.0f;
+        }
+        // F4: ceu de chuva — nublado bloqueia o astro direto. Um unico fator escurece
+        // EffectiveSunColor/MoonLightCol (e por tabela KeyColor -> CSM, agua, nuvens, DDGI,
+        // reflexoes, cortina) + o ambient do ceu. Nuvens/fog acoplam mais abaixo.
+        const f32 RainSky    = Weather.DriveSky ? Weather.RainAmount : 0.0f;
+        const f32 RainKeyDim = 1.0f - RainSky * 0.75f;
+        const f32 RainAmbDim = 1.0f - RainSky * 0.40f;
+
         Vec3 EffectiveSunColor = SunColorRGB;
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
             const Vec3 T = Atmosphere.SunTransmittance(SunN);
@@ -842,6 +859,8 @@ namespace Smile {
                                   EffectiveSunColor.Y * HorizonFade,
                                   EffectiveSunColor.Z * HorizonFade };
         }
+        EffectiveSunColor = { EffectiveSunColor.X * RainKeyDim, EffectiveSunColor.Y * RainKeyDim,
+                              EffectiveSunColor.Z * RainKeyDim }; // F4: nublado de chuva
         MappedCB->SunColor       = { EffectiveSunColor.X, EffectiveSunColor.Y, EffectiveSunColor.Z, 0.0f };
 
         const Vec3 MoonN = TimeOfDay.MoonDirection();
@@ -856,7 +875,9 @@ namespace Smile {
         const Vec3 MoonTrans = (UseAtmosphereSky && Atmosphere.IsInitialized())
                              ? Atmosphere.SunTransmittance(MoonN) : Vec3{ 1.0f, 1.0f, 1.0f };
         const Vec3 MoonTint     = { 0.6f, 0.7f, 1.0f };
-        const Vec3 MoonLightCol = { MoonTint.X * MoonTrans.X, MoonTint.Y * MoonTrans.Y, MoonTint.Z * MoonTrans.Z };
+        const Vec3 MoonLightCol = { MoonTint.X * MoonTrans.X * RainKeyDim,
+                                    MoonTint.Y * MoonTrans.Y * RainKeyDim,
+                                    MoonTint.Z * MoonTrans.Z * RainKeyDim }; // F4: nublado
         const f32  MoonW        = MoonOn ? (TimeOfDay.MoonIntensity * MoonIllum * NightFactor * MoonUp) : 0.0f;
         MappedCB->MoonDirection = { MoonN.X, MoonN.Y, MoonN.Z, MoonW };
         MappedCB->MoonColor     = { MoonLightCol.X, MoonLightCol.Y, MoonLightCol.Z, 0.0f };
@@ -917,6 +938,9 @@ namespace Smile {
                 Sky    = (Zenith + (Horizon - Zenith) * LowSun) * Day;
                 Ground = Sky * 0.35f;
             }
+            // F4: nublado de chuva escurece o ambient (o SkyView LUT nao sabe das nuvens)
+            Sky    = { Sky.X * RainAmbDim, Sky.Y * RainAmbDim, Sky.Z * RainAmbDim };
+            Ground = { Ground.X * RainAmbDim, Ground.Y * RainAmbDim, Ground.Z * RainAmbDim };
             MappedCB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
                                              UseAtmosphereAmbient ? 1.0f : 0.0f };
             MappedCB->GroundAmbientColor = { Ground.X, Ground.Y, Ground.Z, AtmoAmbientIntensity };
@@ -973,14 +997,28 @@ namespace Smile {
         Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans, VPNoTrans,
                                   InvViewProjFull, CameraPosition, kKmPerWorldUnit,
                                   static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()));
+        // F4: mist da chuva — boost temporario na densidade do height fog (restaurado apos o
+        // update; o knob do usuario nao muda). Chuva forte ~2.5x a densidade base.
+        const f32 FogDensityBase = Fog.GetDensity();
+        if (RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + RainSky * 1.5f));
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm());
+        Fog.SetDensity(FogDensityBase);
+
+        // F4: chuva puxa a cobertura de nuvem pra um piso nublado (max com o valor do
+        // usuario; idem, restaurada apos o update — a pagina de nuvens continua mandando).
         const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kGroundAltitudeKm;
+        const f32 CloudCovBase = VolumetricClouds.GetCoverage();
+        if (RainSky > 0.0f) {
+            const f32 RainCov = std::min(RainSky * 1.4f, 1.0f) * 0.92f;
+            VolumetricClouds.SetCoverage(std::max(CloudCovBase, RainCov));
+        }
         VolumetricClouds.UpdatePerFrame(FrameSlot, InvVPNoTrans, InvViewProjFull,
                                         ViewProjUnjittered, CameraPosition, kKmPerWorldUnit,
                                         CloudGroundRadius, KeyDir, KeyCloudCol,
                                         SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex);
+        VolumetricClouds.SetCoverage(CloudCovBase);
 
         {
             // Sombra das nuvens no chao: params p/ o deferred lighting + SRV copiado no
@@ -1553,7 +1591,8 @@ namespace Smile {
 
         // Chuva F1: molha o G-buffer logo apos o geometry pass — ReSTIR, deferred lighting e
         // reflexoes RT (todos leem A/B depois deste ponto) veem a cena ja molhada.
-        if (Weather.Raining() && RainWetness.IsInitialized()) {
+        // F4: Active() em vez de Raining() — o passe continua rodando enquanto o chao seca.
+        if (Weather.Active() && RainWetness.IsInitialized()) {
             // F2: mapa de oclusao top-down (cacheado — so re-renderiza ao cruzar o snap de
             // 16 m). Vidro ENTRA na lista: telhado de vidro bloqueia chuva, ao contrario do
             // CSM onde translucido deixa o sol passar. O Execute logo abaixo re-seta todo o

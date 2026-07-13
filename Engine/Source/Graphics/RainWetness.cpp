@@ -255,14 +255,16 @@ namespace Smile {
         RainWetnessConstants c{};
         c.InvViewProj    = _InvViewProjFull;
         c.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _TimeSec };
-        c.RainParams0    = { _Weather.RainAmount, _Weather.PuddleAmount,
+        // F4: a superficie usa o molhado ACUMULADO (Wetness, com inercia de secagem);
+        // o instantaneo vai em RainParams1.z p/ aneis/splashes (param de "chovendo agora").
+        c.RainParams0    = { _Weather.Wetness, _Weather.PuddleAmount,
                              _Weather.RippleStrength, _Weather.WetDarkening };
         // F2: matriz do ULTIMO render do mapa (cacheado); bias/banda em unidades de depth
         // do ortho (range vertical kOccUp+kOccDown). Sem mapa ainda = desligado (tudo molha).
         const f32 OccRange = kOccUp + kOccDown;
 
         const f32 Scale  = _Weather.PuddleScale > 1e-3f ? _Weather.PuddleScale : 1.0f;
-        c.RainParams1    = { 1.0f / Scale, 1.0f / OccRange, 0.0f, 0.0f };
+        c.RainParams1    = { 1.0f / Scale, 1.0f / OccRange, _Weather.RainAmount, 0.0f };
         c.RainOccMatrix = OccWorldToUVZ;
         c.RainOccParams = { (_Weather.RainOcclusion && OccEverRendered) ? 1.0f : 0.0f,
                             0.75f / OccRange,            // bias: ~0.75 m acima ja e "coberto"
@@ -270,7 +272,9 @@ namespace Smile {
                             static_cast<f32>(kOccSize) };
 
         // F3: cortina — queda ~12 m/s (chuva real ~9, um pouco mais rapido le melhor em tela).
-        c.CurtainParams  = { _Weather.CurtainAmount, 12.0f, 0.0f, 0.0f };
+        // F4: pre-multiplicada pelo RainAmount INSTANTANEO (parou de chover = gota some na
+        // hora, mesmo com o chao ainda molhado pela inercia do Wetness).
+        c.CurtainParams  = { _Weather.CurtainAmount * _Weather.RainAmount, 12.0f, 0.0f, 0.0f };
         c.KeyLightDir    = { _KeyDir.X, _KeyDir.Y, _KeyDir.Z, 0.0f };
         c.KeyLightColor  = { _KeyColorTimesInt.X, _KeyColorTimesInt.Y, _KeyColorTimesInt.Z, 0.0f };
         c.SkyAmbientRain = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };

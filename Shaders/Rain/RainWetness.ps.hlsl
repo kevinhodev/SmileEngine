@@ -105,8 +105,11 @@ PSOut main(VSOutput input) {
     float3 worldPos = wH.xyz / wH.w;
 
     // F2: oclusao escala a chuva inteira — interior/marquise ficam secos (discard preserva
-    // o G-buffer original do geometry pass).
-    const float rain = RainParams0.x * SkyVisibility(worldPos);
+    // o G-buffer original do geometry pass). F4: rain = molhado ACUMULADO (inercia de
+    // secagem), rainNow = chuva instantanea (aneis/splashes param na hora junto com ela).
+    const float vis     = SkyVisibility(worldPos);
+    const float rain    = RainParams0.x * vis;
+    const float rainNow = RainParams1.z * vis;
     if (rain <= 0.0005f) discard;
 
     float4 gA = SceneA.Load(int3(px, 0));
@@ -142,16 +145,40 @@ PSOut main(VSOutput input) {
     float puddle = smoothstep(thresh, thresh + 0.12f, mask) * (puddleBlend > 0.001f ? 1.0f : 0.0f);
     puddle *= saturate(puddleBlend * 4.0f);
 
+    // fade com a distancia (alem de ~60 m ripple/splash viram ruido sob TAA/FSR2)
+    const float distFade = saturate(1.0f - length(worldPos - CameraWorldPos.xyz) / 60.0f);
+
     if (puddle > 0.001f) {
-        // ripples: fade com a distancia (alem de ~60 m o gradiente vira ruido sob TAA/FSR2)
-        const float distFade = saturate(1.0f - length(worldPos - CameraWorldPos.xyz) / 60.0f);
+        // ripples escalam com rainNOW: parou de chover, a poça fica (rain/Wetness) mas os
+        // aneis somem e ela vira espelho parado (F4)
         float2 grad = RippleGradient(worldPos.xz, CameraWorldPos.w * 0.9f)
-                    * RainParams0.z * rain * distFade;
+                    * RainParams0.z * rainNow * distFade;
         float3 puddleN = normalize(float3(-grad.x, 1.0f, -grad.y));
 
         N     = normalize(lerp(N, puddleN, puddle));
         rough = lerp(rough, 0.06f, puddle);   // agua parada ~espelho (gloss 0.93 da Cry)
         ao    = lerp(ao, 1.0f, puddle * 0.5f); // agua nao cavita o AO do material seco
+    }
+
+    // ---- F4: splash de impacto ----
+    // Celulas de ~12 cm; por ciclo um subconjunto proporcional a chuva flasha uma coroa
+    // curta (~0.3 s) que perturba a normal e baixa o roughness — glint de especular na luz
+    // (spatter mask da Cry, procedural). So onde chove AGORA, up-facing, perto da camera.
+    if (rainNow > 0.001f && isUp > 0.0f && distFade > 0.001f) {
+        float2 cell = floor(worldPos.xz * 8.0f);
+        float2 rnd  = Hash22(cell);
+        float  ph   = CameraWorldPos.w * (2.4f + rnd.y * 1.6f) + rnd.x * 19.0f;
+        float  cyc  = floor(ph);
+        float  life = ph - cyc;
+        float  gate = Hash21(cell + cyc * 0.618f) < rainNow * 0.35f ? 1.0f : 0.0f;
+        float  flash = gate * (1.0f - life) * (1.0f - life) * isUp * distFade;
+        if (flash > 0.01f) {
+            float2 d2 = Hash22(cell + cyc) * 2.0f - 1.0f;
+            float3 splashN = normalize(float3(d2.x * 0.55f, 1.0f, d2.y * 0.55f));
+            N      = normalize(lerp(N, splashN, flash * 0.6f));
+            rough  = lerp(rough, 0.10f, flash * 0.7f);
+            albedo += flash * 0.02f; // respingo claro sutil
+        }
     }
 
     PSOut o;

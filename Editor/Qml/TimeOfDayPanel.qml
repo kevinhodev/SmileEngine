@@ -675,6 +675,27 @@ Rectangle {
                     boundValue: todModel.curtainAmount
                     onMoved: v => todModel.curtainAmount = v
                 }
+                // F4: chuva escurece sol/ambient, sobe cobertura de nuvem e engrossa o fog
+                Item {
+                    width: parent.width
+                    height: 22
+                    enabled: todModel.rainAmount > 0
+                    opacity: todModel.rainAmount > 0 ? 1.0 : 0.4
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Chuva dirige o céu"
+                        color: root.textNormal
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: todModel.weatherDriveSky
+                        onToggled: todModel.weatherDriveSky = !checked
+                    }
+                }
             }
         }
     }
