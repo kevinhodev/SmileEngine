@@ -41,7 +41,9 @@ namespace Smile {
         void RecordVolumetric(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                               u32 DepthSRVSlot, D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddr,
                               u32 CSMShadowSRVSlot);
-        u32  VolumetricSRVSlot() const { return VolSRVSlot; }
+        // Slot que o fog consome: resultado POS-blur 3x3 (mora no ShaftRT[0], que so e
+        // reusado pelo radial blur depois do fog — ordem de GPU garante a leitura antes).
+        u32  VolumetricSRVSlot() const { return RTSRVSlot[0]; }
         // Composicao aditiva no HDR (chamador ja re-bindou o RTV e o viewport full-res).
         void Composite(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                        u32 FullWidth, u32 FullHeight);
@@ -110,6 +112,7 @@ namespace Smile {
         // F2 — volumetrico: root sig propria (CSM em b3/t11/s2, registers do CSMCommon)
         Microsoft::WRL::ComPtr<ID3D12RootSignature> VolRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> VolPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> VolBlurPSO;
         Microsoft::WRL::ComPtr<ID3D12Resource> VolRT;
         u32 VolSRVSlot = kInvalidSlot;
         D3D12_RESOURCE_STATES VolState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -118,7 +121,7 @@ namespace Smile {
         bool VolEnabled   = true;
         f32  VolIntensity = 1.0f;
         f32  VolPhaseG    = 0.7f;
-        f32  VolSteps     = 16.0f;
+        f32  VolSteps     = 24.0f; // distribuicao quadratica: ~metade dos passos nos primeiros 100m
         f32  VolMaxDist   = 400.0f;
 
         // ping-pong meia-res RGBA16F (mask -> blur x3)

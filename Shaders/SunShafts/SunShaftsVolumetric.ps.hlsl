@@ -60,13 +60,22 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
                 (12.566371f * pow(abs(1.0f + g * g - 2.0f * g * mu), 1.5f));
 
     const int steps = (int)MarchParams.x;
-    float dt = dist / (float)steps;
     float jitter = CSM_IGN(svpos.xy + 5.588238f * MarchParams.z);
 
-    float  T     = 1.0f;
-    float  accum = 0.0f;
+    // Distribuicao QUADRATICA dos passos (t = f^2 * dist): os feixes vivem nos
+    // primeiros metros (copa de arvore, janela) — uniforme em 400m dava passo de
+    // 25m e virava mancha. Mesmo espirito do slicing exponencial do froxel fog
+    // da UE/Frostbite (denso perto, esparso longe). dt = largura real do segmento.
+    float  T       = 1.0f;
+    float  accum   = 0.0f;
+    float  prevEnd = 0.0f;
     [loop] for (int i = 0; i < steps; ++i) {
-        float  t  = ((float)i + jitter) * dt;
+        float  fj = ((float)i + jitter) / (float)steps;
+        float  t  = fj * fj * dist;
+        float  fe = (float)(i + 1) / (float)steps;
+        float  segEnd = fe * fe * dist;
+        float  dt = segEnd - prevEnd;
+        prevEnd = segEnd;
         float3 wp = CameraWorldPos.xyz + dir * t;
 
         // densidade do height fog na altura do passo (mesma distribuição 2-exponencial

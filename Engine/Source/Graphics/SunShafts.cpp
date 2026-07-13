@@ -217,6 +217,10 @@ namespace Smile {
         PSODesc.RTVFormats[0]  = DXGI_FORMAT_R16G16B16A16_FLOAT;
         PSODesc.PS             = { PSVol.data(), PSVol.size() };
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&VolPSO)));
+
+        auto PSVolBlur = LoadShaderBytecode("SunShaftsVolBlur.ps_6_0.cso");
+        PSODesc.PS = { PSVolBlur.data(), PSVolBlur.size() };
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&VolBlurPSO)));
     }
 
     void FSunShafts::CreateConstantBuffer(ID3D12Device* _Device) {
@@ -519,5 +523,15 @@ namespace Smile {
         B.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         _CommandList->ResourceBarrier(1, &B);
         VolState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+        // blur 3x3: VolRT -> ShaftRT[0] (o fog le o resultado borrado; o radial blur
+        // so reusa o ShaftRT[0] depois do fog — ordem de execucao da GPU garante)
+        Transition(_CommandList, 0, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        auto BlurRTV = RTVHeap.CpuHandle(0);
+        _CommandList->OMSetRenderTargets(1, &BlurRTV, FALSE, nullptr);
+        _CommandList->SetPipelineState(VolBlurPSO.Get());
+        _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(VolSRVSlot));
+        _CommandList->DrawInstanced(3, 1, 0, 0);
+        Transition(_CommandList, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 }
