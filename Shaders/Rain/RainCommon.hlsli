@@ -72,6 +72,37 @@ float SkyVisibilityBand(float3 worldPos, float bandMul) {
 
 float SkyVisibility(float3 worldPos) { return SkyVisibilityBand(worldPos, 1.0f); }
 
+// ---- F5: particulas de chuva (compartilhado entre RainParticles.vs e RainSplash.vs) ----
+
+// Eixo 1D com wrap preso na camera mas world-fixed entre wraps:
+// d/dcam[fmod(h*span - cam, span) + cam] = 0.
+float RainWrapAxis(float h, float cam, float span) {
+    float m = fmod(h * span - cam, span);
+    if (m < 0.0f) m += span;
+    return cam + m - span * 0.5f;
+}
+
+// Posicao procedural da gota `iid` no instante corrente (hash + tempo, box com wrap na
+// camera). A MESMA conta alimenta a gota (RainParticles.vs) e o splash dela
+// (RainSplash.vs) — o splash toca na fracao "subterranea" do ciclo da queda.
+float3 RainParticlePos(uint iid, out float speed, out float2 h1out) {
+    const float2 h0 = Hash22(float2((float)iid * 0.7219f, 17.31f));
+    const float2 h1 = Hash22(float2((float)iid * 0.3471f, 91.17f));
+    h1out = h1;
+
+    const float boxR = RainParticleParams.x;
+    const float boxH = RainParticleParams.y;
+    speed = CurtainParams.y * (0.85f + h1.x * 0.5f);
+
+    float3 p;
+    p.x = RainWrapAxis(h0.x, CameraWorldPos.x, boxR * 2.0f);
+    p.z = RainWrapAxis(h0.y, CameraWorldPos.z, boxR * 2.0f);
+    float m = fmod(h1.y * boxH - CameraWorldPos.y + CameraWorldPos.w * speed, boxH);
+    if (m < 0.0f) m += boxH;
+    p.y = CameraWorldPos.y + (boxH - m) - boxH * 0.35f;
+    return p;
+}
+
 // Depth do mapa filtrado bilinear — p/ comparacoes de altura RELATIVAS (drenagem), onde
 // interpolar o depth e inofensivo e tira o serrilhado dos taps pontuais.
 float OccDepthBilinear(float2 uv) {

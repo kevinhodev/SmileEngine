@@ -84,6 +84,8 @@ smile_compile_shader(Rain/RainWetness.ps.hlsl             ps_6_0 main SHADER_OUT
 smile_compile_shader(Rain/RainCurtain.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Rain/RainParticles.vs.hlsl           vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Rain/RainParticles.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Rain/RainSplash.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Rain/RainSplash.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
 # Nuvens volumetricas — bake de ruido 3D + raymarch + composite
 smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
@@ -198,6 +200,8 @@ add_custom_target(Shaders
         Rain/RainCurtain.ps.hlsl
         Rain/RainParticles.vs.hlsl
         Rain/RainParticles.ps.hlsl
+        Rain/RainSplash.vs.hlsl
+        Rain/RainSplash.ps.hlsl
         Clouds/CloudNoiseCommon.hlsli
         Clouds/CloudDensity.hlsli
         Clouds/CloudLighting.hlsli

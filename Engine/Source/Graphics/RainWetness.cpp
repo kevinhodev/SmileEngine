@@ -35,6 +35,7 @@ namespace Smile {
         PSO.Reset();
         CurtainPSO.Reset();
         ParticlesPSO.Reset();
+        SplashPSO.Reset();
         BuildPSO(_Device);
         BuildCurtainPSO(_Device);
         BuildParticlesPSO(_Device);
@@ -182,6 +183,7 @@ namespace Smile {
     void FRainWetness::BuildParticlesPSO(ID3D12Device* _Device) {
         // F5: quads instanciados 100% procedurais (SV_VertexID/SV_InstanceID, sem VB) com o
         // mesmo blend premultiplicado da cortina; soft-depth manual no PS (depth como SRV).
+        // Dois PSOs no mesmo molde: gota (F5a) e splash de impacto (F5b).
         auto VS = LoadShaderBytecode("RainParticles.vs_6_0.cso");
         auto PS = LoadShaderBytecode("RainParticles.ps_6_0.cso");
 
@@ -221,6 +223,12 @@ namespace Smile {
         PSODesc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&ParticlesPSO)));
+
+        auto SplashVS = LoadShaderBytecode("RainSplash.vs_6_0.cso");
+        auto SplashPS = LoadShaderBytecode("RainSplash.ps_6_0.cso");
+        PSODesc.VS = { SplashVS.data(), SplashVS.size() };
+        PSODesc.PS = { SplashPS.data(), SplashPS.size() };
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&SplashPSO)));
     }
 
     void FRainWetness::CreateConstantBuffer(ID3D12Device* _Device) {
@@ -717,5 +725,13 @@ namespace Smile {
         _Cmd->IASetVertexBuffers(0, 0, nullptr);
         _Cmd->IASetIndexBuffer(nullptr);
         _Cmd->DrawInstanced(6, ParticleCount, 0, 0);
+
+        // F5b: splashes de impacto — mesmas instancias (cada gota tem exatamente 1 splash
+        // em voo: a fracao "subterranea" do ciclo da queda e a janela dele). Estado 100%
+        // compartilhado; so troca o PSO.
+        if (SplashPSO) {
+            _Cmd->SetPipelineState(SplashPSO.Get());
+            _Cmd->DrawInstanced(6, ParticleCount, 0, 0);
+        }
     }
 }

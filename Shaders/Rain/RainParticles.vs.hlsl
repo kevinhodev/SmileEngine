@@ -15,32 +15,13 @@ struct VSOut {
     float  alpha : TEXCOORD2;
 };
 
-// Eixo 1D com wrap preso na camera mas world-fixed entre wraps:
-// d/dcam[fmod(h*span - cam, span) + cam] = 0.
-float WrapAxis(float h, float cam, float span) {
-    float m = fmod(h * span - cam, span);
-    if (m < 0.0f) m += span;
-    return cam + m - span * 0.5f;
-}
-
 VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VSOut o;
 
-    const float2 h0 = Hash22(float2((float)iid * 0.7219f, 17.31f));
-    const float2 h1 = Hash22(float2((float)iid * 0.3471f, 91.17f));
-
-    const float boxR  = RainParticleParams.x;
-    const float boxH  = RainParticleParams.y;
-    const float speed = CurtainParams.y * (0.85f + h1.x * 0.5f);
-    const float time  = CameraWorldPos.w;
-
-    float3 p;
-    p.x = WrapAxis(h0.x, CameraWorldPos.x, boxR * 2.0f);
-    p.z = WrapAxis(h0.y, CameraWorldPos.z, boxR * 2.0f);
-    // queda: a fase avanca com o tempo; wrap em Y tambem preso na camera (voo acompanha)
-    float m = fmod(h1.y * boxH - CameraWorldPos.y + time * speed, boxH);
-    if (m < 0.0f) m += boxH;
-    p.y = CameraWorldPos.y + (boxH - m) - boxH * 0.35f;
+    const float boxR = RainParticleParams.x;
+    float  speed;
+    float2 h1;
+    float3 p = RainParticlePos(iid, speed, h1); // conta compartilhada com o splash (F5b)
 
     // colisao/oclusao pelo heightmap: abaixo do teto local = ja bateu (ou area coberta)
     float kill = 0.0f;

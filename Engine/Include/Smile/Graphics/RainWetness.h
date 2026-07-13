@@ -127,7 +127,8 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CurtainPSO;   // F3
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> ParticlesPSO; // F5
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> ParticlesPSO; // F5a
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> SplashPSO;    // F5b
         u32 ParticleCount = 0; // instancias deste frame (escala com a chuva; 0 = nao desenha)
 
         // Copias de leitura de GBufferA/B (mesmos formatos), SRVs contiguos [A,B] p/ uma tabela.
