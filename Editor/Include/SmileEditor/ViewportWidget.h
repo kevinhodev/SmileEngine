@@ -37,6 +37,10 @@ namespace SmileEditor {
         Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool sunShadowsEnabled READ AreSunShadowsEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool sunShaftsEnabled READ AreSunShaftsEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double sunShaftsIntensity READ GetSunShaftsIntensity NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double sunShaftsAnisotropy READ GetSunShaftsAnisotropy NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double sunShaftsMaxDistance READ GetSunShaftsMaxDistance NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool shadowCacheEnabled READ IsShadowCacheEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool shadowDebugCascades READ IsShadowDebugCascades NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double shadowMaxDistance READ GetShadowMaxDistance NOTIFY ViewSettingsChanged)
@@ -107,6 +111,10 @@ namespace SmileEditor {
         bool              IsTAAEnabled() const;
         bool              IsFrustumCullingEnabled() const;
         bool              AreSunShadowsEnabled() const;
+        bool              AreSunShaftsEnabled() const;
+        double            GetSunShaftsIntensity() const;
+        double            GetSunShaftsAnisotropy() const;
+        double            GetSunShaftsMaxDistance() const;
         bool              IsShadowCacheEnabled() const;
         bool              IsShadowDebugCascades() const;
         double            GetShadowMaxDistance() const;
@@ -160,6 +168,10 @@ namespace SmileEditor {
         Q_INVOKABLE void SetTAAEnabled(bool enabled);
         Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);
         Q_INVOKABLE void SetSunShadowsEnabled(bool enabled);
+        Q_INVOKABLE void SetSunShaftsEnabled(bool enabled);
+        Q_INVOKABLE void SetSunShaftsIntensity(double value);
+        Q_INVOKABLE void SetSunShaftsAnisotropy(double value);
+        Q_INVOKABLE void SetSunShaftsMaxDistance(double value);
         Q_INVOKABLE void SetShadowCacheEnabled(bool enabled);
         Q_INVOKABLE void SetShadowDebugCascades(bool enabled);
         Q_INVOKABLE void SetShadowMaxDistance(double distance);

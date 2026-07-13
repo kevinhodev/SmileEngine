@@ -8,13 +8,23 @@ float4 FogApplyMain(float2 pixelXY) {
     float depthNdc = FogSampleDepth(px);
     
     float2 uv  = pixelXY * ScreenParams.zw;
+    bool isSky = SmileIsSky(depthNdc);
+
+    float3 sunShafts = 0.0f;
+    if (SunShaftParams.y > 0.5f) {
+        float shaftDepth = isSky ? SunShaftParams.x : FogLinearizeDepth(depthNdc);
+        sunShafts = SampleSunShafts(uv, shaftDepth);
+    }
+    if (isSky)
+        return float4(sunShafts, 1.0f);
+
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     float4 wH  = mul(float4(ndc, depthNdc, 1.0f), InvViewProj);
     float3 worldPos = wH.xyz / wH.w;
     float3 c2r  = worldPos - CameraWorldPos.xyz;
     float  dist = length(c2r);
 
-    if (dist >= DepthParams.y * 0.97f) return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    if (dist >= DepthParams.y * 0.97f) return float4(sunShafts, 1.0f);
 
     float4 hf = float4(0.0f, 0.0f, 0.0f, 1.0f);
     if (AerialParams.z > 0.5f) hf = GetExponentialHeightFog(c2r);
@@ -26,7 +36,7 @@ float4 FogApplyMain(float2 pixelXY) {
     }
 
     float  T         = ap.a * hf.a;
-    float3 inscatter = ap.rgb * hf.a + hf.rgb;
+    float3 inscatter = ap.rgb * hf.a + hf.rgb + sunShafts;
     return float4(inscatter, T);
 }
 

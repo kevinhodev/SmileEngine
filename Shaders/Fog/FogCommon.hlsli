@@ -1,6 +1,8 @@
 #ifndef SMILE_FOG_COMMON_HLSLI
 #define SMILE_FOG_COMMON_HLSLI
 
+#include "../Common/DepthConfig.hlsli"
+
 cbuffer FogCB : register(b0) {
     float4 ExponentialFogParameters;     
     float4 ExponentialFogParameters2;    
@@ -13,10 +15,28 @@ cbuffer FogCB : register(b0) {
     float4 AerialParams;               
     float4 ScreenParams;      
     float4 DepthParams;        
+    float4 SunShaftParams;
 };
 
 Texture3D<float4> AerialVolume     : register(t1);
+Texture3D<float4> SunShaftVolume   : register(t2);
 SamplerState      LinearClampSampler : register(s0);
+
+float FogLinearizeDepth(float d) {
+    float n = DepthParams.x;
+    float f = DepthParams.y;
+#if SMILE_REVERSE_Z
+    return n * f / (d * (f - n) + n);
+#else
+    return n * f / (f - d * (f - n));
+#endif
+}
+
+float3 SampleSunShafts(float2 uv, float viewDepth) {
+    float z = sqrt(saturate(viewDepth / max(SunShaftParams.x, 1e-4f)));
+    return SunShaftVolume.SampleLevel(
+        LinearClampSampler, float3(uv, z), 0.0f).rgb;
+}
 
 float CalculateLineIntegralShared(float falloff, float rayDirZ, float rayOriginTerms) {
     float Falloff = max(-127.0f, falloff * rayDirZ);

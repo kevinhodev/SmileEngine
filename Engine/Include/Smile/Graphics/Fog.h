@@ -19,6 +19,7 @@ namespace Smile {
         Vec4  AerialParams;                 // x=AP depth (km), y=useAP, z=useHeightFog, w unused
         Vec4  ScreenParams;                 // x=w, y=h, z=1/w, w=1/h
         Vec4  DepthParams;                  // x=near, y=far, z/w unused
+        Vec4  SunShaftParams;               // x=max view depth, y=enabled, z/w unused
     };
 
     class FFogPass {
@@ -29,10 +30,12 @@ namespace Smile {
                             const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
                             const Vec3& DirToSun, f32 NearZ, f32 FarZ,
                             u32 Width, u32 Height, bool UseAerial, bool UseHeightFog,
-                            f32 AerialDepthKm);
+                            f32 AerialDepthKm, bool VolumetricSunShafts,
+                            f32 SunShaftMaxDistance);
 
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
-                     u32 DepthSRVSlot, u32 AerialVolumeSRVSlot);
+                     u32 DepthSRVSlot, u32 AerialVolumeSRVSlot,
+                     u32 SunShaftVolumeSRVSlot);
 
         void SetDensity(f32 V)        { Density = V; }
         void SetHeightFalloff(f32 V)  { HeightFalloff = V; }
@@ -53,6 +56,11 @@ namespace Smile {
         Vec3 GetFogColor() const       { return FogColor; }
         f32  GetMaxOpacity() const     { return MaxOpacity; }
         bool IsInitialized() const     { return Initialized; }
+
+        void GetVolumeLayers(Vec4& Layer1, Vec4& Layer2) const {
+            Layer1 = { Density, HeightFalloff, FogHeight, 0.0f };
+            Layer2 = { Density2, HeightFalloff2, FogHeight2, 0.0f };
+        }
 
     private:
         void BuildRootSignature(ID3D12Device* Device);

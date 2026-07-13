@@ -79,6 +79,10 @@ smile_compile_shader(Atmosphere/StarField.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/FogFullscreen.vs.hlsl            vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/FogFullscreen.ps.hlsl            ps_6_0 main SHADER_OUTPUTS)
 
+# Sun shafts fisicos: scattering temporal em froxels + integracao por coluna
+smile_compile_shader(SunShafts/SunShaftsScatter.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(SunShafts/SunShaftsIntegrate.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+
 # Chuva — F1 wetness deferred no G-buffer + F3 cortina de gotas (estilo CRainStage/SceneRain)
 smile_compile_shader(Rain/RainWetness.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Rain/RainCurtain.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
@@ -195,6 +199,9 @@ add_custom_target(Shaders
         Fog/FogApply.hlsli
         Fog/FogFullscreen.vs.hlsl
         Fog/FogFullscreen.ps.hlsl
+        SunShafts/SunShaftsCommon.hlsli
+        SunShafts/SunShaftsScatter.cs.hlsl
+        SunShafts/SunShaftsIntegrate.cs.hlsl
         Rain/RainCommon.hlsli
         Rain/RainWetness.ps.hlsl
         Rain/RainCurtain.ps.hlsl
