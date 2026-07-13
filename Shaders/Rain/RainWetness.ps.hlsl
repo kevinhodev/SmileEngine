@@ -80,15 +80,15 @@ float DrainageMask(float3 worldPos) {
     float3 uvz = mul(float4(worldPos, 1.0f), RainOccMatrix).xyz;
     if (any(uvz.xy != saturate(uvz.xy))) return 1.0f;
 
-    const float size   = RainOccParams.w;
-    const float rangeM = 1.0f / RainParams1.y;      // metros por unidade de depth do ortho
-    const int2  c      = int2(uvz.xy * size);
-    const int2  offs[4] = { int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3) }; // ~0.7 m
+    const float  texel  = 1.0f / RainOccParams.w;
+    const float  rangeM = 1.0f / RainParams1.y;     // metros por unidade de depth do ortho
+    const float2 offs[4] = { float2(3.0f, 0.0f), float2(-3.0f, 0.0f),
+                             float2(0.0f, 3.0f), float2(0.0f, -3.0f) }; // ~0.7 m
 
     float drain = 0.0f;
     [unroll] for (int i = 0; i < 4; ++i) {
-        int2  s  = clamp(c + offs[i], int2(0, 0), int2(size - 1.0f, size - 1.0f));
-        float nz = RainOccMap.Load(int3(s, 0));
+        // tap bilinear (Load pontual dava serrilhado diagonal na borda seco/molhado)
+        float nz = OccDepthBilinear(uvz.xy + offs[i] * texel);
         // vizinho mais fundo que ~0.3 m = queda; 0.8 m = borda franca
         drain += smoothstep(0.3f, 0.8f, (nz - uvz.z) * rangeM);
     }
@@ -165,19 +165,32 @@ PSOut main(VSOutput input) {
     // curta (~0.3 s) que perturba a normal e baixa o roughness — glint de especular na luz
     // (spatter mask da Cry, procedural). So onde chove AGORA, up-facing, perto da camera.
     if (rainNow > 0.001f && isUp > 0.0f && distFade > 0.001f) {
-        float2 cell = floor(worldPos.xz * 8.0f);
+        float2 sp   = worldPos.xz * 8.0f;
+        float2 cell = floor(sp);
+        float2 fc   = sp - cell;
         float2 rnd  = Hash22(cell);
         float  ph   = CameraWorldPos.w * (2.4f + rnd.y * 1.6f) + rnd.x * 19.0f;
         float  cyc  = floor(ph);
         float  life = ph - cyc;
         float  gate = Hash21(cell + cyc * 0.618f) < rainNow * 0.35f ? 1.0f : 0.0f;
-        float  flash = gate * (1.0f - life) * (1.0f - life) * isUp * distFade;
-        if (flash > 0.01f) {
-            float2 d2 = Hash22(cell + cyc) * 2.0f - 1.0f;
-            float3 splashN = normalize(float3(d2.x * 0.55f, 1.0f, d2.y * 0.55f));
-            N      = normalize(lerp(N, splashN, flash * 0.6f));
-            rough  = lerp(rough, 0.10f, flash * 0.7f);
-            albedo += flash * 0.02f; // respingo claro sutil
+        if (gate * (1.0f - life) > 0.05f) {
+            // coroa RADIAL dentro da celula (centro/dir aleatorios por ciclo): anel
+            // gaussiano que expande e morre — sem isso a celula inteira flashava e o
+            // splash parecia um quad de 12 cm (bug do A/B)
+            float2 rnd2 = Hash22(cell + cyc);
+            float2 ctr  = 0.25f + 0.5f * rnd2;
+            float2 toP  = fc - ctr;
+            float  d    = length(toP);
+            float  x    = (d - life * 0.30f) * 11.0f;
+            float  crown = exp(-x * x) * (1.0f - life) * (1.0f - life);
+            float  flash = gate * crown * isUp * distFade;
+            if (flash > 0.01f) {
+                float2 dirR = toP / max(d, 1e-3f); // normal empurrada radialmente p/ fora
+                float3 splashN = normalize(float3(dirR.x * 0.55f, 1.0f, dirR.y * 0.55f));
+                N      = normalize(lerp(N, splashN, saturate(flash * 0.6f)));
+                rough  = lerp(rough, 0.10f, saturate(flash * 0.7f));
+                albedo += flash * 0.02f; // respingo claro sutil
+            }
         }
     }
 

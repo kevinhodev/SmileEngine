@@ -46,19 +46,41 @@ float SkyVisibilityBand(float3 worldPos, float bandMul) {
     float3 uvz = mul(float4(worldPos, 1.0f), RainOccMatrix).xyz; // ortho: w = 1
     if (any(uvz.xy != saturate(uvz.xy)) || uvz.z >= 1.0f) return 1.0f;
 
-    // 2x2 taps (Load; borda suave vem da banda em profundidade, nao precisa de PCF grande)
+    // PCF 2x2 com pesos bilineares (compara ANTES, filtra depois — filtrar o depth cru
+    // inventaria alturas no meio do ar na borda da marquise). Media igual dava escada
+    // diagonal dura na resolucao do mapa (~23 cm/texel) — os "triangulos" do A/B.
     const float size = RainOccParams.w;
-    int2 c = int2(clamp(uvz.xy * size - 0.5f, 0.0f, size - 2.0f));
-    float occ = 0.0f;
+    float2 st = uvz.xy * size - 0.5f;
+    float2 fl = floor(st);
+    float2 f  = st - fl;
+    int2   c  = int2(clamp(fl, 0.0f, size - 2.0f));
+
+    float o[4];
     [unroll] for (int j = 0; j < 2; ++j)
     [unroll] for (int i = 0; i < 2; ++i) {
         float mapZ = RainOccMap.Load(int3(c + int2(i, j), 0));
         // occluder acima do pixel (mapZ menor = mais perto do teto) alem do bias = coberto
-        occ += saturate((uvz.z - RainOccParams.y - mapZ) * RainOccParams.z * bandMul);
+        o[j * 2 + i] = saturate((uvz.z - RainOccParams.y - mapZ) * RainOccParams.z * bandMul);
     }
-    return 1.0f - occ * 0.25f;
+    float occ = lerp(lerp(o[0], o[1], f.x), lerp(o[2], o[3], f.x), f.y);
+    return 1.0f - occ;
 }
 
 float SkyVisibility(float3 worldPos) { return SkyVisibilityBand(worldPos, 1.0f); }
+
+// Depth do mapa filtrado bilinear — p/ comparacoes de altura RELATIVAS (drenagem), onde
+// interpolar o depth e inofensivo e tira o serrilhado dos taps pontuais.
+float OccDepthBilinear(float2 uv) {
+    const float size = RainOccParams.w;
+    float2 st = uv * size - 0.5f;
+    float2 fl = floor(st);
+    float2 f  = st - fl;
+    int2   c  = int2(clamp(fl, 0.0f, size - 2.0f));
+    float d00 = RainOccMap.Load(int3(c, 0));
+    float d10 = RainOccMap.Load(int3(c + int2(1, 0), 0));
+    float d01 = RainOccMap.Load(int3(c + int2(0, 1), 0));
+    float d11 = RainOccMap.Load(int3(c + int2(1, 1), 0));
+    return lerp(lerp(d00, d10, f.x), lerp(d01, d11, f.x), f.y);
+}
 
 #endif
