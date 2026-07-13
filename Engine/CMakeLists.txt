@@ -45,6 +45,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Fog.h
     Include/Smile/Graphics/Weather.h
     Include/Smile/Graphics/RainWetness.h
+    Include/Smile/Graphics/SunShaftBloom.h
     Include/Smile/Graphics/SunShadows.h
     Include/Smile/Graphics/RaytracingScene.h
     Include/Smile/Graphics/DDGI.h
@@ -93,6 +94,7 @@ set(ENGINE_SOURCES
     Source/Graphics/Skybox.cpp
     Source/Graphics/Fog.cpp
     Source/Graphics/SunShafts.cpp
+    Source/Graphics/SunShaftBloom.cpp
     Source/Graphics/RainWetness.cpp
     Source/Graphics/SunShadows.cpp
     Source/Graphics/LocalShadows.cpp

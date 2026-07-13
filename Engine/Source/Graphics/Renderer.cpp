@@ -77,6 +77,8 @@ namespace Smile {
 
         SunShadows.Initialize(Device.Native(), SRVHeap);
         SunShafts.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        SunShaftBloom.Initialize(Device.Native(), SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                 RenderWidth(), RenderHeight());
 
         LocalShadows.Initialize(Device.Native(), SRVHeap);
 
@@ -685,6 +687,7 @@ namespace Smile {
         Water.Resize(Device.Native(), RW, RH);
         RainWetness.Resize(Device.Native(), SRVHeap, RW, RH);
         SunShafts.Resize(Device.Native(), SRVHeap, RW, RH);
+        SunShaftBloom.Resize(Device.Native(), SRVHeap, RW, RH);
         CreateSceneCopies();
 
         PostProcessor.Resize(Device.Native(), SRVHeap, SW, SH);    
@@ -1017,6 +1020,9 @@ namespace Smile {
                                  CameraPosition, KeyDir, KeyColor, KeyInt,
                                  FogLayer1, FogLayer2, FarZ, ShaftJitter,
                                  VolumetricShaftsActive);
+        SunShaftBloom.UpdatePerFrame(FrameSlot, ViewProjUnjittered, InvViewProjFull,
+                                     CameraPosition, KeyDir, KeyColor, KeyInt,
+                                     FrameIndex, true);
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit,
                            KeyDir, NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog,
@@ -1925,6 +1931,33 @@ namespace Smile {
             DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
             CommandList->ResourceBarrier(1, &DepthBarrier);
+        }
+
+        // F3 artistica: mascara HDR/depth quarter-res + blur radial progressivo.
+        // A composicao fica antes da chuva e do temporal AA/upscale, separada dos froxels.
+        if (SunShaftBloom.HasWork()) {
+            D3D12_RESOURCE_BARRIER Barriers[2]{};
+            for (auto& Barrier : Barriers) {
+                Barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            }
+            Barriers[0].Transition.pResource   = DepthBuffer.Get();
+            Barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            Barriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            Barriers[1].Transition.pResource   = HDRColorBuffer.Get();
+            Barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            Barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(2, Barriers);
+
+            SunShaftBloom.RecordMaskAndBlur(CommandList, SRVHeap, HDRSRVSlot, DepthSRVSlot);
+
+            for (auto& Barrier : Barriers)
+                std::swap(Barrier.Transition.StateBefore, Barrier.Transition.StateAfter);
+            CommandList->ResourceBarrier(2, Barriers);
+
+            auto HDRRTV = HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &HDRRTV, FALSE, nullptr);
+            SunShaftBloom.Composite(CommandList, SRVHeap, RenderWidth(), RenderHeight());
         }
 
         // Chuva F3/F5: cortina + gotas por particula — depois do fog (chuva de perto nao
