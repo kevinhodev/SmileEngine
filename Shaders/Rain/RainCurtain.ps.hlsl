@@ -82,6 +82,9 @@ float4 main(VSOutput input) : SV_Target {
     if (upFade <= 0.001f) discard;
 
     [unroll] for (int i = 0; i < 3; ++i) {
+        // F5: com particulas ON o near-field e delas — a cortina mantem so o cilindro
+        // de 12 m (medio/longe), senao gota-quad e streak se sobrepoem em dobro
+        if (CurtainParams.z > 0.5f && i < 2) continue;
         const float r     = radii[i];
         const float horiz = max(horizRaw, 0.12f);   // clamp p/ olhar reto cima/baixo
         const float t     = r / horiz;               // distancia 3D REAL ate o streak

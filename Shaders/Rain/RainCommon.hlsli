@@ -14,10 +14,14 @@ cbuffer RainCB : register(b0) {
     row_major float4x4 RainOccMatrix; // F2: world -> UVZ do mapa de oclusao (ortho top-down)
     float4 RainOccParams;           // x = enabled, y = bias (depth), z = 1/banda (depth),
                                     // w = resolucao do mapa
-    float4 CurtainParams;           // F3: x = CurtainAmount, y = queda (m/s), zw = -
+    float4 CurtainParams;           // F3: x = CurtainAmount x rain, y = queda (m/s),
+                                    // F5: z = particulas ativas (cortina poupa o near), w = -
     float4 KeyLightDir;             // F3: xyz = dir PARA a key light (mundo)
     float4 KeyLightColor;           // F3: rgb = cor x intensidade da key light
     float4 SkyAmbientRain;          // F3: rgb = ambient fisico do ceu
+    row_major float4x4 RainViewProj; // F5: view-proj FULL jitterada (particulas projetam mundo)
+    float4 RainParticleParams;      // F5: x = raio XZ do box (m), y = altura (m), z = -,
+                                    //     w = num de particulas
 };
 
 Texture2D<float> SceneDepth : register(t2);

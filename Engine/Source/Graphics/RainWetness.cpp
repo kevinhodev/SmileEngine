@@ -17,10 +17,11 @@ namespace Smile {
         BuildRootSignature(_Device);
         BuildPSO(_Device);
         BuildCurtainPSO(_Device);
+        BuildParticlesPSO(_Device);
         CreateConstantBuffer(_Device);
         CreateScratch(_Device, _SRVHeap, _Width, _Height);
         BuildOcclusion(_Device, _SRVHeap);
-        LogInfo("Chuva deferred (wetness + occlusion map + cortina) inicializada");
+        LogInfo("Chuva deferred (wetness + occlusion map + cortina + particulas) inicializada");
     }
 
     void FRainWetness::Resize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -33,8 +34,10 @@ namespace Smile {
         if (!IsInitialized()) return;
         PSO.Reset();
         CurtainPSO.Reset();
+        ParticlesPSO.Reset();
         BuildPSO(_Device);
         BuildCurtainPSO(_Device);
+        BuildParticlesPSO(_Device);
     }
 
     void FRainWetness::BuildRootSignature(ID3D12Device* _Device) {
@@ -53,10 +56,13 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE OccRange = DepthRange;
         OccRange.BaseShaderRegister = 3;
 
+        // Visibilidade ALL em CBV/depth/occ: o VS das particulas (F5) le o CB, projeta com a
+        // RainViewProj e amostra o occlusion map como heightmap de colisao. Scratch segue
+        // PIXEL (so o PS da wetness le).
         D3D12_ROOT_PARAMETER RootParams[4]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
-        RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
 
         RootParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -66,12 +72,12 @@ namespace Smile {
         RootParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[2].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[2].DescriptorTable.pDescriptorRanges   = &DepthRange;
-        RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         RootParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[3].DescriptorTable.pDescriptorRanges   = &OccRange;
-        RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_ROOT_SIGNATURE_DESC Desc{};
         Desc.NumParameters = _countof(RootParams);
@@ -173,6 +179,50 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&CurtainPSO)));
     }
 
+    void FRainWetness::BuildParticlesPSO(ID3D12Device* _Device) {
+        // F5: quads instanciados 100% procedurais (SV_VertexID/SV_InstanceID, sem VB) com o
+        // mesmo blend premultiplicado da cortina; soft-depth manual no PS (depth como SRV).
+        auto VS = LoadShaderBytecode("RainParticles.vs_6_0.cso");
+        auto PS = LoadShaderBytecode("RainParticles.ps_6_0.cso");
+
+        D3D12_RASTERIZER_DESC Raster{};
+        Raster.FillMode        = D3D12_FILL_MODE_SOLID;
+        Raster.CullMode        = D3D12_CULL_MODE_NONE;
+        Raster.DepthClipEnable = TRUE;
+
+        D3D12_BLEND_DESC Blend{};
+        auto& RT0                 = Blend.RenderTarget[0];
+        RT0.BlendEnable           = TRUE;
+        RT0.SrcBlend              = D3D12_BLEND_ONE;
+        RT0.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+        RT0.BlendOp               = D3D12_BLEND_OP_ADD;
+        RT0.SrcBlendAlpha         = D3D12_BLEND_ONE;
+        RT0.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+        RT0.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+        RT0.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+        D3D12_DEPTH_STENCIL_DESC Depth{};
+        Depth.DepthEnable   = FALSE;
+        Depth.StencilEnable = FALSE;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc{};
+        PSODesc.pRootSignature        = RootSig.Get();
+        PSODesc.VS                    = { VS.data(), VS.size() };
+        PSODesc.PS                    = { PS.data(), PS.size() };
+        PSODesc.BlendState            = Blend;
+        PSODesc.SampleMask            = UINT_MAX;
+        PSODesc.RasterizerState       = Raster;
+        PSODesc.DepthStencilState     = Depth;
+        PSODesc.InputLayout           = { nullptr, 0 };
+        PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        PSODesc.NumRenderTargets      = 1;
+        PSODesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR scene color
+        PSODesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+        PSODesc.SampleDesc            = { 1, 0 };
+
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&ParticlesPSO)));
+    }
+
     void FRainWetness::CreateConstantBuffer(ID3D12Device* _Device) {
         D3D12_HEAP_PROPERTIES Heap{};
         Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -246,9 +296,10 @@ namespace Smile {
     }
 
     void FRainWetness::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProjFull,
-                                      const Vec3& _CameraWorldPos, f32 _TimeSec,
-                                      const FWeather& _Weather, const Vec3& _KeyDir,
-                                      const Vec3& _KeyColorTimesInt, const Vec3& _SkyAmbient) {
+                                      const Mat44& _ViewProjFull, const Vec3& _CameraWorldPos,
+                                      f32 _TimeSec, const FWeather& _Weather,
+                                      const Vec3& _KeyDir, const Vec3& _KeyColorTimesInt,
+                                      const Vec3& _SkyAmbient) {
         FrameSlot = _FrameSlot;
         if (!MappedBase) return;
 
@@ -274,10 +325,20 @@ namespace Smile {
         // F3: cortina — queda ~12 m/s (chuva real ~9, um pouco mais rapido le melhor em tela).
         // F4: pre-multiplicada pelo RainAmount INSTANTANEO (parou de chover = gota some na
         // hora, mesmo com o chao ainda molhado pela inercia do Wetness).
-        c.CurtainParams  = { _Weather.CurtainAmount * _Weather.RainAmount, 12.0f, 0.0f, 0.0f };
+        // F5: com particulas ON a cortina poupa os 2 cilindros proximos (CurtainParams.z);
+        // as particulas so existem com o occlusion map valido (a colisao vem dele).
+        const bool ParticlesOn = _Weather.RainParticles && OccEverRendered &&
+                                 _Weather.RainAmount > 0.001f;
+        ParticleCount = ParticlesOn
+            ? static_cast<u32>(static_cast<f32>(kMaxRainParticles) * _Weather.RainAmount)
+            : 0u;
+        c.CurtainParams  = { _Weather.CurtainAmount * _Weather.RainAmount, 12.0f,
+                             ParticlesOn ? 1.0f : 0.0f, 0.0f };
         c.KeyLightDir    = { _KeyDir.X, _KeyDir.Y, _KeyDir.Z, 0.0f };
         c.KeyLightColor  = { _KeyColorTimesInt.X, _KeyColorTimesInt.Y, _KeyColorTimesInt.Z, 0.0f };
         c.SkyAmbientRain = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };
+        c.RainViewProj   = _ViewProjFull;
+        c.RainParticleParams = { 12.0f, 24.0f, 0.0f, static_cast<f32>(ParticleCount) };
 
         std::memcpy(MappedBase + static_cast<size_t>(FrameSlot) * sizeof(RainWetnessConstants),
                     &c, sizeof(RainWetnessConstants));
@@ -500,10 +561,13 @@ namespace Smile {
             Clear.Format             = DXGI_FORMAT_D32_FLOAT;
             Clear.DepthStencil.Depth = 1.0f;
 
+            // PSR|NPSR: o PS da wetness/cortina e o VS das particulas (F5) leem o mapa
             SMILE_HR(_Device->CreateCommittedResource(
                 &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &Clear, IID_PPV_ARGS(&OccDepth)));
-            OccState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &Clear, IID_PPV_ARGS(&OccDepth)));
+            OccState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
             OccDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
             D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
@@ -621,9 +685,37 @@ namespace Smile {
         }
 
         B.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         _Cmd->ResourceBarrier(1, &B);
-        OccState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        OccState = B.Transition.StateAfter;
         return true;
+    }
+
+    // F5a: gotas por particula. Mesmo estado de pipeline da cortina (RTV do HDR ja setado,
+    // depth em PSR); um DrawInstanced de quads que o VS posiciona por hash+tempo e mata
+    // pelo heightmap de oclusao — sem buffer de particulas, sem compute.
+    void FRainWetness::ExecuteParticles(ID3D12GraphicsCommandList* _Cmd,
+                                        FTextureSRVHeap& _SRVHeap, u32 _DepthSRVSlot,
+                                        u32 _Width, u32 _Height) {
+        if (!ParticlesPSO || ParticleCount == 0) return;
+
+        D3D12_VIEWPORT Viewport{ 0.0f, 0.0f,
+                                 static_cast<f32>(_Width), static_cast<f32>(_Height),
+                                 0.0f, 1.0f };
+        D3D12_RECT Scissor{ 0, 0, static_cast<LONG>(_Width), static_cast<LONG>(_Height) };
+        _Cmd->RSSetViewports(1, &Viewport);
+        _Cmd->RSSetScissorRects(1, &Scissor);
+
+        _Cmd->SetGraphicsRootSignature(RootSig.Get());
+        _Cmd->SetPipelineState(ParticlesPSO.Get());
+        _Cmd->SetGraphicsRootConstantBufferView(0, CBAddr());
+        _Cmd->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(ScratchSRVBase));
+        _Cmd->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_DepthSRVSlot));
+        _Cmd->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(OccSRVSlot));
+        _Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        _Cmd->IASetVertexBuffers(0, 0, nullptr);
+        _Cmd->IASetIndexBuffer(nullptr);
+        _Cmd->DrawInstanced(6, ParticleCount, 0, 0);
     }
 }

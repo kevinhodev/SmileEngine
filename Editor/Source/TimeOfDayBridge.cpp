@@ -66,6 +66,7 @@ namespace SmileEditor {
     double TimeOfDayBridge::WetDarkening() const   { return WeatherOfConst(Renderer).WetDarkening; }
     double TimeOfDayBridge::CurtainAmount() const  { return WeatherOfConst(Renderer).CurtainAmount; }
     bool   TimeOfDayBridge::WeatherDriveSky() const{ return WeatherOfConst(Renderer).DriveSky; }
+    bool   TimeOfDayBridge::RainParticles() const  { return WeatherOfConst(Renderer).RainParticles; }
 
     double TimeOfDayBridge::SunElevationDeg() const {
         // TOD off: le a direcao manual corrente do renderer (a que de fato ilumina a cena).
@@ -198,6 +199,10 @@ namespace SmileEditor {
     }
     void TimeOfDayBridge::SetWeatherDriveSky(bool _V) {
         WeatherOf(Renderer).DriveSky = _V;
+        emit StateChanged();
+    }
+    void TimeOfDayBridge::SetRainParticles(bool _V) {
+        WeatherOf(Renderer).RainParticles = _V;
         emit StateChanged();
     }
     void TimeOfDayBridge::SetManualAzimuthDeg(double _V) {

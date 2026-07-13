@@ -696,6 +696,27 @@ Rectangle {
                         onToggled: todModel.weatherDriveSky = !checked
                     }
                 }
+                // F5: gotas por particula no near-field (qualidade alta); OFF = so cortina
+                Item {
+                    width: parent.width
+                    height: 22
+                    enabled: todModel.rainAmount > 0
+                    opacity: todModel.rainAmount > 0 ? 1.0 : 0.4
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Gotas por partícula (perto)"
+                        color: root.textNormal
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: todModel.rainParticles
+                        onToggled: todModel.rainParticles = !checked
+                    }
+                }
             }
         }
     }

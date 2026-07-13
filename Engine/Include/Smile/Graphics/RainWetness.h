@@ -23,11 +23,15 @@ namespace Smile {
         Mat44 RainOccMatrix; // F2: world -> UVZ do mapa de oclusao (ortho top-down + bias UV)
         Vec4  RainOccParams; // x = enabled (0/1), y = bias (depth), z = 1/banda suave (depth),
                              // w = resolucao do mapa
-        Vec4  CurtainParams; // F3: x = CurtainAmount, y = velocidade de queda (m/s), zw = -
+        Vec4  CurtainParams; // F3: x = CurtainAmount x rain, y = queda (m/s),
+                             // F5: z = particulas ativas (cortina poupa o near), w = -
         Vec4  KeyLightDir;   // F3: xyz = dir PARA a key light (mundo)
         Vec4  KeyLightColor; // F3: rgb = cor x intensidade da key light
         Vec4  SkyAmbientRain;// F3: rgb = ambient fisico do ceu (streaks visiveis de costas
                              //      pra luz e a noite)
+        Mat44 RainViewProj;  // F5: view-proj FULL jitterada (VS das particulas projeta mundo)
+        Vec4  RainParticleParams; // F5: x = raio XZ do box (m), y = altura (m),
+                                  //     z = -, w = num de particulas
     };
 
     // Chuva deferred — F1 (padrao CRainStage::ExecuteDeferredRainGBuffer da CryEngine, com
@@ -63,9 +67,9 @@ namespace Smile {
         void InvalidateOcclusion() { OccValid = false; }
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
-                            const Vec3& CameraWorldPos, f32 TimeSec, const FWeather& Weather,
-                            const Vec3& KeyDir, const Vec3& KeyColorTimesInt,
-                            const Vec3& SkyAmbient);
+                            const Mat44& ViewProjFull, const Vec3& CameraWorldPos, f32 TimeSec,
+                            const FWeather& Weather, const Vec3& KeyDir,
+                            const Vec3& KeyColorTimesInt, const Vec3& SkyAmbient);
 
         // Pre-condicoes (estado no ponto do frame em que roda): G-buffer em RENDER_TARGET
         // (saida do geometry pass) e depth em DEPTH_WRITE — restaura os dois ao final.
@@ -80,10 +84,19 @@ namespace Smile {
         void ExecuteCurtain(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                             u32 DepthSRVSlot, u32 Width, u32 Height);
 
+        // F5a: gotas por particula — DrawInstanced de quads 100% procedurais (hash + tempo,
+        // box com wrap preso na camera, colisao pelo occlusion map como heightmap no VS).
+        // Mesmas pre-condicoes do ExecuteCurtain; chamar logo depois dele.
+        void ExecuteParticles(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
+                              u32 DepthSRVSlot, u32 Width, u32 Height);
+
     private:
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSO(ID3D12Device* Device);
-        void BuildCurtainPSO(ID3D12Device* Device); // F3 (mesmo root sig da wetness)
+        void BuildCurtainPSO(ID3D12Device* Device);   // F3 (mesmo root sig da wetness)
+        void BuildParticlesPSO(ID3D12Device* Device); // F5 (idem)
+
+        static constexpr u32 kMaxRainParticles = 32768; // box 24x24x24 m ~ 2.4/m3 no maximo
         void CreateConstantBuffer(ID3D12Device* Device);
         void CreateScratch(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void BuildOcclusion(ID3D12Device* Device, FTextureSRVHeap& SRVHeap); // F2: mapa + PSOs
@@ -113,7 +126,9 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> CurtainPSO; // F3
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> CurtainPSO;   // F3
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> ParticlesPSO; // F5
+        u32 ParticleCount = 0; // instancias deste frame (escala com a chuva; 0 = nao desenha)
 
         // Copias de leitura de GBufferA/B (mesmos formatos), SRVs contiguos [A,B] p/ uma tabela.
         Microsoft::WRL::ComPtr<ID3D12Resource> ScratchA;

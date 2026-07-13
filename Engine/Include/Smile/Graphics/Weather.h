@@ -27,6 +27,11 @@ namespace Smile {
         // dos streaks por cima do RainAmount; 0 = so wetness, sem gota visivel no ar.
         f32 CurtainAmount = 1.0f;
 
+        // F5: gotas por particula no near-field (opcao de qualidade). ON = quads procedurais
+        // com colisao pelo occlusion map substituem os 2 cilindros proximos da cortina (que
+        // segue cobrindo o medio/longe). OFF = so a cortina (barato, estilo Cry pura).
+        bool RainParticles = true;
+
         // F4: chuva dirige o ceu — cobertura de nuvem sobe pra um piso nublado, key light
         // (sol/lua) e ambient escurecem, height fog engrossa (mist). Os knobs do usuario
         // (pagina de nuvens/fog) nao sao alterados: o override e por-frame.
