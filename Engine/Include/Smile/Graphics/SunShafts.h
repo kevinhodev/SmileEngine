@@ -87,8 +87,8 @@ namespace Smile {
         u32 FrameSlot  = 0;
 
         f32 LastFade            = 0.0f;
-        f32 Intensity           = 0.7f;
-        f32 Threshold           = 1.0f;
+        f32 Intensity           = 0.3f; // 0.7 estourava no A/B (bola branca)
+        f32 Threshold           = 2.0f;
         f32 FirstPassDistance   = 0.1f;    // fracao da distancia ate o sol no 1o passe
         f32 OcclusionDepthRange = 1000.0f; // so geometria alem de range/2 alimenta a mascara
 

@@ -369,7 +369,7 @@ namespace SmileEditor {
     }
 
     double ViewportWidget::GetSunShaftsIntensity() const {
-        return Renderer ? Renderer->GetSunShafts().GetIntensity() : 0.7;
+        return Renderer ? Renderer->GetSunShafts().GetIntensity() : 0.3;
     }
 
     void ViewportWidget::SetSunShaftsIntensity(double _Value) {
@@ -379,7 +379,7 @@ namespace SmileEditor {
     }
 
     double ViewportWidget::GetSunShaftsThreshold() const {
-        return Renderer ? Renderer->GetSunShafts().GetThreshold() : 1.0;
+        return Renderer ? Renderer->GetSunShafts().GetThreshold() : 2.0;
     }
 
     void ViewportWidget::SetSunShaftsThreshold(double _Value) {

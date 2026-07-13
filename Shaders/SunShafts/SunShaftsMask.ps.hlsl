@@ -25,9 +25,11 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
     float invRange  = ShaftTint.w;
     float distMask  = saturate((dist - 0.5f / invRange) * invRange);
 
-    // luminancia acima do limiar, com teto anti-firefly (UE BloomMaxBrightness)
+    // luminancia acima do limiar, com teto (UE BloomMaxBrightness). Teto BAIXO de
+    // proposito: o disco solar tem luminancia HDR enorme — com teto alto o blur vira
+    // uma bola branca saturada que afoga os streaks (visto no A/B da F1).
     float lum = max(dot(col, float3(0.30f, 0.59f, 0.11f)), 6.10352e-5f);
-    float adj = clamp(lum - ShaftParams.x, 0.0f, 50.0f);
+    float adj = clamp(lum - ShaftParams.x, 0.0f, 8.0f);
     float3 bloom = col / lum * adj * 2.0f;
 
     // mascara radial em torno do sol (aspect-corrigida): o blur so puxa energia
