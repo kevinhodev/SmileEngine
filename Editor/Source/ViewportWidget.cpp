@@ -358,6 +358,46 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    bool ViewportWidget::AreSunShaftsEnabled() const {
+        return Renderer ? Renderer->GetUseSunShafts() : false;
+    }
+
+    void ViewportWidget::SetSunShaftsEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetUseSunShafts(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetSunShaftsIntensity() const {
+        return Renderer ? Renderer->GetSunShafts().GetIntensity() : 0.7;
+    }
+
+    void ViewportWidget::SetSunShaftsIntensity(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetSunShafts().SetIntensity(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetSunShaftsThreshold() const {
+        return Renderer ? Renderer->GetSunShafts().GetThreshold() : 1.0;
+    }
+
+    void ViewportWidget::SetSunShaftsThreshold(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetSunShafts().SetThreshold(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetSunShaftsRayLength() const {
+        return Renderer ? Renderer->GetSunShafts().GetRayLength() : 0.1;
+    }
+
+    void ViewportWidget::SetSunShaftsRayLength(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetSunShafts().SetRayLength(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
     }

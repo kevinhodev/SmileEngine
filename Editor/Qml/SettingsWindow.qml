@@ -42,7 +42,7 @@ Rectangle {
         if (selectedPage === 0)
             return "Upscaling, anti-aliasing e resolução interna do viewport"
         if (selectedPage === 6)
-            return "Sombras do sol (CSM): cascatas, cache, bias e debug"
+            return "Sombras do sol (CSM), sun shafts: cascatas, cache, bias e debug"
         if (selectedPage === 7)
             return "Raymarch de nuvens na atmosfera: cobertura, forma, iluminação e custo"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
@@ -997,6 +997,55 @@ Rectangle {
                     y: 266
                     checked: viewportModel.shadowDebugCascades
                     onToggled: viewportModel.SetShadowDebugCascades(!checked)
+                }
+            }
+
+            Card {
+                x: 24
+                y: 412
+                width: shadowsPage.colW
+                height: 212
+                title: "Sun shafts"
+
+                Text {
+                    x: 20; y: 55
+                    text: "Raios do sol (radial blur)"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "meia-res · 3 passes · aditivo pré-TAA"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.sunShaftsEnabled
+                    onToggled: viewportModel.SetSunShaftsEnabled(!checked)
+                }
+
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Intensidade"
+                    from: 0; to: 3.0; step: 0.05
+                    value: viewportModel.sunShaftsIntensity
+                    valueText: viewportModel.sunShaftsIntensity.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetSunShaftsIntensity(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 160
+                    width: parent.width - 40
+                    label: "Limiar de brilho (HDR)"
+                    from: 0; to: 8.0; step: 0.1
+                    value: viewportModel.sunShaftsThreshold
+                    valueText: viewportModel.sunShaftsThreshold.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetSunShaftsThreshold(v)
                 }
             }
 

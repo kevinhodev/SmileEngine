@@ -23,6 +23,7 @@
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/Fog.h"
+#include "Smile/Graphics/SunShafts.h"
 #include "Smile/Graphics/Weather.h"
 #include "Smile/Graphics/RainWetness.h"
 #include "Smile/Graphics/SunShadows.h"
@@ -243,6 +244,11 @@ namespace Smile {
 
         FFogPass& GetFog()                     { return Fog; }
 
+        void SetUseSunShafts(bool Use)         { UseSunShafts = Use; }
+        bool GetUseSunShafts() const           { return UseSunShafts; }
+        FSunShafts& GetSunShafts()             { return SunShafts; }
+        const FSunShafts& GetSunShafts() const { return SunShafts; }
+
         FSunShadows& GetSunShadows()           { return SunShadows; }
         void SetUseSunShadows(bool Use)        { UseSunShadows = Use; }
         bool GetUseSunShadows() const          { return UseSunShadows; }
@@ -456,6 +462,9 @@ namespace Smile {
         FFogPass        Fog;
         bool            UseAerialPerspective = false;
         bool            UseHeightFog         = false;
+
+        FSunShafts      SunShafts;
+        bool            UseSunShafts = true; // barato (5 passes meia-res); fade CPU zera fora da tela
 
         FWeather        Weather;     // estado de clima (chuva) — editor escreve, chuva le
         FRainWetness    RainWetness; // F1: wetness deferred no G-buffer (pos-geometry pass)
