@@ -1554,6 +1554,20 @@ namespace Smile {
         // Chuva F1: molha o G-buffer logo apos o geometry pass — ReSTIR, deferred lighting e
         // reflexoes RT (todos leem A/B depois deste ponto) veem a cena ja molhada.
         if (Weather.Raining() && RainWetness.IsInitialized()) {
+            // F2: mapa de oclusao top-down (cacheado — so re-renderiza ao cruzar o snap de
+            // 16 m). Vidro ENTRA na lista: telhado de vidro bloqueia chuva, ao contrario do
+            // CSM onde translucido deixa o sol passar. O Execute logo abaixo re-seta todo o
+            // estado (root sig/PSO/viewport/RT), entao nao precisa de restore aqui.
+            if (Weather.RainOcclusion) {
+                std::vector<FRainWetness::FOccluderItem> RainOccluders;
+                RainOccluders.reserve(AllItems.size());
+                for (const AllItem& A : AllItems)
+                    RainOccluders.push_back({ A.R->Mesh, A.Mat,
+                                              ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                              A.R->AABBMin, A.R->AABBMax });
+                RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, CameraPosition,
+                                               RainOccluders.data(), RainOccluders.size());
+            }
             RainWetness.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
                                        ElapsedTime, Weather);
             RainWetness.Execute(CommandList, SRVHeap, GBuffer, DepthBuffer.Get(), DepthSRVSlot,

@@ -3,12 +3,15 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/Weather.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
 namespace Smile {
     class FGBuffer;
+    class FGpuMesh;
+    class FMaterial;
 
     struct alignas(256) RainWetnessConstants {
         Mat44 InvViewProj;   // inversa FULL da view-proj jitterada (reconstrucao do worldPos,
@@ -17,6 +20,9 @@ namespace Smile {
         Vec4  RainParams0;   // x = RainAmount, y = PuddleAmount, z = RippleStrength,
                              // w = WetDarkening
         Vec4  RainParams1;   // x = 1/PuddleScale (1/m), yzw = -
+        Mat44 RainOccMatrix; // F2: world -> UVZ do mapa de oclusao (ortho top-down + bias UV)
+        Vec4  RainOccParams; // x = enabled (0/1), y = bias (depth), z = 1/banda suave (depth),
+                             // w = resolucao do mapa
     };
 
     // Chuva deferred — F1 (padrao CRainStage::ExecuteDeferredRainGBuffer da CryEngine, com
@@ -27,11 +33,29 @@ namespace Smile {
     // veem a cena ja molhada — rua espelhada nas reflexoes vem de graca.
     class FRainWetness {
     public:
+        // F2: occluder da chuva (mesmos campos do FShadowDrawItem do CSM — o Renderer monta
+        // a lista do mesmo AllItems; vidro ENTRA: telhado de vidro bloqueia chuva).
+        struct FOccluderItem {
+            const FGpuMesh*           Mesh;
+            const FMaterial*          Mat;
+            D3D12_GPU_VIRTUAL_ADDRESS ObjectCB;
+            Vec3                      AABBMin;
+            Vec3                      AABBMax;
+        };
+
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Recreate(ID3D12Device* Device); // reload de shader (PSO apenas)
 
         bool IsInitialized() const { return PSO != nullptr; }
+
+        // F2: renderiza o mapa de oclusao top-down se preciso (centro snapado mudou ou cache
+        // invalido). Retorna true se re-renderizou (o caller restaura o estado de cena).
+        // Cacheado estilo Cry (bProcessed): andar so re-renderiza ao cruzar o quantum de snap.
+        bool RecordOcclusionMap(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
+                                u32 FrameSlot, const Vec3& CamPos,
+                                const FOccluderItem* Items, size_t Count);
+        void InvalidateOcclusion() { OccValid = false; }
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
                             const Vec3& CameraWorldPos, f32 TimeSec, const FWeather& Weather);
@@ -47,6 +71,30 @@ namespace Smile {
         void BuildPSO(ID3D12Device* Device);
         void CreateConstantBuffer(ID3D12Device* Device);
         void CreateScratch(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
+        void BuildOcclusion(ID3D12Device* Device, FTextureSRVHeap& SRVHeap); // F2: mapa + PSOs
+
+        // ---- F2: mapa de oclusao (depth ortho top-down 512^2 ao redor da camera) ----
+        static constexpr u32 kOccSize       = 512;
+        static constexpr f32 kOccHalfExtent = 60.0f;  // cobre 120 m ao redor da camera
+        static constexpr f32 kOccSnap       = 16.0f;  // quantum do centro: re-render ao cruzar
+        static constexpr f32 kOccUp         = 150.0f; // teto acima da camera (telhados ocluem)
+        static constexpr f32 kOccDown       = 50.0f;  // piso abaixo (camera em mezanino/ponte)
+
+        Microsoft::WRL::ComPtr<ID3D12RootSignature> OccRootSig; // clone do layout do CSM
+                                                                // (Material::Bind assume 1/2)
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> OccOpaquePSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> OccMaskedPSO;
+        Microsoft::WRL::ComPtr<ID3D12Resource>      OccDepth;
+        FDescriptorHeap                             OccDSVHeap;
+        u32                                         OccSRVSlot = 0xFFFFFFFFu;
+        D3D12_RESOURCE_STATES OccState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        Microsoft::WRL::ComPtr<ID3D12Resource>      OccCB; // LightViewProj por frame em voo
+        u8*                                         MappedOccCB = nullptr;
+        Mat44 OccWorldToUVZ{};       // matriz do ULTIMO render (o CB da wetness usa esta,
+                                     // nao a do frame corrente — o mapa e cacheado)
+        Vec3  OccSnapped{};          // centro snapado do ultimo render
+        bool  OccValid        = false;
+        bool  OccEverRendered = false;
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;

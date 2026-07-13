@@ -14,11 +14,15 @@ cbuffer RainCB : register(b0) {
     float4 RainParams0;             // x = RainAmount, y = PuddleAmount, z = RippleStrength,
                                     // w = WetDarkening
     float4 RainParams1;             // x = 1/PuddleScale (1/m), yzw = -
+    row_major float4x4 RainOccMatrix; // F2: world -> UVZ do mapa de oclusao (ortho top-down)
+    float4 RainOccParams;           // x = enabled, y = bias (depth), z = 1/banda (depth),
+                                    // w = resolucao do mapa
 };
 
 Texture2D        SceneA     : register(t0); // copia de GBufferA (BaseColor + AO)
 Texture2D        SceneB     : register(t1); // copia de GBufferB (OctNormal + Rough + Metal)
 Texture2D<float> SceneDepth : register(t2);
+Texture2D<float> RainOccMap : register(t3); // F2: depth top-down cacheado (0 = teto do volume)
 
 struct VSOutput {
     float4 pos : SV_POSITION;
@@ -88,16 +92,41 @@ float2 RippleGradient(float2 xz, float t) {
     return g;
 }
 
+// F2: "esse ponto ve o ceu?" — compara a altura do pixel com o depth top-down cacheado
+// (estilo rain occlusion da Cry). 1 = exposto (molha), 0 = coberto (seco). Fora do volume
+// do mapa = exposto: o mapa acompanha a camera, longe dela o erro nao e visivel.
+float SkyVisibility(float3 worldPos) {
+    if (RainOccParams.x < 0.5f) return 1.0f;
+
+    float3 uvz = mul(float4(worldPos, 1.0f), RainOccMatrix).xyz; // ortho: w = 1
+    if (any(uvz.xy != saturate(uvz.xy)) || uvz.z >= 1.0f) return 1.0f;
+
+    // 2x2 taps (Load; borda suave vem da banda em profundidade, nao precisa de PCF grande)
+    const float size = RainOccParams.w;
+    int2 c = int2(clamp(uvz.xy * size - 0.5f, 0.0f, size - 2.0f));
+    float occ = 0.0f;
+    [unroll] for (int j = 0; j < 2; ++j)
+    [unroll] for (int i = 0; i < 2; ++i) {
+        float mapZ = RainOccMap.Load(int3(c + int2(i, j), 0));
+        // occluder acima do pixel (mapZ menor = mais perto do teto) alem do bias = coberto
+        occ += saturate((uvz.z - RainOccParams.y - mapZ) * RainOccParams.z);
+    }
+    return 1.0f - occ * 0.25f;
+}
+
 PSOut main(VSOutput input) {
     int2  px       = int2(input.pos.xy);
     float rawDepth = SceneDepth.Load(int3(px, 0));
     if (rawDepth <= 0.0f) discard; // ceu (reverse-Z)
 
-    const float rain = RainParams0.x;
-
     float2 ndc = float2(input.uv.x * 2.0f - 1.0f, 1.0f - input.uv.y * 2.0f);
     float4 wH  = mul(float4(ndc, rawDepth, 1.0f), InvViewProj);
     float3 worldPos = wH.xyz / wH.w;
+
+    // F2: oclusao escala a chuva inteira — interior/marquise ficam secos (discard preserva
+    // o G-buffer original do geometry pass).
+    const float rain = RainParams0.x * SkyVisibility(worldPos);
+    if (rain <= 0.0005f) discard;
 
     float4 gA = SceneA.Load(int3(px, 0));
     float4 gB = SceneB.Load(int3(px, 0));

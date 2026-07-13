@@ -20,6 +20,9 @@ namespace Smile {
         f32 WetDarkening   = 0.85f; // [0,1] escurecimento do albedo poroso molhado (Cry
                                     // fDiffuseDarkening: porosidade alta escurece ate ~0.2x)
 
+        // F2: mapa de oclusao top-down — so molha o que ve o ceu (interior/marquise secos).
+        bool RainOcclusion = true;
+
         bool Raining() const { return RainAmount > 0.001f; }
     };
 }
