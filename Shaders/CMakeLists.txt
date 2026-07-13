@@ -79,6 +79,9 @@ smile_compile_shader(Atmosphere/StarField.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/FogFullscreen.vs.hlsl            vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/FogFullscreen.ps.hlsl            ps_6_0 main SHADER_OUTPUTS)
 
+# Chuva — F1: wetness deferred no G-buffer (estilo CRainStage da Cry, mascaras procedurais)
+smile_compile_shader(Rain/RainWetness.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
+
 # Nuvens volumetricas — bake de ruido 3D + raymarch + composite
 smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/BakeDetailNoise.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
@@ -187,6 +190,7 @@ add_custom_target(Shaders
         Fog/FogApply.hlsli
         Fog/FogFullscreen.vs.hlsl
         Fog/FogFullscreen.ps.hlsl
+        Rain/RainWetness.ps.hlsl
         Clouds/CloudNoiseCommon.hlsli
         Clouds/CloudDensity.hlsli
         Clouds/CloudLighting.hlsli

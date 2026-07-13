@@ -14,6 +14,12 @@ namespace SmileEditor {
             static Smile::FTimeOfDay Tod;
             return Tod;
         }
+
+        // Idem p/ o clima (secao Clima do painel).
+        Smile::FWeather& FallbackWeather() {
+            static Smile::FWeather W;
+            return W;
+        }
     }
 
     TimeOfDayBridge::TimeOfDayBridge(QObject* _Parent) : QObject(_Parent) {}
@@ -33,6 +39,12 @@ namespace SmileEditor {
     static const Smile::FTimeOfDay& TodOfConst(const Smile::Renderer* _R) {
         return _R ? _R->GetTimeOfDay() : FallbackTod();
     }
+    static Smile::FWeather& WeatherOf(Smile::Renderer* _R) {
+        return _R ? _R->GetWeather() : FallbackWeather();
+    }
+    static const Smile::FWeather& WeatherOfConst(const Smile::Renderer* _R) {
+        return _R ? _R->GetWeather() : FallbackWeather();
+    }
 
     bool   TimeOfDayBridge::Enabled() const        { return TodOfConst(Renderer).Enabled; }
     bool   TimeOfDayBridge::Running() const        { return TodOfConst(Renderer).Running; }
@@ -47,6 +59,11 @@ namespace SmileEditor {
     double TimeOfDayBridge::MoonDiskSize() const   { return TodOfConst(Renderer).MoonDiskSize; }
     double TimeOfDayBridge::MoonDiskBrightness() const { return TodOfConst(Renderer).MoonDiskBrightness; }
     double TimeOfDayBridge::StarIntensity() const  { return TodOfConst(Renderer).StarIntensity; }
+    double TimeOfDayBridge::RainAmount() const     { return WeatherOfConst(Renderer).RainAmount; }
+    double TimeOfDayBridge::PuddleAmount() const   { return WeatherOfConst(Renderer).PuddleAmount; }
+    double TimeOfDayBridge::PuddleScale() const    { return WeatherOfConst(Renderer).PuddleScale; }
+    double TimeOfDayBridge::RippleStrength() const { return WeatherOfConst(Renderer).RippleStrength; }
+    double TimeOfDayBridge::WetDarkening() const   { return WeatherOfConst(Renderer).WetDarkening; }
 
     double TimeOfDayBridge::SunElevationDeg() const {
         // TOD off: le a direcao manual corrente do renderer (a que de fato ilumina a cena).
@@ -151,6 +168,26 @@ namespace SmileEditor {
     }
     void TimeOfDayBridge::SetStarIntensity(double _V) {
         TodOf(Renderer).StarIntensity = (float)std::max(_V, 0.0);
+        emit StateChanged();
+    }
+    void TimeOfDayBridge::SetRainAmount(double _V) {
+        WeatherOf(Renderer).RainAmount = (float)std::clamp(_V, 0.0, 1.0);
+        emit StateChanged();
+    }
+    void TimeOfDayBridge::SetPuddleAmount(double _V) {
+        WeatherOf(Renderer).PuddleAmount = (float)std::clamp(_V, 0.0, 1.0);
+        emit StateChanged();
+    }
+    void TimeOfDayBridge::SetPuddleScale(double _V) {
+        WeatherOf(Renderer).PuddleScale = (float)std::clamp(_V, 1.0, 64.0);
+        emit StateChanged();
+    }
+    void TimeOfDayBridge::SetRippleStrength(double _V) {
+        WeatherOf(Renderer).RippleStrength = (float)std::clamp(_V, 0.0, 2.0);
+        emit StateChanged();
+    }
+    void TimeOfDayBridge::SetWetDarkening(double _V) {
+        WeatherOf(Renderer).WetDarkening = (float)std::clamp(_V, 0.0, 1.0);
         emit StateChanged();
     }
     void TimeOfDayBridge::SetManualAzimuthDeg(double _V) {

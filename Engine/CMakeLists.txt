@@ -43,6 +43,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/VolumetricClouds.h
     Include/Smile/Graphics/Skybox.h
     Include/Smile/Graphics/Fog.h
+    Include/Smile/Graphics/Weather.h
+    Include/Smile/Graphics/RainWetness.h
     Include/Smile/Graphics/SunShadows.h
     Include/Smile/Graphics/RaytracingScene.h
     Include/Smile/Graphics/DDGI.h
@@ -90,6 +92,7 @@ set(ENGINE_SOURCES
     Source/Graphics/VolumetricClouds.cpp
     Source/Graphics/Skybox.cpp
     Source/Graphics/Fog.cpp
+    Source/Graphics/RainWetness.cpp
     Source/Graphics/SunShadows.cpp
     Source/Graphics/LocalShadows.cpp
     Source/Graphics/RaytracingScene.cpp

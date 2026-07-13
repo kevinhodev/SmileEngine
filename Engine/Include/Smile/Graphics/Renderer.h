@@ -23,6 +23,8 @@
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/Fog.h"
+#include "Smile/Graphics/Weather.h"
+#include "Smile/Graphics/RainWetness.h"
 #include "Smile/Graphics/SunShadows.h"
 #include "Smile/Graphics/LocalShadows.h"
 #include "Smile/Graphics/RaytracingScene.h"
@@ -204,6 +206,10 @@ namespace Smile {
         // Estado do Time-of-Day, exposto p/ o painel TOD do editor (leitura e escrita).
         FTimeOfDay&       GetTimeOfDay()       { return TimeOfDay; }
         const FTimeOfDay& GetTimeOfDay() const { return TimeOfDay; }
+
+        // Estado de clima (chuva), exposto p/ a secao Clima do painel TOD (leitura e escrita).
+        FWeather&       GetWeather()       { return Weather; }
+        const FWeather& GetWeather() const { return Weather; }
 
         void LoadMoonTexture(const std::wstring& Path);
         void LoadStarCatalog(const std::wstring& Path);
@@ -448,8 +454,11 @@ namespace Smile {
         bool            UseAtmosphereSky = true;
 
         FFogPass        Fog;
-        bool            UseAerialPerspective = false; 
-        bool            UseHeightFog         = false; 
+        bool            UseAerialPerspective = false;
+        bool            UseHeightFog         = false;
+
+        FWeather        Weather;     // estado de clima (chuva) — editor escreve, chuva le
+        FRainWetness    RainWetness; // F1: wetness deferred no G-buffer (pos-geometry pass)
 
         FSunShadows     SunShadows;
         bool            UseSunShadows = true;

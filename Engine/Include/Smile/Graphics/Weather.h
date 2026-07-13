@@ -1,0 +1,25 @@
+#pragma once
+
+#include "Smile/Core/Types.h"
+
+namespace Smile {
+    // Estado de CLIMA (F1 do sistema de chuva). Header-only como o FTimeOfDay: o Renderer e o
+    // dono, o editor le/escreve direto (painel TOD, secao Clima). RainAmount e o knob mestre —
+    // 0 = seco, 1 = temporal — e dirige o passe de wetness deferred (RainWetness); os demais
+    // sao proporcoes/estetica por cima dele.
+    //
+    // Fases futuras (mesmo plano do CSM/nuvens): F2 occlusion map top-down (interior seco),
+    // F3 cortina de gotas (cones estilo Cry), F4 splashes + mist + acoplamento nuvens/ceu,
+    // F5 particulas GPU near-field como opcao de qualidade sobre o MESMO estado — a decisao
+    // "chove aqui?" (occlusion) e compartilhada por qualquer visual de gota.
+    struct FWeather {
+        f32 RainAmount     = 0.0f;  // knob mestre [0,1]: intensidade da chuva/molhado
+        f32 PuddleAmount   = 0.65f; // [0,1] quanto do chao up-facing empoca com RainAmount=1
+        f32 PuddleScale    = 8.0f;  // tamanho caracteristico das pocas (m) — escala do noise XZ
+        f32 RippleStrength = 1.0f;  // forca dos aneis de gota nas pocas (0 = espelho parado)
+        f32 WetDarkening   = 0.85f; // [0,1] escurecimento do albedo poroso molhado (Cry
+                                    // fDiffuseDarkening: porosidade alta escurece ate ~0.2x)
+
+        bool Raining() const { return RainAmount > 0.001f; }
+    };
+}

@@ -73,6 +73,8 @@ namespace Smile {
 
         Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
+        RainWetness.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+
         SunShadows.Initialize(Device.Native(), SRVHeap);
         LocalShadows.Initialize(Device.Native(), SRVHeap);
 
@@ -575,6 +577,8 @@ namespace Smile {
                   [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
                 { { "WaterSurface.vs", "WaterSurface.ps" },
                   [&] { Water.Recreate(Dev, RT, DS); } },
+                { { "RainWetness.ps" },
+                  [&] { RainWetness.Recreate(Dev); } },
                 { { "DDGIDebugProbes.vs", "DDGIDebugProbes.ps", "DDGIDebugVolume.vs",
                     "DDGIDebugVolume.ps", "DDGIDebugRays.vs", "DDGIDebugRays.ps" },
                   [&] { if (Device.RaytracingSupported())
@@ -676,6 +680,7 @@ namespace Smile {
 
         VolumetricClouds.Resize(Device.Native(), SRVHeap, RW, RH);
         Water.Resize(Device.Native(), RW, RH);
+        RainWetness.Resize(Device.Native(), SRVHeap, RW, RH);
         CreateSceneCopies();
 
         PostProcessor.Resize(Device.Native(), SRVHeap, SW, SH);    
@@ -1544,6 +1549,15 @@ namespace Smile {
             VB.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &VB);
             VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+
+        // Chuva F1: molha o G-buffer logo apos o geometry pass — ReSTIR, deferred lighting e
+        // reflexoes RT (todos leem A/B depois deste ponto) veem a cena ja molhada.
+        if (Weather.Raining() && RainWetness.IsInitialized()) {
+            RainWetness.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
+                                       ElapsedTime, Weather);
+            RainWetness.Execute(CommandList, SRVHeap, GBuffer, DepthBuffer.Get(), DepthSRVSlot,
+                                RenderWidth(), RenderHeight());
         }
 
         if (ReSTIRGIActive) {

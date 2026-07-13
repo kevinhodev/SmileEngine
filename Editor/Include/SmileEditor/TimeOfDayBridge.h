@@ -29,6 +29,12 @@ namespace SmileEditor {
         Q_PROPERTY(double moonDiskSize READ MoonDiskSize WRITE SetMoonDiskSize NOTIFY StateChanged)
         Q_PROPERTY(double moonDiskBrightness READ MoonDiskBrightness WRITE SetMoonDiskBrightness NOTIFY StateChanged)
         Q_PROPERTY(double starIntensity READ StarIntensity WRITE SetStarIntensity NOTIFY StateChanged)
+        // Clima (FWeather do Renderer) — F1: chuva/wetness deferred.
+        Q_PROPERTY(double rainAmount READ RainAmount WRITE SetRainAmount NOTIFY StateChanged)
+        Q_PROPERTY(double puddleAmount READ PuddleAmount WRITE SetPuddleAmount NOTIFY StateChanged)
+        Q_PROPERTY(double puddleScale READ PuddleScale WRITE SetPuddleScale NOTIFY StateChanged)
+        Q_PROPERTY(double rippleStrength READ RippleStrength WRITE SetRippleStrength NOTIFY StateChanged)
+        Q_PROPERTY(double wetDarkening READ WetDarkening WRITE SetWetDarkening NOTIFY StateChanged)
         // Sol manual (TOD desligado): az/el em graus, escreve via Renderer::SetSunAzimuthElevation.
         Q_PROPERTY(double manualAzimuthDeg READ ManualAzimuthDeg WRITE SetManualAzimuthDeg NOTIFY StateChanged)
         Q_PROPERTY(double manualElevationDeg READ ManualElevationDeg WRITE SetManualElevationDeg NOTIFY StateChanged)
@@ -57,6 +63,11 @@ namespace SmileEditor {
         double MoonDiskSize() const;
         double MoonDiskBrightness() const;
         double StarIntensity() const;
+        double RainAmount() const;
+        double PuddleAmount() const;
+        double PuddleScale() const;
+        double RippleStrength() const;
+        double WetDarkening() const;
         double ManualAzimuthDeg() const  { return ManualAz; }
         double ManualElevationDeg() const { return ManualEl; }
         double SunElevationDeg() const;
@@ -77,6 +88,11 @@ namespace SmileEditor {
         void SetMoonDiskSize(double V);
         void SetMoonDiskBrightness(double V);
         void SetStarIntensity(double V);
+        void SetRainAmount(double V);
+        void SetPuddleAmount(double V);
+        void SetPuddleScale(double V);
+        void SetRippleStrength(double V);
+        void SetWetDarkening(double V);
         void SetManualAzimuthDeg(double V);
         void SetManualElevationDeg(double V);
 

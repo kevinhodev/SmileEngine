@@ -617,6 +617,56 @@ Rectangle {
                     onMoved: v => todModel.starIntensity = v
                 }
             }
+
+            // ---- Clima (F1: chuva/wetness) ----
+            Card {
+                title: "Clima"
+                iconName: "cloud-rain"
+
+                SliderRow {
+                    label: "Chuva"
+                    valueText: Math.round(todModel.rainAmount * 100) + "%"
+                    from: 0; to: 1
+                    boundValue: todModel.rainAmount
+                    onMoved: v => todModel.rainAmount = v
+                }
+                SliderRow {
+                    enabled: todModel.rainAmount > 0
+                    opacity: todModel.rainAmount > 0 ? 1.0 : 0.4
+                    label: "Poças"
+                    valueText: Math.round(todModel.puddleAmount * 100) + "%"
+                    from: 0; to: 1
+                    boundValue: todModel.puddleAmount
+                    onMoved: v => todModel.puddleAmount = v
+                }
+                SliderRow {
+                    enabled: todModel.rainAmount > 0
+                    opacity: todModel.rainAmount > 0 ? 1.0 : 0.4
+                    label: "Tamanho das poças"
+                    valueText: root.fmt(todModel.puddleScale, 0) + " m"
+                    from: 2; to: 32; stepSize: 1
+                    boundValue: todModel.puddleScale
+                    onMoved: v => todModel.puddleScale = v
+                }
+                SliderRow {
+                    enabled: todModel.rainAmount > 0
+                    opacity: todModel.rainAmount > 0 ? 1.0 : 0.4
+                    label: "Ondulação das gotas"
+                    valueText: root.fmt(todModel.rippleStrength, 2)
+                    from: 0; to: 2
+                    boundValue: todModel.rippleStrength
+                    onMoved: v => todModel.rippleStrength = v
+                }
+                SliderRow {
+                    enabled: todModel.rainAmount > 0
+                    opacity: todModel.rainAmount > 0 ? 1.0 : 0.4
+                    label: "Escurecimento molhado"
+                    valueText: Math.round(todModel.wetDarkening * 100) + "%"
+                    from: 0; to: 1
+                    boundValue: todModel.wetDarkening
+                    onMoved: v => todModel.wetDarkening = v
+                }
+            }
         }
     }
 }
