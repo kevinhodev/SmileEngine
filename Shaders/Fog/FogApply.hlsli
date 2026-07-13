@@ -19,6 +19,12 @@ float4 FogApplyMain(float2 pixelXY) {
     float4 hf = float4(0.0f, 0.0f, 0.0f, 1.0f);
     if (AerialParams.z > 0.5f) hf = GetExponentialHeightFog(c2r);
 
+    // Sun shafts volumétricos: somam no inscatter do height fog (upsample bilinear do
+    // meia-res; mídia é suave, não precisa de peso de depth). Mesmo tratamento do
+    // dirInscatter analítico: não é atenuado pelo aerial (consistência com o legado).
+    if (AerialParams.w > 0.5f)
+        hf.rgb += VolumetricShafts.SampleLevel(LinearClampSampler, uv, 0.0f).rgb;
+
     float4 ap = float4(0.0f, 0.0f, 0.0f, 1.0f);
     if (AerialParams.y > 0.5f) {
         float tDepthKm = dist * CameraWorldPos.w; 

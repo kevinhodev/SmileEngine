@@ -398,6 +398,46 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    bool ViewportWidget::AreSunShaftsVolumetric() const {
+        return Renderer ? Renderer->GetSunShafts().GetVolumetric() : true;
+    }
+
+    void ViewportWidget::SetSunShaftsVolumetric(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetSunShafts().SetVolumetric(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetSunShaftsVolIntensity() const {
+        return Renderer ? Renderer->GetSunShafts().GetVolIntensity() : 1.0;
+    }
+
+    void ViewportWidget::SetSunShaftsVolIntensity(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetSunShafts().SetVolIntensity(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetSunShaftsVolPhaseG() const {
+        return Renderer ? Renderer->GetSunShafts().GetVolPhaseG() : 0.7;
+    }
+
+    void ViewportWidget::SetSunShaftsVolPhaseG(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetSunShafts().SetVolPhaseG(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    int ViewportWidget::GetSunShaftsVolSteps() const {
+        return Renderer ? static_cast<int>(Renderer->GetSunShafts().GetVolSteps()) : 16;
+    }
+
+    void ViewportWidget::SetSunShaftsVolSteps(int _Value) {
+        if (!Renderer) return;
+        Renderer->GetSunShafts().SetVolSteps(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
     }

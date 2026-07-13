@@ -13,11 +13,12 @@ namespace Smile {
                                 DXGI_FORMAT _HDRFormat, u32 _Width, u32 _Height) {
         if (Initialized) return;
         BuildRootSignature(_Device);
+        BuildVolRootSignature(_Device);
         BuildPSOs(_Device, _HDRFormat);
         CreateConstantBuffer(_Device);
         CreateRTs(_Device, _SRVHeap, _Width, _Height);
         Initialized = true;
-        LogInfo("Sun shafts (radial blur screen-space) inicializado");
+        LogInfo("Sun shafts (radial blur + volumetrico CSM) inicializado");
     }
 
     void FSunShafts::Resize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -86,6 +87,75 @@ namespace Smile {
                                               IID_PPV_ARGS(&RootSig)));
     }
 
+    void FSunShafts::BuildVolRootSignature(ID3D12Device* _Device) {
+        // Registers casam com o CSMCommon.hlsli: CSMCB em b3, SunShadowMap em t11,
+        // ShadowCmp em s2. Depth da cena em t0, ponto em s1, constantes proprias em b0.
+        D3D12_DESCRIPTOR_RANGE DepthRange{};
+        DepthRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DepthRange.NumDescriptors                    = 1;
+        DepthRange.BaseShaderRegister                = 0;
+        DepthRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_DESCRIPTOR_RANGE ShadowRange = DepthRange;
+        ShadowRange.BaseShaderRegister = 11;
+
+        D3D12_ROOT_PARAMETER RootParams[4]{};
+        RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[0].Descriptor.ShaderRegister = 0;
+        RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[1].Descriptor.ShaderRegister = 3;
+        RootParams[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[2].DescriptorTable.pDescriptorRanges   = &DepthRange;
+        RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[3].DescriptorTable.pDescriptorRanges   = &ShadowRange;
+        RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
+        Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        Samplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].MaxAnisotropy    = 1;
+        Samplers[0].ComparisonFunc   = D3D12_COMPARISON_FUNC_ALWAYS;
+        Samplers[0].MinLOD           = 0.0f;
+        Samplers[0].MaxLOD           = D3D12_FLOAT32_MAX;
+        Samplers[0].ShaderRegister   = 1;
+        Samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // identico ao s2 do deferred lighting (PipelineState.cpp): LESS_EQUAL + borda branca
+        Samplers[1] = Samplers[0];
+        Samplers[1].Filter         = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+        Samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        Samplers[1].BorderColor    = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+        Samplers[1].ShaderRegister = 2;
+
+        D3D12_ROOT_SIGNATURE_DESC Desc{};
+        Desc.NumParameters     = _countof(RootParams);
+        Desc.pParameters       = RootParams;
+        Desc.NumStaticSamplers = _countof(Samplers);
+        Desc.pStaticSamplers   = Samplers;
+        Desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        Microsoft::WRL::ComPtr<ID3DBlob> Blob, ErrorBlob;
+        HRESULT Hr = D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1, &Blob, &ErrorBlob);
+        if (FAILED(Hr)) {
+            if (ErrorBlob)
+                LogError(std::string("SunShafts vol root sig error: ") +
+                         static_cast<const char*>(ErrorBlob->GetBufferPointer()));
+            SMILE_HR(Hr);
+        }
+        SMILE_HR(_Device->CreateRootSignature(0, Blob->GetBufferPointer(), Blob->GetBufferSize(),
+                                              IID_PPV_ARGS(&VolRootSig)));
+    }
+
     void FSunShafts::BuildPSOs(ID3D12Device* _Device, DXGI_FORMAT _HDRFormat) {
         auto VS      = LoadShaderBytecode("FogFullscreen.vs_6_0.cso");
         auto PSMask  = LoadShaderBytecode("SunShaftsMask.ps_6_0.cso");
@@ -139,6 +209,14 @@ namespace Smile {
         PSODesc.RTVFormats[0] = _HDRFormat;
         PSODesc.PS            = { PSApply.data(), PSApply.size() };
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&ApplyPSO)));
+
+        // F2 — raymarch volumetrico (root sig propria, RT meia-res opaco)
+        auto PSVol = LoadShaderBytecode("SunShaftsVolumetric.ps_6_0.cso");
+        PSODesc.pRootSignature = VolRootSig.Get();
+        PSODesc.BlendState     = Opaque;
+        PSODesc.RTVFormats[0]  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        PSODesc.PS             = { PSVol.data(), PSVol.size() };
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&VolPSO)));
     }
 
     void FSunShafts::CreateConstantBuffer(ID3D12Device* _Device) {
@@ -167,6 +245,17 @@ namespace Smile {
         std::memset(MappedBase, 0,
                     static_cast<size_t>(FCommandQueue::kFramesInFlight) * kCBRegions *
                         sizeof(ShaftConstants));
+
+        // CB do volumetrico (1 regiao por frame-slot)
+        Desc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(VolConstants);
+        SMILE_HR(_Device->CreateCommittedResource(
+            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr, IID_PPV_ARGS(&VolCB)));
+        void* VolPtr = nullptr;
+        SMILE_HR(VolCB->Map(0, &NoRead, &VolPtr));
+        VolMappedBase = reinterpret_cast<u8*>(VolPtr);
+        std::memset(VolMappedBase, 0,
+                    static_cast<size_t>(FCommandQueue::kFramesInFlight) * sizeof(VolConstants));
     }
 
     void FSunShafts::CreateRTs(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -201,14 +290,23 @@ namespace Smile {
             RTState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
+        // F2 — RT do inscatter volumetrico (mesma meia-res)
+        VolRT.Reset();
+        SMILE_HR(_Device->CreateCommittedResource(
+            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
+            IID_PPV_ARGS(&VolRT)));
+        VolState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
         if (!RTVHeap.Native())
-            RTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
+            RTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 3, false);
 
         D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
         RTVDesc.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         for (u32 i = 0; i < 2; ++i)
             _Device->CreateRenderTargetView(ShaftRT[i].Get(), &RTVDesc, RTVHeap.CpuHandle(i));
+        _Device->CreateRenderTargetView(VolRT.Get(), &RTVDesc, RTVHeap.CpuHandle(2));
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -219,13 +317,17 @@ namespace Smile {
             if (RTSRVSlot[i] == kInvalidSlot) RTSRVSlot[i] = _SRVHeap.Allocate(1);
             _SRVHeap.CreateSRV(_Device, ShaftRT[i].Get(), SRVDesc, RTSRVSlot[i]);
         }
+        if (VolSRVSlot == kInvalidSlot) VolSRVSlot = _SRVHeap.Allocate(1);
+        _SRVHeap.CreateSRV(_Device, VolRT.Get(), SRVDesc, VolSRVSlot);
     }
 
     void FSunShafts::UpdatePerFrame(u32 _FrameSlot, const Vec2& _SunUV, f32 _Fade,
                                     const Mat44& _InvViewProjFull, const Vec3& _CameraWorldPos,
                                     const Vec3& _Tint) {
-        FrameSlot = _FrameSlot;
-        LastFade  = _Fade;
+        FrameSlot       = _FrameSlot;
+        LastFade        = _Fade;
+        LastInvViewProj = _InvViewProjFull;
+        LastCameraPos   = _CameraWorldPos;
         if (!MappedBase) return;
 
         const f32 Aspect = RTWidth > 0 ? static_cast<f32>(RTHeight) / static_cast<f32>(RTWidth)
@@ -345,5 +447,77 @@ namespace Smile {
         _CommandList->IASetVertexBuffers(0, 0, nullptr);
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
+    }
+
+    void FSunShafts::UpdateVolumetric(const Vec3& _DirToSun, const Vec3& _SunColorTimesIntensity,
+                                      const Vec4& _CollapsedFogParams, f32 _NoiseFrame) {
+        if (!VolMappedBase) return;
+        auto* c = reinterpret_cast<VolConstants*>(
+            VolMappedBase + static_cast<size_t>(FrameSlot) * sizeof(VolConstants));
+
+        const Vec3 SunN = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 1.0f, 0.0f });
+        c->SunDirPhase = { SunN.X, SunN.Y, SunN.Z, VolPhaseG };
+        c->SunColorInt = { _SunColorTimesIntensity.X, _SunColorTimesIntensity.Y,
+                           _SunColorTimesIntensity.Z, VolIntensity };
+        c->FogDensityP = _CollapsedFogParams;
+        c->MarchParams = { VolSteps, VolMaxDist, _NoiseFrame, 0.0f };
+        const f32 W = static_cast<f32>(RTWidth), H = static_cast<f32>(RTHeight);
+        c->ScreenParams   = { W, H, 1.0f / W, 1.0f / H };
+        c->InvViewProj    = LastInvViewProj;
+        c->CameraWorldPos = { LastCameraPos.X, LastCameraPos.Y, LastCameraPos.Z, 0.0f };
+    }
+
+    void FSunShafts::RecordVolumetric(ID3D12GraphicsCommandList* _CommandList,
+                                      FTextureSRVHeap& _SRVHeap, u32 _DepthSRVSlot,
+                                      D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddr,
+                                      u32 _CSMShadowSRVSlot) {
+        if (!Initialized) return;
+
+        if (VolState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = VolRT.Get();
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = VolState;
+            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            _CommandList->ResourceBarrier(1, &B);
+            VolState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        }
+
+        D3D12_VIEWPORT VP{};
+        VP.Width    = static_cast<FLOAT>(RTWidth);
+        VP.Height   = static_cast<FLOAT>(RTHeight);
+        VP.MinDepth = 0.0f;
+        VP.MaxDepth = 1.0f;
+        D3D12_RECT Scissor{};
+        Scissor.right  = static_cast<LONG>(RTWidth);
+        Scissor.bottom = static_cast<LONG>(RTHeight);
+
+        _CommandList->SetGraphicsRootSignature(VolRootSig.Get());
+        _CommandList->SetPipelineState(VolPSO.Get());
+        _CommandList->RSSetViewports(1, &VP);
+        _CommandList->RSSetScissorRects(1, &Scissor);
+
+        auto RTV = RTVHeap.CpuHandle(2);
+        _CommandList->OMSetRenderTargets(1, &RTV, FALSE, nullptr);
+        _CommandList->SetGraphicsRootConstantBufferView(
+            0, VolCB->GetGPUVirtualAddress() +
+                   static_cast<UINT64>(FrameSlot) * sizeof(VolConstants));
+        _CommandList->SetGraphicsRootConstantBufferView(1, _CSMConstantsAddr);
+        _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_DepthSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_CSMShadowSRVSlot));
+        _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        _CommandList->IASetVertexBuffers(0, 0, nullptr);
+        _CommandList->IASetIndexBuffer(nullptr);
+        _CommandList->DrawInstanced(3, 1, 0, 0);
+
+        D3D12_RESOURCE_BARRIER B{};
+        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        B.Transition.pResource   = VolRT.Get();
+        B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        B.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        _CommandList->ResourceBarrier(1, &B);
+        VolState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     }
 }
