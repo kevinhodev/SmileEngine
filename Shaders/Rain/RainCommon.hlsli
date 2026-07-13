@@ -37,7 +37,10 @@ float Hash21(float2 p) { return Hash22(p).x; }
 // F2: "esse ponto ve o ceu?" — compara a altura do pixel com o depth top-down cacheado
 // (estilo rain occlusion da Cry). 1 = exposto (molha), 0 = coberto (seco). Fora do volume
 // do mapa = exposto: o mapa acompanha a camera, longe dela o erro nao e visivel.
-float SkyVisibility(float3 worldPos) {
+// bandMul aperta a banda suave: 1 = 1.5 m (wetness, suaviza borda de parede na resolucao
+// do mapa); a cortina usa ~6 (0.25 m — marquise baixa a 1.3 m do ponto corta por inteiro,
+// senao 30-60% da chuva vaza por baixo).
+float SkyVisibilityBand(float3 worldPos, float bandMul) {
     if (RainOccParams.x < 0.5f) return 1.0f;
 
     float3 uvz = mul(float4(worldPos, 1.0f), RainOccMatrix).xyz; // ortho: w = 1
@@ -51,9 +54,11 @@ float SkyVisibility(float3 worldPos) {
     [unroll] for (int i = 0; i < 2; ++i) {
         float mapZ = RainOccMap.Load(int3(c + int2(i, j), 0));
         // occluder acima do pixel (mapZ menor = mais perto do teto) alem do bias = coberto
-        occ += saturate((uvz.z - RainOccParams.y - mapZ) * RainOccParams.z);
+        occ += saturate((uvz.z - RainOccParams.y - mapZ) * RainOccParams.z * bandMul);
     }
     return 1.0f - occ * 0.25f;
 }
+
+float SkyVisibility(float3 worldPos) { return SkyVisibilityBand(worldPos, 1.0f); }
 
 #endif

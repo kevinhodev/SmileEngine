@@ -55,10 +55,15 @@ float4 main(VSOutput input) : SV_Target {
     const float speed = CurtainParams.y;
 
     // forward scattering: gota e uma lente — brilha olhando CONTRA a luz (sol/lua baixos
-    // atras da chuva = cortina prateada; de costas pra luz sobra o ambient do ceu)
-    const float  fwd  = pow(saturate(dot(dir, KeyLightDir.xyz) * 0.5f + 0.5f), 4.0f);
-    const float3 tint = KeyLightColor.rgb * lerp(0.03f, 0.12f, fwd)
-                      + SkyAmbientRain.rgb * 0.06f;
+    // atras da chuva = cortina prateada; de costas pra luz sobra o ambient do ceu).
+    // O tint da key light e DESSATURADO: a gota refrata o ceu inteiro, nao so o disco do
+    // sol — com a cor crua, crepusculo virava streak ambar tipo faisca (bug do A/B).
+    const float  fwd    = pow(saturate(dot(dir, KeyLightDir.xyz) * 0.5f + 0.5f), 4.0f);
+    const float3 keyRaw = KeyLightColor.rgb;
+    const float  keyLum = dot(keyRaw, float3(0.2126f, 0.7152f, 0.0722f));
+    const float3 keyCol = lerp(keyLum.xxx, keyRaw, 0.35f);
+    const float3 tint   = keyCol * lerp(0.03f, 0.11f, fwd)
+                        + SkyAmbientRain.rgb * 0.10f;
 
     // 3 cilindros presos na camera: perto = streak grande e rapido, longe = cortina densa.
     const float radii [3] = { 2.2f, 5.5f, 12.0f };
@@ -68,16 +73,28 @@ float4 main(VSOutput input) : SV_Target {
     float3 acc  = 0.0f;
     float  accA = 0.0f;
 
+    // singularidade do zenite: olhando reto p/ cima o UV cilindrico degenera num starburst
+    // radial (bug do A/B) — fade suave; horiz > 0.2 (ate ~78 graus de elevacao) intacto
+    const float horizRaw = length(dir.xz);
+    const float upFade   = smoothstep(0.08f, 0.20f, horizRaw);
+    if (upFade <= 0.001f) discard;
+
     [unroll] for (int i = 0; i < 3; ++i) {
         const float r     = radii[i];
-        const float gfade = saturate((sceneDist - r) * 0.8f); // soft-depth: parede esconde
+        const float horiz = max(horizRaw, 0.12f);   // clamp p/ olhar reto cima/baixo
+        const float t     = r / horiz;               // distancia 3D REAL ate o streak
+
+        // soft-depth contra a distancia REAL do streak (t), nao o raio do cilindro:
+        // olhando p/ cima t >> r e o streak fica ATRAS do toldo/arco — comparar com r
+        // deixava chover "dentro" de area coberta (bug do A/B)
+        const float gfade = saturate((sceneDist - t) * 0.8f);
         if (gfade <= 0.0f) continue;
 
-        const float  horiz = max(length(dir.xz), 0.12f); // clamp p/ olhar reto cima/baixo
-        const float  t     = r / horiz;
-        const float3 wall  = CameraWorldPos.xyz + dir * t;
+        const float3 wall = CameraWorldPos.xyz + dir * t;
 
-        const float occ = SkyVisibility(wall); // F2: marquise/interior cortam a cortina
+        // F2: marquise/interior cortam a cortina — banda apertada (0.25 m), a de 1.5 m do
+        // wetness deixava vazar 30-60% debaixo de cobertura baixa (bug do A/B)
+        const float occ = SkyVisibilityBand(wall, 6.0f);
         if (occ <= 0.01f) continue;
 
         // UV cilindrico com numero INTEIRO de colunas na volta (sem costura atras da camera)
@@ -89,7 +106,7 @@ float4 main(VSOutput input) : SV_Target {
         const float presence = lerp(0.06f, 0.50f, rain);
         float s = StreakPattern(u, v, presence);
         s += StreakPattern(u * 1.53f + 11.0f, v * 1.31f + 3.0f, presence * 0.8f) * 0.6f;
-        s *= gfade * occ;
+        s *= gfade * occ * upFade;
         if (s <= 0.001f) continue;
 
         const float a = s * alphaL[i];
