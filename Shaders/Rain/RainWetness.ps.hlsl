@@ -172,7 +172,7 @@ PSOut main(VSOutput input) {
         float  ph   = CameraWorldPos.w * (2.4f + rnd.y * 1.6f) + rnd.x * 19.0f;
         float  cyc  = floor(ph);
         float  life = ph - cyc;
-        float  gate = Hash21(cell + cyc * 0.618f) < rainNow * 0.35f ? 1.0f : 0.0f;
+        float  gate = Hash21(cell + cyc * 0.618f) < rainNow * 0.45f ? 1.0f : 0.0f;
         if (gate * (1.0f - life) > 0.05f) {
             // coroa RADIAL dentro da celula (centro/dir aleatorios por ciclo): anel
             // gaussiano que expande e morre — sem isso a celula inteira flashava e o
@@ -181,15 +181,15 @@ PSOut main(VSOutput input) {
             float2 ctr  = 0.25f + 0.5f * rnd2;
             float2 toP  = fc - ctr;
             float  d    = length(toP);
-            float  x    = (d - life * 0.30f) * 11.0f;
+            float  x    = (d - life * 0.35f) * 7.5f;
             float  crown = exp(-x * x) * (1.0f - life) * (1.0f - life);
             float  flash = gate * crown * isUp * distFade;
             if (flash > 0.01f) {
                 float2 dirR = toP / max(d, 1e-3f); // normal empurrada radialmente p/ fora
                 float3 splashN = normalize(float3(dirR.x * 0.55f, 1.0f, dirR.y * 0.55f));
-                N      = normalize(lerp(N, splashN, saturate(flash * 0.6f)));
-                rough  = lerp(rough, 0.10f, saturate(flash * 0.7f));
-                albedo += flash * 0.02f; // respingo claro sutil
+                N      = normalize(lerp(N, splashN, saturate(flash * 0.75f)));
+                rough  = lerp(rough, 0.08f, saturate(flash * 0.8f));
+                albedo += flash * 0.05f; // respingo claro (agua espumada e mais clara)
             }
         }
     }
