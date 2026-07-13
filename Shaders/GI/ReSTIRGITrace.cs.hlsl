@@ -27,8 +27,9 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
-    float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao no espaco
-                                    // jittered), z = nº de luzes puntuais no SceneLights (F5)
+    float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao temporal),
+                                    // z = nº de luzes (F5),
+                                    // w = maxAge do reservoir (0 = sem expiracao)
 };
 
 RaytracingAccelerationStructure Scene      : register(t0);
@@ -148,49 +149,90 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     Reservoir r; ResInit(r);
     r.x1 = x1;
+    float age = 0.0f; // idade da amostra selecionada (frames sobrevividos no reservoir)
     {
         float pHat = TargetPHat(x1, N, x2, Lo);
         float pSrc = max(cosT, 1e-4f) / SMILE_PI;
         float wInit = (pSrc > 0.0f) ? (pHat / pSrc) : 0.0f;
-        ResUpdate(r, x2, n2, Lo, wInit, rng);
+        ResUpdate(r, x2, n2, Lo, wInit, rng); // adotada -> age 0 (ja e o default)
     }
 
     // --- (2) Reuso temporal ------------------------------------------------------------------
     if (ReuseParams.w > 0.5f) {
         float2 vel    = Velocity.Load(int3(px, 0)).rg;
-        // Velocity e unjittered (contrato do FSR2), mas o raster e jittered: sem compensar
-        // prevJitter - currJitter, a busca no historico desloca ate 1 texel por frame.
+        // Velocity usa MVPs sem jitter, mas depth/x1 pertencem ao raster jittered; portanto a
+        // correspondencia correta inclui prevJitter-currJitter. A busca 2x2 abaixo evita que
+        // essa correcao alterne cegamente entre texels nas bordas e dobras.
         float2 prevUv = uv - vel + JitterParams.xy;
         if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
-            int2 ppx = int2(prevUv * ScreenParams.xy);
-            float4 pa = PrevResA.Load(int3(ppx, 0));
-            float4 pb = PrevResB.Load(int3(ppx, 0));
-            float4 pc = PrevResC.Load(int3(ppx, 0));
-            float4 pd = PrevResD.Load(int3(ppx, 0));
             float posReject = ReuseParams.y * max(camDist, 1.0f);
-            // Rejeicao por plano alem da radial: a reprojecao pode cair numa superficie quase
-            // paralela (quina/glancing) dentro do raio radial mas fora do plano da atual.
-            float planeDist = abs(dot(N, pa.xyz - x1));
-            // Rejeicao por NORMAL do pixel anterior (oct em ResC.a/ResD.a): posicao compativel
-            // nao garante mesma orientacao (quina de 90º cabe no raio radial E no plano em
-            // glancing). Mesmo threshold do reuso espacial (SpatialParams.w).
-            float3 prevN1 = DDGI_OctDecode(float2(pc.a, pd.a));
-            if (pa.w > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
-                length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject) {
+            float2 prevPx = prevUv * ScreenParams.xy - 0.5f;
+            int2 basePx = int2(floor(prevPx));
+            int2 ppx = int2(-1, -1);
+            float bestScore = 1e30f;
+            float4 pa = 0.0f, pc = 0.0f, pd = 0.0f;
+            float prevM = 0.0f, prevAge = 0.0f;
+
+            [unroll] for (int oy = 0; oy < 2; ++oy) {
+                [unroll] for (int ox = 0; ox < 2; ++ox) {
+                    int2 qpx = basePx + int2(ox, oy);
+                    if (qpx.x < 0 || qpx.y < 0 ||
+                        qpx.x >= (int)ScreenParams.x || qpx.y >= (int)ScreenParams.y)
+                        continue;
+
+                    float4 qa = PrevResA.Load(int3(qpx, 0));
+                    float qM, qAge;
+                    ResUnpackMAge(qa.w, qM, qAge);
+                    if (qM <= 0.0f) continue;
+
+                    float4 qc = PrevResC.Load(int3(qpx, 0));
+                    float4 qd = PrevResD.Load(int3(qpx, 0));
+                    float3 qN1 = DDGI_OctDecode(float2(qc.a, qd.a));
+                    float normalCos = dot(qN1, N);
+                    if (normalCos < SpatialParams.w) continue;
+
+                    float3 delta = qa.xyz - x1;
+                    float posDist = length(delta);
+                    float planeDist = abs(dot(N, delta));
+                    if (posDist >= posReject || planeDist >= 0.2f * posReject) continue;
+
+                    // Posicao domina; a normal desempata dobras quase coincidentes.
+                    float score = posDist / max(posReject, 1e-5f) + (1.0f - normalCos);
+                    if (score < bestScore) {
+                        bestScore = score;
+                        ppx = qpx;
+                        pa = qa; pc = qc; pd = qd; prevM = qM; prevAge = qAge;
+                    }
+                }
+            }
+
+            if (ppx.x >= 0) {
+                float4 pb = PrevResB.Load(int3(ppx, 0));
                 Reservoir prev;
                 prev.x1 = pa.xyz; prev.x2 = pb.xyz; prev.n2 = pd.xyz; prev.Lo = pc.rgb;
-                prev.M  = min(pa.w, ReuseParams.x); // MCap
+                prev.M  = min(prevM, ReuseParams.x); // MCap
                 prev.W  = pb.w; prev.wSum = 0.0f;
+
+                // Idade maxima da amostra (RTXDI maxReservoirAge): o MCap limita o PESO do
+                // historico, nao a vida da amostra — uma amostra brilhante rara travada num
+                // bolsao escuro re-valida a si mesma e vira mancha persistente (bisect nas
+                // cortinas do Bistro: Temporal OFF = manchas somem). Expira com stagger por
+                // hash do pixel (0.75x..1.25x) senao as manchas expirariam em onda sincrona.
+                bool prevValid = true;
+                float maxAge = JitterParams.w;
+                if (maxAge > 0.0f) {
+                    float stagger = 0.75f + 0.5f * float(GGX_PCG(px.x * 7919u + px.y) & 0xFFu) / 255.0f;
+                    if (prevAge >= maxAge * stagger) prevValid = false;
+                }
 
                 // Validacao periodica da amostra temporal (estilo RTXDI): Lo foi shaded no frame
                 // em que a amostra nasceu e a iluminacao muda continuamente (TimeOfDay anima o
-                // sol) — sem re-shade, radiancia velha sobrevive indefinidamente no reservoir
-                // (MCap limita contagem, nao idade). Valida 1/N dos pixels por frame, com fase
-                // por hash do pixel (senao a tela validaria em onda): re-traca x1 -> x2; mesmo
-                // hit = Lo re-shaded; oclusor novo ou geometria movida = descarta a amostra.
-                bool prevValid = true;
+                // sol) — sem re-shade, radiancia velha sobrevive indefinidamente no reservoir.
+                // Valida 1/N dos pixels por frame, com fase por hash do pixel (senao a tela
+                // validaria em onda): re-traca x1 -> x2; mesmo hit = Lo re-shaded; oclusor novo
+                // ou geometria movida = descarta a amostra.
                 uint validN = (uint)ShadeParams.w;
-                if (validN > 0u &&
+                if (prevValid && validN > 0u &&
                     ((uint)TraceParams.x + GGX_PCG(px.x + GGX_PCG(px.y))) % validN == 0u) {
                     float3 vorg = OffsetRayGBuffer(x1, N, camDist);
                     float3 toS  = prev.x2 - vorg;
@@ -247,7 +289,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     float J = ReconnectionJacobian(x1, prev.x1, prev.x2, prev.n2);
                     if (J >= 0.1f && J <= 10.0f) {
                         float pHatPrev = TargetPHat(x1, N, prev.x2, prev.Lo);
-                        ResMerge(r, prev, pHatPrev, J, rng);
+                        // Amostra do historico sobreviveu a selecao -> envelhece 1 frame.
+                        if (ResMerge(r, prev, pHatPrev, J, rng)) age = prevAge + 1.0f;
                     }
                 }
             }
@@ -264,7 +307,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float selDist = (r.wSum > 0.0f) ? length(r.x2 - x1) : hitDist;
     float2 n1Oct = DDGI_OctEncode(N); // n1 no historico p/ a rejeicao por normal do temporal
     GIOut[px]    = float4(gi, selDist);
-    CurrResA[px] = float4(r.x1, r.M);
+    CurrResA[px] = float4(r.x1, ResPackMAge(r.M, age));
     CurrResB[px] = float4(r.x2, r.W);
     CurrResC[px] = float4(r.Lo, n1Oct.x);
     CurrResD[px] = float4(r.n2, n1Oct.y);

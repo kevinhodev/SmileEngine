@@ -91,8 +91,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     Reservoir rs; ResInit(rs); rs.x1 = x1;
     {
         Reservoir self;
+        float selfM, selfAge; // ResA.w = M + idade empacotados (so o temporal usa a idade)
+        ResUnpackMAge(a.w, selfM, selfAge);
         self.x1 = a.xyz; self.x2 = b.xyz; self.n2 = dd.xyz; self.Lo = c.rgb;
-        self.M = a.w; self.W = b.w; self.wSum = 0.0f;
+        self.M = selfM; self.W = b.w; self.wSum = 0.0f;
         float pHatSelf = TargetPHat(x1, n1, self.x2, self.Lo);
         if (ResMerge(rs, self, pHatSelf, 1.0f, rng)) selCand = 0;
         candX1[0] = x1; candN1[0] = n1; candM[0] = self.M; candCount = 1;
@@ -119,8 +121,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         if (dot(qn1, n1) < normalRej) continue; // rejeicao por normal
 
         float4 qa = ResA.Load(int3(qpx, 0));
-        if (qa.w <= 0.0f) continue;
-        if (length(qa.xyz - x1) > posReject) continue; // rejeicao por posicao
+        float qM, qAge;
+        ResUnpackMAge(qa.w, qM, qAge);
+        if (qM <= 0.0f) continue;
+        float3 qDelta = qa.xyz - x1;
+        if (length(qDelta) > posReject) continue; // rejeicao radial por posicao
+        // A distancia radial + normal parecida ainda aceita camadas paralelas proximas. Em
+        // tecido/dobras isso deixa uma amostra clara atravessar para outra prega e o NRD a
+        // expande em mancha. Usa a mesma rejeicao de plano do temporal.
+        if (abs(dot(n1, qDelta)) > 0.2f * posReject) continue;
 
         float4 qb = ResB.Load(int3(qpx, 0));
         float4 qc = ResC.Load(int3(qpx, 0));
@@ -128,7 +137,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
         Reservoir nb;
         nb.x1 = qa.xyz; nb.x2 = qb.xyz; nb.n2 = qdd.xyz; nb.Lo = qc.rgb;
-        nb.M = qa.w; nb.W = qb.w; nb.wSum = 0.0f;
+        nb.M = qM; nb.W = qb.w; nb.wSum = 0.0f;
 
         float J = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2); // dst=atual, src=vizinho
         // Rejeita (nao clampa) Jacobiano extremo: clampar mantem o sample com peso errado

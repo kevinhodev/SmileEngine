@@ -160,6 +160,10 @@ namespace Smile {
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B
         f32  MCap           = 20.0f;
+        f32  MaxAge         = 32.0f; // vida maxima (frames) da amostra selecionada no reservoir
+                                     // (RTXDI maxReservoirAge; MCap limita peso, nao idade) —
+                                     // expira amostra brilhante travada em bolsao escuro (mancha);
+                                     // stagger 0.75x-1.25x por pixel no shader. 0 = sem expiracao
         f32  PosRejectScale = 0.01f;
         f32  ValidateInterval = 8.0f; // re-shade da amostra temporal em 1/N dos px por frame
                                       // (radiancia envelhece com sol dinamico); 0 = off

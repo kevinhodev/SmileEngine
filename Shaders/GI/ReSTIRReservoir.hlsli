@@ -37,11 +37,28 @@ float TargetPHat(float3 x1, float3 n1, float3 x2, float3 Lo) {
     return ReSTIR_Luminance(Lo) * cosT;
 }
 
-// Adiciona um candidato (M=1) com peso de resampling w.
-void ResUpdate(inout Reservoir r, float3 x2c, float3 n2c, float3 Loc, float w, inout uint rng) {
+// Pack/unpack de M + idade da amostra no MESMO canal (ResA.w, fp32): M fica abaixo de 1024 e a
+// idade (inteira) vive nos multiplos de 1024 — exato em fp32 ate idade ~4000. A idade conta ha
+// quantos frames a amostra SELECIONADA sobrevive no reservoir (nao e o M, que o MCap limita):
+// sem expiracao, amostra brilhante rara travada num bolsao escuro vira mancha persistente.
+// Historico antigo (so M) decodifica idade 0 — migracao gratis.
+float ResPackMAge(float M, float age) {
+    return min(M, 1000.0f) + min(floor(age), 4000.0f) * 1024.0f;
+}
+void ResUnpackMAge(float packed, out float M, out float age) {
+    age = floor(packed / 1024.0f);
+    M   = packed - age * 1024.0f;
+}
+
+// Adiciona um candidato (M=1) com peso de resampling w. Retorna true se adotado.
+bool ResUpdate(inout Reservoir r, float3 x2c, float3 n2c, float3 Loc, float w, inout uint rng) {
     r.wSum += w;
     r.M    += 1.0f;
-    if (w > 0.0f && RngNext(rng) * r.wSum <= w) { r.x2 = x2c; r.n2 = n2c; r.Lo = Loc; }
+    if (w > 0.0f && RngNext(rng) * r.wSum <= w) {
+        r.x2 = x2c; r.n2 = n2c; r.Lo = Loc;
+        return true;
+    }
+    return false;
 }
 
 // Funde um reservoir inteiro (other) no atual. pHatOther = pHat (do pixel atual) p/ a amostra de
