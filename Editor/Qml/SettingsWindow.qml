@@ -42,7 +42,7 @@ Rectangle {
         if (selectedPage === 0)
             return "Upscaling, anti-aliasing e resolução interna do viewport"
         if (selectedPage === 6)
-            return "Sombras do sol (CSM), sun shafts: cascatas, cache, bias e debug"
+            return "Sombras do sol (CSM): cascatas, cache, bias e debug"
         if (selectedPage === 7)
             return "Raymarch de nuvens na atmosfera: cobertura, forma, iluminação e custo"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
@@ -911,22 +911,16 @@ Rectangle {
             }
         }
 
-        Flickable {
+        Item {
             id: shadowsPage
             visible: root.selectedPage === 6
             anchors.fill: parent
-            anchors.topMargin: 84
-            contentWidth: width
-            contentHeight: 328 + 452 + 24
-            clip: true
-            ScrollBar.vertical: ThinScrollBar { revealed: shadowsPageHover.hovered }
-            HoverHandler { id: shadowsPageHover }
 
             readonly property int gap: 16
             readonly property int colW: (width - 48 - gap) / 2
 
             Card {
-                x: 24; y: 0
+                x: 24; y: 84
                 width: shadowsPage.colW
                 height: 312
                 title: "Sombras do sol (CSM)"
@@ -1007,109 +1001,8 @@ Rectangle {
             }
 
             Card {
-                x: 24
-                y: 328
-                width: shadowsPage.colW
-                height: 452
-                title: "Sun shafts"
-
-                Text {
-                    x: 20; y: 55
-                    text: "Raios do sol (radial blur)"
-                    color: root.textPrimary
-                    font.family: "Segoe UI"
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 74
-                    text: "meia-res · 3 passes · aditivo pré-TAA"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 54
-                    checked: viewportModel.sunShaftsEnabled
-                    onToggled: viewportModel.SetSunShaftsEnabled(!checked)
-                }
-
-                ShadowSlider {
-                    x: 20; y: 108
-                    width: parent.width - 40
-                    label: "Intensidade"
-                    from: 0; to: 3.0; step: 0.05
-                    value: viewportModel.sunShaftsIntensity
-                    valueText: viewportModel.sunShaftsIntensity.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsIntensity(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 160
-                    width: parent.width - 40
-                    label: "Limiar de brilho (HDR)"
-                    from: 0; to: 8.0; step: 0.1
-                    value: viewportModel.sunShaftsThreshold
-                    valueText: viewportModel.sunShaftsThreshold.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsThreshold(v)
-                }
-
-                Rectangle { x: 20; y: 214; width: parent.width - 40; height: 1; color: root.divider }
-
-                Text {
-                    x: 20; y: 230
-                    text: "Volumétrico (raymarch no CSM)"
-                    color: root.textPrimary
-                    font.family: "Segoe UI"
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 249
-                    text: "raio de verdade: janela, fresta, copa — via height fog"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 229
-                    checked: viewportModel.sunShaftsVolumetric
-                    onToggled: viewportModel.SetSunShaftsVolumetric(!checked)
-                }
-
-                ShadowSlider {
-                    x: 20; y: 284
-                    width: parent.width - 40
-                    label: "Intensidade volumétrica"
-                    from: 0; to: 5.0; step: 0.1
-                    value: viewportModel.sunShaftsVolIntensity
-                    valueText: viewportModel.sunShaftsVolIntensity.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsVolIntensity(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 336
-                    width: parent.width - 40
-                    label: "Fase HG (g) — lobo contra a luz"
-                    from: 0; to: 0.95; step: 0.01
-                    value: viewportModel.sunShaftsVolPhaseG
-                    valueText: viewportModel.sunShaftsVolPhaseG.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsVolPhaseG(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 388
-                    width: parent.width - 40
-                    label: "Passos do raymarch"
-                    from: 8; to: 48; step: 4
-                    value: viewportModel.sunShaftsVolSteps
-                    valueText: viewportModel.sunShaftsVolSteps + ""
-                    onCommitted: (v) => viewportModel.SetSunShaftsVolSteps(v)
-                }
-            }
-
-            Card {
                 x: 24 + shadowsPage.colW + shadowsPage.gap
-                y: 0
+                y: 84
                 width: shadowsPage.colW
                 height: 420
                 title: "Cascatas — custo e bias"

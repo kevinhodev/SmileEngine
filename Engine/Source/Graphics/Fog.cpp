@@ -29,12 +29,9 @@ namespace Smile {
         DepthRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_DESCRIPTOR_RANGE AerialRange = DepthRange;
-        AerialRange.BaseShaderRegister = 1;
+        AerialRange.BaseShaderRegister = 1; 
 
-        D3D12_DESCRIPTOR_RANGE VolShaftsRange = DepthRange;
-        VolShaftsRange.BaseShaderRegister = 2;
-
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[3]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -48,11 +45,6 @@ namespace Smile {
         RootParams[2].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[2].DescriptorTable.pDescriptorRanges   = &AerialRange;
         RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
-
-        RootParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[3].DescriptorTable.pDescriptorRanges   = &VolShaftsRange;
-        RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -155,28 +147,22 @@ namespace Smile {
             std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(FogConstants), &Zero, sizeof(FogConstants));
     }
 
-    Vec4 FFogPass::CollapsedFogParams(f32 _ObserverHeight) const {
+    void FFogPass::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProjFull,
+                                  const Vec3& _CameraWorldPos, f32 _KmPerWorldUnit,
+                                  const Vec3& _DirToSun, f32 _NearZ, f32 _FarZ,
+                                  u32 _Width, u32 _Height, bool _UseAerial, bool _UseHeightFog,
+                                  f32 _AerialDepthKm) {
+        FrameSlot = _FrameSlot;
+        if (!MappedBase) return;
+
+        const f32 ObserverH = _CameraWorldPos.Y;
         auto Collapse = [](f32 Density, f32 Falloff, f32 ObserverHeight, f32 FogH) -> f32 {
             f32 Exponent = -Falloff * (ObserverHeight - FogH);
             Exponent = std::max(-126.0f, std::min(126.0f, Exponent));
             return Density * std::pow(2.0f, Exponent);
         };
-        return { Collapse(Density,  HeightFalloff,  _ObserverHeight, FogHeight),  HeightFalloff,
-                 Collapse(Density2, HeightFalloff2, _ObserverHeight, FogHeight2), HeightFalloff2 };
-    }
-
-    void FFogPass::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProjFull,
-                                  const Vec3& _CameraWorldPos, f32 _KmPerWorldUnit,
-                                  const Vec3& _DirToSun, f32 _NearZ, f32 _FarZ,
-                                  u32 _Width, u32 _Height, bool _UseAerial, bool _UseHeightFog,
-                                  f32 _AerialDepthKm, bool _VolumetricShafts) {
-        FrameSlot = _FrameSlot;
-        if (!MappedBase) return;
-
-        const f32  ObserverH = _CameraWorldPos.Y;
-        const Vec4 Coll      = CollapsedFogParams(ObserverH);
-        const f32  Collapsed1 = Coll.X;
-        const f32  Collapsed2 = Coll.Z;
+        const f32 Collapsed1 = Collapse(Density,  HeightFalloff,  ObserverH, FogHeight);
+        const f32 Collapsed2 = Collapse(Density2, HeightFalloff2, ObserverH, FogHeight2);
 
         FogConstants c{};
         c.ExponentialFogParameters  = { Collapsed1, HeightFalloff, ObserverH, StartDistance };
@@ -185,15 +171,12 @@ namespace Smile {
         c.FogInscatteringColor      = { FogColor.X, FogColor.Y, FogColor.Z, 1.0f - MaxOpacity };
         c.DirectionalInscatteringColor = { DirColor.X, DirColor.Y, DirColor.Z, DirExponent };
 
-        // shafts volumetricos substituem o analitico (manter os dois dobraria a energia)
-        const bool AnalyticDir = DirEnabled && !_VolumetricShafts;
         const Vec3 SunN = _DirToSun.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
-        c.InscatteringLightDirection = { SunN.X, SunN.Y, SunN.Z, AnalyticDir ? DirStartDistance : -1.0f };
+        c.InscatteringLightDirection = { SunN.X, SunN.Y, SunN.Z, DirEnabled ? DirStartDistance : -1.0f };
 
         c.InvViewProj    = _InvViewProjFull;
         c.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
-        c.AerialParams   = { _AerialDepthKm, _UseAerial ? 1.0f : 0.0f, _UseHeightFog ? 1.0f : 0.0f,
-                             _VolumetricShafts ? 1.0f : 0.0f };
+        c.AerialParams   = { _AerialDepthKm, _UseAerial ? 1.0f : 0.0f, _UseHeightFog ? 1.0f : 0.0f, 0.0f };
         const f32 W = static_cast<f32>(_Width), H = static_cast<f32>(_Height);
         c.ScreenParams   = { W, H, W > 0 ? 1.0f / W : 0.0f, H > 0 ? 1.0f / H : 0.0f };
         c.DepthParams    = { _NearZ, _FarZ, 0.0f, 0.0f };
@@ -202,14 +185,13 @@ namespace Smile {
     }
 
     void FFogPass::Execute(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
-                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot, u32 _VolShaftsSRVSlot) {
+                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot) {
         if (!Initialized) return;
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
         _CommandList->SetPipelineState(PSO.Get());
         _CommandList->SetGraphicsRootConstantBufferView(0, CBAddr());
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(_DepthSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_AerialVolumeSRVSlot));
-        _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_VolShaftsSRVSlot));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CommandList->IASetVertexBuffers(0, 0, nullptr);
         _CommandList->IASetIndexBuffer(nullptr);

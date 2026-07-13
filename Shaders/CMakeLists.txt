@@ -87,14 +87,6 @@ smile_compile_shader(Rain/RainParticles.ps.hlsl           ps_6_0 main SHADER_OUT
 smile_compile_shader(Rain/RainSplash.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Rain/RainSplash.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
-# Sun shafts (radial blur screen-space, hibrido Cry/UE) — mascara + blur + composicao
-smile_compile_shader(SunShafts/SunShaftsMask.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(SunShafts/SunShaftsBlur.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(SunShafts/SunShaftsApply.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
-# F2 — inscatter direcional volumetrico (raymarch CSM meia-res, consumido pelo fog)
-smile_compile_shader(SunShafts/SunShaftsVolumetric.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(SunShafts/SunShaftsVolBlur.ps.hlsl    ps_6_0 main SHADER_OUTPUTS)
-
 # Nuvens volumetricas — bake de ruido 3D + raymarch + composite
 smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/BakeDetailNoise.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
@@ -210,12 +202,6 @@ add_custom_target(Shaders
         Rain/RainParticles.ps.hlsl
         Rain/RainSplash.vs.hlsl
         Rain/RainSplash.ps.hlsl
-        SunShafts/SunShaftsCommon.hlsli
-        SunShafts/SunShaftsMask.ps.hlsl
-        SunShafts/SunShaftsBlur.ps.hlsl
-        SunShafts/SunShaftsApply.ps.hlsl
-        SunShafts/SunShaftsVolumetric.ps.hlsl
-        SunShafts/SunShaftsVolBlur.ps.hlsl
         Clouds/CloudNoiseCommon.hlsli
         Clouds/CloudDensity.hlsli
         Clouds/CloudLighting.hlsli

@@ -73,9 +73,6 @@ namespace Smile {
 
         Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
-        SunShafts.Initialize(Device.Native(), SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                             RenderWidth(), RenderHeight());
-
         RainWetness.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
 
         SunShadows.Initialize(Device.Native(), SRVHeap);
@@ -685,7 +682,6 @@ namespace Smile {
         VolumetricClouds.Resize(Device.Native(), SRVHeap, RW, RH);
         Water.Resize(Device.Native(), RW, RH);
         RainWetness.Resize(Device.Native(), SRVHeap, RW, RH);
-        SunShafts.Resize(Device.Native(), SRVHeap, RW, RH);
         CreateSceneCopies();
 
         PostProcessor.Resize(Device.Native(), SRVHeap, SW, SH);    
@@ -1004,52 +1000,12 @@ namespace Smile {
                                   static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()));
         // F4: mist da chuva — boost temporario na densidade do height fog (restaurado apos o
         // update; o knob do usuario nao muda). Chuva forte ~2.5x a densidade base.
-        const bool VolShaftsActive = UseSunShafts && SunShafts.IsInitialized() &&
-                                     SunShafts.GetVolumetric() && UseHeightFog;
         const f32 FogDensityBase = Fog.GetDensity();
         if (RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + RainSky * 1.5f));
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
-                           UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm(),
-                           VolShaftsActive);
-        // densidades colapsadas AINDA com o boost de chuva — o raymarch dos shafts tem
-        // que ver o mesmo meio que o fog deste frame
-        const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(CameraPosition.Y);
+                           UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm());
         Fog.SetDensity(FogDensityBase);
-
-        // Sun shafts: projeta a key light na tela (convencao row-vector da engine) e
-        // zera o fade com ela atras da camera; perto de w=0 o UV explode pra longe e a
-        // mascara radial ja mata o efeito sozinha, sem pop. Tint neutro — a cor vem do
-        // proprio HDR mascarado (disco do sol ja tingido pela transmitancia atmosferica).
-        if (SunShafts.IsInitialized()) {
-            const Vec3   SunWorld = CameraPosition + KeyDir * 10000.0f;
-            const Mat44& VP = ViewProjUnjittered;
-            const f32 CX = SunWorld.X * VP.M[0][0] + SunWorld.Y * VP.M[1][0] +
-                           SunWorld.Z * VP.M[2][0] + VP.M[3][0];
-            const f32 CY = SunWorld.X * VP.M[0][1] + SunWorld.Y * VP.M[1][1] +
-                           SunWorld.Z * VP.M[2][1] + VP.M[3][1];
-            const f32 CW = SunWorld.X * VP.M[0][3] + SunWorld.Y * VP.M[1][3] +
-                           SunWorld.Z * VP.M[2][3] + VP.M[3][3];
-            Vec2 SunUV{ 0.5f, 0.5f };
-            f32  ShaftFade = 0.0f;
-            if (CW > 1e-4f) {
-                SunUV     = { 0.5f + 0.5f * CX / CW, 0.5f - 0.5f * CY / CW };
-                ShaftFade = 1.0f;
-            }
-            SunShafts.UpdatePerFrame(FrameSlot, SunUV, ShaftFade, InvViewProjFull,
-                                     CameraPosition, { 1.0f, 1.0f, 1.0f });
-
-            // F2 — volumetrico: raymarch precisa da radiancia real da key light (cor x
-            // intensidade) e do ruido IGN so quando ha acumulador temporal pra integra-lo
-            if (VolShaftsActive) {
-                const Vec3 KeyColInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
-                                         KeyColor.Z * KeyInt };
-                const f32 ShaftNoiseFrame = (TAAActive || Fsr2Active)
-                    ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-                SunShafts.UpdateVolumetric(KeyDir, KeyColInt, ShaftsFogCollapsed,
-                                           ShaftNoiseFrame);
-            }
-        }
 
         // F4: chuva puxa a cobertura de nuvem pra um piso nublado (max com o valor do
         // usuario; idem, restaurada apos o update — a pagina de nuvens continua mandando).
@@ -1939,56 +1895,13 @@ namespace Smile {
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &DepthBarrier);
 
-            // F2 dos sun shafts: raymarch volumetrico meia-res (depth ja legivel aqui);
-            // o fog apply consome o RT via t2. Mesma condicao do UpdatePerFrame.
-            const bool VolShaftsOn = UseSunShafts && SunShafts.IsInitialized() &&
-                                     SunShafts.GetVolumetric() && UseHeightFog;
-            if (VolShaftsOn) {
-                SunShadows.EnsureReadable(CommandList);
-                SunShafts.RecordVolumetric(CommandList, SRVHeap, DepthSRVSlot,
-                                           SunShadows.ConstantsAddress(),
-                                           SunShadows.ShadowSRVSlot());
-                CommandList->RSSetViewports(1, &Viewport);
-                CommandList->RSSetScissorRects(1, &ScissorRect);
-            }
-
             auto Fog_RTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &Fog_RTV, FALSE, nullptr);
-            Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV(),
-                        SunShafts.IsInitialized() ? SunShafts.VolumetricSRVSlot()
-                                                  : DepthSRVSlot);
+            Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV());
 
             DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
             CommandList->ResourceBarrier(1, &DepthBarrier);
-        }
-
-        // Sun shafts (radial blur estilo Cry/UE): mascara meia-res do HDR ja fogado +
-        // 3 blurs radiais em direcao ao sol + composicao aditiva de volta no HDR.
-        // Antes da chuva e do TAA/FSR2 — o acumulador temporal limpa o ruido de graca.
-        if (UseSunShafts && SunShafts.IsInitialized() && SunShafts.HasWork()) {
-            D3D12_RESOURCE_BARRIER ShaftBarriers[2]{};
-            for (auto& B : ShaftBarriers) {
-                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            }
-            ShaftBarriers[0].Transition.pResource   = DepthBuffer.Get();
-            ShaftBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            ShaftBarriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            ShaftBarriers[1].Transition.pResource   = HDRColorBuffer.Get();
-            ShaftBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            ShaftBarriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(2, ShaftBarriers);
-
-            SunShafts.RecordMaskAndBlur(CommandList, SRVHeap, HDRSRVSlot, DepthSRVSlot);
-
-            for (auto& B : ShaftBarriers)
-                std::swap(B.Transition.StateBefore, B.Transition.StateAfter);
-            CommandList->ResourceBarrier(2, ShaftBarriers);
-
-            auto Shaft_RTV = HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &Shaft_RTV, FALSE, nullptr);
-            SunShafts.Composite(CommandList, SRVHeap, RenderWidth(), RenderHeight());
         }
 
         // Chuva F3/F5: cortina + gotas por particula — depois do fog (chuva de perto nao

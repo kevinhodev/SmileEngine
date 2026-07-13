@@ -16,10 +16,6 @@ cbuffer FogCB : register(b0) {
 };
 
 Texture3D<float4> AerialVolume     : register(t1);
-// F2 dos sun shafts: inscatter direcional volumétrico meia-res (raymarch CSM).
-// Quando AerialParams.w > 0.5, substitui o termo analítico DirectionalInscattering
-// (o CPU zera InscatteringLightDirection.w pra desligar o analítico junto).
-Texture2D<float4> VolumetricShafts : register(t2);
 SamplerState      LinearClampSampler : register(s0);
 
 float CalculateLineIntegralShared(float falloff, float rayDirZ, float rayOriginTerms) {
