@@ -124,12 +124,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         float qM, qAge;
         ResUnpackMAge(qa.w, qM, qAge);
         if (qM <= 0.0f) continue;
-        float3 qDelta = qa.xyz - x1;
-        if (length(qDelta) > posReject) continue; // rejeicao radial por posicao
-        // A distancia radial + normal parecida ainda aceita camadas paralelas proximas. Em
-        // tecido/dobras isso deixa uma amostra clara atravessar para outra prega e o NRD a
-        // expande em mancha. Usa a mesma rejeicao de plano do temporal.
-        if (abs(dot(n1, qDelta)) > 0.2f * posReject) continue;
+        // So rejeicao RADIAL (config estavel do bisect 2026-07-12; a rejeicao de plano do fix 6
+        // saiu junto com o resto do pacote — re-introduzir so com A/B dedicado).
+        if (length(qa.xyz - x1) > posReject) continue; // rejeicao radial por posicao
 
         float4 qb = ResB.Load(int3(qpx, 0));
         float4 qc = ResC.Load(int3(qpx, 0));

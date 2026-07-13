@@ -143,11 +143,8 @@ namespace Smile {
                 " cbMax=" + std::to_string(d.constantBufferMaxDataSize));
 
         nrd::ReblurSettings reblur{};
-        // O ReSTIR difuso produz ocasionalmente um sample brilhante isolado. O prepass default
-        // do REBLUR (30 px) transforma esse ponto em um blob e o historico passa a acumula-lo;
-        // a propria documentacao do NRD recomenda desligar o prepass difuso nesse caso. O
-        // prepass especular continua ativo e preserva o tracking das reflexoes.
-        reblur.diffusePrepassBlurRadius = 0.0f;
+        // Prepass difuso no default do NRD (config estavel do bisect 2026-07-12; o override 0
+        // do fix 6 saiu junto com o pacote).
         reblur.enableAntiFirefly = true;
         nrd::SetDenoiserSettings(*Instance, 0, &reblur);
 

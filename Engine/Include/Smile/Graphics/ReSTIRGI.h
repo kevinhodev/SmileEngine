@@ -160,13 +160,14 @@ namespace Smile {
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B
         f32  MCap           = 20.0f;
-        f32  MaxAge         = 32.0f; // vida maxima (frames) da amostra selecionada no reservoir
-                                     // (RTXDI maxReservoirAge; MCap limita peso, nao idade) —
-                                     // expira amostra brilhante travada em bolsao escuro (mancha);
-                                     // stagger 0.75x-1.25x por pixel no shader. 0 = sem expiracao
+        f32  MaxAge         = 0.0f;  // idade maxima da amostra no reservoir (RTXDI maxReservoirAge);
+                                     // 0 = off (config estavel do bisect 2026-07-12; usar 32 p/
+                                     // religar a expiracao — infra pronta no shader)
         f32  PosRejectScale = 0.01f;
-        f32  ValidateInterval = 8.0f; // re-shade da amostra temporal em 1/N dos px por frame
-                                      // (radiancia envelhece com sol dinamico); 0 = off
+        f32  ValidateInterval = 0.0f; // re-shade periodico da amostra temporal: 0 = off (config
+                                      // estavel do bisect 2026-07-12). ATENCAO: com TimeOfDay
+                                      // animando, radiancia velha persiste no reservoir — religar
+                                      // com 8 quando o sol dinamico voltar a importar
         f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off)
         f32  SpatialRadius  = 16.0f;  // raio (px) dos vizinhos
         f32  SpatialCount   = 4.0f;   // nº de vizinhos

@@ -160,53 +160,28 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // --- (2) Reuso temporal ------------------------------------------------------------------
     if (ReuseParams.w > 0.5f) {
         float2 vel    = Velocity.Load(int3(px, 0)).rg;
-        // Velocity usa MVPs sem jitter, mas depth/x1 pertencem ao raster jittered; portanto a
-        // correspondencia correta inclui prevJitter-currJitter. A busca 2x2 abaixo evita que
-        // essa correcao alterne cegamente entre texels nas bordas e dobras.
-        float2 prevUv = uv - vel + JitterParams.xy;
+        // SEM compensacao prevJitter-currJitter (A/B em bisect: com ela o fetch do reservoir
+        // danca entre texels e o conteudo faz random walk -> manchas + rastejo). A busca 2x2
+        // ancorada abaixo cobre o erro sub-texel restante.
+        float2 prevUv = uv - vel;
         if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
+            // Fetch de UM texel por truncamento — config estavel do bisect 2026-07-12. A busca
+            // 2x2 por melhor x1 (fix 6) foi removida: mesmo ancorada em prevPx ela mantinha as
+            // manchas/rastejo; re-introduzir so com A/B dedicado. Unpack do M mantido (ResA.w
+            // fica no formato M+idade empacotados; expiracao hoje desligada via MaxAge=0).
+            int2 ppx = int2(prevUv * ScreenParams.xy);
+            float4 pa = PrevResA.Load(int3(ppx, 0));
+            float4 pc = PrevResC.Load(int3(ppx, 0));
+            float4 pd = PrevResD.Load(int3(ppx, 0));
             float posReject = ReuseParams.y * max(camDist, 1.0f);
-            float2 prevPx = prevUv * ScreenParams.xy - 0.5f;
-            int2 basePx = int2(floor(prevPx));
-            int2 ppx = int2(-1, -1);
-            float bestScore = 1e30f;
-            float4 pa = 0.0f, pc = 0.0f, pd = 0.0f;
-            float prevM = 0.0f, prevAge = 0.0f;
+            float planeDist = abs(dot(N, pa.xyz - x1));
+            float3 prevN1 = DDGI_OctDecode(float2(pc.a, pd.a));
+            float prevM, prevAge;
+            ResUnpackMAge(pa.w, prevM, prevAge);
+            bool accept = prevM > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
+                          length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject;
 
-            [unroll] for (int oy = 0; oy < 2; ++oy) {
-                [unroll] for (int ox = 0; ox < 2; ++ox) {
-                    int2 qpx = basePx + int2(ox, oy);
-                    if (qpx.x < 0 || qpx.y < 0 ||
-                        qpx.x >= (int)ScreenParams.x || qpx.y >= (int)ScreenParams.y)
-                        continue;
-
-                    float4 qa = PrevResA.Load(int3(qpx, 0));
-                    float qM, qAge;
-                    ResUnpackMAge(qa.w, qM, qAge);
-                    if (qM <= 0.0f) continue;
-
-                    float4 qc = PrevResC.Load(int3(qpx, 0));
-                    float4 qd = PrevResD.Load(int3(qpx, 0));
-                    float3 qN1 = DDGI_OctDecode(float2(qc.a, qd.a));
-                    float normalCos = dot(qN1, N);
-                    if (normalCos < SpatialParams.w) continue;
-
-                    float3 delta = qa.xyz - x1;
-                    float posDist = length(delta);
-                    float planeDist = abs(dot(N, delta));
-                    if (posDist >= posReject || planeDist >= 0.2f * posReject) continue;
-
-                    // Posicao domina; a normal desempata dobras quase coincidentes.
-                    float score = posDist / max(posReject, 1e-5f) + (1.0f - normalCos);
-                    if (score < bestScore) {
-                        bestScore = score;
-                        ppx = qpx;
-                        pa = qa; pc = qc; pd = qd; prevM = qM; prevAge = qAge;
-                    }
-                }
-            }
-
-            if (ppx.x >= 0) {
+            if (accept) {
                 float4 pb = PrevResB.Load(int3(ppx, 0));
                 Reservoir prev;
                 prev.x1 = pa.xyz; prev.x2 = pb.xyz; prev.n2 = pd.xyz; prev.Lo = pc.rgb;
@@ -303,7 +278,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     // hitDist p/ o NRD = distancia da amostra VENCEDORA do WRS (o temporal pode trocar x2; o hitT
     // do raio inicial guiaria o denoiser com um caminho diferente do da radiancia resolvida).
-    // Fallback pro raio inicial quando nada foi selecionado (wSum=0 deixa x2 zerado).
     float selDist = (r.wSum > 0.0f) ? length(r.x2 - x1) : hitDist;
     float2 n1Oct = DDGI_OctEncode(N); // n1 no historico p/ a rejeicao por normal do temporal
     GIOut[px]    = float4(gi, selDist);
