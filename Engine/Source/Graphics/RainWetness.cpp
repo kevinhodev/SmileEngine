@@ -16,10 +16,11 @@ namespace Smile {
         if (IsInitialized()) return;
         BuildRootSignature(_Device);
         BuildPSO(_Device);
+        BuildCurtainPSO(_Device);
         CreateConstantBuffer(_Device);
         CreateScratch(_Device, _SRVHeap, _Width, _Height);
         BuildOcclusion(_Device, _SRVHeap);
-        LogInfo("Chuva deferred (wetness no G-buffer + occlusion map) inicializada");
+        LogInfo("Chuva deferred (wetness + occlusion map + cortina) inicializada");
     }
 
     void FRainWetness::Resize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -31,7 +32,9 @@ namespace Smile {
     void FRainWetness::Recreate(ID3D12Device* _Device) {
         if (!IsInitialized()) return;
         PSO.Reset();
+        CurtainPSO.Reset();
         BuildPSO(_Device);
+        BuildCurtainPSO(_Device);
     }
 
     void FRainWetness::BuildRootSignature(ID3D12Device* _Device) {
@@ -126,6 +129,50 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&PSO)));
     }
 
+    void FRainWetness::BuildCurtainPSO(ID3D12Device* _Device) {
+        // F3: fullscreen sobre o HDR ja iluminado/fogado, blend PREMULTIPLICADO (o PS devolve
+        // cor ja escalada pelo alpha) — streak soma luz e vela levemente o fundo.
+        auto VS = LoadShaderBytecode("PostProcess.vs_6_0.cso");
+        auto PS = LoadShaderBytecode("RainCurtain.ps_6_0.cso");
+
+        D3D12_RASTERIZER_DESC Raster{};
+        Raster.FillMode        = D3D12_FILL_MODE_SOLID;
+        Raster.CullMode        = D3D12_CULL_MODE_NONE;
+        Raster.DepthClipEnable = TRUE;
+
+        D3D12_BLEND_DESC Blend{};
+        auto& RT0                 = Blend.RenderTarget[0];
+        RT0.BlendEnable           = TRUE;
+        RT0.SrcBlend              = D3D12_BLEND_ONE;
+        RT0.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+        RT0.BlendOp               = D3D12_BLEND_OP_ADD;
+        RT0.SrcBlendAlpha         = D3D12_BLEND_ONE;
+        RT0.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+        RT0.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+        RT0.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+        D3D12_DEPTH_STENCIL_DESC Depth{};
+        Depth.DepthEnable   = FALSE; // soft-depth manual no PS (depth vem como SRV)
+        Depth.StencilEnable = FALSE;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc{};
+        PSODesc.pRootSignature        = RootSig.Get();
+        PSODesc.VS                    = { VS.data(), VS.size() };
+        PSODesc.PS                    = { PS.data(), PS.size() };
+        PSODesc.BlendState            = Blend;
+        PSODesc.SampleMask            = UINT_MAX;
+        PSODesc.RasterizerState       = Raster;
+        PSODesc.DepthStencilState     = Depth;
+        PSODesc.InputLayout           = { nullptr, 0 };
+        PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        PSODesc.NumRenderTargets      = 1;
+        PSODesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR scene color
+        PSODesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+        PSODesc.SampleDesc            = { 1, 0 };
+
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&CurtainPSO)));
+    }
+
     void FRainWetness::CreateConstantBuffer(ID3D12Device* _Device) {
         D3D12_HEAP_PROPERTIES Heap{};
         Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -200,7 +247,8 @@ namespace Smile {
 
     void FRainWetness::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProjFull,
                                       const Vec3& _CameraWorldPos, f32 _TimeSec,
-                                      const FWeather& _Weather) {
+                                      const FWeather& _Weather, const Vec3& _KeyDir,
+                                      const Vec3& _KeyColorTimesInt, const Vec3& _SkyAmbient) {
         FrameSlot = _FrameSlot;
         if (!MappedBase) return;
 
@@ -209,17 +257,23 @@ namespace Smile {
         c.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _TimeSec };
         c.RainParams0    = { _Weather.RainAmount, _Weather.PuddleAmount,
                              _Weather.RippleStrength, _Weather.WetDarkening };
-        const f32 Scale  = _Weather.PuddleScale > 1e-3f ? _Weather.PuddleScale : 1.0f;
-        c.RainParams1    = { 1.0f / Scale, 0.0f, 0.0f, 0.0f };
-
         // F2: matriz do ULTIMO render do mapa (cacheado); bias/banda em unidades de depth
         // do ortho (range vertical kOccUp+kOccDown). Sem mapa ainda = desligado (tudo molha).
         const f32 OccRange = kOccUp + kOccDown;
+
+        const f32 Scale  = _Weather.PuddleScale > 1e-3f ? _Weather.PuddleScale : 1.0f;
+        c.RainParams1    = { 1.0f / Scale, 1.0f / OccRange, 0.0f, 0.0f };
         c.RainOccMatrix = OccWorldToUVZ;
         c.RainOccParams = { (_Weather.RainOcclusion && OccEverRendered) ? 1.0f : 0.0f,
                             0.75f / OccRange,            // bias: ~0.75 m acima ja e "coberto"
                             OccRange / 1.5f,             // banda suave de 1.5 m na transicao
                             static_cast<f32>(kOccSize) };
+
+        // F3: cortina — queda ~12 m/s (chuva real ~9, um pouco mais rapido le melhor em tela).
+        c.CurtainParams  = { _Weather.CurtainAmount, 12.0f, 0.0f, 0.0f };
+        c.KeyLightDir    = { _KeyDir.X, _KeyDir.Y, _KeyDir.Z, 0.0f };
+        c.KeyLightColor  = { _KeyColorTimesInt.X, _KeyColorTimesInt.Y, _KeyColorTimesInt.Z, 0.0f };
+        c.SkyAmbientRain = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };
 
         std::memcpy(MappedBase + static_cast<size_t>(FrameSlot) * sizeof(RainWetnessConstants),
                     &c, sizeof(RainWetnessConstants));
@@ -284,6 +338,32 @@ namespace Smile {
                 D3D12_RESOURCE_STATE_COPY_DEST);
         Barrier(ScratchB.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                 D3D12_RESOURCE_STATE_COPY_DEST);
+    }
+
+    void FRainWetness::ExecuteCurtain(ID3D12GraphicsCommandList* _Cmd, FTextureSRVHeap& _SRVHeap,
+                                      u32 _DepthSRVSlot, u32 _Width, u32 _Height) {
+        if (!CurtainPSO) return;
+
+        // Pre-condicoes do caller (padrao do Fog.Execute): RTV do HDR ja setado sem DSV,
+        // depth transicionado pra PIXEL_SHADER_RESOURCE. O scratch nao e lido pelo shader
+        // da cortina, mas a tabela [1] e setada mesmo assim (root sig compartilhado).
+        D3D12_VIEWPORT Viewport{ 0.0f, 0.0f,
+                                 static_cast<f32>(_Width), static_cast<f32>(_Height),
+                                 0.0f, 1.0f };
+        D3D12_RECT Scissor{ 0, 0, static_cast<LONG>(_Width), static_cast<LONG>(_Height) };
+        _Cmd->RSSetViewports(1, &Viewport);
+        _Cmd->RSSetScissorRects(1, &Scissor);
+
+        _Cmd->SetGraphicsRootSignature(RootSig.Get());
+        _Cmd->SetPipelineState(CurtainPSO.Get());
+        _Cmd->SetGraphicsRootConstantBufferView(0, CBAddr());
+        _Cmd->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(ScratchSRVBase));
+        _Cmd->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_DepthSRVSlot));
+        _Cmd->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(OccSRVSlot));
+        _Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        _Cmd->IASetVertexBuffers(0, 0, nullptr);
+        _Cmd->IASetIndexBuffer(nullptr);
+        _Cmd->DrawInstanced(3, 1, 0, 0);
     }
 
     // ---- F2: mapa de oclusao top-down ----

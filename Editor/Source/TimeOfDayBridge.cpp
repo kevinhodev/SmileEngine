@@ -64,7 +64,7 @@ namespace SmileEditor {
     double TimeOfDayBridge::PuddleScale() const    { return WeatherOfConst(Renderer).PuddleScale; }
     double TimeOfDayBridge::RippleStrength() const { return WeatherOfConst(Renderer).RippleStrength; }
     double TimeOfDayBridge::WetDarkening() const   { return WeatherOfConst(Renderer).WetDarkening; }
-    bool   TimeOfDayBridge::RainOcclusion() const  { return WeatherOfConst(Renderer).RainOcclusion; }
+    double TimeOfDayBridge::CurtainAmount() const  { return WeatherOfConst(Renderer).CurtainAmount; }
 
     double TimeOfDayBridge::SunElevationDeg() const {
         // TOD off: le a direcao manual corrente do renderer (a que de fato ilumina a cena).
@@ -191,8 +191,8 @@ namespace SmileEditor {
         WeatherOf(Renderer).WetDarkening = (float)std::clamp(_V, 0.0, 1.0);
         emit StateChanged();
     }
-    void TimeOfDayBridge::SetRainOcclusion(bool _V) {
-        WeatherOf(Renderer).RainOcclusion = _V;
+    void TimeOfDayBridge::SetCurtainAmount(double _V) {
+        WeatherOf(Renderer).CurtainAmount = (float)std::clamp(_V, 0.0, 1.0);
         emit StateChanged();
     }
     void TimeOfDayBridge::SetManualAzimuthDeg(double _V) {

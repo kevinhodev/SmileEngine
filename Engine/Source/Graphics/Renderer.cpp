@@ -577,7 +577,7 @@ namespace Smile {
                   [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
                 { { "WaterSurface.vs", "WaterSurface.ps" },
                   [&] { Water.Recreate(Dev, RT, DS); } },
-                { { "RainWetness.ps" },
+                { { "RainWetness.ps", "RainCurtain.ps" },
                   [&] { RainWetness.Recreate(Dev); } },
                 { { "DDGIDebugProbes.vs", "DDGIDebugProbes.ps", "DDGIDebugVolume.vs",
                     "DDGIDebugVolume.ps", "DDGIDebugRays.vs", "DDGIDebugRays.ps" },
@@ -1568,8 +1568,10 @@ namespace Smile {
                 RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, CameraPosition,
                                                RainOccluders.data(), RainOccluders.size());
             }
+            const Vec3 KeyColorInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
+                                       KeyColor.Z * KeyInt };
             RainWetness.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
-                                       ElapsedTime, Weather);
+                                       ElapsedTime, Weather, KeyDir, KeyColorInt, SkyAmbient);
             RainWetness.Execute(CommandList, SRVHeap, GBuffer, DepthBuffer.Get(), DepthSRVSlot,
                                 RenderWidth(), RenderHeight());
         }
@@ -1852,9 +1854,30 @@ namespace Smile {
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &DepthBarrier);
 
-            auto Fog_RTV = HDRRTVHeap.CpuHandle(0); 
+            auto Fog_RTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &Fog_RTV, FALSE, nullptr);
             Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV());
+
+            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            CommandList->ResourceBarrier(1, &DepthBarrier);
+        }
+
+        // Chuva F3: cortina de gotas — depois do fog (chuva de perto nao leva fog em dobro)
+        // e antes do TAA/FSR2 (o acumulador integra os streaks como motion blur leve).
+        if (Weather.Raining() && Weather.CurtainAmount > 0.001f && RainWetness.IsInitialized()) {
+            D3D12_RESOURCE_BARRIER DepthBarrier{};
+            DepthBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            DepthBarrier.Transition.pResource   = DepthBuffer.Get();
+            DepthBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            CommandList->ResourceBarrier(1, &DepthBarrier);
+
+            auto RainRTV = HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &RainRTV, FALSE, nullptr);
+            RainWetness.ExecuteCurtain(CommandList, SRVHeap, DepthSRVSlot,
+                                       RenderWidth(), RenderHeight());
 
             DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;

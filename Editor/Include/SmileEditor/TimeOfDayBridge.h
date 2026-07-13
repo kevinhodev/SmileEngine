@@ -35,7 +35,7 @@ namespace SmileEditor {
         Q_PROPERTY(double puddleScale READ PuddleScale WRITE SetPuddleScale NOTIFY StateChanged)
         Q_PROPERTY(double rippleStrength READ RippleStrength WRITE SetRippleStrength NOTIFY StateChanged)
         Q_PROPERTY(double wetDarkening READ WetDarkening WRITE SetWetDarkening NOTIFY StateChanged)
-        Q_PROPERTY(bool rainOcclusion READ RainOcclusion WRITE SetRainOcclusion NOTIFY StateChanged)
+        Q_PROPERTY(double curtainAmount READ CurtainAmount WRITE SetCurtainAmount NOTIFY StateChanged)
         // Sol manual (TOD desligado): az/el em graus, escreve via Renderer::SetSunAzimuthElevation.
         Q_PROPERTY(double manualAzimuthDeg READ ManualAzimuthDeg WRITE SetManualAzimuthDeg NOTIFY StateChanged)
         Q_PROPERTY(double manualElevationDeg READ ManualElevationDeg WRITE SetManualElevationDeg NOTIFY StateChanged)
@@ -69,7 +69,7 @@ namespace SmileEditor {
         double PuddleScale() const;
         double RippleStrength() const;
         double WetDarkening() const;
-        bool   RainOcclusion() const;
+        double CurtainAmount() const;
         double ManualAzimuthDeg() const  { return ManualAz; }
         double ManualElevationDeg() const { return ManualEl; }
         double SunElevationDeg() const;
@@ -95,7 +95,7 @@ namespace SmileEditor {
         void SetPuddleScale(double V);
         void SetRippleStrength(double V);
         void SetWetDarkening(double V);
-        void SetRainOcclusion(bool V);
+        void SetCurtainAmount(double V);
         void SetManualAzimuthDeg(double V);
         void SetManualElevationDeg(double V);
 

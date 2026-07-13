@@ -1,4 +1,5 @@
 #include "../GBuffer.hlsli"
+#include "RainCommon.hlsli"
 
 // Chuva deferred — F1 (porte do DeferredRainGBufferPS da CryEngine, mascaras procedurais no
 // lugar das texturas de asset). Le as COPIAS de GBufferA/B (scratch) e reescreve os originais:
@@ -8,21 +9,9 @@
 //     roughness ~0.06 (quase espelho — as reflexoes RT leem o G-buffer e molham de graca)
 // Pixels sem chuva efetiva dao discard: o RT preserva o conteudo original do geometry pass.
 
-cbuffer RainCB : register(b0) {
-    row_major float4x4 InvViewProj; // inversa FULL da view-proj jitterada
-    float4 CameraWorldPos;          // xyz = camera (mundo), w = tempo (s)
-    float4 RainParams0;             // x = RainAmount, y = PuddleAmount, z = RippleStrength,
-                                    // w = WetDarkening
-    float4 RainParams1;             // x = 1/PuddleScale (1/m), yzw = -
-    row_major float4x4 RainOccMatrix; // F2: world -> UVZ do mapa de oclusao (ortho top-down)
-    float4 RainOccParams;           // x = enabled, y = bias (depth), z = 1/banda (depth),
-                                    // w = resolucao do mapa
-};
-
-Texture2D        SceneA     : register(t0); // copia de GBufferA (BaseColor + AO)
-Texture2D        SceneB     : register(t1); // copia de GBufferB (OctNormal + Rough + Metal)
-Texture2D<float> SceneDepth : register(t2);
-Texture2D<float> RainOccMap : register(t3); // F2: depth top-down cacheado (0 = teto do volume)
+// cbuffer + SceneDepth/RainOccMap + hashes + SkyVisibility vem do RainCommon.hlsli
+Texture2D SceneA : register(t0); // copia de GBufferA (BaseColor + AO)
+Texture2D SceneB : register(t1); // copia de GBufferB (OctNormal + Rough + Metal)
 
 struct VSOutput {
     float4 pos : SV_POSITION;
@@ -33,17 +22,6 @@ struct PSOut {
     float4 A : SV_Target0;
     float4 B : SV_Target1;
 };
-
-// ---- Ruido (procedural, sem textura) ----
-
-float2 Hash22(float2 p) {
-    // hash de Dave Hoskins (sem sin — estavel em qualquer GPU/distancia)
-    float3 p3 = frac(float3(p.xyx) * float3(0.1031f, 0.1030f, 0.0973f));
-    p3 += dot(p3, p3.yzx + 33.33f);
-    return frac((p3.xx + p3.yz) * p3.zy);
-}
-
-float Hash21(float2 p) { return Hash22(p).x; }
 
 float ValueNoise(float2 p) {
     float2 i = floor(p);
@@ -92,26 +70,29 @@ float2 RippleGradient(float2 xz, float t) {
     return g;
 }
 
-// F2: "esse ponto ve o ceu?" — compara a altura do pixel com o depth top-down cacheado
-// (estilo rain occlusion da Cry). 1 = exposto (molha), 0 = coberto (seco). Fora do volume
-// do mapa = exposto: o mapa acompanha a camera, longe dela o erro nao e visivel.
-float SkyVisibility(float3 worldPos) {
+// F2b: drenagem — poça só onde a vizinhança top-down é PLANA. Reusa o occlusion map como
+// heightmap: vizinho ~0.7 m mais baixo = beirada/pedestal (topo de poste, barril, mureta,
+// borda de telhado) e a agua escoa em vez de empocar; vizinhos na mesma altura = chao de
+// verdade. Fisica de escoamento implicita, sem simulacao.
+float DrainageMask(float3 worldPos) {
     if (RainOccParams.x < 0.5f) return 1.0f;
 
-    float3 uvz = mul(float4(worldPos, 1.0f), RainOccMatrix).xyz; // ortho: w = 1
-    if (any(uvz.xy != saturate(uvz.xy)) || uvz.z >= 1.0f) return 1.0f;
+    float3 uvz = mul(float4(worldPos, 1.0f), RainOccMatrix).xyz;
+    if (any(uvz.xy != saturate(uvz.xy))) return 1.0f;
 
-    // 2x2 taps (Load; borda suave vem da banda em profundidade, nao precisa de PCF grande)
-    const float size = RainOccParams.w;
-    int2 c = int2(clamp(uvz.xy * size - 0.5f, 0.0f, size - 2.0f));
-    float occ = 0.0f;
-    [unroll] for (int j = 0; j < 2; ++j)
-    [unroll] for (int i = 0; i < 2; ++i) {
-        float mapZ = RainOccMap.Load(int3(c + int2(i, j), 0));
-        // occluder acima do pixel (mapZ menor = mais perto do teto) alem do bias = coberto
-        occ += saturate((uvz.z - RainOccParams.y - mapZ) * RainOccParams.z);
+    const float size   = RainOccParams.w;
+    const float rangeM = 1.0f / RainParams1.y;      // metros por unidade de depth do ortho
+    const int2  c      = int2(uvz.xy * size);
+    const int2  offs[4] = { int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3) }; // ~0.7 m
+
+    float drain = 0.0f;
+    [unroll] for (int i = 0; i < 4; ++i) {
+        int2  s  = clamp(c + offs[i], int2(0, 0), int2(size - 1.0f, size - 1.0f));
+        float nz = RainOccMap.Load(int3(s, 0));
+        // vizinho mais fundo que ~0.3 m = queda; 0.8 m = borda franca
+        drain += smoothstep(0.3f, 0.8f, (nz - uvz.z) * rangeM);
     }
-    return 1.0f - occ * 0.25f;
+    return saturate(1.0f - drain * 0.6f); // 2+ lados em queda = seca por completo
 }
 
 PSOut main(VSOutput input) {
@@ -150,9 +131,12 @@ PSOut main(VSOutput input) {
     // Filme d'agua alisa: poroso molhado ~0.40, liso molhado ~0.15 (gloss 0.60/0.85 da Cry).
     rough = lerp(rough, lerp(0.15f, 0.40f, porosity), accum);
 
-    // ---- Pocas (so chao) ----
+    // ---- Pocas (so chao PLANO que retem agua) ----
+    // Gate mais apertado que o isUp do wetness: superficie curva (barril, topo de poste)
+    // drena; + mascara de drenagem top-down (F2b) mata poça em pedestal/beirada.
+    const float flatUp      = smoothstep(0.82f, 0.95f, N.y);
     const float mask        = PuddleMask(worldPos.xz * RainParams1.x);
-    const float puddleBlend = RainParams0.y * rain * isUp;
+    const float puddleBlend = RainParams0.y * rain * flatUp * DrainageMask(worldPos);
     // limiar do noise: mais PuddleAmount*rain = pocas maiores; borda suave de 0.12
     const float thresh = lerp(0.78f, 0.42f, saturate(RainParams0.y * rain));
     float puddle = smoothstep(thresh, thresh + 0.12f, mask) * (puddleBlend > 0.001f ? 1.0f : 0.0f);

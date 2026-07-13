@@ -23,6 +23,10 @@ namespace Smile {
         // F2: mapa de oclusao top-down — so molha o que ve o ceu (interior/marquise secos).
         bool RainOcclusion = true;
 
+        // F3: cortina de gotas (streaks na frente da camera). Escala a densidade/opacidade
+        // dos streaks por cima do RainAmount; 0 = so wetness, sem gota visivel no ar.
+        f32 CurtainAmount = 1.0f;
+
         bool Raining() const { return RainAmount > 0.001f; }
     };
 }

@@ -23,6 +23,11 @@ namespace Smile {
         Mat44 RainOccMatrix; // F2: world -> UVZ do mapa de oclusao (ortho top-down + bias UV)
         Vec4  RainOccParams; // x = enabled (0/1), y = bias (depth), z = 1/banda suave (depth),
                              // w = resolucao do mapa
+        Vec4  CurtainParams; // F3: x = CurtainAmount, y = velocidade de queda (m/s), zw = -
+        Vec4  KeyLightDir;   // F3: xyz = dir PARA a key light (mundo)
+        Vec4  KeyLightColor; // F3: rgb = cor x intensidade da key light
+        Vec4  SkyAmbientRain;// F3: rgb = ambient fisico do ceu (streaks visiveis de costas
+                             //      pra luz e a noite)
     };
 
     // Chuva deferred — F1 (padrao CRainStage::ExecuteDeferredRainGBuffer da CryEngine, com
@@ -58,7 +63,9 @@ namespace Smile {
         void InvalidateOcclusion() { OccValid = false; }
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
-                            const Vec3& CameraWorldPos, f32 TimeSec, const FWeather& Weather);
+                            const Vec3& CameraWorldPos, f32 TimeSec, const FWeather& Weather,
+                            const Vec3& KeyDir, const Vec3& KeyColorTimesInt,
+                            const Vec3& SkyAmbient);
 
         // Pre-condicoes (estado no ponto do frame em que roda): G-buffer em RENDER_TARGET
         // (saida do geometry pass) e depth em DEPTH_WRITE — restaura os dois ao final.
@@ -66,9 +73,17 @@ namespace Smile {
                      FGBuffer& GBuffer, ID3D12Resource* DepthBuffer, u32 DepthSRVSlot,
                      u32 Width, u32 Height);
 
+        // F3: cortina de gotas (estilo SceneRain da Cry, cilindros conceituais no fullscreen
+        // pass — 3 raios com parallax, streaks procedurais, tint da key light, soft-depth e
+        // oclusao pelo mapa da F2). Blend premultiplicado por cima do HDR ja com fog; o
+        // caller poe o RTV do HDR e o depth como SRV (mesmo padrao do Fog.Execute).
+        void ExecuteCurtain(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
+                            u32 DepthSRVSlot, u32 Width, u32 Height);
+
     private:
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSO(ID3D12Device* Device);
+        void BuildCurtainPSO(ID3D12Device* Device); // F3 (mesmo root sig da wetness)
         void CreateConstantBuffer(ID3D12Device* Device);
         void CreateScratch(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void BuildOcclusion(ID3D12Device* Device, FTextureSRVHeap& SRVHeap); // F2: mapa + PSOs
@@ -98,6 +113,7 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> CurtainPSO; // F3
 
         // Copias de leitura de GBufferA/B (mesmos formatos), SRVs contiguos [A,B] p/ uma tabela.
         Microsoft::WRL::ComPtr<ID3D12Resource> ScratchA;
