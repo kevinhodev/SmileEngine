@@ -17,12 +17,16 @@ cbuffer SunShaftsVolCB : register(b0) {
     float4 MarchParams;    // x = passos, y = dist máxima (m), z = frame do ruído IGN,
                            // w = "poeira" = multiplicador da densidade efetiva DESTE passe
     float4 ScreenParams;   // xy = dims do RT meia-res, zw = 1/dims
+    float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = força (0 = off)
+    float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     row_major float4x4 InvViewProj;
     float4 CameraWorldPos; // xyz = câmera em mundo, w unused
 };
 
-Texture2D<float> SceneDepth : register(t0);
-SamplerState     PointClamp : register(s1);
+Texture2D<float> SceneDepth     : register(t0);
+Texture2D<float> CloudShadowMap : register(t1); // transmitância das nuvens p/ a key light
+SamplerState     LinearClamp    : register(s0);
+SamplerState     PointClamp     : register(s1);
 
 // Visibilidade barata p/ pontos no ar: seleção de cascata + 1 tap comparativo.
 // Sem normal-offset (não há superfície) e bias fixo — acne não existe em volume.
@@ -94,6 +98,21 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
                       MarchParams.w;
 
         float vis = VisVolumetric(wp);
+
+        // Sombra das nuvens POR PASSO (mesma projeção do deferred lighting): nuvem
+        // corta o feixe no meio do ar — a borda da sombra vira uma parede de luz.
+        // De brinde, dia nublado apaga os shafts sozinho.
+        if (CloudShadowParams.w > 0.0f) {
+            float  kKm   = CloudShadowParams2.x;
+            float2 hitKm = wp.xz * kKm + CloudShadowParams2.zw *
+                           max(CloudShadowParams2.y - wp.y * kKm, 0.0f);
+            float2 suv   = (hitKm - CloudShadowParams.xy) * CloudShadowParams.z + 0.5f;
+            if (all(suv > 0.0f) && all(suv < 1.0f)) {
+                float Tc = CloudShadowMap.SampleLevel(LinearClamp, suv, 0.0f).r;
+                vis *= lerp(1.0f, Tc, CloudShadowParams.w);
+            }
+        }
+
         float contrib = vis * sigma * T * dt;
         accum += contrib;
         wSum  += contrib;

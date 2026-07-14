@@ -23,18 +23,22 @@ namespace Smile {
         // SunColorTimesIntensity = radiância real da key light (cor x intensidade);
         // CollapsedFogParams vem de FFogPass::CollapsedFogParams (mesmo meio do fog do
         // frame); PrevViewProj interno vem do ViewProjUnjittered do frame anterior.
+        // CloudShadowParams/2 = MESMOS vetores do deferred lighting (nuvem corta o
+        // feixe por passo; w=0 desliga e o shader nem amostra).
         void UpdateVolumetric(u32 FrameSlot, const Vec3& DirToSun,
                               const Vec3& SunColorTimesIntensity,
                               const Vec4& CollapsedFogParams, f32 NoiseFrame,
                               const Mat44& InvViewProjFull, const Vec3& CameraWorldPos,
-                              const Mat44& ViewProjUnjittered);
+                              const Mat44& ViewProjUnjittered,
+                              const Vec4& CloudShadowParams, const Vec4& CloudShadowParams2);
 
         // Raymarch + temporal nos RTs próprios. Depth em PIXEL_SHADER_RESOURCE e CSM
         // legível (EnsureReadable) antes. Muda viewport pra meia-res — o chamador
-        // re-seta o viewport full depois.
+        // re-seta o viewport full depois. CloudShadowSRVSlot = shadow map de nuvens
+        // (passar um SRV qualquer válido, ex. depth, quando nuvens off — CB gate w=0).
         void RecordVolumetric(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                               u32 DepthSRVSlot, D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddr,
-                              u32 CSMShadowSRVSlot);
+                              u32 CSMShadowSRVSlot, u32 CloudShadowSRVSlot);
 
         // Slot que o fog consome: história acumulada (ou o raw, com temporal off).
         u32 VolumetricSRVSlot() const {
@@ -70,6 +74,8 @@ namespace Smile {
             Vec4  FogDensityP;    // x = dens1 colapsada, y = falloff1, z = dens2, w = falloff2
             Vec4  MarchParams;    // x = passos, y = dist max, z = frame IGN, w = poeira
             Vec4  ScreenParams;   // dims do RT meia-res
+            Vec4  CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = força (0 = off)
+            Vec4  CloudShadowParams2; // x = km/unidade, y = base da camada (km), zw = keyDir.xz/y
             Mat44 InvViewProj;
             Vec4  CameraWorldPos;
         };

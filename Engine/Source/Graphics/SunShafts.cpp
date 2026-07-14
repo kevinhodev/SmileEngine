@@ -40,7 +40,10 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE ShadowRange = DepthRange;
         ShadowRange.BaseShaderRegister = 11;
 
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_DESCRIPTOR_RANGE CloudRange = DepthRange;
+        CloudRange.BaseShaderRegister = 1;
+
+        D3D12_ROOT_PARAMETER RootParams[5]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -59,7 +62,12 @@ namespace Smile {
         RootParams[3].DescriptorTable.pDescriptorRanges   = &ShadowRange;
         RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
+        RootParams[4].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[4].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[4].DescriptorTable.pDescriptorRanges   = &CloudRange;
+        RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_STATIC_SAMPLER_DESC Samplers[3]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_POINT;
         Samplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         Samplers[0].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -77,6 +85,11 @@ namespace Smile {
         Samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         Samplers[1].BorderColor    = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
         Samplers[1].ShaderRegister = 2;
+
+        // linear clamp p/ o shadow map de nuvens (transmitância suave, igual ao deferred)
+        Samplers[2] = Samplers[0];
+        Samplers[2].Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        Samplers[2].ShaderRegister = 0;
 
         D3D12_ROOT_SIGNATURE_DESC Desc{};
         Desc.NumParameters     = _countof(RootParams);
@@ -296,7 +309,9 @@ namespace Smile {
                                       const Vec3& _SunColorTimesIntensity,
                                       const Vec4& _CollapsedFogParams, f32 _NoiseFrame,
                                       const Mat44& _InvViewProjFull, const Vec3& _CameraWorldPos,
-                                      const Mat44& _ViewProjUnjittered) {
+                                      const Mat44& _ViewProjUnjittered,
+                                      const Vec4& _CloudShadowParams,
+                                      const Vec4& _CloudShadowParams2) {
         FrameSlot = _FrameSlot;
         if (!VolMappedBase || !TemporalMappedBase) return;
 
@@ -309,6 +324,8 @@ namespace Smile {
         v.FogDensityP    = _CollapsedFogParams;
         v.MarchParams    = { VolSteps, VolMaxDist, _NoiseFrame, VolDust };
         v.ScreenParams   = { W, H, 1.0f / W, 1.0f / H };
+        v.CloudShadowParams  = _CloudShadowParams;
+        v.CloudShadowParams2 = _CloudShadowParams2;
         v.InvViewProj    = _InvViewProjFull;
         v.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, 0.0f };
         std::memcpy(VolMappedBase + static_cast<size_t>(FrameSlot) * sizeof(VolConstants),
@@ -343,7 +360,7 @@ namespace Smile {
     void FSunShafts::RecordVolumetric(ID3D12GraphicsCommandList* _CommandList,
                                       FTextureSRVHeap& _SRVHeap, u32 _DepthSRVSlot,
                                       D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddr,
-                                      u32 _CSMShadowSRVSlot) {
+                                      u32 _CSMShadowSRVSlot, u32 _CloudShadowSRVSlot) {
         if (!Initialized) return;
 
         D3D12_VIEWPORT VP{};
@@ -370,6 +387,7 @@ namespace Smile {
         _CommandList->SetGraphicsRootConstantBufferView(1, _CSMConstantsAddr);
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_DepthSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_CSMShadowSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_CloudShadowSRVSlot));
         _CommandList->DrawInstanced(3, 1, 0, 0);
         TransitionTo(_CommandList, VolRT.Get(), VolState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 

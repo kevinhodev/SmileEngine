@@ -1015,21 +1015,9 @@ namespace Smile {
         const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(CameraPosition.Y);
         Fog.SetDensity(FogDensityBase);
 
-        // Sun shafts volumétricos: raymarch precisa da radiância real da key light e do
-        // ruído IGN animado — o acumulador temporal próprio (ou o TAA/FSR2) integra o
-        // jitter; sem nenhum dos dois o ruído fica estático (menos pior que fervilhar).
-        if (VolShaftsActive) {
-            const Vec3 KeyColInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
-                                     KeyColor.Z * KeyInt };
-            const f32 ShaftNoiseFrame =
-                (TAAActive || Fsr2Active || SunShafts.GetVolTemporal())
-                    ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-            SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
-                                       ShaftNoiseFrame, InvViewProjFull, CameraPosition,
-                                       ViewProjUnjittered);
-        } else if (SunShafts.IsInitialized()) {
-            SunShafts.ResetHistory(); // história/PrevVP obsoletos quando o efeito dorme
-        }
+        // (o UpdateVolumetric dos sun shafts roda mais abaixo, depois do update das
+        // nuvens — ele consome os CloudShadowParams do frame, que dependem do centro
+        // snapado do shadow map de nuvens)
 
         // F4: chuva puxa a cobertura de nuvem pra um piso nublado (max com o valor do
         // usuario; idem, restaurada apos o update — a pagina de nuvens continua mandando).
@@ -1045,20 +1033,24 @@ namespace Smile {
                                         SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex);
         VolumetricClouds.SetCoverage(CloudCovBase);
 
+        Vec4 CloudShadowP{ 0.0f, 0.0f, 0.0f, 0.0f };
+        Vec4 CloudShadowP2{ 0.0f, 0.0f, 0.0f, 0.0f };
         {
             // Sombra das nuvens no chao: params p/ o deferred lighting + SRV copiado no
             // slot t4 da tabela do G-buffer (por frame: barato e nunca envelhece).
+            // Os mesmos vetores alimentam o raymarch dos sun shafts (nuvem corta o feixe).
             const f32 KeyY = KeyDir.Y > 0.05f ? KeyDir.Y : 0.05f;
             const bool CloudShadowOn = UseClouds && VolumetricClouds.IsInitialized() &&
                                        VolumetricClouds.GetShadowsEnabled() && KeyDir.Y > 0.02f;
-            MappedCB->CloudShadowParams  = { VolumetricClouds.ShadowCenterX(),
-                                             VolumetricClouds.ShadowCenterZ(),
-                                             VolumetricClouds.ShadowInvExtent(),
-                                             CloudShadowOn ? VolumetricClouds.GetShadowStrength()
-                                                           : 0.0f };
-            MappedCB->CloudShadowParams2 = { kKmPerWorldUnit,
-                                             VolumetricClouds.GetBottomAltitude(),
-                                             KeyDir.X / KeyY, KeyDir.Z / KeyY };
+            CloudShadowP  = { VolumetricClouds.ShadowCenterX(),
+                              VolumetricClouds.ShadowCenterZ(),
+                              VolumetricClouds.ShadowInvExtent(),
+                              CloudShadowOn ? VolumetricClouds.GetShadowStrength() : 0.0f };
+            CloudShadowP2 = { kKmPerWorldUnit,
+                              VolumetricClouds.GetBottomAltitude(),
+                              KeyDir.X / KeyY, KeyDir.Z / KeyY };
+            MappedCB->CloudShadowParams  = CloudShadowP;
+            MappedCB->CloudShadowParams2 = CloudShadowP2;
             if (VolumetricClouds.IsInitialized()) {
                 D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(GBuffer.SRVTableStart() + 4);
                 D3D12_CPU_DESCRIPTOR_HANDLE Src =
@@ -1067,6 +1059,22 @@ namespace Smile {
                 Device.Native()->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
                                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             }
+        }
+
+        // Sun shafts volumétricos: raymarch precisa da radiância real da key light e do
+        // ruído IGN animado — o acumulador temporal próprio (ou o TAA/FSR2) integra o
+        // jitter; sem nenhum dos dois o ruído fica estático (menos pior que fervilhar).
+        if (VolShaftsActive) {
+            const Vec3 KeyColInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
+                                     KeyColor.Z * KeyInt };
+            const f32 ShaftNoiseFrame =
+                (TAAActive || Fsr2Active || SunShafts.GetVolTemporal())
+                    ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
+            SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
+                                       ShaftNoiseFrame, InvViewProjFull, CameraPosition,
+                                       ViewProjUnjittered, CloudShadowP, CloudShadowP2);
+        } else if (SunShafts.IsInitialized()) {
+            SunShafts.ResetHistory(); // história/PrevVP obsoletos quando o efeito dorme
         }
 
         const Mat44 WaterViewProj    = ViewProjection;
@@ -1927,7 +1935,10 @@ namespace Smile {
                 SunShadows.EnsureReadable(CommandList);
                 SunShafts.RecordVolumetric(CommandList, SRVHeap, DepthSRVSlot,
                                            SunShadows.ConstantsAddress(),
-                                           SunShadows.ShadowSRVSlot());
+                                           SunShadows.ShadowSRVSlot(),
+                                           VolumetricClouds.IsInitialized()
+                                               ? VolumetricClouds.ShadowSRV()
+                                               : DepthSRVSlot);
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
             }
