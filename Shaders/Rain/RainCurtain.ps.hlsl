@@ -67,11 +67,13 @@ float4 main(VSOutput input) : SV_Target {
     const float3 tint   = keyCol * lerp(0.03f, 0.11f, fwd)
                         + SkyAmbientRain.rgb * 0.10f;
 
-    // 3 cilindros presos na camera: perto = streak grande e rapido, longe = cortina densa.
-    const float radii [3] = { 2.2f, 5.5f, 12.0f };
-    const float scaleV[3] = { 0.45f, 0.30f, 0.22f }; // 1/altura da celula vertical (m)
-    const float alphaL[3] = { 0.35f, 0.30f, 0.25f };
-
+    // 4 cilindros presos na camera: perto = streak grande e rapido, longe = cortina densa.
+    // O de 28 m e a chuva DISTANTE (rua do outro lado de um arco/tunel curto — A/B da F3).
+    const float radii [4] = { 2.2f, 5.5f, 12.0f, 28.0f };
+    const float scaleV[4] = { 0.45f, 0.30f, 0.22f, 0.15f }; // 1/altura da celula vertical (m)
+    const float alphaL[4] = { 0.35f, 0.30f, 0.25f, 0.20f };
+    const float colsM [4] = { 7.0f, 7.0f, 7.0f, 3.5f };     // colunas/m (longe = mais grosso,
+                                                            // senao vira shimmer subpixel)
     float3 acc  = 0.0f;
     float  accA = 0.0f;
 
@@ -81,9 +83,9 @@ float4 main(VSOutput input) : SV_Target {
     const float upFade   = smoothstep(0.08f, 0.20f, horizRaw);
     if (upFade <= 0.001f) discard;
 
-    [unroll] for (int i = 0; i < 3; ++i) {
-        // F5: com particulas ON o near-field e delas — a cortina mantem so o cilindro
-        // de 12 m (medio/longe), senao gota-quad e streak se sobrepoem em dobro
+    [unroll] for (int i = 0; i < 4; ++i) {
+        // F5: com particulas ON o near-field e delas — a cortina mantem so os cilindros
+        // de 12/28 m (medio/longe), senao gota-quad e streak se sobrepoem em dobro
         if (CurtainParams.z > 0.5f && i < 2) continue;
         const float r     = radii[i];
         const float horiz = max(horizRaw, 0.12f);   // clamp p/ olhar reto cima/baixo
@@ -103,7 +105,7 @@ float4 main(VSOutput input) : SV_Target {
         if (occ <= 0.01f) continue;
 
         // UV cilindrico com numero INTEIRO de colunas na volta (sem costura atras da camera)
-        const float cols  = round(6.28318f * r * 7.0f);
+        const float cols  = round(6.28318f * r * colsM[i]);
         const float un    = (atan2(dir.x, dir.z) * 0.159155f + 0.5f) * cols;
         const float u     = fmod(floor(un), cols) + frac(un);
         const float v     = (wall.y + time * speed) * scaleV[i];
@@ -117,6 +119,26 @@ float4 main(VSOutput input) : SV_Target {
         const float a = s * alphaL[i];
         acc  += tint * a * (1.0f - accA);
         accA += a * (1.0f - accA);
+    }
+
+    // ---- Chuva DISTANTE (veu estilo Cry) ----
+    // De dentro de um tunel os cilindros caem todos em area coberta e a chuva la fora
+    // sumia (A/B da F3). A Cry acumula oclusao ao longo do raio (40 taps); aqui 8 taps de
+    // exposicao entre 12 m e min(cena, 55 m) viram um veu fraco SEM streak — le como
+    // "esta chovendo la fora" por qualquer abertura, com tunel de qualquer comprimento.
+    const float veilStart = 12.0f;
+    const float veilEnd   = min(sceneDist, 55.0f);
+    if (veilEnd > veilStart + 1.0f) {
+        float expo = 0.0f;
+        [unroll] for (int k = 0; k < 8; ++k) {
+            float tk = lerp(veilStart, veilEnd, (k + 0.5f) / 8.0f);
+            expo += SkyVisibility(CameraWorldPos.xyz + dir * tk);
+        }
+        expo *= 0.125f;
+        // peso pelo comprimento do trecho chuvoso na frente do pixel
+        float veil = expo * saturate((veilEnd - veilStart) / 40.0f) * rain * 0.10f * upFade;
+        acc  += tint * veil * (1.0f - accA);
+        accA += veil * (1.0f - accA);
     }
 
     if (accA <= 0.0015f) discard;
