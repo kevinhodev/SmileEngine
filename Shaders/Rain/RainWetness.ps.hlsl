@@ -156,7 +156,10 @@ PSOut main(VSOutput input) {
         float3 puddleN = normalize(float3(-grad.x, 1.0f, -grad.y));
 
         N     = normalize(lerp(N, puddleN, puddle));
-        rough = lerp(rough, 0.06f, puddle);   // agua parada ~espelho (gloss 0.93 da Cry)
+        // 0.02: abaixo do corte de espelho EXATO do ReflectionTraceMirror (<0.05). Com 0.06
+        // a poça caia no GGX jittered + temporal e o reflexo amaciava — espelho d'agua de
+        // verdade precisa do reflect determinístico (rodada "reflexão molhada").
+        rough = lerp(rough, 0.02f, puddle);
         ao    = lerp(ao, 1.0f, puddle * 0.5f); // agua nao cavita o AO do material seco
     }
 

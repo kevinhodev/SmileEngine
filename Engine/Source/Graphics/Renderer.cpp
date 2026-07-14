@@ -1198,10 +1198,14 @@ namespace Smile {
 
         if (ReflectionsActive) {
             Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
+            // Chuva (reflexao molhada): raios que erram a cena leem o SkyView LUT, que nao
+            // sabe das nuvens — sem o dim, poça espelhada refletia ceu AZUL no temporal
+            // nublado. Escurece o ceu dos misses junto com o clima (KeyColor ja vem dimado).
+            const f32 ReflSkyIntensity = 1.0f - RainSky * 0.65f;
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
-                                       KeyColor, FrameIndex, 1.0f, 0.2f, Reflections.GetRealHitShading(),
-                                       View, GILightCount);
+                                       KeyColor, FrameIndex, ReflSkyIntensity, 0.2f,
+                                       Reflections.GetRealHitShading(), View, GILightCount);
         }
 
         if (ReSTIRGIActive) {
