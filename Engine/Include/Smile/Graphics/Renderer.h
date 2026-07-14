@@ -24,7 +24,6 @@
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/Fog.h"
 #include "Smile/Graphics/SunShafts.h"
-#include "Smile/Graphics/SunShaftBloom.h"
 #include "Smile/Graphics/Weather.h"
 #include "Smile/Graphics/RainWetness.h"
 #include "Smile/Graphics/SunShadows.h"
@@ -248,8 +247,6 @@ namespace Smile {
         bool GetUseSunShafts() const           { return UseSunShafts; }
         FSunShafts& GetSunShafts()             { return SunShafts; }
         const FSunShafts& GetSunShafts() const { return SunShafts; }
-        FSunShaftBloom& GetSunShaftBloom()             { return SunShaftBloom; }
-        const FSunShaftBloom& GetSunShaftBloom() const { return SunShaftBloom; }
 
 
         FSunShadows& GetSunShadows()           { return SunShadows; }
@@ -467,7 +464,6 @@ namespace Smile {
         bool            UseHeightFog         = false;
 
         FSunShafts      SunShafts;
-        FSunShaftBloom  SunShaftBloom;
         bool            UseSunShafts          = true;
 
         FWeather        Weather;     // estado de clima (chuva) — editor escreve, chuva le

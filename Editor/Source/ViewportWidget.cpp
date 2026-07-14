@@ -398,36 +398,6 @@ namespace SmileEditor {
     }
 
 
-    bool ViewportWidget::IsSunShaftBloomEnabled() const {
-        return Renderer ? Renderer->GetSunShaftBloom().GetEnabled() : true;
-    }
-
-    void ViewportWidget::SetSunShaftBloomEnabled(bool _Enabled) {
-        if (!Renderer) return;
-        Renderer->GetSunShaftBloom().SetEnabled(_Enabled);
-        emit ViewSettingsChanged();
-    }
-
-    double ViewportWidget::GetSunShaftBloomIntensity() const {
-        return Renderer ? Renderer->GetSunShaftBloom().GetIntensity() : 0.35;
-    }
-
-    void ViewportWidget::SetSunShaftBloomIntensity(double _Value) {
-        if (!Renderer) return;
-        Renderer->GetSunShaftBloom().SetIntensity(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
-    }
-
-    double ViewportWidget::GetSunShaftBloomThreshold() const {
-        return Renderer ? Renderer->GetSunShaftBloom().GetThreshold() : 1.0;
-    }
-
-    void ViewportWidget::SetSunShaftBloomThreshold(double _Value) {
-        if (!Renderer) return;
-        Renderer->GetSunShaftBloom().SetThreshold(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
-    }
-
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
     }

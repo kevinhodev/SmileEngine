@@ -1123,55 +1123,6 @@ Rectangle {
                     }
                 }
             }
-
-            Card {
-                x: 24 + shadowsPage.colW + shadowsPage.gap
-                y: 520
-                width: shadowsPage.colW
-                height: 164
-                title: "Bloom artistico"
-
-                Text {
-                    x: 20; y: 50
-                    text: "Raios radiais HDR"
-                    color: root.textPrimary
-                    font.family: "Segoe UI"
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 69
-                    text: "quarter-res | 3 passes | antes do TAA"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 49
-                    checked: viewportModel.sunShaftBloomEnabled
-                    onToggled: viewportModel.SetSunShaftBloomEnabled(!checked)
-                }
-
-                ShadowSlider {
-                    x: 20; y: 104
-                    width: (parent.width - 52) / 2
-                    label: "Intensidade"
-                    from: 0; to: 2; step: 0.01
-                    value: viewportModel.sunShaftBloomIntensity
-                    valueText: viewportModel.sunShaftBloomIntensity.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftBloomIntensity(v)
-                }
-                ShadowSlider {
-                    x: parent.width / 2 + 6; y: 104
-                    width: (parent.width - 52) / 2
-                    label: "Threshold HDR"
-                    from: 0; to: 5; step: 0.05
-                    value: viewportModel.sunShaftBloomThreshold
-                    valueText: viewportModel.sunShaftBloomThreshold.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftBloomThreshold(v)
-                }
-            }
         }
 
         Flickable {
