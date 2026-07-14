@@ -999,64 +999,6 @@ Rectangle {
                     onToggled: viewportModel.SetShadowDebugCascades(!checked)
                 }
             }
-            Card {
-                x: 24
-                y: 412
-                width: shadowsPage.colW
-                height: 272
-                title: "Sun shafts"
-
-                Text {
-                    x: 20; y: 55
-                    text: "Iluminacao volumetrica direcional"
-                    color: root.textPrimary
-                    font.family: "Segoe UI"
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 74
-                    text: "froxels 16 px | 64 slices | CSM + temporal"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 54
-                    checked: viewportModel.sunShaftsEnabled
-                    onToggled: viewportModel.SetSunShaftsEnabled(!checked)
-                }
-
-                ShadowSlider {
-                    x: 20; y: 108
-                    width: parent.width - 40
-                    label: "Intensidade"
-                    from: 0; to: 2; step: 0.01
-                    value: viewportModel.sunShaftsIntensity
-                    valueText: viewportModel.sunShaftsIntensity.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsIntensity(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 160
-                    width: parent.width - 40
-                    label: "Anisotropia (g)"
-                    from: 0; to: 0.9; step: 0.01
-                    value: viewportModel.sunShaftsAnisotropy
-                    valueText: viewportModel.sunShaftsAnisotropy.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsAnisotropy(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 212
-                    width: parent.width - 40
-                    label: "Distancia volumetrica"
-                    from: 100; to: 2000; step: 25
-                    value: viewportModel.sunShaftsMaxDistance
-                    valueText: Math.round(viewportModel.sunShaftsMaxDistance) + " m"
-                    onCommitted: (v) => viewportModel.SetSunShaftsMaxDistance(v)
-                }
-            }
-
 
             Card {
                 x: 24 + shadowsPage.colW + shadowsPage.gap

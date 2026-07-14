@@ -29,12 +29,9 @@ namespace Smile {
         DepthRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_DESCRIPTOR_RANGE AerialRange = DepthRange;
-        AerialRange.BaseShaderRegister = 1;
+        AerialRange.BaseShaderRegister = 1; 
 
-        D3D12_DESCRIPTOR_RANGE SunShaftRange = DepthRange;
-        SunShaftRange.BaseShaderRegister = 2;
-
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[3]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -48,11 +45,6 @@ namespace Smile {
         RootParams[2].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[2].DescriptorTable.pDescriptorRanges   = &AerialRange;
         RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
-
-        RootParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[3].DescriptorTable.pDescriptorRanges   = &SunShaftRange;
-        RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -159,8 +151,7 @@ namespace Smile {
                                   const Vec3& _CameraWorldPos, f32 _KmPerWorldUnit,
                                   const Vec3& _DirToSun, f32 _NearZ, f32 _FarZ,
                                   u32 _Width, u32 _Height, bool _UseAerial, bool _UseHeightFog,
-                                  f32 _AerialDepthKm, bool _VolumetricSunShafts,
-                                  f32 _SunShaftMaxDistance) {
+                                  f32 _AerialDepthKm) {
         FrameSlot = _FrameSlot;
         if (!MappedBase) return;
 
@@ -181,9 +172,7 @@ namespace Smile {
         c.DirectionalInscatteringColor = { DirColor.X, DirColor.Y, DirColor.Z, DirExponent };
 
         const Vec3 SunN = _DirToSun.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
-        const bool AnalyticDirectional = DirEnabled && !_VolumetricSunShafts;
-        c.InscatteringLightDirection = { SunN.X, SunN.Y, SunN.Z,
-                                          AnalyticDirectional ? DirStartDistance : -1.0f };
+        c.InscatteringLightDirection = { SunN.X, SunN.Y, SunN.Z, DirEnabled ? DirStartDistance : -1.0f };
 
         c.InvViewProj    = _InvViewProjFull;
         c.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
@@ -191,22 +180,18 @@ namespace Smile {
         const f32 W = static_cast<f32>(_Width), H = static_cast<f32>(_Height);
         c.ScreenParams   = { W, H, W > 0 ? 1.0f / W : 0.0f, H > 0 ? 1.0f / H : 0.0f };
         c.DepthParams    = { _NearZ, _FarZ, 0.0f, 0.0f };
-        c.SunShaftParams = { _SunShaftMaxDistance, _VolumetricSunShafts ? 1.0f : 0.0f,
-                              0.0f, 0.0f };
 
         *Mapped() = c;
     }
 
     void FFogPass::Execute(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
-                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot,
-                           u32 _SunShaftVolumeSRVSlot) {
+                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot) {
         if (!Initialized) return;
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
         _CommandList->SetPipelineState(PSO.Get());
         _CommandList->SetGraphicsRootConstantBufferView(0, CBAddr());
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(_DepthSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_AerialVolumeSRVSlot));
-        _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_SunShaftVolumeSRVSlot));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CommandList->IASetVertexBuffers(0, 0, nullptr);
         _CommandList->IASetIndexBuffer(nullptr);

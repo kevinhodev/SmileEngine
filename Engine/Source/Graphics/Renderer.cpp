@@ -76,8 +76,6 @@ namespace Smile {
         RainWetness.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
 
         SunShadows.Initialize(Device.Native(), SRVHeap);
-        SunShafts.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-
         LocalShadows.Initialize(Device.Native(), SRVHeap);
 
         PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
@@ -684,7 +682,6 @@ namespace Smile {
         VolumetricClouds.Resize(Device.Native(), SRVHeap, RW, RH);
         Water.Resize(Device.Native(), RW, RH);
         RainWetness.Resize(Device.Native(), SRVHeap, RW, RH);
-        SunShafts.Resize(Device.Native(), SRVHeap, RW, RH);
         CreateSceneCopies();
 
         PostProcessor.Resize(Device.Native(), SRVHeap, SW, SH);    
@@ -1005,23 +1002,9 @@ namespace Smile {
         // update; o knob do usuario nao muda). Chuva forte ~2.5x a densidade base.
         const f32 FogDensityBase = Fog.GetDensity();
         if (RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + RainSky * 1.5f));
-        Vec4 FogLayer1, FogLayer2;
-        Fog.GetVolumeLayers(FogLayer1, FogLayer2);
-        const bool VolumetricShaftsActive = UseSunShafts && UseSunShadows &&
-                                            KeyInt > 1e-4f;
-        const u32 ShaftJitterIndex = (FrameIndex % 1024u) + 1u;
-        const Vec3 ShaftJitter{ Halton(ShaftJitterIndex, 2),
-                                Halton(ShaftJitterIndex, 3),
-                                Halton(ShaftJitterIndex, 5) };
-        SunShafts.UpdatePerFrame(FrameSlot, InvViewProjUnjit, PrevViewProj,
-                                 CameraPosition, KeyDir, KeyColor, KeyInt,
-                                 FogLayer1, FogLayer2, FarZ, ShaftJitter,
-                                 VolumetricShaftsActive);
-        Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit,
-                           KeyDir, NearZ, FarZ, RenderWidth(), RenderHeight(),
-                           UseAerialPerspective, UseHeightFog,
-                           Atmosphere.AerialDepthKm(), VolumetricShaftsActive,
-                           SunShafts.GetMaxDistance());
+        Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
+                           NearZ, FarZ, RenderWidth(), RenderHeight(),
+                           UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm());
         Fog.SetDensity(FogDensityBase);
 
         // F4: chuva puxa a cobertura de nuvem pra um piso nublado (max com o valor do
@@ -1903,11 +1886,7 @@ namespace Smile {
                                  FrameIndex);
         }
 
-        if (SunShafts.HasWork()) {
-            SunShafts.Record(CommandList, SRVHeap, SunShadows.ConstantsAddress(),
-                             SunShadows.ShadowSRVSlot());
-        }
-        if ((UseHeightFog || UseAerialPerspective || SunShafts.HasWork()) && Fog.IsInitialized()) {
+        if ((UseHeightFog || UseAerialPerspective) && Fog.IsInitialized()) {
             D3D12_RESOURCE_BARRIER DepthBarrier{};
             DepthBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             DepthBarrier.Transition.pResource   = DepthBuffer.Get();
@@ -1918,9 +1897,7 @@ namespace Smile {
 
             auto Fog_RTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &Fog_RTV, FALSE, nullptr);
-            SunShafts.EnsureReadable(CommandList);
-            Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV(),
-                        SunShafts.IntegratedSRV());
+            Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV());
 
             DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;

@@ -357,46 +357,6 @@ namespace SmileEditor {
         Renderer->GetSunShadows().SetSunAngularSize(static_cast<Smile::f32>(_Degrees));
         emit ViewSettingsChanged();
     }
-    bool ViewportWidget::AreSunShaftsEnabled() const {
-        return Renderer ? Renderer->GetUseSunShafts() : true;
-    }
-
-    void ViewportWidget::SetSunShaftsEnabled(bool _Enabled) {
-        if (!Renderer) return;
-        Renderer->SetUseSunShafts(_Enabled);
-        emit ViewSettingsChanged();
-    }
-
-    double ViewportWidget::GetSunShaftsIntensity() const {
-        return Renderer ? Renderer->GetSunShafts().GetIntensity() : 0.20;
-    }
-
-    void ViewportWidget::SetSunShaftsIntensity(double _Value) {
-        if (!Renderer) return;
-        Renderer->GetSunShafts().SetIntensity(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
-    }
-
-    double ViewportWidget::GetSunShaftsAnisotropy() const {
-        return Renderer ? Renderer->GetSunShafts().GetAnisotropy() : 0.70;
-    }
-
-    void ViewportWidget::SetSunShaftsAnisotropy(double _Value) {
-        if (!Renderer) return;
-        Renderer->GetSunShafts().SetAnisotropy(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
-    }
-
-    double ViewportWidget::GetSunShaftsMaxDistance() const {
-        return Renderer ? Renderer->GetSunShafts().GetMaxDistance() : 800.0;
-    }
-
-    void ViewportWidget::SetSunShaftsMaxDistance(double _Value) {
-        if (!Renderer) return;
-        Renderer->GetSunShafts().SetMaxDistance(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
-    }
-
 
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
