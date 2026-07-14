@@ -42,7 +42,7 @@ Rectangle {
         if (selectedPage === 0)
             return "Upscaling, anti-aliasing e resolução interna do viewport"
         if (selectedPage === 6)
-            return "Sombras do sol (CSM): cascatas, cache, bias e debug"
+            return "Sombras do sol (CSM), sun shafts: cascatas, cache, bias e debug"
         if (selectedPage === 7)
             return "Raymarch de nuvens na atmosfera: cobertura, forma, iluminação e custo"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
@@ -911,16 +911,22 @@ Rectangle {
             }
         }
 
-        Item {
+        Flickable {
             id: shadowsPage
             visible: root.selectedPage === 6
             anchors.fill: parent
+            anchors.topMargin: 84
+            contentWidth: width
+            contentHeight: 328 + 500 + 24
+            clip: true
+            ScrollBar.vertical: ThinScrollBar { revealed: shadowsPageHover.hovered }
+            HoverHandler { id: shadowsPageHover }
 
             readonly property int gap: 16
             readonly property int colW: (width - 48 - gap) / 2
 
             Card {
-                x: 24; y: 84
+                x: 24; y: 0
                 width: shadowsPage.colW
                 height: 312
                 title: "Sombras do sol (CSM)"
@@ -1001,8 +1007,108 @@ Rectangle {
             }
 
             Card {
+                x: 24
+                y: 328
+                width: shadowsPage.colW
+                height: 500
+                title: "Sun shafts"
+
+                Text {
+                    x: 20; y: 55
+                    text: "Raios volumétricos (raymarch no CSM)"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "raio de verdade: janela, fresta, copa — via height fog"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.sunShaftsEnabled
+                    onToggled: viewportModel.SetSunShaftsEnabled(!checked)
+                }
+
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Intensidade"
+                    from: 0; to: 5.0; step: 0.1
+                    value: viewportModel.sunShaftsIntensity
+                    valueText: viewportModel.sunShaftsIntensity.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetSunShaftsIntensity(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 160
+                    width: parent.width - 40
+                    label: "Poeira — realce do feixe"
+                    from: 0.5; to: 8.0; step: 0.1
+                    value: viewportModel.sunShaftsDust
+                    valueText: viewportModel.sunShaftsDust.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetSunShaftsDust(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 212
+                    width: parent.width - 40
+                    label: "Fase HG (g) — lobo contra a luz"
+                    from: 0; to: 0.95; step: 0.01
+                    value: viewportModel.sunShaftsPhaseG
+                    valueText: viewportModel.sunShaftsPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetSunShaftsPhaseG(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 264
+                    width: parent.width - 40
+                    label: "Passos do raymarch"
+                    from: 8; to: 64; step: 4
+                    value: viewportModel.sunShaftsSteps
+                    valueText: viewportModel.sunShaftsSteps + ""
+                    onCommitted: (v) => viewportModel.SetSunShaftsSteps(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 316
+                    width: parent.width - 40
+                    label: "Alcance da marcha (m)"
+                    from: 32; to: 400; step: 8
+                    value: viewportModel.sunShaftsRange
+                    valueText: Math.round(viewportModel.sunShaftsRange) + " m"
+                    onCommitted: (v) => viewportModel.SetSunShaftsRange(v)
+                }
+
+                Rectangle { x: 20; y: 372; width: parent.width - 40; height: 1; color: root.divider }
+
+                Text {
+                    x: 20; y: 390
+                    text: "Acumulação temporal"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 409
+                    text: "integra o ruído do raymarch ao longo dos frames"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 389
+                    checked: viewportModel.sunShaftsTemporal
+                    onToggled: viewportModel.SetSunShaftsTemporal(!checked)
+                }
+            }
+
+            Card {
                 x: 24 + shadowsPage.colW + shadowsPage.gap
-                y: 84
+                y: 0
                 width: shadowsPage.colW
                 height: 420
                 title: "Cascatas — custo e bias"

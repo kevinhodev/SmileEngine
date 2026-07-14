@@ -87,6 +87,10 @@ smile_compile_shader(Rain/RainParticles.ps.hlsl           ps_6_0 main SHADER_OUT
 smile_compile_shader(Rain/RainSplash.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Rain/RainSplash.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
+# Sun shafts volumetricos — raymarch CSM meia-res + acumulacao temporal (fog consome via t2)
+smile_compile_shader(SunShafts/SunShaftsVolumetric.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(SunShafts/SunShaftsTemporal.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
+
 # Nuvens volumetricas — bake de ruido 3D + raymarch + composite
 smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/BakeDetailNoise.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
@@ -202,6 +206,8 @@ add_custom_target(Shaders
         Rain/RainParticles.ps.hlsl
         Rain/RainSplash.vs.hlsl
         Rain/RainSplash.ps.hlsl
+        SunShafts/SunShaftsVolumetric.ps.hlsl
+        SunShafts/SunShaftsTemporal.ps.hlsl
         Clouds/CloudNoiseCommon.hlsli
         Clouds/CloudDensity.hlsli
         Clouds/CloudLighting.hlsli

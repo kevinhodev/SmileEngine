@@ -44,6 +44,13 @@ namespace SmileEditor {
         Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ViewSettingsChanged)
         Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double shadowSunAngle READ GetShadowSunAngle NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool sunShaftsEnabled READ AreSunShaftsEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double sunShaftsIntensity READ GetSunShaftsIntensity NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double sunShaftsDust READ GetSunShaftsDust NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double sunShaftsPhaseG READ GetSunShaftsPhaseG NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int sunShaftsSteps READ GetSunShaftsSteps NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double sunShaftsRange READ GetSunShaftsRange NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool sunShaftsTemporal READ AreSunShaftsTemporal NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsEnabled READ AreCloudsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsHalfRes READ AreCloudsHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsTemporal READ AreCloudsTemporal NOTIFY ViewSettingsChanged)
@@ -114,6 +121,13 @@ namespace SmileEditor {
         double            GetShadowMinCasterTexels() const;
         QVariantList      GetShadowCascadeBias() const;
         double            GetShadowSunAngle() const;
+        bool              AreSunShaftsEnabled() const;
+        double            GetSunShaftsIntensity() const;
+        double            GetSunShaftsDust() const;
+        double            GetSunShaftsPhaseG() const;
+        int               GetSunShaftsSteps() const;
+        double            GetSunShaftsRange() const;
+        bool              AreSunShaftsTemporal() const;
         bool              AreCloudsEnabled() const;
         bool              AreCloudsHalfRes() const;
         bool              AreCloudsTemporal() const;
@@ -167,6 +181,13 @@ namespace SmileEditor {
         Q_INVOKABLE void SetShadowMinCasterTexels(double texels);
         Q_INVOKABLE void SetShadowCascadeBiasScale(int cascade, double scale);
         Q_INVOKABLE void SetShadowSunAngle(double degrees);
+        Q_INVOKABLE void SetSunShaftsEnabled(bool enabled);
+        Q_INVOKABLE void SetSunShaftsIntensity(double value);
+        Q_INVOKABLE void SetSunShaftsDust(double value);
+        Q_INVOKABLE void SetSunShaftsPhaseG(double value);
+        Q_INVOKABLE void SetSunShaftsSteps(int value);
+        Q_INVOKABLE void SetSunShaftsRange(double value);
+        Q_INVOKABLE void SetSunShaftsTemporal(bool enabled);
         Q_INVOKABLE void SetCloudsEnabled(bool enabled);
         Q_INVOKABLE void SetCloudsHalfRes(bool halfRes);
         Q_INVOKABLE void SetCloudsTemporal(bool enabled);
