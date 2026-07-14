@@ -83,6 +83,21 @@ float4 main(VSOutput input) : SV_Target {
     const float upFade   = smoothstep(0.08f, 0.20f, horizRaw);
     if (upFade <= 0.001f) discard;
 
+    // Exposicao ao longo do raio (raymarch de chuva distante estilo Cry, 8 taps entre 12 m
+    // e min(cena, 55 m)): fracao do caminho EXPOSTA a chuva. Alimenta o veu e — o ponto do
+    // A/B do tunel — serve de fallback do cilindro de 28 m: de dentro de um tunel comprido
+    // a parede do cilindro ainda esta coberta, mas o raio atravessa chuva depois da boca.
+    float farExpo = 0.0f;
+    const float veilStart = 12.0f;
+    const float veilEnd   = min(sceneDist, 55.0f);
+    if (veilEnd > veilStart + 1.0f) {
+        [unroll] for (int k = 0; k < 8; ++k) {
+            float tk = lerp(veilStart, veilEnd, (k + 0.5f) / 8.0f);
+            farExpo += SkyVisibility(CameraWorldPos.xyz + dir * tk);
+        }
+        farExpo *= 0.125f;
+    }
+
     [unroll] for (int i = 0; i < 4; ++i) {
         // F5: com particulas ON o near-field e delas — a cortina mantem so os cilindros
         // de 12/28 m (medio/longe), senao gota-quad e streak se sobrepoem em dobro
@@ -100,8 +115,12 @@ float4 main(VSOutput input) : SV_Target {
         const float3 wall = CameraWorldPos.xyz + dir * t;
 
         // F2: marquise/interior cortam a cortina — banda apertada (0.25 m), a de 1.5 m do
-        // wetness deixava vazar 30-60% debaixo de cobertura baixa (bug do A/B)
-        const float occ = SkyVisibilityBand(wall, 6.0f);
+        // wetness deixava vazar 30-60% debaixo de cobertura baixa (bug do A/B).
+        // O cilindro de 28 m representa TODA a chuva de 12 m ao infinito: a visibilidade
+        // dele e "existe trecho exposto no raio?" (max com o raymarch) — senao, com a boca
+        // do tunel alem de 28 m, a saida ficava sem chuva (A/B do tunel, rodada 2)
+        float occ = SkyVisibilityBand(wall, 6.0f);
+        if (i == 3) occ = max(occ, farExpo);
         if (occ <= 0.01f) continue;
 
         // UV cilindrico com numero INTEIRO de colunas na volta (sem costura atras da camera)
@@ -121,22 +140,10 @@ float4 main(VSOutput input) : SV_Target {
         accA += a * (1.0f - accA);
     }
 
-    // ---- Chuva DISTANTE (veu estilo Cry) ----
-    // De dentro de um tunel os cilindros caem todos em area coberta e a chuva la fora
-    // sumia (A/B da F3). A Cry acumula oclusao ao longo do raio (40 taps); aqui 8 taps de
-    // exposicao entre 12 m e min(cena, 55 m) viram um veu fraco SEM streak — le como
-    // "esta chovendo la fora" por qualquer abertura, com tunel de qualquer comprimento.
-    const float veilStart = 12.0f;
-    const float veilEnd   = min(sceneDist, 55.0f);
-    if (veilEnd > veilStart + 1.0f) {
-        float expo = 0.0f;
-        [unroll] for (int k = 0; k < 8; ++k) {
-            float tk = lerp(veilStart, veilEnd, (k + 0.5f) / 8.0f);
-            expo += SkyVisibility(CameraWorldPos.xyz + dir * tk);
-        }
-        expo *= 0.125f;
+    // ---- Veu de chuva distante (haze sem streak, atras dos cilindros) ----
+    if (farExpo > 0.001f) {
         // peso pelo comprimento do trecho chuvoso na frente do pixel
-        float veil = expo * saturate((veilEnd - veilStart) / 40.0f) * rain * 0.10f * upFade;
+        float veil = farExpo * saturate((veilEnd - veilStart) / 30.0f) * rain * 0.18f * upFade;
         acc  += tint * veil * (1.0f - accA);
         accA += veil * (1.0f - accA);
     }
