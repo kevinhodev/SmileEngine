@@ -379,7 +379,7 @@ namespace SmileEditor {
     }
 
     double ViewportWidget::GetSunShaftsDust() const {
-        return Renderer ? Renderer->GetSunShafts().GetVolDust() : 1.0;
+        return Renderer ? Renderer->GetSunShafts().GetVolDust() : 8.0;
     }
 
     void ViewportWidget::SetSunShaftsDust(double _Value) {

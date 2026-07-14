@@ -129,7 +129,7 @@ namespace Smile {
         f32  VolPhaseG    = 0.7f;
         f32  VolSteps     = 32.0f;
         f32  VolMaxDist   = 128.0f; // feixe é efeito de perto; 400m diluía os passos
-        f32  VolDust      = 1.0f;   // boost artístico do espalhamento (não da extinção)
+        f32  VolDust      = 8.0f;   // multiplicador da densidade efetiva do passe (satura, não estoura)
         bool VolTemporal  = true;
 
         D3D12_GPU_VIRTUAL_ADDRESS VolCBAddr() const {

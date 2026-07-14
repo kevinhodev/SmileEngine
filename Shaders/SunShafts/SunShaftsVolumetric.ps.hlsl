@@ -15,7 +15,7 @@ cbuffer SunShaftsVolCB : register(b0) {
     float4 FogDensityP;    // x = densidade1 colapsada na câmera (exp2), y = falloff1,
                            // z = densidade2 colapsada, w = falloff2
     float4 MarchParams;    // x = passos, y = dist máxima (m), z = frame do ruído IGN,
-                           // w = boost de "poeira" (só no espalhamento, não na extinção)
+                           // w = "poeira" = multiplicador da densidade efetiva DESTE passe
     float4 ScreenParams;   // xy = dims do RT meia-res, zw = 1/dims
     row_major float4x4 InvViewProj;
     float4 CameraWorldPos; // xyz = câmera em mundo, w unused
@@ -83,10 +83,15 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
         float3 wp = CameraWorldPos.xyz + dir * t;
 
         // densidade do height fog na altura do passo (mesma distribuição 2-exponencial
-        // do FogCommon, colapsada na câmera; x0.6931 converte exp2 -> unidades naturais)
+        // do FogCommon, colapsada na câmera; x0.6931 converte exp2 -> unidades naturais).
+        // "Poeira" multiplica a densidade EFETIVA do passe (espalhamento E extinção):
+        // o shaft enxerga um ar mais denso que o fog global — o efeito satura física-
+        // mente em vez de estourar (com fog default 0.0002, o raio inteiro espalha só
+        // ~2% da luz; era por isso que intensidade linear não resolvia).
         float dh = wp.y - CameraWorldPos.y;
         float sigma = (FogDensityP.x * exp2(-FogDensityP.y * dh) +
-                       FogDensityP.z * exp2(-FogDensityP.w * dh)) * 0.6931472f;
+                       FogDensityP.z * exp2(-FogDensityP.w * dh)) * 0.6931472f *
+                      MarchParams.w;
 
         float vis = VisVolumetric(wp);
         float contrib = vis * sigma * T * dt;
@@ -96,9 +101,7 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
         T     *= exp(-sigma * dt);
     }
 
-    // "Poeira": realça só o espalhamento (albedo artístico), extinção segue física —
-    // deixa o feixe visível sem engrossar o fog global.
-    float3 result = accum * MarchParams.w * ph * SunColorInt.rgb * SunColorInt.w;
+    float3 result = accum * ph * SunColorInt.rgb * SunColorInt.w;
 
     // alpha = distância média ponderada pela contribuição: o passe temporal reprojeta
     // o pixel por este ponto representativo (fallback: meio do raio, contribuição ~0)

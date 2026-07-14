@@ -917,17 +917,21 @@ Rectangle {
             anchors.fill: parent
             anchors.topMargin: 84
             contentWidth: width
-            contentHeight: 328 + 500 + 24
+            contentHeight: shadowsCol.height + 40
             clip: true
             ScrollBar.vertical: ThinScrollBar { revealed: shadowsPageHover.hovered }
             HoverHandler { id: shadowsPageHover }
 
-            readonly property int gap: 16
-            readonly property int colW: (width - 48 - gap) / 2
+            // coluna única (padrão da página de nuvens): contentHeight segue a Column
+            // e o scroll sempre alcança o último card
+            Column {
+                id: shadowsCol
+                x: 24
+                width: shadowsPage.width - 48
+                spacing: 16
 
             Card {
-                x: 24; y: 0
-                width: shadowsPage.colW
+                width: parent.width
                 height: 312
                 title: "Sombras do sol (CSM)"
 
@@ -1007,9 +1011,7 @@ Rectangle {
             }
 
             Card {
-                x: 24
-                y: 328
-                width: shadowsPage.colW
+                width: parent.width
                 height: 500
                 title: "Sun shafts"
 
@@ -1047,10 +1049,10 @@ Rectangle {
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
-                    label: "Poeira — realce do feixe"
-                    from: 0.5; to: 8.0; step: 0.1
+                    label: "Poeira — densidade do feixe"
+                    from: 1; to: 64; step: 1
                     value: viewportModel.sunShaftsDust
-                    valueText: viewportModel.sunShaftsDust.toFixed(1).replace(".", ",")
+                    valueText: "×" + Math.round(viewportModel.sunShaftsDust)
                     onCommitted: (v) => viewportModel.SetSunShaftsDust(v)
                 }
                 ShadowSlider {
@@ -1107,9 +1109,7 @@ Rectangle {
             }
 
             Card {
-                x: 24 + shadowsPage.colW + shadowsPage.gap
-                y: 0
-                width: shadowsPage.colW
+                width: parent.width
                 height: 420
                 title: "Cascatas — custo e bias"
 
@@ -1170,6 +1170,7 @@ Rectangle {
                         }
                     }
                 }
+            }
             }
         }
 

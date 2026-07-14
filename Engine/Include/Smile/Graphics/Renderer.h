@@ -461,7 +461,7 @@ namespace Smile {
 
         FFogPass        Fog;
         bool            UseAerialPerspective = false;
-        bool            UseHeightFog         = false;
+        bool            UseHeightFog         = true;
 
         FSunShafts      SunShafts;
         bool            UseSunShafts = true; // raymarch meia-res + temporal; exige height fog ON
