@@ -422,7 +422,7 @@ Rectangle {
             }
             ToggleRow {
                 x: 8; y: 234; width: 264; height: 28
-                label: "Folhagem sombreia GI"; detail: "shadow rays c/ alpha-test"
+                label: "Folhagem sombreia GI"; detail: "alpha-test"
                 checked: viewportModel.giFoliageShadows
                 onToggled: viewportModel.ToggleGIFoliageShadows()
             }
