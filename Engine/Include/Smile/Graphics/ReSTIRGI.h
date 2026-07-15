@@ -42,7 +42,7 @@ namespace Smile {
 
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 VertexSlot, u32 IndexSlot, u32 DepthSlot, u32 GBufferSlot,
+                            u32 DepthSlot, u32 GBufferSlot,
                             u32 VelocitySlot);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,

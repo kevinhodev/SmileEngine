@@ -116,23 +116,8 @@ namespace Smile {
         }
         const u32 NumBlas = static_cast<u32>(UniqueMeshes.size());
 
-        std::vector<D3D12_RESOURCE_BARRIER> ToRT, FromRT;
-        for (const FGpuMesh* M : UniqueMeshes) {
-            if (!M->IsDefaultHeap()) continue;
-            PushTransition(ToRT, M->VertexResource(),
-                           D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            PushTransition(ToRT, M->IndexResource(),
-                           D3D12_RESOURCE_STATE_INDEX_BUFFER,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            PushTransition(FromRT, M->VertexResource(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-            PushTransition(FromRT, M->IndexResource(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_INDEX_BUFFER);
-        }
-        if (!ToRT.empty()) CL->ResourceBarrier(static_cast<UINT>(ToRT.size()), ToRT.data());
+        // VB/IB dos meshes ja vivem em estado combinado de leitura que inclui NON_PIXEL
+        // (GpuMesh.cpp) — o build de BLAS le direto, sem transicao de ida e volta.
 
         // Passo 1: prebuild de todos os BLAS p/ dimensionar UM scratch e UM pool de build
         // suballocados por offset (alinhamento de AS = 256B) em vez de um committed resource
@@ -216,7 +201,6 @@ namespace Smile {
             CL->ResourceBarrier(static_cast<UINT>(ToCopy.size()), ToCopy.data());
             CL->CopyResource(ReadbackBuf.Get(), PostbuildBuf.Get());
         }
-        if (!FromRT.empty()) CL->ResourceBarrier(static_cast<UINT>(FromRT.size()), FromRT.data());
 
         SMILE_HR(CL->Close());
         ID3D12CommandList* Lists[] = { CL.Get() };

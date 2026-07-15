@@ -4,9 +4,10 @@
 #include "DDGICommon.hlsli"
 #include "../LightsCommon.hlsli"
 
-// Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, Vertices,
-// Indices, SkyViewLUT, IrradAtlas, LinearClamp/Wrap e — F5 — SceneLights
-// (StructuredBuffer<FPunctualLight> com TODAS as luzes ativas, sem frustum cull).
+// Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, SkyViewLUT,
+// IrradAtlas, LinearClamp/Wrap e — F5 — SceneLights (StructuredBuffer<FPunctualLight> com
+// TODAS as luzes ativas, sem frustum cull). VB/IB vem bindless via InstanceGeo
+// (ResourceDescriptorHeap), nao ha mais Vertices/Indices globais.
 struct FHitShadeParams {
     float3 GridMin;       float Spacing;
     int3   Count;         int   AtlasTile;
@@ -63,12 +64,14 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity) {
 // de reconexao (n2). Aditivo; nao altera ShadeSurfaceHit (caminho das reflexoes intacto).
 float3 HitGeomNormal(uint instId, uint tri, float2 bary, float3x4 worldToObject, float3 rayDir) {
     InstanceGeo geo = Instances[instId];
-    uint i0 = Indices[geo.IndexBase + tri * 3 + 0] + geo.VertexBase;
-    uint i1 = Indices[geo.IndexBase + tri * 3 + 1] + geo.VertexBase;
-    uint i2 = Indices[geo.IndexBase + tri * 3 + 2] + geo.VertexBase;
-    float3 nObj = Vertices[i0].Normal * (1.0f - bary.x - bary.y)
-                + Vertices[i1].Normal * bary.x
-                + Vertices[i2].Normal * bary.y;
+    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
+    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
+    uint i0 = Idx[tri * 3 + 0];
+    uint i1 = Idx[tri * 3 + 1];
+    uint i2 = Idx[tri * 3 + 2];
+    float3 nObj = Verts[i0].Normal * (1.0f - bary.x - bary.y)
+                + Verts[i1].Normal * bary.x
+                + Verts[i2].Normal * bary.y;
     float3 nWrld = mul(nObj, (float3x3)worldToObject);
     float  nLen  = length(nWrld);
     float3 geomN = (nLen > 1e-5f) ? (nWrld / nLen) : normalize(-rayDir);
@@ -84,21 +87,23 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     InstanceGeo geo    = Instances[instId];
     float3      albedo = geo.BaseColor.rgb;
 
-    uint   i0   = Indices[geo.IndexBase + tri * 3 + 0] + geo.VertexBase;
-    uint   i1   = Indices[geo.IndexBase + tri * 3 + 1] + geo.VertexBase;
-    uint   i2   = Indices[geo.IndexBase + tri * 3 + 2] + geo.VertexBase;
-    float3 nObj = Vertices[i0].Normal * (1.0f - bary.x - bary.y)
-                + Vertices[i1].Normal * bary.x
-                + Vertices[i2].Normal * bary.y;
+    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
+    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
+    uint   i0   = Idx[tri * 3 + 0];
+    uint   i1   = Idx[tri * 3 + 1];
+    uint   i2   = Idx[tri * 3 + 2];
+    float3 nObj = Verts[i0].Normal * (1.0f - bary.x - bary.y)
+                + Verts[i1].Normal * bary.x
+                + Verts[i2].Normal * bary.y;
     float3 nWrld = mul(nObj, (float3x3)worldToObject);
     float  nLen  = length(nWrld);
     float3 geomN = (nLen > 1e-5f) ? (nWrld / nLen) : normalize(-rayDir);
     bool   backface = (geo.TwoSided == 0) && (dot(geomN, rayDir) > 0.0f);
     outSignedDist   = backface ? -hitDist : hitDist;
 
-    float2 uv = Vertices[i0].TexCoord * (1.0f - bary.x - bary.y)
-              + Vertices[i1].TexCoord * bary.x
-              + Vertices[i2].TexCoord * bary.y;
+    float2 uv = Verts[i0].TexCoord * (1.0f - bary.x - bary.y)
+              + Verts[i1].TexCoord * bary.x
+              + Verts[i2].TexCoord * bary.y;
 
     float3 hitN = normalize(-rayDir);
     if (P.RealHitShading) {

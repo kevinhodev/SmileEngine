@@ -48,8 +48,7 @@ namespace Smile {
         // Renderer (depth, gbuffer, BRDF LUT).
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 VertexSlot, u32 IndexSlot, u32 DepthSlot, u32 GBufferSlot,
-                            u32 BRDFLutSlot);
+                            u32 DepthSlot, u32 GBufferSlot, u32 BRDFLutSlot);
 
         // Params estaticos do volume DDGI (grid/atlas) p/ o CB. Chamar quando o volume e (re)criado.
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,

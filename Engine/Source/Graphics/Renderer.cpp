@@ -371,14 +371,14 @@ namespace Smile {
                                 DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         Reflections.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
-            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
+            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), HDREnv.BRDFLutSRV());
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
-            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(), DDGI.VertexSRV(), DDGI.IndexSRV(),
+            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot);
 
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());

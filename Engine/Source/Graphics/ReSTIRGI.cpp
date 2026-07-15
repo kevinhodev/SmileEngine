@@ -88,8 +88,8 @@ namespace Smile {
 
     void FReSTIRGI::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                    u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
-                                   u32 _InstanceSlot, u32 _IrradSlot, u32 _VertexSlot,
-                                   u32 _IndexSlot, u32 _DepthSlot, u32 _GBufferSlot, u32 _VelocitySlot) {
+                                   u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
+                                   u32 _GBufferSlot, u32 _VelocitySlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
@@ -139,15 +139,16 @@ namespace Smile {
 
         for (u32 p = 0; p < 2; ++p) {
             const u32 prev = 1u - p;
-            // t0..t12 fixos + t13 = luzes puntuais (F5; copiado por frame).
+            // t0..t12 fixos + t13 = luzes puntuais (F5; copiado por frame). t4/t5 eram os
+            // merged VB/IB, aposentados pelo bindless (InstanceGeo) — filler valido.
             TraceTable[p] = _SRVHeap.Allocate(14);
             D3D12_CPU_DESCRIPTOR_HANDLE TSrc[13] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
                 _SRVHeap.CpuHandleStaging(_SkyViewSlot),
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
                 _SRVHeap.CpuHandleStaging(_IrradSlot),
-                _SRVHeap.CpuHandleStaging(_VertexSlot),
-                _SRVHeap.CpuHandleStaging(_IndexSlot),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_VelocitySlot),
@@ -168,7 +169,8 @@ namespace Smile {
             };
             CopyTable(TraceUAVTable[p], USrc, 5);
 
-            // t7..t9 = geometria p/ o alpha-test dos visibility rays (M6).
+            // t7 = InstanceGeo p/ o alpha-test dos visibility rays (M6); t8/t9 eram os merged
+            // VB/IB, aposentados pelo bindless — filler valido.
             SpatialTable[p] = _SRVHeap.Allocate(10);
             D3D12_CPU_DESCRIPTOR_HANDLE SSrc[10] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
@@ -179,8 +181,8 @@ namespace Smile {
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
-                _SRVHeap.CpuHandleStaging(_VertexSlot),
-                _SRVHeap.CpuHandleStaging(_IndexSlot),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
             };
             CopyTable(SpatialTable[p], SSrc, 10);
         }

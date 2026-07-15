@@ -42,8 +42,8 @@ namespace Smile {
         // Flags: 1=AlphaTest (FORCE_NON_OPAQUE na TLAS), 2=HasEmissiveMap, 4=Foliage, 8=HasMrMap.
         struct DDGIInstanceGeo {
             Vec4 BaseColor;
-            u32  VertexBase  = 0;
-            u32  IndexBase   = 0;
+            u32  VertexSrv   = 0; // indice bindless (ResourceDescriptorHeap) do VB do mesh
+            u32  IndexSrv    = 0; // idem p/ o IB — buffers 0-based por mesh, sem offsets
             u32  AlbedoIndex = 0;
             u32  HasAlbedo   = 0;
             u32  TwoSided    = 0;
@@ -125,8 +125,11 @@ namespace Smile {
         FreeSlot(ProbesTraceSRVSlot, 1);
         FreeSlot(ProbesTraceUAVSlot, 1);
         FreeSlot(InstanceSRVSlot, 1);
-        FreeSlot(VertexSRVSlot, 1);
-        FreeSlot(IndexSRVSlot, 1);
+        if (MeshGeoSlotBase != kInvalidSlot) {
+            _SRVHeap.Free(MeshGeoSlotBase, MeshGeoSlotCount);
+            MeshGeoSlotBase  = kInvalidSlot;
+            MeshGeoSlotCount = 0;
+        }
         FreeSlot(ProbeDataSRVSlot, 1);
         FreeSlot(ProbeRayCountSRVSlot, 1);
         FreeSlot(ProbeDataUAVSlot, 2); 
@@ -138,8 +141,6 @@ namespace Smile {
         DistAtlas.Reset();
         ProbesTrace.Reset();
         InstanceGeoBuf.Reset();
-        MergedVertexBuf.Reset();
-        MergedIndexBuf.Reset();
         ProbeDataBuf.Reset();
         ProbeRayCountBuf.Reset();
         AtlasState         = D3D12_RESOURCE_STATE_COMMON;
@@ -189,23 +190,38 @@ namespace Smile {
         DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT);
         ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat);
 
-        std::unordered_map<const FGpuMesh*, std::pair<u32, u32>> MeshBase; 
+        // SRVs bindless de VB/IB por mesh único (2 slots contíguos: VB, IB) — o InstanceGeo
+        // aponta pros índices e os shaders leem via ResourceDescriptorHeap (SM6.6). Substitui
+        // os merged buffers, que duplicavam a geometria inteira da cena em VRAM.
+        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot; // valor = slot do VB (IB = +1)
         std::vector<const FGpuMesh*> UniqueMeshes;
-        u32 TotalVerts = 0, TotalIndices = 0;
         for (u32 i = 0; i < NumRenderables; ++i) {
             const FGpuMesh* M = _Scene.Renderables()[i].Mesh;
-            if (!M || !M->IsValid() || MeshBase.count(M)) continue;
-            MeshBase[M] = { TotalVerts, TotalIndices };
+            if (!M || !M->IsValid() || MeshGeoSlot.count(M)) continue;
+            MeshGeoSlot[M] = 0;
             UniqueMeshes.push_back(M);
-            TotalVerts   += M->VertexCount();
-            TotalIndices += M->GetIndexCount();
         }
-        const u32 VertElems = std::max(TotalVerts, 1u);
-        const u32 IdxElems  = std::max(TotalIndices, 1u);
-        MergedVertexBuf = CreateDefaultBuffer(_Device,
-            static_cast<UINT64>(VertElems) * sizeof(Vertex), D3D12_RESOURCE_STATE_COPY_DEST);
-        MergedIndexBuf  = CreateDefaultBuffer(_Device,
-            static_cast<UINT64>(IdxElems) * sizeof(u32), D3D12_RESOURCE_STATE_COPY_DEST);
+        MeshGeoSlotCount = static_cast<u32>(UniqueMeshes.size()) * 2;
+        MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
+            GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
+            GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            GeoSrv.Buffer.FirstElement     = 0;
+            for (u32 i = 0; i < static_cast<u32>(UniqueMeshes.size()); ++i) {
+                const FGpuMesh* M      = UniqueMeshes[i];
+                const u32       VbSlot = MeshGeoSlotBase + i * 2;
+                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
+                GeoSrv.Buffer.NumElements         = M->VertexCount();
+                GeoSrv.Buffer.StructureByteStride = sizeof(Vertex);
+                _SRVHeap.CreateSRV(_Device, M->VertexResource(), GeoSrv, VbSlot);
+                GeoSrv.Format                     = DXGI_FORMAT_R32_UINT;
+                GeoSrv.Buffer.NumElements         = M->GetIndexCount();
+                GeoSrv.Buffer.StructureByteStride = 0;
+                _SRVHeap.CreateSRV(_Device, M->IndexResource(), GeoSrv, VbSlot + 1);
+                MeshGeoSlot[M] = VbSlot;
+            }
+        }
         ProbeDataBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(Vec4),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
@@ -247,8 +263,8 @@ namespace Smile {
                     }
                 }
             }
-            auto It = R.Mesh ? MeshBase.find(R.Mesh) : MeshBase.end();
-            if (It != MeshBase.end()) { g.VertexBase = It->second.first; g.IndexBase = It->second.second; }
+            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
+            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
             std::memcpy(GeoMapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
         }
         InstanceGeoBuf->Unmap(0, nullptr);
@@ -260,8 +276,6 @@ namespace Smile {
         ProbesTraceSRVSlot = _SRVHeap.Allocate(1);
         ProbesTraceUAVSlot = _SRVHeap.Allocate(1);
         InstanceSRVSlot    = _SRVHeap.Allocate(1);
-        VertexSRVSlot      = _SRVHeap.Allocate(1);
-        IndexSRVSlot       = _SRVHeap.Allocate(1);
         ProbeDataSRVSlot     = _SRVHeap.Allocate(1);
         ProbeRayCountSRVSlot = _SRVHeap.Allocate(1);
 
@@ -296,15 +310,6 @@ namespace Smile {
         BufSrv.Buffer.StructureByteStride = sizeof(DDGIInstanceGeo);
         _SRVHeap.CreateSRV(_Device, InstanceGeoBuf.Get(), BufSrv, InstanceSRVSlot);
 
-        BufSrv.Buffer.NumElements         = VertElems;
-        BufSrv.Buffer.StructureByteStride = sizeof(Vertex);
-        _SRVHeap.CreateSRV(_Device, MergedVertexBuf.Get(), BufSrv, VertexSRVSlot);
-
-        BufSrv.Format                     = DXGI_FORMAT_R32_UINT;
-        BufSrv.Buffer.NumElements         = IdxElems;
-        BufSrv.Buffer.StructureByteStride = 0;
-        _SRVHeap.CreateSRV(_Device, MergedIndexBuf.Get(), BufSrv, IndexSRVSlot);
-
         BufSrv.Format                     = DXGI_FORMAT_R32G32B32A32_FLOAT;
         BufSrv.Buffer.NumElements         = NumProbes;
         BufSrv.Buffer.StructureByteStride = 0;
@@ -326,14 +331,16 @@ namespace Smile {
 
         // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
         // Uma tabela por frame em voo: o t8 muda todo frame e a tabela do frame anterior ainda
-        // pode estar sendo lida pela GPU (descriptor versioning).
+        // pode estar sendo lida pela GPU (descriptor versioning). t4/t5 eram os merged VB/IB,
+        // aposentados pelo bindless (InstanceGeo.VertexSrv/IndexSrv); recebem um descriptor
+        // valido de enchimento p/ manter o layout da tabela (shader nao declara mais t4/t5).
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
             _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
-            _SRVHeap.CpuHandleStaging(VertexSRVSlot),
-            _SRVHeap.CpuHandleStaging(IndexSRVSlot),
+            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
         };
@@ -378,37 +385,8 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         CL->SetDescriptorHeaps(1, Heaps);
 
-        auto PushBarrier = [](std::vector<D3D12_RESOURCE_BARRIER>& V, ID3D12Resource* R,
-                              D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = R;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = Before;
-            B.Transition.StateAfter  = After;
-            V.push_back(B);
-        };
-        std::vector<D3D12_RESOURCE_BARRIER> ToCopy, FromCopy;
-        for (const FGpuMesh* M : UniqueMeshes) {
-            if (!M->IsDefaultHeap()) continue;
-            PushBarrier(ToCopy,   M->VertexResource(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            PushBarrier(ToCopy,   M->IndexResource(),  D3D12_RESOURCE_STATE_INDEX_BUFFER,               D3D12_RESOURCE_STATE_COPY_SOURCE);
-            PushBarrier(FromCopy, M->VertexResource(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-            PushBarrier(FromCopy, M->IndexResource(),  D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_INDEX_BUFFER);
-        }
-        if (!ToCopy.empty()) CL->ResourceBarrier(static_cast<UINT>(ToCopy.size()), ToCopy.data());
-        for (const FGpuMesh* M : UniqueMeshes) {
-            const auto Base = MeshBase[M];
-            CL->CopyBufferRegion(MergedVertexBuf.Get(), static_cast<UINT64>(Base.first) * sizeof(Vertex),
-                                 M->VertexResource(), 0, static_cast<UINT64>(M->VertexCount()) * sizeof(Vertex));
-            CL->CopyBufferRegion(MergedIndexBuf.Get(), static_cast<UINT64>(Base.second) * sizeof(u32),
-                                 M->IndexResource(), 0, static_cast<UINT64>(M->GetIndexCount()) * sizeof(u32));
-        }
-
-        PushBarrier(FromCopy, MergedVertexBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        PushBarrier(FromCopy, MergedIndexBuf.Get(),  D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        CL->ResourceBarrier(static_cast<UINT>(FromCopy.size()), FromCopy.data());
-
+        // Sem copia de geometria: os shaders leem os VB/IB originais via bindless — os meshes
+        // ja vivem em estado combinado de leitura que inclui NON_PIXEL (GpuMesh.cpp).
         Transition(CL, IrradAtlas.Get(), AtlasState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, DistAtlas.Get(),  DistState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         const float Zero[4] = { 0, 0, 0, 0 };

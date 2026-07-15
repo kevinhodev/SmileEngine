@@ -23,10 +23,12 @@
 
 // 80 bytes — casa campo-a-campo com DDGIInstanceGeo (DDGI.cpp). Campos alem do BaseColor/geometria
 // alimentam o ReSTIR PT (emissivo, alpha-test, metal/rough); os shaders antigos ignoram os novos.
+// VertexSrv/IndexSrv = indices bindless (ResourceDescriptorHeap) do VB/IB originais do mesh,
+// 0-based por mesh — substituem os merged buffers (t4/t5 aposentados).
 struct InstanceGeo {
     float4 BaseColor;
-    uint   VertexBase;
-    uint   IndexBase;
+    uint   VertexSrv;
+    uint   IndexSrv;
     uint   AlbedoIndex;
     uint   HasAlbedo;
     uint   TwoSided;

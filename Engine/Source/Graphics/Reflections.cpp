@@ -174,9 +174,8 @@ namespace Smile {
 
     void FReflections::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                       u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
-                                      u32 _InstanceSlot, u32 _IrradSlot, u32 _VertexSlot,
-                                      u32 _IndexSlot, u32 _DepthSlot, u32 _GBufferSlot,
-                                      u32 _BRDFLutSlot) {
+                                      u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
+                                      u32 _GBufferSlot, u32 _BRDFLutSlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot)
@@ -229,14 +228,15 @@ namespace Smile {
 
         // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
         // Uma tabela por frame em voo: o t8 muda todo frame e a tabela do frame anterior ainda
-        // pode estar sendo lida pela GPU (descriptor versioning).
+        // pode estar sendo lida pela GPU (descriptor versioning). t4/t5 eram os merged VB/IB,
+        // aposentados pelo bindless (InstanceGeo) — filler valido p/ manter o layout.
         D3D12_CPU_DESCRIPTOR_HANDLE TSrc[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSlot),
             _SRVHeap.CpuHandleStaging(_InstanceSlot),
             _SRVHeap.CpuHandleStaging(_IrradSlot),
-            _SRVHeap.CpuHandleStaging(_VertexSlot),
-            _SRVHeap.CpuHandleStaging(_IndexSlot),
+            _SRVHeap.CpuHandleStaging(_InstanceSlot),
+            _SRVHeap.CpuHandleStaging(_InstanceSlot),
             _SRVHeap.CpuHandleStaging(_DepthSlot),
             _SRVHeap.CpuHandleStaging(_GBufferSlot),
         };

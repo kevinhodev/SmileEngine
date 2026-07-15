@@ -98,10 +98,14 @@ namespace Smile {
             Barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             Barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
         }
+        // Estado combinado de leitura: raster (VB/IB) + NON_PIXEL p/ o RT ler direto —
+        // build de BLAS (VA) e hit shading bindless (SRV) — sem transicao por frame/setup.
         Barriers[0].Transition.pResource  = VertexBuffer.Get();
-        Barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+        Barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+                                          | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         Barriers[1].Transition.pResource  = IndexBuffer.Get();
-        Barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_INDEX_BUFFER;
+        Barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_INDEX_BUFFER
+                                          | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         _CommandList->ResourceBarrier(2, Barriers);
 
         VertexBufferView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();

@@ -42,10 +42,9 @@ Texture2D<float4>               ResD   : register(t4); // n2.xyz  (a = n1.oct.y,
 Texture2D<float4>               GBuffer : register(t5);
 Texture2D<float>                Depth   : register(t6);
 // Alpha-test dos visibility rays (M6): sem eles o pass usava CULL_NON_OPAQUE (folhagem nao
-// ocluia e paredes atras de candidato masked eram perdidas).
+// ocluia e paredes atras de candidato masked eram perdidas). t8/t9 aposentados (VB/IB
+// bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
 StructuredBuffer<InstanceGeo>   Instances : register(t7);
-StructuredBuffer<DDGIVertex>    Vertices  : register(t8);
-Buffer<uint>                    Indices   : register(t9);
 
 RWTexture2D<float4>             GIOut   : register(u0); // rgb=gi, a=hitDist (preservado p/ o NRD)
 

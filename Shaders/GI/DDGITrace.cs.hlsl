@@ -18,8 +18,7 @@ RaytracingAccelerationStructure Scene       : register(t0);
 Texture2D<float4>               SkyViewLUT  : register(t1);
 StructuredBuffer<InstanceGeo>   Instances   : register(t2);
 Texture2D<float4>               IrradAtlas  : register(t3); 
-StructuredBuffer<DDGIVertex>    Vertices    : register(t4); 
-Buffer<uint>                    Indices     : register(t5); 
+// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
 Buffer<float4>                  ProbeData   : register(t6);
 Buffer<uint>                    ProbeRayCount:register(t7);
 

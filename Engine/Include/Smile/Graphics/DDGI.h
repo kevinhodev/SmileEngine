@@ -50,8 +50,6 @@ namespace Smile {
         bool IsReady() const { return Ready; }
         u32  IrradianceAtlasSRV() const { return AtlasSRVSlot; }
         u32  InstanceSRV() const { return InstanceSRVSlot; }
-        u32  VertexSRV()   const { return VertexSRVSlot; }
-        u32  IndexSRV()    const { return IndexSRVSlot; }
         u32  SceneGITableStart()  const { return SceneGITableStart_; }
         u32  DistAtlasSRV()    const { return DistSRVSlot; }
         u32  ProbesTraceSRV()  const { return ProbesTraceSRVSlot; }
@@ -120,10 +118,8 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> IrradAtlas;       
         Microsoft::WRL::ComPtr<ID3D12Resource> DistAtlas;        
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbesTrace;      
-        Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;   
-        Microsoft::WRL::ComPtr<ID3D12Resource> MergedVertexBuf;  
-        Microsoft::WRL::ComPtr<ID3D12Resource> MergedIndexBuf;   
-        Microsoft::WRL::ComPtr<ID3D12Resource> ProbeDataBuf;     
+        Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;
+        Microsoft::WRL::ComPtr<ID3D12Resource> ProbeDataBuf;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeRayCountBuf; 
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
@@ -134,8 +130,10 @@ namespace Smile {
         u32 ProbesTraceSRVSlot = kInvalidSlot;
         u32 ProbesTraceUAVSlot = kInvalidSlot;
         u32 InstanceSRVSlot    = kInvalidSlot;
-        u32 VertexSRVSlot      = kInvalidSlot;
-        u32 IndexSRVSlot       = kInvalidSlot;
+        // SRVs bindless de VB/IB por mesh único (2 slots contíguos por mesh: base+2i = VB,
+        // base+2i+1 = IB) — o InstanceGeo carrega os índices; substitui os merged buffers.
+        u32 MeshGeoSlotBase    = kInvalidSlot;
+        u32 MeshGeoSlotCount   = 0;
         u32 ProbeDataSRVSlot   = kInvalidSlot;
         u32 ProbeDataUAVSlot   = kInvalidSlot;
         u32 ProbeRayCountSRVSlot = kInvalidSlot;
