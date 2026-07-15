@@ -21,17 +21,20 @@ namespace Smile {
         void Release(FTextureSRVHeap& SRVHeap);
 
         bool IsBuilt()        const { return Built; }
-        u32  TlasSRVSlot()    const { return TlasSRVSlot_; }       
+        u32  TlasSRVSlot()    const { return TlasSRVSlot_; }
         u32  InstanceCount()  const { return InstanceCount_; }
-        u32  BlasCount()      const { return static_cast<u32>(BlasResults.size()); }
+        u32  BlasCount()      const { return BlasCount_; }
 
     private:
         bool   Built          = false;
         u32    TlasSRVSlot_    = 0xFFFFFFFFu;
         u32    InstanceCount_  = 0;
+        u32    BlasCount_      = 0;
 
-        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>          BlasResults;
+        // Todos os BLAS vivem suballocados (offsets 256B) num buffer unico ja compactado;
+        // o map guarda o VA de cada BLAS dentro do pool.
+        Microsoft::WRL::ComPtr<ID3D12Resource>                         BlasPool;
         std::unordered_map<const FGpuMesh*, D3D12_GPU_VIRTUAL_ADDRESS> BlasByMesh;
-        Microsoft::WRL::ComPtr<ID3D12Resource>                       Tlas;
+        Microsoft::WRL::ComPtr<ID3D12Resource>                         Tlas;
     };
 }
