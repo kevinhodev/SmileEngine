@@ -217,7 +217,8 @@ namespace Smile {
         CPU.GridCount       = GIGridCount;
         CPU.AtlasParams     = GIAtlasParams;
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
-        CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z, 0.0f };
+        CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
+                                FoliageShadows ? 255.0f : 1.0f }; // w = ShadowRayMask
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, ValidateInterval };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };

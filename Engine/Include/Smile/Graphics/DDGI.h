@@ -21,7 +21,7 @@ namespace Smile {
                               // (raios do DDGI partem de probes; o bias so desloca sombras no hit)
         Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH, w = realHitShading
         Vec4 MiscParams;      // x = relocationEnabled (Fase 2), y = deactivThresh, z = maxRays, w = minRays
-        Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), yzw = -
+        Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), y = nº luzes (F5), z = ShadowRayMask, w = -
     };
 
     class FDDGI {
@@ -88,6 +88,10 @@ namespace Smile {
 
         void SetRealHitShading(bool V) { RealHitShading = V; }
         bool GetRealHitShading() const { return RealHitShading; }
+
+        // Folhagem nos shadow rays do hit (ON = alpha-test por candidato; OFF = mask so-opaco).
+        void SetFoliageShadows(bool V) { FoliageShadows = V; }
+        bool GetFoliageShadows() const { return FoliageShadows; }
 
         void SetRelocation(bool V) { Relocation = V; RelocateFramesLeft = V ? kRelocateConvergeFrames : 4; }
         bool GetRelocation() const { return Relocation; }
@@ -170,7 +174,8 @@ namespace Smile {
         f32  SkyIntensity = 1.0f;
         f32  NormalBias   = 0.2f;   
         f32  MaxRayDist   = 0.0f;  
-        bool RealHitShading = true; 
+        bool RealHitShading = true;
+        bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (mask ALL vs OPAQUE)
         bool Relocation     = true; 
         f32  DeactivationThreshold = 0.20f; 
         bool AdaptiveRays   = false; 

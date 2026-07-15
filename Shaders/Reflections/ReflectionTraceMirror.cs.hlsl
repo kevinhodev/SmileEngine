@@ -101,6 +101,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     P.AlbedoLOD      = ReflectParams.w;
     P.RealHitShading = ReflectParams.z > 0.5f;
     P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
+    P.ShadowRayMask  = (uint)SunColor.w;
 
     float3 radiance;
     float  hitDist = TraceParams.y;

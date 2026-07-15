@@ -350,7 +350,7 @@ Rectangle {
         x: viewModeButton.x + leftTools.x
         y: root.height
         width: 280
-        height: 424
+        height: 452
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: if (gBufferPopup.opened) gBufferPopup.close()
@@ -422,41 +422,47 @@ Rectangle {
             }
             ToggleRow {
                 x: 8; y: 234; width: 264; height: 28
+                label: "Folhagem sombreia GI"; detail: "shadow rays c/ alpha-test"
+                checked: viewportModel.giFoliageShadows
+                onToggled: viewportModel.ToggleGIFoliageShadows()
+            }
+            ToggleRow {
+                x: 8; y: 262; width: 264; height: 28
                 label: "GTAO"
                 checked: viewportModel.gtaoEnabled
                 onToggled: viewportModel.ToggleGTAO()
             }
             ToggleRow {
-                x: 8; y: 262; width: 264; height: 28
+                x: 8; y: 290; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
                 checked: viewportModel.gtaoHalfRes
                 onToggled: viewportModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 294; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 322; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 304
+                x: 14; y: 332
                 text: "Reflexos e denoise"
                 color: root.textMuted
                 font.family: "Segoe UI"
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 322; width: 264; height: 28
+                x: 8; y: 350; width: 264; height: 28
                 label: "Reflexos RT"
                 checked: viewportModel.reflectionsEnabled
                 onToggled: viewportModel.ToggleReflections()
             }
             ToggleRow {
-                x: 8; y: 350; width: 264; height: 28
+                x: 8; y: 378; width: 264; height: 28
                 label: "NRD REBLUR"; detail: "difuso + especular"
                 checked: viewportModel.nrdEnabled
                 onToggled: viewportModel.ToggleNrd()
             }
 
-            Rectangle { x: 14; y: 382; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 410; width: 252; height: 1; color: "#23241d" }
             Rectangle {
-                x: 8; y: 388; width: 264; height: 28; radius: 5
+                x: 8; y: 416; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? "#22231c" : "transparent"
                 Text {
                     x: 8

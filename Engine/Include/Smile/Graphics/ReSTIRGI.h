@@ -19,7 +19,7 @@ namespace Smile {
         Vec4  GridCount;       // DDGI: xyz = nº de probes por eixo
         Vec4  AtlasParams;     // DDGI irradiancia: x = tile, y = W, z = H
         Vec4  SunDirIntensity; // xyz = direcao P/ o sol (norm.), w = intensidade
-        Vec4  SunColor;        // rgb = cor do sol
+        Vec4  SunColor;        // rgb = cor do sol, w = ShadowRayMask (mask dos shadow rays no hit)
         Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
                                // (so sombras no hit; origem de raio do G-buffer usa offset robusto)
         Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD, z = fireflyMax, w = validateInterval
@@ -88,6 +88,8 @@ namespace Smile {
         bool GetSpatial() const    { return Spatial; }
         void SetVisibility(bool V) { Visibility = V; }
         bool GetVisibility() const { return Visibility; }
+        void SetFoliageShadows(bool V) { FoliageShadows = V; }
+        bool GetFoliageShadows() const { return FoliageShadows; }
 
     private:
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
@@ -156,6 +158,7 @@ namespace Smile {
         bool Temporal       = true;
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
+        bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask ALL vs OPAQUE)
         bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B

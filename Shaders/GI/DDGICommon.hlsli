@@ -9,6 +9,12 @@
 #define DDGI_IRRADIANCE_GAMMA 1.5f
 #endif
 
+// Instance masks da TLAS (RaytracingScene.cpp seta por instancia). Raios normais usam ALL;
+// shadow rays podem usar so OPAQUE p/ pular folhagem/alpha-test (modo rapido, toggle no editor).
+#define SMILE_RT_MASK_OPAQUE    0x01u
+#define SMILE_RT_MASK_ALPHATEST 0x02u
+#define SMILE_RT_MASK_ALL       0xFFu
+
 // Flags do InstanceGeo (bitmask em Flags).
 #define INSTGEO_FLAG_ALPHATEST 1u  // clip por albedo.a vs AlphaCutoff (folhagem; FORCE_NON_OPAQUE na TLAS)
 #define INSTGEO_FLAG_EMISSIVE  2u  // tem mapa emissivo (EmissiveMapIndex valido)

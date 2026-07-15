@@ -120,6 +120,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.AlbedoLOD      = ShadeParams.y;
     P.RealHitShading = ShadeParams.x > 0.5f;
     P.NumLights      = (int)JitterParams.z; // F5
+    P.ShadowRayMask  = (uint)SunColor.w;
 
     float3 Lo, x2, n2;
     float  hitDist;

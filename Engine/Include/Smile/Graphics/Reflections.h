@@ -22,7 +22,7 @@ namespace Smile {
         Vec4  GridCount;         // DDGI probe counts
         Vec4  AtlasParams;       // DDGI irradiance atlas (tile, W, H)
         Vec4  SunDirIntensity;   // xyz = dir TO sun, w = intensity
-        Vec4  SunColor;          // rgb = sun color
+        Vec4  SunColor;          // rgb = sun color, w = ShadowRayMask (mask dos shadow rays no hit)
         Vec4  TraceParams;       // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
                                  // (so sombras no hit; origem do raio usa offset robusto)
         Vec4  HalfScreenParams;  // halfW, halfH, 1/halfW, 1/halfH (trace e half-res; Fase 2b)
@@ -104,6 +104,8 @@ namespace Smile {
         f32  GetRoughnessFade() const { return RoughnessFadeLength; }
         void SetRealHitShading(bool V){ RealHit = V; }
         bool GetRealHitShading() const{ return RealHit; }
+        void SetFoliageShadows(bool V){ FoliageShadows = V; }
+        bool GetFoliageShadows() const{ return FoliageShadows; }
         void SetTemporal(bool V)      { Temporal = V; }
         bool GetTemporal() const      { return Temporal; }
         void SetMaxFrames(f32 V)      { MaxFrames = V; }
@@ -201,6 +203,7 @@ namespace Smile {
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)
         bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
+        bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (mask ALL vs OPAQUE)
         bool UseNrd              = false; // denoise via NRD REBLUR especular (unificado c/ o GI)
         // Temporal (Fase 3).
         bool Temporal            = true;  // acumulacao temporal (off = só resolve espacial)

@@ -18,6 +18,8 @@ struct FHitShadeParams {
     float  AlbedoLOD;
     bool   RealHitShading;
     int    NumLights;     // luzes puntuais no SceneLights (F5)
+    uint   ShadowRayMask; // instance mask dos shadow rays: ALL = folhagem sombreia (alpha-test
+                          // por candidato); OPAQUE = pula folhagem (rapido, traversal pura)
 };
 
 static const float kSkyBottomR = 6360.0f;
@@ -116,7 +118,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         sray.TMin      = 0.01f;
         sray.TMax      = P.MaxRayDist;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
-        sq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, sray);
+        sq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, sray);
         SMILE_RT_PROCEED(sq)
         vis = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
     }
@@ -144,7 +146,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         lray.TMin      = 0.01f;
         lray.TMax      = max(lenL - 0.05f, 0.02f);
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
-        lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, lray);
+        lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)
         if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += contrib;
     }

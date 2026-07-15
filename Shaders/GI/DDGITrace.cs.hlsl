@@ -80,6 +80,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.AlbedoLOD      = 4.0f;
     P.RealHitShading = DistAtlasParams.w > 0.5f;
     P.NumLights      = (int)MiscParams2.y;
+    P.ShadowRayMask  = (uint)MiscParams2.z;
 
     float3 radiance;
     float  signedDist;

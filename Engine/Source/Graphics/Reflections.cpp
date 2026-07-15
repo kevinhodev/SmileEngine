@@ -382,7 +382,8 @@ namespace Smile {
         CPU.GridCount       = GIGridCount;
         CPU.AtlasParams     = GIAtlasParams;
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
-        CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z, 0.0f };
+        CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
+                                FoliageShadows ? 255.0f : 1.0f }; // w = ShadowRayMask
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };

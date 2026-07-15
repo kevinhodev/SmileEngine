@@ -89,6 +89,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetReSTIRGI().GetVisibility();
     }
 
+    bool ViewportWidget::AreGIFoliageShadowsEnabled() const {
+        return Renderer && Renderer->GetDDGI().GetFoliageShadows();
+    }
+
     bool ViewportWidget::IsGTAOEnabled() const {
         return Renderer && Renderer->GetUseAO();
     }
@@ -216,6 +220,16 @@ namespace SmileEditor {
         if (!Renderer) return;
         auto& ReSTIRGI = Renderer->GetReSTIRGI();
         ReSTIRGI.SetVisibility(!ReSTIRGI.GetVisibility());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleGIFoliageShadows() {
+        if (!Renderer) return;
+        // Toggle unico p/ os 3 consumidores do HitShading (DDGI e a fonte da verdade na leitura).
+        const bool V = !Renderer->GetDDGI().GetFoliageShadows();
+        Renderer->GetDDGI().SetFoliageShadows(V);
+        Renderer->GetReSTIRGI().SetFoliageShadows(V);
+        Renderer->GetReflections().SetFoliageShadows(V);
         emit ViewSettingsChanged();
     }
 

@@ -279,12 +279,16 @@ namespace Smile {
                 for (int Col = 0; Col < 4; ++Col)
                     Inst.Transform[Row][Col] = T.M[Row][Col];
             Inst.InstanceID                          = ThisIdx;
-            Inst.InstanceMask                        = 0xFF;
             Inst.InstanceContributionToHitGroupIndex = 0;
             Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+            // Masks segmentadas (SMILE_RT_MASK_* em DDGICommon.hlsli): raios normais tracejam
+            // com ALL (uniao dos bits = tudo visivel, comportamento identico ao 0xFF antigo);
+            // shadow rays podem usar so OPAQUE p/ pular folhagem (toggle no editor).
             // Folhagem/alpha-test: candidatos nao-opacos passam pelo AlphaTestPass no shader
             // (SMILE_RT_PROCEED em HitShading.hlsli) — sem isto os cards viram quads solidos.
-            if (R.Material && R.Material->Constants.AlphaTest)
+            const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
+            Inst.InstanceMask = AlphaTest ? 0x02u : 0x01u;
+            if (AlphaTest)
                 Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
             Inst.AccelerationStructure               = It->second;
             Instances.push_back(Inst);

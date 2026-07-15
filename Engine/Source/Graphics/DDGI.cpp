@@ -473,7 +473,8 @@ namespace Smile {
         // Marca de "recem-ativado" so quando o Relocate ainda tem >=1 frame agendado DEPOIS
         // deste (a marca precisa do proximo Relocate p/ o auto-demote; orfa = hyst 0 eterno).
         CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f,
-                                static_cast<f32>(_PunctualLightCount), 0.0f, 0.0f };
+                                static_cast<f32>(_PunctualLightCount),
+                                FoliageShadows ? 255.0f : 1.0f, 0.0f }; // z = ShadowRayMask
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }
