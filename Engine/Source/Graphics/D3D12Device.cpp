@@ -65,6 +65,21 @@ namespace Smile {
         if (_EnableDebugLayer) {
             ComPtr<ID3D12InfoQueue1> InfoQueue;
             if (SUCCEEDED(Device.As(&InfoQueue))) {
+                // Falso positivo conhecido do debug layer (Agility SDK ~1.616): em fila
+                // COPY, o validador promove a textura COMMON->COPY_DEST na propria copia
+                // e dai acusa INCOMPATIBLE_BARRIER_LAYOUT (#1334) "LEGACY_COPY_DEST !=
+                // COMMON" em TODO CopyTextureRegion — mesmo com o recurso criado em
+                // COMMON, que e o correto (regra: recurso entra na fila COPY em COMMON).
+                // Corrigido em SDKs posteriores ("promoted COPY_DEST not decaying back
+                // to COMMON"); suprimido ate o runtime local atualizar.
+                D3D12_MESSAGE_ID DeniedIds[] = {
+                    static_cast<D3D12_MESSAGE_ID>(1334) // INCOMPATIBLE_BARRIER_LAYOUT
+                };
+                D3D12_INFO_QUEUE_FILTER Filter{};
+                Filter.DenyList.NumIDs  = _countof(DeniedIds);
+                Filter.DenyList.pIDList = DeniedIds;
+                InfoQueue->PushStorageFilter(&Filter);
+
                 DWORD Cookie = 0;
                 if (SUCCEEDED(InfoQueue->RegisterMessageCallback(
                         D3D12DebugMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE,

@@ -153,7 +153,7 @@ namespace Smile {
         const double msDecode = MsSince(t0) - msRead;
 
         std::vector<FTexture> texs =
-            FTexture::CreateBatchFromCPU(Device.Native(), CommandQueue, SRVHeap, cpuData);
+            FTexture::CreateBatchFromCPU(Device.Native(), UploadQueue, SRVHeap, cpuData);
         const double msTexUpload = MsSince(tDecodeEnd);
         std::unordered_map<std::string, FTexture*> texByPath;
         u32 uploaded = 0;
@@ -255,7 +255,7 @@ namespace Smile {
                 meshesCPU[i].Indices.resize(e.IndexCount);
                 std::memcpy(meshesCPU[i].Indices.data(), geoBase + e.IndexOffset, e.IndexCount * sizeof(u32));
             }
-            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), CommandQueue, meshesCPU);
+            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
             for (u32 i = 0; i < sh.RenderableCount; ++i) {
                 const SSceneRenderable& r = rnds[i];
                 if (r.MeshIndex >= mh.MeshCount) continue;
@@ -296,7 +296,7 @@ namespace Smile {
                 gMin.push_back(Vec3{ mn[0], mn[1], mn[2] });
                 gMax.push_back(Vec3{ mx[0], mx[1], mx[2] });
             }
-            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), CommandQueue, meshesCPU);
+            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
             for (size_t k = 0; k < meshPtrs.size(); ++k) {
                 FRenderable out;
                 out.Mesh     = meshPtrs[k];
@@ -308,6 +308,12 @@ namespace Smile {
         }
 
         const double msMesh = MsSince(tMeshStart);
+
+        // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
+        // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
+        const Clock::time_point tSyncStart = Clock::now();
+        UploadQueue.WaitIdle();
+        const double msSync = MsSince(tSyncStart);
 
         // Dimensiona o ObjectCB pelo total de renderaveis da cena (cobre carga aditiva,
         // onde os renderaveis do interior se somam aos do exterior ja presentes).
@@ -329,6 +335,7 @@ namespace Smile {
                 " decode=" + std::to_string((int)msDecode) +
                 " uploadTex=" + std::to_string((int)msTexUpload) +
                 " meshes=" + std::to_string((int)msMesh) +
+                " syncUpload=" + std::to_string((int)msSync) +
                 " | total=" + std::to_string((int)MsSince(t0)));
 
         // AABB de uniao sobre TODA a cena (exterior + interior em carga aditiva), para

@@ -10,6 +10,7 @@
 
 namespace Smile {
     class FCommandQueue;
+    class FUploadQueue;
 
     class FCloudNoise {
     public:
@@ -26,7 +27,7 @@ namespace Smile {
 
         // Weather map autorado (textura pintada, canais R=cobertura G=tipo B=peak height)
         // substitui o procedural; ClearWeatherOverride volta ao bakeado.
-        bool LoadWeatherOverride(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        bool LoadWeatherOverride(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                  FTextureSRVHeap& SRVHeap, const std::wstring& Path);
         void ClearWeatherOverride(FTextureSRVHeap& SRVHeap);
         bool HasWeatherOverride() const { return OverrideActive; }

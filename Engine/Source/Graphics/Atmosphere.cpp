@@ -68,7 +68,7 @@ namespace Smile {
     }
 
     void FAtmosphere::Initialize(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
-                                 FTextureSRVHeap& _SRVHeap,
+                                 FUploadQueue& _UploadQueue, FTextureSRVHeap& _SRVHeap,
                                  DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (Initialized) return;
         SRVHeapPtr  = &_SRVHeap;
@@ -164,7 +164,7 @@ namespace Smile {
             std::memset(AmbientMapped, 0, static_cast<size_t>(BufDesc.Width));
         }
 
-        MoonTexture = FTexture::CreateDefault(_Device, _CmdQueue, _SRVHeap, EDefaultTexture::White);
+        MoonTexture = FTexture::CreateDefault(_Device, _UploadQueue, _SRVHeap, EDefaultTexture::White);
 
         BuildInputTables(_Device, _SRVHeap);
         BuildSkyRootSignature(_Device);
@@ -232,11 +232,11 @@ namespace Smile {
         }
     }
 
-    void FAtmosphere::LoadMoonTexture(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
+    void FAtmosphere::LoadMoonTexture(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                       FTextureSRVHeap& _SRVHeap, const std::wstring& _Path) {
         if (!Initialized) return;
-        FTexture Tex = FTexture::LoadFromFile(_Device, _CmdQueue, _SRVHeap, _Path, false);
-        if (!Tex.IsValid()) return; 
+        FTexture Tex = FTexture::LoadFromFile(_Device, _UploadQueue, _SRVHeap, _Path, false);
+        if (!Tex.IsValid()) return;
 
         MoonTexture.Release(_SRVHeap);
         MoonTexture   = std::move(Tex);

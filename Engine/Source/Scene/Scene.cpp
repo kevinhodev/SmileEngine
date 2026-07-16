@@ -1,5 +1,5 @@
 #include "Smile/Scene/Scene.h"
-#include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/UploadQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 
@@ -21,7 +21,7 @@ namespace Smile {
         return Ptr;
     }
 
-    std::vector<FGpuMesh*> FScene::AddMeshesBatch(ID3D12Device* _Device, FCommandQueue& _Queue,
+    std::vector<FGpuMesh*> FScene::AddMeshesBatch(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                                   const std::vector<FMesh>& _Meshes) {
         // Pool de geometria: cada chunk vira UM buffer default-heap ([VBs desde 0][IBs])
         // + UM staging, com uma copia e uma barrier — em vez de 2 committed resources
@@ -99,25 +99,14 @@ namespace Smile {
             }
             Staging->Unmap(0, nullptr);
 
-            _Queue.ResetForRecording();
-            ID3D12GraphicsCommandList* CommandList = _Queue.List();
+            // Fila COPY, sem bloquear e sem barrier: buffer promove/decai implicitamente
+            // (VB/IB/SRV de BLAS leem via promotion na fila direta). O staging fica retido
+            // pela fila; o SceneLoader da o WaitIdle antes do primeiro consumo.
+            ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
             CommandList->CopyBufferRegion(Pool.Get(), 0, Staging.Get(), 0, Total);
-
-            // Estado combinado de leitura: raster (VB/IB) + NON_PIXEL p/ o RT ler direto —
-            // build de BLAS (VA) e hit shading bindless (SRV) — sem transicao por frame.
-            D3D12_RESOURCE_BARRIER Barrier{};
-            Barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barrier.Transition.pResource   = Pool.Get();
-            Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-            Barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
-                                           | D3D12_RESOURCE_STATE_INDEX_BUFFER
-                                           | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &Barrier);
-
-            SMILE_HR(CommandList->Close());
-            ID3D12CommandList* Lists[] = { CommandList };
-            _Queue.ExecuteAndSync(Lists, 1);
+            std::vector<ComPtr<ID3D12Resource>> Keep;
+            Keep.push_back(std::move(Staging));
+            _UploadQueue.Submit(std::move(Keep));
         }
         return Out;
     }

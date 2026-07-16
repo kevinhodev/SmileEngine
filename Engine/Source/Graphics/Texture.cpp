@@ -1,5 +1,5 @@
 #include "Smile/Graphics/Texture.h"
-#include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/UploadQueue.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -120,10 +120,13 @@ namespace Smile {
         D3D12_HEAP_PROPERTIES DefaultHeap{};
         DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
+        // COMMON, nao COPY_DEST: recurso acessado em fila COPY tem que ENTRAR nela em
+        // COMMON (a promotion COMMON->COPY_DEST acontece la; iniciar em COPY_DEST viola
+        // o layout esperado e o debug layer reclama por subresource).
         ComPtr<ID3D12Resource> GPUTexture;
         SMILE_HR(_Device->CreateCommittedResource(
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&GPUTexture)));
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&GPUTexture)));
         VramTracker::Register(GPUTexture.Get(), EVramCategory::SceneTextures);
 
         std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> Layouts(MipCount);
@@ -178,13 +181,9 @@ namespace Smile {
             _CommandList->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
         }
 
-        D3D12_RESOURCE_BARRIER ResourceBarrier{};
-        ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        ResourceBarrier.Transition.pResource   = GPUTexture.Get();
-        ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        _CommandList->ResourceBarrier(1, &ResourceBarrier);
+        // Sem transition barrier: o upload roda na fila COPY (que nem aceita transicao pra
+        // estado de shader) — a textura decai pra COMMON no fim do batch e promove pra
+        // SRV implicitamente no primeiro read da fila direta.
 
         u32 Slot = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -207,47 +206,44 @@ namespace Smile {
         return Result;
     }
 
-    std::vector<FTexture> FTexture::CreateBatchFromCPU(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    std::vector<FTexture> FTexture::CreateBatchFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                                        FTextureSRVHeap& _SRVHeap,
                                                        const std::vector<FTextureCPUData>& _Data) {
         std::vector<FTexture> Out(_Data.size());
-        constexpr size_t kStagingBudget = 256ull * 1024 * 1024; 
+        constexpr size_t kStagingBudget = 256ull * 1024 * 1024;
 
+        // Submit nao bloqueia: enquanto a GPU copia o batch N, o CPU ja prepara o N+1
+        // (stagings retidos pela fila ate a fence). O chamador da o WaitIdle antes do
+        // primeiro consumo (SceneLoader espera depois dos meshes).
         size_t i = 0;
         while (i < _Data.size()) {
-            _CommandQueue.ResetForRecording();
-            ID3D12GraphicsCommandList* CommandList = _CommandQueue.List();
+            ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
             std::vector<ComPtr<ID3D12Resource>> Staging;
             size_t BatchBytes = 0;
-            bool   AnyRecorded = false;
 
             for (; i < _Data.size(); ++i) {
-                if (!_Data[i].Valid()) continue; 
+                if (!_Data[i].Valid()) continue;
                 Out[i] = RecordUpload(_Device, CommandList, _SRVHeap,
                                       _Data[i].Mips, _Data[i].Format, Staging);
-                AnyRecorded = true;
                 for (const auto& m : _Data[i].Mips) BatchBytes += m.Pixels.size();
                 if (BatchBytes >= kStagingBudget) { ++i; break; }
             }
 
-            SMILE_HR(CommandList->Close());
-            ID3D12CommandList* Lists[] = { CommandList };
-            _CommandQueue.ExecuteAndSync(Lists, 1);
-            (void)AnyRecorded;
+            _UploadQueue.Submit(std::move(Staging));
         }
         return Out;
     }
 
-    FTexture FTexture::Upload(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::Upload(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                FTextureSRVHeap& _SRVHeap,
                                const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format) {
-        _CommandQueue.ResetForRecording();
-        ID3D12GraphicsCommandList* CommandList = _CommandQueue.List();
+        ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
         std::vector<ComPtr<ID3D12Resource>> Staging;
         FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format, Staging);
-        SMILE_HR(CommandList->Close());
-        ID3D12CommandList* Lists[] = { CommandList };
-        _CommandQueue.ExecuteAndSync(Lists, 1);
+        _UploadQueue.Submit(std::move(Staging));
+        // Carga avulsa (default/lua/weather map): o chamador usa a textura em seguida,
+        // entao espera aqui mesmo — o ganho de overlap e do caminho em batch.
+        _UploadQueue.WaitIdle();
         return Result;
     }
 
@@ -344,16 +340,16 @@ namespace Smile {
         return Data;
     }
 
-    FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                      FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data) {
         if (!_Data.Valid()) return FTexture{}; 
-        return Upload(_Device, _CommandQueue, _SRVHeap, _Data.Mips, _Data.Format);
+        return Upload(_Device, _UploadQueue, _SRVHeap, _Data.Mips, _Data.Format);
     }
 
-    FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                      FTextureSRVHeap& _SRVHeap,
                                      const std::wstring& _Path, bool _IsNormalMap) {
-        return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
+        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
     }
 
     namespace {
@@ -467,12 +463,12 @@ namespace Smile {
         return Data;
     }
 
-    FTexture FTexture::LoadDDS(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::LoadDDS(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                               FTextureSRVHeap& _SRVHeap, const std::wstring& _Path, bool _sRGB) {
-        return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadDDSCPU(_Path, _sRGB));
+        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap, LoadDDSCPU(_Path, _sRGB));
     }
 
-    FTexture FTexture::CreateDefault(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::CreateDefault(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                       FTextureSRVHeap& _SRVHeap,
                                       EDefaultTexture _Type) {
         FMipData Mip;
@@ -498,6 +494,6 @@ namespace Smile {
         }
         std::vector<FMipData> Mips;
         Mips.push_back(std::move(Mip));
-        return Upload(_Device, _CommandQueue, _SRVHeap, Mips, DXGI_FORMAT_R8G8B8A8_UNORM);
+        return Upload(_Device, _UploadQueue, _SRVHeap, Mips, DXGI_FORMAT_R8G8B8A8_UNORM);
     }
 }

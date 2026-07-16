@@ -11,6 +11,7 @@
 
 namespace Smile {
     class FCommandQueue;
+    class FUploadQueue;
 
     struct alignas(256) AtmosphereConstants {
         Vec4 RayleighScattering; // rgb km^-1, w = Rayleigh density scale height (km)
@@ -71,7 +72,7 @@ namespace Smile {
         static constexpr f32 kGroundAltitudeKm = 0.5f;
 
         void Initialize(ID3D12Device* Device, FCommandQueue& CmdQueue,
-                        FTextureSRVHeap& SRVHeap,
+                        FUploadQueue& UploadQueue, FTextureSRVHeap& SRVHeap,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         void RecreateSky(ID3D12Device* Device,
@@ -116,7 +117,7 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
         bool IsInitialized() const { return Initialized; }
 
-        void LoadMoonTexture(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        void LoadMoonTexture(ID3D12Device* Device, FUploadQueue& UploadQueue,
                              FTextureSRVHeap& SRVHeap, const std::wstring& Path);
         bool HasMoonTexture() const { return MoonTexLoaded; }
 

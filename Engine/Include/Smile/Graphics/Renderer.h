@@ -8,6 +8,7 @@
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Graphics/D3D12Device.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/UploadQueue.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/SwapChain.h"
 #include "Smile/Graphics/PipelineState.h"
@@ -283,6 +284,7 @@ namespace Smile {
 
         const FD3D12Device& GetDevice()  const { return Device; }
         FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
+        FUploadQueue&       GetUploadQueue()   { return UploadQueue; }
         const FGpuProfiler& GetGpuProfiler() const { return GpuProfiler; }
         FTextureSRVHeap&    GetSRVHeap()       { return SRVHeap; }
 
@@ -337,6 +339,7 @@ namespace Smile {
 
         FD3D12Device    Device;
         FCommandQueue   CommandQueue;
+        FUploadQueue    UploadQueue; // fila COPY p/ uploads (texturas/meshes) sem stall
         FGpuProfiler    GpuProfiler;
         FSwapChain      SwapChain;
         FPipelineState  PipelineState;

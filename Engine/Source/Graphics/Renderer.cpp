@@ -34,6 +34,7 @@ namespace Smile {
 
         Device.Initialize(kDebugLayer);
         CommandQueue.Initialize(Device.Native(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+        UploadQueue.Initialize(Device.Native());
         GpuProfiler.Initialize(Device.Native(), CommandQueue.Native(),
                                FCommandQueue::kFramesInFlight);
         SwapChain.Initialize(Device.GetFactory(),
@@ -62,7 +63,7 @@ namespace Smile {
         Skybox.Initialize(Device.Native(),
                           DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
-        Atmosphere.Initialize(Device.Native(), CommandQueue, SRVHeap,
+        Atmosphere.Initialize(Device.Native(), CommandQueue, UploadQueue, SRVHeap,
                               DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
         CloudNoise.Initialize(Device.Native(), CommandQueue, SRVHeap);
@@ -160,10 +161,10 @@ namespace Smile {
     void Renderer::CreateDefaultMaterial() {
         auto* Dev = Device.Native();
 
-        TexDefaultWhite  = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::White);
-        TexDefaultNormal = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::FlatNormal);
-        TexDefaultORM    = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::ORM);
-        TexDefaultBlack  = FTexture::CreateDefault(Dev, CommandQueue, SRVHeap, EDefaultTexture::Black);
+        TexDefaultWhite  = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::White);
+        TexDefaultNormal = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::FlatNormal);
+        TexDefaultORM    = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::ORM);
+        TexDefaultBlack  = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::Black);
 
         DefaultMaterial.Albedo            = &TexDefaultWhite;
         DefaultMaterial.Normal            = &TexDefaultNormal;
@@ -667,7 +668,7 @@ namespace Smile {
     bool Renderer::LoadCloudWeatherTexture(const std::wstring& _Path) {
         if (!Initialized || !CloudNoise.IsInitialized()) return false;
         CommandQueue.Flush();
-        if (!CloudNoise.LoadWeatherOverride(Device.Native(), CommandQueue, SRVHeap, _Path))
+        if (!CloudNoise.LoadWeatherOverride(Device.Native(), UploadQueue, SRVHeap, _Path))
             return false;
         VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
         return true;
@@ -733,7 +734,7 @@ namespace Smile {
 
     void Renderer::LoadMoonTexture(const std::wstring& _Path) {
         if (!Initialized || !Atmosphere.IsInitialized()) return;
-        Atmosphere.LoadMoonTexture(Device.Native(), CommandQueue, SRVHeap, _Path);
+        Atmosphere.LoadMoonTexture(Device.Native(), UploadQueue, SRVHeap, _Path);
     }
 
     void Renderer::LoadStarCatalog(const std::wstring& _Path) {
@@ -2128,6 +2129,7 @@ namespace Smile {
     void Renderer::Shutdown() {
         if (!Initialized) return;
         CommandQueue.Flush();
+        UploadQueue.Shutdown();
         Nrd.Shutdown();  
         Fsr2.Shutdown(); 
         if (ConstantBuffer && MappedFrameBase) {

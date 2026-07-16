@@ -134,10 +134,10 @@ namespace Smile {
                 ", celulas=" + std::to_string(WeatherCellMult) + ")");
     }
 
-    bool FCloudNoise::LoadWeatherOverride(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
+    bool FCloudNoise::LoadWeatherOverride(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                           FTextureSRVHeap& _SRVHeap, const std::wstring& _Path) {
         if (!Initialized) return false;
-        FTexture Tex = FTexture::LoadFromFile(_Device, _CmdQueue, _SRVHeap, _Path, false);
+        FTexture Tex = FTexture::LoadFromFile(_Device, _UploadQueue, _SRVHeap, _Path, false);
         if (!Tex.IsValid()) {
             LogWarning("Weather map autorado: falha ao carregar a textura");
             return false;

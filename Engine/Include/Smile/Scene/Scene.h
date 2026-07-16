@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace Smile {
-    class FCommandQueue;
+    class FUploadQueue;
 
     struct FTransform {
         Vec3 Position      = { 0.0f, 0.0f, 0.0f };
@@ -34,7 +34,7 @@ namespace Smile {
     public:
         FGpuMesh* AddMesh(ID3D12Device* Device, const FMesh& Mesh);
 
-        std::vector<FGpuMesh*> AddMeshesBatch(ID3D12Device* Device, FCommandQueue& Queue,
+        std::vector<FGpuMesh*> AddMeshesBatch(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                               const std::vector<FMesh>& Meshes);
 
         FRenderable& AddRenderable(const FRenderable& Renderable);
