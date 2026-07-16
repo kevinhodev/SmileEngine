@@ -119,6 +119,15 @@ namespace Smile {
         AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
         IntegrateAmbientPSO.Initialize(_Device, "IntegrateSkyAmbient.cs_6_0.cso", 1, 1);
 
+        // Cube de reflexo da atmosfera (consumido pela água): raw + prefiltrado GGX.
+        SkyReflRaw.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                          kSkyReflSize, kSkyReflMips, true);
+        SkyReflSpec.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                           kSkyReflSize, kSkyReflMips, true);
+        SkyReflBakePSO.Initialize(_Device, "BakeSkyReflection.cs_6_0.cso", 1, 1);
+        SkyReflMipGenPSO.Initialize(_Device, "MipGen.cs_6_0.cso", true);
+        SkyReflPrefilterPSO.Initialize(_Device, "SpecularPrefilter.cs_6_0.cso", true);
+
         // Buffer do ambient (2x float4) + readback ring p/ a CPU ler com latencia segura.
         {
             constexpr u64 kAmbientBytes = 2 * sizeof(f32) * 4;
@@ -691,6 +700,52 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(SkyView.UAVSlot));
         _CommandList->Dispatch((kSkyViewW + 7) / 8, (kSkyViewH + 7) / 8, 1);
         SkyView.Transition(_CommandList, kReadState);
+    }
+
+    void FAtmosphere::RecordSkyReflectionBake(ID3D12GraphicsCommandList* _CommandList) {
+        if (!Initialized || !SkyReflRaw.IsValid()) return;
+
+        // 1) SkyView LUT -> mip0 do cube raw (SkyView ja esta em kReadState, o
+        //    RecordSkyViewBake roda antes no mesmo command list).
+        SkyReflRaw.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        SkyReflBakePSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
+        _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(SkyView.SRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(SkyReflRaw.UAVSlot(0)));
+        _CommandList->Dispatch((kSkyReflSize + 7) / 8, (kSkyReflSize + 7) / 8, 6);
+        SkyReflRaw.TransitionMip(_CommandList, 0, kReadState);
+
+        // 2) Mip chain do raw (o prefilter seleciona mip da fonte pelo pdf).
+        for (u32 Mip = 1; Mip < kSkyReflMips; ++Mip) {
+            const u32 MipSize = kSkyReflSize >> Mip;
+            const u32 Constants[2] = { MipSize, Mip - 1 };
+            SkyReflMipGenPSO.Bind(_CommandList);
+            _CommandList->SetComputeRoot32BitConstants(0, _countof(Constants), Constants, 0);
+            _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(SkyReflRaw.SRVSlot()));
+            _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(SkyReflRaw.UAVSlot(Mip)));
+            const u32 Groups = (MipSize + 7) / 8;
+            _CommandList->Dispatch(Groups, Groups, 6);
+            SkyReflRaw.TransitionMip(_CommandList, Mip, kReadState);
+        }
+
+        // 3) Prefilter GGX raw -> spec (roughness = mip/(mips-1), igual ao chain do HDRI).
+        SkyReflSpec.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        for (u32 Mip = 0; Mip < kSkyReflMips; ++Mip) {
+            const u32 MipSize = kSkyReflSize >> Mip;
+            const f32 Roughness = static_cast<f32>(Mip) / static_cast<f32>(kSkyReflMips - 1);
+            u32 Constants[4];
+            Constants[0] = MipSize;
+            Constants[1] = kSkyReflSize;
+            std::memcpy(&Constants[2], &Roughness, sizeof(f32));
+            Constants[3] = kSkyReflSamples;
+            SkyReflPrefilterPSO.Bind(_CommandList);
+            _CommandList->SetComputeRoot32BitConstants(0, _countof(Constants), Constants, 0);
+            _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(SkyReflRaw.SRVSlot()));
+            _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(SkyReflSpec.UAVSlot(Mip)));
+            const u32 Groups = (MipSize + 7) / 8;
+            _CommandList->Dispatch(Groups, Groups, 6);
+        }
+        SkyReflSpec.Transition(_CommandList, kReadState);
     }
 
     void FAtmosphere::RecordSkyAmbientIntegration(ID3D12GraphicsCommandList* _CommandList) {

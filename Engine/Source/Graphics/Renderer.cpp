@@ -1101,10 +1101,16 @@ namespace Smile {
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
         const bool WaterHasDepth = SceneColorCopy && SceneDepthCopy;
         if (UseWater && Water.IsInitialized()) {
+            // Reflexo: atmosfera Hillaire prefiltrada quando o céu físico está ativo
+            // (dimada pelo clima, mesma regra do ReflSkyIntensity das reflexões RT);
+            // HDRI/IBL como fallback.
+            const bool WaterAtmoRefl = UseAtmosphereSky && Atmosphere.IsInitialized();
+            const f32 WaterReflIntensity =
+                WaterAtmoRefl ? (1.0f - RainSky * 0.65f) : IBLIntensity;
             Water.UpdatePerFrame(FrameSlot, WaterViewProj, Projection, WaterInvViewProj,
                                  ViewProjUnjittered, PrevViewProj, CameraPosition, KeyDir,
                                  KeyInt, KeyColor, ElapsedTime,
-                                 HDREnv.HasHDRLoaded(), IBLIntensity,
+                                 WaterAtmoRefl || HDREnv.HasHDRLoaded(), WaterReflIntensity,
                                  RenderWidth(), RenderHeight(), NearZ, FarZ,
                                  WaterHasDepth, UseAtmosphereSky);
             if (Ocean.IsInitialized()) {
@@ -1157,6 +1163,9 @@ namespace Smile {
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
             Atmosphere.RecordSkyViewBake(CommandList);
             Atmosphere.RecordSkyAmbientIntegration(CommandList);
+            // Cube de reflexo da atmosfera (água): baka logo após o SkyView do frame.
+            if (UseWater && Water.IsInitialized())
+                Atmosphere.RecordSkyReflectionBake(CommandList);
             Atmosphere.RenderSky(CommandList, SRVHeap);
             // Estrelas do catalogo: passe aditivo proprio, so quando a noite contribui.
             if (NightFactor > 0.001f && TimeOfDay.StarIntensity > 0.0f)
@@ -1948,7 +1957,11 @@ namespace Smile {
                 HDRRTVHeap.CpuHandle(0), VelocityRTVHeap.CpuHandle(0) };
             CommandList->OMSetRenderTargets(2, WaterRTVs, FALSE, &DSV);
 
-            Water.RenderSurface(CommandList, SRVHeap, HDREnv.SpecularSRV(), Ocean.SRVSlot(),
+            const u32 WaterReflCube =
+                (UseAtmosphereSky && Atmosphere.IsInitialized())
+                    ? Atmosphere.SkyReflectionSRV()
+                    : HDREnv.SpecularSRV();
+            Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, Ocean.SRVSlot(),
                                 Ocean.NormalSRVSlot(), SceneCopyTableStart, Atmosphere.SkyViewSRV(),
                                 SunShadows.ConstantsAddress(), SunShadows.ShadowSRVSlot());
 

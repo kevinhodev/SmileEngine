@@ -6,6 +6,8 @@
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/VolumeTexture.h"
+#include "Smile/Graphics/CubeTexture.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -98,6 +100,11 @@ namespace Smile {
         void RecordSkyViewBake(ID3D12GraphicsCommandList* CommandList);
         void RecordAerialPerspectiveBake(ID3D12GraphicsCommandList* CommandList);
 
+        // Cube de reflexo da atmosfera: baka o SkyView LUT num cubemap 64² + prefiltra GGX
+        // (MipGen+SpecularPrefilter do IBL) — a água amostra com roughness→mip igual ao HDRI.
+        void RecordSkyReflectionBake(ID3D12GraphicsCommandList* CommandList);
+        u32  SkyReflectionSRV() const { return SkyReflSpec.SRVSlot(); }
+
         // Ambient fisico: CS integra o SkyView LUT cos-weighted (ceu + chao virtual) num buffer
         // 2x float4 copiado p/ readback — a CPU le com kFramesInFlight de latencia e escreve nos
         // slots SkyAmbientColor/GroundAmbientColor do FrameConstants (consumidores intactos).
@@ -156,6 +163,15 @@ namespace Smile {
 
         FVolumeTexture      AerialPerspectiveVolume;
         FVolumetricPipeline AerialPerspectivePSO;
+
+        static constexpr u32 kSkyReflSize    = 64;
+        static constexpr u32 kSkyReflMips    = 7;  // 64..1 — casa com kSpecularMaxMip=6 da água
+        static constexpr u32 kSkyReflSamples = 64; // céu é liso; 64 taps GGX bastam por frame
+        FCubeTexture        SkyReflRaw;   // fonte (SkyView→cube + mip chain)
+        FCubeTexture        SkyReflSpec;  // prefiltrado GGX (consumido pela água)
+        FVolumetricPipeline SkyReflBakePSO;
+        FComputePipeline    SkyReflMipGenPSO;
+        FComputePipeline    SkyReflPrefilterPSO;
 
         FVolumetricPipeline IntegrateAmbientPSO;
         Microsoft::WRL::ComPtr<ID3D12Resource> AmbientBuffer;   // DEFAULT, 2x float4, UAV

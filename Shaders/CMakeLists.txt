@@ -72,6 +72,7 @@ smile_compile_shader(Atmosphere/SkyAtmosphere.vs.hlsl     vs_6_0 main SHADER_OUT
 smile_compile_shader(Atmosphere/SkyAtmosphere.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/BakeAerialPerspective.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/IntegrateSkyAmbient.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/BakeSkyReflection.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/StarField.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/StarField.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 
@@ -193,6 +194,7 @@ add_custom_target(Shaders
         Atmosphere/SkyAtmosphere.ps.hlsl
         Atmosphere/BakeAerialPerspective.cs.hlsl
         Atmosphere/IntegrateSkyAmbient.cs.hlsl
+        Atmosphere/BakeSkyReflection.cs.hlsl
         Atmosphere/StarField.vs.hlsl
         Atmosphere/StarField.ps.hlsl
         Fog/FogCommon.hlsli
