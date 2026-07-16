@@ -49,9 +49,15 @@ namespace Smile {
 
         void Clear();
 
+        // Versao dos transforms dos renderables — quem muta transform (gizmo do editor)
+        // bumpa; o Renderer compara por frame p/ reconstruir SO a TLAS (BLAS intactos).
+        u64  TransformsVersion() const { return TransformsVersion_; }
+        void BumpTransformsVersion()   { ++TransformsVersion_; }
+
     private:
         std::vector<std::unique_ptr<FGpuMesh>> MeshLibrary;
         std::vector<FRenderable>               RenderableList;
         std::vector<FLight>                    LightList;
+        u64                                    TransformsVersion_ = 0;
     };
 }

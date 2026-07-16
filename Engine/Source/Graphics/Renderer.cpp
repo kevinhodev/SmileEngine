@@ -75,7 +75,16 @@ namespace Smile {
                                     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                                     SwapChain.GetWidth(), SwapChain.GetHeight());
 
-        Ocean.Initialize(Device.Native(), SRVHeap);
+        // Cascatas: bandas em ciclos/tile disjuntas e contíguas em mundo (T1=6·T0,
+        // T2=24·T0 → c0 cobre λ≤T0/2, c1 (T0/2, 3·T0], c2 (3·T0, 24·T0]); tempo com
+        // dispersão física (cascata maior evolui ~1/√(T_i/T0) mais devagar); seed
+        // própria descorrelaciona os padrões.
+        Ocean[0].ConfigureCascade(1337u, 1.0f,     2.0f, 129.0f);
+        Ocean[1].ConfigureCascade(1338u, 0.4082f,  2.0f, 12.0f);
+        // c2 começa em 2 ciclos (λ máx 512 m): o componente de 1024 m virava morro único.
+        Ocean[2].ConfigureCascade(1339u, 0.2041f,  2.0f, 8.0f);
+        for (u32 c = 0; c < kOceanCascades; ++c)
+            Ocean[c].Initialize(Device.Native(), SRVHeap);
         Water.Initialize(Device.Native(),
                          DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                          DXGI_FORMAT_R16G16_FLOAT);
@@ -127,6 +136,7 @@ namespace Smile {
     void Renderer::BuildRaytracingScene() {
         if (!Device.RaytracingSupported()) return;
         RaytracingScene.Build(Device, CommandQueue, SRVHeap, Scene);
+        TlasTransformsVersion = Scene.TransformsVersion();
     }
 
     void Renderer::SetupGIForScene(const Vec3& _AABBMin, const Vec3& _AABBMax) {
@@ -1109,19 +1119,21 @@ namespace Smile {
                 WaterAtmoRefl ? (1.0f - RainSky * 0.65f) : IBLIntensity;
             Water.UpdatePerFrame(FrameSlot, WaterViewProj, Projection, WaterInvViewProj,
                                  ViewProjUnjittered, PrevViewProj, CameraPosition, KeyDir,
-                                 KeyInt, KeyColor, ElapsedTime,
+                                 KeyInt, KeyColor, SkyAmbient, ElapsedTime,
                                  WaterAtmoRefl || HDREnv.HasHDRLoaded(), WaterReflIntensity,
                                  RenderWidth(), RenderHeight(), NearZ, FarZ,
                                  WaterHasDepth, UseAtmosphereSky);
-            if (Ocean.IsInitialized()) {
-                Ocean.SetTime(ElapsedTime);
-                Ocean.SetWindDirection(Water.GetWindDirection());
-                Ocean.SetWindSpeed(Water.GetWindSpeed());
-                Ocean.SetAmplitude(Water.GetWavesAmount());
-                // Espuma responde ao choppy/altura REAIS da superfície (não a um scale fixo).
-                Ocean.SetChoppyFactors(Water.GetFFTChoppyScale() *
-                                       Water.GetFFTDisplacementScale() *
-                                       Water.GetWavesSize() * Water.GetWavesAmount());
+            for (u32 c = 0; c < kOceanCascades; ++c) {
+                if (!Ocean[c].IsInitialized()) continue;
+                Ocean[c].SetTime(ElapsedTime);
+                Ocean[c].SetWindDirection(Water.GetWindDirection());
+                Ocean[c].SetWindSpeed(Water.GetWindSpeed());
+                Ocean[c].SetAmplitude(Water.GetWavesAmount());
+                // Espuma responde ao choppy/altura REAIS da superfície (não a um scale
+                // fixo); boost×texel das cascatas cancelam → mesmo valor pras três.
+                Ocean[c].SetChoppyFactors(Water.GetFFTChoppyScale() *
+                                          Water.GetFFTDisplacementScale() *
+                                          Water.GetWavesSize() * Water.GetWavesAmount());
             }
         }
 
@@ -1158,9 +1170,10 @@ namespace Smile {
         ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
 
-        if (UseWater && Ocean.IsInitialized()) {
+        if (UseWater && Ocean[0].IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Água — FFT");
-            Ocean.RecordCompute(FrameSlot, CommandList, SRVHeap);
+            for (u32 c = 0; c < kOceanCascades; ++c)
+                Ocean[c].RecordCompute(FrameSlot, CommandList, SRVHeap);
         }
 
         GpuProfiler.Begin(CommandList, "Céu e atmosfera");
@@ -1223,6 +1236,17 @@ namespace Smile {
                     G.SpotParams  = { 0.0f, 0.0f, 0.0f, 0.0f };
                 }
                 Dst[GILightCount++] = G;
+            }
+        }
+
+        // Transform mudou no editor (gizmo) -> rebuild leve SO da TLAS (BLAS intactos)
+        // na list do frame, ANTES do segmento A fechar: o DDGI async espera o fence do
+        // segmento, entao compute e reflexos/ReSTIR ja tracejam contra a TLAS nova.
+        if (RaytracingScene.IsBuilt() && Scene.TransformsVersion() != TlasTransformsVersion) {
+            Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> TlasCL;
+            if (SUCCEEDED(CommandList->QueryInterface(IID_PPV_ARGS(&TlasCL))) &&
+                RaytracingScene.RecordTlasRebuild(TlasCL.Get(), Scene, FrameSlot)) {
+                TlasTransformsVersion = Scene.TransformsVersion();
             }
         }
 
@@ -1965,8 +1989,12 @@ namespace Smile {
                 (UseAtmosphereSky && Atmosphere.IsInitialized())
                     ? Atmosphere.SkyReflectionSRV()
                     : HDREnv.SpecularSRV();
-            Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, Ocean.SRVSlot(),
-                                Ocean.NormalSRVSlot(), SceneCopyTableStart, Atmosphere.SkyViewSRV(),
+            const u32 OceanDispSlots[kOceanCascades] = {
+                Ocean[0].SRVSlot(), Ocean[1].SRVSlot(), Ocean[2].SRVSlot() };
+            const u32 OceanNormalSlots[kOceanCascades] = {
+                Ocean[0].NormalSRVSlot(), Ocean[1].NormalSRVSlot(), Ocean[2].NormalSRVSlot() };
+            Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, OceanDispSlots,
+                                OceanNormalSlots, SceneCopyTableStart, Atmosphere.SkyViewSRV(),
                                 SunShadows.ConstantsAddress(), SunShadows.ShadowSRVSlot());
 
             WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,

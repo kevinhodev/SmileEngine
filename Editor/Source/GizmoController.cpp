@@ -193,6 +193,7 @@ namespace SmileEditor {
         Rn.Transform.Position = NewPos;
         Rn.AABBMin += Step; // a AABB de mundo acompanha (frustum culling)
         Rn.AABBMax += Step;
+        R.GetScene().BumpTransformsVersion(); // TLAS segue o objeto (rebuild leve no frame)
     }
 
     void GizmoController::OnMouseRelease() {

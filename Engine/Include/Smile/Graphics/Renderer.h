@@ -498,6 +498,7 @@ namespace Smile {
         FLocalShadows   LocalShadows; // sombras de spot (F3a); budget kMaxShadows/frame
  
         FRaytracingScene RaytracingScene;
+        u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
         FDDGI            DDGI;
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;
@@ -528,7 +529,10 @@ namespace Smile {
         FVolumetricClouds VolumetricClouds;
         bool              UseClouds = false; // off por padrao: caro e ainda nao otimizado
 
-        FOceanFFT         Ocean;
+        // Multi-cascata: 3 sims FFT em escalas de tile T0/6·T0/24·T0 com bandas de
+        // espectro disjuntas — detalhe, mar médio e swell (mata o tiling de escala única).
+        static constexpr u32 kOceanCascades = FWaterRenderer::kFFTCascades;
+        FOceanFFT         Ocean[kOceanCascades];
         FWaterRenderer    Water;
         bool              UseWater  = false; 
 

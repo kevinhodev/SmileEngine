@@ -49,19 +49,6 @@ namespace Smile {
                                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         }
 
-        ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* _Device, const void* _Src,
-                                                  UINT64 _Size) {
-            ComPtr<ID3D12Resource> Buffer = CreateBuffer(_Device, _Size, D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
-            if (_Src && _Size) {
-                void* Mapped = nullptr; D3D12_RANGE NoRead{ 0, 0 };
-                SMILE_HR(Buffer->Map(0, &NoRead, &Mapped));
-                std::memcpy(Mapped, _Src, _Size);
-                Buffer->Unmap(0, nullptr);
-            }
-            return Buffer;
-        }
-
         void PushTransition(std::vector<D3D12_RESOURCE_BARRIER>& _Out, ID3D12Resource* _Res,
                             D3D12_RESOURCE_STATES _Before, D3D12_RESOURCE_STATES _After) {
             D3D12_RESOURCE_BARRIER B{};
@@ -81,14 +68,88 @@ namespace Smile {
         }
     }
 
+    static_assert(FRaytracingScene::kInstanceSlots == FCommandQueue::kFramesInFlight,
+                  "InstanceUpload versionado por frame em voo");
+
     void FRaytracingScene::Release(FTextureSRVHeap& _SRVHeap) {
         if (TlasSRVSlot_ != kInvalidSlot) { _SRVHeap.Free(TlasSRVSlot_, 1); TlasSRVSlot_ = kInvalidSlot; }
         BlasPool.Reset();
         BlasByMesh.clear();
         Tlas.Reset();
+        TlasScratch.Reset();
+        for (u32 s = 0; s < kInstanceSlots; ++s) {
+            InstanceUpload[s].Reset();
+            InstanceMapped[s] = nullptr;
+        }
+        InstanceCapacity = 0;
         Built          = false;
         InstanceCount_ = 0;
         BlasCount_     = 0;
+    }
+
+    void FRaytracingScene::CollectInstances(const FScene& _Scene,
+                                            std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& _Out) const {
+        _Out.clear();
+        _Out.reserve(_Scene.Renderables().size());
+        u32 Idx = 0;
+        for (const FRenderable& R : _Scene.Renderables()) {
+            const u32 ThisIdx = Idx++;
+            if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
+            auto It = BlasByMesh.find(R.Mesh);
+            if (It == BlasByMesh.end() || It->second == 0) continue;
+
+            D3D12_RAYTRACING_INSTANCE_DESC Inst{};
+
+            const Mat44 T = R.Transform.Matrix().GetTransposed();
+            for (int Row = 0; Row < 3; ++Row)
+                for (int Col = 0; Col < 4; ++Col)
+                    Inst.Transform[Row][Col] = T.M[Row][Col];
+            Inst.InstanceID                          = ThisIdx;
+            Inst.InstanceContributionToHitGroupIndex = 0;
+            Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+            // Masks segmentadas (SMILE_RT_MASK_* em DDGICommon.hlsli): raios normais tracejam
+            // com ALL (uniao dos bits = tudo visivel, comportamento identico ao 0xFF antigo);
+            // shadow rays podem usar so OPAQUE p/ pular folhagem (toggle no editor).
+            // Folhagem/alpha-test: candidatos nao-opacos passam pelo AlphaTestPass no shader
+            // (SMILE_RT_PROCEED em HitShading.hlsli) — sem isto os cards viram quads solidos.
+            const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
+            Inst.InstanceMask = AlphaTest ? 0x02u : 0x01u;
+            if (AlphaTest)
+                Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
+            Inst.AccelerationStructure               = It->second;
+            _Out.push_back(Inst);
+        }
+    }
+
+    bool FRaytracingScene::RecordTlasRebuild(ID3D12GraphicsCommandList4* _CL, const FScene& _Scene,
+                                             u32 _FrameSlot) {
+        if (!Built || !Tlas || !TlasScratch || !_CL) return false;
+
+        std::vector<D3D12_RAYTRACING_INSTANCE_DESC> Instances;
+        CollectInstances(_Scene, Instances);
+        if (Instances.empty() || Instances.size() > InstanceCapacity) return false;
+
+        const u32 Slot = _FrameSlot % kInstanceSlots;
+        std::memcpy(InstanceMapped[Slot], Instances.data(),
+                    Instances.size() * sizeof(D3D12_RAYTRACING_INSTANCE_DESC));
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS TInputs{};
+        TInputs.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+        TInputs.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
+        TInputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+        TInputs.NumDescs      = static_cast<UINT>(Instances.size());
+        TInputs.InstanceDescs = InstanceUpload[Slot]->GetGPUVirtualAddress();
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC TBuild{};
+        TBuild.Inputs                           = TInputs;
+        TBuild.ScratchAccelerationStructureData = TlasScratch->GetGPUVirtualAddress();
+        TBuild.DestAccelerationStructureData    = Tlas->GetGPUVirtualAddress();
+        _CL->BuildRaytracingAccelerationStructure(&TBuild, 0, nullptr);
+        // WAR/RAW: o proximo consumidor (trace) e o proximo rebuild (scratch) esperam o build.
+        GlobalUAVBarrier(_CL);
+
+        InstanceCount_ = static_cast<u32>(Instances.size());
+        return true;
     }
 
     void FRaytracingScene::Build(FD3D12Device& _Device, FCommandQueue& _Queue,
@@ -250,59 +311,44 @@ namespace Smile {
         BlasCount_ = NumBlas;
 
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> Instances;
-        Instances.reserve(_Scene.Renderables().size());
-        u32 Idx = 0;
-        for (const FRenderable& R : _Scene.Renderables()) {
-            const u32 ThisIdx = Idx++;
-            if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
-            auto It = BlasByMesh.find(R.Mesh);
-            if (It == BlasByMesh.end() || It->second == 0) continue;
-
-            D3D12_RAYTRACING_INSTANCE_DESC Inst{};
-
-            const Mat44 T = R.Transform.Matrix().GetTransposed();
-            for (int Row = 0; Row < 3; ++Row)
-                for (int Col = 0; Col < 4; ++Col)
-                    Inst.Transform[Row][Col] = T.M[Row][Col];
-            Inst.InstanceID                          = ThisIdx;
-            Inst.InstanceContributionToHitGroupIndex = 0;
-            Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
-            // Masks segmentadas (SMILE_RT_MASK_* em DDGICommon.hlsli): raios normais tracejam
-            // com ALL (uniao dos bits = tudo visivel, comportamento identico ao 0xFF antigo);
-            // shadow rays podem usar so OPAQUE p/ pular folhagem (toggle no editor).
-            // Folhagem/alpha-test: candidatos nao-opacos passam pelo AlphaTestPass no shader
-            // (SMILE_RT_PROCEED em HitShading.hlsli) — sem isto os cards viram quads solidos.
-            const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
-            Inst.InstanceMask = AlphaTest ? 0x02u : 0x01u;
-            if (AlphaTest)
-                Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
-            Inst.AccelerationStructure               = It->second;
-            Instances.push_back(Inst);
-        }
+        CollectInstances(_Scene, Instances);
         InstanceCount_ = static_cast<u32>(Instances.size());
 
-        ComPtr<ID3D12Resource> InstanceBuffer, TScratch;
         if (!Instances.empty()) {
-            InstanceBuffer = CreateUploadBuffer(Dev5, Instances.data(),
-                Instances.size() * sizeof(D3D12_RAYTRACING_INSTANCE_DESC));
+            // Infra persistente (rebuild de TLAS por frame no editor): uploads versionados
+            // por frame em voo + TLAS/scratch dimensionados p/ a capacidade maxima — TODOS
+            // os renderables, pois Visible pode ligar depois do load.
+            InstanceCapacity = static_cast<u32>(_Scene.Renderables().size());
+            const UINT64 UploadSize =
+                static_cast<UINT64>(InstanceCapacity) * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
+            for (u32 s = 0; s < kInstanceSlots; ++s) {
+                InstanceUpload[s] = CreateBuffer(Dev5, UploadSize, D3D12_HEAP_TYPE_UPLOAD,
+                    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
+                D3D12_RANGE NoRead{ 0, 0 };
+                SMILE_HR(InstanceUpload[s]->Map(0, &NoRead,
+                         reinterpret_cast<void**>(&InstanceMapped[s])));
+            }
+            std::memcpy(InstanceMapped[0], Instances.data(),
+                        Instances.size() * sizeof(D3D12_RAYTRACING_INSTANCE_DESC));
 
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS TInputs{};
             TInputs.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
             TInputs.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
             TInputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-            TInputs.NumDescs      = static_cast<UINT>(Instances.size());
-            TInputs.InstanceDescs = InstanceBuffer->GetGPUVirtualAddress();
+            TInputs.NumDescs      = InstanceCapacity; // prebuild no pior caso (rebuilds reusam)
+            TInputs.InstanceDescs = InstanceUpload[0]->GetGPUVirtualAddress();
 
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO TInfo{};
             Dev5->GetRaytracingAccelerationStructurePrebuildInfo(&TInputs, &TInfo);
-            TScratch = CreateUAVBuffer(Dev5, AlignAS(TInfo.ScratchDataSizeInBytes),
-                                       D3D12_RESOURCE_STATE_COMMON);
+            TlasScratch = CreateUAVBuffer(Dev5, AlignAS(TInfo.ScratchDataSizeInBytes),
+                                          D3D12_RESOURCE_STATE_COMMON);
             Tlas = CreateUAVBuffer(Dev5, AlignAS(TInfo.ResultDataMaxSizeInBytes),
                                    D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
 
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC TBuild{};
             TBuild.Inputs                           = TInputs;
-            TBuild.ScratchAccelerationStructureData = TScratch->GetGPUVirtualAddress();
+            TBuild.Inputs.NumDescs                  = static_cast<UINT>(Instances.size());
+            TBuild.ScratchAccelerationStructureData = TlasScratch->GetGPUVirtualAddress();
             TBuild.DestAccelerationStructureData    = Tlas->GetGPUVirtualAddress();
             CL->BuildRaytracingAccelerationStructure(&TBuild, 0, nullptr);
         }
