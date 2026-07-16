@@ -8,6 +8,7 @@
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Graphics/D3D12Device.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/SwapChain.h"
 #include "Smile/Graphics/PipelineState.h"
 #include "Smile/Graphics/Camera.h"
@@ -282,6 +283,7 @@ namespace Smile {
 
         const FD3D12Device& GetDevice()  const { return Device; }
         FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
+        const FGpuProfiler& GetGpuProfiler() const { return GpuProfiler; }
         FTextureSRVHeap&    GetSRVHeap()       { return SRVHeap; }
 
         FRaytracingScene&   GetRaytracingScene() { return RaytracingScene; }
@@ -335,6 +337,7 @@ namespace Smile {
 
         FD3D12Device    Device;
         FCommandQueue   CommandQueue;
+        FGpuProfiler    GpuProfiler;
         FSwapChain      SwapChain;
         FPipelineState  PipelineState;
         FTextureSRVHeap SRVHeap;

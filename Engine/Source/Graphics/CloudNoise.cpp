@@ -1,4 +1,5 @@
 #include "Smile/Graphics/CloudNoise.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -30,6 +31,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateCommittedResource(
                 &Heap, D3D12_HEAP_FLAG_NONE, &Desc, WeatherState, nullptr,
                 IID_PPV_ARGS(&WeatherTex)));
+            VramTracker::Register(WeatherTex.Get(), EVramCategory::Sky);
 
             WeatherSRVSlot = _SRVHeap.Allocate(1);
             D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};

@@ -1,5 +1,6 @@
 #include "Smile/Graphics/RaytracingScene.h"
 #include "Smile/Graphics/D3D12Device.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/GpuMesh.h"
@@ -38,6 +39,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> Buffer;
             SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
                      _State, nullptr, IID_PPV_ARGS(&Buffer)));
+            VramTracker::Register(Buffer.Get(), EVramCategory::RaytracingAS);
             return Buffer;
         }
 

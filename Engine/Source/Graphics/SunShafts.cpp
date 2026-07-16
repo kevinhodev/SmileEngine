@@ -1,4 +1,5 @@
 #include "Smile/Graphics/SunShafts.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -272,6 +273,7 @@ namespace Smile {
             &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
             IID_PPV_ARGS(&VolRT)));
+        VramTracker::Register(VolRT.Get(), EVramCategory::Sky);
         VolState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         for (u32 i = 0; i < 2; ++i) {
@@ -279,6 +281,7 @@ namespace Smile {
                 &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
                 IID_PPV_ARGS(&HistoryRT[i])));
+            VramTracker::Register(HistoryRT[i].Get(), EVramCategory::Sky);
             HistState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 

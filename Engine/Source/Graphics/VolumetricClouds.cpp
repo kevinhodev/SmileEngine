@@ -1,4 +1,5 @@
 #include "Smile/Graphics/VolumetricClouds.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CloudNoise.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
@@ -61,6 +62,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateCommittedResource(
                 &SHeap, D3D12_HEAP_FLAG_NONE, &SDesc, ShadowState, nullptr,
                 IID_PPV_ARGS(&ShadowTex)));
+            VramTracker::Register(ShadowTex.Get(), EVramCategory::Sky);
 
             ShadowSRVSlot = _SRVHeap.Allocate(1);
             ShadowUAVSlot = _SRVHeap.Allocate(1);
@@ -110,6 +112,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &Heap, D3D12_HEAP_FLAG_NONE, &Desc, RTState, nullptr,
             IID_PPV_ARGS(&CloudRT)));
+        VramTracker::Register(CloudRT.Get(), EVramCategory::Sky);
 
         if (RTSRVSlot == kInvalidSlot) RTSRVSlot = _SRVHeap.Allocate(1);
         if (RTUAVSlot == kInvalidSlot) RTUAVSlot = _SRVHeap.Allocate(1);
@@ -135,6 +138,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateCommittedResource(
                 &Heap, D3D12_HEAP_FLAG_NONE, &Desc, HistState[i], nullptr,
                 IID_PPV_ARGS(&HistoryRT[i])));
+            VramTracker::Register(HistoryRT[i].Get(), EVramCategory::Sky);
 
             if (HistSRVSlot[i] == kInvalidSlot) HistSRVSlot[i] = _SRVHeap.Allocate(1);
             if (HistUAVSlot[i] == kInvalidSlot) HistUAVSlot[i] = _SRVHeap.Allocate(1);

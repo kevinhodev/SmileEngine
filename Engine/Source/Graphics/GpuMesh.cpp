@@ -1,4 +1,5 @@
 #include "Smile/Graphics/GpuMesh.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 
@@ -69,6 +70,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
                      &ResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
                      IID_PPV_ARGS(&Buffer)));
+            VramTracker::Register(Buffer.Get(), EVramCategory::Geometry);
             return Buffer;
         }
     }

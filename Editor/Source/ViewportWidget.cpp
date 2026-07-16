@@ -1,5 +1,6 @@
 #include "SmileEditor/ViewportWidget.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Core/Logger.h"
 #include <QShowEvent>
@@ -12,7 +13,10 @@
 #include <QCursor>
 #include <QLocale>
 #include <QFileDialog>
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <vector>
 
 namespace SmileEditor {
     static constexpr float kMouseSensitivity = 0.15f;  
@@ -174,6 +178,137 @@ namespace SmileEditor {
             Renderer->GetDevice().GetAdapterDedicatedVideoMemory()) / (1024.0 * 1024.0 * 1024.0);
         return QLocale(QLocale::Portuguese, QLocale::Brazil).toString(GiB, 'f', 1) +
                QStringLiteral(" GB");
+    }
+
+    QString ViewportWidget::GetVRAMUsageText() const {
+        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        const auto& VM = Renderer->GetDevice().QueryVideoMemory();
+        if (!VM.Valid) return QStringLiteral("—");
+
+        const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
+        const double GiB = 1024.0 * 1024.0 * 1024.0;
+        const double Pct = VM.LocalBudget > 0
+            ? 100.0 * static_cast<double>(VM.LocalUsage) / static_cast<double>(VM.LocalBudget)
+            : 0.0;
+        return Loc.toString(static_cast<double>(VM.LocalUsage) / GiB, 'f', 2) +
+               QStringLiteral(" / ") +
+               Loc.toString(static_cast<double>(VM.LocalBudget) / GiB, 'f', 1) +
+               QStringLiteral(" GB (") + Loc.toString(Pct, 'f', 0) + QStringLiteral("%)");
+    }
+
+    bool ViewportWidget::IsVRAMOverBudget() const {
+        if (!Renderer || !Renderer->IsInitialized()) return false;
+        return Renderer->GetDevice().QueryVideoMemory().OverBudget;
+    }
+
+    double ViewportWidget::GetVRAMBudgetFrac() const {
+        if (!Renderer || !Renderer->IsInitialized()) return 0.0;
+        const auto& VM = Renderer->GetDevice().QueryVideoMemory();
+        if (!VM.Valid || VM.LocalBudget == 0) return 0.0;
+        return std::min(1.0, static_cast<double>(VM.LocalUsage) /
+                             static_cast<double>(VM.LocalBudget));
+    }
+
+    namespace {
+        QString FormatBytes(Smile::u64 _Bytes) {
+            const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
+            const double MiB = static_cast<double>(_Bytes) / (1024.0 * 1024.0);
+            if (MiB >= 1024.0) return Loc.toString(MiB / 1024.0, 'f', 2) + QStringLiteral(" GB");
+            return Loc.toString(MiB, 'f', 1) + QStringLiteral(" MB");
+        }
+    }
+
+    QString ViewportWidget::GetVRAMNonLocalText() const {
+        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        const auto& VM = Renderer->GetDevice().QueryVideoMemory();
+        if (!VM.Valid) return QStringLiteral("—");
+        return FormatBytes(VM.NonLocalUsage) + QStringLiteral(" / ") +
+               FormatBytes(VM.NonLocalBudget);
+    }
+
+    // Tabela da janela de Estatisticas: categorias rastreadas (> 0) em ordem decrescente
+    // + linha "Nao rastreado" (uso DXGI − soma rastreada: driver, descriptor heaps,
+    // swapchain, upload heaps e o que nao foi instrumentado). frac e relativo ao uso total.
+    QVariantList ViewportWidget::GetVRAMBreakdown() const {
+        QVariantList Rows;
+        if (!Renderer || !Renderer->IsInitialized()) return Rows;
+
+        const auto& VM   = Renderer->GetDevice().QueryVideoMemory();
+        const auto  Snap = Smile::VramTracker::Snapshot();
+        const double Total = VM.Valid && VM.LocalUsage > 0
+            ? static_cast<double>(VM.LocalUsage)
+            : static_cast<double>(std::max<Smile::u64>(Snap.TotalTracked, 1));
+
+        using Smile::EVramCategory;
+        std::vector<std::pair<size_t, Smile::u64>> Sorted;
+        for (size_t i = 0; i < static_cast<size_t>(EVramCategory::Count); ++i)
+            if (Snap.Bytes[i] > 0) Sorted.emplace_back(i, Snap.Bytes[i]);
+        std::sort(Sorted.begin(), Sorted.end(),
+                  [](const auto& A, const auto& B) { return A.second > B.second; });
+
+        for (const auto& [Index, Bytes] : Sorted) {
+            QVariantMap Row;
+            Row.insert(QStringLiteral("name"), QString::fromUtf8(
+                Smile::VramTracker::CategoryName(static_cast<EVramCategory>(Index))));
+            Row.insert(QStringLiteral("text"), FormatBytes(Bytes));
+            Row.insert(QStringLiteral("frac"), static_cast<double>(Bytes) / Total);
+            Rows.push_back(Row);
+        }
+
+        if (VM.Valid && VM.LocalUsage > Snap.TotalTracked) {
+            const Smile::u64 Untracked = VM.LocalUsage - Snap.TotalTracked;
+            QVariantMap Row;
+            Row.insert(QStringLiteral("name"), QStringLiteral("Não rastreado"));
+            Row.insert(QStringLiteral("text"), FormatBytes(Untracked));
+            Row.insert(QStringLiteral("frac"), static_cast<double>(Untracked) / Total);
+            Rows.push_back(Row);
+        }
+        return Rows;
+    }
+
+    namespace {
+        constexpr const char* kGpuFrameScope = "Frame (GPU)";
+    }
+
+    QString ViewportWidget::GetGpuFrameText() const {
+        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        for (const auto& R : Renderer->GetGpuProfiler().Results())
+            if (std::strcmp(R.Name, kGpuFrameScope) == 0)
+                return QLocale(QLocale::Portuguese, QLocale::Brazil)
+                           .toString(R.Milliseconds, 'f', 2) + QStringLiteral(" ms");
+        return QStringLiteral("—");
+    }
+
+    // Tabela "GPU por passe": escopos do FGpuProfiler (sem o total, que vira o header),
+    // ordenados do mais caro pro mais barato; frac relativo ao frame total de GPU.
+    QVariantList ViewportWidget::GetGpuTimings() const {
+        QVariantList Rows;
+        if (!Renderer || !Renderer->IsInitialized()) return Rows;
+        const auto& Results = Renderer->GetGpuProfiler().Results();
+        if (Results.empty()) return Rows;
+
+        double FrameMs = 0.0;
+        for (const auto& R : Results)
+            if (std::strcmp(R.Name, kGpuFrameScope) == 0) FrameMs = R.Milliseconds;
+
+        std::vector<const Smile::FGpuProfiler::FScopeResult*> Sorted;
+        Sorted.reserve(Results.size());
+        for (const auto& R : Results)
+            if (std::strcmp(R.Name, kGpuFrameScope) != 0) Sorted.push_back(&R);
+        std::sort(Sorted.begin(), Sorted.end(),
+                  [](const auto* A, const auto* B) { return A->Milliseconds > B->Milliseconds; });
+
+        const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
+        for (const auto* R : Sorted) {
+            QVariantMap Row;
+            Row.insert(QStringLiteral("name"), QString::fromUtf8(R->Name));
+            Row.insert(QStringLiteral("text"), Loc.toString(R->Milliseconds, 'f', 2) +
+                                               QStringLiteral(" ms"));
+            Row.insert(QStringLiteral("frac"),
+                       FrameMs > 0.0 ? std::min(1.0, R->Milliseconds / FrameMs) : 0.0);
+            Rows.push_back(Row);
+        }
+        return Rows;
     }
 
     void ViewportWidget::SelectLit() {
@@ -644,6 +779,88 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudMarchSteps(int _Steps) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetMarchSteps(static_cast<Smile::f32>(_Steps));
+        emit ViewSettingsChanged();
+    }
+
+    // ---- Clima (FWeather; defaults espelham o struct p/ antes do renderer existir) ----
+    double ViewportWidget::GetRainAmount() const {
+        return Renderer ? Renderer->GetWeather().RainAmount : 0.0;
+    }
+    void ViewportWidget::SetRainAmount(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetWeather().RainAmount = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetPuddleAmount() const {
+        return Renderer ? Renderer->GetWeather().PuddleAmount : 0.65;
+    }
+    void ViewportWidget::SetPuddleAmount(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetWeather().PuddleAmount = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetPuddleScale() const {
+        return Renderer ? Renderer->GetWeather().PuddleScale : 8.0;
+    }
+    void ViewportWidget::SetPuddleScale(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetWeather().PuddleScale = static_cast<Smile::f32>(std::clamp(_Value, 1.0, 64.0));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetRippleStrength() const {
+        return Renderer ? Renderer->GetWeather().RippleStrength : 1.0;
+    }
+    void ViewportWidget::SetRippleStrength(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetWeather().RippleStrength = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 2.0));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetWetDarkening() const {
+        return Renderer ? Renderer->GetWeather().WetDarkening : 0.85;
+    }
+    void ViewportWidget::SetWetDarkening(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetWeather().WetDarkening = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetCurtainAmount() const {
+        return Renderer ? Renderer->GetWeather().CurtainAmount : 1.0;
+    }
+    void ViewportWidget::SetCurtainAmount(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetWeather().CurtainAmount = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
+        emit ViewSettingsChanged();
+    }
+
+    bool ViewportWidget::IsRainOcclusion() const {
+        return Renderer ? Renderer->GetWeather().RainOcclusion : true;
+    }
+    void ViewportWidget::SetRainOcclusion(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetWeather().RainOcclusion = _Enabled;
+        emit ViewSettingsChanged();
+    }
+
+    bool ViewportWidget::AreRainParticles() const {
+        return Renderer ? Renderer->GetWeather().RainParticles : true;
+    }
+    void ViewportWidget::SetRainParticles(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetWeather().RainParticles = _Enabled;
+        emit ViewSettingsChanged();
+    }
+
+    bool ViewportWidget::IsWeatherDriveSky() const {
+        return Renderer ? Renderer->GetWeather().DriveSky : true;
+    }
+    void ViewportWidget::SetWeatherDriveSky(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetWeather().DriveSky = _Enabled;
         emit ViewSettingsChanged();
     }
 

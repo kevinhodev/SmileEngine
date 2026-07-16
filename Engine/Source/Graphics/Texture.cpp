@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <wincodec.h>
@@ -123,6 +124,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&GPUTexture)));
+        VramTracker::Register(GPUTexture.Get(), EVramCategory::SceneTextures);
 
         std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> Layouts(MipCount);
         std::vector<UINT>   NumRows(MipCount);

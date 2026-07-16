@@ -1,5 +1,6 @@
 #include "Smile/Graphics/LocalShadows.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
@@ -44,6 +45,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
             ArrayState, &Clear, IID_PPV_ARGS(&DepthArray)));
+        VramTracker::Register(DepthArray.Get(), EVramCategory::Shadows);
 
         DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kMaxShadows, false);
         for (u32 s = 0; s < kMaxShadows; ++s) {
@@ -65,6 +67,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
             CubeState, &Clear, IID_PPV_ARGS(&CubeArray)));
+        VramTracker::Register(CubeArray.Get(), EVramCategory::Shadows);
 
         CubeDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kMaxCubeShadows * 6, false);
         for (u32 s = 0; s < kMaxCubeShadows * 6; ++s) {

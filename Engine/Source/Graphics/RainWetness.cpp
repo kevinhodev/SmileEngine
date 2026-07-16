@@ -1,4 +1,5 @@
 #include "Smile/Graphics/RainWetness.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
@@ -290,6 +291,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateCommittedResource(
                 &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_COPY_DEST,
                 nullptr, IID_PPV_ARGS(&_Out)));
+            VramTracker::Register(_Out.Get(), EVramCategory::Misc);
 
             D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
             SRVDesc.Format                  = _Fmt;
@@ -574,6 +576,7 @@ namespace Smile {
                 &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &Clear, IID_PPV_ARGS(&OccDepth)));
+            VramTracker::Register(OccDepth.Get(), EVramCategory::Misc);
             OccState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 

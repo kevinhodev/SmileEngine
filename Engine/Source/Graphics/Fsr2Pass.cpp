@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Fsr2Pass.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/Logger.h"
 
 #if SMILE_FSR2_ENABLED
@@ -103,6 +104,7 @@ namespace Smile {
             LogError("FSR2: CreateCommittedResource (output) falhou");
             P->DestroyContext(); return false;
         }
+        VramTracker::Register(P->Output.Get(), EVramCategory::RenderTargets);
 
         if (P->OutputSRV == kInvalidSlot) P->OutputSRV = SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};

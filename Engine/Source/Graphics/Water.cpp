@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Water.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
@@ -503,6 +504,7 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(&GpuInstanceBuffer)));
+        VramTracker::Register(GpuInstanceBuffer.Get(), EVramCategory::Water);
         GpuInstanceBufferState = D3D12_RESOURCE_STATE_COMMON;
         GpuInstanceVBView.BufferLocation = GpuInstanceBuffer->GetGPUVirtualAddress();
         GpuInstanceVBView.StrideInBytes  = sizeof(TileInstance);
@@ -513,6 +515,7 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(&GpuIndirectArgsBuffer)));
+        VramTracker::Register(GpuIndirectArgsBuffer.Get(), EVramCategory::Water);
         GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_COMMON;
 
         DefaultDesc.Width = TileSourceBufferSize;
@@ -520,6 +523,7 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(&GpuTileSourceBuffer)));
+        VramTracker::Register(GpuTileSourceBuffer.Get(), EVramCategory::Water);
         GpuTileSourceBufferState = D3D12_RESOURCE_STATE_COMMON;
 
         DefaultDesc.Width = GpuDrawBucketScratchBufferSize;
@@ -527,6 +531,7 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(&GpuDrawBucketScratchBuffer)));
+        VramTracker::Register(GpuDrawBucketScratchBuffer.Get(), EVramCategory::Water);
         GpuDrawBucketScratchState = D3D12_RESOURCE_STATE_COMMON;
 
         DefaultDesc.Width = GpuDebugCounterBufferSize;
@@ -534,6 +539,7 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(&GpuDebugCounterBuffer)));
+        VramTracker::Register(GpuDebugCounterBuffer.Get(), EVramCategory::Water);
         GpuDebugCounterState = D3D12_RESOURCE_STATE_COMMON;
 
         D3D12_HEAP_PROPERTIES ReadbackHeap{};

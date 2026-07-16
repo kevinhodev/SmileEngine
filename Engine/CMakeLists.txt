@@ -57,6 +57,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Fsr2Pass.h
     Include/Smile/Graphics/OceanFFT.h
     Include/Smile/Graphics/Water.h
+    Include/Smile/Graphics/VramTracker.h
+    Include/Smile/Graphics/GpuProfiler.h
     Include/Smile/Graphics/Renderer.h
 )
 
@@ -113,6 +115,8 @@ set(ENGINE_SOURCES
     Source/Graphics/Picking.cpp
     Source/Graphics/SelectionOutline.cpp
     Source/Graphics/DebugDraw.cpp
+    Source/Graphics/VramTracker.cpp
+    Source/Graphics/GpuProfiler.cpp
     Source/Graphics/Renderer.cpp
 )
 

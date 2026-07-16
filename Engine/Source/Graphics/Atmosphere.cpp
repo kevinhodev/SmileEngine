@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Atmosphere.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
@@ -34,6 +35,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &Heap, D3D12_HEAP_FLAG_NONE, &Desc, State, nullptr,
             IID_PPV_ARGS(&Resource)));
+        VramTracker::Register(Resource.Get(), EVramCategory::Sky);
 
         SRVSlot = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -137,6 +139,7 @@ namespace Smile {
                 &DefHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
                 IID_PPV_ARGS(&AmbientBuffer)));
+            VramTracker::Register(AmbientBuffer.Get(), EVramCategory::Sky);
 
             AmbientUAVSlot = _SRVHeap.Allocate(1);
             D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};

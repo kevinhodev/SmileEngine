@@ -1,4 +1,5 @@
 #include "Smile/Graphics/DDGI.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Scene/Scene.h"
@@ -35,6 +36,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> Tex;
             SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
+            VramTracker::Register(Tex.Get(), EVramCategory::GI);
             return Tex;
         }
 
@@ -74,6 +76,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> Buf;
             SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                      _State, nullptr, IID_PPV_ARGS(&Buf)));
+            VramTracker::Register(Buf.Get(), EVramCategory::GI);
             return Buf;
         }
 

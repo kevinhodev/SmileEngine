@@ -1,4 +1,5 @@
 #include "Smile/Graphics/CubeTexture.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 
 namespace Smile {
@@ -32,6 +33,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
             InitialState, nullptr, IID_PPV_ARGS(&GpuResource)));
+        VramTracker::Register(GpuResource.Get(), EVramCategory::SceneTextures);
 
         FaceSRVSlot = _SRVHeap.Allocate(1);
 

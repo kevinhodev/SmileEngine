@@ -1,4 +1,5 @@
 #include "Smile/Graphics/TemporalAA.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -67,6 +68,7 @@ namespace Smile {
                 &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
                 IID_PPV_ARGS(&History[i])));
+            VramTracker::Register(History[i].Get(), EVramCategory::RenderTargets);
             HistoryState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
@@ -74,6 +76,7 @@ namespace Smile {
             &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
             IID_PPV_ARGS(&DisplayTex)));
+        VramTracker::Register(DisplayTex.Get(), EVramCategory::RenderTargets);
         DisplayState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!HistoryRTVHeap.Native())

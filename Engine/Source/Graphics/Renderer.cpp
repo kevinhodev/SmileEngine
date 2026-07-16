@@ -1,6 +1,7 @@
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Graphics/Mesh.h"
 #include "Smile/Graphics/DepthConfig.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
@@ -32,6 +33,8 @@ namespace Smile {
 
         Device.Initialize(kDebugLayer);
         CommandQueue.Initialize(Device.Native(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+        GpuProfiler.Initialize(Device.Native(), CommandQueue.Native(),
+                               FCommandQueue::kFramesInFlight);
         SwapChain.Initialize(Device.GetFactory(),
                              CommandQueue.Native(),
                              Device.Native(),
@@ -291,6 +294,7 @@ namespace Smile {
             &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
             D3D12_RESOURCE_STATE_DEPTH_WRITE, &ClearValue,
             IID_PPV_ARGS(&DepthBuffer)));
+        VramTracker::Register(DepthBuffer.Get(), EVramCategory::RenderTargets);
 
         D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
         DSVDesc.Format        = DXGI_FORMAT_D32_FLOAT;
@@ -345,6 +349,7 @@ namespace Smile {
             &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
             D3D12_RESOURCE_STATE_RENDER_TARGET, &ClearValue,
             IID_PPV_ARGS(&NormalBuffer)));
+        VramTracker::Register(NormalBuffer.Get(), EVramCategory::RenderTargets);
         NormalBufferState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
         D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
@@ -426,6 +431,7 @@ namespace Smile {
             &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
             IID_PPV_ARGS(&HDRColorBuffer)));
+        VramTracker::Register(HDRColorBuffer.Get(), EVramCategory::RenderTargets);
 
         if (!HDRRTVHeap.Native())
             HDRRTVHeap.Initialize(Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
@@ -474,6 +480,7 @@ namespace Smile {
             &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
             IID_PPV_ARGS(&VelocityBuffer)));
+        VramTracker::Register(VelocityBuffer.Get(), EVramCategory::RenderTargets);
         VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!VelocityRTVHeap.Native())
@@ -517,11 +524,13 @@ namespace Smile {
         ResourceDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneColorCopy)));
+        VramTracker::Register(SceneColorCopy.Get(), EVramCategory::RenderTargets);
         SceneColorCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
 
         ResourceDesc.Format = DXGI_FORMAT_R32_TYPELESS;
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneDepthCopy)));
+        VramTracker::Register(SceneDepthCopy.Get(), EVramCategory::RenderTargets);
         SceneDepthCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
 
         if (SceneCopyTableStart == kInvalidSlot)
@@ -764,6 +773,11 @@ namespace Smile {
         if (!Initialized) return;
 
         CommandQueue.BeginFrame();
+
+        // Le os timestamps do frame antigo deste slot (fence ja esperado) e abre o escopo
+        // total; os escopos por passe vem espalhados abaixo, Resolve antes do Close.
+        GpuProfiler.BeginFrame(CommandQueue.FrameIndex());
+        GpuProfiler.Begin(CommandQueue.List(), "Frame (GPU)");
 
         ObjectPicker.Tick();
 
@@ -1131,9 +1145,11 @@ namespace Smile {
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
 
         if (UseWater && Ocean.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Água — FFT");
             Ocean.RecordCompute(FrameSlot, CommandList, SRVHeap);
         }
 
+        GpuProfiler.Begin(CommandList, "Céu e atmosfera");
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
             Atmosphere.RecordSkyViewBake(CommandList);
             Atmosphere.RecordSkyAmbientIntegration(CommandList);
@@ -1149,11 +1165,14 @@ namespace Smile {
         if (Atmosphere.IsInitialized()) {
             Atmosphere.RecordAerialPerspectiveBake(CommandList);
         }
+        GpuProfiler.End(CommandList); // Céu e atmosfera
 
         // Shadow map das nuvens: bakeado ANTES do deferred lighting, que o consome (t4 da
         // tabela do G-buffer) p/ atenuar a key light no chao.
-        if (UseClouds && VolumetricClouds.IsInitialized())
+        if (UseClouds && VolumetricClouds.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Sombra das nuvens");
             VolumetricClouds.RecordShadowMap(CommandList, SRVHeap);
+        }
 
         // F5: lista de luzes do MUNDO INDIRETO (DDGI/reflexoes/ReSTIR) — TODAS as ativas, SEM
         // frustum cull (luz atras da camera ilumina GI) e sem shadow map (visibilidade nos
@@ -1191,6 +1210,7 @@ namespace Smile {
         }
 
         if (UseGI && DDGI.IsReady()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "DDGI");
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex, GILightCount);
             DDGI.RecordUpdate(CommandList, SRVHeap);
@@ -1434,7 +1454,10 @@ namespace Smile {
                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                         A.R->AABBMin, A.R->AABBMax });
                 }
-                SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size());
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
+                    SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size());
+                }
 
                 auto SceneRTV = HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
@@ -1464,12 +1487,15 @@ namespace Smile {
                                          ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                          A.R->AABBMin, A.R->AABBMax });
             }
-            LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
-                                         LocalCasters.data(), LocalCasters.size(),
-                                         LocalShadowJobs.data(),
-                                         static_cast<u32>(LocalShadowJobs.size()),
-                                         LocalCubeJobs.data(),
-                                         static_cast<u32>(LocalCubeJobs.size()));
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Sombras — locais");
+                LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
+                                             LocalCasters.data(), LocalCasters.size(),
+                                             LocalShadowJobs.data(),
+                                             static_cast<u32>(LocalShadowJobs.size()),
+                                             LocalCubeJobs.data(),
+                                             static_cast<u32>(LocalCubeJobs.size()));
+            }
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
@@ -1488,6 +1514,7 @@ namespace Smile {
         const bool AOWillRun = UseAO && AO.IsReady();
         const bool DoPrepass = true;
         if (DoPrepass) {
+            GpuProfiler.Begin(CommandList, "Z-prepass");
             if (AOWillRun) {
                 if (NormalBufferState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
                     D3D12_RESOURCE_BARRIER NB{};
@@ -1527,6 +1554,7 @@ namespace Smile {
                 V.Mat->Bind(CommandList, SRVHeap);
                 V.R->Mesh->Draw(CommandList);
             }
+            GpuProfiler.End(CommandList); // Z-prepass
         }
 
         if (AO.IsReady()) {
@@ -1558,7 +1586,10 @@ namespace Smile {
                     CommandList->ResourceBarrier(1, &NB);
                     NormalBufferState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 }
-                AO.Execute(CommandList, SRVHeap, DepthSRVSlot);
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "GTAO");
+                    AO.Execute(CommandList, SRVHeap, DepthSRVSlot);
+                }
 
                 DB.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 DB.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -1578,6 +1609,7 @@ namespace Smile {
         }
 
         {
+            GpuProfiler.Begin(CommandList, "G-buffer (geometria)");
             GBuffer.TransitionToWrite(CommandList);
             if (VelocityState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
                 D3D12_RESOURCE_BARRIER VB{};
@@ -1624,12 +1656,14 @@ namespace Smile {
             VB.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &VB);
             VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            GpuProfiler.End(CommandList); // G-buffer (geometria)
         }
 
         // Chuva F1: molha o G-buffer logo apos o geometry pass — ReSTIR, deferred lighting e
         // reflexoes RT (todos leem A/B depois deste ponto) veem a cena ja molhada.
         // F4: Active() em vez de Raining() — o passe continua rodando enquanto o chao seca.
         if (Weather.Active() && RainWetness.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
             // F2: mapa de oclusao top-down (cacheado — so re-renderiza ao cruzar o snap de
             // 16 m). Vidro ENTRA na lista: telhado de vidro bloqueia chuva, ao contrario do
             // CSM onde translucido deixa o sol passar. O Execute logo abaixo re-seta todo o
@@ -1671,10 +1705,17 @@ namespace Smile {
             CommandList->ResourceBarrier(1, &VBar);
             VelocityState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
-            ReSTIRGI.RecordTrace(CommandList, SRVHeap);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR GI");
+                ReSTIRGI.RecordTrace(CommandList, SRVHeap);
+            }
 
             if (NrdMode) {
-                if (ReflectionsActive) Reflections.RecordTrace(CommandList, SRVHeap); 
+                if (ReflectionsActive) {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (trace)");
+                    Reflections.RecordTrace(CommandList, SRVHeap);
+                }
+                GpuProfiler.Begin(CommandList, "NRD denoise");
                 Nrd.TransitionInputsToWrite(CommandList);
                 ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
                 // O REBLUR combinado le a IN_SPEC todo frame: sem reflexoes, escreve sinal
@@ -1685,6 +1726,7 @@ namespace Smile {
                              JitterPx, PrevJitterPx, FrameIndex);
                 Nrd.Denoise(CommandList);
                 Nrd.TransitionOutputToRead(CommandList);
+                GpuProfiler.End(CommandList); // NRD denoise
                 ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
                 CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
             }
@@ -1742,11 +1784,13 @@ namespace Smile {
                     ? LocalShadows.ShadowSRVSlot() : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(11, SRVHeap.GpuHandle(LocalShadowTable));
             }
+            GpuProfiler.Begin(CommandList, "Deferred lighting");
             CommandList->SetPipelineState(PipelineState.PSODeferredLighting());
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             CommandList->IASetVertexBuffers(0, 0, nullptr);
             CommandList->IASetIndexBuffer(nullptr);
             CommandList->DrawInstanced(3, 1, 0, 0);
+            GpuProfiler.End(CommandList); // Deferred lighting
 
             DepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -1796,9 +1840,12 @@ namespace Smile {
             Barrier(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, ReadState);
             GBuffer.TransitionToRead(CommandList, ReadState); 
 
-            if (!NrdMode) Reflections.RecordTrace(CommandList, SRVHeap);
-            Reflections.RecordComposite(CommandList, SRVHeap, HDRRTVHeap.CpuHandle(0),
-                                        RenderWidth(), RenderHeight());
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
+                if (!NrdMode) Reflections.RecordTrace(CommandList, SRVHeap);
+                Reflections.RecordComposite(CommandList, SRVHeap, HDRRTVHeap.CpuHandle(0),
+                                            RenderWidth(), RenderHeight());
+            }
 
             Barrier(DepthBuffer.Get(), ReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
             GBuffer.TransitionToWrite(CommandList);
@@ -1823,6 +1870,7 @@ namespace Smile {
             for (const VisItem& V : VisibleScratch)
                 if (V.Mat->Blend) { AnyBlend = true; break; }
             if (AnyBlend) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Translúcidos");
                 auto SceneRTV = HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
                 CommandList->RSSetViewports(1, &Viewport);
@@ -1886,11 +1934,13 @@ namespace Smile {
         }
 
         if (UseWater && Water.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Água — superfície");
             Water.RenderSurface(CommandList, SRVHeap, HDREnv.SpecularSRV(), Ocean.SRVSlot(),
                                 Ocean.NormalSRVSlot(), SceneCopyTableStart, Atmosphere.SkyViewSRV());
         }
 
         if (UseClouds && VolumetricClouds.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Nuvens");
             // Depth vira SRV: o raymarch clampa a marcha na geometria e o composite faz
             // upsample bilateral — nuvem aparece ENTRE camera e chao/predios em voo.
             D3D12_RESOURCE_BARRIER CloudDepthBarrier{};
@@ -1936,6 +1986,7 @@ namespace Smile {
             // UpdatePerFrame.
             const bool VolShaftsOn = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
             if (VolShaftsOn) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Sun shafts");
                 SunShadows.EnsureReadable(CommandList);
                 SunShafts.RecordVolumetric(CommandList, SRVHeap, DepthSRVSlot,
                                            SunShadows.ConstantsAddress(),
@@ -1947,11 +1998,13 @@ namespace Smile {
                 CommandList->RSSetScissorRects(1, &ScissorRect);
             }
 
+            GpuProfiler.Begin(CommandList, "Fog");
             auto Fog_RTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &Fog_RTV, FALSE, nullptr);
             Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV(),
                         SunShafts.IsInitialized() ? SunShafts.VolumetricSRVSlot()
                                                   : DepthSRVSlot);
+            GpuProfiler.End(CommandList); // Fog
 
             DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -1970,6 +2023,7 @@ namespace Smile {
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &DepthBarrier);
 
+            GpuProfiler.Begin(CommandList, "Chuva — cortina/gotas");
             auto RainRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &RainRTV, FALSE, nullptr);
             if (Weather.CurtainAmount > 0.001f)
@@ -1978,6 +2032,7 @@ namespace Smile {
             if (Weather.RainParticles)
                 RainWetness.ExecuteParticles(CommandList, SRVHeap, DepthSRVSlot,
                                              RenderWidth(), RenderHeight());
+            GpuProfiler.End(CommandList); // Chuva — cortina/gotas
 
             DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -2015,10 +2070,13 @@ namespace Smile {
             ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(1, &ResourceBarrier);
 
-            TemporalAA.Execute(CommandList, SRVHeap, FrameSlot, InvViewProjUnjit, PrevViewProj,
-                               TAAHistoryBlend, TAARanLastFrame, TAAVarianceGamma, TAASharpness,
-                               TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, CameraPosition,
-                               NearZ, FarZ, TAADebugMode);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "TAA");
+                TemporalAA.Execute(CommandList, SRVHeap, FrameSlot, InvViewProjUnjit, PrevViewProj,
+                                   TAAHistoryBlend, TAARanLastFrame, TAAVarianceGamma, TAASharpness,
+                                   TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, CameraPosition,
+                                   NearZ, FarZ, TAADebugMode);
+            }
 
             ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -2039,8 +2097,11 @@ namespace Smile {
             In[2].Transition.pResource = VelocityBuffer.Get(); In[2].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             CommandList->ResourceBarrier(3, In);
 
-            Fsr2.Dispatch(CommandList, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get(),
-                          JitterPxX, JitterPxY, NearZ, FarZ, FovY, LastDeltaTime, false);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "FSR2");
+                Fsr2.Dispatch(CommandList, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get(),
+                              JitterPxX, JitterPxY, NearZ, FarZ, FovY, LastDeltaTime, false);
+            }
 
             D3D12_RESOURCE_BARRIER Out[3]{};
             for (auto& B : Out) {
@@ -2083,8 +2144,11 @@ namespace Smile {
         BackBufferBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
         CommandList->ResourceBarrier(1, &BackBufferBarrier);
 
-        PostProcessor.Execute(CommandList, SRVHeap, PostInput, SwapChain.CurrentRTV(),
-                              PostInputSRV, FrameSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
+        {
+            FGpuScope Scope(GpuProfiler, CommandList, "Pós (bloom+tonemap)");
+            PostProcessor.Execute(CommandList, SRVHeap, PostInput, SwapChain.CurrentRTV(),
+                                  PostInputSRV, FrameSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
+        }
 
         if (SelectedIndex >= 0 && SelectedSlot != kInvalidSlot && SelectedMesh
             && SelectionOutline.IsInitialized()) {
@@ -2126,6 +2190,9 @@ namespace Smile {
         BackBufferBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         BackBufferBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
         CommandList->ResourceBarrier(1, &BackBufferBarrier);
+
+        GpuProfiler.End(CommandList); // Frame (GPU)
+        GpuProfiler.Resolve(CommandList);
 
         SMILE_HR(CommandList->Close());
         ID3D12CommandList* CommandLists[] = { CommandList };

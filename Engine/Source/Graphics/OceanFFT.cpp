@@ -1,4 +1,5 @@
 #include "Smile/Graphics/OceanFFT.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -128,6 +129,7 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> Res;
         SMILE_HR(_Device->CreateCommittedResource(
             &Heap, D3D12_HEAP_FLAG_NONE, &Desc, _InitialState, nullptr, IID_PPV_ARGS(&Res)));
+        VramTracker::Register(Res.Get(), EVramCategory::Water);
         return Res;
     }
 

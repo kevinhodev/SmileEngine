@@ -1,4 +1,5 @@
 #include "Smile/Graphics/NrdDenoiser.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -98,6 +99,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> T;
             SMILE_HR(Dev->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &D,
                      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&T)));
+            VramTracker::Register(T.Get(), EVramCategory::GI);
             return T;
         }
     }

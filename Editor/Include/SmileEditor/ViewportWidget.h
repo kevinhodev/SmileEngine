@@ -72,6 +72,16 @@ namespace SmileEditor {
         Q_PROPERTY(double cloudBottomKm READ GetCloudBottomKm NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double cloudThicknessKm READ GetCloudThicknessKm NOTIFY ViewSettingsChanged)
         Q_PROPERTY(int cloudMarchSteps READ GetCloudMarchSteps NOTIFY ViewSettingsChanged)
+        // Clima (FWeather do Renderer) — pagina Clima do SettingsWindow.
+        Q_PROPERTY(double rainAmount READ GetRainAmount NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double puddleAmount READ GetPuddleAmount NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double puddleScale READ GetPuddleScale NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double rippleStrength READ GetRippleStrength NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double wetDarkening READ GetWetDarkening NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double curtainAmount READ GetCurtainAmount NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool rainOcclusion READ IsRainOcclusion NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool rainParticles READ AreRainParticles NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool weatherDriveSky READ IsWeatherDriveSky NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool mergeByMaterialEnabled READ IsMergeByMaterialEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
@@ -82,6 +92,13 @@ namespace SmileEditor {
         Q_PROPERTY(QString outputResolution READ GetOutputResolution NOTIFY FrameReady)
         Q_PROPERTY(QString gpuName READ GetGPUName NOTIFY RendererInitialized)
         Q_PROPERTY(QString vramText READ GetVRAMText NOTIFY RendererInitialized)
+        Q_PROPERTY(QString vramUsageText READ GetVRAMUsageText NOTIFY FrameReady)
+        Q_PROPERTY(bool vramOverBudget READ IsVRAMOverBudget NOTIFY FrameReady)
+        Q_PROPERTY(double vramBudgetFrac READ GetVRAMBudgetFrac NOTIFY FrameReady)
+        Q_PROPERTY(QString vramNonLocalText READ GetVRAMNonLocalText NOTIFY FrameReady)
+        Q_PROPERTY(QVariantList vramBreakdown READ GetVRAMBreakdown NOTIFY FrameReady)
+        Q_PROPERTY(QString gpuFrameText READ GetGpuFrameText NOTIFY FrameReady)
+        Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY FrameReady)
 
     public:
         // Valores explicitos preservados (o QML compara viewMode com inteiros fixos; o 1 era o
@@ -150,6 +167,15 @@ namespace SmileEditor {
         double            GetCloudBottomKm() const;
         double            GetCloudThicknessKm() const;
         int               GetCloudMarchSteps() const;
+        double            GetRainAmount() const;
+        double            GetPuddleAmount() const;
+        double            GetPuddleScale() const;
+        double            GetRippleStrength() const;
+        double            GetWetDarkening() const;
+        double            GetCurtainAmount() const;
+        bool              IsRainOcclusion() const;
+        bool              AreRainParticles() const;
+        bool              IsWeatherDriveSky() const;
         bool              IsDepthPrepassEnabled() const;
         bool              IsMergeByMaterialEnabled() const;
         double            GetFrameTimeMs() const;
@@ -159,6 +185,13 @@ namespace SmileEditor {
         QString           GetOutputResolution() const;
         QString           GetGPUName() const;
         QString           GetVRAMText() const;
+        QString           GetVRAMUsageText() const;
+        bool              IsVRAMOverBudget() const;
+        double            GetVRAMBudgetFrac() const;
+        QString           GetVRAMNonLocalText() const;
+        QVariantList      GetVRAMBreakdown() const;
+        QString           GetGpuFrameText() const;
+        QVariantList      GetGpuTimings() const;
 
         Q_INVOKABLE void SelectLit();
         Q_INVOKABLE void SelectGBuffer(int mode);
@@ -211,6 +244,15 @@ namespace SmileEditor {
         Q_INVOKABLE void SetCloudShadowStrength(double value);
         Q_INVOKABLE void SetCloudAltitude(double bottomKm, double thicknessKm);
         Q_INVOKABLE void SetCloudMarchSteps(int steps);
+        Q_INVOKABLE void SetRainAmount(double value);
+        Q_INVOKABLE void SetPuddleAmount(double value);
+        Q_INVOKABLE void SetPuddleScale(double value);
+        Q_INVOKABLE void SetRippleStrength(double value);
+        Q_INVOKABLE void SetWetDarkening(double value);
+        Q_INVOKABLE void SetCurtainAmount(double value);
+        Q_INVOKABLE void SetRainOcclusion(bool enabled);
+        Q_INVOKABLE void SetRainParticles(bool enabled);
+        Q_INVOKABLE void SetWeatherDriveSky(bool enabled);
         Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
         Q_INVOKABLE void SetMergeByMaterialEnabled(bool enabled);
         Q_INVOKABLE void ResetRenderSettings();

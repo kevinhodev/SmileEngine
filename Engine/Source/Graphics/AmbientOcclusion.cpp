@@ -1,4 +1,5 @@
 #include "Smile/Graphics/AmbientOcclusion.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
@@ -30,6 +31,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> Texture;
             SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
                      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Texture)));
+            VramTracker::Register(Texture.Get(), EVramCategory::RenderTargets);
             return Texture;
         }
     }

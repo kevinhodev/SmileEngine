@@ -1,5 +1,6 @@
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 
 namespace Smile {
@@ -63,6 +64,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateCommittedResource(
                 &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
                 D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&Targets[i])));
+            VramTracker::Register(Targets[i].Get(), EVramCategory::RenderTargets);
             States[i] = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
             D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
