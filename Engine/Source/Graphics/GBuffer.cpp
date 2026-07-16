@@ -91,20 +91,15 @@ namespace Smile {
         _SRVHeap.CreateSRV(_Device, _Depth, SRVDesc, SRVSlotBase + kTargetCount);
     }
 
+    void FGBuffer::AppendTransitions(FBarrierBatch& _Batch, D3D12_RESOURCE_STATES _Target) {
+        for (u32 i = 0; i < kTargetCount; ++i)
+            _Batch.TransitionTracked(Targets[i].Get(), States[i], _Target);
+    }
+
     void FGBuffer::TransitionToRead(ID3D12GraphicsCommandList* _Cmd, D3D12_RESOURCE_STATES _ReadState) {
-        D3D12_RESOURCE_BARRIER Barriers[kTargetCount]{};
-        u32 Count = 0;
-        for (u32 i = 0; i < kTargetCount; ++i) {
-            if (States[i] == _ReadState) continue;
-            Barriers[Count].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barriers[Count].Transition.pResource   = Targets[i].Get();
-            Barriers[Count].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barriers[Count].Transition.StateBefore = States[i];
-            Barriers[Count].Transition.StateAfter  = _ReadState;
-            States[i] = _ReadState;
-            ++Count;
-        }
-        if (Count > 0) _Cmd->ResourceBarrier(Count, Barriers);
+        FBarrierBatch Batch;
+        AppendTransitions(Batch, _ReadState);
+        Batch.Flush(_Cmd);
     }
 
     void FGBuffer::TransitionToWrite(ID3D12GraphicsCommandList* _Cmd) {

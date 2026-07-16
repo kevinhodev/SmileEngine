@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/Mesh.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Graphics/VramTracker.h"
@@ -1114,13 +1115,10 @@ namespace Smile {
         auto DSV = DSVHeap.CpuHandle(0);
 
         {
-            D3D12_RESOURCE_BARRIER ResourceBarrier{};
-            ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            ResourceBarrier.Transition.pResource   = HDRColorBuffer.Get();
-            ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            CommandList->ResourceBarrier(1, &ResourceBarrier);
+            FBarrierBatch Batch;
+            Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
 
             auto HDR_RTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &HDR_RTV, FALSE, &DSV);
@@ -1516,16 +1514,10 @@ namespace Smile {
         if (DoPrepass) {
             GpuProfiler.Begin(CommandList, "Z-prepass");
             if (AOWillRun) {
-                if (NormalBufferState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
-                    D3D12_RESOURCE_BARRIER NB{};
-                    NB.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                    NB.Transition.pResource   = NormalBuffer.Get();
-                    NB.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                    NB.Transition.StateBefore = NormalBufferState;
-                    NB.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                    CommandList->ResourceBarrier(1, &NB);
-                    NormalBufferState = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                }
+                FBarrierBatch Batch;
+                Batch.TransitionTracked(NormalBuffer.Get(), NormalBufferState,
+                                        D3D12_RESOURCE_STATE_RENDER_TARGET);
+                Batch.Flush(CommandList);
                 auto NormalRTV = NormalRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &NormalRTV, FALSE, &DSV);
                 const FLOAT NeutralN[4] = { 0.5f, 0.5f, 0.5f, 0.0f }; 
@@ -1560,13 +1552,6 @@ namespace Smile {
         if (AO.IsReady()) {
             if (AOWillRun) {
                 CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
-                D3D12_RESOURCE_BARRIER DB{};
-                DB.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                DB.Transition.pResource   = DepthBuffer.Get();
-                DB.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                DB.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-                DB.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                CommandList->ResourceBarrier(1, &DB);
 
                 const f32 TanHalf = std::tan(0.5f * FovY);
                 const f32 M11 = 1.0f / TanHalf;
@@ -1576,24 +1561,22 @@ namespace Smile {
                 AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, View,
                                   RenderWidth(), RenderHeight(), FrameIndex);
 
-                {
-                    D3D12_RESOURCE_BARRIER NB{};
-                    NB.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                    NB.Transition.pResource   = NormalBuffer.Get();
-                    NB.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                    NB.Transition.StateBefore = NormalBufferState;
-                    NB.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                    CommandList->ResourceBarrier(1, &NB);
-                    NormalBufferState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                }
+                // depth + normal viram SRV de compute juntos (um ResourceBarrier so)
+                FBarrierBatch Batch;
+                Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                Batch.TransitionTracked(NormalBuffer.Get(), NormalBufferState,
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                Batch.Flush(CommandList);
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "GTAO");
                     AO.Execute(CommandList, SRVHeap, DepthSRVSlot);
                 }
 
-                DB.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                DB.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-                CommandList->ResourceBarrier(1, &DB);
+                Batch.Transition(DepthBuffer.Get(),
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                 D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                Batch.Flush(CommandList);
 
                 auto SceneRTV = HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
@@ -1610,17 +1593,12 @@ namespace Smile {
 
         {
             GpuProfiler.Begin(CommandList, "G-buffer (geometria)");
-            GBuffer.TransitionToWrite(CommandList);
-            if (VelocityState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
-                D3D12_RESOURCE_BARRIER VB{};
-                VB.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                VB.Transition.pResource   = VelocityBuffer.Get();
-                VB.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                VB.Transition.StateBefore = VelocityState;
-                VB.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                CommandList->ResourceBarrier(1, &VB);
-                VelocityState = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            }
+            // 3 RTs do G-buffer + velocity num ResourceBarrier so
+            FBarrierBatch Batch;
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
             D3D12_CPU_DESCRIPTOR_HANDLE GBufRTVs[FGBuffer::kTargetCount + 1] = {
                 GBuffer.RTVHandle(0), GBuffer.RTVHandle(1), GBuffer.RTVHandle(2),
                 VelocityRTVHeap.CpuHandle(0) };
@@ -1648,14 +1626,9 @@ namespace Smile {
                 Mat->Bind(CommandList, SRVHeap);
                 V.R->Mesh->Draw(CommandList);
             }
-            D3D12_RESOURCE_BARRIER VB{};
-            VB.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            VB.Transition.pResource   = VelocityBuffer.Get();
-            VB.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            VB.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            VB.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &VB);
-            VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
             GpuProfiler.End(CommandList); // G-buffer (geometria)
         }
 
@@ -1688,22 +1661,14 @@ namespace Smile {
         }
 
         if (ReSTIRGIActive) {
-            D3D12_RESOURCE_BARRIER DBar{};
-            DBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            DBar.Transition.pResource   = DepthBuffer.Get();
-            DBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            DBar.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &DBar);
-            GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            D3D12_RESOURCE_BARRIER VBar{};
-            VBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            VBar.Transition.pResource   = VelocityBuffer.Get();
-            VBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            VBar.Transition.StateBefore = VelocityState;
-            VBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &VBar);
-            VelocityState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            // depth + G-buffer (3) + velocity viram SRV de trace num ResourceBarrier so
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR GI");
@@ -1731,26 +1696,21 @@ namespace Smile {
                 CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
             }
 
-            DBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            DBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            CommandList->ResourceBarrier(1, &DBar);
-            GBuffer.TransitionToWrite(CommandList);
-
-            VBar.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            VBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &VBar);
-            VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
         }
 
         {
-            GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            D3D12_RESOURCE_BARRIER DepthBar{};
-            DepthBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            DepthBar.Transition.pResource   = DepthBuffer.Get();
-            DepthBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            DepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            DepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &DepthBar);
+            // G-buffer (3) + depth viram SRV do lighting num ResourceBarrier so
+            FBarrierBatch Batch;
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr); 
@@ -1792,10 +1752,10 @@ namespace Smile {
             CommandList->DrawInstanced(3, 1, 0, 0);
             GpuProfiler.End(CommandList); // Deferred lighting
 
-            DepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            DepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            CommandList->ResourceBarrier(1, &DepthBar);
-            GBuffer.TransitionToWrite(CommandList);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
         }
 
         if (ObjectPicker.HasPendingRequest()) {
@@ -1825,20 +1785,12 @@ namespace Smile {
         if (ReflectionsActive) {
             CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
 
-            auto Barrier = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
-                D3D12_RESOURCE_BARRIER B{};
-                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                B.Transition.pResource   = R;
-                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                B.Transition.StateBefore = Before;
-                B.Transition.StateAfter  = After;
-                CommandList->ResourceBarrier(1, &B);
-            };
-
             const D3D12_RESOURCE_STATES ReadState =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            Barrier(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, ReadState);
-            GBuffer.TransitionToRead(CommandList, ReadState); 
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, ReadState);
+            GBuffer.AppendTransitions(Batch, ReadState);
+            Batch.Flush(CommandList);
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
@@ -1847,8 +1799,9 @@ namespace Smile {
                                             RenderWidth(), RenderHeight());
             }
 
-            Barrier(DepthBuffer.Get(), ReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            GBuffer.TransitionToWrite(CommandList);
+            Batch.Transition(DepthBuffer.Get(), ReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
@@ -1901,33 +1854,30 @@ namespace Smile {
         if (UseWater && Water.IsInitialized() && WaterHasDepth) {
             CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
 
-            auto Transition = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& Cur,
-                                  D3D12_RESOURCE_STATES To) {
-                if (Cur == To) return;
-                D3D12_RESOURCE_BARRIER B{};
-                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                B.Transition.pResource   = R;
-                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                B.Transition.StateBefore = Cur;
-                B.Transition.StateAfter  = To;
-                CommandList->ResourceBarrier(1, &B);
-                Cur = To;
-            };
-
-            D3D12_RESOURCE_STATES HdrState   = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            D3D12_RESOURCE_STATES DepthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            Transition(HDRColorBuffer.Get(),  HdrState,   D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Transition(DepthBuffer.Get(),     DepthState, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Transition(SceneColorCopy.Get(),  SceneColorCopyState, D3D12_RESOURCE_STATE_COPY_DEST);
-            Transition(SceneDepthCopy.Get(),  SceneDepthCopyState, D3D12_RESOURCE_STATE_COPY_DEST);
+            // 4 transicoes por ResourceBarrier (ida e volta da copia da cena)
+            FBarrierBatch Batch;
+            Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorCopyState,
+                                    D3D12_RESOURCE_STATE_COPY_DEST);
+            Batch.TransitionTracked(SceneDepthCopy.Get(), SceneDepthCopyState,
+                                    D3D12_RESOURCE_STATE_COPY_DEST);
+            Batch.Flush(CommandList);
 
             CommandList->CopyResource(SceneColorCopy.Get(), HDRColorBuffer.Get());
             CommandList->CopyResource(SceneDepthCopy.Get(), DepthBuffer.Get());
 
-            Transition(HDRColorBuffer.Get(),  HdrState,   D3D12_RESOURCE_STATE_RENDER_TARGET);
-            Transition(DepthBuffer.Get(),     DepthState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            Transition(SceneColorCopy.Get(),  SceneColorCopyState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Transition(SceneDepthCopy.Get(),  SceneDepthCopyState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                             D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorCopyState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(SceneDepthCopy.Get(), SceneDepthCopyState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             auto HDR_RTV_Rebind = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &HDR_RTV_Rebind, FALSE, &DSV);
@@ -1943,14 +1893,12 @@ namespace Smile {
             FGpuScope Scope(GpuProfiler, CommandList, "Nuvens");
             // Depth vira SRV: o raymarch clampa a marcha na geometria e o composite faz
             // upsample bilateral — nuvem aparece ENTRE camera e chao/predios em voo.
-            D3D12_RESOURCE_BARRIER CloudDepthBarrier{};
-            CloudDepthBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            CloudDepthBarrier.Transition.pResource   = DepthBuffer.Get();
-            CloudDepthBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            CloudDepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            CloudDepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &CloudDepthBarrier);
+            const D3D12_RESOURCE_STATES CloudReadState =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, CloudReadState);
+            Batch.Flush(CommandList);
 
             VolumetricClouds.RecordRaymarch(CommandList, SRVHeap, DepthSRVSlot);
 
@@ -1958,9 +1906,8 @@ namespace Smile {
             CommandList->OMSetRenderTargets(1, &CloudRTV, FALSE, nullptr); // sem DSV: depth e SRV
             VolumetricClouds.Composite(CommandList, SRVHeap, DepthSRVSlot);
 
-            CloudDepthBarrier.Transition.StateBefore = CloudDepthBarrier.Transition.StateAfter;
-            CloudDepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            CommandList->ResourceBarrier(1, &CloudDepthBarrier);
+            Batch.Transition(DepthBuffer.Get(), CloudReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Flush(CommandList);
         }
 
         if (Device.RaytracingSupported() && DDGIDebugPass.GetEnabled() && DDGI.IsReady()) {
@@ -1973,13 +1920,10 @@ namespace Smile {
         }
 
         if ((UseHeightFog || UseAerialPerspective) && Fog.IsInitialized()) {
-            D3D12_RESOURCE_BARRIER DepthBarrier{};
-            DepthBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            DepthBarrier.Transition.pResource   = DepthBuffer.Get();
-            DepthBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &DepthBarrier);
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             // Sun shafts volumétricos: raymarch + temporal meia-res (depth já legível
             // aqui); o fog apply consome o resultado via t2. Mesma condição do
@@ -2006,22 +1950,19 @@ namespace Smile {
                                                   : DepthSRVSlot);
             GpuProfiler.End(CommandList); // Fog
 
-            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            CommandList->ResourceBarrier(1, &DepthBarrier);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Flush(CommandList);
         }
 
         // Chuva F3/F5: cortina + gotas por particula — depois do fog (chuva de perto nao
         // leva fog em dobro) e antes do TAA/FSR2 (o acumulador integra como motion blur).
         if (Weather.Raining() && RainWetness.IsInitialized() &&
             (Weather.CurtainAmount > 0.001f || Weather.RainParticles)) {
-            D3D12_RESOURCE_BARRIER DepthBarrier{};
-            DepthBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            DepthBarrier.Transition.pResource   = DepthBuffer.Get();
-            DepthBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &DepthBarrier);
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             GpuProfiler.Begin(CommandList, "Chuva — cortina/gotas");
             auto RainRTV = HDRRTVHeap.CpuHandle(0);
@@ -2034,9 +1975,9 @@ namespace Smile {
                                              RenderWidth(), RenderHeight());
             GpuProfiler.End(CommandList); // Chuva — cortina/gotas
 
-            DepthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            DepthBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            CommandList->ResourceBarrier(1, &DepthBarrier);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Flush(CommandList);
         }
 
         if (GBufferDebugMode > 0 && GBuffer.IsInitialized() && GBufferDebugPass.IsInitialized()) {
@@ -2050,25 +1991,19 @@ namespace Smile {
         }
 
         {
-            D3D12_RESOURCE_BARRIER ResourceBarrier{};
-            ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            ResourceBarrier.Transition.pResource   = HDRColorBuffer.Get();
-            ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &ResourceBarrier);
+            FBarrierBatch Batch;
+            Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
         }
 
         ID3D12Resource* PostInput    = HDRColorBuffer.Get();
         u32             PostInputSRV = HDRSRVSlot;
         if (TAAActive) {
-            D3D12_RESOURCE_BARRIER ResourceBarrier{};
-            ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            ResourceBarrier.Transition.pResource   = DepthBuffer.Get();
-            ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(1, &ResourceBarrier);
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "TAA");
@@ -2078,24 +2013,22 @@ namespace Smile {
                                    NearZ, FarZ, TAADebugMode);
             }
 
-            ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            CommandList->ResourceBarrier(1, &ResourceBarrier);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Flush(CommandList);
 
             PostInput    = TemporalAA.DisplayOutputResource();
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             TAARanLastFrame = true;
         } else if (Fsr2Active) {
-            D3D12_RESOURCE_BARRIER In[3]{};
-            for (auto& B : In) {
-                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                B.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            }
-            In[0].Transition.pResource = HDRColorBuffer.Get(); In[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            In[1].Transition.pResource = DepthBuffer.Get();    In[1].Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            In[2].Transition.pResource = VelocityBuffer.Get(); In[2].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(3, In);
+            FBarrierBatch Batch;
+            Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(VelocityBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "FSR2");
@@ -2103,16 +2036,13 @@ namespace Smile {
                               JitterPxX, JitterPxY, NearZ, FarZ, FovY, LastDeltaTime, false);
             }
 
-            D3D12_RESOURCE_BARRIER Out[3]{};
-            for (auto& B : Out) {
-                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                B.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            }
-            Out[0].Transition.pResource = HDRColorBuffer.Get(); Out[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            Out[1].Transition.pResource = DepthBuffer.Get();    Out[1].Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            Out[2].Transition.pResource = VelocityBuffer.Get(); Out[2].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            CommandList->ResourceBarrier(3, Out);
+            Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Transition(VelocityBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
 
             PostInput    = Fsr2.OutputResource();
             PostInputSRV = Fsr2.OutputSRVSlot();
@@ -2136,13 +2066,10 @@ namespace Smile {
             PostInputSRV = Flicker.OutputSRVSlot();
         }
 
-        D3D12_RESOURCE_BARRIER BackBufferBarrier{};
-        BackBufferBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        BackBufferBarrier.Transition.pResource   = SwapChain.CurrentBackBuffer();
-        BackBufferBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        BackBufferBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-        BackBufferBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        CommandList->ResourceBarrier(1, &BackBufferBarrier);
+        FBarrierBatch BackBatch;
+        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_PRESENT,
+                             D3D12_RESOURCE_STATE_RENDER_TARGET);
+        BackBatch.Flush(CommandList);
 
         {
             FGpuScope Scope(GpuProfiler, CommandList, "Pós (bloom+tonemap)");
@@ -2163,14 +2090,11 @@ namespace Smile {
             // Linhas ocluiveis (volumes de luz do editor) testam contra o depth da cena no PS:
             // o depth (res de render) vira SRV so durante o draw e volta a DEPTH_WRITE.
             const bool WantDepth = DebugDraw.HasOccluded() && DepthSRVSlot != kInvalidSlot;
-            D3D12_RESOURCE_BARRIER DebugDepthBar{};
-            DebugDepthBar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            DebugDepthBar.Transition.pResource   = DepthBuffer.Get();
-            DebugDepthBar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            FBarrierBatch Batch;
             if (WantDepth) {
-                DebugDepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-                DebugDepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-                CommandList->ResourceBarrier(1, &DebugDepthBar);
+                Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                Batch.Flush(CommandList);
             }
             // Eixos da camera em mundo (colunas da view row-vector) p/ os billboards de icone.
             const Vec3 CamRight{ View.M[0][0], View.M[1][0], View.M[2][0] };
@@ -2180,16 +2104,16 @@ namespace Smile {
                              WantDepth ? SRVHeap.GpuHandle(DepthSRVSlot)
                                        : D3D12_GPU_DESCRIPTOR_HANDLE{});
             if (WantDepth) {
-                DebugDepthBar.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-                DebugDepthBar.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-                CommandList->ResourceBarrier(1, &DebugDepthBar);
+                Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                 D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                Batch.Flush(CommandList);
             }
         }
         DebugDraw.Clear();
 
-        BackBufferBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        BackBufferBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-        CommandList->ResourceBarrier(1, &BackBufferBarrier);
+        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                             D3D12_RESOURCE_STATE_PRESENT);
+        BackBatch.Flush(CommandList);
 
         GpuProfiler.End(CommandList); // Frame (GPU)
         GpuProfiler.Resolve(CommandList);

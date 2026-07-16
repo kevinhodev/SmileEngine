@@ -2,6 +2,7 @@
 
 #include <d3d12.h>
 #include "Smile/Core/Types.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 
 namespace Smile {
@@ -49,6 +50,9 @@ namespace Smile {
         ID3D12Resource* Resource(u32 Index) const { return Targets[Index].Get(); }
 
         // Transicoes (rastreiam o estado interno por-target). Read = combinacao de estados de leitura.
+        // AppendTransitions empilha num batch compartilhado (transicoes vizinhas de outros
+        // recursos saem no MESMO ResourceBarrier); os To* emitem na hora, num batch proprio.
+        void AppendTransitions(FBarrierBatch& Batch, D3D12_RESOURCE_STATES Target);
         void TransitionToRead(ID3D12GraphicsCommandList* Cmd, D3D12_RESOURCE_STATES ReadState);
         void TransitionToWrite(ID3D12GraphicsCommandList* Cmd);
 
