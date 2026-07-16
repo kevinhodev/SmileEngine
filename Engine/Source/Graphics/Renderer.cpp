@@ -1118,6 +1118,10 @@ namespace Smile {
                 Ocean.SetWindDirection(Water.GetWindDirection());
                 Ocean.SetWindSpeed(Water.GetWindSpeed());
                 Ocean.SetAmplitude(Water.GetWavesAmount());
+                // Espuma responde ao choppy/altura REAIS da superfície (não a um scale fixo).
+                Ocean.SetChoppyFactors(Water.GetFFTChoppyScale() *
+                                       Water.GetFFTDisplacementScale() *
+                                       Water.GetWavesSize() * Water.GetWavesAmount());
             }
         }
 

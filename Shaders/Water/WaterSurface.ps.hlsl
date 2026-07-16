@@ -192,6 +192,13 @@ float4 ShadeWater(VSOutput IN) {
         JDebug = WaterSampleFFT(IN.worldPos.xz).w;
         foam = saturate((FoamParams.x - JDebug) / max(FoamParams.y, 1e-3));
         foam = foam * foam * (3.0 - 2.0 * foam);
+        // Breakup procedural (estilo FoamTex da Cry, sem asset): 2 oitavas de value
+        // noise advectadas pelo fluxo do vento — quebra o "adesivo chapado".
+        float2 flow   = OceanParams1.yz * Misc.x;
+        float2 foamUV = IN.worldPos.xz * 0.35 + flow * 0.05;
+        float  pat = WaterValueNoise(foamUV) * 0.65 +
+                     WaterValueNoise(foamUV * 3.7 - flow * 0.11) * 0.35;
+        foam *= saturate(0.35 + 1.55 * pat * pat);
         foam = saturate(foam * FoamParams.z * WaterDistanceFade(camDist, 0.0, FoamParams.w));
         // Espuma iluminada estilo Cry: parte solar gateada pela sombra + piso de céu.
         foamLit = FoamColor.rgb * (SunColor.rgb * SunDirection.w * 0.16 * sunVis + 0.30);

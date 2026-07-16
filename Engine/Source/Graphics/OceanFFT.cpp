@@ -307,11 +307,18 @@ namespace Smile {
             H0Dirty = false;
         }
 
+        const f32 Dt = std::clamp(RealTime - LastRealTime, 0.0f, 0.1f);
+        LastRealTime = RealTime;
+
         MappedCB->Time          = SimTime;
         MappedCB->ChoppyScale   = ChoppyWaveScale;
         MappedCB->HeightScale   = MaxWaveSize;
         MappedCB->NormalUp      = NormalUp;
         MappedCB->JacobianScale = ChoppyJacobianScale;
+        MappedCB->DeltaTime     = Dt;
+        MappedCB->FoamRecovery  = FoamRecovery;
+        MappedCB->FoamReset     = FoamHistoryValid ? 0.0f : 1.0f;
+        FoamHistoryValid = true;
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress() +
             static_cast<UINT64>(FrameSlot) * sizeof(OceanCB);
 

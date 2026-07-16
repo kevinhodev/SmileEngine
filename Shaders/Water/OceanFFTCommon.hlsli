@@ -7,14 +7,14 @@ static const float OCEAN_PI    = 3.14159265358979323846f;
 static const float OCEAN_TWOPI = 6.28318530717958647692f;
 
 cbuffer OceanFFTCB : register(b0) {
-    float Time;          
-    float ChoppyScale;   
-    float HeightScale;   
-    float NormalUp;      
-    float JacobianScale; 
-    float _Pad0;
-    float _Pad1;
-    float _Pad2;
+    float Time;
+    float ChoppyScale;
+    float HeightScale;
+    float NormalUp;
+    float JacobianScale;
+    float DeltaTime;    // dt real do frame (s) — acumulacao temporal da espuma
+    float FoamRecovery; // taxa de recuperacao do J acumulado rumo ao J do frame (1/s)
+    float FoamReset;    // 1 = sem historico valido (primeiro frame): usa J direto
 };
 
 float2 OceanComplexMul(float2 z, float2 w) {
