@@ -291,10 +291,16 @@ namespace SmileEditor {
         for (const auto& R : Results)
             if (std::strcmp(R.Name, kGpuFrameScope) == 0) FrameMs = R.Milliseconds;
 
+        // Passes da fila de COMPUTE (DDGI async) entram na mesma tabela — o tempo e
+        // medido na fila propria e o frac continua relativo ao frame da fila direta
+        // (mostra quanto do frame o trabalho sobreposto ocupa).
+        const auto ComputeResults = Renderer->GetAsyncComputeTimings();
+
         std::vector<const Smile::FGpuProfiler::FScopeResult*> Sorted;
-        Sorted.reserve(Results.size());
+        Sorted.reserve(Results.size() + ComputeResults.size());
         for (const auto& R : Results)
             if (std::strcmp(R.Name, kGpuFrameScope) != 0) Sorted.push_back(&R);
+        for (const auto& R : ComputeResults) Sorted.push_back(&R);
         std::sort(Sorted.begin(), Sorted.end(),
                   [](const auto* A, const auto* B) { return A->Milliseconds > B->Milliseconds; });
 

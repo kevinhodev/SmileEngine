@@ -38,6 +38,8 @@ namespace Smile {
         ComputeQueue.Initialize(Device.Native());
         GpuProfiler.Initialize(Device.Native(), CommandQueue.Native(),
                                FCommandQueue::kFramesInFlight);
+        GpuProfilerCompute.Initialize(Device.Native(), ComputeQueue.Native(),
+                                      FAsyncComputeQueue::kSlots);
         SwapChain.Initialize(Device.GetFactory(),
                              CommandQueue.Native(),
                              Device.Native(),
@@ -1223,9 +1225,14 @@ namespace Smile {
                 const u64 S1 = CommandQueue.SubmitSegmentAndContinue();
 
                 ID3D12GraphicsCommandList* CCL = ComputeQueue.Begin();
+                GpuProfilerCompute.BeginFrame(ComputeQueue.CurrentSlot());
                 ID3D12DescriptorHeap* CHeaps[] = { SRVHeap.Native() };
                 CCL->SetDescriptorHeaps(_countof(CHeaps), CHeaps);
-                DDGI.RecordUpdate(CCL, SRVHeap);
+                {
+                    FGpuScope Scope(GpuProfilerCompute, CCL, "DDGI (async)");
+                    DDGI.RecordUpdate(CCL, SRVHeap);
+                }
+                GpuProfilerCompute.Resolve(CCL);
                 GIComputeFence = ComputeQueue.SubmitAfter(CommandQueue.NativeFence(), S1);
 
                 // A list do frame reabriu ZERADA — reestabelece o estado que os passes
@@ -2164,6 +2171,7 @@ namespace Smile {
         SMILE_HR(CommandList->Close());
         ID3D12CommandList* CommandLists[] = { CommandList };
 
+        AsyncGIRanLastFrame = (GIComputeFence != 0);
         CommandQueue.EndFrame(CommandLists, 1);
         SwapChain.Present();
     }

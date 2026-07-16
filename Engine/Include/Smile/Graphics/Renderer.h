@@ -287,6 +287,14 @@ namespace Smile {
         FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
         FUploadQueue&       GetUploadQueue()   { return UploadQueue; }
         const FGpuProfiler& GetGpuProfiler() const { return GpuProfiler; }
+
+        // Passes medidos na fila de COMPUTE assincrona (frequencia/readback proprios).
+        // Vazio quando o DDGI rodou na fila direta (async off/relocation) — a UI nao
+        // mostra linha velha de um modo que nao esta mais rodando.
+        std::vector<FGpuProfiler::FScopeResult> GetAsyncComputeTimings() const {
+            if (!AsyncGIRanLastFrame) return {};
+            return GpuProfilerCompute.Results();
+        }
         FTextureSRVHeap&    GetSRVHeap()       { return SRVHeap; }
 
         FRaytracingScene&   GetRaytracingScene() { return RaytracingScene; }
@@ -346,7 +354,9 @@ namespace Smile {
         FCommandQueue   CommandQueue;
         FUploadQueue    UploadQueue; // fila COPY p/ uploads (texturas/meshes) sem stall
         FAsyncComputeQueue ComputeQueue; // fila COMPUTE p/ DDGI async (F3)
+        FGpuProfiler    GpuProfilerCompute; // timestamps da fila de compute (DDGI async)
         bool            UseAsyncCompute = true;
+        bool            AsyncGIRanLastFrame = false;
         FGpuProfiler    GpuProfiler;
         FSwapChain      SwapChain;
         FPipelineState  PipelineState;

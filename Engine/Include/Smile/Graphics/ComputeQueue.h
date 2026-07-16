@@ -28,7 +28,10 @@ namespace Smile {
 
         void WaitIdle();
 
-        ID3D12Fence* NativeFence() const { return Fence.Get(); }
+        ID3D12Fence*        NativeFence() const { return Fence.Get(); }
+        ID3D12CommandQueue* Native()      const { return Queue.Get(); }
+        // Slot em gravacao (Begin ja esperou o fence dele) — p/ o ring do GPU profiler.
+        u32                 CurrentSlot() const { return Slot; }
 
     private:
         void CpuWait(u64 Value);
