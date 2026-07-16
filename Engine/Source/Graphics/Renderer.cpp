@@ -35,6 +35,7 @@ namespace Smile {
         Device.Initialize(kDebugLayer);
         CommandQueue.Initialize(Device.Native(), D3D12_COMMAND_LIST_TYPE_DIRECT);
         UploadQueue.Initialize(Device.Native());
+        ComputeQueue.Initialize(Device.Native());
         GpuProfiler.Initialize(Device.Native(), CommandQueue.Native(),
                                FCommandQueue::kFramesInFlight);
         SwapChain.Initialize(Device.GetFactory(),
@@ -1208,11 +1209,39 @@ namespace Smile {
             }
         }
 
+        // Fence do DDGI async (0 = rodou sincrono ou nao rodou). Quando != 0, a fila
+        // direta espera esse valor antes do primeiro consumidor (ReSTIR/reflexos/deferred).
+        u64 GIComputeFence = 0;
         if (UseGI && DDGI.IsReady()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "DDGI");
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex, GILightCount);
-            DDGI.RecordUpdate(CommandList, SRVHeap);
+            if (UseAsyncCompute && DDGI.CanRunAsync()) {
+                // DDGI na fila de COMPUTE, sobrepondo CSM/prepass/G-buffer. O segmento A
+                // (fechado aqui) contem os PRODUTORES dos inputs do DDGI — LUTs de ceu e
+                // sombra de nuvens — e as transicoes PIXEL-cientes (so valem na direta).
+                DDGI.TransitionForUpdate(CommandList);
+                const u64 S1 = CommandQueue.SubmitSegmentAndContinue();
+
+                ID3D12GraphicsCommandList* CCL = ComputeQueue.Begin();
+                ID3D12DescriptorHeap* CHeaps[] = { SRVHeap.Native() };
+                CCL->SetDescriptorHeaps(_countof(CHeaps), CHeaps);
+                DDGI.RecordUpdate(CCL, SRVHeap);
+                GIComputeFence = ComputeQueue.SubmitAfter(CommandQueue.NativeFence(), S1);
+
+                // A list do frame reabriu ZERADA — reestabelece o estado que os passes
+                // seguintes assumem herdado do inicio do frame.
+                ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+                CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
+                auto SceneRTV = HDRRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+            } else {
+                FGpuScope Scope(GpuProfiler, CommandList, "DDGI");
+                DDGI.TransitionForUpdate(CommandList);
+                DDGI.RecordUpdate(CommandList, SRVHeap);
+                DDGI.TransitionForRead(CommandList);
+            }
         }
 
         if (ReflectionsActive) {
@@ -1659,6 +1688,19 @@ namespace Smile {
                                        KeyColorInt, SkyAmbient);
             RainWetness.Execute(CommandList, SRVHeap, GBuffer, DepthBuffer.Get(), DepthSRVSlot,
                                 RenderWidth(), RenderHeight());
+        }
+
+        // DDGI async: daqui em diante o frame LE o DDGI (traces de ReSTIR/reflexos e o
+        // deferred lighting) — fecha o segmento B, poe a fila direta esperando o compute
+        // e reabre (segmento C) ja com os atlases de volta em estado de leitura.
+        if (GIComputeFence != 0) {
+            CommandQueue.SubmitSegmentAndContinue();
+            CommandQueue.GpuWait(ComputeQueue.NativeFence(), GIComputeFence);
+            ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+            CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            DDGI.TransitionForRead(CommandList);
         }
 
         if (ReSTIRGIActive) {
@@ -2129,6 +2171,7 @@ namespace Smile {
     void Renderer::Shutdown() {
         if (!Initialized) return;
         CommandQueue.Flush();
+        ComputeQueue.Shutdown();
         UploadQueue.Shutdown();
         Nrd.Shutdown();  
         Fsr2.Shutdown(); 

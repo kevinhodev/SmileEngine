@@ -72,6 +72,7 @@ set(ENGINE_SOURCES
     Source/Graphics/D3D12Device.cpp
     Source/Graphics/CommandQueue.cpp
     Source/Graphics/UploadQueue.cpp
+    Source/Graphics/ComputeQueue.cpp
     Source/Graphics/DescriptorHeap.cpp
     Source/Graphics/SwapChain.cpp
     Source/Graphics/PipelineState.cpp

@@ -9,6 +9,7 @@
 #include "Smile/Graphics/D3D12Device.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/UploadQueue.h"
+#include "Smile/Graphics/ComputeQueue.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/SwapChain.h"
 #include "Smile/Graphics/PipelineState.h"
@@ -294,6 +295,10 @@ namespace Smile {
         void SetUseGI(bool V)           { UseGI = V; }
         bool GetUseGI() const           { return UseGI; }
 
+        // F3: DDGI na fila de compute, sobrepondo CSM/prepass/G-buffer (default ON).
+        void SetUseAsyncCompute(bool V) { UseAsyncCompute = V; }
+        bool GetUseAsyncCompute() const { return UseAsyncCompute; }
+
         FReSTIRGI&       GetReSTIRGI()       { return ReSTIRGI; }
         const FReSTIRGI& GetReSTIRGI() const { return ReSTIRGI; }
         FReflections& GetReflections()     { return Reflections; }
@@ -340,6 +345,8 @@ namespace Smile {
         FD3D12Device    Device;
         FCommandQueue   CommandQueue;
         FUploadQueue    UploadQueue; // fila COPY p/ uploads (texturas/meshes) sem stall
+        FAsyncComputeQueue ComputeQueue; // fila COMPUTE p/ DDGI async (F3)
+        bool            UseAsyncCompute = true;
         FGpuProfiler    GpuProfiler;
         FSwapChain      SwapChain;
         FPipelineState  PipelineState;

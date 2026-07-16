@@ -475,6 +475,22 @@ namespace Smile {
         _State = _After;
     }
 
+    void FDDGI::TransitionForUpdate(ID3D12GraphicsCommandList* _CL) {
+        if (!Ready) return;
+        // Sai de kAtlasRead (contem PIXEL) -> UAV: so em fila direta. ProbeData fica de
+        // fora: o trace ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    void FDDGI::TransitionForRead(ID3D12GraphicsCommandList* _CL) {
+        if (!Ready) return;
+        Transition(_CL, IrradAtlas.Get(),   AtlasState,     kAtlasRead);
+        Transition(_CL, DistAtlas.Get(),    DistState,      kAtlasRead);
+        Transition(_CL, ProbeDataBuf.Get(), ProbeDataState, kAtlasRead);
+    }
+
     void FDDGI::RecordUpdate(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (!Ready) return;
 
@@ -510,11 +526,9 @@ namespace Smile {
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbeDataUAVSlot)); 
             _CL->Dispatch((NumProbes + 63) / 64, 1, 1);
-            Transition(_CL, ProbeDataBuf.Get(),     ProbeDataState,     kAtlasRead); 
+            // ProbeData -> kAtlasRead fica no TransitionForRead (estado com PIXEL; e o
+            // relocate so roda no caminho sincrono — ver CanRunAsync).
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
-
-        Transition(_CL, IrradAtlas.Get(), AtlasState, kAtlasRead);
-        Transition(_CL, DistAtlas.Get(),  DistState,  kAtlasRead);
     }
 }

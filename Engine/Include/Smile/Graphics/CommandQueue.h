@@ -17,6 +17,15 @@ namespace Smile {
         void BeginFrame();
         void EndFrame(ID3D12CommandList* const* CommandLists, UINT Count);
 
+        // Async compute: Wait/Signal de fila so operam ENTRE ExecuteCommandLists, entao
+        // o frame vira segmentos — fecha e executa o que foi gravado, sinaliza a fence e
+        // reabre a MESMA list no allocator do frame. Retorna o valor sinalizado (a fila
+        // de compute espera esse valor antes de rodar).
+        u64  SubmitSegmentAndContinue();
+        // Esta fila espera (GPU-side) uma fence externa — vale pros proximos ECLs.
+        void GpuWait(ID3D12Fence* ExternalFence, u64 Value);
+        ID3D12Fence* NativeFence() const { return Fence.Get(); }
+
         u32 FrameIndex() const { return CurrentFrame; }
 
         ID3D12CommandQueue*        Native()    const { return CommandQueue.Get(); }

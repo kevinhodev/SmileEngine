@@ -66,4 +66,19 @@ namespace Smile {
         Signal();
         FrameFenceValues[CurrentFrame] = FenceValue;
     }
+
+    u64 FCommandQueue::SubmitSegmentAndContinue() {
+        SMILE_HR(CommandList->Close());
+        ID3D12CommandList* Lists[] = { CommandList.Get() };
+        CommandQueue->ExecuteCommandLists(1, Lists);
+        Signal();
+        // Resetar a list e legal com comandos pendentes (a restricao e do ALLOCATOR, e o
+        // fence de BeginFrame ja garantiu que o slot do frame esta livre).
+        SMILE_HR(CommandList->Reset(FrameAllocators[CurrentFrame].Get(), nullptr));
+        return FenceValue;
+    }
+
+    void FCommandQueue::GpuWait(ID3D12Fence* _ExternalFence, u64 _Value) {
+        SMILE_HR(CommandQueue->Wait(_ExternalFence, _Value));
+    }
 }

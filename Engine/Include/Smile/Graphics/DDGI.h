@@ -45,7 +45,19 @@ namespace Smile {
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                   u32 StagingSlot, u32 FrameSlot);
 
+        // Async compute (F3): transicoes envolvendo PIXEL_SHADER_RESOURCE nao podem ser
+        // gravadas em fila COMPUTE. TransitionForUpdate (atlases/trace -> UAV) vai na
+        // fila DIRETA antes do signal; RecordUpdate (dispatches + transicoes UAV/NON_PIXEL,
+        // compute-legais) roda em qualquer fila; TransitionForRead (atlases -> PIXEL|
+        // NON_PIXEL) vai na direta depois do wait. No caminho sincrono, chamar as tres em
+        // sequencia na mesma list = comportamento antigo.
+        void TransitionForUpdate(ID3D12GraphicsCommandList* CommandList);
         void RecordUpdate(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
+        void TransitionForRead(ID3D12GraphicsCommandList* CommandList);
+
+        // Relocation de probes (transiente pos-setup) transiciona ProbeData no MEIO do
+        // update a partir de estado com PIXEL — nesses frames o update roda sincrono.
+        bool CanRunAsync() const { return RelocateFramesLeft == 0; }
 
         bool IsReady() const { return Ready; }
         u32  IrradianceAtlasSRV() const { return AtlasSRVSlot; }
