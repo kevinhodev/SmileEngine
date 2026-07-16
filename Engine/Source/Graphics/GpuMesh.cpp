@@ -51,74 +51,45 @@ namespace Smile {
         IndexBufferView.SizeInBytes    = IndexBufferSize;
     }
 
-    namespace {
-        Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
-            ID3D12Device* _Device, UINT _Size) {
-            D3D12_HEAP_PROPERTIES HeapProps{};
-            HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC ResourceDesc{};
-            ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            ResourceDesc.Width            = _Size;
-            ResourceDesc.Height           = 1;
-            ResourceDesc.DepthOrArraySize = 1;
-            ResourceDesc.MipLevels        = 1;
-            ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            ResourceDesc.SampleDesc       = { 1, 0 };
-            ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-            Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                     &ResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                     IID_PPV_ARGS(&Buffer)));
-            VramTracker::Register(Buffer.Get(), EVramCategory::Geometry);
-            return Buffer;
-        }
+    Microsoft::WRL::ComPtr<ID3D12Resource> FGpuMesh::CreatePoolBuffer(ID3D12Device* _Device,
+                                                                      u64 _Size) {
+        D3D12_HEAP_PROPERTIES HeapProps{};
+        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC ResourceDesc{};
+        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        ResourceDesc.Width            = _Size;
+        ResourceDesc.Height           = 1;
+        ResourceDesc.DepthOrArraySize = 1;
+        ResourceDesc.MipLevels        = 1;
+        ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
+        ResourceDesc.SampleDesc       = { 1, 0 };
+        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
+        SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
+                 &ResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                 IID_PPV_ARGS(&Buffer)));
+        VramTracker::Register(Buffer.Get(), EVramCategory::Geometry);
+        return Buffer;
     }
 
-    void FGpuMesh::RecordUploadDefault(ID3D12Device* _Device,
-                                       ID3D12GraphicsCommandList* _CommandList,
-                                       const FMesh& _Mesh,
-                                       std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& _StagingOut) {
-        const UINT VertexBufferSize = static_cast<UINT>(_Mesh.Vertices.size() * sizeof(Vertex));
-        const UINT IndexBufferSize  = static_cast<UINT>(_Mesh.Indices.size()  * sizeof(u32));
-        IndexCount  = static_cast<u32>(_Mesh.Indices.size());
-        DefaultHeap = true; 
-        if (VertexBufferSize == 0 || IndexBufferSize == 0) { IndexCount = 0; return; }
+    void FGpuMesh::InitFromPool(const Microsoft::WRL::ComPtr<ID3D12Resource>& _Pool,
+                                u64 _VbOffset, u64 _IbOffset,
+                                u32 _VertexCount, u32 _IndexCount) {
+        IndexCount = _IndexCount;
+        if (_VertexCount == 0 || _IndexCount == 0) { IndexCount = 0; return; }
 
-        VertexBuffer = CreateDefaultBuffer(_Device, VertexBufferSize);
-        IndexBuffer  = CreateDefaultBuffer(_Device, IndexBufferSize);
-
-        auto VStage = CreateUploadBuffer(_Device, _Mesh.Vertices.data(), VertexBufferSize);
-        auto IStage = CreateUploadBuffer(_Device, _Mesh.Indices.data(),  IndexBufferSize);
-
-        _CommandList->CopyBufferRegion(VertexBuffer.Get(), 0, VStage.Get(), 0, VertexBufferSize);
-        _CommandList->CopyBufferRegion(IndexBuffer.Get(),  0, IStage.Get(), 0, IndexBufferSize);
-
-        D3D12_RESOURCE_BARRIER Barriers[2]{};
-        for (int i = 0; i < 2; ++i) {
-            Barriers[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        }
-        // Estado combinado de leitura: raster (VB/IB) + NON_PIXEL p/ o RT ler direto —
-        // build de BLAS (VA) e hit shading bindless (SRV) — sem transicao por frame/setup.
-        Barriers[0].Transition.pResource  = VertexBuffer.Get();
-        Barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
-                                          | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        Barriers[1].Transition.pResource  = IndexBuffer.Get();
-        Barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_INDEX_BUFFER
-                                          | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        _CommandList->ResourceBarrier(2, Barriers);
-
-        VertexBufferView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();
+        VertexBuffer = _Pool;
+        IndexBuffer  = _Pool;
+        const D3D12_GPU_VIRTUAL_ADDRESS Base = _Pool->GetGPUVirtualAddress();
+        VertexBufferView.BufferLocation = Base + _VbOffset;
         VertexBufferView.StrideInBytes  = sizeof(Vertex);
-        VertexBufferView.SizeInBytes    = VertexBufferSize;
-        IndexBufferView.BufferLocation  = IndexBuffer->GetGPUVirtualAddress();
+        VertexBufferView.SizeInBytes    = _VertexCount * static_cast<u32>(sizeof(Vertex));
+        IndexBufferView.BufferLocation  = Base + _IbOffset;
         IndexBufferView.Format          = DXGI_FORMAT_R32_UINT;
-        IndexBufferView.SizeInBytes     = IndexBufferSize;
-
-        _StagingOut.push_back(std::move(VStage));
-        _StagingOut.push_back(std::move(IStage));
+        IndexBufferView.SizeInBytes     = _IndexCount * static_cast<u32>(sizeof(u32));
+        VbFirstElement = static_cast<u32>(_VbOffset / sizeof(Vertex));
+        IbFirstElement = static_cast<u32>(_IbOffset / sizeof(u32));
     }
 
     void FGpuMesh::Draw(ID3D12GraphicsCommandList* _CommandList) const {

@@ -31,6 +31,10 @@ namespace SmileEditor {
         explicit MainWindow(QWidget* parent = nullptr);
         ~MainWindow() override;
 
+        // Cena .sscene passada na linha de comando (dev/smoke): carregada assim que o
+        // renderer inicializar (OnRendererReady), sem passar pelo dialogo de arquivo.
+        void SetStartupScene(const QString& Path) { StartupScenePath = Path; }
+
     protected:
         void changeEvent(QEvent* event) override; // notifica o WindowBridge em max/restore
         bool eventFilter(QObject* obj, QEvent* event) override; // visibilidade da janela TOD -> menu
@@ -51,6 +55,7 @@ namespace SmileEditor {
         void CreateDocks();
         QWidget* CreateViewportChrome();
 
+        QString               StartupScenePath;
         ViewportWidget*       Viewport    = nullptr;
         QPointer<AboutDialog> AboutDlg;
         QPointer<QDialog>     SettingsDlg;

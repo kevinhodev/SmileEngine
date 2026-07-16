@@ -398,6 +398,12 @@ namespace SmileEditor {
             connect(Viewport, &ViewportWidget::FrameReady,
                     LightsBr, &LightsBridge::Refresh, Qt::UniqueConnection);
         }
+
+        if (!StartupScenePath.isEmpty()) {
+            if (!Viewport->GetRenderer()->LoadCookedScene(StartupScenePath.toStdWString()))
+                Smile::LogError("Cena de startup falhou: " + StartupScenePath.toStdString());
+            else if (LightsBr) LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+        }
     }
 
     void MainWindow::UpdateStats() {

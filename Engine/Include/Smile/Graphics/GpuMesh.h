@@ -4,16 +4,26 @@
 #include "Smile/Graphics/Mesh.h"
 #include <d3d12.h>
 #include <wrl/client.h>
-#include <vector>
 
 namespace Smile {
     class FGpuMesh {
     public:
         void Upload(ID3D12Device* Device, const FMesh& Mesh);
 
-        void RecordUploadDefault(ID3D12Device* Device, ID3D12GraphicsCommandList* CommandList,
-                                 const FMesh& Mesh,
-                                 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& StagingOut);
+        // Pool de geometria: varios meshes suballocados num UNICO buffer default-heap
+        // ([VB slices desde 0][IB slices]) em vez de 2 committed resources por mesh —
+        // committed tem heap de >=64KB, entao mesh pequeno desperdicava VRAM, e criar
+        // milhares de recursos dominava o load. Cria o pool (registra no VramTracker);
+        // o upload/estado fica com o chamador (FScene::AddMeshesBatch).
+        static Microsoft::WRL::ComPtr<ID3D12Resource> CreatePoolBuffer(ID3D12Device* Device,
+                                                                       u64 Size);
+
+        // Aponta este mesh pra uma fatia do pool: VBV/IBV/GPUVAs viram base+offset, e
+        // VertexBuffer/IndexBuffer seguram o MESMO pool (o refcount do ComPtr mantem o
+        // pool vivo enquanto qualquer mesh dele existir). VbOffset PRECISA ser multiplo
+        // de sizeof(Vertex) e IbOffset de 4 (FirstElement dos SRVs bindless e exato).
+        void InitFromPool(const Microsoft::WRL::ComPtr<ID3D12Resource>& Pool,
+                          u64 VbOffset, u64 IbOffset, u32 VertexCount, u32 IndexCount);
 
         void Draw(ID3D12GraphicsCommandList* CommandList) const;
 
@@ -28,14 +38,18 @@ namespace Smile {
         ID3D12Resource* VertexResource() const { return VertexBuffer.Get(); }
         ID3D12Resource* IndexResource()  const { return IndexBuffer.Get(); }
 
-        bool IsDefaultHeap() const { return DefaultHeap; }
+        // Offset da fatia dentro do pool, em ELEMENTOS (Vertex / u32) — FirstElement dos
+        // SRVs bindless de VB/IB (DDGI). 0 quando o mesh tem buffer proprio (Upload).
+        u32 VertexFirstElement() const { return VbFirstElement; }
+        u32 IndexFirstElement()  const { return IbFirstElement; }
 
     private:
         Microsoft::WRL::ComPtr<ID3D12Resource> VertexBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
         D3D12_VERTEX_BUFFER_VIEW               VertexBufferView{};
         D3D12_INDEX_BUFFER_VIEW                IndexBufferView{};
-        u32                                    IndexCount  = 0;
-        bool                                   DefaultHeap = false; 
+        u32                                    IndexCount     = 0;
+        u32                                    VbFirstElement = 0;
+        u32                                    IbFirstElement = 0;
     };
 }

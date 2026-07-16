@@ -15,6 +15,10 @@ int main(int argc, char* argv[]) {
     SmileEditor::ApplyDarkTheme(app);
 
     SmileEditor::MainWindow window;
+    // Dev/smoke: caminho de .sscene como 1o argumento carrega a cena no boot.
+    const QStringList args = QApplication::arguments();
+    if (args.size() > 1 && args.at(1).endsWith(QStringLiteral(".sscene"), Qt::CaseInsensitive))
+        window.SetStartupScene(args.at(1));
     window.show();
 
     return app.exec();

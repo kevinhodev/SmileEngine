@@ -210,15 +210,17 @@ namespace Smile {
             D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
             GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
             GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            GeoSrv.Buffer.FirstElement     = 0;
             for (u32 i = 0; i < static_cast<u32>(UniqueMeshes.size()); ++i) {
                 const FGpuMesh* M      = UniqueMeshes[i];
                 const u32       VbSlot = MeshGeoSlotBase + i * 2;
+                // FirstElement = offset da fatia no pool de geometria (0 se buffer proprio)
                 GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
+                GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
                 GeoSrv.Buffer.NumElements         = M->VertexCount();
                 GeoSrv.Buffer.StructureByteStride = sizeof(Vertex);
                 _SRVHeap.CreateSRV(_Device, M->VertexResource(), GeoSrv, VbSlot);
                 GeoSrv.Format                     = DXGI_FORMAT_R32_UINT;
+                GeoSrv.Buffer.FirstElement        = M->IndexFirstElement();
                 GeoSrv.Buffer.NumElements         = M->GetIndexCount();
                 GeoSrv.Buffer.StructureByteStride = 0;
                 _SRVHeap.CreateSRV(_Device, M->IndexResource(), GeoSrv, VbSlot + 1);
