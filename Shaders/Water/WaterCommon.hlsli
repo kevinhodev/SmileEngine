@@ -25,9 +25,11 @@ cbuffer WaterCB : register(b0) {
     float4 DebugParams;    
     float4 InScatterColor;   
     float4 AbsorptionColor; 
-    float4 FoamParams;     
-    float4 FoamColor;  
-    float4 QuadTreeParams;   
+    float4 FoamParams;
+    float4 FoamColor;
+    float4 QuadTreeParams;
+    row_major float4x4 ViewProjNoJitter; // velocity: projecao atual SEM jitter
+    row_major float4x4 PrevViewProj;     // velocity: projecao anterior SEM jitter
 };
 
 Texture2D<float4> FFTDisplacement : register(t1);
@@ -55,7 +57,7 @@ float3 WaterFFTNormalFromDisplacement(float2 worldXZ, float worldStep, float nor
 }
 
 Texture2D<float4> WaterNormalTex : register(t4);
-SamplerState      AnisoWrap      : register(s2);
+SamplerState      AnisoWrap      : register(s3); // s2 e o sampler de comparacao do CSM
 
 Texture2D<float4> SceneColor : register(t2);
 Texture2D<float>  SceneDepth : register(t3);
@@ -81,8 +83,10 @@ struct VSOutput {
     float3 vView      : TEXCOORD2; 
     float4 screenProj : TEXCOORD3; 
     float4 baseTC     : TEXCOORD4; 
-    float4 debugData  : TEXCOORD5; 
-    float2 tileUV     : TEXCOORD6; 
+    float4 debugData  : TEXCOORD5;
+    float2 tileUV     : TEXCOORD6;
+    float4 curClip    : TEXCOORD7; // clip atual sem jitter (velocity)
+    float4 prevClip   : TEXCOORD8; // clip anterior sem jitter (velocity)
 };
 
 float FresnelSchlick(float F0, float cosTheta, float gloss) {

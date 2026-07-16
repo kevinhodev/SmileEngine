@@ -24,12 +24,15 @@ namespace Smile {
         };
 
         void Initialize(ID3D12Device* Device,
-                        DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
+                        DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
+                        DXGI_FORMAT VelocityFormat);
         void Recreate(ID3D12Device* Device,
-                      DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
-        void Resize(ID3D12Device* Device, u32 Width, u32 Height); 
+                      DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
+                      DXGI_FORMAT VelocityFormat);
+        void Resize(ID3D12Device* Device, u32 Width, u32 Height);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& ViewProj, const Mat44& Projection, const Mat44& InvViewProj,
+                            const Mat44& ViewProjNoJitter, const Mat44& PrevViewProjNoJitter,
                             const Vec3& CameraPos, const Vec3& SunDir, f32 SunIntensity,
                             const Vec3& SunColor, f32 ElapsedTime,
                             bool IBLEnabled, f32 IBLIntensity,
@@ -39,7 +42,9 @@ namespace Smile {
         void RenderSurface(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                            u32 SpecularCubeSRVSlot, u32 FFTDisplacementSRVSlot,
                            u32 FFTNormalSRVSlot, u32 SceneCopyTableStart,
-                           u32 AtmosphereSkyViewSRVSlot);
+                           u32 AtmosphereSkyViewSRVSlot,
+                           D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddress,
+                           u32 SunShadowSRVSlot);
 
         bool IsInitialized() const { return PSO != nullptr; }
         void SetDebugMode(EDebugMode Mode) { DebugMode = Mode; }
@@ -126,9 +131,7 @@ namespace Smile {
         void SetInScatterColor(const Vec3& C) { InScatterColor = C; }
         void SetInScatterDensity(f32 V)       { InScatterDensity = V; }
         void SetAbsorption(const Vec3& C)     { AbsorptionColor = C; }
-        void SetSunSpecClamp(f32 V)           { SunSpecClamp = V; }
         f32  GetInScatterDensity() const      { return InScatterDensity; }
-        f32  GetSunSpecClamp() const          { return SunSpecClamp; }
 
         void SetUseFoam(bool V)            { UseFoam = V; }
         void SetFoamCoverage(f32 V)        { FoamCoverage = V; }
@@ -174,16 +177,19 @@ namespace Smile {
             Vec4  RefractionParams;// 16  x=RefractionBumpScale y=SoftIntersectionFactor z=fogDensity w=ReflectionBumpScale
             Vec4  DebugParams;     // 16  x=debug mode (0 off/1 wire/2 tiles)
             Vec4  InScatterColor;  // 16  rgb=cor turquesa do in-scatter, w=densidade do in-scatter
-            Vec4  AbsorptionColor; // 16  rgb=extincao por canal (Beer-Lambert), w=clamp do sun-spec
+            Vec4  AbsorptionColor; // 16  rgb=extincao por canal (Beer-Lambert), w=livre
             Vec4  FoamParams;      // 16  x=coverage(limiar J) y=sharpness z=intensidade(0=off) w=fadeDist(m)
             Vec4  FoamColor;       // 16  rgb=tint da espuma, w=supressao do sun-spec
             Vec4  QuadTreeParams;  // 16  x=rootX y=rootZ z=leafSize w=rootSize
+            Mat44 ViewProjNoJitter;// 64  velocity: VP atual SEM jitter
+            Mat44 PrevViewProj;    // 64  velocity: VP anterior SEM jitter
         };
         static_assert(sizeof(WaterConstants) % 256 == 0, "WaterConstants deve ser multiplo de 256");
 
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSO(ID3D12Device* Device,
-                      DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
+                      DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
+                      DXGI_FORMAT VelocityFormat);
         void BuildGenerateDrawsPipeline(ID3D12Device* Device);
         void BuildGrid(ID3D12Device* Device);
         void BuildInstanceBuffer(ID3D12Device* Device);
@@ -327,7 +333,6 @@ namespace Smile {
         Vec3 InScatterColor   = { 0.06f, 0.30f, 0.36f };
         f32  InScatterDensity = 1.5f;
         Vec3 AbsorptionColor  = { 0.45f, 0.15f, 0.10f };
-        f32  SunSpecClamp     = 2.0f;  
 
         bool UseFoam          = true;
         f32  FoamCoverage     = 0.62f; 

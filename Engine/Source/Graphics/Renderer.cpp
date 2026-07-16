@@ -77,7 +77,8 @@ namespace Smile {
 
         Ocean.Initialize(Device.Native(), SRVHeap);
         Water.Initialize(Device.Native(),
-                         DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
+                         DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
+                         DXGI_FORMAT_R16G16_FLOAT);
 
         Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
@@ -563,7 +564,7 @@ namespace Smile {
         Skybox.Recreate(Device.Native(), RT, DS);
         Atmosphere.RecreateSky(Device.Native(), RT, DS);
         VolumetricClouds.RecreateComposite(Device.Native(), RT, DS);
-        Water.Recreate(Device.Native(), RT, DS);
+        Water.Recreate(Device.Native(), RT, DS, DXGI_FORMAT_R16G16_FLOAT);
         if (Device.RaytracingSupported())
             DDGIDebugPass.Recreate(Device.Native(), RT, DS);
     }
@@ -592,7 +593,7 @@ namespace Smile {
                 { { "CloudComposite.vs", "CloudComposite.ps" },
                   [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
                 { { "WaterSurface.vs", "WaterSurface.ps" },
-                  [&] { Water.Recreate(Dev, RT, DS); } },
+                  [&] { Water.Recreate(Dev, RT, DS, DXGI_FORMAT_R16G16_FLOAT); } },
                 { { "RainWetness.ps", "RainCurtain.ps", "RainParticles.vs", "RainParticles.ps",
                     "RainSplash.vs", "RainSplash.ps" },
                   [&] { RainWetness.Recreate(Dev); } },
@@ -1100,7 +1101,8 @@ namespace Smile {
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
         const bool WaterHasDepth = SceneColorCopy && SceneDepthCopy;
         if (UseWater && Water.IsInitialized()) {
-            Water.UpdatePerFrame(FrameSlot, WaterViewProj, Projection, WaterInvViewProj, CameraPosition, KeyDir,
+            Water.UpdatePerFrame(FrameSlot, WaterViewProj, Projection, WaterInvViewProj,
+                                 ViewProjUnjittered, PrevViewProj, CameraPosition, KeyDir,
                                  KeyInt, KeyColor, ElapsedTime,
                                  HDREnv.HasHDRLoaded(), IBLIntensity,
                                  RenderWidth(), RenderHeight(), NearZ, FarZ,
@@ -1935,8 +1937,26 @@ namespace Smile {
 
         if (UseWater && Water.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Água — superfície");
+            // Água escreve velocity (RT1) pro TAA/FSR2 não reprojetar a superfície só
+            // pelo fundo atrás dela — o velocity buffer só é consumido no upscale/AA,
+            // bem depois deste passe.
+            FBarrierBatch WaterBatch;
+            WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+            WaterBatch.Flush(CommandList);
+            D3D12_CPU_DESCRIPTOR_HANDLE WaterRTVs[2] = {
+                HDRRTVHeap.CpuHandle(0), VelocityRTVHeap.CpuHandle(0) };
+            CommandList->OMSetRenderTargets(2, WaterRTVs, FALSE, &DSV);
+
             Water.RenderSurface(CommandList, SRVHeap, HDREnv.SpecularSRV(), Ocean.SRVSlot(),
-                                Ocean.NormalSRVSlot(), SceneCopyTableStart, Atmosphere.SkyViewSRV());
+                                Ocean.NormalSRVSlot(), SceneCopyTableStart, Atmosphere.SkyViewSRV(),
+                                SunShadows.ConstantsAddress(), SunShadows.ShadowSRVSlot());
+
+            WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            WaterBatch.Flush(CommandList);
+            auto PostWaterRTV = HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &PostWaterRTV, FALSE, &DSV);
         }
 
         if (UseClouds && VolumetricClouds.IsInitialized()) {

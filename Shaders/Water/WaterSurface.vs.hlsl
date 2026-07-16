@@ -71,6 +71,10 @@ VSOutput main(VSInput IN) {
     o.worldPos = worldPos;
     o.vView = camPos - worldPos;
     o.pos = mul(float4(worldPos, 1.0), ViewProj);
+    // Velocity so de camera: mesma posicao deslocada projetada pelas VPs sem jitter
+    // (fase da onda entre frames fica de fora — residuo pequeno pro TAA/FSR2).
+    o.curClip  = mul(float4(worldPos, 1.0), ViewProjNoJitter);
+    o.prevClip = mul(float4(worldPos, 1.0), PrevViewProj);
 
     float normalScreenFade = WaterNormalFade(max(o.pos.w, 0.0));
     o.normal = normalize(lerp(float3(0.0, 1.0, 0.0), normal, normalScreenFade));
