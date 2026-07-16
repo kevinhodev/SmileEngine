@@ -5,10 +5,10 @@
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
-    // Ponte C++<->QML do painel Time of Day (TimeOfDayPanel.qml). Le/escreve o FTimeOfDay do
+    // Ponte C++<->QML da janela Time of Day (TimeOfDayWindow.qml). Le/escreve o FTimeOfDay do
     // Renderer direto — seguro porque o render roda no timer do ViewportWidget, na mesma thread
     // da GUI. Alem do estado bruto, expoe leituras derivadas (elevacao/azimute de sol e lua,
-    // fracao de fase) e SunElevationAt/MoonElevationAt p/ o painel desenhar o arco do dia.
+    // fracao de fase) e SunElevationAt/MoonElevationAt p/ a janela desenhar o arco do dia.
     //
     // Sinais: StateChanged = qualquer knob mudou (setter ou hora escrutinada); TimeChanged = o
     // relogio andou (por frame, via Refresh no FrameReady) — separados p/ o QML nao reavaliar
@@ -29,15 +29,7 @@ namespace SmileEditor {
         Q_PROPERTY(double moonDiskSize READ MoonDiskSize WRITE SetMoonDiskSize NOTIFY StateChanged)
         Q_PROPERTY(double moonDiskBrightness READ MoonDiskBrightness WRITE SetMoonDiskBrightness NOTIFY StateChanged)
         Q_PROPERTY(double starIntensity READ StarIntensity WRITE SetStarIntensity NOTIFY StateChanged)
-        // Clima (FWeather do Renderer) — F1: chuva/wetness deferred.
-        Q_PROPERTY(double rainAmount READ RainAmount WRITE SetRainAmount NOTIFY StateChanged)
-        Q_PROPERTY(double puddleAmount READ PuddleAmount WRITE SetPuddleAmount NOTIFY StateChanged)
-        Q_PROPERTY(double puddleScale READ PuddleScale WRITE SetPuddleScale NOTIFY StateChanged)
-        Q_PROPERTY(double rippleStrength READ RippleStrength WRITE SetRippleStrength NOTIFY StateChanged)
-        Q_PROPERTY(double wetDarkening READ WetDarkening WRITE SetWetDarkening NOTIFY StateChanged)
-        Q_PROPERTY(double curtainAmount READ CurtainAmount WRITE SetCurtainAmount NOTIFY StateChanged)
-        Q_PROPERTY(bool weatherDriveSky READ WeatherDriveSky WRITE SetWeatherDriveSky NOTIFY StateChanged)
-        Q_PROPERTY(bool rainParticles READ RainParticles WRITE SetRainParticles NOTIFY StateChanged)
+        // Clima (FWeather) saiu daqui: mora na pagina Clima do SettingsWindow via ViewportWidget.
         // Sol manual (TOD desligado): az/el em graus, escreve via Renderer::SetSunAzimuthElevation.
         Q_PROPERTY(double manualAzimuthDeg READ ManualAzimuthDeg WRITE SetManualAzimuthDeg NOTIFY StateChanged)
         Q_PROPERTY(double manualElevationDeg READ ManualElevationDeg WRITE SetManualElevationDeg NOTIFY StateChanged)
@@ -66,14 +58,6 @@ namespace SmileEditor {
         double MoonDiskSize() const;
         double MoonDiskBrightness() const;
         double StarIntensity() const;
-        double RainAmount() const;
-        double PuddleAmount() const;
-        double PuddleScale() const;
-        double RippleStrength() const;
-        double WetDarkening() const;
-        double CurtainAmount() const;
-        bool   WeatherDriveSky() const;
-        bool   RainParticles() const;
         double ManualAzimuthDeg() const  { return ManualAz; }
         double ManualElevationDeg() const { return ManualEl; }
         double SunElevationDeg() const;
@@ -94,21 +78,12 @@ namespace SmileEditor {
         void SetMoonDiskSize(double V);
         void SetMoonDiskBrightness(double V);
         void SetStarIntensity(double V);
-        void SetRainAmount(double V);
-        void SetPuddleAmount(double V);
-        void SetPuddleScale(double V);
-        void SetRippleStrength(double V);
-        void SetWetDarkening(double V);
-        void SetCurtainAmount(double V);
-        void SetWeatherDriveSky(bool V);
-        void SetRainParticles(bool V);
         void SetManualAzimuthDeg(double V);
         void SetManualElevationDeg(double V);
 
         // Elevacao (graus) de sol/lua numa hora arbitraria do dia corrente — curva do arco do ceu.
         Q_INVOKABLE double sunElevationAt(double hours) const;
         Q_INVOKABLE double moonElevationAt(double hours) const;
-        Q_INVOKABLE void   closePanel() { emit CloseRequested(); }
 
     public slots:
         void Refresh(); // FrameReady: emite TimeChanged se o relogio andou desde o ultimo frame
@@ -117,7 +92,6 @@ namespace SmileEditor {
         void AvailableChanged();
         void StateChanged();
         void TimeChanged();
-        void CloseRequested(); // botao X do painel -> MainWindow fecha o dock
 
     private:
         void SyncManualFromRenderer(); // az/el manuais a partir do SunDir atual do Renderer

@@ -165,6 +165,20 @@ namespace SmileEditor {
             WindowBr->NotifyWindowStateChanged();
     }
 
+    bool MainWindow::eventFilter(QObject* _Obj, QEvent* _Event) {
+        // Reflete mostrar/esconder da janela TOD no check do menu "Janela" (cobre o X da
+        // propria janela, que fecha via WindowBridge sem passar pelo toggle do menu).
+        if (TodDlg && _Obj == TodDlg &&
+            (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
+            if (Menus) Menus->SetTimeOfDayVisible(_Event->type() == QEvent::Show);
+        }
+        if (StatsDlg && _Obj == StatsDlg &&
+            (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
+            if (Menus) Menus->SetStatsVisible(_Event->type() == QEvent::Show);
+        }
+        return QMainWindow::eventFilter(_Obj, _Event);
+    }
+
     void MainWindow::CreateTopBar() {
         // Barra unificada em QML: windowBridge (min/max/fechar + zonas do hit-test), menuBridge
         // (menus) e smilelogo (logo procedural da engine como image provider).
@@ -239,10 +253,15 @@ namespace SmileEditor {
             if (ConsoleDock) ConsoleDock->setVisible(!ConsoleDock->isVisible());
         });
         connect(Menus, &MenuBridge::ToggleTimeOfDayRequested, this, [this]() {
-            if (TodDock) TodDock->setVisible(!TodDock->isVisible());
+            if (TodDlg && TodDlg->isVisible()) TodDlg->hide();
+            else                               ShowTimeOfDay();
         });
         connect(Menus, &MenuBridge::ToggleLightsRequested, this, [this]() {
             if (LightsDock) LightsDock->setVisible(!LightsDock->isVisible());
+        });
+        connect(Menus, &MenuBridge::ToggleStatsRequested, this, [this]() {
+            if (StatsDlg && StatsDlg->isVisible()) StatsDlg->hide();
+            else                                   ShowStats();
         });
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
@@ -323,34 +342,9 @@ namespace SmileEditor {
         // Reflete o estado do dock no check do menu "Janela" (inclui o fechar via menu do console).
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
 
-        // ---- Time of Day (dock lateral direito, painel 100% QML) ----
-        TodDock = new QDockWidget(tr("Time of Day"), this);
-        TodDock->setObjectName("TimeOfDayDock");
-        TodDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-        TodDock->setFeatures(QDockWidget::DockWidgetMovable |
-                             QDockWidget::DockWidgetFloatable |
-                             QDockWidget::DockWidgetClosable);
+        // O Time of Day virou janela flutuante (ShowTimeOfDay) — nao ha mais dock dele.
 
-        QQuickWidget* TodPanel = CreateQmlPanel(
-            QStringLiteral("TimeOfDayPanel.qml"),
-            { { QStringLiteral("todModel"), TodBridge } },
-            TodDock);
-        TodPanel->setObjectName("TimeOfDayPanel");
-        TodDock->setWidget(TodPanel);
-
-        // Mesmo padrao do console: header desenhado no QML, title bar nativa some.
-        auto* TodEmptyTitleBar = new QWidget(TodDock);
-        TodEmptyTitleBar->setFixedHeight(0);
-        TodDock->setTitleBarWidget(TodEmptyTitleBar);
-        connect(TodBridge, &TimeOfDayBridge::CloseRequested, TodDock, &QDockWidget::close);
-
-        addDockWidget(Qt::RightDockWidgetArea, TodDock);
-        TodPanel->setMinimumWidth(280);
-        resizeDocks({ TodDock }, { 320 }, Qt::Horizontal);
-
-        connect(TodDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetTimeOfDayVisible);
-
-        // ---- Luzes (dock lateral direito, tabificado com o Time of Day) ----
+        // ---- Luzes (dock lateral direito) ----
         LightsDock = new QDockWidget(tr("Luzes"), this);
         LightsDock->setObjectName("LightsDock");
         LightsDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -372,10 +366,7 @@ namespace SmileEditor {
 
         addDockWidget(Qt::RightDockWidgetArea, LightsDock);
         LightsPanel->setMinimumWidth(280);
-        // Compartilha a coluna direita com o TOD em abas (padrao Unreal de docks empilhados);
-        // o TOD fica na frente por ser o painel mais usado ate aqui.
-        tabifyDockWidget(TodDock, LightsDock);
-        TodDock->raise();
+        resizeDocks({ LightsDock }, { 320 }, Qt::Horizontal);
 
         connect(LightsDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetLightsVisible);
     }
@@ -497,6 +488,95 @@ namespace SmileEditor {
         }
         SettingsDlg->raise();
         SettingsDlg->activateWindow();
+    }
+
+    void MainWindow::ShowTimeOfDay() {
+        if (!TodDlg) {
+            // Mesmo padrao do SettingsWindow: QDialog frameless nao-modal com chrome 100% QML
+            // (arrasto/minimizar/fechar via WindowBridge).
+            auto* Dialog = new QDialog(this);
+            Dialog->setObjectName(QStringLiteral("TimeOfDayWindow"));
+            Dialog->setWindowTitle(tr("Time of Day — SmileEngine"));
+            Dialog->setWindowIcon(windowIcon());
+            Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
+                                   Qt::WindowMinimizeButtonHint);
+            Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+            Dialog->resize(840, 672);
+            Dialog->setMinimumSize(840, 672);
+
+            auto* TodWindowBridge = new WindowBridge(Dialog, Dialog);
+            QQuickWidget* Panel = CreateQmlPanel(
+                QStringLiteral("TimeOfDayWindow.qml"),
+                { { QStringLiteral("todModel"), TodBridge },
+                  { QStringLiteral("todWindow"), TodWindowBridge } },
+                Dialog);
+            Panel->setObjectName(QStringLiteral("TimeOfDayWindowPanel"));
+
+            auto* DialogLayout = new QVBoxLayout(Dialog);
+            DialogLayout->setContentsMargins(0, 0, 0, 0);
+            DialogLayout->setSpacing(0);
+            DialogLayout->addWidget(Panel);
+
+            Dialog->installEventFilter(this); // Show/Hide -> check do menu "Janela"
+            TodDlg = Dialog;
+        }
+
+        if (TodDlg->isMinimized()) TodDlg->showNormal();
+        else                       TodDlg->show();
+
+        // Centraliza apenas quando a janela ainda nao ganhou uma posicao util do window manager.
+        if (!TodDlg->property("smilePositioned").toBool()) {
+            const QPoint Center = frameGeometry().center();
+            TodDlg->move(Center.x() - TodDlg->width() / 2,
+                         Center.y() - TodDlg->height() / 2);
+            TodDlg->setProperty("smilePositioned", true);
+        }
+        TodDlg->raise();
+        TodDlg->activateWindow();
+    }
+
+    void MainWindow::ShowStats() {
+        if (!StatsDlg) {
+            // Mesmo padrao do TimeOfDayWindow: QDialog frameless nao-modal com chrome QML.
+            auto* Dialog = new QDialog(this);
+            Dialog->setObjectName(QStringLiteral("StatsWindow"));
+            Dialog->setWindowTitle(tr("Estatísticas — SmileEngine"));
+            Dialog->setWindowIcon(windowIcon());
+            Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
+                                   Qt::WindowMinimizeButtonHint);
+            Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+            Dialog->resize(420, 680);
+            Dialog->setMinimumSize(420, 560);
+
+            auto* StatsWindowBridge = new WindowBridge(Dialog, Dialog);
+            QQuickWidget* Panel = CreateQmlPanel(
+                QStringLiteral("StatsWindow.qml"),
+                { { QStringLiteral("viewportModel"), Viewport },
+                  { QStringLiteral("statsWindow"), StatsWindowBridge } },
+                Dialog);
+            Panel->setObjectName(QStringLiteral("StatsWindowPanel"));
+
+            auto* DialogLayout = new QVBoxLayout(Dialog);
+            DialogLayout->setContentsMargins(0, 0, 0, 0);
+            DialogLayout->setSpacing(0);
+            DialogLayout->addWidget(Panel);
+
+            Dialog->installEventFilter(this); // Show/Hide -> check do menu "Janela"
+            StatsDlg = Dialog;
+        }
+
+        if (StatsDlg->isMinimized()) StatsDlg->showNormal();
+        else                         StatsDlg->show();
+
+        // Centraliza apenas quando a janela ainda nao ganhou uma posicao util do window manager.
+        if (!StatsDlg->property("smilePositioned").toBool()) {
+            const QPoint Center = frameGeometry().center();
+            StatsDlg->move(Center.x() - StatsDlg->width() / 2,
+                           Center.y() - StatsDlg->height() / 2);
+            StatsDlg->setProperty("smilePositioned", true);
+        }
+        StatsDlg->raise();
+        StatsDlg->activateWindow();
     }
 
     void MainWindow::TriggerShaderCompileAndReload(const QString& _Path) {

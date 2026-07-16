@@ -138,6 +138,11 @@ MenuBar {
             markVisible: menuBridge.lightsVisible
             onTriggered: menuBridge.toggleLights()
         }
+        MItem {
+            text: "Estatísticas"; checkColumn: true
+            markVisible: menuBridge.statsVisible
+            onTriggered: menuBridge.toggleStats()
+        }
     }
 
     DarkMenu {

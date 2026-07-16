@@ -12,6 +12,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool consoleVisible READ ConsoleVisible NOTIFY ConsoleVisibleChanged)
         Q_PROPERTY(bool timeOfDayVisible READ TimeOfDayVisible NOTIFY TimeOfDayVisibleChanged)
         Q_PROPERTY(bool lightsVisible READ LightsVisible NOTIFY LightsVisibleChanged)
+        Q_PROPERTY(bool statsVisible READ StatsVisible NOTIFY StatsVisibleChanged)
 
     public:
         explicit MenuBridge(QObject* parent = nullptr);
@@ -22,6 +23,8 @@ namespace SmileEditor {
         void SetTimeOfDayVisible(bool v);
         bool LightsVisible() const { return LightsVis; }
         void SetLightsVisible(bool v);
+        bool StatsVisible() const { return StatsVis; }
+        void SetStatsVisible(bool v);
 
     public slots:
         void loadScene()        { emit LoadSceneRequested(); }
@@ -32,6 +35,7 @@ namespace SmileEditor {
         void toggleConsole()    { emit ToggleConsoleRequested(); }
         void toggleTimeOfDay()  { emit ToggleTimeOfDayRequested(); }
         void toggleLights()     { emit ToggleLightsRequested(); }
+        void toggleStats()      { emit ToggleStatsRequested(); }
         void setVSync(bool on)            { emit VSyncToggled(on); }
         void setFrustumCulling(bool on)   { emit FrustumCullingToggled(on); }
         void setDepthPrepass(bool on)     { emit DepthPrepassToggled(on); }
@@ -46,8 +50,10 @@ namespace SmileEditor {
         void ToggleConsoleRequested();
         void ToggleTimeOfDayRequested();
         void ToggleLightsRequested();
+        void ToggleStatsRequested();
         void TimeOfDayVisibleChanged();
         void LightsVisibleChanged();
+        void StatsVisibleChanged();
         void VSyncToggled(bool on);
         void FrustumCullingToggled(bool on);
         void DepthPrepassToggled(bool on);
@@ -56,7 +62,8 @@ namespace SmileEditor {
 
     private:
         bool ConsoleVis   = true;
-        bool TimeOfDayVis = true;
+        bool TimeOfDayVis = false; // TOD agora e janela flutuante: comeca fechada
         bool LightsVis    = true;
+        bool StatsVis     = false; // Estatisticas: janela flutuante, comeca fechada
     };
 }

@@ -8,17 +8,11 @@ namespace SmileEditor {
     namespace {
         constexpr double kToDeg = 180.0 / 3.14159265358979;
 
-        // FTimeOfDay de fallback: mantem o painel funcional (bindings validos) antes do renderer
+        // FTimeOfDay de fallback: mantem a janela funcional (bindings validos) antes do renderer
         // inicializar; os valores sao os defaults da engine e sao descartados no SetRenderer.
         Smile::FTimeOfDay& FallbackTod() {
             static Smile::FTimeOfDay Tod;
             return Tod;
-        }
-
-        // Idem p/ o clima (secao Clima do painel).
-        Smile::FWeather& FallbackWeather() {
-            static Smile::FWeather W;
-            return W;
         }
     }
 
@@ -39,13 +33,6 @@ namespace SmileEditor {
     static const Smile::FTimeOfDay& TodOfConst(const Smile::Renderer* _R) {
         return _R ? _R->GetTimeOfDay() : FallbackTod();
     }
-    static Smile::FWeather& WeatherOf(Smile::Renderer* _R) {
-        return _R ? _R->GetWeather() : FallbackWeather();
-    }
-    static const Smile::FWeather& WeatherOfConst(const Smile::Renderer* _R) {
-        return _R ? _R->GetWeather() : FallbackWeather();
-    }
-
     bool   TimeOfDayBridge::Enabled() const        { return TodOfConst(Renderer).Enabled; }
     bool   TimeOfDayBridge::Running() const        { return TodOfConst(Renderer).Running; }
     double TimeOfDayBridge::TimeHours() const      { return TodOfConst(Renderer).TimeHours; }
@@ -59,14 +46,6 @@ namespace SmileEditor {
     double TimeOfDayBridge::MoonDiskSize() const   { return TodOfConst(Renderer).MoonDiskSize; }
     double TimeOfDayBridge::MoonDiskBrightness() const { return TodOfConst(Renderer).MoonDiskBrightness; }
     double TimeOfDayBridge::StarIntensity() const  { return TodOfConst(Renderer).StarIntensity; }
-    double TimeOfDayBridge::RainAmount() const     { return WeatherOfConst(Renderer).RainAmount; }
-    double TimeOfDayBridge::PuddleAmount() const   { return WeatherOfConst(Renderer).PuddleAmount; }
-    double TimeOfDayBridge::PuddleScale() const    { return WeatherOfConst(Renderer).PuddleScale; }
-    double TimeOfDayBridge::RippleStrength() const { return WeatherOfConst(Renderer).RippleStrength; }
-    double TimeOfDayBridge::WetDarkening() const   { return WeatherOfConst(Renderer).WetDarkening; }
-    double TimeOfDayBridge::CurtainAmount() const  { return WeatherOfConst(Renderer).CurtainAmount; }
-    bool   TimeOfDayBridge::WeatherDriveSky() const{ return WeatherOfConst(Renderer).DriveSky; }
-    bool   TimeOfDayBridge::RainParticles() const  { return WeatherOfConst(Renderer).RainParticles; }
 
     double TimeOfDayBridge::SunElevationDeg() const {
         // TOD off: le a direcao manual corrente do renderer (a que de fato ilumina a cena).
@@ -166,43 +145,13 @@ namespace SmileEditor {
         emit StateChanged();
     }
     void TimeOfDayBridge::SetMoonDiskBrightness(double _V) {
-        TodOf(Renderer).MoonDiskBrightness = (float)std::clamp(_V, 0.1, 6.0);
+        // Cap em 3: acima de ~2 o disco cai no ombro do tonemap e esmaga o contraste dos
+        // mares da textura (ver nota no FTimeOfDay::MoonDiskBrightness).
+        TodOf(Renderer).MoonDiskBrightness = (float)std::clamp(_V, 0.1, 3.0);
         emit StateChanged();
     }
     void TimeOfDayBridge::SetStarIntensity(double _V) {
         TodOf(Renderer).StarIntensity = (float)std::max(_V, 0.0);
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetRainAmount(double _V) {
-        WeatherOf(Renderer).RainAmount = (float)std::clamp(_V, 0.0, 1.0);
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetPuddleAmount(double _V) {
-        WeatherOf(Renderer).PuddleAmount = (float)std::clamp(_V, 0.0, 1.0);
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetPuddleScale(double _V) {
-        WeatherOf(Renderer).PuddleScale = (float)std::clamp(_V, 1.0, 64.0);
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetRippleStrength(double _V) {
-        WeatherOf(Renderer).RippleStrength = (float)std::clamp(_V, 0.0, 2.0);
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetWetDarkening(double _V) {
-        WeatherOf(Renderer).WetDarkening = (float)std::clamp(_V, 0.0, 1.0);
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetCurtainAmount(double _V) {
-        WeatherOf(Renderer).CurtainAmount = (float)std::clamp(_V, 0.0, 1.0);
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetWeatherDriveSky(bool _V) {
-        WeatherOf(Renderer).DriveSky = _V;
-        emit StateChanged();
-    }
-    void TimeOfDayBridge::SetRainParticles(bool _V) {
-        WeatherOf(Renderer).RainParticles = _V;
         emit StateChanged();
     }
     void TimeOfDayBridge::SetManualAzimuthDeg(double _V) {

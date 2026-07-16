@@ -33,6 +33,7 @@ namespace SmileEditor {
 
     protected:
         void changeEvent(QEvent* event) override; // notifica o WindowBridge em max/restore
+        bool eventFilter(QObject* obj, QEvent* event) override; // visibilidade da janela TOD -> menu
 
     private slots:
         void OnHelpAbout();
@@ -40,6 +41,8 @@ namespace SmileEditor {
         void UpdateStats();
         void TriggerShaderCompileAndReload(const QString& Path);
         void ShowSettings();
+        void ShowTimeOfDay();
+        void ShowStats();
 
     private:
         void CreateTopBar();      // barra unificada QML (MainBar.qml + EditorMenuBar.qml)
@@ -58,8 +61,9 @@ namespace SmileEditor {
         NativeWindowFilter*   WinFilter   = nullptr; // frameless nativo (Slate-style)
         MenuBridge*           Menus       = nullptr; // ponte C++ -> EditorMenuBar.qml
         QDockWidget*          ConsoleDock = nullptr; // p/ toggle/estado no menu Janela
-        TimeOfDayBridge*      TodBridge   = nullptr; // ponte C++ -> TimeOfDayPanel.qml
-        QDockWidget*          TodDock     = nullptr; // dock lateral do painel Time of Day
+        TimeOfDayBridge*      TodBridge   = nullptr; // ponte C++ -> TimeOfDayWindow.qml
+        QPointer<QDialog>     TodDlg;                // janela flutuante do Time of Day
+        QPointer<QDialog>     StatsDlg;              // janela flutuante de Estatisticas (VRAM)
         LightsBridge*         LightsBr    = nullptr; // ponte C++ -> LightsPanel.qml
         QDockWidget*          LightsDock  = nullptr; // dock lateral do painel de Luzes
 
