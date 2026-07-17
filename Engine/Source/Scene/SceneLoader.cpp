@@ -411,6 +411,7 @@ namespace Smile {
                     td.HighStart      = FindNum("highStart",      td.HighStart);
                     td.HighEnd        = FindNum("highEnd",        td.HighEnd);
                     td.BlendContrast  = FindNum("blendContrast",  td.BlendContrast);
+                    td.MacroAmount    = FindNum("macroAmount",    td.MacroAmount);
                     Terrain.Load(Device.Native(), UploadQueue, SRVHeap, td);
                 } else {
                     LogError("Terreno: sidecar sem chave \"heightmap\": " + terrainPath.string());

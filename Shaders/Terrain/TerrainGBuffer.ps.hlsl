@@ -38,7 +38,9 @@ static const float3 kLodDebugColors[8] = {
     float3(0.2f, 1.0f, 1.0f), // 7 ciano
 };
 
-// Value noise 2D barato (2 oitavas) p/ os patches de terra — sem textura de ruido.
+// Value noise 2D barato p/ os patches de terra e a macro variation — sem textura de
+// ruido. 3 oitavas ROTACIONADAS entre si: mata os losangos axis-aligned da
+// interpolacao bilinear (F2 usava 2 oitavas alinhadas — patches poligonais duros).
 float Hash2(float2 p) {
     return frac(sin(dot(p, float2(127.1f, 311.7f))) * 43758.5453f);
 }
@@ -52,8 +54,14 @@ float ValueNoise(float2 p) {
     const float d = Hash2(i + float2(1, 1));
     return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
-float Fbm2(float2 p) {
-    return ValueNoise(p) * 0.667f + ValueNoise(p * 2.03f) * 0.333f;
+float Fbm3(float2 p) {
+    const float2x2 R = float2x2(0.8f, -0.6f, 0.6f, 0.8f); // rotacao ~37 graus por oitava
+    float v = ValueNoise(p) * 0.5f;
+    p = mul(R, p) * 2.03f;
+    v += ValueNoise(p) * 0.3f;
+    p = mul(R, p) * 1.97f;
+    v += ValueNoise(p) * 0.2f;
+    return v;
 }
 
 // Pesos das 4 camadas: x = grama, y = terra, z = rocha, w = alta.
@@ -61,8 +69,8 @@ float4 LayerWeights(float3 worldPos, float3 geoN) {
     const float slope = 1.0f - saturate(geoN.y);
 
     float wRock = smoothstep(TParams4.x, TParams4.y, slope);
-    const float dirtNoise = Fbm2(worldPos.xz * TParams3.z);
-    float wDirt = TParams3.w * smoothstep(0.45f, 0.62f, dirtNoise) * (1.0f - wRock);
+    const float dirtNoise = Fbm3(worldPos.xz * TParams3.z);
+    float wDirt = TParams3.w * smoothstep(0.42f, 0.66f, dirtNoise) * (1.0f - wRock);
     float wHigh = smoothstep(TParams4.z, TParams4.w, worldPos.y) * (1.0f - wRock * 0.5f);
     float wGrass = saturate(1.0f - wRock - wDirt - wHigh);
 
@@ -81,11 +89,31 @@ GBufferOutput main(PSInput input) {
     if (TParams2.w > 0.5f) {
         const float4 w = LayerWeights(input.worldPos, GeoN);
         const float mipBias = TParams3.x;
+
+        // Anti-tiling por distancia (F2.5): perto usa o tile normal; longe blenda com a
+        // MESMA textura em escala ~5.7x maior (quebra o periodo) e o detalhe da normal
+        // faz fade (a media da normal mippada vira flat mesmo — só formaliza).
+        const float dist      = distance(CamPosMacro.xyz, input.worldPos);
+        const float farBlend  = smoothstep(30.0f, 130.0f, dist);
+        const float detailFade = 1.0f - smoothstep(60.0f, 250.0f, dist);
+        const float kFarScale = 0.173f;
+
         const float2 uvG = input.worldPos.xz * LayerTiling.x;
         const float2 uvD = input.worldPos.xz * LayerTiling.y;
         const float2 uvH = input.worldPos.xz * LayerTiling.w;
 
+        float3 albG = lerp(LayerAlbedo0.SampleBias(TerrainAnisoWrap, uvG, mipBias).rgb,
+                           LayerAlbedo0.SampleBias(TerrainAnisoWrap, uvG * kFarScale, mipBias).rgb,
+                           farBlend);
+        float3 albD = lerp(LayerAlbedo1.SampleBias(TerrainAnisoWrap, uvD, mipBias).rgb,
+                           LayerAlbedo1.SampleBias(TerrainAnisoWrap, uvD * kFarScale, mipBias).rgb,
+                           farBlend);
+        float3 albH = lerp(LayerAlbedo3.SampleBias(TerrainAnisoWrap, uvH, mipBias).rgb,
+                           LayerAlbedo3.SampleBias(TerrainAnisoWrap, uvH * kFarScale, mipBias).rgb,
+                           farBlend);
+
         // Rocha: albedo triplanar (3 projecoes pesadas por |N|) — penhasco sem stretching.
+        // Fica em escala unica: a repeticao some no relevo irregular da montanha.
         float3 tw = pow(abs(GeoN), 4.0f);
         tw /= dot(tw, 1.0f);
         const float  tileR = LayerTiling.z;
@@ -94,19 +122,23 @@ GBufferOutput main(PSInput input) {
             tw.y * LayerAlbedo2.SampleBias(TerrainAnisoWrap, input.worldPos.xz * tileR, mipBias).rgb +
             tw.z * LayerAlbedo2.SampleBias(TerrainAnisoWrap, input.worldPos.xy * tileR, mipBias).rgb;
 
-        baseColor = w.x * LayerAlbedo0.SampleBias(TerrainAnisoWrap, uvG, mipBias).rgb +
-                    w.y * LayerAlbedo1.SampleBias(TerrainAnisoWrap, uvD, mipBias).rgb +
-                    w.z * rockA +
-                    w.w * LayerAlbedo3.SampleBias(TerrainAnisoWrap, uvH, mipBias).rgb;
+        baseColor = w.x * albG + w.y * albD + w.z * rockA + w.w * albH;
+
+        // Macro variation (F2.5): tinte de brilho em 2 escalas grandes (~137 m e ~31 m via
+        // oitavas do Fbm3) — quebra o padrao do tiling a media/longa distancia.
+        if (CamPosMacro.w > 0.0f) {
+            const float macro = Fbm3(input.worldPos.xz * (1.0f / 137.0f));
+            baseColor *= 1.0f + (macro - 0.5f) * 2.0f * CamPosMacro.w;
+        }
 
         // Normal de detalhe: acumula em tangent space (planar XZ; rocha idem — ver nota
-        // no topo) e transforma UMA vez pela TBN do heightfield.
+        // no topo), faz fade por distancia e transforma UMA vez pela TBN do heightfield.
         float3 nts =
             w.x * (LayerNormal0.SampleBias(TerrainAnisoWrap, uvG, mipBias).rgb * 2.0f - 1.0f) +
             w.y * (LayerNormal1.SampleBias(TerrainAnisoWrap, uvD, mipBias).rgb * 2.0f - 1.0f) +
             w.z * (LayerNormal2.SampleBias(TerrainAnisoWrap, input.worldPos.xz * tileR, mipBias).rgb * 2.0f - 1.0f) +
             w.w * (LayerNormal3.SampleBias(TerrainAnisoWrap, uvH, mipBias).rgb * 2.0f - 1.0f);
-        nts = normalize(nts);
+        nts = normalize(lerp(float3(0.0f, 0.0f, 1.0f), normalize(nts), detailFade));
 
         // TBN do heightfield: T no eixo X projetado, B = cross(N, T) — convencao NormalGL.
         const float3 T = normalize(float3(1.0f, 0.0f, 0.0f) - GeoN * GeoN.x);

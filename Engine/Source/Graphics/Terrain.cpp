@@ -514,6 +514,7 @@ namespace Smile {
                                 1.0f / Desc_.LayerTile[2], 1.0f / Desc_.LayerTile[3] };
         CB.LayerRough       = { Desc_.LayerRough[0], Desc_.LayerRough[1],
                                 Desc_.LayerRough[2], Desc_.LayerRough[3] };
+        CB.CamPosMacro      = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z, Desc_.MacroAmount };
         std::memcpy(MappedCB + static_cast<size_t>(_FrameSlot) * sizeof(TerrainConstants),
                     &CB, sizeof(CB));
 

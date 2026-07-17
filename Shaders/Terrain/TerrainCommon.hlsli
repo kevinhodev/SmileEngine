@@ -23,6 +23,8 @@ cbuffer TerrainCB : register(b0) {
                           // da camada alta (mundo)
     float4 LayerTiling;   // 1/metros-por-tile, por camada (grama, terra, rocha, alta)
     float4 LayerRough;    // roughness por camada
+    float4 CamPosMacro;   // xyz = posicao da camera (mundo), w = intensidade da macro
+                          // variation (0 desliga o anti-tiling de tinte)
 };
 
 // Constantes por chunk (root constants — 8 dwords, sem CB por chunk).

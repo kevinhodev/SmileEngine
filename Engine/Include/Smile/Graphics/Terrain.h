@@ -34,6 +34,7 @@ namespace Smile {
         f32          HighStart      = 18.0f; // altitude de entrada da camada alta (mundo)
         f32          HighEnd        = 30.0f;
         f32          BlendContrast  = 4.0f;  // pow dos pesos (transicao mais curta)
+        f32          MacroAmount    = 0.18f; // tinte de macro variation (0 desliga)
     };
 
     // Terreno F1 (renderizacao apenas — sem sculpt/paint no editor):
@@ -97,6 +98,7 @@ namespace Smile {
             Vec4  Params4;     // xy = slope start/end rocha, zw = altura start/end camada alta
             Vec4  LayerTiling; // 1/metros-por-tile por camada
             Vec4  LayerRough;  // roughness por camada
+            Vec4  CamPosMacro; // xyz = camera (mundo), w = intensidade da macro variation
         };
         struct ChunkConstants { // root constants (8 dwords) — espelha ChunkCB do hlsl
             u32 ChunkX, ChunkZ, Lod, Pad;
