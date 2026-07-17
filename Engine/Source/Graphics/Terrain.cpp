@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <thread>
 
 namespace Smile {
     namespace {
@@ -61,7 +62,7 @@ namespace Smile {
     }
 
     void FTerrain::BuildRootSignature(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[5]{};
 
         // b0: TerrainCB (matrizes + parametros do terreno)
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -91,24 +92,46 @@ namespace Smile {
         RootParams[3].Descriptor.ShaderRegister = 2;
         RootParams[3].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
 
-        // s0: bilinear clamp (normal por pixel no PS; o VS usa Load — texel exato)
-        D3D12_STATIC_SAMPLER_DESC Sampler{};
-        Sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-        Sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        Sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        Sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        Sampler.MaxAnisotropy    = 1;
-        Sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_ALWAYS;
-        Sampler.MinLOD           = 0.0f;
-        Sampler.MaxLOD           = D3D12_FLOAT32_MAX;
-        Sampler.ShaderRegister   = 0;
-        Sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // t1-t8: camadas do material F2 (4 albedo + 4 normal), tabela contigua
+        D3D12_DESCRIPTOR_RANGE LayerRange{};
+        LayerRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        LayerRange.NumDescriptors                    = 2 * FTerrainDesc::kLayers;
+        LayerRange.BaseShaderRegister                = 1;
+        LayerRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[4].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[4].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[4].DescriptorTable.pDescriptorRanges   = &LayerRange;
+        RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // s0: bilinear clamp (normal do heightfield no PS; o VS usa Load — texel exato)
+        // s1: aniso wrap (texturas das camadas, tiling em mundo)
+        D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
+        Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        Samplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].MaxAnisotropy    = 1;
+        Samplers[0].ComparisonFunc   = D3D12_COMPARISON_FUNC_ALWAYS;
+        Samplers[0].MinLOD           = 0.0f;
+        Samplers[0].MaxLOD           = D3D12_FLOAT32_MAX;
+        Samplers[0].ShaderRegister   = 0;
+        Samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        Samplers[1] = Samplers[0];
+        Samplers[1].Filter           = D3D12_FILTER_ANISOTROPIC;
+        Samplers[1].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        Samplers[1].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        Samplers[1].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        Samplers[1].MaxAnisotropy    = 8;
+        Samplers[1].ShaderRegister   = 1;
+        Samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC Desc{};
         Desc.NumParameters     = _countof(RootParams);
         Desc.pParameters       = RootParams;
-        Desc.NumStaticSamplers = 1;
-        Desc.pStaticSamplers   = &Sampler;
+        Desc.NumStaticSamplers = _countof(Samplers);
+        Desc.pStaticSamplers   = Samplers;
         Desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
         Microsoft::WRL::ComPtr<ID3DBlob> Blob, Error;
@@ -352,6 +375,59 @@ namespace Smile {
             return false;
         }
 
+        // F2: camadas de material (4 albedo sRGB + 4 normal linear). Decode WIC em paralelo
+        // (mesmo padrao do SceneLoader), upload em batch, e faltante vira fallback 1x1
+        // (branco/flat) — a tabela t1-t8 SEMPRE tem descritor valido.
+        {
+            constexpr u32 kSlots = 2 * FTerrainDesc::kLayers;
+            std::vector<FTextureCPUData> LayerCPU(kSlots);
+            {
+                std::vector<std::thread> Pool;
+                for (u32 i = 0; i < kSlots; ++i) {
+                    const bool IsNormal = i >= FTerrainDesc::kLayers;
+                    const std::wstring& Path = IsNormal
+                        ? _Desc.LayerNormal[i - FTerrainDesc::kLayers]
+                        : _Desc.LayerAlbedo[i];
+                    if (Path.empty()) continue;
+                    Pool.emplace_back([&LayerCPU, i, IsNormal, Path]() {
+                        LayerCPU[i] = FTexture::LoadCPU(Path, IsNormal, !IsNormal);
+                    });
+                }
+                for (auto& T : Pool) T.join();
+            }
+            HasLayers = false;
+            for (u32 i = 0; i < kSlots; ++i) {
+                if (LayerCPU[i].Valid()) { HasLayers = true; continue; }
+                // Fallback 1x1: branco (albedo) / normal flat (0.5, 0.5, 1)
+                const bool IsNormal = i >= FTerrainDesc::kLayers;
+                FMipData Mip;
+                Mip.Width = Mip.Height = 1;
+                Mip.Pixels = IsNormal ? std::vector<u8>{ 128, 128, 255, 255 }
+                                      : std::vector<u8>{ 255, 255, 255, 255 };
+                LayerCPU[i].Mips = { std::move(Mip) };
+                LayerCPU[i].Width = LayerCPU[i].Height = 1;
+                LayerCPU[i].Format = IsNormal ? DXGI_FORMAT_R8G8B8A8_UNORM
+                                              : DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            }
+            for (u32 i = 0; i < kSlots; ++i)
+                LayerTex[i] = FTexture::CreateFromCPU(_Device, _UploadQueue, _SRVHeap,
+                                                      LayerCPU[i], EVramCategory::Terrain);
+
+            // Tabela contigua t1-t8 (padrao FMaterial: SRVs re-criados nos slots da tabela;
+            // os slots individuais das FTextures seguem donos do lifetime).
+            LayerTableStart = _SRVHeap.Allocate(kSlots);
+            for (u32 i = 0; i < kSlots; ++i) {
+                D3D12_SHADER_RESOURCE_VIEW_DESC SRV{};
+                SRV.Format                        = LayerTex[i].Format();
+                SRV.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+                SRV.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                SRV.Texture2D.MipLevels           = LayerTex[i].MipCount();
+                SRV.Texture2D.MostDetailedMip     = 0;
+                SRV.Texture2D.ResourceMinLODClamp = 0.0f;
+                _SRVHeap.CreateSRV(_Device, LayerTex[i].Resource(), SRV, LayerTableStart + i);
+            }
+        }
+
         Desc_          = _Desc;
         Desc_.HeightmapSize = Size;
         HeightmapSize  = Size;
@@ -398,6 +474,13 @@ namespace Smile {
     void FTerrain::Unload(FTextureSRVHeap& _SRVHeap) {
         if (Heightmap.IsValid())
             Heightmap.Release(_SRVHeap);
+        for (FTexture& T : LayerTex)
+            if (T.IsValid()) T.Release(_SRVHeap);
+        if (LayerTableStart != 0xFFFFFFFFu) {
+            _SRVHeap.Free(LayerTableStart, 2 * FTerrainDesc::kLayers);
+            LayerTableStart = 0xFFFFFFFFu;
+        }
+        HasLayers = false;
         HeightmapSize = 0;
         ChunksPerSide = 0;
         ChunkMinH.clear();
@@ -408,7 +491,7 @@ namespace Smile {
 
     void FTerrain::UpdatePerFrame(u32 _FrameSlot, const Mat44& _ViewProj,
                                   const Mat44& _ViewProjNoJitter, const Mat44& _PrevViewProj,
-                                  const Vec3& _CameraPos, f32 _FovYRadians) {
+                                  const Vec3& _CameraPos, f32 _FovYRadians, f32 _MipBias) {
         if (!IsLoaded()) return;
         FrameSlot_ = _FrameSlot;
 
@@ -420,7 +503,17 @@ namespace Smile {
                                 Desc_.UnitsPerTexel };
         CB.Params           = { Desc_.HeightScale, static_cast<f32>(HeightmapSize),
                                 static_cast<f32>(kChunkQuads), static_cast<f32>(MaxLod) };
-        CB.Params2          = { DebugLodColors ? 1.0f : 0.0f, BaseGray, Roughness, 0.0f };
+        CB.Params2          = { DebugLodColors ? 1.0f : 0.0f, BaseGray, Roughness,
+                                HasLayers ? 1.0f : 0.0f };
+        CB.Params3          = { _MipBias, Desc_.BlendContrast, Desc_.DirtScale,
+                                Desc_.DirtAmount };
+        CB.Params4          = { Desc_.RockSlopeStart, Desc_.RockSlopeEnd,
+                                Desc_.HighStart, Desc_.HighEnd };
+        // Tiling em 1/metros (o shader multiplica worldXZ direto)
+        CB.LayerTiling      = { 1.0f / Desc_.LayerTile[0], 1.0f / Desc_.LayerTile[1],
+                                1.0f / Desc_.LayerTile[2], 1.0f / Desc_.LayerTile[3] };
+        CB.LayerRough       = { Desc_.LayerRough[0], Desc_.LayerRough[1],
+                                Desc_.LayerRough[2], Desc_.LayerRough[3] };
         std::memcpy(MappedCB + static_cast<size_t>(_FrameSlot) * sizeof(TerrainConstants),
                     &CB, sizeof(CB));
 
@@ -505,6 +598,8 @@ namespace Smile {
             0, ConstantBuffer->GetGPUVirtualAddress() +
                static_cast<u64>(FrameSlot_) * sizeof(TerrainConstants));
         _Cmd->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(Heightmap.SRVSlot()));
+        if (LayerTableStart != 0xFFFFFFFFu)
+            _Cmd->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(LayerTableStart));
         if (_CascadeCB)
             _Cmd->SetGraphicsRootConstantBufferView(3, _CascadeCB);
         _Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

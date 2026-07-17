@@ -390,6 +390,27 @@ namespace Smile {
                     td.HeightScale   = FindNum("heightScale", 100.0f);
                     td.Origin        = { FindNum("originX", 0.0f), FindNum("originY", 0.0f),
                                          FindNum("originZ", 0.0f) };
+                    // F2: camadas de material ("tex0".."tex3" albedo, "nrm0".."nrm3" normal,
+                    // "tile0".."tile3" metros por tile, "rough0".."rough3") + regras dos
+                    // pesos procedurais. Paths relativos a pasta da cena.
+                    for (u32 l = 0; l < FTerrainDesc::kLayers; ++l) {
+                        const std::string suf = std::to_string(l);
+                        const std::string alb = FindStr(("tex" + suf).c_str());
+                        const std::string nrm = FindStr(("nrm" + suf).c_str());
+                        if (!alb.empty())
+                            td.LayerAlbedo[l] = (sceneDir / fs::path(alb)).wstring();
+                        if (!nrm.empty())
+                            td.LayerNormal[l] = (sceneDir / fs::path(nrm)).wstring();
+                        td.LayerTile[l]  = FindNum(("tile" + suf).c_str(), td.LayerTile[l]);
+                        td.LayerRough[l] = FindNum(("rough" + suf).c_str(), td.LayerRough[l]);
+                    }
+                    td.RockSlopeStart = FindNum("rockSlopeStart", td.RockSlopeStart);
+                    td.RockSlopeEnd   = FindNum("rockSlopeEnd",   td.RockSlopeEnd);
+                    td.DirtScale      = FindNum("dirtScale",      td.DirtScale);
+                    td.DirtAmount     = FindNum("dirtAmount",     td.DirtAmount);
+                    td.HighStart      = FindNum("highStart",      td.HighStart);
+                    td.HighEnd        = FindNum("highEnd",        td.HighEnd);
+                    td.BlendContrast  = FindNum("blendContrast",  td.BlendContrast);
                     Terrain.Load(Device.Native(), UploadQueue, SRVHeap, td);
                 } else {
                     LogError("Terreno: sidecar sem chave \"heightmap\": " + terrainPath.string());

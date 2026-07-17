@@ -1522,7 +1522,7 @@ namespace Smile {
         // slot — antes do CSM (as cascatas reusam o LOD da vista).
         if (Terrain.IsLoaded())
             Terrain.UpdatePerFrame(FrameSlot, ViewProjection, ViewProjUnjittered, PrevViewProj,
-                                   CameraPosition, FovY);
+                                   CameraPosition, FovY, MipBias);
 
         {
             // Ruido do PCF animado so quando ha acumulador temporal pra integra-lo;

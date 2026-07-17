@@ -19,6 +19,21 @@ namespace Smile {
         f32          UnitsPerTexel  = 1.0f;  // metros de mundo por texel
         f32          HeightScale    = 100.0f;// extensao Y em mundo do range 0..65535
         Vec3         Origin         = { 0.0f, 0.0f, 0.0f }; // mundo do texel (0,0)
+
+        // F2: camadas de material (0 = grama, 1 = terra, 2 = rocha, 3 = alta). Pesos
+        // procedurais por declive/ruido/altitude — sem splatmap pintada por enquanto.
+        static constexpr u32 kLayers = 4;
+        std::wstring LayerAlbedo[kLayers];   // vazio = camada com fallback branco/flat
+        std::wstring LayerNormal[kLayers];
+        f32          LayerTile[kLayers]  = { 4.0f, 4.0f, 6.0f, 3.0f }; // metros por tile
+        f32          LayerRough[kLayers] = { 0.90f, 0.95f, 0.85f, 0.92f };
+        f32          RockSlopeStart = 0.45f; // em (1 - N.y)
+        f32          RockSlopeEnd   = 0.70f;
+        f32          DirtScale      = 0.02f; // freq. do ruido dos patches de terra (1/m)
+        f32          DirtAmount     = 0.6f;  // 0..1
+        f32          HighStart      = 18.0f; // altitude de entrada da camada alta (mundo)
+        f32          HighEnd        = 30.0f;
+        f32          BlendContrast  = 4.0f;  // pow dos pesos (transicao mais curta)
     };
 
     // Terreno F1 (renderizacao apenas — sem sculpt/paint no editor):
@@ -46,7 +61,8 @@ namespace Smile {
         // Seleciona LOD por chunk (screen-size), resolve LOD dos vizinhos e faz o frustum
         // cull da vista. Escreve o CB do slot do frame.
         void UpdatePerFrame(u32 FrameSlot, const Mat44& ViewProj, const Mat44& ViewProjNoJitter,
-                            const Mat44& PrevViewProj, const Vec3& CameraPos, f32 FovYRadians);
+                            const Mat44& PrevViewProj, const Vec3& CameraPos, f32 FovYRadians,
+                            f32 MipBias);
 
         // Passes (cada um seta root signature/PSO proprios; o chamador re-liga os dele depois).
         void RenderDepthPrepass(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
@@ -76,7 +92,11 @@ namespace Smile {
             Mat44 PrevViewProj;
             Vec4  OriginUnits; // xyz = origem, w = unidades por texel
             Vec4  Params;      // x = heightScale, y = texels mip0, z = quads LOD0, w = maxLod
-            Vec4  Params2;     // x = debug LOD, y = cinza base, z = roughness, w = -
+            Vec4  Params2;     // x = debug LOD, y = cinza base, z = roughness, w = tem camadas
+            Vec4  Params3;     // x = mip bias, y = contraste blend, z = escala ruido terra, w = qtd terra
+            Vec4  Params4;     // xy = slope start/end rocha, zw = altura start/end camada alta
+            Vec4  LayerTiling; // 1/metros-por-tile por camada
+            Vec4  LayerRough;  // roughness por camada
         };
         struct ChunkConstants { // root constants (8 dwords) — espelha ChunkCB do hlsl
             u32 ChunkX, ChunkZ, Lod, Pad;
@@ -109,6 +129,11 @@ namespace Smile {
         u32 FrameSlot_ = 0;
 
         FTexture Heightmap;                // R16_UNORM + mips por decimacao
+        // F2: texturas das camadas (4 albedo + 4 normal; faltantes viram fallback 1x1) e a
+        // tabela CONTIGUA t1-t8 (padrao FMaterial: SRVs re-criados nos slots da tabela).
+        FTexture LayerTex[2 * FTerrainDesc::kLayers];
+        u32  LayerTableStart = 0xFFFFFFFFu;
+        bool HasLayers       = false;
         u32  HeightmapSize = 0;            // texels mip0
         u32  ChunksPerSide = 0;
         u32  MaxLod        = 0;
