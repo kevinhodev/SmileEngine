@@ -2,6 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
+#include "Smile/Graphics/Mesh.h"
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include <d3d12.h>
@@ -77,6 +78,10 @@ namespace Smile {
         void GetBounds(Vec3& OutMin, Vec3& OutMax) const { OutMin = BoundsMin; OutMax = BoundsMax; }
         u32  VisibleChunkCount() const { return static_cast<u32>(Visible.size()); }
 
+        // F3: malha proxy do heightfield (decimada, world-space, transform identidade) pro
+        // BLAS da cena — DDGI/ReSTIR/reflexoes passam a ver o chao. So valida apos Load.
+        bool BuildProxyMesh(FMesh& Out) const;
+
         void SetDebugLodColors(bool V) { DebugLodColors = V; }
         bool GetDebugLodColors() const { return DebugLodColors; }
         void SetLod0ScreenSize(f32 V)  { Lod0ScreenSize = V < 0.01f ? 0.01f : V; }
@@ -142,6 +147,10 @@ namespace Smile {
         FTerrainDesc Desc_;
 
         std::vector<f32> ChunkMinH, ChunkMaxH; // altura normalizada [0,1], por chunk
+        // F3: copia CPU decimada (1 amostra a cada kProxyStep texels) p/ a malha proxy do RT
+        static constexpr u32 kProxyStep = 8;
+        std::vector<f32> ProxyHeights;         // (ProxyVerts)^2, altura normalizada
+        u32              ProxyVerts = 0;
         std::vector<u8>  ChunkLods;            // LOD selecionado no frame (por chunk)
         std::vector<u32> Visible;              // indices dos chunks visiveis na vista
 

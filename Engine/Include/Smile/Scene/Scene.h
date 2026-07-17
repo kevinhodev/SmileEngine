@@ -25,6 +25,10 @@ namespace Smile {
         FGpuMesh*   Mesh     = nullptr;
         FMaterial*  Material = nullptr;
         bool        Visible  = true;
+        // So existe pro ray tracing (TLAS + tabelas de hit shading): fica FORA do raster,
+        // prepass, CSM e picking. Uso: proxy do terreno (F3) — o terreno real rasteriza
+        // pelo FTerrain, o proxy da o chao pro DDGI/ReSTIR/reflexoes.
+        bool        RaytracingOnly = false;
 
         Vec3        AABBMin  = { -1e9f, -1e9f, -1e9f };
         Vec3        AABBMax  = {  1e9f,  1e9f,  1e9f };

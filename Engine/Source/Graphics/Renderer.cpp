@@ -1483,7 +1483,7 @@ namespace Smile {
             PrevModels.resize(RList.size(), Mat44::Identity());
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
-                if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
+                if (!R.Visible || R.RaytracingOnly || !R.Mesh || !R.Mesh->IsValid()) continue;
                 if (AllItems.size() >= MaxObjects) break;
                 FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
                 const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());

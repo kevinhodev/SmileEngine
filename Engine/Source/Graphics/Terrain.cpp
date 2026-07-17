@@ -457,6 +457,19 @@ namespace Smile {
             }
         }
 
+        // F3: copia decimada p/ a malha proxy do RT (1 amostra a cada kProxyStep texels,
+        // ~130k tris num mapa de 2048 — silhueta suficiente pra GI/reflexao).
+        ProxyVerts = Size / kProxyStep + 1;
+        ProxyHeights.resize(static_cast<size_t>(ProxyVerts) * ProxyVerts);
+        for (u32 z = 0; z < ProxyVerts; ++z) {
+            const u32 tz = std::min(z * kProxyStep, Size - 1);
+            for (u32 x = 0; x < ProxyVerts; ++x) {
+                const u32 tx = std::min(x * kProxyStep, Size - 1);
+                ProxyHeights[static_cast<size_t>(z) * ProxyVerts + x] =
+                    Mip0[static_cast<size_t>(tz) * Size + tx] * (1.0f / 65535.0f);
+            }
+        }
+
         ChunkLods.assign(static_cast<size_t>(ChunksPerSide) * ChunksPerSide, 0);
         Visible.clear();
 
@@ -468,6 +481,52 @@ namespace Smile {
         LogInfo("Terreno carregado: " + std::to_string(Size) + "^2 texels, " +
                 std::to_string(ChunksPerSide) + "x" + std::to_string(ChunksPerSide) +
                 " chunks, maxLod=" + std::to_string(MaxLod));
+        return true;
+    }
+
+    bool FTerrain::BuildProxyMesh(FMesh& _Out) const {
+        if (!IsLoaded() || ProxyVerts < 2) return false;
+
+        const u32 V = ProxyVerts;
+        const f32 StepWorld = kProxyStep * Desc_.UnitsPerTexel;
+        auto H = [&](i32 x, i32 z) {
+            x = std::clamp(x, 0, static_cast<i32>(V) - 1);
+            z = std::clamp(z, 0, static_cast<i32>(V) - 1);
+            return ProxyHeights[static_cast<size_t>(z) * V + x] * Desc_.HeightScale;
+        };
+
+        _Out.Vertices.resize(static_cast<size_t>(V) * V);
+        for (u32 z = 0; z < V; ++z) {
+            for (u32 x = 0; x < V; ++x) {
+                Vertex& Vx = _Out.Vertices[static_cast<size_t>(z) * V + x];
+                Vx.Position[0] = Desc_.Origin.X + x * StepWorld;
+                Vx.Position[1] = Desc_.Origin.Y + H(x, z);
+                Vx.Position[2] = Desc_.Origin.Z + z * StepWorld;
+                // Diferencas centrais na grade decimada (mesma formula do PS)
+                const f32 Nx = H(x - 1, z) - H(x + 1, z);
+                const f32 Nz = H(x, z - 1) - H(x, z + 1);
+                const f32 Ny = 2.0f * StepWorld;
+                const f32 Len = std::sqrt(Nx * Nx + Ny * Ny + Nz * Nz);
+                Vx.Normal[0] = Nx / Len;
+                Vx.Normal[1] = Ny / Len;
+                Vx.Normal[2] = Nz / Len;
+                Vx.TexCoord[0] = static_cast<f32>(x) / (V - 1);
+                Vx.TexCoord[1] = static_cast<f32>(z) / (V - 1);
+            }
+        }
+
+        _Out.Indices.clear();
+        _Out.Indices.reserve(static_cast<size_t>(V - 1) * (V - 1) * 6);
+        for (u32 z = 0; z < V - 1; ++z) {
+            for (u32 x = 0; x < V - 1; ++x) {
+                const u32 I00 = (z + 0) * V + (x + 0);
+                const u32 I10 = (z + 0) * V + (x + 1);
+                const u32 I01 = (z + 1) * V + (x + 0);
+                const u32 I11 = (z + 1) * V + (x + 1);
+                _Out.Indices.push_back(I00); _Out.Indices.push_back(I11); _Out.Indices.push_back(I10);
+                _Out.Indices.push_back(I00); _Out.Indices.push_back(I01); _Out.Indices.push_back(I11);
+            }
+        }
         return true;
     }
 
@@ -487,6 +546,8 @@ namespace Smile {
         ChunkMaxH.clear();
         ChunkLods.clear();
         Visible.clear();
+        ProxyHeights.clear();
+        ProxyVerts = 0;
     }
 
     void FTerrain::UpdatePerFrame(u32 _FrameSlot, const Mat44& _ViewProj,

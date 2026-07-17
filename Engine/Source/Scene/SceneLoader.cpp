@@ -412,7 +412,47 @@ namespace Smile {
                     td.HighEnd        = FindNum("highEnd",        td.HighEnd);
                     td.BlendContrast  = FindNum("blendContrast",  td.BlendContrast);
                     td.MacroAmount    = FindNum("macroAmount",    td.MacroAmount);
-                    Terrain.Load(Device.Native(), UploadQueue, SRVHeap, td);
+                    if (Terrain.Load(Device.Native(), UploadQueue, SRVHeap, td)) {
+                        // F3: proxy do terreno na TLAS — renderable RaytracingOnly (fora do
+                        // raster/CSM/picking; o terreno real rasteriza pelo FTerrain). Entra
+                        // ANTES do BuildRaytracingScene logo abaixo, e DEPOIS da uniao de
+                        // AABB da cena (o volume de GI nao estica pro terreno de proposito).
+                        // Material = cor media do vale (e o que o bounce do GI enxerga).
+                        FMesh Proxy;
+                        if (Terrain.BuildProxyMesh(Proxy)) {
+                            std::vector<FMesh> ProxyList;
+                            ProxyList.push_back(std::move(Proxy));
+                            std::vector<FGpuMesh*> ProxyMesh =
+                                Scene.AddMeshesBatch(Device.Native(), UploadQueue, ProxyList);
+                            UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
+
+                            auto mat = std::make_unique<FMaterial>();
+                            mat->Albedo            = &TexDefaultWhite;
+                            mat->Normal            = &TexDefaultNormal;
+                            mat->MetallicRoughness = &TexDefaultWhite;
+                            mat->AO                = &TexDefaultWhite;
+                            mat->Emissive          = &TexDefaultBlack;
+                            mat->Height            = &TexDefaultWhite;
+                            mat->Metalness         = &TexDefaultWhite;
+                            mat->Roughness         = &TexDefaultWhite;
+                            mat->Constants.BaseColorFactor = { 0.26f, 0.32f, 0.19f, 1.0f };
+                            mat->Constants.MetallicFactor  = 0.0f;
+                            mat->Constants.RoughnessFactor = 0.95f;
+                            mat->Finalize(Device.Native(), SRVHeap);
+                            mat->UpdateConstants();
+
+                            FRenderable proxy;
+                            proxy.Name           = "TerrainRTProxy";
+                            proxy.Mesh           = ProxyMesh.empty() ? nullptr : ProxyMesh[0];
+                            proxy.Material       = mat.get();
+                            proxy.RaytracingOnly = true;
+                            Terrain.GetBounds(proxy.AABBMin, proxy.AABBMax);
+                            if (proxy.Mesh) {
+                                Scene.AddRenderable(proxy);
+                                ImportedMaterials.push_back(std::move(mat));
+                            }
+                        }
+                    }
                 } else {
                     LogError("Terreno: sidecar sem chave \"heightmap\": " + terrainPath.string());
                 }
