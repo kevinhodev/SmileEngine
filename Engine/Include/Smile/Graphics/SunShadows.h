@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include <d3d12.h>
+#include <functional>
 #include <wrl/client.h>
 
 namespace Smile {
@@ -44,8 +45,16 @@ namespace Smile {
                             f32 FovYRadians, f32 Aspect, const Vec3& DirToSun, f32 NearZ,
                             f32 NoiseFrame);
 
+        // Caster extra por cascata (terreno): chamado depois dos itens, com o CB e a matriz
+        // da cascata. Pode trocar root signature/PSO — o loop re-liga os do CSM na proxima
+        // cascata.
+        using FExtraCascadeDraw = std::function<void(ID3D12GraphicsCommandList*, u32 Cascade,
+                                                     D3D12_GPU_VIRTUAL_ADDRESS CascadeCB,
+                                                     const Mat44& CascadeViewProj)>;
+
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
-                             const FShadowDrawItem* Items, size_t Count);
+                             const FShadowDrawItem* Items, size_t Count,
+                             const FExtraCascadeDraw& ExtraDraw = {});
 
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);
 

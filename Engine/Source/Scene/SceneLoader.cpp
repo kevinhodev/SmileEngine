@@ -351,6 +351,57 @@ namespace Smile {
             sceneMax.Z = std::max(sceneMax.Z, r.AABBMax.Z);
         }
 
+        // Terreno (F1): sidecar <cena>.terrain.json ao lado da cena — JSON PLANO, so
+        // chaves de primeiro nivel ("heightmap" relativo a pasta da cena, "size",
+        // "unitsPerTexel", "heightScale", "originX/Y/Z"). Sem sidecar em carga de
+        // substituicao, descarrega o terreno anterior.
+        {
+            fs::path terrainPath = base; terrainPath += L".terrain.json";
+            if (fs::exists(terrainPath)) {
+                std::ifstream tf(terrainPath);
+                std::string js((std::istreambuf_iterator<char>(tf)),
+                               std::istreambuf_iterator<char>());
+                auto FindNum = [&](const char* key, f32 def) -> f32 {
+                    const std::string k = std::string("\"") + key + "\"";
+                    size_t p = js.find(k);
+                    if (p == std::string::npos) return def;
+                    p = js.find(':', p + k.size());
+                    if (p == std::string::npos) return def;
+                    return std::strtof(js.c_str() + p + 1, nullptr);
+                };
+                auto FindStr = [&](const char* key) -> std::string {
+                    const std::string k = std::string("\"") + key + "\"";
+                    size_t p = js.find(k);
+                    if (p == std::string::npos) return {};
+                    p = js.find(':', p + k.size());
+                    if (p == std::string::npos) return {};
+                    p = js.find('"', p);
+                    if (p == std::string::npos) return {};
+                    const size_t e = js.find('"', p + 1);
+                    if (e == std::string::npos) return {};
+                    return js.substr(p + 1, e - p - 1);
+                };
+                const std::string hm = FindStr("heightmap");
+                if (!hm.empty()) {
+                    FTerrainDesc td;
+                    td.HeightmapPath = (sceneDir / fs::path(hm)).wstring();
+                    td.HeightmapSize = static_cast<u32>(FindNum("size", 0.0f));
+                    td.UnitsPerTexel = FindNum("unitsPerTexel", 1.0f);
+                    td.HeightScale   = FindNum("heightScale", 100.0f);
+                    td.Origin        = { FindNum("originX", 0.0f), FindNum("originY", 0.0f),
+                                         FindNum("originZ", 0.0f) };
+                    Terrain.Load(Device.Native(), UploadQueue, SRVHeap, td);
+                } else {
+                    LogError("Terreno: sidecar sem chave \"heightmap\": " + terrainPath.string());
+                }
+            } else if (!_Additive) {
+                Terrain.Unload(SRVHeap);
+            }
+        }
+
+        // O volume de GI NAO inclui o terreno de proposito: um terreno de km esticaria o
+        // grid de probes do DDGI. Fora do volume o shading cai no fallback de ambiente;
+        // terreno no GI de verdade vem na F3 (BLAS proxy na TLAS).
         BuildRaytracingScene();
         SetupGIForScene(sceneMin, sceneMax);
 

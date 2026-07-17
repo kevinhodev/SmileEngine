@@ -102,6 +102,12 @@ smile_compile_shader(Clouds/CloudShadowMap.cs.hlsl        cs_6_0 main SHADER_OUT
 smile_compile_shader(Clouds/CloudComposite.vs.hlsl        vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudComposite.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 
+# Terreno F1 — heightmap + morph continuo de LOD (Flax/CDLOD) + LOD por screen-size (UE)
+smile_compile_shader(Terrain/Terrain.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Terrain/TerrainShadow.vs.hlsl        vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Terrain/TerrainGBuffer.ps.hlsl       ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Terrain/TerrainDepthNormal.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
+
 # Oceano (port fiel da CryEngine) — superficie (projected grid + shading)
 smile_compile_shader(Water/WaterSurface.vs.hlsl           vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)

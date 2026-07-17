@@ -102,6 +102,7 @@ namespace Smile::VramTracker {
             case EVramCategory::GI:            return "GI e reflexos";
             case EVramCategory::Sky:           return "Céu e nuvens";
             case EVramCategory::Water:         return "Água";
+            case EVramCategory::Terrain:       return "Terreno";
             case EVramCategory::Misc:          return "Outros";
             default:                           return "?";
         }

@@ -47,6 +47,7 @@
 #include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
+#include "Smile/Graphics/Terrain.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Scene/Scene.h"
 
@@ -259,6 +260,14 @@ namespace Smile {
         void SetUseWater(bool Use);
         bool GetUseWater() const             { return UseWater; }
         FWaterRenderer& GetWater()           { return Water; }
+
+        // Terreno (F1: renderizacao apenas). Carregado pelo sidecar <cena>.terrain.json no
+        // LoadCookedScene, ou direto via LoadTerrain.
+        FTerrain&       GetTerrain()         { return Terrain; }
+        const FTerrain& GetTerrain() const   { return Terrain; }
+        bool LoadTerrain(const FTerrainDesc& Desc) {
+            return Terrain.Load(Device.Native(), UploadQueue, SRVHeap, Desc);
+        }
 
         void SetUseClouds(bool Use)          { if (Use && !UseClouds) VolumetricClouds.InvalidateHistory();
                                                UseClouds = Use; }
@@ -534,7 +543,9 @@ namespace Smile {
         static constexpr u32 kOceanCascades = FWaterRenderer::kFFTCascades;
         FOceanFFT         Ocean[kOceanCascades];
         FWaterRenderer    Water;
-        bool              UseWater  = false; 
+        bool              UseWater  = false;
+
+        FTerrain          Terrain;
 
         ComPtr<ID3D12Resource> SceneColorCopy;
         ComPtr<ID3D12Resource> SceneDepthCopy;

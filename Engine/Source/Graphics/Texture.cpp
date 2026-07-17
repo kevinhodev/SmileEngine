@@ -101,7 +101,8 @@ namespace Smile {
     FTexture FTexture::RecordUpload(ID3D12Device* _Device, ID3D12GraphicsCommandList* _CommandList,
                                     FTextureSRVHeap& _SRVHeap,
                                     const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
-                                    std::vector<ComPtr<ID3D12Resource>>& _StagingOut) {
+                                    std::vector<ComPtr<ID3D12Resource>>& _StagingOut,
+                                    EVramCategory _Category) {
         const u32 MipCount = static_cast<u32>(_Mips.size());
         const u32 Width    = _Mips[0].Width;
         const u32 Height   = _Mips[0].Height;
@@ -127,7 +128,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
             D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&GPUTexture)));
-        VramTracker::Register(GPUTexture.Get(), EVramCategory::SceneTextures);
+        VramTracker::Register(GPUTexture.Get(), _Category);
 
         std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> Layouts(MipCount);
         std::vector<UINT>   NumRows(MipCount);
@@ -236,10 +237,12 @@ namespace Smile {
 
     FTexture FTexture::Upload(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                FTextureSRVHeap& _SRVHeap,
-                               const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format) {
+                               const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
+                               EVramCategory _Category) {
         ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
         std::vector<ComPtr<ID3D12Resource>> Staging;
-        FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format, Staging);
+        FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format, Staging,
+                                       _Category);
         _UploadQueue.Submit(std::move(Staging));
         // Carga avulsa (default/lua/weather map): o chamador usa a textura em seguida,
         // entao espera aqui mesmo — o ganho de overlap e do caminho em batch.
@@ -341,9 +344,10 @@ namespace Smile {
     }
 
     FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
-                                     FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data) {
-        if (!_Data.Valid()) return FTexture{}; 
-        return Upload(_Device, _UploadQueue, _SRVHeap, _Data.Mips, _Data.Format);
+                                     FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data,
+                                     EVramCategory _Category) {
+        if (!_Data.Valid()) return FTexture{};
+        return Upload(_Device, _UploadQueue, _SRVHeap, _Data.Mips, _Data.Format, _Category);
     }
 
     FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FUploadQueue& _UploadQueue,

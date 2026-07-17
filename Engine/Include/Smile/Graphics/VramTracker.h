@@ -17,6 +17,7 @@ namespace Smile {
         GI,             // DDGI, ReSTIR, reflexoes, NRD
         Sky,            // atmosfera, nuvens (noises 3D/weather), estrelas, sun shafts
         Water,          // FFT + superficie
+        Terrain,        // heightmap + grids de chunk
         Misc,           // chuva, picking, debug — o resto instrumentado
         Count
     };

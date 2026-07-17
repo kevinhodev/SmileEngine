@@ -377,9 +377,9 @@ namespace Smile {
 
     void FSunShadows::RecordDepthPass(ID3D12GraphicsCommandList* _CommandList,
                                       FTextureSRVHeap& _SRVHeap,
-                                      const FShadowDrawItem* _Items, size_t _Count) {
+                                      const FShadowDrawItem* _Items, size_t _Count,
+                                      const FExtraCascadeDraw& _ExtraDraw) {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        _CommandList->SetGraphicsRootSignature(RootSig.Get());
 
         D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
                            static_cast<FLOAT>(kResolution), 0.0f, 1.0f };
@@ -389,6 +389,9 @@ namespace Smile {
 
         for (u32 c = 0; c < kNumCascades; ++c) {
             if (!(UpdateMask & (1u << c))) continue; // cascata congelada: depth do update anterior segue valido
+            // Root sig por cascata (nao uma vez fora do loop): o ExtraDraw (terreno) troca
+            // root signature/PSO no fim da cascata anterior.
+            _CommandList->SetGraphicsRootSignature(RootSig.Get());
             auto DSV = DSVHeap.CpuHandle(c);
             _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
             _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -439,10 +442,13 @@ namespace Smile {
                 const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
                 ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
-                _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB); 
-                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);                
+                _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
+                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);
                 It.Mesh->Draw(_CommandList);
             }
+
+            if (_ExtraDraw)
+                _ExtraDraw(_CommandList, c, CascadeCBAddr(c), CascadeViewProj[c]);
         }
 
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

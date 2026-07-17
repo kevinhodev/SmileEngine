@@ -98,6 +98,8 @@ namespace Smile {
         SunShadows.Initialize(Device.Native(), SRVHeap);
         LocalShadows.Initialize(Device.Native(), SRVHeap);
 
+        Terrain.Initialize(Device.Native());
+
         PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
         ObjectPicker.Initialize(Device.Native(), SwapChain.GetWidth(), SwapChain.GetHeight());
@@ -575,6 +577,7 @@ namespace Smile {
         Atmosphere.RecreateSky(Device.Native(), RT, DS);
         VolumetricClouds.RecreateComposite(Device.Native(), RT, DS);
         Water.Recreate(Device.Native(), RT, DS, DXGI_FORMAT_R16G16_FLOAT);
+        Terrain.RecreatePSOs(Device.Native());
         if (Device.RaytracingSupported())
             DDGIDebugPass.Recreate(Device.Native(), RT, DS);
     }
@@ -604,6 +607,9 @@ namespace Smile {
                   [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
                 { { "WaterSurface.vs", "WaterSurface.ps" },
                   [&] { Water.Recreate(Dev, RT, DS, DXGI_FORMAT_R16G16_FLOAT); } },
+                { { "Terrain.vs", "TerrainShadow.vs", "TerrainGBuffer.ps",
+                    "TerrainDepthNormal.ps" },
+                  [&] { Terrain.RecreatePSOs(Dev); } },
                 { { "RainWetness.ps", "RainCurtain.ps", "RainParticles.vs", "RainParticles.ps",
                     "RainSplash.vs", "RainSplash.ps" },
                   [&] { RainWetness.Recreate(Dev); } },
@@ -1512,6 +1518,12 @@ namespace Smile {
                   [](const VisItem& a, const VisItem& b) { return a.Dist < b.Dist; });
         LastVisibleCount = static_cast<u32>(VisibleScratch.size());
 
+        // Terreno: seleciona LOD por chunk (screen-size) + frustum cull e escreve o CB do
+        // slot — antes do CSM (as cascatas reusam o LOD da vista).
+        if (Terrain.IsLoaded())
+            Terrain.UpdatePerFrame(FrameSlot, ViewProjection, ViewProjUnjittered, PrevViewProj,
+                                   CameraPosition, FovY);
+
         {
             // Ruido do PCF animado so quando ha acumulador temporal pra integra-lo;
             // sem TAA/FSR2 o padrao estatico e o menor mal (animado viraria shimmer).
@@ -1530,7 +1542,15 @@ namespace Smile {
                 }
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
-                    SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size());
+                    FSunShadows::FExtraCascadeDraw TerrainCasters;
+                    if (Terrain.IsLoaded())
+                        TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd, u32,
+                                                D3D12_GPU_VIRTUAL_ADDRESS CascadeCB,
+                                                const Mat44& CascadeVP) {
+                            Terrain.RenderShadowCascade(Cmd, SRVHeap, CascadeCB, CascadeVP);
+                        };
+                    SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size(),
+                                               TerrainCasters);
                 }
 
                 auto SceneRTV = HDRRTVHeap.CpuHandle(0);
@@ -1622,6 +1642,11 @@ namespace Smile {
                 V.Mat->Bind(CommandList, SRVHeap);
                 V.R->Mesh->Draw(CommandList);
             }
+
+            // Terreno no prepass (root sig/PSO proprios; AO e G-buffer religam os deles
+            // depois). Com GTAO on escreve o NormalBuffer junto, como as meshes.
+            if (Terrain.IsLoaded())
+                Terrain.RenderDepthPrepass(CommandList, SRVHeap, AOWillRun);
             GpuProfiler.End(CommandList); // Z-prepass
         }
 
@@ -1701,6 +1726,13 @@ namespace Smile {
                     4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
                 Mat->Bind(CommandList, SRVHeap);
                 V.R->Mesh->Draw(CommandList);
+            }
+
+            // Terreno no geometry pass (depth EQUAL sobre o depth do prepass; o deferred
+            // lighting religa a root signature principal depois).
+            if (Terrain.IsLoaded()) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Terreno");
+                Terrain.RenderGBuffer(CommandList, SRVHeap);
             }
             Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
                                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

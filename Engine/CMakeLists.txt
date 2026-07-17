@@ -87,6 +87,7 @@ set(ENGINE_SOURCES
     Source/Graphics/VolumeTexture.cpp
     Source/Graphics/Material.cpp
     Source/Graphics/GBuffer.cpp
+    Source/Graphics/Terrain.cpp
     Source/Graphics/GBufferDebug.cpp
     Source/Graphics/ComputePipeline.cpp
     Source/Graphics/VolumetricPipeline.cpp
