@@ -20,7 +20,8 @@ cbuffer SunShaftsVolCB : register(b0) {
     float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = força (0 = off)
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     row_major float4x4 InvViewProj;
-    float4 CameraWorldPos; // xyz = câmera em mundo, w unused
+    float4 CameraWorldPos; // xyz = câmera em mundo, w = início da marcha (m; froxel
+                           // volumetric fog ativo cobre 0..w — shafts pegam dali pra fora)
 };
 
 Texture2D<float> SceneDepth     : register(t0);
@@ -69,19 +70,23 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
     const int steps = (int)MarchParams.x;
     float jitter = CSM_IGN(svpos.xy + 5.588238f * MarchParams.z);
 
-    // Distribuicao QUADRATICA dos passos (t = f^2 * dist): os feixes vivem nos
-    // primeiros metros (copa de arvore, janela) — denso perto, esparso longe, mesmo
+    // Distribuicao QUADRATICA dos passos (t = start + f^2 * range): os feixes vivem
+    // nos primeiros metros do trecho coberto — denso perto, esparso longe, mesmo
     // espirito do slicing exponencial do froxel fog da UE. dt = largura do segmento.
+    // start > 0 = froxel volumetric fog cobre 0..start (o feixe de perto ja vem do
+    // volume; comecar la evita o inscatter do sol em dobro).
+    float  start = min(CameraWorldPos.w, dist);
+    float  range = dist - start;
     float  T       = 1.0f;
     float  accum   = 0.0f;
     float  wSum    = 0.0f;  // contribuicao total (p/ distancia media da reprojecao)
     float  dSum    = 0.0f;
-    float  prevEnd = 0.0f;
+    float  prevEnd = start;
     [loop] for (int i = 0; i < steps; ++i) {
         float  fj = ((float)i + jitter) / (float)steps;
-        float  t  = fj * fj * dist;
+        float  t  = start + fj * fj * range;
         float  fe = (float)(i + 1) / (float)steps;
-        float  segEnd = fe * fe * dist;
+        float  segEnd = start + fe * fe * range;
         float  dt = segEnd - prevEnd;
         prevEnd = segEnd;
         float3 wp = CameraWorldPos.xyz + dir * t;

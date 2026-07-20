@@ -38,6 +38,9 @@ cbuffer VolFogCB : register(b0) {
     float4 LightParamsVF;  // x = nº de luzes, y = 1/res do atlas spot, z = depth bias (m),
                            // w = intensidade das luzes no fog (0 desliga o loop)
     float4 LightParamsVF2; // x = near das projecoes locais, yzw unused
+    // F4 — sombra das nuvens no termo do sol (MESMA projecao do deferred/shafts):
+    float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = força (0 = off)
+    float4 CloudShadowParams2; // x = km/unidade, y = base da camada (km), zw = keyDir.xz/y
 };
 
 // Profundidade (view-Z linear) do slice — inverso de VolFog_SliceFromDepth.

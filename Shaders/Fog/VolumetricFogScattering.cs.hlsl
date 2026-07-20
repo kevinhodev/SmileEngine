@@ -29,6 +29,7 @@ Texture3D<float4> ScatteringHistory   : register(t2);
 StructuredBuffer<FGPULight> LocalLights : register(t3);
 Texture2DArray    LocalShadowMap      : register(t18); // atlas D32 dos spots (F3a)
 TextureCubeArray  LocalCubeShadow     : register(t19); // cube array dos points (F3b)
+Texture2D<float>  CloudShadowMap      : register(t4);  // transmitancia das nuvens (F4)
 SamplerState      LinearClamp         : register(s0);
 
 RWTexture3D<float4> LightScattering : register(u0);
@@ -64,6 +65,20 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
 
     // Sol: radiancia da key light x visibilidade CSM x fase HG (lobo contra a luz).
     float vis = VolFog_SunVis(wp);
+
+    // F4: sombra das nuvens POR FROXEL (mesma projecao do deferred/shafts) — nuvem
+    // corta o feixe no meio do ar; dia nublado apaga o sol do fog sozinho.
+    if (CloudShadowParams.w > 0.0f && vis > 0.0f) {
+        float  kKm   = CloudShadowParams2.x;
+        float2 hitKm = wp.xz * kKm + CloudShadowParams2.zw *
+                       max(CloudShadowParams2.y - wp.y * kKm, 0.0f);
+        float2 suv   = (hitKm - CloudShadowParams.xy) * CloudShadowParams.z + 0.5f;
+        if (all(suv > 0.0f) && all(suv < 1.0f)) {
+            float Tc = CloudShadowMap.SampleLevel(LinearClamp, suv, 0.0f);
+            vis *= lerp(1.0f, Tc, CloudShadowParams.w);
+        }
+    }
+
     float ph  = VolFog_PhaseHG(SunDirPhase.w, dot(SunDirPhase.xyz, -dir));
     float3 lighting = SunColorInt.rgb * (vis * ph);
 

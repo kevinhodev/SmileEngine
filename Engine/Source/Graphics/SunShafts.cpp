@@ -314,7 +314,8 @@ namespace Smile {
                                       const Mat44& _InvViewProjFull, const Vec3& _CameraWorldPos,
                                       const Mat44& _ViewProjUnjittered,
                                       const Vec4& _CloudShadowParams,
-                                      const Vec4& _CloudShadowParams2) {
+                                      const Vec4& _CloudShadowParams2,
+                                      f32 _MarchStartDist) {
         FrameSlot = _FrameSlot;
         if (!VolMappedBase || !TemporalMappedBase) return;
 
@@ -330,7 +331,8 @@ namespace Smile {
         v.CloudShadowParams  = _CloudShadowParams;
         v.CloudShadowParams2 = _CloudShadowParams2;
         v.InvViewProj    = _InvViewProjFull;
-        v.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, 0.0f };
+        v.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z,
+                             _MarchStartDist };
         std::memcpy(VolMappedBase + static_cast<size_t>(FrameSlot) * sizeof(VolConstants),
                     &v, sizeof(VolConstants));
 

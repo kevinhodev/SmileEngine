@@ -1154,12 +1154,24 @@ namespace Smile {
             const f32 ShaftNoiseFrame =
                 (TAAActive || Fsr2Active || SunShafts.GetVolTemporal())
                     ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
+            // Shafts marcham DESDE A CAMERA mesmo com o froxel fog ativo: o grid
+            // 160x90x64 nao resolve feixe fino de janela/copa (que vive nos primeiros
+            // metros) e o multiplicador de Poeira e um boost artistico que o volume
+            // nao replica — comecar a marcha no fim do alcance apagava os shafts
+            // (regressao vista no A/B do nascer do sol). O overlap de inscatter e
+            // intencional; a infra de MarchStartDist fica (default 0) se precisar.
             SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
                                        ShaftNoiseFrame, InvViewProjFull, CameraPosition,
-                                       ViewProjUnjittered, CloudShadowP, CloudShadowP2);
+                                       ViewProjUnjittered, CloudShadowP, CloudShadowP2,
+                                       0.0f);
         } else if (SunShafts.IsInitialized()) {
             SunShafts.ResetHistory(); // história/PrevVP obsoletos quando o efeito dorme
         }
+
+        // F4 do froxel fog: sombra das nuvens no termo do sol (mesmos vetores do
+        // deferred/shafts, que dependem do centro snapado do shadow map — por isso
+        // patch pos-update das nuvens, nao no UpdatePerFrame la atras).
+        if (VolFogActive) VolumetricFog.PatchCloudShadow(CloudShadowP, CloudShadowP2);
 
         const Mat44 WaterViewProj    = ViewProjection;
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
@@ -2141,7 +2153,9 @@ namespace Smile {
                                                                 : DepthSRVSlot,
                                       LightBuffer->GetGPUVirtualAddress() +
                                           static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight),
-                                      LocalShadows.ShadowSRVSlot());
+                                      LocalShadows.ShadowSRVSlot(),
+                                      VolumetricClouds.IsInitialized()
+                                          ? VolumetricClouds.ShadowSRV() : DepthSRVSlot);
             }
 
             // Sun shafts volumétricos: raymarch + temporal meia-res (depth já legível

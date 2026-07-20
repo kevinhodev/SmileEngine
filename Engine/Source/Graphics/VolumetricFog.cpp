@@ -60,13 +60,16 @@ namespace Smile {
         LocalShadowRange.BaseShaderRegister = 18;
         LocalShadowRange.NumDescriptors     = 2; // t18 atlas spot + t19 cube array
 
+        D3D12_DESCRIPTOR_RANGE CloudRange = VBufferRange;
+        CloudRange.BaseShaderRegister = 4; // t4 shadow map das nuvens
+
         D3D12_DESCRIPTOR_RANGE UAVRange{};
         UAVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         UAVRange.NumDescriptors                    = 1;
         UAVRange.BaseShaderRegister                = 0;
         UAVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[9]{};
+        D3D12_ROOT_PARAMETER RootParams[10]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
@@ -108,6 +111,11 @@ namespace Smile {
         RootParams[8].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[8].DescriptorTable.pDescriptorRanges   = &UAVRange;
         RootParams[8].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[9].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[9].DescriptorTable.pDescriptorRanges   = &CloudRange;
+        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -232,9 +240,12 @@ namespace Smile {
             }
         }
 
-        // Luzes: zeradas aqui — o PatchLights (pos-culling do frame) preenche.
+        // Luzes e nuvens: zerados aqui — os Patch* (pos-culling/pos-update das nuvens,
+        // que rodam depois no frame) preenchem.
         c.LightParamsVF  = { 0.0f, 0.0f, 0.0f, LightsIntensity };
         c.LightParamsVF2 = { 0.05f, 0.0f, 0.0f, 0.0f };
+        c.CloudShadowParams  = { 0.0f, 0.0f, 0.0f, 0.0f };
+        c.CloudShadowParams2 = { 0.0f, 0.0f, 0.0f, 0.0f };
 
         // Guarda o frame atual como "anterior" do proximo.
         StoredPrevVP = _P.ViewProjUnjit;
@@ -253,12 +264,19 @@ namespace Smile {
         Mapped()->LightParamsVF2 = { _PointNear, 0.0f, 0.0f, 0.0f };
     }
 
+    void FVolumetricFogPass::PatchCloudShadow(const Vec4& _CloudShadowParams,
+                                              const Vec4& _CloudShadowParams2) {
+        if (!MappedBase) return;
+        Mapped()->CloudShadowParams  = _CloudShadowParams;
+        Mapped()->CloudShadowParams2 = _CloudShadowParams2;
+    }
+
     void FVolumetricFogPass::Execute(ID3D12GraphicsCommandList* _CommandList,
                                      FTextureSRVHeap& _SRVHeap,
                                      D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddr,
                                      u32 _CSMShadowSRVSlot, u32 _DDGIIrradianceSRVSlot,
                                      D3D12_GPU_VIRTUAL_ADDRESS _LightsVA,
-                                     u32 _LocalShadowSRVSlot) {
+                                     u32 _LocalShadowSRVSlot, u32 _CloudShadowSRVSlot) {
         if (!Initialized) return;
 
         constexpr u32 GX = (kGridW + 3) / 4, GY = (kGridH + 3) / 4, GZ = (kGridZ + 3) / 4;
@@ -289,6 +307,7 @@ namespace Smile {
         _CommandList->SetComputeRootShaderResourceView(6, _LightsVA);
         _CommandList->SetComputeRootDescriptorTable(7, _SRVHeap.GpuHandle(_LocalShadowSRVSlot));
         _CommandList->SetComputeRootDescriptorTable(8, _SRVHeap.GpuHandle(Target.UAVSlot(0)));
+        _CommandList->SetComputeRootDescriptorTable(9, _SRVHeap.GpuHandle(_CloudShadowSRVSlot));
         _CommandList->Dispatch(GX, GY, GZ);
 
         // 3) Integracao acumulada -> Integrated (o fog fullscreen le em PIXEL)

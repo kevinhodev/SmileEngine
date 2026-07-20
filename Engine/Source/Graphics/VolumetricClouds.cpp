@@ -512,10 +512,15 @@ namespace Smile {
             B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             B.Transition.pResource   = ShadowTex.Get();
             B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            // PIXEL | NON_PIXEL: alem do deferred/shafts (PS), o volumetric fog le o
+            // shadow map das nuvens em compute.
+            const D3D12_RESOURCE_STATES ReadBoth =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             B.Transition.StateBefore = ShadowState;
-            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            B.Transition.StateAfter  = ReadBoth;
             _CommandList->ResourceBarrier(1, &B);
-            ShadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            ShadowState = ReadBoth;
         }
     }
 

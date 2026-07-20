@@ -25,12 +25,16 @@ namespace Smile {
         // frame); PrevViewProj interno vem do ViewProjUnjittered do frame anterior.
         // CloudShadowParams/2 = MESMOS vetores do deferred lighting (nuvem corta o
         // feixe por passo; w=0 desliga e o shader nem amostra).
+        // MarchStartDist: inicio da marcha em metros — com o froxel volumetric fog ativo,
+        // os shafts cobrem so DALI pra fora (o volume ja produz o feixe de perto; sem
+        // isso o inscatter do sol conta em dobro no alcance coberto).
         void UpdateVolumetric(u32 FrameSlot, const Vec3& DirToSun,
                               const Vec3& SunColorTimesIntensity,
                               const Vec4& CollapsedFogParams, f32 NoiseFrame,
                               const Mat44& InvViewProjFull, const Vec3& CameraWorldPos,
                               const Mat44& ViewProjUnjittered,
-                              const Vec4& CloudShadowParams, const Vec4& CloudShadowParams2);
+                              const Vec4& CloudShadowParams, const Vec4& CloudShadowParams2,
+                              f32 MarchStartDist = 0.0f);
 
         // Raymarch + temporal nos RTs próprios. Depth em PIXEL_SHADER_RESOURCE e CSM
         // legível (EnsureReadable) antes. Muda viewport pra meia-res — o chamador

@@ -46,14 +46,20 @@ namespace Smile {
         // escrito pelo UpdatePerFrame deste frame.
         void PatchLights(u32 NumLights, f32 InvSpotRes, f32 DepthBias, f32 PointNear);
 
+        // F4 — sombra das nuvens no sol: chamado depois do update das nuvens (os params
+        // dependem do centro snapado do shadow map). MESMOS vetores do deferred/shafts.
+        void PatchCloudShadow(const Vec4& CloudShadowParams, const Vec4& CloudShadowParams2);
+
         // CSM e sombras locais legiveis em NON_PIXEL antes (EnsureReadableCompute).
         // DDGIIrradianceSRVSlot: passar um SRV valido qualquer com DDGI off (CB gate).
         // LightsVA = slice do FrameSlot no LightBuffer do deferred (root SRV t3);
         // LocalShadowSRVSlot = atlas spot (cube array vive no slot+1, tabela cobre os 2).
+        // CloudShadowSRVSlot: shadow map das nuvens (passar um SRV valido qualquer com
+        // nuvens off — CB gate CloudShadowParams.w = 0).
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddr, u32 CSMShadowSRVSlot,
                      u32 DDGIIrradianceSRVSlot, D3D12_GPU_VIRTUAL_ADDRESS LightsVA,
-                     u32 LocalShadowSRVSlot);
+                     u32 LocalShadowSRVSlot, u32 CloudShadowSRVSlot);
 
         u32  IntegratedSRVSlot() const { return Integrated.SRVSlot(); }
         // (B, O, S, kGridZ) do ultimo UpdatePerFrame — o fog fullscreen fatia igual.
@@ -106,6 +112,8 @@ namespace Smile {
             Vec4  FrameJitterOffsets[8];
             Vec4  LightParamsVF;
             Vec4  LightParamsVF2;
+            Vec4  CloudShadowParams;
+            Vec4  CloudShadowParams2;
         };
         static constexpr u32 kMissSupersamples = 4;    // amostras qdo a historia falha
         static constexpr f32 kHistoryWeight    = 0.9f; // blend da UE
