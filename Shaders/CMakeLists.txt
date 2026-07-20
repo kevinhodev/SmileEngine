@@ -79,6 +79,10 @@ smile_compile_shader(Atmosphere/StarField.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 # Fog deferido (UE5): aerial perspective froxel + exponential height fog
 smile_compile_shader(Fog/FogFullscreen.vs.hlsl            vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/FogFullscreen.ps.hlsl            ps_6_0 main SHADER_OUTPUTS)
+# Froxel volumetric fog (UE): densidade -> scattering (sol CSM + ambiente DDGI) -> integracao
+smile_compile_shader(Fog/VolumetricFogSetup.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/VolumetricFogScattering.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/VolumetricFogIntegrate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 
 # Chuva — F1 wetness deferred no G-buffer + F3 cortina de gotas (estilo CRainStage/SceneRain)
 smile_compile_shader(Rain/RainWetness.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
@@ -207,6 +211,10 @@ add_custom_target(Shaders
         Fog/FogApply.hlsli
         Fog/FogFullscreen.vs.hlsl
         Fog/FogFullscreen.ps.hlsl
+        Fog/VolumetricFogCommon.hlsli
+        Fog/VolumetricFogSetup.cs.hlsl
+        Fog/VolumetricFogScattering.cs.hlsl
+        Fog/VolumetricFogIntegrate.cs.hlsl
         Rain/RainCommon.hlsli
         Rain/RainWetness.ps.hlsl
         Rain/RainCurtain.ps.hlsl

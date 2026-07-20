@@ -26,6 +26,7 @@
 #include "Smile/Graphics/VolumetricClouds.h"
 #include "Smile/Graphics/Skybox.h"
 #include "Smile/Graphics/Fog.h"
+#include "Smile/Graphics/VolumetricFog.h"
 #include "Smile/Graphics/SunShafts.h"
 #include "Smile/Graphics/Weather.h"
 #include "Smile/Graphics/RainWetness.h"
@@ -144,6 +145,10 @@ namespace Smile {
 
         FScene& GetScene() { return Scene; }
 
+        // Materiais importados da(s) cena(s) cozida(s) — o Editor de Materiais edita
+        // Constants direto (CBV upload mapeado) e chama UpdateConstants() p/ aplicar.
+        std::vector<std::unique_ptr<FMaterial>>& GetMaterials() { return ImportedMaterials; }
+
         // Additive=true acrescenta a cena cozida sobre a atual (ex.: interior por cima
         // do exterior da Bistro) sem limpar meshes/materiais/camera ja carregados.
         bool LoadCookedScene(const std::wstring& ScenePath, bool Additive = false);
@@ -247,6 +252,12 @@ namespace Smile {
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
         FFogPass& GetFog()                     { return Fog; }
+
+        // Froxel volumetric fog (F1): exige height fog ON (mesma densidade).
+        void SetUseVolumetricFog(bool Use)     { UseVolumetricFog = Use; }
+        bool GetUseVolumetricFog() const       { return UseVolumetricFog; }
+        FVolumetricFogPass& GetVolumetricFog()             { return VolumetricFog; }
+        const FVolumetricFogPass& GetVolumetricFog() const { return VolumetricFog; }
 
         void SetUseSunShafts(bool Use)         { UseSunShafts = Use; }
         bool GetUseSunShafts() const           { return UseSunShafts; }
@@ -499,6 +510,8 @@ namespace Smile {
         bool            UseAtmosphereSky = true;
 
         FFogPass        Fog;
+        FVolumetricFogPass VolumetricFog;
+        bool            UseVolumetricFog     = true; // froxel fog; exige height fog ON
         bool            UseAerialPerspective = false;
         bool            UseHeightFog         = true;
 

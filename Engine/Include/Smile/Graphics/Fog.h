@@ -19,6 +19,9 @@ namespace Smile {
         Vec4  AerialParams;                 // x=AP depth (km), y=useAP, z=useHeightFog, w=shafts volumetricos on
         Vec4  ScreenParams;                 // x=w, y=h, z=1/w, w=1/h
         Vec4  DepthParams;                  // x=near, y=far, z/w unused
+        Vec4  VolFogParams;                 // froxel fog: B, O, S, GridSizeZ
+        Vec4  VolFogParams2;                // x=alcance (m), y=ligado, zw unused
+        Vec4  CamForwardVF;                 // xyz=frente da camera, w unused
     };
 
     class FFogPass {
@@ -28,14 +31,20 @@ namespace Smile {
         // VolumetricShafts: sun shafts volumétricos ligados — o shader soma o RT
         // meia-res no inscatter (upsample bilateral) e o termo direcional analítico
         // é desligado (senão dobra a energia).
+        // VolFog*: froxel volumetric fog (FVolumetricFogPass) — o shader amostra o volume
+        // integrado em t3 e exclui o height fog analitico no alcance coberto.
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
                             const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
                             const Vec3& DirToSun, f32 NearZ, f32 FarZ,
                             u32 Width, u32 Height, bool UseAerial, bool UseHeightFog,
-                            f32 AerialDepthKm, bool VolumetricShafts = false);
+                            f32 AerialDepthKm, bool VolumetricShafts = false,
+                            bool VolFogOn = false, f32 VolFogMaxDist = 100.0f,
+                            const Vec4& VolFogGridZ = Vec4{},
+                            const Vec3& CamForward = Vec3{ 0.0f, 0.0f, 1.0f });
 
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
-                     u32 DepthSRVSlot, u32 AerialVolumeSRVSlot, u32 VolShaftsSRVSlot);
+                     u32 DepthSRVSlot, u32 AerialVolumeSRVSlot, u32 VolShaftsSRVSlot,
+                     u32 VolFogSRVSlot);
 
         // Densidades 2-exponenciais colapsadas na altura do observador (mesma conta do
         // UpdatePerFrame) — o raymarch dos sun shafts reconstrói a densidade por altura.

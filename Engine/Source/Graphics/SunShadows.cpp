@@ -457,4 +457,9 @@ namespace Smile {
     void FSunShadows::EnsureReadable(ID3D12GraphicsCommandList* _CommandList) {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
+
+    void FSunShadows::EnsureReadableCompute(ID3D12GraphicsCommandList* _CommandList) {
+        TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
 }

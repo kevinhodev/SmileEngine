@@ -53,7 +53,7 @@ float3 SampleVolumetricShafts(float2 uv, float distCenter, bool skyCenter) {
 float4 FogApplyMain(float2 pixelXY) {
     int2  px       = int2(pixelXY);
     float depthNdc = FogSampleDepth(px);
-    
+
     float2 uv  = pixelXY * ScreenParams.zw;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     float4 wH  = mul(float4(ndc, depthNdc, 1.0f), InvViewProj);
@@ -61,10 +61,28 @@ float4 FogApplyMain(float2 pixelXY) {
     float3 c2r  = worldPos - CameraWorldPos.xyz;
     float  dist = length(c2r);
 
-    if (dist >= DepthParams.y * 0.97f) return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    // Froxel volumetric fog: amostra o volume integrado em (uv, slice(viewZ)).
+    // cosA converte distancia -> view-depth (o grid e fatiado em view-Z).
+    const bool  volOn = VolFogParams2.y > 0.5f;
+    float4 vol  = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    float  cosA = 1.0f;
+    if (volOn) {
+        float3 dirV = c2r / max(dist, 1e-4f);
+        cosA = max(dot(dirV, CamForwardVF.xyz), 0.05f);
+        float viewZ = dist * cosA;
+        float slice = log2(viewZ * VolFogParams.x + VolFogParams.y) * VolFogParams.z;
+        float uvz   = saturate(slice / VolFogParams.w);
+        vol = VolumetricFogTex.SampleLevel(LinearClampSampler, float3(uv, uvz), 0.0f);
+    }
+
+    // Ceu: sem height fog/aerial daqui (o sky shader ja tem a atmosfera), mas o
+    // volume froxel na frente do horizonte existe fisicamente — aplica so ele.
+    if (dist >= DepthParams.y * 0.97f) return float4(vol.rgb, vol.a);
 
     float4 hf = float4(0.0f, 0.0f, 0.0f, 1.0f);
-    if (AerialParams.z > 0.5f) hf = GetExponentialHeightFog(c2r);
+    // Exclui o analitico no trecho coberto pelo volume (0..alcance/cosA), UE-style.
+    float excludeDist = volOn ? (VolFogParams2.x / cosA) : 0.0f;
+    if (AerialParams.z > 0.5f) hf = GetExponentialHeightFog(c2r, excludeDist);
 
     // Sun shafts volumétricos: somam no inscatter do height fog. Mesmo tratamento do
     // dirInscatter analítico: não é atenuado pelo aerial (consistência com o legado).
@@ -73,12 +91,14 @@ float4 FogApplyMain(float2 pixelXY) {
 
     float4 ap = float4(0.0f, 0.0f, 0.0f, 1.0f);
     if (AerialParams.y > 0.5f) {
-        float tDepthKm = dist * CameraWorldPos.w; 
+        float tDepthKm = dist * CameraWorldPos.w;
         ap = SampleAerialPerspective(uv, tDepthKm, AerialParams.x);
     }
 
-    float  T         = ap.a * hf.a;
-    float3 inscatter = ap.rgb * hf.a + hf.rgb;
+    // Composicao de longe pra perto: aerial atras do height fog, ambos atras do
+    // volume froxel (meio mais proximo da camera atenua o que vem de tras).
+    float  T         = ap.a * hf.a * vol.a;
+    float3 inscatter = (ap.rgb * hf.a + hf.rgb) * vol.a + vol.rgb;
     return float4(inscatter, T);
 }
 

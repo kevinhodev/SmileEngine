@@ -97,6 +97,7 @@ set(ENGINE_SOURCES
     Source/Graphics/VolumetricClouds.cpp
     Source/Graphics/Skybox.cpp
     Source/Graphics/Fog.cpp
+    Source/Graphics/VolumetricFog.cpp
     Source/Graphics/SunShafts.cpp
     Source/Graphics/RainWetness.cpp
     Source/Graphics/SunShadows.cpp

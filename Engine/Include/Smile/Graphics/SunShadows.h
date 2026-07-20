@@ -57,6 +57,8 @@ namespace Smile {
                              const FExtraCascadeDraw& ExtraDraw = {});
 
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);
+        // Leitura tambem em compute (volumetric fog): PIXEL | NON_PIXEL.
+        void EnsureReadableCompute(ID3D12GraphicsCommandList* CommandList);
 
         u32  ShadowSRVSlot() const { return ShadowSRVSlot_; }
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const {

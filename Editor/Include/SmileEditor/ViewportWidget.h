@@ -52,6 +52,12 @@ namespace SmileEditor {
         Q_PROPERTY(int sunShaftsSteps READ GetSunShaftsSteps NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double sunShaftsRange READ GetSunShaftsRange NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool sunShaftsTemporal READ AreSunShaftsTemporal NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool volFogEnabled READ IsVolFogEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double volFogDistance READ GetVolFogDistance NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double volFogPhaseG READ GetVolFogPhaseG NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double volFogDensity READ GetVolFogDensity NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double volFogAmbient READ GetVolFogAmbient NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool volFogTemporal READ IsVolFogTemporal NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsEnabled READ AreCloudsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsHalfRes READ AreCloudsHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsTemporal READ AreCloudsTemporal NOTIFY ViewSettingsChanged)
@@ -147,6 +153,12 @@ namespace SmileEditor {
         int               GetSunShaftsSteps() const;
         double            GetSunShaftsRange() const;
         bool              AreSunShaftsTemporal() const;
+        bool              IsVolFogEnabled() const;
+        double            GetVolFogDistance() const;
+        double            GetVolFogPhaseG() const;
+        double            GetVolFogDensity() const;
+        double            GetVolFogAmbient() const;
+        bool              IsVolFogTemporal() const;
         bool              AreCloudsEnabled() const;
         bool              AreCloudsHalfRes() const;
         bool              AreCloudsTemporal() const;
@@ -224,6 +236,12 @@ namespace SmileEditor {
         Q_INVOKABLE void SetSunShaftsSteps(int value);
         Q_INVOKABLE void SetSunShaftsRange(double value);
         Q_INVOKABLE void SetSunShaftsTemporal(bool enabled);
+        Q_INVOKABLE void SetVolFogEnabled(bool enabled);
+        Q_INVOKABLE void SetVolFogDistance(double value);
+        Q_INVOKABLE void SetVolFogPhaseG(double value);
+        Q_INVOKABLE void SetVolFogDensity(double value);
+        Q_INVOKABLE void SetVolFogAmbient(double value);
+        Q_INVOKABLE void SetVolFogTemporal(bool enabled);
         Q_INVOKABLE void SetCloudsEnabled(bool enabled);
         Q_INVOKABLE void SetCloudsHalfRes(bool halfRes);
         Q_INVOKABLE void SetCloudsTemporal(bool enabled);

@@ -91,6 +91,8 @@ namespace Smile {
 
         Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
+        VolumetricFog.Initialize(Device.Native(), SRVHeap);
+
         SunShafts.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
 
         RainWetness.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
@@ -1042,13 +1044,59 @@ namespace Smile {
         const bool VolShaftsActive = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
         const f32 FogDensityBase = Fog.GetDensity();
         if (RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + RainSky * 1.5f));
+        // densidades colapsadas AINDA com o boost de chuva — shafts e froxel fog tem
+        // que ver o mesmo meio que o fog deste frame
+        const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(CameraPosition.Y);
+
+        // Frente da camera via unproject do centro (mesma convencao row-vector do
+        // ScreenToRay) — o froxel fog fatia em view-Z e o fog apply exclui por cos.
+        Vec3 CamForwardW{ 0.0f, 0.0f, 1.0f };
+        {
+            const Mat44& IM = InvViewProjUnjit;
+            const f32 v[4] = { 0.0f, 0.0f, 0.5f, 1.0f };
+            f32 w[4];
+            for (int j = 0; j < 4; ++j)
+                w[j] = v[2] * IM.M[2][j] + v[3] * IM.M[3][j];
+            if (std::fabs(w[3]) > 1e-9f) {
+                const Vec3 P{ w[0] / w[3], w[1] / w[3], w[2] / w[3] };
+                CamForwardW = (P - CameraPosition).NormalizedSafe(Vec3{ 0.0f, 0.0f, 1.0f });
+            }
+        }
+
+        // Froxel volumetric fog: atualizado ANTES do Fog.UpdatePerFrame (fornece o
+        // GridZParams pro fog apply fatiar o volume identico).
+        const bool VolFogActive = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
+        if (VolFogActive) {
+            FVolumetricFogPass::FFrameParams VF{};
+            VF.InvViewProjUnjit = InvViewProjUnjit;
+            VF.ViewProjUnjit    = ViewProjUnjittered;
+            VF.FrameIndex       = FrameIndex;
+            VF.CameraPos        = CameraPosition;
+            VF.CameraForward    = CamForwardW;
+            VF.DirToSun         = KeyDir;
+            VF.SunColorTimesIntensity = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
+                                          KeyColor.Z * KeyInt };
+            VF.CollapsedFog     = ShaftsFogCollapsed;
+            VF.SkyAmbient       = SkyAmbient;
+            VF.NearZ            = NearZ;
+            if (UseGI && DDGI.IsReady()) {
+                const Vec3 GMin = DDGI.GridMin();
+                const Vec3 GCnt = DDGI.GridCount();
+                VF.DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
+                VF.DDGIGridCount = { GCnt.X, GCnt.Y, GCnt.Z, 1.0f };
+                VF.DDGIParams    = { DDGI.GetIntensity(), DDGI.TileSizeF(),
+                                     DDGI.AtlasW(), DDGI.AtlasH() };
+            }
+            VolumetricFog.UpdatePerFrame(FrameSlot, VF);
+        } else if (VolumetricFog.IsInitialized()) {
+            VolumetricFog.ResetHistory(); // efeito dormiu: historia/PrevVP obsoletos
+        }
+
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm(),
-                           VolShaftsActive);
-        // densidades colapsadas AINDA com o boost de chuva — o raymarch dos shafts tem
-        // que ver o mesmo meio que o fog deste frame
-        const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(CameraPosition.Y);
+                           VolShaftsActive, VolFogActive, VolumetricFog.GetMaxDistance(),
+                           VolumetricFog.GridZParams(), CamForwardW);
         Fog.SetDensity(FogDensityBase);
 
         // (o UpdateVolumetric dos sun shafts roda mais abaixo, depois do update das
@@ -2072,6 +2120,18 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
 
+            // Froxel volumetric fog: 3 dispatches (densidade -> scattering -> integracao);
+            // o fog apply consome o volume integrado via t3. Mesma condicao do update.
+            const bool VolFogOn = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
+            if (VolFogOn) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Volumetric fog");
+                SunShadows.EnsureReadableCompute(CommandList);
+                VolumetricFog.Execute(CommandList, SRVHeap, SunShadows.ConstantsAddress(),
+                                      SunShadows.ShadowSRVSlot(),
+                                      (UseGI && DDGI.IsReady()) ? DDGI.IrradianceAtlasSRV()
+                                                                : DepthSRVSlot);
+            }
+
             // Sun shafts volumétricos: raymarch + temporal meia-res (depth já legível
             // aqui); o fog apply consome o resultado via t2. Mesma condição do
             // UpdatePerFrame.
@@ -2094,7 +2154,8 @@ namespace Smile {
             CommandList->OMSetRenderTargets(1, &Fog_RTV, FALSE, nullptr);
             Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV(),
                         SunShafts.IsInitialized() ? SunShafts.VolumetricSRVSlot()
-                                                  : DepthSRVSlot);
+                                                  : DepthSRVSlot,
+                        VolFogOn ? VolumetricFog.IntegratedSRVSlot() : DepthSRVSlot);
             GpuProfiler.End(CommandList); // Fog
 
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,

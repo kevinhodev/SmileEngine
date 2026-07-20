@@ -583,6 +583,66 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    bool ViewportWidget::IsVolFogEnabled() const {
+        return Renderer ? Renderer->GetUseVolumetricFog() : true;
+    }
+
+    void ViewportWidget::SetVolFogEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetUseVolumetricFog(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetVolFogDistance() const {
+        return Renderer ? Renderer->GetVolumetricFog().GetMaxDistance() : 100.0;
+    }
+
+    void ViewportWidget::SetVolFogDistance(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricFog().SetMaxDistance(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetVolFogPhaseG() const {
+        return Renderer ? Renderer->GetVolumetricFog().GetPhaseG() : 0.3;
+    }
+
+    void ViewportWidget::SetVolFogPhaseG(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricFog().SetPhaseG(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetVolFogDensity() const {
+        return Renderer ? Renderer->GetVolumetricFog().GetExtinctionScale() : 1.0;
+    }
+
+    void ViewportWidget::SetVolFogDensity(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricFog().SetExtinctionScale(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    double ViewportWidget::GetVolFogAmbient() const {
+        return Renderer ? Renderer->GetVolumetricFog().GetAmbientIntensity() : 1.0;
+    }
+
+    void ViewportWidget::SetVolFogAmbient(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricFog().SetAmbientIntensity(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
+    bool ViewportWidget::IsVolFogTemporal() const {
+        return Renderer ? Renderer->GetVolumetricFog().GetTemporal() : true;
+    }
+
+    void ViewportWidget::SetVolFogTemporal(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricFog().SetTemporal(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
     }

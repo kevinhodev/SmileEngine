@@ -42,7 +42,7 @@ Rectangle {
         if (selectedPage === 0)
             return "Upscaling, anti-aliasing e resolução interna do viewport"
         if (selectedPage === 6)
-            return "Sombras do sol (CSM), sun shafts: cascatas, cache, bias e debug"
+            return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
         if (selectedPage === 7)
             return "Raymarch de nuvens na atmosfera: cobertura, forma, iluminação e custo"
         if (selectedPage === 8)
@@ -1108,6 +1108,95 @@ Rectangle {
                     y: 389
                     checked: viewportModel.sunShaftsTemporal
                     onToggled: viewportModel.SetSunShaftsTemporal(!checked)
+                }
+            }
+
+            Card {
+                width: parent.width
+                height: 430
+                title: "Volumetric fog"
+
+                Text {
+                    x: 20; y: 55
+                    text: "Fog froxel (grid 3D estilo UE)"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "fog perto com sombra do sol e GI; além do alcance segue o analítico"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 54
+                    checked: viewportModel.volFogEnabled
+                    onToggled: viewportModel.SetVolFogEnabled(!checked)
+                }
+
+                ShadowSlider {
+                    x: 20; y: 108
+                    width: parent.width - 40
+                    label: "Alcance do volume (m)"
+                    from: 30; to: 300; step: 10
+                    value: viewportModel.volFogDistance
+                    valueText: Math.round(viewportModel.volFogDistance) + " m"
+                    onCommitted: (v) => viewportModel.SetVolFogDistance(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 160
+                    width: parent.width - 40
+                    label: "Densidade do volume"
+                    from: 0.25; to: 8.0; step: 0.25
+                    value: viewportModel.volFogDensity
+                    valueText: "×" + viewportModel.volFogDensity.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetVolFogDensity(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 212
+                    width: parent.width - 40
+                    label: "Fase HG (g) — lobo contra a luz"
+                    from: 0; to: 0.9; step: 0.05
+                    value: viewportModel.volFogPhaseG
+                    valueText: viewportModel.volFogPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetVolFogPhaseG(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 264
+                    width: parent.width - 40
+                    label: "Ambiente (DDGI/céu)"
+                    from: 0; to: 4.0; step: 0.1
+                    value: viewportModel.volFogAmbient
+                    valueText: "×" + viewportModel.volFogAmbient.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetVolFogAmbient(v)
+                }
+
+                Rectangle { x: 20; y: 328; width: parent.width - 40; height: 1; color: root.divider }
+
+                Text {
+                    x: 20; y: 346
+                    text: "Acumulação temporal"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 365
+                    text: "jitter Halton + reprojeção — desligar volta o banding em fatias"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 345
+                    checked: viewportModel.volFogTemporal
+                    onToggled: viewportModel.SetVolFogTemporal(!checked)
                 }
             }
 

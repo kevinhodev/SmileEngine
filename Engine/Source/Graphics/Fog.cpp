@@ -34,7 +34,10 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE VolShaftsRange = DepthRange;
         VolShaftsRange.BaseShaderRegister = 2;
 
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_DESCRIPTOR_RANGE VolFogRange = DepthRange;
+        VolFogRange.BaseShaderRegister = 3;
+
+        D3D12_ROOT_PARAMETER RootParams[5]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -53,6 +56,11 @@ namespace Smile {
         RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[3].DescriptorTable.pDescriptorRanges   = &VolShaftsRange;
         RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[4].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[4].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[4].DescriptorTable.pDescriptorRanges   = &VolFogRange;
+        RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -169,7 +177,9 @@ namespace Smile {
                                   const Vec3& _CameraWorldPos, f32 _KmPerWorldUnit,
                                   const Vec3& _DirToSun, f32 _NearZ, f32 _FarZ,
                                   u32 _Width, u32 _Height, bool _UseAerial, bool _UseHeightFog,
-                                  f32 _AerialDepthKm, bool _VolumetricShafts) {
+                                  f32 _AerialDepthKm, bool _VolumetricShafts,
+                                  bool _VolFogOn, f32 _VolFogMaxDist,
+                                  const Vec4& _VolFogGridZ, const Vec3& _CamForward) {
         FrameSlot = _FrameSlot;
         if (!MappedBase) return;
 
@@ -197,12 +207,16 @@ namespace Smile {
         const f32 W = static_cast<f32>(_Width), H = static_cast<f32>(_Height);
         c.ScreenParams   = { W, H, W > 0 ? 1.0f / W : 0.0f, H > 0 ? 1.0f / H : 0.0f };
         c.DepthParams    = { _NearZ, _FarZ, 0.0f, 0.0f };
+        c.VolFogParams   = _VolFogGridZ;
+        c.VolFogParams2  = { _VolFogMaxDist, _VolFogOn ? 1.0f : 0.0f, 0.0f, 0.0f };
+        c.CamForwardVF   = { _CamForward.X, _CamForward.Y, _CamForward.Z, 0.0f };
 
         *Mapped() = c;
     }
 
     void FFogPass::Execute(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
-                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot, u32 _VolShaftsSRVSlot) {
+                           u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot, u32 _VolShaftsSRVSlot,
+                           u32 _VolFogSRVSlot) {
         if (!Initialized) return;
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
         _CommandList->SetPipelineState(PSO.Get());
@@ -210,6 +224,7 @@ namespace Smile {
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(_DepthSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_AerialVolumeSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_VolShaftsSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_VolFogSRVSlot));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CommandList->IASetVertexBuffers(0, 0, nullptr);
         _CommandList->IASetIndexBuffer(nullptr);
