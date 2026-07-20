@@ -134,7 +134,7 @@ MenuBar {
             onTriggered: menuBridge.toggleTimeOfDay()
         }
         MItem {
-            text: "Luzes"; checkColumn: true
+            text: "Cena"; checkColumn: true
             markVisible: menuBridge.lightsVisible
             onTriggered: menuBridge.toggleLights()
         }

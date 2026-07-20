@@ -10,6 +10,7 @@
 #include "SmileEditor/StatusBridge.h"
 #include "SmileEditor/TimeOfDayBridge.h"
 #include "SmileEditor/LightsBridge.h"
+#include "SmileEditor/SceneOutlinerBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/DarkTheme.h"
@@ -67,7 +68,12 @@ namespace SmileEditor {
         WindowBr   = new WindowBridge(this); // botoes de janela da MainBar.qml
         Menus      = new MenuBridge(this);   // menus da MainBar.qml (precisa existir antes dela)
         TodBridge  = new TimeOfDayBridge(this); // painel Time of Day (renderer chega depois)
-        LightsBr   = new LightsBridge(this);    // painel de Luzes (renderer chega depois)
+        LightsBr   = new LightsBridge(this);          // acoes/props de luz (renderer depois)
+        OutlinerBr = new SceneOutlinerBridge(this);   // Scene Outliner (renderer depois)
+
+        // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
+        connect(LightsBr, &LightsBridge::LightsChanged,
+                OutlinerBr, &SceneOutlinerBridge::Rebuild);
 
         CreateTopBar();
         setCentralWidget(CreateViewportChrome());
@@ -230,10 +236,13 @@ namespace SmileEditor {
             const QString File = QFileDialog::getOpenFileName(
                 this, tr("Carregar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            if (!R->LoadCookedScene(File.toStdWString()))
+            if (!R->LoadCookedScene(File.toStdWString())) {
                 QMessageBox::warning(this, tr("Carregar Cena"),
                                      tr("Falha ao carregar a cena. Veja o console."));
-            else if (LightsBr) LightsBr->OnSceneLoaded(File, /*Additive=*/false);
+            } else {
+                if (LightsBr)   LightsBr->OnSceneLoaded(File, /*Additive=*/false);
+                if (OutlinerBr) OutlinerBr->OnSceneLoaded(File, /*Additive=*/false);
+            }
         });
         connect(Menus, &MenuBridge::AddSceneRequested, this, [this, RendererReady]() {
             auto* R = RendererReady(); if (!R) return;
@@ -241,10 +250,13 @@ namespace SmileEditor {
             const QString File = QFileDialog::getOpenFileName(
                 this, tr("Adicionar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            if (!R->LoadCookedScene(File.toStdWString(), /*Additive=*/true))
+            if (!R->LoadCookedScene(File.toStdWString(), /*Additive=*/true)) {
                 QMessageBox::warning(this, tr("Adicionar Cena"),
                                      tr("Falha ao adicionar a cena. Veja o console."));
-            else if (LightsBr) LightsBr->OnSceneLoaded(File, /*Additive=*/true);
+            } else {
+                if (LightsBr)   LightsBr->OnSceneLoaded(File, /*Additive=*/true);
+                if (OutlinerBr) OutlinerBr->OnSceneLoaded(File, /*Additive=*/true);
+            }
         });
         connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
 
@@ -344,29 +356,31 @@ namespace SmileEditor {
 
         // O Time of Day virou janela flutuante (ShowTimeOfDay) — nao ha mais dock dele.
 
-        // ---- Luzes (dock lateral direito) ----
-        LightsDock = new QDockWidget(tr("Luzes"), this);
-        LightsDock->setObjectName("LightsDock");
+        // ---- Cena / Scene Outliner (dock lateral direito, ex-painel de Luzes) ----
+        LightsDock = new QDockWidget(tr("Cena"), this);
+        LightsDock->setObjectName("SceneOutlinerDock");
         LightsDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
         LightsDock->setFeatures(QDockWidget::DockWidgetMovable |
                                 QDockWidget::DockWidgetFloatable |
                                 QDockWidget::DockWidgetClosable);
 
-        QQuickWidget* LightsPanel = CreateQmlPanel(
-            QStringLiteral("LightsPanel.qml"),
-            { { QStringLiteral("lightsModel"), LightsBr } },
+        QQuickWidget* OutlinerPanel = CreateQmlPanel(
+            QStringLiteral("SceneOutlinerPanel.qml"),
+            { { QStringLiteral("outlinerModel"),  OutlinerBr },
+              { QStringLiteral("lightsModel"),    LightsBr },
+              { QStringLiteral("viewportModel"),  Viewport } },
             LightsDock);
-        LightsPanel->setObjectName("LightsPanel");
-        LightsDock->setWidget(LightsPanel);
+        OutlinerPanel->setObjectName("SceneOutlinerPanel");
+        LightsDock->setWidget(OutlinerPanel);
 
-        auto* LightsEmptyTitleBar = new QWidget(LightsDock);
-        LightsEmptyTitleBar->setFixedHeight(0);
-        LightsDock->setTitleBarWidget(LightsEmptyTitleBar);
-        connect(LightsBr, &LightsBridge::CloseRequested, LightsDock, &QDockWidget::close);
+        auto* OutlinerEmptyTitleBar = new QWidget(LightsDock);
+        OutlinerEmptyTitleBar->setFixedHeight(0);
+        LightsDock->setTitleBarWidget(OutlinerEmptyTitleBar);
+        connect(OutlinerBr, &SceneOutlinerBridge::CloseRequested, LightsDock, &QDockWidget::close);
 
         addDockWidget(Qt::RightDockWidgetArea, LightsDock);
-        LightsPanel->setMinimumWidth(280);
-        resizeDocks({ LightsDock }, { 320 }, Qt::Horizontal);
+        OutlinerPanel->setMinimumWidth(300);
+        resizeDocks({ LightsDock }, { 340 }, Qt::Horizontal);
 
         connect(LightsDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetLightsVisible);
     }
@@ -399,10 +413,21 @@ namespace SmileEditor {
                     LightsBr, &LightsBridge::Refresh, Qt::UniqueConnection);
         }
 
+        // Scene Outliner: o Refresh por frame sincroniza picking do viewport, contagens e
+        // toggles de ambiente com a arvore.
+        if (OutlinerBr) {
+            OutlinerBr->SetRenderer(Viewport->GetRenderer());
+            connect(Viewport, &ViewportWidget::FrameReady,
+                    OutlinerBr, &SceneOutlinerBridge::Refresh, Qt::UniqueConnection);
+        }
+
         if (!StartupScenePath.isEmpty()) {
-            if (!Viewport->GetRenderer()->LoadCookedScene(StartupScenePath.toStdWString()))
+            if (!Viewport->GetRenderer()->LoadCookedScene(StartupScenePath.toStdWString())) {
                 Smile::LogError("Cena de startup falhou: " + StartupScenePath.toStdString());
-            else if (LightsBr) LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+            } else {
+                if (LightsBr)   LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+                if (OutlinerBr) OutlinerBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+            }
         }
     }
 

@@ -23,6 +23,7 @@ namespace SmileEditor {
     class StatusBridge;
     class TimeOfDayBridge;
     class LightsBridge;
+    class SceneOutlinerBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -69,8 +70,9 @@ namespace SmileEditor {
         TimeOfDayBridge*      TodBridge   = nullptr; // ponte C++ -> TimeOfDayWindow.qml
         QPointer<QDialog>     TodDlg;                // janela flutuante do Time of Day
         QPointer<QDialog>     StatsDlg;              // janela flutuante de Estatisticas (VRAM)
-        LightsBridge*         LightsBr    = nullptr; // ponte C++ -> LightsPanel.qml
-        QDockWidget*          LightsDock  = nullptr; // dock lateral do painel de Luzes
+        LightsBridge*         LightsBr    = nullptr; // acoes/propriedades de luz (outliner)
+        SceneOutlinerBridge*  OutlinerBr  = nullptr; // ponte C++ -> SceneOutlinerPanel.qml
+        QDockWidget*          LightsDock  = nullptr; // dock lateral do Scene Outliner ("Cena")
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

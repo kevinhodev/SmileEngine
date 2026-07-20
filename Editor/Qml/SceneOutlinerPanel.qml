@@ -1,10 +1,13 @@
 import QtQuick
 import QtQuick.Controls
 
-// Painel de Luzes (dock lateral). Liga em `lightsModel` (LightsBridge): lista das luzes da cena
-// (add/duplicar/remover/toggle), propriedades da selecionada (cor com picker HSV, intensidade,
-// raio, cones do spot, posicao) e persistencia em <cena>.lights.json. Estilo do TimeOfDayPanel
-// (dark, cards, accent azul).
+// Scene Outliner (dock lateral, substitui o antigo painel de Luzes). Liga em tres bridges:
+//  - `outlinerModel` (SceneOutlinerBridge): arvore flat da cena (Ambiente/Luzes/Meshes por
+//    asset), busca, filtro, expand/colapso e selecao de luz/mesh sincronizada com o picking.
+//  - `lightsModel` (LightsBridge): acoes e propriedades de luz (add/duplicar/remover/toggle,
+//    cor HSV, sliders, sombras, posicao) — mesmo contrato do painel antigo.
+//  - `viewportModel` (ViewportWidget): toggle das nuvens (olho da linha de ambiente).
+// Estilo do TimeOfDayPanel (dark, cards, accent azul).
 Rectangle {
     id: root
     color: "#141511"
@@ -19,7 +22,8 @@ Rectangle {
     readonly property color blue: "#5b9dff"
     readonly property color bulbColor: "#e8c565"
 
-    readonly property bool hasSelection: lightsModel.selectedIndex >= 0
+    readonly property bool hasLightSelection: lightsModel.selectedIndex >= 0
+    readonly property bool hasMeshSelection: outlinerModel.meshSelected
 
     function fmt(v, dec) { return v.toFixed(dec === undefined ? 1 : dec).replace(".", ",") }
 
@@ -187,6 +191,56 @@ Rectangle {
         ToolTip.text: ib.tip
     }
 
+    // Olho de visibilidade das linhas da arvore (aberto/cortado).
+    component EyeButton: Item {
+        id: eye
+        property bool on: true
+        property string tip
+        signal clicked()
+        width: 22; height: 22
+        Rectangle {
+            anchors.fill: parent; radius: 5
+            color: eyeHover.hovered ? "#23241d" : "transparent"
+        }
+        LucideIcon {
+            anchors.centerIn: parent
+            name: eye.on ? "eye" : "eye-off"
+            size: 13
+            color: eye.on ? (eyeHover.hovered ? root.textPrimary : root.textSecondary)
+                          : root.textMuted
+        }
+        HoverHandler { id: eyeHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: eye.clicked() }
+        ToolTip.visible: eye.tip !== "" && eyeHover.hovered
+        ToolTip.delay: 600
+        ToolTip.text: eye.tip
+    }
+
+    // Chip de filtro (Tudo/Luzes/Meshes/Ambiente).
+    component FilterChip: Rectangle {
+        id: chip
+        property string label
+        property int value: 0
+        readonly property bool active: outlinerModel.filter === value
+        width: chipText.implicitWidth + 20
+        height: 20
+        radius: 10
+        color: active ? "#1c2438" : (chipHover.hovered ? "#20211a" : root.cardBg)
+        border.color: active ? "#2c3f63" : root.borderColor
+        border.width: 1
+        Text {
+            id: chipText
+            anchors.centerIn: parent
+            text: chip.label
+            color: chip.active ? root.blue : root.textSecondary
+            font.family: "Segoe UI"
+            font.pixelSize: 10
+            font.weight: Font.DemiBold
+        }
+        HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: outlinerModel.filter = chip.value }
+    }
+
     // Campo numerico compacto (posicao XYZ).
     component NumberField: Rectangle {
         id: nf
@@ -246,23 +300,23 @@ Rectangle {
 
         LucideIcon {
             x: 12; anchors.verticalCenter: parent.verticalCenter
-            name: "lightbulb"; size: 15
-            color: lightsModel.count > 0 ? root.bulbColor : root.textMuted
+            name: "list-tree"; size: 15
+            color: outlinerModel.totalCount > 0 ? root.blue : root.textMuted
         }
         Text {
             x: 34
             anchors.verticalCenter: parent.verticalCenter
-            text: "Luzes"
+            text: "Cena"
             color: root.textPrimary
             font.family: "Segoe UI"
             font.pixelSize: 12
             font.weight: Font.Medium
         }
-        // badge com a contagem
+        // badge com a contagem total de objetos
         Rectangle {
-            x: 74
+            x: 70
             anchors.verticalCenter: parent.verticalCenter
-            visible: lightsModel.count > 0
+            visible: outlinerModel.totalCount > 0
             width: countLabel.implicitWidth + 12
             height: 16
             radius: 8
@@ -270,7 +324,7 @@ Rectangle {
             Text {
                 id: countLabel
                 anchors.centerIn: parent
-                text: lightsModel.count
+                text: outlinerModel.totalCount.toLocaleString(Qt.locale("pt-BR"), 'f', 0)
                 color: root.textSecondary
                 font.family: "Segoe UI"
                 font.pixelSize: 10
@@ -278,7 +332,7 @@ Rectangle {
             }
         }
 
-        // salvar (ponto ambar = mudancas nao salvas)
+        // salvar luzes (ponto ambar = mudancas nao salvas)
         Item {
             id: saveBtn
             anchors.right: closeBtn.left
@@ -331,7 +385,7 @@ Rectangle {
                 color: closeHover.hovered ? root.textPrimary : root.textMuted
             }
             HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: lightsModel.closePanel() }
+            TapHandler { onTapped: outlinerModel.closePanel() }
         }
         Rectangle {
             anchors.left: parent.left; anchors.right: parent.right
@@ -340,203 +394,404 @@ Rectangle {
         }
     }
 
-    Flickable {
+    // ---- Busca ----
+    Rectangle {
+        id: searchBox
         anchors.top: header.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
+        anchors.left: parent.left; anchors.right: parent.right
         anchors.margins: 12
         anchors.topMargin: 10
-        contentHeight: col.implicitHeight
+        height: 28
+        radius: 6
+        color: "#111209"
+        border.color: searchInput.activeFocus ? root.blue : root.borderColor
+        border.width: 1
+
+        LucideIcon {
+            x: 9; anchors.verticalCenter: parent.verticalCenter
+            name: "search"; size: 13
+            color: root.textMuted
+        }
+        TextInput {
+            id: searchInput
+            anchors.fill: parent
+            anchors.leftMargin: 28
+            anchors.rightMargin: clearSearch.visible ? 28 : 9
+            verticalAlignment: TextInput.AlignVCenter
+            color: root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+            selectByMouse: true
+            selectionColor: root.blue
+            onTextEdited: outlinerModel.search = text
+            Text {
+                anchors.fill: parent
+                verticalAlignment: Text.AlignVCenter
+                visible: searchInput.text === "" && !searchInput.activeFocus
+                text: "Buscar na cena…"
+                color: root.textMuted
+                font.family: "Segoe UI"
+                font.pixelSize: 11
+            }
+        }
+        IconButton {
+            id: clearSearch
+            anchors.right: parent.right
+            anchors.rightMargin: 3
+            anchors.verticalCenter: parent.verticalCenter
+            visible: searchInput.text !== ""
+            icon: "x"
+            onClicked: { searchInput.text = ""; outlinerModel.search = "" }
+        }
+    }
+
+    // ---- Chips de filtro ----
+    Row {
+        id: chipsRow
+        anchors.top: searchBox.bottom
+        anchors.left: parent.left
+        anchors.topMargin: 8
+        anchors.leftMargin: 12
+        spacing: 6
+        // valores casam com SceneOutlinerBridge: 0 = Tudo, senao EGroup+1
+        FilterChip { label: "Tudo";     value: 0 }
+        FilterChip { label: "Luzes";    value: 2 }
+        FilterChip { label: "Meshes";   value: 3 }
+        FilterChip { label: "Ambiente"; value: 1 }
+    }
+
+    // ---- Arvore da cena ----
+    Rectangle {
+        id: treeCard
+        anchors.top: chipsRow.bottom
+        anchors.left: parent.left; anchors.right: parent.right
+        anchors.bottom: propsArea.top
+        anchors.margins: 12
+        anchors.topMargin: 8
+        anchors.bottomMargin: 8
+        radius: 8
+        color: root.cardBg
+        border.color: root.borderColor
+        border.width: 1
+        opacity: outlinerModel.available ? 1.0 : 0.45
+
+        // estado vazio
+        Text {
+            anchors.centerIn: parent
+            width: parent.width - 48
+            visible: tree.count === 0
+            text: outlinerModel.search !== ""
+                  ? "Nada na cena casa com a busca."
+                  : "Carregue uma cena (Ctrl+O) para povoar o outliner."
+            color: root.textMuted
+            font.family: "Segoe UI"
+            font.pixelSize: 10
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            lineHeight: 1.25
+        }
+
+        ListView {
+            id: tree
+            anchors.fill: parent
+            anchors.margins: 6
+            anchors.bottomMargin: footer.height + 6
+            clip: true
+            model: outlinerModel
+            boundsBehavior: Flickable.StopAtBounds
+            reuseItems: true
+            ScrollBar.vertical: ThinScrollBar {}
+
+            // selecao veio do viewport (picking): garante a linha na area visivel
+            Connections {
+                target: outlinerModel
+                function onScrollToRequested(row) {
+                    tree.positionViewAtIndex(row, ListView.Contain)
+                }
+            }
+
+            delegate: Rectangle {
+                id: rowItem
+                required property int index
+                required property int kind
+                required property int depth
+                required property string name
+                required property string icon
+                required property int count
+                required property bool expanded
+                required property bool rowEnabled
+                required property bool hasEye
+                required property color dotColor
+                required property bool hasDot
+                required property bool selected
+                required property int sceneIdx
+
+                readonly property bool isGroup: kind === 0
+                readonly property bool isEnv: kind === 1
+                readonly property bool isLight: kind === 2
+                readonly property bool isAsset: kind === 3
+                readonly property bool isMesh: kind === 4
+                readonly property bool isBranch: isGroup || isAsset
+                // olho: luz usa o proprio Enabled; nuvens/oceano ligam nos toggles reais
+                readonly property bool eyeOn: isLight ? rowEnabled
+                                            : isEnv && sceneIdx === 1 ? viewportModel.cloudsEnabled
+                                            : isEnv && sceneIdx === 2 ? outlinerModel.oceanVisible
+                                            : true
+                readonly property bool dimmed: (isLight || isEnv) && hasEye && !eyeOn
+
+                width: ListView.view.width
+                height: isGroup ? 30 : 26
+                radius: 6
+                color: selected ? "#1d2743"
+                     : rowHover.hovered ? "#20211a" : "transparent"
+                border.color: selected ? "#33477a" : "transparent"
+                border.width: 1
+
+                // chevron (grupos e pastas)
+                LucideIcon {
+                    id: chevron
+                    visible: rowItem.isBranch
+                    x: 4 + rowItem.depth * 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "chevron-right"
+                    size: 12
+                    color: root.textSecondary
+                    rotation: rowItem.expanded ? 90 : 0
+                    Behavior on rotation { NumberAnimation { duration: 100 } }
+                }
+
+                // dot da cor da luz
+                Rectangle {
+                    visible: rowItem.hasDot
+                    x: 6 + rowItem.depth * 14 + 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 8; height: 8; radius: 4
+                    color: rowItem.dotColor
+                    border.color: Qt.darker(color, 1.6)
+                    border.width: 1
+                    opacity: rowItem.dimmed ? 0.35 : 1.0
+                }
+
+                LucideIcon {
+                    id: rowIcon
+                    x: 6 + rowItem.depth * 14 + (rowItem.isBranch ? 16 : 0)
+                       + (rowItem.hasDot ? 13 : 0)
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: rowItem.icon
+                    size: rowItem.isGroup ? 13 : 12
+                    color: rowItem.dimmed ? root.textMuted
+                         : rowItem.isGroup && rowItem.sceneIdx === 1 ? root.bulbColor
+                         : rowItem.isGroup ? root.textNormal
+                         : rowItem.isLight ? root.bulbColor
+                         : rowItem.isAsset ? "#c9a86a"
+                         : rowItem.icon === "leaf" ? "#7fc98f"
+                         : rowItem.isEnv ? root.textNormal
+                         : root.textSecondary
+                }
+
+                Text {
+                    id: rowLabel
+                    x: rowIcon.x + rowIcon.width + 7
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: rightActions.x - x - 4
+                    text: rowItem.name
+                    color: rowItem.dimmed ? root.textMuted
+                         : rowItem.selected ? root.textPrimary
+                         : rowItem.isGroup ? root.textPrimary
+                         : root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                    font.weight: rowItem.isGroup ? Font.DemiBold : Font.Normal
+                    elide: Text.ElideRight
+                }
+
+                // badge de contagem (grupos/pastas)
+                Rectangle {
+                    visible: rowItem.count >= 0 && rowItem.isBranch
+                    x: Math.min(rowLabel.x + rowLabel.implicitWidth + 8,
+                                rightActions.x - width - 4)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: badgeText.implicitWidth + 10
+                    height: 14
+                    radius: 7
+                    color: "#23241d"
+                    Text {
+                        id: badgeText
+                        anchors.centerIn: parent
+                        text: rowItem.count.toLocaleString(Qt.locale("pt-BR"), 'f', 0)
+                        color: root.textSecondary
+                        font.family: "Segoe UI"
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                    }
+                }
+
+                Row {
+                    id: rightActions
+                    anchors.right: parent.right
+                    anchors.rightMargin: 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 1
+
+                    // + Point / + Spot no header do grupo Luzes
+                    Rectangle {
+                        visible: rowItem.isGroup && rowItem.sceneIdx === 1
+                        width: addPointRow.implicitWidth + 14; height: 18; radius: 9
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: addPointHover.hovered ? "#20304e" : "#1c2438"
+                        border.color: "#2c3f63"
+                        border.width: 1
+                        Row {
+                            id: addPointRow
+                            anchors.centerIn: parent
+                            spacing: 2
+                            LucideIcon {
+                                name: "plus"; size: 9; color: root.blue
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Text {
+                                text: "Point"
+                                color: root.blue
+                                font.family: "Segoe UI"
+                                font.pixelSize: 9
+                                font.weight: Font.DemiBold
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                        HoverHandler { id: addPointHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: lightsModel.addLight(0) }
+                    }
+                    Rectangle {
+                        visible: rowItem.isGroup && rowItem.sceneIdx === 1
+                        width: addSpotRow.implicitWidth + 14; height: 18; radius: 9
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: addSpotHover.hovered ? "#20304e" : "#1c2438"
+                        border.color: "#2c3f63"
+                        border.width: 1
+                        Row {
+                            id: addSpotRow
+                            anchors.centerIn: parent
+                            spacing: 2
+                            LucideIcon {
+                                name: "plus"; size: 9; color: root.blue
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Text {
+                                text: "Spot"
+                                color: root.blue
+                                font.family: "Segoe UI"
+                                font.pixelSize: 9
+                                font.weight: Font.DemiBold
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                        HoverHandler { id: addSpotHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: lightsModel.addLight(1) }
+                    }
+
+                    // acoes de luz no hover
+                    IconButton {
+                        visible: rowItem.isLight && rowHover.hovered
+                        anchors.verticalCenter: parent.verticalCenter
+                        icon: "copy"; tip: "Duplicar"
+                        onClicked: lightsModel.duplicateLight(rowItem.sceneIdx)
+                    }
+                    IconButton {
+                        visible: rowItem.isLight && rowHover.hovered
+                        anchors.verticalCenter: parent.verticalCenter
+                        icon: "trash-2"; tip: "Remover"
+                        hoverTint: "#e07a6a"
+                        onClicked: lightsModel.removeLight(rowItem.sceneIdx)
+                    }
+
+                    // olho de visibilidade
+                    EyeButton {
+                        visible: rowItem.hasEye
+                        anchors.verticalCenter: parent.verticalCenter
+                        on: rowItem.eyeOn
+                        tip: rowItem.isLight ? "Ligar/desligar a luz"
+                           : rowItem.sceneIdx === 1 ? "Ligar/desligar as nuvens"
+                           : "Ligar/desligar o oceano"
+                        onClicked: {
+                            if (rowItem.isLight)
+                                lightsModel.toggleLightEnabled(rowItem.sceneIdx)
+                            else if (rowItem.sceneIdx === 1)
+                                viewportModel.SetCloudsEnabled(!viewportModel.cloudsEnabled)
+                            else if (rowItem.sceneIdx === 2)
+                                outlinerModel.oceanVisible = !outlinerModel.oceanVisible
+                        }
+                    }
+                }
+
+                HoverHandler {
+                    id: rowHover
+                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1 && rowItem.sceneIdx !== 2
+                                 ? Qt.ArrowCursor : Qt.PointingHandCursor
+                }
+                TapHandler {
+                    onTapped: {
+                        if (rowItem.isBranch)          outlinerModel.toggleExpand(rowItem.index)
+                        else if (rowItem.isLight)      lightsModel.selectLight(rowItem.sceneIdx)
+                        else if (rowItem.isMesh)       outlinerModel.selectRow(rowItem.index)
+                    }
+                }
+            }
+        }
+
+        // rodape com contagens
+        Item {
+            id: footer
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 24
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1; color: root.divider
+            }
+            Text {
+                x: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: {
+                    var t = outlinerModel.totalCount.toLocaleString(Qt.locale("pt-BR"), 'f', 0)
+                            + " objetos"
+                    if (outlinerModel.selectedCount > 0)
+                        t += "  ·  " + outlinerModel.selectedCount + " selecionado"
+                    if (outlinerModel.hiddenCount > 0)
+                        t += "  ·  " + outlinerModel.hiddenCount + " luz(es) desligada(s)"
+                    return t
+                }
+                color: root.textMuted
+                font.family: "Segoe UI"
+                font.pixelSize: 9
+            }
+        }
+    }
+
+    // ---- Propriedades da selecao ----
+    Flickable {
+        id: propsArea
+        anchors.left: parent.left; anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 12
+        anchors.topMargin: 0
+        height: Math.min(propsCol.implicitHeight, root.height * 0.52)
+        contentHeight: propsCol.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ThinScrollBar {}
 
         Column {
-            id: col
+            id: propsCol
             width: parent.width
             spacing: 10
-            opacity: lightsModel.available ? 1.0 : 0.45
+            opacity: outlinerModel.available ? 1.0 : 0.45
 
-            // ---- Lista de luzes ----
-            Card {
-                title: "Luzes na cena"
-                iconName: "lightbulb"
-                headerItem: [
-                    Row {
-                        spacing: 6
-                        // adicionar point / spot
-                        Rectangle {
-                            width: addPointRow.implicitWidth + 16; height: 20; radius: 10
-                            color: addPointHover.hovered ? "#20304e" : "#1c2438"
-                            border.color: "#2c3f63"
-                            border.width: 1
-                            Row {
-                                id: addPointRow
-                                anchors.centerIn: parent
-                                spacing: 3
-                                LucideIcon {
-                                    name: "plus"; size: 10; color: root.blue
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                LucideIcon {
-                                    name: "lightbulb"; size: 11; color: root.blue
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                Text {
-                                    text: "Point"
-                                    color: root.blue
-                                    font.family: "Segoe UI"
-                                    font.pixelSize: 10
-                                    font.weight: Font.DemiBold
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-                            HoverHandler { id: addPointHover; cursorShape: Qt.PointingHandCursor }
-                            TapHandler { onTapped: lightsModel.addLight(0) }
-                        }
-                        Rectangle {
-                            width: addSpotRow.implicitWidth + 16; height: 20; radius: 10
-                            color: addSpotHover.hovered ? "#20304e" : "#1c2438"
-                            border.color: "#2c3f63"
-                            border.width: 1
-                            Row {
-                                id: addSpotRow
-                                anchors.centerIn: parent
-                                spacing: 3
-                                LucideIcon {
-                                    name: "plus"; size: 10; color: root.blue
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                LucideIcon {
-                                    name: "cone"; size: 11; color: root.blue
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                Text {
-                                    text: "Spot"
-                                    color: root.blue
-                                    font.family: "Segoe UI"
-                                    font.pixelSize: 10
-                                    font.weight: Font.DemiBold
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-                            HoverHandler { id: addSpotHover; cursorShape: Qt.PointingHandCursor }
-                            TapHandler { onTapped: lightsModel.addLight(1) }
-                        }
-                    }
-                ]
-
-                // estado vazio
-                Text {
-                    visible: lightsModel.count === 0
-                    width: parent.width
-                    text: "Nenhuma luz na cena.\nAdicione uma com os botões acima — ela nasce na frente da câmera."
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 10
-                    wrapMode: Text.WordWrap
-                    lineHeight: 1.25
-                }
-
-                Column {
-                    width: parent.width
-                    spacing: 2
-
-                    Repeater {
-                        model: lightsModel.count
-
-                        delegate: Rectangle {
-                            id: lightRow
-                            required property int index
-                            // depende de `revision`: qualquer mudanca re-le o lightAt()
-                            property var info: lightsModel.revision >= 0
-                                               ? lightsModel.lightAt(index) : ({})
-                            readonly property bool selected: lightsModel.selectedIndex === index
-
-                            width: parent.width
-                            height: 30
-                            radius: 6
-                            color: selected ? "#1d2743"
-                                 : rowHover.hovered ? "#20211a" : "transparent"
-                            border.color: selected ? "#33477a" : "transparent"
-                            border.width: 1
-
-                            // dot da cor da luz
-                            Rectangle {
-                                x: 8
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 9; height: 9; radius: 4.5
-                                color: lightRow.info.color !== undefined ? lightRow.info.color : "#888"
-                                border.color: Qt.darker(color, 1.6)
-                                border.width: 1
-                                opacity: lightRow.info.enabled ? 1.0 : 0.35
-                            }
-                            LucideIcon {
-                                x: 24
-                                anchors.verticalCenter: parent.verticalCenter
-                                name: lightRow.info.type === 1 ? "cone" : "lightbulb"
-                                size: 12
-                                color: lightRow.info.enabled ? root.textSecondary : root.textMuted
-                            }
-                            Text {
-                                x: 43
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: parent.width - 43 - 110
-                                text: lightRow.info.name !== undefined ? lightRow.info.name : ""
-                                color: lightRow.info.enabled
-                                       ? (lightRow.selected ? root.textPrimary : root.textNormal)
-                                       : root.textMuted
-                                font.family: "Segoe UI"
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                            }
-
-                            Row {
-                                anchors.right: parent.right
-                                anchors.rightMargin: 6
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 2
-                                IconButton {
-                                    visible: rowHover.hovered
-                                    icon: "copy"; tip: "Duplicar"
-                                    onClicked: lightsModel.duplicateLight(lightRow.index)
-                                }
-                                IconButton {
-                                    visible: rowHover.hovered
-                                    icon: "trash-2"; tip: "Remover"
-                                    hoverTint: "#e07a6a"
-                                    onClicked: lightsModel.removeLight(lightRow.index)
-                                }
-                                Toggle {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    checked: lightRow.info.enabled === true
-                                    onToggled: lightsModel.toggleLightEnabled(lightRow.index)
-                                }
-                            }
-
-                            HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
-                            TapHandler { onTapped: lightsModel.selectLight(lightRow.index) }
-                        }
-                    }
-                }
-
-                Text {
-                    visible: lightsModel.count > 0
-                    width: parent.width
-                    text: "Clique no marker no viewport para selecionar; arraste com o gizmo."
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 9
-                    wrapMode: Text.WordWrap
-                }
-            }
-
-            // ---- Propriedades da selecionada ----
+            // ---- Luz selecionada (mesmo contrato do painel antigo) ----
             Card {
                 title: lightsModel.lightType === 1 ? "Propriedades — Spot" : "Propriedades — Point"
                 iconName: lightsModel.lightType === 1 ? "cone" : "lightbulb"
-                visible: root.hasSelection
+                visible: root.hasLightSelection
                 headerItem: [
                     Toggle {
                         checked: lightsModel.lightEnabled
@@ -853,15 +1108,39 @@ Rectangle {
                 }
             }
 
+            // ---- Mesh selecionada (propriedades completas chegam na F3) ----
+            Card {
+                title: "Propriedades — Mesh"
+                iconName: "box"
+                visible: !root.hasLightSelection && root.hasMeshSelection
+
+                Text {
+                    width: parent.width
+                    text: outlinerModel.meshName
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                }
+                Text {
+                    width: parent.width
+                    text: "Arraste com o gizmo no viewport. Material, tris e VRAM chegam em breve."
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+            }
+
             // dica quando nada selecionado
             Card {
                 title: "Propriedades"
                 iconName: "info"
-                visible: !root.hasSelection
+                visible: !root.hasLightSelection && !root.hasMeshSelection
 
                 Text {
                     width: parent.width
-                    text: "Selecione uma luz na lista ou clique no marker dela no viewport."
+                    text: "Selecione um objeto na árvore ou clique nele no viewport."
                     color: root.textMuted
                     font.family: "Segoe UI"
                     font.pixelSize: 10

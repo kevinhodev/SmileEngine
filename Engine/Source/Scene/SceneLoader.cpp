@@ -2,6 +2,7 @@
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -244,6 +245,15 @@ namespace Smile {
         auto matOf = [&](u32 mi) -> FMaterial* {
             return (mi != kNoMaterial && mi < sh.MaterialCount) ? matPtrs[mi] : nullptr;
         };
+        // Nome do renderable p/ o Scene Outliner: o cozido v6 nao guarda nome por no (o cooker
+        // baka o transform no vertice), entao o melhor nome disponivel e o do material.
+        auto nameOf = [&](u32 mi, u32 fallbackIdx) -> std::string {
+            if (mi != kNoMaterial && mi < sh.MaterialCount && mats[mi].Name[0] != '\0') {
+                const char* n = mats[mi].Name;
+                return std::string(n, strnlen(n, kCookedMaxName));
+            }
+            return "Mesh " + std::to_string(fallbackIdx);
+        };
 
         const Clock::time_point tMeshStart = Clock::now();
         if (!MergeByMaterial) {
@@ -260,6 +270,7 @@ namespace Smile {
                 const SSceneRenderable& r = rnds[i];
                 if (r.MeshIndex >= mh.MeshCount) continue;
                 FRenderable out;
+                out.Name     = nameOf(r.MaterialIndex, i);
                 out.Mesh     = meshPtrs[r.MeshIndex];
                 out.Material = matOf(r.MaterialIndex);
                 const SMeshEntry& e = entries[r.MeshIndex];
@@ -299,6 +310,7 @@ namespace Smile {
             std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
             for (size_t k = 0; k < meshPtrs.size(); ++k) {
                 FRenderable out;
+                out.Name     = nameOf(groupMat[k], static_cast<u32>(k));
                 out.Mesh     = meshPtrs[k];
                 out.Material = matOf(groupMat[k]);
                 out.AABBMin  = gMin[k];
