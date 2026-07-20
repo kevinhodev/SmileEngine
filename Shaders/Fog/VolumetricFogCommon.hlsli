@@ -41,6 +41,9 @@ cbuffer VolFogCB : register(b0) {
     // F4 — sombra das nuvens no termo do sol (MESMA projecao do deferred/shafts):
     float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = força (0 = off)
     float4 CloudShadowParams2; // x = km/unidade, y = base da camada (km), zw = keyDir.xz/y
+    // Conservative depth (UE): froxel inteiro atras da geometria nao computa luz.
+    row_major float4x4 CurViewProj; // frame ATUAL, SEM jitter (NDC da face do froxel)
+    float4 ConsDepthParams; // x = ligado (>0.5), y = render W, z = render H, w unused
 };
 
 // Profundidade (view-Z linear) do slice — inverso de VolFog_SliceFromDepth.

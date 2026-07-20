@@ -1079,6 +1079,8 @@ namespace Smile {
             VF.CollapsedFog     = ShaftsFogCollapsed;
             VF.SkyAmbient       = SkyAmbient;
             VF.NearZ            = NearZ;
+            VF.RenderW          = RenderWidth();
+            VF.RenderH          = RenderHeight();
             if (UseGI && DDGI.IsReady()) {
                 const Vec3 GMin = DDGI.GridMin();
                 const Vec3 GCnt = DDGI.GridCount();
@@ -2135,9 +2137,13 @@ namespace Smile {
         }
 
         if ((UseHeightFog || UseAerialPerspective) && Fog.IsInitialized()) {
+            // PIXEL | NON_PIXEL: fog/shafts leem o depth em PS; o conservative depth do
+            // froxel fog downsampla em compute.
+            const D3D12_RESOURCE_STATES FogDepthRead =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             FBarrierBatch Batch;
-            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, FogDepthRead);
             Batch.Flush(CommandList);
 
             // Froxel volumetric fog: 3 dispatches (densidade -> scattering -> integracao);
@@ -2155,7 +2161,8 @@ namespace Smile {
                                           static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight),
                                       LocalShadows.ShadowSRVSlot(),
                                       VolumetricClouds.IsInitialized()
-                                          ? VolumetricClouds.ShadowSRV() : DepthSRVSlot);
+                                          ? VolumetricClouds.ShadowSRV() : DepthSRVSlot,
+                                      DepthSRVSlot);
             }
 
             // Sun shafts volumétricos: raymarch + temporal meia-res (depth já legível
@@ -2184,7 +2191,7 @@ namespace Smile {
                         VolFogOn ? VolumetricFog.IntegratedSRVSlot() : DepthSRVSlot);
             GpuProfiler.End(CommandList); // Fog
 
-            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            Batch.Transition(DepthBuffer.Get(), FogDepthRead,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
             Batch.Flush(CommandList);
         }

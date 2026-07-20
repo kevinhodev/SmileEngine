@@ -1,6 +1,7 @@
 #include "Smile/Graphics/VolumetricFog.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/ShaderUtils.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cmath>
@@ -22,6 +23,42 @@ namespace Smile {
 
         SetupPSO.Initialize(_Device, "VolumetricFogSetup.cs_6_0.cso", 1, 1);
         IntegratePSO.Initialize(_Device, "VolumetricFogIntegrate.cs_6_0.cso", 1, 1);
+        ConsDepthPSO.Initialize(_Device, "VolumetricFogConsDepth.cs_6_0.cso", 1, 1);
+
+        // Conservative depth 160x90 R16F ping-pong (cur = min-Z deste frame; prev
+        // alimenta o fixup da historia contra desoclusao com fog fantasma).
+        for (u32 i = 0; i < 2; ++i) {
+            D3D12_HEAP_PROPERTIES Heap{};
+            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+            D3D12_RESOURCE_DESC Desc{};
+            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            Desc.Width            = kGridW;
+            Desc.Height           = kGridH;
+            Desc.DepthOrArraySize = 1;
+            Desc.MipLevels        = 1;
+            Desc.Format           = DXGI_FORMAT_R16_FLOAT;
+            Desc.SampleDesc       = { 1, 0 };
+            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            SMILE_HR(_Device->CreateCommittedResource(
+                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                nullptr, IID_PPV_ARGS(&ConsDepthTex[i])));
+            VramTracker::Register(ConsDepthTex[i].Get(), EVramCategory::Sky);
+
+            ConsDepthSRV[i] = _SRVHeap.Allocate(1);
+            D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
+            SRVDesc.Format                    = DXGI_FORMAT_R16_FLOAT;
+            SRVDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
+            SRVDesc.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            SRVDesc.Texture2D.MipLevels       = 1;
+            _SRVHeap.CreateSRV(_Device, ConsDepthTex[i].Get(), SRVDesc, ConsDepthSRV[i]);
+
+            ConsDepthUAV[i] = _SRVHeap.Allocate(1);
+            D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
+            UAVDesc.Format        = DXGI_FORMAT_R16_FLOAT;
+            UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            _SRVHeap.CreateUAV(_Device, ConsDepthTex[i].Get(), UAVDesc, ConsDepthUAV[i]);
+        }
         BuildScatteringRootSignature(_Device);
         {
             auto CSO = LoadShaderBytecode("VolumetricFogScattering.cs_6_0.cso");
@@ -63,13 +100,19 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE CloudRange = VBufferRange;
         CloudRange.BaseShaderRegister = 4; // t4 shadow map das nuvens
 
+        D3D12_DESCRIPTOR_RANGE ConsRange = VBufferRange;
+        ConsRange.BaseShaderRegister = 5; // t5 cons depth atual
+
+        D3D12_DESCRIPTOR_RANGE PrevConsRange = VBufferRange;
+        PrevConsRange.BaseShaderRegister = 6; // t6 cons depth anterior
+
         D3D12_DESCRIPTOR_RANGE UAVRange{};
         UAVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         UAVRange.NumDescriptors                    = 1;
         UAVRange.BaseShaderRegister                = 0;
         UAVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[10]{};
+        D3D12_ROOT_PARAMETER RootParams[12]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
@@ -116,6 +159,16 @@ namespace Smile {
         RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[9].DescriptorTable.pDescriptorRanges   = &CloudRange;
         RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[10].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[10].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[10].DescriptorTable.pDescriptorRanges   = &ConsRange;
+        RootParams[10].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[11].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[11].DescriptorTable.pDescriptorRanges   = &PrevConsRange;
+        RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -247,6 +300,11 @@ namespace Smile {
         c.CloudShadowParams  = { 0.0f, 0.0f, 0.0f, 0.0f };
         c.CloudShadowParams2 = { 0.0f, 0.0f, 0.0f, 0.0f };
 
+        c.CurViewProj     = _P.ViewProjUnjit;
+        c.ConsDepthParams = { ConservativeDepth ? 1.0f : 0.0f,
+                              static_cast<f32>(_P.RenderW), static_cast<f32>(_P.RenderH),
+                              0.0f };
+
         // Guarda o frame atual como "anterior" do proximo.
         StoredPrevVP = _P.ViewProjUnjit;
         PrevCamPosV  = _P.CameraPos;
@@ -276,10 +334,38 @@ namespace Smile {
                                      D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddr,
                                      u32 _CSMShadowSRVSlot, u32 _DDGIIrradianceSRVSlot,
                                      D3D12_GPU_VIRTUAL_ADDRESS _LightsVA,
-                                     u32 _LocalShadowSRVSlot, u32 _CloudShadowSRVSlot) {
+                                     u32 _LocalShadowSRVSlot, u32 _CloudShadowSRVSlot,
+                                     u32 _DepthSRVSlot) {
         if (!Initialized) return;
 
         constexpr u32 GX = (kGridW + 3) / 4, GY = (kGridH + 3) / 4, GZ = (kGridZ + 3) / 4;
+
+        // Barreira local dos ping-pong 2D do conservative depth.
+        auto ConsTransition = [&](u32 Idx, D3D12_RESOURCE_STATES After) {
+            if (ConsDepthState[Idx] == After) return;
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = ConsDepthTex[Idx].Get();
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = ConsDepthState[Idx];
+            B.Transition.StateAfter  = After;
+            _CommandList->ResourceBarrier(1, &B);
+            ConsDepthState[Idx] = After;
+        };
+
+        // 0) Conservative depth: min-Z do tile (usa o ping-pong com o CurrentScatter —
+        // cur escrito agora, prev vem do frame anterior pro fixup da historia).
+        const u32 ConsCur = CurrentScatter, ConsPrev = 1u - CurrentScatter;
+        if (ConservativeDepth) {
+            ConsTransition(ConsCur, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ConsDepthPSO.Bind(_CommandList);
+            _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
+            _CommandList->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(_DepthSRVSlot));
+            _CommandList->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ConsDepthUAV[ConsCur]));
+            _CommandList->Dispatch((kGridW + 7) / 8, (kGridH + 7) / 8, 1);
+        }
+        ConsTransition(ConsCur,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ConsTransition(ConsPrev, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
         // 1) Densidade -> VBufferA
         VBufferA.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -308,6 +394,8 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(7, _SRVHeap.GpuHandle(_LocalShadowSRVSlot));
         _CommandList->SetComputeRootDescriptorTable(8, _SRVHeap.GpuHandle(Target.UAVSlot(0)));
         _CommandList->SetComputeRootDescriptorTable(9, _SRVHeap.GpuHandle(_CloudShadowSRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(10, _SRVHeap.GpuHandle(ConsDepthSRV[ConsCur]));
+        _CommandList->SetComputeRootDescriptorTable(11, _SRVHeap.GpuHandle(ConsDepthSRV[ConsPrev]));
         _CommandList->Dispatch(GX, GY, GZ);
 
         // 3) Integracao acumulada -> Integrated (o fog fullscreen le em PIXEL)

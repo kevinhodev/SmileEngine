@@ -33,6 +33,7 @@ namespace Smile {
             Vec4  CollapsedFog{};            // FFogPass::CollapsedFogParams (mesmo meio do frame)
             Vec3  SkyAmbient{};              // fallback do ambiente quando DDGI off
             f32   NearZ = 0.1f;
+            u32   RenderW = 0, RenderH = 0;  // res de render (conservative depth)
             Vec4  DDGIGridMin{};             // xyz = origem, w = spacing
             Vec4  DDGIGridCount{};           // xyz = probes por eixo, w = DDGI on (>0.5)
             Vec4  DDGIParams{};              // x = intensidade, y = tile, z/w = atlas W/H
@@ -55,11 +56,12 @@ namespace Smile {
         // LightsVA = slice do FrameSlot no LightBuffer do deferred (root SRV t3);
         // LocalShadowSRVSlot = atlas spot (cube array vive no slot+1, tabela cobre os 2).
         // CloudShadowSRVSlot: shadow map das nuvens (passar um SRV valido qualquer com
-        // nuvens off — CB gate CloudShadowParams.w = 0).
+        // nuvens off — CB gate CloudShadowParams.w = 0). DepthSRVSlot: depth da cena em
+        // PIXEL|NON_PIXEL (conservative depth downsampla em compute).
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddr, u32 CSMShadowSRVSlot,
                      u32 DDGIIrradianceSRVSlot, D3D12_GPU_VIRTUAL_ADDRESS LightsVA,
-                     u32 LocalShadowSRVSlot, u32 CloudShadowSRVSlot);
+                     u32 LocalShadowSRVSlot, u32 CloudShadowSRVSlot, u32 DepthSRVSlot);
 
         u32  IntegratedSRVSlot() const { return Integrated.SRVSlot(); }
         // (B, O, S, kGridZ) do ultimo UpdatePerFrame — o fog fullscreen fatia igual.
@@ -88,6 +90,11 @@ namespace Smile {
         f32  GetAmbientIntensity() const{ return AmbientIntensity; }
         void SetLightsIntensity(f32 V)  { LightsIntensity = V; }
         f32  GetLightsIntensity() const { return LightsIntensity; }
+        void SetConservativeDepth(bool V) {
+            if (V != ConservativeDepth) ResetHistory(); // conteudo de froxel oculto muda
+            ConservativeDepth = V;
+        }
+        bool GetConservativeDepth() const { return ConservativeDepth; }
 
     private:
         // Espelho exato do VolFogCB (VolumetricFogCommon.hlsli).
@@ -114,6 +121,8 @@ namespace Smile {
             Vec4  LightParamsVF2;
             Vec4  CloudShadowParams;
             Vec4  CloudShadowParams2;
+            Mat44 CurViewProj;
+            Vec4  ConsDepthParams;
         };
         static constexpr u32 kMissSupersamples = 4;    // amostras qdo a historia falha
         static constexpr f32 kHistoryWeight    = 0.9f; // blend da UE
@@ -128,6 +137,14 @@ namespace Smile {
 
         FVolumetricPipeline SetupPSO;     // b0 + t0 (unused) + u0
         FVolumetricPipeline IntegratePSO; // b0 + t0 (scattering) + u0
+        FVolumetricPipeline ConsDepthPSO; // b0 + t0 (depth da cena) + u0
+
+        // Conservative depth 160x90 R16F, ping-pong (prev alimenta o fixup da historia).
+        Microsoft::WRL::ComPtr<ID3D12Resource> ConsDepthTex[2];
+        u32 ConsDepthSRV[2] = { 0, 0 };
+        u32 ConsDepthUAV[2] = { 0, 0 };
+        D3D12_RESOURCE_STATES ConsDepthState[2] = { D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> ScatterRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> ScatterPSO;
@@ -151,6 +168,7 @@ namespace Smile {
         f32  ExtinctionScale  = 1.0f;   // densidade extra do volume (so o froxel)
         f32  AmbientIntensity = 1.0f;
         f32  LightsIntensity  = 1.0f;   // luzes puntuais no ar (0 desliga o loop)
+        bool ConservativeDepth = true;  // pula froxel atras de parede (UE)
         Vec3 Albedo{ 0.9f, 0.9f, 0.9f };
 
         bool Initialized = false;

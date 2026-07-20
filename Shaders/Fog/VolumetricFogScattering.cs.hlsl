@@ -30,6 +30,8 @@ StructuredBuffer<FGPULight> LocalLights : register(t3);
 Texture2DArray    LocalShadowMap      : register(t18); // atlas D32 dos spots (F3a)
 TextureCubeArray  LocalCubeShadow     : register(t19); // cube array dos points (F3b)
 Texture2D<float>  CloudShadowMap      : register(t4);  // transmitancia das nuvens (F4)
+Texture2D<float>  ConsDepth           : register(t5);  // min device-z por tile (este frame)
+Texture2D<float>  PrevConsDepth       : register(t6);  // idem, frame anterior (fixup da historia)
 SamplerState      LinearClamp         : register(s0);
 
 RWTexture3D<float4> LightScattering : register(u0);
@@ -167,15 +169,37 @@ void main(uint3 id : SV_DispatchThreadID) {
     float viewZc;
     float3 wpCenter = VolFog_WorldPos(id, float3(0.5f, 0.5f, 0.5f), viewZc);
 
+    // Conservative depth: face FRONTAL do froxel (meia celula pra camera, expande p/ o
+    // bilinear — offset da UE) atras do pixel mais distante do tile = oculto, nem
+    // computa luz. Reverse-Z: device-z maior = mais perto.
+    if (ConsDepthParams.x > 0.5f) {
+        float vzn;
+        float3 wpNear = VolFog_WorldPos(id, float3(0.5f, 0.5f, -0.5f), vzn);
+        float4 clipN  = mul(float4(wpNear, 1.0f), CurViewProj);
+        if (clipN.w > 1e-4f && ConsDepth[id.xy] > clipN.z / clipN.w) {
+            LightScattering[id] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+            return;
+        }
+    }
+
     float histAlpha = TemporalParams.x;
     float3 histUV   = float3(-1.0f, -1.0f, -1.0f);
     if (histAlpha > 0.0f) {
         float4 prevH = mul(float4(wpCenter, 1.0f), PrevViewProj);
         if (prevH.w > 1e-4f) {
-            float2 prevNdc = prevH.xy / prevH.w;
+            float3 prevNdc = prevH.xyz / prevH.w;
             float  prevZ   = dot(wpCenter - PrevCamPos.xyz, PrevCamForward.xyz);
             histUV = float3(prevNdc.x * 0.5f + 0.5f, 0.5f - prevNdc.y * 0.5f,
                             VolFog_SliceFromDepth(max(prevZ, 1e-3f)) / GridZParams.w);
+
+            // Fixup (versao 1-tap do FixupHistoryUV da UE): se a celula estava OCULTA
+            // no frame anterior, a historia dela e preto valido-invalido — descarta
+            // (vira supersampling) em vez de desocluir com fog escuro fantasma.
+            if (ConsDepthParams.x > 0.5f) {
+                uint2 prevTile = (uint2)clamp(histUV.xy * GridSize.xy,
+                                              float2(0.0f, 0.0f), GridSize.xy - 1.0f);
+                if (PrevConsDepth[prevTile] > prevNdc.z) histAlpha = 0.0f;
+            }
         }
         if (any(histUV < 0.0f) || any(histUV > 1.0f)) histAlpha = 0.0f;
     }

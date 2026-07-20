@@ -1113,7 +1113,7 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 482
+                height: 552
                 title: "Volumetric fog"
 
                 Text {
@@ -1206,6 +1206,28 @@ Rectangle {
                     y: 397
                     checked: viewportModel.volFogTemporal
                     onToggled: viewportModel.SetVolFogTemporal(!checked)
+                }
+
+                Text {
+                    x: 20; y: 448
+                    text: "Conservative depth"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 467
+                    text: "pula froxel atrás de parede — só custo, não muda o visual"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 447
+                    checked: viewportModel.volFogConsDepth
+                    onToggled: viewportModel.SetVolFogConsDepth(!checked)
                 }
             }
 

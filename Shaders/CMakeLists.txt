@@ -83,6 +83,7 @@ smile_compile_shader(Fog/FogFullscreen.ps.hlsl            ps_6_0 main SHADER_OUT
 smile_compile_shader(Fog/VolumetricFogSetup.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/VolumetricFogScattering.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/VolumetricFogIntegrate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/VolumetricFogConsDepth.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 
 # Chuva — F1 wetness deferred no G-buffer + F3 cortina de gotas (estilo CRainStage/SceneRain)
 smile_compile_shader(Rain/RainWetness.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
@@ -215,6 +216,7 @@ add_custom_target(Shaders
         Fog/VolumetricFogSetup.cs.hlsl
         Fog/VolumetricFogScattering.cs.hlsl
         Fog/VolumetricFogIntegrate.cs.hlsl
+        Fog/VolumetricFogConsDepth.cs.hlsl
         Rain/RainCommon.hlsli
         Rain/RainWetness.ps.hlsl
         Rain/RainCurtain.ps.hlsl

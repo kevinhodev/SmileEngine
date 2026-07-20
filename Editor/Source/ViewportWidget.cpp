@@ -653,6 +653,16 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    bool ViewportWidget::IsVolFogConsDepth() const {
+        return Renderer ? Renderer->GetVolumetricFog().GetConservativeDepth() : true;
+    }
+
+    void ViewportWidget::SetVolFogConsDepth(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricFog().SetConservativeDepth(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
     }
