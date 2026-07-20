@@ -11,6 +11,30 @@ import QtQuick.Controls
 Rectangle {
     id: root
     color: "#141511"
+    focus: true
+
+    // Atalhos (valem quando o foco NAO esta num campo de texto do painel):
+    // Del remove a luz, Ctrl+D duplica, setas navegam a arvore, F enquadra a camera.
+    Keys.onPressed: (event) => {
+        if (event.key === Qt.Key_Delete && root.hasLightSelection) {
+            lightsModel.removeLight(lightsModel.selectedIndex)
+            event.accepted = true
+        } else if (event.key === Qt.Key_D && (event.modifiers & Qt.ControlModifier)
+                   && root.hasLightSelection) {
+            lightsModel.duplicateLight(lightsModel.selectedIndex)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Up) {
+            outlinerModel.selectStep(-1)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Down) {
+            outlinerModel.selectStep(1)
+            event.accepted = true
+        } else if (event.key === Qt.Key_F && event.modifiers === Qt.NoModifier) {
+            var r = outlinerModel.selectedRowIndex()
+            if (r >= 0) outlinerModel.focusRow(r)
+            event.accepted = true
+        }
+    }
 
     readonly property color cardBg: "#1a1b15"
     readonly property color borderColor: "#2a2b24"
@@ -241,6 +265,33 @@ Rectangle {
         TapHandler { onTapped: outlinerModel.filter = chip.value }
     }
 
+    // Linha rotulo/valor do card de propriedades da mesh.
+    component PropRow: Item {
+        property string label
+        property string value
+        width: parent.width
+        height: 18
+        Text {
+            x: 0
+            anchors.verticalCenter: parent.verticalCenter
+            text: parent.label
+            color: root.textSecondary
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+        }
+        Text {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - 90
+            horizontalAlignment: Text.AlignRight
+            text: parent.value
+            color: root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 11
+            elide: Text.ElideMiddle
+        }
+    }
+
     // Campo numerico compacto (posicao XYZ).
     component NumberField: Rectangle {
         id: nf
@@ -351,7 +402,7 @@ Rectangle {
                                                                      : root.textMuted
             }
             Rectangle {
-                visible: lightsModel.dirty
+                visible: lightsModel.dirty || outlinerModel.dirty
                 x: 15; y: 2
                 width: 7; height: 7; radius: 3.5
                 color: root.bulbColor
@@ -362,12 +413,18 @@ Rectangle {
                 id: saveHover
                 cursorShape: lightsModel.hasSceneFile ? Qt.PointingHandCursor : Qt.ArrowCursor
             }
-            TapHandler { enabled: lightsModel.hasSceneFile; onTapped: lightsModel.saveLights() }
+            TapHandler {
+                enabled: lightsModel.hasSceneFile
+                onTapped: {
+                    lightsModel.saveLights()
+                    outlinerModel.saveVisibility()
+                }
+            }
             ToolTip.visible: saveHover.hovered
             ToolTip.delay: 600
             ToolTip.text: lightsModel.hasSceneFile
-                          ? "Salvar luzes (<cena>.lights.json)"
-                          : "Carregue uma cena para salvar luzes"
+                          ? "Salvar luzes e visibilidade (<cena>.lights/.visibility.json)"
+                          : "Carregue uma cena para salvar"
         }
         Item {
             id: closeBtn
@@ -502,13 +559,19 @@ Rectangle {
             reuseItems: true
             ScrollBar.vertical: ThinScrollBar {}
 
-            // selecao veio do viewport (picking): garante a linha na area visivel
-            Connections {
-                target: outlinerModel
-                function onScrollToRequested(row) {
+            // selecao veio do viewport (picking) ou das setas: garante a linha na area
+            // visivel. Conexao IMPERATIVA pelo nome exato: os sinais das bridges comecam
+            // com maiuscula (ScrollToRequested) e o Connections procura a versao
+            // minuscula (scrollToRequested) — o handler declarativo nunca dispara.
+            // Qt.callLater: o pedido pode chegar logo apos um reset do modelo
+            // (RevealSelection -> Rebuild) e o positionViewAtIndex sincrono posiciona
+            // com o layout velho.
+            function scrollToRow(row) {
+                Qt.callLater(function() {
                     tree.positionViewAtIndex(row, ListView.Contain)
-                }
+                })
             }
+            Component.onCompleted: outlinerModel.ScrollToRequested.connect(tree.scrollToRow)
 
             delegate: Rectangle {
                 id: rowItem
@@ -742,6 +805,7 @@ Rectangle {
                     // entao o tap da linha tambem dispara — ignora a faixa das acoes.
                     onTapped: (ep) => {
                         if (ep.position.x >= rightActions.x) return
+                        root.forceActiveFocus() // atalhos de teclado voltam pro painel
                         if (rowItem.isBranch)          outlinerModel.toggleExpand(rowItem.index)
                         else if (rowItem.isLight)      lightsModel.selectLight(rowItem.sceneIdx)
                         else if (rowItem.isMesh)       outlinerModel.selectRow(rowItem.index)
@@ -868,13 +932,16 @@ Rectangle {
                     function push() {
                         if (!syncing) lightsModel.color = Qt.hsva(hue, sat, val, 1.0)
                     }
-                    Component.onCompleted: syncFromModel()
-                    Connections {
-                        target: lightsModel
-                        function onSelectionChanged() { picker.syncFromModel() }
-                        function onLightChanged() {
+                    // Conexoes imperativas: mesmo racional do scrollToRow — os sinais
+                    // SelectionChanged/LightChanged (maiuscula) nao casam com handlers
+                    // declarativos de Connections (bug latente herdado do LightsPanel:
+                    // o picker nao re-sincronizava ao trocar de luz).
+                    Component.onCompleted: {
+                        syncFromModel()
+                        lightsModel.SelectionChanged.connect(picker.syncFromModel)
+                        lightsModel.LightChanged.connect(function() {
                             if (!svDrag.active && !hueDrag.active) picker.syncFromModel()
-                        }
+                        })
                     }
 
                     // quadrado SV
@@ -1126,7 +1193,7 @@ Rectangle {
                 }
             }
 
-            // ---- Mesh selecionada (propriedades completas chegam na F3) ----
+            // ---- Mesh selecionada ----
             Card {
                 title: "Propriedades — Mesh"
                 iconName: "box"
@@ -1138,14 +1205,61 @@ Rectangle {
                     color: root.textPrimary
                     font.family: "Segoe UI"
                     font.pixelSize: 11
+                    font.weight: Font.Medium
                     elide: Text.ElideRight
                 }
+
+                PropRow {
+                    label: "Material"
+                    value: outlinerModel.meshMaterial !== "" ? outlinerModel.meshMaterial : "—"
+                }
+                PropRow {
+                    label: "Triângulos"
+                    value: outlinerModel.meshTris.toLocaleString(Qt.locale("pt-BR"), 'f', 0)
+                }
+                PropRow {
+                    label: "Vértices"
+                    value: outlinerModel.meshVerts.toLocaleString(Qt.locale("pt-BR"), 'f', 0)
+                }
+                PropRow {
+                    label: "Geometria"
+                    value: outlinerModel.meshVramText
+                }
+
+                // flags do material (folhagem/two-sided/masked/translucido)
+                Flow {
+                    width: parent.width
+                    spacing: 5
+                    visible: outlinerModel.meshFlags.length > 0
+                    Repeater {
+                        model: outlinerModel.meshFlags
+                        delegate: Rectangle {
+                            required property string modelData
+                            width: flagText.implicitWidth + 14
+                            height: 18
+                            radius: 9
+                            color: "#23241d"
+                            border.color: "#33342c"
+                            border.width: 1
+                            Text {
+                                id: flagText
+                                anchors.centerIn: parent
+                                text: modelData
+                                color: root.textSecondary
+                                font.family: "Segoe UI"
+                                font.pixelSize: 9
+                                font.weight: Font.DemiBold
+                            }
+                        }
+                    }
+                }
+
                 Text {
                     width: parent.width
-                    text: "Duplo-clique na árvore enquadra a câmera. Material, tris e VRAM chegam em breve."
+                    text: "Duplo-clique na árvore (ou F) enquadra a câmera."
                     color: root.textMuted
                     font.family: "Segoe UI"
-                    font.pixelSize: 10
+                    font.pixelSize: 9
                     wrapMode: Text.WordWrap
                 }
             }

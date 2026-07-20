@@ -6,6 +6,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <memory>
+#include <string>
 
 namespace Smile {
     struct alignas(256) MaterialConstants {
@@ -53,7 +54,9 @@ namespace Smile {
 
     class FMaterial {
     public:
-        FTexture* Albedo            = nullptr; 
+        std::string Name; // nome do material cozido (SSceneMaterial::Name) — editor/outliner
+
+        FTexture* Albedo            = nullptr;
         FTexture* Normal            = nullptr; 
         FTexture* MetallicRoughness = nullptr; 
         FTexture* AO                = nullptr;

@@ -34,6 +34,15 @@ namespace SmileEditor {
         Q_PROPERTY(bool terrainVisible READ TerrainVisible WRITE SetTerrainVisible NOTIFY EnvChanged)
         Q_PROPERTY(bool meshSelected READ MeshSelected NOTIFY SelectionChanged)
         Q_PROPERTY(QString meshName READ MeshName NOTIFY SelectionChanged)
+        // Propriedades da mesh SELECIONADA (card do painel; defaults vazios sem selecao).
+        Q_PROPERTY(QString meshMaterial READ MeshMaterial NOTIFY SelectionChanged)
+        Q_PROPERTY(int meshTris READ MeshTris NOTIFY SelectionChanged)
+        Q_PROPERTY(int meshVerts READ MeshVerts NOTIFY SelectionChanged)
+        Q_PROPERTY(QString meshVramText READ MeshVramText NOTIFY SelectionChanged)
+        Q_PROPERTY(QStringList meshFlags READ MeshFlags NOTIFY SelectionChanged)
+        Q_PROPERTY(bool meshVisible READ MeshVisible NOTIFY SelectionChanged)
+        // Visibilidade tem persistencia propria (<cena>.visibility.json, botao salvar).
+        Q_PROPERTY(bool dirty READ Dirty NOTIFY DirtyChanged)
 
     public:
         // Tipos de linha (role `kind` no delegate).
@@ -87,6 +96,13 @@ namespace SmileEditor {
         void    SetTerrainVisible(bool V);
         bool    MeshSelected() const;
         QString MeshName() const;
+        QString MeshMaterial() const;
+        int     MeshTris() const;
+        int     MeshVerts() const;
+        QString MeshVramText() const;
+        QStringList MeshFlags() const;
+        bool    MeshVisible() const;
+        bool    Dirty() const { return VisDirty; }
 
         Q_INVOKABLE void toggleExpand(int row);
         Q_INVOKABLE void selectRow(int row);    // luz/mesh: seleciona no renderer (exclusivo)
@@ -98,6 +114,11 @@ namespace SmileEditor {
         // (mesh = AABB, luz = posicao + raio da fonte). Estilo tecla F da UE.
         Q_INVOKABLE void focusRow(int row);
         Q_INVOKABLE int  selectedRowIndex() const; // linha selecionada na lista flat (-1 = fora)
+        // Setas cima/baixo: move a selecao pra proxima linha selecionavel (luz/mesh).
+        Q_INVOKABLE void selectStep(int delta);
+        // Salva o estado de visibilidade (meshes ocultas por asset + terreno) no
+        // <cena>.visibility.json — chamado pelo botao salvar junto do saveLights.
+        Q_INVOKABLE bool saveVisibility();
         Q_INVOKABLE void closePanel() { emit CloseRequested(); }
 
     public slots:
@@ -110,6 +131,7 @@ namespace SmileEditor {
         void SelectionChanged();
         void FiltersChanged();
         void EnvChanged();
+        void DirtyChanged();
         void CloseRequested();
         void ScrollToRequested(int row); // selecao veio do viewport: QML rola ate a linha
 
@@ -137,10 +159,17 @@ namespace SmileEditor {
         // Troca Rows preservando o scroll: mesma estrutura -> dataChanged; senao reset.
         void ApplyRows(QVector<FRow>&& NewRows);
         bool MatchesSearch(const QString& Name) const;
+        void MarkDirty();
+        bool LoadVisibility(); // le o JsonPath e aplica Visible/terreno nos assets presentes
+        // Garante que a linha da selecao exista na lista flat (expande grupo/pasta e
+        // reseta o chip de filtro se preciso). Retorna a linha, ou -1 se a busca a esconde.
+        int  RevealSelection();
 
         Smile::Renderer* Renderer = nullptr;
         QVector<FRow>        Rows;
         QVector<FAssetRange> Assets;
+        QString JsonPath;          // <cena>.visibility.json da cena principal (nao-aditiva)
+        bool    VisDirty = false;
         QVector<bool>        AssetExpanded;      // paralelo a Assets
         bool    GroupExpanded[3] = { true, true, true };
         QString SearchText;

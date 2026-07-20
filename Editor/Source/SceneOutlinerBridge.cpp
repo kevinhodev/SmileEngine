@@ -1,8 +1,13 @@
 #include "SmileEditor/SceneOutlinerBridge.h"
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Scene/Scene.h"
+#include "Smile/Core/Logger.h"
 
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include <algorithm>
 #include <cmath>
@@ -43,17 +48,21 @@ namespace SmileEditor {
     void SceneOutlinerBridge::OnSceneLoaded(const QString& _ScenePath, bool _Additive) {
         if (!Renderer) return;
         const int Count = (int)Renderer->GetScene().Renderables().size();
-        const QString Base = QFileInfo(_ScenePath).completeBaseName();
+        const QFileInfo Info(_ScenePath);
         if (!_Additive) {
             Assets.clear();
             AssetExpanded.clear();
-            Assets.push_back({ Base, 0, Count });
+            Assets.push_back({ Info.completeBaseName(), 0, Count });
             AssetExpanded.push_back(true);
+            // Persistencia acompanha a cena principal (mesma convencao do .lights.json).
+            JsonPath = Info.path() + "/" + Info.completeBaseName() + ".visibility.json";
+            if (VisDirty) { VisDirty = false; emit DirtyChanged(); }
         } else {
             const int Begin = Assets.isEmpty() ? 0 : Assets.last().End;
-            Assets.push_back({ Base, Begin, Count });
+            Assets.push_back({ Info.completeBaseName(), Begin, Count });
             AssetExpanded.push_back(true);
         }
+        LoadVisibility(); // aplica ocultas/terreno do json da cena principal (idempotente)
         Rebuild();
     }
 
@@ -360,6 +369,7 @@ namespace SmileEditor {
         }
         if (Bumped) Renderer->GetScene().BumpTransformsVersion();
         CachedTerrainOn = _V;
+        MarkDirty();
         Rebuild();
         emit EnvChanged();
     }
@@ -368,12 +378,61 @@ namespace SmileEditor {
         return Renderer && Renderer->GetSelectedObject() >= 0;
     }
 
+    // Renderable selecionado ou nullptr (sem renderer / indice invalido).
+    static const Smile::FRenderable* SelMesh(Smile::Renderer* _R) {
+        if (!_R) return nullptr;
+        const auto& List = _R->GetScene().Renderables();
+        const int I = _R->GetSelectedObject();
+        return (I >= 0 && I < (int)List.size()) ? &List[(size_t)I] : nullptr;
+    }
+
     QString SceneOutlinerBridge::MeshName() const {
-        if (!Renderer) return {};
-        const auto& Renderables = Renderer->GetScene().Renderables();
-        const int I = Renderer->GetSelectedObject();
-        if (I < 0 || I >= (int)Renderables.size()) return {};
-        return QString::fromStdString(Renderables[(size_t)I].Name);
+        const auto* R = SelMesh(Renderer);
+        return R ? QString::fromStdString(R->Name) : QString();
+    }
+
+    QString SceneOutlinerBridge::MeshMaterial() const {
+        const auto* R = SelMesh(Renderer);
+        if (!R || !R->Material) return {};
+        return QString::fromStdString(R->Material->Name);
+    }
+
+    int SceneOutlinerBridge::MeshTris() const {
+        const auto* R = SelMesh(Renderer);
+        return (R && R->Mesh) ? (int)(R->Mesh->GetIndexCount() / 3) : 0;
+    }
+
+    int SceneOutlinerBridge::MeshVerts() const {
+        const auto* R = SelMesh(Renderer);
+        return (R && R->Mesh) ? (int)R->Mesh->VertexCount() : 0;
+    }
+
+    QString SceneOutlinerBridge::MeshVramText() const {
+        const auto* R = SelMesh(Renderer);
+        if (!R || !R->Mesh) return {};
+        const double Bytes = (double)R->Mesh->VertexCount() * R->Mesh->VertexStride() +
+                             (double)R->Mesh->GetIndexCount() * sizeof(Smile::u32);
+        const double KB = Bytes / 1024.0;
+        if (KB < 1024.0)
+            return QString::number(KB, 'f', 1).replace('.', ',') + QStringLiteral(" KB");
+        return QString::number(KB / 1024.0, 'f', 2).replace('.', ',') + QStringLiteral(" MB");
+    }
+
+    QStringList SceneOutlinerBridge::MeshFlags() const {
+        const auto* R = SelMesh(Renderer);
+        QStringList Flags;
+        if (!R || !R->Material) return Flags;
+        const auto* M = R->Material;
+        if (M->Constants.ShadingModel == 1) Flags << QStringLiteral("Folhagem");
+        if (M->TwoSided)                    Flags << QStringLiteral("Two-sided");
+        if (M->Constants.AlphaTest)         Flags << QStringLiteral("Masked");
+        if (M->Blend)                       Flags << QStringLiteral("Translúcido");
+        return Flags;
+    }
+
+    bool SceneOutlinerBridge::MeshVisible() const {
+        const auto* R = SelMesh(Renderer);
+        return R ? R->Visible : true;
     }
 
     // ---- Acoes ----
@@ -452,6 +511,7 @@ namespace SmileEditor {
         // TLAS re-coleta as instancias no rebuild leve do proximo frame (pula !Visible),
         // entao GI/reflexos/ReSTIR respeitam o olho, nao so o raster.
         Renderer->GetScene().BumpTransformsVersion();
+        MarkDirty();
         Rebuild();
     }
 
@@ -479,21 +539,179 @@ namespace SmileEditor {
             return;
         }
 
-        // Enquadra mantendo a orientacao atual: recua do alvo ao longo do forward.
-        const double Pitch = Renderer->GetPitch() * kToRad;
-        const double Yaw   = Renderer->GetYaw()   * kToRad;
-        const Smile::Vec3 Fwd = { (float)(std::cos(Pitch) * std::sin(Yaw)),
-                                  (float)std::sin(Pitch),
-                                  (float)(std::cos(Pitch) * std::cos(Yaw)) };
+        // Enquadra aproximando PELO LADO onde a camera ja esta (dolly no eixo alvo ->
+        // camera) e aponta pro alvo — recuar pelo forward atual jogava a camera pra
+        // TRAS do objeto quando ele estava fora do olhar (ex.: dentro do predio atras
+        // da arvore). Mesmo comportamento da tecla F da UE.
         const float Dist = std::clamp(Radius * 2.2f, 1.5f, 220.0f);
-        Renderer->SetCameraPose(Center - Fwd * Dist,
-                                Renderer->GetPitch(), Renderer->GetYaw());
+        Smile::Vec3 Dir = (Renderer->GetCameraPos() - Center)
+                              .NormalizedSafe(Smile::Vec3{ 0.0f, 0.35f, -1.0f });
+        const Smile::Vec3 Pos = Center + Dir * Dist;
+        const Smile::Vec3 Look = (Dir * -1.0f); // olhar pro centro
+        const float PitchDeg = (float)(std::asin(std::clamp((double)Look.Y, -1.0, 1.0)) / kToRad);
+        const float YawDeg   = (float)(std::atan2((double)Look.X, (double)Look.Z) / kToRad);
+        Renderer->SetCameraPose(Pos, PitchDeg, YawDeg);
     }
 
     int SceneOutlinerBridge::selectedRowIndex() const {
         for (int I = 0; I < Rows.size(); ++I)
             if (RowSelected(Rows[I])) return I;
         return -1;
+    }
+
+    int SceneOutlinerBridge::RevealSelection() {
+        int Row = selectedRowIndex();
+        if (Row >= 0 || !Renderer) return Row;
+
+        const int SelLight = Renderer->GetSelectedLight();
+        const int SelMesh  = Renderer->GetSelectedObject();
+        if (SelLight < 0 && SelMesh < 0) return -1;
+
+        // A linha nao esta na lista flat: grupo/pasta colapsados ou chip de filtro
+        // escondendo o tipo — abre o caminho ate ela.
+        bool Changed = false;
+        if (SelLight >= 0 && !GroupExpanded[GLuzes]) {
+            GroupExpanded[GLuzes] = true;
+            Changed = true;
+        }
+        if (SelMesh >= 0) {
+            if (!GroupExpanded[GMeshes]) { GroupExpanded[GMeshes] = true; Changed = true; }
+            for (int A = 0; A < Assets.size() && A < AssetExpanded.size(); ++A) {
+                if (SelMesh >= Assets[A].Begin && SelMesh < Assets[A].End &&
+                    !AssetExpanded[A]) {
+                    AssetExpanded[A] = true;
+                    Changed = true;
+                }
+            }
+        }
+        const int Need = SelLight >= 0 ? GLuzes : GMeshes;
+        if (FilterGroup != 0 && FilterGroup != Need + 1) {
+            FilterGroup = 0;
+            Changed = true;
+            emit FiltersChanged();
+        }
+        if (Changed) {
+            Rebuild();
+            Row = selectedRowIndex();
+        }
+        return Row; // -1 restante = busca ativa filtrando o nome da selecao
+    }
+
+    void SceneOutlinerBridge::selectStep(int _Delta) {
+        if (Rows.isEmpty()) return;
+        const int Dir = _Delta >= 0 ? 1 : -1;
+        const int Cur = selectedRowIndex();
+        int I = Cur < 0 ? (Dir > 0 ? 0 : (int)Rows.size() - 1) : Cur + Dir;
+        for (; I >= 0 && I < Rows.size(); I += Dir) {
+            if (Rows[I].Kind == KLight || Rows[I].Kind == KMesh) {
+                selectRow(I);
+                emit ScrollToRequested(I);
+                return;
+            }
+        }
+    }
+
+    // ---- Persistencia (<cena>.visibility.json) ----
+    void SceneOutlinerBridge::MarkDirty() {
+        if (!VisDirty) { VisDirty = true; emit DirtyChanged(); }
+    }
+
+    bool SceneOutlinerBridge::LoadVisibility() {
+        if (!Renderer || JsonPath.isEmpty()) return false;
+        QFile File(JsonPath);
+        if (!File.exists()) return false;
+        if (!File.open(QIODevice::ReadOnly)) {
+            Smile::LogWarning("Outliner: falha ao abrir " + JsonPath.toStdString());
+            return false;
+        }
+        QJsonParseError Err{};
+        const QJsonDocument Doc = QJsonDocument::fromJson(File.readAll(), &Err);
+        if (Err.error != QJsonParseError::NoError || !Doc.isObject()) {
+            Smile::LogWarning("Outliner: JSON invalido em " + JsonPath.toStdString());
+            return false;
+        }
+        const QJsonObject Root = Doc.object();
+        auto& Renderables = Renderer->GetScene().Renderables();
+        const int Total = (int)Renderables.size();
+        bool Applied = false;
+
+        if (Root.contains(QStringLiteral("terrainVisible"))) {
+            const bool V = Root.value(QStringLiteral("terrainVisible")).toBool(true);
+            if (Renderer->GetUseTerrain() != V) {
+                Renderer->SetUseTerrain(V);
+                for (auto& R : Renderables)
+                    if (R.RaytracingOnly) R.Visible = V;
+                CachedTerrainOn = V;
+                Applied = true;
+            }
+        }
+
+        // Ocultas por asset: indices RELATIVOS ao Begin do range — estaveis enquanto os
+        // mesmos cozidos carregarem na mesma ordem (a ordem do .sscene e deterministica).
+        int HiddenApplied = 0;
+        for (const QJsonValue& V : Root.value(QStringLiteral("assets")).toArray()) {
+            const QJsonObject O = V.toObject();
+            const QString Name = O.value(QStringLiteral("name")).toString();
+            for (const FAssetRange& A : Assets) {
+                if (A.Name != Name) continue;
+                const int End = std::min(A.End, Total);
+                for (const QJsonValue& H : O.value(QStringLiteral("hidden")).toArray()) {
+                    const int I = A.Begin + H.toInt(-1);
+                    if (I >= A.Begin && I < End && Renderables[(size_t)I].Visible) {
+                        Renderables[(size_t)I].Visible = false;
+                        Applied = true;
+                        ++HiddenApplied;
+                    }
+                }
+                break;
+            }
+        }
+
+        if (Applied) {
+            Renderer->GetScene().BumpTransformsVersion(); // TLAS acompanha as ocultas
+            if (HiddenApplied > 0)
+                Smile::LogInfo("Outliner: " + std::to_string(HiddenApplied) +
+                               " mesh(es) ocultas de " +
+                               QFileInfo(JsonPath).fileName().toStdString());
+        }
+        return Applied;
+    }
+
+    bool SceneOutlinerBridge::saveVisibility() {
+        if (!Renderer || JsonPath.isEmpty()) return false;
+        const auto& Renderables = Renderer->GetScene().Renderables();
+        const int Total = (int)Renderables.size();
+
+        QJsonArray AssetsArr;
+        for (const FAssetRange& A : Assets) {
+            QJsonArray Hidden;
+            const int End = std::min(A.End, Total);
+            for (int I = A.Begin; I < End; ++I) {
+                const auto& R = Renderables[(size_t)I];
+                if (!R.RaytracingOnly && !R.Visible) Hidden.append(I - A.Begin);
+            }
+            if (Hidden.isEmpty()) continue;
+            QJsonObject O;
+            O[QStringLiteral("name")]   = A.Name;
+            O[QStringLiteral("hidden")] = Hidden;
+            AssetsArr.append(O);
+        }
+
+        QJsonObject Root;
+        Root[QStringLiteral("version")]        = 1;
+        Root[QStringLiteral("terrainVisible")] = Renderer->GetUseTerrain();
+        Root[QStringLiteral("assets")]         = AssetsArr;
+
+        QFile File(JsonPath);
+        if (!File.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            Smile::LogError("Outliner: falha ao salvar " + JsonPath.toStdString());
+            return false;
+        }
+        File.write(QJsonDocument(Root).toJson(QJsonDocument::Indented));
+        Smile::LogInfo("Outliner: visibilidade salva em " +
+                       QFileInfo(JsonPath).fileName().toStdString());
+        if (VisDirty) { VisDirty = false; emit DirtyChanged(); }
+        return true;
     }
 
     // ---- Sincronizacao por frame ----
@@ -517,7 +735,7 @@ namespace SmileEditor {
             if (!Rows.isEmpty())
                 emit dataChanged(index(0), index((int)Rows.size() - 1), { RSelected });
             emit SelectionChanged();
-            const int Row = selectedRowIndex();
+            const int Row = RevealSelection(); // expande o caminho se estiver colapsado
             if (Row >= 0) emit ScrollToRequested(Row);
         }
 

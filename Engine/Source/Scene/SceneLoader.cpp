@@ -176,6 +176,7 @@ namespace Smile {
         for (u32 i = 0; i < sh.MaterialCount; ++i) {
             const SSceneMaterial& sm = mats[i];
             auto mat = std::make_unique<FMaterial>();
+            mat->Name = std::string(sm.Name, strnlen(sm.Name, kCookedMaxName));
 
             FTexture* baseT  = getTex(sm.BaseColor);
             FTexture* specT  = getTex(sm.Specular);
