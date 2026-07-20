@@ -532,12 +532,14 @@ Rectangle {
                 readonly property bool isAsset: kind === 3
                 readonly property bool isMesh: kind === 4
                 readonly property bool isBranch: isGroup || isAsset
-                // olho: luz usa o proprio Enabled; nuvens/oceano ligam nos toggles reais
-                readonly property bool eyeOn: isLight ? rowEnabled
-                                            : isEnv && sceneIdx === 1 ? viewportModel.cloudsEnabled
-                                            : isEnv && sceneIdx === 2 ? outlinerModel.oceanVisible
-                                            : true
-                readonly property bool dimmed: (isLight || isEnv) && hasEye && !eyeOn
+                // olho: ambiente liga nos toggles reais (bindings vivos); luz/mesh/pasta
+                // usam o estado da linha (Enabled da luz / Visible do renderable)
+                readonly property bool eyeOn: isEnv ? (sceneIdx === 1 ? viewportModel.cloudsEnabled
+                                                     : sceneIdx === 2 ? outlinerModel.oceanVisible
+                                                     : sceneIdx === 3 ? outlinerModel.terrainVisible
+                                                     : true)
+                                            : rowEnabled
+                readonly property bool dimmed: hasEye && !eyeOn
 
                 width: ListView.view.width
                 height: isGroup ? 30 : 26
@@ -710,15 +712,22 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         on: rowItem.eyeOn
                         tip: rowItem.isLight ? "Ligar/desligar a luz"
+                           : rowItem.isMesh ? "Mostrar/ocultar a mesh (raster + GI)"
+                           : rowItem.isAsset ? "Mostrar/ocultar todas as meshes do asset"
                            : rowItem.sceneIdx === 1 ? "Ligar/desligar as nuvens"
-                           : "Ligar/desligar o oceano"
+                           : rowItem.sceneIdx === 2 ? "Ligar/desligar o oceano"
+                           : "Mostrar/ocultar o terreno"
                         onClicked: {
                             if (rowItem.isLight)
                                 lightsModel.toggleLightEnabled(rowItem.sceneIdx)
+                            else if (rowItem.isMesh || rowItem.isAsset)
+                                outlinerModel.toggleEye(rowItem.index)
                             else if (rowItem.sceneIdx === 1)
                                 viewportModel.SetCloudsEnabled(!viewportModel.cloudsEnabled)
                             else if (rowItem.sceneIdx === 2)
                                 outlinerModel.oceanVisible = !outlinerModel.oceanVisible
+                            else if (rowItem.sceneIdx === 3)
+                                outlinerModel.terrainVisible = !outlinerModel.terrainVisible
                         }
                     }
                 }
@@ -729,10 +738,19 @@ Rectangle {
                                  ? Qt.ArrowCursor : Qt.PointingHandCursor
                 }
                 TapHandler {
-                    onTapped: {
+                    // os handlers dos botoes (olho/duplicar/lixeira) NAO tomam grab exclusivo,
+                    // entao o tap da linha tambem dispara — ignora a faixa das acoes.
+                    onTapped: (ep) => {
+                        if (ep.position.x >= rightActions.x) return
                         if (rowItem.isBranch)          outlinerModel.toggleExpand(rowItem.index)
                         else if (rowItem.isLight)      lightsModel.selectLight(rowItem.sceneIdx)
                         else if (rowItem.isMesh)       outlinerModel.selectRow(rowItem.index)
+                    }
+                    // duplo-clique enquadra a camera no objeto (estilo tecla F da UE)
+                    onDoubleTapped: (ep) => {
+                        if (ep.position.x >= rightActions.x) return
+                        if (rowItem.isLight || rowItem.isMesh)
+                            outlinerModel.focusRow(rowItem.index)
                     }
                 }
             }
@@ -758,7 +776,7 @@ Rectangle {
                     if (outlinerModel.selectedCount > 0)
                         t += "  ·  " + outlinerModel.selectedCount + " selecionado"
                     if (outlinerModel.hiddenCount > 0)
-                        t += "  ·  " + outlinerModel.hiddenCount + " luz(es) desligada(s)"
+                        t += "  ·  " + outlinerModel.hiddenCount + " ocultos"
                     return t
                 }
                 color: root.textMuted
@@ -1124,7 +1142,7 @@ Rectangle {
                 }
                 Text {
                     width: parent.width
-                    text: "Arraste com o gizmo no viewport. Material, tris e VRAM chegam em breve."
+                    text: "Duplo-clique na árvore enquadra a câmera. Material, tris e VRAM chegam em breve."
                     color: root.textMuted
                     font.family: "Segoe UI"
                     font.pixelSize: 10

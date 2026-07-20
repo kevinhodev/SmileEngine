@@ -31,6 +31,7 @@ namespace SmileEditor {
         Q_PROPERTY(QString search READ Search WRITE SetSearch NOTIFY FiltersChanged)
         Q_PROPERTY(int filter READ Filter WRITE SetFilter NOTIFY FiltersChanged)
         Q_PROPERTY(bool oceanVisible READ OceanVisible WRITE SetOceanVisible NOTIFY EnvChanged)
+        Q_PROPERTY(bool terrainVisible READ TerrainVisible WRITE SetTerrainVisible NOTIFY EnvChanged)
         Q_PROPERTY(bool meshSelected READ MeshSelected NOTIFY SelectionChanged)
         Q_PROPERTY(QString meshName READ MeshName NOTIFY SelectionChanged)
 
@@ -82,11 +83,20 @@ namespace SmileEditor {
         void    SetFilter(int V);
         bool    OceanVisible() const;
         void    SetOceanVisible(bool V);
+        bool    TerrainVisible() const;
+        void    SetTerrainVisible(bool V);
         bool    MeshSelected() const;
         QString MeshName() const;
 
         Q_INVOKABLE void toggleExpand(int row);
         Q_INVOKABLE void selectRow(int row);    // luz/mesh: seleciona no renderer (exclusivo)
+        // Olho de mesh/pasta: flip de FRenderable::Visible + bump da TransformsVersion
+        // (o rebuild leve da TLAS re-coleta as instancias pulando !Visible -> o GI/reflexos
+        // respeitam o toggle no frame seguinte). Pasta = range inteiro do asset.
+        Q_INVOKABLE void toggleEye(int row);
+        // Duplo-clique: teleporta a camera pra enquadrar o objeto mantendo a orientacao
+        // (mesh = AABB, luz = posicao + raio da fonte). Estilo tecla F da UE.
+        Q_INVOKABLE void focusRow(int row);
         Q_INVOKABLE int  selectedRowIndex() const; // linha selecionada na lista flat (-1 = fora)
         Q_INVOKABLE void closePanel() { emit CloseRequested(); }
 
@@ -141,8 +151,9 @@ namespace SmileEditor {
         int  CachedSelLight  = -1;
         int  CachedRenderableCount = -1;
         int  CachedLightCount      = -1;
-        bool CachedClouds  = true;
-        bool CachedOcean   = true;
-        bool CachedTerrain = false;
+        bool CachedClouds    = true;
+        bool CachedOcean     = true;
+        bool CachedTerrain   = false; // Terrain.IsLoaded()
+        bool CachedTerrainOn = true;  // GetUseTerrain() (olho)
     };
 }

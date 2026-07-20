@@ -5,6 +5,7 @@
 #include <QFileInfo>
 
 #include <algorithm>
+#include <cmath>
 
 namespace SmileEditor {
     namespace {
@@ -16,6 +17,8 @@ namespace SmileEditor {
             { SceneOutlinerBridge::EnvOceano,  "Oceano FFT",          "waves"    },
             { SceneOutlinerBridge::EnvTerreno, "Terreno",             "mountain" },
         };
+
+        constexpr double kToRad = 3.14159265358979 / 180.0;
     }
 
     SceneOutlinerBridge::SceneOutlinerBridge(QObject* _Parent)
@@ -26,9 +29,10 @@ namespace SmileEditor {
         if (Renderer) {
             CachedSelMesh  = Renderer->GetSelectedObject();
             CachedSelLight = Renderer->GetSelectedLight();
-            CachedClouds   = Renderer->GetUseClouds();
-            CachedOcean    = Renderer->GetUseWater();
-            CachedTerrain  = Renderer->GetTerrain().IsLoaded();
+            CachedClouds    = Renderer->GetUseClouds();
+            CachedOcean     = Renderer->GetUseWater();
+            CachedTerrain   = Renderer->GetTerrain().IsLoaded();
+            CachedTerrainOn = Renderer->GetUseTerrain();
         }
         Rebuild();
         emit AvailableChanged();
@@ -122,11 +126,12 @@ namespace SmileEditor {
                 R.Name     = QLatin1String(E.Name);
                 R.Icon     = QLatin1String(E.Icon);
                 R.SceneIdx = E.Id;
-                // Olho: nuvens/oceano tem toggle real hoje; o estado vem por binding direto
-                // (viewportModel.cloudsEnabled / oceanVisible), REnabled aqui e so fallback.
-                R.HasEye   = (E.Id == EnvNuvens || E.Id == EnvOceano);
-                R.Enabled  = (E.Id == EnvNuvens) ? Renderer->GetUseClouds()
-                           : (E.Id == EnvOceano) ? Renderer->GetUseWater() : true;
+                // Olho: o estado vem por binding direto no QML (viewportModel.cloudsEnabled /
+                // oceanVisible / terrainVisible), REnabled aqui e so fallback.
+                R.HasEye   = (E.Id != EnvSol);
+                R.Enabled  = (E.Id == EnvNuvens)  ? Renderer->GetUseClouds()
+                           : (E.Id == EnvOceano)  ? Renderer->GetUseWater()
+                           : (E.Id == EnvTerreno) ? Renderer->GetUseTerrain() : true;
                 Children.push_back(R);
             }
             if (!Searching || !Children.isEmpty()) {
@@ -193,10 +198,12 @@ namespace SmileEditor {
                 const FAssetRange& Range = Ranges[A];
                 QVector<FRow> Children;
                 int RangeCount = 0;
+                bool AnyVisible = false;
                 for (int I = Range.Begin; I < std::min(Range.End, Total); ++I) {
                     const auto& R = Renderables[(size_t)I];
                     if (R.RaytracingOnly) continue;
                     ++RangeCount;
+                    AnyVisible = AnyVisible || R.Visible;
                     const QString Name = QString::fromStdString(R.Name);
                     if (!MatchesSearch(Name)) continue;
                     FRow M;
@@ -206,6 +213,8 @@ namespace SmileEditor {
                     M.Icon     = (R.Material && R.Material->Constants.ShadingModel == 1)
                                ? QStringLiteral("leaf") : QStringLiteral("box");
                     M.SceneIdx = I;
+                    M.HasEye   = true;
+                    M.Enabled  = R.Visible;
                     Children.push_back(M);
                 }
                 MeshCount += RangeCount;
@@ -221,6 +230,8 @@ namespace SmileEditor {
                 F.Count    = RangeCount;
                 F.Expanded = Expanded;
                 F.SceneIdx = A; // indice em Assets (ou o residual, que nao colapsa persistente)
+                F.HasEye   = true;
+                F.Enabled  = AnyVisible;
                 Folders.push_back(F);
                 if (Expanded) Folders += Children;
             }
@@ -295,9 +306,12 @@ namespace SmileEditor {
 
     int SceneOutlinerBridge::HiddenCount() const {
         if (!Renderer) return 0;
+        const auto& Scene = const_cast<Smile::Renderer*>(Renderer)->GetScene();
         int N = 0;
-        for (const auto& L : const_cast<Smile::Renderer*>(Renderer)->GetScene().Lights())
+        for (const auto& L : Scene.Lights())
             if (!L.Enabled) ++N;
+        for (const auto& R : Scene.Renderables())
+            if (!R.RaytracingOnly && !R.Visible) ++N;
         return N;
     }
 
@@ -325,6 +339,28 @@ namespace SmileEditor {
         Renderer->SetUseWater(_V);
         CachedOcean = _V;
         Rebuild(); // REnabled da linha do oceano
+        emit EnvChanged();
+    }
+
+    bool SceneOutlinerBridge::TerrainVisible() const {
+        return Renderer ? Renderer->GetUseTerrain() : true;
+    }
+
+    void SceneOutlinerBridge::SetTerrainVisible(bool _V) {
+        if (!Renderer || Renderer->GetUseTerrain() == _V) return;
+        Renderer->SetUseTerrain(_V); // gates de prepass/G-buffer/CSM do FTerrain
+        // O chao do GI e o proxy RaytracingOnly na TLAS — esconde junto, senao o DDGI
+        // continua quicando luz num terreno invisivel.
+        bool Bumped = false;
+        for (auto& R : Renderer->GetScene().Renderables()) {
+            if (R.RaytracingOnly && R.Visible != _V) {
+                R.Visible = _V;
+                Bumped = true;
+            }
+        }
+        if (Bumped) Renderer->GetScene().BumpTransformsVersion();
+        CachedTerrainOn = _V;
+        Rebuild();
         emit EnvChanged();
     }
 
@@ -379,6 +415,81 @@ namespace SmileEditor {
         emit SelectionChanged();
     }
 
+    void SceneOutlinerBridge::toggleEye(int _Row) {
+        if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
+        const FRow& Row = Rows[_Row];
+        auto& Renderables = Renderer->GetScene().Renderables();
+
+        if (Row.Kind == KMesh) {
+            if (Row.SceneIdx < 0 || Row.SceneIdx >= (int)Renderables.size()) return;
+            Renderables[(size_t)Row.SceneIdx].Visible =
+                !Renderables[(size_t)Row.SceneIdx].Visible;
+        } else if (Row.Kind == KAsset) {
+            // Pasta: range do asset (ou o residual "Outros"). Se ha alguma visivel ->
+            // esconde todas; senao mostra todas.
+            const int Total = (int)Renderables.size();
+            int Begin = 0, End = Total;
+            if (Row.SceneIdx >= 0 && Row.SceneIdx < Assets.size()) {
+                Begin = Assets[Row.SceneIdx].Begin;
+                End   = std::min(Assets[Row.SceneIdx].End, Total);
+            } else if (!Assets.isEmpty()) {
+                Begin = Assets.last().End; // residual
+            }
+            bool AnyVisible = false;
+            for (int I = Begin; I < End; ++I)
+                if (!Renderables[(size_t)I].RaytracingOnly && Renderables[(size_t)I].Visible)
+                    { AnyVisible = true; break; }
+            for (int I = Begin; I < End; ++I)
+                if (!Renderables[(size_t)I].RaytracingOnly)
+                    Renderables[(size_t)I].Visible = !AnyVisible;
+        } else if (Row.Kind == KEnv && Row.SceneIdx == EnvTerreno) {
+            SetTerrainVisible(!Renderer->GetUseTerrain());
+            return;
+        } else {
+            return;
+        }
+
+        // TLAS re-coleta as instancias no rebuild leve do proximo frame (pula !Visible),
+        // entao GI/reflexos/ReSTIR respeitam o olho, nao so o raster.
+        Renderer->GetScene().BumpTransformsVersion();
+        Rebuild();
+    }
+
+    void SceneOutlinerBridge::focusRow(int _Row) {
+        if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
+        const FRow& Row = Rows[_Row];
+
+        Smile::Vec3 Center;
+        float Radius = 1.0f;
+        if (Row.Kind == KMesh) {
+            const auto& Renderables = Renderer->GetScene().Renderables();
+            if (Row.SceneIdx < 0 || Row.SceneIdx >= (int)Renderables.size()) return;
+            const auto& R = Renderables[(size_t)Row.SceneIdx];
+            // AABB ja e world-space nas cenas cozidas (o cooker baka a transform no
+            // vertice); pra renderables com transform propria, soma a posicao.
+            const Smile::Vec3 Local = (R.AABBMin + R.AABBMax) * 0.5f;
+            Center = Local + R.Transform.Position;
+            Radius = std::max(((R.AABBMax - R.AABBMin) * 0.5f).Length(), 0.25f);
+        } else if (Row.Kind == KLight) {
+            const auto& Lights = Renderer->GetScene().Lights();
+            if (Row.SceneIdx < 0 || Row.SceneIdx >= (int)Lights.size()) return;
+            Center = Lights[(size_t)Row.SceneIdx].Position;
+            Radius = 1.5f;
+        } else {
+            return;
+        }
+
+        // Enquadra mantendo a orientacao atual: recua do alvo ao longo do forward.
+        const double Pitch = Renderer->GetPitch() * kToRad;
+        const double Yaw   = Renderer->GetYaw()   * kToRad;
+        const Smile::Vec3 Fwd = { (float)(std::cos(Pitch) * std::sin(Yaw)),
+                                  (float)std::sin(Pitch),
+                                  (float)(std::cos(Pitch) * std::cos(Yaw)) };
+        const float Dist = std::clamp(Radius * 2.2f, 1.5f, 220.0f);
+        Renderer->SetCameraPose(Center - Fwd * Dist,
+                                Renderer->GetPitch(), Renderer->GetYaw());
+    }
+
     int SceneOutlinerBridge::selectedRowIndex() const {
         for (int I = 0; I < Rows.size(); ++I)
             if (RowSelected(Rows[I])) return I;
@@ -411,11 +522,13 @@ namespace SmileEditor {
         }
 
         // Toggles de ambiente mudaram por fora (SettingsWindow etc.).
-        const bool Clouds = Renderer->GetUseClouds();
-        const bool Ocean  = Renderer->GetUseWater();
-        if (Clouds != CachedClouds || Ocean != CachedOcean) {
-            CachedClouds = Clouds;
-            CachedOcean  = Ocean;
+        const bool Clouds    = Renderer->GetUseClouds();
+        const bool Ocean     = Renderer->GetUseWater();
+        const bool TerrainOn = Renderer->GetUseTerrain();
+        if (Clouds != CachedClouds || Ocean != CachedOcean || TerrainOn != CachedTerrainOn) {
+            CachedClouds    = Clouds;
+            CachedOcean     = Ocean;
+            CachedTerrainOn = TerrainOn;
             Rebuild(); // REnabled das linhas de ambiente
             emit EnvChanged();
         }

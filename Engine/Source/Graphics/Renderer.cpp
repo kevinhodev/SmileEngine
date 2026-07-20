@@ -1520,7 +1520,7 @@ namespace Smile {
 
         // Terreno: seleciona LOD por chunk (screen-size) + frustum cull e escreve o CB do
         // slot — antes do CSM (as cascatas reusam o LOD da vista).
-        if (Terrain.IsLoaded())
+        if (UseTerrain && Terrain.IsLoaded())
             Terrain.UpdatePerFrame(FrameSlot, ViewProjection, ViewProjUnjittered, PrevViewProj,
                                    CameraPosition, FovY, MipBias);
 
@@ -1543,7 +1543,7 @@ namespace Smile {
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
                     FSunShadows::FExtraCascadeDraw TerrainCasters;
-                    if (Terrain.IsLoaded())
+                    if (UseTerrain && Terrain.IsLoaded())
                         TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd, u32,
                                                 D3D12_GPU_VIRTUAL_ADDRESS CascadeCB,
                                                 const Mat44& CascadeVP) {
@@ -1645,7 +1645,7 @@ namespace Smile {
 
             // Terreno no prepass (root sig/PSO proprios; AO e G-buffer religam os deles
             // depois). Com GTAO on escreve o NormalBuffer junto, como as meshes.
-            if (Terrain.IsLoaded())
+            if (UseTerrain && Terrain.IsLoaded())
                 Terrain.RenderDepthPrepass(CommandList, SRVHeap, AOWillRun);
             GpuProfiler.End(CommandList); // Z-prepass
         }
@@ -1730,7 +1730,7 @@ namespace Smile {
 
             // Terreno no geometry pass (depth EQUAL sobre o depth do prepass; o deferred
             // lighting religa a root signature principal depois).
-            if (Terrain.IsLoaded()) {
+            if (UseTerrain && Terrain.IsLoaded()) {
                 FGpuScope Scope(GpuProfiler, CommandList, "Terreno");
                 Terrain.RenderGBuffer(CommandList, SRVHeap);
             }

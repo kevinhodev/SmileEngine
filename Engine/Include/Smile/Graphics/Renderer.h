@@ -268,6 +268,8 @@ namespace Smile {
         bool LoadTerrain(const FTerrainDesc& Desc) {
             return Terrain.Load(Device.Native(), UploadQueue, SRVHeap, Desc);
         }
+        void SetUseTerrain(bool Use)         { UseTerrain = Use; }
+        bool GetUseTerrain() const           { return UseTerrain; }
 
         void SetUseClouds(bool Use)          { if (Use && !UseClouds) VolumetricClouds.InvalidateHistory();
                                                UseClouds = Use; }
@@ -291,6 +293,11 @@ namespace Smile {
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
         f32  GetPitch()     const { return Camera.GetPitch(); }
         f32  GetYaw()       const { return Camera.GetYaw(); }
+        // Foco de camera do editor (duplo-clique no Scene Outliner): teleporta mantendo
+        // a orientacao atual.
+        void SetCameraPose(const Vec3& Pos, f32 PitchDeg, f32 YawDeg) {
+            Camera.SetPose(Pos, PitchDeg, YawDeg);
+        }
 
         const FD3D12Device& GetDevice()  const { return Device; }
         FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
@@ -546,6 +553,8 @@ namespace Smile {
         bool              UseWater  = false;
 
         FTerrain          Terrain;
+        bool              UseTerrain = true; // olho do Scene Outliner (so raster; proxy RT
+                                             // e escondido pelo Visible do renderable proxy)
 
         ComPtr<ID3D12Resource> SceneColorCopy;
         ComPtr<ID3D12Resource> SceneDepthCopy;
