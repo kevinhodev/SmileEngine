@@ -643,6 +643,16 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    double ViewportWidget::GetVolFogLights() const {
+        return Renderer ? Renderer->GetVolumetricFog().GetLightsIntensity() : 1.0;
+    }
+
+    void ViewportWidget::SetVolFogLights(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetVolumetricFog().SetLightsIntensity(static_cast<Smile::f32>(_Value));
+        emit ViewSettingsChanged();
+    }
+
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
     }

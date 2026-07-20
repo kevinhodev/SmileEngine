@@ -396,4 +396,11 @@ namespace Smile {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         TransitionCube(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
+
+    void FLocalShadows::EnsureReadableCompute(ID3D12GraphicsCommandList* _CommandList) {
+        const D3D12_RESOURCE_STATES Both = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        TransitionArray(_CommandList, Both);
+        TransitionCube(_CommandList, Both);
+    }
 }

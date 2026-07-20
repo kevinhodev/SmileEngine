@@ -39,7 +39,8 @@ namespace Smile {
     void FVolumetricFogPass::BuildScatteringRootSignature(ID3D12Device* _Device) {
         // Registers casam com VolumetricFogScattering: b0 = VolFogCB, b3/t11/s2 = CSM
         // (CSMCommon.hlsli), t0 = VBufferA, t1 = atlas de irradiancia do DDGI,
-        // t2 = historia do scattering (ping-pong), u0 = saida.
+        // t2 = historia do scattering (ping-pong), t3 = lista FGPULight (root SRV),
+        // t18+t19 = atlas spot + cube array (slots contiguos, uma tabela), u0 = saida.
         D3D12_DESCRIPTOR_RANGE VBufferRange{};
         VBufferRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         VBufferRange.NumDescriptors                    = 1;
@@ -55,13 +56,17 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE ShadowRange = VBufferRange;
         ShadowRange.BaseShaderRegister = 11;
 
+        D3D12_DESCRIPTOR_RANGE LocalShadowRange = VBufferRange;
+        LocalShadowRange.BaseShaderRegister = 18;
+        LocalShadowRange.NumDescriptors     = 2; // t18 atlas spot + t19 cube array
+
         D3D12_DESCRIPTOR_RANGE UAVRange{};
         UAVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         UAVRange.NumDescriptors                    = 1;
         UAVRange.BaseShaderRegister                = 0;
         UAVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[7]{};
+        D3D12_ROOT_PARAMETER RootParams[9]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
@@ -90,10 +95,19 @@ namespace Smile {
         RootParams[5].DescriptorTable.pDescriptorRanges   = &HistoryRange;
         RootParams[5].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
-        RootParams[6].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[6].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[6].DescriptorTable.pDescriptorRanges   = &UAVRange;
-        RootParams[6].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+        RootParams[6].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV; // t3 lista de luzes
+        RootParams[6].Descriptor.ShaderRegister = 3;
+        RootParams[6].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[7].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[7].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[7].DescriptorTable.pDescriptorRanges   = &LocalShadowRange;
+        RootParams[7].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[8].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[8].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[8].DescriptorTable.pDescriptorRanges   = &UAVRange;
+        RootParams[8].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -218,6 +232,10 @@ namespace Smile {
             }
         }
 
+        // Luzes: zeradas aqui — o PatchLights (pos-culling do frame) preenche.
+        c.LightParamsVF  = { 0.0f, 0.0f, 0.0f, LightsIntensity };
+        c.LightParamsVF2 = { 0.05f, 0.0f, 0.0f, 0.0f };
+
         // Guarda o frame atual como "anterior" do proximo.
         StoredPrevVP = _P.ViewProjUnjit;
         PrevCamPosV  = _P.CameraPos;
@@ -227,10 +245,20 @@ namespace Smile {
         *Mapped() = c;
     }
 
+    void FVolumetricFogPass::PatchLights(u32 _NumLights, f32 _InvSpotRes, f32 _DepthBias,
+                                         f32 _PointNear) {
+        if (!MappedBase) return;
+        Mapped()->LightParamsVF  = { static_cast<f32>(_NumLights), _InvSpotRes, _DepthBias,
+                                     LightsIntensity };
+        Mapped()->LightParamsVF2 = { _PointNear, 0.0f, 0.0f, 0.0f };
+    }
+
     void FVolumetricFogPass::Execute(ID3D12GraphicsCommandList* _CommandList,
                                      FTextureSRVHeap& _SRVHeap,
                                      D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddr,
-                                     u32 _CSMShadowSRVSlot, u32 _DDGIIrradianceSRVSlot) {
+                                     u32 _CSMShadowSRVSlot, u32 _DDGIIrradianceSRVSlot,
+                                     D3D12_GPU_VIRTUAL_ADDRESS _LightsVA,
+                                     u32 _LocalShadowSRVSlot) {
         if (!Initialized) return;
 
         constexpr u32 GX = (kGridW + 3) / 4, GY = (kGridH + 3) / 4, GZ = (kGridZ + 3) / 4;
@@ -258,7 +286,9 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(3, _SRVHeap.GpuHandle(_DDGIIrradianceSRVSlot));
         _CommandList->SetComputeRootDescriptorTable(4, _SRVHeap.GpuHandle(_CSMShadowSRVSlot));
         _CommandList->SetComputeRootDescriptorTable(5, _SRVHeap.GpuHandle(History.SRVSlot()));
-        _CommandList->SetComputeRootDescriptorTable(6, _SRVHeap.GpuHandle(Target.UAVSlot(0)));
+        _CommandList->SetComputeRootShaderResourceView(6, _LightsVA);
+        _CommandList->SetComputeRootDescriptorTable(7, _SRVHeap.GpuHandle(_LocalShadowSRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(8, _SRVHeap.GpuHandle(Target.UAVSlot(0)));
         _CommandList->Dispatch(GX, GY, GZ);
 
         // 3) Integracao acumulada -> Integrated (o fog fullscreen le em PIXEL)

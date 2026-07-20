@@ -65,6 +65,8 @@ namespace Smile {
 
         // Garante os arrays legiveis (PIXEL_SHADER_RESOURCE) mesmo em frame sem job novo.
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);
+        // Leitura tambem em compute (volumetric fog): PIXEL | NON_PIXEL.
+        void EnsureReadableCompute(ID3D12GraphicsCommandList* CommandList);
 
         // Slot do SRV do atlas de spot (t18); o SRV do cube array (t19) vive em Slot+1 —
         // a tabela do root param cobre os dois de uma vez (descritores contiguos).

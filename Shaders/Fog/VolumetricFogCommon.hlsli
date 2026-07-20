@@ -34,6 +34,10 @@ cbuffer VolFogCB : register(b0) {
     float4 TemporalParams; // x = peso da história (0 = inválida/off), y = amostras em
                            // history-miss, zw unused
     float4 FrameJitterOffsets[8]; // xyz = offset do voxel por amostra (Halton 2/3/5)
+    // F3 — luzes puntuais (mesma lista FGPULight do deferred, root SRV):
+    float4 LightParamsVF;  // x = nº de luzes, y = 1/res do atlas spot, z = depth bias (m),
+                           // w = intensidade das luzes no fog (0 desliga o loop)
+    float4 LightParamsVF2; // x = near das projecoes locais, yzw unused
 };
 
 // Profundidade (view-Z linear) do slice — inverso de VolFog_SliceFromDepth.

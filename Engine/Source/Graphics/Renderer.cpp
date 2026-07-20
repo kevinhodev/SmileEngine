@@ -1511,6 +1511,14 @@ namespace Smile {
                                        LocalShadows.GetDepthBias(), 0.0f };
             MappedCB->LightParams2 = { 1.0f / static_cast<f32>(FLocalShadows::kCubeResolution),
                                        FLocalShadows::kPointNear, 0.0f, 0.0f };
+
+            // F3 do froxel fog: o scattering le a MESMA lista deste frame — patcha o CB
+            // (escrito la atras, antes do culling) com contagem e params de sombra local.
+            if (VolFogActive)
+                VolumetricFog.PatchLights(NumLights,
+                                          1.0f / static_cast<f32>(FLocalShadows::kResolution),
+                                          LocalShadows.GetDepthBias(),
+                                          FLocalShadows::kPointNear);
         }
 
 
@@ -2126,10 +2134,14 @@ namespace Smile {
             if (VolFogOn) {
                 FGpuScope Scope(GpuProfiler, CommandList, "Volumetric fog");
                 SunShadows.EnsureReadableCompute(CommandList);
+                LocalShadows.EnsureReadableCompute(CommandList);
                 VolumetricFog.Execute(CommandList, SRVHeap, SunShadows.ConstantsAddress(),
                                       SunShadows.ShadowSRVSlot(),
                                       (UseGI && DDGI.IsReady()) ? DDGI.IrradianceAtlasSRV()
-                                                                : DepthSRVSlot);
+                                                                : DepthSRVSlot,
+                                      LightBuffer->GetGPUVirtualAddress() +
+                                          static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight),
+                                      LocalShadows.ShadowSRVSlot());
             }
 
             // Sun shafts volumétricos: raymarch + temporal meia-res (depth já legível

@@ -58,6 +58,7 @@ namespace SmileEditor {
         Q_PROPERTY(double volFogDensity READ GetVolFogDensity NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double volFogAmbient READ GetVolFogAmbient NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool volFogTemporal READ IsVolFogTemporal NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double volFogLights READ GetVolFogLights NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsEnabled READ AreCloudsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsHalfRes READ AreCloudsHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool cloudsTemporal READ AreCloudsTemporal NOTIFY ViewSettingsChanged)
@@ -159,6 +160,7 @@ namespace SmileEditor {
         double            GetVolFogDensity() const;
         double            GetVolFogAmbient() const;
         bool              IsVolFogTemporal() const;
+        double            GetVolFogLights() const;
         bool              AreCloudsEnabled() const;
         bool              AreCloudsHalfRes() const;
         bool              AreCloudsTemporal() const;
@@ -242,6 +244,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SetVolFogDensity(double value);
         Q_INVOKABLE void SetVolFogAmbient(double value);
         Q_INVOKABLE void SetVolFogTemporal(bool enabled);
+        Q_INVOKABLE void SetVolFogLights(double value);
         Q_INVOKABLE void SetCloudsEnabled(bool enabled);
         Q_INVOKABLE void SetCloudsHalfRes(bool halfRes);
         Q_INVOKABLE void SetCloudsTemporal(bool enabled);

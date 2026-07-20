@@ -1113,7 +1113,7 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 430
+                height: 482
                 title: "Volumetric fog"
 
                 Text {
@@ -1174,18 +1174,27 @@ Rectangle {
                     valueText: "×" + viewportModel.volFogAmbient.toFixed(1).replace(".", ",")
                     onCommitted: (v) => viewportModel.SetVolFogAmbient(v)
                 }
+                ShadowSlider {
+                    x: 20; y: 316
+                    width: parent.width - 40
+                    label: "Luzes no ar (halo de point/spot)"
+                    from: 0; to: 4.0; step: 0.1
+                    value: viewportModel.volFogLights
+                    valueText: "×" + viewportModel.volFogLights.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetVolFogLights(v)
+                }
 
-                Rectangle { x: 20; y: 328; width: parent.width - 40; height: 1; color: root.divider }
+                Rectangle { x: 20; y: 380; width: parent.width - 40; height: 1; color: root.divider }
 
                 Text {
-                    x: 20; y: 346
+                    x: 20; y: 398
                     text: "Acumulação temporal"
                     color: root.textPrimary
                     font.family: "Segoe UI"
                     font.pixelSize: 13
                 }
                 Text {
-                    x: 20; y: 365
+                    x: 20; y: 417
                     text: "jitter Halton + reprojeção — desligar volta o banding em fatias"
                     color: root.textMuted
                     font.family: "Segoe UI"
@@ -1194,7 +1203,7 @@ Rectangle {
                 Toggle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
-                    y: 345
+                    y: 397
                     checked: viewportModel.volFogTemporal
                     onToggled: viewportModel.SetVolFogTemporal(!checked)
                 }

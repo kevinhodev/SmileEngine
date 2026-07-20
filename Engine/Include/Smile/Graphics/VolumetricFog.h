@@ -41,11 +41,19 @@ namespace Smile {
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         void UpdatePerFrame(u32 FrameSlot, const FFrameParams& P);
 
-        // CSM legivel em NON_PIXEL antes (FSunShadows::EnsureReadableCompute).
+        // F3 — luzes puntuais: chamado DEPOIS do culling de luzes do frame (o loop do
+        // scattering le a MESMA lista FGPULight do deferred). Patcha o CB do slot ja
+        // escrito pelo UpdatePerFrame deste frame.
+        void PatchLights(u32 NumLights, f32 InvSpotRes, f32 DepthBias, f32 PointNear);
+
+        // CSM e sombras locais legiveis em NON_PIXEL antes (EnsureReadableCompute).
         // DDGIIrradianceSRVSlot: passar um SRV valido qualquer com DDGI off (CB gate).
+        // LightsVA = slice do FrameSlot no LightBuffer do deferred (root SRV t3);
+        // LocalShadowSRVSlot = atlas spot (cube array vive no slot+1, tabela cobre os 2).
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddr, u32 CSMShadowSRVSlot,
-                     u32 DDGIIrradianceSRVSlot);
+                     u32 DDGIIrradianceSRVSlot, D3D12_GPU_VIRTUAL_ADDRESS LightsVA,
+                     u32 LocalShadowSRVSlot);
 
         u32  IntegratedSRVSlot() const { return Integrated.SRVSlot(); }
         // (B, O, S, kGridZ) do ultimo UpdatePerFrame — o fog fullscreen fatia igual.
@@ -72,6 +80,8 @@ namespace Smile {
         f32  GetExtinctionScale() const { return ExtinctionScale; }
         void SetAmbientIntensity(f32 V) { AmbientIntensity = V; }
         f32  GetAmbientIntensity() const{ return AmbientIntensity; }
+        void SetLightsIntensity(f32 V)  { LightsIntensity = V; }
+        f32  GetLightsIntensity() const { return LightsIntensity; }
 
     private:
         // Espelho exato do VolFogCB (VolumetricFogCommon.hlsli).
@@ -94,6 +104,8 @@ namespace Smile {
             Vec4  PrevCamForward;
             Vec4  TemporalParams;
             Vec4  FrameJitterOffsets[8];
+            Vec4  LightParamsVF;
+            Vec4  LightParamsVF2;
         };
         static constexpr u32 kMissSupersamples = 4;    // amostras qdo a historia falha
         static constexpr f32 kHistoryWeight    = 0.9f; // blend da UE
@@ -130,6 +142,7 @@ namespace Smile {
         f32  PhaseG           = 0.3f;   // HG do sol (UE usa 0.2; shafts de longe usam 0.7)
         f32  ExtinctionScale  = 1.0f;   // densidade extra do volume (so o froxel)
         f32  AmbientIntensity = 1.0f;
+        f32  LightsIntensity  = 1.0f;   // luzes puntuais no ar (0 desliga o loop)
         Vec3 Albedo{ 0.9f, 0.9f, 0.9f };
 
         bool Initialized = false;
