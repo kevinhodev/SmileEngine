@@ -10,6 +10,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QTimer>
+#include <QGuiApplication>
 #include <QCursor>
 #include <QLocale>
 #include <QFileDialog>
@@ -54,6 +55,14 @@ namespace SmileEditor {
         RedrawTimer = new QTimer(this);
         RedrawTimer->setInterval(0);
         connect(RedrawTimer, &QTimer::timeout, this, &ViewportWidget::OnRenderTimer);
+
+        // Editor em segundo plano (nenhuma janela nossa com foco): cai pra ~10fps em vez
+        // de queimar GPU em FPS livre enquanto o usuario esta em outro app (estilo "Use
+        // Less CPU when in Background" da UE). Minimizado ja para de vez (hideEvent).
+        connect(qGuiApp, &QGuiApplication::applicationStateChanged, this,
+                [this](Qt::ApplicationState State) {
+            RedrawTimer->setInterval(State == Qt::ApplicationActive ? 0 : 100);
+        });
 
         FrameTimer.start();
     }

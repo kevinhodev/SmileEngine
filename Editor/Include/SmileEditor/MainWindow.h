@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
@@ -40,6 +41,7 @@ namespace SmileEditor {
     protected:
         void changeEvent(QEvent* event) override; // notifica o WindowBridge em max/restore
         bool eventFilter(QObject* obj, QEvent* event) override; // visibilidade da janela TOD -> menu
+        void closeEvent(QCloseEvent* event) override; // prompt de sidecars nao salvos
 
     private slots:
         void OnHelpAbout();
@@ -80,5 +82,6 @@ namespace SmileEditor {
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;
+        QElapsedTimer         StatsThrottle;    // status bar atualiza a ~5Hz, nao por frame
     };
 } 

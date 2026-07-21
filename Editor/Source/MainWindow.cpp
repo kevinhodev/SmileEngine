@@ -31,6 +31,7 @@
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QCloseEvent>
 #include <QMessageBox>
 #include <QFileSystemWatcher>
 #include <QFrame>
@@ -199,6 +200,41 @@ namespace SmileEditor {
             if (MaterialsBr) MaterialsBr->SetPreviewEnabled(Shown); // preview so com a janela aberta
         }
         return QMainWindow::eventFilter(_Obj, _Event);
+    }
+
+    void MainWindow::closeEvent(QCloseEvent* _Event) {
+        // Sidecars com dirty flag (lights/visibility/materials) fechavam descartando em
+        // silencio. Sao baratos de salvar — pergunta uma vez, com Salvar como default.
+        const bool LightsDirty    = LightsBr    && LightsBr->Dirty();
+        const bool VisDirty       = OutlinerBr  && OutlinerBr->Dirty();
+        const bool MaterialsDirty = MaterialsBr && MaterialsBr->Dirty();
+        if (!LightsDirty && !VisDirty && !MaterialsDirty) {
+            QMainWindow::closeEvent(_Event);
+            return;
+        }
+
+        QStringList Pending;
+        if (LightsDirty)    Pending << tr("luzes");
+        if (VisDirty)       Pending << tr("visibilidade");
+        if (MaterialsDirty) Pending << tr("materiais");
+
+        const auto Choice = QMessageBox::question(
+            this, tr("Alterações não salvas"),
+            tr("Há alterações não salvas de: %1.\nSalvar antes de sair?")
+                .arg(Pending.join(QStringLiteral(", "))),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save);
+
+        if (Choice == QMessageBox::Cancel) {
+            _Event->ignore();
+            return;
+        }
+        if (Choice == QMessageBox::Save) {
+            if (LightsDirty)    LightsBr->saveLights();
+            if (VisDirty)       OutlinerBr->saveVisibility();
+            if (MaterialsDirty) MaterialsBr->saveMaterials();
+        }
+        QMainWindow::closeEvent(_Event);
     }
 
     void MainWindow::CreateTopBar() {
@@ -466,6 +502,11 @@ namespace SmileEditor {
         if (!Viewport || !StatusBr) return;
         auto* Renderer = Viewport->GetRenderer();
         if (!Renderer || !Renderer->IsInitialized()) return;
+
+        // ~5Hz basta: formatar QString + relayout da StatusBar a 100+Hz era so custo —
+        // ninguem le FPS piscando por frame.
+        if (StatsThrottle.isValid() && StatsThrottle.elapsed() < 200) return;
+        StatsThrottle.restart();
 
         const float FPS = Viewport->GetFPS();
         const float FrameMs = FPS > 0.0f ? 1000.0f / FPS : 0.0f;
