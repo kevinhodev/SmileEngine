@@ -24,6 +24,7 @@ namespace SmileEditor {
     class TimeOfDayBridge;
     class LightsBridge;
     class SceneOutlinerBridge;
+    class MaterialsBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -48,6 +49,7 @@ namespace SmileEditor {
         void ShowSettings();
         void ShowTimeOfDay();
         void ShowStats();
+        void ShowMaterials();
 
     private:
         void CreateTopBar();      // barra unificada QML (MainBar.qml + EditorMenuBar.qml)
@@ -73,6 +75,8 @@ namespace SmileEditor {
         LightsBridge*         LightsBr    = nullptr; // acoes/propriedades de luz (outliner)
         SceneOutlinerBridge*  OutlinerBr  = nullptr; // ponte C++ -> SceneOutlinerPanel.qml
         QDockWidget*          LightsDock  = nullptr; // dock lateral do Scene Outliner ("Cena")
+        MaterialsBridge*      MaterialsBr = nullptr; // ponte C++ -> MaterialsWindow.qml
+        QPointer<QDialog>     MaterialsDlg;          // janela flutuante do Editor de Materiais
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;

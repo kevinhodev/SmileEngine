@@ -14,6 +14,11 @@ smile_compile_shader(ForwardBlend.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
+# Preview do Editor de Materiais (offscreen 512x512): forward PBR isolado + fundo do HDRI
+smile_compile_shader(Preview/MaterialPreview.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Preview/MaterialPreview.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Preview/PreviewSky.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+
 # Depth pre-pass com saida de normal geometrica (G-buffer leve p/ o GTAO)
 smile_compile_shader(DepthNormal.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 # Variantes masked/two-sided do prepass (alpha-clip, estilo UE masked prepass)

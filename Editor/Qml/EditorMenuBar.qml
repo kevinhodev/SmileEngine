@@ -143,6 +143,11 @@ MenuBar {
             markVisible: menuBridge.statsVisible
             onTriggered: menuBridge.toggleStats()
         }
+        MItem {
+            text: "Materiais"; checkColumn: true
+            markVisible: menuBridge.materialsVisible
+            onTriggered: menuBridge.toggleMaterials()
+        }
     }
 
     DarkMenu {

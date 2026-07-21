@@ -29,4 +29,10 @@ namespace SmileEditor {
         StatsVis = _V;
         emit StatsVisibleChanged();
     }
+
+    void MenuBridge::SetMaterialsVisible(bool _V) {
+        if (MaterialsVis == _V) return;
+        MaterialsVis = _V;
+        emit MaterialsVisibleChanged();
+    }
 }

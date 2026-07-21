@@ -13,6 +13,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool timeOfDayVisible READ TimeOfDayVisible NOTIFY TimeOfDayVisibleChanged)
         Q_PROPERTY(bool lightsVisible READ LightsVisible NOTIFY LightsVisibleChanged)
         Q_PROPERTY(bool statsVisible READ StatsVisible NOTIFY StatsVisibleChanged)
+        Q_PROPERTY(bool materialsVisible READ MaterialsVisible NOTIFY MaterialsVisibleChanged)
 
     public:
         explicit MenuBridge(QObject* parent = nullptr);
@@ -25,6 +26,8 @@ namespace SmileEditor {
         void SetLightsVisible(bool v);
         bool StatsVisible() const { return StatsVis; }
         void SetStatsVisible(bool v);
+        bool MaterialsVisible() const { return MaterialsVis; }
+        void SetMaterialsVisible(bool v);
 
     public slots:
         void loadScene()        { emit LoadSceneRequested(); }
@@ -36,6 +39,7 @@ namespace SmileEditor {
         void toggleTimeOfDay()  { emit ToggleTimeOfDayRequested(); }
         void toggleLights()     { emit ToggleLightsRequested(); }
         void toggleStats()      { emit ToggleStatsRequested(); }
+        void toggleMaterials()  { emit ToggleMaterialsRequested(); }
         void setVSync(bool on)            { emit VSyncToggled(on); }
         void setFrustumCulling(bool on)   { emit FrustumCullingToggled(on); }
         void setDepthPrepass(bool on)     { emit DepthPrepassToggled(on); }
@@ -51,6 +55,8 @@ namespace SmileEditor {
         void ToggleTimeOfDayRequested();
         void ToggleLightsRequested();
         void ToggleStatsRequested();
+        void ToggleMaterialsRequested();
+        void MaterialsVisibleChanged();
         void TimeOfDayVisibleChanged();
         void LightsVisibleChanged();
         void StatsVisibleChanged();
@@ -65,5 +71,6 @@ namespace SmileEditor {
         bool TimeOfDayVis = false; // TOD agora e janela flutuante: comeca fechada
         bool LightsVis    = true;
         bool StatsVis     = false; // Estatisticas: janela flutuante, comeca fechada
+        bool MaterialsVis = false; // Editor de Materiais: janela flutuante, comeca fechada
     };
 }

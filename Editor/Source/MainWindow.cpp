@@ -11,6 +11,7 @@
 #include "SmileEditor/TimeOfDayBridge.h"
 #include "SmileEditor/LightsBridge.h"
 #include "SmileEditor/SceneOutlinerBridge.h"
+#include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/DarkTheme.h"
@@ -70,10 +71,19 @@ namespace SmileEditor {
         TodBridge  = new TimeOfDayBridge(this); // painel Time of Day (renderer chega depois)
         LightsBr   = new LightsBridge(this);          // acoes/props de luz (renderer depois)
         OutlinerBr = new SceneOutlinerBridge(this);   // Scene Outliner (renderer depois)
+        MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
         connect(LightsBr, &LightsBridge::LightsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Rebuild);
+
+        // Isolar do Editor de Materiais mexe em FRenderable::Visible -> olhos do Outliner
+        // refazem. "Selecionar na cena" revela o dock (a arvore segue a selecao sozinha).
+        connect(MaterialsBr, &MaterialsBridge::VisibilityChanged,
+                OutlinerBr, &SceneOutlinerBridge::Rebuild);
+        connect(MaterialsBr, &MaterialsBridge::RevealInOutlinerRequested, this, [this]() {
+            if (LightsDock) { LightsDock->show(); LightsDock->raise(); }
+        });
 
         CreateTopBar();
         setCentralWidget(CreateViewportChrome());
@@ -182,6 +192,12 @@ namespace SmileEditor {
             (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
             if (Menus) Menus->SetStatsVisible(_Event->type() == QEvent::Show);
         }
+        if (MaterialsDlg && _Obj == MaterialsDlg &&
+            (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
+            const bool Shown = _Event->type() == QEvent::Show;
+            if (Menus)       Menus->SetMaterialsVisible(Shown);
+            if (MaterialsBr) MaterialsBr->SetPreviewEnabled(Shown); // preview so com a janela aberta
+        }
         return QMainWindow::eventFilter(_Obj, _Event);
     }
 
@@ -240,8 +256,9 @@ namespace SmileEditor {
                 QMessageBox::warning(this, tr("Carregar Cena"),
                                      tr("Falha ao carregar a cena. Veja o console."));
             } else {
-                if (LightsBr)   LightsBr->OnSceneLoaded(File, /*Additive=*/false);
-                if (OutlinerBr) OutlinerBr->OnSceneLoaded(File, /*Additive=*/false);
+                if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/false);
+                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/false);
+                if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/false);
             }
         });
         connect(Menus, &MenuBridge::AddSceneRequested, this, [this, RendererReady]() {
@@ -254,8 +271,9 @@ namespace SmileEditor {
                 QMessageBox::warning(this, tr("Adicionar Cena"),
                                      tr("Falha ao adicionar a cena. Veja o console."));
             } else {
-                if (LightsBr)   LightsBr->OnSceneLoaded(File, /*Additive=*/true);
-                if (OutlinerBr) OutlinerBr->OnSceneLoaded(File, /*Additive=*/true);
+                if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/true);
+                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/true);
+                if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/true);
             }
         });
         connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
@@ -274,6 +292,10 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::ToggleStatsRequested, this, [this]() {
             if (StatsDlg && StatsDlg->isVisible()) StatsDlg->hide();
             else                                   ShowStats();
+        });
+        connect(Menus, &MenuBridge::ToggleMaterialsRequested, this, [this]() {
+            if (MaterialsDlg && MaterialsDlg->isVisible()) MaterialsDlg->hide();
+            else                                           ShowMaterials();
         });
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
@@ -421,12 +443,21 @@ namespace SmileEditor {
                     OutlinerBr, &SceneOutlinerBridge::Refresh, Qt::UniqueConnection);
         }
 
+        // Editor de Materiais: o Refresh por frame segue o picking (clicar numa mesh
+        // seleciona o material dela no browser, estilo "pick from scene" da Cry).
+        if (MaterialsBr) {
+            MaterialsBr->SetRenderer(Viewport->GetRenderer());
+            connect(Viewport, &ViewportWidget::FrameReady,
+                    MaterialsBr, &MaterialsBridge::Refresh, Qt::UniqueConnection);
+        }
+
         if (!StartupScenePath.isEmpty()) {
             if (!Viewport->GetRenderer()->LoadCookedScene(StartupScenePath.toStdWString())) {
                 Smile::LogError("Cena de startup falhou: " + StartupScenePath.toStdString());
             } else {
-                if (LightsBr)   LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
-                if (OutlinerBr) OutlinerBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+                if (LightsBr)    LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+                if (MaterialsBr) MaterialsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
             }
         }
     }
@@ -608,6 +639,56 @@ namespace SmileEditor {
         }
         StatsDlg->raise();
         StatsDlg->activateWindow();
+    }
+
+    void MainWindow::ShowMaterials() {
+        if (!MaterialsDlg) {
+            // Mesmo padrao do TimeOfDayWindow/StatsWindow: QDialog frameless com chrome QML.
+            auto* Dialog = new QDialog(this);
+            Dialog->setObjectName(QStringLiteral("MaterialsWindow"));
+            Dialog->setWindowTitle(tr("Materiais — SmileEngine"));
+            Dialog->setWindowIcon(windowIcon());
+            Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
+                                   Qt::WindowMinimizeButtonHint);
+            Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+            Dialog->resize(1460, 800);
+            Dialog->setMinimumSize(1240, 660);
+
+            auto* MaterialsWindowBridge = new WindowBridge(Dialog, Dialog);
+            QQuickWidget* Panel = CreateQmlPanel(
+                QStringLiteral("MaterialsWindow.qml"),
+                { { QStringLiteral("materialsModel"),  MaterialsBr },
+                  { QStringLiteral("materialsWindow"), MaterialsWindowBridge } },
+                Dialog,
+                { { QStringLiteral("materialpreview"),
+                    new MaterialPreviewImageProvider(MaterialsBr) },
+                  { QStringLiteral("materialthumb"),
+                    new MaterialThumbImageProvider(MaterialsBr) } });
+            Panel->setObjectName(QStringLiteral("MaterialsWindowPanel"));
+
+            auto* DialogLayout = new QVBoxLayout(Dialog);
+            DialogLayout->setContentsMargins(0, 0, 0, 0);
+            DialogLayout->setSpacing(0);
+            DialogLayout->addWidget(Panel);
+
+            Dialog->installEventFilter(this); // Show/Hide -> check do menu "Janela"
+            MaterialsDlg = Dialog;
+
+            connect(MaterialsBr, &MaterialsBridge::CloseRequested, Dialog, &QDialog::hide);
+        }
+
+        if (MaterialsDlg->isMinimized()) MaterialsDlg->showNormal();
+        else                             MaterialsDlg->show();
+
+        // Centraliza apenas quando a janela ainda nao ganhou uma posicao util do window manager.
+        if (!MaterialsDlg->property("smilePositioned").toBool()) {
+            const QPoint Center = frameGeometry().center();
+            MaterialsDlg->move(Center.x() - MaterialsDlg->width() / 2,
+                               Center.y() - MaterialsDlg->height() / 2);
+            MaterialsDlg->setProperty("smilePositioned", true);
+        }
+        MaterialsDlg->raise();
+        MaterialsDlg->activateWindow();
     }
 
     void MainWindow::TriggerShaderCompileAndReload(const QString& _Path) {

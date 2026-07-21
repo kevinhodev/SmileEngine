@@ -40,6 +40,7 @@
 #include "Smile/Graphics/Reflections.h"
 #include "Smile/Graphics/AmbientOcclusion.h"
 #include "Smile/Graphics/PostProcess.h"
+#include "Smile/Graphics/MaterialPreview.h"
 #include "Smile/Graphics/Picking.h"
 #include "Smile/Graphics/SelectionOutline.h"
 #include "Smile/Graphics/DebugDraw.h"
@@ -148,6 +149,18 @@ namespace Smile {
         // Materiais importados da(s) cena(s) cozida(s) — o Editor de Materiais edita
         // Constants direto (CBV upload mapeado) e chama UpdateConstants() p/ aplicar.
         std::vector<std::unique_ptr<FMaterial>>& GetMaterials() { return ImportedMaterials; }
+
+        // Carga avulsa de textura em runtime (Editor de Materiais: troca de mapa num slot).
+        // .dds direto; resto via WIC (png/jpg/bmp) com mips por decimacao. sRGB so muda a
+        // view (albedo/emissivo). Dona da textura: ImportedTextures. nullptr em falha.
+        FTexture* ImportRuntimeTexture(const std::wstring& Path, bool IsNormalMap, bool sRGB);
+
+        // Preview offscreen do Editor de Materiais (FMaterialPreview: HDRI proprio, nao
+        // interfere no IBL da cena). Render sincrono; Out = RGBA8 512x512.
+        bool RenderMaterialPreview(FMaterial* Material, const FMaterialPreview::FParams& Params,
+                                   std::vector<u8>& Out);
+        bool LoadMaterialPreviewEnvironment(const std::wstring& Path);
+        bool MaterialPreviewReady() const { return MaterialPreview.HasEnvironment(); }
 
         // Additive=true acrescenta a cena cozida sobre a atual (ex.: interior por cima
         // do exterior da Bistro) sem limpar meshes/materiais/camera ja carregados.
@@ -388,6 +401,8 @@ namespace Smile {
         FSwapChain      SwapChain;
         FPipelineState  PipelineState;
         FTextureSRVHeap SRVHeap;
+
+        FMaterialPreview MaterialPreview; // preview offscreen do Editor de Materiais
 
         FCamera Camera;
 

@@ -116,6 +116,7 @@ set(ENGINE_SOURCES
     Source/Graphics/FlickerHeatmap.cpp
     Source/Graphics/OceanFFT.cpp
     Source/Graphics/Water.cpp
+    Source/Graphics/MaterialPreview.cpp
     Source/Graphics/Picking.cpp
     Source/Graphics/SelectionOutline.cpp
     Source/Graphics/DebugDraw.cpp

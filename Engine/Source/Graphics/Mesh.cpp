@@ -102,4 +102,64 @@ namespace Smile {
         }
         return Mesh;
     }
+
+    FMesh FMesh::CreatePlane(f32 Size) {
+        const f32 S = Size * 0.5f;
+        FMesh Mesh;
+        Mesh.Vertices = {
+            {{-S, 0.0f,  S}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+            {{ S, 0.0f,  S}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+            {{ S, 0.0f, -S}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+            {{-S, 0.0f, -S}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
+        };
+        Mesh.Indices = { 0, 1, 2,  0, 2, 3 };
+        return Mesh;
+    }
+
+    FMesh FMesh::CreateCylinder(u32 Slices, f32 Radius, f32 Height) {
+        constexpr f32 PI = 3.14159265358979323846f;
+        const f32 H = Height * 0.5f;
+
+        FMesh Mesh;
+        // Lateral: aneis topo/base com normal radial e UV continua.
+        for (u32 j = 0; j <= Slices; ++j) {
+            const f32 u  = static_cast<f32>(j) / static_cast<f32>(Slices);
+            const f32 a  = u * 2.0f * PI;
+            const f32 nx = std::cos(a);
+            const f32 nz = std::sin(a);
+            Mesh.Vertices.push_back({{ nx * Radius,  H, nz * Radius }, { nx, 0.0f, nz }, { u, 0.0f }});
+            Mesh.Vertices.push_back({{ nx * Radius, -H, nz * Radius }, { nx, 0.0f, nz }, { u, 1.0f }});
+        }
+        for (u32 j = 0; j < Slices; ++j) {
+            const u32 a = j * 2;
+            Mesh.Indices.push_back(a);     Mesh.Indices.push_back(a + 2); Mesh.Indices.push_back(a + 1);
+            Mesh.Indices.push_back(a + 2); Mesh.Indices.push_back(a + 3); Mesh.Indices.push_back(a + 1);
+        }
+
+        // Tampas: leque com centro proprio (normal +Y/-Y, UV planar).
+        auto AddCap = [&](f32 Y, f32 NY) {
+            const u32 Center = static_cast<u32>(Mesh.Vertices.size());
+            Mesh.Vertices.push_back({{ 0.0f, Y, 0.0f }, { 0.0f, NY, 0.0f }, { 0.5f, 0.5f }});
+            for (u32 j = 0; j <= Slices; ++j) {
+                const f32 a  = static_cast<f32>(j) / static_cast<f32>(Slices) * 2.0f * PI;
+                const f32 nx = std::cos(a);
+                const f32 nz = std::sin(a);
+                Mesh.Vertices.push_back({{ nx * Radius, Y, nz * Radius }, { 0.0f, NY, 0.0f },
+                                         { nx * 0.5f + 0.5f, nz * 0.5f + 0.5f }});
+            }
+            for (u32 j = 0; j < Slices; ++j) {
+                Mesh.Indices.push_back(Center);
+                if (NY > 0.0f) {
+                    Mesh.Indices.push_back(Center + 1 + j + 1);
+                    Mesh.Indices.push_back(Center + 1 + j);
+                } else {
+                    Mesh.Indices.push_back(Center + 1 + j);
+                    Mesh.Indices.push_back(Center + 1 + j + 1);
+                }
+            }
+        };
+        AddCap( H,  1.0f);
+        AddCap(-H, -1.0f);
+        return Mesh;
+    }
 }

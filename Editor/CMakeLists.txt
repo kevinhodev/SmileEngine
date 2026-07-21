@@ -20,6 +20,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/TimeOfDayBridge.h
     Include/SmileEditor/LightsBridge.h
     Include/SmileEditor/SceneOutlinerBridge.h
+    Include/SmileEditor/MaterialsBridge.h
 )
 
 set(EDITOR_SOURCES
@@ -40,6 +41,7 @@ set(EDITOR_SOURCES
     Source/TimeOfDayBridge.cpp
     Source/LightsBridge.cpp
     Source/SceneOutlinerBridge.cpp
+    Source/MaterialsBridge.cpp
 )
 
 # WIN32 = subsistema Windows (sem console preto atras)

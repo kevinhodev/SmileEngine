@@ -759,6 +759,71 @@ namespace Smile {
         Atmosphere.LoadMoonTexture(Device.Native(), UploadQueue, SRVHeap, _Path);
     }
 
+    FTexture* Renderer::ImportRuntimeTexture(const std::wstring& _Path, bool _IsNormalMap,
+                                            bool _sRGB) {
+        if (!Initialized) return nullptr;
+
+        auto EndsWith = [&](const wchar_t* Ext) {
+            const size_t N = wcslen(Ext);
+            if (_Path.size() < N) return false;
+            return _wcsnicmp(_Path.c_str() + _Path.size() - N, Ext, N) == 0;
+        };
+
+        FTexture Tex = EndsWith(L".dds")
+            ? FTexture::LoadDDS(Device.Native(), UploadQueue, SRVHeap, _Path, _sRGB)
+            : FTexture::CreateFromCPU(Device.Native(), UploadQueue, SRVHeap,
+                                      FTexture::LoadCPU(_Path, _IsNormalMap, _sRGB));
+        if (!Tex.IsValid()) return nullptr;
+
+        ImportedTextures.push_back(std::make_unique<FTexture>(std::move(Tex)));
+        return ImportedTextures.back().get();
+    }
+
+    bool Renderer::RenderMaterialPreview(FMaterial* _Material,
+                                         const FMaterialPreview::FParams& _Params,
+                                         std::vector<u8>& _Out) {
+        if (!Initialized || !_Material) return false;
+
+        // "Mesh da cena": renderable selecionado se usa o material, senao o primeiro que
+        // usa. A matriz normaliza a mesh pro enquadramento da esfera (raio 0.5) a partir
+        // do AABB — Transform primeiro cobre gizmo (cooker baka transform no vertice).
+        const FGpuMesh* SceneMesh = nullptr;
+        Mat44 SceneModel = Mat44::Identity();
+        if (_Params.Primitive == FMaterialPreview::PrimSceneMesh) {
+            const auto& Rnds = Scene.Renderables();
+            const FRenderable* Pick = nullptr;
+            if (SelectedIndex >= 0 && SelectedIndex < (int)Rnds.size() &&
+                Rnds[SelectedIndex].Material == _Material && !Rnds[SelectedIndex].RaytracingOnly)
+                Pick = &Rnds[SelectedIndex];
+            if (!Pick) {
+                for (const auto& R : Rnds) {
+                    if (R.Material != _Material || R.RaytracingOnly || !R.Mesh) continue;
+                    Pick = &R;
+                    break;
+                }
+            }
+            if (Pick && Pick->Mesh && Pick->Mesh->IsValid()) {
+                SceneMesh = Pick->Mesh;
+                const Vec3 Center = (Pick->AABBMin + Pick->AABBMax) * 0.5f;
+                const Vec3 Ext    = (Pick->AABBMax - Pick->AABBMin) * 0.5f;
+                f32 Radius = std::sqrt(Ext.X * Ext.X + Ext.Y * Ext.Y + Ext.Z * Ext.Z);
+                if (Radius < 1e-3f || Radius > 1e8f) Radius = 0.5f; // AABB ausente/degenerado
+                const f32 S = 0.5f / Radius;
+                SceneModel = Pick->Transform.Matrix()
+                           * Mat44::Translation(-Center)
+                           * Mat44::Scale({ S, S, S });
+            }
+        }
+
+        return MaterialPreview.Render(Device.Native(), CommandQueue, SRVHeap,
+                                      *_Material, _Params, _Out, SceneMesh, SceneModel);
+    }
+
+    bool Renderer::LoadMaterialPreviewEnvironment(const std::wstring& _Path) {
+        if (!Initialized) return false;
+        return MaterialPreview.LoadEnvironment(Device.Native(), CommandQueue, SRVHeap, _Path);
+    }
+
     void Renderer::LoadStarCatalog(const std::wstring& _Path) {
         if (!Initialized || !Atmosphere.IsInitialized()) return;
         Atmosphere.LoadStarCatalog(Device.Native(), SRVHeap, _Path);
