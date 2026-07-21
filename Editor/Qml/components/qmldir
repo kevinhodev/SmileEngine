@@ -1,0 +1,8 @@
+singleton Theme 1.0 Theme.qml
+WindowButton 1.0 WindowButton.qml
+Toggle 1.0 Toggle.qml
+ToggleRow 1.0 ToggleRow.qml
+Card 1.0 Card.qml
+SliderRow 1.0 SliderRow.qml
+Chip 1.0 Chip.qml
+ColorRow 1.0 ColorRow.qml

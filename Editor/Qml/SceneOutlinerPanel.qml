@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "components" as C
 
 // Scene Outliner (dock lateral, substitui o antigo painel de Luzes). Liga em tres bridges:
 //  - `outlinerModel` (SceneOutlinerBridge): arvore flat da cena (Ambiente/Luzes/Meshes por
@@ -36,14 +37,14 @@ Rectangle {
         }
     }
 
-    readonly property color cardBg: "#1a1b15"
-    readonly property color borderColor: "#2a2b24"
-    readonly property color divider: "#23241d"
-    readonly property color textPrimary: "#e6e2d8"
-    readonly property color textNormal: "#c8c2b4"
-    readonly property color textSecondary: "#9a958a"
-    readonly property color textMuted: "#6c6a61"
-    readonly property color blue: "#5b9dff"
+    readonly property color cardBg: C.Theme.cardBg
+    readonly property color borderColor: C.Theme.borderColor
+    readonly property color divider: C.Theme.divider
+    readonly property color textPrimary: C.Theme.textPrimary
+    readonly property color textNormal: C.Theme.textNormal
+    readonly property color textSecondary: C.Theme.textSecondary
+    readonly property color textMuted: C.Theme.textMuted
+    readonly property color blue: C.Theme.blue
     readonly property color bulbColor: "#e8c565"
 
     readonly property bool hasLightSelection: lightsModel.selectedIndex >= 0
@@ -52,143 +53,9 @@ Rectangle {
     function fmt(v, dec) { return v.toFixed(dec === undefined ? 1 : dec).replace(".", ",") }
 
     // ---- Componentes locais (mesma linguagem do TimeOfDayPanel/SettingsWindow) ----
-    component Toggle: Item {
-        id: toggle
-        property bool checked: false
-        property bool interactive: true
-        signal toggled()
-        implicitWidth: 36
-        implicitHeight: 20
-        opacity: interactive ? 1.0 : 0.48
-        Rectangle {
-            anchors.fill: parent
-            radius: height / 2
-            color: toggle.checked ? root.blue : "#23241d"
-            border.color: toggle.checked ? root.blue : "#33342c"
-            border.width: 1
-            Rectangle {
-                width: 14; height: 14; radius: 7
-                y: 3
-                x: toggle.checked ? 19 : 3
-                color: toggle.checked ? "#f2efe6" : root.textMuted
-                Behavior on x { NumberAnimation { duration: 100 } }
-            }
-        }
-        HoverHandler { cursorShape: toggle.interactive ? Qt.PointingHandCursor : Qt.ArrowCursor }
-        TapHandler { enabled: toggle.interactive; onTapped: toggle.toggled() }
-    }
-
-    component Card: Rectangle {
-        default property alias content: inner.data
-        property string title
-        property string iconName
-        property alias headerItem: headerSlot.data
-        width: parent.width
-        radius: 8
-        color: root.cardBg
-        border.color: root.borderColor
-        border.width: 1
-        implicitHeight: 40 + inner.implicitHeight + 14
-
-        LucideIcon {
-            visible: parent.iconName !== ""
-            x: 14; y: 13
-            name: parent.iconName
-            size: 14
-            color: root.textSecondary
-        }
-        Text {
-            x: parent.iconName !== "" ? 36 : 16; y: 12
-            text: parent.title
-            color: root.textPrimary
-            font.family: "Segoe UI"
-            font.pixelSize: 12
-            font.weight: Font.Medium
-        }
-        Item {
-            id: headerSlot
-            anchors.right: parent.right
-            anchors.rightMargin: 14
-            y: 10
-            width: childrenRect.width
-            height: 20
-        }
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            y: 36; height: 1
-            color: root.divider
-        }
-        Column {
-            id: inner
-            x: 14; y: 44
-            width: parent.width - 28
-            spacing: 10
-        }
-    }
-
-    component SliderRow: Item {
-        id: row
-        property string label
-        property string valueText
-        property real from: 0
-        property real to: 1
-        property real stepSize: 0
-        property real boundValue: 0
-        signal moved(real v)
-        width: parent.width
-        height: 38
-
-        Text {
-            x: 0; y: 0
-            text: row.label
-            color: root.textNormal
-            font.family: "Segoe UI"
-            font.pixelSize: 11
-        }
-        Text {
-            anchors.right: parent.right; y: 0
-            text: row.valueText
-            color: root.textSecondary
-            font.family: "Segoe UI"
-            font.pixelSize: 11
-        }
-        Slider {
-            id: sl
-            x: 0; y: 16
-            width: parent.width
-            height: 18
-            from: row.from
-            to: row.to
-            stepSize: row.stepSize
-            onMoved: row.moved(value)
-            Binding {
-                target: sl; property: "value"
-                value: row.boundValue
-                when: !sl.pressed
-                restoreMode: Binding.RestoreBinding
-            }
-            background: Rectangle {
-                x: sl.leftPadding
-                y: sl.topPadding + sl.availableHeight / 2 - height / 2
-                width: sl.availableWidth
-                height: 4; radius: 2
-                color: "#23241d"
-                Rectangle {
-                    width: sl.visualPosition * parent.width
-                    height: parent.height; radius: 2
-                    color: root.blue
-                }
-            }
-            handle: Rectangle {
-                x: sl.leftPadding + sl.visualPosition * (sl.availableWidth - width)
-                y: sl.topPadding + sl.availableHeight / 2 - height / 2
-                width: 12; height: 12; radius: 6
-                color: "#f2efe6"
-                border.color: root.blue
-                border.width: 1.5
-            }
-        }
-    }
+    component Toggle: C.Toggle {}
+    component Card: C.Card { contentSpacing: 10 }
+    component SliderRow: C.SliderRow {}
 
     // Botaozinho de icone com hover (linhas da lista, header).
     component IconButton: Item {

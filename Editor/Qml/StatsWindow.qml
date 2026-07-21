@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "components" as C
 
 // Janela flutuante de Estatisticas (menu Janela > Estatísticas). Liga em `viewportModel`
 // (ViewportWidget) e `statsWindow` (WindowBridge da QDialog frameless). Foco: consumo de
@@ -13,35 +14,19 @@ Rectangle {
     implicitWidth: 420
     implicitHeight: 680
 
-    readonly property color cardBg: "#1a1b15"
-    readonly property color borderColor: "#2a2b24"
-    readonly property color divider: "#23241d"
-    readonly property color textPrimary: "#e6e2d8"
-    readonly property color textNormal: "#c8c2b4"
-    readonly property color textSecondary: "#9a958a"
-    readonly property color textMuted: "#6c6a61"
-    readonly property color blue: "#5b9dff"
-    readonly property color green: "#9ac055"
-    readonly property color warn: "#e0885a"
+    readonly property color cardBg: C.Theme.cardBg
+    readonly property color borderColor: C.Theme.borderColor
+    readonly property color divider: C.Theme.divider
+    readonly property color textPrimary: C.Theme.textPrimary
+    readonly property color textNormal: C.Theme.textNormal
+    readonly property color textSecondary: C.Theme.textSecondary
+    readonly property color textMuted: C.Theme.textMuted
+    readonly property color blue: C.Theme.blue
+    readonly property color green: C.Theme.green
+    readonly property color warn: C.Theme.warn
 
-    component WindowButton: Rectangle {
-        id: windowButton
-        property string glyph
-        property bool danger: false
-        signal tapped()
-        width: 46
-        height: 40
-        color: winHover.hovered ? (danger ? "#c42b1c" : "#23241d") : "transparent"
-        Text {
-            anchors.centerIn: parent
-            text: windowButton.glyph
-            color: winHover.hovered && windowButton.danger ? "#ffffff" : "#9a958a"
-            font.family: "Segoe UI Symbol"
-            font.pixelSize: 16
-        }
-        HoverHandler { id: winHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: windowButton.tapped() }
-    }
+    // ---- Componentes compartilhados (Editor/Qml/components) ----
+    component WindowButton: C.WindowButton {}
 
     // ---- Barra de titulo (drag + minimizar/fechar) ----
     Item {

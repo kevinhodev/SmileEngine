@@ -29,15 +29,21 @@ namespace SmileEditor {
             Debounce->setSingleShot(true);
             Debounce->setInterval(120);
 
-            // (Re)observa a pasta E todos os .qml dela. Os dois sinais sao necessarios: edicao
+            // (Re)observa as pastas E todos os .qml delas. Os dois sinais sao necessarios: edicao
             // in-place dispara fileChanged; save atomico (rename) dispara directoryChanged e ainda
             // derruba o watch do arquivo trocado — por isso re-armamos os paths a cada evento.
+            // Inclui a subpasta components/ (Theme singleton + componentes compartilhados): salvar
+            // um componente recarrega todos os paineis abertos que o usam.
             auto Rearm = [Watcher, Dir]() {
-                if (!Watcher->directories().contains(Dir)) Watcher->addPath(Dir);
-                const QStringList Files = QDir(Dir).entryList(QStringList{ "*.qml" }, QDir::Files);
-                for (const QString& F : Files) {
-                    const QString Fp = Dir + "/" + F;
-                    if (!Watcher->files().contains(Fp)) Watcher->addPath(Fp);
+                const QStringList Dirs{ Dir, Dir + "/components" };
+                for (const QString& D : Dirs) {
+                    if (!QFileInfo::exists(D)) continue;
+                    if (!Watcher->directories().contains(D)) Watcher->addPath(D);
+                    const QStringList Files = QDir(D).entryList(QStringList{ "*.qml" }, QDir::Files);
+                    for (const QString& F : Files) {
+                        const QString Fp = D + "/" + F;
+                        if (!Watcher->files().contains(Fp)) Watcher->addPath(Fp);
+                    }
                 }
             };
             Rearm();
