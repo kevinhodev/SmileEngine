@@ -2,8 +2,9 @@
 // Blend por cima do HDR ja iluminado (deferred + reflexos), com depth read-only.
 //
 // Blend PREMULTIPLICADO (SrcBlend=ONE, DestBlend=INV_SRC_ALPHA): a parte "difusa" (tinte do
-// vidro) e pesada por alpha AQUI no shader, e o especular ambiente (IBL) soma inteiro — um
-// vidro quase transparente continua refletindo. O alpha de saida ganha o Fresnel medio, entao
+// vidro) e pesada por alpha AQUI no shader, e o especular — direto (sol/lua) e ambiente
+// (IBL) — soma inteiro, estilo ThinTranslucent da UE: um vidro quase transparente continua
+// refletindo e mantem o glint do sol. O alpha de saida ganha o Fresnel medio, entao
 // em angulo rasante o vidro oculta mais o fundo (comportamento de janela real).
 //
 // Deliberadamente mais simples que o GBuffer.ps: sem normal map (vidro e liso; usa a normal
@@ -146,21 +147,28 @@ float4 main(PSInput input) : SV_Target {
     float  a  = Roughness * Roughness;
     float  a2 = a * a;
 
-    // --- Direto: sol + lua, sombreados pelo CSM (mesmo caminho do deferred). ---
-    float3 Direct = float3(0.0f, 0.0f, 0.0f);
+    // --- Direto: sol + lua, sombreados pelo CSM (mesmo caminho do deferred). Difuso e
+    // especular SEPARADOS: o difuso e tinte (pesado por alpha), o especular e reflexo da
+    // superficie e soma inteiro — mesmo racional do especular IBL abaixo. ---
+    float3 DirectDiffuse  = float3(0.0f, 0.0f, 0.0f);
+    float3 DirectSpecular = float3(0.0f, 0.0f, 0.0f);
     {
-        float3 Lsun   = normalize(SunDirection.xyz);
-        float3 SunLit = BRDF_Direct(N, V, Lsun, SunColor.rgb * SunDirection.w,
-                                    DiffuseColor, SpecularColor, Metallic, Roughness, a2,
-                                    float3(0.0f, 0.0f, 0.0f));
-        float3 MoonLit = float3(0.0f, 0.0f, 0.0f);
+        float3 Lsun = normalize(SunDirection.xyz);
+        BRDF_DirectSplit(N, V, Lsun, SunColor.rgb * SunDirection.w,
+                         DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                         float3(0.0f, 0.0f, 0.0f), DirectDiffuse, DirectSpecular);
         if (MoonDirection.w > 0.0f) {
             float3 Lmoon = normalize(MoonDirection.xyz);
-            MoonLit = BRDF_Direct(N, V, Lmoon, MoonColor.rgb * MoonDirection.w,
-                                  DiffuseColor, SpecularColor, Metallic, Roughness, a2,
-                                  float3(0.0f, 0.0f, 0.0f));
+            float3 MoonDiffuse, MoonSpecular;
+            BRDF_DirectSplit(N, V, Lmoon, MoonColor.rgb * MoonDirection.w,
+                             DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                             float3(0.0f, 0.0f, 0.0f), MoonDiffuse, MoonSpecular);
+            DirectDiffuse  += MoonDiffuse;
+            DirectSpecular += MoonSpecular;
         }
-        Direct = (SunLit + MoonLit) * SampleCSM(input.worldPos, N, input.pos.xy);
+        float Shadow = SampleCSM(input.worldPos, N, input.pos.xy);
+        DirectDiffuse  *= Shadow;
+        DirectSpecular *= Shadow;
     }
 
     // --- Ambiente difuso: DDGI quando ha grid; senao hemisferio atmosferico. ---
@@ -189,10 +197,11 @@ float4 main(PSInput input) : SV_Target {
         SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y) * IBLParams.x;
     }
 
-    // Saida premultiplicada: tinte pesado por alpha + especular inteiro. O alpha de saida
-    // ganha o Fresnel medio p/ o vidro ocultar mais o fundo em angulo rasante.
+    // Saida premultiplicada: tinte (difuso direto + ambiente) pesado por alpha + especular
+    // inteiro (sol/lua + IBL — vidro quase transparente continua com glint). O alpha de
+    // saida ganha o Fresnel medio p/ o vidro ocultar mais o fundo em angulo rasante.
     float  Favg     = (F.x + F.y + F.z) * (1.0f / 3.0f);
     float  OutAlpha = saturate(Alpha + Favg * (1.0f - Alpha));
-    float3 OutColor = (Direct + AmbientDiffuse) * Alpha + SpecularIBL;
+    float3 OutColor = (DirectDiffuse + AmbientDiffuse) * Alpha + DirectSpecular + SpecularIBL;
     return float4(OutColor, OutAlpha);
 }

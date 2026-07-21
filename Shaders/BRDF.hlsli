@@ -63,10 +63,15 @@ float3 FoliageTransmission(float3 N, float3 V, float3 L, float3 Radiance, float3
     return Radiance * (WrapNoL * Scatter) * TransColor;
 }
 
-float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
-                   float3 DiffuseColor, float3 SpecularColor,
-                   float Metallic, float Roughness, float a2, float3 TransColor) {
-    float3 Result = float3(0.0f, 0.0f, 0.0f);
+// Variante com saidas SEPARADAS de difuso e especular. Usada pelos translucidos: o tinte
+// difuso e pesado por alpha, mas o reflexo especular da superficie soma inteiro (estilo
+// ThinTranslucent da UE). A transmissao de folhagem entra no difuso.
+void BRDF_DirectSplit(float3 N, float3 V, float3 L, float3 Radiance,
+                      float3 DiffuseColor, float3 SpecularColor,
+                      float Metallic, float Roughness, float a2, float3 TransColor,
+                      out float3 OutDiffuse, out float3 OutSpecular) {
+    OutDiffuse  = float3(0.0f, 0.0f, 0.0f);
+    OutSpecular = float3(0.0f, 0.0f, 0.0f);
 
     float NoL = saturate(dot(N, L));
     if (NoL > 0.0f) {
@@ -106,13 +111,21 @@ float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
             float3 Diffuse = (Kd * DiffuseColor) / BRDF_PI;
         #endif
 
-        Result += (Diffuse + Specular) * Radiance * NoL;
+        OutDiffuse  = Diffuse * Radiance * NoL;
+        OutSpecular = Specular * Radiance * NoL;
     }
 
     if (any(TransColor > 0.0f))
-        Result += FoliageTransmission(N, V, L, Radiance, TransColor);
+        OutDiffuse += FoliageTransmission(N, V, L, Radiance, TransColor);
+}
 
-    return Result;
+float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
+                   float3 DiffuseColor, float3 SpecularColor,
+                   float Metallic, float Roughness, float a2, float3 TransColor) {
+    float3 Diffuse, Specular;
+    BRDF_DirectSplit(N, V, L, Radiance, DiffuseColor, SpecularColor,
+                     Metallic, Roughness, a2, TransColor, Diffuse, Specular);
+    return Diffuse + Specular;
 }
 
 // F4 (luzes de area "soft", estilo UE/Flax): variante do BRDF_Direct com direcoes SEPARADAS —
