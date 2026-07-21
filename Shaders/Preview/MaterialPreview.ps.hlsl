@@ -172,9 +172,31 @@ float V_SmithJointApprox(float NoV, float NoL, float a) {
     return 0.5f / max(SmithV + SmithL, 1e-5f);
 }
 
-float3 ACESFilm(float3 x) {
-    // Narkowicz ACES fit — mesmo espirito do tonemap principal, bom o bastante pro preview.
-    return saturate((x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f));
+// MESMO ACES fitted do FinalTonemap.ps (matrizes de Hill + RRT/ODT) — curva diferente
+// aqui fazia o preview parecer lavado em relacao ao viewport.
+static const float3x3 ACESInputMat = {
+    0.59719f, 0.35458f, 0.04823f,
+    0.07608f, 0.90834f, 0.01558f,
+    0.02244f, 0.08207f, 0.89548f
+};
+
+static const float3x3 ACESOutputMat = {
+    1.60475f, -0.53108f, -0.07367f,
+    -0.10210f,  1.10813f, -0.00603f,
+    -0.00327f, -0.07276f,  1.07602f
+};
+
+float3 RRTAndODTFit(float3 v) {
+    float3 a = v * (v + 0.0245786f) - 0.000090537f;
+    float3 b = v * (0.983729f * v + 0.432951f) + 0.238081f;
+    return a / b;
+}
+
+float3 ACESFilm(float3 color) {
+    color = mul(ACESInputMat, color);
+    color = RRTAndODTFit(color);
+    color = mul(ACESOutputMat, color);
+    return saturate(color);
 }
 
 float4 main(PSInput input) : SV_Target {

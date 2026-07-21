@@ -25,7 +25,9 @@ namespace Smile {
     // ate o primeiro Render/LoadEnvironment.
     class FMaterialPreview {
     public:
-        static constexpr u32 kSize = 512;
+        // 1024: o painel do preview passa de 512 na janela default — 512 upscalado ficava
+        // borrado/serrilhado vs o viewport. A 1024 o QML downscala (efeito SSAA de graca).
+        static constexpr u32 kSize = 1024;
 
         enum EPrimitive { PrimSphere = 0, PrimCube = 1, PrimPlane = 2, PrimCylinder = 3,
                           PrimSceneMesh = 4 };

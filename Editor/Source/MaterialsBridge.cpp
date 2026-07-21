@@ -957,10 +957,12 @@ namespace SmileEditor {
                 return; // infra indisponivel: para a fila (re-enfileira via data())
 
             // Premultiplied antes do scale: downscale em alpha reto faria franja escura
-            // na borda da esfera contra o fundo transparente.
+            // na borda da esfera contra o fundo transparente. Dois passos (fast 256 ->
+            // smooth 96): smooth direto de 1024 custaria ~10ms por thumb na fila.
             const int Size = int(Smile::FMaterialPreview::kSize);
             QImage Thumb = QImage(Pixels.data(), Size, Size, QImage::Format_RGBA8888)
                                .convertToFormat(QImage::Format_ARGB32_Premultiplied)
+                               .scaled(256, 256, Qt::KeepAspectRatio, Qt::FastTransformation)
                                .scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation);
             {
                 QMutexLocker Lock(&ThumbMutex);
