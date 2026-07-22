@@ -28,9 +28,9 @@ float4 main(VSOutput input) : SV_Target {
         case 2:  outColor = g.WorldNormal * 0.5f + 0.5f;       break;
         case 3:  outColor = g.Roughness.xxx;                   break;
         case 4:  outColor = g.Metallic.xxx;                    break;
-        // Emissivo saiu do G-buffer (vai direto no SceneColor); o modo 5 passou a mostrar os
-        // canais LIVRES do C (hoje zeros — vira o debug de subsurface/specular quando ocuparem).
-        case 5:  outColor = c.gba;                             break;
+        // Modo 5 = subsurface premul (C.gba): folhagem default aparece cinza 0.6; DefaultLit
+        // preto. (O emissivo saiu do G-buffer na dieta — debuga-se direto no viewport.)
+        case 5:  outColor = g.Subsurface;                      break;
         case 6:  outColor = g.AO.xxx;                          break;
         case 7: { 
             outColor = (g.ShadingModel == SMILE_SHADINGMODEL_FOLIAGE)

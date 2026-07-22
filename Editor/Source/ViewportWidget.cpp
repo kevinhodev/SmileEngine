@@ -29,7 +29,7 @@ namespace SmileEditor {
             "World Normal",
             "Roughness",
             "Metallic",
-            "Emissive",
+            "Subsurface",
             "Ambient Occlusion",
             "Shading Model",
             "Motion Vectors"

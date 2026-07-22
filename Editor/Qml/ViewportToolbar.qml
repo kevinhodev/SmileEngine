@@ -525,7 +525,7 @@ Rectangle {
                     "World Normal",
                     "Roughness",
                     "Metallic",
-                    "G-Buffer C (livre)",
+                    "Subsurface",
                     "Ambient Occlusion",
                     "Shading Model",
                     "Motion Vectors"

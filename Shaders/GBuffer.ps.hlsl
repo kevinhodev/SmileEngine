@@ -218,7 +218,12 @@ GBufferOutput main(PSInput input) {
     if (HasEmissiveMap)
         Emissive *= EmissiveMap.SampleBias(MaterialSampler, UV, MipBias).rgb;
 
-    GBufferOutput o = EncodeGBuffer(BaseColor, AO, N, Roughness, Metallic, Emissive, ShadingModel);
+    // Subsurface premultiplicado (tint x intensidade) — vai no C.gba; o deferred faz
+    // TransColor = BaseColor * isto. Default do loader p/ folhagem = (1,1,1)x0.6.
+    float3 Subsurface = SubsurfaceColor.rgb * SubsurfaceColor.a;
+
+    GBufferOutput o = EncodeGBuffer(BaseColor, AO, N, Roughness, Metallic, Emissive, ShadingModel,
+                                    Subsurface);
 
     float2 curNDC  = input.curClip.xy  / input.curClip.w;
     float2 prevNDC = input.prevClip.xy / input.prevClip.w;

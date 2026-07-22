@@ -221,7 +221,10 @@ float4 main(VSOutput input) : SV_Target {
     float3 DiffuseColor  = BaseColor * (1.0f - Metallic);
     float3 SpecularColor = lerp(float3(0.04f, 0.04f, 0.04f), BaseColor, Metallic);
 
-    float3 TransColor = IsFoliage ? (BaseColor * 0.6f) : float3(0.0f, 0.0f, 0.0f);
+    // Transmissao data-driven do G-buffer (C.gba = tint x intensidade do material): folhagem
+    // vem do loader com 0.6 branco (= o antigo hardcode, paridade bit-a-bit); DefaultLit vem 0.
+    // Material com subsurface setado na janela de Materiais transmite sem trocar de ID.
+    float3 TransColor = BaseColor * g.Subsurface;
 
     float a   = Roughness * Roughness;
     float a2  = a * a;
@@ -399,7 +402,11 @@ float4 main(VSOutput input) : SV_Target {
         // oclui em folhagem densa; o Lumen pula screen traces backface pelo mesmo motivo).
         bool foliageFill = IsFoliage && UseGI;
         if (foliageFill) {
-            gi = SampleSceneDDGI(worldPos, N) + 0.6f * SampleSceneDDGI(worldPos, -N);
+            // Fator do lado de tras = intensidade de subsurface do material (era 0.6 fixo —
+            // mesmo default do loader). max3 do premul: tint nao escurece o fill, so a cor
+            // da transmissao direta.
+            float backFill = max(g.Subsurface.r, max(g.Subsurface.g, g.Subsurface.b));
+            gi = SampleSceneDDGI(worldPos, N) + backFill * SampleSceneDDGI(worldPos, -N);
         } else if (UseReSTIR) {
             // ReSTIR full-res no A0-A3 (Load por pixel); o A4 passa p/ meia-res + upsample bilateral.
             gi = ReSTIRGITex.Load(int3(px, 0)).rgb;

@@ -154,7 +154,8 @@ GBufferOutput main(PSInput input) {
         baseColor = kLodDebugColors[min(ChunkLod, 7u)];
 
     GBufferOutput o = EncodeGBuffer(baseColor, 1.0f, N, roughness, 0.0f,
-                                    float3(0.0f, 0.0f, 0.0f), SMILE_SHADINGMODEL_DEFAULTLIT);
+                                    float3(0.0f, 0.0f, 0.0f), SMILE_SHADINGMODEL_DEFAULTLIT,
+                                    float3(0.0f, 0.0f, 0.0f));
 
     const float2 curNDC  = input.curClip.xy  / input.curClip.w;
     const float2 prevNDC = input.prevClip.xy / input.prevClip.w;

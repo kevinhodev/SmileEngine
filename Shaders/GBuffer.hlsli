@@ -33,7 +33,9 @@ uint GBuffer_DecodeShadingModel(float a) {
 // Dieta do G-buffer (192 -> 128 bpp com velocity, paridade com UE/Flax):
 //   A (RGBA8)    .rgb = BaseColor  .a = AO do material
 //   B (RGB10A2)  .rg  = OctNormal  .b = Roughness      .a = ShadingModelID (2 bits)
-//   C (RGBA8)    .r   = Metallic   .gba = LIVRES (futuro: subsurface/specular/wetness)
+//   C (RGBA8)    .r   = Metallic   .gba = Subsurface (tint x intensidade, PREMULTIPLICADO;
+//                       folhagem default = 0.6 branco — o mesmo fator que era hardcoded no
+//                       deferred; DefaultLit escreve 0 e nada transmite)
 //   Emissive     -> escrito DIRETO no SceneColor HDR (SV_Target4); o deferred lighting
 //                   SOMA a luz por cima (blend aditivo, estilo UE) em vez de reescrever.
 struct GBufferOutput {
@@ -45,12 +47,13 @@ struct GBufferOutput {
 };
 
 GBufferOutput EncodeGBuffer(float3 baseColor, float ao, float3 worldNormal,
-                            float roughness, float metallic, float3 emissive, uint shadingModel) {
+                            float roughness, float metallic, float3 emissive, uint shadingModel,
+                            float3 subsurface) {
     GBufferOutput o;
     o.A = float4(baseColor, ao);
     o.B = float4(GBuffer_OctEncode(worldNormal), roughness,
                  GBuffer_EncodeShadingModel(shadingModel));
-    o.C = float4(metallic, 0.0f, 0.0f, 0.0f);
+    o.C = float4(metallic, saturate(subsurface));
     o.Velocity = float2(0.0f, 0.0f);
     o.Emissive = float4(emissive, 0.0f);
     return o;
@@ -63,6 +66,7 @@ struct GBufferData {
     float  Roughness;
     float  Metallic;
     uint   ShadingModel;
+    float3 Subsurface; // tint x intensidade (premul); multiplica o BaseColor na transmissao
 };
 
 GBufferData DecodeGBuffer(float4 a, float4 b, float4 c) {
@@ -73,6 +77,7 @@ GBufferData DecodeGBuffer(float4 a, float4 b, float4 c) {
     g.Roughness    = b.b;
     g.ShadingModel = GBuffer_DecodeShadingModel(b.a);
     g.Metallic     = c.r;
+    g.Subsurface   = c.gba;
     return g;
 }
 
