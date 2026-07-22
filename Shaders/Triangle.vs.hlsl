@@ -24,7 +24,14 @@ VSOutput main(VSInput input) {
     VSOutput o;
     o.pos         = mul(float4(input.pos, 1.0f), MVP);
     o.worldPos    = mul(float4(input.pos, 1.0f), ModelMatrix).xyz;
-    o.worldNormal = mul(input.normal, (float3x3)ModelMatrix);
+
+    // Normal pela matriz de COFATORES (= det*inverse-transpose, sem o det que a normalizacao
+    // do PS come): escala nao-uniforme no gizmo nao entorta mais a normal. Com escala
+    // uniforme/rigida degenera exatamente no mul antigo. Convencao row-vector (mul(n, M)).
+    const float3x3 M = (float3x3)ModelMatrix;
+    const float3x3 CofM = float3x3(cross(M[1], M[2]), cross(M[2], M[0]), cross(M[0], M[1]));
+    o.worldNormal = mul(input.normal, CofM);
+
     o.uv          = input.uv;
     o.curClip     = mul(float4(input.pos, 1.0f), CurMVPNoJitter);
     o.prevClip    = mul(float4(input.pos, 1.0f), PrevMVP);
