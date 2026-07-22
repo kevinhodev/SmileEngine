@@ -64,7 +64,8 @@ namespace SmileEditor {
         QStringList BadgesOf(const Smile::FMaterial& M) {
             QStringList B;
             const auto& C = M.Constants;
-            if (C.ShadingModel == 1) B << QStringLiteral("FOL");
+            if (C.ShadingModel == 1)      B << QStringLiteral("FOL");
+            else if (C.ShadingModel == 2) B << QStringLiteral("SSS");
             if (C.HasHeightMap)      B << QStringLiteral("POM");
             if (M.Blend)             B << QStringLiteral("BLEND");
             else if (C.AlphaTest)    B << QStringLiteral("MASK");

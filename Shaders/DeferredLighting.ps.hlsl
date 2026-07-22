@@ -408,6 +408,8 @@ float4 main(VSOutput input) : SV_Target {
             float backFill = max(g.Subsurface.r, max(g.Subsurface.g, g.Subsurface.b));
             gi = SampleSceneDDGI(worldPos, N) + backFill * SampleSceneDDGI(worldPos, -N);
         } else if (UseReSTIR) {
+            // (Subsurface NAO cai aqui fora: solido segue o gather normal e ganha o termo de
+            // tras logo abaixo — so a folhagem pula o ReSTIR, por auto-oclusao das cards.)
             // ReSTIR full-res no A0-A3 (Load por pixel); o A4 passa p/ meia-res + upsample bilateral.
             gi = ReSTIRGITex.Load(int3(px, 0)).rgb;
             // ReflectionParams.w == 2 -> saida do NRD REBLUR em YCoCg: desempacota p/ linear
@@ -418,6 +420,16 @@ float4 main(VSOutput input) : SV_Target {
             }
         } else {
             gi = SampleSceneDDGI(worldPos, N);
+        }
+
+        // Subsurface (ID 2, solido translucido): caminho normal de GI (ReSTIR/GTAO seguem) +
+        // termo do lado de TRAS do DDGI escalado pela intensidade do material — cortina/vela
+        // acesa pela luz que chega do outro lado, mesmo raciocinio do fill da folhagem mas
+        // SOMADO ao gather frontal em vez de substitui-lo.
+        if (g.ShadingModel == SMILE_SHADINGMODEL_SUBSURFACE && UseGI) {
+            float backSSS = max(g.Subsurface.r, max(g.Subsurface.g, g.Subsurface.b));
+            if (backSSS > 0.0f)
+                gi += backSSS * SampleSceneDDGI(worldPos, -N);
         }
         DbgGI = gi;
 

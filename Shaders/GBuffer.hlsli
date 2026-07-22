@@ -3,7 +3,13 @@
 
 #define SMILE_SHADINGMODEL_DEFAULTLIT 0u
 #define SMILE_SHADINGMODEL_FOLIAGE    1u
-#define SMILE_SHADINGMODEL_COUNT      2u
+#define SMILE_SHADINGMODEL_SUBSURFACE 2u  // solido translucido (vela/cortina/cera): DefaultLit
+                                          // + transmissao direta + termo de tras no GI; mantem
+                                          // GTAO e ReSTIR (diferente da folhagem)
+// COUNT = 4 = capacidade do alpha de 2 bits E potencia de 2: o encode (id+0.5)/COUNT so cai
+// nos niveis exatos do UNORM2 com COUNT 2 ou 4 (com 3, o id 0 empata entre dois niveis e o
+// arredondamento fica por conta do hardware). Sobra 1 slot (ID 3) p/ um modelo futuro.
+#define SMILE_SHADINGMODEL_COUNT      4u
 
 float2 GBuffer_OctEncode(float3 n) {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
@@ -20,9 +26,8 @@ float3 GBuffer_OctDecode(float2 f) {
     return normalize(n);
 }
 
-// ID no alpha de 2 BITS do RGB10A2 (niveis 0, 1/3, 2/3, 1): o encode (id+0.5)/COUNT cai no
-// nivel certo por arredondamento p/ COUNT potencia de 2 (2 ou 4 modelos). Se COUNT crescer
-// alem de 4, o ID precisa de casa nova (stencil ou canal de 8 bits no GBufferC).
+// ID no alpha de 2 BITS do RGB10A2 (niveis 0, 1/3, 2/3, 1). Se COUNT crescer alem de 4, o ID
+// precisa de casa nova (stencil ou canal de 8 bits no GBufferC).
 float GBuffer_EncodeShadingModel(uint id) {
     return ((float)id + 0.5f) / (float)SMILE_SHADINGMODEL_COUNT;
 }

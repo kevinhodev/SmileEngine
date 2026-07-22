@@ -985,10 +985,10 @@ Rectangle {
                 Card {
                     title: "Shading"
                     iconName: "leaf"
-                    keywords: "shading defaultlit folhagem two-sided cor de subsurface transmissão"
+                    keywords: "shading defaultlit folhagem subsurface two-sided cor de subsurface transmissão"
                     Row {
                         spacing: 6
-                        visible: root.matchParam("shading defaultlit folhagem")
+                        visible: root.matchParam("shading defaultlit folhagem subsurface")
                         Chip {
                             label: "DefaultLit"
                             active: materialsModel.shadingModel === 0
@@ -999,6 +999,13 @@ Rectangle {
                             active: materialsModel.shadingModel === 1
                             onTapped: materialsModel.shadingModel = 1
                         }
+                        // Sólido translúcido (vela/cortina/cera): transmissão direta + brilho
+                        // de trás no GI; mantém GTAO/ReSTIR (folhagem não).
+                        Chip {
+                            label: "Subsurface"
+                            active: materialsModel.shadingModel === 2
+                            onTapped: materialsModel.shadingModel = 2
+                        }
                     }
                     ToggleRow {
                         label: "Two-sided"
@@ -1007,13 +1014,13 @@ Rectangle {
                         onToggled: materialsModel.twoSided = !materialsModel.twoSided
                     }
                     ColorRow {
-                        visible: materialsModel.shadingModel === 1 && root.matchParam("cor de subsurface")
+                        visible: materialsModel.shadingModel >= 1 && root.matchParam("cor de subsurface")
                         label: "Cor de subsurface"
                         value: materialsModel.subsurfaceColor
                         onPushed: (c) => materialsModel.subsurfaceColor = c
                     }
                     SliderRow {
-                        visible: materialsModel.shadingModel === 1 && root.matchParam("transmissão")
+                        visible: materialsModel.shadingModel >= 1 && root.matchParam("transmissão")
                         label: "Transmissão"
                         from: 0; to: 1
                         boundValue: materialsModel.subsurfaceIntensity
