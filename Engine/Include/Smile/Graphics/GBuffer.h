@@ -10,7 +10,7 @@ namespace Smile {
 
     // G-Buffer do deferred shading: 3 render targets + depth (externo).
     // Layout pos-dieta (ver Shaders/GBuffer.hlsli, manter em sincronia):
-    //   A  R8G8B8A8_UNORM     .rgb = BaseColor   .a = AO
+    //   A  R8G8B8A8_UNORM_SRGB  .rgb = BaseColor  .a = AO (alpha fica LINEAR em formato sRGB)
     //   B  R10G10B10A2_UNORM  .rg  = OctNormal   .b = Roughness  .a = ShadingModelID (2 bits)
     //   C  R8G8B8A8_UNORM     .r   = Metallic    .gba = livres (subsurface/specular futuros)
     // Emissivo NAO mora aqui: o geometry pass escreve direto no SceneColor HDR (5o MRT) e o
@@ -22,7 +22,12 @@ namespace Smile {
     public:
         static constexpr u32 kTargetCount = 3;
 
-        static constexpr DXGI_FORMAT kFormatA = DXGI_FORMAT_R8G8B8A8_UNORM;     // BaseColor + AO
+        // sRGB (como o GBufferC da UE, bLegacyAlbedoSrgb): o hardware encoda na escrita e
+        // decoda na leitura de graca — os 8 bits viram perceptualmente uniformes e o albedo
+        // ESCURO ganha ~2 bits efetivos (sem banding sob GI fraca/noite). Shaders seguem
+        // 100% em linear; nenhum leitor/writer muda. UAV em sRGB nao existe — o G-buffer
+        // nao tem UAV (so RTV/SRV/CopyResource, todos ok).
+        static constexpr DXGI_FORMAT kFormatA = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; // BaseColor + AO
         static constexpr DXGI_FORMAT kFormatB = DXGI_FORMAT_R10G10B10A2_UNORM; // OctNormal + Rough + ID
         static constexpr DXGI_FORMAT kFormatC = DXGI_FORMAT_R8G8B8A8_UNORM;    // Metallic + canais livres
 
