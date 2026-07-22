@@ -221,7 +221,11 @@ namespace Smile {
             // Translucido (alpha-blend no passe forward); o alpha vem de BaseColorFactor.w (× textura).
             mat->Blend = (sm.Blend != 0u);
 
-            mat->Constants.AOStrength         = 0.0f;
+            // AO bakeado do asset LIGADO (era 0 = descartado): o canal R do Specular packed
+            // pega oclusao de media distancia que o GTAO screen-space nao alcanca. O slider
+            // global "AO bakeado" (pagina de sombras) escala isto contra o GTAO — em 0 volta
+            // ao comportamento antigo.
+            mat->Constants.AOStrength         = 1.0f;
             mat->Constants.NormalFlipY        = 1u;              
             mat->Constants.NormalReconstructZ =
                 (normT && normT->Format() == DXGI_FORMAT_BC5_UNORM) ? 1u : 0u;

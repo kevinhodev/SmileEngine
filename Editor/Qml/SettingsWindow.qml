@@ -969,6 +969,36 @@ Rectangle {
 
             Card {
                 width: parent.width
+                height: 148
+                title: "Oclusão ambiente"
+
+                Text {
+                    x: 20; y: 55
+                    text: "AO bakeado dos materiais"
+                    color: root.textPrimary
+                    font.family: "Segoe UI"
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 74
+                    text: "canal AO dos assets sobre o indireto — soma com o GTAO; 0 = só GTAO"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                ShadowSlider {
+                    x: 20; y: 100
+                    width: parent.width - 40
+                    label: "Força"
+                    from: 0; to: 1; step: 0.05
+                    value: viewportModel.bakedAOStrength
+                    valueText: "×" + viewportModel.bakedAOStrength.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetBakedAOStrength(v)
+                }
+            }
+
+            Card {
+                width: parent.width
                 height: 500
                 title: "Sun shafts"
 

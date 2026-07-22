@@ -114,6 +114,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetAO().GetHalfRes();
     }
 
+    double ViewportWidget::GetBakedAOStrength() const {
+        return Renderer ? Renderer->GetBakedAOStrength() : 1.0;
+    }
+
     bool ViewportWidget::AreReflectionsEnabled() const {
         return Renderer && Renderer->GetUseReflections();
     }
@@ -386,6 +390,12 @@ namespace SmileEditor {
     void ViewportWidget::ToggleGTAO() {
         if (!Renderer) return;
         Renderer->SetUseAO(!Renderer->GetUseAO());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetBakedAOStrength(double _Strength) {
+        if (!Renderer) return;
+        Renderer->SetBakedAOStrength(static_cast<Smile::f32>(_Strength));
         emit ViewSettingsChanged();
     }
 
