@@ -1065,7 +1065,7 @@ namespace Smile {
         const f32 MipBias = (Fsr2Active && RenderWidth() < OutputWidth())
             ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
             : 0.0f;
-        MappedCB->RenderParams = { MipBias, BakedAOStrength, 0.0f, 0.0f };
+        MappedCB->RenderParams = { MipBias, 0.0f, 0.0f, 0.0f };
 
         Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans, VPNoTrans,
                                   InvViewProjFull, CameraPosition, kKmPerWorldUnit,

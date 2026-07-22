@@ -183,13 +183,11 @@ GBufferOutput main(PSInput input) {
 
     float Metallic  = MetallicFactor;
     float Roughness = RoughnessFactor;
-    float PackedAO  = 1.0f; // R do mapa Specular (packing Cry: R=AO, G=rough, B=metal)
     if (HasMetallicRoughnessMap) {
         float4 MR = MetallicRoughnessMap.SampleBias(MaterialSampler, UV, MipBias);
         if (SpecularPacking) {
             Roughness *= MR.g;
             Metallic  *= MR.b;
-            PackedAO   = MR.r;
         } else {
             Metallic  *= MR.r;
             Roughness *= MR.g;
@@ -210,14 +208,11 @@ GBufferOutput main(PSInput input) {
         Roughness              = sqrt(sqrt(a2New));
     }
 
-    // AO bakeado do asset sobre o indireto: strength do material x slider global (RenderParams.y,
-    // pagina de sombras do editor) — arbitra o double-darkening com o GTAO. Reusa o MR ja lido.
-    float AO  = 1.0f;
-    float AOK = AOStrength * saturate(RenderParams.y);
+    float AO = 1.0f;
     if (SpecularPacking && HasMetallicRoughnessMap)
-        AO = lerp(1.0f, PackedAO, AOK);
+        AO = lerp(1.0f, MetallicRoughnessMap.SampleBias(MaterialSampler, UV, MipBias).r, AOStrength);
     else if (HasAOMap)
-        AO = lerp(1.0f, AOMap.SampleBias(MaterialSampler, UV, MipBias).r, AOK);
+        AO = lerp(1.0f, AOMap.SampleBias(MaterialSampler, UV, MipBias).r, AOStrength);
 
     float3 Emissive = EmissiveFactor.rgb * EmissiveStrength;
     if (HasEmissiveMap)

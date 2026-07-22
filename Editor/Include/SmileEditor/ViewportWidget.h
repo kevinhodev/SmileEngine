@@ -29,7 +29,6 @@ namespace SmileEditor {
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double bakedAOStrength READ GetBakedAOStrength NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool nrdEnabled READ IsNrdEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool fsr2Enabled READ IsFsr2Enabled NOTIFY ViewSettingsChanged)
@@ -133,7 +132,6 @@ namespace SmileEditor {
         bool              AreGIFoliageShadowsEnabled() const;
         bool              IsGTAOEnabled() const;
         bool              IsGTAOHalfRes() const;
-        double            GetBakedAOStrength() const;
         bool              AreReflectionsEnabled() const;
         bool              IsNrdEnabled() const;
         bool              IsFsr2Enabled() const;
@@ -220,7 +218,6 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleGIFoliageShadows();
         Q_INVOKABLE void ToggleGTAO();
         Q_INVOKABLE void ToggleGTAOHalfRes();
-        Q_INVOKABLE void SetBakedAOStrength(double strength);
         Q_INVOKABLE void ToggleReflections();
         Q_INVOKABLE void ToggleNrd();
         Q_INVOKABLE void SetFsr2Enabled(bool enabled);

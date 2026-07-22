@@ -376,12 +376,6 @@ namespace Smile {
         void SetUseAO(bool V)          { UseAO = V; }
         bool GetUseAO() const          { return UseAO; }
 
-        // AO bakeado dos materiais (canal do asset, ex.: R do Specular packed) sobre o indireto.
-        // Escala global do AOStrength de todos os materiais via RenderParams.y do FrameCB —
-        // arbitra double-darkening contra o GTAO (0 = so GTAO, comportamento pre-2026-07-22).
-        void SetBakedAOStrength(f32 V) { BakedAOStrength = V; }
-        f32  GetBakedAOStrength() const { return BakedAOStrength; }
-
     private:
         void RecreateAllPSOs();
         void BuildDefaultScene();
@@ -573,7 +567,6 @@ namespace Smile {
         FAmbientOcclusion AO;
         bool              UseAO   = true;
         bool              AODebug = false;
-        f32               BakedAOStrength = 1.0f;
         static constexpr f32 kKmPerWorldUnit = 0.001f;
 
         FCloudNoise       CloudNoise;
