@@ -11,7 +11,7 @@
 
 // cbuffer + SceneDepth/RainOccMap + hashes + SkyVisibility vem do RainCommon.hlsli
 Texture2D SceneA : register(t0); // copia de GBufferA (BaseColor + AO)
-Texture2D SceneB : register(t1); // copia de GBufferB (OctNormal + Rough + Metal)
+Texture2D SceneB : register(t1); // copia de GBufferB (OctNormal + Rough + ShadingModelID)
 
 struct VSOutput {
     float4 pos : SV_POSITION;
@@ -119,7 +119,7 @@ PSOut main(VSOutput input) {
     float  ao     = gA.a;
     float3 N      = GBuffer_OctDecode(gB.rg);
     float  rough  = gB.b;
-    float  metal  = gB.a;
+    float  shadingId = gB.a; // passthrough (2 bits); o metallic mora no GBufferC, intocado
 
     // Acumulo por orientacao: chao junta agua, parede drena (fica so umida). (Cry restringe a
     // camada deferred a up-facing; o leve wet de parede aqui e o termo do Lagarde.)
@@ -199,6 +199,6 @@ PSOut main(VSOutput input) {
 
     PSOut o;
     o.A = float4(albedo, ao);
-    o.B = float4(GBuffer_OctEncode(N), rough, metal);
+    o.B = float4(GBuffer_OctEncode(N), rough, shadingId);
     return o;
 }

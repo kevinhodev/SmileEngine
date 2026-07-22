@@ -24,11 +24,13 @@ float4 main(VSOutput input) : SV_Target {
 
     float3 outColor;
     switch (Mode) {
-        case 1:  outColor = g.BaseColor;                       break; 
-        case 2:  outColor = g.WorldNormal * 0.5f + 0.5f;       break; 
+        case 1:  outColor = g.BaseColor;                       break;
+        case 2:  outColor = g.WorldNormal * 0.5f + 0.5f;       break;
         case 3:  outColor = g.Roughness.xxx;                   break;
         case 4:  outColor = g.Metallic.xxx;                    break;
-        case 5:  outColor = g.Emissive;                        break;
+        // Emissivo saiu do G-buffer (vai direto no SceneColor); o modo 5 passou a mostrar os
+        // canais LIVRES do C (hoje zeros — vira o debug de subsurface/specular quando ocuparem).
+        case 5:  outColor = c.gba;                             break;
         case 6:  outColor = g.AO.xxx;                          break;
         case 7: { 
             outColor = (g.ShadingModel == SMILE_SHADINGMODEL_FOLIAGE)

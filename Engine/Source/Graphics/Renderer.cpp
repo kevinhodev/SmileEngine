@@ -389,7 +389,7 @@ namespace Smile {
         Reflections.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
-            DepthSRVSlot, GBuffer.SRVSlot(1), HDREnv.BRDFLutSRV());
+            DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV());
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
@@ -1720,10 +1720,13 @@ namespace Smile {
             Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
                                     D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
-            D3D12_CPU_DESCRIPTOR_HANDLE GBufRTVs[FGBuffer::kTargetCount + 1] = {
+            // 5o MRT = SceneColor HDR: o emissivo e escrito direto nele (dieta do G-buffer).
+            // O ceu ja esta la (desenhado antes do prepass); a geometria opaca sobrescreve so
+            // os proprios pixels e o deferred lighting depois SOMA a luz (blend aditivo).
+            D3D12_CPU_DESCRIPTOR_HANDLE GBufRTVs[FGBuffer::kTargetCount + 2] = {
                 GBuffer.RTVHandle(0), GBuffer.RTVHandle(1), GBuffer.RTVHandle(2),
-                VelocityRTVHeap.CpuHandle(0) };
-            CommandList->OMSetRenderTargets(FGBuffer::kTargetCount + 1, GBufRTVs, FALSE, &DSV);
+                VelocityRTVHeap.CpuHandle(0), HDRRTVHeap.CpuHandle(0) };
+            CommandList->OMSetRenderTargets(FGBuffer::kTargetCount + 2, GBufRTVs, FALSE, &DSV);
             GBuffer.Clear(CommandList);
             const FLOAT VelClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
             CommandList->ClearRenderTargetView(VelocityRTVHeap.CpuHandle(0), VelClear, 0, nullptr);
@@ -1871,7 +1874,12 @@ namespace Smile {
                 CommandList->SetGraphicsRootDescriptorTable(11, SRVHeap.GpuHandle(LocalShadowTable));
             }
             GpuProfiler.Begin(CommandList, "Deferred lighting");
-            CommandList->SetPipelineState(PipelineState.PSODeferredLighting());
+            // Aditivo (soma sobre o emissivo do geometry pass); nas views de debug SSAO/GI o
+            // shader retorna a visualizacao inteira -> PSO opaco p/ substituir a tela.
+            const bool DeferredDebugView = AODebug || (UseGI && DDGI.IsReady() && GIDebug);
+            CommandList->SetPipelineState(DeferredDebugView
+                ? PipelineState.PSODeferredLightingDebug()
+                : PipelineState.PSODeferredLighting());
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             CommandList->IASetVertexBuffers(0, 0, nullptr);
             CommandList->IASetIndexBuffer(nullptr);

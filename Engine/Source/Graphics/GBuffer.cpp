@@ -6,7 +6,7 @@
 namespace Smile {
 
     // Valores de clear canonicos (precisam casar com o D3D12_CLEAR_VALUE da criacao do recurso).
-    //   A: preto, AO=0     B: normal "p/ frente" (0,0,1) + rough/metal 0   C: emissive 0, model 0
+    //   A: preto, AO=0   B: normal "p/ frente" (0,0,1) + rough 0 + ID 0   C: metallic 0, livres 0
     static const FLOAT kClearA[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     static const FLOAT kClearB[4] = { 0.5f, 0.5f, 0.0f, 0.0f }; // OctEncode((0,0,1)) = (0.5,0.5)
     static const FLOAT kClearC[4] = { 0.0f, 0.0f, 0.0f, 0.0f };

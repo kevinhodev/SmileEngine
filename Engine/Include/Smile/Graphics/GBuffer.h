@@ -9,10 +9,12 @@ namespace Smile {
     class FTextureSRVHeap;
 
     // G-Buffer do deferred shading: 3 render targets + depth (externo).
-    // Layout (ver Shaders/GBuffer.hlsli, manter em sincronia):
-    //   A  R8G8B8A8_UNORM      .rgb = BaseColor   .a = AO
-    //   B  R16G16B16A16_FLOAT  .rg  = OctNormal   .b = Roughness  .a = Metallic
-    //   C  R16G16B16A16_FLOAT  .rgb = Emissive    .a = ShadingModelID
+    // Layout pos-dieta (ver Shaders/GBuffer.hlsli, manter em sincronia):
+    //   A  R8G8B8A8_UNORM     .rgb = BaseColor   .a = AO
+    //   B  R10G10B10A2_UNORM  .rg  = OctNormal   .b = Roughness  .a = ShadingModelID (2 bits)
+    //   C  R8G8B8A8_UNORM     .r   = Metallic    .gba = livres (subsurface/specular futuros)
+    // Emissivo NAO mora aqui: o geometry pass escreve direto no SceneColor HDR (5o MRT) e o
+    // deferred lighting soma a luz por cima (blend aditivo).
     //
     // Os 3 SRVs sao alocados CONTIGUOS no heap compartilhado (SRVTableStart()) p/ bind do passe
     // de iluminacao como uma unica descriptor table. O depth fica com o Renderer.
@@ -21,8 +23,8 @@ namespace Smile {
         static constexpr u32 kTargetCount = 3;
 
         static constexpr DXGI_FORMAT kFormatA = DXGI_FORMAT_R8G8B8A8_UNORM;     // BaseColor + AO
-        static constexpr DXGI_FORMAT kFormatB = DXGI_FORMAT_R16G16B16A16_FLOAT; // OctNormal + Rough + Metal
-        static constexpr DXGI_FORMAT kFormatC = DXGI_FORMAT_R16G16B16A16_FLOAT; // Emissive + ShadingModelID
+        static constexpr DXGI_FORMAT kFormatB = DXGI_FORMAT_R10G10B10A2_UNORM; // OctNormal + Rough + ID
+        static constexpr DXGI_FORMAT kFormatC = DXGI_FORMAT_R8G8B8A8_UNORM;    // Metallic + canais livres
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);

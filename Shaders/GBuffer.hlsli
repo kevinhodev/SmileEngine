@@ -20,6 +20,9 @@ float3 GBuffer_OctDecode(float2 f) {
     return normalize(n);
 }
 
+// ID no alpha de 2 BITS do RGB10A2 (niveis 0, 1/3, 2/3, 1): o encode (id+0.5)/COUNT cai no
+// nivel certo por arredondamento p/ COUNT potencia de 2 (2 ou 4 modelos). Se COUNT crescer
+// alem de 4, o ID precisa de casa nova (stencil ou canal de 8 bits no GBufferC).
 float GBuffer_EncodeShadingModel(uint id) {
     return ((float)id + 0.5f) / (float)SMILE_SHADINGMODEL_COUNT;
 }
@@ -27,20 +30,29 @@ uint GBuffer_DecodeShadingModel(float a) {
     return min((uint)(a * (float)SMILE_SHADINGMODEL_COUNT), SMILE_SHADINGMODEL_COUNT - 1u);
 }
 
+// Dieta do G-buffer (192 -> 128 bpp com velocity, paridade com UE/Flax):
+//   A (RGBA8)    .rgb = BaseColor  .a = AO do material
+//   B (RGB10A2)  .rg  = OctNormal  .b = Roughness      .a = ShadingModelID (2 bits)
+//   C (RGBA8)    .r   = Metallic   .gba = LIVRES (futuro: subsurface/specular/wetness)
+//   Emissive     -> escrito DIRETO no SceneColor HDR (SV_Target4); o deferred lighting
+//                   SOMA a luz por cima (blend aditivo, estilo UE) em vez de reescrever.
 struct GBufferOutput {
-    float4 A        : SV_Target0; 
-    float4 B        : SV_Target1; 
-    float4 C        : SV_Target2; 
-    float2 Velocity : SV_Target3; 
+    float4 A        : SV_Target0;
+    float4 B        : SV_Target1;
+    float4 C        : SV_Target2;
+    float2 Velocity : SV_Target3;
+    float4 Emissive : SV_Target4; // SceneColor HDR (RGBA16F)
 };
 
 GBufferOutput EncodeGBuffer(float3 baseColor, float ao, float3 worldNormal,
                             float roughness, float metallic, float3 emissive, uint shadingModel) {
     GBufferOutput o;
     o.A = float4(baseColor, ao);
-    o.B = float4(GBuffer_OctEncode(worldNormal), roughness, metallic);
-    o.C = float4(emissive, GBuffer_EncodeShadingModel(shadingModel));
-    o.Velocity = float2(0.0f, 0.0f); 
+    o.B = float4(GBuffer_OctEncode(worldNormal), roughness,
+                 GBuffer_EncodeShadingModel(shadingModel));
+    o.C = float4(metallic, 0.0f, 0.0f, 0.0f);
+    o.Velocity = float2(0.0f, 0.0f);
+    o.Emissive = float4(emissive, 0.0f);
     return o;
 }
 
@@ -50,7 +62,6 @@ struct GBufferData {
     float3 WorldNormal;
     float  Roughness;
     float  Metallic;
-    float3 Emissive;
     uint   ShadingModel;
 };
 
@@ -60,10 +71,9 @@ GBufferData DecodeGBuffer(float4 a, float4 b, float4 c) {
     g.AO           = a.a;
     g.WorldNormal  = GBuffer_OctDecode(b.rg);
     g.Roughness    = b.b;
-    g.Metallic     = b.a;
-    g.Emissive     = c.rgb;
-    g.ShadingModel = GBuffer_DecodeShadingModel(c.a);
+    g.ShadingModel = GBuffer_DecodeShadingModel(b.a);
+    g.Metallic     = c.r;
     return g;
 }
 
-#endif 
+#endif

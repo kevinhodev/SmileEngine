@@ -66,7 +66,7 @@ namespace Smile {
     void FReflections::CreateCompositePipeline(ID3D12Device* _Device) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        SRVRange.NumDescriptors                    = 4;
+        SRVRange.NumDescriptors                    = 5; // t4 = GBufferC (metallic pos-dieta)
         SRVRange.BaseShaderRegister                = 0;
         SRVRange.RegisterSpace                     = 0;
         SRVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -155,12 +155,12 @@ namespace Smile {
         Free(ResolveTableStart, 4);
         Free(TemporalTable[0], 4); Free(TemporalTable[1], 4);
         Free(SpatialTable[0], 3); Free(SpatialTable[1], 3);
-        Free(CompositeTable[0], 4); Free(CompositeTable[1], 4);
+        Free(CompositeTable[0], 5); Free(CompositeTable[1], 5);
         Free(SpecPackSrvTable, 3);
         Free(SpecPackUAVSlot, 1);
         Free(NrdOutSpecSRV, 1);
         NrdInSpec = nullptr;
-        Free(CompositeTableNrd[0], 4); Free(CompositeTableNrd[1], 4);
+        Free(CompositeTableNrd[0], 5); Free(CompositeTableNrd[1], 5);
         Radiance.Reset();
         RayData.Reset();
         Resolved.Reset();
@@ -177,7 +177,7 @@ namespace Smile {
     void FReflections::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                       u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
                                       u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
-                                      u32 _GBufferSlot, u32 _BRDFLutSlot) {
+                                      u32 _GBufferSlot, u32 _GBufferCSlot, u32 _BRDFLutSlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot)
@@ -186,6 +186,7 @@ namespace Smile {
         Width = _Width; Height = _Height;
         HalfWidth = (_Width + 1) / 2; HalfHeight = (_Height + 1) / 2;
         DepthSlotCached = _DepthSlot; GBufferSlotCached = _GBufferSlot; BRDFLutSlotCached = _BRDFLutSlot;
+        GBufferCSlotCached = _GBufferCSlot;
         Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
         RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
         Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
@@ -287,15 +288,18 @@ namespace Smile {
             _Device->CopyDescriptors(1, &SDst, &Three, 3, SSrc, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
             // Composite le o Denoised (saida do spatial), nao mais o History[curr] direto.
-            CompositeTable[curr] = _SRVHeap.Allocate(4);
+            // t4 = GBufferC (metallic saiu do B.a na dieta do G-buffer).
+            CompositeTable[curr] = _SRVHeap.Allocate(5);
             D3D12_CPU_DESCRIPTOR_HANDLE CDst2 = _SRVHeap.CpuHandle(CompositeTable[curr]);
-            D3D12_CPU_DESCRIPTOR_HANDLE CSrc2[4] = {
+            D3D12_CPU_DESCRIPTOR_HANDLE CSrc2[5] = {
                 _SRVHeap.CpuHandleStaging(DenoisedSRVSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_BRDFLutSlot),
+                _SRVHeap.CpuHandleStaging(_GBufferCSlot),
             };
-            _Device->CopyDescriptors(1, &CDst2, &Four, 4, CSrc2, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            UINT Five = 5; UINT OnesC[5] = { 1,1,1,1,1 };
+            _Device->CopyDescriptors(1, &CDst2, &Five, 5, CSrc2, OnesC, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
 
         // NRD: tabela do pack especular [Resolved, GBuffer, Depth]. A UAV da IN_SPEC e a SRV da
@@ -334,19 +338,20 @@ namespace Smile {
         Srv.Texture2D.MipLevels     = 1;
         _SRVHeap.CreateSRV(_Device, _NrdOutSpec, Srv, NrdOutSpecSRV);
 
-        // Composite-NRD: [OUT_SPEC, GBuffer, Depth, BRDFLut]. Identico p/ as 2 paridades (a OUT do NRD
-        // nao e ping-pong), entao CurrParity nao importa neste caminho.
-        UINT Four = 4; UINT Ones[4] = { 1,1,1,1 };
+        // Composite-NRD: [OUT_SPEC, GBuffer, Depth, BRDFLut, GBufferC]. Identico p/ as 2 paridades
+        // (a OUT do NRD nao e ping-pong), entao CurrParity nao importa neste caminho.
+        UINT Five = 5; UINT Ones[5] = { 1,1,1,1,1 };
         for (u32 i = 0; i < 2; ++i) {
-            CompositeTableNrd[i] = _SRVHeap.Allocate(4);
+            CompositeTableNrd[i] = _SRVHeap.Allocate(5);
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(CompositeTableNrd[i]);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src[4] = {
+            D3D12_CPU_DESCRIPTOR_HANDLE Src[5] = {
                 _SRVHeap.CpuHandleStaging(NrdOutSpecSRV),
                 _SRVHeap.CpuHandleStaging(GBufferSlotCached),
                 _SRVHeap.CpuHandleStaging(DepthSlotCached),
                 _SRVHeap.CpuHandleStaging(BRDFLutSlotCached),
+                _SRVHeap.CpuHandleStaging(GBufferCSlotCached),
             };
-            _Device->CopyDescriptors(1, &Dst, &Four, 4, Src, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            _Device->CopyDescriptors(1, &Dst, &Five, 5, Src, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
     }
 

@@ -301,16 +301,19 @@ namespace Smile {
         // --- Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs) -------------------------
         // Opaco: depth EQUAL (reusa o depth do prepass). Two-sided/alpha-test (folhagem): nao
         // entram no prepass, entao escrevem o proprio depth (depth LESS + write).
+        // Dieta: +2 MRTs alem do G-buffer — velocity e o SceneColor HDR, onde o emissivo e
+        // escrito DIRETO (o deferred lighting soma a luz por cima com blend aditivo).
         auto GBufferPSBlob = LoadShaderBytecode("GBuffer.ps_6_0.cso");
         PSODesc.VS                = { VertexShaderBlob.data(), VertexShaderBlob.size() };
         PSODesc.PS                = { GBufferPSBlob.data(), GBufferPSBlob.size() };
         PSODesc.BlendState        = BlendDesc;     // opaco, escreve todos os canais
         PSODesc.DepthStencilState = DepthEqual;    // le o depth do prepass, nao escreve
-        PSODesc.NumRenderTargets  = FGBuffer::kTargetCount + 1; // +1 = velocity (motion vector)
+        PSODesc.NumRenderTargets  = FGBuffer::kTargetCount + 2; // +velocity +SceneColor (emissivo)
         PSODesc.RTVFormats[0]     = FGBuffer::kFormatA;
         PSODesc.RTVFormats[1]     = FGBuffer::kFormatB;
         PSODesc.RTVFormats[2]     = FGBuffer::kFormatC;
         PSODesc.RTVFormats[3]     = DXGI_FORMAT_R16G16_FLOAT; // SV_Target3 = motion vector (UV)
+        PSODesc.RTVFormats[4]     = DXGI_FORMAT_R16G16B16A16_FLOAT; // SV_Target4 = emissivo -> HDR
         PSODesc.DSVFormat         = DXGI_FORMAT_D32_FLOAT;
         PSODesc.SampleDesc        = { 1, 0 };
 
@@ -355,14 +358,25 @@ namespace Smile {
         PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
         PSODesc.RTVFormats[2]     = DXGI_FORMAT_UNKNOWN;
         PSODesc.RTVFormats[3]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[4]     = DXGI_FORMAT_UNKNOWN;
         ComPtr<ID3D12PipelineState> NewPSOForwardBlend;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOForwardBlend)));
         PipelineStateForwardBlend = NewPSOForwardBlend;
 
         // --- Deferred lighting: fullscreen (PostProcess.vs), le o G-buffer e ilumina -> HDR. ----
         // Usa a root signature principal (a tabela de material e religada p/ [A,B,C,Depth]).
+        // Blend ADITIVO na cor (o emissivo ja esta no SceneColor via geometry pass) com alpha
+        // sobrescrito p/ 1. A variante OPACA e usada nos modos de debug (SSAO/GI view), onde o
+        // shader retorna a visualizacao inteira e nao pode somar com o emissivo por baixo.
         auto LightVSBlob = LoadShaderBytecode("PostProcess.vs_6_0.cso");
         auto LightPSBlob = LoadShaderBytecode("DeferredLighting.ps_6_0.cso");
+
+        D3D12_BLEND_DESC LightAdditive = BlendDesc;
+        LightAdditive.RenderTarget[0].BlendEnable    = TRUE;
+        LightAdditive.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
+        LightAdditive.RenderTarget[0].DestBlend      = D3D12_BLEND_ONE;
+        LightAdditive.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
+        LightAdditive.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
 
         D3D12_RASTERIZER_DESC LightRaster{};
         LightRaster.FillMode        = D3D12_FILL_MODE_SOLID;
@@ -377,7 +391,7 @@ namespace Smile {
         LightDesc.pRootSignature        = RootSignature.Get();
         LightDesc.VS                    = { LightVSBlob.data(), LightVSBlob.size() };
         LightDesc.PS                    = { LightPSBlob.data(), LightPSBlob.size() };
-        LightDesc.BlendState            = BlendDesc;
+        LightDesc.BlendState            = LightAdditive;
         LightDesc.SampleMask            = UINT_MAX;
         LightDesc.RasterizerState       = LightRaster;
         LightDesc.DepthStencilState     = LightDepth;
@@ -390,5 +404,10 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> NewPSODeferredLighting;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&LightDesc, IID_PPV_ARGS(&NewPSODeferredLighting)));
         PipelineStateDeferredLighting = NewPSODeferredLighting;
+
+        LightDesc.BlendState = BlendDesc; // opaco: debug views substituem a tela
+        ComPtr<ID3D12PipelineState> NewPSODeferredLightingDebug;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&LightDesc, IID_PPV_ARGS(&NewPSODeferredLightingDebug)));
+        PipelineStateDeferredLightingDebug = NewPSODeferredLightingDebug;
     }
 }

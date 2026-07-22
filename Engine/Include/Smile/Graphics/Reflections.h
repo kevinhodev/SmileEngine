@@ -48,7 +48,7 @@ namespace Smile {
         // Renderer (depth, gbuffer, BRDF LUT).
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 DepthSlot, u32 GBufferSlot, u32 BRDFLutSlot);
+                            u32 DepthSlot, u32 GBufferSlot, u32 GBufferCSlot, u32 BRDFLutSlot);
 
         // Params estaticos do volume DDGI (grid/atlas) p/ o CB. Chamar quando o volume e (re)criado.
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
@@ -166,15 +166,16 @@ namespace Smile {
         // le History[curr]. 2 tabelas pre-montadas (sem CopyDescriptors por frame).
         u32 TemporalTable[2]    = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [resolved, gbuf, depth, hist[1-curr]]
         u32 SpatialTable[2]     = { kInvalidSlot, kInvalidSlot }; // 3 SRVs [hist[curr], gbuf, depth]
-        u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [denoised, gbuf, depth, brdfLut]
+        u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 5 SRVs [denoised, gbuf, depth, brdfLut, gbufC]
         // NRD unificado: pack especular + composite lendo a OUT_SPEC do NRD em vez do Denoised caseiro.
         u32 SpecPackSrvTable    = kInvalidSlot;                   // 3 SRVs [resolved, gbuf, depth]
         u32 SpecPackUAVSlot     = kInvalidSlot;                   // UAV da IN_SPEC do NRD
         ID3D12Resource* NrdInSpec = nullptr;                      // nao-owned (FNrdDenoiser); p/ o clear
         u32 NrdOutSpecSRV       = kInvalidSlot;                   // SRV da OUT_SPEC do NRD
-        u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 4 SRVs [nrdOutSpec, gbuf, depth, brdfLut]
+        u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 5 SRVs [nrdOutSpec, gbuf, depth, brdfLut, gbufC]
         u32 DepthSlotCached     = kInvalidSlot;
         u32 GBufferSlotCached   = kInvalidSlot;
+        u32 GBufferCSlotCached  = kInvalidSlot; // metallic (dieta do G-buffer)
         u32 BRDFLutSlotCached   = kInvalidSlot;
         u32  FrameParity        = 0;     // alterna a cada RecordTrace
         u32  CurrParity         = 0;     // paridade usada neste frame (trace->composite)

@@ -212,14 +212,16 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&NewDepthNormal)));
         PSODepthNormal = NewDepthNormal;
 
-        // Geometry pass: MRT do G-buffer + velocity, depth EQUAL (terreno sempre no prepass).
+        // Geometry pass: MRT do G-buffer + velocity + SceneColor (emissivo, dieta do G-buffer),
+        // depth EQUAL (terreno sempre no prepass).
         Desc.PS                = { GBufferPSBlob.data(), GBufferPSBlob.size() };
         Desc.DepthStencilState = DepthEqual;
-        Desc.NumRenderTargets  = FGBuffer::kTargetCount + 1;
+        Desc.NumRenderTargets  = FGBuffer::kTargetCount + 2;
         Desc.RTVFormats[0]     = FGBuffer::kFormatA;
         Desc.RTVFormats[1]     = FGBuffer::kFormatB;
         Desc.RTVFormats[2]     = FGBuffer::kFormatC;
         Desc.RTVFormats[3]     = DXGI_FORMAT_R16G16_FLOAT;
+        Desc.RTVFormats[4]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> NewGBuffer;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&NewGBuffer)));
         PSOGBuffer = NewGBuffer;
@@ -246,6 +248,7 @@ namespace Smile {
         Desc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
         Desc.RTVFormats[2]     = DXGI_FORMAT_UNKNOWN;
         Desc.RTVFormats[3]     = DXGI_FORMAT_UNKNOWN;
+        Desc.RTVFormats[4]     = DXGI_FORMAT_UNKNOWN;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> NewShadow;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&NewShadow)));
         PSOShadow = NewShadow;

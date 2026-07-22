@@ -19,10 +19,11 @@ cbuffer CompositeCB : register(b0) {
     float4 NrdSpecParams;           // w = 1 -> OUT_SPEC do NRD em YCoCg (desempacotar)
 };
 
-Texture2D<float4> Reflection : register(t0); 
-Texture2D<float4> GBuffer    : register(t1); 
-Texture2D<float>  Depth      : register(t2); 
-Texture2D<float4> BRDFLut    : register(t3); 
+Texture2D<float4> Reflection : register(t0);
+Texture2D<float4> GBuffer    : register(t1); // GBufferB: octNormal + rough + shadingID
+Texture2D<float>  Depth      : register(t2);
+Texture2D<float4> BRDFLut    : register(t3);
+Texture2D<float4> GBufferC   : register(t4); // .r = metallic (dieta do G-buffer)
 
 SamplerState LinearClamp : register(s0);
 
@@ -36,7 +37,7 @@ float4 main(VSOutput input) : SV_TARGET {
 
     float4 gb        = GBuffer.Load(int3(px, 0));
     float  roughness = gb.b;
-    float  metallic  = gb.a;
+    float  metallic  = GBufferC.Load(int3(px, 0)).r;
     float  combineAlpha = saturate((ReflectParams.x - roughness) / max(ReflectParams.y, 1e-4f));
 
     float deviceZ = Depth.Load(int3(px, 0)).r;

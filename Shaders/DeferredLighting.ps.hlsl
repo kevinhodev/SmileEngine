@@ -208,7 +208,6 @@ float4 main(VSOutput input) : SV_Target {
     float3 BaseColor = g.BaseColor;
     float  Metallic  = g.Metallic;
     float  Roughness = max(g.Roughness, 0.04f);
-    float3 Emissive  = g.Emissive;
     float  matAO     = g.AO;
     bool   IsFoliage = (g.ShadingModel == SMILE_SHADINGMODEL_FOLIAGE);
 
@@ -426,7 +425,10 @@ float4 main(VSOutput input) : SV_Target {
         }
     }
 
-    float3 FinalColor = Lighting + Ambient + Emissive;
+    // Emissivo NAO entra aqui: o geometry pass ja o escreveu no SceneColor (SV_Target4 do
+    // G-buffer) e este passe SOMA por cima (PSO aditivo). Nos modos de debug (SSAO/GI) o
+    // Renderer troca p/ o PSO opaco — o return substitui a tela, como antes da dieta.
+    float3 FinalColor = Lighting + Ambient;
 
     if (DDGIGridCount.w > 1.5f) return float4(DbgGI, 1.0f); 
 
