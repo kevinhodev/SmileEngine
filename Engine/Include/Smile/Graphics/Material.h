@@ -81,7 +81,7 @@ namespace Smile {
         void UpdateTextureSlot(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                u32 LocalSlot, FTexture* Texture);
 
-        bool IsFinalized() const { return CBV != nullptr; }
+        bool IsFinalized() const { return MappedCBV != nullptr; }
 
         u32  AlbedoDescriptorIndex() const { return SRVTableStart; }
         bool HasAlbedoTexture()      const { return Constants.HasAlbedoMap != 0; }
@@ -89,8 +89,13 @@ namespace Smile {
     private:
         static constexpr u32 kInvalidTable = 0xFFFFFFFFu;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
+        // CBV vem de um POOL paginado compartilhado (Material.cpp): paginas upload de 64KB com
+        // slots de 256B. Antes cada material criava um committed buffer proprio de 256B — que o
+        // D3D12 arredonda p/ 64KB de heap — desperdicando ~64KB por material (Bistro: 132
+        // materiais = ~8MB; Emerald pior) + alloc count. O slot devolve GPU VA + ptr mapeado.
         MaterialConstants* MappedCBV = nullptr;
+        D3D12_GPU_VIRTUAL_ADDRESS CBGpuVA = 0;
+        u32 CBSlot                   = kInvalidTable;
         u32 SRVTableStart            = kInvalidTable;
     };
 } 
