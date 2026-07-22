@@ -164,7 +164,16 @@
       "PowerShell(git stash drop 'stash@{0}')",
       "PowerShell(cmake --build build --target Shaders --config Release; Write-Host \"EXIT: $LASTEXITCODE\"; Get-ChildItem build/bin/Shaders/ReSTIRGITrace.cs_6_6.cso, build/bin/Shaders/ReSTIRGISpatial.cs_6_6.cso | Select-Object Name, LastWriteTime)",
       "PowerShell(git add Shaders)",
-      "PowerShell(cmake --build build --target Shaders --config Release; Write-Host \"SHADERS: $LASTEXITCODE\"; cmake --build build --target SmileEngine --config Release 2>&1 | Select-String -Pattern \"error|vcxproj ->\" | Select-Object -Last 3; cmake --build build --target SmileEditor --config Release 2>&1 | Select-String -Pattern \"error|SmileEditor.vcxproj ->\" | Select-Object -Last 3)"
+      "PowerShell(cmake --build build --target Shaders --config Release; Write-Host \"SHADERS: $LASTEXITCODE\"; cmake --build build --target SmileEngine --config Release 2>&1 | Select-String -Pattern \"error|vcxproj ->\" | Select-Object -Last 3; cmake --build build --target SmileEditor --config Release 2>&1 | Select-String -Pattern \"error|SmileEditor.vcxproj ->\" | Select-Object -Last 3)",
+      "mcp__visualize__show_widget",
+      "Bash(git -C \"D:/Engines/SmileEngine\" status --short)",
+      "PowerShell(cmake --build \"D:\\\\Engines\\\\SmileEngine\\\\build\" --config Release --target SmileEditor)",
+      "PowerShell(Select-String -Path \"C:\\\\Users\\\\user\\\\.claude\\\\projects\\\\D--Engines-SmileEngine\\\\3734104e-d35c-4a9f-846d-fe32b5ec8746\\\\tool-results\\\\bgoh2x3pg.txt\" -Pattern \"error|SmileEditor.exe\" | Select-Object -First 20 | ForEach-Object Line)",
+      "PowerShell(Select-String -Path \"C:\\\\Users\\\\user\\\\.claude\\\\projects\\\\D--Engines-SmileEngine\\\\3734104e-d35c-4a9f-846d-fe32b5ec8746\\\\tool-results\\\\b6kp10cnk.txt\" -Pattern \"^Error|error\\\\]\" | ForEach-Object Line; Write-Output \"---- contagem ----\"; \\(Select-String -Path \"C:\\\\Users\\\\user\\\\.claude\\\\projects\\\\D--Engines-SmileEngine\\\\3734104e-d35c-4a9f-846d-fe32b5ec8746\\\\tool-results\\\\b6kp10cnk.txt\" -Pattern \"Warning:\" | Measure-Object\\).Count)",
+      "PowerShell($p = Start-Process \"D:\\\\Engines\\\\SmileEngine\\\\build\\\\bin\\\\Release\\\\SmileEditor.exe\" -WorkingDirectory \"D:\\\\Engines\\\\SmileEngine\\\\build\\\\bin\\\\Release\" -PassThru; Start-Sleep -Seconds 12; if \\($p.HasExited\\) { Write-Output \"SAIU cedo, exit code: $\\($p.ExitCode\\)\" } else { Write-Output \"Rodando OK \\(pid $\\($p.Id\\)\\) apos 12s\" }; Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(cmake --build \"D:\\\\Engines\\\\SmileEngine\\\\build\" --config Release --target SmileEditor 2>&1 | Select-String -Pattern \"error|warning C4100|SmileEditor.exe\" | Select-Object -First 15 | ForEach-Object Line)",
+      "PowerShell($out = & \"C:\\\\Qt\\\\6.10.2\\\\msvc2022_64\\\\bin\\\\qmllint.exe\" \"D:\\\\Engines\\\\SmileEngine\\\\Editor\\\\Qml\\\\TimeOfDayWindow.qml\" \"D:\\\\Engines\\\\SmileEngine\\\\Editor\\\\Qml\\\\SettingsWindow.qml\" 2>&1 | Out-String; $errors = \\($out -split \"`n\" | Select-String -Pattern \"^Error\"\\); Write-Output \"Erros: $\\($errors.Count\\)\"; $errors | Select-Object -First 10)",
+      "Bash(git checkout *)"
     ]
   }
 }

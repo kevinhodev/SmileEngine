@@ -54,8 +54,10 @@ namespace Smile {
         const f32 start        = N / 2.0f;
         const UINT rowPitch    = H0Footprint.Footprint.RowPitch;
 
-        Rng.seed(1337u);
+        Rng.seed(Seed);
         GaussianHasLast = false;
+
+        const f32 kTwoPiRcp = 1.0f / kTwoPi;
 
         for (int m = 0; m < M; ++m) {
             const f32 ky = (start - static_cast<f32>(m)) * pi2OverWorld;
@@ -67,8 +69,14 @@ namespace Smile {
 
                 f32 sqrtP = 0.0f;
                 if (kx != 0.0f || ky != 0.0f) {
-                    const f32 P = ComputePhillips(kx, ky);
-                    sqrtP = (P > 0.0f) ? std::sqrt(P) : 0.0f;
+                    // Banda por cascata: componente com c ciclos/tile só entra se
+                    // c ∈ [CutoffLow, CutoffHigh) — bandas disjuntas somam sem duplicar.
+                    const f32 cycles = std::sqrt(kx * kx + ky * ky) *
+                                       WorldSize * kTwoPiRcp;
+                    if (cycles >= CutoffLowCycles && cycles < CutoffHighCycles) {
+                        const f32 P = ComputePhillips(kx, ky);
+                        sqrtP = (P > 0.0f) ? std::sqrt(P) : 0.0f;
+                    }
                 }
 
                 const f32 h0x   = sqrtP * FrandGaussian() * recipSqrt2;

@@ -40,19 +40,17 @@ namespace Smile {
             return Tex;
         }
 
-        // Espelho C++ do InstanceGeo de DDGICommon.hlsli (80 bytes) — mudar em lockstep.
-        // Flags: 1=AlphaTest (FORCE_NON_OPAQUE na TLAS), 2=HasEmissiveMap, 4=Foliage, 8=HasMrMap.
         struct DDGIInstanceGeo {
             Vec4 BaseColor;
-            u32  VertexSrv   = 0; // indice bindless (ResourceDescriptorHeap) do VB do mesh
-            u32  IndexSrv    = 0; // idem p/ o IB — buffers 0-based por mesh, sem offsets
+            u32  VertexSrv   = 0; 
+            u32  IndexSrv    = 0; 
             u32  AlbedoIndex = 0;
             u32  HasAlbedo   = 0;
             u32  TwoSided    = 0;
             u32  Flags       = 0;
             f32  AlphaCutoff = 0.5f;
             f32  RoughnessFactor = 0.5f;
-            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; // rgb = fator*strength; w = MetallicFactor
+            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; 
             u32  EmissiveMapIndex = 0;
             u32  MrMapIndex       = 0;
             u32  GeoPad0 = 0, GeoPad1 = 0;
@@ -104,7 +102,7 @@ namespace Smile {
     }
 
     void FDDGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); // t8 = luzes (F5)
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); 
         UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
         UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
         RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
@@ -181,8 +179,7 @@ namespace Smile {
         GridMinV = { _AABBMin.X - 0.5f * SpacingV, _AABBMin.Y - 0.5f * SpacingV,
                      _AABBMin.Z - 0.5f * SpacingV };
         NumProbes       = static_cast<u32>(CountX) * CountY * CountZ;
-        // Tiles com 1px de borda octaedrica de cada lado (stride = tile+2; ver DDGI_TileOrigin).
-        // Pior caso 32x32x32: 1024 tiles * 16px = 16384 = limite exato de textura do D3D12.
+
         AtlasWidth      = static_cast<u32>(CountX) * CountZ * (kTileSize + 2);
         AtlasHeight     = static_cast<u32>(CountY) * (kTileSize + 2);
         DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * (kDistTileSize + 2);
@@ -193,10 +190,7 @@ namespace Smile {
         DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT);
         ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat);
 
-        // SRVs bindless de VB/IB por mesh único (2 slots contíguos: VB, IB) — o InstanceGeo
-        // aponta pros índices e os shaders leem via ResourceDescriptorHeap (SM6.6). Substitui
-        // os merged buffers, que duplicavam a geometria inteira da cena em VRAM.
-        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot; // valor = slot do VB (IB = +1)
+        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot; 
         std::vector<const FGpuMesh*> UniqueMeshes;
         for (u32 i = 0; i < NumRenderables; ++i) {
             const FGpuMesh* M = _Scene.Renderables()[i].Mesh;
@@ -213,7 +207,7 @@ namespace Smile {
             for (u32 i = 0; i < static_cast<u32>(UniqueMeshes.size()); ++i) {
                 const FGpuMesh* M      = UniqueMeshes[i];
                 const u32       VbSlot = MeshGeoSlotBase + i * 2;
-                // FirstElement = offset da fatia no pool de geometria (0 se buffer proprio)
+
                 GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
                 GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
                 GeoSrv.Buffer.NumElements         = M->VertexCount();
@@ -247,7 +241,7 @@ namespace Smile {
                     g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
                     g.HasAlbedo   = 1;
                 }
-                // Campos p/ o ReSTIR PT (emissivo, alpha-test, metal/rough por instancia).
+
                 g.AlphaCutoff     = MC.AlphaCutoff;
                 g.RoughnessFactor = MC.RoughnessFactor;
                 g.EmissiveFactor  = { MC.EmissiveFactor.X * MC.EmissiveStrength,
@@ -334,11 +328,6 @@ namespace Smile {
         BufUav.Format              = DXGI_FORMAT_R32_UINT;
         _SRVHeap.CreateUAV(_Device, ProbeRayCountBuf.Get(), BufUav, ProbeRayCountUAVSlot);
 
-        // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
-        // Uma tabela por frame em voo: o t8 muda todo frame e a tabela do frame anterior ainda
-        // pode estar sendo lida pela GPU (descriptor versioning). t4/t5 eram os merged VB/IB,
-        // aposentados pelo bindless (InstanceGeo.VertexSrv/IndexSrv); recebem um descriptor
-        // valido de enchimento p/ manter o layout da tabela (shader nao declara mais t4/t5).
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
@@ -368,8 +357,6 @@ namespace Smile {
         _Device->CopyDescriptors(1, &GDst, &GDstCount, 3, GSrc, GSrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        // Tabela dos passes de blend (Update/UpdateDist): t0 = ProbesTrace, t1 = ProbeData
-        // (w>=1 = probe recem-ativado/relocado -> hysteresis 0 naquele frame).
         UpdateTableStart = _SRVHeap.Allocate(2);
         D3D12_CPU_DESCRIPTOR_HANDLE UDst = _SRVHeap.CpuHandle(UpdateTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE USrc[2] = {
@@ -390,8 +377,6 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         CL->SetDescriptorHeaps(1, Heaps);
 
-        // Sem copia de geometria: os shaders leem os VB/IB originais via bindless — os meshes
-        // ja vivem em estado combinado de leitura que inclui NON_PIXEL (GpuMesh.cpp).
         Transition(CL, IrradAtlas.Get(), AtlasState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, DistAtlas.Get(),  DistState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         const float Zero[4] = { 0, 0, 0, 0 };

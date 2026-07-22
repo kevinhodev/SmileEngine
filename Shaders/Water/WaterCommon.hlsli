@@ -30,17 +30,35 @@ cbuffer WaterCB : register(b0) {
     float4 QuadTreeParams;
     row_major float4x4 ViewProjNoJitter; // velocity: projecao atual SEM jitter
     row_major float4x4 PrevViewProj;     // velocity: projecao anterior SEM jitter
+    float4 CascadeParams; // x,y,z = 1/tileWorld das cascatas 0..2, w = nº de cascatas
+    float4 WaterAmbient;  // rgb = ambiente físico do céu (ilumina o in-scatter), w = livre
 };
 
-Texture2D<float4> FFTDisplacement : register(t1);
-SamplerState      LinearWrap      : register(s0);
+Texture2D<float4> FFTDisplacement  : register(t1); // cascata 0 (detalhe)
+Texture2D<float4> FFTDisplacement1 : register(t6); // cascata 1
+Texture2D<float4> FFTDisplacement2 : register(t7); // cascata 2 (swell)
+SamplerState      LinearWrap       : register(s0);
 
 float2 WaterFFTSampleUV(float2 worldXZ) {
-    return worldXZ * 0.0125 * OceanParams0.w * 1.25;
+    return worldXZ * CascadeParams.x; // cascata 0
+}
+
+float2 WaterCascadeUV(uint c, float2 worldXZ) {
+    return worldXZ * CascadeParams[c];
 }
 
 float4 WaterSampleFFTUv(float2 baseUV) {
     return FFTDisplacement.SampleLevel(LinearWrap, baseUV, 0.0);
+}
+
+float4 WaterSampleFFTCascadeUv(uint c, float2 baseUV) {
+    if (c == 1) return FFTDisplacement1.SampleLevel(LinearWrap, baseUV, 0.0);
+    if (c == 2) return FFTDisplacement2.SampleLevel(LinearWrap, baseUV, 0.0);
+    return FFTDisplacement.SampleLevel(LinearWrap, baseUV, 0.0);
+}
+
+float4 WaterSampleFFTCascade(uint c, float2 worldXZ) {
+    return WaterSampleFFTCascadeUv(c, WaterCascadeUV(c, worldXZ));
 }
 
 float4 WaterSampleFFT(float2 worldXZ) {
@@ -56,7 +74,9 @@ float3 WaterFFTNormalFromDisplacement(float2 worldXZ, float worldStep, float nor
     return normalize(float3(hL - hR, max(normalUp * 0.65, 1.0), hD - hU));
 }
 
-Texture2D<float4> WaterNormalTex : register(t4);
+Texture2D<float4> WaterNormalTex  : register(t4); // cascata 0 (Toksvig mips)
+Texture2D<float4> WaterNormalTex1 : register(t8);
+Texture2D<float4> WaterNormalTex2 : register(t9);
 SamplerState      AnisoWrap      : register(s3); // s2 e o sampler de comparacao do CSM
 
 Texture2D<float4> SceneColor : register(t2);
@@ -106,6 +126,16 @@ float3 AnalyticSky(float3 dir) {
 
 float4 SampleWaterNormalGrad(float2 uv, float2 dx, float2 dy) {
     float4 n = WaterNormalTex.SampleGrad(AnisoWrap, uv, dx, dy);
+    n.xyz = normalize(n.xyz);
+    n.w = saturate(n.w);
+    return n;
+}
+
+float4 SampleWaterNormalGradCascade(uint c, float2 uv, float2 dx, float2 dy) {
+    float4 n;
+    if      (c == 1) n = WaterNormalTex1.SampleGrad(AnisoWrap, uv, dx, dy);
+    else if (c == 2) n = WaterNormalTex2.SampleGrad(AnisoWrap, uv, dx, dy);
+    else             n = WaterNormalTex.SampleGrad(AnisoWrap, uv, dx, dy);
     n.xyz = normalize(n.xyz);
     n.w = saturate(n.w);
     return n;

@@ -33,9 +33,21 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE FFTRange{};
         FFTRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         FFTRange.NumDescriptors                    = 1;
-        FFTRange.BaseShaderRegister                = 1; 
+        FFTRange.BaseShaderRegister                = 1;
         FFTRange.RegisterSpace                     = 0;
         FFTRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        // Cascatas 1/2 (multi-cascata): displacement t6/t7 (VS+PS), normal t8/t9 (PS).
+        D3D12_DESCRIPTOR_RANGE FFTRange1 = FFTRange; FFTRange1.BaseShaderRegister = 6;
+        D3D12_DESCRIPTOR_RANGE FFTRange2 = FFTRange; FFTRange2.BaseShaderRegister = 7;
+        D3D12_DESCRIPTOR_RANGE FFTNormalRange1{};
+        FFTNormalRange1.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        FFTNormalRange1.NumDescriptors                    = 1;
+        FFTNormalRange1.BaseShaderRegister                = 8;
+        FFTNormalRange1.RegisterSpace                     = 0;
+        FFTNormalRange1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE FFTNormalRange2 = FFTNormalRange1;
+        FFTNormalRange2.BaseShaderRegister = 9;
 
         D3D12_DESCRIPTOR_RANGE FFTNormalRange{};
         FFTNormalRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -65,7 +77,7 @@ namespace Smile {
         SunShadowRange.RegisterSpace                     = 0;
         SunShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[8]{};
+        D3D12_ROOT_PARAMETER RootParams[12]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].Descriptor.RegisterSpace  = 0;
@@ -105,6 +117,26 @@ namespace Smile {
         RootParams[7].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[7].DescriptorTable.pDescriptorRanges   = &SunShadowRange;
         RootParams[7].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[8].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[8].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[8].DescriptorTable.pDescriptorRanges   = &FFTRange1;
+        RootParams[8].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[9].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[9].DescriptorTable.pDescriptorRanges   = &FFTRange2;
+        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+        RootParams[10].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[10].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[10].DescriptorTable.pDescriptorRanges   = &FFTNormalRange1;
+        RootParams[10].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[11].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[11].DescriptorTable.pDescriptorRanges   = &FFTNormalRange2;
+        RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Samplers[4]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -771,7 +803,7 @@ namespace Smile {
                                         const Mat44& _InvViewProj,
                                         const Mat44& _ViewProjNoJitter, const Mat44& _PrevViewProjNoJitter,
                                         const Vec3& _CameraPos, const Vec3& _SunDir, f32 _SunIntensity,
-                                        const Vec3& _SunColor, f32 _ElapsedTime,
+                                        const Vec3& _SunColor, const Vec3& _SkyAmbient, f32 _ElapsedTime,
                                         bool _IBLEnabled, f32 _IBLIntensity,
                                         u32 _ScreenW, u32 _ScreenH, f32 _NearZ, f32 _FarZ,
                                         bool _HasSceneCopies, bool _UseAtmosphereSky) {
@@ -807,7 +839,18 @@ namespace Smile {
         MappedCBV->WaterFXParams = { SSSStrength, SSSPower, SSSHeightScale, ShoreFoamWidth };
         MappedCBV->ShadeParams  = { FresnelGloss, ReflectionScale, kSunShininess, kSunSpecScale };
         MappedCBV->OceanFFT     = { UseFFT ? 1.0f : 0.0f, FFTDispScale, FFTChoppyScale, FFTNormalUp };
-        MappedCBV->OceanFade    = { FFTFadeStart, FFTFadeRange, 0.0f, 0.0f };
+        // zw = boost de amplitude das cascatas 1/2. A/B 2026-07-16: o valor auto-similar
+        // (razão dos tiles 6/24, e mesmo 5/16) fazia MONTANHA de água — Phillips não tem
+        // o corte de vento em unidades de mundo aqui, então o swell sai gigante. Sub-
+        // similar bem amansado: swell presente sem virar serra.
+        MappedCBV->OceanFade    = { FFTFadeStart, FFTFadeRange, 2.2f, 4.5f };
+
+        // Tiles das cascatas: T0 = 64/wavesAmount (idêntico ao mapeamento single-cascata
+        // validado), T1 = 6·T0, T2 = 24·T0. Bandas de espectro disjuntas no FOceanFFT.
+        const f32 T0 = 64.0f / std::max(WavesAmount, 0.05f);
+        MappedCBV->CascadeParams = { 1.0f / T0, 1.0f / (6.0f * T0), 1.0f / (24.0f * T0),
+                                     static_cast<f32>(kFFTCascades) };
+        MappedCBV->WaterAmbient  = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };
         MappedCBV->BumpParams   = { BumpTilling, BumpDetailTilling, BumpNormalsScale, BumpDetailScale };
         MappedCBV->BumpParams2  = { BumpStrength, ParallaxHeight, UseBump ? 1.0f : 0.0f, BumpFadeDist };
 
@@ -982,8 +1025,10 @@ namespace Smile {
     }
 
     void FWaterRenderer::RenderSurface(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
-                                       u32 _SpecularCubeSRVSlot, u32 _FFTDisplacementSRVSlot,
-                                       u32 _FFTNormalSRVSlot, u32 _SceneCopyTableStart,
+                                       u32 _SpecularCubeSRVSlot,
+                                       const u32 (&_FFTDisplacementSRVSlots)[kFFTCascades],
+                                       const u32 (&_FFTNormalSRVSlots)[kFFTCascades],
+                                       u32 _SceneCopyTableStart,
                                        u32 _AtmosphereSkyViewSRVSlot,
                                        D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddress,
                                        u32 _SunShadowSRVSlot) {
@@ -1008,12 +1053,16 @@ namespace Smile {
         _CommandList->SetGraphicsRootConstantBufferView(
             0, CBV->GetGPUVirtualAddress() + static_cast<UINT64>(FrameSlot) * sizeof(WaterConstants));
         _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(_SpecularCubeSRVSlot));
-        _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[0]));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_SceneCopyTableStart));
-        _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_FFTNormalSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[0]));
         _CommandList->SetGraphicsRootDescriptorTable(5, _SRVHeap.GpuHandle(_AtmosphereSkyViewSRVSlot));
         _CommandList->SetGraphicsRootConstantBufferView(6, _CSMConstantsAddress);
         _CommandList->SetGraphicsRootDescriptorTable(7, _SRVHeap.GpuHandle(_SunShadowSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(8, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(9, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[2]));
+        _CommandList->SetGraphicsRootDescriptorTable(10, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(11, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[2]));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         D3D12_VERTEX_BUFFER_VIEW Views[] = { VBView, GpuInstanceVBView };
         _CommandList->IASetVertexBuffers(0, _countof(Views), Views);

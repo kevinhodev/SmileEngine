@@ -75,14 +75,10 @@ namespace Smile {
                                     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                                     SwapChain.GetWidth(), SwapChain.GetHeight());
 
-        // Cascatas: bandas em ciclos/tile disjuntas e contíguas em mundo (T1=6·T0,
-        // T2=24·T0 → c0 cobre λ≤T0/2, c1 (T0/2, 3·T0], c2 (3·T0, 24·T0]); tempo com
-        // dispersão física (cascata maior evolui ~1/√(T_i/T0) mais devagar); seed
-        // própria descorrelaciona os padrões.
         Ocean[0].ConfigureCascade(1337u, 1.0f,     2.0f, 129.0f);
         Ocean[1].ConfigureCascade(1338u, 0.4082f,  2.0f, 12.0f);
-        // c2 começa em 2 ciclos (λ máx 512 m): o componente de 1024 m virava morro único.
         Ocean[2].ConfigureCascade(1339u, 0.2041f,  2.0f, 8.0f);
+
         for (u32 c = 0; c < kOceanCascades; ++c)
             Ocean[c].Initialize(Device.Native(), SRVHeap);
         Water.Initialize(Device.Native(),
@@ -246,8 +242,6 @@ namespace Smile {
         SMILE_HR(ConstantBuffer->Map(0, &NoReadRange, &Ptr));
         MappedFrameBase = reinterpret_cast<u8*>(Ptr);
 
-        // Buffer de luzes puntuais (root SRV t17 do deferred lighting): mesmo ciclo de vida
-        // do FrameCB — upload persistente, um slice de kMaxLights por frame em voo.
         ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
                              kMaxLights * sizeof(FGPULight);
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
@@ -256,8 +250,6 @@ namespace Smile {
         SMILE_HR(LightBuffer->Map(0, &NoReadRange, &Ptr));
         MappedLightBase = reinterpret_cast<u8*>(Ptr);
 
-        // F5: lista compacta pro mundo indireto (DDGI/reflexoes/ReSTIR) + 1 SRV de staging
-        // por slice de frame (copiado pras tabelas de trace a cada frame).
         ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
                              kMaxLights * sizeof(FGPULightGI);
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
@@ -784,9 +776,6 @@ namespace Smile {
                                          std::vector<u8>& _Out) {
         if (!Initialized || !_Material) return false;
 
-        // "Mesh da cena": renderable selecionado se usa o material, senao o primeiro que
-        // usa. A matriz normaliza a mesh pro enquadramento da esfera (raio 0.5) a partir
-        // do AABB — Transform primeiro cobre gizmo (cooker baka transform no vertice).
         const FGpuMesh* SceneMesh = nullptr;
         Mat44 SceneModel = Mat44::Identity();
         if (_Params.Primitive == FMaterialPreview::PrimSceneMesh) {
@@ -863,8 +852,6 @@ namespace Smile {
 
         CommandQueue.BeginFrame();
 
-        // Le os timestamps do frame antigo deste slot (fence ja esperado) e abre o escopo
-        // total; os escopos por passe vem espalhados abaixo, Resolve antes do Close.
         GpuProfiler.BeginFrame(CommandQueue.FrameIndex());
         GpuProfiler.Begin(CommandQueue.List(), "Frame (GPU)");
 
@@ -878,8 +865,7 @@ namespace Smile {
 
         const f32 NearZ = 0.1f;
         const f32 FarZ  = UseWater ? 20000.0f : 4000.0f;
-        // FOV unico do frame: projecao, CSM, AO e FSR2 precisam concordar (o fitting das
-        // cascatas assume exatamente o frustum da camera).
+
         const f32 FovY  = 60.0f * ToRad;
         const Mat44 ProjUnjittered = kReverseZ
             ? Mat44::PerspectiveFovReverseZLH(FovY, Aspect, NearZ, FarZ)
@@ -903,8 +889,7 @@ namespace Smile {
             Projection.M[2][0] += JitterPxX * 2.0f / static_cast<f32>(RenderWidth());
             Projection.M[2][1] += ProjJitterYSign * JitterPxY * 2.0f / static_cast<f32>(RenderHeight());
         }
-        // Offset que o jitter aplica ao sample rasterizado, no espaco UV (y invertido: ndc y-up ->
-        // uv y-down). Consumido pela reprojecao do ReSTIR GI (delta prev-curr) e pelo NRD (pixels).
+
         const Vec2 JitterUv{ JitterPxX / static_cast<f32>(RenderWidth()),
                              -ProjJitterYSign * JitterPxY / static_cast<f32>(RenderHeight()) };
         const Vec2 JitterPx{ JitterPxX, -ProjJitterYSign * JitterPxY };
@@ -934,9 +919,6 @@ namespace Smile {
         const Vec3 SunN          = SunDir.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
         MappedCB->SunDirection   = { SunN.X, SunN.Y, SunN.Z, SunIntensity };
 
-        // Chuva F4: acumulo/secagem do molhado — o chao encharca em ~5 s e seca em ~30 s.
-        // A superficie (wetness/pocas) usa Weather.Wetness; a cortina e os aneis de gota usam
-        // o RainAmount instantaneo: para de chover -> gotas somem na hora, chao seca devagar.
         {
             const f32 Target = Weather.RainAmount;
             const f32 Tau    = (Target > Weather.Wetness) ? 5.0f : 30.0f;
@@ -944,9 +926,7 @@ namespace Smile {
                                (1.0f - std::exp(-std::max(LastDeltaTime, 0.0f) / Tau));
             if (Target <= 0.001f && Weather.Wetness < 0.005f) Weather.Wetness = 0.0f;
         }
-        // F4: ceu de chuva — nublado bloqueia o astro direto. Um unico fator escurece
-        // EffectiveSunColor/MoonLightCol (e por tabela KeyColor -> CSM, agua, nuvens, DDGI,
-        // reflexoes, cortina) + o ambient do ceu. Nuvens/fog acoplam mais abaixo.
+
         const f32 RainSky    = Weather.DriveSky ? Weather.RainAmount : 0.0f;
         const f32 RainKeyDim = 1.0f - RainSky * 0.75f;
         const f32 RainAmbDim = 1.0f - RainSky * 0.40f;
@@ -956,9 +936,7 @@ namespace Smile {
             const Vec3 T = Atmosphere.SunTransmittance(SunN);
             EffectiveSunColor = { SunColorRGB.X * T.X, SunColorRGB.Y * T.Y, SunColorRGB.Z * T.Z };
         }
-        // Fade no horizonte (janela dusk/dawn estilo Cry): no horizonte o sol ainda tem ~15% no
-        // vermelho, e a key light vira lua em SunY<=0 — sem zerar ANTES da troca, a direcao do
-        // CSM flipa com luz visivel (pop). Banda [0, 0.03] em sin(elevacao) ~ 0..1.7 graus.
+
         {
             const f32 hf = std::clamp(SunN.Y / 0.03f, 0.0f, 1.0f);
             const f32 HorizonFade = hf * hf * (3.0f - 2.0f * hf);
@@ -998,15 +976,9 @@ namespace Smile {
         Atmosphere.SetNightParams(MoonN, CosMoonRadius, MoonDiskBright,
                                   TimeOfDay.StarIntensity, NightFactor, ElapsedTime);
 
-        // Lua como 2a luz atmosferica no sky-view/aerial LUT (ceu azulado de luar). Escala em
-        // fracao da iluminancia do sol: 0.05 * MoonIntensity(0.25 default) * fase ~ 1.25% do ceu
-        // diurno com lua cheia — estilizado (real seria ~1/400000, invisivel sem auto-exposure).
         const f32 MoonSkyScale = MoonOn ? (0.05f * TimeOfDay.MoonIntensity * MoonIllum) : 0.0f;
         Atmosphere.SetMoonSkyLight(MoonSkyScale, MoonOn ? MoonIllum : 0.0f);
 
-        // Estrelas: polo celeste pela latitude/north-offset do TOD; rotacao diurna de 15 graus/h
-        // dirigida pelo relogio (pausa e acelera junto com sol/lua). TOD off mantem o giro lento
-        // em tempo real antigo.
         {
             const f32  LatR  = TimeOfDay.LatitudeDeg    * ToRad;
             const f32  NoR   = TimeOfDay.NorthOffsetDeg * ToRad;
@@ -1027,10 +999,6 @@ namespace Smile {
 
         Vec3 SkyAmbient, GroundAmbient; // tambem alimentam o ambient das nuvens volumetricas
         {
-            // Ambient FISICO: integracao cos-weighted do SkyView LUT (CS + readback, ver
-            // FAtmosphere::RecordSkyAmbientIntegration) — segue crepusculo, transmitancia e o
-            // ceu de luar automaticamente. A curva pintada a mao fica so de fallback (primeiros
-            // frames antes do readback aquecer, ou atmosfera desligada).
             Vec3& Sky    = SkyAmbient;
             Vec3& Ground = GroundAmbient;
             const bool Physical = UseAtmosphereSky && Atmosphere.IsInitialized() &&
@@ -1045,7 +1013,7 @@ namespace Smile {
                 Sky    = (Zenith + (Horizon - Zenith) * LowSun) * Day;
                 Ground = Sky * 0.35f;
             }
-            // F4: nublado de chuva escurece o ambient (o SkyView LUT nao sabe das nuvens)
+
             Sky    = { Sky.X * RainAmbDim, Sky.Y * RainAmbDim, Sky.Z * RainAmbDim };
             Ground = { Ground.X * RainAmbDim, Ground.Y * RainAmbDim, Ground.Z * RainAmbDim };
             MappedCB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
@@ -1078,7 +1046,7 @@ namespace Smile {
         const bool NrdMode           = ReSTIRGIActive && Nrd.IsReady() && UseNrdDenoise;
         ReSTIRGI.SetUseNrd(NrdMode);
         Reflections.SetUseNrd(NrdMode);
-        // ReflectionParams.w: 0=off, 1=ReSTIR GI cru, 2=ReSTIR GI via NRD (YCoCg).
+
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        ReflectionsActive ? 1.0f : 0.0f,
                                        ReSTIRGIActive ? (NrdMode ? 2.0f : 1.0f) : 0.0f };
@@ -1094,8 +1062,6 @@ namespace Smile {
         const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
         MappedCB->InvViewProj = InvViewProjFull;
 
-        // Mip bias global (AMD FSR2: log2(render/display) - 1) para recuperar detalhe de textura
-        // no upscale. So quando o FSR2 esta de fato upscalando; nativo/SSAA ficam sem bias.
         const f32 MipBias = (Fsr2Active && RenderWidth() < OutputWidth())
             ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
             : 0.0f;
@@ -1104,17 +1070,13 @@ namespace Smile {
         Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans, VPNoTrans,
                                   InvViewProjFull, CameraPosition, kKmPerWorldUnit,
                                   static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()));
-        // F4: mist da chuva — boost temporario na densidade do height fog (restaurado apos o
-        // update; o knob do usuario nao muda). Chuva forte ~2.5x a densidade base.
+
         const bool VolShaftsActive = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
         const f32 FogDensityBase = Fog.GetDensity();
         if (RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + RainSky * 1.5f));
-        // densidades colapsadas AINDA com o boost de chuva — shafts e froxel fog tem
-        // que ver o mesmo meio que o fog deste frame
+
         const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(CameraPosition.Y);
 
-        // Frente da camera via unproject do centro (mesma convencao row-vector do
-        // ScreenToRay) — o froxel fog fatia em view-Z e o fog apply exclui por cos.
         Vec3 CamForwardW{ 0.0f, 0.0f, 1.0f };
         {
             const Mat44& IM = InvViewProjUnjit;
@@ -1128,8 +1090,6 @@ namespace Smile {
             }
         }
 
-        // Froxel volumetric fog: atualizado ANTES do Fog.UpdatePerFrame (fornece o
-        // GridZParams pro fog apply fatiar o volume identico).
         const bool VolFogActive = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
         if (VolFogActive) {
             FVolumetricFogPass::FFrameParams VF{};
@@ -1166,12 +1126,6 @@ namespace Smile {
                            VolumetricFog.GridZParams(), CamForwardW);
         Fog.SetDensity(FogDensityBase);
 
-        // (o UpdateVolumetric dos sun shafts roda mais abaixo, depois do update das
-        // nuvens — ele consome os CloudShadowParams do frame, que dependem do centro
-        // snapado do shadow map de nuvens)
-
-        // F4: chuva puxa a cobertura de nuvem pra um piso nublado (max com o valor do
-        // usuario; idem, restaurada apos o update — a pagina de nuvens continua mandando).
         const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kGroundAltitudeKm;
         const f32 CloudCovBase = VolumetricClouds.GetCoverage();
         if (RainSky > 0.0f) {
@@ -1187,9 +1141,6 @@ namespace Smile {
         Vec4 CloudShadowP{ 0.0f, 0.0f, 0.0f, 0.0f };
         Vec4 CloudShadowP2{ 0.0f, 0.0f, 0.0f, 0.0f };
         {
-            // Sombra das nuvens no chao: params p/ o deferred lighting + SRV copiado no
-            // slot t4 da tabela do G-buffer (por frame: barato e nunca envelhece).
-            // Os mesmos vetores alimentam o raymarch dos sun shafts (nuvem corta o feixe).
             const f32 KeyY = KeyDir.Y > 0.05f ? KeyDir.Y : 0.05f;
             const bool CloudShadowOn = UseClouds && VolumetricClouds.IsInitialized() &&
                                        VolumetricClouds.GetShadowsEnabled() && KeyDir.Y > 0.02f;
@@ -1212,41 +1163,26 @@ namespace Smile {
             }
         }
 
-        // Sun shafts volumétricos: raymarch precisa da radiância real da key light e do
-        // ruído IGN animado — o acumulador temporal próprio (ou o TAA/FSR2) integra o
-        // jitter; sem nenhum dos dois o ruído fica estático (menos pior que fervilhar).
         if (VolShaftsActive) {
             const Vec3 KeyColInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
                                      KeyColor.Z * KeyInt };
             const f32 ShaftNoiseFrame =
                 (TAAActive || Fsr2Active || SunShafts.GetVolTemporal())
                     ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-            // Shafts marcham DESDE A CAMERA mesmo com o froxel fog ativo: o grid
-            // 160x90x64 nao resolve feixe fino de janela/copa (que vive nos primeiros
-            // metros) e o multiplicador de Poeira e um boost artistico que o volume
-            // nao replica — comecar a marcha no fim do alcance apagava os shafts
-            // (regressao vista no A/B do nascer do sol). O overlap de inscatter e
-            // intencional; a infra de MarchStartDist fica (default 0) se precisar.
             SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
                                        ShaftNoiseFrame, InvViewProjFull, CameraPosition,
                                        ViewProjUnjittered, CloudShadowP, CloudShadowP2,
                                        0.0f);
         } else if (SunShafts.IsInitialized()) {
-            SunShafts.ResetHistory(); // história/PrevVP obsoletos quando o efeito dorme
+            SunShafts.ResetHistory();
         }
 
-        // F4 do froxel fog: sombra das nuvens no termo do sol (mesmos vetores do
-        // deferred/shafts, que dependem do centro snapado do shadow map — por isso
-        // patch pos-update das nuvens, nao no UpdatePerFrame la atras).
         if (VolFogActive) VolumetricFog.PatchCloudShadow(CloudShadowP, CloudShadowP2);
 
         const Mat44 WaterViewProj    = ViewProjection;
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
         const bool WaterHasDepth = SceneColorCopy && SceneDepthCopy;
         if (UseWater && Water.IsInitialized()) {
-            // Reflexo: atmosfera Hillaire prefiltrada quando o céu físico está ativo
-            // (dimada pelo clima, mesma regra do ReflSkyIntensity das reflexões RT);
-            // HDRI/IBL como fallback.
             const bool WaterAtmoRefl = UseAtmosphereSky && Atmosphere.IsInitialized();
             const f32 WaterReflIntensity =
                 WaterAtmoRefl ? (1.0f - RainSky * 0.65f) : IBLIntensity;
@@ -1262,8 +1198,6 @@ namespace Smile {
                 Ocean[c].SetWindDirection(Water.GetWindDirection());
                 Ocean[c].SetWindSpeed(Water.GetWindSpeed());
                 Ocean[c].SetAmplitude(Water.GetWavesAmount());
-                // Espuma responde ao choppy/altura REAIS da superfície (não a um scale
-                // fixo); boost×texel das cascatas cancelam → mesmo valor pras três.
                 Ocean[c].SetChoppyFactors(Water.GetFFTChoppyScale() *
                                           Water.GetFFTDisplacementScale() *
                                           Water.GetWavesSize() * Water.GetWavesAmount());
@@ -1313,11 +1247,9 @@ namespace Smile {
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
             Atmosphere.RecordSkyViewBake(CommandList);
             Atmosphere.RecordSkyAmbientIntegration(CommandList);
-            // Cube de reflexo da atmosfera (água): baka logo após o SkyView do frame.
             if (UseWater && Water.IsInitialized())
                 Atmosphere.RecordSkyReflectionBake(CommandList);
             Atmosphere.RenderSky(CommandList, SRVHeap);
-            // Estrelas do catalogo: passe aditivo proprio, so quando a noite contribui.
             if (NightFactor > 0.001f && TimeOfDay.StarIntensity > 0.0f)
                 Atmosphere.RenderStars(CommandList, SRVHeap);
         } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
@@ -1330,17 +1262,11 @@ namespace Smile {
         }
         GpuProfiler.End(CommandList); // Céu e atmosfera
 
-        // Shadow map das nuvens: bakeado ANTES do deferred lighting, que o consome (t4 da
-        // tabela do G-buffer) p/ atenuar a key light no chao.
         if (UseClouds && VolumetricClouds.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Sombra das nuvens");
             VolumetricClouds.RecordShadowMap(CommandList, SRVHeap);
         }
 
-        // F5: lista de luzes do MUNDO INDIRETO (DDGI/reflexoes/ReSTIR) — TODAS as ativas, SEM
-        // frustum cull (luz atras da camera ilumina GI) e sem shadow map (visibilidade nos
-        // hits e por shadow ray inline). O descriptor do slice do frame e copiado pras
-        // tabelas de trace de cada consumidor.
         u32 GILightCount = 0;
         {
             FGPULightGI* Dst = reinterpret_cast<FGPULightGI*>(
@@ -1372,9 +1298,6 @@ namespace Smile {
             }
         }
 
-        // Transform mudou no editor (gizmo) -> rebuild leve SO da TLAS (BLAS intactos)
-        // na list do frame, ANTES do segmento A fechar: o DDGI async espera o fence do
-        // segmento, entao compute e reflexos/ReSTIR ja tracejam contra a TLAS nova.
         if (RaytracingScene.IsBuilt() && Scene.TransformsVersion() != TlasTransformsVersion) {
             Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> TlasCL;
             if (SUCCEEDED(CommandList->QueryInterface(IID_PPV_ARGS(&TlasCL))) &&
@@ -1383,16 +1306,11 @@ namespace Smile {
             }
         }
 
-        // Fence do DDGI async (0 = rodou sincrono ou nao rodou). Quando != 0, a fila
-        // direta espera esse valor antes do primeiro consumidor (ReSTIR/reflexos/deferred).
         u64 GIComputeFence = 0;
         if (UseGI && DDGI.IsReady()) {
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex, GILightCount);
             if (UseAsyncCompute && DDGI.CanRunAsync()) {
-                // DDGI na fila de COMPUTE, sobrepondo CSM/prepass/G-buffer. O segmento A
-                // (fechado aqui) contem os PRODUTORES dos inputs do DDGI — LUTs de ceu e
-                // sombra de nuvens — e as transicoes PIXEL-cientes (so valem na direta).
                 DDGI.TransitionForUpdate(CommandList);
                 const u64 S1 = CommandQueue.SubmitSegmentAndContinue();
 
@@ -1407,8 +1325,6 @@ namespace Smile {
                 GpuProfilerCompute.Resolve(CCL);
                 GIComputeFence = ComputeQueue.SubmitAfter(CommandQueue.NativeFence(), S1);
 
-                // A list do frame reabriu ZERADA — reestabelece o estado que os passes
-                // seguintes assumem herdado do inicio do frame.
                 ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
                 CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
                 auto SceneRTV = HDRRTVHeap.CpuHandle(0);
@@ -1425,9 +1341,6 @@ namespace Smile {
 
         if (ReflectionsActive) {
             Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
-            // Chuva (reflexao molhada): raios que erram a cena leem o SkyView LUT, que nao
-            // sabe das nuvens — sem o dim, poça espelhada refletia ceu AZUL no temporal
-            // nublado. Escurece o ceu dos misses junto com o clima (KeyColor ja vem dimado).
             const f32 ReflSkyIntensity = 1.0f - RainSky * 0.65f;
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
@@ -1472,13 +1385,6 @@ namespace Smile {
             return false;
         };
 
-        // Luzes puntuais: coleta as ativas da cena, cull esfera-vs-frustum pelo raio de
-        // atenuacao (a janela (1-(d/r)^4)^2 no shader garante contribuicao zero fora do raio,
-        // entao o corte nao pipoca) e sobe pro slice do frame no LightBuffer (root SRV t17).
-        // O teste de esfera precisa de planos NORMALIZADOS (os do AABB acima usam so o sinal).
-        // Sombras locais (F3a): spots visiveis com CastShadows disputam kMaxShadows slices do
-        // atlas por distancia a camera; escolhidos ganham matriz + slice no FGPULight e viram
-        // jobs do depth pass (gravado depois do CSM, quando os casters ja existem).
         std::vector<FLocalShadows::FShadowJob>     LocalShadowJobs;
         std::vector<FLocalShadows::FCubeShadowJob> LocalCubeJobs;
         {
@@ -1496,7 +1402,7 @@ namespace Smile {
 
             struct ShadowCand { u32 Gpu; u32 LightIdx; f32 Dist2; };
             std::vector<ShadowCand> ShadowCands;
-            std::vector<ShadowCand> CubeCands; // points com CastShadows (budget proprio)
+            std::vector<ShadowCand> CubeCands; 
 
             const auto& SceneLights = Scene.Lights();
             for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
@@ -1553,16 +1459,13 @@ namespace Smile {
                 const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
                                                        : Vec3{ 0.0f, 1.0f, 0.0f };
                 const f32 OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * ToRad;
-                // Mesmo near do shader (LightParams2.y): o refZ linear reconstruido la
-                // precisa bater 1:1 com a projecao usada aqui.
+
                 const f32 NearP    = FLocalShadows::kPointNear;
                 const f32 FarP     = std::max(L.AttenuationRadius, NearP * 2.0f);
                 const Mat44 LView = Mat44::LookAtLH(L.Position, L.Position + D, Up);
                 const Mat44 LProj = Mat44::PerspectiveFovLH(2.0f * OuterRad, 1.0f, NearP, FarP);
                 const Mat44 LVP   = LView * LProj;
 
-                // NDC -> UV (mesma convencao do WorldToShadow do CSM); o w fica pro shader
-                // dividir (projecao perspectiva).
                 Mat44 BiasUV = Mat44::Identity();
                 BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
                 BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
@@ -1573,8 +1476,6 @@ namespace Smile {
                 LocalShadowJobs.push_back({ LVP, L.Position, FarP, s });
             }
 
-            // Points sombreados (F3b): mesmo criterio de distancia, budget proprio de cubos.
-            // O lookup nao usa matriz (eixo dominante no shader) — so o indice do cubo.
             std::sort(CubeCands.begin(), CubeCands.end(),
                       [](const ShadowCand& a, const ShadowCand& b) { return a.Dist2 < b.Dist2; });
             const u32 NumCubes = std::min<u32>(static_cast<u32>(CubeCands.size()),
@@ -1591,8 +1492,6 @@ namespace Smile {
             MappedCB->LightParams2 = { 1.0f / static_cast<f32>(FLocalShadows::kCubeResolution),
                                        FLocalShadows::kPointNear, 0.0f, 0.0f };
 
-            // F3 do froxel fog: o scattering le a MESMA lista deste frame — patcha o CB
-            // (escrito la atras, antes do culling) com contagem e params de sombra local.
             if (VolFogActive)
                 VolumetricFog.PatchLights(NumLights,
                                           1.0f / static_cast<f32>(FLocalShadows::kResolution),
@@ -1653,15 +1552,11 @@ namespace Smile {
                   [](const VisItem& a, const VisItem& b) { return a.Dist < b.Dist; });
         LastVisibleCount = static_cast<u32>(VisibleScratch.size());
 
-        // Terreno: seleciona LOD por chunk (screen-size) + frustum cull e escreve o CB do
-        // slot — antes do CSM (as cascatas reusam o LOD da vista).
         if (UseTerrain && Terrain.IsLoaded())
             Terrain.UpdatePerFrame(FrameSlot, ViewProjection, ViewProjUnjittered, PrevViewProj,
                                    CameraPosition, FovY, MipBias);
 
         {
-            // Ruido do PCF animado so quando ha acumulador temporal pra integra-lo;
-            // sem TAA/FSR2 o padrao estatico e o menor mal (animado viraria shimmer).
             const f32 ShadowNoiseFrame = (TAAActive || Fsr2Active)
                 ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
             SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CameraPosition, FovY, Aspect, KeyDir, NearZ, ShadowNoiseFrame);
@@ -1704,9 +1599,6 @@ namespace Smile {
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
-        // Sombras das luzes locais (F3): slices de spot + cubos de point, casters filtrados
-        // por esfera da luz. Depois restaura o estado de cena (o passe troca root sig/RT/
-        // viewport). Sem jobs, so garante os arrays legiveis pro deferred lighting (t18/t19).
         if (!LocalShadowJobs.empty() || !LocalCubeJobs.empty()) {
             std::vector<FLocalShadows::FShadowDrawItem> LocalCasters;
             LocalCasters.reserve(AllItems.size());
@@ -1764,9 +1656,6 @@ namespace Smile {
                 V.R->Mesh->Draw(CommandList);
             }
 
-            // Masked/two-sided no prepass (GTAO F4, estilo UE masked prepass): cull NONE +
-            // alpha-clip no PS. O GTAO passa a ver folhagem/grades (fim dos speckles de AO do
-            // fundo) e elas projetam AO; o G-buffer two-sided roda LESS_EQUAL sobre esse depth.
             CommandList->SetPipelineState(AOWillRun ? PipelineState.PSODepthNormalMasked()
                                                     : PipelineState.PSODepthOnlyMasked());
             for (const VisItem& V : VisibleScratch) {
@@ -1778,8 +1667,6 @@ namespace Smile {
                 V.R->Mesh->Draw(CommandList);
             }
 
-            // Terreno no prepass (root sig/PSO proprios; AO e G-buffer religam os deles
-            // depois). Com GTAO on escreve o NormalBuffer junto, como as meshes.
             if (UseTerrain && Terrain.IsLoaded())
                 Terrain.RenderDepthPrepass(CommandList, SRVHeap, AOWillRun);
             GpuProfiler.End(CommandList); // Z-prepass
@@ -1797,7 +1684,6 @@ namespace Smile {
                 AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, View,
                                   RenderWidth(), RenderHeight(), FrameIndex);
 
-                // depth + normal viram SRV de compute juntos (um ResourceBarrier so)
                 FBarrierBatch Batch;
                 Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1829,7 +1715,6 @@ namespace Smile {
 
         {
             GpuProfiler.Begin(CommandList, "G-buffer (geometria)");
-            // 3 RTs do G-buffer + velocity num ResourceBarrier so
             FBarrierBatch Batch;
             GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
@@ -1863,8 +1748,6 @@ namespace Smile {
                 V.R->Mesh->Draw(CommandList);
             }
 
-            // Terreno no geometry pass (depth EQUAL sobre o depth do prepass; o deferred
-            // lighting religa a root signature principal depois).
             if (UseTerrain && Terrain.IsLoaded()) {
                 FGpuScope Scope(GpuProfiler, CommandList, "Terreno");
                 Terrain.RenderGBuffer(CommandList, SRVHeap);
@@ -1875,15 +1758,8 @@ namespace Smile {
             GpuProfiler.End(CommandList); // G-buffer (geometria)
         }
 
-        // Chuva F1: molha o G-buffer logo apos o geometry pass — ReSTIR, deferred lighting e
-        // reflexoes RT (todos leem A/B depois deste ponto) veem a cena ja molhada.
-        // F4: Active() em vez de Raining() — o passe continua rodando enquanto o chao seca.
         if (Weather.Active() && RainWetness.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
-            // F2: mapa de oclusao top-down (cacheado — so re-renderiza ao cruzar o snap de
-            // 16 m). Vidro ENTRA na lista: telhado de vidro bloqueia chuva, ao contrario do
-            // CSM onde translucido deixa o sol passar. O Execute logo abaixo re-seta todo o
-            // estado (root sig/PSO/viewport/RT), entao nao precisa de restore aqui.
             if (Weather.RainOcclusion) {
                 std::vector<FRainWetness::FOccluderItem> RainOccluders;
                 RainOccluders.reserve(AllItems.size());
@@ -1903,9 +1779,6 @@ namespace Smile {
                                 RenderWidth(), RenderHeight());
         }
 
-        // DDGI async: daqui em diante o frame LE o DDGI (traces de ReSTIR/reflexos e o
-        // deferred lighting) — fecha o segmento B, poe a fila direta esperando o compute
-        // e reabre (segmento C) ja com os atlases de volta em estado de leitura.
         if (GIComputeFence != 0) {
             CommandQueue.SubmitSegmentAndContinue();
             CommandQueue.GpuWait(ComputeQueue.NativeFence(), GIComputeFence);
@@ -1917,7 +1790,6 @@ namespace Smile {
         }
 
         if (ReSTIRGIActive) {
-            // depth + G-buffer (3) + velocity viram SRV de trace num ResourceBarrier so
             FBarrierBatch Batch;
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1939,8 +1811,7 @@ namespace Smile {
                 GpuProfiler.Begin(CommandList, "NRD denoise");
                 Nrd.TransitionInputsToWrite(CommandList);
                 ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
-                // O REBLUR combinado le a IN_SPEC todo frame: sem reflexoes, escreve sinal
-                // especular zero valido (senao o denoiser consome conteudo indefinido).
+
                 if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
                 else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
                 Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
@@ -1961,7 +1832,6 @@ namespace Smile {
         }
 
         {
-            // G-buffer (3) + depth viram SRV do lighting num ResourceBarrier so
             FBarrierBatch Batch;
             GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -2006,7 +1876,7 @@ namespace Smile {
             CommandList->IASetVertexBuffers(0, 0, nullptr);
             CommandList->IASetIndexBuffer(nullptr);
             CommandList->DrawInstanced(3, 1, 0, 0);
-            GpuProfiler.End(CommandList); // Deferred lighting
+            GpuProfiler.End(CommandList); 
 
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -2071,9 +1941,6 @@ namespace Smile {
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
-        // --- Forward de translucidos (materiais Blend: vidro): por cima do HDR ja iluminado ----
-        // (deferred + reflexos), depth read-only contra o opaco, back-to-front (VisibleScratch ja
-        // esta ordenado front-to-back; iterar reverso da a ordem certa p/ alpha-blend).
         {
             bool AnyBlend = false;
             for (const VisItem& V : VisibleScratch)
@@ -2106,11 +1973,9 @@ namespace Smile {
             }
         }
 
-
         if (UseWater && Water.IsInitialized() && WaterHasDepth) {
             CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
 
-            // 4 transicoes por ResourceBarrier (ida e volta da copia da cena)
             FBarrierBatch Batch;
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                              D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -2141,9 +2006,7 @@ namespace Smile {
 
         if (UseWater && Water.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Água — superfície");
-            // Água escreve velocity (RT1) pro TAA/FSR2 não reprojetar a superfície só
-            // pelo fundo atrás dela — o velocity buffer só é consumido no upscale/AA,
-            // bem depois deste passe.
+
             FBarrierBatch WaterBatch;
             WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
                                          D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -2173,8 +2036,7 @@ namespace Smile {
 
         if (UseClouds && VolumetricClouds.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Nuvens");
-            // Depth vira SRV: o raymarch clampa a marcha na geometria e o composite faz
-            // upsample bilateral — nuvem aparece ENTRE camera e chao/predios em voo.
+
             const D3D12_RESOURCE_STATES CloudReadState =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -2202,8 +2064,6 @@ namespace Smile {
         }
 
         if ((UseHeightFog || UseAerialPerspective) && Fog.IsInitialized()) {
-            // PIXEL | NON_PIXEL: fog/shafts leem o depth em PS; o conservative depth do
-            // froxel fog downsampla em compute.
             const D3D12_RESOURCE_STATES FogDepthRead =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -2211,8 +2071,6 @@ namespace Smile {
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, FogDepthRead);
             Batch.Flush(CommandList);
 
-            // Froxel volumetric fog: 3 dispatches (densidade -> scattering -> integracao);
-            // o fog apply consome o volume integrado via t3. Mesma condicao do update.
             const bool VolFogOn = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
             if (VolFogOn) {
                 FGpuScope Scope(GpuProfiler, CommandList, "Volumetric fog");
@@ -2230,9 +2088,6 @@ namespace Smile {
                                       DepthSRVSlot);
             }
 
-            // Sun shafts volumétricos: raymarch + temporal meia-res (depth já legível
-            // aqui); o fog apply consome o resultado via t2. Mesma condição do
-            // UpdatePerFrame.
             const bool VolShaftsOn = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
             if (VolShaftsOn) {
                 FGpuScope Scope(GpuProfiler, CommandList, "Sun shafts");
@@ -2261,8 +2116,6 @@ namespace Smile {
             Batch.Flush(CommandList);
         }
 
-        // Chuva F3/F5: cortina + gotas por particula — depois do fog (chuva de perto nao
-        // leva fog em dobro) e antes do TAA/FSR2 (o acumulador integra como motion blur).
         if (Weather.Raining() && RainWetness.IsInitialized() &&
             (Weather.CurtainAmount > 0.001f || Weather.RainParticles)) {
             FBarrierBatch Batch;
@@ -2393,8 +2246,6 @@ namespace Smile {
         }
 
         if (DebugDraw.IsInitialized() && !DebugDraw.Empty()) {
-            // Linhas ocluiveis (volumes de luz do editor) testam contra o depth da cena no PS:
-            // o depth (res de render) vira SRV so durante o draw e volta a DEPTH_WRITE.
             const bool WantDepth = DebugDraw.HasOccluded() && DepthSRVSlot != kInvalidSlot;
             FBarrierBatch Batch;
             if (WantDepth) {
@@ -2421,7 +2272,7 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_PRESENT);
         BackBatch.Flush(CommandList);
 
-        GpuProfiler.End(CommandList); // Frame (GPU)
+        GpuProfiler.End(CommandList); 
         GpuProfiler.Resolve(CommandList);
 
         SMILE_HR(CommandList->Close());

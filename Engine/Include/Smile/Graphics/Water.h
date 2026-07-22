@@ -34,14 +34,18 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Mat44& ViewProj, const Mat44& Projection, const Mat44& InvViewProj,
                             const Mat44& ViewProjNoJitter, const Mat44& PrevViewProjNoJitter,
                             const Vec3& CameraPos, const Vec3& SunDir, f32 SunIntensity,
-                            const Vec3& SunColor, f32 ElapsedTime,
+                            const Vec3& SunColor, const Vec3& SkyAmbient, f32 ElapsedTime,
                             bool IBLEnabled, f32 IBLIntensity,
                             u32 ScreenW, u32 ScreenH, f32 NearZ, f32 FarZ, bool HasSceneCopies,
                             bool UseAtmosphereSky);
 
+        static constexpr u32 kFFTCascades = 3;
+
         void RenderSurface(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
-                           u32 SpecularCubeSRVSlot, u32 FFTDisplacementSRVSlot,
-                           u32 FFTNormalSRVSlot, u32 SceneCopyTableStart,
+                           u32 SpecularCubeSRVSlot,
+                           const u32 (&FFTDisplacementSRVSlots)[kFFTCascades],
+                           const u32 (&FFTNormalSRVSlots)[kFFTCascades],
+                           u32 SceneCopyTableStart,
                            u32 AtmosphereSkyViewSRVSlot,
                            D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddress,
                            u32 SunShadowSRVSlot);
@@ -183,6 +187,8 @@ namespace Smile {
             Vec4  QuadTreeParams;  // 16  x=rootX y=rootZ z=leafSize w=rootSize
             Mat44 ViewProjNoJitter;// 64  velocity: VP atual SEM jitter
             Mat44 PrevViewProj;    // 64  velocity: VP anterior SEM jitter
+            Vec4  CascadeParams;   // 16  xyz=1/tileWorld das cascatas, w=nº de cascatas
+            Vec4  WaterAmbient;    // 16  rgb=ambiente físico do céu (in-scatter), w=livre
         };
         static_assert(sizeof(WaterConstants) % 256 == 0, "WaterConstants deve ser multiplo de 256");
 
@@ -330,12 +336,14 @@ namespace Smile {
         f32  FogDensity             = 0.1f;  
         f32  WaterClarity           = 8.0f;  
 
-        Vec3 InScatterColor   = { 0.06f, 0.30f, 0.36f };
+        // Albedo de espalhamento ESCURO (ref AC4/oceano real: teal profundo ~4-8% de
+        // upwelling) — o antigo (0.06,0.30,0.36) saturava turquesa claro = leitoso.
+        Vec3 InScatterColor   = { 0.015f, 0.085f, 0.11f };
         f32  InScatterDensity = 1.5f;
         Vec3 AbsorptionColor  = { 0.45f, 0.15f, 0.10f };
 
         bool UseFoam          = true;
-        f32  FoamCoverage     = 0.62f; 
+        f32  FoamCoverage     = 0.55f; // A/B 2026-07-16: 0.62 cobria demais c/ 3 cascatas
         f32  FoamSharpness    = 0.5f;  
         f32  FoamIntensity    = 1.0f;  
         f32  FoamFadeDist     = 600.0f;

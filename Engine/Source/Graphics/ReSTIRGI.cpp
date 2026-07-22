@@ -34,9 +34,7 @@ namespace Smile {
     }
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true); // t13 = luzes (F5)
-        // t7..t9 = Instances/Vertices/Indices (alpha-test dos visibility rays, M6);
-        // heap-indexed pelo ResourceDescriptorHeap do AlphaTestPass.
+        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true); 
         SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
         CreateConstantBuffer(_Device);
@@ -141,8 +139,7 @@ namespace Smile {
 
         for (u32 p = 0; p < 2; ++p) {
             const u32 prev = 1u - p;
-            // t0..t12 fixos + t13 = luzes puntuais (F5; copiado por frame). t4/t5 eram os
-            // merged VB/IB, aposentados pelo bindless (InstanceGeo) — filler valido.
+
             TraceTable[p] = _SRVHeap.Allocate(14);
             D3D12_CPU_DESCRIPTOR_HANDLE TSrc[13] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
@@ -171,8 +168,6 @@ namespace Smile {
             };
             CopyTable(TraceUAVTable[p], USrc, 5);
 
-            // t7 = InstanceGeo p/ o alpha-test dos visibility rays (M6); t8/t9 eram os merged
-            // VB/IB, aposentados pelo bindless — filler valido.
             SpatialTable[p] = _SRVHeap.Allocate(10);
             D3D12_CPU_DESCRIPTOR_HANDLE SSrc[10] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
@@ -195,10 +190,7 @@ namespace Smile {
     void FReSTIRGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                          u32 _StagingSlot) {
         if (!Ready) return;
-        // SO a tabela da paridade DESTE frame: a outra foi bindada pelo frame anterior, que com
-        // 2 frames em voo ainda pode estar lendo o heap shader-visible — reescrever descriptor
-        // em uso pela GPU e UB (descriptor versioning). A tabela corrente foi usada pela ultima
-        // vez ha >=2 frames, ja coberta pelo fence do FrameSlot.
+
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[FrameParity] + 13);
         D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
         UINT One = 1;
@@ -259,10 +251,6 @@ namespace Smile {
         CurrParity = p;
 
         if (NeedsClear) {
-            // SO o conjunto prev: o trace escreve TODO pixel do curr incondicionalmente, e
-            // clear+dispatch no mesmo recurso sem UAV barrier e WAW nao ordenado (o clear
-            // poderia terminar DEPOIS do dispatch). A transition prev->SRV logo abaixo ja
-            // ordena o clear contra a leitura.
             const float Zero[4] = { 0, 0, 0, 0 };
             auto ClearRes = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& St, u32 UavSlot) {
                 Transition(_CL, R, St, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
