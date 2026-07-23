@@ -2,7 +2,7 @@
 
 cbuffer FrameCB : register(b0) {
     float4 CameraPosition : packoffset(c0);
-    // x = mip bias global (FSR2 upscale: log2(render/display) - 1; 0 sem upscale).
+    // x = mip bias global (FSR upscale: log2(render/display) - 1; 0 sem upscale).
     // c18 = logo apos o InvViewProj do FrameConstants (ver Renderer.h).
     float4 RenderParams   : packoffset(c18);
 };
@@ -156,14 +156,23 @@ GBufferOutput main(PSInput input) {
         }
     }
 
-    // Bias negativo de mip nas texturas de material quando o FSR2 upscala (recupera o detalhe
+    // Bias negativo de mip nas texturas de material quando o FSR upscala (recupera o detalhe
     // que a render res menor perderia); 0 em nativo/SSAA. Nao se aplica ao parallax (SampleGrad).
     float MipBias = RenderParams.x;
 
     float4 AlbedoSample = HasAlbedoMap ? AlbedoMap.SampleBias(MaterialSampler, UV, MipBias) : float4(1.0f, 1.0f, 1.0f, 1.0f);
     float3 BaseColor    = BaseColorFactor.rgb * AlbedoSample.rgb;
-    if (AlphaTest)
-        clip(AlbedoSample.a * BaseColorFactor.a - AlphaCutoff);
+    if (AlphaTest) {
+        // A cobertura do recorte (alfa) NAO usa o MipBias negativo do FSR: puxar o alfa p/ um
+        // mip mais nitido deixa a borda da folhagem alta-frequencia e a cobertura instavel entre
+        // frames com jitter -> cintilacao no upscale (Qualidade+). O bias fica so no RGB (detalhe);
+        // o alfa e amostrado no mip da render res (bias 0), mantendo a silhueta estavel p/ o FSR.
+        // Sem upscale (MipBias==0) reaproveita AlbedoSample.a — sem fetch extra.
+        float ClipAlpha = (MipBias < 0.0f && HasAlbedoMap)
+                        ? AlbedoMap.SampleBias(MaterialSampler, UV, 0.0f).a
+                        : AlbedoSample.a;
+        clip(ClipAlpha * BaseColorFactor.a - AlphaCutoff);
+    }
 
     float3 N        = GeoN;
     float  ToksvigT = 1.0f;
