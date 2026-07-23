@@ -34,7 +34,8 @@ namespace SmileEditor {
         Q_PROPERTY(int upscalerMode READ GetUpscalerMode NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool fsrAvailable READ IsFsrAvailable NOTIFY RendererInitialized)
         Q_PROPERTY(bool dlssAvailable READ IsDlssAvailable NOTIFY RendererInitialized)
-        Q_PROPERTY(int fsrQuality READ GetFsrQuality NOTIFY ViewSettingsChanged)
+        // Preset compartilhado FSR/DLSS (nao e so do FSR) — ver Renderer::SetUpscalerQuality.
+        Q_PROPERTY(int upscalerQuality READ GetUpscalerQuality NOTIFY ViewSettingsChanged)
         Q_PROPERTY(int recommendedUpscalerMode READ GetRecommendedUpscalerMode NOTIFY RendererInitialized)
         Q_PROPERTY(QString recommendedUpscalerName READ GetRecommendedUpscalerName NOTIFY RendererInitialized)
         Q_PROPERTY(double renderScale READ GetRenderScale NOTIFY ViewSettingsChanged)
@@ -95,7 +96,6 @@ namespace SmileEditor {
         Q_PROPERTY(bool rainParticles READ AreRainParticles NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool weatherDriveSky READ IsWeatherDriveSky NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool mergeByMaterialEnabled READ IsMergeByMaterialEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
         Q_PROPERTY(double frameTimeMs READ GetFrameTimeMs NOTIFY FrameReady)
         Q_PROPERTY(int visibleDrawCount READ GetVisibleDrawCount NOTIFY FrameReady)
@@ -142,7 +142,7 @@ namespace SmileEditor {
         int               GetUpscalerMode() const;
         bool              IsFsrAvailable() const;
         bool              IsDlssAvailable() const;
-        int               GetFsrQuality() const;
+        int               GetUpscalerQuality() const;
         int               GetRecommendedUpscalerMode() const;
         QString           GetRecommendedUpscalerName() const;
         double            GetRenderScale() const;
@@ -202,7 +202,6 @@ namespace SmileEditor {
         bool              AreRainParticles() const;
         bool              IsWeatherDriveSky() const;
         bool              IsDepthPrepassEnabled() const;
-        bool              IsMergeByMaterialEnabled() const;
         double            GetFrameTimeMs() const;
         int               GetVisibleDrawCount() const;
         int               GetTotalDrawCount() const;
@@ -231,7 +230,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleReflections();
         Q_INVOKABLE void ToggleNrd();
         Q_INVOKABLE void SetUpscalerMode(int mode);
-        Q_INVOKABLE void SetFsrQuality(int quality);
+        Q_INVOKABLE void SetUpscalerQuality(int quality);
         Q_INVOKABLE void SetRenderScale(double scale);
         Q_INVOKABLE void SetTAAEnabled(bool enabled);
         Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);
@@ -289,7 +288,6 @@ namespace SmileEditor {
         Q_INVOKABLE void SetRainParticles(bool enabled);
         Q_INVOKABLE void SetWeatherDriveSky(bool enabled);
         Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
-        Q_INVOKABLE void SetMergeByMaterialEnabled(bool enabled);
         Q_INVOKABLE void ResetRenderSettings();
         Q_INVOKABLE void RequestSettings();
 

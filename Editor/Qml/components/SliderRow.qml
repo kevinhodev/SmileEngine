@@ -21,14 +21,14 @@ Item {
         x: 0; y: 0
         text: row.label
         color: Theme.textNormal
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 11
     }
     Text {
         anchors.right: parent.right; y: 0
         text: row.valueText
         color: Theme.textSecondary
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 11
     }
     Slider {

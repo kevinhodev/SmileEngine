@@ -37,7 +37,7 @@ Item {
         y: 4
         text: colorRow.label
         color: Theme.textNormal
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 11
     }
     Text {
@@ -159,7 +159,7 @@ Item {
         visible: colorRow.open
         text: "arraste no quadrado (S/V) e na barra (matiz)"
         color: Theme.textMuted
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 10
     }
 }

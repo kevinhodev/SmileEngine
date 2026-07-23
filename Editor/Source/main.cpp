@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QQuickStyle>
 #include <QStandardPaths>
 #include <QSysInfo>
@@ -50,6 +51,31 @@ namespace {
 
         for (qsizetype I = kRetainedLogSessions; I < Logs.size(); ++I)
             QFile::remove(Logs.at(I).absoluteFilePath());
+    }
+
+    // Registra as fontes empacotadas (Fonts/ ao lado do exe) antes de qualquer UI subir. Vale
+    // p/ os dois mundos: QSS dos widgets e Theme.fontFamily do QML. Se falhar, o Qt cai na
+    // familia seguinte sozinho — a UI continua legivel, so sem a Inter.
+    void RegisterBundledFonts() {
+        const QString Dir = QCoreApplication::applicationDirPath() + QStringLiteral("/Fonts");
+        const QStringList Files = QDir(Dir).entryList(
+            QStringList{ QStringLiteral("*.ttf"), QStringLiteral("*.otf") }, QDir::Files);
+
+        for (const QString& F : Files) {
+            const QString Path = Dir + QLatin1Char('/') + F;
+            const int Id = QFontDatabase::addApplicationFont(Path);
+            if (Id < 0) {
+                LogQString(Smile::LogLevel::Warning,
+                           QStringLiteral("Falha ao registrar a fonte %1").arg(F));
+                continue;
+            }
+            // Loga a familia REAL que o Qt registrou: em fonte variavel o nome nem sempre e o
+            // do arquivo, e o Theme precisa bater exatamente com ela.
+            LogQString(Smile::LogLevel::Info,
+                       QStringLiteral("Fonte registrada: %1 -> %2")
+                           .arg(F, QFontDatabase::applicationFontFamilies(Id).join(
+                                       QStringLiteral(", "))));
+        }
     }
 
     void InitializeSessionLogging() {
@@ -100,6 +126,7 @@ namespace {
         QQuickStyle::setStyle(QStringLiteral("Basic"));
 
         InitializeSessionLogging();
+        RegisterBundledFonts();
         SmileEditor::ApplyDarkTheme(App);
 
         int ExitCode = EXIT_FAILURE;

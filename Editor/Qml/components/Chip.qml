@@ -17,7 +17,7 @@ Rectangle {
         anchors.centerIn: parent
         text: chip.label
         color: chip.active ? Theme.blue : Theme.textNormal
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 10
     }
     HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }

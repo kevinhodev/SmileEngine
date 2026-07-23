@@ -90,7 +90,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: "Materiais"
             color: root.textPrimary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 13
             font.weight: Font.Medium
         }
@@ -102,7 +102,7 @@ Rectangle {
                   ? materialsModel.totalCount + " materiais · edição ao vivo na cena"
                   : "aguardando o renderer…"
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
 
@@ -171,7 +171,7 @@ Rectangle {
                     text: "Salvar"
                     anchors.verticalCenter: parent.verticalCenter
                     color: materialsModel.dirty ? "#10151d" : root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                     font.weight: materialsModel.dirty ? Font.DemiBold : Font.Normal
                 }
@@ -206,7 +206,7 @@ Rectangle {
                     text: "Reverter material"
                     anchors.verticalCenter: parent.verticalCenter
                     color: root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
             }
@@ -239,7 +239,7 @@ Rectangle {
                 anchors.rightMargin: 24
                 verticalAlignment: TextInput.AlignVCenter
                 color: root.textPrimary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
                 clip: true
                 selectByMouse: true
@@ -252,7 +252,7 @@ Rectangle {
                     visible: paramSearchInput.text.length === 0 && !paramSearchInput.activeFocus
                     text: "Buscar parâmetro…  Ctrl+F"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
             }
@@ -284,7 +284,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "alterações não salvas · Ctrl+S"
                 color: root.textSecondary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 10
             }
         }
@@ -327,7 +327,7 @@ Rectangle {
                 anchors.rightMargin: 24
                 verticalAlignment: TextInput.AlignVCenter
                 color: root.textPrimary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
                 clip: true
                 selectByMouse: true
@@ -339,7 +339,7 @@ Rectangle {
                     visible: searchInput.text.length === 0 && !searchInput.activeFocus
                     text: "Buscar material…"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
             }
@@ -445,7 +445,7 @@ Rectangle {
                     width: badgeRow.x - x - 6
                     text: matRow.name
                     color: matRow.selected ? root.textPrimary : root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                     font.weight: matRow.selected ? Font.DemiBold : Font.Normal
                     elide: Text.ElideRight
@@ -455,7 +455,7 @@ Rectangle {
                     text: matRow.meshCount + (matRow.meshCount === 1 ? " mesh · " : " meshes · ") + matRow.vramText
                           + (matRow.modified ? "  ●" : "")
                     color: matRow.modified ? root.amber : root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
                 Row {
@@ -479,7 +479,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: parent.modelData
                                 color: root.badgeColor(parent.modelData)
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 9
                                 font.weight: Font.DemiBold
                             }
@@ -511,7 +511,7 @@ Rectangle {
                       ? materialsModel.totalCount + " materiais na cena"
                       : matList.count + " de " + materialsModel.totalCount + " materiais"
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 10
             }
         }
@@ -595,7 +595,7 @@ Rectangle {
                     text: !materialsModel.hasSelection ? "selecione um material"
                         : "preparando o preview (HDRI + IBL)…"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
             }
@@ -628,7 +628,7 @@ Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "arraste orbita · scroll aproxima · Shift+arraste gira o HDRI"
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
     }
@@ -657,14 +657,14 @@ Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: "Selecione um material na lista"
                 color: root.textSecondary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 12
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: "ou clique numa mesh no viewport — o material dela abre aqui"
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 10
             }
         }
@@ -703,7 +703,7 @@ Rectangle {
                         width: parent.width - 56 - 220 // deixa espaco pros chips de acao
                         text: materialsModel.name + (materialsModel.selectedModified ? "  ●" : "")
                         color: root.textPrimary
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
                         elide: Text.ElideRight
@@ -715,7 +715,7 @@ Rectangle {
                               (materialsModel.meshCount === 1 ? " mesh · " : " meshes · ") +
                               materialsModel.vramText + " em texturas"
                         color: root.textSecondary
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 10
                         elide: Text.ElideRight
                     }
@@ -826,7 +826,7 @@ Rectangle {
                                     x: 34; y: 6
                                     text: slotCell.modelData.label
                                     color: slotCell.modelData.has ? root.textNormal : root.textMuted
-                                    font.family: "Segoe UI"
+                                    font.family: C.Theme.fontFamily
                                     font.pixelSize: 10
                                     font.weight: slotCell.modelData.has ? Font.Medium : Font.Normal
                                 }
@@ -835,7 +835,7 @@ Rectangle {
                                     width: parent.width - 42
                                     text: slotCell.modelData.info
                                     color: root.textMuted
-                                    font.family: "Segoe UI"
+                                    font.family: C.Theme.fontFamily
                                     font.pixelSize: 9
                                     elide: Text.ElideRight
                                 }
@@ -867,7 +867,7 @@ Rectangle {
                         width: parent.width
                         text: "clique troca o mapa (png/jpg/bmp/dds) · × volta pro shader sem o mapa · ● = override"
                         color: root.textMuted
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 9
                     }
                 }
@@ -911,7 +911,7 @@ Rectangle {
                         visible: !materialsModel.hasHeightMap
                         text: "sem height map"
                         color: root.textMuted
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 10
                     }
                     SliderRow {
@@ -1034,7 +1034,7 @@ Rectangle {
                     width: parent.width
                     text: "Overrides salvos em <cena>.materials.json (sidecar, junto do .visibility.json)"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignHCenter
                 }

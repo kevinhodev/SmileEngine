@@ -29,6 +29,9 @@ Rectangle {
     readonly property color blueBg: C.Theme.blueBg
     readonly property color blueBorder: C.Theme.blueBorder
     readonly property color green: C.Theme.green
+    // Cores de acento dos vendors, usadas so nas marcas tipograficas dos upscalers.
+    readonly property color amdRed: "#e8483c"
+    readonly property color nvidiaGreen: "#8cc63f"
 
     function pageTitle() {
         const titles = [
@@ -41,7 +44,7 @@ Rectangle {
 
     function pageSubtitle() {
         if (selectedPage === 0)
-            return "Upscaling, anti-aliasing e resolução interna do viewport"
+            return "Upscaling, Anti-Aliasing e Resolução Interna do Viewport"
         if (selectedPage === 6)
             return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
         if (selectedPage === 7)
@@ -75,7 +78,7 @@ Rectangle {
             x: 0; y: 0
             text: srow.label
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
         }
         Rectangle {
@@ -88,7 +91,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: srow.valueText
                 color: root.textPrimary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 10
             }
         }
@@ -169,7 +172,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: nav.label
             color: root.selectedPage === nav.page ? root.textPrimary : "#b9b5aa"
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
         }
         Rectangle {
@@ -184,7 +187,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "beta"
                 color: "#d8a03a"
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 10
             }
         }
@@ -207,7 +210,7 @@ Rectangle {
             anchors.centerIn: parent
             text: abtn.label
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         HoverHandler { id: abtnHover; cursorShape: Qt.PointingHandCursor }
@@ -239,22 +242,21 @@ Rectangle {
             color: option.selected ? "#243651" : "#292b24"
             border.color: option.selected ? "#345681" : "#36382f"
             clip: true
-            Image {
-                anchors.fill: parent
-                anchors.margins: 1
+            Text {
+                anchors.centerIn: parent
                 visible: option.mode === 1
-                source: "icons/fidelityfx-fsr.png"
-                sourceClipRect: Qt.rect(266, 88, 72, 72)
-                fillMode: Image.PreserveAspectCrop
-                smooth: true
-                mipmap: true
+                text: "FSR"
+                color: root.amdRed
+                font.family: C.Theme.fontFamily
+                font.pixelSize: 10
+                font.weight: Font.Bold
             }
             Text {
                 anchors.centerIn: parent
                 visible: option.mode === 2
                 text: "DLSS"
-                color: root.green
-                font.family: "Segoe UI"
+                color: root.nvidiaGreen
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 8
                 font.weight: Font.Bold
             }
@@ -263,7 +265,7 @@ Rectangle {
                 visible: option.mode === 0
                 text: "1:1"
                 color: option.selected ? root.blue : root.textNormal
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
             }
@@ -272,7 +274,7 @@ Rectangle {
             x: 48; y: 8
             text: option.label
             color: option.selected ? root.textPrimary : root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
             font.weight: Font.Medium
         }
@@ -282,7 +284,7 @@ Rectangle {
             text: option.detail
             color: root.textMuted
             elide: Text.ElideRight
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
         Rectangle {
@@ -300,7 +302,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: option.badge
                 color: option.badge === "RECOMENDADO" ? root.green : root.textSecondary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
             }
@@ -347,7 +349,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 text: card.title
                 color: root.textPrimary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 13
                 font.weight: Font.Medium
             }
@@ -371,7 +373,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: statusRow.label
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Text {
@@ -379,7 +381,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: statusRow.value
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
     }
@@ -401,7 +403,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: rayRow.label
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
         }
         Text {
@@ -409,7 +411,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: rayRow.active ? "ligado" : "desligado"
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
     }
@@ -437,7 +439,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: "Configurações — SmileEngine"
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
         }
 
@@ -513,7 +515,7 @@ Rectangle {
                 color: root.textNormal
                 selectionColor: root.blue
                 selectedTextColor: "#10110f"
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
                 background: null
                 onTextChanged: root.searchText = text
@@ -524,7 +526,7 @@ Rectangle {
             x: 20; y: 70
             text: "Gráficos"
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Column {
@@ -545,7 +547,7 @@ Rectangle {
             x: 20; y: 372
             text: "Editor"
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Column {
@@ -568,14 +570,14 @@ Rectangle {
                 x: 14; y: 9
                 text: "Preset ativo"
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             Text {
                 x: 14; y: 27
                 text: "Ultra — RT completo"
                 color: root.textNormal
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 12
             }
             Text {
@@ -610,7 +612,7 @@ Rectangle {
             x: 24; y: 22
             text: root.pageTitle()
             color: root.textPrimary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 20
             font.weight: Font.Medium
         }
@@ -618,7 +620,7 @@ Rectangle {
             x: 24; y: 49
             text: root.pageSubtitle()
             color: root.textSecondary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Rectangle {
@@ -639,37 +641,64 @@ Rectangle {
                 color: root.textSecondary
                 elide: Text.ElideRight
                 horizontalAlignment: Text.AlignHCenter
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
         }
 
-        Item {
+        // Duas colunas empilhadas por Column (mesmo padrao da pagina de Sombras/Nuvens, adaptado
+        // p/ 2 colunas): nenhum card sabe seu proprio y, entao mudar/ocultar conteudo reflui tudo
+        // sozinho. O contentHeight segue a coluna mais alta, entao o scroll sempre alcanca o fim.
+        Flickable {
             id: renderingPage
             visible: root.selectedPage === 0
             anchors.fill: parent
+            anchors.topMargin: 84
+            contentWidth: width
+            contentHeight: Math.max(renderingLeftCol.height, renderingRightCol.height) + 40
+            clip: true
+            ScrollBar.vertical: ThinScrollBar { revealed: renderingPageHover.hovered }
+            HoverHandler { id: renderingPageHover }
 
             readonly property int rightW: 180
             readonly property int gap: 16
             readonly property int leftW: width - 48 - rightW - gap
 
+            Column {
+                id: renderingLeftCol
+                x: 24
+                width: renderingPage.leftW
+                spacing: 16
+
             Card {
                 id: upscalingCard
-                x: 24; y: 84
-                width: renderingPage.leftW
-                height: 272
-                title: "Upscaling e anti-aliasing"
+                width: parent.width
+                title: "Upscaling e Anti-Aliasing"
+
+                // Ritmo vertical do card, encadeado por binding (nada de y hardcoded): o respiro
+                // no topo e na base e o mesmo (contentPadding), rotulo->controle usa gapLabel e a
+                // troca de bloco usa gapSection. Mexer num espaco reflui o resto sozinho.
+                readonly property int gapLabel: 8
+                readonly property int gapSection: 14
+                // fsrControls e nativeControls ocupam o mesmo slot (so um fica visivel por vez),
+                // entao qualquer um serve de referencia p/ o fim do conteudo.
+                readonly property int contentBottom: recommendedRow.visible
+                    ? recommendedRow.y + recommendedRow.height
+                    : fsrControls.y + fsrControls.height
+                height: contentBottom + contentPadding
 
                 Text {
+                    id: techLabel
                     x: 20; y: upscalingCard.headerHeight + upscalingCard.contentPadding
-                    text: "Tecnologia de reconstrução"
+                    text: "Tecnologia de Reconstrução"
                     color: root.textNormal
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 12
                 }
                 Rectangle {
                     id: upscalerField
-                    x: 20; y: 72
+                    x: 20
+                    y: techLabel.y + techLabel.height + upscalingCard.gapLabel
                     width: parent.width - 40
                     height: 44
                     radius: 7
@@ -685,22 +714,23 @@ Rectangle {
                         color: "#292c25"
                         border.color: "#383a31"
                         clip: true
-                        Image {
-                            anchors.fill: parent
-                            anchors.margins: 1
+                        // Marca tipografica em vez de logo bitmap: nitida em qualquer DPI e nunca
+                        // corta (o banner do FSR era 300 KB recortado por sourceClipRect).
+                        Text {
+                            anchors.centerIn: parent
                             visible: viewportModel.upscalerMode === 1
-                            source: "icons/fidelityfx-fsr.png"
-                            sourceClipRect: Qt.rect(266, 88, 72, 72)
-                            fillMode: Image.PreserveAspectCrop
-                            smooth: true
-                            mipmap: true
+                            text: "FSR"
+                            color: root.amdRed
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 10
+                            font.weight: Font.Bold
                         }
                         Text {
                             anchors.centerIn: parent
                             visible: viewportModel.upscalerMode === 2
                             text: "DLSS"
-                            color: root.green
-                            font.family: "Segoe UI"
+                            color: root.nvidiaGreen
+                            font.family: C.Theme.fontFamily
                             font.pixelSize: 8
                             font.weight: Font.Bold
                         }
@@ -709,7 +739,7 @@ Rectangle {
                             visible: viewportModel.upscalerMode === 0
                             text: "1:1"
                             color: root.textNormal
-                            font.family: "Segoe UI"
+                            font.family: C.Theme.fontFamily
                             font.pixelSize: 9
                             font.weight: Font.DemiBold
                         }
@@ -722,7 +752,7 @@ Rectangle {
                                 ? "AMD FidelityFX Super Resolution"
                                 : "Sem upscaling"
                         color: root.textPrimary
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 12
                         font.weight: Font.Medium
                     }
@@ -730,13 +760,13 @@ Rectangle {
                         x: 49; y: 24
                         width: parent.width - 174
                         text: viewportModel.upscalerMode === 2
-                              ? "DLSS · reconstrução por IA (Super Resolution)"
+                              ? "DLSS · Reconstrução por IA (Super Resolution)"
                               : viewportModel.upscalerMode === 1
-                                ? "FSR 3.1 · reconstrução temporal"
-                                : "TAA · escala manual de renderização"
+                                ? "FSR 3.1 · Reconstrução Temporal"
+                                : "TAA · Escala Manual de Renderização"
                         color: root.textMuted
                         elide: Text.ElideRight
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 10
                     }
                     Rectangle {
@@ -753,7 +783,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: "RECOMENDADO"
                             color: root.green
-                            font.family: "Segoe UI"
+                            font.family: C.Theme.fontFamily
                             font.pixelSize: 9
                             font.weight: Font.DemiBold
                         }
@@ -794,19 +824,22 @@ Rectangle {
                 }
 
                 Text {
-                    x: 20; y: 122
+                    id: techHelper
+                    x: 20
+                    y: upscalerField.y + upscalerField.height + upscalingCard.gapLabel
                     text: viewportModel.fsrAvailable
                           ? "O recomendado é escolhido conforme o hardware e os backends disponíveis."
                           : "FSR 3.1 indisponível; usando o caminho nativo com TAA."
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
 
                 Item {
                     id: fsrControls
                     visible: viewportModel.upscalerMode === 1 || viewportModel.upscalerMode === 2
-                    x: 20; y: 144
+                    x: 20
+                    y: techHelper.y + techHelper.height + upscalingCard.gapSection
                     width: parent.width - 40
                     height: 111
 
@@ -814,22 +847,24 @@ Rectangle {
                         x: 0; y: 0
                         text: "Preset de qualidade"
                         color: root.textNormal
-                        font.family: "Segoe UI"
-                        font.pixelSize: 11
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 12
                     }
                     Text {
                         anchors.right: parent.right
                         y: 1
-                        text: "FSR controla a escala interna"
+                        // O backend selecionado e quem dita a escala interna — nao e sempre o FSR.
+                        text: (viewportModel.upscalerMode === 2 ? "DLSS" : "FSR") +
+                              " controla a escala interna"
                         color: root.textMuted
-                        font.family: "Segoe UI"
-                        font.pixelSize: 9
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
                     }
                     Rectangle {
                         id: qualitySelector
                         x: 0; y: 18
                         width: parent.width
-                        height: 28
+                        height: 36
                         radius: 6
                         color: "#23241d"
                         border.color: root.borderColor
@@ -838,30 +873,52 @@ Rectangle {
                         Row {
                             anchors.fill: parent
                             Repeater {
-                                model: ["100%", "Qualidade", "Balanceado", "Performance", "Ultra"]
+                                // Rotulo + escala de render de cada preset. "Ultra" e Ultra
+                                // PERFORMANCE (a menor resolucao) — sem o sufixo ele le como
+                                // "o melhor de todos", que e o oposto do que faz.
+                                model: [
+                                    { name: "100%",        scale: "nativo" },
+                                    { name: "Qualidade",   scale: "67%"    },
+                                    { name: "Balanceado",  scale: "59%"    },
+                                    { name: "Performance", scale: "50%"    },
+                                    { name: "Ultra Perf.", scale: "33%"    }
+                                ]
                                 delegate: Rectangle {
-                                    required property string modelData
+                                    required property var modelData
                                     required property int index
+                                    readonly property bool isCurrent: viewportModel.upscalerQuality === index
                                     width: qualitySelector.width / 5
                                     height: qualitySelector.height
                                     radius: 6
-                                    color: viewportModel.fsrQuality === index ? root.blueBg
-                                                                              : (qualityHover.hovered ? "#2a2b24" : "transparent")
-                                    border.color: viewportModel.fsrQuality === index ? root.blueBorder : "transparent"
+                                    color: isCurrent ? root.blueBg
+                                                     : (qualityHover.hovered ? "#2a2b24" : "transparent")
+                                    border.color: isCurrent ? root.blueBorder : "transparent"
                                     border.width: 1
-                                    Text {
+                                    Column {
                                         anchors.centerIn: parent
-                                        text: modelData
-                                        color: viewportModel.fsrQuality === index ? root.blue : root.textSecondary
-                                        font.family: "Segoe UI"
-                                        font.pixelSize: 9
+                                        spacing: 1
+                                        Text {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: modelData.name
+                                            color: isCurrent ? root.blue : root.textSecondary
+                                            font.family: C.Theme.fontFamily
+                                            font.pixelSize: 10
+                                        }
+                                        Text {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: modelData.scale
+                                            color: isCurrent ? root.blue : root.textMuted
+                                            opacity: isCurrent ? 0.85 : 1.0
+                                            font.family: C.Theme.fontFamily
+                                            font.pixelSize: 9
+                                        }
                                     }
                                     HoverHandler {
                                         id: qualityHover
                                         cursorShape: Qt.PointingHandCursor
                                     }
                                     TapHandler {
-                                        onTapped: viewportModel.SetFsrQuality(index)
+                                        onTapped: viewportModel.SetUpscalerQuality(index)
                                     }
                                 }
                             }
@@ -869,7 +926,7 @@ Rectangle {
                     }
 
                     Rectangle {
-                        x: 0; y: 57
+                        x: 0; y: 65
                         width: parent.width
                         height: 46; radius: 7
                         color: "#151a16"
@@ -882,16 +939,16 @@ Rectangle {
                         }
                         Text {
                             x: 29; y: 8
-                            text: "Reconstrução ativa"
+                            text: "Reconstrução Ativa"
                             color: root.textNormal
-                            font.family: "Segoe UI"
-                            font.pixelSize: 10
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 11
                         }
                         Text {
                             x: 29; y: 25
                             text: viewportModel.internalResolution + "  →  " + viewportModel.outputResolution
                             color: root.textPrimary
-                            font.family: "Segoe UI"
+                            font.family: C.Theme.fontMono
                             font.pixelSize: 10
                         }
                         Rectangle {
@@ -907,10 +964,10 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: viewportModel.renderScale < 0.999
                                       ? "−" + Math.round((1.0 - viewportModel.renderScale *
-                                                         viewportModel.renderScale) * 100) + "% pixels"
-                                      : "resolução integral"
+                                                         viewportModel.renderScale) * 100) + "% Pixels"
+                                      : "Resolução Integral"
                                 color: root.green
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 9
                             }
                         }
@@ -920,7 +977,8 @@ Rectangle {
                 Item {
                     id: nativeControls
                     visible: viewportModel.upscalerMode === 0
-                    x: 20; y: 144
+                    x: 20
+                    y: techHelper.y + techHelper.height + upscalingCard.gapSection
                     width: parent.width - 40
                     height: 111
 
@@ -928,7 +986,7 @@ Rectangle {
                         x: 0; y: 2
                         text: "Anti-aliasing temporal (TAA)"
                         color: root.textNormal
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 11
                     }
                     Toggle {
@@ -942,7 +1000,7 @@ Rectangle {
                         x: 0; y: 39
                         text: "Escala de renderização (SSAA)"
                         color: root.textNormal
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 11
                     }
                     Rectangle {
@@ -955,7 +1013,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: viewportModel.renderScale.toFixed(2).replace(".", ",") + "×"
                             color: root.textPrimary
-                            font.family: "Segoe UI"
+                            font.family: C.Theme.fontFamily
                             font.pixelSize: 10
                         }
                     }
@@ -998,7 +1056,7 @@ Rectangle {
                         x: 0; y: 84
                         text: "1,0×"
                         color: root.textMuted
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 9
                     }
                     Text {
@@ -1006,17 +1064,40 @@ Rectangle {
                         y: 84
                         text: "2,0×"
                         color: root.textMuted
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 9
                     }
                 }
 
-                Text {
-                    x: 20; y: 251
-                    text: "Recomendado para esta GPU: " + viewportModel.recommendedUpscalerName
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 9
+                // Só aparece quando NÃO se está no backend recomendado — no recomendado o badge
+                // do dropdown já comunica isso. Clicável: informar sem dar saída é beco sem saída.
+                Row {
+                    id: recommendedRow
+                    x: 20
+                    y: fsrControls.y + fsrControls.height + upscalingCard.gapLabel
+                    spacing: 5
+                    visible: viewportModel.upscalerMode !== viewportModel.recommendedUpscalerMode
+                    Text {
+                        text: "Recomendado para esta GPU:"
+                        color: root.textMuted
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
+                    }
+                    Text {
+                        id: useRecommendedLink
+                        text: "Usar " + viewportModel.recommendedUpscalerName
+                        color: root.blue
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
+                        font.underline: useRecommendedHover.hovered
+                        HoverHandler {
+                            id: useRecommendedHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                        TapHandler {
+                            onTapped: viewportModel.SetUpscalerMode(viewportModel.recommendedUpscalerMode)
+                        }
+                    }
                 }
 
                 Popup {
@@ -1043,7 +1124,7 @@ Rectangle {
                             width: upscalerPopup.availableWidth
                             mode: 0
                             label: "Sem upscaling"
-                            detail: "TAA · escala manual de 100% a 200% (SSAA)"
+                            detail: "TAA · Escala Manual de 100% a 200% (SSAA)"
                             selected: viewportModel.upscalerMode === 0
                             badge: viewportModel.recommendedUpscalerMode === 0 ? "RECOMENDADO" : ""
                             onChosen: {
@@ -1056,8 +1137,8 @@ Rectangle {
                             mode: 1
                             label: "AMD FidelityFX Super Resolution"
                             detail: available
-                                    ? "FSR 3.1 · temporal · compatível com esta GPU"
-                                    : "FSR 3.1 não foi inicializado neste dispositivo"
+                                    ? "FSR 3.1 · Temporal · Compatível com esta GPU"
+                                    : "FSR 3.1 não foi Inicializado Neste Dispositivo"
                             selected: viewportModel.upscalerMode === 1
                             available: viewportModel.fsrAvailable
                             badge: viewportModel.recommendedUpscalerMode === 1 ? "RECOMENDADO" : ""
@@ -1071,8 +1152,8 @@ Rectangle {
                             mode: 2
                             label: "NVIDIA DLSS"
                             detail: available
-                                    ? "DLSS · reconstrução por IA · requer GPU NVIDIA RTX"
-                                    : "DLSS indisponível (requer GPU NVIDIA RTX)"
+                                    ? "DLSS · Reconstrução por IA · Requer GPU NVIDIA RTX"
+                                    : "DLSS Indisponível (requer GPU NVIDIA RTX)"
                             selected: viewportModel.upscalerMode === 2
                             available: viewportModel.dlssAvailable
                             badge: viewportModel.recommendedUpscalerMode === 2 ? "RECOMENDADO" : ""
@@ -1085,97 +1166,118 @@ Rectangle {
                 }
             }
 
+            // Preferencia real de renderizacao: trade-off que depende da cena. Nomeado pelos
+            // passes (nao por "geometria") — o prepass muda a ordem dos passes, nao a geometria.
             Card {
-                x: 24; y: 368
-                width: renderingPage.leftW
-                height: 178
-                title: "Cena e geometria"
+                width: parent.width
+                height: 88
+                title: "Passes de Renderização"
 
                 Text {
                     x: 20; y: 56
-                    text: "Frustum culling"
+                    text: "Depth Prepass"
                     color: root.textNormal
-                    font.family: "Segoe UI"
-                    font.pixelSize: 12
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
                 }
                 Text {
-                    x: 158; y: 56
-                    text: "descarta o que está fora da câmera"
+                    // Ancorada ate o toggle (que e 36 de largura + 20 de margem): sem isso o
+                    // texto cresce por baixo dele. elide garante degradacao limpa se nao couber.
+                    y: 57
+                    anchors.left: parent.left;              anchors.leftMargin: 158
+                    anchors.right: prepassToggle.left;      anchors.rightMargin: 12
+                    text: "troca um passe extra por menos overdraw"
+                    elide: Text.ElideRight
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
+                    id: prepassToggle
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 50
+                    checked: viewportModel.depthPrepassEnabled
+                    onToggled: viewportModel.SetDepthPrepassEnabled(!checked)
+                }
+            }
+
+            // Chaves de investigacao, nao preferencias: desligar so faz sentido p/ isolar bug
+            // de culling (geometria sumindo/piscando). Separadas do card acima justamente p/
+            // nao parecerem ajuste de qualidade.
+            Card {
+                width: parent.width
+                height: 148
+                title: "Diagnóstico"
+
+                Text {
+                    x: 20; y: 50
+                    width: parent.width - 40
+                    text: "Ligados por padrão. Desligue apenas para investigar geometria sumindo " +
+                          "ou piscando — com eles off a cena fica bem mais lenta."
+                    wrapMode: Text.WordWrap
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 11
+                }
+
+                Text {
+                    x: 20; y: 92
+                    text: "Frustum Culling"
+                    color: root.textNormal
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                Text {
+                    y: 93
+                    anchors.left: parent.left;          anchors.leftMargin: 158
+                    anchors.right: frustumToggle.left;  anchors.rightMargin: 12
+                    text: "descarta o que está fora da câmera"
+                    elide: Text.ElideRight
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    id: frustumToggle
+                    anchors.right: parent.right; anchors.rightMargin: 20; y: 86
                     checked: viewportModel.frustumCullingEnabled
                     onToggled: viewportModel.SetFrustumCullingEnabled(!checked)
                 }
 
                 Text {
-                    x: 20; y: 88
-                    text: "Occlusion culling"
+                    x: 20; y: 120
+                    text: "Occlusion Culling"
                     color: root.textNormal
-                    font.family: "Segoe UI"
-                    font.pixelSize: 12
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
                 }
                 Text {
-                    x: 158; y: 88
+                    y: 121
+                    anchors.left: parent.left;            anchors.leftMargin: 158
+                    anchors.right: occlusionToggle.left;  anchors.rightMargin: 12
                     text: "HZB: descarta o que está atrás de parede"
+                    elide: Text.ElideRight
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
-                    anchors.right: parent.right; anchors.rightMargin: 20; y: 82
+                    id: occlusionToggle
+                    anchors.right: parent.right; anchors.rightMargin: 20; y: 114
                     checked: viewportModel.occlusionCullingEnabled
                     onToggled: viewportModel.SetOcclusionCullingEnabled(!checked)
                 }
-
-                Text {
-                    x: 20; y: 120
-                    text: "Depth prepass"
-                    color: root.textNormal
-                    font.family: "Segoe UI"
-                    font.pixelSize: 12
-                }
-                Text {
-                    x: 158; y: 120
-                    text: "pré-passe de profundidade"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right; anchors.rightMargin: 20; y: 114
-                    checked: viewportModel.depthPrepassEnabled
-                    onToggled: viewportModel.SetDepthPrepassEnabled(!checked)
-                }
-
-                Text {
-                    x: 20; y: 152
-                    text: "Mesclar por material"
-                    color: root.textNormal
-                    font.family: "Segoe UI"
-                    font.pixelSize: 12
-                }
-                Text {
-                    x: 158; y: 152
-                    text: "agrupa draws por material"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right; anchors.rightMargin: 20; y: 146
-                    checked: viewportModel.mergeByMaterialEnabled
-                    onToggled: viewportModel.SetMergeByMaterialEnabled(!checked)
-                }
             }
 
-            Card {
+            } // renderingLeftCol
+
+            Column {
+                id: renderingRightCol
                 x: 24 + renderingPage.leftW + renderingPage.gap
-                y: 84
                 width: renderingPage.rightW
+                spacing: 16
+
+            Card {
+                width: parent.width
                 height: 170
                 title: "Desempenho"
 
@@ -1183,22 +1285,22 @@ Rectangle {
                     x: 16; y: 54
                     text: Math.round(viewportModel.fps)
                     color: root.blue
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 28
                     font.weight: Font.Medium
                 }
                 Text {
                     x: 66; y: 70
-                    text: "fps"
+                    text: "FPS"
                     color: root.textSecondary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Text {
                     x: 16; y: 90
                     text: viewportModel.frameTimeMs.toFixed(1).replace(".", ",") + " ms por frame"
                     color: root.textSecondary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Rectangle { x: 0; y: 112; width: parent.width; height: 1; color: root.divider }
@@ -1217,9 +1319,7 @@ Rectangle {
             }
 
             Card {
-                x: 24 + renderingPage.leftW + renderingPage.gap
-                y: 266
-                width: renderingPage.rightW
+                width: parent.width
                 height: 210
                 title: "Ray tracing"
 
@@ -1243,6 +1343,8 @@ Rectangle {
                     value: viewportModel.vramText
                 }
             }
+
+            } // renderingRightCol
         }
 
         Flickable {
@@ -1273,14 +1375,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Sombras dinâmicas"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "4 cascatas · 2048² · PCF Poisson 16 taps"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1325,14 +1427,14 @@ Rectangle {
                     x: 20; y: 272
                     text: "Debug de cascatas"
                     color: root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Text {
                     x: 158; y: 272
                     text: "tinge a cena pela cascata usada"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1353,14 +1455,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Raios volumétricos (raymarch no CSM)"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "raio de verdade: janela, fresta, copa — via height fog"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1423,14 +1525,14 @@ Rectangle {
                     x: 20; y: 390
                     text: "Acumulação temporal"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 409
                     text: "integra o ruído do raymarch ao longo dos frames"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1451,14 +1553,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Fog froxel (grid 3D estilo UE)"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "fog perto com sombra do sol e GI; além do alcance segue o analítico"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1521,14 +1623,14 @@ Rectangle {
                     x: 20; y: 398
                     text: "Acumulação temporal"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 417
                     text: "jitter Halton + reprojeção — desligar volta o banding em fatias"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1543,14 +1645,14 @@ Rectangle {
                     x: 20; y: 448
                     text: "Conservative depth"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 467
                     text: "pula froxel atrás de parede — só custo, não muda o visual"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1571,14 +1673,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Cache round-robin"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "cascatas 2/3 re-renderizam a cada 2/4 frames"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1603,7 +1705,7 @@ Rectangle {
                     x: 20; y: 164
                     text: "Bias por cascata (multiplicador)"
                     color: root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Column {
@@ -1654,14 +1756,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Nuvens volumétricas"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "raymarch acoplado à atmosfera"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1776,7 +1878,7 @@ Rectangle {
                           ? "fonte: textura autorada — R = cobertura · G = tipo · B = altura de topo"
                           : "fonte: procedural (seed " + viewportModel.cloudWeatherSeed + ")"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
             }
@@ -1790,14 +1892,14 @@ Rectangle {
                     x: 20; y: 316
                     text: "Sombra das nuvens no chão"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 335
                     text: "shadow map 512² projetado da camada"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1873,14 +1975,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Meia resolução"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "raymarch em ½ res + upsample bilinear"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1895,14 +1997,14 @@ Rectangle {
                     x: 20; y: 97
                     text: "Reprojeção temporal"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 116
                     text: "acumula frames; integra o ruído do jitter"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -1954,14 +2056,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Intensidade e cortina"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "knob mestre do wetness deferred + streaks na frente da câmera"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
 
@@ -1988,14 +2090,14 @@ Rectangle {
                     x: 20; y: 216
                     text: "Oclusão da chuva"
                     color: root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Text {
                     x: 190; y: 216
                     text: "só molha o que vê o céu — interior seco"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -2010,14 +2112,14 @@ Rectangle {
                     x: 20; y: 246
                     text: "Gotas por partícula"
                     color: root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Text {
                     x: 190; y: 246
                     text: "quads GPU no near-field; off = só cortina"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -2032,14 +2134,14 @@ Rectangle {
                     x: 20; y: 276
                     text: "Chuva dirige o céu"
                     color: root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Text {
                     x: 190; y: 276
                     text: "nublado, key light e fog seguem a chuva"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Toggle {
@@ -2060,14 +2162,14 @@ Rectangle {
                     x: 20; y: 55
                     text: "Resposta do chão à chuva"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                 }
                 Text {
                     x: 20; y: 74
                     text: "acúmulo em ~5 s de chuva, seca em ~30 s depois que para"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
 
@@ -2127,7 +2229,7 @@ Rectangle {
                     y: 30
                     text: root.pageTitle()
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 18
                 }
                 Text {
@@ -2138,7 +2240,7 @@ Rectangle {
                     color: root.textSecondary
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
             }
@@ -2166,7 +2268,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: "As alterações são aplicadas em tempo real no viewport"
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Rectangle {
@@ -2182,7 +2284,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "Restaurar padrões"
                 color: root.textNormal
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 12
             }
             HoverHandler { id: resetHover; cursorShape: Qt.PointingHandCursor }
@@ -2199,7 +2301,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "Aplicar"
                 color: "#10110f"
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 12
                 font.weight: Font.Medium
             }

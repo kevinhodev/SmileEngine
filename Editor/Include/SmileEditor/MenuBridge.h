@@ -43,7 +43,6 @@ namespace SmileEditor {
         void setVSync(bool on)            { emit VSyncToggled(on); }
         void setFrustumCulling(bool on)   { emit FrustumCullingToggled(on); }
         void setDepthPrepass(bool on)     { emit DepthPrepassToggled(on); }
-        void setMergeByMaterial(bool on)  { emit MergeByMaterialToggled(on); }
 
     signals:
         void LoadSceneRequested();
@@ -63,7 +62,6 @@ namespace SmileEditor {
         void VSyncToggled(bool on);
         void FrustumCullingToggled(bool on);
         void DepthPrepassToggled(bool on);
-        void MergeByMaterialToggled(bool on);
         void ConsoleVisibleChanged();
 
     private:

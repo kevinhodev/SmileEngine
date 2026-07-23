@@ -124,7 +124,7 @@ Rectangle {
             anchors.centerIn: parent
             text: chip.label
             color: chip.active ? root.blue : root.textSecondary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
             font.weight: Font.DemiBold
         }
@@ -143,7 +143,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: parent.label
             color: root.textSecondary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Text {
@@ -153,7 +153,7 @@ Rectangle {
             horizontalAlignment: Text.AlignRight
             text: parent.value
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
             elide: Text.ElideMiddle
         }
@@ -176,7 +176,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: nf.label
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
             font.weight: Font.DemiBold
         }
@@ -187,7 +187,7 @@ Rectangle {
             verticalAlignment: TextInput.AlignVCenter
             horizontalAlignment: TextInput.AlignRight
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
             selectByMouse: true
             selectionColor: root.blue
@@ -226,7 +226,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: "Cena"
             color: root.textPrimary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
             font.weight: Font.Medium
         }
@@ -244,7 +244,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: outlinerModel.totalCount.toLocaleString(Qt.locale("pt-BR"), 'f', 0)
                 color: root.textSecondary
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 10
                 font.weight: Font.DemiBold
             }
@@ -343,7 +343,7 @@ Rectangle {
             anchors.rightMargin: clearSearch.visible ? 28 : 9
             verticalAlignment: TextInput.AlignVCenter
             color: root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
             selectByMouse: true
             selectionColor: root.blue
@@ -354,7 +354,7 @@ Rectangle {
                 visible: searchInput.text === "" && !searchInput.activeFocus
                 text: "Buscar na cena…"
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
         }
@@ -408,7 +408,7 @@ Rectangle {
                   ? "Nada na cena casa com a busca."
                   : "Carregue uma cena (Ctrl+O) para povoar o outliner."
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
@@ -531,7 +531,7 @@ Rectangle {
                          : rowItem.selected ? root.textPrimary
                          : rowItem.isGroup ? root.textPrimary
                          : root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                     font.weight: rowItem.isGroup ? Font.DemiBold : Font.Normal
                     elide: Text.ElideRight
@@ -552,7 +552,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: rowItem.count.toLocaleString(Qt.locale("pt-BR"), 'f', 0)
                         color: root.textSecondary
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 9
                         font.weight: Font.DemiBold
                     }
@@ -584,7 +584,7 @@ Rectangle {
                             Text {
                                 text: "Point"
                                 color: root.blue
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 9
                                 font.weight: Font.DemiBold
                                 anchors.verticalCenter: parent.verticalCenter
@@ -611,7 +611,7 @@ Rectangle {
                             Text {
                                 text: "Spot"
                                 color: root.blue
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 9
                                 font.weight: Font.DemiBold
                                 anchors.verticalCenter: parent.verticalCenter
@@ -711,7 +711,7 @@ Rectangle {
                     return t
                 }
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 9
             }
         }
@@ -762,7 +762,7 @@ Rectangle {
                         anchors.leftMargin: 9; anchors.rightMargin: 9
                         verticalAlignment: TextInput.AlignVCenter
                         color: root.textPrimary
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 11
                         selectByMouse: true
                         selectionColor: root.blue
@@ -963,7 +963,7 @@ Rectangle {
                         y: 4
                         text: "Projeta sombras"
                         color: root.textNormal
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 11
                     }
                     Text {
@@ -972,7 +972,7 @@ Rectangle {
                         text: lightsModel.lightType === 1 ? "· 8 spots/quadro"
                                                           : "· 4 points/quadro"
                         color: root.textMuted
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 9
                     }
                     Toggle {
@@ -1024,7 +1024,7 @@ Rectangle {
                         x: 0; y: 0
                         text: "Posição"
                         color: root.textNormal
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 11
                     }
                     Row {
@@ -1070,7 +1070,7 @@ Rectangle {
                     width: parent.width
                     text: outlinerModel.meshName
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                     font.weight: Font.Medium
                     elide: Text.ElideRight
@@ -1113,7 +1113,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: modelData
                                 color: root.textSecondary
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 9
                                 font.weight: Font.DemiBold
                             }
@@ -1125,7 +1125,7 @@ Rectangle {
                     width: parent.width
                     text: "Duplo-clique na árvore (ou F) enquadra a câmera."
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 9
                     wrapMode: Text.WordWrap
                 }
@@ -1141,7 +1141,7 @@ Rectangle {
                     width: parent.width
                     text: "Selecione um objeto na árvore ou clique nele no viewport."
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                     wrapMode: Text.WordWrap
                 }

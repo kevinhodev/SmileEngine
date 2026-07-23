@@ -120,7 +120,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: "Time of Day"
             color: root.textPrimary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 13
             font.weight: Font.Medium
         }
@@ -133,7 +133,7 @@ Rectangle {
                   (todModel.latitudeDeg >= 0 ? "N" : "S") +
                   (root.sunsetH >= 0 ? " · pôr do sol " + root.timeLabel(root.sunsetH) : "")
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
 
@@ -414,7 +414,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: root.timeLabel(todModel.timeHours)
                         color: root.blue
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 10
                         font.weight: Font.Medium
                     }
@@ -426,14 +426,14 @@ Rectangle {
                     text: "sol " + Math.round(todModel.sunElevationDeg) + "°  ·  az " +
                           Math.round(todModel.sunAzimuthDeg) + "°"
                     color: root.textSecondary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 9
                 }
                 Text {
                     anchors.right: parent.right; anchors.rightMargin: 8; y: 6
                     text: "lua " + Math.round(todModel.moonElevationDeg) + "°"
                     color: Qt.alpha(root.moonColor, 0.8)
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 9
                 }
             }
@@ -469,7 +469,7 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 18
                     font.weight: Font.DemiBold
                     horizontalAlignment: TextInput.AlignRight
@@ -501,7 +501,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: root.dayPhase(todModel.timeHours, todModel.sunElevationDeg)
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
 
@@ -617,7 +617,7 @@ Rectangle {
                             width: parent.width
                             text: "O relógio está desligado — o sol é posicionado direto."
                             color: root.textMuted
-                            font.family: "Segoe UI"
+                            font.family: C.Theme.fontFamily
                             font.pixelSize: 10
                             wrapMode: Text.WordWrap
                         }

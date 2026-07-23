@@ -190,8 +190,6 @@ namespace Smile {
         u32  GetVisibleCount() const     { return LastVisibleCount; } 
         u32  GetDrawCount() const        { return static_cast<u32>(Scene.Renderables().size()); }
 
-        void SetMergeByMaterial(bool Use) { MergeByMaterial = Use; }
-        bool GetMergeByMaterial() const   { return MergeByMaterial; }
 
         bool IsInitialized() const { return Initialized; }
 
@@ -490,7 +488,6 @@ namespace Smile {
 
         bool UseFrustumCulling = true;
         bool UseDepthPrepass   = false;
-        bool MergeByMaterial   = false;
         f32  RenderScale       = 1.0f; // SSAA: cena em swapchain*RenderScale; backbuffer nativo
         u32  LastVisibleCount  = 0;
 

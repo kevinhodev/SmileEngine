@@ -29,7 +29,7 @@ Rectangle {
         x: card.iconName !== "" ? 36 : 16; y: 12
         text: card.title
         color: Theme.textPrimary
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 12
         font.weight: Font.Medium
     }

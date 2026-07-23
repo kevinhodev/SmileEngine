@@ -261,67 +261,26 @@ namespace Smile {
         };
 
         const Clock::time_point tMeshStart = Clock::now();
-        if (!MergeByMaterial) {
-            std::vector<FMesh> meshesCPU(mh.MeshCount);
-            for (u32 i = 0; i < mh.MeshCount; ++i) {
-                const SMeshEntry& e = entries[i];
-                meshesCPU[i].Vertices.resize(e.VertexCount);
-                std::memcpy(meshesCPU[i].Vertices.data(), geoBase + e.VertexOffset, e.VertexCount * sizeof(Vertex));
-                meshesCPU[i].Indices.resize(e.IndexCount);
-                std::memcpy(meshesCPU[i].Indices.data(), geoBase + e.IndexOffset, e.IndexCount * sizeof(u32));
-            }
-            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
-            for (u32 i = 0; i < sh.RenderableCount; ++i) {
-                const SSceneRenderable& r = rnds[i];
-                if (r.MeshIndex >= mh.MeshCount) continue;
-                FRenderable out;
-                out.Name     = nameOf(r.MaterialIndex, i);
-                out.Mesh     = meshPtrs[r.MeshIndex];
-                out.Material = matOf(r.MaterialIndex);
-                const SMeshEntry& e = entries[r.MeshIndex];
-                out.AABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
-                out.AABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
-                Scene.AddRenderable(out);
-            }
-        } else {
-            std::unordered_map<u32, std::vector<u32>> groups; 
-            groups.reserve(sh.MaterialCount + 1);
-            for (u32 i = 0; i < sh.RenderableCount; ++i) {
-                if (rnds[i].MeshIndex >= mh.MeshCount) continue;
-                groups[rnds[i].MaterialIndex].push_back(rnds[i].MeshIndex);
-            }
-            std::vector<FMesh> meshesCPU;  meshesCPU.reserve(groups.size());
-            std::vector<u32>   groupMat;   groupMat.reserve(groups.size());
-            std::vector<Vec3>  gMin, gMax; gMin.reserve(groups.size()); gMax.reserve(groups.size());
-            for (auto& g : groups) {
-                FMesh m;
-                f32 mn[3] = {  1e30f,  1e30f,  1e30f };
-                f32 mx[3] = { -1e30f, -1e30f, -1e30f };
-                for (u32 ei : g.second) {
-                    const SMeshEntry& e = entries[ei];
-                    const u32 base = static_cast<u32>(m.Vertices.size());
-                    const Vertex* vsrc = reinterpret_cast<const Vertex*>(geoBase + e.VertexOffset);
-                    m.Vertices.insert(m.Vertices.end(), vsrc, vsrc + e.VertexCount);
-                    const u32* isrc = reinterpret_cast<const u32*>(geoBase + e.IndexOffset);
-                    m.Indices.reserve(m.Indices.size() + e.IndexCount);
-                    for (u32 k = 0; k < e.IndexCount; ++k) m.Indices.push_back(isrc[k] + base);
-                    for (int c = 0; c < 3; ++c) { mn[c] = std::min(mn[c], e.AABBMin[c]); mx[c] = std::max(mx[c], e.AABBMax[c]); }
-                }
-                meshesCPU.push_back(std::move(m));
-                groupMat.push_back(g.first);
-                gMin.push_back(Vec3{ mn[0], mn[1], mn[2] });
-                gMax.push_back(Vec3{ mx[0], mx[1], mx[2] });
-            }
-            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
-            for (size_t k = 0; k < meshPtrs.size(); ++k) {
-                FRenderable out;
-                out.Name     = nameOf(groupMat[k], static_cast<u32>(k));
-                out.Mesh     = meshPtrs[k];
-                out.Material = matOf(groupMat[k]);
-                out.AABBMin  = gMin[k];
-                out.AABBMax  = gMax[k];
-                Scene.AddRenderable(out);
-            }
+        std::vector<FMesh> meshesCPU(mh.MeshCount);
+        for (u32 i = 0; i < mh.MeshCount; ++i) {
+            const SMeshEntry& e = entries[i];
+            meshesCPU[i].Vertices.resize(e.VertexCount);
+            std::memcpy(meshesCPU[i].Vertices.data(), geoBase + e.VertexOffset, e.VertexCount * sizeof(Vertex));
+            meshesCPU[i].Indices.resize(e.IndexCount);
+            std::memcpy(meshesCPU[i].Indices.data(), geoBase + e.IndexOffset, e.IndexCount * sizeof(u32));
+        }
+        std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
+        for (u32 i = 0; i < sh.RenderableCount; ++i) {
+            const SSceneRenderable& r = rnds[i];
+            if (r.MeshIndex >= mh.MeshCount) continue;
+            FRenderable out;
+            out.Name     = nameOf(r.MaterialIndex, i);
+            out.Mesh     = meshPtrs[r.MeshIndex];
+            out.Material = matOf(r.MaterialIndex);
+            const SMeshEntry& e = entries[r.MeshIndex];
+            out.AABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
+            out.AABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
+            Scene.AddRenderable(out);
         }
 
         const double msMesh = MsSince(tMeshStart);

@@ -122,6 +122,15 @@ if(WIN32)
         COMMENT "Copiando paineis QML para o diretorio de build"
     )
 
+    # Fontes empacotadas (Inter, SIL OFL) — registradas no boot por RegisterBundledFonts().
+    # Vao em Fonts/ ao lado do exe, que e onde o main.cpp procura.
+    add_custom_command(TARGET SmileEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/Fonts"
+                "$<TARGET_FILE_DIR:SmileEditor>/Fonts"
+        COMMENT "Copiando fontes empacotadas para o diretorio de build"
+    )
+
     # Copia a NRD.dll ao lado do exe (o NRD usa o caminho D3D12 direto via import lib + DLL).
     if(SMILE_NRD_DLL AND EXISTS "${SMILE_NRD_DLL}")
         add_custom_command(TARGET SmileEditor POST_BUILD

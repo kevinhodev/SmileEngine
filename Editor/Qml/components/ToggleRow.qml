@@ -14,7 +14,7 @@ Item {
         y: 3
         text: toggleRow.label
         color: toggleRow.interactive ? Theme.textNormal : Theme.textMuted
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 11
     }
     Text {
@@ -23,7 +23,7 @@ Item {
         y: 4
         text: toggleRow.hint
         color: Theme.textMuted
-        font.family: "Segoe UI"
+        font.family: Theme.fontFamily
         font.pixelSize: 10
     }
     Toggle {

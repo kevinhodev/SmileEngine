@@ -134,7 +134,7 @@ namespace SmileEditor {
         return Renderer && Renderer->IsInitialized() && Renderer->UpscalerAvailable(Smile::EUpscaler::DLSS);
     }
 
-    int ViewportWidget::GetFsrQuality() const {
+    int ViewportWidget::GetUpscalerQuality() const {
         return Renderer ? Renderer->GetUpscalerQuality() : 0;  // qualidade compartilhada FSR/DLSS
     }
 
@@ -168,10 +168,6 @@ namespace SmileEditor {
 
     bool ViewportWidget::IsDepthPrepassEnabled() const {
         return Renderer && Renderer->GetDepthPrepass();
-    }
-
-    bool ViewportWidget::IsMergeByMaterialEnabled() const {
-        return Renderer && Renderer->GetMergeByMaterial();
     }
 
     double ViewportWidget::GetFrameTimeMs() const {
@@ -438,7 +434,7 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
-    void ViewportWidget::SetFsrQuality(int _Quality) {
+    void ViewportWidget::SetUpscalerQuality(int _Quality) {
         if (!Renderer) return;
         Renderer->SetUpscalerQuality(_Quality);  // qualidade compartilhada FSR/DLSS
         emit ViewSettingsChanged();
@@ -995,12 +991,6 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
-    void ViewportWidget::SetMergeByMaterialEnabled(bool _Enabled) {
-        if (!Renderer) return;
-        Renderer->SetMergeByMaterial(_Enabled);
-        emit ViewSettingsChanged();
-    }
-
     void ViewportWidget::ResetRenderSettings() {
         if (!Renderer) return;
         // O padrao segue o backend recomendado (DLSS em NVIDIA, senao FSR, senao nativo), mas em
@@ -1010,7 +1000,6 @@ namespace SmileEditor {
         Renderer->SetUseTAA(true);
         Renderer->SetFrustumCulling(true);
         Renderer->SetDepthPrepass(false);
-        Renderer->SetMergeByMaterial(false);
         emit ViewSettingsChanged();
     }
 

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "components" as C
 
 // Toolbar do viewport e dropdown de view modes. `viewportModel` e o ViewportWidget
 // exposto pelo C++; ele aplica os modos/toggles diretamente no Renderer.
@@ -57,7 +58,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: toolButton.label
             color: toolButton.active ? root.blue : root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Chevron {
@@ -156,7 +157,7 @@ Rectangle {
             anchors.topMargin: modeRow.sublabel === "" ? (parent.height - height) / 2 : 4
             text: modeRow.label
             color: modeRow.selected ? root.textPrimary : root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
         }
         Rectangle {
@@ -171,7 +172,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "beta"
                 color: "#d8a03a"
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 10
             }
         }
@@ -183,7 +184,7 @@ Rectangle {
             anchors.topMargin: 1
             text: modeRow.sublabel
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
         Text {
@@ -193,7 +194,7 @@ Rectangle {
             anchors.verticalCenter: modeLabel.verticalCenter
             text: modeRow.shortcutText
             color: modeRow.selected ? "#8fb4e8" : root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
         Canvas {
@@ -238,7 +239,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: toggleRow.label
             color: toggleHover.hovered && toggleRow.interactive ? root.textPrimary : root.textNormal
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
         }
         Text {
@@ -248,7 +249,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: "· " + toggleRow.detail
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
         Rectangle {
@@ -367,7 +368,7 @@ Rectangle {
                 x: 14; y: 11
                 text: "Modo de visualização"
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
 
@@ -398,7 +399,7 @@ Rectangle {
                 x: 14; y: 132
                 text: "Iluminação global"
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
@@ -444,7 +445,7 @@ Rectangle {
                 x: 14; y: 332
                 text: "Reflexos e denoise"
                 color: root.textMuted
-                font.family: "Segoe UI"
+                font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
@@ -477,7 +478,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Configurações de renderização…"
                     color: "#9a958a"
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Text {
@@ -486,7 +487,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Ctrl+,"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
                 HoverHandler { id: settingsHover; cursorShape: Qt.PointingHandCursor }
@@ -549,7 +550,7 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData
                         color: root.textNormal
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 12
                     }
                     HoverHandler { id: gBufferHover; cursorShape: Qt.PointingHandCursor }

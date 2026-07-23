@@ -49,7 +49,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: "Estatísticas"
             color: root.textPrimary
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 13
             font.weight: Font.Medium
         }
@@ -59,7 +59,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: viewportModel.gpuName
             color: root.textMuted
-            font.family: "Segoe UI"
+            font.family: C.Theme.fontFamily
             font.pixelSize: 10
             elide: Text.ElideRight
             width: Math.max(0, windowButtons.x - x - 8)
@@ -127,7 +127,7 @@ Rectangle {
                     x: 16; y: 14
                     text: "VRAM do processo"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                     font.weight: Font.Medium
                 }
@@ -135,7 +135,7 @@ Rectangle {
                     x: 16; y: 40
                     text: viewportModel.vramUsageText
                     color: viewportModel.vramOverBudget ? root.warn : root.blue
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 22
                     font.weight: Font.Medium
                 }
@@ -162,7 +162,7 @@ Rectangle {
                           ? "ACIMA do budget do OS — recursos podem ser despejados pra RAM"
                           : "budget dinâmico do OS · placa com " + viewportModel.vramText + " dedicados"
                     color: viewportModel.vramOverBudget ? root.warn : root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
             }
@@ -179,7 +179,7 @@ Rectangle {
                     x: 16; y: 14
                     text: "GPU por passe"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                     font.weight: Font.Medium
                 }
@@ -189,7 +189,7 @@ Rectangle {
                     y: 16
                     text: "frame: " + viewportModel.gpuFrameText
                     color: root.textSecondary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
 
@@ -211,7 +211,7 @@ Rectangle {
                                 y: 0
                                 text: modelData.name
                                 color: root.textNormal
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 11
                             }
                             Text {
@@ -219,7 +219,7 @@ Rectangle {
                                 y: 0
                                 text: modelData.text
                                 color: root.textNormal
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 11
                             }
                             Rectangle {
@@ -244,7 +244,7 @@ Rectangle {
                         visible: viewportModel.gpuTimings.length === 0
                         text: "Coletando timestamps…"
                         color: root.textMuted
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 11
                     }
                 }
@@ -262,7 +262,7 @@ Rectangle {
                     x: 16; y: 14
                     text: "Por categoria"
                     color: root.textPrimary
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 13
                     font.weight: Font.Medium
                 }
@@ -272,7 +272,7 @@ Rectangle {
                     y: 16
                     text: "% do uso total"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 10
                 }
 
@@ -295,7 +295,7 @@ Rectangle {
                                 text: modelData.name
                                 color: modelData.name === "Não rastreado" ? root.textMuted
                                                                           : root.textNormal
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 11
                             }
                             Text {
@@ -303,7 +303,7 @@ Rectangle {
                                 y: 0
                                 text: modelData.text
                                 color: root.textNormal
-                                font.family: "Segoe UI"
+                                font.family: C.Theme.fontFamily
                                 font.pixelSize: 11
                             }
                             Rectangle {
@@ -329,7 +329,7 @@ Rectangle {
                         visible: viewportModel.vramBreakdown.length === 0
                         text: "Sem dados ainda — carregue uma cena."
                         color: root.textMuted
-                        font.family: "Segoe UI"
+                        font.family: C.Theme.fontFamily
                         font.pixelSize: 11
                     }
                 }
@@ -348,7 +348,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "RAM compartilhada (non-local)"
                     color: root.textMuted
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Text {
@@ -357,7 +357,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: viewportModel.vramNonLocalText
                     color: root.textNormal
-                    font.family: "Segoe UI"
+                    font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
             }
