@@ -124,11 +124,23 @@ GBufferOutput main(PSInput input) {
 
         baseColor = w.x * albG + w.y * albD + w.z * rockA + w.w * albH;
 
-        // Macro variation (F2.5): tinte de brilho em 2 escalas grandes (~137 m e ~31 m via
-        // oitavas do Fbm3) — quebra o padrao do tiling a media/longa distancia.
+        // Macro variation (F2.5/F2.6): quebra o padrao do tiling em escala grande.
+        // (a) BRILHO em 2 escalas (~137/31 m via oitavas do Fbm3) — media/longa distancia.
+        // (b) MATIZ em escala media (~23 m) p/ o PRIMEIRO PLANO, onde o anti-tiling por
+        //     distancia ainda nao agiu e a grama lia como "carpete" de tom unico:
+        //     manchas secas (palha, dessatura o verde) x vicosas (verde mais fundo/frio),
+        //     pesado pela camada de grama (rocha/terra ficam de fora) e pelo mesmo slider
+        //     da macro, com boost fixo p/ ficar perceptivel de perto.
         if (CamPosMacro.w > 0.0f) {
             const float macro = Fbm3(input.worldPos.xz * (1.0f / 137.0f));
             baseColor *= 1.0f + (macro - 0.5f) * 2.0f * CamPosMacro.w;
+
+            const float  tintN     = Fbm3(input.worldPos.xz * (1.0f / 23.0f));
+            const float3 dryTint   = float3(1.12f, 1.04f, 0.74f); // seco: puxa palha
+            const float3 lushTint  = float3(0.88f, 1.00f, 0.90f); // vicoso: verde frio
+            const float3 grassTint = lerp(lushTint, dryTint, smoothstep(0.35f, 0.72f, tintN));
+            const float  hueStr    = saturate(CamPosMacro.w * 2.0f);
+            baseColor *= lerp(float3(1.0f, 1.0f, 1.0f), grassTint, w.x * hueStr);
         }
 
         // Normal de detalhe: acumula em tangent space (planar XZ; rocha idem — ver nota

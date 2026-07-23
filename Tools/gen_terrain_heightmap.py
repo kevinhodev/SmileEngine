@@ -46,6 +46,28 @@ ring = np.clip((r - 0.28) / 0.72, 0.0, 1.0)
 
 # Vale quase plano no centro; a cordilheira entra com ring^1.4 e os picos ridged por cima
 h = 0.10 + base * 0.25 * np.maximum(ring, 0.12) + ring ** 1.4 * (0.42 + 0.38 * ridged)
+
+# --- Ondulacao do vale (F2.6, beauty shot) ---------------------------------
+# O vale era chapado demais p/ apresentacao: luz rasante nao pega gradiente e a
+# grama vira "carpete". Somamos um rolling gentil FORA de um pad plano centrado
+# na origem (footprint da Bistro) — dentro do pad, h fica IDENTICO ao de cima,
+# entao o casario nao muda em nada. A mascara faz rampa suave (sem costura).
+HEIGHT_SCALE = 170.0   # espelha o heightScale do .terrain.json (m por unidade normalizada)
+ROLL_AMP_M   = 1.5     # amplitude do rolling, +/- em metros (gentil de proposito)
+PAD_RADIUS_M = 150.0   # raio do plato plano ao redor da origem (mundo 0,0)
+PAD_RAMP_M   = 120.0   # largura da rampa pad -> rolling
+
+# Distancia em METROS da origem do mundo (texel central SIZE/2, unitsPerTexel=1).
+distM  = np.sqrt((xx - SIZE * 0.5) ** 2 + (yy - SIZE * 0.5) ** 2)
+tMask  = np.clip((distM - PAD_RADIUS_M) / PAD_RAMP_M, 0.0, 1.0)
+rollMask = tMask * tMask * (3.0 - 2.0 * tMask)          # smoothstep
+
+# 3 oitavas ~51/26/13 m de comprimento de onda; centrado em 0 p/ nao deslocar a
+# altura media (continuidade com o pad na rampa).
+roll = (fbm(3, 40) - 0.5) * 2.0 * (ROLL_AMP_M / HEIGHT_SCALE)
+h += rollMask * roll
+# ---------------------------------------------------------------------------
+
 h = np.clip(h, 0.0, 1.0)
 
 out = (h * 65535.0 + 0.5).astype("<u2")
