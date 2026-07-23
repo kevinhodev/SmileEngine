@@ -142,12 +142,8 @@ namespace Smile {
         ffxQuery(&P->Context, &JitterDesc.header);
     }
 
-    void FFsrPass::Dispatch(ID3D12GraphicsCommandList* Cmd,
-                            ID3D12Resource* Color, ID3D12Resource* Depth, ID3D12Resource* Velocity,
-                            f32 JitterX, f32 JitterY,
-                            f32 NearZ, f32 FarZ, f32 FovYRadians,
-                            f32 DeltaTimeSec, bool Reset) {
-        if (!P || !P->Created || !Cmd || !Color || !Depth || !Velocity) return;
+    void FFsrPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
+        if (!P || !P->Created || !Cmd || !In.Color || !In.Depth || !In.Velocity) return;
 
         Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -157,27 +153,27 @@ namespace Smile {
         ffxDispatchDescUpscale D{};
         D.header.type   = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
         D.commandList   = Cmd;
-        D.color         = ffxApiGetResourceDX12(Color,    FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        D.depth         = ffxApiGetResourceDX12(Depth,    FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        D.motionVectors = ffxApiGetResourceDX12(Velocity, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+        D.color         = ffxApiGetResourceDX12(In.Color,    FFX_API_RESOURCE_STATE_COMPUTE_READ);
+        D.depth         = ffxApiGetResourceDX12(In.Depth,    FFX_API_RESOURCE_STATE_COMPUTE_READ);
+        D.motionVectors = ffxApiGetResourceDX12(In.Velocity, FFX_API_RESOURCE_STATE_COMPUTE_READ);
         D.output        = ffxApiGetResourceDX12(P->Output.Get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
         D.exposure                   = FfxApiResource{};   // auto-exposure ligado -> sem recurso externo
         D.reactive                   = FfxApiResource{};
         D.transparencyAndComposition = FfxApiResource{};
 
-        D.jitterOffset            = { JitterX, JitterY };
+        D.jitterOffset            = { In.JitterX, In.JitterY };
         // Motion vectors da engine em UV*(-render); convencao preservada da integracao anterior.
         D.motionVectorScale       = { -static_cast<float>(P->RW), -static_cast<float>(P->RH) };
         D.renderSize              = { P->RW, P->RH };
         D.upscaleSize             = { P->SW, P->SH };
         D.enableSharpening        = false;                 // sharpen fica fora do FSR (feito no post chain)
         D.sharpness               = 0.0f;
-        D.frameTimeDelta          = (DeltaTimeSec > 0.0f ? DeltaTimeSec : 1.0f / 60.0f) * 1000.0f; // ms
+        D.frameTimeDelta          = (In.DeltaTimeSec > 0.0f ? In.DeltaTimeSec : 1.0f / 60.0f) * 1000.0f; // ms
         D.preExposure             = 1.0f;
-        D.reset                   = Reset || P->FirstDispatch;
-        D.cameraNear              = NearZ;
-        D.cameraFar               = FarZ;
-        D.cameraFovAngleVertical  = FovYRadians;
+        D.reset                   = In.Reset || P->FirstDispatch;
+        D.cameraNear              = In.NearZ;
+        D.cameraFar               = In.FarZ;
+        D.cameraFovAngleVertical  = In.FovYRadians;
         D.viewSpaceToMetersFactor = 0.0f;
         D.flags                   = 0;
 
@@ -192,6 +188,10 @@ namespace Smile {
 
     ID3D12Resource* FFsrPass::OutputResource() const { return P ? P->Output.Get() : nullptr; }
     u32             FFsrPass::OutputSRVSlot() const { return P ? P->OutputSRV : kInvalidSlot; }
+    f32 FFsrPass::RenderRatioForQuality(int Quality) const {
+        static const f32 R[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
+        return R[Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality)];
+    }
     u32 FFsrPass::RenderW()  const { return P ? P->RW : 0; }
     u32 FFsrPass::RenderH()  const { return P ? P->RH : 0; }
     u32 FFsrPass::DisplayW() const { return P ? P->SW : 0; }
@@ -205,10 +205,10 @@ namespace Smile {
     void FFsrPass::Shutdown() {}
     bool FFsrPass::IsInitialized() const { return false; }
     void FFsrPass::GetJitter(u32, f32& OutX, f32& OutY) const { OutX = OutY = 0.0f; }
-    void FFsrPass::Dispatch(ID3D12GraphicsCommandList*, ID3D12Resource*, ID3D12Resource*,
-                            ID3D12Resource*, f32, f32, f32, f32, f32, f32, bool) {}
+    void FFsrPass::Dispatch(ID3D12GraphicsCommandList*, const FUpscaleParams&) {}
     ID3D12Resource* FFsrPass::OutputResource() const { return nullptr; }
     u32             FFsrPass::OutputSRVSlot() const { return 0xFFFFFFFFu; }
+    f32 FFsrPass::RenderRatioForQuality(int) const { return 1.0f; }
     u32 FFsrPass::RenderW()  const { return 0; }
     u32 FFsrPass::RenderH()  const { return 0; }
     u32 FFsrPass::DisplayW() const { return 0; }

@@ -123,23 +123,31 @@ namespace SmileEditor {
     }
 
     int ViewportWidget::GetUpscalerMode() const {
-        return Renderer && Renderer->FsrAvailable() && Renderer->GetUseFsr() ? 1 : 0;
+        return Renderer ? static_cast<int>(Renderer->GetUpscaler()) : 0;  // 0=None 1=FSR 2=DLSS
     }
 
     bool ViewportWidget::IsFsrAvailable() const {
-        return Renderer && Renderer->IsInitialized() && Renderer->FsrAvailable();
+        return Renderer && Renderer->IsInitialized() && Renderer->UpscalerAvailable(Smile::EUpscaler::FSR);
+    }
+
+    bool ViewportWidget::IsDlssAvailable() const {
+        return Renderer && Renderer->IsInitialized() && Renderer->UpscalerAvailable(Smile::EUpscaler::DLSS);
     }
 
     int ViewportWidget::GetFsrQuality() const {
-        return Renderer ? Renderer->GetFsrQuality() : 0;
+        return Renderer ? Renderer->GetUpscalerQuality() : 0;  // qualidade compartilhada FSR/DLSS
     }
 
     int ViewportWidget::GetRecommendedUpscalerMode() const {
-        return IsFsrAvailable() ? 1 : 0;
+        if (IsDlssAvailable()) return 2;   // DLSS preferido em NVIDIA
+        if (IsFsrAvailable())  return 1;
+        return 0;
     }
 
     QString ViewportWidget::GetRecommendedUpscalerName() const {
-        return IsFsrAvailable() ? QStringLiteral("FSR 3.1") : QStringLiteral("Sem upscaling");
+        if (IsDlssAvailable()) return QStringLiteral("DLSS");
+        if (IsFsrAvailable())  return QStringLiteral("FSR 3.1");
+        return QStringLiteral("Sem upscaling");
     }
 
     double ViewportWidget::GetRenderScale() const {
@@ -426,13 +434,13 @@ namespace SmileEditor {
 
     void ViewportWidget::SetUpscalerMode(int _Mode) {
         if (!Renderer) return;
-        Renderer->SetUseFsr(_Mode == 1 && Renderer->FsrAvailable());
+        Renderer->SetUpscaler(static_cast<Smile::EUpscaler>(_Mode));  // 0=None 1=FSR 2=DLSS; cai p/ None se indisponivel
         emit ViewSettingsChanged();
     }
 
     void ViewportWidget::SetFsrQuality(int _Quality) {
         if (!Renderer) return;
-        Renderer->SetFsrQuality(_Quality);
+        Renderer->SetUpscalerQuality(_Quality);  // qualidade compartilhada FSR/DLSS
         emit ViewSettingsChanged();
     }
 
@@ -995,11 +1003,10 @@ namespace SmileEditor {
 
     void ViewportWidget::ResetRenderSettings() {
         if (!Renderer) return;
-        // O padrao segue o backend recomendado. Com FSR disponivel, Qualidade entrega o melhor
-        // equilibrio geral; sem o backend, a engine volta ao caminho nativo em escala 1:1.
-        Renderer->SetFsrQuality(Renderer->FsrAvailable() ? 1 : 0);
-        Renderer->SetUseFsr(Renderer->FsrAvailable());
-        if (!Renderer->FsrAvailable()) Renderer->SetRenderScale(1.0f);
+        // O padrao segue o backend recomendado (DLSS em NVIDIA, senao FSR, senao nativo), mas em
+        // escala 1:1 (tier 0 = 100%): reconstroi/faz AA sem upscale. Bate com o default do Renderer.
+        Renderer->SetUpscalerQuality(0);
+        Renderer->SetUpscaler(static_cast<Smile::EUpscaler>(GetRecommendedUpscalerMode()));
         Renderer->SetUseTAA(true);
         Renderer->SetFrustumCulling(true);
         Renderer->SetDepthPrepass(false);
@@ -1017,10 +1024,9 @@ namespace SmileEditor {
         Renderer->Initialize(hWnd,
                              static_cast<unsigned int>(width()),
                              static_cast<unsigned int>(height()));
-        // FsrQuality e uma preferencia anterior ao contexto. Agora que o backend existe, aplica a
-        // escala recomendada e recria os alvos internos uma unica vez.
-        if (Renderer->FsrAvailable() && Renderer->GetUseFsr())
-            Renderer->SetFsrQuality(Renderer->GetFsrQuality());
+        // A selecao de upscaler/qualidade e uma preferencia anterior ao contexto. Agora que os passes
+        // existem, reaplica a escala (e revalida a disponibilidade) recriando os alvos internos 1x.
+        Renderer->SetUpscaler(Renderer->GetUpscaler());
         Initialized = true;
         emit RendererInitialized();
     }

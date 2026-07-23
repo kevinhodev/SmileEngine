@@ -251,6 +251,15 @@ Rectangle {
             }
             Text {
                 anchors.centerIn: parent
+                visible: option.mode === 2
+                text: "DLSS"
+                color: root.green
+                font.family: "Segoe UI"
+                font.pixelSize: 8
+                font.weight: Font.Bold
+            }
+            Text {
+                anchors.centerIn: parent
                 visible: option.mode === 0
                 text: "1:1"
                 color: option.selected ? root.blue : root.textNormal
@@ -688,6 +697,15 @@ Rectangle {
                         }
                         Text {
                             anchors.centerIn: parent
+                            visible: viewportModel.upscalerMode === 2
+                            text: "DLSS"
+                            color: root.green
+                            font.family: "Segoe UI"
+                            font.pixelSize: 8
+                            font.weight: Font.Bold
+                        }
+                        Text {
+                            anchors.centerIn: parent
                             visible: viewportModel.upscalerMode === 0
                             text: "1:1"
                             color: root.textNormal
@@ -698,9 +716,11 @@ Rectangle {
                     }
                     Text {
                         x: 49; y: 7
-                        text: viewportModel.upscalerMode === 1
-                              ? "AMD FidelityFX Super Resolution"
-                              : "Sem upscaling"
+                        text: viewportModel.upscalerMode === 2
+                              ? "NVIDIA DLSS"
+                              : viewportModel.upscalerMode === 1
+                                ? "AMD FidelityFX Super Resolution"
+                                : "Sem upscaling"
                         color: root.textPrimary
                         font.family: "Segoe UI"
                         font.pixelSize: 12
@@ -709,9 +729,11 @@ Rectangle {
                     Text {
                         x: 49; y: 24
                         width: parent.width - 174
-                        text: viewportModel.upscalerMode === 1
-                              ? "FSR 3.1 · reconstrução temporal"
-                              : "TAA · escala manual de renderização"
+                        text: viewportModel.upscalerMode === 2
+                              ? "DLSS · reconstrução por IA (Super Resolution)"
+                              : viewportModel.upscalerMode === 1
+                                ? "FSR 3.1 · reconstrução temporal"
+                                : "TAA · escala manual de renderização"
                         color: root.textMuted
                         elide: Text.ElideRight
                         font.family: "Segoe UI"
@@ -783,7 +805,7 @@ Rectangle {
 
                 Item {
                     id: fsrControls
-                    visible: viewportModel.upscalerMode === 1
+                    visible: viewportModel.upscalerMode === 1 || viewportModel.upscalerMode === 2
                     x: 20; y: 144
                     width: parent.width - 40
                     height: 111
@@ -1002,7 +1024,7 @@ Rectangle {
                     popupType: Popup.Item
                     x: 20; y: 119
                     width: parent.width - 40
-                    height: 112
+                    height: 164
                     padding: 6
                     z: 100
                     // O campo pertence ao parent do popup: clicar nele deve chegar ao TapHandler
@@ -1041,6 +1063,21 @@ Rectangle {
                             badge: viewportModel.recommendedUpscalerMode === 1 ? "RECOMENDADO" : ""
                             onChosen: {
                                 viewportModel.SetUpscalerMode(1)
+                                upscalerPopup.close()
+                            }
+                        }
+                        UpscalerOption {
+                            width: upscalerPopup.availableWidth
+                            mode: 2
+                            label: "NVIDIA DLSS"
+                            detail: available
+                                    ? "DLSS · reconstrução por IA · requer GPU NVIDIA RTX"
+                                    : "DLSS indisponível (requer GPU NVIDIA RTX)"
+                            selected: viewportModel.upscalerMode === 2
+                            available: viewportModel.dlssAvailable
+                            badge: viewportModel.recommendedUpscalerMode === 2 ? "RECOMENDADO" : ""
+                            onChosen: {
+                                viewportModel.SetUpscalerMode(2)
                                 upscalerPopup.close()
                             }
                         }

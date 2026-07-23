@@ -47,6 +47,7 @@
 #include "Smile/Graphics/DebugDraw.h"
 #include "Smile/Graphics/TemporalAA.h"
 #include "Smile/Graphics/FsrPass.h"
+#include "Smile/Graphics/DlssPass.h"
 #include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
@@ -247,23 +248,27 @@ namespace Smile {
         void LoadMoonTexture(const std::wstring& Path);
         void LoadStarCatalog(const std::wstring& Path);
 
-        // FSR (substitui o TAA quando ligado). Funciona em Debug e Release (ffx-api via DLL); vira
-        // stub so quando o SDK nao e achado no CMake.
-        void SetUseFsr(bool V) {
-            UseFsr = V; TAARanLastFrame = false;
-            // FSR = render menor + upscale; desligado volta ao nativo. So mexe no scale se o
-            // contexto existe — sem contexto (stub) nao mexe p/ nao borrar via post chain.
-            if (Fsr.IsInitialized()) SetRenderScale(V ? FsrRatio() : 1.0f);
+        // === Seletor de upscaler (None / FSR / DLSS) — substitui o TAA quando != None ===
+        // Cai automaticamente p/ None se o upscaler pedido nao estiver disponivel (sem reconstrutor nao
+        // da p/ renderizar sub-nativo). A qualidade (0=100%..4=UltraPerf) e compartilhada entre eles.
+        void SetUpscaler(EUpscaler U) {
+            if (U != EUpscaler::None && !UpscalerAvailable(U)) U = EUpscaler::None;
+            Upscaler = U; TAARanLastFrame = false;
+            ApplyUpscalerScale();
         }
-        bool GetUseFsr() const               { return UseFsr; }
-        bool FsrAvailable() const            { return Fsr.IsInitialized(); }
-        // Qualidade do FSR: 0=100%(1.0x) 1=Quality(1.5x) 2=Balanced(1.7x) 3=Performance(2.0x)
-        // 4=UltraPerf(3.0x). Dirige o RenderScale (render res < display = upscale + perf).
-        void SetFsrQuality(int Mode) {
-            FsrQuality = Mode < 0 ? 0 : (Mode > 4 ? 4 : Mode);
-            if (UseFsr && Fsr.IsInitialized()) SetRenderScale(FsrRatio());
+        EUpscaler GetUpscaler() const        { return Upscaler; }
+        bool UpscalerAvailable(EUpscaler U) const {
+            switch (U) {
+                case EUpscaler::FSR:  return Fsr.Available();
+                case EUpscaler::DLSS: return Dlss.Available();
+                default:              return true; // None sempre disponivel
+            }
         }
-        int  GetFsrQuality() const           { return FsrQuality; }
+        void SetUpscalerQuality(int Q) {
+            UpscalerQuality = Q < 0 ? 0 : (Q > 4 ? 4 : Q);
+            ApplyUpscalerScale();
+        }
+        int  GetUpscalerQuality() const      { return UpscalerQuality; }
         void SetUseTAA(bool V)               { UseTAA = V; TAARanLastFrame = false; }
         bool GetUseTAA() const               { return UseTAA; }
         void SetFlickerMode(u32 Mode)        { if (Mode > 0 && FlickerMode == 0) FlickerResetPending = true; FlickerMode = Mode; }
@@ -514,14 +519,31 @@ namespace Smile {
         Mat44                    PrevViewProj{};
         bool                     TAARanLastFrame = false;
 
-        // FSR (AMD FidelityFX, upscaler FSR 3.1 via ffx-api) — substitui o TAA custom. Ativo em Debug
-        // e Release; vira stub (FFsrPass) so quando o SDK nao e achado no CMake.
+        // === Upscaler (None/FSR/DLSS) — substitui o TAA custom quando != None ===
+        // FSR (ffx-api) e DLSS (Streamline) implementam IUpscaler; ambos viram stub se o SDK nao for
+        // achado no CMake. DLSS so fica disponivel em NVIDIA c/ suporte (senao cai p/ FSR/None).
         FFsrPass                 Fsr;
-        bool                     UseFsr = true;   // FSR ligado por padrao (substitui o TAA)
-        int                      FsrQuality = 1;  // 0=100% 1=Quality 2=Balanced 3=Perf 4=Ultra
-        f32 FsrRatio() const {
-            static const f32 R[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
-            return R[FsrQuality < 0 ? 0 : (FsrQuality > 4 ? 4 : FsrQuality)];
+        FDlssPass                Dlss;
+        EUpscaler                Upscaler = EUpscaler::FSR; // selecionado (cai p/ None se indisponivel)
+        // Padrao = 0 (100%): o upscaler reconstroi/faz AA na resolucao nativa, sem upscale. Decisao
+        // de produto — os tiers de upscale ficam como opt-in do usuario. Manter em sincronia com
+        // ViewportWidget::ResetRenderSettings().
+        int                      UpscalerQuality = 0;       // 0=100% 1=Quality 2=Balanced 3=Perf 4=Ultra
+
+        // Upscaler pronto p/ dispatch (output criado). None/indisponivel/nao-inicializado => nullptr.
+        IUpscaler* ActiveUpscaler() {
+            switch (Upscaler) {
+                case EUpscaler::FSR:  return Fsr.IsInitialized()  ? static_cast<IUpscaler*>(&Fsr)  : nullptr;
+                case EUpscaler::DLSS: return Dlss.IsInitialized() ? static_cast<IUpscaler*>(&Dlss) : nullptr;
+                default:              return nullptr;
+            }
+        }
+        // Razao render/display pura do upscaler SELECIONADO (independe de estar inicializado).
+        void ApplyUpscalerScale() {
+            f32 R = 1.0f;
+            if      (Upscaler == EUpscaler::FSR)  R = Fsr.RenderRatioForQuality(UpscalerQuality);
+            else if (Upscaler == EUpscaler::DLSS) R = Dlss.RenderRatioForQuality(UpscalerQuality);
+            SetRenderScale(R);
         }
 
         FFlickerHeatmap          Flicker;

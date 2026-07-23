@@ -145,7 +145,7 @@ PSOut main(VSOutput input) {
     float puddle = smoothstep(thresh, thresh + 0.12f, mask) * (puddleBlend > 0.001f ? 1.0f : 0.0f);
     puddle *= saturate(puddleBlend * 4.0f);
 
-    // fade com a distancia (alem de ~60 m ripple/splash viram ruido sob TAA/FSR2)
+    // fade com a distancia (alem de ~60 m ripple/splash viram ruido sob TAA/FSR)
     const float distFade = saturate(1.0f - length(worldPos - CameraWorldPos.xyz) / 60.0f);
 
     if (puddle > 0.001f) {

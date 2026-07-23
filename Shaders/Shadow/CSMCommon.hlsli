@@ -8,7 +8,7 @@ cbuffer CSMCB : register(b3) {
     float4 CSMTexelWorld;
     float4 CSMParams;
     float4 CSMParams2;
-    float4 CSMParams3;    // x = frame do ruido (0 quando TAA/FSR2 off), y = tan(meio-angulo do sol; 0 = PCSS off), z = penumbra max em texels, w reservado
+    float4 CSMParams3;    // x = frame do ruido (0 quando TAA/FSR off), y = tan(meio-angulo do sol; 0 = PCSS off), z = penumbra max em texels, w reservado
     float4 CSMBiasScale;  // multiplicador do depth bias por cascata
     float4 CSMDepthRangeWorld; // extensao em mundo do range de depth do ortho, por cascata (PCSS)
 };

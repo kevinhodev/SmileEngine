@@ -2,7 +2,7 @@
 
 // Variante depth-testada do DebugDraw: compara o fragmento com o depth da CENA (SRV) e
 // descarta atras da geometria — teste manual no PS porque o debug desenha no backbuffer
-// pos-tonemap (res nativa, sem DSV) e o depth da cena vive em res de RENDER (FSR2/SSAA);
+// pos-tonemap (res nativa, sem DSV) e o depth da cena vive em res de RENDER (FSR/SSAA);
 // o sample por UV normalizado absorve a diferenca de resolucao. Usado pros volumes de luz
 // do editor (esfera/cone), que "param" no chao em vez de atravessar; gizmo e markers ficam
 // no caminho sem teste (sempre visiveis).

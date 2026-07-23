@@ -55,7 +55,9 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/HiZOcclusion.h
     Include/Smile/Graphics/ShaderUtils.h
     Include/Smile/Graphics/PostProcess.h
+    Include/Smile/Graphics/Upscaler.h
     Include/Smile/Graphics/FsrPass.h
+    Include/Smile/Graphics/DlssPass.h
     Include/Smile/Graphics/OceanFFT.h
     Include/Smile/Graphics/Water.h
     Include/Smile/Graphics/VramTracker.h
@@ -115,6 +117,7 @@ set(ENGINE_SOURCES
     Source/Graphics/PostProcess.cpp
     Source/Graphics/TemporalAA.cpp
     Source/Graphics/FsrPass.cpp
+    Source/Graphics/DlssPass.cpp
     Source/Graphics/FlickerHeatmap.cpp
     Source/Graphics/OceanFFT.cpp
     Source/Graphics/Water.cpp
@@ -175,6 +178,31 @@ if(EXISTS "${_fsr_inc}/ffx_api/ffx_api.h" AND EXISTS "${_fsr_lib}")
 else()
     message(WARNING "FSR nao encontrado em ${SMILE_FSR_ROOT} — FsrPass compila como stub")
     target_compile_definitions(SmileEngine PRIVATE SMILE_FSR_ENABLED=0)
+endif()
+
+# === Streamline (NVIDIA DLSS Super Resolution — kFeatureDLSS) ====================================
+# Manual hooking: linka a import lib sl.interposer + as DLLs (production) ficam ao lado do exe. As
+# funcoes core sao extern "C" via DLL, entao vale Debug E Release. Se ausente, DlssPass compila como
+# stub (SMILE_SL_ENABLED=0) e o DLSS some do seletor (Available()=false), caindo no FSR/None.
+set(SMILE_SL_ROOT "D:/Engines/Streamline" CACHE PATH "Raiz do NVIDIA Streamline SDK")
+set(_sl_inc "${SMILE_SL_ROOT}/include")
+set(_sl_lib "${SMILE_SL_ROOT}/lib/x64/sl.interposer.lib")
+set(_sl_bin "${SMILE_SL_ROOT}/bin/x64")
+# DLLs production a copiar ao lado do exe (SR agora; +sl.dlss_d/nvngx_dlssd p/ o RR no futuro).
+set(SMILE_SL_DLLS
+    "${_sl_bin}/sl.interposer.dll"
+    "${_sl_bin}/sl.common.dll"
+    "${_sl_bin}/sl.dlss.dll"
+    "${_sl_bin}/nvngx_dlss.dll"
+    CACHE STRING "DLLs do Streamline/DLSS p/ copiar ao lado do exe")
+if(EXISTS "${_sl_inc}/sl.h" AND EXISTS "${_sl_lib}")
+    message(STATUS "Streamline/DLSS encontrado: ${SMILE_SL_ROOT}")
+    target_include_directories(SmileEngine PRIVATE "${_sl_inc}")
+    target_compile_definitions(SmileEngine PRIVATE SMILE_SL_ENABLED=1)
+    target_link_libraries(SmileEngine PUBLIC "${_sl_lib}")
+else()
+    message(WARNING "Streamline nao encontrado em ${SMILE_SL_ROOT} — DlssPass compila como stub")
+    target_compile_definitions(SmileEngine PRIVATE SMILE_SL_ENABLED=0)
 endif()
 
 # === NRD (NVIDIA Real-time Denoising) — denoiser do ReSTIR GI (RELAX_DIFFUSE) ===================

@@ -41,7 +41,10 @@ namespace Smile {
         constexpr bool kDebugLayer = false;
     #endif
 
+        // Streamline (DLSS) em manual hooking: inicializar ANTES de criar o device D3D12.
+        FDlssPass::InitStreamline();
         Device.Initialize(kDebugLayer);
+        FDlssPass::SetDevice(Device.Native());   // avisa o SL do device (manual hooking)
         CommandQueue.Initialize(Device.Native(), D3D12_COMMAND_LIST_TYPE_DIRECT);
         UploadQueue.Initialize(Device.Native());
         ComputeQueue.Initialize(Device.Native());
@@ -119,6 +122,8 @@ namespace Smile {
         TemporalAA.SetupInputs(Device.Native(), SRVHeap, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get());
 
         Fsr.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+                        SwapChain.GetWidth(), SwapChain.GetHeight());
+        Dlss.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
                         SwapChain.GetWidth(), SwapChain.GetHeight());
 
         Flicker.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
@@ -733,6 +738,7 @@ namespace Smile {
         TAARanLastFrame = false;
 
         Fsr.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
+        Dlss.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
         Flicker.Resize(Device.Native(), SRVHeap, RW, RH);
         FlickerResetPending = true;
 
@@ -886,12 +892,13 @@ namespace Smile {
             : Mat44::PerspectiveFovLH(FovY, Aspect, NearZ, FarZ);
 
         Mat44 Projection = ProjUnjittered;
-        const bool FsrActive = UseFsr && Fsr.IsInitialized();
-        const bool TAAActive  = UseTAA && !FsrActive && TemporalAA.IsInitialized();
+        IUpscaler* ActiveUp = ActiveUpscaler();          // FSR ou DLSS-SR ativo (nullptr = None/indisponivel)
+        const bool UpscaleActive = (ActiveUp != nullptr);
+        const bool TAAActive  = UseTAA && !UpscaleActive && TemporalAA.IsInitialized();
         f32 JitterPxX = 0.0f, JitterPxY = 0.0f;
-        f32 ProjJitterYSign = 1.0f; 
-        if (FsrActive) {
-            Fsr.GetJitter(FrameIndex, JitterPxX, JitterPxY);
+        f32 ProjJitterYSign = 1.0f;
+        if (UpscaleActive) {
+            ActiveUp->GetJitter(FrameIndex, JitterPxX, JitterPxY); // FSR: sequencia do SDK; DLSS: Halton
             ProjJitterYSign = -1.0f;
         } else if (TAAActive) {
             const u32 kJitterPhases = 8;
@@ -899,7 +906,7 @@ namespace Smile {
             JitterPxX = Halton(Idx, 2) - 0.5f;
             JitterPxY = Halton(Idx, 3) - 0.5f;
         }
-        if (FsrActive || TAAActive) {
+        if (UpscaleActive || TAAActive) {
             Projection.M[2][0] += JitterPxX * 2.0f / static_cast<f32>(RenderWidth());
             Projection.M[2][1] += ProjJitterYSign * JitterPxY * 2.0f / static_cast<f32>(RenderHeight());
         }
@@ -1076,7 +1083,7 @@ namespace Smile {
         const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
         MappedCB->InvViewProj = InvViewProjFull;
 
-        const f32 MipBias = (FsrActive && RenderWidth() < OutputWidth())
+        const f32 MipBias = (UpscaleActive && RenderWidth() < OutputWidth())
             ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
             : 0.0f;
         MappedCB->RenderParams = { MipBias, 0.0f, 0.0f, 0.0f };
@@ -1181,7 +1188,7 @@ namespace Smile {
             const Vec3 KeyColInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
                                      KeyColor.Z * KeyInt };
             const f32 ShaftNoiseFrame =
-                (TAAActive || FsrActive || SunShafts.GetVolTemporal())
+                (TAAActive || UpscaleActive || SunShafts.GetVolTemporal())
                     ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
             SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
                                        ShaftNoiseFrame, InvViewProjFull, CameraPosition,
@@ -1591,7 +1598,7 @@ namespace Smile {
                                    CameraPosition, FovY, MipBias);
 
         {
-            const f32 ShadowNoiseFrame = (TAAActive || FsrActive)
+            const f32 ShadowNoiseFrame = (TAAActive || UpscaleActive)
                 ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
             SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CameraPosition, FovY, Aspect, KeyDir, NearZ, ShadowNoiseFrame);
             if (UseSunShadows) {
@@ -2242,7 +2249,7 @@ namespace Smile {
             PostInput    = TemporalAA.DisplayOutputResource();
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             TAARanLastFrame = true;
-        } else if (FsrActive) {
+        } else if (UpscaleActive) {
             FBarrierBatch Batch;
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -2252,10 +2259,42 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
 
+            FUpscaleParams UpParams{};
+            UpParams.Color        = HDRColorBuffer.Get();
+            UpParams.Depth        = DepthBuffer.Get();
+            UpParams.Velocity     = VelocityBuffer.Get();
+            UpParams.JitterX      = JitterPxX;
+            UpParams.JitterY      = JitterPxY;
+            UpParams.NearZ        = NearZ;
+            UpParams.FarZ         = FarZ;
+            UpParams.FovYRadians  = FovY;
+            UpParams.AspectRatio  = Aspect;
+            UpParams.DeltaTimeSec = LastDeltaTime;
+            UpParams.Quality      = UpscalerQuality;
+            UpParams.Reset        = false;
+            // Matrizes p/ o DLSS (o FSR ignora): projecao unjittered + reprojecao (clip atual -> anterior).
+            // PrevViewProj ainda guarda o frame anterior aqui (so e atualizado logo abaixo).
+            UpParams.ViewToClip     = ProjUnjittered;
+            UpParams.ClipToPrevClip = ViewProjUnjittered.Inverse() * PrevViewProj;
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "FSR");
-                Fsr.Dispatch(CommandList, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get(),
-                              JitterPxX, JitterPxY, NearZ, FarZ, FovY, LastDeltaTime, false);
+                const Mat44 InvView = View.Inverse();   // view->world: linhas = base da camera em mundo
+                UpParams.CamRight = { InvView.M[0][0], InvView.M[0][1], InvView.M[0][2] };
+                UpParams.CamUp    = { InvView.M[1][0], InvView.M[1][1], InvView.M[1][2] };
+                UpParams.CamFwd   = { InvView.M[2][0], InvView.M[2][1], InvView.M[2][2] };
+                UpParams.CamPos   = { InvView.M[3][0], InvView.M[3][1], InvView.M[3][2] };
+            }
+
+            {
+                FGpuScope Scope(GpuProfiler, CommandList,
+                                Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR");
+                ActiveUp->Dispatch(CommandList, UpParams);
+            }
+
+            // Manual hooking (eDisableCLStateTracking): o SL pode ter mexido no estado do CL. Rebinda o
+            // descriptor heap shader-visible antes do post chain (o FSR/ffx-api tolera o rebind redundante).
+            {
+                ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+                CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
             }
 
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -2266,8 +2305,8 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
 
-            PostInput    = Fsr.OutputResource();
-            PostInputSRV = Fsr.OutputSRVSlot();
+            PostInput    = ActiveUp->OutputResource();
+            PostInputSRV = ActiveUp->OutputSRVSlot();
             TAARanLastFrame = false;
         } else {
             TAARanLastFrame = false;
@@ -2351,8 +2390,10 @@ namespace Smile {
         CommandQueue.Flush();
         ComputeQueue.Shutdown();
         UploadQueue.Shutdown();
-        Nrd.Shutdown();  
+        Nrd.Shutdown();
         Fsr.Shutdown();
+        Dlss.Shutdown();
+        FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);
             MappedFrameBase = nullptr;

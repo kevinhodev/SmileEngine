@@ -33,6 +33,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool nrdEnabled READ IsNrdEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(int upscalerMode READ GetUpscalerMode NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool fsrAvailable READ IsFsrAvailable NOTIFY RendererInitialized)
+        Q_PROPERTY(bool dlssAvailable READ IsDlssAvailable NOTIFY RendererInitialized)
         Q_PROPERTY(int fsrQuality READ GetFsrQuality NOTIFY ViewSettingsChanged)
         Q_PROPERTY(int recommendedUpscalerMode READ GetRecommendedUpscalerMode NOTIFY RendererInitialized)
         Q_PROPERTY(QString recommendedUpscalerName READ GetRecommendedUpscalerName NOTIFY RendererInitialized)
@@ -140,6 +141,7 @@ namespace SmileEditor {
         bool              IsNrdEnabled() const;
         int               GetUpscalerMode() const;
         bool              IsFsrAvailable() const;
+        bool              IsDlssAvailable() const;
         int               GetFsrQuality() const;
         int               GetRecommendedUpscalerMode() const;
         QString           GetRecommendedUpscalerName() const;

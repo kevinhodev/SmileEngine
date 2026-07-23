@@ -17,7 +17,7 @@ cbuffer TerrainCB : register(b0) {
                           // z = quads por chunk no LOD0, w = maxLod
     float4 TParams2;      // x = debug (0=off, 1=cores por LOD), y = cinza base do material,
                           // z = roughness base, w = camadas texturizadas (0/1)
-    float4 TParams3;      // x = mip bias (FSR2), y = contraste do blend, z = escala do ruido
+    float4 TParams3;      // x = mip bias (FSR), y = contraste do blend, z = escala do ruido
                           // de terra (1/m), w = quantidade de terra (0..1)
     float4 TParams4;      // xy = slope start/end da rocha (1 - N.y), zw = altura start/end
                           // da camada alta (mundo)

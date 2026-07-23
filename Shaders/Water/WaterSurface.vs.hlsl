@@ -89,7 +89,7 @@ VSOutput main(VSInput IN) {
     o.vView = camPos - worldPos;
     o.pos = mul(float4(worldPos, 1.0), ViewProj);
     // Velocity so de camera: mesma posicao deslocada projetada pelas VPs sem jitter
-    // (fase da onda entre frames fica de fora — residuo pequeno pro TAA/FSR2).
+    // (fase da onda entre frames fica de fora — residuo pequeno pro TAA/FSR).
     o.curClip  = mul(float4(worldPos, 1.0), ViewProjNoJitter);
     o.prevClip = mul(float4(worldPos, 1.0), PrevViewProj);
 

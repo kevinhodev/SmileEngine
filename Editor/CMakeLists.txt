@@ -141,5 +141,17 @@ if(WIN32)
             COMMENT "Copiando amd_fidelityfx_dx12.dll para o diretorio de build"
         )
     endif()
+
+    # Copia os DLLs (production) do Streamline/DLSS ao lado do exe (manual hooking: import lib + DLLs).
+    foreach(_sl_dll ${SMILE_SL_DLLS})
+        if(EXISTS "${_sl_dll}")
+            add_custom_command(TARGET SmileEditor POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_sl_dll}"
+                        "$<TARGET_FILE_DIR:SmileEditor>"
+                COMMENT "Copiando ${_sl_dll} para o diretorio de build"
+            )
+        endif()
+    endforeach()
 endif()
 

@@ -3,7 +3,7 @@
 // Passe de estrelas por catalogo real (Yale BSC via HYG, cozido em Assets/Sky/stars.sstars).
 // Estilo CryEngine (mesh de estrelas com magnitude/cor reais) mas sem vertex buffer: um quad
 // por estrela via DrawInstanced(6, N) lendo StructuredBuffer — quads de ~2px com gaussiana no
-// PS ficam estaveis sob TAA/FSR2, ao contrario do hash procedural de 1px que cintilava.
+// PS ficam estaveis sob TAA/FSR, ao contrario do hash procedural de 1px que cintilava.
 struct FStar {
     float3 Dir;        // frame do catalogo (polo celeste = +Y)
     float  Brightness; // 10^(-0.4*mag), mag 0 -> 1.0
