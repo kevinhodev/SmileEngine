@@ -470,9 +470,10 @@ namespace Smile {
         u32            DebugTargetIndex   = kNoDebugTarget;
         Vec4           DebugChannelWeight = Vec4{ 1.0f, 1.0f, 1.0f, 1.0f };
         u32            DebugMip           = 0;
-        // Cena noturna em HDR linear com exposicao 1 sai quase preta (foi o que aconteceu com
-        // "Upscaler · saida"). 8 e um ponto de partida utilizavel; o certo e um slider na UI.
-        f32            DebugExposure      = 8.0f;
+        // MULTIPLICADOR sobre a exposicao padrao de cada alvo (FDebugTarget::Exposure). Fica
+        // em 1.0 ate existir o slider na janela de debug; um valor global unico nao servia,
+        // porque cada sinal vive numa magnitude diferente.
+        f32            DebugExposure      = 1.0f;
 
         // Motion vector buffer (RG16F): escrito no geometry pass (SV_Target3), lido pelo TAA.
         // RT proprio (lifecycle desacoplado das transicoes do GBuffer, que fazem ping-pong p/ as

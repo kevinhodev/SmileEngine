@@ -18,12 +18,12 @@ cbuffer DebugViewCB : register(b0) {
     uint   Decode;
     uint   SubIndex;      // campo do G-buffer quando DECODE_GBUFFER_FIELD
     uint   Mip;
-    uint   _pad0;
+    uint   AtlasTilePx;   // > 0: alvo e atlas de tiles NxN dessa largura -> reempacota em grade
     float4 ChannelWeight;
     float  Exposure;      // DECODE_HDR
     float  NearZ;         // DECODE_REVERSE_Z
     float  FarZ;
-    float  _pad1;
+    float  TileAspect;    // largura/altura do RETANGULO onde o tile esta sendo desenhado
 };
 
 Texture2D Target    : register(t0);  // alvo generico do tile
@@ -61,7 +61,42 @@ float4 main(VSOutput input) : SV_Target {
     uint tw, th, tmips;
     Target.GetDimensions(0, tw, th, tmips);
     uint mip = min(Mip, tmips > 0 ? tmips - 1u : 0u);
-    int2 tpx = int2(input.uv * float2(max(tw >> mip, 1u), max(th >> mip, 1u)));
+
+    // Preserva o aspecto do alvo (letterbox). Sem isto, alvo que nao e screen-space — os
+    // atlas do DDGI sao grades de tiles de probe, nao imagem de tela — sai esticado a ponto
+    // de virar listra ilegivel. Alvo screen-space tem aspecto ~igual ao do tile, entao
+    // scale ~= 1 e nada muda: da p/ aplicar sempre, sem flag.
+    float2 uv = input.uv;
+    if (AtlasTilePx > 0u) {
+        // Atlas de probe (DDGI): a largura e CountX*CountZ*tile e a altura so CountY*tile —
+        // num grid comum isso da algo como 8192x64, proporcao ~128:1. Esticar vira listra e
+        // o letterbox vira um fio de 1 pixel. O util e REEMPACOTAR: os tiles viram uma grade
+        // aproximadamente quadrada, cada probe legivel.
+        uint tilesX = max(tw / AtlasTilePx, 1u);
+        uint tilesY = max(th / AtlasTilePx, 1u);
+        uint total  = tilesX * tilesY;
+        uint cols   = max((uint)ceil(sqrt((float)total * max(TileAspect, 1e-4f))), 1u);
+        uint rows   = (total + cols - 1u) / cols;
+
+        uint cx = min((uint)(uv.x * cols), cols - 1u);
+        uint cy = min((uint)(uv.y * rows), rows - 1u);
+        uint idx = cy * cols + cx;
+        if (idx >= total) return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+        float2 inCell = frac(float2(uv.x * cols, uv.y * rows));
+        float2 srcTile = float2(idx % tilesX, idx / tilesX);
+        uv = (srcTile + inCell) * float(AtlasTilePx) / float2(max(tw,1u), max(th,1u));
+    } else {
+        // Preserva o aspecto do alvo (letterbox). Alvo screen-space tem aspecto ~igual ao do
+        // tile, entao scale ~= 1 e nada muda: da p/ aplicar sempre, sem flag.
+        float scale = (float(tw) / max(float(th), 1.0f)) / max(TileAspect, 1e-4f);
+        if (scale > 1.0f) uv.y = (uv.y - 0.5f) * scale + 0.5f;
+        else              uv.x = (uv.x - 0.5f) / scale + 0.5f;
+        if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f)
+            return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    int2 tpx = int2(uv * float2(max(tw >> mip, 1u), max(th >> mip, 1u)));
 
     float3 outColor;
 
@@ -99,8 +134,11 @@ float4 main(VSOutput input) : SV_Target {
     float4 s = Target.Load(int3(tpx, mip));
 
     if (Decode == DECODE_GRAYSCALE) {
-        // Alvo de 1 canal (GTAO, mascaras): sem replicar, r vira vermelho puro.
-        outColor = (s.r * ChannelWeight.r).xxx;
+        // Alvo de 1 canal (GTAO, mascaras): sem replicar, r vira vermelho puro. Exposure aqui
+        // e FATOR DE ESCALA, nao tonemap: o atlas de distancia do DDGI guarda distancia em
+        // unidades de mundo, entao qualquer valor > 1 satura em branco sem normalizar por
+        // MaxRayDistance.
+        outColor = saturate(s.r * ChannelWeight.r * Exposure).xxx;
         return float4(outColor, 1.0f);
     } else if (Decode == DECODE_OCT_NORMAL) {
         outColor = GBuffer_OctDecode(s.rg) * 0.5f + 0.5f;

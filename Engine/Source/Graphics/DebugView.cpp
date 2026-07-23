@@ -165,15 +165,17 @@ namespace Smile {
             _CommandList->RSSetViewports(1, &VP);
             _CommandList->RSSetScissorRects(1, &Scissor);
 
-            struct { u32 Decode, SubIndex, Mip, Pad0; f32 Cw[4]; f32 Exposure, NearZ, FarZ, Pad1; } K{};
+            struct { u32 Decode, SubIndex, Mip, AtlasTilePx; f32 Cw[4]; f32 Exposure, NearZ, FarZ, TileAspect; } K{};
             K.Decode   = static_cast<u32>(T.Decode);
             K.SubIndex = T.SubIndex;
             K.Mip      = T.Mip;
+            K.AtlasTilePx = T.AtlasTilePx;
             K.Cw[0] = T.ChannelWeight.X; K.Cw[1] = T.ChannelWeight.Y;
             K.Cw[2] = T.ChannelWeight.Z; K.Cw[3] = T.ChannelWeight.W;
             K.Exposure = T.Exposure;
             K.NearZ    = T.NearZ;
             K.FarZ     = T.FarZ;
+            K.TileAspect = TileH > 0.0f ? TileW / TileH : 1.0f;
 
             _CommandList->SetGraphicsRoot32BitConstants(0, 12, &K, 0);
             _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(T.SrvSlot));

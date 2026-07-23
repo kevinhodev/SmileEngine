@@ -18,9 +18,11 @@ namespace Smile {
         EDebugDecode Decode        = EDebugDecode::Raw;
         u32          SubIndex      = 0;      // campo do G-buffer, quando Decode == GBufferField
         u32          Mip           = 0;
+        u32          AtlasTilePx   = 0;     // > 0: reempacota tiles de atlas (DDGI) em grade
         f32          Exposure      = 1.0f;   // usado por Decode::HDR
         f32          NearZ         = 0.1f;    // usados por Decode::ReverseZ p/ linearizar
         f32          FarZ          = 4000.0f;
+        // TileAspect e calculado pelo passe (depende da grade), nao vem daqui.
     };
 
     // Visualizador generico de render targets. Substitui o FGBufferDebug: os 8 modos antigos

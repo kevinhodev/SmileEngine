@@ -18,7 +18,7 @@ namespace Smile::DebugTargets {
     }
 
     void Register(const std::string& _Name, u32 _SrvSlot, EDebugDecode _Decode,
-                  u32 _SubIndex, u32 _MipCount) {
+                  u32 _SubIndex, u32 _MipCount, f32 _Exposure, u32 _AtlasTilePx) {
         if (_Name.empty() || _SrvSlot == 0xFFFFFFFFu) return;
 
         std::lock_guard<std::mutex> Lock(GMutex);
@@ -29,11 +29,14 @@ namespace Smile::DebugTargets {
                 T.Decode   = _Decode;
                 T.SubIndex = _SubIndex;
                 T.MipCount = _MipCount == 0 ? 1 : _MipCount;
+                T.Exposure = _Exposure;
+                T.AtlasTilePx = _AtlasTilePx;
                 return;
             }
         }
         GTargets.push_back(FDebugTarget{ _Name, _SrvSlot, _Decode, _SubIndex,
-                                         _MipCount == 0 ? 1 : _MipCount });
+                                         _MipCount == 0 ? 1 : _MipCount, _Exposure,
+                                         _AtlasTilePx });
     }
 
     void Clear() {

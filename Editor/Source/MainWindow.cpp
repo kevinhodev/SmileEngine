@@ -313,6 +313,7 @@ namespace SmileEditor {
                 if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/false);
                 if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/false);
                 if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/false);
+                if (Viewport) Viewport->NotifyDebugTargetsChanged();
             }
         });
         connect(Menus, &MenuBridge::AddSceneRequested, this, [this, RendererReady]() {
@@ -328,6 +329,7 @@ namespace SmileEditor {
                 if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/true);
                 if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/true);
                 if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/true);
+                if (Viewport) Viewport->NotifyDebugTargetsChanged();
             }
         });
         connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
@@ -512,6 +514,7 @@ namespace SmileEditor {
                 if (LightsBr)    LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
                 if (OutlinerBr)  OutlinerBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
                 if (MaterialsBr) MaterialsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
+                Viewport->NotifyDebugTargetsChanged();
             }
         }
     }

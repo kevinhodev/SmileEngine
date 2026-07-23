@@ -793,10 +793,14 @@ namespace Smile {
         if (AO.AOSRVSlot() != kNoSlot)
             Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Grayscale);
         if (ReSTIRGI.GITexSRVSlot() != kNoSlot)
-            Register("ReSTIR GI", ReSTIRGI.GITexSRVSlot(), EDebugDecode::HDR);
+            Register("ReSTIR GI", ReSTIRGI.GITexSRVSlot(), EDebugDecode::HDR, 0, 1, /*Exposure=*/1.5f);
         if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
-            Register("DDGI · irradiancia", DDGI.IrradianceAtlasSRV(), EDebugDecode::HDR);
-            Register("DDGI · distancia",   DDGI.DistAtlasSRV(),       EDebugDecode::Grayscale);
+            Register("DDGI · irradiancia", DDGI.IrradianceAtlasSRV(), EDebugDecode::HDR, 0, 1,
+                     /*Exposure=*/0.4f, /*AtlasTilePx=*/6 + 2);
+            // Distancia vem em unidades de MUNDO: normaliza por MaxRayDistance p/ cair em [0,1].
+            const f32 DistNorm = DDGI.MaxRayDistance() > 0.0f ? 1.0f / DDGI.MaxRayDistance() : 1.0f;
+            Register("DDGI · distancia",   DDGI.DistAtlasSRV(),       EDebugDecode::Grayscale, 0, 1,
+                     /*Exposure=*/DistNorm, /*AtlasTilePx=*/14 + 2);
         }
 
         // "Upscaler · saida" NAO entra: o upscaler roda DEPOIS deste passe no frame, entao o
@@ -805,7 +809,7 @@ namespace Smile {
 
         // --- Atmosfera / volumetrico -----------------------------------------------------
         if (SunShafts.IsInitialized())
-            Register("Sun shafts", SunShafts.VolumetricSRVSlot(), EDebugDecode::HDR);
+            Register("Sun shafts", SunShafts.VolumetricSRVSlot(), EDebugDecode::HDR, 0, 1, /*Exposure=*/2.0f);
     }
 
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
@@ -2290,8 +2294,9 @@ namespace Smile {
                 Tile.Decode        = T.Decode;
                 Tile.SubIndex      = T.SubIndex;
                 Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
+                Tile.AtlasTilePx   = T.AtlasTilePx;
                 Tile.ChannelWeight = DebugChannelWeight;
-                Tile.Exposure      = DebugExposure;
+                Tile.Exposure      = T.Exposure * DebugExposure;  // global multiplica o padrao do alvo
                 Tile.NearZ         = NearZ;   // Decode::ReverseZ linariza com estes
                 Tile.FarZ          = FarZ;
             } else if (GBufferDebugMode == 8) {

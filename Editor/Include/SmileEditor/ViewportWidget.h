@@ -229,6 +229,11 @@ namespace SmileEditor {
         Q_INVOKABLE void SelectReflectionHeatmap();
         // Visualizador: -1 desliga; senao e o indice em debugTargetNames.
         Q_INVOKABLE void SelectDebugTarget(int index);
+
+        // DDGI e ReSTIR GI so ganham SRV ao carregar cena (SetupForScene guarda em
+        // DDGI.IsReady()), entao a lista de alvos muda DEPOIS do load. Sem este aviso a QML
+        // segue exibindo a lista do boot, sem eles. Chamado pelo MainWindow apos LoadCookedScene.
+        void NotifyDebugTargetsChanged() { emit DebugTargetsChanged(); }
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
