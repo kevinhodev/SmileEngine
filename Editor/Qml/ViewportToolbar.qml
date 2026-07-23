@@ -351,10 +351,13 @@ Rectangle {
         x: viewModeButton.x + leftTools.x
         y: root.height
         width: 280
-        height: 452
+        height: 482
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onClosed: if (gBufferPopup.opened) gBufferPopup.close()
+        onClosed: {
+            if (gBufferPopup.opened) gBufferPopup.close()
+            if (debugTargetPopup.opened) debugTargetPopup.close()
+        }
 
         background: Rectangle {
             color: "#1b1c17"
@@ -393,77 +396,89 @@ Rectangle {
                 selected: viewportModel.viewMode === 3
                 onTapped: { viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
             }
+            // Visualizador generico: lista TODOS os alvos publicados em DebugTargets, nao so
+            // os do G-buffer. A lista vem do bridge (debugTargetNames), entao passe novo que
+            // se registre aparece aqui sozinho.
+            ModeRow {
+                x: 8; y: 120; width: 264; height: 28
+                label: "Render targets"; hasSubmenu: true
+                selected: viewportModel.debugTargetIndex >= 0
+                onTapped: {
+                    if (debugTargetPopup.opened) debugTargetPopup.close()
+                    else debugTargetPopup.open()
+                }
+            }
 
-            Rectangle { x: 14; y: 122; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 152; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 132
+                x: 14; y: 162
                 text: "Iluminação global"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 150; width: 264; height: 28
+                x: 8; y: 180; width: 264; height: 28
                 label: "DDGI"; detail: "radiance cache"
                 checked: viewportModel.ddgiEnabled
                 onToggled: viewportModel.ToggleDDGI()
             }
             ToggleRow {
-                x: 8; y: 178; width: 264; height: 28
+                x: 8; y: 208; width: 264; height: 28
                 label: "ReSTIR GI"
                 checked: viewportModel.restirGIEnabled
                 onToggled: viewportModel.ToggleReSTIRGI()
             }
             ToggleRow {
-                x: 8; y: 206; width: 264; height: 28
+                x: 8; y: 236; width: 264; height: 28
                 label: "ReSTIR visibility"; detail: "raio extra"
                 checked: viewportModel.restirGIVisibilityEnabled
                 interactive: viewportModel.restirGIEnabled
                 onToggled: viewportModel.ToggleReSTIRGIVisibility()
             }
             ToggleRow {
-                x: 8; y: 234; width: 264; height: 28
+                x: 8; y: 264; width: 264; height: 28
                 label: "Folhagem sombreia GI"; detail: "alpha-test"
                 checked: viewportModel.giFoliageShadows
                 onToggled: viewportModel.ToggleGIFoliageShadows()
             }
             ToggleRow {
-                x: 8; y: 262; width: 264; height: 28
+                x: 8; y: 292; width: 264; height: 28
                 label: "GTAO"
                 checked: viewportModel.gtaoEnabled
                 onToggled: viewportModel.ToggleGTAO()
             }
             ToggleRow {
-                x: 8; y: 290; width: 264; height: 28
+                x: 8; y: 320; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
                 checked: viewportModel.gtaoHalfRes
                 onToggled: viewportModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 322; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 352; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 332
+                x: 14; y: 362
                 text: "Reflexos e denoise"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 350; width: 264; height: 28
+                x: 8; y: 380; width: 264; height: 28
                 label: "Reflexos RT"
                 checked: viewportModel.reflectionsEnabled
                 onToggled: viewportModel.ToggleReflections()
             }
             ToggleRow {
-                x: 8; y: 378; width: 264; height: 28
+                x: 8; y: 408; width: 264; height: 28
                 label: "NRD REBLUR"; detail: "difuso + especular"
                 checked: viewportModel.nrdEnabled
                 onToggled: viewportModel.ToggleNrd()
             }
 
-            Rectangle { x: 14; y: 410; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 440; width: 252; height: 1; color: "#23241d" }
             Rectangle {
-                x: 8; y: 416; width: 264; height: 28; radius: 5
+                x: 8; y: 446; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? "#22231c" : "transparent"
                 Text {
                     x: 8
@@ -559,6 +574,90 @@ Rectangle {
                             viewportModel.SelectGBuffer(index + 1)
                             gBufferPopup.close()
                             viewModesPopup.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Submenu do visualizador generico. A lista NAO e hardcoded: vem de debugTargetNames, que
+    // o bridge le do registro DebugTargets. Passe que se registre aparece aqui sozinho.
+    Popup {
+        id: debugTargetPopup
+        popupType: Popup.Window
+        x: viewModesPopup.x + viewModesPopup.width - 4
+        y: root.height + 86
+        width: 232
+        // Cresce com a lista (+1 pela linha "Desligado"), com teto p/ nao estourar a tela.
+        height: Math.min(12 + (viewportModel.debugTargetNames.length + 1) * 28, 460)
+        padding: 6
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: "#1b1c17"
+            border.color: "#33342c"
+            border.width: 1
+            radius: 7
+        }
+        contentItem: Flickable {
+            contentHeight: debugTargetCol.height
+            clip: true
+            Column {
+                id: debugTargetCol
+                Rectangle {
+                    width: 220; height: 28; radius: 4
+                    color: offHover.hovered ? "#2a2b24" : "transparent"
+                    RadioMark {
+                        anchors.left: parent.left; anchors.leftMargin: 7
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: viewportModel.debugTargetIndex < 0
+                    }
+                    Text {
+                        anchors.left: parent.left; anchors.leftMargin: 27
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Desligado"
+                        color: root.textMuted
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 12
+                    }
+                    HoverHandler { id: offHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler {
+                        onTapped: {
+                            viewportModel.SelectDebugTarget(-1)
+                            debugTargetPopup.close()
+                            viewModesPopup.close()
+                        }
+                    }
+                }
+                Repeater {
+                    model: viewportModel.debugTargetNames
+                    delegate: Rectangle {
+                        required property string modelData
+                        required property int index
+                        width: 220; height: 28; radius: 4
+                        color: targetHover.hovered ? "#2a2b24" : "transparent"
+                        RadioMark {
+                            anchors.left: parent.left; anchors.leftMargin: 7
+                            anchors.verticalCenter: parent.verticalCenter
+                            checked: viewportModel.debugTargetIndex === index
+                        }
+                        Text {
+                            anchors.left: parent.left; anchors.leftMargin: 27
+                            anchors.right: parent.right; anchors.rightMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData
+                            elide: Text.ElideRight
+                            color: root.textNormal
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 12
+                        }
+                        HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler {
+                            onTapped: {
+                                viewportModel.SelectDebugTarget(index)
+                                debugTargetPopup.close()
+                                viewModesPopup.close()
+                            }
                         }
                     }
                 }

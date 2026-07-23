@@ -34,7 +34,6 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/VolumeTexture.h
     Include/Smile/Graphics/Material.h
     Include/Smile/Graphics/GBuffer.h
-    Include/Smile/Graphics/GBufferDebug.h
     Include/Smile/Graphics/ComputePipeline.h
     Include/Smile/Graphics/VolumetricPipeline.h
     Include/Smile/Graphics/HDREnvironment.h
@@ -58,6 +57,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Upscaler.h
     Include/Smile/Graphics/FsrPass.h
     Include/Smile/Graphics/DlssPass.h
+    Include/Smile/Graphics/DebugTargets.h
+    Include/Smile/Graphics/DebugView.h
     Include/Smile/Graphics/OceanFFT.h
     Include/Smile/Graphics/Water.h
     Include/Smile/Graphics/VramTracker.h
@@ -91,7 +92,6 @@ set(ENGINE_SOURCES
     Source/Graphics/Material.cpp
     Source/Graphics/GBuffer.cpp
     Source/Graphics/Terrain.cpp
-    Source/Graphics/GBufferDebug.cpp
     Source/Graphics/ComputePipeline.cpp
     Source/Graphics/VolumetricPipeline.cpp
     Source/Graphics/HDREnvironment.cpp
@@ -118,6 +118,8 @@ set(ENGINE_SOURCES
     Source/Graphics/TemporalAA.cpp
     Source/Graphics/FsrPass.cpp
     Source/Graphics/DlssPass.cpp
+    Source/Graphics/DebugTargets.cpp
+    Source/Graphics/DebugView.cpp
     Source/Graphics/FlickerHeatmap.cpp
     Source/Graphics/OceanFFT.cpp
     Source/Graphics/Water.cpp

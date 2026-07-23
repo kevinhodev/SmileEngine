@@ -64,7 +64,7 @@ namespace Smile {
         CreateNormalBuffer();
         GBuffer.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
         GBuffer.WriteDepthSRV(Device.Native(), SRVHeap, DepthBuffer.Get()); 
-        GBufferDebugPass.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+        DebugViewPass.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
         CreateHDRBuffers();
         CreateVelocityBuffer();
         CreateSceneCopies();
@@ -747,6 +747,56 @@ namespace Smile {
         HiZ.SetupForResize(Device.Native(), SRVHeap, RW, RH);
 
         SetupReflectionsForScene();
+
+        RegisterDebugTargets();
+    }
+
+    // Publica no registro os alvos que ja possuem SRV. Nomes sao a chave (o filtro do
+    // visualizador e por substring), entao os prefixos importam: digitar "gbuffer" traz o
+    // G-buffer inteiro, "reflex" traz os estagios de reflexao.
+    void Renderer::RegisterDebugTargets() {
+        using namespace DebugTargets;
+        constexpr u32 kNoSlot = 0xFFFFFFFFu;
+
+        // --- Cena / G-buffer -------------------------------------------------------------
+        // Os 8 modos antigos viram entradas com decode GBufferField (SubIndex == modo antigo).
+        // O SrvSlot aqui e so p/ o registro ter algo valido; o decode le os 3 MRTs da tabela.
+        if (GBuffer.IsInitialized()) {
+            const u32 GB = GBuffer.SRVTableStart();
+            Register("GBuffer · base color",    GB, EDebugDecode::GBufferField, 1);
+            Register("GBuffer · normal",        GB, EDebugDecode::GBufferField, 2);
+            Register("GBuffer · roughness",     GB, EDebugDecode::GBufferField, 3);
+            Register("GBuffer · metallic",      GB, EDebugDecode::GBufferField, 4);
+            Register("GBuffer · subsurface",    GB, EDebugDecode::GBufferField, 5);
+            Register("GBuffer · AO",            GB, EDebugDecode::GBufferField, 6);
+            Register("GBuffer · shading model", GB, EDebugDecode::GBufferField, 7);
+        }
+        if (VelocitySRVSlot != kNoSlot)
+            Register("Motion vectors", VelocitySRVSlot, EDebugDecode::Velocity);
+        if (DepthSRVSlot != kNoSlot)
+            Register("Depth (reverse-Z)", DepthSRVSlot, EDebugDecode::ReverseZ);
+        if (NormalSRVSlot != kNoSlot)
+            Register("Normal geometrica", NormalSRVSlot, EDebugDecode::Raw);
+        if (HDRSRVSlot != kNoSlot)
+            Register("HDR color", HDRSRVSlot, EDebugDecode::HDR);
+
+        // --- Iluminacao indireta ---------------------------------------------------------
+        if (AO.AOSRVSlot() != kNoSlot)
+            Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Raw);
+        if (ReSTIRGI.GITexSRVSlot() != kNoSlot)
+            Register("ReSTIR GI", ReSTIRGI.GITexSRVSlot(), EDebugDecode::HDR);
+        if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
+            Register("DDGI · irradiancia", DDGI.IrradianceAtlasSRV(), EDebugDecode::HDR);
+            Register("DDGI · distancia",   DDGI.DistAtlasSRV(),       EDebugDecode::Raw);
+        }
+
+        // --- Upscaler / temporal ---------------------------------------------------------
+        if (IUpscaler* U = ActiveUpscaler())
+            Register("Upscaler · saida", U->OutputSRVSlot(), EDebugDecode::HDR);
+
+        // --- Atmosfera / volumetrico -----------------------------------------------------
+        if (SunShafts.IsInitialized())
+            Register("Sun shafts", SunShafts.VolumetricSRVSlot(), EDebugDecode::HDR);
     }
 
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
@@ -2209,14 +2259,41 @@ namespace Smile {
             Batch.Flush(CommandList);
         }
 
-        if (GBufferDebugMode > 0 && GBuffer.IsInitialized() && GBufferDebugPass.IsInitialized()) {
+        // Alvo escolhido no visualizador tem prioridade sobre o view mode do G-buffer.
+        const auto& DbgAll = DebugTargets::All();
+        const bool  DbgTargetActive = DebugTargetIndex < DbgAll.size();
+
+        if ((GBufferDebugMode > 0 || DbgTargetActive) &&
+            GBuffer.IsInitialized() && DebugViewPass.IsInitialized()) {
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             auto HDRDbgRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &HDRDbgRTV, FALSE, nullptr);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
-            GBufferDebugPass.Execute(CommandList, SRVHeap, GBuffer.SRVTableStart(), VelocitySRVSlot, GBufferDebugMode);
-            GBuffer.TransitionToWrite(CommandList); 
+
+            // Os modos 1..7 sao campos do G-buffer; o 8 e o motion vector, que tem decode
+            // proprio (escala pela resolucao). Um tile so = tela cheia — a mesma chamada
+            // aceita N tiles quando a janela de debug multiplo chegar.
+            FDebugTile Tile{};
+            if (DbgTargetActive) {
+                const FDebugTarget& T = DbgAll[DebugTargetIndex];
+                Tile.SrvSlot       = T.SrvSlot;
+                Tile.Decode        = T.Decode;
+                Tile.SubIndex      = T.SubIndex;
+                Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
+                Tile.ChannelWeight = DebugChannelWeight;
+                Tile.Exposure      = DebugExposure;
+            } else if (GBufferDebugMode == 8) {
+                Tile.SrvSlot = VelocitySRVSlot;
+                Tile.Decode  = EDebugDecode::Velocity;
+            } else {
+                Tile.SrvSlot  = GBuffer.SRVTableStart();
+                Tile.Decode   = EDebugDecode::GBufferField;
+                Tile.SubIndex = GBufferDebugMode;
+            }
+            DebugViewPass.Execute(CommandList, SRVHeap, &Tile, 1, 1,
+                                  GBuffer.SRVTableStart(), VelocitySRVSlot, Viewport);
+            GBuffer.TransitionToWrite(CommandList);
         }
 
         {

@@ -7,7 +7,8 @@ smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
 smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(GBufferDebug.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
+# Visualizador generico de render targets (absorve o GBufferDebug via DECODE_GBUFFER_FIELD)
+smile_compile_shader(DebugView.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(DeferredLighting.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 # Passe forward de translucidos (materiais Blend: vidro etc.), por cima do HDR iluminado
 smile_compile_shader(ForwardBlend.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
@@ -167,7 +168,7 @@ add_custom_target(Shaders
         Common/DepthConfig.hlsli
         GBuffer.hlsli
         GBuffer.ps.hlsl
-        GBufferDebug.ps.hlsl
+        DebugView.ps.hlsl
         DeferredLighting.ps.hlsl
         BRDF.hlsli
         Triangle.vs.hlsl

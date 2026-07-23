@@ -374,6 +374,28 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    QStringList ViewportWidget::GetDebugTargetNames() const {
+        QStringList Names;
+        for (const Smile::FDebugTarget& T : Smile::DebugTargets::All())
+            Names << QString::fromStdString(T.Name);
+        return Names;
+    }
+
+    int ViewportWidget::GetDebugTargetIndex() const {
+        if (!Renderer) return -1;
+        const Smile::u32 I = Renderer->GetDebugTargetIndex();
+        return I == Smile::Renderer::kNoDebugTarget ? -1 : static_cast<int>(I);
+    }
+
+    void ViewportWidget::SelectDebugTarget(int _Index) {
+        if (!Renderer) return;
+        // -1 desliga e devolve o viewport ao caminho normal; o view mode do G-buffer volta
+        // a valer sozinho (o Renderer da prioridade ao alvo so enquanto ele esta setado).
+        Renderer->SetDebugTargetIndex(_Index < 0 ? Smile::Renderer::kNoDebugTarget
+                                                 : static_cast<Smile::u32>(_Index));
+        emit ViewSettingsChanged();
+    }
+
     void ViewportWidget::ToggleDDGI() {
         if (!Renderer) return;
         Renderer->SetUseGI(!Renderer->GetUseGI());
@@ -1018,6 +1040,7 @@ namespace SmileEditor {
         Renderer->SetUpscaler(Renderer->GetUpscaler());
         Initialized = true;
         emit RendererInitialized();
+        emit DebugTargetsChanged();   // os alvos foram publicados na criacao dos targets internos
     }
 
     void ViewportWidget::showEvent(QShowEvent* _Event) {
@@ -1037,6 +1060,8 @@ namespace SmileEditor {
         if (Initialized) {
             Renderer->Resize(static_cast<unsigned int>(_Event->size().width()),
                              static_cast<unsigned int>(_Event->size().height()));
+            // Resize realoca SRVs: os alvos foram re-registrados com slots novos.
+            emit DebugTargetsChanged();
         }
     }
 

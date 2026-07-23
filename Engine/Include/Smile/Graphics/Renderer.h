@@ -18,7 +18,7 @@
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/GBuffer.h"
-#include "Smile/Graphics/GBufferDebug.h"
+#include "Smile/Graphics/DebugView.h"
 #include "Smile/Graphics/HDREnvironment.h"
 #include "Smile/Graphics/Atmosphere.h"
 #include "Smile/Graphics/TimeOfDay.h"
@@ -276,6 +276,21 @@ namespace Smile {
         void SetGBufferDebugMode(u32 Mode)   { GBufferDebugMode = Mode > 8 ? 8 : Mode; }
         u32  GetGBufferDebugMode() const     { return GBufferDebugMode; }
 
+        // === Visualizador de render targets ==============================================
+        // Seleciona QUALQUER alvo publicado em DebugTargets pelo indice em All(). kNoDebugTarget
+        // desliga. Independente do GBufferDebugMode (que continua servindo o menu de view modes
+        // do toolbar); quando os dois estao ativos, o alvo escolhido aqui tem prioridade.
+        static constexpr u32 kNoDebugTarget = 0xFFFFFFFFu;
+        void SetDebugTargetIndex(u32 Index)  { DebugTargetIndex = Index; }
+        u32  GetDebugTargetIndex() const     { return DebugTargetIndex; }
+        // Peso por canal do alvo selecionado (isolar r/g/b/a, multiplicar). Ver FDebugTile.
+        void SetDebugChannelWeight(const Vec4& W) { DebugChannelWeight = W; }
+        Vec4 GetDebugChannelWeight() const   { return DebugChannelWeight; }
+        void SetDebugMip(u32 Mip)            { DebugMip = Mip; }
+        u32  GetDebugMip() const             { return DebugMip; }
+        void SetDebugExposure(f32 E)         { DebugExposure = E; }
+        f32  GetDebugExposure() const        { return DebugExposure; }
+
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
         FFogPass& GetFog()                     { return Fog; }
@@ -447,8 +462,15 @@ namespace Smile {
         // Deferred shading: o G-buffer e a unica fonte de geometria opaca. GBufferB (OctNormal +
         // Roughness + Metallic) e byte-a-byte o antigo ReflectionGBuffer -> as reflexoes leem dele.
         FGBuffer       GBuffer;
-        FGBufferDebug  GBufferDebugPass;
+        FDebugView     DebugViewPass;
+        // Registra em DebugTargets os alvos que ja tem SRV. Chamado no fim de
+        // RecreateInternalTargets(), pois o resize realoca slots (o registro sobrescreve por nome).
+        void RegisterDebugTargets();
         u32            GBufferDebugMode = 0;
+        u32            DebugTargetIndex   = kNoDebugTarget;
+        Vec4           DebugChannelWeight = Vec4{ 1.0f, 1.0f, 1.0f, 1.0f };
+        u32            DebugMip           = 0;
+        f32            DebugExposure      = 1.0f;
 
         // Motion vector buffer (RG16F): escrito no geometry pass (SV_Target3), lido pelo TAA.
         // RT proprio (lifecycle desacoplado das transicoes do GBuffer, que fazem ping-pong p/ as

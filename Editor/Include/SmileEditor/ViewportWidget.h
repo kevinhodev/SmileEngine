@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QString>
 #include <QVariantList>
+#include <QStringList>
 #include <memory>
 #include "Smile/Math/Math.h"
 #include "SmileEditor/GizmoController.h"
@@ -22,6 +23,9 @@ namespace SmileEditor {
         Q_OBJECT
         Q_PROPERTY(int viewMode READ GetViewMode NOTIFY ViewSettingsChanged)
         Q_PROPERTY(int gBufferMode READ GetGBufferMode NOTIFY ViewSettingsChanged)
+        // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
+        Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
+        Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewSettingsChanged)
         Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
@@ -130,6 +134,8 @@ namespace SmileEditor {
         float            GetFPS()      const { return LastFPS; }
         int               GetViewMode() const { return CurrentViewMode; }
         int               GetGBufferMode() const { return CurrentGBufferMode; }
+        QStringList       GetDebugTargetNames() const;
+        int               GetDebugTargetIndex() const;
         QString           GetViewModeLabel() const;
         bool              IsDDGIEnabled() const;
         bool              IsReSTIRGIEnabled() const;
@@ -221,6 +227,8 @@ namespace SmileEditor {
         Q_INVOKABLE void SelectLit();
         Q_INVOKABLE void SelectGBuffer(int mode);
         Q_INVOKABLE void SelectReflectionHeatmap();
+        // Visualizador: -1 desliga; senao e o indice em debugTargetNames.
+        Q_INVOKABLE void SelectDebugTarget(int index);
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
@@ -311,6 +319,9 @@ namespace SmileEditor {
         void ObjectSelected(int sceneIndex); // clique no viewport: indice na cena (-1 = vazio)
         void ViewSettingsChanged();
         void SettingsRequested();
+        // A lista de alvos so muda quando o Renderer recria os targets (boot/resize/troca de
+        // cena) — separada de ViewSettingsChanged p/ a QML nao reconstruir o combo a cada frame.
+        void DebugTargetsChanged();
 
     private slots:
         void OnRenderTimer();
