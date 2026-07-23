@@ -368,15 +368,11 @@ Rectangle {
         property string label
         property string value
         height: 20
+        // O valor manda: ele dimensiona primeiro e o label ocupa o que sobrar, com elide. Sem
+        // isso os dois cresciam um contra o outro e o valor longo cobria o label
+        // (ex.: "Draws visiveis" sumindo sob "644 / 1592 · ocl 198").
         Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: statusRow.label
-            color: root.textMuted
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 11
-        }
-        Text {
+            id: statusValue
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             text: statusRow.value
@@ -384,32 +380,13 @@ Rectangle {
             font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
-    }
-
-    component RayStatusRow: Item {
-        id: rayRow
-        property string label
-        property bool active: false
-        height: 24
-        Rectangle {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            width: 7; height: 7; radius: 3.5
-            color: rayRow.active ? root.green : root.textMuted
-        }
         Text {
             anchors.left: parent.left
-            anchors.leftMargin: 16
+            anchors.right: statusValue.left
+            anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
-            text: rayRow.label
-            color: root.textNormal
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 12
-        }
-        Text {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: rayRow.active ? "ligado" : "desligado"
+            text: statusRow.label
+            elide: Text.ElideRight
             color: root.textMuted
             font.family: C.Theme.fontFamily
             font.pixelSize: 11
@@ -1278,7 +1255,7 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 170
+                height: 150
                 title: "Desempenho"
 
                 Text {
@@ -1304,43 +1281,17 @@ Rectangle {
                     font.pixelSize: 11
                 }
                 Rectangle { x: 0; y: 112; width: parent.width; height: 1; color: root.divider }
+                // So o que reage a ESTA pagina: trocar o preset muda a resolucao interna e o
+                // fps/ms na hora. Saiu a VRAM (era o total ESTATICO do adapter, alem de estar
+                // sob um cabecalho de Ray tracing — a StatsWindow ja mostra a do processo) e
+                // saiu a contagem de draws, que e telemetria geral e nao reage a esta pagina.
+                // NOTA: draws hoje nao aparecem em lugar nenhum; o bridge ainda expoe
+                // visibleDrawCount/occludedDrawCount/totalDrawCount p/ quem for reexibir
+                // (a StatsWindow e o lugar natural — ela so tem VRAM e custo por passe).
                 StatusRow {
-                    x: 16; y: 119; width: parent.width - 32
-                    label: "Draws visíveis"
-                    value: viewportModel.visibleDrawCount + " / " + viewportModel.totalDrawCount
-                           + (viewportModel.occludedDrawCount > 0
-                              ? " · ocl " + viewportModel.occludedDrawCount : "")
-                }
-                StatusRow {
-                    x: 16; y: 141; width: parent.width - 32
+                    x: 16; y: 121; width: parent.width - 32
                     label: "Res. interna"
                     value: viewportModel.internalResolution
-                }
-            }
-
-            Card {
-                width: parent.width
-                height: 210
-                title: "Ray tracing"
-
-                Column {
-                    x: 16; y: 48
-                    width: parent.width - 32
-                    RayStatusRow { width: parent.width; label: "DDGI"; active: viewportModel.ddgiEnabled }
-                    RayStatusRow { width: parent.width; label: "ReSTIR GI"; active: viewportModel.restirGIEnabled }
-                    RayStatusRow {
-                        width: parent.width
-                        label: "Visibility ray"
-                        active: viewportModel.restirGIEnabled && viewportModel.restirGIVisibilityEnabled
-                    }
-                    RayStatusRow { width: parent.width; label: "NRD REBLUR"; active: viewportModel.nrdEnabled }
-                    RayStatusRow { width: parent.width; label: "Reflexos RT"; active: viewportModel.reflectionsEnabled }
-                }
-                Rectangle { x: 0; y: 170; width: parent.width; height: 1; color: root.divider }
-                StatusRow {
-                    x: 16; y: 178; width: parent.width - 32
-                    label: "VRAM dedicada"
-                    value: viewportModel.vramText
                 }
             }
 
