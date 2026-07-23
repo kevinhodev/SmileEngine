@@ -165,6 +165,11 @@ namespace Smile {
         SetupReflectionsForScene();
 
         DDGIDebugPass.SetupForScene(Device.Native(), SRVHeap, DDGI.NumProbesCount());
+
+        // DDGI/reflexoes so ganham SRV aqui (por cena), DEPOIS do registro feito em
+        // RecreateInternalTargets — sem esta 2a passada eles nunca apareciam na lista.
+        // Registrar de novo e barato e idempotente: a chave e o nome, entao sobrescreve.
+        RegisterDebugTargets();
     }
 
     void Renderer::CreateIBLDescriptorTable() {
@@ -414,6 +419,9 @@ namespace Smile {
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot);
+
+        // Idem p/ o ReSTIR GI, cujo SRV nasce aqui.
+        RegisterDebugTargets();
 
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
@@ -777,22 +785,23 @@ namespace Smile {
             Register("Depth (reverse-Z)", DepthSRVSlot, EDebugDecode::ReverseZ);
         if (NormalSRVSlot != kNoSlot)
             Register("Normal geometrica", NormalSRVSlot, EDebugDecode::Raw);
-        if (HDRSRVSlot != kNoSlot)
-            Register("HDR color", HDRSRVSlot, EDebugDecode::HDR);
+        // "HDR color" NAO entra: o HDRColorBuffer e o proprio render target deste passe
+        // (RTV em HDRRTVHeap.CpuHandle(0)), entao le-lo como SRV no mesmo draw seria
+        // ler e escrever o mesmo recurso. Precisaria de copia; fica p/ quando houver captura.
 
         // --- Iluminacao indireta ---------------------------------------------------------
         if (AO.AOSRVSlot() != kNoSlot)
-            Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Raw);
+            Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Grayscale);
         if (ReSTIRGI.GITexSRVSlot() != kNoSlot)
             Register("ReSTIR GI", ReSTIRGI.GITexSRVSlot(), EDebugDecode::HDR);
         if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
             Register("DDGI · irradiancia", DDGI.IrradianceAtlasSRV(), EDebugDecode::HDR);
-            Register("DDGI · distancia",   DDGI.DistAtlasSRV(),       EDebugDecode::Raw);
+            Register("DDGI · distancia",   DDGI.DistAtlasSRV(),       EDebugDecode::Grayscale);
         }
 
-        // --- Upscaler / temporal ---------------------------------------------------------
-        if (IUpscaler* U = ActiveUpscaler())
-            Register("Upscaler · saida", U->OutputSRVSlot(), EDebugDecode::HDR);
+        // "Upscaler · saida" NAO entra: o upscaler roda DEPOIS deste passe no frame, entao o
+        // que se leria aqui e o resultado do frame ANTERIOR — dado enganoso. Mesmo caso do
+        // "HDR color": so volta com um passe de captura por copia (e o que a Unreal faz).
 
         // --- Atmosfera / volumetrico -----------------------------------------------------
         if (SunShafts.IsInitialized())
@@ -2283,6 +2292,8 @@ namespace Smile {
                 Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
                 Tile.ChannelWeight = DebugChannelWeight;
                 Tile.Exposure      = DebugExposure;
+                Tile.NearZ         = NearZ;   // Decode::ReverseZ linariza com estes
+                Tile.FarZ          = FarZ;
             } else if (GBufferDebugMode == 8) {
                 Tile.SrvSlot = VelocitySRVSlot;
                 Tile.Decode  = EDebugDecode::Velocity;

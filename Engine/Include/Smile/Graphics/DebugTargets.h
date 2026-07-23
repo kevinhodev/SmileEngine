@@ -12,6 +12,7 @@ namespace Smile {
     // Este enum e so p/ o que o peso nao resolve: dado EMPACOTADO que precisa desempacotar.
     enum class EDebugDecode : u32 {
         Raw = 0,       // rgb direto (LDR / ja em faixa visivel)
+        Grayscale,     // alvo de 1 canal: replica R em rgb. Sem isso um R8 sai VERMELHO (g=b=0)
         HDR,           // tonemap + exposicao — radiance, GI, reflexao (senao estoura branco)
         GBufferField,  // decode do G-buffer; SubIndex escolhe o campo (absorve os 8 modos antigos)
         OctNormal,     // normal octaedrica empacotada -> xyz*0.5+0.5

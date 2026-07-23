@@ -19,6 +19,8 @@ namespace Smile {
         u32          SubIndex      = 0;      // campo do G-buffer, quando Decode == GBufferField
         u32          Mip           = 0;
         f32          Exposure      = 1.0f;   // usado por Decode::HDR
+        f32          NearZ         = 0.1f;    // usados por Decode::ReverseZ p/ linearizar
+        f32          FarZ          = 4000.0f;
     };
 
     // Visualizador generico de render targets. Substitui o FGBufferDebug: os 8 modos antigos

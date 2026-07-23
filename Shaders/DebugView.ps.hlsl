@@ -7,11 +7,12 @@
 #include "GBuffer.hlsli"
 
 #define DECODE_RAW            0u
-#define DECODE_HDR            1u
-#define DECODE_GBUFFER_FIELD  2u
-#define DECODE_OCT_NORMAL     3u
-#define DECODE_REVERSE_Z      4u
-#define DECODE_VELOCITY       5u
+#define DECODE_GRAYSCALE      1u
+#define DECODE_HDR            2u
+#define DECODE_GBUFFER_FIELD  3u
+#define DECODE_OCT_NORMAL     4u
+#define DECODE_REVERSE_Z      5u
+#define DECODE_VELOCITY       6u
 
 cbuffer DebugViewCB : register(b0) {
     uint   Decode;
@@ -20,7 +21,9 @@ cbuffer DebugViewCB : register(b0) {
     uint   _pad0;
     float4 ChannelWeight;
     float  Exposure;      // DECODE_HDR
-    float3 _pad1;
+    float  NearZ;         // DECODE_REVERSE_Z
+    float  FarZ;
+    float  _pad1;
 };
 
 Texture2D Target    : register(t0);  // alvo generico do tile
@@ -41,11 +44,16 @@ float3 TonemapForView(float3 c, float exposure) {
     return c / (1.0f + c);
 }
 
-// Reverse-Z: perto = 1, longe = 0, e a distribuicao e fortemente nao-linear. Mostrar cru da
-// uma tela quase branca. Aqui so invertemos e aplicamos uma curva p/ espalhar o range util.
-float3 VisualizeReverseZ(float d) {
-    float v = saturate(1.0f - d);
-    return pow(v, 0.35f).xxx;
+// Reverse-Z: perto = 1, longe = 0, e a distribuicao concentra quase todo o [0,1] no que esta
+// perto (num cenario de 0.1..4000, o fundo cai em d ~= 1e-5). Qualquer gama pura sobre d e
+// compromisso ruim: ou lava tudo de branco (gama pequena) ou afunda a cena inteira no preto
+// (gama grande). O jeito certo e LINEARIZAR de volta p/ distancia de view e usar rampa
+// logaritmica, que e o que distribui bem uma faixa de 4 ordens de grandeza.
+float3 VisualizeReverseZ(float d, float nearZ, float farZ) {
+    // Inversa da projecao reverse-Z: d=1 -> nearZ, d=0 -> farZ.
+    float linearZ = (nearZ * farZ) / max(nearZ + d * (farZ - nearZ), 1e-6f);
+    float t = log2(max(linearZ / nearZ, 1.0f)) / log2(max(farZ / nearZ, 2.0f));
+    return saturate(1.0f - t).xxx;   // perto = claro, longe = escuro
 }
 
 float4 main(VSOutput input) : SV_Target {
@@ -90,10 +98,14 @@ float4 main(VSOutput input) : SV_Target {
 
     float4 s = Target.Load(int3(tpx, mip));
 
-    if (Decode == DECODE_OCT_NORMAL) {
+    if (Decode == DECODE_GRAYSCALE) {
+        // Alvo de 1 canal (GTAO, mascaras): sem replicar, r vira vermelho puro.
+        outColor = (s.r * ChannelWeight.r).xxx;
+        return float4(outColor, 1.0f);
+    } else if (Decode == DECODE_OCT_NORMAL) {
         outColor = GBuffer_OctDecode(s.rg) * 0.5f + 0.5f;
     } else if (Decode == DECODE_REVERSE_Z) {
-        outColor = VisualizeReverseZ(s.r);
+        outColor = VisualizeReverseZ(s.r, NearZ, FarZ);
     } else if (Decode == DECODE_HDR) {
         outColor = TonemapForView(s.rgb * ChannelWeight.rgb, Exposure);
         return float4(outColor, 1.0f);
