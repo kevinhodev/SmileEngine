@@ -118,6 +118,9 @@ namespace Smile {
         AO.SetupForResize(Device.Native(), SRVHeap, DepthSRVSlot, NormalSRVSlot,
                           SwapChain.GetWidth(), SwapChain.GetHeight());
 
+        HiZ.Initialize(Device.Native());
+        HiZ.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+
         if (Device.RaytracingSupported()) {
             DDGI.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
@@ -725,6 +728,8 @@ namespace Smile {
         FlickerResetPending = true;
 
         AO.SetupForResize(Device.Native(), SRVHeap, DepthSRVSlot, NormalSRVSlot, RW, RH);
+
+        HiZ.SetupForResize(Device.Native(), SRVHeap, RW, RH);
 
         SetupReflectionsForScene();
     }
@@ -1515,8 +1520,11 @@ namespace Smile {
             AllItems.reserve(RList.size());
             const size_t PrevCount = PrevModels.size();
             PrevModels.resize(RList.size(), Mat44::Identity());
+            const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
+                if (WriteOcclusionBounds)
+                    HiZ.WriteBounds(FrameSlot, static_cast<u32>(si), R.AABBMin, R.AABBMax);
                 if (!R.Visible || R.RaytracingOnly || !R.Mesh || !R.Mesh->IsValid()) continue;
                 if (AllItems.size() >= MaxObjects) break;
                 FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
@@ -1538,11 +1546,27 @@ namespace Smile {
             }
         }
 
+        // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
+        // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.
+        const u32* OcclusionVis = UseOcclusionCulling
+            ? HiZ.ResolveResults(FrameSlot, static_cast<u32>(Scene.Renderables().size()))
+            : nullptr;
+        u32 OccludedCount = 0;
+
         struct VisItem { const FRenderable* R; FMaterial* Mat; f32 Dist; u32 Slot; u32 SceneIndex; };
         std::vector<VisItem> VisibleScratch;
         VisibleScratch.reserve(AllItems.size());
         for (const AllItem& A : AllItems) {
             if (UseFrustumCulling && AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
+            // Objeto selecionado nunca e cullado (gizmo/drag move mais rapido que a
+            // latencia do readback e o pop incomodaria bem aqui). O resultado so cobre
+            // [0, Capacity); indices alem disso (ex.: proxy RT do terreno) ficam visiveis.
+            if (OcclusionVis && A.SceneIndex < HiZ.Capacity() &&
+                !OcclusionVis[A.SceneIndex] &&
+                static_cast<int>(A.SceneIndex) != SelectedIndex) {
+                ++OccludedCount;
+                continue;
+            }
             const f32 cx = (A.R->AABBMin.X + A.R->AABBMax.X) * 0.5f - CamPos.X;
             const f32 cy = (A.R->AABBMin.Y + A.R->AABBMax.Y) * 0.5f - CamPos.Y;
             const f32 cz = (A.R->AABBMin.Z + A.R->AABBMax.Z) * 0.5f - CamPos.Z;
@@ -1550,7 +1574,8 @@ namespace Smile {
         }
         std::sort(VisibleScratch.begin(), VisibleScratch.end(),
                   [](const VisItem& a, const VisItem& b) { return a.Dist < b.Dist; });
-        LastVisibleCount = static_cast<u32>(VisibleScratch.size());
+        LastVisibleCount  = static_cast<u32>(VisibleScratch.size());
+        LastOccludedCount = OccludedCount;
 
         if (UseTerrain && Terrain.IsLoaded())
             Terrain.UpdatePerFrame(FrameSlot, ViewProjection, ViewProjUnjittered, PrevViewProj,
@@ -1670,6 +1695,27 @@ namespace Smile {
             if (UseTerrain && Terrain.IsLoaded())
                 Terrain.RenderDepthPrepass(CommandList, SRVHeap, AOWillRun);
             GpuProfiler.End(CommandList); // Z-prepass
+        }
+
+        // HZB do depth do prepass (min-reduce reverse-Z) + teste dos AABBs com a VP
+        // sem jitter DESTE frame; o resultado volta pela readback ring e e consumido
+        // kFramesInFlight frames depois no filtro do VisibleScratch (acima).
+        if (HiZ.IsReady() && UseOcclusionCulling) {
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "HZB");
+                HiZ.RecordBuild(CommandList, SRVHeap, DepthSRVSlot);
+                HiZ.RecordTest(CommandList, SRVHeap, FrameSlot,
+                               static_cast<u32>(Scene.Renderables().size()),
+                               ViewProjUnjittered);
+            }
+            Batch.Transition(DepthBuffer.Get(),
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Flush(CommandList);
         }
 
         if (AO.IsReady()) {

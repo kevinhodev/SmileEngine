@@ -733,7 +733,7 @@ Rectangle {
             Card {
                 x: 24; y: 368
                 width: renderingPage.leftW
-                height: 146
+                height: 178
                 title: "Cena e geometria"
 
                 Text {
@@ -758,40 +758,60 @@ Rectangle {
 
                 Text {
                     x: 20; y: 88
-                    text: "Depth prepass"
+                    text: "Occlusion culling"
                     color: root.textNormal
                     font.family: "Segoe UI"
                     font.pixelSize: 12
                 }
                 Text {
                     x: 158; y: 88
-                    text: "pré-passe de profundidade"
+                    text: "HZB: descarta o que está atrás de parede"
                     color: root.textMuted
                     font.family: "Segoe UI"
                     font.pixelSize: 11
                 }
                 Toggle {
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 82
-                    checked: viewportModel.depthPrepassEnabled
-                    onToggled: viewportModel.SetDepthPrepassEnabled(!checked)
+                    checked: viewportModel.occlusionCullingEnabled
+                    onToggled: viewportModel.SetOcclusionCullingEnabled(!checked)
                 }
 
                 Text {
                     x: 20; y: 120
-                    text: "Mesclar por material"
+                    text: "Depth prepass"
                     color: root.textNormal
                     font.family: "Segoe UI"
                     font.pixelSize: 12
                 }
                 Text {
                     x: 158; y: 120
-                    text: "agrupa draws por material"
+                    text: "pré-passe de profundidade"
                     color: root.textMuted
                     font.family: "Segoe UI"
                     font.pixelSize: 11
                 }
                 Toggle {
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 114
+                    checked: viewportModel.depthPrepassEnabled
+                    onToggled: viewportModel.SetDepthPrepassEnabled(!checked)
+                }
+
+                Text {
+                    x: 20; y: 152
+                    text: "Mesclar por material"
+                    color: root.textNormal
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                Text {
+                    x: 158; y: 152
+                    text: "agrupa draws por material"
+                    color: root.textMuted
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right; anchors.rightMargin: 20; y: 146
                     checked: viewportModel.mergeByMaterialEnabled
                     onToggled: viewportModel.SetMergeByMaterialEnabled(!checked)
                 }
@@ -831,6 +851,8 @@ Rectangle {
                     x: 16; y: 119; width: parent.width - 32
                     label: "Draws visíveis"
                     value: viewportModel.visibleDrawCount + " / " + viewportModel.totalDrawCount
+                           + (viewportModel.occludedDrawCount > 0
+                              ? " · ocl " + viewportModel.occludedDrawCount : "")
                 }
                 StatusRow {
                     x: 16; y: 141; width: parent.width - 32

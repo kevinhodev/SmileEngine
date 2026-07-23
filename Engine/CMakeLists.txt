@@ -52,6 +52,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/ReSTIRGI.h
     Include/Smile/Graphics/NrdDenoiser.h
     Include/Smile/Graphics/AmbientOcclusion.h
+    Include/Smile/Graphics/HiZOcclusion.h
     Include/Smile/Graphics/ShaderUtils.h
     Include/Smile/Graphics/PostProcess.h
     Include/Smile/Graphics/Fsr2Pass.h
@@ -109,6 +110,7 @@ set(ENGINE_SOURCES
     Source/Graphics/NrdDenoiser.cpp
     Source/Graphics/Reflections.cpp
     Source/Graphics/AmbientOcclusion.cpp
+    Source/Graphics/HiZOcclusion.cpp
     Source/Graphics/ShaderUtils.cpp
     Source/Graphics/PostProcess.cpp
     Source/Graphics/TemporalAA.cpp

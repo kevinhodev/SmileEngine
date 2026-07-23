@@ -146,6 +146,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetFrustumCulling();
     }
 
+    bool ViewportWidget::IsOcclusionCullingEnabled() const {
+        return Renderer && Renderer->GetOcclusionCulling();
+    }
+
     bool ViewportWidget::IsDepthPrepassEnabled() const {
         return Renderer && Renderer->GetDepthPrepass();
     }
@@ -164,6 +168,10 @@ namespace SmileEditor {
 
     int ViewportWidget::GetTotalDrawCount() const {
         return Renderer ? static_cast<int>(Renderer->GetDrawCount()) : 0;
+    }
+
+    int ViewportWidget::GetOccludedDrawCount() const {
+        return Renderer ? static_cast<int>(Renderer->GetOccludedCount()) : 0;
     }
 
     QString ViewportWidget::GetInternalResolution() const {
@@ -435,6 +443,12 @@ namespace SmileEditor {
     void ViewportWidget::SetFrustumCullingEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetFrustumCulling(_Enabled);
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetOcclusionCullingEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetOcclusionCulling(_Enabled);
         emit ViewSettingsChanged();
     }
 

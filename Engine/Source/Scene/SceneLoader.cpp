@@ -43,6 +43,10 @@ namespace Smile {
         void* p = nullptr;
         SMILE_HR(ObjectCB->Map(0, &NoRead, &p));
         MappedObjectCB = reinterpret_cast<u8*>(p);
+
+        // Buffers de bounds/visibilidade do occlusion culling acompanham a capacidade
+        // (a fila ja foi flushada acima; recriar aqui e seguro).
+        HiZ.SetupObjects(Device.Native(), SRVHeap, MaxObjects);
     }
 
     namespace {

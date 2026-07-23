@@ -39,6 +39,7 @@
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
 #include "Smile/Graphics/AmbientOcclusion.h"
+#include "Smile/Graphics/HiZOcclusion.h"
 #include "Smile/Graphics/PostProcess.h"
 #include "Smile/Graphics/MaterialPreview.h"
 #include "Smile/Graphics/Picking.h"
@@ -173,6 +174,15 @@ namespace Smile {
 
         void SetFrustumCulling(bool Use) { UseFrustumCulling = Use; }
         bool GetFrustumCulling() const   { return UseFrustumCulling; }
+
+        // Occlusion culling (HZB): ao religar, descarta resultados velhos do readback
+        // ring — os proximos kFramesInFlight frames desenham tudo ate ter teste fresco.
+        void SetOcclusionCulling(bool Use) {
+            if (Use && !UseOcclusionCulling) HiZ.InvalidateResults();
+            UseOcclusionCulling = Use;
+        }
+        bool GetOcclusionCulling() const { return UseOcclusionCulling; }
+        u32  GetOccludedCount() const    { return LastOccludedCount; }
 
         void SetDepthPrepass(bool Use)   { UseDepthPrepass = Use; }
         bool GetDepthPrepass() const     { return UseDepthPrepass; }
@@ -567,6 +577,10 @@ namespace Smile {
         FAmbientOcclusion AO;
         bool              UseAO   = true;
         bool              AODebug = false;
+
+        FHiZOcclusion     HiZ; // occlusion culling HZB (build + teste + readback ring)
+        bool              UseOcclusionCulling = true;
+        u32               LastOccludedCount   = 0;
         static constexpr f32 kKmPerWorldUnit = 0.001f;
 
         FCloudNoise       CloudNoise;

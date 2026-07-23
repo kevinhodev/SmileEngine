@@ -59,6 +59,11 @@ smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_
 smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
+# Occlusion culling — cadeia HZB (min-reduce do depth em reverse-Z, estilo UE)
+# + teste de AABB (1 thread/objeto, port do HZBTestPS/NaniteHZBCull)
+smile_compile_shader(HZB/HZBBuild.cs.hlsl    cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(HZB/HZBTest.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
+
 smile_compile_shader(AO/GTAO.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(AO/GTAOBlur.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(AO/GTAOUpsample.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
@@ -193,6 +198,8 @@ add_custom_target(Shaders
         Reflections/ReflectionSpatial.cs.hlsl
         Reflections/ReflectionComposite.ps.hlsl
         Reflections/ReflectionNrdPack.cs.hlsl
+        HZB/HZBBuild.cs.hlsl
+        HZB/HZBTest.cs.hlsl
         AO/GTAOCommon.hlsli
         AO/GTAO.cs.hlsl
         AO/GTAOBlur.cs.hlsl

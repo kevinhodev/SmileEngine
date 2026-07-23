@@ -37,6 +37,7 @@ namespace SmileEditor {
         Q_PROPERTY(double renderScale READ GetRenderScale NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool occlusionCullingEnabled READ IsOcclusionCullingEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool sunShadowsEnabled READ AreSunShadowsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool shadowCacheEnabled READ IsShadowCacheEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool shadowDebugCascades READ IsShadowDebugCascades NOTIFY ViewSettingsChanged)
@@ -95,6 +96,7 @@ namespace SmileEditor {
         Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
         Q_PROPERTY(double frameTimeMs READ GetFrameTimeMs NOTIFY FrameReady)
         Q_PROPERTY(int visibleDrawCount READ GetVisibleDrawCount NOTIFY FrameReady)
+        Q_PROPERTY(int occludedDrawCount READ GetOccludedDrawCount NOTIFY FrameReady)
         Q_PROPERTY(int totalDrawCount READ GetTotalDrawCount NOTIFY FrameReady)
         Q_PROPERTY(QString internalResolution READ GetInternalResolution NOTIFY FrameReady)
         Q_PROPERTY(QString outputResolution READ GetOutputResolution NOTIFY FrameReady)
@@ -140,6 +142,7 @@ namespace SmileEditor {
         double            GetRenderScale() const;
         bool              IsTAAEnabled() const;
         bool              IsFrustumCullingEnabled() const;
+        bool              IsOcclusionCullingEnabled() const;
         bool              AreSunShadowsEnabled() const;
         bool              IsShadowCacheEnabled() const;
         bool              IsShadowDebugCascades() const;
@@ -197,6 +200,7 @@ namespace SmileEditor {
         double            GetFrameTimeMs() const;
         int               GetVisibleDrawCount() const;
         int               GetTotalDrawCount() const;
+        int               GetOccludedDrawCount() const;
         QString           GetInternalResolution() const;
         QString           GetOutputResolution() const;
         QString           GetGPUName() const;
@@ -225,6 +229,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SetRenderScale(double scale);
         Q_INVOKABLE void SetTAAEnabled(bool enabled);
         Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);
+        Q_INVOKABLE void SetOcclusionCullingEnabled(bool enabled);
         Q_INVOKABLE void SetSunShadowsEnabled(bool enabled);
         Q_INVOKABLE void SetShadowCacheEnabled(bool enabled);
         Q_INVOKABLE void SetShadowDebugCascades(bool enabled);
