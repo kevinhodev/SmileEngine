@@ -2,26 +2,67 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <d3d12sdklayers.h>
+#include <cstdio>
 #include <string>
+#include <string_view>
 
 namespace Smile {
     namespace {
-        void CALLBACK D3D12DebugMessageCallback(D3D12_MESSAGE_CATEGORY,
+        std::string WideToUtf8(std::wstring_view _Text) {
+            if (_Text.empty()) return {};
+            const int Length = WideCharToMultiByte(
+                CP_UTF8, 0, _Text.data(), static_cast<int>(_Text.size()),
+                nullptr, 0, nullptr, nullptr);
+            if (Length <= 0) return "<nome indisponivel>";
+
+            std::string Utf8(static_cast<size_t>(Length), '\0');
+            WideCharToMultiByte(
+                CP_UTF8, 0, _Text.data(), static_cast<int>(_Text.size()),
+                Utf8.data(), Length, nullptr, nullptr);
+            return Utf8;
+        }
+
+        std::string Hex4(unsigned _Value) {
+            char Text[9]{};
+            std::snprintf(Text, sizeof(Text), "%04X", _Value);
+            return Text;
+        }
+
+        void CALLBACK D3D12DebugMessageCallback(D3D12_MESSAGE_CATEGORY _Category,
                                                 D3D12_MESSAGE_SEVERITY _Severity,
-                                                D3D12_MESSAGE_ID,
+                                                D3D12_MESSAGE_ID _Id,
                                                 LPCSTR _Description, void*) {
+            const std::string Prefix =
+                "[D3D12 #" + std::to_string(static_cast<unsigned>(_Id)) +
+                " cat=" + std::to_string(static_cast<unsigned>(_Category)) + "] ";
             switch (_Severity) {
                 case D3D12_MESSAGE_SEVERITY_CORRUPTION:
                 case D3D12_MESSAGE_SEVERITY_ERROR:
-                    LogError(std::string("[D3D12] ") + _Description);
+                    LogError(Prefix + _Description);
                     break;
                 case D3D12_MESSAGE_SEVERITY_WARNING:
-                    LogWarning(std::string("[D3D12] ") + _Description);
+                    LogWarning(Prefix + _Description);
                     break;
                 default:
                     break; 
             }
         }
+    }
+
+    FD3D12Device::~FD3D12Device() noexcept {
+        if (DebugInfoQueue && DebugCallbackRegistered) {
+            const HRESULT Hr = DebugInfoQueue->UnregisterMessageCallback(DebugCallbackCookie);
+            if (FAILED(Hr)) {
+                char Message[96]{};
+                std::snprintf(Message, sizeof(Message),
+                              "[D3D12] Falha ao remover callback de debug: HRESULT 0x%08lX",
+                              static_cast<unsigned long>(Hr));
+                LogWarning(Message);
+            }
+        }
+        DebugCallbackRegistered = false;
+        DebugCallbackCookie = 0;
+        DebugInfoQueue.Reset();
     }
 
     void FD3D12Device::Initialize(bool _EnableDebugLayer) {
@@ -56,6 +97,12 @@ namespace Smile {
 
         AdapterDescription          = AdapterDesc.Description;
         AdapterDedicatedVideoMemory = static_cast<u64>(AdapterDesc.DedicatedVideoMemory);
+        LogInfo("[D3D12] - Adapter: " + WideToUtf8(AdapterDescription) +
+                " | vendor=0x" + Hex4(AdapterDesc.VendorId) +
+                " device=0x" + Hex4(AdapterDesc.DeviceId) +
+                " | VRAM dedicada=" +
+                std::to_string(AdapterDedicatedVideoMemory / (1024ull * 1024ull)) +
+                " MiB | tearing=" + (IsTearingSupported ? "sim" : "nao"));
 
         if (FAILED(Adapter.As(&Adapter3)))
             LogWarning("[D3D12] - IDXGIAdapter3 indisponivel; medicao de uso de VRAM desativada");
@@ -63,8 +110,7 @@ namespace Smile {
         SMILE_HR(D3D12CreateDevice(Adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&Device)));
 
         if (_EnableDebugLayer) {
-            ComPtr<ID3D12InfoQueue1> InfoQueue;
-            if (SUCCEEDED(Device.As(&InfoQueue))) {
+            if (SUCCEEDED(Device.As(&DebugInfoQueue))) {
                 // Falso positivo conhecido do debug layer (Agility SDK ~1.616): em fila
                 // COPY, o validador promove a textura COMMON->COPY_DEST na propria copia
                 // e dai acusa INCOMPATIBLE_BARRIER_LAYOUT (#1334) "LEGACY_COPY_DEST !=
@@ -78,12 +124,14 @@ namespace Smile {
                 D3D12_INFO_QUEUE_FILTER Filter{};
                 Filter.DenyList.NumIDs  = _countof(DeniedIds);
                 Filter.DenyList.pIDList = DeniedIds;
-                InfoQueue->PushStorageFilter(&Filter);
+                DebugInfoQueue->PushStorageFilter(&Filter);
 
                 DWORD Cookie = 0;
-                if (SUCCEEDED(InfoQueue->RegisterMessageCallback(
+                if (SUCCEEDED(DebugInfoQueue->RegisterMessageCallback(
                         D3D12DebugMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE,
                         nullptr, &Cookie))) {
+                    DebugCallbackCookie = Cookie;
+                    DebugCallbackRegistered = true;
                     LogInfo("[D3D12] - Debug Messages Roteadas para o Logger");
                 }
             } else {

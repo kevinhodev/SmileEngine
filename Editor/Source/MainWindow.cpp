@@ -67,6 +67,22 @@ namespace SmileEditor {
 
         // Precisa existir antes de CreateDocks (o ConsolePanel.qml liga nele) e do sink de log.
         ConsoleLog = new LogBridge(this);
+        // Liga cedo: CreateTopBar/CreateViewportChrome/CreateDocks ja podem emitir logs e erros
+        // QML. SetLogSink e quiescente, entao o destrutor consegue desligar isto com seguranca.
+        Smile::SetLogSink([Log = ConsoleLog](Smile::LogLevel Level, std::string_view Message) {
+            Log->Append(Level, Message);
+        });
+        struct FSinkRollback {
+            bool Armed = true;
+            ~FSinkRollback() noexcept {
+                if (!Armed) return;
+                try {
+                    Smile::SetLogSink({});
+                } catch (...) {
+                }
+            }
+        } SinkRollback;
+
         WindowBr   = new WindowBridge(this); // botoes de janela da MainBar.qml
         Menus      = new MenuBridge(this);   // menus da MainBar.qml (precisa existir antes dela)
         TodBridge  = new TimeOfDayBridge(this); // painel Time of Day (renderer chega depois)
@@ -90,12 +106,6 @@ namespace SmileEditor {
         setCentralWidget(CreateViewportChrome());
         CreateDocks();
         WireMenuActions(); // conecta os menus depois que Viewport e ConsoleDock existem
-
-        // O LogBridge normaliza nivel->cor/tag e marshala para a thread da GUI; o ConsolePanel.qml
-        // escuta LineAdded e preenche a ListView.
-        Smile::SetLogSink([this](Smile::LogLevel level, std::string_view msg) {
-            if (ConsoleLog) ConsoleLog->Append(level, msg);
-        });
 
         CreateStatusBar();
 
@@ -165,9 +175,17 @@ namespace SmileEditor {
         } else {
             Smile::LogWarning("Diretorio de shaders de origem nao encontrado: " + ShadersSourceDir.toStdString());
         }
+        SinkRollback.Armed = false;
     }
 
     MainWindow::~MainWindow() {
+        // Primeiro passo do teardown: espera callbacks em voo e impede que Renderer::Shutdown
+        // alcance o LogBridge depois que os filhos Qt comecarem a ser destruidos.
+        try {
+            Smile::SetLogSink({});
+        } catch (...) {
+            Smile::LogError("Falha absorvida ao desconectar o console durante o teardown");
+        }
         if (WinFilter) {
             qApp->removeNativeEventFilter(WinFilter);
             delete WinFilter;

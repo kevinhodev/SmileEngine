@@ -69,7 +69,7 @@ namespace SmileEditor {
 
     ViewportWidget::~ViewportWidget() {
         if (RedrawTimer) RedrawTimer->stop();
-        if (Renderer)    Renderer->Shutdown();
+        // O destrutor noexcept do Renderer centraliza o shutdown e absorve falhas tardias.
     }
 
     QPaintEngine* ViewportWidget::paintEngine() const {

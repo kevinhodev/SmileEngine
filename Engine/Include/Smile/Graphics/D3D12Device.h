@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <chrono>
 #include <string>
@@ -22,6 +23,8 @@ namespace Smile {
 
     class FD3D12Device {
     public:
+        ~FD3D12Device() noexcept;
+
         void Initialize(bool EnableDebugLayer);
 
         ID3D12Device*   Native() const { return Device.Get(); }
@@ -43,6 +46,7 @@ namespace Smile {
     private:
         ComPtr<ID3D12Device>  Device;
         ComPtr<ID3D12Device5> DeviceRT;
+        ComPtr<ID3D12InfoQueue1> DebugInfoQueue;
         ComPtr<IDXGIFactory6> Factory;
         ComPtr<IDXGIAdapter1> Adapter;
         ComPtr<IDXGIAdapter3> Adapter3;
@@ -54,5 +58,7 @@ namespace Smile {
         u64                   AdapterDedicatedVideoMemory = 0;
         bool                  IsTearingSupported    = false;
         bool                  IsRaytracingSupported = false;
+        DWORD                 DebugCallbackCookie   = 0;
+        bool                  DebugCallbackRegistered = false;
     };
 } 

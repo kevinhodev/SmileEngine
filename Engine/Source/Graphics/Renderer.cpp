@@ -8,6 +8,7 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
+#include <exception>
 #include <functional>
 #include <cmath>
 
@@ -21,7 +22,15 @@ namespace Smile {
     }
 
     Renderer::Renderer() = default;
-    Renderer::~Renderer() { Shutdown(); }
+    Renderer::~Renderer() noexcept {
+        try {
+            Shutdown();
+        } catch (const std::exception& Error) {
+            LogError(std::string("Falha absorvida no shutdown do Renderer: ") + Error.what());
+        } catch (...) {
+            LogError("Falha desconhecida absorvida no shutdown do Renderer");
+        }
+    }
 
     void Renderer::Initialize(HWND _hWnd, u32 _Width, u32 _Height) {
         if (Initialized) return;

@@ -3,6 +3,8 @@
 #include <QAbstractListModel>
 #include <QString>
 #include <QVector>
+#include <deque>
+#include <mutex>
 #include <string_view>
 #include "Smile/Core/Logger.h"
 
@@ -14,6 +16,9 @@ namespace SmileEditor {
     class LogBridge : public QAbstractListModel {
         Q_OBJECT
         Q_PROPERTY(int maxLines READ MaxLines CONSTANT)
+        Q_PROPERTY(int count READ Count NOTIFY StatsChanged)
+        Q_PROPERTY(qulonglong droppedCount READ DroppedCount NOTIFY StatsChanged)
+        Q_PROPERTY(qulonglong evictedCount READ EvictedCount NOTIFY StatsChanged)
 
     public:
         enum Roles {
@@ -29,6 +34,9 @@ namespace SmileEditor {
         void Append(Smile::LogLevel level, std::string_view message);
 
         int MaxLines() const { return 500; }
+        int Count() const { return static_cast<int>(Entries.size()); }
+        qulonglong DroppedCount() const { return DroppedCount_; }
+        qulonglong EvictedCount() const { return EvictedCount_; }
 
         // QAbstractListModel
         int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -46,6 +54,9 @@ namespace SmileEditor {
     signals:
         // MainWindow liga isto ao close() do QDockWidget (a barra de titulo virou 100% QML).
         void CloseRequested();
+        void StatsChanged();
+        // Sinal explicito: no teto FIFO, count/contentHeight podem ficar iguais depois do lote.
+        void RowsAppended();
 
     private:
         struct Entry {
@@ -55,10 +66,20 @@ namespace SmileEditor {
             QString Color; // hex CSS (#rrggbb) por nivel
         };
 
-        // Insere uma linha; roda sempre na thread da GUI (chamada via QueuedConnection).
-        Q_INVOKABLE void AppendRow(const QString& time, const QString& tag,
-                                   const QString& message, const QString& color);
+        // Drena a fila concorrente em um unico lote; roda sempre na thread da GUI.
+        void DrainPending();
 
         QVector<Entry> Entries;
+
+        static constexpr size_t kMaxPendingEntries = 4096;
+        static constexpr size_t kMaxConsoleMessageBytes = 256 * 1024;
+
+        std::mutex        PendingMutex;
+        std::deque<Entry> Pending;
+        qulonglong        PendingDropped = 0;
+        bool              DrainScheduled = false;
+
+        qulonglong DroppedCount_ = 0; // pressao na fila: nunca chegou ao model
+        qulonglong EvictedCount_ = 0; // FIFO normal: saiu pelo teto de historico
     };
 }

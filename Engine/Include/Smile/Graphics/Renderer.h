@@ -123,7 +123,7 @@ namespace Smile {
     class Renderer {
     public:
         Renderer();
-        ~Renderer();
+        ~Renderer() noexcept;
 
         Renderer(const Renderer&)            = delete;
         Renderer& operator=(const Renderer&) = delete;

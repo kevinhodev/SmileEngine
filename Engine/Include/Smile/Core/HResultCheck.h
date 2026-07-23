@@ -27,7 +27,8 @@ namespace Smile {
     do {                                                                                \
         const HRESULT _hr = (expr);                                                     \
         if (FAILED(_hr)) {                                                              \
-            ::Smile::LogError(std::string("[HR FAIL] ") + #expr);                       \
-            throw ::Smile::HResultException(_hr, #expr, __FILE__, __LINE__);            \
+            const ::Smile::HResultException _exception(_hr, #expr, __FILE__, __LINE__); \
+            ::Smile::LogError(std::string("[HR FAIL] ") + _exception.what());            \
+            throw _exception;                                                           \
         }                                                                               \
     } while (0)

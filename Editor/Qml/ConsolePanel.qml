@@ -12,8 +12,24 @@ Rectangle {
 
     // Pin = "travar no fim": auto-rola pra ultima msg conforme chegam. Rolar pra cima destrava.
     property bool follow: true
+    property bool scrollPending: false
 
     function scrollToEnd() { logView.positionViewAtEnd() }
+    function requestScrollToEnd() {
+        if (!root.follow || root.scrollPending)
+            return
+        root.scrollPending = true
+        Qt.callLater(function() {
+            root.scrollPending = false
+            if (root.follow)
+                root.scrollToEnd()
+        })
+    }
+
+    Connections {
+        target: logModel
+        function onRowsAppended() { root.requestScrollToEnd() }
+    }
 
     // ---- Componentes reutilizaveis (inline) ----
     component IconButton: Item {
@@ -73,6 +89,21 @@ Rectangle {
         Row {
             anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
             spacing: 6
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: {
+                    let value = logModel.count + "/" + logModel.maxLines
+                    if (logModel.evictedCount > 0)
+                        value += " · " + logModel.evictedCount + " antigas"
+                    if (logModel.droppedCount > 0)
+                        value += " · " + logModel.droppedCount + " perdidas"
+                    return value
+                }
+                color: logModel.droppedCount > 0 ? "#f3b43f" : "#6c6a61"
+                font.family: "Consolas"
+                font.pixelSize: 10
+            }
 
             Rectangle {
                 id: clearBtn
@@ -154,9 +185,9 @@ Rectangle {
 
             HoverHandler { id: listHover }
 
-            // Auto-scroll robusto: dispara em contentHeightChanged (depois do delegate novo ser
-            // criado/medido) via Qt.callLater, senao parava na penultima linha.
-            onContentHeightChanged: if (root.follow) Qt.callLater(root.scrollToEnd)
+            // RowsAppended e explicito: quando o FIFO remove+insere no teto, count/contentHeight
+            // podem terminar iguais e nenhum *Changed seria suficiente para seguir o fim.
+            onMovementStarted: root.follow = false
             onMovementEnded: root.follow = atYEnd
             Component.onCompleted: positionViewAtEnd()
 
@@ -177,6 +208,7 @@ Rectangle {
                     width: Math.max(0, logView.width - timeCol.width - tagCol.width - 12)
                     text: model.message; color: "#b9b5aa"
                     font.family: "Consolas"; font.pixelSize: 12
+                    textFormat: Text.PlainText
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 }
             }
@@ -220,7 +252,11 @@ Rectangle {
                 size: logView.visibleArea.heightRatio
                 position: logView.visibleArea.yPosition
                 active: logView.movingVertically
-                onPositionChanged: if (pressed) logView.contentY = position * logView.contentHeight
+                onPositionChanged: if (pressed) {
+                    root.follow = false
+                    logView.contentY = position * logView.contentHeight
+                }
+                onPressedChanged: if (!pressed) root.follow = logView.atYEnd
             }
         }
     }
