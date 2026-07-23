@@ -131,5 +131,15 @@ if(WIN32)
             COMMENT "Copiando NRD.dll para o diretorio de build"
         )
     endif()
+
+    # Copia a amd_fidelityfx_dx12.dll ao lado do exe (o FSR/ffx-api usa import lib + DLL, igual ao NRD).
+    if(SMILE_FSR_DLL AND EXISTS "${SMILE_FSR_DLL}")
+        add_custom_command(TARGET SmileEditor POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${SMILE_FSR_DLL}"
+                    "$<TARGET_FILE_DIR:SmileEditor>"
+            COMMENT "Copiando amd_fidelityfx_dx12.dll para o diretorio de build"
+        )
+    endif()
 endif()
 

@@ -46,7 +46,7 @@
 #include "Smile/Graphics/SelectionOutline.h"
 #include "Smile/Graphics/DebugDraw.h"
 #include "Smile/Graphics/TemporalAA.h"
-#include "Smile/Graphics/Fsr2Pass.h"
+#include "Smile/Graphics/FsrPass.h"
 #include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
@@ -77,7 +77,7 @@ namespace Smile {
         Mat44 InvViewProj;        // 64 bytes — inversa FULL da view-proj (jittered); deferred lighting
                                   // reconstroi worldPos do depth. Append no fim: nao mexe nos offsets acima.
 
-        Vec4  RenderParams;       // 16 bytes (c18) — x = mip bias global de textura (FSR2 upscale:
+        Vec4  RenderParams;       // 16 bytes (c18) — x = mip bias global de textura (FSR upscale:
                                   // log2(render/display) - 1; 0 quando nativo/SSAA), yzw = -
 
         Vec4  CloudShadowParams;  // 16 bytes — xy = centro XZ do shadow map de nuvens (km),
@@ -247,22 +247,23 @@ namespace Smile {
         void LoadMoonTexture(const std::wstring& Path);
         void LoadStarCatalog(const std::wstring& Path);
 
-        // FSR2 (substitui o TAA quando ligado). So funciona em build Release (Debug = stub).
-        void SetUseFsr2(bool V) {
-            UseFsr2 = V; TAARanLastFrame = false;
-            // FSR2 = render menor + upscale; desligado volta ao nativo. So mexe no scale se o
-            // contexto existe (Release) — em Debug (stub) nao mexe p/ nao borrar via post chain.
-            if (Fsr2.IsInitialized()) SetRenderScale(V ? Fsr2Ratio() : 1.0f);
+        // FSR (substitui o TAA quando ligado). Funciona em Debug e Release (ffx-api via DLL); vira
+        // stub so quando o SDK nao e achado no CMake.
+        void SetUseFsr(bool V) {
+            UseFsr = V; TAARanLastFrame = false;
+            // FSR = render menor + upscale; desligado volta ao nativo. So mexe no scale se o
+            // contexto existe — sem contexto (stub) nao mexe p/ nao borrar via post chain.
+            if (Fsr.IsInitialized()) SetRenderScale(V ? FsrRatio() : 1.0f);
         }
-        bool GetUseFsr2() const              { return UseFsr2; }
-        bool Fsr2Available() const           { return Fsr2.IsInitialized(); }
-        // Qualidade do FSR2: 0=Native(1.0) 1=Quality(1.5x) 2=Balanced(1.7x) 3=Performance(2.0x)
+        bool GetUseFsr() const               { return UseFsr; }
+        bool FsrAvailable() const            { return Fsr.IsInitialized(); }
+        // Qualidade do FSR: 0=100%(1.0x) 1=Quality(1.5x) 2=Balanced(1.7x) 3=Performance(2.0x)
         // 4=UltraPerf(3.0x). Dirige o RenderScale (render res < display = upscale + perf).
-        void SetFsr2Quality(int Mode) {
-            Fsr2Quality = Mode < 0 ? 0 : (Mode > 4 ? 4 : Mode);
-            if (UseFsr2 && Fsr2.IsInitialized()) SetRenderScale(Fsr2Ratio());
+        void SetFsrQuality(int Mode) {
+            FsrQuality = Mode < 0 ? 0 : (Mode > 4 ? 4 : Mode);
+            if (UseFsr && Fsr.IsInitialized()) SetRenderScale(FsrRatio());
         }
-        int  GetFsr2Quality() const          { return Fsr2Quality; }
+        int  GetFsrQuality() const           { return FsrQuality; }
         void SetUseTAA(bool V)               { UseTAA = V; TAARanLastFrame = false; }
         bool GetUseTAA() const               { return UseTAA; }
         void SetFlickerMode(u32 Mode)        { if (Mode > 0 && FlickerMode == 0) FlickerResetPending = true; FlickerMode = Mode; }
@@ -513,14 +514,14 @@ namespace Smile {
         Mat44                    PrevViewProj{};
         bool                     TAARanLastFrame = false;
 
-        // FSR2 (AMD FidelityFX) — substitui o TAA custom. Fase 1: so ciclo de vida do contexto.
-        // Ativo so em build Release (em Debug FFsr2Pass e stub). Dispatch vem na Fase 2.
-        FFsr2Pass                Fsr2;
-        bool                     UseFsr2 = true;  // FSR2 ligado por padrao (substitui o TAA em Release)
-        int                      Fsr2Quality = 0; // 0=Native 1=Quality 2=Balanced 3=Perf 4=Ultra
-        f32 Fsr2Ratio() const {
+        // FSR (AMD FidelityFX, upscaler FSR 3.1 via ffx-api) — substitui o TAA custom. Ativo em Debug
+        // e Release; vira stub (FFsrPass) so quando o SDK nao e achado no CMake.
+        FFsrPass                 Fsr;
+        bool                     UseFsr = true;   // FSR ligado por padrao (substitui o TAA)
+        int                      FsrQuality = 1;  // 0=100% 1=Quality 2=Balanced 3=Perf 4=Ultra
+        f32 FsrRatio() const {
             static const f32 R[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
-            return R[Fsr2Quality < 0 ? 0 : (Fsr2Quality > 4 ? 4 : Fsr2Quality)];
+            return R[FsrQuality < 0 ? 0 : (FsrQuality > 4 ? 4 : FsrQuality)];
         }
 
         FFlickerHeatmap          Flicker;

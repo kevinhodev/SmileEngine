@@ -122,16 +122,24 @@ namespace SmileEditor {
         return Renderer && Renderer->GetUseNrdDenoise();
     }
 
-    bool ViewportWidget::IsFsr2Enabled() const {
-        return Renderer && Renderer->Fsr2Available() && Renderer->GetUseFsr2();
+    int ViewportWidget::GetUpscalerMode() const {
+        return Renderer && Renderer->FsrAvailable() && Renderer->GetUseFsr() ? 1 : 0;
     }
 
-    bool ViewportWidget::IsFsr2Available() const {
-        return Renderer && Renderer->IsInitialized() && Renderer->Fsr2Available();
+    bool ViewportWidget::IsFsrAvailable() const {
+        return Renderer && Renderer->IsInitialized() && Renderer->FsrAvailable();
     }
 
-    int ViewportWidget::GetFsr2Quality() const {
-        return Renderer ? Renderer->GetFsr2Quality() : 0;
+    int ViewportWidget::GetFsrQuality() const {
+        return Renderer ? Renderer->GetFsrQuality() : 0;
+    }
+
+    int ViewportWidget::GetRecommendedUpscalerMode() const {
+        return IsFsrAvailable() ? 1 : 0;
+    }
+
+    QString ViewportWidget::GetRecommendedUpscalerName() const {
+        return IsFsrAvailable() ? QStringLiteral("FSR 3.1") : QStringLiteral("Sem upscaling");
     }
 
     double ViewportWidget::GetRenderScale() const {
@@ -416,15 +424,15 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
-    void ViewportWidget::SetFsr2Enabled(bool _Enabled) {
+    void ViewportWidget::SetUpscalerMode(int _Mode) {
         if (!Renderer) return;
-        Renderer->SetUseFsr2(_Enabled && Renderer->Fsr2Available());
+        Renderer->SetUseFsr(_Mode == 1 && Renderer->FsrAvailable());
         emit ViewSettingsChanged();
     }
 
-    void ViewportWidget::SetFsr2Quality(int _Quality) {
+    void ViewportWidget::SetFsrQuality(int _Quality) {
         if (!Renderer) return;
-        Renderer->SetFsr2Quality(_Quality);
+        Renderer->SetFsrQuality(_Quality);
         emit ViewSettingsChanged();
     }
 
@@ -987,9 +995,11 @@ namespace SmileEditor {
 
     void ViewportWidget::ResetRenderSettings() {
         if (!Renderer) return;
-        Renderer->SetFsr2Quality(1);
-        Renderer->SetUseFsr2(Renderer->Fsr2Available());
-        if (!Renderer->Fsr2Available()) Renderer->SetRenderScale(1.0f);
+        // O padrao segue o backend recomendado. Com FSR disponivel, Qualidade entrega o melhor
+        // equilibrio geral; sem o backend, a engine volta ao caminho nativo em escala 1:1.
+        Renderer->SetFsrQuality(Renderer->FsrAvailable() ? 1 : 0);
+        Renderer->SetUseFsr(Renderer->FsrAvailable());
+        if (!Renderer->FsrAvailable()) Renderer->SetRenderScale(1.0f);
         Renderer->SetUseTAA(true);
         Renderer->SetFrustumCulling(true);
         Renderer->SetDepthPrepass(false);
@@ -1007,6 +1017,10 @@ namespace SmileEditor {
         Renderer->Initialize(hWnd,
                              static_cast<unsigned int>(width()),
                              static_cast<unsigned int>(height()));
+        // FsrQuality e uma preferencia anterior ao contexto. Agora que o backend existe, aplica a
+        // escala recomendada e recria os alvos internos uma unica vez.
+        if (Renderer->FsrAvailable() && Renderer->GetUseFsr())
+            Renderer->SetFsrQuality(Renderer->GetFsrQuality());
         Initialized = true;
         emit RendererInitialized();
     }

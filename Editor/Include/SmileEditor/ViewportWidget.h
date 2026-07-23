@@ -31,9 +31,11 @@ namespace SmileEditor {
         Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool nrdEnabled READ IsNrdEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool fsr2Enabled READ IsFsr2Enabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool fsr2Available READ IsFsr2Available NOTIFY RendererInitialized)
-        Q_PROPERTY(int fsr2Quality READ GetFsr2Quality NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int upscalerMode READ GetUpscalerMode NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool fsrAvailable READ IsFsrAvailable NOTIFY RendererInitialized)
+        Q_PROPERTY(int fsrQuality READ GetFsrQuality NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int recommendedUpscalerMode READ GetRecommendedUpscalerMode NOTIFY RendererInitialized)
+        Q_PROPERTY(QString recommendedUpscalerName READ GetRecommendedUpscalerName NOTIFY RendererInitialized)
         Q_PROPERTY(double renderScale READ GetRenderScale NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
@@ -136,9 +138,11 @@ namespace SmileEditor {
         bool              IsGTAOHalfRes() const;
         bool              AreReflectionsEnabled() const;
         bool              IsNrdEnabled() const;
-        bool              IsFsr2Enabled() const;
-        bool              IsFsr2Available() const;
-        int               GetFsr2Quality() const;
+        int               GetUpscalerMode() const;
+        bool              IsFsrAvailable() const;
+        int               GetFsrQuality() const;
+        int               GetRecommendedUpscalerMode() const;
+        QString           GetRecommendedUpscalerName() const;
         double            GetRenderScale() const;
         bool              IsTAAEnabled() const;
         bool              IsFrustumCullingEnabled() const;
@@ -224,8 +228,8 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleGTAOHalfRes();
         Q_INVOKABLE void ToggleReflections();
         Q_INVOKABLE void ToggleNrd();
-        Q_INVOKABLE void SetFsr2Enabled(bool enabled);
-        Q_INVOKABLE void SetFsr2Quality(int quality);
+        Q_INVOKABLE void SetUpscalerMode(int mode);
+        Q_INVOKABLE void SetFsrQuality(int quality);
         Q_INVOKABLE void SetRenderScale(double scale);
         Q_INVOKABLE void SetTAAEnabled(bool enabled);
         Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);

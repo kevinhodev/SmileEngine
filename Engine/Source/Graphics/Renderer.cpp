@@ -118,7 +118,7 @@ namespace Smile {
         TemporalAA.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
         TemporalAA.SetupInputs(Device.Native(), SRVHeap, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get());
 
-        Fsr2.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+        Fsr.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
                         SwapChain.GetWidth(), SwapChain.GetHeight());
 
         Flicker.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
@@ -732,7 +732,7 @@ namespace Smile {
         TemporalAA.SetupInputs(Device.Native(), SRVHeap, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get());
         TAARanLastFrame = false;
 
-        Fsr2.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
+        Fsr.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
         Flicker.Resize(Device.Native(), SRVHeap, RW, RH);
         FlickerResetPending = true;
 
@@ -886,12 +886,12 @@ namespace Smile {
             : Mat44::PerspectiveFovLH(FovY, Aspect, NearZ, FarZ);
 
         Mat44 Projection = ProjUnjittered;
-        const bool Fsr2Active = UseFsr2 && Fsr2.IsInitialized();
-        const bool TAAActive  = UseTAA && !Fsr2Active && TemporalAA.IsInitialized();
+        const bool FsrActive = UseFsr && Fsr.IsInitialized();
+        const bool TAAActive  = UseTAA && !FsrActive && TemporalAA.IsInitialized();
         f32 JitterPxX = 0.0f, JitterPxY = 0.0f;
         f32 ProjJitterYSign = 1.0f; 
-        if (Fsr2Active) {
-            Fsr2.GetJitter(FrameIndex, JitterPxX, JitterPxY); 
+        if (FsrActive) {
+            Fsr.GetJitter(FrameIndex, JitterPxX, JitterPxY);
             ProjJitterYSign = -1.0f;
         } else if (TAAActive) {
             const u32 kJitterPhases = 8;
@@ -899,7 +899,7 @@ namespace Smile {
             JitterPxX = Halton(Idx, 2) - 0.5f;
             JitterPxY = Halton(Idx, 3) - 0.5f;
         }
-        if (Fsr2Active || TAAActive) {
+        if (FsrActive || TAAActive) {
             Projection.M[2][0] += JitterPxX * 2.0f / static_cast<f32>(RenderWidth());
             Projection.M[2][1] += ProjJitterYSign * JitterPxY * 2.0f / static_cast<f32>(RenderHeight());
         }
@@ -1076,7 +1076,7 @@ namespace Smile {
         const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
         MappedCB->InvViewProj = InvViewProjFull;
 
-        const f32 MipBias = (Fsr2Active && RenderWidth() < OutputWidth())
+        const f32 MipBias = (FsrActive && RenderWidth() < OutputWidth())
             ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
             : 0.0f;
         MappedCB->RenderParams = { MipBias, 0.0f, 0.0f, 0.0f };
@@ -1181,7 +1181,7 @@ namespace Smile {
             const Vec3 KeyColInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
                                      KeyColor.Z * KeyInt };
             const f32 ShaftNoiseFrame =
-                (TAAActive || Fsr2Active || SunShafts.GetVolTemporal())
+                (TAAActive || FsrActive || SunShafts.GetVolTemporal())
                     ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
             SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
                                        ShaftNoiseFrame, InvViewProjFull, CameraPosition,
@@ -1591,7 +1591,7 @@ namespace Smile {
                                    CameraPosition, FovY, MipBias);
 
         {
-            const f32 ShadowNoiseFrame = (TAAActive || Fsr2Active)
+            const f32 ShadowNoiseFrame = (TAAActive || FsrActive)
                 ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
             SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CameraPosition, FovY, Aspect, KeyDir, NearZ, ShadowNoiseFrame);
             if (UseSunShadows) {
@@ -2242,7 +2242,7 @@ namespace Smile {
             PostInput    = TemporalAA.DisplayOutputResource();
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             TAARanLastFrame = true;
-        } else if (Fsr2Active) {
+        } else if (FsrActive) {
             FBarrierBatch Batch;
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -2253,8 +2253,8 @@ namespace Smile {
             Batch.Flush(CommandList);
 
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "FSR2");
-                Fsr2.Dispatch(CommandList, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get(),
+                FGpuScope Scope(GpuProfiler, CommandList, "FSR");
+                Fsr.Dispatch(CommandList, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get(),
                               JitterPxX, JitterPxY, NearZ, FarZ, FovY, LastDeltaTime, false);
             }
 
@@ -2266,8 +2266,8 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
 
-            PostInput    = Fsr2.OutputResource();
-            PostInputSRV = Fsr2.OutputSRVSlot();
+            PostInput    = Fsr.OutputResource();
+            PostInputSRV = Fsr.OutputSRVSlot();
             TAARanLastFrame = false;
         } else {
             TAARanLastFrame = false;
@@ -2352,7 +2352,7 @@ namespace Smile {
         ComputeQueue.Shutdown();
         UploadQueue.Shutdown();
         Nrd.Shutdown();  
-        Fsr2.Shutdown(); 
+        Fsr.Shutdown();
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);
             MappedFrameBase = nullptr;

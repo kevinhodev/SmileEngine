@@ -214,24 +214,139 @@ Rectangle {
         TapHandler { onTapped: abtn.tapped() }
     }
 
+    component UpscalerOption: Rectangle {
+        id: option
+        property int mode: 0
+        property string label
+        property string detail
+        property string badge
+        property bool selected: false
+        property bool available: true
+        signal chosen()
+
+        height: 48
+        radius: 6
+        color: option.selected ? root.blueBg
+                               : (optionHover.hovered && option.available ? root.hoverBg : "transparent")
+        border.color: option.selected ? root.blueBorder : "transparent"
+        border.width: 1
+        opacity: option.available ? 1.0 : 0.46
+
+        Rectangle {
+            x: 8
+            anchors.verticalCenter: parent.verticalCenter
+            width: 30; height: 30; radius: 7
+            color: option.selected ? "#243651" : "#292b24"
+            border.color: option.selected ? "#345681" : "#36382f"
+            clip: true
+            Image {
+                anchors.fill: parent
+                anchors.margins: 1
+                visible: option.mode === 1
+                source: "icons/fidelityfx-fsr.png"
+                sourceClipRect: Qt.rect(266, 88, 72, 72)
+                fillMode: Image.PreserveAspectCrop
+                smooth: true
+                mipmap: true
+            }
+            Text {
+                anchors.centerIn: parent
+                visible: option.mode === 0
+                text: "1:1"
+                color: option.selected ? root.blue : root.textNormal
+                font.family: "Segoe UI"
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+            }
+        }
+        Text {
+            x: 48; y: 8
+            text: option.label
+            color: option.selected ? root.textPrimary : root.textNormal
+            font.family: "Segoe UI"
+            font.pixelSize: 12
+            font.weight: Font.Medium
+        }
+        Text {
+            x: 48; y: 26
+            width: parent.width - 154
+            text: option.detail
+            color: root.textMuted
+            elide: Text.ElideRight
+            font.family: "Segoe UI"
+            font.pixelSize: 10
+        }
+        Rectangle {
+            visible: option.badge.length > 0
+            anchors.right: selectedMark.left
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            width: optionBadge.implicitWidth + 18
+            height: 20
+            radius: 10
+            color: option.badge === "RECOMENDADO" ? "#1d3424" : "#25271f"
+            border.color: option.badge === "RECOMENDADO" ? "#36563d" : "#3a3c33"
+            Text {
+                id: optionBadge
+                anchors.centerIn: parent
+                text: option.badge
+                color: option.badge === "RECOMENDADO" ? root.green : root.textSecondary
+                font.family: "Segoe UI"
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+            }
+        }
+        Text {
+            id: selectedMark
+            anchors.right: parent.right
+            anchors.rightMargin: 13
+            anchors.verticalCenter: parent.verticalCenter
+            text: option.selected ? "✓" : ""
+            color: root.blue
+            font.family: "Segoe UI Symbol"
+            font.pixelSize: 13
+        }
+        HoverHandler {
+            id: optionHover
+            enabled: option.available
+            cursorShape: option.available ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+        }
+        TapHandler {
+            enabled: option.available
+            onTapped: option.chosen()
+        }
+    }
+
     component Card: Rectangle {
+        id: card
         property string title
+        readonly property int headerHeight: 40
+        readonly property int contentPadding: 16
         radius: 8
         color: root.cardBg
         border.color: root.borderColor
         border.width: 1
-        Text {
-            x: 20; y: 18
-            text: parent.title
-            color: root.textPrimary
-            font.family: "Segoe UI"
-            font.pixelSize: 13
-            font.weight: Font.Medium
+
+        Item {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: card.headerHeight
+
+            Text {
+                x: 20
+                anchors.verticalCenter: parent.verticalCenter
+                text: card.title
+                color: root.textPrimary
+                font.family: "Segoe UI"
+                font.pixelSize: 13
+                font.weight: Font.Medium
+            }
         }
         Rectangle {
             anchors.left: parent.left
             anchors.right: parent.right
-            y: 40
+            y: card.headerHeight
             height: 1
             color: root.divider
         }
@@ -537,196 +652,399 @@ Rectangle {
                 title: "Upscaling e anti-aliasing"
 
                 Text {
-                    x: 20; y: 55
-                    text: "FSR 2"
-                    color: root.textPrimary
-                    font.family: "Segoe UI"
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 74
-                    text: viewportModel.fsr2Available
-                          ? "Substitui o TAA quando ativo"
-                          : "Disponível apenas em build Release"
-                    color: root.textMuted
+                    x: 20; y: upscalingCard.headerHeight + upscalingCard.contentPadding
+                    text: "Tecnologia de reconstrução"
+                    color: root.textNormal
                     font.family: "Segoe UI"
                     font.pixelSize: 11
                 }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 54
-                    checked: viewportModel.fsr2Enabled
-                    interactive: viewportModel.fsr2Available
-                    onToggled: viewportModel.SetFsr2Enabled(!checked)
+                Rectangle {
+                    id: upscalerField
+                    x: 20; y: 72
+                    width: parent.width - 40
+                    height: 44
+                    radius: 7
+                    color: "#23241d"
+                    border.color: upscalerPopup.opened || upscalerHover.hovered
+                                  ? root.blueBorder : root.borderColor
+                    border.width: 1
+
+                    Rectangle {
+                        x: 9
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 30; height: 28; radius: 7
+                        color: "#292c25"
+                        border.color: "#383a31"
+                        clip: true
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            visible: viewportModel.upscalerMode === 1
+                            source: "icons/fidelityfx-fsr.png"
+                            sourceClipRect: Qt.rect(266, 88, 72, 72)
+                            fillMode: Image.PreserveAspectCrop
+                            smooth: true
+                            mipmap: true
+                        }
+                        Text {
+                            anchors.centerIn: parent
+                            visible: viewportModel.upscalerMode === 0
+                            text: "1:1"
+                            color: root.textNormal
+                            font.family: "Segoe UI"
+                            font.pixelSize: 9
+                            font.weight: Font.DemiBold
+                        }
+                    }
+                    Text {
+                        x: 49; y: 7
+                        text: viewportModel.upscalerMode === 1
+                              ? "AMD FidelityFX Super Resolution"
+                              : "Sem upscaling"
+                        color: root.textPrimary
+                        font.family: "Segoe UI"
+                        font.pixelSize: 12
+                        font.weight: Font.Medium
+                    }
+                    Text {
+                        x: 49; y: 24
+                        width: parent.width - 174
+                        text: viewportModel.upscalerMode === 1
+                              ? "FSR 3.1 · reconstrução temporal"
+                              : "TAA · escala manual de renderização"
+                        color: root.textMuted
+                        elide: Text.ElideRight
+                        font.family: "Segoe UI"
+                        font.pixelSize: 10
+                    }
+                    Rectangle {
+                        visible: viewportModel.upscalerMode === viewportModel.recommendedUpscalerMode
+                        anchors.right: dropdownArrow.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: recommendedText.implicitWidth + 16
+                        height: 20; radius: 10
+                        color: "#1d3424"
+                        border.color: "#36563d"
+                        Text {
+                            id: recommendedText
+                            anchors.centerIn: parent
+                            text: "RECOMENDADO"
+                            color: root.green
+                            font.family: "Segoe UI"
+                            font.pixelSize: 9
+                            font.weight: Font.DemiBold
+                        }
+                    }
+                    Canvas {
+                        id: dropdownArrow
+                        anchors.right: parent.right
+                        anchors.rightMargin: 13
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12
+                        height: 8
+                        property bool expanded: upscalerPopup.opened
+                        onExpandedChanged: requestPaint()
+                        onPaint: {
+                            const ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.strokeStyle = root.textSecondary
+                            ctx.lineWidth = 1.4
+                            ctx.lineCap = "round"
+                            ctx.lineJoin = "round"
+                            ctx.beginPath()
+                            if (expanded) {
+                                ctx.moveTo(1, 6.5)
+                                ctx.lineTo(6, 1.5)
+                                ctx.lineTo(11, 6.5)
+                            } else {
+                                ctx.moveTo(1, 1.5)
+                                ctx.lineTo(6, 6.5)
+                                ctx.lineTo(11, 1.5)
+                            }
+                            ctx.stroke()
+                        }
+                    }
+                    HoverHandler { id: upscalerHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler {
+                        onTapped: upscalerPopup.opened ? upscalerPopup.close() : upscalerPopup.open()
+                    }
                 }
 
                 Text {
-                    x: 20; y: 106
-                    text: "Qualidade do FSR 2"
-                    color: viewportModel.fsr2Available ? root.textNormal : root.textMuted
+                    x: 20; y: 122
+                    text: viewportModel.fsrAvailable
+                          ? "O recomendado é escolhido conforme o hardware e os backends disponíveis."
+                          : "FSR 3.1 indisponível; usando o caminho nativo com TAA."
+                    color: root.textMuted
                     font.family: "Segoe UI"
-                    font.pixelSize: 12
+                    font.pixelSize: 10
                 }
-                Rectangle {
-                    id: qualitySelector
-                    x: 20; y: 126
-                    width: parent.width - 40
-                    height: 26
-                    radius: 6
-                    color: "#23241d"
-                    border.color: root.borderColor
-                    border.width: 1
-                    opacity: viewportModel.fsr2Available ? 1.0 : 0.48
 
-                    Row {
-                        anchors.fill: parent
-                        Repeater {
-                            model: ["Nativo", "Qualidade", "Balanceado", "Performance", "Ultra"]
-                            delegate: Rectangle {
-                                required property string modelData
-                                required property int index
-                                width: qualitySelector.width / 5
-                                height: qualitySelector.height
-                                radius: 6
-                                color: viewportModel.fsr2Quality === index ? root.blueBg
-                                                                          : (qualityHover.hovered ? "#2a2b24" : "transparent")
-                                border.color: viewportModel.fsr2Quality === index ? root.blueBorder : "transparent"
-                                border.width: 1
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: modelData
-                                    color: viewportModel.fsr2Quality === index ? root.blue : root.textSecondary
-                                    font.family: "Segoe UI"
-                                    font.pixelSize: 10
-                                }
-                                HoverHandler {
-                                    id: qualityHover
-                                    enabled: viewportModel.fsr2Available
-                                    cursorShape: Qt.PointingHandCursor
-                                }
-                                TapHandler {
-                                    enabled: viewportModel.fsr2Available
-                                    onTapped: viewportModel.SetFsr2Quality(index)
+                Item {
+                    id: fsrControls
+                    visible: viewportModel.upscalerMode === 1
+                    x: 20; y: 144
+                    width: parent.width - 40
+                    height: 111
+
+                    Text {
+                        x: 0; y: 0
+                        text: "Preset de qualidade"
+                        color: root.textNormal
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                    }
+                    Text {
+                        anchors.right: parent.right
+                        y: 1
+                        text: "FSR controla a escala interna"
+                        color: root.textMuted
+                        font.family: "Segoe UI"
+                        font.pixelSize: 9
+                    }
+                    Rectangle {
+                        id: qualitySelector
+                        x: 0; y: 18
+                        width: parent.width
+                        height: 28
+                        radius: 6
+                        color: "#23241d"
+                        border.color: root.borderColor
+                        border.width: 1
+
+                        Row {
+                            anchors.fill: parent
+                            Repeater {
+                                model: ["100%", "Qualidade", "Balanceado", "Performance", "Ultra"]
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    required property int index
+                                    width: qualitySelector.width / 5
+                                    height: qualitySelector.height
+                                    radius: 6
+                                    color: viewportModel.fsrQuality === index ? root.blueBg
+                                                                              : (qualityHover.hovered ? "#2a2b24" : "transparent")
+                                    border.color: viewportModel.fsrQuality === index ? root.blueBorder : "transparent"
+                                    border.width: 1
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData
+                                        color: viewportModel.fsrQuality === index ? root.blue : root.textSecondary
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 9
+                                    }
+                                    HoverHandler {
+                                        id: qualityHover
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+                                    TapHandler {
+                                        onTapped: viewportModel.SetFsrQuality(index)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                Text {
-                    x: 20; y: 163
-                    text: "Render interno " + viewportModel.internalResolution +
-                          " · saída " + viewportModel.outputResolution
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 10
+
+                    Rectangle {
+                        x: 0; y: 57
+                        width: parent.width
+                        height: 46; radius: 7
+                        color: "#151a16"
+                        border.color: "#29352d"
+                        Rectangle {
+                            x: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 7; height: 7; radius: 3.5
+                            color: root.green
+                        }
+                        Text {
+                            x: 29; y: 8
+                            text: "Reconstrução ativa"
+                            color: root.textNormal
+                            font.family: "Segoe UI"
+                            font.pixelSize: 10
+                        }
+                        Text {
+                            x: 29; y: 25
+                            text: viewportModel.internalResolution + "  →  " + viewportModel.outputResolution
+                            color: root.textPrimary
+                            font.family: "Segoe UI"
+                            font.pixelSize: 10
+                        }
+                        Rectangle {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: reductionText.implicitWidth + 16
+                            height: 21; radius: 10.5
+                            color: "#1b2b21"
+                            border.color: "#34483a"
+                            Text {
+                                id: reductionText
+                                anchors.centerIn: parent
+                                text: viewportModel.renderScale < 0.999
+                                      ? "−" + Math.round((1.0 - viewportModel.renderScale *
+                                                         viewportModel.renderScale) * 100) + "% pixels"
+                                      : "resolução integral"
+                                color: root.green
+                                font.family: "Segoe UI"
+                                font.pixelSize: 9
+                            }
+                        }
+                    }
                 }
 
-                Text {
-                    x: 20; y: 190
-                    text: "Render scale (SSAA)"
-                    color: root.textNormal
-                    font.family: "Segoe UI"
-                    font.pixelSize: 12
-                }
-                Rectangle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 183
-                    width: 54; height: 22; radius: 4
-                    color: "#23241d"
-                    border.color: root.borderColor
+                Item {
+                    id: nativeControls
+                    visible: viewportModel.upscalerMode === 0
+                    x: 20; y: 144
+                    width: parent.width - 40
+                    height: 111
+
                     Text {
-                        anchors.centerIn: parent
-                        text: viewportModel.renderScale.toFixed(2).replace(".", ",") + "×"
-                        color: root.textPrimary
+                        x: 0; y: 2
+                        text: "Anti-aliasing temporal (TAA)"
+                        color: root.textNormal
                         font.family: "Segoe UI"
                         font.pixelSize: 11
                     }
-                }
-                Slider {
-                    id: renderScaleSlider
-                    x: 20; y: 207
-                    width: parent.width - 60
-                    height: 18
-                    from: 0.5
-                    to: 2.0
-                    stepSize: 0.05
-                    value: viewportModel.renderScale
-                    onPressedChanged: {
-                        if (!pressed) viewportModel.SetRenderScale(value)
+                    Toggle {
+                        anchors.right: parent.right
+                        y: -3
+                        checked: viewportModel.taaEnabled
+                        onToggled: viewportModel.SetTAAEnabled(!checked)
                     }
-                    background: Rectangle {
-                        x: renderScaleSlider.leftPadding
-                        y: renderScaleSlider.topPadding + renderScaleSlider.availableHeight / 2 - height / 2
-                        width: renderScaleSlider.availableWidth
-                        height: 4
-                        radius: 2
+                    Rectangle { x: 0; y: 29; width: parent.width; height: 1; color: root.divider }
+                    Text {
+                        x: 0; y: 39
+                        text: "Escala de renderização (SSAA)"
+                        color: root.textNormal
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                    }
+                    Rectangle {
+                        anchors.right: parent.right
+                        y: 33
+                        width: 54; height: 22; radius: 4
                         color: "#23241d"
-                        Rectangle {
-                            width: renderScaleSlider.visualPosition * parent.width
-                            height: parent.height
-                            radius: 2
-                            color: root.blue
+                        border.color: root.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: viewportModel.renderScale.toFixed(2).replace(".", ",") + "×"
+                            color: root.textPrimary
+                            font.family: "Segoe UI"
+                            font.pixelSize: 10
                         }
                     }
-                    handle: Rectangle {
-                        x: renderScaleSlider.leftPadding +
-                           renderScaleSlider.visualPosition * (renderScaleSlider.availableWidth - width)
-                        y: renderScaleSlider.topPadding + renderScaleSlider.availableHeight / 2 - height / 2
-                        width: 14; height: 14; radius: 7
-                        color: "#f2efe6"
-                        border.color: root.blue
-                        border.width: 1.5
+                    Slider {
+                        id: renderScaleSlider
+                        x: 0; y: 58
+                        width: parent.width
+                        height: 18
+                        from: 1.0
+                        to: 2.0
+                        stepSize: 0.05
+                        value: viewportModel.renderScale
+                        onPressedChanged: {
+                            if (!pressed) viewportModel.SetRenderScale(value)
+                        }
+                        background: Rectangle {
+                            x: renderScaleSlider.leftPadding
+                            y: renderScaleSlider.topPadding + renderScaleSlider.availableHeight / 2 - height / 2
+                            width: renderScaleSlider.availableWidth
+                            height: 4; radius: 2
+                            color: "#23241d"
+                            Rectangle {
+                                width: renderScaleSlider.visualPosition * parent.width
+                                height: parent.height
+                                radius: 2
+                                color: root.blue
+                            }
+                        }
+                        handle: Rectangle {
+                            x: renderScaleSlider.leftPadding +
+                               renderScaleSlider.visualPosition * (renderScaleSlider.availableWidth - width)
+                            y: renderScaleSlider.topPadding + renderScaleSlider.availableHeight / 2 - height / 2
+                            width: 14; height: 14; radius: 7
+                            color: "#f2efe6"
+                            border.color: root.blue
+                            border.width: 1.5
+                        }
                     }
-                }
-                Text {
-                    x: 20; y: 229
-                    text: "0,5×"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 10
-                }
-                Text {
-                    anchors.horizontalCenter: renderScaleSlider.horizontalCenter
-                    y: 229
-                    text: "1,0×"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 10
-                }
-                Text {
-                    anchors.right: renderScaleSlider.right
-                    y: 229
-                    text: "2,0×"
-                    color: root.textMuted
-                    font.family: "Segoe UI"
-                    font.pixelSize: 10
+                    Text {
+                        x: 0; y: 84
+                        text: "1,0×"
+                        color: root.textMuted
+                        font.family: "Segoe UI"
+                        font.pixelSize: 9
+                    }
+                    Text {
+                        anchors.right: parent.right
+                        y: 84
+                        text: "2,0×"
+                        color: root.textMuted
+                        font.family: "Segoe UI"
+                        font.pixelSize: 9
+                    }
                 }
 
                 Text {
                     x: 20; y: 251
-                    text: "TAA"
-                    color: viewportModel.fsr2Enabled ? root.textMuted : root.textNormal
-                    font.family: "Segoe UI"
-                    font.pixelSize: 12
-                }
-                Text {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 70
-                    y: 251
-                    text: viewportModel.fsr2Enabled ? "desligado — FSR 2 controla a resolução" : ""
+                    text: "Recomendado para esta GPU: " + viewportModel.recommendedUpscalerName
                     color: root.textMuted
                     font.family: "Segoe UI"
-                    font.pixelSize: 10
+                    font.pixelSize: 9
                 }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 246
-                    checked: viewportModel.taaEnabled && !viewportModel.fsr2Enabled
-                    interactive: !viewportModel.fsr2Enabled
-                    onToggled: viewportModel.SetTAAEnabled(!checked)
+
+                Popup {
+                    id: upscalerPopup
+                    popupType: Popup.Item
+                    x: 20; y: 119
+                    width: parent.width - 40
+                    height: 112
+                    padding: 6
+                    z: 100
+                    // O campo pertence ao parent do popup: clicar nele deve chegar ao TapHandler
+                    // e alternar open/close, sem o CloseOnPressOutside fechar e reabrir no mesmo tap.
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+                    background: Rectangle {
+                        color: "#1e201a"
+                        border.color: "#3b3d34"
+                        border.width: 1
+                        radius: 8
+                    }
+                    contentItem: Column {
+                        spacing: 4
+                        UpscalerOption {
+                            width: upscalerPopup.availableWidth
+                            mode: 0
+                            label: "Sem upscaling"
+                            detail: "TAA · escala manual de 100% a 200% (SSAA)"
+                            selected: viewportModel.upscalerMode === 0
+                            badge: viewportModel.recommendedUpscalerMode === 0 ? "RECOMENDADO" : ""
+                            onChosen: {
+                                viewportModel.SetUpscalerMode(0)
+                                upscalerPopup.close()
+                            }
+                        }
+                        UpscalerOption {
+                            width: upscalerPopup.availableWidth
+                            mode: 1
+                            label: "AMD FidelityFX Super Resolution"
+                            detail: available
+                                    ? "FSR 3.1 · temporal · compatível com esta GPU"
+                                    : "FSR 3.1 não foi inicializado neste dispositivo"
+                            selected: viewportModel.upscalerMode === 1
+                            available: viewportModel.fsrAvailable
+                            badge: viewportModel.recommendedUpscalerMode === 1 ? "RECOMENDADO" : ""
+                            onChosen: {
+                                viewportModel.SetUpscalerMode(1)
+                                upscalerPopup.close()
+                            }
+                        }
+                    }
                 }
             }
 
@@ -869,7 +1187,7 @@ Rectangle {
                 title: "Ray tracing"
 
                 Column {
-                    x: 16; y: 46
+                    x: 16; y: 48
                     width: parent.width - 32
                     RayStatusRow { width: parent.width; label: "DDGI"; active: viewportModel.ddgiEnabled }
                     RayStatusRow { width: parent.width; label: "ReSTIR GI"; active: viewportModel.restirGIEnabled }
@@ -881,7 +1199,7 @@ Rectangle {
                     RayStatusRow { width: parent.width; label: "NRD REBLUR"; active: viewportModel.nrdEnabled }
                     RayStatusRow { width: parent.width; label: "Reflexos RT"; active: viewportModel.reflectionsEnabled }
                 }
-                Rectangle { x: 0; y: 168; width: parent.width; height: 1; color: root.divider }
+                Rectangle { x: 0; y: 170; width: parent.width; height: 1; color: root.divider }
                 StatusRow {
                     x: 16; y: 178; width: parent.width - 32
                     label: "VRAM dedicada"
