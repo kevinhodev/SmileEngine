@@ -2257,14 +2257,30 @@ namespace Smile {
         if (Weather.Active() && RainWetness.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
             if (Weather.RainOcclusion) {
+                // O mapa e cacheado (re-renderiza so ao cruzar o snap de 16 m). Invalida quando
+                // a cena muda no lugar: gizmo/material/visibilidade bumpam a MESMA
+                // TransformsVersion que a TLAS ja segue. Load de cena nao bumpa a versao —
+                // esse caso e invalidado explicito no LoadScene.
+                if (Scene.TransformsVersion() != RainOccTransformsVersion) {
+                    RainWetness.InvalidateOcclusion();
+                    RainOccTransformsVersion = Scene.TransformsVersion();
+                }
                 std::vector<FRainWetness::FOccluderItem> RainOccluders;
                 RainOccluders.reserve(AllItems.size());
                 for (const AllItem& A : AllItems)
                     RainOccluders.push_back({ A.R->Mesh, A.Mat,
                                               ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                               A.R->AABBMin, A.R->AABBMax });
+                // Terreno tambem oclui/colide (nao esta em AllItems) — mesmo callback do CSM.
+                FRainWetness::FTerrainOccluderDraw TerrainOccDraw;
+                if (UseTerrain && Terrain.IsLoaded())
+                    TerrainOccDraw = [this](ID3D12GraphicsCommandList* Cmd,
+                                            D3D12_GPU_VIRTUAL_ADDRESS OccCB, const Mat44& OccVP) {
+                        Terrain.RenderShadowCascade(Cmd, SRVHeap, OccCB, OccVP);
+                    };
                 RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, CameraPosition,
-                                               RainOccluders.data(), RainOccluders.size());
+                                               RainOccluders.data(), RainOccluders.size(),
+                                               TerrainOccDraw);
             }
             const Vec3 KeyColorInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
                                        KeyColor.Z * KeyInt };

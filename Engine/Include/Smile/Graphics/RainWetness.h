@@ -7,6 +7,7 @@
 #include "Smile/Graphics/Weather.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <functional>
 
 namespace Smile {
     class FGBuffer;
@@ -52,6 +53,14 @@ namespace Smile {
             Vec3                      AABBMax;
         };
 
+        // F2b: callback opcional pra desenhar o terreno DENTRO do mapa de oclusao (o FTerrain
+        // rasteriza pelo proprio pipeline e NAO esta em AllItems, entao nao entra pela lista
+        // acima). Mesmo padrao do FExtraCascadeDraw do CSM: recebe o CB ja escrito com a
+        // ViewProj ortho top-down (b da cascade) e a matriz p/ o culling proprio do terreno.
+        using FTerrainOccluderDraw =
+            std::function<void(ID3D12GraphicsCommandList*, D3D12_GPU_VIRTUAL_ADDRESS OccCB,
+                               const Mat44& OccViewProj)>;
+
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Recreate(ID3D12Device* Device); // reload de shader (PSO apenas)
@@ -63,7 +72,8 @@ namespace Smile {
         // Cacheado estilo Cry (bProcessed): andar so re-renderiza ao cruzar o quantum de snap.
         bool RecordOcclusionMap(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                                 u32 FrameSlot, const Vec3& CamPos,
-                                const FOccluderItem* Items, size_t Count);
+                                const FOccluderItem* Items, size_t Count,
+                                const FTerrainOccluderDraw& ExtraDraw = {});
         void InvalidateOcclusion() { OccValid = false; }
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
