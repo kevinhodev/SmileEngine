@@ -328,6 +328,79 @@ Rectangle {
         }
     }
 
+    // Linha do seletor de denoiser (Nenhum / NRD REBLUR / DLSS Ray Reconstruction). Espelha o
+    // UpscalerOption, mas com a marca tipografica do denoiser (OFF/NRD/RR).
+    component DenoiserOption: Rectangle {
+        id: dopt
+        property int mode: 0
+        property string label
+        property string detail
+        property bool selected: false
+        property bool available: true
+        signal chosen()
+
+        height: 48
+        radius: 6
+        color: dopt.selected ? root.blueBg
+                             : (doptHover.hovered && dopt.available ? root.hoverBg : "transparent")
+        border.color: dopt.selected ? root.blueBorder : "transparent"
+        border.width: 1
+        opacity: dopt.available ? 1.0 : 0.46
+
+        Rectangle {
+            x: 8
+            anchors.verticalCenter: parent.verticalCenter
+            width: 30; height: 30; radius: 7
+            color: dopt.selected ? "#243651" : "#292b24"
+            border.color: dopt.selected ? "#345681" : "#36382f"
+            clip: true
+            Text {
+                anchors.centerIn: parent
+                text: dopt.mode === 2 ? "RR" : (dopt.mode === 1 ? "NRD" : "OFF")
+                color: dopt.mode === 2 ? root.nvidiaGreen
+                                       : (dopt.mode === 1 ? root.textNormal : root.textMuted)
+                font.family: C.Theme.fontFamily
+                font.pixelSize: dopt.mode === 1 ? 8 : 9
+                font.weight: Font.Bold
+            }
+        }
+        Text {
+            x: 48; y: 8
+            text: dopt.label
+            color: dopt.selected ? root.textPrimary : root.textNormal
+            font.family: C.Theme.fontFamily
+            font.pixelSize: 12
+            font.weight: Font.Medium
+        }
+        Text {
+            x: 48; y: 26
+            width: parent.width - 80
+            text: dopt.detail
+            color: root.textMuted
+            elide: Text.ElideRight
+            font.family: C.Theme.fontFamily
+            font.pixelSize: 10
+        }
+        Text {
+            anchors.right: parent.right
+            anchors.rightMargin: 13
+            anchors.verticalCenter: parent.verticalCenter
+            text: dopt.selected ? "✓" : ""
+            color: root.blue
+            font.family: "Segoe UI Symbol"
+            font.pixelSize: 13
+        }
+        HoverHandler {
+            id: doptHover
+            enabled: dopt.available
+            cursorShape: dopt.available ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+        }
+        TapHandler {
+            enabled: dopt.available
+            onTapped: dopt.chosen()
+        }
+    }
+
     component Card: Rectangle {
         id: card
         property string title
@@ -1138,6 +1211,167 @@ Rectangle {
                                 viewportModel.SetUpscalerMode(2)
                                 upscalerPopup.close()
                             }
+                        }
+                    }
+                }
+            }
+
+            // Denoiser do GI/reflexao (eixo separado do upscaler). RR acopla denoise+upscale, entao
+            // fica ao lado do card de Upscaling; a ativacao saiu da viewport (era toggle NRD).
+            Card {
+                id: denoiserCard
+                width: parent.width
+                title: "Denoiser (GI e Reflexão)"
+
+                readonly property int gapLabel: 8
+                readonly property int contentBottom: denoiserHelper.y + denoiserHelper.height
+                height: contentBottom + contentPadding
+
+                Text {
+                    id: denoiserLabel
+                    x: 20; y: denoiserCard.headerHeight + denoiserCard.contentPadding
+                    text: "Redução de Ruído do Ray Tracing"
+                    color: root.textNormal
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 12
+                }
+                Rectangle {
+                    id: denoiserField
+                    x: 20
+                    y: denoiserLabel.y + denoiserLabel.height + denoiserCard.gapLabel
+                    width: parent.width - 40
+                    height: 44
+                    radius: 7
+                    color: "#23241d"
+                    border.color: denoiserPopup.opened || denoiserHover.hovered
+                                  ? root.blueBorder : root.borderColor
+                    border.width: 1
+
+                    Rectangle {
+                        x: 9
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 30; height: 28; radius: 7
+                        color: "#292c25"
+                        border.color: "#383a31"
+                        clip: true
+                        Text {
+                            anchors.centerIn: parent
+                            text: viewportModel.denoiserMode === 2 ? "RR"
+                                  : (viewportModel.denoiserMode === 1 ? "NRD" : "OFF")
+                            color: viewportModel.denoiserMode === 2 ? root.nvidiaGreen
+                                   : (viewportModel.denoiserMode === 1 ? root.textNormal : root.textMuted)
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: viewportModel.denoiserMode === 1 ? 8 : 9
+                            font.weight: Font.Bold
+                        }
+                    }
+                    Text {
+                        x: 49; y: 7
+                        text: viewportModel.denoiserMode === 2 ? "DLSS Ray Reconstruction"
+                              : (viewportModel.denoiserMode === 1 ? "NRD REBLUR" : "Nenhum")
+                        color: root.textPrimary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 12
+                        font.weight: Font.Medium
+                    }
+                    Text {
+                        x: 49; y: 24
+                        width: parent.width - 80
+                        text: viewportModel.denoiserMode === 2
+                              ? "Denoiser neural (NVIDIA) · substitui NRD + upscaler"
+                              : (viewportModel.denoiserMode === 1
+                                 ? "REBLUR · difuso (GI) + especular (reflexão)"
+                                 : "GI e reflexão sem denoise (ruidoso)")
+                        color: root.textMuted
+                        elide: Text.ElideRight
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
+                    }
+                    Canvas {
+                        id: denoiserArrow
+                        anchors.right: parent.right
+                        anchors.rightMargin: 13
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12; height: 8
+                        property bool expanded: denoiserPopup.opened
+                        onExpandedChanged: requestPaint()
+                        onPaint: {
+                            const ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.strokeStyle = root.textSecondary
+                            ctx.lineWidth = 1.4
+                            ctx.lineCap = "round"
+                            ctx.lineJoin = "round"
+                            ctx.beginPath()
+                            if (expanded) {
+                                ctx.moveTo(1, 6.5); ctx.lineTo(6, 1.5); ctx.lineTo(11, 6.5)
+                            } else {
+                                ctx.moveTo(1, 1.5); ctx.lineTo(6, 6.5); ctx.lineTo(11, 1.5)
+                            }
+                            ctx.stroke()
+                        }
+                    }
+                    HoverHandler { id: denoiserHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler {
+                        onTapped: denoiserPopup.opened ? denoiserPopup.close() : denoiserPopup.open()
+                    }
+                }
+
+                Text {
+                    id: denoiserHelper
+                    x: 20
+                    y: denoiserField.y + denoiserField.height + denoiserCard.gapLabel
+                    width: parent.width - 40
+                    wrapMode: Text.WordWrap
+                    text: viewportModel.rrAvailable
+                          ? "Ray Reconstruction faz denoise e upscale num passo só — ao selecioná-lo, o upscaling fica travado em NVIDIA DLSS."
+                          : "DLSS Ray Reconstruction requer GPU NVIDIA RTX; nesta máquina só NRD está disponível."
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 10
+                    lineHeight: 1.25
+                }
+
+                Popup {
+                    id: denoiserPopup
+                    popupType: Popup.Item
+                    x: 20
+                    y: denoiserField.y + denoiserField.height + 4
+                    width: parent.width - 40
+                    height: 164
+                    padding: 6
+                    z: 100
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                    background: Rectangle {
+                        color: "#1e201a"; border.color: "#3b3d34"; border.width: 1; radius: 8
+                    }
+                    contentItem: Column {
+                        spacing: 4
+                        DenoiserOption {
+                            width: denoiserPopup.availableWidth
+                            mode: 0
+                            label: "Nenhum"
+                            detail: "GI e reflexão ruidosos (sem denoise)"
+                            selected: viewportModel.denoiserMode === 0
+                            onChosen: { viewportModel.SetDenoiserMode(0); denoiserPopup.close() }
+                        }
+                        DenoiserOption {
+                            width: denoiserPopup.availableWidth
+                            mode: 1
+                            label: "NRD REBLUR"
+                            detail: "Denoiser clássico · difuso + especular"
+                            selected: viewportModel.denoiserMode === 1
+                            onChosen: { viewportModel.SetDenoiserMode(1); denoiserPopup.close() }
+                        }
+                        DenoiserOption {
+                            width: denoiserPopup.availableWidth
+                            mode: 2
+                            label: "DLSS Ray Reconstruction"
+                            detail: available ? "IA · substitui NRD + upscaler (trava DLSS)"
+                                              : "Indisponível (requer GPU NVIDIA RTX)"
+                            selected: viewportModel.denoiserMode === 2
+                            available: viewportModel.rrAvailable
+                            onChosen: { viewportModel.SetDenoiserMode(2); denoiserPopup.close() }
                         }
                     }
                 }

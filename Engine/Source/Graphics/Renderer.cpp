@@ -160,6 +160,11 @@ namespace Smile {
                         SwapChain.GetWidth(), SwapChain.GetHeight());
         Dlss.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
                         SwapChain.GetWidth(), SwapChain.GetHeight());
+        DlssRR.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+                          SwapChain.GetWidth(), SwapChain.GetHeight());
+        RRGuides.Initialize(Device.Native());
+        RRGuides.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        BgVelocity.Initialize(Device.Native());
 
         Flicker.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
@@ -451,7 +456,8 @@ namespace Smile {
         Reflections.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
-            DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV());
+            DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
+            GBuffer.SRVSlot(0)); // GBufferA = BaseColor (tint do metal no reflexo)
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
@@ -688,9 +694,11 @@ namespace Smile {
         ResourceDesc.Format           = DXGI_FORMAT_R16G16_FLOAT;
         ResourceDesc.SampleDesc       = { 1, 0 };
         ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        // RT (G-buffer escreve velocity) + UAV (passe de velocity do background preenche o ceu/nuvens/fog).
+        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
+                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-        const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f }; 
+        const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = DXGI_FORMAT_R16G16_FLOAT;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
@@ -719,6 +727,13 @@ namespace Smile {
         SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         SRVDesc.Texture2D.MipLevels     = 1;
         SRVHeap.CreateSRV(Device.Native(), VelocityBuffer.Get(), SRVDesc, VelocitySRVSlot);
+
+        if (VelocityUavSlot == kInvalidSlot)
+            VelocityUavSlot = SRVHeap.Allocate(1);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
+        UAVDesc.Format        = DXGI_FORMAT_R16G16_FLOAT;
+        UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        SRVHeap.CreateUAV(Device.Native(), VelocityBuffer.Get(), UAVDesc, VelocityUavSlot);
     }
 
     void Renderer::CreateSceneCopies() {
@@ -930,6 +945,8 @@ namespace Smile {
 
         Fsr.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
         Dlss.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
+        DlssRR.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
+        RRGuides.SetupForResize(Device.Native(), SRVHeap, RW, RH);
         Flicker.Resize(Device.Native(), SRVHeap, RW, RH);
         FlickerResetPending = true;
 
@@ -1445,9 +1462,13 @@ namespace Smile {
 
         const bool ReflectionsActive = UseReflections && Reflections.IsReady();
         const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady();
-        const bool NrdMode           = ReSTIRGIActive && Nrd.IsReady() && UseNrdDenoise;
-        ReSTIRGI.SetUseNrd(NrdMode);
+        // DLSS Ray Reconstruction: denoiser neural que substitui NRD + SR. Precisa do RR inicializado
+        // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
+        const bool RRMode  = (Denoiser == EDenoiser::DLSS_RR) && DlssRR.IsInitialized() && RRGuides.IsReady();
+        const bool NrdMode = ReSTIRGIActive && Nrd.IsReady() && Denoiser == EDenoiser::NRD;
+        ReSTIRGI.SetUseNrd(NrdMode);           // RRMode => NrdMode=false => ReSTIR entrega GI cru (ruidoso)
         Reflections.SetUseNrd(NrdMode);
+        Reflections.SetRawSpec(RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
 
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        ReflectionsActive ? 1.0f : 0.0f,
@@ -1460,6 +1481,11 @@ namespace Smile {
         ViewNoTrans.M[3][2] = 0.0f;
         const Mat44 VPNoTrans    = ViewNoTrans * Projection;
         const Mat44 InvVPNoTrans = VPNoTrans.Inverse();
+        // Reprojecao do BACKGROUND (ceu no infinito): clip atual -> clip anterior SEM translacao e SEM
+        // jitter. Espelha o ClipToPrevClip do DLSS (ViewProjUnjittered.Inverse()*PrevViewProj), mas com a
+        // translacao removida (skybox nao tem parallax). Alimenta o passe de velocity do background.
+        const Mat44 VPNoTransUnjit    = ViewNoTrans * ProjUnjittered;
+        const Mat44 SkyClipToPrevClip = VPNoTransUnjit.Inverse() * PrevVPNoTrans;
         const Mat44 InvViewProjFull = ViewProjection.Inverse();
         const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
         MappedCB->InvViewProj = InvViewProjFull;
@@ -2204,6 +2230,30 @@ namespace Smile {
             GpuProfiler.End(CommandList); // G-buffer (geometria)
         }
 
+        // Motion vector do BACKGROUND: o G-buffer so escreveu velocity p/ geometria+terreno; ceu/nuvens/fog
+        // ficaram ZERO (clear acima). Preenche o velocity do ceu (reproj rotacao-only, sem parallax) p/ o
+        // DLSS/RR/TAA nao arrastar o historico do ceu ao girar a camera. So roda com consumidor temporal.
+        if ((UpscaleActive || TAAActive) && BgVelocity.IsReady()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Velocity do background");
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Batch.Flush(CommandList);
+
+            BgVelocity.Record(CommandList, FrameSlot, SRVHeap.GpuHandle(DepthSRVSlot),
+                              SRVHeap.GpuHandle(VelocityUavSlot), SkyClipToPrevClip,
+                              RenderWidth(), RenderHeight());
+
+            FBarrierBatch Restore;
+            Restore.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Restore.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Restore.Flush(CommandList);
+        }
+
         if (Weather.Active() && RainWetness.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
             if (Weather.RainOcclusion) {
@@ -2384,6 +2434,11 @@ namespace Smile {
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
                 if (!NrdMode) Reflections.RecordTrace(CommandList, SRVHeap);
+                // RR: extrai o hitDist especular do Resolved ENQUANTO ele esta NON_PIXEL (o composite
+                // cru abaixo o transiciona p/ PIXEL). O RecordTrace acima parou no Resolved (RawSpec).
+                if (RRMode)
+                    RRGuides.RecordSpecHitDist(CommandList, SRVHeap,
+                                               SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()));
                 Reflections.RecordComposite(CommandList, SRVHeap, HDRRTVHeap.CpuHandle(0),
                                             RenderWidth(), RenderHeight());
             }
@@ -2853,6 +2908,10 @@ namespace Smile {
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             TAARanLastFrame = true;
         } else if (UpscaleActive) {
+            // RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
+            // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
+            const bool IsRR = (Denoiser == EDenoiser::DLSS_RR);
+
             FBarrierBatch Batch;
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -2860,7 +2919,20 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Transition(VelocityBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
+
+            if (IsRR) {
+                // Guides de material do RR (albedo difuso/especular, normal-roughness) do G-buffer
+                // [A,B,C,Depth] (mesma tabela contigua do deferred) + FrameCB. O specHitDist ja foi
+                // extraido no bloco da reflexao (ou fica zerado sem reflexoes). Deixa tudo em NON_PIXEL.
+                FGpuScope Scope(GpuProfiler, CommandList, "DLSS-RR guides");
+                RRGuides.RecordGuides(CommandList, SRVHeap, SRVHeap.GpuHandle(GBuffer.SRVTableStart()),
+                                      ConstantBuffer->GetGPUVirtualAddress() +
+                                      static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
+                if (!ReflectionsActive) RRGuides.ClearSpecHitDist(CommandList, SRVHeap);
+                RRGuides.TransitionForRR(CommandList);
+            }
 
             FUpscaleParams UpParams{};
             UpParams.Color        = HDRColorBuffer.Get();
@@ -2874,7 +2946,9 @@ namespace Smile {
             UpParams.AspectRatio  = Aspect;
             UpParams.DeltaTimeSec = LastDeltaTime;
             UpParams.Quality      = UpscalerQuality;
-            UpParams.Reset        = false;
+            // Reset one-shot: descarta o historico temporal em troca de modo/denoiser/scene/resize (senao o
+            // RR/DLSS reusa acumulacao velha => ghosting). Limpo logo apos o Dispatch.
+            UpParams.Reset        = RRResetPending;
             // Matrizes p/ o DLSS (o FSR ignora): projecao unjittered + reprojecao (clip atual -> anterior).
             // PrevViewProj ainda guarda o frame anterior aqui (so e atualizado logo abaixo).
             UpParams.ViewToClip     = ProjUnjittered;
@@ -2886,12 +2960,22 @@ namespace Smile {
                 UpParams.CamFwd   = { InvView.M[2][0], InvView.M[2][1], InvView.M[2][2] };
                 UpParams.CamPos   = { InvView.M[3][0], InvView.M[3][1], InvView.M[3][2] };
             }
+            if (IsRR) {
+                // Guides que so o RR consome (o FSR/DLSS-SR ignoram). WorldToView (row-major, sem jitter)
+                // = View: o RR deriva os specular motion vectors do specHitDist + matrizes world<->view.
+                UpParams.DiffuseAlbedo   = RRGuides.DiffuseAlbedo();
+                UpParams.SpecularAlbedo  = RRGuides.SpecularAlbedo();
+                UpParams.NormalRoughness = RRGuides.NormalRoughness();
+                UpParams.SpecHitDist     = RRGuides.SpecHitDist();
+                UpParams.WorldToView     = View;
+            }
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList,
-                                Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR");
+                                IsRR ? "DLSS-RR" : (Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR"));
                 ActiveUp->Dispatch(CommandList, UpParams);
             }
+            RRResetPending = false;   // reset consumido
 
             // Manual hooking (eDisableCLStateTracking): o SL pode ter mexido no estado do CL. Rebinda o
             // descriptor heap shader-visible antes do post chain (o FSR/ffx-api tolera o rebind redundante).
@@ -2906,6 +2990,7 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
             Batch.Transition(VelocityBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
 
             PostInput    = ActiveUp->OutputResource();
@@ -2915,10 +3000,11 @@ namespace Smile {
             TAARanLastFrame = false;
         }
 
-        PrevViewProj = ViewProjUnjittered;
-        NrdPrevProj  = ProjUnjittered;
-        NrdPrevView  = View;
-        PrevJitterUv = JitterUv;
+        PrevViewProj  = ViewProjUnjittered;
+        PrevVPNoTrans = VPNoTransUnjit;   // frame anterior p/ a reprojecao do background (velocity do ceu)
+        NrdPrevProj   = ProjUnjittered;
+        NrdPrevView   = View;
+        PrevJitterUv  = JitterUv;
         PrevJitterPx = JitterPx;
 
         if (FlickerMode > 0 && Flicker.IsInitialized()) {
@@ -2996,7 +3082,10 @@ namespace Smile {
         Nrd.Shutdown();
         Fsr.Shutdown();
         Dlss.Shutdown();
-        FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS
+        DlssRR.Shutdown();
+        RRGuides.Shutdown();
+        BgVelocity.Shutdown();
+        FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS/RR
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);
             MappedFrameBase = nullptr;

@@ -9,6 +9,7 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include <sl_dlss_d.h>   // kFeatureDLSS_RR — o FDlssRRPass avalia a feature; carregada aqui no init comum
 #endif
 
 namespace Smile {
@@ -110,9 +111,11 @@ namespace Smile {
         // Mantem os defaults (eDisableCLStateTracking|eAllowOTA|eLoadDownloadedPlugins) e adiciona
         // manual hooking + tagging por frame.
         Pref.flags |= sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-        static const sl::Feature kFeats[] = { sl::kFeatureDLSS };
+        // Carrega SR (kFeatureDLSS) e RR (kFeatureDLSS_RR). O RR e um denoiser neural que substitui o NRD
+        // E o passe de SR (ver FDlssRRPass); os plugins production sao sl.dlss(_d).dll + nvngx_dlss(d).dll.
+        static const sl::Feature kFeats[] = { sl::kFeatureDLSS, sl::kFeatureDLSS_RR };
         Pref.featuresToLoad    = kFeats;
-        Pref.numFeaturesToLoad = 1;
+        Pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(kFeats));
         Pref.engine            = sl::EngineType::eCustom;
         Pref.engineVersion     = "SmileEngine";
         // OBRIGATORIO p/ o NGX: o SL so dispensa o applicationId (que a NVIDIA emite p/ titulos
@@ -252,9 +255,10 @@ namespace Smile {
         C.clipToCameraView = ToSL(In.ViewToClip.Inverse());
         C.clipToPrevClip   = ToSL(In.ClipToPrevClip);
         C.prevClipToClip   = ToSL(In.ClipToPrevClip.Inverse());
-        C.jitterOffset     = { In.JitterX, In.JitterY };
-        // CALIBRAR: escala p/ normalizar os MV da engine ao espaco esperado pelo SL (~[-1,1]). O FSR usa
-        // px {-RW,-RH}; comecar por {-1,-1} e ajustar (talvez {-2,-2} ou Y invertido) com o overlay de debug.
+        C.jitterOffset        = { In.JitterX, In.JitterY };
+        C.cameraPinholeOffset = { 0.0f, 0.0f };   // pinhole convencional (senao fica INVALID_FLOAT)
+        // Velocity da engine = curUV-prevUV; o plugin faz NGX MV_Scale = mvecScale*W/H (dlss*Entry.cpp), ou
+        // seja o NGX ja converte p/ pixels => mvecScale=-1 casa (prevUV-curUV)*W. Confirmado na fonte do SL.
         C.mvecScale        = { -1.0f, -1.0f };
         C.cameraPos        = ToSL(In.CamPos);
         C.cameraUp         = ToSL(In.CamUp);

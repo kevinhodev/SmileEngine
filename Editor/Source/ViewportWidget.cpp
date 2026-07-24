@@ -112,6 +112,14 @@ namespace SmileEditor {
         return Renderer && Renderer->GetUseNrdDenoise();
     }
 
+    int ViewportWidget::GetDenoiserMode() const {
+        return Renderer ? static_cast<int>(Renderer->GetDenoiser()) : 0;  // 0=None 1=NRD 2=DLSS RR
+    }
+
+    bool ViewportWidget::IsRRAvailable() const {
+        return Renderer && Renderer->IsInitialized() && Renderer->RRAvailable();
+    }
+
     int ViewportWidget::GetUpscalerMode() const {
         return Renderer ? static_cast<int>(Renderer->GetUpscaler()) : 0;  // 0=None 1=FSR 2=DLSS
     }
@@ -798,6 +806,14 @@ namespace SmileEditor {
     void ViewportWidget::ToggleNrd() {
         if (!Renderer) return;
         Renderer->SetUseNrdDenoise(!Renderer->GetUseNrdDenoise());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetDenoiserMode(int _Mode) {
+        if (!Renderer) return;
+        // 0=Nenhum 1=NRD 2=DLSS RR. Selecionar RR forca e trava o upscaler em DLSS (o RR faz o upscale);
+        // o Renderer cai p/ NRD se o RR nao estiver disponivel (sem NVIDIA/SDK).
+        Renderer->SetDenoiser(static_cast<Smile::EDenoiser>(_Mode));
         emit ViewSettingsChanged();
     }
 

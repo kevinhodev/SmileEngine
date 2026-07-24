@@ -57,6 +57,9 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Upscaler.h
     Include/Smile/Graphics/FsrPass.h
     Include/Smile/Graphics/DlssPass.h
+    Include/Smile/Graphics/DlssRRPass.h
+    Include/Smile/Graphics/DlssRRGuides.h
+    Include/Smile/Graphics/BackgroundVelocity.h
     Include/Smile/Graphics/DebugTargets.h
     Include/Smile/Graphics/DebugView.h
     Include/Smile/Graphics/OceanFFT.h
@@ -118,6 +121,9 @@ set(ENGINE_SOURCES
     Source/Graphics/TemporalAA.cpp
     Source/Graphics/FsrPass.cpp
     Source/Graphics/DlssPass.cpp
+    Source/Graphics/DlssRRPass.cpp
+    Source/Graphics/DlssRRGuides.cpp
+    Source/Graphics/BackgroundVelocity.cpp
     Source/Graphics/DebugTargets.cpp
     Source/Graphics/DebugView.cpp
     Source/Graphics/FlickerHeatmap.cpp
@@ -190,13 +196,26 @@ set(SMILE_SL_ROOT "D:/Engines/Streamline" CACHE PATH "Raiz do NVIDIA Streamline 
 set(_sl_inc "${SMILE_SL_ROOT}/include")
 set(_sl_lib "${SMILE_SL_ROOT}/lib/x64/sl.interposer.lib")
 set(_sl_bin "${SMILE_SL_ROOT}/bin/x64")
-# DLLs production a copiar ao lado do exe (SR agora; +sl.dlss_d/nvngx_dlssd p/ o RR no futuro).
+# DLLs production a copiar ao lado do exe. SR = sl.dlss/nvngx_dlss; RR (Ray Reconstruction) =
+# sl.dlss_d/nvngx_dlssd (plugin + modelo neural do denoiser).
 set(SMILE_SL_DLLS
     "${_sl_bin}/sl.interposer.dll"
     "${_sl_bin}/sl.common.dll"
     "${_sl_bin}/sl.dlss.dll"
     "${_sl_bin}/nvngx_dlss.dll"
-    CACHE STRING "DLLs do Streamline/DLSS p/ copiar ao lado do exe")
+    "${_sl_bin}/sl.dlss_d.dll"
+    "${_sl_bin}/nvngx_dlssd.dll"
+    CACHE STRING "DLLs do Streamline/DLSS (SR + RR) p/ copiar ao lado do exe")
+# Migra caches antigos: set(... CACHE) nao reescreve um cache ja existente, entao um build/ configurado
+# antes do RR ficaria sem os 2 DLLs novos. Acrescenta-os (com FORCE) so quando faltarem, preservando
+# qualquer customizacao da lista.
+foreach(_rr_dll "${_sl_bin}/sl.dlss_d.dll" "${_sl_bin}/nvngx_dlssd.dll")
+    if(NOT "${_rr_dll}" IN_LIST SMILE_SL_DLLS)
+        list(APPEND SMILE_SL_DLLS "${_rr_dll}")
+        set(SMILE_SL_DLLS "${SMILE_SL_DLLS}" CACHE STRING
+            "DLLs do Streamline/DLSS (SR + RR) p/ copiar ao lado do exe" FORCE)
+    endif()
+endforeach()
 if(EXISTS "${_sl_inc}/sl.h" AND EXISTS "${_sl_lib}")
     message(STATUS "Streamline/DLSS encontrado: ${SMILE_SL_ROOT}")
     target_include_directories(SmileEngine PRIVATE "${_sl_inc}")

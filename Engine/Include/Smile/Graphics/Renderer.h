@@ -48,6 +48,9 @@
 #include "Smile/Graphics/TemporalAA.h"
 #include "Smile/Graphics/FsrPass.h"
 #include "Smile/Graphics/DlssPass.h"
+#include "Smile/Graphics/DlssRRPass.h"
+#include "Smile/Graphics/DlssRRGuides.h"
+#include "Smile/Graphics/BackgroundVelocity.h"
 #include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
@@ -251,6 +254,9 @@ namespace Smile {
         // da p/ renderizar sub-nativo). A qualidade (0=100%..4=UltraPerf) e compartilhada entre eles.
         void SetUpscaler(EUpscaler U) {
             if (U != EUpscaler::None && !UpscalerAvailable(U)) U = EUpscaler::None;
+            // Acoplamento: o RR faz o upscale via DLSS. Trocar o upscaler p/ fora de DLSS desliga o RR
+            // (cai p/ NRD). Nao recursa: SetDenoiser(DLSS_RR) chama SetUpscaler(DLSS), que nao entra aqui.
+            if (Denoiser == EDenoiser::DLSS_RR && U != EUpscaler::DLSS) Denoiser = EDenoiser::NRD;
             Upscaler = U; TAARanLastFrame = false;
             ApplyUpscalerScale();
         }
@@ -444,11 +450,25 @@ namespace Smile {
         }
         bool GetUseReSTIRGI() const    { return UseReSTIRGI; }
 
-        void SetUseNrdDenoise(bool V) {
-            if (V && !UseNrdDenoise) Nrd.InvalidateHistory();
-            UseNrdDenoise = V;
+        // Eixo de denoiser {None, NRD, DLSS_RR}. NRD/None e o toggle antigo; DLSS_RR (Ray Reconstruction)
+        // substitui o NRD E o passe de SR num eval so, entao SELECIONAR RR FORCA o upscaler p/ DLSS.
+        void SetDenoiser(EDenoiser D) {
+            if (D == EDenoiser::DLSS_RR && !DlssRR.Available()) D = EDenoiser::NRD; // fallback: sem NVIDIA/RR
+            if (D == Denoiser) return;
+            Nrd.InvalidateHistory();            // muda a natureza do sinal -> reinicia acumulacao
+            Denoiser = D;
+            RRResetPending = true;              // trocar de/para RR: descarta o historico neural velho
+            if (Denoiser == EDenoiser::DLSS_RR) // RR faz o upscale; trava o upscaler em DLSS
+                SetUpscaler(EUpscaler::DLSS);
+            TAARanLastFrame = false;
+            ApplyUpscalerScale();
         }
-        bool GetUseNrdDenoise() const  { return UseNrdDenoise; }
+        EDenoiser GetDenoiser() const  { return Denoiser; }
+        bool RRAvailable() const       { return DlssRR.Available(); }
+
+        // Compat: o toggle NRD antigo (viewport) mapeia p/ o eixo de denoiser {None, NRD}.
+        void SetUseNrdDenoise(bool V) { SetDenoiser(V ? EDenoiser::NRD : EDenoiser::None); }
+        bool GetUseNrdDenoise() const  { return Denoiser == EDenoiser::NRD; }
 
         FAmbientOcclusion& GetAO()     { return AO; }
         void SetUseAO(bool V)          { UseAO = V; }
@@ -554,6 +574,7 @@ namespace Smile {
         ComPtr<ID3D12Resource>   VelocityBuffer;
         FDescriptorHeap          VelocityRTVHeap;   // 1 RTV
         u32                      VelocitySRVSlot = 0xFFFFFFFFu;
+        u32                      VelocityUavSlot = 0xFFFFFFFFu; // UAV p/ o passe de velocity do background
         D3D12_RESOURCE_STATES    VelocityState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         // Transform por-objeto do frame anterior, indexado pelo indice da cena (Scene.Renderables()).
         // Estatico -> PrevModel == Model -> motion vector reduz ao termo de camera.
@@ -626,18 +647,23 @@ namespace Smile {
         int                      UpscalerQuality = 0;       // 0=100% 1=Quality 2=Balanced 3=Perf 4=Ultra
 
         // Upscaler pronto p/ dispatch (output criado). None/indisponivel/nao-inicializado => nullptr.
+        // Com o denoiser em DLSS_RR, o passe ATIVO e o proprio RR (faz denoise+upscale) — reusa todo o
+        // plumbing display-res -> post do FSR/DLSS-SR.
         IUpscaler* ActiveUpscaler() {
+            if (Denoiser == EDenoiser::DLSS_RR)
+                return DlssRR.IsInitialized() ? static_cast<IUpscaler*>(&DlssRR) : nullptr;
             switch (Upscaler) {
                 case EUpscaler::FSR:  return Fsr.IsInitialized()  ? static_cast<IUpscaler*>(&Fsr)  : nullptr;
                 case EUpscaler::DLSS: return Dlss.IsInitialized() ? static_cast<IUpscaler*>(&Dlss) : nullptr;
                 default:              return nullptr;
             }
         }
-        // Razao render/display pura do upscaler SELECIONADO (independe de estar inicializado).
+        // Razao render/display pura do upscaler/denoiser SELECIONADO (independe de estar inicializado).
         void ApplyUpscalerScale() {
             f32 R = 1.0f;
-            if      (Upscaler == EUpscaler::FSR)  R = Fsr.RenderRatioForQuality(UpscalerQuality);
-            else if (Upscaler == EUpscaler::DLSS) R = Dlss.RenderRatioForQuality(UpscalerQuality);
+            if      (Denoiser == EDenoiser::DLSS_RR) R = DlssRR.RenderRatioForQuality(UpscalerQuality);
+            else if (Upscaler == EUpscaler::FSR)     R = Fsr.RenderRatioForQuality(UpscalerQuality);
+            else if (Upscaler == EUpscaler::DLSS)    R = Dlss.RenderRatioForQuality(UpscalerQuality);
             SetRenderScale(R);
         }
 
@@ -681,8 +707,13 @@ namespace Smile {
 
         FReSTIRGI        ReSTIRGI;
         bool             UseReSTIRGI = false; // experimental; default OFF (nao toca o estado padrao)
-        FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (RELAX_DIFFUSE) — Fase B/C
-        bool             UseNrdDenoise = false; // NRD como denoiser do ReSTIR (Fase C)
+        FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (REBLUR difuso+especular)
+        FDlssRRPass      DlssRR;              // DLSS Ray Reconstruction (denoise+upscale num eval)
+        FDlssRRGuides    RRGuides;            // buffers de material que o RR consome (albedo/normal/hitDist)
+        FBackgroundVelocity BgVelocity;       // motion vector do ceu/nuvens/fog (velocity ZERO do G-buffer)
+        Mat44            PrevVPNoTrans{};      // frame anterior: ViewNoTrans * ProjUnjittered (reproj do ceu)
+        bool             RRResetPending = true;// descarta o historico do RR (troca de modo/scene/resize)
+        EDenoiser        Denoiser = EDenoiser::None; // {None, NRD, DLSS_RR}; default = sem denoise
         Mat44            NrdPrevView{};        // prev view/proj NAO-jitteradas p/ a reprojecao do NRD
         Mat44            NrdPrevProj{};
         Vec2             PrevJitterUv{ 0.0f, 0.0f }; // jitter do frame anterior em UV (y ja invertido

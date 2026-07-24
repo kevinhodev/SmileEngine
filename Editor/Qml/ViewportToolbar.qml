@@ -351,7 +351,7 @@ Rectangle {
         x: viewModeButton.x + leftTools.x
         y: root.height
         width: 280
-        height: 452
+        height: 424
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
@@ -450,7 +450,7 @@ Rectangle {
             Rectangle { x: 14; y: 322; width: 252; height: 1; color: "#23241d" }
             Text {
                 x: 14; y: 332
-                text: "Reflexos e denoise"
+                text: "Reflexos"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
@@ -461,16 +461,12 @@ Rectangle {
                 checked: viewportModel.reflectionsEnabled
                 onToggled: viewportModel.ToggleReflections()
             }
-            ToggleRow {
-                x: 8; y: 378; width: 264; height: 28
-                label: "NRD REBLUR"; detail: "difuso + especular"
-                checked: viewportModel.nrdEnabled
-                onToggled: viewportModel.ToggleNrd()
-            }
+            // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
+            // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.
 
-            Rectangle { x: 14; y: 410; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 382; width: 252; height: 1; color: "#23241d" }
             Rectangle {
-                x: 8; y: 416; width: 264; height: 28; radius: 5
+                x: 8; y: 388; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? "#22231c" : "transparent"
                 Text {
                     x: 8

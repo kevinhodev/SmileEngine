@@ -216,7 +216,10 @@ namespace Smile {
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 FoliageShadows ? 255.0f : 1.0f }; // w = ShadowRayMask
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
-        CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD, FireflyMax, ValidateInterval };
+        // GI cru (RR/None) usa teto de firefly mais apertado: sem REBLUR pra limpar o residuo, os
+        // outliers viram sparkles que o RR nao remove bem. O caminho NRD mantem o teto original.
+        CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD,
+                                UseNrd ? FireflyMax : FireflyMaxRaw, ValidateInterval };
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
         CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y,

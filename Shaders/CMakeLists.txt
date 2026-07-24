@@ -60,6 +60,15 @@ smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_
 # Pack do sinal especular p/ o NRD (REBLUR) — inclui NRD.hlsli p/ o packing de hitDist normalizado
 smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 
+# DLSS Ray Reconstruction — guides de material (albedo difuso/especular, normal-roughness) derivados
+# do G-buffer + extracao do hitDist especular do Resolved. Alimentam o slEvaluateFeature(kFeatureDLSS_RR).
+smile_compile_shader(Upscale/DlssRRGuides.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Upscale/DlssRRSpecHit.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+
+# Motion vector do background (ceu/nuvens/fog) — preenche o velocity ZERO que o G-buffer deixa, senao o
+# DLSS/RR/TAA reprojeta o historico do ceu do lugar errado ao girar a camera (ghosting).
+smile_compile_shader(Upscale/BackgroundVelocity.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
 # Occlusion culling — cadeia HZB (min-reduce do depth em reverse-Z, estilo UE)
 # + teste de AABB (1 thread/objeto, port do HZBTestPS/NaniteHZBCull)
@@ -201,6 +210,9 @@ add_custom_target(Shaders
         Reflections/ReflectionSpatial.cs.hlsl
         Reflections/ReflectionComposite.ps.hlsl
         Reflections/ReflectionNrdPack.cs.hlsl
+        Upscale/DlssRRGuides.cs.hlsl
+        Upscale/DlssRRSpecHit.cs.hlsl
+        Upscale/BackgroundVelocity.cs.hlsl
         HZB/HZBBuild.cs.hlsl
         HZB/HZBTest.cs.hlsl
         AO/GTAOCommon.hlsli

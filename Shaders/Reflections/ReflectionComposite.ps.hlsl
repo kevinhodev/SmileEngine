@@ -24,6 +24,7 @@ Texture2D<float4> GBuffer    : register(t1); // GBufferB: octNormal + rough + sh
 Texture2D<float>  Depth      : register(t2);
 Texture2D<float4> BRDFLut    : register(t3);
 Texture2D<float4> GBufferC   : register(t4); // .r = metallic (dieta do G-buffer)
+Texture2D<float4> GBufferA   : register(t5); // .rgb = BaseColor (sRGB->linear no Load) — tint do metal
 
 SamplerState LinearClamp : register(s0);
 
@@ -64,7 +65,11 @@ float4 main(VSOutput input) : SV_TARGET {
     float3 V = normalize(CameraPos.xyz - worldPos);
     float  NoV = saturate(dot(N, V));
 
-    float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), float3(1.0f, 1.0f, 1.0f), metallic);
+    // Metal tinge o reflexo pela BaseColor (F0 = BaseColor p/ metal); antes usava branco, o que deixava
+    // metal colorido (ex.: scooter azul) refletindo sem tint E desalinhava do guide do RR (DlssRRGuides usa
+    // BaseColor). Agora casa com o guide -> o RR demodula o especular corretamente.
+    float3 baseColor = GBufferA.Load(int3(px, 0)).rgb;
+    float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
     float2 brdf = BRDFLut.SampleLevel(LinearClamp, float2(NoV, roughness), 0.0f).rg;
 
     float3 reflRad = Reflection.Load(int3(px, 0)).rgb;

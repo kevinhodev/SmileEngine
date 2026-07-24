@@ -13,6 +13,11 @@ namespace Smile {
     // (0 = nativo, 1 = FSR); DLSS entra como 2.
     enum class EUpscaler : u8 { None = 0, FSR = 1, DLSS = 2 };
 
+    // Denoiser do GI/reflexao (eixo separado do upscaler). NRD REBLUR = caseiro; DLSS_RR = Ray
+    // Reconstruction (denoiser neural que SUBSTITUI o NRD E o passe de SR num eval so). Como o RR
+    // acopla denoise+upscale, selecionar DLSS_RR forca o upscaler p/ DLSS (ver Renderer::SetDenoiser).
+    enum class EDenoiser : u8 { None = 0, NRD = 1, DLSS_RR = 2 };
+
     // Parametros de um dispatch de upscale. O FSR usa o subconjunto (cor/depth/vel/jitter/near/far/fov);
     // o DLSS (Streamline) exige tambem as matrizes de camera p/ o sl::Constants — o Renderer preenche
     // tudo sempre (custo desprezivel) e cada upscaler le o que precisa.
@@ -30,6 +35,15 @@ namespace Smile {
         Mat44 ViewToClip{};       // projecao unjittered
         Mat44 ClipToPrevClip{};   // reprojecao: clip atual -> clip do frame anterior
         Vec3  CamPos{}, CamRight{}, CamUp{}, CamFwd{};
+
+        // Guides do DLSS Ray Reconstruction (somente o FDlssRRPass usa; FSR/DLSS-SR ignoram). Todos
+        // render-res, lineares. A cor (Color acima) entra RUIDOSA no RR (GI+reflexao pre-denoise). Ver
+        // Shaders/PostProcess/DlssRRGuides.cs.hlsl e ProgrammingGuideDLSS_RR.md §4.
+        ID3D12Resource* DiffuseAlbedo   = nullptr; // kBufferTypeAlbedo         (BaseColor*(1-Metallic))
+        ID3D12Resource* SpecularAlbedo  = nullptr; // kBufferTypeSpecularAlbedo (EnvBRDFApprox2)
+        ID3D12Resource* NormalRoughness = nullptr; // kBufferTypeNormalRoughness (normal.xyz + rough linear no .a)
+        ID3D12Resource* SpecHitDist     = nullptr; // kBufferTypeSpecularHitDistance (R16F, do Resolved.a)
+        Mat44 WorldToView{};      // row-major SEM jitter — DLSSDOptions.worldToCameraView (specHitDist MV)
     };
 
     // Interface comum dos upscaladores "SR-class" (renderiza sub-nativo e reconstrui no fim do frame).

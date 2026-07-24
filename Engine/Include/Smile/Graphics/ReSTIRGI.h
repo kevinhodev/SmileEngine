@@ -178,7 +178,9 @@ namespace Smile {
                                       // estavel do bisect 2026-07-12). ATENCAO: com TimeOfDay
                                       // animando, radiancia velha persiste no reservoir — religar
                                       // com 8 quando o sol dinamico voltar a importar
-        f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off)
+        f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off) — caminho NRD
+        f32  FireflyMaxRaw  = 4.0f;   // teto mais apertado p/ GI CRU (RR/None): sem REBLUR limpando o
+                                      // residuo, o RR/deferred mostra os sparkles direto (0 = off)
         f32  SpatialRadius  = 16.0f;  // raio (px) dos vizinhos
         f32  SpatialCount   = 4.0f;   // nº de vizinhos
         f32  NormalReject   = 0.9f;   // dot(n_q, n_r) minimo

@@ -55,6 +55,9 @@ namespace SmileEditor {
         Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool nrdEnabled READ IsNrdEnabled NOTIFY ViewSettingsChanged)
+        // Eixo de denoiser {0=Nenhum, 1=NRD, 2=DLSS RR}. rrAvailable gateia a opcao RR na UI.
+        Q_PROPERTY(int denoiserMode READ GetDenoiserMode NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool rrAvailable READ IsRRAvailable NOTIFY RendererInitialized)
         Q_PROPERTY(int upscalerMode READ GetUpscalerMode NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool fsrAvailable READ IsFsrAvailable NOTIFY RendererInitialized)
         Q_PROPERTY(bool dlssAvailable READ IsDlssAvailable NOTIFY RendererInitialized)
@@ -182,6 +185,8 @@ namespace SmileEditor {
         bool              IsGTAOHalfRes() const;
         bool              AreReflectionsEnabled() const;
         bool              IsNrdEnabled() const;
+        int               GetDenoiserMode() const;   // 0=Nenhum 1=NRD 2=DLSS Ray Reconstruction
+        bool              IsRRAvailable() const;      // DLSS RR suportado (NVIDIA RTX + SDK)
         int               GetUpscalerMode() const;
         bool              IsFsrAvailable() const;
         bool              IsDlssAvailable() const;
@@ -296,6 +301,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleGTAOHalfRes();
         Q_INVOKABLE void ToggleReflections();
         Q_INVOKABLE void ToggleNrd();
+        Q_INVOKABLE void SetDenoiserMode(int mode);   // 0=Nenhum 1=NRD 2=DLSS RR (RR acopla upscaler=DLSS)
         Q_INVOKABLE void SetUpscalerMode(int mode);
         Q_INVOKABLE void SetUpscalerQuality(int quality);
         Q_INVOKABLE void SetRenderScale(double scale);

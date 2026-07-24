@@ -48,7 +48,8 @@ namespace Smile {
         // Renderer (depth, gbuffer, BRDF LUT).
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 DepthSlot, u32 GBufferSlot, u32 GBufferCSlot, u32 BRDFLutSlot);
+                            u32 DepthSlot, u32 GBufferSlot, u32 GBufferCSlot, u32 BRDFLutSlot,
+                            u32 GBufferASlot);
 
         // Params estaticos do volume DDGI (grid/atlas) p/ o CB. Chamar quando o volume e (re)criado.
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
@@ -86,6 +87,16 @@ namespace Smile {
 
         void SetUseNrd(bool V) { UseNrd = V; }
         bool GetUseNrd() const { return UseNrd; }
+
+        // Modo "cru" p/ o DLSS Ray Reconstruction: como no UseNrd, o RecordTrace PARA no Resolved (sem
+        // Temporal/Spatial nem NRD), mas o RecordComposite compoe o Resolved DIRETO (ruidoso, linear) —
+        // o RR faz o denoise. Ligar com SetUseNrd(false) (senao o composite tentaria a OUT_SPEC do NRD).
+        void SetRawSpec(bool V) { RawSpec = V; }
+        bool GetRawSpec() const { return RawSpec; }
+
+        // SRV shader-visivel do Resolved (radiancia especular crua + hitDist no .a). O guides pass do RR
+        // le daqui p/ extrair o kBufferTypeSpecularHitDistance. Valido apos SetupForResize.
+        u32 GetResolvedSRVSlot() const { return ResolvedSRVSlot; }
 
         // Grava o composite (fullscreen, blend aditivo no HDR). HdrRtv = RTV do HDR color (ja em
         // RENDER_TARGET). Caller restaura RT/viewport/root sig depois se precisar.
@@ -173,9 +184,12 @@ namespace Smile {
         ID3D12Resource* NrdInSpec = nullptr;                      // nao-owned (FNrdDenoiser); p/ o clear
         u32 NrdOutSpecSRV       = kInvalidSlot;                   // SRV da OUT_SPEC do NRD
         u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 5 SRVs [nrdOutSpec, gbuf, depth, brdfLut, gbufC]
+        // RR: composite lendo o Resolved CRU (parity-independente — Resolved nao faz ping-pong).
+        u32 CompositeTableRaw    = kInvalidSlot;                  // 5 SRVs [resolved, gbuf, depth, brdfLut, gbufC]
         u32 DepthSlotCached     = kInvalidSlot;
         u32 GBufferSlotCached   = kInvalidSlot;
         u32 GBufferCSlotCached  = kInvalidSlot; // metallic (dieta do G-buffer)
+        u32 GBufferASlotCached  = kInvalidSlot; // BaseColor (tint do metal no composite)
         u32 BRDFLutSlotCached   = kInvalidSlot;
         u32  FrameParity        = 0;     // alterna a cada RecordTrace
         u32  CurrParity         = 0;     // paridade usada neste frame (trace->composite)
@@ -205,6 +219,7 @@ namespace Smile {
         bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
         bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (mask ALL vs OPAQUE)
         bool UseNrd              = false; // denoise via NRD REBLUR especular (unificado c/ o GI)
+        bool RawSpec             = false; // reflexao crua p/ o DLSS Ray Reconstruction (denoise = RR)
         // Temporal (Fase 3).
         bool Temporal            = true;  // acumulacao temporal (off = só resolve espacial)
         f32  MaxFrames           = 12.0f; // frames acumulados (Lumen default)
