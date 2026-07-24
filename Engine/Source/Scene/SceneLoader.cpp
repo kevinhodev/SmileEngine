@@ -443,12 +443,6 @@ namespace Smile {
         BuildRaytracingScene();
         SetupGIForScene(sceneMin, sceneMax);
 
-        // Geometria da cena mudou (load aditivo/substitutivo). O cache do mapa de oclusao da
-        // chuva nao segue a TransformsVersion (o load nao a bumpa), entao invalida explicito —
-        // senao a chuva usaria o telhado/heightmap da cena anterior. A RainOccTransformsVersion
-        // do Renderer re-sincroniza sozinha no proximo frame.
-        RainWetness.InvalidateOcclusion();
-
         // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
         // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
         if (!_Additive) ClearLightSelection();

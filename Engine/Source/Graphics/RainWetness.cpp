@@ -623,8 +623,7 @@ namespace Smile {
     bool FRainWetness::RecordOcclusionMap(ID3D12GraphicsCommandList* _Cmd,
                                           FTextureSRVHeap& _SRVHeap, u32 _FrameSlot,
                                           const Vec3& _CamPos,
-                                          const FOccluderItem* _Items, size_t _Count,
-                                          const FTerrainOccluderDraw& _ExtraDraw) {
+                                          const FOccluderItem* _Items, size_t _Count) {
         if (!OccOpaquePSO) return false;
 
         // Centro snapado num quantum grosso (16 m): andar so re-renderiza ao cruzar a
@@ -695,13 +694,6 @@ namespace Smile {
             if (AlphaTested) It.Mat->Bind(_Cmd, _SRVHeap);
             It.Mesh->Draw(_Cmd);
         }
-
-        // F2b: terreno como oclusor/heightmap. O FTerrain nao esta em AllItems (rasteriza pelo
-        // proprio pipeline), entao entra por callback — mesma ViewProj ortho deste render (o
-        // callback re-liga a root sig/PSO dele). Sem isso as gotas/splashes atravessam o chao.
-        if (_ExtraDraw)
-            _ExtraDraw(_Cmd, OccCB->GetGPUVirtualAddress() + static_cast<u64>(_FrameSlot) * 256,
-                       ViewProj);
 
         B.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
         B.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |

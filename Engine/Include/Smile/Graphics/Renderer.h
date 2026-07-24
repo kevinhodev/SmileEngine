@@ -697,7 +697,6 @@ namespace Smile {
  
         FRaytracingScene RaytracingScene;
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
-        u64              RainOccTransformsVersion = 0; // idem p/ o cache do mapa de oclusao da chuva
         FDDGI            DDGI;
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;
