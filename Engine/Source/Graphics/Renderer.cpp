@@ -460,9 +460,6 @@ namespace Smile {
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot);
 
-        // Idem p/ o ReSTIR GI, cujo SRV nasce aqui.
-        RegisterDebugTargets();
-
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
         if (Nrd.IsReady()) {
@@ -476,6 +473,10 @@ namespace Smile {
                 Nrd.IoResource(FNrdDenoiser::IO_SPEC_RADIANCE_HITDIST),
                 Nrd.IoResource(FNrdDenoiser::IO_OUT_SPEC));
         }
+
+        // Depois do NRD: o SRV do ReSTIR nasce acima e o da OUT do NRD so existe apos o
+        // SetupNrdPack. Registrar antes deixava a saida do denoiser fora da lista p/ sempre.
+        RegisterDebugTargets();
     }
 
     void Renderer::CreateHDRBuffers() {
@@ -993,8 +994,16 @@ namespace Smile {
         // --- Iluminacao indireta ---------------------------------------------------------
         if (AO.AOSRVSlot() != kNoSlot)
             Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Grayscale);
-        if (ReSTIRGI.GITexSRVSlot() != kNoSlot)
-            Register("ReSTIR GI", ReSTIRGI.GITexSRVSlot(), EDebugDecode::HDR, 0, 1,
+        // As duas pontas do ReSTIR entram como alvos SEPARADOS, cada uma com slot fixo. Seguir
+        // o slot vigente (que alterna com o toggle do NRD) daria uma entrada que troca de
+        // textura por baixo — e o util p/ debugar o ReSTIR e justamente o sinal CRU, onde o
+        // ruido e a convergencia aparecem. A OUT do NRD sai em YCoCg e por isso tem decode
+        // proprio; lida como RGB ela pinta a cena inteira de vermelho.
+        if (ReSTIRGI.GITexRawSRVSlot() != kNoSlot)
+            Register("ReSTIR GI", ReSTIRGI.GITexRawSRVSlot(), EDebugDecode::HDR, 0, 1,
+                     /*Exposure=*/1.5f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
+        if (ReSTIRGI.NrdOutSRVSlot() != kNoSlot)
+            Register("ReSTIR GI · NRD", ReSTIRGI.NrdOutSRVSlot(), EDebugDecode::NrdRadiance, 0, 1,
                      /*Exposure=*/1.5f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
         if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
             // O atlas guarda irradiancia comprimida por gamma; o decode generico de HDR

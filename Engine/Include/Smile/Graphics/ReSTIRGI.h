@@ -72,8 +72,15 @@ namespace Smile {
         bool GetUseNrd() const { return UseNrd; }
 
         bool IsReady() const   { return Ready; }
+        // true quando a tabela t16 aponta p/ a OUT do NRD (radiancia em YCoCg) e nao p/ a
+        // GITexture crua (RGB linear). Quem le o alvo precisa saber qual dos dois recebeu.
+        bool IsNrdOutput() const  { return UseNrd && NrdOutSRV != kInvalidSlot; }
         // Tabela t16 do deferred: NRD OUT quando o NRD esta ligado, senao a GITexture crua.
-        u32  GITexSRVSlot() const { return (UseNrd && NrdOutSRV != kInvalidSlot) ? NrdOutSRV : GITexSRV; }
+        u32  GITexSRVSlot() const { return IsNrdOutput() ? NrdOutSRV : GITexSRV; }
+        // As duas pontas, para quem precisa de uma especifica em vez da vigente (visualizador
+        // de debug: o sinal CRU e o que mostra ruido/convergencia; o do NRD, o resultado).
+        u32  GITexRawSRVSlot() const { return GITexSRV; }
+        u32  NrdOutSRVSlot() const   { return NrdOutSRV; }
 
         // Invalida o historico temporal: arma o clear dos reservoirs no proximo RecordTrace.
         // Chamar em toggles e mudancas discretas de cena/iluminacao (o continuo — sol do

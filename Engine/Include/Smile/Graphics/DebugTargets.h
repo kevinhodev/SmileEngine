@@ -20,6 +20,9 @@ namespace Smile {
         Velocity,      // motion vector escalado pela resolucao
         DDGIIrradiance, // desfaz o gamma do atlas DDGI antes do tonemap
         DDGIDistance,   // primeiro momento do atlas DDGI em heatmap
+        // Saida do NRD REBLUR: a radiancia sai em YCoCg (rgb = Y,Co,Cg). Lida como RGB a cena
+        // inteira fica VERMELHA — o mesmo desempacotamento que o DeferredLighting ja faz.
+        NrdRadiance,
         Count
     };
 
