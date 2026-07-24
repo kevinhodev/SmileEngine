@@ -70,29 +70,39 @@ float2 RippleGradient(float2 xz, float t) {
     return g;
 }
 
-// F2b: drenagem — poça só onde a vizinhança top-down é PLANA. Reusa o occlusion map como
-// heightmap: vizinho ~0.7 m mais baixo = beirada/pedestal (topo de poste, barril, mureta,
-// borda de telhado) e a agua escoa em vez de empocar; vizinhos na mesma altura = chao de
-// verdade. Fisica de escoamento implicita, sem simulacao.
-float DrainageMask(float3 worldPos) {
-    if (RainOccParams.x < 0.5f) return 1.0f;
+// Fluxo/poças: gate topológico via occ map como heightmap (top-down). Suprime poça onde a água
+// ESCOA — vizinho mais baixo (saída/pour point) = superfície em DECLIVE ou beirada/pedestal (topo
+// de poste, barril, mureta, borda de telhado): a água corre em vez de empoçar. Chão PLANO (rua,
+// pátio) e fundo de bacia NAO têm saída -> mantêm a poça. Substitui o antigo DrainageMask: o corte
+// cm-escala (3-12 cm) já engloba as quedas francas de 0.3-0.8 m dele, entao 1 função/8 taps cobrem
+// os dois casos (antes eram 4+8 taps). NAO exige concavidade DE PROPOSITO: exigir bacia mataria
+// poça em rua plana legítima (Bistro). O detector de bacia completo (concavidade + ausência de
+// saída) fica pro bake hidrológico (ver memoria da arquitetura de fluxo). Occ map serve aqui por
+// ser uso EFEMERO por-frame — NAO e estado de agua persistente (viria do heightmap do FTerrain).
+float SlopeDrainMask(float3 worldPos) {
+    if (RainOccParams.x < 0.5f) return 1.0f; // sem occ: sem topologia -> nao gateia (legado)
 
     float3 uvz = mul(float4(worldPos, 1.0f), RainOccMatrix).xyz;
-    if (any(uvz.xy != saturate(uvz.xy))) return 1.0f;
+    if (any(uvz.xy != saturate(uvz.xy))) return 1.0f; // fora do mapa (longe) -> nao gateia
 
     const float  texel  = 1.0f / RainOccParams.w;
     const float  rangeM = 1.0f / RainParams1.y;     // metros por unidade de depth do ortho
-    const float2 offs[4] = { float2(3.0f, 0.0f), float2(-3.0f, 0.0f),
-                             float2(0.0f, 3.0f), float2(0.0f, -3.0f) }; // ~0.7 m
+    // 8 taps num circulo de raio ~2 texels (~0.5 m): diagonais a 1.414 p/ o MESMO raio dos
+    // cardinais — senao a diagonal (1.41x mais longe) usaria o mesmo limiar em cm e ficaria
+    // anisotropica (rejeitaria declive diagonal cedo demais).
+    const float2 offs[8] = { float2( 2.0f,   0.0f  ), float2(-2.0f,   0.0f  ),
+                             float2( 0.0f,   2.0f  ), float2( 0.0f,  -2.0f  ),
+                             float2( 1.414f, 1.414f), float2( 1.414f,-1.414f),
+                             float2(-1.414f, 1.414f), float2(-1.414f,-1.414f) };
 
-    float drain = 0.0f;
-    [unroll] for (int i = 0; i < 4; ++i) {
-        // tap bilinear (Load pontual dava serrilhado diagonal na borda seco/molhado)
+    float maxDrop = 0.0f; // maior queda p/ um vizinho -> saida (declive/beirada)
+    [unroll] for (int i = 0; i < 8; ++i) {
         float nz = OccDepthBilinear(uvz.xy + offs[i] * texel);
-        // vizinho mais fundo que ~0.3 m = queda; 0.8 m = borda franca
-        drain += smoothstep(0.3f, 0.8f, (nz - uvz.z) * rangeM);
+        // depth MAIOR = mais BAIXO (olho em cima); (nz - uvz.z) > 0 = vizinho mais baixo
+        maxDrop = max(maxDrop, (nz - uvz.z) * rangeM);
     }
-    return saturate(1.0f - drain * 0.6f); // 2+ lados em queda = seca por completo
+    // >~12 cm de queda p/ algum lado = escoa (sem poça); <~3 cm = plano/bacia (poça mantida)
+    return 1.0f - smoothstep(0.03f, 0.12f, maxDrop);
 }
 
 PSOut main(VSOutput input) {
@@ -139,7 +149,15 @@ PSOut main(VSOutput input) {
     // drena; + mascara de drenagem top-down (F2b) mata poça em pedestal/beirada.
     const float flatUp      = smoothstep(0.82f, 0.95f, N.y);
     const float mask        = PuddleMask(worldPos.xz * RainParams1.x);
-    const float puddleBlend = RainParams0.y * rain * flatUp * DrainageMask(worldPos);
+    // Hotfix (2 eixos): SlopeDrainMask mata poça em declive/terreno inclinado e beirada (mantém
+    // plano+bacia, entao rua plana do Bistro NAO regride); (1 - porosity) impede material poroso
+    // (grama/terra) de virar espelho. A porosidade aqui e PROXY VISUAL TEMPORARIO derivado da
+    // roughness — NAO permeabilidade fisica; troca por mascara WetResponse/Infiltration por
+    // material numa fase futura. Nas regioes ELEGIVEIS (plano/exposto/impermeavel) o noise
+    // (PuddleMask) ainda distribui ONDE cada poça aparece — vira "so quebra a borda" quando a
+    // colocacao autoral/bake entrar; por ora ele so nao decide mais em declive/grama.
+    const float puddleBlend = RainParams0.y * rain * flatUp
+                            * SlopeDrainMask(worldPos) * (1.0f - porosity);
     // limiar do noise: mais PuddleAmount*rain = pocas maiores; borda suave de 0.12
     const float thresh = lerp(0.78f, 0.42f, saturate(RainParams0.y * rain));
     float puddle = smoothstep(thresh, thresh + 0.12f, mask) * (puddleBlend > 0.001f ? 1.0f : 0.0f);

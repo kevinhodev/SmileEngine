@@ -1312,7 +1312,7 @@ namespace SmileEditor {
     }
 
     double ViewportWidget::GetPuddleScale() const {
-        return Renderer ? Renderer->GetWeather().PuddleScale : 8.0;
+        return Renderer ? Renderer->GetWeather().PuddleScale : 4.0;
     }
     void ViewportWidget::SetPuddleScale(double _Value) {
         if (!Renderer) return;
