@@ -985,8 +985,6 @@ namespace Smile {
             Register("Motion vectors", VelocitySRVSlot, EDebugDecode::Velocity);
         if (DepthSRVSlot != kNoSlot)
             Register("Depth (reverse-Z)", DepthSRVSlot, EDebugDecode::ReverseZ);
-        if (NormalSRVSlot != kNoSlot)
-            Register("Normal geometrica", NormalSRVSlot, EDebugDecode::Raw);
         // "HDR color" NAO entra: o HDRColorBuffer e o proprio render target deste passe
         // (RTV em HDRRTVHeap.CpuHandle(0)), entao le-lo como SRV no mesmo draw seria
         // ler e escrever o mesmo recurso. Precisaria de copia; fica p/ quando houver captura.
@@ -994,6 +992,12 @@ namespace Smile {
         // --- Iluminacao indireta ---------------------------------------------------------
         if (AO.AOSRVSlot() != kNoSlot)
             Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Grayscale);
+        // Entrada do GTAO, nao a normal do G-buffer: sai do Z-prepass (DepthNormal.ps) com a
+        // normal INTERPOLADA do vertice, sem normal map — oclusao e sobre a forma da geometria.
+        // Fica no grupo do GTAO porque so e escrita quando ele roda (ver AOWillRun no Render);
+        // com o GTAO desligado o alvo congela no ultimo frame valido ou no clear neutro cinza.
+        if (NormalSRVSlot != kNoSlot)
+            Register("GTAO · normal geometrica", NormalSRVSlot, EDebugDecode::Raw);
         // As duas pontas do ReSTIR entram como alvos SEPARADOS, cada uma com slot fixo. Seguir
         // o slot vigente (que alterna com o toggle do NRD) daria uma entrada que troca de
         // textura por baixo — e o util p/ debugar o ReSTIR e justamente o sinal CRU, onde o
