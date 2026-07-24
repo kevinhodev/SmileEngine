@@ -2,7 +2,9 @@
 #include "DDGICommon.hlsli"
 
 // Diagnostico pontual do DDGI. Uma unica thread reconstrói o ponto clicado a partir do
-// depth e repete os mesmos oito taps/pesos usados por SampleDDGIIrradianceCheb.
+// depth e roda os mesmos oito taps do gather — literalmente a mesma funcao
+// (DDGI_EvaluateTapCheb, em DDGICommon.hlsli), nao uma copia dela. Diagnostico que
+// reimplementa o que audita passa a mentir no dia em que o original muda.
 //
 // Saida:
 //   [0] ponto.xyz, valido
@@ -77,94 +79,57 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     [unroll]
     for (uint i = 0u; i < DDGI_POINT_PROBES; ++i) {
-        const int3 off = int3(i & 1u, (i >> 1u) & 1u, (i >> 2u) & 1u);
-        int3 c = clamp(base + off, int3(0, 0, 0), count - 1);
-        uint probeIndex = (uint)DDGI_ProbeLinear(c, count);
-        bool ignored = false;
-
-        if (useChebyshev && skipMode != 0u && ProbeData[probeIndex].w < 0.0f) {
-            if (skipMode >= 2u) {
-                const int3 axisMask[3] = {
-                    int3(1, 0, 0), int3(0, 1, 0), int3(0, 0, 1)
-                };
-                bool found = false;
-                [loop] for (int sd = 1; sd < 3 && !found; ++sd) {
-                    [unroll] for (int ax = 0; ax < 3; ++ax) {
-                        const int dir = (off[ax] != 0) ? 1 : -1;
-                        const int3 sc = clamp(
-                            c + axisMask[ax] * (dir * sd), int3(0, 0, 0), count - 1);
-                        const uint candidate = (uint)DDGI_ProbeLinear(sc, count);
-                        if (ProbeData[candidate].w >= 0.0f) {
-                            c = sc;
-                            probeIndex = candidate;
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                ignored = !found;
-            } else {
-                ignored = true;
-            }
-        }
-
-        const float3 tri = lerp(1.0f - fracPart, fracPart, (float3)off);
-        const float triWeight = useChebyshev
-            ? max(tri.x * tri.y * tri.z, 0.001f)
-            : tri.x * tri.y * tri.z;
-        const float3 baseProbePos =
-            DDGI_ProbeWorldPos(c, GridMinSpacing.xyz, GridMinSpacing.w);
-        const float3 probePos = baseProbePos +
-            (useChebyshev ? ProbeData[probeIndex].xyz : 0.0f);
-        const float3 probeToPoint = biasPos - probePos;
-        const float distToPoint = length(probeToPoint);
-        const float3 dirPP = probeToPoint / max(distToPoint, 1e-4f);
-
-        const int2 distOrigin =
-            DDGI_TileOrigin(c, count, (int)DistAtlasParams.x);
-        const float2 moments = DDGI_SampleProbeRG(
-            DistanceAtlas, LinearClamp, distOrigin, (int)DistAtlasParams.x,
-            1.0f / DistAtlasParams.yz, dirPP);
-        const float mean = moments.x;
-        const float sigma = sqrt(abs(moments.y - mean * mean));
-
-        float visibility = 1.0f;
-        float weight = triWeight;
+        DDGITapCheb tap;
         if (useChebyshev) {
-            const float backface = dot(-dirPP, N) * 0.5f + 0.5f;
-            weight = backface * backface + 0.05f;
-            if (distToPoint > mean) {
-                const float variance = abs(mean * mean - moments.y);
-                const float delta = distToPoint - mean;
-                const float cheb = variance / max(variance + delta * delta, 1e-8f);
-                visibility = max(cheb * cheb * cheb, 0.05f);
-                weight *= visibility;
-            }
-            weight = max(weight, 1e-6f);
-            const float minWeightThreshold = 0.2f;
-            if (weight < minWeightThreshold)
-                weight *= (weight * weight) /
-                          (minWeightThreshold * minWeightThreshold);
-            weight *= triWeight;
+            // A MESMA funcao que o SampleDDGIIrradianceCheb usa p/ pesar cada probe: e o
+            // que garante que o numero relatado aqui e o numero que iluminou o pixel.
+            tap = DDGI_EvaluateTapCheb(
+                (int)i, base, fracPart, biasPos, N,
+                GridMinSpacing.xyz, GridMinSpacing.w, count,
+                DistanceAtlas, LinearClamp, (int)DistAtlasParams.x,
+                1.0f / DistAtlasParams.yz, ProbeData, skipMode);
+        } else {
+            // Com o Chebyshev desligado o consumidor e o SampleDDGIIrradiance: trilinear
+            // puro, sem bias, sem relocacao e sem skip de probe inativa. Os momentos ainda
+            // sao lidos p/ o painel mostrar o que o teste de visibilidade DIRIA se ligado.
+            const int3 off = int3(i & 1u, (i >> 1u) & 1u, (i >> 2u) & 1u);
+            const int3 c   = clamp(base + off, int3(0, 0, 0), count - 1);
+            const float3 tri = lerp(1.0f - fracPart, fracPart, (float3)off);
+            const float3 probeToPoint =
+                biasPos - DDGI_ProbeWorldPos(c, GridMinSpacing.xyz, GridMinSpacing.w);
+
+            tap.Coord       = c;
+            tap.Index       = (uint)DDGI_ProbeLinear(c, count);
+            tap.Ignored     = false;
+            tap.DistToProbe = length(probeToPoint);
+            tap.Trilinear   = tri.x * tri.y * tri.z;
+            tap.Visibility  = 1.0f;
+            tap.Weight      = tap.Trilinear;
+
+            const float2 moments = DDGI_SampleProbeRG(
+                DistanceAtlas, LinearClamp,
+                DDGI_TileOrigin(c, count, (int)DistAtlasParams.x),
+                (int)DistAtlasParams.x, 1.0f / DistAtlasParams.yz,
+                probeToPoint / max(tap.DistToProbe, 1e-4f));
+            tap.Mean  = moments.x;
+            tap.Mean2 = moments.y;
         }
-        if (ignored) weight = 0.0f;
 
-        const int2 irrOrigin =
-            DDGI_TileOrigin(c, count, (int)AtlasParams.x);
-        const float3 irr = ignored ? 0.0f : DDGI_SampleProbe(
-            IrradianceAtlas, LinearClamp, irrOrigin, (int)AtlasParams.x,
-            1.0f / AtlasParams.yz, N);
+        const float3 irr = tap.Ignored ? 0.0f : DDGI_SampleProbe(
+            IrradianceAtlas, LinearClamp,
+            DDGI_TileOrigin(tap.Coord, count, (int)AtlasParams.x),
+            (int)AtlasParams.x, 1.0f / AtlasParams.yz, N);
 
-        probeIndices[i]      = probeIndex;
-        skipped[i]           = ignored;
-        pointDistances[i]    = distToPoint;
-        means[i]             = mean;
-        deviations[i]        = sigma;
-        trilinearWeights[i]  = triWeight;
-        visibilityWeights[i] = visibility;
-        finalWeights[i]      = weight;
+        probeIndices[i]      = tap.Index;
+        skipped[i]           = tap.Ignored;
+        pointDistances[i]    = tap.DistToProbe;
+        means[i]             = tap.Mean;
+        deviations[i]        = sqrt(abs(tap.Mean2 - tap.Mean * tap.Mean));
+        trilinearWeights[i]  = tap.Trilinear;
+        visibilityWeights[i] = tap.Visibility;
+        finalWeights[i]      = tap.Weight;
         irradiances[i]       = irr;
-        totalWeight         += weight;
+        totalWeight         += tap.Weight;
     }
 
     DiagnosticOut[0] = float4(worldPos, 1.0f);

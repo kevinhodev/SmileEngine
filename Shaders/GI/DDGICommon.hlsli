@@ -168,6 +168,99 @@ float3 DDGI_SurfaceBias(float3 N, float3 V, float spacing) {
     return (N * 0.2f + V * 0.8f) * (0.75f * spacing * 0.2f);
 }
 
+// Um tap do gather com Chebyshev: tudo que decide o peso de UMA das 8 probes da celula.
+// SampleDDGIIrradianceCheb consome so o Weight; o diagnostico pontual (DDGIDebugPoint.cs)
+// publica os intermediarios. Os dois passam por DDGI_EvaluateTapCheb — mexer no peso sem
+// mexer no diagnostico deixaria a ferramenta MENTINDO, que e pior que nao ter ferramenta.
+struct DDGITapCheb {
+    int3  Coord;        // pode diferir de base+off: o fallback procura vizinho ativo
+    uint  Index;        // linear de Coord
+    bool  Ignored;      // probe inativa e sem substituta -> nao contribui
+    float DistToProbe;
+    float Mean;         // 1o momento na direcao probe->ponto
+    float Mean2;        // 2o momento (sigma sai daqui, so o debug usa)
+    float Trilinear;    // ja com o piso de 0.001
+    float Visibility;   // Chebyshev^3 com piso; 1.0 quando nao ha oclusao a testar
+    float Weight;       // final: backface * visibilidade * crush * trilinear
+};
+
+DDGITapCheb DDGI_EvaluateTapCheb(
+        int i, int3 base, float3 frac, float3 biasPos, float3 N,
+        float3 gridMin, float spacing, int3 count,
+        Texture2D<float4> distAtlas, SamplerState samp, int distTile, float2 distInvSize,
+        Buffer<float4> probeData, uint skipMode) {
+    int3 off = int3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+    int3 c   = clamp(base + off, int3(0, 0, 0), count - 1);
+
+    DDGITapCheb tap;
+    tap.Ignored    = false;
+    tap.Visibility = 1.0f;
+
+    uint index = (uint)DDGI_ProbeLinear(c, count);
+    if (skipMode != 0u && probeData[index].w < 0.0f) {
+        if (skipMode >= 2u) {
+            const int3 axisMask[3] = { int3(1,0,0), int3(0,1,0), int3(0,0,1) };
+            bool found = false;
+            [loop] for (int sd = 1; sd < 3 && !found; ++sd) {
+                for (int ax = 0; ax < 3; ++ax) {
+                    int  dir = (off[ax] != 0) ? 1 : -1;
+                    int3 sc  = clamp(c + axisMask[ax] * (dir * sd), int3(0, 0, 0), count - 1);
+                    uint candidate = (uint)DDGI_ProbeLinear(sc, count);
+                    if (probeData[candidate].w >= 0.0f) {
+                        c = sc; index = candidate; found = true; break;
+                    }
+                }
+            }
+            tap.Ignored = !found;
+        } else {
+            tap.Ignored = true;
+        }
+    }
+    tap.Coord = c;
+    tap.Index = index;
+
+    // Posicao REAL do probe (grid + offset de relocacao): o trace dispara os raios e o
+    // dist atlas mede distancias a partir do probe relocado — o Chebyshev e o peso de
+    // backface tem que usar a mesma origem, senao o teste de visibilidade compara contra
+    // a posicao errada exatamente nos probes que foram movidos por estar perto de parede.
+    float3 probePos     = DDGI_ProbeWorldPos(c, gridMin, spacing) + probeData[index].xyz;
+    float3 probeToPoint = biasPos - probePos;
+    tap.DistToProbe     = length(probeToPoint);
+    float3 dirPP        = probeToPoint / max(tap.DistToProbe, 1e-4f);
+
+    // Pesos DEFENSIVOS com piso (receita do Flax, DDGI.hlsl): backface e Chebyshev se
+    // auto-sabotam em geometria densa/fina (miolo de sebe, cantos, frestas) — os pisos
+    // garantem que wsum nunca colapsa a zero => nunca retorna preto absoluto, so escurece.
+    float backface = dot(-dirPP, N) * 0.5f + 0.5f;
+    float w = backface * backface + 0.05f;
+
+    int2   distOrigin = DDGI_TileOrigin(c, count, distTile);
+    float2 md = DDGI_SampleProbeRG(distAtlas, samp, distOrigin, distTile, distInvSize, dirPP);
+    tap.Mean  = md.x;
+    tap.Mean2 = md.y;
+    if (tap.DistToProbe > tap.Mean) {
+        float variance = abs(tap.Mean * tap.Mean - tap.Mean2);
+        float d        = tap.DistToProbe - tap.Mean;
+        float cheb     = variance / max(variance + d * d, 1e-8f);
+        tap.Visibility = max(cheb * cheb * cheb, 0.05f);
+        w *= tap.Visibility;
+    }
+    w = max(w, 1e-6f);
+
+    // Curva de crush suave p/ pesos baixos ("inject a small portion of light"): mantem a
+    // penalizacao dos probes ocluidos sem a transicao dura do corte a zero.
+    const float minWeightThreshold = 0.2f;
+    if (w < minWeightThreshold)
+        w *= (w * w) / (minWeightThreshold * minWeightThreshold);
+
+    float3 trilin = lerp(1.0f - frac, frac, (float3)off);
+    tap.Trilinear = max(trilin.x * trilin.y * trilin.z, 0.001f);
+    w *= tap.Trilinear;
+
+    tap.Weight = tap.Ignored ? 0.0f : w;
+    return tap;
+}
+
 float3 SampleDDGIIrradianceCheb(
         Texture2D<float4> irrAtlas, Texture2D<float4> distAtlas, SamplerState samp,
         float3 worldPos, float3 N, float3 gridMin, float spacing, int3 count,
@@ -183,66 +276,15 @@ float3 SampleDDGIIrradianceCheb(
 
     [unroll]
     for (int i = 0; i < 8; ++i) {
-        int3 off = int3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
-        int3 c   = clamp(base + off, int3(0, 0, 0), count - 1);
+        DDGITapCheb tap = DDGI_EvaluateTapCheb(i, base, frac, biasPos, N, gridMin, spacing,
+                                               count, distAtlas, samp, distTile, distInvSize,
+                                               probeData, skipMode);
+        if (tap.Ignored) continue;
 
-        if (skipMode != 0u && probeData[DDGI_ProbeLinear(c, count)].w < 0.0f) {
-            if (skipMode >= 2u) {
-                const int3 axisMask[3] = { int3(1,0,0), int3(0,1,0), int3(0,0,1) };
-                bool found = false;
-                [loop] for (int sd = 1; sd < 3 && !found; ++sd) {
-                    for (int ax = 0; ax < 3; ++ax) {
-                        int  dir = (off[ax] != 0) ? 1 : -1;
-                        int3 sc  = clamp(c + axisMask[ax] * (dir * sd), int3(0, 0, 0), count - 1);
-                        if (probeData[DDGI_ProbeLinear(sc, count)].w >= 0.0f) { c = sc; found = true; break; }
-                    }
-                }
-                if (!found) continue;
-            } else {
-                continue; 
-            }
-        }
-
-        // Posicao REAL do probe (grid + offset de relocacao): o trace dispara os raios e o
-        // dist atlas mede distancias a partir do probe relocado — o Chebyshev e o peso de
-        // backface tem que usar a mesma origem, senao o teste de visibilidade compara contra
-        // a posicao errada exatamente nos probes que foram movidos por estar perto de parede.
-        float3 probePos    = DDGI_ProbeWorldPos(c, gridMin, spacing)
-                           + probeData[DDGI_ProbeLinear(c, count)].xyz;
-        float3 probeToPoint = biasPos - probePos;
-        float  distToProbe = length(probeToPoint);
-        float3 dirPP       = probeToPoint / max(distToProbe, 1e-4f);
-
-        // Pesos DEFENSIVOS com piso (receita do Flax, DDGI.hlsl): backface e Chebyshev se
-        // auto-sabotam em geometria densa/fina (miolo de sebe, cantos, frestas) — os pisos
-        // garantem que wsum nunca colapsa a zero => nunca retorna preto absoluto, so escurece.
-        float backface = dot(-dirPP, N) * 0.5f + 0.5f;
-        float w = backface * backface + 0.05f;
-
-        int2   distOrigin = DDGI_TileOrigin(c, count, distTile);
-        float2 md = DDGI_SampleProbeRG(distAtlas, samp, distOrigin, distTile, distInvSize, dirPP);
-        float  mean = md.x, mean2 = md.y;
-        if (distToProbe > mean) {
-            float variance = abs(mean * mean - mean2);
-            float d        = distToProbe - mean;
-            float cheb     = variance / (variance + d * d);
-            w *= max(cheb * cheb * cheb, 0.05f);
-        }
-        w = max(w, 1e-6f);
-
-        // Curva de crush suave p/ pesos baixos ("inject a small portion of light"): mantem a
-        // penalizacao dos probes ocluidos sem a transicao dura do corte a zero.
-        const float minWeightThreshold = 0.2f;
-        if (w < minWeightThreshold)
-            w *= (w * w) / (minWeightThreshold * minWeightThreshold);
-
-        float3 trilin = lerp(1.0f - frac, frac, (float3)off);
-        w *= max(trilin.x * trilin.y * trilin.z, 0.001f);
-
-        int2   irrOrigin = DDGI_TileOrigin(c, count, irrTile);
+        int2   irrOrigin = DDGI_TileOrigin(tap.Coord, count, irrTile);
         float3 irr = DDGI_SampleProbe(irrAtlas, samp, irrOrigin, irrTile, irrInvSize, N);
-        sum  += irr * w;
-        wsum += w;
+        sum  += irr * tap.Weight;
+        wsum += tap.Weight;
     }
     return (wsum > 0.0f) ? (sum / wsum) : float3(0.0f, 0.0f, 0.0f);
 }
