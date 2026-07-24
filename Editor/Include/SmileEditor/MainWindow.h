@@ -51,6 +51,7 @@ namespace SmileEditor {
         void ShowSettings();
         void ShowTimeOfDay();
         void ShowStats();
+        void ShowDebugTargets();
         void ShowMaterials();
 
     private:
@@ -74,6 +75,7 @@ namespace SmileEditor {
         TimeOfDayBridge*      TodBridge   = nullptr; // ponte C++ -> TimeOfDayWindow.qml
         QPointer<QDialog>     TodDlg;                // janela flutuante do Time of Day
         QPointer<QDialog>     StatsDlg;              // janela flutuante de Estatisticas (VRAM)
+        QPointer<QDialog>     DebugTargetsDlg;       // janela flutuante do visualizador de RTs
         LightsBridge*         LightsBr    = nullptr; // acoes/propriedades de luz (outliner)
         SceneOutlinerBridge*  OutlinerBr  = nullptr; // ponte C++ -> SceneOutlinerPanel.qml
         QDockWidget*          LightsDock  = nullptr; // dock lateral do Scene Outliner ("Cena")

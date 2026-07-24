@@ -14,6 +14,8 @@
 #include <QCursor>
 #include <QLocale>
 #include <QFileDialog>
+#include <QMutexLocker>
+#include <QVariantMap>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -385,6 +387,366 @@ namespace SmileEditor {
         if (!Renderer) return -1;
         const Smile::u32 I = Renderer->GetDebugTargetIndex();
         return I == Smile::Renderer::kNoDebugTarget ? -1 : static_cast<int>(I);
+    }
+
+    QVariantList ViewportWidget::GetDebugSelection() const {
+        QVariantList L;
+        if (!Renderer) return L;
+        for (Smile::u32 I : Renderer->GetDebugSelection()) L << static_cast<int>(I);
+        return L;
+    }
+
+    int ViewportWidget::GetDebugColumns() const {
+        return Renderer ? static_cast<int>(Renderer->GetDebugColumns()) : 0;
+    }
+
+    double ViewportWidget::GetDebugExposure() const {
+        return Renderer ? static_cast<double>(Renderer->GetDebugExposure()) : 1.0;
+    }
+
+    bool ViewportWidget::GetDebugProbeCoordValues(
+            int& _X, int& _Y, int& _Z, int& _CountX, int& _CountY, int& _CountZ) const {
+        if (!Renderer || !DebugProbeSessionActive) return false;
+        const auto& DDGI = Renderer->GetDDGI();
+        const Smile::u32 Index = Renderer->GetDebugProbeIndex();
+        if (!DDGI.IsReady() || Index == Smile::Renderer::kNoDebugProbe ||
+            Index >= DDGI.NumProbesCount()) {
+            return false;
+        }
+
+        const Smile::Vec3 Count = DDGI.GridCount();
+        _CountX = static_cast<int>(Count.X);
+        _CountY = static_cast<int>(Count.Y);
+        _CountZ = static_cast<int>(Count.Z);
+        if (_CountX <= 0 || _CountY <= 0 || _CountZ <= 0) return false;
+
+        const int XY = _CountX * _CountY;
+        _Z = static_cast<int>(Index) / XY;
+        const int R = static_cast<int>(Index) - _Z * XY;
+        _Y = R / _CountX;
+        _X = R - _Y * _CountX;
+        return true;
+    }
+
+    int ViewportWidget::GetDebugProbeIndex() const {
+        if (!Renderer || !DebugProbeSessionActive) return -1;
+        const Smile::u32 Index = Renderer->GetDebugProbeIndex();
+        return Index == Smile::Renderer::kNoDebugProbe ? -1 : static_cast<int>(Index);
+    }
+
+    QString ViewportWidget::GetDebugProbeCoord() const {
+        int X, Y, Z, CX, CY, CZ;
+        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
+        return QStringLiteral("grid (%1, %2, %3)").arg(X).arg(Y).arg(Z);
+    }
+
+    QString ViewportWidget::GetDebugProbeWorld() const {
+        int X, Y, Z, CX, CY, CZ;
+        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
+        const auto& DDGI = Renderer->GetDDGI();
+        const Smile::Vec3 Min = DDGI.GridMin();
+        const double S = DDGI.Spacing();
+        const double PX = Min.X + static_cast<double>(X) * S;
+        const double PY = Min.Y + static_cast<double>(Y) * S;
+        const double PZ = Min.Z + static_cast<double>(Z) * S;
+        const QLocale Locale;
+        return QStringLiteral("posição-base %1 · %2 · %3 m")
+            .arg(Locale.toString(PX, 'f', 2))
+            .arg(Locale.toString(PY, 'f', 2))
+            .arg(Locale.toString(PZ, 'f', 2));
+    }
+
+    QString ViewportWidget::GetDebugProbeGrid() const {
+        int X, Y, Z, CX, CY, CZ;
+        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
+        const QLocale Locale;
+        return QStringLiteral("%1 × %2 × %3 probes · spacing %4 m")
+            .arg(CX).arg(CY).arg(CZ)
+            .arg(Locale.toString(Renderer->GetDDGI().Spacing(), 'f', 2));
+    }
+
+    QString ViewportWidget::GetDebugProbeDistanceRange() const {
+        if (!Renderer || !DebugProbeSessionActive) return QString();
+        const QLocale Locale;
+        return QStringLiteral("distância média · 0 → %1 m")
+            .arg(Locale.toString(Renderer->GetDDGI().DistanceMomentMax(), 'f', 2));
+    }
+
+    bool ViewportWidget::IsDebugPreviewReady() const {
+        QMutexLocker Lock(&DebugPreviewMutex);
+        return !DebugPreviewImage.isNull();
+    }
+
+    QImage ViewportWidget::DebugPreviewImageCopy() const {
+        QMutexLocker Lock(&DebugPreviewMutex);
+        return DebugPreviewImage.copy();
+    }
+
+    void ViewportWidget::InvalidateDebugPreview() {
+        {
+            QMutexLocker Lock(&DebugPreviewMutex);
+            DebugPreviewImage = QImage();
+        }
+        ++DebugPreviewSeq;
+        emit DebugPreviewUpdated();
+    }
+
+    void ViewportWidget::SetDebugPreviewEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        if (!_Enabled && DebugProbeSessionActive) ClearDebugProbeInspection();
+        Renderer->SetDebugPreviewEnabled(_Enabled);
+        if (_Enabled) InvalidateDebugPreview();
+    }
+
+    // Liga/desliga um alvo na grade offscreen da janela. O alvo unico do toolbar continua
+    // independente e, se ativo, permanece fullscreen no viewport principal.
+    void ViewportWidget::ToggleDebugSelection(int _Index) {
+        if (!Renderer || _Index < 0) return;
+        if (DebugProbeSessionActive) ClearDebugProbeInspection();
+        std::vector<Smile::u32> Sel = Renderer->GetDebugSelection();
+        const auto It = std::find(Sel.begin(), Sel.end(), static_cast<Smile::u32>(_Index));
+        if (It != Sel.end()) Sel.erase(It);
+        else if (Sel.size() < 16u) Sel.push_back(static_cast<Smile::u32>(_Index));
+        else return;
+        Renderer->SetDebugSelection(Sel);
+        InvalidateDebugPreview();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ClearDebugSelection() {
+        if (!Renderer) return;
+        if (DebugProbeSessionActive) ClearDebugProbeInspection();
+        Renderer->SetDebugSelection({});
+        InvalidateDebugPreview();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetDebugColumns(int _Columns) {
+        if (!Renderer) return;
+        if (DebugProbeSessionActive) return;
+        Renderer->SetDebugColumns(_Columns < 0 ? 0 : static_cast<Smile::u32>(_Columns));
+        InvalidateDebugPreview();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetDebugExposure(double _Exposure) {
+        if (!Renderer) return;
+        Renderer->SetDebugExposure(static_cast<float>(_Exposure));
+        InvalidateDebugPreview();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::InspectDDGIProbe(
+            int _TargetIndex, double _U, double _V, double _TileAspect) {
+        if (!Renderer || DebugProbeSessionActive || _TargetIndex < 0) return;
+        const auto& Targets = Smile::DebugTargets::All();
+        if (static_cast<size_t>(_TargetIndex) >= Targets.size()) return;
+        const Smile::FDebugTarget& Clicked = Targets[static_cast<size_t>(_TargetIndex)];
+        if (Clicked.AtlasTilePx == 0 ||
+            (Clicked.Decode != Smile::EDebugDecode::DDGIIrradiance &&
+             Clicked.Decode != Smile::EDebugDecode::DDGIDistance)) {
+            return;
+        }
+
+        const auto& DDGI = Renderer->GetDDGI();
+        if (!DDGI.IsReady()) return;
+        const Smile::Vec3 Count = DDGI.GridCount();
+        const int CountX = static_cast<int>(Count.X);
+        const int CountY = static_cast<int>(Count.Y);
+        const int CountZ = static_cast<int>(Count.Z);
+        if (CountX <= 0 || CountY <= 0 || CountZ <= 0) return;
+
+        const int TilesX = CountX * CountZ;
+        const int Total  = TilesX * CountY;
+        const double Aspect = std::max(_TileAspect, 1e-4);
+        const int Cols = std::max(1, static_cast<int>(
+            std::ceil(std::sqrt(static_cast<double>(Total) * Aspect))));
+        const int Rows = (Total + Cols - 1) / Cols;
+        const double U = std::clamp(_U, 0.0, 0.999999);
+        const double V = std::clamp(_V, 0.0, 0.999999);
+        const int DisplayX = std::min(static_cast<int>(U * Cols), Cols - 1);
+        const int DisplayY = std::min(static_cast<int>(V * Rows), Rows - 1);
+        const int AtlasIndex = DisplayY * Cols + DisplayX;
+        if (AtlasIndex < 0 || AtlasIndex >= Total) return; // celula vazia da ultima linha
+
+        const int TileCol = AtlasIndex % TilesX;
+        const int Y = AtlasIndex / TilesX;
+        const int X = TileCol % CountX;
+        const int Z = TileCol / CountX;
+        const int ProbeIndex = X + Y * CountX + Z * CountX * CountY;
+
+        DebugProbePreviousTargets.clear();
+        for (Smile::u32 Index : Renderer->GetDebugSelection()) {
+            if (Index < Targets.size())
+                DebugProbePreviousTargets << QString::fromStdString(Targets[Index].Name);
+        }
+        DebugProbePreviousColumns = static_cast<int>(Renderer->GetDebugColumns());
+
+        std::vector<Smile::u32> DetailTargets;
+        for (size_t I = 0; I < Targets.size(); ++I) {
+            if (Targets[I].Decode == Smile::EDebugDecode::DDGIIrradiance ||
+                Targets[I].Decode == Smile::EDebugDecode::DDGIDistance) {
+                DetailTargets.push_back(static_cast<Smile::u32>(I));
+            }
+        }
+        if (DetailTargets.empty()) return;
+
+        DebugProbeSessionActive = true;
+        DebugProbeDirection.clear();
+        DebugProbeSample.clear();
+        ResetDebugProbePoint();
+        Renderer->SetDebugSelection(DetailTargets);
+        Renderer->SetDebugColumns(DetailTargets.size() > 1 ? 2u : 1u);
+        Renderer->SetDebugProbeIndex(ProbeIndex);
+        InvalidateDebugPreview();
+        emit DebugProbeDirectionChanged();
+        emit DebugProbeSampleChanged();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::StepDebugProbe(int _DX, int _DY, int _DZ) {
+        int X, Y, Z, CountX, CountY, CountZ;
+        if (!GetDebugProbeCoordValues(X, Y, Z, CountX, CountY, CountZ)) return;
+        const int NX = std::clamp(X + _DX, 0, CountX - 1);
+        const int NY = std::clamp(Y + _DY, 0, CountY - 1);
+        const int NZ = std::clamp(Z + _DZ, 0, CountZ - 1);
+        const int Index = NX + NY * CountX + NZ * CountX * CountY;
+        if (Index == GetDebugProbeIndex()) return;
+        ResetDebugProbePoint();
+        Renderer->SetDebugProbeIndex(Index);
+        if (!DebugProbeSample.isEmpty()) {
+            DebugProbeSample.clear();
+            emit DebugProbeSampleChanged();
+        }
+        InvalidateDebugPreview();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ClearDebugProbeInspection() {
+        if (!Renderer || !DebugProbeSessionActive) return;
+        ResetDebugProbePoint();
+        Renderer->SetDebugProbeIndex(-1);
+
+        std::vector<Smile::u32> Restored;
+        Restored.reserve(static_cast<size_t>(DebugProbePreviousTargets.size()));
+        for (const QString& Name : DebugProbePreviousTargets) {
+            const Smile::u32 Index = Smile::DebugTargets::IndexOf(Name.toStdString());
+            if (Index != Smile::DebugTargets::kInvalid) Restored.push_back(Index);
+        }
+        Renderer->SetDebugSelection(Restored);
+        Renderer->SetDebugColumns(
+            DebugProbePreviousColumns < 0 ? 0u
+                                          : static_cast<Smile::u32>(DebugProbePreviousColumns));
+
+        DebugProbeSessionActive = false;
+        DebugProbePreviousTargets.clear();
+        DebugProbeDirection.clear();
+        DebugProbeSample.clear();
+        InvalidateDebugPreview();
+        emit DebugProbeDirectionChanged();
+        emit DebugProbeSampleChanged();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ResetDebugProbePoint(bool _CancelRendererRequest) {
+        const bool Changed = DebugProbePointPickArmed ||
+                             !DebugProbePointSummary.isEmpty() ||
+                             !DebugProbeContributors.isEmpty();
+        if (Renderer && _CancelRendererRequest) {
+            Renderer->CancelDebugProbePoint();
+            if (DebugProbeSessionActive) {
+                Renderer->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
+            }
+        }
+        DebugProbePointPickArmed = false;
+        DebugProbePointSummary.clear();
+        DebugProbeContributors.clear();
+        DebugProbeContributorIndices.fill(0);
+        DebugProbeContributorWeights.fill(0.0f);
+        DebugProbeContributorCount = 0;
+        DebugProbeContributorRiskSlot = -1;
+        if (!MouseLookActive) unsetCursor();
+        if (Changed) emit DebugProbePointChanged();
+    }
+
+    void ViewportWidget::ArmDebugProbePointPick() {
+        if (!Renderer || !Renderer->IsInitialized() || !DebugProbeSessionActive) return;
+        if (DebugProbePointPickArmed) {
+            ResetDebugProbePoint();
+            return;
+        }
+
+        Renderer->CancelDebugProbePoint();
+        Renderer->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
+        DebugProbeContributors.clear();
+        DebugProbeContributorIndices.fill(0);
+        DebugProbeContributorWeights.fill(0.0f);
+        DebugProbeContributorCount = 0;
+        DebugProbeContributorRiskSlot = -1;
+        DebugProbePointPickArmed = true;
+        DebugProbePointSummary =
+            QStringLiteral("Clique em uma superfície no viewport para diagnosticar o DDGI");
+        setCursor(Qt::CrossCursor);
+        emit DebugProbePointChanged();
+    }
+
+    void ViewportWidget::ClearDebugProbePoint() {
+        ResetDebugProbePoint();
+    }
+
+    void ViewportWidget::SelectDebugProbeContributor(int _ProbeIndex) {
+        if (!Renderer || !DebugProbeSessionActive || _ProbeIndex < 0) return;
+        bool Found = false;
+        for (Smile::u32 I = 0; I < DebugProbeContributorCount; ++I) {
+            if (DebugProbeContributorIndices[I] ==
+                static_cast<Smile::u32>(_ProbeIndex)) {
+                Found = true;
+                break;
+            }
+        }
+        if (!Found) return;
+
+        Renderer->SetDebugProbeIndex(_ProbeIndex);
+        Renderer->SetDebugProbeContributors(
+            DebugProbeContributorIndices.data(),
+            DebugProbeContributorWeights.data(),
+            DebugProbeContributorCount,
+            DebugProbeContributorRiskSlot);
+        InvalidateDebugPreview();
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::UpdateDebugProbeDirection(double _U, double _V) {
+        QString NewLabel;
+        const bool Valid = DebugProbeSessionActive && _U >= 0.0 && _U <= 1.0 &&
+                           _V >= 0.0 && _V <= 1.0;
+        if (Renderer)
+            Renderer->SetDebugProbeSampleUV(
+                Valid ? static_cast<float>(_U) : -1.0f,
+                Valid ? static_cast<float>(_V) : -1.0f);
+        if (Valid) {
+            double X = _U * 2.0 - 1.0;
+            double Y = _V * 2.0 - 1.0;
+            double Z = 1.0 - std::abs(X) - std::abs(Y);
+            const double T = std::clamp(-Z, 0.0, 1.0);
+            X += X >= 0.0 ? -T : T;
+            Y += Y >= 0.0 ? -T : T;
+            const double L = std::sqrt(X * X + Y * Y + Z * Z);
+            if (L > 1e-8) { X /= L; Y /= L; Z /= L; }
+            const QLocale Locale;
+            NewLabel = QStringLiteral("direção (%1, %2, %3)")
+                .arg(Locale.toString(X, 'f', 2))
+                .arg(Locale.toString(Y, 'f', 2))
+                .arg(Locale.toString(Z, 'f', 2));
+        }
+        if (DebugProbeDirection != NewLabel) {
+            DebugProbeDirection = NewLabel;
+            emit DebugProbeDirectionChanged();
+        }
+        if (!DebugProbeSample.isEmpty()) {
+            DebugProbeSample.clear();
+            emit DebugProbeSampleChanged();
+        }
     }
 
     void ViewportWidget::SelectDebugTarget(int _Index) {
@@ -1097,6 +1459,150 @@ namespace SmileEditor {
         GizmoCtrl.Submit(*Renderer);
         Renderer->RenderFrame();
 
+        // A captura e produzida dentro do frame, em target offscreen. O readback fica pronto
+        // quando o slot de frame volta a ser usado; daqui em diante o QML so enxerga QImage.
+        std::vector<Smile::u8> DebugPixels;
+        if (Renderer->ConsumeDebugPreview(DebugPixels)) {
+            const size_t Expected =
+                static_cast<size_t>(Smile::Renderer::kDebugPreviewWidth) *
+                Smile::Renderer::kDebugPreviewHeight * 4u;
+            if (DebugPixels.size() == Expected) {
+                QImage Image(DebugPixels.data(),
+                             static_cast<int>(Smile::Renderer::kDebugPreviewWidth),
+                             static_cast<int>(Smile::Renderer::kDebugPreviewHeight),
+                             QImage::Format_RGBA8888);
+                {
+                    QMutexLocker Lock(&DebugPreviewMutex);
+                    DebugPreviewImage = Image.copy();
+                }
+                ++DebugPreviewSeq;
+                emit DebugPreviewUpdated();
+            }
+        }
+
+        Smile::Renderer::FDebugProbeSample ProbeSample;
+        if (Renderer->ConsumeDebugProbeSample(ProbeSample) &&
+            DebugProbeSessionActive &&
+            ProbeSample.ProbeIndex == Renderer->GetDebugProbeIndex()) {
+            const QLocale Locale;
+            DebugProbeSample = QStringLiteral(
+                "irr %1 · %2 · %3  •  distância %4 m  •  σ %5 m")
+                .arg(Locale.toString(ProbeSample.Irradiance[0], 'f', 3))
+                .arg(Locale.toString(ProbeSample.Irradiance[1], 'f', 3))
+                .arg(Locale.toString(ProbeSample.Irradiance[2], 'f', 3))
+                .arg(Locale.toString(ProbeSample.MeanDistance, 'f', 2))
+                .arg(Locale.toString(ProbeSample.DistanceDeviation, 'f', 2));
+            emit DebugProbeSampleChanged();
+        }
+
+        Smile::FDDGIPointDiagnostic PointDiagnostic;
+        if (Renderer->ConsumeDebugProbePoint(PointDiagnostic) &&
+            DebugProbeSessionActive) {
+            DebugProbeContributors.clear();
+            DebugProbeContributorIndices.fill(0);
+            DebugProbeContributorWeights.fill(0.0f);
+            DebugProbeContributorCount = 0;
+            DebugProbeContributorRiskSlot = -1;
+
+            if (!PointDiagnostic.Valid) {
+                DebugProbePointSummary =
+                    QStringLiteral("Nenhuma superfície encontrada nesse pixel");
+                Renderer->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
+            } else {
+                const auto& DDGI = Renderer->GetDDGI();
+                const Smile::Vec3 GridCount = DDGI.GridCount();
+                const int CountX = std::max(1, static_cast<int>(GridCount.X));
+                const int CountY = std::max(1, static_cast<int>(GridCount.Y));
+                const int XY = CountX * CountY;
+                const QLocale Locale;
+
+                for (Smile::u32 I = 0;
+                     I < Smile::FDDGIDebug::kPointProbeCount; ++I) {
+                    const Smile::FDDGIPointProbeDiagnostic& P =
+                        PointDiagnostic.Probes[I];
+                    const int Index = static_cast<int>(P.ProbeIndex);
+                    const int Z = Index / XY;
+                    const int R = Index - Z * XY;
+                    const int Y = R / CountX;
+                    const int X = R - Y * CountX;
+
+                    QVariantMap Item;
+                    Item.insert(QStringLiteral("probeIndex"), Index);
+                    Item.insert(QStringLiteral("coord"),
+                                QStringLiteral("(%1,%2,%3)").arg(X).arg(Y).arg(Z));
+                    Item.insert(QStringLiteral("active"), P.Active);
+                    Item.insert(QStringLiteral("dominant"),
+                                static_cast<int>(I) == PointDiagnostic.DominantSlot);
+                    Item.insert(QStringLiteral("risk"),
+                                static_cast<int>(I) == PointDiagnostic.RiskSlot);
+                    Item.insert(QStringLiteral("distance"), P.DistanceToPoint);
+                    Item.insert(QStringLiteral("mean"), P.MeanDistance);
+                    Item.insert(QStringLiteral("sigma"), P.DistanceDeviation);
+                    Item.insert(QStringLiteral("trilinear"), P.TrilinearWeight);
+                    Item.insert(QStringLiteral("visibility"), P.Visibility);
+                    Item.insert(QStringLiteral("weight"), P.NormalizedWeight);
+                    Item.insert(QStringLiteral("leakRisk"), P.LeakRisk);
+                    Item.insert(
+                        QStringLiteral("irradiance"),
+                        QStringLiteral("%1 · %2 · %3")
+                            .arg(Locale.toString(P.Irradiance.X, 'f', 2))
+                            .arg(Locale.toString(P.Irradiance.Y, 'f', 2))
+                            .arg(Locale.toString(P.Irradiance.Z, 'f', 2)));
+                    DebugProbeContributors.append(Item);
+
+                    if (P.Active &&
+                        DebugProbeContributorCount <
+                            DebugProbeContributorIndices.size()) {
+                        if (static_cast<int>(I) == PointDiagnostic.RiskSlot) {
+                            DebugProbeContributorRiskSlot =
+                                static_cast<int>(DebugProbeContributorCount);
+                        }
+                        DebugProbeContributorIndices[DebugProbeContributorCount] =
+                            P.ProbeIndex;
+                        DebugProbeContributorWeights[DebugProbeContributorCount] =
+                            P.NormalizedWeight;
+                        ++DebugProbeContributorCount;
+                    }
+                }
+
+                const int FocusSlot = PointDiagnostic.RiskSlot >= 0
+                    ? PointDiagnostic.RiskSlot : PointDiagnostic.DominantSlot;
+                if (FocusSlot >= 0 &&
+                    FocusSlot < static_cast<int>(
+                        Smile::FDDGIDebug::kPointProbeCount)) {
+                    Renderer->SetDebugProbeIndex(static_cast<int>(
+                        PointDiagnostic.Probes[
+                            static_cast<size_t>(FocusSlot)].ProbeIndex));
+                }
+                Renderer->SetDebugProbeContributors(
+                    DebugProbeContributorIndices.data(),
+                    DebugProbeContributorWeights.data(),
+                    DebugProbeContributorCount,
+                    DebugProbeContributorRiskSlot);
+
+                const int DominantIndex = PointDiagnostic.DominantSlot >= 0
+                    ? static_cast<int>(PointDiagnostic.Probes[
+                        static_cast<size_t>(PointDiagnostic.DominantSlot)].ProbeIndex)
+                    : -1;
+                const int RiskIndex = PointDiagnostic.RiskSlot >= 0
+                    ? static_cast<int>(PointDiagnostic.Probes[
+                        static_cast<size_t>(PointDiagnostic.RiskSlot)].ProbeIndex)
+                    : -1;
+                DebugProbePointSummary = QStringLiteral(
+                    "ponto %1 · %2 · %3 m  •  dominante #%4%5")
+                    .arg(Locale.toString(PointDiagnostic.WorldPosition.X, 'f', 2))
+                    .arg(Locale.toString(PointDiagnostic.WorldPosition.Y, 'f', 2))
+                    .arg(Locale.toString(PointDiagnostic.WorldPosition.Z, 'f', 2))
+                    .arg(DominantIndex)
+                    .arg(RiskIndex >= 0
+                        ? QStringLiteral("  •  maior risco #%1").arg(RiskIndex)
+                        : QStringLiteral("  •  sem risco relevante"));
+                InvalidateDebugPreview();
+                emit ViewSettingsChanged();
+            }
+            emit DebugProbePointChanged();
+        }
+
         // Picking: coleta o resultado de um clique recente (readback assincrono pronto alguns
         // frames depois). Atualiza a selecao e loga o objeto (validacao da Fase 1).
         int PickedIndex = -1;
@@ -1158,6 +1664,11 @@ namespace SmileEditor {
 
     void ViewportWidget::mousePressEvent(QMouseEvent* _Event) {
         if (_Event->button() == Qt::RightButton) {
+            if (DebugProbePointPickArmed) {
+                ResetDebugProbePoint();
+                _Event->accept();
+                return;
+            }
             MouseLookActive = true;
             IgnoreNextMove  = false;
             setCursor(Qt::BlankCursor);
@@ -1173,6 +1684,24 @@ namespace SmileEditor {
                 const QPointF P = _Event->position();
                 const unsigned int Px = static_cast<unsigned int>(P.x() > 0.0 ? P.x() : 0.0);
                 const unsigned int Py = static_cast<unsigned int>(P.y() > 0.0 ? P.y() : 0.0);
+                if (DebugProbePointPickArmed) {
+                    DebugProbePointPickArmed = false;
+                    DebugProbeContributors.clear();
+                    DebugProbeContributorCount = 0;
+                    DebugProbeContributorRiskSlot = -1;
+                    if (Renderer->RequestDebugProbePoint(Px, Py)) {
+                        DebugProbePointSummary =
+                            QStringLiteral("Lendo o ponto da cena...");
+                    } else {
+                        DebugProbePointSummary =
+                            QStringLiteral("Não foi possível iniciar o diagnóstico");
+                    }
+                    unsetCursor();
+                    emit DebugProbePointChanged();
+                    setFocus();
+                    _Event->accept();
+                    return;
+                }
                 // 1) Tenta pegar um handle do gizmo. Se pegou, comeca o arraste e NAO faz picking.
                 // 2) Senao, tenta um marker de LUZ (teste 2D em tela — luz nao esta no ID-buffer).
                 // 3) Senao, picking normal por GPU (seleciona o objeto sob o cursor).

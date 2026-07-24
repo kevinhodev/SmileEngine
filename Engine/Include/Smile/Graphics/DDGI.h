@@ -67,6 +67,8 @@ namespace Smile {
         u32  ProbesTraceSRV()  const { return ProbesTraceSRVSlot; }
         u32  ProbeDataSRV()    const { return ProbeDataSRVSlot; }
         u32  ProbeRayCountSRV()const { return ProbeRayCountSRVSlot; } 
+        ID3D12Resource* IrradianceAtlasResource() const { return IrradAtlas.Get(); }
+        ID3D12Resource* DistanceAtlasResource() const   { return DistAtlas.Get(); }
         u32  NumProbesCount()  const { return NumProbes; }
         u32  RaysPerProbe()    const { return kRaysPerProbe; }
 
@@ -80,6 +82,21 @@ namespace Smile {
         f32  DistAtlasH()    const { return (f32)DistAtlasHeight; }
         f32  DistTileSizeF() const { return (f32)kDistTileSize; }
         f32  MaxRayDistance() const { return MaxRayDist; } 
+        // O atlas de distancia guarda os dois momentos ja limitados a esta vizinhanca.
+        // Nao confundir com MaxRayDistance(), que e o alcance do trace na cena inteira.
+        f32  DistanceMomentMax() const { return SpacingV * 2.6f; }
+        // Ordem fisica dos tiles no atlas: X varia primeiro, depois Z; Y ocupa as linhas.
+        // ProbeLinear, usado pelos buffers, varia X, depois Y, depois Z.
+        u32  AtlasTileFromProbe(u32 ProbeIndex) const {
+            if (ProbeIndex >= NumProbes || CountX <= 0 || CountY <= 0) return 0;
+            const u32 XY = static_cast<u32>(CountX * CountY);
+            const u32 Z  = ProbeIndex / XY;
+            const u32 R  = ProbeIndex - Z * XY;
+            const u32 Y  = R / static_cast<u32>(CountX);
+            const u32 X  = R - Y * static_cast<u32>(CountX);
+            return X + Z * static_cast<u32>(CountX)
+                     + Y * static_cast<u32>(CountX * CountZ);
+        }
 
         void SetIntensity(f32 V)  { Intensity = V; }
         f32  GetIntensity() const { return Intensity; }

@@ -30,6 +30,12 @@ namespace SmileEditor {
         emit StatsVisibleChanged();
     }
 
+    void MenuBridge::SetDebugTargetsVisible(bool _V) {
+        if (DebugTargetsVis == _V) return;
+        DebugTargetsVis = _V;
+        emit DebugTargetsVisibleChanged();
+    }
+
     void MenuBridge::SetMaterialsVisible(bool _V) {
         if (MaterialsVis == _V) return;
         MaterialsVis = _V;

@@ -19,6 +19,39 @@ namespace Smile {
             while (i > 0) { f /= static_cast<f32>(b); r += f * static_cast<f32>(i % b); i /= b; }
             return r;
         }
+
+        constexpr DXGI_FORMAT kDebugPreviewFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+        constexpr u32 kDebugPreviewRowPitch =
+            (Renderer::kDebugPreviewWidth * 4u + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u) &
+            ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u);
+        constexpr u64 kDebugProbeIrrOffset  = 0;
+        constexpr u64 kDebugProbeDistOffset = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
+        constexpr u64 kDebugProbeReadbackSize =
+            D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 2ull;
+
+        f32 HalfToFloat(u16 H) {
+            const u32 Sign = static_cast<u32>(H & 0x8000u) << 16;
+            u32 Exp  = (H >> 10) & 0x1Fu;
+            u32 Mant = H & 0x03FFu;
+            u32 Bits;
+            if (Exp == 0) {
+                if (Mant == 0) {
+                    Bits = Sign;
+                } else {
+                    i32 E = -14;
+                    while ((Mant & 0x0400u) == 0) { Mant <<= 1; --E; }
+                    Mant &= 0x03FFu;
+                    Bits = Sign | (static_cast<u32>(E + 127) << 23) | (Mant << 13);
+                }
+            } else if (Exp == 0x1Fu) {
+                Bits = Sign | 0x7F800000u | (Mant << 13);
+            } else {
+                Bits = Sign | ((Exp + 112u) << 23) | (Mant << 13);
+            }
+            f32 Result;
+            std::memcpy(&Result, &Bits, sizeof(Result));
+            return Result;
+        }
     }
 
     Renderer::Renderer() = default;
@@ -65,6 +98,8 @@ namespace Smile {
         GBuffer.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
         GBuffer.WriteDepthSRV(Device.Native(), SRVHeap, DepthBuffer.Get()); 
         DebugViewPass.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+        DebugPreviewPass.Initialize(Device.Native(), kDebugPreviewFormat);
+        CreateDebugPreviewTargets();
         CreateHDRBuffers();
         CreateVelocityBuffer();
         CreateSceneCopies();
@@ -157,6 +192,9 @@ namespace Smile {
     }
 
     void Renderer::SetupGIForScene(const Vec3& _AABBMin, const Vec3& _AABBMax) {
+        // Uma probe selecionada pertence ao volume anterior; nunca deixa o marcador apontar
+        // para o mesmo indice numerico de uma grade recem-criada.
+        SetDebugProbeIndex(-1);
         if (!Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
         if (!Atmosphere.IsInitialized()) return; 
         DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
@@ -165,6 +203,8 @@ namespace Smile {
         SetupReflectionsForScene();
 
         DDGIDebugPass.SetupForScene(Device.Native(), SRVHeap, DDGI.NumProbesCount());
+        DDGIDebugPass.SetupPointDiagnosticInputs(
+            Device.Native(), SRVHeap, GBuffer.SRVTableStart(), DDGI);
 
         // DDGI/reflexoes so ganham SRV aqui (por cena), DEPOIS do registro feito em
         // RecreateInternalTargets — sem esta 2a passada eles nunca apareciam na lista.
@@ -489,6 +529,147 @@ namespace Smile {
         SRVHeap.CreateSRV(Device.Native(), HDRColorBuffer.Get(), SRVDesc, HDRSRVSlot);
     }
 
+    void Renderer::CreateDebugPreviewTargets() {
+        D3D12_HEAP_PROPERTIES DefaultHeap{};
+        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12_RESOURCE_DESC TargetDesc{};
+        TargetDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        TargetDesc.Width            = kDebugPreviewWidth;
+        TargetDesc.Height           = kDebugPreviewHeight;
+        TargetDesc.DepthOrArraySize = 1;
+        TargetDesc.MipLevels        = 1;
+        TargetDesc.Format           = kDebugPreviewFormat;
+        TargetDesc.SampleDesc       = { 1, 0 };
+        TargetDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        TargetDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        D3D12_CLEAR_VALUE Clear{};
+        Clear.Format   = kDebugPreviewFormat;
+        Clear.Color[0] = 0.035f;
+        Clear.Color[1] = 0.037f;
+        Clear.Color[2] = 0.031f;
+        Clear.Color[3] = 1.0f;
+        SMILE_HR(Device.Native()->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TargetDesc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear,
+            IID_PPV_ARGS(&DebugPreviewTarget)));
+        VramTracker::Register(DebugPreviewTarget.Get(), EVramCategory::RenderTargets);
+
+        DebugPreviewRTVHeap.Initialize(
+            Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
+        Device.Native()->CreateRenderTargetView(
+            DebugPreviewTarget.Get(), nullptr, DebugPreviewRTVHeap.CpuHandle(0));
+
+        D3D12_HEAP_PROPERTIES ReadbackHeap{};
+        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC ReadbackDesc{};
+        ReadbackDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        ReadbackDesc.Width            = static_cast<u64>(kDebugPreviewRowPitch) *
+                                        kDebugPreviewHeight;
+        ReadbackDesc.Height           = 1;
+        ReadbackDesc.DepthOrArraySize = 1;
+        ReadbackDesc.MipLevels        = 1;
+        ReadbackDesc.Format           = DXGI_FORMAT_UNKNOWN;
+        ReadbackDesc.SampleDesc       = { 1, 0 };
+        ReadbackDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        for (u32 I = 0; I < FCommandQueue::kFramesInFlight; ++I) {
+            SMILE_HR(Device.Native()->CreateCommittedResource(
+                &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &ReadbackDesc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                IID_PPV_ARGS(&DebugPreviewReadback[I])));
+            DebugPreviewReadbackPending[I] = false;
+            DebugPreviewReadbackVersion[I] = 0;
+
+            ReadbackDesc.Width = kDebugProbeReadbackSize;
+            SMILE_HR(Device.Native()->CreateCommittedResource(
+                &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &ReadbackDesc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                IID_PPV_ARGS(&DebugProbeSampleReadback[I])));
+            DebugProbeSamplePending[I] = false;
+            DebugProbeSampleVersion[I] = 0;
+            DebugProbeSampleIndex[I]   = kNoDebugProbe;
+            ReadbackDesc.Width = static_cast<u64>(kDebugPreviewRowPitch) *
+                                 kDebugPreviewHeight;
+        }
+    }
+
+    void Renderer::CollectDebugPreviewReadback(u32 _FrameSlot) {
+        if (_FrameSlot >= FCommandQueue::kFramesInFlight) return;
+
+        if (DebugPreviewReadbackPending[_FrameSlot]) {
+            DebugPreviewReadbackPending[_FrameSlot] = false;
+            if (DebugPreviewReadbackVersion[_FrameSlot] == DebugPreviewConfigVersion &&
+                DebugPreviewEnabled) {
+                void* Mapped = nullptr;
+                const size_t TotalBytes =
+                    static_cast<size_t>(kDebugPreviewRowPitch) * kDebugPreviewHeight;
+                D3D12_RANGE ReadRange{ 0, TotalBytes };
+                SMILE_HR(DebugPreviewReadback[_FrameSlot]->Map(0, &ReadRange, &Mapped));
+
+                DebugPreviewPixels.resize(
+                    static_cast<size_t>(kDebugPreviewWidth) * kDebugPreviewHeight * 4u);
+                const auto* Src = static_cast<const u8*>(Mapped);
+                u8* Dst = DebugPreviewPixels.data();
+                constexpr size_t TightRow = static_cast<size_t>(kDebugPreviewWidth) * 4u;
+                for (u32 Y = 0; Y < kDebugPreviewHeight; ++Y)
+                    std::memcpy(Dst + static_cast<size_t>(Y) * TightRow,
+                                Src + static_cast<size_t>(Y) * kDebugPreviewRowPitch,
+                                TightRow);
+
+                D3D12_RANGE NoWrite{ 0, 0 };
+                DebugPreviewReadback[_FrameSlot]->Unmap(0, &NoWrite);
+                DebugPreviewPixelsReady = true;
+            }
+        }
+
+        if (DebugProbeSamplePending[_FrameSlot]) {
+            DebugProbeSamplePending[_FrameSlot] = false;
+            if (DebugProbeSampleVersion[_FrameSlot] == DebugPreviewConfigVersion &&
+                DebugProbeSampleIndex[_FrameSlot] == DebugProbeIndex &&
+                DebugPreviewEnabled) {
+                void* Mapped = nullptr;
+                D3D12_RANGE ReadRange{ 0, static_cast<SIZE_T>(kDebugProbeReadbackSize) };
+                SMILE_HR(DebugProbeSampleReadback[_FrameSlot]->Map(
+                    0, &ReadRange, &Mapped));
+                const auto* Bytes = static_cast<const u8*>(Mapped);
+                const auto* Irr = reinterpret_cast<const u16*>(
+                    Bytes + kDebugProbeIrrOffset);
+                const auto* Dist = reinterpret_cast<const u16*>(
+                    Bytes + kDebugProbeDistOffset);
+
+                DebugProbeSampleResult.ProbeIndex = DebugProbeSampleIndex[_FrameSlot];
+                for (u32 C = 0; C < 3; ++C)
+                    DebugProbeSampleResult.Irradiance[C] =
+                        std::pow(std::max(HalfToFloat(Irr[C]), 0.0f), 1.5f);
+                const f32 Mean  = HalfToFloat(Dist[0]);
+                const f32 Mean2 = HalfToFloat(Dist[1]);
+                DebugProbeSampleResult.MeanDistance = Mean;
+                DebugProbeSampleResult.DistanceDeviation =
+                    std::sqrt(std::abs(Mean2 - Mean * Mean));
+
+                D3D12_RANGE NoWrite{ 0, 0 };
+                DebugProbeSampleReadback[_FrameSlot]->Unmap(0, &NoWrite);
+                DebugProbeSampleReady = true;
+            }
+        }
+    }
+
+    bool Renderer::ConsumeDebugPreview(std::vector<u8>& _OutPixels) {
+        if (!DebugPreviewPixelsReady) return false;
+        _OutPixels = DebugPreviewPixels;
+        DebugPreviewPixelsReady = false;
+        return true;
+    }
+
+    bool Renderer::ConsumeDebugProbeSample(FDebugProbeSample& _OutSample) {
+        if (!DebugProbeSampleReady) return false;
+        _OutSample = DebugProbeSampleResult;
+        DebugProbeSampleReady = false;
+        return true;
+    }
+
     void Renderer::CreateVelocityBuffer() {
         const u32 Width = RenderWidth(), Height = RenderHeight();
         if (Width == 0 || Height == 0) return;
@@ -633,7 +814,8 @@ namespace Smile {
                     "RainSplash.vs", "RainSplash.ps" },
                   [&] { RainWetness.Recreate(Dev); } },
                 { { "DDGIDebugProbes.vs", "DDGIDebugProbes.ps", "DDGIDebugVolume.vs",
-                    "DDGIDebugVolume.ps", "DDGIDebugRays.vs", "DDGIDebugRays.ps" },
+                    "DDGIDebugVolume.ps", "DDGIDebugRays.vs", "DDGIDebugRays.ps",
+                    "DDGIDebugStats.cs", "DDGIDebugPoint.cs" },
                   [&] { if (Device.RaytracingSupported())
                             DDGIDebugPass.Recreate(Dev, RT, DS); } },
             };
@@ -755,6 +937,10 @@ namespace Smile {
         HiZ.SetupForResize(Device.Native(), SRVHeap, RW, RH);
 
         SetupReflectionsForScene();
+        if (DDGI.IsReady()) {
+            DDGIDebugPass.SetupPointDiagnosticInputs(
+                Device.Native(), SRVHeap, GBuffer.SRVTableStart(), DDGI);
+        }
 
         RegisterDebugTargets();
     }
@@ -765,6 +951,21 @@ namespace Smile {
     void Renderer::RegisterDebugTargets() {
         using namespace DebugTargets;
         constexpr u32 kNoSlot = 0xFFFFFFFFu;
+
+        // O indice e detalhe de apresentacao; preserva a selecao pelo nome enquanto a lista
+        // e reconstruida. Isso tambem remove entradas DDGI/ReSTIR obsoletas quando uma nova
+        // cena nao consegue recriar seus recursos, em vez de deixar um SRV ja liberado visivel.
+        std::vector<std::string> SelectedNames;
+        std::string MainTargetName;
+        {
+            const auto& Previous = All();
+            SelectedNames.reserve(DebugSelection.size());
+            for (u32 Index : DebugSelection)
+                if (Index < Previous.size()) SelectedNames.push_back(Previous[Index].Name);
+            if (DebugTargetIndex < Previous.size())
+                MainTargetName = Previous[DebugTargetIndex].Name;
+        }
+        Clear();
 
         // --- Cena / G-buffer -------------------------------------------------------------
         // Os 8 modos antigos viram entradas com decode GBufferField (SubIndex == modo antigo).
@@ -793,13 +994,19 @@ namespace Smile {
         if (AO.AOSRVSlot() != kNoSlot)
             Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Grayscale);
         if (ReSTIRGI.GITexSRVSlot() != kNoSlot)
-            Register("ReSTIR GI", ReSTIRGI.GITexSRVSlot(), EDebugDecode::HDR, 0, 1, /*Exposure=*/1.5f);
+            Register("ReSTIR GI", ReSTIRGI.GITexSRVSlot(), EDebugDecode::HDR, 0, 1,
+                     /*Exposure=*/1.5f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
         if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
-            Register("DDGI · irradiancia", DDGI.IrradianceAtlasSRV(), EDebugDecode::HDR, 0, 1,
+            // O atlas guarda irradiancia comprimida por gamma; o decode generico de HDR
+            // deixava o sinal artificialmente claro e nao correspondia ao que o lighting usa.
+            Register("DDGI · irradiancia", DDGI.IrradianceAtlasSRV(),
+                     EDebugDecode::DDGIIrradiance, 0, 1,
                      /*Exposure=*/0.4f, /*AtlasTilePx=*/6 + 2);
-            // Distancia vem em unidades de MUNDO: normaliza por MaxRayDistance p/ cair em [0,1].
-            const f32 DistNorm = DDGI.MaxRayDistance() > 0.0f ? 1.0f / DDGI.MaxRayDistance() : 1.0f;
-            Register("DDGI · distancia",   DDGI.DistAtlasSRV(),       EDebugDecode::Grayscale, 0, 1,
+            // R e a media em unidades de mundo, ja limitada no update a 2,6 * spacing.
+            // MaxRayDistance e o alcance do trace da cena e pode ser dezenas de vezes maior.
+            const f32 DistMax  = DDGI.DistanceMomentMax();
+            const f32 DistNorm = DistMax > 0.0f ? 1.0f / DistMax : 1.0f;
+            Register("DDGI · distancia",   DDGI.DistAtlasSRV(),       EDebugDecode::DDGIDistance, 0, 1,
                      /*Exposure=*/DistNorm, /*AtlasTilePx=*/14 + 2);
         }
 
@@ -810,6 +1017,100 @@ namespace Smile {
         // --- Atmosfera / volumetrico -----------------------------------------------------
         if (SunShafts.IsInitialized())
             Register("Sun shafts", SunShafts.VolumetricSRVSlot(), EDebugDecode::HDR, 0, 1, /*Exposure=*/2.0f);
+
+        std::vector<u32> RemappedSelection;
+        RemappedSelection.reserve(SelectedNames.size());
+        for (const std::string& Name : SelectedNames) {
+            const u32 Index = IndexOf(Name);
+            if (Index != DebugTargets::kInvalid) RemappedSelection.push_back(Index);
+        }
+        SetDebugSelection(RemappedSelection);
+        DebugTargetIndex = MainTargetName.empty() ? kNoDebugTarget : IndexOf(MainTargetName);
+    }
+
+    void Renderer::SetDebugProbeIndex(i32 _Index) {
+        const u32 NewIndex = (_Index >= 0 && DDGI.IsReady() &&
+                              static_cast<u32>(_Index) < DDGI.NumProbesCount())
+                           ? static_cast<u32>(_Index) : kNoDebugProbe;
+        if (DebugProbeIndex == NewIndex) return;
+
+        DebugProbeIndex = NewIndex;
+        DebugProbeSampleU = -1.0f;
+        DebugProbeSampleV = -1.0f;
+        DebugProbeSampleReady = false;
+        const bool Active = DebugProbeIndex != kNoDebugProbe;
+        DDGIDebugPass.SetSelectedProbe(Active ? static_cast<i32>(DebugProbeIndex) : -1);
+        DDGIDebugPass.SetEnabled(Active);
+        if (Active) {
+            DDGIDebugPass.SetMode(FDDGIDebug::EMode::Selected);
+            DDGIDebugPass.SetProbeRadius(0.14f);
+            DDGIDebugPass.SetShowVolume(false);
+            DDGIDebugPass.SetShowRays(false);
+        }
+        ++DebugPreviewConfigVersion;
+    }
+
+    void Renderer::SetDebugProbeSampleUV(f32 _U, f32 _V) {
+        const bool Valid = DebugProbeIndex != kNoDebugProbe &&
+                           _U >= 0.0f && _U <= 1.0f &&
+                           _V >= 0.0f && _V <= 1.0f;
+        const f32 U = Valid ? std::clamp(_U, 0.0f, 0.999999f) : -1.0f;
+        const f32 V = Valid ? std::clamp(_V, 0.0f, 0.999999f) : -1.0f;
+        if (DebugProbeSampleU == U && DebugProbeSampleV == V) return;
+        DebugProbeSampleU = U;
+        DebugProbeSampleV = V;
+        DebugProbeSampleReady = false;
+        ++DebugPreviewConfigVersion;
+    }
+
+    bool Renderer::RequestDebugProbePoint(u32 _X, u32 _Y) {
+        if (DebugProbeIndex == kNoDebugProbe || !DDGI.IsReady()) return false;
+        const u32 InternalX = static_cast<u32>(
+            static_cast<f32>(_X) * RenderScale + 0.5f);
+        const u32 InternalY = static_cast<u32>(
+            static_cast<f32>(_Y) * RenderScale + 0.5f);
+        return DDGIDebugPass.RequestPointDiagnostic(InternalX, InternalY);
+    }
+
+    void Renderer::CancelDebugProbePoint() {
+        DDGIDebugPass.CancelPointDiagnostic();
+    }
+
+    bool Renderer::ConsumeDebugProbePoint(
+            FDDGIPointDiagnostic& _OutDiagnostic) {
+        return DDGIDebugPass.ConsumePointDiagnostic(_OutDiagnostic);
+    }
+
+    void Renderer::SetDebugProbeContributors(
+            const FDDGIPointDiagnostic& _Diagnostic) {
+        u32 Indices[FDDGIDebug::kPointProbeCount]{};
+        f32 Weights[FDDGIDebug::kPointProbeCount]{};
+        u32 Count = 0;
+        i32 RiskSlot = -1;
+        for (u32 I = 0; I < FDDGIDebug::kPointProbeCount; ++I) {
+            const FDDGIPointProbeDiagnostic& P = _Diagnostic.Probes[I];
+            if (!P.Active || P.ProbeIndex >= DDGI.NumProbesCount()) continue;
+            if (static_cast<i32>(I) == _Diagnostic.RiskSlot)
+                RiskSlot = static_cast<i32>(Count);
+            Indices[Count] = P.ProbeIndex;
+            Weights[Count] = P.NormalizedWeight;
+            ++Count;
+        }
+        SetDebugProbeContributors(Indices, Weights, Count, RiskSlot);
+    }
+
+    void Renderer::SetDebugProbeContributors(
+            const u32* _Indices, const f32* _Weights,
+            u32 _Count, i32 _RiskSlot) {
+        if (_Count > 0 && _Indices && _Weights) {
+            DDGIDebugPass.SetSelectedProbes(
+                _Indices, _Weights, _Count, _RiskSlot);
+            DDGIDebugPass.SetEnabled(true);
+            DDGIDebugPass.SetMode(FDDGIDebug::EMode::Selected);
+        } else if (DebugProbeIndex != kNoDebugProbe) {
+            DDGIDebugPass.SetSelectedProbe(
+                static_cast<i32>(DebugProbeIndex));
+        }
     }
 
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
@@ -982,6 +1283,10 @@ namespace Smile {
         LastViewProj = ViewProjUnjittered; 
 
         const u32 FrameSlot = CommandQueue.FrameIndex();
+        // BeginFrame acabou de esperar a fence deste slot, portanto o readback gravado na
+        // utilizacao anterior do slot ja pode ser mapeado sem stall.
+        CollectDebugPreviewReadback(FrameSlot);
+        DDGIDebugPass.CollectPointDiagnostic(FrameSlot);
         FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
             MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));
 
@@ -1960,10 +2265,13 @@ namespace Smile {
         }
 
         {
+            constexpr D3D12_RESOURCE_STATES DeferredReadState =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             FBarrierBatch Batch;
-            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            GBuffer.AppendTransitions(Batch, DeferredReadState);
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                             DeferredReadState);
             Batch.Flush(CommandList);
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
@@ -2011,7 +2319,16 @@ namespace Smile {
             CommandList->DrawInstanced(3, 1, 0, 0);
             GpuProfiler.End(CommandList); 
 
-            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            const u32 PointGIFlags =
+                (GIChebyshev ? 1u : 0u) |
+                (GISkipInactiveProbes ? 2u : 0u) |
+                (GISkipInactiveFallback ? 4u : 0u);
+            DDGIDebugPass.RecordPointDiagnostic(
+                FrameSlot, CommandList, SRVHeap, DDGI,
+                InvViewProjFull, CameraPosition,
+                RenderWidth(), RenderHeight(), PointGIFlags);
+
+            Batch.Transition(DepthBuffer.Get(), DeferredReadState,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
             GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
@@ -2272,43 +2589,223 @@ namespace Smile {
             Batch.Flush(CommandList);
         }
 
-        // Alvo escolhido no visualizador tem prioridade sobre o view mode do G-buffer.
+        // O dropdown do toolbar continua fullscreen no viewport. A selecao da janela e
+        // independente: ela e composta num target offscreen e copiada para o QML.
         const auto& DbgAll = DebugTargets::All();
-        const bool  DbgTargetActive = DebugTargetIndex < DbgAll.size();
+        const bool MainDebugActive = GBufferDebugMode > 0 || DebugTargetIndex < DbgAll.size();
+        const bool PreviewActive   = DebugPreviewEnabled && !DebugSelection.empty();
+        // A janela e uma ferramenta interativa: capturar so 1/3 dos frames fazia o jitter
+        // temporal aparecer como tremedeira e deixava o movimento visivelmente defasado.
+        const bool CapturePreview  = PreviewActive;
 
-        if ((GBufferDebugMode > 0 || DbgTargetActive) &&
+        if ((MainDebugActive || CapturePreview) &&
             GBuffer.IsInitialized() && DebugViewPass.IsInitialized()) {
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            auto HDRDbgRTV = HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &HDRDbgRTV, FALSE, nullptr);
-            CommandList->RSSetViewports(1, &Viewport);
-            CommandList->RSSetScissorRects(1, &ScissorRect);
 
-            // Os modos 1..7 sao campos do G-buffer; o 8 e o motion vector, que tem decode
-            // proprio (escala pela resolucao). Um tile so = tela cheia — a mesma chamada
-            // aceita N tiles quando a janela de debug multiplo chegar.
-            FDebugTile Tile{};
-            if (DbgTargetActive) {
-                const FDebugTarget& T = DbgAll[DebugTargetIndex];
-                Tile.SrvSlot       = T.SrvSlot;
-                Tile.Decode        = T.Decode;
-                Tile.SubIndex      = T.SubIndex;
-                Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
-                Tile.AtlasTilePx   = T.AtlasTilePx;
-                Tile.ChannelWeight = DebugChannelWeight;
-                Tile.Exposure      = T.Exposure * DebugExposure;  // global multiplica o padrao do alvo
-                Tile.NearZ         = NearZ;   // Decode::ReverseZ linariza com estes
-                Tile.FarZ          = FarZ;
-            } else if (GBufferDebugMode == 8) {
-                Tile.SrvSlot = VelocitySRVSlot;
-                Tile.Decode  = EDebugDecode::Velocity;
-            } else {
-                Tile.SrvSlot  = GBuffer.SRVTableStart();
-                Tile.Decode   = EDebugDecode::GBufferField;
-                Tile.SubIndex = GBufferDebugMode;
+            // Depth e normal podem ser escolhidos tanto no toolbar quanto na janela. Deixa-os
+            // legiveis durante os dois draws e restaura exatamente os estados de entrada.
+            const bool NeedPublishedInputs =
+                CapturePreview || DebugTargetIndex < DbgAll.size();
+            const D3D12_RESOURCE_STATES NormalBefore = NormalBufferState;
+            if (NeedPublishedInputs) {
+                FBarrierBatch InputBatch;
+                InputBatch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                InputBatch.TransitionTracked(NormalBuffer.Get(), NormalBufferState,
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                InputBatch.Flush(CommandList);
             }
-            DebugViewPass.Execute(CommandList, SRVHeap, &Tile, 1, 1,
-                                  GBuffer.SRVTableStart(), VelocitySRVSlot, Viewport);
+
+            if (CapturePreview && DebugPreviewPass.IsInitialized() && DebugPreviewTarget) {
+                FDebugTile PreviewTiles[16]{};
+                u32 PreviewTileCount = 0;
+                for (u32 Idx : DebugSelection) {
+                    if (PreviewTileCount >= 16u || Idx >= DbgAll.size()) continue;
+                    const FDebugTarget& T = DbgAll[Idx];
+                    FDebugTile& Tile   = PreviewTiles[PreviewTileCount++];
+                    Tile.SrvSlot       = T.SrvSlot;
+                    Tile.Decode        = T.Decode;
+                    Tile.SubIndex      = T.SubIndex;
+                    if (DebugProbeIndex != kNoDebugProbe && T.AtlasTilePx > 0 &&
+                        T.Name.rfind("DDGI", 0) == 0) {
+                        // Zero significa overview; +1 permite selecionar fisicamente o tile 0.
+                        Tile.SubIndex = DDGI.AtlasTileFromProbe(DebugProbeIndex) + 1u;
+                    }
+                    Tile.AtlasTilePx   = T.AtlasTilePx;
+                    Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
+                    Tile.ChannelWeight = DebugChannelWeight;
+                    Tile.Exposure      = T.Exposure * DebugExposure;
+                    Tile.NearZ         = NearZ;
+                    Tile.FarZ          = FarZ;
+                    Tile.LinearFilter  = T.LinearFilter;
+                }
+
+                auto PreviewRTV = DebugPreviewRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &PreviewRTV, FALSE, nullptr);
+                const f32 Clear[4] = { 0.035f, 0.037f, 0.031f, 1.0f };
+                CommandList->ClearRenderTargetView(PreviewRTV, Clear, 0, nullptr);
+
+                D3D12_VIEWPORT PreviewViewport{
+                    0.0f, 0.0f,
+                    static_cast<f32>(kDebugPreviewWidth),
+                    static_cast<f32>(kDebugPreviewHeight),
+                    0.0f, 1.0f
+                };
+                DebugPreviewPass.Execute(
+                    CommandList, SRVHeap, PreviewTiles, PreviewTileCount, DebugColumns,
+                    GBuffer.SRVTableStart(), VelocitySRVSlot, PreviewViewport,
+                    JitterUv, /*EncodeForDisplay=*/true);
+
+                D3D12_RESOURCE_BARRIER ToCopy{};
+                ToCopy.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                ToCopy.Transition.pResource   = DebugPreviewTarget.Get();
+                ToCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                ToCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                ToCopy.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                CommandList->ResourceBarrier(1, &ToCopy);
+
+                D3D12_TEXTURE_COPY_LOCATION Src{};
+                Src.pResource        = DebugPreviewTarget.Get();
+                Src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                Src.SubresourceIndex = 0;
+
+                D3D12_TEXTURE_COPY_LOCATION Dst{};
+                Dst.pResource = DebugPreviewReadback[FrameSlot].Get();
+                Dst.Type      = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                Dst.PlacedFootprint.Offset             = 0;
+                Dst.PlacedFootprint.Footprint.Format   = kDebugPreviewFormat;
+                Dst.PlacedFootprint.Footprint.Width    = kDebugPreviewWidth;
+                Dst.PlacedFootprint.Footprint.Height   = kDebugPreviewHeight;
+                Dst.PlacedFootprint.Footprint.Depth    = 1;
+                Dst.PlacedFootprint.Footprint.RowPitch = kDebugPreviewRowPitch;
+                CommandList->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
+
+                std::swap(ToCopy.Transition.StateBefore, ToCopy.Transition.StateAfter);
+                CommandList->ResourceBarrier(1, &ToCopy);
+                DebugPreviewReadbackPending[FrameSlot] = true;
+                DebugPreviewReadbackVersion[FrameSlot] = DebugPreviewConfigVersion;
+                DebugPreviewLastCapturedVersion = DebugPreviewConfigVersion;
+
+                if (DebugProbeIndex != kNoDebugProbe && DDGI.IsReady() &&
+                    DebugProbeSampleU >= 0.0f && DebugProbeSampleV >= 0.0f) {
+                    ID3D12Resource* IrrResource  = DDGI.IrradianceAtlasResource();
+                    ID3D12Resource* DistResource = DDGI.DistanceAtlasResource();
+                    constexpr D3D12_RESOURCE_STATES AtlasRead =
+                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    D3D12_RESOURCE_BARRIER AtlasBarriers[2]{};
+                    ID3D12Resource* Resources[2] = { IrrResource, DistResource };
+                    for (u32 I = 0; I < 2; ++I) {
+                        AtlasBarriers[I].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        AtlasBarriers[I].Transition.pResource = Resources[I];
+                        AtlasBarriers[I].Transition.Subresource =
+                            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                        AtlasBarriers[I].Transition.StateBefore = AtlasRead;
+                        AtlasBarriers[I].Transition.StateAfter =
+                            D3D12_RESOURCE_STATE_COPY_SOURCE;
+                    }
+                    CommandList->ResourceBarrier(2, AtlasBarriers);
+
+                    const Vec3 GridCount = DDGI.GridCount();
+                    const u32 TilesX = static_cast<u32>(GridCount.X) *
+                                       static_cast<u32>(GridCount.Z);
+                    const u32 AtlasTile = DDGI.AtlasTileFromProbe(DebugProbeIndex);
+                    const u32 TileX = AtlasTile % std::max(TilesX, 1u);
+                    const u32 TileY = AtlasTile / std::max(TilesX, 1u);
+                    const u32 IrrLocalX = std::min(
+                        static_cast<u32>(DebugProbeSampleU * FDDGI::kTileSize),
+                        static_cast<u32>(FDDGI::kTileSize - 1));
+                    const u32 IrrLocalY = std::min(
+                        static_cast<u32>(DebugProbeSampleV * FDDGI::kTileSize),
+                        static_cast<u32>(FDDGI::kTileSize - 1));
+                    const u32 DistLocalX = std::min(
+                        static_cast<u32>(DebugProbeSampleU * FDDGI::kDistTileSize),
+                        static_cast<u32>(FDDGI::kDistTileSize - 1));
+                    const u32 DistLocalY = std::min(
+                        static_cast<u32>(DebugProbeSampleV * FDDGI::kDistTileSize),
+                        static_cast<u32>(FDDGI::kDistTileSize - 1));
+
+                    auto CopyTexel = [&](ID3D12Resource* Resource, DXGI_FORMAT Format,
+                                         u32 X, u32 Y, u64 Offset) {
+                        D3D12_TEXTURE_COPY_LOCATION SrcLoc{};
+                        SrcLoc.pResource = Resource;
+                        SrcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                        SrcLoc.SubresourceIndex = 0;
+                        D3D12_TEXTURE_COPY_LOCATION DstLoc{};
+                        DstLoc.pResource = DebugProbeSampleReadback[FrameSlot].Get();
+                        DstLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                        DstLoc.PlacedFootprint.Offset = Offset;
+                        DstLoc.PlacedFootprint.Footprint.Format = Format;
+                        DstLoc.PlacedFootprint.Footprint.Width = 1;
+                        DstLoc.PlacedFootprint.Footprint.Height = 1;
+                        DstLoc.PlacedFootprint.Footprint.Depth = 1;
+                        DstLoc.PlacedFootprint.Footprint.RowPitch =
+                            D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+                        const D3D12_BOX Box{ X, Y, 0, X + 1u, Y + 1u, 1 };
+                        CommandList->CopyTextureRegion(&DstLoc, 0, 0, 0, &SrcLoc, &Box);
+                    };
+                    CopyTexel(
+                        IrrResource, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                        TileX * static_cast<u32>(FDDGI::kTileSize + 2) + 1u + IrrLocalX,
+                        TileY * static_cast<u32>(FDDGI::kTileSize + 2) + 1u + IrrLocalY,
+                        kDebugProbeIrrOffset);
+                    CopyTexel(
+                        DistResource, DXGI_FORMAT_R16G16_FLOAT,
+                        TileX * static_cast<u32>(FDDGI::kDistTileSize + 2) + 1u + DistLocalX,
+                        TileY * static_cast<u32>(FDDGI::kDistTileSize + 2) + 1u + DistLocalY,
+                        kDebugProbeDistOffset);
+
+                    for (D3D12_RESOURCE_BARRIER& Barrier : AtlasBarriers)
+                        std::swap(Barrier.Transition.StateBefore,
+                                  Barrier.Transition.StateAfter);
+                    CommandList->ResourceBarrier(2, AtlasBarriers);
+                    DebugProbeSamplePending[FrameSlot] = true;
+                    DebugProbeSampleVersion[FrameSlot] = DebugPreviewConfigVersion;
+                    DebugProbeSampleIndex[FrameSlot]   = DebugProbeIndex;
+                }
+            }
+
+            if (MainDebugActive) {
+                auto HDRDbgRTV = HDRRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &HDRDbgRTV, FALSE, nullptr);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+
+                FDebugTile Tile{};
+                if (DebugTargetIndex < DbgAll.size()) {
+                    const FDebugTarget& T = DbgAll[DebugTargetIndex];
+                    Tile.SrvSlot       = T.SrvSlot;
+                    Tile.Decode        = T.Decode;
+                    Tile.SubIndex      = T.SubIndex;
+                    Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
+                    Tile.AtlasTilePx   = T.AtlasTilePx;
+                    Tile.ChannelWeight = DebugChannelWeight;
+                    Tile.Exposure      = T.Exposure * DebugExposure;
+                    Tile.NearZ         = NearZ;
+                    Tile.FarZ          = FarZ;
+                    Tile.LinearFilter  = T.LinearFilter;
+                } else if (GBufferDebugMode == 8) {
+                    Tile.SrvSlot = VelocitySRVSlot;
+                    Tile.Decode  = EDebugDecode::Velocity;
+                } else {
+                    Tile.SrvSlot  = GBuffer.SRVTableStart();
+                    Tile.Decode   = EDebugDecode::GBufferField;
+                    Tile.SubIndex = GBufferDebugMode;
+                }
+                DebugViewPass.Execute(CommandList, SRVHeap, &Tile, 1, 1,
+                                      GBuffer.SRVTableStart(), VelocitySRVSlot, Viewport,
+                                      Vec2{ 0.0f, 0.0f }, /*EncodeForDisplay=*/false);
+            }
+
+            if (NeedPublishedInputs) {
+                FBarrierBatch RestoreBatch;
+                RestoreBatch.Transition(
+                    DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                RestoreBatch.TransitionTracked(NormalBuffer.Get(), NormalBufferState,
+                                               NormalBefore);
+                RestoreBatch.Flush(CommandList);
+            }
             GBuffer.TransitionToWrite(CommandList);
         }
 

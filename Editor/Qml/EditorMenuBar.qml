@@ -144,6 +144,11 @@ MenuBar {
             onTriggered: menuBridge.toggleStats()
         }
         MItem {
+            text: "Render targets"; checkColumn: true; shortcutText: "Ctrl+Shift+T"
+            markVisible: menuBridge.debugTargetsVisible
+            onTriggered: menuBridge.toggleDebugTargets()
+        }
+        MItem {
             text: "Materiais"; checkColumn: true
             markVisible: menuBridge.materialsVisible
             onTriggered: menuBridge.toggleMaterials()

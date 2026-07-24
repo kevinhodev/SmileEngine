@@ -20,6 +20,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     if (probeIdx >= numProbes) return;
 
     int   backCount = 0;
+    int   realCount = 0;
     float minFront  = DistAtlasParams.w; 
     float sumFront  = 0.0f;
     int   frontCount = 0;
@@ -27,6 +28,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     [loop]
     for (int r = 0; r < DDGI_RAYS; ++r) {
         float d = ProbesTrace[int2(r, probeIdx)].a;
+        // Raios nao escolhidos pelo adaptive tracing usam este sentinel e nao podem entrar
+        // nem no denominador nem como backface.
+        if (d < -1e8f) continue;
+        realCount++;
         if (d < 0.0f) {
             backCount++;
         } else {
@@ -36,7 +41,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
-    float backRatio = (float)backCount / (float)DDGI_RAYS;
+    float backRatio = realCount > 0 ? (float)backCount / (float)realCount : 0.0f;
     float meanFront = frontCount > 0 ? (sumFront / (float)frontCount) : 0.0f;
     float state     = backRatio > 0.25f ? 0.0f : 1.0f; 
 

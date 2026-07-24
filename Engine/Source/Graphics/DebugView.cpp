@@ -44,10 +44,10 @@ namespace Smile {
         VelRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         D3D12_ROOT_PARAMETER RootParams[4]{};
-        // b0: Decode, SubIndex, Mip, _pad | ChannelWeight.xyzw | Exposure, _pad3
+        // b0: decode/tile | pesos | exposicao/aspecto | offset UV/display
         RootParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         RootParams[0].Constants.ShaderRegister = 0;
-        RootParams[0].Constants.Num32BitValues = 12;
+        RootParams[0].Constants.Num32BitValues = 16;
         RootParams[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -65,11 +65,26 @@ namespace Smile {
         RootParams[3].DescriptorTable.pDescriptorRanges   = &VelRange;
         RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
+        D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
+        Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        Samplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        Samplers[0].MaxAnisotropy    = 1;
+        Samplers[0].ComparisonFunc   = D3D12_COMPARISON_FUNC_ALWAYS;
+        Samplers[0].MinLOD           = 0.0f;
+        Samplers[0].MaxLOD           = D3D12_FLOAT32_MAX;
+        Samplers[0].ShaderRegister   = 0;
+        Samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        Samplers[1]                  = Samplers[0];
+        Samplers[1].Filter           = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        Samplers[1].ShaderRegister   = 1;
+
         D3D12_ROOT_SIGNATURE_DESC Desc{};
         Desc.NumParameters     = _countof(RootParams);
         Desc.pParameters       = RootParams;
-        Desc.NumStaticSamplers = 0;
-        Desc.pStaticSamplers   = nullptr;
+        Desc.NumStaticSamplers = _countof(Samplers);
+        Desc.pStaticSamplers   = Samplers;
         Desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
         Microsoft::WRL::ComPtr<ID3DBlob> Blob, ErrorBlob;
@@ -121,7 +136,8 @@ namespace Smile {
     void FDebugView::Execute(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
                              const FDebugTile* _Tiles, u32 _Count, u32 _Columns,
                              u32 _GBufferTableStart, u32 _VelocitySRVSlot,
-                             const D3D12_VIEWPORT& _FullViewport) {
+                             const D3D12_VIEWPORT& _FullViewport,
+                             const Vec2& _ScreenUvOffset, bool _EncodeForDisplay) {
         if (!Initialized || !_Tiles || _Count == 0) return;
 
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
@@ -165,7 +181,13 @@ namespace Smile {
             _CommandList->RSSetViewports(1, &VP);
             _CommandList->RSSetScissorRects(1, &Scissor);
 
-            struct { u32 Decode, SubIndex, Mip, AtlasTilePx; f32 Cw[4]; f32 Exposure, NearZ, FarZ, TileAspect; } K{};
+            struct {
+                u32 Decode, SubIndex, Mip, AtlasTilePx;
+                f32 Cw[4];
+                f32 Exposure, NearZ, FarZ, TileAspect;
+                f32 ScreenUvOffset[2];
+                u32 EncodeForDisplay, LinearFilter;
+            } K{};
             K.Decode   = static_cast<u32>(T.Decode);
             K.SubIndex = T.SubIndex;
             K.Mip      = T.Mip;
@@ -176,8 +198,12 @@ namespace Smile {
             K.NearZ    = T.NearZ;
             K.FarZ     = T.FarZ;
             K.TileAspect = TileH > 0.0f ? TileW / TileH : 1.0f;
+            K.ScreenUvOffset[0] = _ScreenUvOffset.X;
+            K.ScreenUvOffset[1] = _ScreenUvOffset.Y;
+            K.EncodeForDisplay  = _EncodeForDisplay ? 1u : 0u;
+            K.LinearFilter      = T.LinearFilter ? 1u : 0u;
 
-            _CommandList->SetGraphicsRoot32BitConstants(0, 12, &K, 0);
+            _CommandList->SetGraphicsRoot32BitConstants(0, 16, &K, 0);
             _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(T.SrvSlot));
             _CommandList->DrawInstanced(3, 1, 0, 0);
         }

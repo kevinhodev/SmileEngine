@@ -56,11 +56,21 @@ float4 main(VSOut i) : SV_Target {
         if (w < 0.0f)        color = float3(0.10f, 0.25f, 1.0f);
         else if (w > 0.20f)  color = float3(0.10f, 0.90f, 1.0f);
         else                 color = float3(1.0f, 0.55f, 0.0f);
+    } else if (mode == 4) {
+        // ProbeData.w congela quando termina a fase de relocation. extra.y vem do passe de
+        // stats executado no frame deste modo e continua valido com adaptive rays.
+        if (i.extra.w < 0.0f) color = float3(0.18f, 0.18f, 0.22f);
+        else                  color = Heat(saturate(i.extra.y / max(DebugParams.w, 1e-3f)));
     } else {
-       float w = i.extra.w;
-        if (w >= 1.0f) w -= 1.0f; // decodifica marca "recem-ativado" (w = 1 + backRatio)
-        if (w < 0.0f) color = float3(0.18f, 0.18f, 0.22f);
-        else          color = Heat(saturate(w / max(DebugParams.w, 1e-3f)));
+        // No diagnostico pontual, as oito probes ficam azuis com brilho proporcional ao peso.
+        // A de maior risco de leak vira laranja para ser localizada imediatamente no viewport.
+        float strength = saturate(sqrt(max(i.extra.x, 0.0f) * 4.0f));
+        color = i.extra.z > 0.5f
+            ? float3(1.00f, 1.00f, 1.00f)
+            : i.extra.y > 0.5f
+                ? float3(1.00f, 0.25f, 0.04f)
+                : lerp(float3(0.04f, 0.16f, 0.28f),
+                       float3(0.10f, 0.75f, 1.00f), strength);
     }
     
     float shade = 0.55f + 0.45f * saturate(dot(N, normalize(float3(0.4f, 0.8f, 0.35f))));

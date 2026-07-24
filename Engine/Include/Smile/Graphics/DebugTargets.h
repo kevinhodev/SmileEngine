@@ -18,6 +18,8 @@ namespace Smile {
         OctNormal,     // normal octaedrica empacotada -> xyz*0.5+0.5
         ReverseZ,      // depth em reverse-Z -> linearizado (mostrar cru da tela branca)
         Velocity,      // motion vector escalado pela resolucao
+        DDGIIrradiance, // desfaz o gamma do atlas DDGI antes do tonemap
+        DDGIDistance,   // primeiro momento do atlas DDGI em heatmap
         Count
     };
 
@@ -31,12 +33,15 @@ namespace Smile {
         EDebugDecode Decode    = EDebugDecode::Raw;
         u32          SubIndex  = 0;                     // campo do G-buffer, quando GBufferField
         u32          MipCount  = 1;                     // > 1 habilita seletor de mip (HZB)
-        // Exposicao PADRAO deste alvo (so Decode::HDR usa). Um valor global nao serve: HDR
-        // color, radiancia do ReSTIR e irradiancia do DDGI vivem em magnitudes diferentes.
+        // Exposicao PADRAO deste alvo (HDR/DDGIIrradiance; em Grayscale funciona como escala).
+        // Um valor global nao serve: radiancia do ReSTIR, irradiancia do DDGI e distancias
+        // vivem em magnitudes diferentes.
         // O slider da janela de debug vai multiplicar isto, nao substituir.
         f32          Exposure  = 1.0f;
         // > 0: alvo e atlas de tiles quadrados dessa largura (probe do DDGI). Ver DebugView.ps.
         u32          AtlasTilePx = 0;
+        // Alguns sinais HDR carregam metadado junto da radiancia e precisam de fetch texel-exato.
+        bool         LinearFilter = true;
     };
 
     // Registro global, no mesmo idioma do VramTracker (que todo passe ja chama na criacao).
@@ -46,7 +51,7 @@ namespace Smile {
         void Register(const std::string& Name, u32 SrvSlot,
                       EDebugDecode Decode = EDebugDecode::Raw,
                       u32 SubIndex = 0, u32 MipCount = 1, f32 Exposure = 1.0f,
-                      u32 AtlasTilePx = 0);
+                      u32 AtlasTilePx = 0, bool LinearFilter = true);
 
         void Clear();
 

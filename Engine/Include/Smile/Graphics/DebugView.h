@@ -22,6 +22,7 @@ namespace Smile {
         f32          Exposure      = 1.0f;   // usado por Decode::HDR
         f32          NearZ         = 0.1f;    // usados por Decode::ReverseZ p/ linearizar
         f32          FarZ          = 4000.0f;
+        bool         LinearFilter  = true;   // false preserva payload HDR/metadados por texel
         // TileAspect e calculado pelo passe (depende da grade), nao vem daqui.
     };
 
@@ -45,7 +46,8 @@ namespace Smile {
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      const FDebugTile* Tiles, u32 Count, u32 Columns,
                      u32 GBufferTableStart, u32 VelocitySRVSlot,
-                     const D3D12_VIEWPORT& FullViewport);
+                     const D3D12_VIEWPORT& FullViewport,
+                     const Vec2& ScreenUvOffset, bool EncodeForDisplay);
 
     private:
         void BuildRootSignature(ID3D12Device* Device);

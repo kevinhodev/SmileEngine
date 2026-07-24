@@ -211,6 +211,14 @@ namespace SmileEditor {
             (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
             if (Menus) Menus->SetStatsVisible(_Event->type() == QEvent::Show);
         }
+        if (DebugTargetsDlg && _Obj == DebugTargetsDlg &&
+            (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
+            const bool Shown = _Event->type() == QEvent::Show;
+            if (Menus) Menus->SetDebugTargetsVisible(Shown);
+            // A grade mora numa captura offscreen. Ocultar pausa o readback, mas preserva a
+            // selecao para a janela voltar exatamente como o usuario a deixou.
+            if (Viewport) Viewport->SetDebugPreviewEnabled(Shown);
+        }
         if (MaterialsDlg && _Obj == MaterialsDlg &&
             (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
             const bool Shown = _Event->type() == QEvent::Show;
@@ -349,6 +357,10 @@ namespace SmileEditor {
             if (StatsDlg && StatsDlg->isVisible()) StatsDlg->hide();
             else                                   ShowStats();
         });
+        connect(Menus, &MenuBridge::ToggleDebugTargetsRequested, this, [this]() {
+            if (DebugTargetsDlg && DebugTargetsDlg->isVisible()) DebugTargetsDlg->hide();
+            else                                                 ShowDebugTargets();
+        });
         connect(Menus, &MenuBridge::ToggleMaterialsRequested, this, [this]() {
             if (MaterialsDlg && MaterialsDlg->isVisible()) MaterialsDlg->hide();
             else                                           ShowMaterials();
@@ -368,6 +380,7 @@ namespace SmileEditor {
         };
         AddShortcut(QKeySequence(tr("Ctrl+O")),       [this]{ Menus->loadScene(); });
         AddShortcut(QKeySequence(tr("Ctrl+Shift+O")), [this]{ Menus->addScene(); });
+        AddShortcut(QKeySequence(tr("Ctrl+Shift+T")), [this]{ Menus->toggleDebugTargets(); });
         AddShortcut(QKeySequence(tr("Ctrl+,")),       [this]{ ShowSettings(); });
         AddShortcut(QKeySequence::Quit,               [this]{ close(); });
     }
@@ -701,6 +714,52 @@ namespace SmileEditor {
         }
         StatsDlg->raise();
         StatsDlg->activateWindow();
+    }
+
+    void MainWindow::ShowDebugTargets() {
+        if (!DebugTargetsDlg) {
+            // Mesmo padrao do StatsWindow: QDialog frameless nao-modal com chrome QML.
+            auto* Dialog = new QDialog(this);
+            Dialog->setObjectName(QStringLiteral("DebugTargetsWindow"));
+            Dialog->setWindowTitle(tr("Render targets — SmileEngine"));
+            Dialog->setWindowIcon(windowIcon());
+            Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
+                                   Qt::WindowMinimizeButtonHint |
+                                   Qt::WindowMaximizeButtonHint);
+            Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+            Dialog->resize(1180, 720);
+            Dialog->setMinimumSize(900, 560);
+
+            auto* DebugWindowBridge = new WindowBridge(Dialog, Dialog);
+            QQuickWidget* Panel = CreateQmlPanel(
+                QStringLiteral("DebugTargetsWindow.qml"),
+                { { QStringLiteral("viewportModel"), Viewport },
+                  { QStringLiteral("debugWindow"), DebugWindowBridge } },
+                Dialog,
+                { { QStringLiteral("debugtargetpreview"),
+                    new DebugTargetPreviewImageProvider(Viewport) } });
+            Panel->setObjectName(QStringLiteral("DebugTargetsWindowPanel"));
+
+            auto* DialogLayout = new QVBoxLayout(Dialog);
+            DialogLayout->setContentsMargins(0, 0, 0, 0);
+            DialogLayout->setSpacing(0);
+            DialogLayout->addWidget(Panel);
+
+            Dialog->installEventFilter(this);
+            DebugTargetsDlg = Dialog;
+        }
+
+        if (DebugTargetsDlg->isMinimized()) DebugTargetsDlg->showNormal();
+        else                                DebugTargetsDlg->show();
+
+        if (!DebugTargetsDlg->property("smilePositioned").toBool()) {
+            const QPoint Center = geometry().center();
+            DebugTargetsDlg->move(Center.x() - DebugTargetsDlg->width() / 2,
+                                  Center.y() - DebugTargetsDlg->height() / 2);
+            DebugTargetsDlg->setProperty("smilePositioned", true);
+        }
+        DebugTargetsDlg->raise();
+        DebugTargetsDlg->activateWindow();
     }
 
     void MainWindow::ShowMaterials() {

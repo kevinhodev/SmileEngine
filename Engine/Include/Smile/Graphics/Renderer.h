@@ -281,15 +281,64 @@ namespace Smile {
         // desliga. Independente do GBufferDebugMode (que continua servindo o menu de view modes
         // do toolbar); quando os dois estao ativos, o alvo escolhido aqui tem prioridade.
         static constexpr u32 kNoDebugTarget = 0xFFFFFFFFu;
+        static constexpr u32 kNoDebugProbe  = 0xFFFFFFFFu;
         void SetDebugTargetIndex(u32 Index)  { DebugTargetIndex = Index; }
         u32  GetDebugTargetIndex() const     { return DebugTargetIndex; }
+
+        // Selecao MULTIPLA da janela de debug. Diferente do alvo unico acima, esta selecao
+        // e composta numa textura offscreen e nunca substitui a imagem do viewport principal.
+        // Colunas 0 = o passe escolhe uma grade aproximadamente quadrada.
+        // Mantem um alvo 16:9 grande o bastante para a janela maximizada. O preview era
+        // 1024x576 e acabava ampliado pelo QML, degradando todos os RTs screen-space.
+        static constexpr u32 kDebugPreviewWidth  = 1600;
+        static constexpr u32 kDebugPreviewHeight = 900;
+        struct FDebugProbeSample {
+            u32 ProbeIndex = kNoDebugProbe;
+            f32 Irradiance[3] = {};
+            f32 MeanDistance = 0.0f;
+            f32 DistanceDeviation = 0.0f;
+        };
+        void SetDebugSelection(const std::vector<u32>& Sel) {
+            if (DebugSelection == Sel) return;
+            DebugSelection = Sel;
+            ++DebugPreviewConfigVersion;
+        }
+        const std::vector<u32>& GetDebugSelection() const   { return DebugSelection; }
+        void SetDebugColumns(u32 C) {
+            if (DebugColumns == C) return;
+            DebugColumns = C;
+            ++DebugPreviewConfigVersion;
+        }
+        u32  GetDebugColumns() const         { return DebugColumns; }
         // Peso por canal do alvo selecionado (isolar r/g/b/a, multiplicar). Ver FDebugTile.
         void SetDebugChannelWeight(const Vec4& W) { DebugChannelWeight = W; }
         Vec4 GetDebugChannelWeight() const   { return DebugChannelWeight; }
         void SetDebugMip(u32 Mip)            { DebugMip = Mip; }
         u32  GetDebugMip() const             { return DebugMip; }
-        void SetDebugExposure(f32 E)         { DebugExposure = E; }
+        void SetDebugExposure(f32 E) {
+            if (DebugExposure == E) return;
+            DebugExposure = E;
+            ++DebugPreviewConfigVersion;
+        }
         f32  GetDebugExposure() const        { return DebugExposure; }
+        void SetDebugProbeIndex(i32 Index);
+        u32  GetDebugProbeIndex() const       { return DebugProbeIndex; }
+        void SetDebugProbeSampleUV(f32 U, f32 V);
+        bool ConsumeDebugProbeSample(FDebugProbeSample& OutSample);
+        bool RequestDebugProbePoint(u32 X, u32 Y);
+        void CancelDebugProbePoint();
+        bool ConsumeDebugProbePoint(FDDGIPointDiagnostic& OutDiagnostic);
+        void SetDebugProbeContributors(const FDDGIPointDiagnostic& Diagnostic);
+        void SetDebugProbeContributors(const u32* Indices, const f32* Weights,
+                                       u32 Count, i32 RiskSlot);
+        void SetDebugPreviewEnabled(bool Enabled) {
+            if (DebugPreviewEnabled == Enabled) return;
+            DebugPreviewEnabled = Enabled;
+            ++DebugPreviewConfigVersion;
+        }
+        // Consome a captura mais recente em RGBA8. Retorna false quando nenhum readback novo
+        // ficou pronto desde a ultima chamada.
+        bool ConsumeDebugPreview(std::vector<u8>& OutPixels);
 
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
@@ -418,6 +467,8 @@ namespace Smile {
         void RecreateInternalTargets(); // recria RTs de cena em RenderWidth/Height (resize + render scale)
         void CreateDefaultMaterial();
         void CreateIBLDescriptorTable();
+        void CreateDebugPreviewTargets();
+        void CollectDebugPreviewReadback(u32 FrameSlot);
 
         FD3D12Device    Device;
         FCommandQueue   CommandQueue;
@@ -463,17 +514,39 @@ namespace Smile {
         // Roughness + Metallic) e byte-a-byte o antigo ReflectionGBuffer -> as reflexoes leem dele.
         FGBuffer       GBuffer;
         FDebugView     DebugViewPass;
+        FDebugView     DebugPreviewPass;
         // Registra em DebugTargets os alvos que ja tem SRV. Chamado no fim de
         // RecreateInternalTargets(), pois o resize realoca slots (o registro sobrescreve por nome).
         void RegisterDebugTargets();
         u32            GBufferDebugMode = 0;
         u32            DebugTargetIndex   = kNoDebugTarget;
+        std::vector<u32> DebugSelection;          // janela de debug: varios alvos em grade offscreen
+        u32            DebugColumns       = 0;    // 0 = grade automatica ~quadrada
         Vec4           DebugChannelWeight = Vec4{ 1.0f, 1.0f, 1.0f, 1.0f };
         u32            DebugMip           = 0;
+        u32            DebugProbeIndex    = kNoDebugProbe;
+        f32            DebugProbeSampleU  = -1.0f;
+        f32            DebugProbeSampleV  = -1.0f;
+        FDebugProbeSample DebugProbeSampleResult{};
+        bool            DebugProbeSampleReady = false;
         // MULTIPLICADOR sobre a exposicao padrao de cada alvo (FDebugTarget::Exposure). Fica
         // em 1.0 ate existir o slider na janela de debug; um valor global unico nao servia,
         // porque cada sinal vive numa magnitude diferente.
         f32            DebugExposure      = 1.0f;
+        ComPtr<ID3D12Resource> DebugPreviewTarget;
+        ComPtr<ID3D12Resource> DebugPreviewReadback[FCommandQueue::kFramesInFlight];
+        ComPtr<ID3D12Resource> DebugProbeSampleReadback[FCommandQueue::kFramesInFlight];
+        FDescriptorHeap        DebugPreviewRTVHeap;
+        bool                   DebugPreviewReadbackPending[FCommandQueue::kFramesInFlight] = {};
+        u64                    DebugPreviewReadbackVersion[FCommandQueue::kFramesInFlight] = {};
+        bool                   DebugProbeSamplePending[FCommandQueue::kFramesInFlight] = {};
+        u64                    DebugProbeSampleVersion[FCommandQueue::kFramesInFlight] = {};
+        u32                    DebugProbeSampleIndex[FCommandQueue::kFramesInFlight] = {};
+        std::vector<u8>        DebugPreviewPixels;
+        bool                   DebugPreviewPixelsReady = false;
+        bool                   DebugPreviewEnabled = false;
+        u64                    DebugPreviewConfigVersion = 1;
+        u64                    DebugPreviewLastCapturedVersion = 0;
 
         // Motion vector buffer (RG16F): escrito no geometry pass (SV_Target3), lido pelo TAA.
         // RT proprio (lifecycle desacoplado das transicoes do GBuffer, que fazem ping-pong p/ as

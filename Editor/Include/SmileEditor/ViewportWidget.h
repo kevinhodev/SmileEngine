@@ -1,12 +1,16 @@
 #pragma once
 
 #include <QWidget>
+#include <QImage>
+#include <QMutex>
+#include <QQuickImageProvider>
 #include <QSet>
 #include <QPoint>
 #include <QElapsedTimer>
 #include <QString>
 #include <QVariantList>
 #include <QStringList>
+#include <array>
 #include <memory>
 #include "Smile/Math/Math.h"
 #include "SmileEditor/GizmoController.h"
@@ -26,6 +30,23 @@ namespace SmileEditor {
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
         Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewSettingsChanged)
+        // Janela de debug: selecao multipla (indices), colunas da grade e exposicao.
+        Q_PROPERTY(QVariantList debugSelection READ GetDebugSelection NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int debugColumns READ GetDebugColumns NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double debugExposure READ GetDebugExposure NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int debugPreviewSeq READ GetDebugPreviewSeq NOTIFY DebugPreviewUpdated)
+        Q_PROPERTY(bool debugPreviewReady READ IsDebugPreviewReady NOTIFY DebugPreviewUpdated)
+        Q_PROPERTY(bool debugProbeInspecting READ IsDebugProbeInspecting NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int debugProbeIndex READ GetDebugProbeIndex NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QString debugProbeCoord READ GetDebugProbeCoord NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QString debugProbeWorld READ GetDebugProbeWorld NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QString debugProbeGrid READ GetDebugProbeGrid NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QString debugProbeDistanceRange READ GetDebugProbeDistanceRange NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QString debugProbeDirection READ GetDebugProbeDirection NOTIFY DebugProbeDirectionChanged)
+        Q_PROPERTY(QString debugProbeSample READ GetDebugProbeSample NOTIFY DebugProbeSampleChanged)
+        Q_PROPERTY(bool debugProbePointPickArmed READ IsDebugProbePointPickArmed NOTIFY DebugProbePointChanged)
+        Q_PROPERTY(QString debugProbePointSummary READ GetDebugProbePointSummary NOTIFY DebugProbePointChanged)
+        Q_PROPERTY(QVariantList debugProbeContributors READ GetDebugProbeContributors NOTIFY DebugProbePointChanged)
         Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
@@ -136,6 +157,24 @@ namespace SmileEditor {
         int               GetGBufferMode() const { return CurrentGBufferMode; }
         QStringList       GetDebugTargetNames() const;
         int               GetDebugTargetIndex() const;
+        QVariantList      GetDebugSelection() const;
+        int               GetDebugColumns() const;
+        double            GetDebugExposure() const;
+        int               GetDebugPreviewSeq() const { return DebugPreviewSeq; }
+        bool              IsDebugPreviewReady() const;
+        QImage            DebugPreviewImageCopy() const;
+        void              SetDebugPreviewEnabled(bool enabled);
+        bool              IsDebugProbeInspecting() const { return DebugProbeSessionActive; }
+        int               GetDebugProbeIndex() const;
+        QString           GetDebugProbeCoord() const;
+        QString           GetDebugProbeWorld() const;
+        QString           GetDebugProbeGrid() const;
+        QString           GetDebugProbeDistanceRange() const;
+        QString           GetDebugProbeDirection() const { return DebugProbeDirection; }
+        QString           GetDebugProbeSample() const { return DebugProbeSample; }
+        bool              IsDebugProbePointPickArmed() const { return DebugProbePointPickArmed; }
+        QString           GetDebugProbePointSummary() const { return DebugProbePointSummary; }
+        QVariantList      GetDebugProbeContributors() const { return DebugProbeContributors; }
         QString           GetViewModeLabel() const;
         bool              IsDDGIEnabled() const;
         bool              IsReSTIRGIEnabled() const;
@@ -229,11 +268,29 @@ namespace SmileEditor {
         Q_INVOKABLE void SelectReflectionHeatmap();
         // Visualizador: -1 desliga; senao e o indice em debugTargetNames.
         Q_INVOKABLE void SelectDebugTarget(int index);
+        Q_INVOKABLE void ToggleDebugSelection(int index);   // liga/desliga um alvo na grade
+        Q_INVOKABLE void ClearDebugSelection();
+        Q_INVOKABLE void SetDebugColumns(int columns);      // 0 = grade automatica
+        Q_INVOKABLE void SetDebugExposure(double exposure); // multiplicador global
+        Q_INVOKABLE void InspectDDGIProbe(int targetIndex, double u, double v,
+                                          double tileAspect);
+        Q_INVOKABLE void StepDebugProbe(int dx, int dy, int dz);
+        Q_INVOKABLE void ClearDebugProbeInspection();
+        Q_INVOKABLE void UpdateDebugProbeDirection(double u, double v);
+        Q_INVOKABLE void ArmDebugProbePointPick();
+        Q_INVOKABLE void ClearDebugProbePoint();
+        Q_INVOKABLE void SelectDebugProbeContributor(int probeIndex);
 
         // DDGI e ReSTIR GI so ganham SRV ao carregar cena (SetupForScene guarda em
         // DDGI.IsReady()), entao a lista de alvos muda DEPOIS do load. Sem este aviso a QML
         // segue exibindo a lista do boot, sem eles. Chamado pelo MainWindow apos LoadCookedScene.
-        void NotifyDebugTargetsChanged() { emit DebugTargetsChanged(); }
+        void NotifyDebugTargetsChanged() {
+            if (DebugProbeSessionActive) ClearDebugProbeInspection();
+            emit DebugTargetsChanged();
+            // RegisterDebugTargets remapeia selecoes por nome quando a disponibilidade de
+            // DDGI/ReSTIR muda; a QML precisa reler tambem os indices selecionados.
+            emit ViewSettingsChanged();
+        }
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
@@ -327,12 +384,20 @@ namespace SmileEditor {
         // A lista de alvos so muda quando o Renderer recria os targets (boot/resize/troca de
         // cena) — separada de ViewSettingsChanged p/ a QML nao reconstruir o combo a cada frame.
         void DebugTargetsChanged();
+        void DebugPreviewUpdated();
+        void DebugProbeDirectionChanged();
+        void DebugProbeSampleChanged();
+        void DebugProbePointChanged();
 
     private slots:
         void OnRenderTimer();
 
     private:
         void EnsureRendererIsInitialized();
+        void InvalidateDebugPreview();
+        void ResetDebugProbePoint(bool CancelRendererRequest = true);
+        bool GetDebugProbeCoordValues(int& X, int& Y, int& Z,
+                                      int& CountX, int& CountY, int& CountZ) const;
 
         // Teste 2D em tela do clique contra os markers das luzes (nao estao no ID-buffer do
         // picking GPU). Retorna o indice em Scene.Lights() ou -1; empate = o mais proximo.
@@ -353,5 +418,37 @@ namespace SmileEditor {
         QElapsedTimer FrameTimer;
         int           CurrentViewMode  = Lit;
         int           CurrentGBufferMode = 1;
+        QImage         DebugPreviewImage;
+        mutable QMutex DebugPreviewMutex;
+        int            DebugPreviewSeq = 0;
+        bool           DebugProbeSessionActive = false;
+        QStringList    DebugProbePreviousTargets;
+        int            DebugProbePreviousColumns = 0;
+        QString        DebugProbeDirection;
+        QString        DebugProbeSample;
+        bool           DebugProbePointPickArmed = false;
+        QString        DebugProbePointSummary;
+        QVariantList   DebugProbeContributors;
+        std::array<Smile::u32, 8> DebugProbeContributorIndices{};
+        std::array<float, 8>      DebugProbeContributorWeights{};
+        Smile::u32     DebugProbeContributorCount = 0;
+        int            DebugProbeContributorRiskSlot = -1;
+    };
+
+    // O numero de sequencia no id serve apenas para furar o cache do QML. O provider
+    // devolve uma copia protegida porque requestImage pode rodar na render thread do Quick.
+    class DebugTargetPreviewImageProvider : public QQuickImageProvider {
+    public:
+        explicit DebugTargetPreviewImageProvider(ViewportWidget* Viewport)
+            : QQuickImageProvider(QQuickImageProvider::Image), Viewport(Viewport) {}
+
+        QImage requestImage(const QString&, QSize* Size, const QSize&) override {
+            QImage Image = Viewport ? Viewport->DebugPreviewImageCopy() : QImage();
+            if (Size) *Size = Image.size();
+            return Image;
+        }
+
+    private:
+        ViewportWidget* Viewport = nullptr;
     };
 } 
