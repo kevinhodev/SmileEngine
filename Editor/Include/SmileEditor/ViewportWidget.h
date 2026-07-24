@@ -26,7 +26,6 @@ namespace SmileEditor {
     class ViewportWidget : public QWidget {
         Q_OBJECT
         Q_PROPERTY(int viewMode READ GetViewMode NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int gBufferMode READ GetGBufferMode NOTIFY ViewSettingsChanged)
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
         Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewSettingsChanged)
@@ -140,10 +139,10 @@ namespace SmileEditor {
 
     public:
         // Valores explicitos preservados (o QML compara viewMode com inteiros fixos; o 1 era o
-        // path tracer experimental, removido).
+        // path tracer experimental e o 2 o menu de buffers do G-buffer, ambos removidos — os
+        // campos do G-buffer agora saem pelo visualizador de render targets).
         enum ViewMode {
             Lit = 0,
-            GBuffer = 2,
             ReflectionHeatmap = 3
         };
         Q_ENUM(ViewMode)
@@ -154,7 +153,6 @@ namespace SmileEditor {
         Smile::Renderer* GetRenderer() const { return Renderer.get(); }
         float            GetFPS()      const { return LastFPS; }
         int               GetViewMode() const { return CurrentViewMode; }
-        int               GetGBufferMode() const { return CurrentGBufferMode; }
         QStringList       GetDebugTargetNames() const;
         int               GetDebugTargetIndex() const;
         QVariantList      GetDebugSelection() const;
@@ -264,7 +262,6 @@ namespace SmileEditor {
         QVariantList      GetGpuTimings() const;
 
         Q_INVOKABLE void SelectLit();
-        Q_INVOKABLE void SelectGBuffer(int mode);
         Q_INVOKABLE void SelectReflectionHeatmap();
         // Visualizador: -1 desliga; senao e o indice em debugTargetNames.
         Q_INVOKABLE void SelectDebugTarget(int index);
@@ -417,7 +414,6 @@ namespace SmileEditor {
         float         LastFPS          = 0.0f;
         QElapsedTimer FrameTimer;
         int           CurrentViewMode  = Lit;
-        int           CurrentGBufferMode = 1;
         QImage         DebugPreviewImage;
         mutable QMutex DebugPreviewMutex;
         int            DebugPreviewSeq = 0;

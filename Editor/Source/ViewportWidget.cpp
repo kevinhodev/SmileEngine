@@ -24,20 +24,6 @@
 namespace SmileEditor {
     static constexpr float kMouseSensitivity = 0.15f;  
 
-    namespace {
-        constexpr const char* kGBufferLabels[] = {
-            "",
-            "Base Color",
-            "World Normal",
-            "Roughness",
-            "Metallic",
-            "Subsurface",
-            "Ambient Occlusion",
-            "Shading Model",
-            "Motion Vectors"
-        };
-    }
-
     ViewportWidget::ViewportWidget(QWidget* _Parent)
         : QWidget(_Parent),
           Renderer(std::make_unique<Smile::Renderer>())
@@ -79,11 +65,13 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetViewModeLabel() const {
+        // Um alvo de debug ativo e o que a tela mostra, entao ele manda no rotulo.
+        const int TargetIndex = GetDebugTargetIndex();
+        if (TargetIndex >= 0) {
+            const QStringList Names = GetDebugTargetNames();
+            if (TargetIndex < Names.size()) return Names[TargetIndex];
+        }
         switch (CurrentViewMode) {
-        case GBuffer:
-            if (CurrentGBufferMode >= 1 && CurrentGBufferMode <= 8)
-                return QString::fromLatin1(kGBufferLabels[CurrentGBufferMode]);
-            return QStringLiteral("GBuffer");
         case ReflectionHeatmap:
             return QStringLiteral("Heatmap");
         case Lit:
@@ -352,23 +340,18 @@ namespace SmileEditor {
         if (!Renderer) return;
         Renderer->SetGBufferDebugMode(0);
         Renderer->SetFlickerMode(0);
+        // Um alvo de debug ativo tem prioridade sobre o caminho normal no Renderer, entao
+        // escolher Lit precisa desliga-lo — senao a tela nao muda e o menu fica com duas
+        // linhas marcadas.
+        Renderer->SetDebugTargetIndex(Smile::Renderer::kNoDebugTarget);
         CurrentViewMode = Lit;
-        emit ViewSettingsChanged();
-    }
-
-    void ViewportWidget::SelectGBuffer(int _Mode) {
-        if (!Renderer) return;
-        const int Mode = qBound(1, _Mode, 8);
-        Renderer->SetFlickerMode(0);
-        Renderer->SetGBufferDebugMode(static_cast<Smile::u32>(Mode));
-        CurrentGBufferMode = Mode;
-        CurrentViewMode = GBuffer;
         emit ViewSettingsChanged();
     }
 
     void ViewportWidget::SelectReflectionHeatmap() {
         if (!Renderer) return;
         Renderer->SetGBufferDebugMode(0);
+        Renderer->SetDebugTargetIndex(Smile::Renderer::kNoDebugTarget);
         // Ainda nao ha um heatmap exclusivo dos raios de reflexao. O heatmap temporal
         // existente e a visualizacao funcional mais proxima para este slot do mockup.
         Renderer->SetFlickerMode(2);
@@ -751,10 +734,16 @@ namespace SmileEditor {
 
     void ViewportWidget::SelectDebugTarget(int _Index) {
         if (!Renderer) return;
-        // -1 desliga e devolve o viewport ao caminho normal; o view mode do G-buffer volta
-        // a valer sozinho (o Renderer da prioridade ao alvo so enquanto ele esta setado).
+        // -1 desliga e devolve o viewport ao caminho normal.
         Renderer->SetDebugTargetIndex(_Index < 0 ? Smile::Renderer::kNoDebugTarget
                                                  : static_cast<Smile::u32>(_Index));
+        if (_Index >= 0) {
+            // Modo unico: o alvo substitui Lit/Heatmap, entao zera o heatmap temporal e
+            // volta o view mode base p/ Lit (é o estado ao qual "Desligado" retorna).
+            Renderer->SetFlickerMode(0);
+            Renderer->SetGBufferDebugMode(0);
+            CurrentViewMode = Lit;
+        }
         emit ViewSettingsChanged();
     }
 
