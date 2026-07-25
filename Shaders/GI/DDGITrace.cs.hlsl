@@ -12,6 +12,11 @@ cbuffer DDGICB : register(b0) {
     float4 DistAtlasParams;
     float4 MiscParams;
     float4 MiscParams2;     // y = nº de luzes puntuais no SceneLights (F5)
+    // Perfil de epsilons: o DDGI so usa a familia (2) — os raios dele partem de PROBES, nao do
+    // G-buffer, entao nao passa pelo OffsetRayGBuffer. Mas o HitShading.hlsli le RayEpsA.w e
+    // RayEpsB.x nos shadow rays do 2o hit, que sao os mesmos p/ os tres passes.
+    float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+    float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);

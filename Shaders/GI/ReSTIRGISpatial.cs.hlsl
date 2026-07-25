@@ -15,7 +15,6 @@
 
 #include "DDGICommon.hlsli"
 #include "../Reflections/GGXSample.hlsli"
-#include "../RayOffset.hlsli"
 
 cbuffer ReSTIRCB : register(b0) {
     row_major float4x4 InvViewProj;
@@ -32,7 +31,28 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=radius(px), y=count, z=spatial(0/1), w=normalReject
     float4 JitterParams;            // xy = prevJitterUv - currJitterUv (so o Pass A usa; layout comum)
+    row_major float4x4 View;        // nao usado aqui; declarado p/ os offsets do CB baterem
+    float4 RayEpsA;                 // x=originFloorMin, y=originFloorPerMeter, z=angularMax,
+                                    // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
+    float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
+                                    // w=angularMinRatio
 };
+
+#include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
+
+// Comprimento minimo da conexao p/ valer a pena tracar o visibility ray. DERIVADO, nao literal:
+// TMin e a margem do TMax agora sao knobs de runtime, e o 0.15 fixo de antes deixaria de garantir
+// TMax > TMin (= comportamento indefinido no DXR) assim que alguem subisse os sliders. A folga
+// extra evita um segmento degenerado de comprimento ~0.
+//
+// Efeito colateral do valor: conexao mais curta que isto NAO e testada. Com os defaults atuais da
+// ~0.08 m, contra os 0.15 m arbitrarios de antes — ou seja, o dobro de alcance p/ oclusao de
+// contato nas conexoes reusadas espacialmente (o sample inicial ja carrega visibilidade do
+// proprio gather).
+float VisRayMinLength() {
+    const float kGuard = 0.01f;
+    return RayEpsB.y + RayEpsB.z + kGuard;
+}
 
 RaytracingAccelerationStructure Scene  : register(t0);
 Texture2D<float4>               ResA   : register(t1); // x1.xyz, M
@@ -160,16 +180,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             // Raio so p/ vizinhos (cd>0): o dominio do proprio pixel e coberto pela shading
             // visibility abaixo (mesmo segmento; nao paga o raio 2x).
             if (ps > 0.0f && cd > 0 && ReuseParams.z > 0.5f) {
-                float3 morg = OffsetRayGBuffer(candX1[cd], candN1[cd],
+                float3 mDir = SafeRayDir(rs.x2 - candX1[cd], candN1[cd]); // p/ o termo angular
+                float3 morg = OffsetRayGBuffer(candX1[cd], candN1[cd], mDir,
                                                length(CameraPos.xyz - candX1[cd]));
                 float3 mToS = rs.x2 - morg;
                 float  mLen = length(mToS);
-                if (mLen > kVisRayMinLength) { // mesmas folgas do shading visibility
+                if (mLen > VisRayMinLength()) { // mesmas folgas do shading visibility
                     RayDesc mray;
                     mray.Origin    = morg;
                     mray.Direction = mToS / mLen;
-                    mray.TMin      = kVisRayTMin;
-                    mray.TMax      = mLen - kVisRayEndMargin;
+                    mray.TMin      = RayEpsB.y;
+                    mray.TMax      = mLen - RayEpsB.z;
                     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                              RAY_FLAG_CULL_BACK_FACING_TRIANGLES> mq;
                     mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
@@ -192,19 +213,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // Direcao e comprimento medidos da origem efetiva (offset robusto anti self-hit). O
         // x2 fica protegido pela folga do TMax (para 0.05 antes da superficie dele); a origem
         // pelo TMin + offset.
-        float3 org = OffsetRayGBuffer(x1, n1, camDist);
-        float3 toS = rs.x2 - org;
-        float  len = length(toS);
+        float3 sDir = SafeRayDir(rs.x2 - x1, n1); // aprox. p/ o termo angular do offset
+        float3 org  = OffsetRayGBuffer(x1, n1, sDir, camDist);
+        float3 toS  = rs.x2 - org;
+        float  len  = length(toS);
         // Pula conexoes curtas: garante TMax > TMin (senao = UB no DXR) e elas sao triviais.
-        // NOTA: com kVisRayMinLength = 0.15 toda conexao abaixo de 15 cm nao e testada — as
-        // reusadas espacialmente ficam sem revalidacao de oclusao nessa escala. O passo 3 do
-        // plano troca este literal por (kVisRayTMin + kVisRayEndMargin + folga).
-        if (len > kVisRayMinLength) {
+        if (len > VisRayMinLength()) {
             RayDesc vray;
             vray.Origin    = org;
             vray.Direction = toS / len;
-            vray.TMin      = kVisRayTMin;
-            vray.TMax      = len - kVisRayEndMargin; // > TMin garantido; para antes do x2
+            vray.TMin      = RayEpsB.y;
+            vray.TMax      = len - RayEpsB.z; // > TMin garantido; para antes do x2
             // MESMAS flags do trace inicial (CULL_BACK) — senao backfaces viram oclusores
             // fantasmas que a amostra original nunca viu. Alpha-test via SMILE_RT_PROCEED
             // (Instances/Vertices/Indices bindados no M6): folhagem masked oclui correto e

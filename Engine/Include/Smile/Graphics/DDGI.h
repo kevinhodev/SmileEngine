@@ -23,6 +23,10 @@ namespace Smile {
         Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH, w = realHitShading
         Vec4 MiscParams;      // x = relocationEnabled (Fase 2), y = deactivThresh, z = maxRays, w = minRays
         Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), y = nº luzes (F5), z = ShadowRayMask, w = -
+        // Perfil de epsilons (FRayEpsilonProfile), anexado no FIM p/ nao deslocar offsets. O DDGI
+        // so usa a familia (2) — os raios dele partem de probes, nao do G-buffer.
+        Vec4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+        Vec4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
     };
 
     class FDDGI {
@@ -101,6 +105,16 @@ namespace Smile {
 
         void SetIntensity(f32 V)  { Intensity = V; }
         f32  GetIntensity() const { return Intensity; }
+        // Perfil compartilhado de epsilons (dono = Renderer, empurra todo frame).
+        void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+
+        // Reset one-shot do atlas: o proximo update que REALMENTE rodar usa histerese 0, ou seja,
+        // substitui o conteudo em vez de misturar. Necessario p/ calibracao: com Hysteresis 0.99
+        // o atlas guarda 99% do resultado por update, entao um knob de epsilon pareceria inerte
+        // por dezenas de frames. O flag e consumido no RecordUpdate, nao aqui — se o passe nao
+        // rodar neste frame, o reset continua pendente.
+        void ResetHistoryOnce()   { HysteresisResetPending = true; }
+
         void SetHysteresis(f32 V) { Hysteresis = V; }
         f32  GetHysteresis() const{ return Hysteresis; }
 
@@ -199,13 +213,13 @@ namespace Smile {
 
         f32  Intensity    = 1.0f;
         f32  Hysteresis   = 0.99f;
+        bool HysteresisResetPending = false; // ver ResetHistoryOnce
         f32  SkyIntensity = 1.0f;
-        // Vai p/ TraceParams.w -> FHitShadeParams::ShadowRayBias no HitShading.hlsli: e o mesmo
-        // bias de shadow ray que ReSTIR e reflexoes usam, nao um parametro proprio do DDGI (o
-        // nome e historico). Compartilha a constante p/ o sweep de calibracao nao deixar o DDGI
-        // em 20 cm enquanto os outros descem.
-        f32  NormalBias   = kHitShadowRayBias;
-        f32  MaxRayDist   = 0.0f;  
+        // NormalBias saiu daqui: o bias dos shadow rays do 2o hit e o mesmo p/ ReSTIR, reflexoes e
+        // DDGI (o nome era historico), entao vive no perfil compartilhado — sem isso o sweep de
+        // calibracao deixaria o DDGI em 20 cm enquanto os outros descem.
+        FRayEpsilonProfile RayEps; // perfil compartilhado (dono = Renderer)
+        f32  MaxRayDist   = 0.0f;
         bool RealHitShading = true;
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (mask ALL vs OPAQUE)
         bool Relocation     = true; 

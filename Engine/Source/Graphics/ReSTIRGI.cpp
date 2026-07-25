@@ -222,7 +222,7 @@ namespace Smile {
     void FReSTIRGI::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Vec3& _CameraPos,
                                    u32 _Width, u32 _Height, const Vec3& _SunDir, f32 _SunIntensity,
                                    const Vec3& _SunColor, u32 _FrameIndex, f32 _SkyIntensity,
-                                   f32 _ShadowRayBias, const Mat44& _View, const Vec2& _JitterDeltaUv,
+                                   const Mat44& _View, const Vec2& _JitterDeltaUv,
                                    u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
@@ -236,7 +236,8 @@ namespace Smile {
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 FoliageShadows ? 255.0f : 1.0f }; // w = ShadowRayMask
-        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
+        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
+                                RayEps.HitShadowRayBias };
         // GI cru (RR/None) usa teto de firefly mais apertado: sem o NRD pra limpar o residuo, os
         // outliers viram sparkles que o RR nao remove bem. O caminho NRD mantem o teto original.
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD,
@@ -244,7 +245,11 @@ namespace Smile {
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
         CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y,
-                                static_cast<f32>(_PunctualLightCount), MaxAge }; // z = luzes (F5)
+                                static_cast<f32>(_PunctualLightCount), RayEps.MaxAge }; // z = luzes (F5)
+        CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
+                                RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
+        CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
+                                FRayEpsilonProfile::kOriginAngularMinRatio };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }

@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RayEpsilons.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -30,6 +31,9 @@ namespace Smile {
         Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), z=spatialRadius, w=mirrorMaxRoughness
         Vec4  DebugParams;       // x = modo de debug do reflexo (0=off, 1=acumulacao, 2=mascara espelho)
         Mat44 View;              // worldPos -> view.z (IN_VIEWZ)
+        // Perfil de epsilons (FRayEpsilonProfile), anexado no FIM p/ nao deslocar offsets.
+        Vec4  RayEpsA;           // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+        Vec4  RayEpsB;           // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
     };
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
@@ -57,7 +61,7 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
                             const Vec3& CameraPos, u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
-                            f32 ShadowRayBias, bool RealHitShading, const Mat44& View,
+                            bool RealHitShading, const Mat44& View,
                             u32 PunctualLightCount = 0);
 
         // F5: copia o SRV do buffer de luzes puntuais do frame pro t8 da tabela de trace DO
@@ -83,6 +87,11 @@ namespace Smile {
         // (DIFFUSE_SPECULAR) le a IN_SPEC todo frame; textura recem-criada nunca escrita = conteudo
         // indefinido entrando no historico. Caller ja transicionou p/ UAV (TransitionInputsToWrite).
         void RecordNrdSpecZero(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+
+        // Perfil compartilhado de epsilons (dono = Renderer, empurra todo frame).
+        void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+        // Limpa o historico temporal PROPRIO (caminho legado, sem NRD) no proximo RecordTrace.
+        void InvalidateHistory()  { NeedsHistoryClear = true; }
 
         void SetUseNrd(bool V) { UseNrd = V; }
         bool GetUseNrd() const { return UseNrd; }
@@ -212,6 +221,7 @@ namespace Smile {
 
         // Tunaveis.
         bool Enabled             = true;
+        FRayEpsilonProfile RayEps;        // perfil compartilhado (dono = Renderer)
         f32  MaxRoughnessToTrace = 0.6f;  // acima -> so DDGI (combine do Lumen)
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)

@@ -462,6 +462,23 @@ namespace Smile {
 
         // Eixo de denoiser {None, NRD, DLSS_RR}. NRD/None e o toggle antigo; DLSS_RR (Ray Reconstruction)
         // substitui o NRD E o passe de SR num eval so, entao SELECIONAR RR FORCA o upscaler p/ DLSS.
+        // === Perfil de epsilons de raio (knobs de calibracao da pagina "Iluminacao global") ===
+        // Mudar geometria de raio invalida TUDO que acumula: os reservoirs do ReSTIR guardam Lo e
+        // x2 medidos com os epsilons antigos, e o NRD acumula sobre eles. Sem o clear o A/B compara
+        // um estado misturado e nao mede nada.
+        const FRayEpsilonProfile& GetRayEpsilons() const { return RayEps; }
+        void SetRayEpsilons(const FRayEpsilonProfile& P) {
+            RayEps = P;
+            // TUDO que acumula precisa cair junto, senao o knob parece inerte enquanto o valor
+            // antigo vaza pelo historico:
+            ReSTIRGI.InvalidateHistory();   // reservoirs guardam Lo/x2 medidos com o epsilon velho
+            Nrd.InvalidateHistory();        // acumula sobre esses reservoirs
+            RRResetPending    = true;       // historico neural do Ray Reconstruction
+            DDGI.ResetHistoryOnce();        // Hysteresis 0.99 -> 99% do atlas velho sobrevive por update
+            Reflections.InvalidateHistory();// historico temporal proprio (caminho legado, sem NRD)
+            TAARanLastFrame   = false;      // sem upscaler, o TAA acumula por conta propria
+        }
+
         void SetDenoiser(EDenoiser D) {
             if (D == EDenoiser::DLSS_RR && !DlssRR.Available()) D = EDenoiser::NRD; // fallback: sem NVIDIA/RR
             if (D == Denoiser) return;
@@ -591,6 +608,8 @@ namespace Smile {
         u32                      VelocitySRVSlot = 0xFFFFFFFFu;
         u32                      VelocityUavSlot = 0xFFFFFFFFu; // UAV p/ o passe de velocity do background
         D3D12_RESOURCE_STATES    VelocityState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        // Perfil unico de epsilons de raio, empurrado p/ ReSTIR/Reflexoes/DDGI todo frame.
+        FRayEpsilonProfile       RayEps;
         // Transform por-objeto do frame anterior, indexado pelo indice da cena (Scene.Renderables()).
         // Estatico -> PrevModel == Model -> motion vector reduz ao termo de camera.
         std::vector<Mat44>       PrevModels;

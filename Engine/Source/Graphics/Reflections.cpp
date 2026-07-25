@@ -385,7 +385,7 @@ namespace Smile {
     void FReflections::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Mat44& _PrevViewProj,
                                       const Vec3& _CameraPos, u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
-                                      f32 _SkyIntensity, f32 _ShadowRayBias, bool _RealHitShading,
+                                      f32 _SkyIntensity, bool _RealHitShading,
                                       const Mat44& _View, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
@@ -407,7 +407,12 @@ namespace Smile {
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 FoliageShadows ? 255.0f : 1.0f }; // w = ShadowRayMask
-        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
+        CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
+                                RayEps.HitShadowRayBias };
+        CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
+                                RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
+        CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
+                                FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReflectionConstants),

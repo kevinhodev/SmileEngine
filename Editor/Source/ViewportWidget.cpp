@@ -835,6 +835,102 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
+    namespace {
+        // Tabela unica dos knobs de epsilon: dirige leitura, escrita e a UI. O ponteiro-p/-membro
+        // evita 9 getters e 9 setters quase identicos, e a UI e um Repeater sobre esta lista.
+        //
+        // UiScale = quantas unidades de UI por unidade de mundo (metro). Os offsets aparecem em
+        // MILIMETROS porque o sweep interessante e sub-milimetrico (o Lumen usa 0,1-0,5 mm) e ler
+        // "0,0002 m" num slider e inutil. MaxAge e contagem de frames, entao escala 1.
+        struct FEpsKnob {
+            const char* Key;
+            const char* Label;
+            const char* Unit;
+            const char* Hint;
+            float Smile::FRayEpsilonProfile::* Field;
+            double UiScale;
+            double UiMin;
+            double UiMax;
+            int    Decimals;
+        };
+
+        const FEpsKnob kEpsKnobs[] = {
+            { "originFloorMin", "Piso do offset de origem", "mm",
+              "Somado ao offset ULP em todo raio que sai do G-buffer. 200 mm e o modo legado e a "
+              "causa medida das manchas nas cortinas. Varrer ate 0.",
+              &Smile::FRayEpsilonProfile::OriginFloorMin, 1000.0, 0.0, 250.0, 2 },
+            { "originFloorPerMeter", "Offset por metro de camera", "mm/m",
+              "Termo proporcional a distancia da camera. Heuristico: a 50 m ele sozinho da 10 mm. "
+              "Varrer ate 0 — a quantizacao do depth justifica ~0,003 mm.",
+              &Smile::FRayEpsilonProfile::OriginFloorPerMeter, 1000.0, 0.0, 1.0, 3 },
+            { "originAngularMax", "Bias angular (raio rasante)", "mm",
+              "Estilo Lumen: raio rasante leva este valor, perpendicular leva 20% dele. 0 = "
+              "desligado. O Lumen usa 0,5 mm — mas em coordenadas camera-relative.",
+              &Smile::FRayEpsilonProfile::OriginAngularMax, 1000.0, 0.0, 5.0, 3 },
+            { "hitShadowRayBias", "Bias do shadow ray (2o hit)", "mm",
+              "Desloca a origem das sombras de sol e puntuais no ponto de hit. Independente do "
+              "piso acima: baixar so o piso deixa este dominando o contato.",
+              &Smile::FRayEpsilonProfile::HitShadowRayBias, 1000.0, 0.0, 250.0, 2 },
+            { "shadowRayBiasMin", "Piso do bias do shadow ray", "mm",
+              "ATENCAO: em 1 mm ele mascara qualquer sweep do bias acima abaixo disso — o A/B "
+              "pareceria nao fazer diferenca pelo motivo errado.",
+              &Smile::FRayEpsilonProfile::ShadowRayBiasMin, 1000.0, 0.0, 10.0, 3 },
+            { "shadowRayTMin", "TMin do shadow ray", "mm",
+              "Soma com o bias: em 10 mm, oclusor a menos de 1 cm do hit fica invisivel mesmo "
+              "depois de o bias cair.",
+              &Smile::FRayEpsilonProfile::ShadowRayTMin, 1000.0, 0.0, 50.0, 2 },
+            { "visRayTMin", "TMin do visibility ray", "mm",
+              "Reuso espacial do ReSTIR. Entra no comprimento minimo da conexao, que e derivado "
+              "de TMin + margem + folga.",
+              &Smile::FRayEpsilonProfile::VisRayTMin, 1000.0, 0.0, 100.0, 2 },
+            { "visRayEndMargin", "Margem final do visibility ray", "mm",
+              "Para o raio antes da superficie do x2. Tambem entra no comprimento minimo.",
+              &Smile::FRayEpsilonProfile::VisRayEndMargin, 1000.0, 0.0, 100.0, 2 },
+            { "maxAge", "Idade maxima do reservoir", "frames",
+              "Expira a amostra selecionada (RTXDI usa 30). 0 = sem expiracao, que e o estado "
+              "atual. O MCap limita o PESO do historico, nao a vida da amostra.",
+              &Smile::FRayEpsilonProfile::MaxAge, 1.0, 0.0, 60.0, 0 },
+        };
+    }
+
+    QVariantList ViewportWidget::GetRayEpsilons() const {
+        QVariantList Out;
+        if (!Renderer) return Out;
+        const Smile::FRayEpsilonProfile& P = Renderer->GetRayEpsilons();
+        for (const FEpsKnob& K : kEpsKnobs) {
+            QVariantMap M;
+            M["key"]      = QString::fromLatin1(K.Key);
+            M["label"]    = QString::fromUtf8(K.Label);
+            M["unit"]     = QString::fromUtf8(K.Unit);
+            M["hint"]     = QString::fromUtf8(K.Hint);
+            M["value"]    = static_cast<double>(P.*(K.Field)) * K.UiScale;
+            M["min"]      = K.UiMin;
+            M["max"]      = K.UiMax;
+            M["decimals"] = K.Decimals;
+            Out.append(M);
+        }
+        return Out;
+    }
+
+    void ViewportWidget::SetRayEpsilon(const QString& _Key, double _UiValue) {
+        if (!Renderer) return;
+        for (const FEpsKnob& K : kEpsKnobs) {
+            if (_Key != QLatin1String(K.Key)) continue;
+            Smile::FRayEpsilonProfile P = Renderer->GetRayEpsilons();
+            P.*(K.Field) = static_cast<float>(
+                qBound(K.UiMin, _UiValue, K.UiMax) / K.UiScale);
+            Renderer->SetRayEpsilons(P); // invalida reservoirs + historico do denoiser
+            emit ViewSettingsChanged();
+            return;
+        }
+    }
+
+    void ViewportWidget::ResetRayEpsilons() {
+        if (!Renderer) return;
+        Renderer->SetRayEpsilons(Smile::FRayEpsilonProfile{}); // volta aos defaults do header
+        emit ViewSettingsChanged();
+    }
+
     void ViewportWidget::SetTAAEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetUseTAA(_Enabled);

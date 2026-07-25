@@ -9,6 +9,8 @@
 // IrradAtlas, LinearClamp/Wrap e — F5 — SceneLights (StructuredBuffer<FPunctualLight> com
 // TODAS as luzes ativas, sem frustum cull). VB/IB vem bindless via InstanceGeo
 // (ResourceDescriptorHeap), nao ha mais Vertices/Indices globais.
+// Contrato de CBUFFER: RayEpsA/RayEpsB declarados no b0 (ver RayOffset.hlsli) — daqui saem o
+// piso do ShadowRayBias (RayEpsA.w) e o TMin dos shadow rays (RayEpsB.x).
 struct FHitShadeParams {
     float3 GridMin;       float Spacing;
     int3   Count;         int   AtlasTile;
@@ -184,9 +186,9 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     float vis = 1.0f;
     if (ndl > 0.0f) {
         RayDesc sray;
-        sray.Origin    = hitPos + offsetN * max(P.ShadowRayBias, kShadowRayBiasMin);
+        sray.Origin    = hitPos + offsetN * max(P.ShadowRayBias, RayEpsA.w);
         sray.Direction = P.SunDir; // direcional: a direcao nao depende da origem deslocada
-        sray.TMin      = kShadowRayTMin;
+        sray.TMin      = RayEpsB.x;
         sray.TMax      = P.MaxRayDist;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
         sq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, sray);
@@ -208,14 +210,23 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         // hitPos+N*b mas direcao/TMax calculados de hitPos, origem/direcao/comprimento
         // descreviam segmentos diferentes — com luz proxima (b=0.2!) o erro angular e grande.
         // O shading (contrib) continua medido do hitPos real; so o raio usa o segmento efetivo.
-        float3 lorg = hitPos + offsetN * max(P.ShadowRayBias, kShadowRayBiasMin);
+        float3 lorg = hitPos + offsetN * max(P.ShadowRayBias, RayEpsA.w);
         float3 toL  = (hitPos + Ll * distL) - lorg;
         float  lenL = max(length(toL), 1e-4f);
+
+        // TMax NUNCA passa da luz — o piso antigo (kLightRayMinTMax) podia empurra-lo p/ ALEM
+        // dela e, pior, deixa-lo ABAIXO do TMin: com ShadowRayTMin virando knob (ate 50 mm) e uma
+        // luz a poucos centimetros, saia TMin 50 mm > TMax 20 mm = intervalo invalido no DXR.
+        // Agora o segmento e o real e, se nao sobrar corpo util entre TMin e TMax, a luz conta
+        // como VISIVEL (o trecho nao testado e menor que os proprios epsilons).
+        float lTMax = lenL - kLightRayEndMargin;
+        if (lTMax <= RayEpsB.x + kLightRayMinTMax) { Edirect += contrib; continue; }
+
         RayDesc lray;
         lray.Origin    = lorg;
         lray.Direction = toL / lenL;
-        lray.TMin      = kShadowRayTMin;
-        lray.TMax      = max(lenL - kLightRayEndMargin, kLightRayMinTMax);
+        lray.TMin      = RayEpsB.x;
+        lray.TMax      = lTMax;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
         lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)

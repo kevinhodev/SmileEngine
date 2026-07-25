@@ -431,8 +431,17 @@ namespace Smile {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.SunDirIntensity = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, _SunIntensity };
-        CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z, Hysteresis };
-        CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity, NormalBias };
+        // Histerese 0 enquanto houver reset pendente: o update SUBSTITUI o atlas em vez de
+        // misturar 99% do conteudo velho (ver ResetHistoryOnce). O flag so e consumido quando o
+        // passe realmente roda, no RecordUpdate.
+        CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z,
+                                HysteresisResetPending ? 0.0f : Hysteresis };
+        CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity,
+                                RayEps.HitShadowRayBias };
+        CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
+                                RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
+        CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
+                                FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
@@ -478,6 +487,9 @@ namespace Smile {
 
     void FDDGI::RecordUpdate(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (!Ready) return;
+        // Daqui em diante o update roda de fato, entao o reset one-shot foi consumido — o CB
+        // deste frame ja foi escrito com histerese 0 pelo UpdatePerFrame.
+        HysteresisResetPending = false;
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);

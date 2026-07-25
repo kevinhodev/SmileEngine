@@ -66,6 +66,10 @@ namespace SmileEditor {
         Q_PROPERTY(int recommendedUpscalerMode READ GetRecommendedUpscalerMode NOTIFY RendererInitialized)
         Q_PROPERTY(QString recommendedUpscalerName READ GetRecommendedUpscalerName NOTIFY RendererInitialized)
         Q_PROPERTY(double renderScale READ GetRenderScale NOTIFY ViewSettingsChanged)
+        // Knobs de calibracao dos epsilons de raio (pagina "Iluminacao global"). Lista uniforme
+        // em vez de 9 propriedades nomeadas: sao todos do mesmo formato (label/valor/faixa/unidade)
+        // e a UI e um Repeater — acrescentar ou tirar um knob vira uma linha na tabela do .cpp.
+        Q_PROPERTY(QVariantList rayEpsilons READ GetRayEpsilons NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool occlusionCullingEnabled READ IsOcclusionCullingEnabled NOTIFY ViewSettingsChanged)
@@ -194,6 +198,7 @@ namespace SmileEditor {
         int               GetRecommendedUpscalerMode() const;
         QString           GetRecommendedUpscalerName() const;
         double            GetRenderScale() const;
+        QVariantList      GetRayEpsilons() const;
         bool              IsTAAEnabled() const;
         bool              IsFrustumCullingEnabled() const;
         bool              IsOcclusionCullingEnabled() const;
@@ -305,6 +310,10 @@ namespace SmileEditor {
         Q_INVOKABLE void SetUpscalerMode(int mode);
         Q_INVOKABLE void SetUpscalerQuality(int quality);
         Q_INVOKABLE void SetRenderScale(double scale);
+        // Valor em UNIDADE DE UI (mm p/ os offsets, frames p/ a idade) — a conversao p/ metros
+        // fica na tabela. Cada mudanca invalida reservoirs + historico do denoiser.
+        Q_INVOKABLE void SetRayEpsilon(const QString& key, double uiValue);
+        Q_INVOKABLE void ResetRayEpsilons();
         Q_INVOKABLE void SetTAAEnabled(bool enabled);
         Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);
         Q_INVOKABLE void SetOcclusionCullingEnabled(bool enabled);

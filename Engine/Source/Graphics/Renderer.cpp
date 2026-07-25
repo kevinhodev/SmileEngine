@@ -1480,6 +1480,12 @@ namespace Smile {
         // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
         const bool RRMode  = (Denoiser == EDenoiser::DLSS_RR) && DlssRR.IsInitialized() && RRGuides.IsReady();
         const bool NrdMode = ReSTIRGIActive && Nrd.IsReady() && Denoiser == EDenoiser::NRD;
+        // Perfil de epsilons: um so p/ a engine inteira, empurrado todo frame (copia barata). Sem
+        // isto cada passe teria a propria copia e o sweep de calibracao mexeria em metade deles.
+        ReSTIRGI.SetRayEpsilons(RayEps);
+        Reflections.SetRayEpsilons(RayEps);
+        DDGI.SetRayEpsilons(RayEps);
+
         ReSTIRGI.SetUseNrd(NrdMode);           // RRMode => NrdMode=false => ReSTIR entrega GI cru (ruidoso)
         Reflections.SetUseNrd(NrdMode);
         Reflections.SetRawSpec(RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
@@ -1786,7 +1792,7 @@ namespace Smile {
             const f32 ReflSkyIntensity = 1.0f - RainSky * 0.65f;
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
-                                       KeyColor, FrameIndex, ReflSkyIntensity, kHitShadowRayBias,
+                                       KeyColor, FrameIndex, ReflSkyIntensity,
                                        Reflections.GetRealHitShading(), View, GILightCount);
         }
 
@@ -1794,7 +1800,7 @@ namespace Smile {
             ReSTIRGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
             ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
                                     RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
-                                    FrameIndex, 1.0f, kHitShadowRayBias, View,
+                                    FrameIndex, 1.0f, View,
                                     PrevJitterUv - JitterUv, GILightCount);
         }
 

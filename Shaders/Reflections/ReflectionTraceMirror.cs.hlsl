@@ -1,7 +1,5 @@
 #include "../GI/DDGICommon.hlsli"
 #include "GGXSample.hlsli"
-#include "../RayOffset.hlsli"
-
 cbuffer ReflectionCB : register(b0) {
     row_major float4x4 InvViewProj;
     float4 CameraPos;       
@@ -15,8 +13,15 @@ cbuffer ReflectionCB : register(b0) {
     float4 TraceParams;     
     float4 HalfScreenParams;
     row_major float4x4 PrevViewProj;
-    float4 TemporalParams;  
+    float4 TemporalParams;
+    // Nao usados aqui; declarados p/ os offsets do CB baterem ate o perfil de epsilons.
+    float4 DebugParams;
+    row_major float4x4 View;
+    float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+    float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
 };
+
+#include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
 
 RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
@@ -81,7 +86,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     // Offset robusto (so anti self-hit): o bias 0.2 na origem deslocava o reflexo de contato
     // e inflava o hitT entregue ao NRD/temporal.
     RayDesc ray;
-    ray.Origin    = OffsetRayGBuffer(worldPos, N, length(CameraPos.xyz - worldPos));
+    ray.Origin    = OffsetRayGBuffer(worldPos, N, R, length(CameraPos.xyz - worldPos));
     ray.Direction = R;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;

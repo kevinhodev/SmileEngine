@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RayEpsilons.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -27,6 +28,10 @@ namespace Smile {
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
         Mat44 View;            // anexado p/ o pack do NRD (worldPos -> view.z = IN_VIEWZ)
+        // Perfil de epsilons (FRayEpsilonProfile). Anexado no FIM p/ nao deslocar nenhum offset
+        // existente — em especial o View, que o ReSTIRNrdPack le em 256.
+        Vec4  RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+        Vec4  RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
     };
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
@@ -46,7 +51,7 @@ namespace Smile {
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
-                            const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity, f32 ShadowRayBias,
+                            const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
                             const Mat44& View, const Vec2& JitterDeltaUv,
                             u32 PunctualLightCount = 0);
 
@@ -69,6 +74,10 @@ namespace Smile {
 
         void SetUseNrd(bool V) { UseNrd = V; }
         bool GetUseNrd() const { return UseNrd; }
+
+        // Perfil compartilhado de epsilons. O Renderer empurra todo frame (copia barata) e e ele
+        // quem invalida na borda de mudanca — aqui invalidar seria NeedsClear todo frame.
+        void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
 
         bool IsReady() const   { return Ready; }
         // true quando a tabela t16 aponta p/ a OUT do NRD (radiancia em YCoCg) e nao p/ a
@@ -179,9 +188,8 @@ namespace Smile {
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B
         f32  MCap           = 20.0f;
-        f32  MaxAge         = 0.0f;  // idade maxima da amostra no reservoir (RTXDI maxReservoirAge);
-                                     // 0 = off (config estavel do bisect 2026-07-12; usar 32 p/
-                                     // religar a expiracao — infra pronta no shader)
+        // MaxAge saiu daqui p/ o FRayEpsilonProfile: virou knob de calibracao junto com os
+        // epsilons de raio, e o perfil e compartilhado com reflexoes/DDGI.
         f32  PosRejectScale = 0.01f;
         f32  ValidateInterval = 0.0f; // re-shade periodico da amostra temporal: 0 = off (config
                                       // estavel do bisect 2026-07-12). ATENCAO: com TimeOfDay
@@ -193,5 +201,8 @@ namespace Smile {
         f32  SpatialRadius  = 16.0f;  // raio (px) dos vizinhos
         f32  SpatialCount   = 4.0f;   // nº de vizinhos
         f32  NormalReject   = 0.9f;   // dot(n_q, n_r) minimo
+
+        // Perfil compartilhado (dono = Renderer). Escrito em RayEpsA/B + TraceParams.w.
+        FRayEpsilonProfile RayEps;
     };
 }

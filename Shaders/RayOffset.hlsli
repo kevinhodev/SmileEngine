@@ -1,10 +1,22 @@
 #ifndef SMILE_RAY_OFFSET_HLSLI
 #define SMILE_RAY_OFFSET_HLSLI
 
-// Os pisos do offset (kRayOriginFloorPerMeter / kRayOriginFloorMin) sao a FAMILIA (1) do perfil
-// de epsilons — ver RayEpsilons.hlsli, onde estao definidos e documentados junto com as familias
-// (2) intervalo do raio e (3) correspondencia temporal, que precisam ser calibradas em conjunto.
 #include "RayEpsilons.hlsli"
+
+// CONTRATO DE CBUFFER: quem inclui este header precisa ter declarado RayEpsA/RayEpsB no proprio
+// cbuffer b0, e o include tem que vir DEPOIS da declaracao. Mesmo padrao do HitShading.hlsli, que
+// exige Scene/Instances/SkyViewLUT declarados. Os campos espelham o FRayEpsilonProfile do C++:
+//   RayEpsA = x originFloorMin, y originFloorPerMeter, z angularMax, w shadowRayBiasMin
+//   RayEpsB = x shadowRayTMin,  y visRayTMin,          z visRayEndMargin, w angularMinRatio
+
+// Normalizacao segura p/ direcoes que podem degenerar. Os call sites do offset calculam a direcao
+// ANTES de validar o comprimento do segmento (a direcao exata depende da origem, que depende do
+// offset), entao conexao degenerada daria NaN/Inf — e ele entraria justo no dot() do termo
+// angular, contaminando a origem. Fallback = a propria normal (bias maximo, o lado seguro).
+float3 SafeRayDir(float3 d, float3 fallback) {
+    float l2 = dot(d, d);
+    return (l2 > 1e-12f) ? (d * rsqrt(l2)) : fallback;
+}
 
 // Origem robusta p/ raios que saem de uma superficie — Wächter & Binder, "A Fast and Robust
 // Method for Avoiding Self-Intersection" (Ray Tracing Gems, cap. 6). Desloca a posicao em ULPs
@@ -23,12 +35,31 @@ float3 OffsetRayWB(float3 p, float3 n) {
 }
 
 // Variante p/ posicoes RECONSTRUIDAS do G-buffer (depth + normal octaedrica): Wächter/Binder
-// assume o hit exato da propria geometria, mas a reconstrucao via InvViewProj + normal
-// quantizada tem erro maior que ULP do hit. Soma o piso configuravel acima por cima do offset
-// ULP. Substitui o normal-bias fixo de 0.2 que contaminava a medida do ReSTIR (pHat/Jacobiano/
-// hitT do NRD nunca abaixo de ~0.2 em contato) e deslocava reflexos de contato em ate 20 cm.
-float3 OffsetRayGBuffer(float3 p, float3 n, float camDist) {
-    return OffsetRayWB(p, n) + n * max(kRayOriginFloorPerMeter * camDist, kRayOriginFloorMin);
+// assume o hit exato da propria geometria, mas a reconstrucao via InvViewProj + normal quantizada
+// tem erro maior que ULP. Soma, por cima do offset ULP, os termos calibraveis do perfil.
+//
+// rayDir = direcao de SAIDA do raio (normalizada). So e usada pelo termo angular; quando ele esta
+// desligado (angularMax == 0, o default) o valor nao importa.
+float3 OffsetRayGBuffer(float3 p, float3 n, float3 rayDir, float camDist) {
+    const float floorMin   = RayEpsA.x;
+    const float perMeter   = RayEpsA.y;
+    const float angularMax = RayEpsA.z;
+    const float minRatio   = RayEpsB.w;
+
+    // Termo constante + termo por distancia da camera (o que existia antes da exposicao).
+    float bias = max(perMeter * camDist, floorMin);
+
+    // Termo ANGULAR, estilo Lumen (ApplyPositionBias em RayTracingCommon.ush): o raio rasante e o
+    // que auto-intersecta, entao leva o maximo; o perpendicular leva minRatio * maximo. O Lumen
+    // usa 0,5 mm / 0,1 mm com a shading normal — mas ele opera em coordenadas camera-relative e
+    // nao tem termo por distancia, entao os numeros dele nao transplantam direto.
+    //
+    // ADITIVO aos termos acima de proposito: o sweep precisa isolar um eixo de cada vez, e zerar
+    // um nao pode desligar o outro.
+    if (angularMax > 0.0f)
+        bias += lerp(angularMax, angularMax * minRatio, saturate(dot(n, rayDir)));
+
+    return OffsetRayWB(p, n) + n * bias;
 }
 
 #endif

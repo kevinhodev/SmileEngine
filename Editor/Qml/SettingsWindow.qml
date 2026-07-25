@@ -72,6 +72,9 @@ Rectangle {
         property real value: 0
         property string valueText: ""
         signal committed(real v)
+        // Emitido so ao SOLTAR o mouse. Quem escreve em estado caro (que invalida historicos ou
+        // reconstroi o model da propria lista) deve usar este, nao o committed continuo.
+        signal released(real v)
         height: 46
 
         Text {
@@ -104,6 +107,7 @@ Rectangle {
             to: srow.to
             stepSize: srow.step
             onMoved: srow.committed(value)
+            onPressedChanged: if (!pressed) srow.released(value)
             background: Rectangle {
                 x: sctl.leftPadding
                 y: sctl.topPadding + sctl.availableHeight / 2 - height / 2
@@ -2398,9 +2402,140 @@ Rectangle {
             } // Column weatherCol
         }
 
+        // ---- Pagina 1: Iluminacao global ----------------------------------------------------
+        // Painel de CALIBRACAO dos epsilons de raio. Uma coluna so (os controles sao largos por
+        // causa da explicacao de cada knob) e Column/Repeater: nenhum slider sabe seu proprio y,
+        // entao acrescentar ou tirar um knob na tabela do C++ reflui a pagina sozinho.
+        Flickable {
+            id: giPage
+            visible: root.selectedPage === 1
+            anchors.fill: parent
+            anchors.topMargin: 84
+            contentWidth: width
+            contentHeight: giCol.height + 40
+            clip: true
+            ScrollBar.vertical: ThinScrollBar { revealed: giPageHover.hovered }
+            HoverHandler { id: giPageHover }
+
+            // SNAPSHOT do model, nao binding direto em viewportModel.rayEpsilons. Escrever um
+            // epsilon emite ViewSettingsChanged, o que re-le a propriedade e trocaria a lista do
+            // Repeater — reconstruindo os delegates DEBAIXO do mouse durante o arrasto. Recarrega
+            // so nos momentos discretos: abrir a pagina e restaurar padroes.
+            property var epsModel: []
+            function reloadEps() { epsModel = viewportModel.rayEpsilons }
+            Component.onCompleted: reloadEps()
+            onVisibleChanged: if (visible) reloadEps()
+
+            Column {
+                id: giCol
+                x: 24
+                width: parent.width - 48
+                spacing: 16
+
+                Card {
+                    id: rayEpsCard
+                    width: parent.width
+                    title: "Epsilons de raio — calibração"
+                    height: epsCol.y + epsCol.height + contentPadding
+
+                    Text {
+                        id: epsHelper
+                        x: 20
+                        y: rayEpsCard.headerHeight + rayEpsCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Geometria dos raios de GI, reflexo e sombra — um perfil só para a " +
+                              "engine inteira. Mudar qualquer valor limpa os reservoirs do ReSTIR " +
+                              "e o histórico do denoiser, senão o A/B compararia um estado " +
+                              "misturado. As três famílias cobrem fenômenos diferentes e não " +
+                              "devem ser varridas juntas: origem do raio, intervalo do segmento " +
+                              "e idade da amostra."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    Column {
+                        id: epsCol
+                        x: 20
+                        y: epsHelper.y + epsHelper.height + 16
+                        width: parent.width - 40
+                        spacing: 12
+
+                        Repeater {
+                            model: giPage.epsModel
+                            delegate: Item {
+                                id: knobRow
+                                required property var modelData
+                                // Valor "ao vivo": o rotulo acompanha o arrasto sem tocar na
+                                // engine. A escrita real so acontece ao soltar (ver onReleased),
+                                // senao cada pixel de arrasto limparia reservoirs, atlas do DDGI,
+                                // historico do NRD e do TAA.
+                                property real uiValue: modelData.value
+                                width: epsCol.width
+                                height: knobSlider.height + knobHint.height
+
+                                ShadowSlider {
+                                    id: knobSlider
+                                    width: parent.width
+                                    label: knobRow.modelData.label
+                                    from: knobRow.modelData.min
+                                    to: knobRow.modelData.max
+                                    step: Math.pow(10, -knobRow.modelData.decimals)
+                                    value: knobRow.uiValue
+                                    valueText: knobRow.uiValue
+                                                   .toFixed(knobRow.modelData.decimals)
+                                                   .replace(".", ",") + " " + knobRow.modelData.unit
+                                    onCommitted: (v) => knobRow.uiValue = v
+                                    onReleased: (v) => {
+                                        knobRow.uiValue = v
+                                        viewportModel.SetRayEpsilon(knobRow.modelData.key, v)
+                                    }
+                                }
+                                Text {
+                                    id: knobHint
+                                    y: knobSlider.height
+                                    width: parent.width
+                                    wrapMode: Text.WordWrap
+                                    text: knobRow.modelData.hint
+                                    color: root.textMuted
+                                    font.family: C.Theme.fontFamily
+                                    font.pixelSize: 10
+                                    lineHeight: 1.3
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            id: epsReset
+                            width: 148; height: 30; radius: 7
+                            color: epsResetHover.hovered ? "#23241d" : "transparent"
+                            border.color: root.borderColor
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Restaurar padrões"
+                                color: root.textNormal
+                                font.family: C.Theme.fontFamily
+                                font.pixelSize: 11
+                            }
+                            HoverHandler { id: epsResetHover }
+                            TapHandler {
+                                onTapped: {
+                                    viewportModel.ResetRayEpsilons()
+                                    giPage.reloadEps() // o snapshot nao se atualiza sozinho
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Item {
-            visible: root.selectedPage !== 0 && root.selectedPage !== 6 && root.selectedPage !== 7 &&
-                     root.selectedPage !== 8
+            visible: root.selectedPage !== 0 && root.selectedPage !== 1 && root.selectedPage !== 6 &&
+                     root.selectedPage !== 7 && root.selectedPage !== 8
             anchors.fill: parent
             Rectangle {
                 anchors.centerIn: parent

@@ -10,7 +10,6 @@
 
 #include "DDGICommon.hlsli"
 #include "../Reflections/GGXSample.hlsli"
-#include "../RayOffset.hlsli"
 
 cbuffer ReSTIRCB : register(b0) {
     row_major float4x4 InvViewProj;
@@ -30,7 +29,15 @@ cbuffer ReSTIRCB : register(b0) {
     float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao temporal),
                                     // z = nº de luzes (F5),
                                     // w = maxAge do reservoir (0 = sem expiracao)
+    row_major float4x4 View;        // nao usado aqui; declarado p/ os offsets do CB baterem
+    float4 RayEpsA;                 // x=originFloorMin, y=originFloorPerMeter, z=angularMax,
+                                    // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
+    float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
+                                    // w=angularMinRatio
 };
+
+// Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
+#include "../RayOffset.hlsli"
 
 RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
@@ -101,7 +108,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // x2 ficava deslocado do x1 usado por pHat/resolve (gi = Lo*cos'/cos, ~1.9x em contatos) e
     // o hitT do NRD nunca caia abaixo de ~0.2. Com offset ~mm, x2 e o hit real p/ todo efeito.
     RayDesc ray;
-    ray.Origin    = OffsetRayGBuffer(x1, N, camDist);
+    ray.Origin    = OffsetRayGBuffer(x1, N, dir, camDist);
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
@@ -209,7 +216,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 uint validN = (uint)ShadeParams.w;
                 if (prevValid && validN > 0u &&
                     ((uint)TraceParams.x + GGX_PCG(px.x + GGX_PCG(px.y))) % validN == 0u) {
-                    float3 vorg = OffsetRayGBuffer(x1, N, camDist);
+                    // Direcao aproximada (de x1, nao da origem deslocada) so p/ o termo angular
+                    // do offset: a direcao exata depende da origem, que depende do offset.
+                    float3 vdir = SafeRayDir(prev.x2 - x1, N);
+                    float3 vorg = OffsetRayGBuffer(x1, N, vdir, camDist);
                     float3 toS  = prev.x2 - vorg;
                     float  len  = length(toS);
                     if (len > 1e-3f) {
