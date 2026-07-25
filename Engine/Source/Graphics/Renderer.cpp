@@ -2995,8 +2995,16 @@ namespace Smile {
             }
             RRResetPending = false;   // reset consumido
 
-            // Manual hooking (eDisableCLStateTracking): o SL pode ter mexido no estado do CL. Rebinda o
-            // descriptor heap shader-visible antes do post chain (o FSR/ffx-api tolera o rebind redundante).
+            // Manual hooking (eDisableCLStateTracking): o SL pode ter mexido no estado do CL e nao tem
+            // proxy p/ restaurar. O ProgrammingGuideManualHooking.md §7.1 lista o que o SL restauraria:
+            // descriptor heaps, compute root signature + TODAS as bindings de compute (tabelas/CBV/SRV/
+            // UAV/constants), PSO e state object. Aqui rebindamos SO os heaps de proposito: auditado, todo
+            // consumidor a jusante seta root signature E PSO proprios antes de usar o CL — Flicker
+            // (FlickerHeatmap.cpp:195), PostProcessor (PostProcess.cpp:284), SelectionOutline (:272/:322)
+            // e DebugDraw (:241) —, e o CL e resetado por frame, entao nada herda estado do eval.
+            // Os heaps ficam porque sao o unico estado que o SL troca e ninguem reestabelece.
+            // ATENCAO: um passe futuro que dependa de estado herdado aqui exige revisitar isto.
+            // (o FSR/ffx-api tolera o rebind redundante).
             {
                 ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
                 CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);

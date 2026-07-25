@@ -5,6 +5,18 @@
 //   u2 NormalRoughness = normal mundo (xyz) + rough linear (a) (kBufferTypeNormalRoughness, ePacked)
 // SRV t0-t3 = G-buffer A,B,C + Depth (a MESMA tabela contigua do deferred, SRVTableStart()).
 // CBV b0 = FrameConstants (usamos ate InvViewProj p/ reconstruir worldPos -> NoV).
+//
+// DESVIO CONHECIDO (auditoria 2026-07-25), de proposito: o RR assume
+//   cor = diffuseAlbedo*Ldifuso + specularAlbedo*Lespecular
+// e demodula por estes guides. Na engine o GI ruidoso chega multiplicado por mais fatores que o
+// albedo — DeferredLighting.ps.hlsl:436 aplica KdGI*(DiffuseColor)*giIntensity*AODiffuse, e o
+// AODiffuse ainda e AO tingido pelo albedo (AOMultiBounce), alem do (1-Metallic) que entra duas
+// vezes (KdGI e dentro do DiffuseColor). Nenhum guide expressa isso: o mesmo pixel tem luz DIRETA
+// sem AO, entao nao existe um albedo unico que sirva pros dois termos.
+// NAO tirar o AO do GI pra "casar" a premissa: o RR nao reaplica AO, e o resultado seria indireto
+// mais chapado — exatamente o que o GTAO foi introduzido pra resolver (A/B aprovado 2026-06-11).
+// O conserto de verdade e o mesmo do guide de transparencia: levar o GI num alvo separado pelo RR
+// e modular DEPOIS do denoise, em display-res. Ate lá o residuo (AO/Kd) e vies de 2a ordem.
 #include "../GBuffer.hlsli"
 
 cbuffer FrameCB : register(b0) {
