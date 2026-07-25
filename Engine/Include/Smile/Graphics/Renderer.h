@@ -258,11 +258,17 @@ namespace Smile {
         // da p/ renderizar sub-nativo). A qualidade (0=100%..4=UltraPerf) e compartilhada entre eles.
         void SetUpscaler(EUpscaler U) {
             if (U != EUpscaler::None && !UpscalerAvailable(U)) U = EUpscaler::None;
-            // Acoplamento: o RR faz o upscale via DLSS. Trocar o upscaler p/ fora de DLSS desliga o RR
-            // (cai p/ NRD). Nao recursa: SetDenoiser(DLSS_RR) chama SetUpscaler(DLSS), que nao entra aqui.
-            if (Denoiser == EDenoiser::DLSS_RR && U != EUpscaler::DLSS) Denoiser = EDenoiser::NRD;
+            // Acoplamento: o RR faz o upscale via DLSS. Trocar o upscaler p/ fora de DLSS desliga o
+            // RR (cai p/ NRD). Vai pelo SetDenoiser em vez de atribuir Denoiser direto: a
+            // atribuicao pulava Nrd.InvalidateHistory(), ReSTIRGI.InvalidateHistory() e o
+            // RRResetPending, entao o NRD reaproveitava acumulacao de outro denoiser e os
+            // reservoirs entravam no NRD ainda com o teto de firefly do modo cru (4 em vez de 8).
+            // Nao recursa: o SetDenoiser so chama SetUpscaler quando o denoiser alvo e DLSS_RR, e
+            // aqui o alvo e sempre NRD.
+            const bool LeavingRR = (Denoiser == EDenoiser::DLSS_RR && U != EUpscaler::DLSS);
             Upscaler = U; TAARanLastFrame = false;
-            ApplyUpscalerScale();
+            if (LeavingRR) SetDenoiser(EDenoiser::NRD); // ja faz o ApplyUpscalerScale()
+            else           ApplyUpscalerScale();
         }
         EUpscaler GetUpscaler() const        { return Upscaler; }
         bool UpscalerAvailable(EUpscaler U) const {
