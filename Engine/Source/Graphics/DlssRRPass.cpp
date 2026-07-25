@@ -106,6 +106,14 @@ namespace Smile {
     bool FDlssRRPass::Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                  u32 RenderW, u32 RenderH, u32 DisplayW, u32 DisplayH) {
         if (!Device || RenderW == 0 || RenderH == 0 || DisplayW == 0 || DisplayH == 0) return false;
+
+        // Re-init (resize da janela / troca de render scale): o plugin do SL SO recria a feature NGX
+        // quando mode, outputWidth/Height, normalRoughnessMode ou presets mudam (dlss_dEntry.cpp:347) —
+        // a resolucao de ENTRADA nao entra nessa conta. Sem liberar aqui, mudar apenas a render res
+        // (ex.: o slider de render scale do editor, que nao passa por ApplyUpscalerScale) deixa a
+        // feature dimensionada pra entrada velha, e o subrect que tagamos deixa de casar com ela.
+        // O caller (Renderer::Resize / SetRenderScale) ja fez CommandQueue.Flush().
+        if (P->Created) slFreeResources(sl::kFeatureDLSS_RR, P->Viewport);
         P->Destroy();
 
         // Suporte: SL ja inicializado pelo Renderer (slInit carregou kFeatureDLSS + kFeatureDLSS_RR).
@@ -250,6 +258,22 @@ namespace Smile {
         if (slDLSSDSetOptions(P->Viewport, Opt) != sl::Result::eOk)
             LogError("DLSS-RR: slDLSSDSetOptions falhou");
 
+        // Sanidade da 1a frame (a feature NGX e criada neste evaluate): o plugin cria com a res OTIMA
+        // do modo e usa a NOSSA extent como render subrect. Se a render res passar do otimo, o subrect
+        // extrapola o buffer criado — acontece se a razao nao vier do SDK ou se a render scale for
+        // dirigida a mao (o RR nao suporta DRS: a res de entrada e ditada pelo modo). Barato e uma vez.
+        if (P->FirstDispatch) {
+            sl::DLSSDOptimalSettings Chk{};
+            if (slDLSSDGetOptimalSettings(Opt, Chk) == sl::Result::eOk && Chk.optimalRenderWidth > 0 &&
+                (P->RW > Chk.optimalRenderWidth || P->RH > Chk.optimalRenderHeight)) {
+                LogWarning("DLSS-RR: render " + std::to_string(P->RW) + "x" + std::to_string(P->RH) +
+                           " PASSA da resolucao otima do modo (" + std::to_string(Chk.optimalRenderWidth) +
+                           "x" + std::to_string(Chk.optimalRenderHeight) + ") — o render subrect extrapola"
+                           " a feature NGX; confira 'Created DLSSDContext feature' vs 'color_in extents'"
+                           " no log do Streamline");
+            }
+        }
+
         // --- Tags (estado ATUAL de cada recurso; o caller poe tudo em NON_PIXEL_SHADER_RESOURCE) ---
         constexpr auto kReadState = static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         sl::Resource ColorRes  (sl::ResourceType::eTex2d, In.Color,          kReadState);
@@ -291,8 +315,31 @@ namespace Smile {
     ID3D12Resource* FDlssRRPass::OutputResource() const { return P ? P->Output.Get() : nullptr; }
     u32             FDlssRRPass::OutputSRVSlot() const { return P ? P->OutputSRV : kInvalidSlot; }
     f32 FDlssRRPass::RenderRatioForQuality(int Quality) const {
-        static const f32 R[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
-        return R[Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality)];
+        // Razoes NOMINAIS do DLSS — fallback. Nao sao as razoes reais: o Balanced do NGX e 58,0%, e
+        // 1/1.7 = 58,8%. Essa diferenca importa porque o plugin cria a feature NGX com a resolucao
+        // OTIMA do driver (dlss_dEntry.cpp:471) e passa a extent que tagamos como
+        // DLSS_Render_Subrect_Dimensions (dlss_dEntry.cpp:865) — com a razao nominal o subrect fica
+        // MAIOR que o buffer criado (1129 vs 1114 num display de 1920). Por isso perguntamos a razao
+        // ao SDK (§3.0 do ProgrammingGuideDLSS_RR.md) e so caimos no nominal sem SL/output conhecido.
+        static const f32 kNominal[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
+        const int Q = Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality);
+        if (!P || !P->Supported || P->SW == 0 || P->SH == 0) return kNominal[Q];
+
+        sl::DLSSDOptions Opt{};
+        Opt.mode         = ModeForQuality(Q);
+        Opt.outputWidth  = P->SW;
+        Opt.outputHeight = P->SH;
+        sl::DLSSDOptimalSettings Settings{};
+        if (slDLSSDGetOptimalSettings(Opt, Settings) != sl::Result::eOk ||
+            Settings.optimalRenderWidth == 0 || Settings.optimalRenderHeight == 0)
+            return kNominal[Q];
+
+        // O Renderer tem UMA escala escalar p/ os dois eixos (RenderScale), entao pega a MENOR das
+        // duas razoes: garante que nem a largura nem a altura derivadas passem do otimo — o
+        // arredondamento do RenderWidth() (+0.5) no pior caso empata com o otimo, nunca o excede.
+        const f32 RatioW = static_cast<f32>(Settings.optimalRenderWidth)  / static_cast<f32>(P->SW);
+        const f32 RatioH = static_cast<f32>(Settings.optimalRenderHeight) / static_cast<f32>(P->SH);
+        return RatioW < RatioH ? RatioW : RatioH;
     }
     u32 FDlssRRPass::RenderW()  const { return P ? P->RW : 0; }
     u32 FDlssRRPass::RenderH()  const { return P ? P->RH : 0; }
