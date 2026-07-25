@@ -198,6 +198,10 @@ namespace Smile {
 
         // Supersampling (SSAA): a cena renderiza em RenderWidth/Height = swapchain * RenderScale;
         // o PostProcessor faz o downsample pro backbuffer nativo. >1.0 = mais amostras/pixel.
+        // IGNORADO com o denoiser em DLSS_RR: ali a resolucao de ENTRADA e ditada pelo modo de
+        // qualidade (o RR nao suporta DRS e a feature NGX e criada na res otima do modo), entao uma
+        // escala arbitraria faria o render subrect divergir do buffer criado. A UI ja esconde o
+        // slider nesse estado (o RR forca upscaler=DLSS); isto blinda a invariante no motor.
         void SetRenderScale(f32 V); // recria os RTs internos (so a cena; backbuffer fica nativo)
         f32  GetRenderScale() const { return RenderScale; }
         u32  RenderWidth()  const { return static_cast<u32>(SwapChain.GetWidth()  * RenderScale + 0.5f); }
@@ -664,8 +668,9 @@ namespace Smile {
             if      (Denoiser == EDenoiser::DLSS_RR) R = DlssRR.RenderRatioForQuality(UpscalerQuality);
             else if (Upscaler == EUpscaler::FSR)     R = Fsr.RenderRatioForQuality(UpscalerQuality);
             else if (Upscaler == EUpscaler::DLSS)    R = Dlss.RenderRatioForQuality(UpscalerQuality);
-            SetRenderScale(R);
+            ApplyRenderScale(R);   // worker: escapa o gate do RR (esta razao E a ditada pelo modo)
         }
+        void ApplyRenderScale(f32 V);   // aplica de fato (clamp + flush + RecreateInternalTargets)
 
         FFlickerHeatmap          Flicker;
         u32                      FlickerMode         = 0;      

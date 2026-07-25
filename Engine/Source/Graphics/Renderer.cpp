@@ -868,6 +868,19 @@ namespace Smile {
     }
 
     void Renderer::SetRenderScale(f32 _Scale) {
+        // Com o RR a res de entrada e ditada pelo modo de qualidade (ver ApplyUpscalerScale): o RR nao
+        // suporta DRS e a feature NGX nasce na res otima do modo, entao aceitar uma escala arbitraria
+        // aqui poria o render subrect fora do buffer criado. Quem manda na escala nesse estado e o
+        // ApplyUpscalerScale, que entra pelo ApplyRenderScale e nao passa por este gate.
+        if (Denoiser == EDenoiser::DLSS_RR) {
+            LogWarning("Escala de renderizacao ignorada: com o DLSS Ray Reconstruction a resolucao de "
+                       "entrada vem do modo de qualidade (o RR nao suporta resolucao dinamica)");
+            return;
+        }
+        ApplyRenderScale(_Scale);
+    }
+
+    void Renderer::ApplyRenderScale(f32 _Scale) {
         _Scale = _Scale < 0.33f ? 0.33f : (_Scale > 2.0f ? 2.0f : _Scale);
         if (_Scale == RenderScale) return;
         RenderScale = _Scale;
