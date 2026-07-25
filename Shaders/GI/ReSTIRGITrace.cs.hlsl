@@ -223,7 +223,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                         SMILE_RT_PROCEED(vq)
                         if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                             float t = vq.CommittedRayT();
-                            if (abs(t - len) <= max(0.02f * len, 0.05f)) {
+                            if (abs(t - len) <= max(kRevalidateRelTol * len, kRevalidateAbsTol)) {
                                 float vsd;
                                 prev.Lo = ShadeSurfaceHit(vq.CommittedInstanceID(),
                                                           vq.CommittedPrimitiveIndex(),
@@ -243,7 +243,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                             } else {
                                 prevValid = false;
                             }
-                        } else if (len >= 0.98f * TraceParams.y) {
+                        } else if (len >= kRevalidateSkyFrac * TraceParams.y) {
                             prev.Lo = ShadeSky(vray.Direction, sunDir, P.SkyIntensity); // era ceu
                         } else {
                             prevValid = false; // superficie sumiu (geometria movida)

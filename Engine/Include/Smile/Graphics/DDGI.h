@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RayEpsilons.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -199,7 +200,11 @@ namespace Smile {
         f32  Intensity    = 1.0f;
         f32  Hysteresis   = 0.99f;
         f32  SkyIntensity = 1.0f;
-        f32  NormalBias   = 0.2f;   
+        // Vai p/ TraceParams.w -> FHitShadeParams::ShadowRayBias no HitShading.hlsli: e o mesmo
+        // bias de shadow ray que ReSTIR e reflexoes usam, nao um parametro proprio do DDGI (o
+        // nome e historico). Compartilha a constante p/ o sweep de calibracao nao deixar o DDGI
+        // em 20 cm enquanto os outros descem.
+        f32  NormalBias   = kHitShadowRayBias;
         f32  MaxRayDist   = 0.0f;  
         bool RealHitShading = true;
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (mask ALL vs OPAQUE)

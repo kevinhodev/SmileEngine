@@ -1,18 +1,10 @@
 #ifndef SMILE_RAY_OFFSET_HLSLI
 #define SMILE_RAY_OFFSET_HLSLI
 
-// Piso do offset p/ origens reconstruidas do G-buffer (ver OffsetRayGBuffer): cobre o erro de
-// reconstrucao depth+normal E geometria embutida/coplanar (props rentes a parede). Knobs de
-// calibracao — subir kRayOriginFloorMin se props flush escurecerem (raio nascendo dentro da
-// casca do asset vizinho) ou aparecer acne; o custo e reintroduzir erro de medida NA MESMA
-// escala do piso (era 0.2 antes do fix — qualquer valor << 0.2 ja e ganho).
-#define kRayOriginFloorPerMeter 2e-4f  // ~0.2 mm por metro de distancia da camera
-// MODO LEGADO TEMPORARIO (2026-07-12): piso em 0.2 reproduz o normal-bias antigo — raios de
-// gather "tunelam" p/ fora de bolsoes fechados (janelas) e os inundam de luz falsa ESTAVEL,
-// mascarando a variancia da luz real (manchas que o REBLUR nao doma). Custo conhecido: energia
-// ~1.9x em contatos, hitT do NRD nunca < 0.2, reflexo de contato deslocado. Voltar p/ 2e-2f
-// (calibrado p/ props flush do Bistro) quando a migracao REBLUR->RELAX_DIFFUSE_SPECULAR sair.
-#define kRayOriginFloorMin      2e-1f
+// Os pisos do offset (kRayOriginFloorPerMeter / kRayOriginFloorMin) sao a FAMILIA (1) do perfil
+// de epsilons — ver RayEpsilons.hlsli, onde estao definidos e documentados junto com as familias
+// (2) intervalo do raio e (3) correspondencia temporal, que precisam ser calibradas em conjunto.
+#include "RayEpsilons.hlsli"
 
 // Origem robusta p/ raios que saem de uma superficie — Wächter & Binder, "A Fast and Robust
 // Method for Avoiding Self-Intersection" (Ray Tracing Gems, cap. 6). Desloca a posicao em ULPs

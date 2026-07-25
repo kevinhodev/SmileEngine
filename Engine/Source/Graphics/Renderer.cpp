@@ -2,6 +2,7 @@
 #include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/Mesh.h"
 #include "Smile/Graphics/DepthConfig.h"
+#include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -1785,7 +1786,7 @@ namespace Smile {
             const f32 ReflSkyIntensity = 1.0f - RainSky * 0.65f;
             Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
-                                       KeyColor, FrameIndex, ReflSkyIntensity, 0.2f,
+                                       KeyColor, FrameIndex, ReflSkyIntensity, kHitShadowRayBias,
                                        Reflections.GetRealHitShading(), View, GILightCount);
         }
 
@@ -1793,8 +1794,8 @@ namespace Smile {
             ReSTIRGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
             ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
                                     RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
-                                    FrameIndex, 1.0f, 0.2f, View, PrevJitterUv - JitterUv,
-                                    GILightCount);
+                                    FrameIndex, 1.0f, kHitShadowRayBias, View,
+                                    PrevJitterUv - JitterUv, GILightCount);
         }
 
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());

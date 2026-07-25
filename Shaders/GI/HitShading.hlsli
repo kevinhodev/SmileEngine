@@ -3,6 +3,7 @@
 
 #include "DDGICommon.hlsli"
 #include "../LightsCommon.hlsli"
+#include "../RayEpsilons.hlsli"
 
 // Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, SkyViewLUT,
 // IrradAtlas, LinearClamp/Wrap e — F5 — SceneLights (StructuredBuffer<FPunctualLight> com
@@ -118,9 +119,9 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     float vis = 1.0f;
     if (ndl > 0.0f) {
         RayDesc sray;
-        sray.Origin    = hitPos + hitN * max(P.ShadowRayBias, 1e-3f);
+        sray.Origin    = hitPos + hitN * max(P.ShadowRayBias, kShadowRayBiasMin);
         sray.Direction = P.SunDir; // direcional: a direcao nao depende da origem deslocada
-        sray.TMin      = 0.01f;
+        sray.TMin      = kShadowRayTMin;
         sray.TMax      = P.MaxRayDist;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
         sq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, sray);
@@ -142,14 +143,14 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         // hitPos+N*b mas direcao/TMax calculados de hitPos, origem/direcao/comprimento
         // descreviam segmentos diferentes — com luz proxima (b=0.2!) o erro angular e grande.
         // O shading (contrib) continua medido do hitPos real; so o raio usa o segmento efetivo.
-        float3 lorg = hitPos + hitN * max(P.ShadowRayBias, 1e-3f);
+        float3 lorg = hitPos + hitN * max(P.ShadowRayBias, kShadowRayBiasMin);
         float3 toL  = (hitPos + Ll * distL) - lorg;
         float  lenL = max(length(toL), 1e-4f);
         RayDesc lray;
         lray.Origin    = lorg;
         lray.Direction = toL / lenL;
-        lray.TMin      = 0.01f;
-        lray.TMax      = max(lenL - 0.05f, 0.02f);
+        lray.TMin      = kShadowRayTMin;
+        lray.TMax      = max(lenL - kLightRayEndMargin, kLightRayMinTMax);
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
         lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)

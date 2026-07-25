@@ -164,12 +164,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                                length(CameraPos.xyz - candX1[cd]));
                 float3 mToS = rs.x2 - morg;
                 float  mLen = length(mToS);
-                if (mLen > 0.15f) { // mesmas folgas do shading visibility
+                if (mLen > kVisRayMinLength) { // mesmas folgas do shading visibility
                     RayDesc mray;
                     mray.Origin    = morg;
                     mray.Direction = mToS / mLen;
-                    mray.TMin      = 0.02f;
-                    mray.TMax      = mLen - 0.05f;
+                    mray.TMin      = kVisRayTMin;
+                    mray.TMax      = mLen - kVisRayEndMargin;
                     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                              RAY_FLAG_CULL_BACK_FACING_TRIANGLES> mq;
                     mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
@@ -196,12 +196,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         float3 toS = rs.x2 - org;
         float  len = length(toS);
         // Pula conexoes curtas: garante TMax > TMin (senao = UB no DXR) e elas sao triviais.
-        if (len > 0.15f) {
+        // NOTA: com kVisRayMinLength = 0.15 toda conexao abaixo de 15 cm nao e testada — as
+        // reusadas espacialmente ficam sem revalidacao de oclusao nessa escala. O passo 3 do
+        // plano troca este literal por (kVisRayTMin + kVisRayEndMargin + folga).
+        if (len > kVisRayMinLength) {
             RayDesc vray;
             vray.Origin    = org;
             vray.Direction = toS / len;
-            vray.TMin      = 0.02f;
-            vray.TMax      = len - 0.05f; // > TMin garantido (len > 0.15); para antes do x2
+            vray.TMin      = kVisRayTMin;
+            vray.TMax      = len - kVisRayEndMargin; // > TMin garantido; para antes do x2
             // MESMAS flags do trace inicial (CULL_BACK) — senao backfaces viram oclusores
             // fantasmas que a amostra original nunca viu. Alpha-test via SMILE_RT_PROCEED
             // (Instances/Vertices/Indices bindados no M6): folhagem masked oclui correto e
