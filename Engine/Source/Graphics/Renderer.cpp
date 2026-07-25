@@ -2451,7 +2451,9 @@ namespace Smile {
                 // cru abaixo o transiciona p/ PIXEL). O RecordTrace acima parou no Resolved (RawSpec).
                 if (RRMode)
                     RRGuides.RecordSpecHitDist(CommandList, SRVHeap,
-                                               SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()));
+                                               SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()),
+                                               ConstantBuffer->GetGPUVirtualAddress() +
+                                               static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
                 Reflections.RecordComposite(CommandList, SRVHeap, HDRRTVHeap.CpuHandle(0),
                                             RenderWidth(), RenderHeight());
             }
@@ -2923,7 +2925,10 @@ namespace Smile {
         } else if (UpscaleActive) {
             // RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
             // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
-            const bool IsRR = (Denoiser == EDenoiser::DLSS_RR);
+            // MESMO predicado do bloco de sinal (RRMode, ja em escopo): recalcular so pelo Denoiser
+            // divergia dele — os guides podiam nao estar prontos e este bloco tentava o eval do RR
+            // enquanto o GI/reflexao ja tinham sido configurados como crus.
+            const bool IsRR = RRMode;
 
             FBarrierBatch Batch;
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,

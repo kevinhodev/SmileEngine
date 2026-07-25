@@ -32,8 +32,11 @@ namespace Smile {
 
         // Extrai o specHitDist do Resolved da reflexao. ResolvedSrv = SRVHeap.GpuHandle(slot do
         // Resolved). Caller garante o Resolved legivel por shader (NON_PIXEL). Deixa SpecHitDist em UAV.
+        // FrameCB so existe p/ preencher o b0 que o root sig do FVolumetricPipeline declara — o shader
+        // nao le nada dele (root param nao referenciado e legal em D3D12, mas o GBV reclama).
         void RecordSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
-                               D3D12_GPU_DESCRIPTOR_HANDLE ResolvedSrv);
+                               D3D12_GPU_DESCRIPTOR_HANDLE ResolvedSrv,
+                               D3D12_GPU_VIRTUAL_ADDRESS FrameCB);
 
         // Sem reflexoes ativas: zera o specHitDist (evita lixo indefinido entrando no RR). Deixa em UAV.
         void ClearSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);

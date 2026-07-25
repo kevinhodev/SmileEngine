@@ -111,11 +111,14 @@ namespace Smile {
     }
 
     void FDlssRRGuides::RecordSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
-                                          D3D12_GPU_DESCRIPTOR_HANDLE ResolvedSrv) {
+                                          D3D12_GPU_DESCRIPTOR_HANDLE ResolvedSrv,
+                                          D3D12_GPU_VIRTUAL_ADDRESS FrameCB) {
         if (!Ready) return;
         Transition(CL, SpecHit.Get(), SpecHitState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         SpecHitPSO.Bind(CL);
-        // b0 do root sig do FVolumetricPipeline nao e usado por este shader; nao precisa bind.
+        // O shader nao le o b0, mas o root sig o declara — deixar o slot vazio e legal em D3D12 e
+        // ruidoso no GPU-based validator. Preenche com o CB do frame (custo zero).
+        CL->SetComputeRootConstantBufferView(0, FrameCB);
         CL->SetComputeRootDescriptorTable(1, ResolvedSrv);
         CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(SpecHitUav));
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;

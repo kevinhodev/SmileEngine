@@ -654,8 +654,12 @@ namespace Smile {
         // Com o denoiser em DLSS_RR, o passe ATIVO e o proprio RR (faz denoise+upscale) — reusa todo o
         // plumbing display-res -> post do FSR/DLSS-SR.
         IUpscaler* ActiveUpscaler() {
+            // Os guides entram na conta: sem eles o Dispatch do RR aborta (guides nulos) sem escrever o
+            // output, e o PostInput apontaria p/ textura estagnada. Devolver nullptr aqui degrada p/ o
+            // caminho sem upscale (TAA/nativo), que e coerente, em vez de uma tela suja + log por frame.
             if (Denoiser == EDenoiser::DLSS_RR)
-                return DlssRR.IsInitialized() ? static_cast<IUpscaler*>(&DlssRR) : nullptr;
+                return (DlssRR.IsInitialized() && RRGuides.IsReady()) ? static_cast<IUpscaler*>(&DlssRR)
+                                                                      : nullptr;
             switch (Upscaler) {
                 case EUpscaler::FSR:  return Fsr.IsInitialized()  ? static_cast<IUpscaler*>(&Fsr)  : nullptr;
                 case EUpscaler::DLSS: return Dlss.IsInitialized() ? static_cast<IUpscaler*>(&Dlss) : nullptr;
