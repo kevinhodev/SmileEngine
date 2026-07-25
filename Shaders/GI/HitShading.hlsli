@@ -79,6 +79,30 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity) {
 // gate `geo.TwoSided == 0` saiu: material two-sided agora tambem tem a normal virada no verso,
 // como o raster ja faz em GBuffer.ps.hlsl. (Hoje isso e inerte para o unico consumidor: o
 // ReconnectionJacobian usa abs() nos dois cossenos. Fica correto para os proximos.)
+// Normal de FACE em espaco de mundo, SEM orientacao — o caller decide o lado. Retorna false em
+// triangulo degenerado ou transform singular (o caller cai na normal de vertice).
+//
+// Teste de degenerado ADIMENSIONAL, feito em espaco de OBJETO e antes da transformacao:
+// |cross|^2 / (|e1|^2 |e2|^2) = sin^2(angulo entre as arestas). Comparar o comprimento absoluto
+// (ainda mais depois de multiplicar por worldToObject, que reescala por ~1/s) faria o limiar
+// depender da escala da instancia e da unidade do asset — instancia muito ampliada cairia no
+// fallback sem ser degenerada. sin <= 1e-6 = arestas colineares de verdade; aresta de comprimento
+// zero da scale2 = 0 e tambem entra aqui.
+bool HitFaceNormal(StructuredBuffer<DDGIVertex> Verts, uint i0, uint i1, uint i2,
+                   float3x4 worldToObject, out float3 outFaceN) {
+    float3 e1 = Verts[i1].Position - Verts[i0].Position;
+    float3 e2 = Verts[i2].Position - Verts[i0].Position;
+    float3 nObj = cross(e1, e2);
+
+    float  nObjLen2 = dot(nObj, nObj);
+    float  scale2   = dot(e1, e1) * dot(e2, e2);
+    float3 nWrld    = mul(nObj, (float3x3)worldToObject);
+    float  nLen     = length(nWrld);
+
+    outFaceN = (nLen > 0.0f) ? (nWrld / nLen) : float3(0.0f, 0.0f, 1.0f);
+    return (nObjLen2 > 1e-12f * scale2) && (nLen > 0.0f);
+}
+
 float3 HitGeomNormal(uint instId, uint tri, float2 bary, float3x4 worldToObject, float3 rayDir) {
     InstanceGeo geo = Instances[instId];
     StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
@@ -87,36 +111,16 @@ float3 HitGeomNormal(uint instId, uint tri, float2 bary, float3x4 worldToObject,
     uint i1 = Idx[tri * 3 + 1];
     uint i2 = Idx[tri * 3 + 2];
 
-    float3 p0 = Verts[i0].Position;
-    float3 p1 = Verts[i1].Position;
-    float3 p2 = Verts[i2].Position;
-    float3 e1 = p1 - p0;
-    float3 e2 = p2 - p0;
-    float3 nObj = cross(e1, e2);
-
-    // Teste de degenerado ADIMENSIONAL, feito em espaco de OBJETO e antes da transformacao:
-    // |cross|^2 / (|e1|^2 |e2|^2) = sin^2(angulo entre as arestas). Comparar o comprimento
-    // absoluto (ainda mais depois de multiplicar por worldToObject, que reescala por ~1/s) faria
-    // o limiar depender da escala da instancia e da unidade do asset — instancia muito ampliada
-    // cairia no fallback sem ser degenerada. sin <= 1e-6 = arestas colineares de verdade;
-    // aresta de comprimento zero da scale2 = 0 e tambem entra aqui.
-    float nObjLen2 = dot(nObj, nObj);
-    float scale2   = dot(e1, e1) * dot(e2, e2);
-    float3 nWrld   = mul(nObj, (float3x3)worldToObject);
-    float  nLen    = length(nWrld);
-
-    if (nObjLen2 <= 1e-12f * scale2 || nLen <= 0.0f) {
-        // Triangulo degenerado (ou transform singular): cai na normal de vertice interpolada.
+    float3 faceN;
+    if (!HitFaceNormal(Verts, i0, i1, i2, worldToObject, faceN)) {
+        // Degenerado: cai na normal de vertice interpolada.
         float3 vObj = Verts[i0].Normal * (1.0f - bary.x - bary.y)
                     + Verts[i1].Normal * bary.x
                     + Verts[i2].Normal * bary.y;
         float3 vWrld = mul(vObj, (float3x3)worldToObject);
         float  vLen  = length(vWrld);
-        float3 vN    = (vLen > 1e-5f) ? (vWrld / vLen) : normalize(-rayDir);
-        return (dot(vN, rayDir) > 0.0f) ? -vN : vN;
+        faceN = (vLen > 1e-5f) ? (vWrld / vLen) : normalize(-rayDir);
     }
-
-    float3 faceN = nWrld / nLen;
     return (dot(faceN, rayDir) > 0.0f) ? -faceN : faceN;
 }
 
@@ -142,6 +146,27 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     bool   backface = (geo.TwoSided == 0) && (dot(geomN, rayDir) > 0.0f);
     outSignedDist   = backface ? -hitDist : hitDist;
 
+    // Normal de FACE, so p/ a ORIGEM dos shadow rays. A interpolada (hitN, abaixo) continua
+    // mandando na BRDF, no N.L e no sample do DDGI — o offset e um problema de escapar do PLANO
+    // do triangulo, e quem descreve esse plano e a face; a normal de vertice/normal map descreve
+    // a aparencia. Era a interpolada que deslocava a origem, entao em malha suavizada sobrava
+    // componente tangencial e o bias precisava ser grande p/ compensar.
+    //
+    // Orientada CONTRA o raio incidente, igual ao HitGeomNormal (e nao "p/ o lado da saida"):
+    // como o shadow ray so e tracado quando N.L > 0, a luz esta do mesmo lado de onde o raio veio.
+    // Nos casos raros em que a interpolada e a face discordam (luz abaixo do horizonte geometrico
+    // mas acima do de shading), virar a face p/ a luz empurraria a origem ATRAVES da superficie —
+    // o remedio ali e bias modulado por angulo, que entra no sweep da rodada 3.
+    //
+    // MUDANCA DE COMPORTAMENTO em material TWO-SIDED: o `backface` acima e gateado por
+    // TwoSided == 0, entao folha/cortina atingida por tras tinha hitN apontando p/ longe do raio e
+    // a origem do shadow ray era empurrada p/ DENTRO da superficie. Aqui a orientacao nao tem
+    // gate. Em geometria one-sided o resultado e identico ao de antes.
+    float3 faceN;
+    float3 offsetN = HitFaceNormal(Verts, i0, i1, i2, worldToObject, faceN)
+                   ? ((dot(faceN, rayDir) > 0.0f) ? -faceN : faceN)
+                   : ((dot(geomN, rayDir) > 0.0f) ? -geomN : geomN); // degenerado: interpolada
+
     float2 uv = Verts[i0].TexCoord * (1.0f - bary.x - bary.y)
               + Verts[i1].TexCoord * bary.x
               + Verts[i2].TexCoord * bary.y;
@@ -159,7 +184,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     float vis = 1.0f;
     if (ndl > 0.0f) {
         RayDesc sray;
-        sray.Origin    = hitPos + hitN * max(P.ShadowRayBias, kShadowRayBiasMin);
+        sray.Origin    = hitPos + offsetN * max(P.ShadowRayBias, kShadowRayBiasMin);
         sray.Direction = P.SunDir; // direcional: a direcao nao depende da origem deslocada
         sray.TMin      = kShadowRayTMin;
         sray.TMax      = P.MaxRayDist;
@@ -183,7 +208,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         // hitPos+N*b mas direcao/TMax calculados de hitPos, origem/direcao/comprimento
         // descreviam segmentos diferentes — com luz proxima (b=0.2!) o erro angular e grande.
         // O shading (contrib) continua medido do hitPos real; so o raio usa o segmento efetivo.
-        float3 lorg = hitPos + hitN * max(P.ShadowRayBias, kShadowRayBiasMin);
+        float3 lorg = hitPos + offsetN * max(P.ShadowRayBias, kShadowRayBiasMin);
         float3 toL  = (hitPos + Ll * distL) - lorg;
         float  lenL = max(length(toL), 1e-4f);
         RayDesc lray;
