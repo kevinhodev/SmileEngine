@@ -707,7 +707,7 @@ namespace Smile {
 
         FReSTIRGI        ReSTIRGI;
         bool             UseReSTIRGI = false; // experimental; default OFF (nao toca o estado padrao)
-        FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (REBLUR difuso+especular)
+        FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (RELAX difuso+especular)
         FDlssRRPass      DlssRR;              // DLSS Ray Reconstruction (denoise+upscale num eval)
         FDlssRRGuides    RRGuides;            // buffers de material que o RR consome (albedo/normal/hitDist)
         FBackgroundVelocity BgVelocity;       // motion vector do ceu/nuvens/fog (velocity ZERO do G-buffer)

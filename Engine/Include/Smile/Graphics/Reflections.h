@@ -29,8 +29,7 @@ namespace Smile {
         Mat44 PrevViewProj;      // VP (sem jitter) do frame anterior — reprojeção do temporal (Fase 3)
         Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), z=spatialRadius, w=mirrorMaxRoughness
         Vec4  DebugParams;       // x = modo de debug do reflexo (0=off, 1=acumulacao, 2=mascara espelho)
-        Mat44 View;              // worldPos -> view.z (IN_VIEWZ); usado pelo pack especular do NRD
-        Vec4  NrdSpecParams;     // xyz = ReblurHitDistanceParameters {A,B,C} (igual ao driver NRD)
+        Mat44 View;              // worldPos -> view.z (IN_VIEWZ)
     };
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
@@ -80,7 +79,7 @@ namespace Smile {
         // (Nrd.TransitionInputsToWrite) e o Resolved ja esta NON_PIXEL (fim do RecordTrace c/ UseNrd).
         void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
-        // Sem reflexoes ativas: escreve sinal especular ZERO valido na IN_SPEC. O REBLUR combinado
+        // Sem reflexoes ativas: escreve sinal especular ZERO valido na IN_SPEC. O RELAX combinado
         // (DIFFUSE_SPECULAR) le a IN_SPEC todo frame; textura recem-criada nunca escrita = conteudo
         // indefinido entrando no historico. Caller ja transicionou p/ UAV (TransitionInputsToWrite).
         void RecordNrdSpecZero(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
@@ -218,7 +217,7 @@ namespace Smile {
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)
         bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
         bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (mask ALL vs OPAQUE)
-        bool UseNrd              = false; // denoise via NRD REBLUR especular (unificado c/ o GI)
+        bool UseNrd              = false; // denoise via NRD RELAX especular (unificado c/ o GI)
         bool RawSpec             = false; // reflexao crua p/ o DLSS Ray Reconstruction (denoise = RR)
         // Temporal (Fase 3).
         bool Temporal            = true;  // acumulacao temporal (off = só resolve espacial)

@@ -9,9 +9,9 @@
 namespace nrd { struct Instance; }
 
 namespace Smile {
-    // Driver D3D12-direto do NRD (RELAX_DIFFUSE), SEM NRI. CreateInstance -> GetInstanceDesc
-    // (15 pipelines DXIL + 10 pool tex + 2 samplers) -> por frame SetCommonSettings +
-    // GetComputeDispatches (lista de DispatchDesc que ESTA classe executa). Ver plano happy-wishing.
+    // Driver D3D12-direto do NRD (RELAX_DIFFUSE_SPECULAR), SEM NRI. CreateInstance -> GetInstanceDesc
+    // (pipelines DXIL + pools + 2 samplers, TODOS dimensionados pelo desc em runtime) -> por frame
+    // SetCommonSettings + GetComputeDispatches (lista de DispatchDesc que ESTA classe executa).
     //
     // BLINDAGEM (o driver manual foi o suspeito da corrupcao anterior): heaps/rings PROPRIOS,
     // dimensionados pelos maximos do InstanceDesc com asserts; bring-up ISOLADO (RunSelfTest sobre IO
@@ -50,8 +50,10 @@ namespace Smile {
         void TransitionOutputToRead(ID3D12GraphicsCommandList* CL);
 
         // IO textures (a engine cria SRV/UAV proprios nelas: UAV p/ o pack escrever, SRV do OUT p/ o
-        // deferred/composite ler). Indices casam com EIo abaixo. REBLUR_DIFFUSE_SPECULAR: 2 sinais
+        // deferred/composite ler). Indices casam com EIo abaixo. RELAX_DIFFUSE_SPECULAR: 2 sinais
         // (difuso = ReSTIR GI; especular = reflexao) compartilham MV/NormalRough/ViewZ.
+        // OUT do RELAX: .rgb = radiancia LINEAR (sem YCoCg, ao contrario do REBLUR), .w = history
+        // length em frames.
         enum EIo {
             IO_MV = 0, IO_NORMAL_ROUGHNESS, IO_VIEWZ,
             IO_DIFF_RADIANCE_HITDIST, IO_SPEC_RADIANCE_HITDIST,
@@ -107,10 +109,10 @@ namespace Smile {
         u32 CbRingOffset = 0;
 
         // Limites do InstanceDesc (blindagem: asserts contra estes).
-        u32 PerSetTex = 0;   // 13
-        u32 PerSetUav = 0;   // 4
-        u32 SetsMax   = 0;   // 27
-        u32 TableStride = 0; // PerSetTex + PerSetUav = 17
+        u32 PerSetTex = 0;
+        u32 PerSetUav = 0;
+        u32 SetsMax   = 0;
+        u32 TableStride = 0; // PerSetTex + PerSetUav
         u32 ResourcesSpace = 0;
         u32 CbSpace = 1, CbReg = 0, SamplerBaseReg = 0;
 

@@ -15,7 +15,7 @@ namespace Smile {
     // SUBSTITUI o NRD (denoise do ReSTIR GI difuso + reflexao especular) E o passe de Super Resolution: um
     // unico slEvaluateFeature(kFeatureDLSS_RR) faz denoise + upscale, guiado por buffers de material
     // (albedo difuso/especular, normal-roughness, hitDist especular). Ganho e QUALIDADE (mata o borrao do
-    // REBLUR), nao fps.
+    // NRD), nao fps.
     //
     // Implementa IUpscaler p/ reusar todo o plumbing "output display-res -> post chain" que o FSR/DLSS-SR ja
     // usam. A diferenca fica no Renderer: quando o RR e o denoiser ativo, o GI/reflexao entram RUIDOSOS na

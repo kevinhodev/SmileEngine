@@ -27,7 +27,6 @@ namespace Smile {
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
         Mat44 View;            // anexado p/ o pack do NRD (worldPos -> view.z = IN_VIEWZ)
-        Vec4  NrdHitDistParams;// xyz = ReblurHitDistanceParameters {A,B,C} (igual ao driver NRD)
     };
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
@@ -179,7 +178,7 @@ namespace Smile {
                                       // animando, radiancia velha persiste no reservoir — religar
                                       // com 8 quando o sol dinamico voltar a importar
         f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off) — caminho NRD
-        f32  FireflyMaxRaw  = 4.0f;   // teto mais apertado p/ GI CRU (RR/None): sem REBLUR limpando o
+        f32  FireflyMaxRaw  = 4.0f;   // teto mais apertado p/ GI CRU (RR/None): sem o NRD limpando o
                                       // residuo, o RR/deferred mostra os sparkles direto (0 = off)
         f32  SpatialRadius  = 16.0f;  // raio (px) dos vizinhos
         f32  SpatialCount   = 4.0f;   // nº de vizinhos

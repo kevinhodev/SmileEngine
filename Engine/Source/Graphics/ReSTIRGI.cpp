@@ -34,7 +34,7 @@ namespace Smile {
     }
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true); 
+        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true);
         SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
         CreateConstantBuffer(_Device);
@@ -216,7 +216,7 @@ namespace Smile {
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 FoliageShadows ? 255.0f : 1.0f }; // w = ShadowRayMask
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity, _ShadowRayBias };
-        // GI cru (RR/None) usa teto de firefly mais apertado: sem REBLUR pra limpar o residuo, os
+        // GI cru (RR/None) usa teto de firefly mais apertado: sem o NRD pra limpar o residuo, os
         // outliers viram sparkles que o RR nao remove bem. O caminho NRD mantem o teto original.
         CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD,
                                 UseNrd ? FireflyMax : FireflyMaxRaw, ValidateInterval };
@@ -224,7 +224,6 @@ namespace Smile {
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
         CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y,
                                 static_cast<f32>(_PunctualLightCount), MaxAge }; // z = luzes (F5)
-        CPU.NrdHitDistParams = { 3.0f, 0.1f, 20.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }

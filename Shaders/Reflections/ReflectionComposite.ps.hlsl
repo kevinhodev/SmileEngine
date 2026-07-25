@@ -16,7 +16,6 @@ cbuffer CompositeCB : register(b0) {
     float4 TemporalParams;
     float4 DebugParams;
     row_major float4x4 View;        // (padding p/ casar o layout do ReflectionConstants)
-    float4 NrdSpecParams;           // w = 1 -> OUT_SPEC do NRD em YCoCg (desempacotar)
 };
 
 Texture2D<float4> Reflection : register(t0);
@@ -72,12 +71,9 @@ float4 main(VSOutput input) : SV_TARGET {
     float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
     float2 brdf = BRDFLut.SampleLevel(LinearClamp, float2(NoV, roughness), 0.0f).rg;
 
+    // O RELAX escreve a OUT_SPEC em radiancia LINEAR (o REBLUR escrevia em YCoCg e exigia um
+    // desempacotamento aqui). Vale p/ os dois caminhos: NRD ligado ou Resolved cru.
     float3 reflRad = Reflection.Load(int3(px, 0)).rgb;
-    // NRD REBLUR escreve a OUT_SPEC em YCoCg -> desempacota p/ linear (_NRD_YCoCgToLinear).
-    if (NrdSpecParams.w > 0.5f) {
-        float t = reflRad.x - reflRad.z;
-        reflRad = max(float3(t + reflRad.y, reflRad.x + reflRad.z, t - reflRad.y), 0.0f);
-    }
     float3 spec    = reflRad * (F0 * brdf.x + brdf.y) * combineAlpha;
 
     return float4(spec, 0.0f); 

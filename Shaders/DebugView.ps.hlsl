@@ -16,7 +16,6 @@
 #define DECODE_VELOCITY       6u
 #define DECODE_DDGI_IRRADIANCE 7u
 #define DECODE_DDGI_DISTANCE   8u
-#define DECODE_NRD_RADIANCE    9u
 
 cbuffer DebugViewCB : register(b0) {
     uint   Decode;
@@ -51,13 +50,6 @@ struct VSOutput {
 float3 TonemapForView(float3 c, float exposure) {
     c = max(c * exposure, 0.0f);
     return c / (1.0f + c);
-}
-
-// _NRD_YCoCgToLinear: a OUT do REBLUR guarda a radiancia em YCoCg. Mesma conta do
-// DeferredLighting.ps (ReflectionParams.w == 2) — sem ela o alvo sai vermelho.
-float3 NrdYCoCgToLinear(float3 c) {
-    float t = c.x - c.z;
-    return max(float3(t + c.y, c.x + c.z, t - c.y), 0.0f);
 }
 
 float3 HeatForView(float t) {
@@ -233,10 +225,6 @@ float4 main(VSOutput input) : SV_Target {
         outColor = VisualizeReverseZ(s.r, NearZ, FarZ);
     } else if (Decode == DECODE_HDR) {
         outColor = TonemapForView(s.rgb * ChannelWeight.rgb, Exposure);
-        return DebugOutput(outColor);
-    } else if (Decode == DECODE_NRD_RADIANCE) {
-        // Desempacota ANTES do peso: em YCoCg um peso por canal nao significa "canal de cor".
-        outColor = TonemapForView(NrdYCoCgToLinear(s.rgb) * ChannelWeight.rgb, Exposure);
         return DebugOutput(outColor);
     } else if (Decode == DECODE_DDGI_IRRADIANCE) {
         // DDGIUpdate armazena pow(irradiance, 1/gamma) para ganhar precisao no escuro.

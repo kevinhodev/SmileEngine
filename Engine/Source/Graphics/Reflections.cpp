@@ -392,9 +392,6 @@ namespace Smile {
         CPU.InvViewProj     = _InvViewProj;
         CPU.PrevViewProj    = _PrevViewProj;
         CPU.View            = _View;
-        // xyz = {A,B,C} default do nrd::ReblurSettings (igual ao driver) — NAO divergir do FNrdDenoiser.
-        // w = UseNrd: avisa o composite que a OUT_SPEC esta em YCoCg (desempacotar p/ linear).
-        CPU.NrdSpecParams   = { 3.0f, 0.1f, 20.0f, UseNrd ? 1.0f : 0.0f };
         CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, SpatialRadius,
                                 FullResMaxRough };
         CPU.DebugParams     = { (f32)DebugMode, MaxFrames, 0.0f, 0.0f }; // y = cap real p/ debug acumulacao
@@ -546,7 +543,7 @@ namespace Smile {
 
     void FReflections::RecordNrdSpecZero(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (SpecPackUAVSlot == kInvalidSlot || !NrdInSpec) return;
-        // Radiancia 0 + hitT 0 = "sem sinal especular" valido pro REBLUR (vs. lixo indefinido).
+        // Radiancia 0 + hitT 0 = "sem sinal especular" valido pro RELAX (vs. lixo indefinido).
         // Ordenacao: TransitionInputsToWrite (antes) e a transition UAV->SRV do proprio NRD
         // (depois) ja serializam o clear contra leituras — sem UAV barrier extra.
         const float Zero[4] = { 0, 0, 0, 0 };

@@ -57,7 +57,7 @@ smile_compile_shader(Reflections/ReflectionResolve.cs.hlsl     cs_6_0 main SHADE
 smile_compile_shader(Reflections/ReflectionTemporal.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionSpatial.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
-# Pack do sinal especular p/ o NRD (REBLUR) — inclui NRD.hlsli p/ o packing de hitDist normalizado
+# Pack do sinal especular p/ o NRD (RELAX) — inclui NRD.hlsli p/ o RELAX_FrontEnd_Pack*
 smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 
 # DLSS Ray Reconstruction — guides de material (albedo difuso/especular, normal-roughness) derivados

@@ -9,7 +9,7 @@
 
 // Debug: pinta de VERMELHO (10,0,0) os pixels cuja conexao selecionada foi morta pelo visibility
 // ray, em vez de zerar W. Ligar = 1 + rebuild do target Shaders + reabrir o editor; testar com
-// "ReSTIR visibility" ON e NRD REBLUR OFF (o denoiser borraria os pontos). Esperado: pontos
+// "ReSTIR visibility" ON e NRD OFF (o denoiser borraria os pontos). Esperado: pontos
 // esparsos re-sorteados por frame em volta de oclusores finos (postes/cadeiras/quinas).
 #define RESTIR_DEBUG_VIS_KILLS 0
 

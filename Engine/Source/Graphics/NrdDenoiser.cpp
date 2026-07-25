@@ -118,7 +118,7 @@ namespace Smile {
 
         nrd::DenoiserDesc denoiser{};
         denoiser.identifier = 0;
-        denoiser.denoiser   = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+        denoiser.denoiser   = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
         nrd::InstanceCreationDesc icd{};
         icd.allocationCallbacks = { NrdAlloc, NrdRealloc, NrdFree, nullptr };
         icd.denoisers           = &denoiser;
@@ -138,17 +138,19 @@ namespace Smile {
         CbSpace        = d.constantBufferAndSamplersSpaceIndex;
         CbReg          = d.constantBufferRegisterIndex;
         SamplerBaseReg = d.samplersBaseRegisterIndex;
-        LogInfo("NRD REBLUR_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
+        LogInfo("NRD RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
                 " perm=" + std::to_string(d.permanentPoolSize) +
                 " trans=" + std::to_string(d.transientPoolSize) +
                 " samplers=" + std::to_string(d.samplersNum) +
                 " cbMax=" + std::to_string(d.constantBufferMaxDataSize));
 
-        nrd::ReblurSettings reblur{};
-        // Prepass difuso no default do NRD (config estavel do bisect 2026-07-12; o override 0
-        // do fix 6 saiu junto com o pacote).
-        reblur.enableAntiFirefly = true;
-        nrd::SetDenoiserSettings(*Instance, 0, &reblur);
+        nrd::RelaxSettings relax{};
+        // Defaults do NRD para o resto: o RELAX foi desenhado para sinal estilo RTXDI/ReSTIR
+        // (prepass 30/50, atrous 5 iteracoes, roughness edge stopping ON) — e o que temos.
+        // O antilag fica no default; o README recomenda desliga-lo so no bring-up inicial
+        // (antilagSettings.accelerationAmount/resetAmount = 0) se aparecer instabilidade.
+        relax.enableAntiFirefly = true;
+        nrd::SetDenoiserSettings(*Instance, 0, &relax);
 
         BuildRootSignature(_Device);
         BuildPipelines(_Device);

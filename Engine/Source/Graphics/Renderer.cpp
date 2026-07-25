@@ -1018,13 +1018,13 @@ namespace Smile {
         // As duas pontas do ReSTIR entram como alvos SEPARADOS, cada uma com slot fixo. Seguir
         // o slot vigente (que alterna com o toggle do NRD) daria uma entrada que troca de
         // textura por baixo — e o util p/ debugar o ReSTIR e justamente o sinal CRU, onde o
-        // ruido e a convergencia aparecem. A OUT do NRD sai em YCoCg e por isso tem decode
-        // proprio; lida como RGB ela pinta a cena inteira de vermelho.
+        // ruido e a convergencia aparecem. Com o RELAX a OUT ja sai em radiancia linear, entao
+        // as duas usam o mesmo decode HDR (o REBLUR exigia um decode YCoCg proprio).
         if (ReSTIRGI.GITexRawSRVSlot() != kNoSlot)
             Register("ReSTIR GI", ReSTIRGI.GITexRawSRVSlot(), EDebugDecode::HDR, 0, 1,
                      /*Exposure=*/1.5f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
         if (ReSTIRGI.NrdOutSRVSlot() != kNoSlot)
-            Register("ReSTIR GI · NRD", ReSTIRGI.NrdOutSRVSlot(), EDebugDecode::NrdRadiance, 0, 1,
+            Register("ReSTIR GI · NRD", ReSTIRGI.NrdOutSRVSlot(), EDebugDecode::HDR, 0, 1,
                      /*Exposure=*/1.5f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
         if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
             // O atlas guarda irradiancia comprimida por gamma; o decode generico de HDR

@@ -13,7 +13,7 @@ namespace Smile {
     // (0 = nativo, 1 = FSR); DLSS entra como 2.
     enum class EUpscaler : u8 { None = 0, FSR = 1, DLSS = 2 };
 
-    // Denoiser do GI/reflexao (eixo separado do upscaler). NRD REBLUR = caseiro; DLSS_RR = Ray
+    // Denoiser do GI/reflexao (eixo separado do upscaler). NRD RELAX = caseiro; DLSS_RR = Ray
     // Reconstruction (denoiser neural que SUBSTITUI o NRD E o passe de SR num eval so). Como o RR
     // acopla denoise+upscale, selecionar DLSS_RR forca o upscaler p/ DLSS (ver Renderer::SetDenoiser).
     enum class EDenoiser : u8 { None = 0, NRD = 1, DLSS_RR = 2 };

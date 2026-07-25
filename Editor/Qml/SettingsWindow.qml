@@ -328,7 +328,7 @@ Rectangle {
         }
     }
 
-    // Linha do seletor de denoiser (Nenhum / NRD REBLUR / DLSS Ray Reconstruction). Espelha o
+    // Linha do seletor de denoiser (Nenhum / NRD RELAX / DLSS Ray Reconstruction). Espelha o
     // UpscalerOption, mas com a marca tipografica do denoiser (OFF/NRD/RR).
     component DenoiserOption: Rectangle {
         id: dopt
@@ -1268,7 +1268,7 @@ Rectangle {
                     Text {
                         x: 49; y: 7
                         text: viewportModel.denoiserMode === 2 ? "DLSS Ray Reconstruction"
-                              : (viewportModel.denoiserMode === 1 ? "NRD REBLUR" : "Nenhum")
+                              : (viewportModel.denoiserMode === 1 ? "NRD RELAX" : "Nenhum")
                         color: root.textPrimary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 12
@@ -1280,7 +1280,7 @@ Rectangle {
                         text: viewportModel.denoiserMode === 2
                               ? "Denoiser neural (NVIDIA) · substitui NRD + upscaler"
                               : (viewportModel.denoiserMode === 1
-                                 ? "REBLUR · difuso (GI) + especular (reflexão)"
+                                 ? "RELAX · difuso (GI) + especular (reflexão)"
                                  : "GI e reflexão sem denoise (ruidoso)")
                         color: root.textMuted
                         elide: Text.ElideRight
@@ -1358,8 +1358,8 @@ Rectangle {
                         DenoiserOption {
                             width: denoiserPopup.availableWidth
                             mode: 1
-                            label: "NRD REBLUR"
-                            detail: "Denoiser clássico · difuso + especular"
+                            label: "NRD RELAX"
+                            detail: "A-trous · difuso (GI) + especular (reflexão)"
                             selected: viewportModel.denoiserMode === 1
                             onChosen: { viewportModel.SetDenoiserMode(1); denoiserPopup.close() }
                         }
