@@ -86,16 +86,22 @@ namespace Smile {
         // TimeOfDay — e coberto pela validacao periodica no shader, ver ValidateInterval).
         void InvalidateHistory()   { NeedsClear = true; }
 
-        void SetRealHitShading(bool V) { RealHit = V; }
+        // Invalidam o historico: mudam o Lo JA GRAVADO nos reservoirs, e com ValidateInterval = 0
+        // (config estavel atual) nao ha re-shade periodico — sem o clear, a radiancia do modo
+        // anterior sobrevive ate a reprojecao rejeitar por posicao, e o toggle fica meio aplicado.
+        void SetRealHitShading(bool V) { if (V != RealHit) NeedsClear = true; RealHit = V; }
         bool GetRealHitShading() const { return RealHit; }
         void SetTemporal(bool V)   { if (V && !Temporal) NeedsClear = true; Temporal = V; }
         bool GetTemporal() const   { return Temporal; }
+        void SetFoliageShadows(bool V) { if (V != FoliageShadows) NeedsClear = true;
+                                         FoliageShadows = V; }
+        bool GetFoliageShadows() const { return FoliageShadows; }
+        // NAO invalidam: o espacial nao realimenta o temporal, entao nem Spatial nem Visibility
+        // (que so atua no Pass B e no resolve final) tocam o que esta gravado no reservoir.
         void SetSpatial(bool V)    { Spatial = V; }
         bool GetSpatial() const    { return Spatial; }
         void SetVisibility(bool V) { Visibility = V; }
         bool GetVisibility() const { return Visibility; }
-        void SetFoliageShadows(bool V) { FoliageShadows = V; }
-        bool GetFoliageShadows() const { return FoliageShadows; }
 
     private:
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
@@ -128,12 +134,17 @@ namespace Smile {
         u32 ResBUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResCUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResDUAV[2] = { kInvalidSlot, kInvalidSlot };
-        // Por paridade: TraceTable[p] = 13 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbuf,vel,prevA..D]
-        // (prev = Res*[1-p]); TraceUAVTable[p] = 5 UAVs [GITex,currA..D] (curr = Res*[p]).
-        // SpatialTable[p] = 7 SRVs [TLAS, currA..D, gbuf, depth].
-        u32 TraceTable[2]    = { kInvalidSlot, kInvalidSlot };
-        u32 TraceUAVTable[2] = { kInvalidSlot, kInvalidSlot };
-        u32 SpatialTable[2]  = { kInvalidSlot, kInvalidSlot };
+        // Indexadas pela PARIDADE do ping-pong (FrameParity), nao pelo FrameSlot do frame em voo:
+        // o conteudo da tabela depende de qual conjunto de reservoirs e prev e qual e curr.
+        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,inst,inst,depth,gbuf,vel,prevA..D,luzes]
+        //                    (prev = Res*[1-p]; o 14o, t13, e reescrito por frame — ver
+        //                     SetPunctualLightsSRV, que DEVE usar a mesma paridade do RecordTrace).
+        // TraceUAVTable[p] = 5 UAVs  [GITex, currA..D] (curr = Res*[p]).
+        // SpatialTable[p]  = 10 SRVs [TLAS, currA..D, gbuf, depth, inst, inst, inst].
+        static constexpr u32 kParityTables = 2;
+        u32 TraceTable[kParityTables]    = { kInvalidSlot, kInvalidSlot };
+        u32 TraceUAVTable[kParityTables] = { kInvalidSlot, kInvalidSlot };
+        u32 SpatialTable[kParityTables]  = { kInvalidSlot, kInvalidSlot };
         // NRD pack (Fase C). PackSrvTable = [GITex,gbuf,depth,vel]; PackUavTable = [viewZ,nr,mv,radHit].
         u32 PackSrvTable = kInvalidSlot;
         u32 PackUavTable = kInvalidSlot;
@@ -153,7 +164,6 @@ namespace Smile {
 
         u32  Width = 0, Height = 0;
         u32  FrameParity = 0;
-        u32  CurrParity  = 0;
         bool NeedsClear  = false;
         bool Initialized = false;
         bool Ready       = false;

@@ -92,8 +92,15 @@ namespace Smile {
                                    u32 _GBufferSlot, u32 _VelocitySlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
+        // Valida os SETE slots, nao so tres: todos vao direto p/ CpuHandleStaging ao montar as
+        // tabelas, e la kInvalidSlot (0xFFFFFFFF) vira base + 0xFFFFFFFF * HandleSize — ~128 GiB
+        // fora do heap. O CopyDescriptors le desse endereco: access violation, ou pior, descriptor
+        // corrompido em silencio. Hoje o Renderer garante os quatro que faltavam, mas isso e
+        // invariante de call site, nao da classe.
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
-            _InstanceSlot == kInvalidSlot || _DepthSlot == kInvalidSlot)
+            _SkyViewSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot ||
+            _IrradSlot == kInvalidSlot || _DepthSlot == kInvalidSlot ||
+            _GBufferSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot)
             return;
 
         Width = _Width; Height = _Height;
@@ -189,8 +196,22 @@ namespace Smile {
 
     void FReSTIRGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                          u32 _StagingSlot) {
+        // Este t13 e o UNICO descriptor reescrito por frame num heap shader-visible, com frames
+        // em voo — o mesmo padrao que ja causou a "descriptor race t13" no projeto. O que torna
+        // seguro e haver uma tabela por paridade e a paridade alternar a cada RecordTrace: ao
+        // escrever a tabela p da CPU no frame N, o frame em voo mais antigo que ainda pode estar
+        // lendo e o N-1, que usou a tabela 1-p. Com 3 frames em voo isso deixa de valer (o N-2
+        // usou p), entao o assert quebra o build em vez de virar corrupcao intermitente.
+        static_assert(kParityTables == FCommandQueue::kFramesInFlight,
+                      "tabela de trace do ReSTIR versionada por paridade: com mais frames em voo "
+                      "e preciso mais tabelas (ou desacoplar paridade do ping-pong do versionamento)");
         if (!Ready) return;
 
+        // Indexado por FrameParity, NAO por FrameSlot (que e o padrao do FReflections): aqui a
+        // tabela carrega qual conjunto de reservoirs e prev/curr, entao tem que ser exatamente a
+        // que o RecordTrace vai bindar. Os dois indices desincronizam de vez assim que o ReSTIR
+        // fica um frame desligado — FrameSlot avanca com o frame, FrameParity so dentro do
+        // RecordTrace — e aí as luzes iriam parar na tabela errada.
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[FrameParity] + 13);
         D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
         UINT One = 1;
@@ -250,7 +271,6 @@ namespace Smile {
         if (!Ready) return;
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
         const u32 p = FrameParity, prev = 1u - FrameParity;
-        CurrParity = p;
 
         if (NeedsClear) {
             const float Zero[4] = { 0, 0, 0, 0 };
@@ -299,16 +319,25 @@ namespace Smile {
             _CL->Dispatch(GX, GY, 1);
         }
 
+        // Estado combinado em vez de escolher por UseNrd. Sao TRES leitores: o deferred (t16,
+        // passe grafico = PIXEL), o pack do NRD (compute = NON_PIXEL) e o visualizador de debug,
+        // que le a GITexture CRUA — e este ultimo e registrado incondicionalmente pelo Renderer
+        // (GITexRawSRVSlot) e o FDebugView nao emite barreira nenhuma. Terminar so em NON_PIXEL
+        // com o NRD ligado deixava o alvo "ReSTIR GI" cru em estado invalido p/ um passe grafico:
+        // erro da debug layer e leitura indefinida justamente no alvo mais util p/ debugar.
+        // Custo: a mesma unica barreira de antes.
         Transition(_CL, GITexture.Get(), GITextureState,
-                   UseNrd ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
-                          : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         FrameParity ^= 1u;
     }
 
     void FReSTIRGI::SetupNrdPack(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                  ID3D12Resource* _ViewZ, ID3D12Resource* _NormalRough,
                                  ID3D12Resource* _Mv, ID3D12Resource* _DiffRadHit, ID3D12Resource* _Out) {
-        if (!Ready || !_ViewZ || !_Out) return;
+        // Os CINCO recursos, nao so dois: ponteiro nulo vira descriptor nulo (legal em D3D12), as
+        // escritas do pack somem em silencio e o NRD denoisa lixo sem erro nenhum.
+        if (!Ready || !_ViewZ || !_NormalRough || !_Mv || !_DiffRadHit || !_Out) return;
 
         PackUavTable = _SRVHeap.Allocate(4);
         auto MakeUav = [&](ID3D12Resource* R, DXGI_FORMAT F, u32 Slot) {

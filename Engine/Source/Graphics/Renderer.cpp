@@ -2333,9 +2333,11 @@ namespace Smile {
                 CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
             }
 
-            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            // Velocity volta p/ PIXEL porque o TAA a le num passe grafico. Depth e G-buffer NAO
+            // voltam p/ DEPTH_WRITE / RENDER_TARGET: ninguem escreve neles daqui ate o deferred
+            // logo abaixo, que os quer em leitura combinada. O round-trip custava 2 barreiras por
+            // MRT + 2 no depth por frame sem nenhum escritor no meio, e o DEPTH_WRITE ainda podia
+            // disparar decompress/resummarize em alguns drivers.
             Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
                                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
@@ -2345,10 +2347,15 @@ namespace Smile {
             constexpr D3D12_RESOURCE_STATES DeferredReadState =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            // O G-buffer rastreia o proprio estado (AppendTransitions so recebe o alvo); o depth
+            // nao, entao o estado de origem depende de o bloco do ReSTIR ter rodado — ele deixa o
+            // depth em NON_PIXEL de proposito, em vez de devolver p/ DEPTH_WRITE.
+            const D3D12_RESOURCE_STATES DepthBefore =
+                ReSTIRGIActive ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+                               : D3D12_RESOURCE_STATE_DEPTH_WRITE;
             FBarrierBatch Batch;
             GBuffer.AppendTransitions(Batch, DeferredReadState);
-            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             DeferredReadState);
+            Batch.Transition(DepthBuffer.Get(), DepthBefore, DeferredReadState);
             Batch.Flush(CommandList);
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);

@@ -460,6 +460,11 @@ namespace Smile {
             if (D == EDenoiser::DLSS_RR && !DlssRR.Available()) D = EDenoiser::NRD; // fallback: sem NVIDIA/RR
             if (D == Denoiser) return;
             Nrd.InvalidateHistory();            // muda a natureza do sinal -> reinicia acumulacao
+            // O teto de firefly do ReSTIR depende do denoiser (FireflyMax 8 com NRD, FireflyMaxRaw
+            // 4 sem ele) e e aplicado ao Lo NA HORA DO TRACE, ou seja, fica gravado no reservoir.
+            // Sem invalidar, o Lo clampado no teto antigo sobrevive no historico — e com
+            // ValidateInterval = 0 nao ha re-shade que o corrija.
+            ReSTIRGI.InvalidateHistory();
             Denoiser = D;
             RRResetPending = true;              // trocar de/para RR: descarta o historico neural velho
             if (Denoiser == EDenoiser::DLSS_RR) // RR faz o upscale; trava o upscaler em DLSS
