@@ -1,4 +1,5 @@
 #include "Smile/Graphics/DDGI.h"
+#include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -474,9 +475,11 @@ namespace Smile {
         CPU.MiscParams      = { Relocation ? 1.0f : 0.0f, DeactivationThreshold, EffMax, EffMin };
         // Marca de "recem-ativado" so quando o Relocate ainda tem >=1 frame agendado DEPOIS
         // deste (a marca precisa do proximo Relocate p/ o auto-demote; orfa = hyst 0 eterno).
+        // z = ShadowRayMask (ver ReSTIRGI.cpp: translucido fora dos dois casos).
         CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f,
                                 static_cast<f32>(_PunctualLightCount),
-                                FoliageShadows ? 255.0f : 1.0f, 0.0f }; // z = ShadowRayMask
+                                static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
+                                                                : kRTMaskShadowFast), 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }

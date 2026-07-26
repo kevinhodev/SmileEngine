@@ -9,11 +9,23 @@
 #define DDGI_IRRADIANCE_GAMMA 1.5f
 #endif
 
-// Instance masks da TLAS (RaytracingScene.cpp seta por instancia). Raios normais usam ALL;
-// shadow rays podem usar so OPAQUE p/ pular folhagem/alpha-test (modo rapido, toggle no editor).
-#define SMILE_RT_MASK_OPAQUE    0x01u
-#define SMILE_RT_MASK_ALPHATEST 0x02u
-#define SMILE_RT_MASK_ALL       0xFFu
+// Instance masks da TLAS (RaytracingScene.cpp seta por instancia; espelhado em
+// Smile/Graphics/RTMasks.h). Cada instancia carrega UM bit de categoria, e cada PASSE escolhe
+// quais categorias enxerga — o modelo do Lumen (RayTracingDefinitions.h), onde o bit OPAQUE e
+// descrito como "used by reflection, shadow, AO and GI tracing passes".
+#define SMILE_RT_MASK_OPAQUE      0x01u
+#define SMILE_RT_MASK_ALPHATEST   0x02u
+// Translucido (material Blend: vidro, vitrine). Sem este bit o vidro entrava na TLAS junto com os
+// opacos e, como nenhum RayQuery implementa transmissao, virava PAREDE para o GI — interior de
+// ambiente envidracado ficava escuro demais. O raster ja o exclui do G-buffer (passe forward).
+#define SMILE_RT_MASK_TRANSLUCENT 0x04u
+#define SMILE_RT_MASK_ALL         0xFFu
+
+// Gather difuso e visibilidade do GI: opaco + alpha-test, SEM translucido. Equivale ao
+// RAY_TRACING_MASK_OPAQUE do Lumen, que traca o gather com ele sozinho
+// (LumenHardwareRayTracingCommon.ush:195). Aproxima transmissao TOTAL pelo vidro — grosseiro, mas
+// muito mais perto da fisica que bloquear 100%. Refracao/Fresnel/absorcao ficam p/ depois.
+#define SMILE_RT_MASK_GATHER      (SMILE_RT_MASK_OPAQUE | SMILE_RT_MASK_ALPHATEST)
 
 // Flags do InstanceGeo (bitmask em Flags).
 #define INSTGEO_FLAG_ALPHATEST 1u  // clip por albedo.a vs AlphaCutoff (folhagem; FORCE_NON_OPAQUE na TLAS)

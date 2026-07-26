@@ -117,7 +117,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // (FRaytracingScene::SetSelectiveCulling) isso vale em tudo menos folhagem/cutout/vidro;
     // desligado, a linha inteira e no-op e a cena e double-sided, que era o regime historico.
     RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
-    q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, ray);
+    q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
@@ -233,7 +233,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                         vray.TMin      = 0.0f;
                         vray.TMax      = TraceParams.y;
                         RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> vq;
-                        vq.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, vray);
+                        vq.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+                                          SMILE_RT_MASK_GATHER, vray);
                         SMILE_RT_PROCEED(vq)
                         if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                             float t = vq.CommittedRayT();

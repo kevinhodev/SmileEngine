@@ -1,4 +1,5 @@
 #include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -234,8 +235,11 @@ namespace Smile {
         CPU.GridCount       = GIGridCount;
         CPU.AtlasParams     = GIAtlasParams;
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
+        // w = ShadowRayMask. Nenhum dos dois valores inclui translucido: vidro que deixa a luz
+        // passar no gather nao pode projetar sombra dura no mesmo frame.
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
-                                FoliageShadows ? 255.0f : 1.0f }; // w = ShadowRayMask
+                                static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
+                                                                : kRTMaskShadowFast) };
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
                                 RayEps.HitShadowRayBias };
         // GI cru (RR/None) usa teto de firefly mais apertado: sem o NRD pra limpar o residuo, os

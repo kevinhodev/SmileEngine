@@ -71,7 +71,10 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     ray.TMax      = maxT;
 
     RayQuery<RAY_FLAG_NONE> q;
-    q.TraceRayInline(Scene, RAY_FLAG_NONE, 0xFF, ray);
+    // GATHER (sem translucido): o vidro nao pode barrar a luz que alimenta as probes, senao
+    // ambiente envidracado fica escuro demais. RAY_FLAG_NONE segue de proposito — a deteccao de
+    // probe enterrada precisa ENXERGAR backface (distancia assinada abaixo).
+    q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;

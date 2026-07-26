@@ -101,7 +101,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         ray.TMax      = TraceParams.y;
 
         RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
-        q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, ray);
+        // ALL, e nao GATHER: reflexao PRECISA ver o vidro (a vitrine tem que aparecer no reflexo).
+        // E a divisao do Lumen — o gather difuso ignora translucido, o passe de reflexao o inclui.
+        q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, SMILE_RT_MASK_ALL, ray);
         SMILE_RT_PROCEED(q)
 
         FHitShadeParams P;

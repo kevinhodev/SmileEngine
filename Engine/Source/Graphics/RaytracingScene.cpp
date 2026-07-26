@@ -4,6 +4,7 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/GpuMesh.h"
+#include "Smile/Graphics/RTMasks.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -107,13 +108,17 @@ namespace Smile {
             Inst.InstanceID                          = ThisIdx;
             Inst.InstanceContributionToHitGroupIndex = 0;
             Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-            // Masks segmentadas (SMILE_RT_MASK_* em DDGICommon.hlsli): raios normais tracejam
-            // com ALL (uniao dos bits = tudo visivel, comportamento identico ao 0xFF antigo);
-            // shadow rays podem usar so OPAQUE p/ pular folhagem (toggle no editor).
+            // Categoria da instancia (kRTMask* em RTMasks.h). UM bit por instancia; quem escolhe
+            // o que enxerga e o PASSE, pela mask do raio — modelo do Lumen.
             // Folhagem/alpha-test: candidatos nao-opacos passam pelo AlphaTestPass no shader
             // (SMILE_RT_PROCEED em HitShading.hlsli) — sem isto os cards viram quads solidos.
+            // Translucido (Blend) fica numa categoria propria: o gather do GI nao o inclui, entao
+            // o vidro deixa de ser parede opaca para a iluminacao indireta. Ele CONTINUA na TLAS —
+            // as reflexoes ainda o enxergam, que era a razao de nao simplesmente removE-lo.
             const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
-            Inst.InstanceMask = AlphaTest ? 0x02u : 0x01u;
+            const bool Blend     = R.Material && R.Material->Blend;
+            Inst.InstanceMask = Blend ? kRTMaskTranslucent
+                                      : (AlphaTest ? kRTMaskAlphaTest : kRTMaskOpaque);
             if (AlphaTest)
                 Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
 

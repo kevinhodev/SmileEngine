@@ -682,6 +682,10 @@ namespace SmileEditor {
     void MaterialsBridge::SetBlendFlag(bool _V) {
         auto* M = SelMat(); if (!M) return;
         M->Blend = _V; // por-draw no Renderer: sai do G-buffer e entra no passe forward
+        // No RT, Blend escolhe a CATEGORIA da instancia na TLAS (kRTMaskTranslucent): translucido
+        // sai do gather do GI. Isso mora na TLAS, nao no constant buffer do material — sem o
+        // rebuild, o material vira vidro no raster e continua opaco para a iluminacao indireta.
+        if (Renderer) Renderer->NotifyMaterialRTStateChanged();
         TouchSelected();
     }
 

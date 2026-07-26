@@ -194,7 +194,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                              RAY_FLAG_CULL_BACK_FACING_TRIANGLES> mq;
                     mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                                      RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, mray);
+                                      RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+                                      SMILE_RT_MASK_GATHER, mray);
                     SMILE_RT_PROCEED(mq)
                     if (mq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ps = 0.0f;
                 }
@@ -233,7 +234,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                   RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
             RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                      RAY_FLAG_CULL_BACK_FACING_TRIANGLES> vq;
-            vq.TraceRayInline(Scene, VisFlags, 0xFF, vray);
+            vq.TraceRayInline(Scene, VisFlags, SMILE_RT_MASK_GATHER, vray);
             SMILE_RT_PROCEED(vq)
             if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
 #if RESTIR_DEBUG_VIS_KILLS
