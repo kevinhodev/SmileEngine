@@ -80,9 +80,14 @@ namespace Smile {
         // como "probe enterrada" na distancia assinada do DDGI.
         //
         // Cutout entra porque um card de folhagem so tem um lado de geometria: cullar o verso o
-        // faria sumir. Blend NAO entra: translucido nao passa pelo G-buffer e o vidro cozido ja
-        // vem com TwoSided proprio.
-        bool IsTwoSidedForRT() const { return TwoSided || Constants.AlphaTest; }
+        // faria sumir. Blend entra porque o PSO do passe forward e cull NONE para todo
+        // translucido (PipelineState.cpp, PipelineStateForwardBlend) — sem ele, marcar um
+        // material one-sided como Blend no editor faria o raster mostrar o verso enquanto as
+        // reflexoes com culling seletivo o descartavam. Os vidros cozidos do Bistro ja vem com
+        // TwoSided proprio, entao hoje isto e coerencia, nao mudanca de imagem.
+        //
+        // Nao afeta a escolha de PSO do G-buffer: aquele loop pula Blend antes de consultar isto.
+        bool IsTwoSidedForRT() const { return TwoSided || Constants.AlphaTest || Blend; }
 
         void Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 

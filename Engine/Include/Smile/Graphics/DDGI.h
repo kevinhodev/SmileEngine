@@ -235,7 +235,7 @@ namespace Smile {
         FRayEpsilonProfile RayEps; // perfil compartilhado (dono = Renderer)
         f32  MaxRayDist   = 0.0f;
         bool RealHitShading = true;
-        bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (mask ALL vs OPAQUE)
+        bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)
         bool Relocation     = true; 
         f32  DeactivationThreshold = 0.20f; 
         bool AdaptiveRays   = false; 

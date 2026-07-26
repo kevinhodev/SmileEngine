@@ -22,8 +22,9 @@ struct FHitShadeParams {
     float  AlbedoLOD;
     bool   RealHitShading;
     int    NumLights;     // luzes puntuais no SceneLights (F5)
-    uint   ShadowRayMask; // instance mask dos shadow rays: ALL = folhagem sombreia (alpha-test
-                          // por candidato); OPAQUE = pula folhagem (rapido, traversal pura)
+    uint   ShadowRayMask; // instance mask dos shadow rays: GATHER = folhagem sombreia (alpha-test
+                          // por candidato); OPAQUE = pula folhagem (rapido, traversal pura).
+                          // Nenhum dos dois inclui TRANSLUCENT — vidro nao faz sombra dura.
 };
 
 static const float kSkyBottomR = 6360.0f;

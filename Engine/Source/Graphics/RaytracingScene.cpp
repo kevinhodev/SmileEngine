@@ -126,11 +126,12 @@ namespace Smile {
             // incondicionalmente TODO RAY_FLAG_CULL_BACK_FACING_TRIANGLES da engine era no-op — a
             // cena inteira era double-sided no RT enquanto o raster cullava.
             //
-            // Criterio = o MESMO do raster (Renderer.cpp escolhe PSOGBufferTwoSided por
-            // `TwoSided || AlphaTest`): so assim as duas visoes da cena concordam sobre o que e
-            // visivel pelo verso. No cozido atual `TwoSided` e `AlphaTest` saem da mesma condicao
-            // (cutout, em Cooker/main.cpp), mais vidro translucido com TwoSided sozinho — na
-            // pratica isto isola folhagem/cutouts/vidro e deixa arquitetura one-sided.
+            // Criterio = FMaterial::IsTwoSidedForRT, que espelha o que o RASTER desenha two-sided:
+            // o G-buffer escolhe PSOGBufferTwoSided por `TwoSided || AlphaTest`, e o passe forward
+            // dos translucidos e cull NONE para todos. So assim as duas visoes da cena concordam
+            // sobre o que e visivel pelo verso. No cozido atual `TwoSided` e `AlphaTest` saem da
+            // mesma condicao (cutout, em Cooker/main.cpp) — na pratica isto isola
+            // folhagem/cutouts/vidro e deixa arquitetura one-sided.
             //
             // DDGI nao e afetado: ele traca com RAY_FLAG_NONE de proposito, porque a deteccao de
             // "probe dentro de geometria" depende de ENXERGAR o backface (distancia assinada em

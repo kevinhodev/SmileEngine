@@ -183,7 +183,7 @@ namespace Smile {
         bool Temporal       = true;
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
-        bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask ALL vs OPAQUE)
+        bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
         bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B

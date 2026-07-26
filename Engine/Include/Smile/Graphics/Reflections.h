@@ -226,7 +226,7 @@ namespace Smile {
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)
         bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
-        bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (mask ALL vs OPAQUE)
+        bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (GATHER vs OPAQUE)
         bool UseNrd              = false; // denoise via NRD RELAX especular (unificado c/ o GI)
         bool RawSpec             = false; // reflexao crua p/ o DLSS Ray Reconstruction (denoise = RR)
         // Temporal (Fase 3).
