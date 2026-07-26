@@ -45,6 +45,8 @@ Rectangle {
     function pageSubtitle() {
         if (selectedPage === 0)
             return "Upscaling, Anti-Aliasing e Resolução Interna do Viewport"
+        if (selectedPage === 1)
+            return "Geometria dos raios de GI, reflexo e sombra: origem, intervalo e frescor da amostra"
         if (selectedPage === 6)
             return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
         if (selectedPage === 7)
