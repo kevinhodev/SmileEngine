@@ -33,43 +33,7 @@ cbuffer FrameCB : register(b0) {
     row_major float4x4 InvViewProj;
 };
 
-cbuffer MaterialCB : register(b1) {
-    float4 BaseColorFactor;
-    float  MetallicFactor;
-    float  RoughnessFactor;
-    float  AOStrength;
-    float  EmissiveStrength;
-    float4 EmissiveFactor;
-    uint   HasAlbedoMap;
-    uint   HasNormalMap;
-    uint   HasMetallicRoughnessMap;
-    uint   HasAOMap;
-    uint   HasEmissiveMap;
-    float  NormalStrength;
-    uint   NormalFlipY;
-
-    uint   HasHeightMap;
-    float  HeightScale;
-    float  ParallaxMinSteps;
-    float  ParallaxMaxSteps;
-    uint   ParallaxSelfShadow;
-    float  ParallaxShadowSteps;
-    float  ParallaxFadeStart;
-    float  ParallaxFadeRange;
-    uint   ParallaxRefine;
-    uint   ParallaxRefineSteps;
-
-    uint   HasMetalnessMap;
-    uint   HasRoughnessMap;
-
-    uint   SpecularPacking;
-    uint   AlphaTest;
-    float  AlphaCutoff;
-    uint   NormalReconstructZ;
-
-    uint   ShadingModel;
-    float4 SubsurfaceColor;
-};
+#include "MaterialCB.hlsli"
 
 Texture2D AlbedoMap            : register(t0);
 Texture2D MetallicRoughnessMap : register(t2);

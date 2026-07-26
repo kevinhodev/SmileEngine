@@ -43,7 +43,9 @@ namespace SmileEditor {
         Q_PROPERTY(QColor baseColor READ BaseColor WRITE SetBaseColor NOTIFY SelectionChanged)
         Q_PROPERTY(qreal metallic READ Metallic WRITE SetMetallic NOTIFY SelectionChanged)
         Q_PROPERTY(qreal roughness READ Roughness WRITE SetRoughness NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal aoStrength READ AOStrength WRITE SetAOStrength NOTIFY SelectionChanged)
+        // Sem aoStrength: o SceneLoader zera AOStrength em todo material cozido (GTAO + DDGI +
+        // oclusao por raio ja cobrem, e somar o mapa por cima escurece a cena toda). O campo
+        // continua em MaterialConstants e o shader continua lendo — so nao e mais editavel.
         Q_PROPERTY(QColor emissiveColor READ EmissiveColor WRITE SetEmissiveColor NOTIFY SelectionChanged)
         Q_PROPERTY(qreal emissiveStrength READ EmissiveStrength WRITE SetEmissiveStrength NOTIFY SelectionChanged)
         Q_PROPERTY(qreal normalStrength READ NormalStrength WRITE SetNormalStrength NOTIFY SelectionChanged)
@@ -117,8 +119,6 @@ namespace SmileEditor {
         void    SetMetallic(qreal V);
         qreal   Roughness() const;
         void    SetRoughness(qreal V);
-        qreal   AOStrength() const;
-        void    SetAOStrength(qreal V);
         QColor  EmissiveColor() const;
         void    SetEmissiveColor(const QColor& V);
         qreal   EmissiveStrength() const;

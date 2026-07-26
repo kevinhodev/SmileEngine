@@ -6,6 +6,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -32,8 +33,49 @@ namespace Smile {
     }
 
     namespace {
+        // sRGB -> linear, 256 entradas (o dominio de entrada e um u8, entao a tabela e exata).
+        const float* SrgbToLinearLUT() {
+            static const std::array<float, 256> Lut = [] {
+                std::array<float, 256> T{};
+                for (int i = 0; i < 256; ++i) {
+                    const float c = float(i) / 255.0f;
+                    T[i] = (c <= 0.04045f) ? (c / 12.92f)
+                                           : std::pow((c + 0.055f) / 1.055f, 2.4f);
+                }
+                return T;
+            }();
+            return Lut.data();
+        }
+
+        // linear -> sRGB. Sem pow no loop quente: a saida e u8, entao basta a tabela dos PONTOS
+        // MEDIOS (em linear) entre niveis sRGB consecutivos — o upper_bound devolve o nivel mais
+        // proximo em 8 comparacoes, com arredondamento exato. Um pow por canal por texel custaria
+        // ~16M chamadas numa textura 2K (mip chain inteira), em 135 PNGs so no Sponza.
+        u8 LinearToSrgbU8(float _L) {
+            static const std::array<float, 255> Mid = [] {
+                const float* Lin = SrgbToLinearLUT();
+                std::array<float, 255> M{};
+                for (int i = 0; i < 255; ++i) M[i] = 0.5f * (Lin[i] + Lin[i + 1]);
+                return M;
+            }();
+            const auto It = std::upper_bound(Mid.begin(), Mid.end(), _L);
+            return static_cast<u8>(It - Mid.begin());
+        }
+
+        // _SrgbSpace = os bytes de ENTRADA estao codificados em sRGB (albedo/emissivo). Nesse caso
+        // a media tem que acontecer em LINEAR: media aritmetica de bytes gama escurece a mip. Um
+        // 2x2 de 0 e 255 dava 127 (que o hardware le como ~0.216 linear) quando o certo e 0.5
+        // linear = 188 em sRGB. O erro aparece em toda mip de toda textura nao-DDS, acumulando
+        // nivel a nivel — as DDS escapam porque trazem a mip chain pronta do disco.
+        //
+        // Mapas de dado (roughness/metal/AO/height) tem _SrgbSpace = false e seguem na media
+        // direta, que para eles ja e a correta: sao lidos como UNORM, nao ha gama envolvida.
+        //
+        // O ALFA nunca passa pela conversao, mesmo em textura sRGB: alfa e linear por definicao
+        // no formato, e e ele que alimenta o clip do alpha-test.
         void DownsampleColor2x2(const u8* Src, u32 SrcW, u32 SrcH,
-                                u8* Dst, u32 DstW, u32 DstH) {
+                                u8* Dst, u32 DstW, u32 DstH, bool _SrgbSpace) {
+            const float* ToLin = _SrgbSpace ? SrgbToLinearLUT() : nullptr;
             for (u32 y = 0; y < DstH; ++y) {
                 u32 sy0 = std::min(y * 2u,       SrcH - 1);
                 u32 sy1 = std::min(y * 2u + 1u,  SrcH - 1);
@@ -45,8 +87,16 @@ namespace Smile {
                     const u8* p10 = Src + (sy1 * SrcW + sx0) * 4;
                     const u8* p11 = Src + (sy1 * SrcW + sx1) * 4;
                     u8* d = Dst + (y * DstW + x) * 4;
-                    for (u32 c = 0; c < 4; ++c)
-                        d[c] = static_cast<u8>((u32(p00[c]) + p01[c] + p10[c] + p11[c] + 2) / 4);
+                    for (u32 c = 0; c < 3; ++c) {
+                        if (ToLin) {
+                            const float L = 0.25f * (ToLin[p00[c]] + ToLin[p01[c]] +
+                                                     ToLin[p10[c]] + ToLin[p11[c]]);
+                            d[c] = LinearToSrgbU8(L);
+                        } else {
+                            d[c] = static_cast<u8>((u32(p00[c]) + p01[c] + p10[c] + p11[c] + 2) / 4);
+                        }
+                    }
+                    d[3] = static_cast<u8>((u32(p00[3]) + p01[3] + p10[3] + p11[3] + 2) / 4);
                 }
             }
         }
@@ -320,7 +370,7 @@ namespace Smile {
                     MinT = std::min(MinT, AvgT);
                 } else {
                     DownsampleColor2x2(Prev.Pixels.data(), PrevW, PrevH,
-                                       Next.Pixels.data(), W, H);
+                                       Next.Pixels.data(), W, H, _sRGB);
                 }
                 Mips.push_back(std::move(Next));
             }

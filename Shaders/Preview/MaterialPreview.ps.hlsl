@@ -13,43 +13,7 @@ cbuffer PreviewCB : register(b0) {
     float4 IBLParams;       // x = intensidade, y = rotacao do env (rad), z = mip max, w = enabled
 };
 
-cbuffer MaterialCB : register(b1) {
-    float4 BaseColorFactor;
-    float  MetallicFactor;
-    float  RoughnessFactor;
-    float  AOStrength;
-    float  EmissiveStrength;
-    float4 EmissiveFactor;
-    uint   HasAlbedoMap;
-    uint   HasNormalMap;
-    uint   HasMetallicRoughnessMap;
-    uint   HasAOMap;
-    uint   HasEmissiveMap;
-    float  NormalStrength;
-    uint   NormalFlipY;
-
-    uint   HasHeightMap;
-    float  HeightScale;
-    float  ParallaxMinSteps;
-    float  ParallaxMaxSteps;
-    uint   ParallaxSelfShadow;
-    float  ParallaxShadowSteps;
-    float  ParallaxFadeStart;
-    float  ParallaxFadeRange;
-    uint   ParallaxRefine;
-    uint   ParallaxRefineSteps;
-
-    uint   HasMetalnessMap;
-    uint   HasRoughnessMap;
-
-    uint   SpecularPacking;
-    uint   AlphaTest;
-    float  AlphaCutoff;
-    uint   NormalReconstructZ;
-
-    uint   ShadingModel;
-    float4 SubsurfaceColor;
-};
+#include "../MaterialCB.hlsli"
 
 Texture2D AlbedoMap            : register(t0);
 Texture2D NormalMap            : register(t1);
@@ -225,7 +189,7 @@ float4 main(PSInput input) : SV_Target {
                                        : float4(1.0f, 1.0f, 1.0f, 1.0f);
     float3 BaseColor    = BaseColorFactor.rgb * AlbedoSample.rgb;
     if (AlphaTest)
-        clip(AlbedoSample.a * BaseColorFactor.a - AlphaCutoff);
+        MaterialAlphaClip(AlbedoSample.a);
 
     float3 N        = GeoN;
     float  ToksvigT = 1.0f;
@@ -303,12 +267,19 @@ float4 main(PSInput input) : SV_Target {
         Direct = (DiffuseColor / PI + Spec) * SunRadiance * NoL;
     }
 
-    // Folhagem: transmissao wrap simples (luz atravessando a folha) — aproximacao do
-    // two-sided do deferred, suficiente pro preview.
-    if (ShadingModel == 1) {
-        float Wrap  = saturate(dot(-N, L) * 0.6f + 0.4f);
-        Direct += DiffuseColor * SubsurfaceColor.rgb * SubsurfaceColor.w
-                * SunRadiance * Wrap / PI;
+    // Transmissao (luz atravessando a superficie) por wrap — aproximacao do two-sided do
+    // deferred, suficiente pro preview.
+    //
+    // DATA-DRIVEN, sem gate por ShadingModel, igual ao deferred: la o TransColor sai de
+    // BaseColor * g.Subsurface e entra em TODA luz direta sem perguntar o modelo
+    // (DeferredLighting.ps.hlsl:227, 256, 263). O gate `ShadingModel == 1` que existia aqui
+    // fazia o preview MENTIR para o modelo Subsurface (ID 2), que o QML oferece no chip: o
+    // usuario mexia em cor/intensidade e a esfera nao reagia.
+    const float3 Trans = SubsurfaceColor.rgb * SubsurfaceColor.w;
+    const float  TransMax = max(Trans.r, max(Trans.g, Trans.b));
+    if (TransMax > 0.0f) {
+        float Wrap = saturate(dot(-N, L) * 0.6f + 0.4f);
+        Direct += DiffuseColor * Trans * SunRadiance * Wrap / PI;
     }
 
     float3 Ambient = 0.0f;
@@ -329,6 +300,17 @@ float4 main(PSInput input) : SV_Target {
         float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y);
 
         Ambient = (DiffuseIBL + SpecularIBL) * AO * IBLParams.x;
+
+        // Subsurface (ID 2): o deferred SOMA ao gather frontal o termo do lado de TRAS do GI,
+        // escalado pela intensidade do material (DeferredLighting.ps.hlsl:426) — cortina/vela
+        // acesa pela luz que vem de tras. Aqui o equivalente de "GI de tras" e a irradiancia do
+        // IBL amostrada em -N. Este termo e o que diferencia SSS de Folhagem no preview: a
+        // folhagem so transmite no direto (acima); o SSS tambem recebe indireto pelas costas.
+        if (ShadingModel == 2 && TransMax > 0.0f) {
+            float3 BackIrr = IrradianceMap.SampleLevel(IBLSampler, RotateY(-N, IBLParams.y),
+                                                       0.0f).rgb;
+            Ambient += TransMax * BaseColor * BackIrr * AO * IBLParams.x;
+        }
     }
 
     float3 Color = Direct + Ambient + Emissive;

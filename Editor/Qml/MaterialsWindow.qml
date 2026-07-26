@@ -761,13 +761,9 @@ Rectangle {
                         valueText: root.fmt(materialsModel.roughness)
                         onMoved: (v) => materialsModel.roughness = v
                     }
-                    SliderRow {
-                        label: "Força do AO"
-                        from: 0; to: 2
-                        boundValue: materialsModel.aoStrength
-                        valueText: root.fmt(materialsModel.aoStrength)
-                        onMoved: (v) => materialsModel.aoStrength = v
-                    }
+                    // Sem "Força do AO": o SceneLoader força AOStrength = 0 em todo material
+                    // cozido de propósito, porque somar o AO da textura por cima de GTAO + DDGI +
+                    // oclusão por raio escurece a cena inteira. O slider existia e não fazia nada.
                     ColorRow {
                         label: "Emissivo"
                         value: materialsModel.emissiveColor

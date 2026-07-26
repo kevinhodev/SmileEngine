@@ -7,43 +7,7 @@ cbuffer FrameCB : register(b0) {
     float4 RenderParams   : packoffset(c18);
 };
 
-cbuffer MaterialCB : register(b1) {
-    float4 BaseColorFactor;
-    float  MetallicFactor;
-    float  RoughnessFactor;
-    float  AOStrength;
-    float  EmissiveStrength;
-    float4 EmissiveFactor;
-    uint   HasAlbedoMap;
-    uint   HasNormalMap;
-    uint   HasMetallicRoughnessMap;
-    uint   HasAOMap;
-    uint   HasEmissiveMap;
-    float  NormalStrength;
-    uint   NormalFlipY;
-
-    uint   HasHeightMap;
-    float  HeightScale;
-    float  ParallaxMinSteps;
-    float  ParallaxMaxSteps;
-    uint   ParallaxSelfShadow;
-    float  ParallaxShadowSteps;
-    float  ParallaxFadeStart;
-    float  ParallaxFadeRange;
-    uint   ParallaxRefine;
-    uint   ParallaxRefineSteps;
-
-    uint   HasMetalnessMap;
-    uint   HasRoughnessMap;
-
-    uint   SpecularPacking;
-    uint   AlphaTest;
-    float  AlphaCutoff;
-    uint   NormalReconstructZ;
-
-    uint   ShadingModel;
-    float4 SubsurfaceColor;
-};
+#include "MaterialCB.hlsli"
 
 Texture2D AlbedoMap            : register(t0);
 Texture2D NormalMap            : register(t1);
@@ -171,7 +135,7 @@ GBufferOutput main(PSInput input) {
         float ClipAlpha = (MipBias < 0.0f && HasAlbedoMap)
                         ? AlbedoMap.SampleBias(MaterialSampler, UV, 0.0f).a
                         : AlbedoSample.a;
-        clip(ClipAlpha * BaseColorFactor.a - AlphaCutoff);
+        MaterialAlphaClip(ClipAlpha);
     }
 
     float3 N        = GeoN;

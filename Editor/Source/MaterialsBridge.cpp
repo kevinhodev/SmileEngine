@@ -540,18 +540,6 @@ namespace SmileEditor {
         TouchSelectedRT(); // InstanceGeo.RoughnessFactor
     }
 
-    qreal MaterialsBridge::AOStrength() const {
-        const auto* M = SelMat();
-        return M ? M->Constants.AOStrength : 1.0;
-    }
-
-    void MaterialsBridge::SetAOStrength(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
-        M->Constants.AOStrength = float(_V);
-        M->UpdateConstants();
-        TouchSelected();
-    }
-
     QColor MaterialsBridge::EmissiveColor() const {
         const auto* M = SelMat();
         if (!M) return QColor(0, 0, 0);
@@ -1184,7 +1172,9 @@ namespace SmileEditor {
         O[QStringLiteral("baseColor")]          = ColorToJson(C.BaseColorFactor.X, C.BaseColorFactor.Y, C.BaseColorFactor.Z);
         O[QStringLiteral("metallic")]           = C.MetallicFactor;
         O[QStringLiteral("roughness")]          = C.RoughnessFactor;
-        O[QStringLiteral("aoStrength")]         = C.AOStrength;
+        // "aoStrength" nao entra mais: o campo deixou de ser editavel (o loader o zera), entao
+        // gravar so produziria ruido — e reler ressuscitaria, num sidecar antigo, um valor que o
+        // usuario nao tem mais como ajustar nem reverter pela UI. JsonToMaterial tambem o ignora.
         O[QStringLiteral("emissive")]           = ColorToJson(C.EmissiveFactor.X, C.EmissiveFactor.Y, C.EmissiveFactor.Z);
         O[QStringLiteral("emissiveStrength")]   = C.EmissiveStrength;
         O[QStringLiteral("normalStrength")]     = C.NormalStrength;
@@ -1230,7 +1220,7 @@ namespace SmileEditor {
         Color3("baseColor", C.BaseColorFactor.X, C.BaseColorFactor.Y, C.BaseColorFactor.Z);
         Num("metallic", C.MetallicFactor);
         Num("roughness", C.RoughnessFactor);
-        Num("aoStrength", C.AOStrength);
+        // "aoStrength" de sidecar antigo e ignorado de proposito (ver MaterialToJson).
         Color3("emissive", C.EmissiveFactor.X, C.EmissiveFactor.Y, C.EmissiveFactor.Z);
         Num("emissiveStrength", C.EmissiveStrength);
         Num("normalStrength", C.NormalStrength);
