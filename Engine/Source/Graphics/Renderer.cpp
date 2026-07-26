@@ -1278,6 +1278,15 @@ namespace Smile {
     void Renderer::RenderFrame() {
         if (!Initialized) return;
 
+        // Edicoes de material chegam da UI ENTRE frames e varias caem no mesmo frame (um arraste
+        // de slider dispara o setter a cada tick). Os setters so marcam; o refresh — que custa um
+        // Flush da fila + reset de historicos — acontece uma vez aqui, coalescido e ANTES do
+        // BeginFrame, ou seja, fora da gravacao do command list.
+        if (MaterialRTStateDirty) {
+            MaterialRTStateDirty = false;
+            NotifyMaterialRTStateChanged();
+        }
+
         CommandQueue.BeginFrame();
 
         GpuProfiler.BeginFrame(CommandQueue.FrameIndex());

@@ -22,7 +22,11 @@ bool AlphaTestPass(uint instId, uint tri, float2 bary) {
               + Verts[i1].TexCoord * bary.x
               + Verts[i2].TexCoord * bary.y;
     Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
-    return albedoTex.SampleLevel(LinearWrap, uv, 0.0f).a >= geo.AlphaCutoff;
+    // O fator de opacidade do material entra no recorte, igual ao raster (GBuffer.ps.hlsl faz
+    // clip(ClipAlpha * BaseColorFactor.a - AlphaCutoff)). Sem ele, um cutout com BaseColorFactor.a
+    // < 1 (fade de LOD, dissolve) sumia da tela e continuava SOLIDO para os raios — sombra, oclusao
+    // de GI e reflexo de uma geometria que o raster ja tinha descartado.
+    return albedoTex.SampleLevel(LinearWrap, uv, 0.0f).a * geo.BaseColor.a >= geo.AlphaCutoff;
 }
 
 // Drena a traversal honrando o alpha-test: opacos auto-comitam; candidatos nao-opacos so comitam

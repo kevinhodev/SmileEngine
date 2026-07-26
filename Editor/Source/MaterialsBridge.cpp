@@ -306,6 +306,10 @@ namespace SmileEditor {
             if (It == OverrideCache.constEnd()) continue;
             JsonToMaterial(It.value(), *M);
             M->UpdateConstants();
+            // O sidecar reescreve cor base, emissivo, rough/metal, cutoff e shading model — tudo
+            // que o InstanceGeo copia. Sem isto a persistencia so valia p/ o raster: a cena reabria
+            // com o material editado na tela e o GI iluminando pelos valores cozidos.
+            if (Renderer) Renderer->MarkMaterialRTStateDirty();
 
             // Texturas trocadas: recarrega do path e reaplica no slot (falha -> slot segue
             // no mapa cozido, so loga). Cargas aditivas pulam quem ja tem override aplicado.
@@ -464,6 +468,13 @@ namespace SmileEditor {
         }
     }
 
+    void MaterialsBridge::TouchSelectedRT() {
+        TouchSelected();
+        // Coalescido: o Renderer aplica uma vez no proximo frame. Chamar o Notify direto aqui
+        // custaria um Flush da fila + reset de todos os historicos POR TICK de slider.
+        if (Renderer) Renderer->MarkMaterialRTStateDirty();
+    }
+
     void MaterialsBridge::MarkDirty() {
         if (!JsonDirty) { JsonDirty = true; emit DirtyChanged(); }
     }
@@ -481,7 +492,7 @@ namespace SmileEditor {
         auto& B = M->Constants.BaseColorFactor;
         B.X = float(_V.redF()); B.Y = float(_V.greenF()); B.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelectedRT(); // InstanceGeo.BaseColor = albedo do GI/reflexo
     }
 
     qreal MaterialsBridge::Metallic() const {
@@ -493,7 +504,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.MetallicFactor = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelectedRT(); // InstanceGeo.EmissiveFactor.w
     }
 
     qreal MaterialsBridge::Roughness() const {
@@ -505,7 +516,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.RoughnessFactor = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelectedRT(); // InstanceGeo.RoughnessFactor
     }
 
     qreal MaterialsBridge::AOStrength() const {
@@ -533,7 +544,7 @@ namespace SmileEditor {
         auto& E = M->Constants.EmissiveFactor;
         E.X = float(_V.redF()); E.Y = float(_V.greenF()); E.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelectedRT(); // InstanceGeo.EmissiveFactor.rgb — o emissivo ILUMINA o GI
     }
 
     qreal MaterialsBridge::EmissiveStrength() const {
@@ -545,7 +556,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.EmissiveStrength = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelectedRT(); // multiplica o EmissiveFactor no InstanceGeo
     }
 
     qreal MaterialsBridge::NormalStrength() const {
@@ -666,8 +677,7 @@ namespace SmileEditor {
         // AlphaTest nao e so raster: decide a InstanceMask e o FORCE_NON_OPAQUE da TLAS, entra no
         // criterio de culling (IsTwoSidedForRT) e vive no snapshot do InstanceGeo. Sem isto o RT
         // seguia com o estado do load.
-        if (Renderer) Renderer->NotifyMaterialRTStateChanged();
-        TouchSelected();
+        TouchSelectedRT();
     }
 
     qreal MaterialsBridge::AlphaCutoff() const {
@@ -679,7 +689,9 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.AlphaCutoff = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        // InstanceGeo.AlphaCutoff: e o cutoff que o alpha-test dos RAIOS usa (RTAlphaTest.hlsli).
+        // O toggle AlphaTest ja sincronizava; o VALOR nao — recorte do raster e do raio divergiam.
+        TouchSelectedRT();
     }
 
     bool MaterialsBridge::BlendFlag() const {
@@ -693,8 +705,7 @@ namespace SmileEditor {
         // No RT, Blend escolhe a CATEGORIA da instancia na TLAS (kRTMaskTranslucent): translucido
         // sai do gather do GI. Isso mora na TLAS, nao no constant buffer do material — sem o
         // rebuild, o material vira vidro no raster e continua opaco para a iluminacao indireta.
-        if (Renderer) Renderer->NotifyMaterialRTStateChanged();
-        TouchSelected();
+        TouchSelectedRT();
     }
 
     bool MaterialsBridge::TwoSided() const {
@@ -707,8 +718,7 @@ namespace SmileEditor {
         M->TwoSided = _V; // PSO escolhido por draw, por frame
         // No RT nao e por draw: alimenta o culling da instancia na TLAS e o TwoSidedRT do
         // InstanceGeo (que decide se um hit pelo verso conta como "dentro de solido").
-        if (Renderer) Renderer->NotifyMaterialRTStateChanged();
-        TouchSelected();
+        TouchSelectedRT();
     }
 
     int MaterialsBridge::ShadingModel() const {
@@ -720,7 +730,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.ShadingModel = Smile::u32(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelectedRT(); // InstanceGeo.Flags bit FOLIAGE (ShadingModel == 1)
     }
 
     QColor MaterialsBridge::SubsurfaceColor() const {
@@ -834,6 +844,11 @@ namespace SmileEditor {
             _M.UpdateTextureSlot(Renderer->GetDevice().Native(), Renderer->GetSRVHeap(),
                                  Smile::u32(_Slot), _T);
         _M.UpdateConstants();
+        // Os slots 0/2/4 viram indices bindless no InstanceGeo (Albedo/MrMap/EmissiveMap) e o
+        // HasAlbedo governa o alpha-test dos RAIOS (RTAlphaTest.hlsli desiste quando e 0). Sem
+        // re-subir o snapshot: adicionar albedo num material sem textura deixava a folhagem como
+        // quad solido so no RT, e limpar o slot mantinha o raio amostrando o descritor antigo.
+        if (Renderer) Renderer->MarkMaterialRTStateDirty();
     }
 
     Smile::FTexture* MaterialsBridge::LoadTextureCached(const QString& _Path, int _Slot) {
@@ -1136,7 +1151,7 @@ namespace SmileEditor {
         M->UpdateConstants();
         // O override salvo (se houver) tambem cai — senao voltaria no proximo load.
         OverrideCache.remove(QString::fromStdString(M->Name));
-        TouchSelected();
+        TouchSelectedRT(); // reverte TUDO, inclusive os campos que o RT le
     }
 
     // ---- Persistencia (<cena>.materials.json) ----

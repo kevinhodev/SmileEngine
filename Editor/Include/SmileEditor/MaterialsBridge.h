@@ -244,6 +244,12 @@ namespace SmileEditor {
         // Notifica edicao do selecionado: SelectionChanged + dataChanged da linha
         // (badges/swatch/dot de modificado podem mudar).
         void   TouchSelected();
+        // Igual ao TouchSelected, mais o pedido de refresh do snapshot InstanceGeo. Use nos
+        // setters cujo campo o RAY TRACING le (ver FDDGI::FillInstanceGeo): cor base, metallic,
+        // roughness, emissivo, cutoff, shading model, alpha-test/blend/two-sided e troca de
+        // textura. Campos so-raster (parallax, NormalStrength, AOStrength, subsurface) devem usar
+        // o TouchSelected puro — marcar a toa reseta o historico do GI/denoiser sem motivo.
+        void   TouchSelectedRT();
         bool   IsModified(const Smile::FMaterial* M) const;
         // Aplica OverrideCache por nome, SO nos materiais recem-vistos (_Fresh). Reaplicar em
         // material ja carregado descartaria a edicao nao salva dele — o Rebuild dispara tambem

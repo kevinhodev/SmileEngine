@@ -516,6 +516,12 @@ namespace Smile {
         // O Flush e necessario: o InstanceGeo e um upload heap sem versao por frame em voo, entao
         // reescrever com frames voando corromperia o que eles leem. Custa um stall, mas isto so
         // dispara em edicao manual de material.
+        // Versao COALESCIDA: use esta nos setters do editor. Arrastar um slider dispara o setter a
+        // cada tick, e cada NotifyMaterialRTStateChanged custa um Flush da fila + reset de todos os
+        // historicos — fazer isso por tick derrubaria o frame rate e manteria o GI em reset
+        // permanente. O RenderFrame consome a flag uma vez, antes do BeginFrame.
+        void MarkMaterialRTStateDirty() { MaterialRTStateDirty = true; }
+
         void NotifyMaterialRTStateChanged() {
             CommandQueue.Flush();
             DDGI.RefreshInstanceGeo(Scene);
@@ -786,6 +792,7 @@ namespace Smile {
         FRaytracingScene RaytracingScene;
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
         bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
+        bool             MaterialRTStateDirty  = false; // pedido de refresh coalescido p/ o proximo frame
         FDDGI            DDGI;
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;

@@ -78,9 +78,14 @@ namespace Smile {
     }
 
     void FMaterial::Finalize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        if (SRVTableStart != kInvalidTable)
-            _SRVHeap.Free(SRVTableStart, kMaterialTextureSlots);
-        SRVTableStart = _SRVHeap.Allocate(kMaterialTextureSlots);
+        // Re-finalize REUSA o range (so reescreve os descritores abaixo). Free+Allocate mudava o
+        // SRVTableStart, e esse indice nao e privado do raster: o snapshot InstanceGeo do RT o
+        // cacheia como AlbedoIndex/MrMapIndex/EmissiveMapIndex (DDGI.cpp) e le via
+        // ResourceDescriptorHeap. Realocar sem re-subir o snapshot fazia os raios amostrarem a
+        // textura de OUTRO material, silenciosamente. Como o free list e first-fit com reuso, o
+        // range nem sequer voltava para o mesmo lugar de forma confiavel.
+        if (SRVTableStart == kInvalidTable)
+            SRVTableStart = _SRVHeap.Allocate(kMaterialTextureSlots);
 
         auto WriteSRV = [&](FTexture* _Texture, u32 _LocalSlot) {
             if (!_Texture || !_Texture->IsValid()) return;
