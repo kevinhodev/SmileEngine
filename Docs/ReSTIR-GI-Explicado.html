@@ -1,0 +1,1463 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}img,svg{max-width:100%}</style>
+</head>
+<body>
+<title>ReSTIR GI explicado — SmileEngine</title>
+
+<style>
+  :root {
+    --paper:    #f3f4f8;
+    --surface:  #fbfbfe;
+    --surface2: #eaebf2;
+    --ink:      #1b1d29;
+    --ink-soft: #575a70;
+    --ink-faint:#8b8ea6;
+    --rule:     #d6d8e4;
+    --radiance: #b8690f;
+    --radiance-bg: #f8ecd9;
+    --ray:      #4a51c9;
+    --ray-bg:   #e5e7fa;
+    --reject:   #b8455c;
+    --reject-bg:#fae4e9;
+    --ok:       #1f7a5c;
+
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --body: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+    --s1: .35rem; --s2: .7rem; --s3: 1.1rem; --s4: 1.7rem; --s5: 2.6rem; --s6: 4rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:    #14151f;
+      --surface:  #1b1d2a;
+      --surface2: #242737;
+      --ink:      #e7e8f0;
+      --ink-soft: #a5a8bd;
+      --ink-faint:#71748c;
+      --rule:     #32354a;
+      --radiance: #f0ad4e;
+      --radiance-bg: #33280f;
+      --ray:      #8b93f2;
+      --ray-bg:   #22254a;
+      --reject:   #f08099;
+      --reject-bg:#3a1d27;
+      --ok:       #4fc79b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#14151f; --surface:#1b1d2a; --surface2:#242737;
+    --ink:#e7e8f0; --ink-soft:#a5a8bd; --ink-faint:#71748c; --rule:#32354a;
+    --radiance:#f0ad4e; --radiance-bg:#33280f;
+    --ray:#8b93f2; --ray-bg:#22254a;
+    --reject:#f08099; --reject-bg:#3a1d27; --ok:#4fc79b;
+  }
+  :root[data-theme="light"] {
+    --paper:#f3f4f8; --surface:#fbfbfe; --surface2:#eaebf2;
+    --ink:#1b1d29; --ink-soft:#575a70; --ink-faint:#8b8ea6; --rule:#d6d8e4;
+    --radiance:#b8690f; --radiance-bg:#f8ecd9;
+    --ray:#4a51c9; --ray-bg:#e5e7fa;
+    --reject:#b8455c; --reject-bg:#fae4e9; --ok:#1f7a5c;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { width: min(68ch, calc(100% - 2.5rem)); margin-inline: auto; }
+  .wide { width: min(1040px, calc(100% - 2.5rem)); margin-inline: auto; }
+
+  /* ---------- hero ---------- */
+  .hero {
+    border-bottom: 1px solid var(--rule);
+    padding-block: var(--s6) var(--s5);
+    background:
+      radial-gradient(120% 90% at 82% 8%, var(--radiance-bg) 0%, transparent 58%),
+      radial-gradient(90% 70% at 8% 100%, var(--ray-bg) 0%, transparent 60%);
+  }
+  .hero > .wrap { display: flex; flex-direction: column; gap: var(--s3); }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(2.4rem, 6.5vw, 4.05rem);
+    line-height: 1.02;
+    letter-spacing: -.02em;
+    text-wrap: balance;
+  }
+  h1 em { font-style: italic; color: var(--radiance); }
+  .lede { font-size: 1.19rem; color: var(--ink-soft); max-width: 54ch; text-wrap: pretty; }
+
+  /* ---------- structure ---------- */
+  main { padding-block: var(--s6) var(--s5); display: flex; flex-direction: column; gap: var(--s6); }
+  section { display: flex; flex-direction: column; gap: var(--s4); }
+  .chapter { display: flex; flex-direction: column; gap: var(--s3); }
+
+  h2 {
+    font-family: var(--display);
+    font-size: clamp(1.7rem, 3.6vw, 2.3rem);
+    font-weight: 600;
+    line-height: 1.12;
+    letter-spacing: -.015em;
+    text-wrap: balance;
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: .68em;
+    color: var(--radiance);
+    margin-right: .5em;
+    font-weight: 400;
+  }
+  h3 {
+    font-family: var(--body);
+    font-size: 1.02rem;
+    font-weight: 650;
+    letter-spacing: .005em;
+    margin-top: var(--s2);
+  }
+  p { text-wrap: pretty; }
+  p + p { margin-top: var(--s3); }
+  a { color: var(--ray); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--ray); outline-offset: 3px; border-radius: 2px; }
+
+  strong { font-weight: 650; }
+  .term { color: var(--radiance); font-weight: 650; }
+  code {
+    font-family: var(--mono);
+    font-size: .87em;
+    background: var(--surface2);
+    padding: .1em .32em;
+    border-radius: 3px;
+  }
+
+  ul, ol { display: flex; flex-direction: column; gap: var(--s2); padding-left: 1.35rem; }
+  li { padding-left: .15rem; }
+  li::marker { color: var(--ink-faint); }
+
+  /* ---------- callouts ---------- */
+  .note {
+    border-left: 2px solid var(--radiance);
+    background: var(--surface);
+    padding: var(--s3) var(--s3) var(--s3) var(--s4);
+    display: flex; flex-direction: column; gap: var(--s2);
+  }
+  .note .tag {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--radiance);
+  }
+  .note.warn { border-left-color: var(--reject); }
+  .note.warn .tag { color: var(--reject); }
+  .note p { font-size: .96rem; }
+
+  .analogy {
+    background: var(--ray-bg);
+    padding: var(--s3) var(--s4);
+    border-radius: 2px;
+    display: flex; flex-direction: column; gap: var(--s2);
+    font-size: .97rem;
+  }
+  .analogy .tag {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--ray);
+  }
+
+  /* ---------- figures ---------- */
+  figure { display: flex; flex-direction: column; gap: var(--s2); }
+  .fig-frame {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: var(--s3);
+    overflow-x: auto;
+  }
+  .fig-frame svg { display: block; width: 100%; height: auto; min-width: 460px; }
+  figcaption { font-size: .87rem; color: var(--ink-soft); max-width: 62ch; }
+  figcaption b { color: var(--ink); font-weight: 650; }
+
+  /* svg tokens */
+  .s-surface { fill: none; stroke: var(--ink-faint); stroke-width: 2; }
+  .s-hatch { stroke: var(--ink-faint); stroke-width: 1; opacity: .5; }
+  .s-ray { fill: none; stroke: var(--ray); stroke-width: 1.6; }
+  .s-ray-d { fill: none; stroke: var(--ray); stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .s-rad { fill: none; stroke: var(--radiance); stroke-width: 1.8; }
+  .s-rej { fill: none; stroke: var(--reject); stroke-width: 1.6; }
+  .s-norm { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+  .s-guide { fill: none; stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 3; }
+  .s-dot { fill: var(--ink); }
+  .s-dot-rad { fill: var(--radiance); }
+  .s-dot-ray { fill: var(--ray); }
+  .s-lbl { font-family: var(--mono); font-size: 11px; fill: var(--ink-soft); }
+  .s-lbl-em { font-family: var(--mono); font-size: 12px; fill: var(--ink); font-weight: 600; }
+  .s-lbl-rad { font-family: var(--mono); font-size: 11px; fill: var(--radiance); }
+  .s-lbl-ray { font-family: var(--mono); font-size: 11px; fill: var(--ray); }
+  .s-lbl-rej { font-family: var(--mono); font-size: 11px; fill: var(--reject); }
+  .s-title { font-family: var(--body); font-size: 12px; fill: var(--ink); font-weight: 650; }
+  .s-fillsurf { fill: var(--surface2); stroke: var(--ink-faint); stroke-width: 1.5; }
+
+  /* ---------- math ---------- */
+  .math {
+    font-family: var(--mono);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: var(--s3) var(--s4);
+    font-size: .95rem;
+    overflow-x: auto;
+    line-height: 1.9;
+  }
+  .math .cm { color: var(--ink-faint); }
+
+  pre {
+    font-family: var(--mono);
+    font-size: .82rem;
+    line-height: 1.6;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--ray);
+    border-radius: 3px;
+    padding: var(--s3);
+    overflow-x: auto;
+  }
+  pre .c { color: var(--ink-faint); }
+  pre .k { color: var(--ray); }
+  pre .n { color: var(--radiance); }
+  .src {
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-faint);
+    letter-spacing: .02em;
+  }
+
+  /* ---------- WRS demo ---------- */
+  .demo {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    display: flex; flex-direction: column; gap: var(--s3);
+    padding: var(--s4);
+  }
+  .demo-head { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: baseline; justify-content: space-between; }
+  .demo-title { font-family: var(--body); font-weight: 650; font-size: 1rem; }
+  .demo-state { font-family: var(--mono); font-size: .8rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .demo-state b { color: var(--radiance); }
+
+  .cands { display: flex; flex-direction: column; gap: var(--s1); }
+  .cand {
+    display: grid;
+    grid-template-columns: 4.4rem 3.4rem 1fr 4.2rem;
+    gap: var(--s2);
+    align-items: center;
+    font-family: var(--mono); font-size: .78rem;
+    padding: .28rem .4rem;
+    border-radius: 2px;
+    border: 1px solid transparent;
+    font-variant-numeric: tabular-nums;
+  }
+  .cand.seen { background: var(--surface2); }
+  .cand.held { border-color: var(--radiance); background: var(--radiance-bg); }
+  .cand .cname { color: var(--ink); font-weight: 600; }
+  .cand .cw { color: var(--radiance); text-align: right; }
+  .cand .cpct { color: var(--ink-soft); text-align: right; }
+  .track { position: relative; height: 12px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+  .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--ray); transition: width .18s ease-out; }
+  .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .75; }
+  @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
+
+  .demo-controls { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+  button {
+    font-family: var(--body); font-size: .86rem; font-weight: 600;
+    color: var(--paper); background: var(--ink);
+    border: 1px solid var(--ink);
+    padding: .48rem .95rem; border-radius: 2px; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink); }
+  button:hover { opacity: .85; }
+  button:disabled { opacity: .4; cursor: default; }
+  .legend { font-family: var(--mono); font-size: .72rem; color: var(--ink-faint); display: flex; gap: var(--s3); flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .swatch { width: 10px; height: 10px; border-radius: 1px; display: inline-block; }
+
+  /* ---------- pipeline ---------- */
+  .pipe { display: flex; flex-direction: column; gap: var(--s2); }
+  .pipe-row {
+    display: grid; gap: var(--s2);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  .box {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: var(--s3); display: flex; flex-direction: column; gap: var(--s1);
+  }
+  .box .bt { font-family: var(--mono); font-size: .74rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); }
+  .box .bn { font-weight: 650; font-size: .95rem; }
+  .box .bd { font-size: .84rem; color: var(--ink-soft); }
+  .box.accent { border-left: 2px solid var(--radiance); }
+  .box.accent2 { border-left: 2px solid var(--ray); }
+  .arrow { text-align: center; color: var(--ink-faint); font-family: var(--mono); font-size: .95rem; }
+
+  /* ---------- tables ---------- */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .86rem; min-width: 520px; }
+  th, td { text-align: left; padding: .58rem .8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 500; background: var(--surface2);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.mono, td .mono { font-family: var(--mono); font-size: .93em; }
+  td.num { font-variant-numeric: tabular-nums; font-family: var(--mono); }
+
+  /* ---------- glossary ---------- */
+  dl.gloss { display: grid; grid-template-columns: auto 1fr; gap: var(--s2) var(--s3); align-items: baseline; }
+  dl.gloss dt { font-family: var(--mono); font-weight: 600; color: var(--radiance); font-size: .9rem; }
+  dl.gloss dd { font-size: .93rem; color: var(--ink-soft); }
+  @media (max-width: 620px) {
+    dl.gloss { grid-template-columns: 1fr; gap: var(--s1); }
+    dl.gloss dd { margin-bottom: var(--s2); }
+  }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-block: var(--s4) var(--s5);
+    color: var(--ink-faint);
+    font-size: .84rem;
+  }
+  footer .wrap { display: flex; flex-direction: column; gap: var(--s2); }
+</style>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">SmileEngine · Shaders/GI · Ouyang et al. 2021</p>
+    <h1>ReSTIR GI, do zero: <em>um raio por pixel</em> que rende como mil</h1>
+    <p class="lede">
+      A iluminação indireta da engine dispara <strong>um único raio por pixel por frame</strong> — e ainda assim
+      converge. O truque não é traçar mais raios: é cada pixel roubar, com cuidado matemático,
+      os raios que seus vizinhos no espaço e no tempo já traçaram. Este é o guia completo,
+      começando do começo.
+    </p>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ 0. TL;DR ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2>Em uma frase</h2>
+      <p>
+        Cada pixel guarda uma <span class="term">caixinha</span> (o <em>reservoir</em>) com <strong>uma</strong>
+        amostra de luz indireta e um número dizendo o quanto confiar nela. A cada frame, o pixel traça
+        um raio novo, tenta trocar sua amostra pela do mesmo pixel no frame anterior e pela de 4 vizinhos
+        na tela — sempre com um sorteio ponderado que mantém o resultado <strong>sem viés</strong>.
+        Depois de alguns frames, aquela única amostra guardada é estatisticamente tão boa quanto uma
+        média de centenas de raios.
+      </p>
+      <div class="analogy">
+        <p class="tag">Analogia</p>
+        <p>
+          Imagine fazer uma pesquisa eleitoral entrevistando <strong>uma</strong> pessoa por bairro. O resultado
+          por bairro é lixo — puro ruído. Mas se cada bairro puder também considerar as entrevistas dos
+          bairros vizinhos, e as suas próprias entrevistas de ontem, cada bairro passa a ter centenas
+          de opiniões pelo preço de uma. ReSTIR é exatamente isso, com pixels em vez de bairros, e com
+          a estatística feita direito para não distorcer o resultado.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 1. O PROBLEMA ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">01</span>O problema: luz indireta é caríssima</h2>
+      <p>
+        <span class="term">Iluminação global</span> (GI) é a parte da luz que <em>não</em> vem direto da
+        lâmpada ou do sol: é a luz que bateu numa parede vermelha e pintou o chão de vermelho, é o brilho
+        suave dentro de uma sala iluminada só pela janela. Fisicamente, para saber quanta luz indireta
+        chega num ponto, você precisa somar a luz que vem de <strong>todas as direções</strong> do hemisfério
+        acima daquele ponto.
+      </p>
+      <div class="math">
+        E(x₁) = ∫<sub>hemisfério</sub> L(x₁ ← ω) · cos θ · dω<span class="cm">   ← uma integral, por pixel, por frame</span>
+      </div>
+      <p>
+        Computador não resolve essa integral analiticamente. Ele <span class="term">amostra</span>: sorteia
+        direções, traça raios, vê o que cada raio encontrou e tira a média. Com 500 raios por pixel o
+        resultado é bonito e leva minutos por frame. Com 1 raio por pixel você tem 16 ms por frame — e
+        uma imagem que parece TV fora do ar.
+      </p>
+    </div>
+
+    <figure class="wide">
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 250" role="img" aria-label="Comparação entre amostrar uma direção e amostrar muitas direções no hemisfério de um ponto.">
+          <!-- painel A -->
+          <text class="s-title" x="20" y="20">1 raio por pixel — o que a engine pode pagar</text>
+          <line class="s-surface" x1="20" y1="200" x2="330" y2="200"/>
+          <g class="s-hatch">
+            <line x1="30" y1="200" x2="20" y2="212"/><line x1="60" y1="200" x2="50" y2="212"/>
+            <line x1="90" y1="200" x2="80" y2="212"/><line x1="120" y1="200" x2="110" y2="212"/>
+            <line x1="150" y1="200" x2="140" y2="212"/><line x1="180" y1="200" x2="170" y2="212"/>
+            <line x1="210" y1="200" x2="200" y2="212"/><line x1="240" y1="200" x2="230" y2="212"/>
+            <line x1="270" y1="200" x2="260" y2="212"/><line x1="300" y1="200" x2="290" y2="212"/>
+            <line x1="330" y1="200" x2="320" y2="212"/>
+          </g>
+          <path class="s-guide" d="M 85 200 A 90 90 0 0 1 265 200"/>
+          <line class="s-norm" x1="175" y1="200" x2="175" y2="130" marker-end="url(#ah-ink)"/>
+          <text class="s-lbl" x="181" y="136">n₁</text>
+          <line class="s-ray" x1="175" y1="200" x2="243" y2="140" marker-end="url(#ah-ray)"/>
+          <circle class="s-dot" cx="175" cy="200" r="4"/>
+          <text class="s-lbl-em" x="150" y="222">x₁</text>
+          <text class="s-lbl-rej" x="80" y="245">resultado: aleatório — ruído</text>
+
+          <!-- painel B -->
+          <text class="s-title" x="400" y="20">~500 raios por pixel — a referência offline</text>
+          <line class="s-surface" x1="400" y1="200" x2="700" y2="200"/>
+          <g class="s-hatch">
+            <line x1="410" y1="200" x2="400" y2="212"/><line x1="440" y1="200" x2="430" y2="212"/>
+            <line x1="470" y1="200" x2="460" y2="212"/><line x1="500" y1="200" x2="490" y2="212"/>
+            <line x1="530" y1="200" x2="520" y2="212"/><line x1="560" y1="200" x2="550" y2="212"/>
+            <line x1="590" y1="200" x2="580" y2="212"/><line x1="620" y1="200" x2="610" y2="212"/>
+            <line x1="650" y1="200" x2="640" y2="212"/><line x1="680" y1="200" x2="670" y2="212"/>
+            <line x1="700" y1="200" x2="690" y2="212"/>
+          </g>
+          <path class="s-guide" d="M 460 200 A 90 90 0 0 1 640 200"/>
+          <g class="s-ray" opacity=".8">
+            <line x1="550" y1="200" x2="466" y2="168"/><line x1="550" y1="200" x2="478" y2="140"/>
+            <line x1="550" y1="200" x2="500" y2="120"/><line x1="550" y1="200" x2="524" y2="112"/>
+            <line x1="550" y1="200" x2="550" y2="110"/><line x1="550" y1="200" x2="576" y2="112"/>
+            <line x1="550" y1="200" x2="600" y2="120"/><line x1="550" y1="200" x2="622" y2="140"/>
+            <line x1="550" y1="200" x2="634" y2="168"/><line x1="550" y1="200" x2="490" y2="152"/>
+            <line x1="550" y1="200" x2="610" y2="152"/><line x1="550" y1="200" x2="536" y2="114"/>
+          </g>
+          <circle class="s-dot" cx="550" cy="200" r="4"/>
+          <text class="s-lbl-em" x="526" y="222">x₁</text>
+          <text class="s-lbl" x="452" y="245" fill="var(--ok)">resultado: liso — mas 500× o custo</text>
+
+          <defs>
+            <marker id="ah-ink" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink)"/>
+            </marker>
+            <marker id="ah-ray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ray)"/>
+            </marker>
+            <marker id="ah-rad" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--radiance)"/>
+            </marker>
+            <marker id="ah-rej" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--reject)"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+      <figcaption>
+        <b>O aperto.</b> A qualidade da imagem depende de quantas direções você conseguiu experimentar.
+        Tempo real só permite uma. ReSTIR não muda esse orçamento — ele muda de onde vêm as
+        <em>outras</em> amostras.
+      </figcaption>
+    </figure>
+
+    <div class="wrap chapter">
+      <h3>A observação que destrava tudo</h3>
+      <p>
+        O pixel do lado enxerga quase a mesma coisa que você. Ele está na mesma parede, com quase a mesma
+        normal, a poucos centímetros. A luz indireta que ele mediu <strong>também seria uma medida válida
+        para você</strong>. Igualmente: o mesmo ponto da cena no frame anterior já foi medido — e a cena
+        mudou pouco em 16 ms.
+      </p>
+      <p>
+        Então a pergunta vira: <em>como pegar as amostras dos vizinhos sem mentir?</em> Se eu simplesmente
+        fizer a média com o pixel vizinho, eu borro a imagem e destruo detalhes de sombra. ReSTIR faz
+        diferente: ele <strong>reamostra</strong> — escolhe estocasticamente uma amostra entre as candidatas,
+        e corrige o peso dela para que a média continue certa.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ 2. RESERVOIR / WRS ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">02</span>O reservoir: guardar 1 amostra e agir como 100</h2>
+      <p>
+        O coração do ReSTIR é uma estrutura minúscula chamada <span class="term">reservoir</span>. Ela
+        implementa um algoritmo clássico, <strong>Weighted Reservoir Sampling</strong> (WRS): você vê uma
+        sequência de candidatos, um por vez, guardando <strong>apenas um</strong> na memória — e no final o
+        candidato guardado foi escolhido com probabilidade proporcional ao peso dele.
+      </p>
+      <div class="analogy">
+        <p class="tag">Analogia</p>
+        <p>
+          Você é um entrevistador com <strong>uma única folha de papel</strong>. Passam mil pessoas. Você não
+          pode anotar todas. Regra: quando a pessoa nº <em>k</em> passa, você joga uma moeda viciada — se
+          der cara, você apaga a folha e escreve o nome dela; se der coroa, mantém o que estava lá. Se o
+          viés da moeda for calibrado certo (<code>w / wSum</code>), no final a folha contém um nome sorteado
+          <em>de forma justa e ponderada</em> entre todos os mil. E você nunca usou mais que uma folha.
+        </p>
+      </div>
+      <p>
+        Essa é literalmente a função <code>ResUpdate</code> da engine — 6 linhas:
+      </p>
+      <pre><span class="c">// Adiciona um candidato (M=1) com peso de resampling w. Retorna true se adotado.</span>
+<span class="k">bool</span> ResUpdate(<span class="k">inout</span> Reservoir r, float3 x2c, float3 n2c, float3 Loc, <span class="k">float</span> w, <span class="k">inout uint</span> rng) {
+    r.wSum += w;              <span class="c">// soma total de pesos vistos</span>
+    r.M    += <span class="n">1.0f</span>;            <span class="c">// contei um candidato a mais</span>
+    <span class="k">if</span> (w &gt; <span class="n">0.0f</span> &amp;&amp; RngNext(rng) * r.wSum &lt;= w) {   <span class="c">// a moeda viciada</span>
+        r.x2 = x2c; r.n2 = n2c; r.Lo = Loc;         <span class="c">// troca a amostra guardada</span>
+        <span class="k">return true</span>;
+    }
+    <span class="k">return false</span>;
+}</pre>
+      <p class="src">Shaders/GI/ReSTIRReservoir.hlsli:54</p>
+    </div>
+
+    <div class="wide">
+      <div class="demo">
+        <div class="demo-head">
+          <p class="demo-title">Experimente: o sorteio ponderado, ao vivo</p>
+          <p class="demo-state" id="dstate">wSum = <b>0</b> · M = <b>0</b> · guardado: <b>—</b></p>
+        </div>
+        <p style="font-size:.9rem;color:var(--ink-soft);max-width:62ch">
+          Seis amostras candidatas com pesos diferentes (pense em “brilho”) chegam em ordem. Rode passo a
+          passo para ver a moeda viciada em ação. Depois rode 20.000 vezes: a frequência com que cada
+          candidata acaba guardada converge exatamente para o peso dela — <strong>é isso que significa
+          “sem viés”</strong>.
+        </p>
+        <div class="cands" id="cands"></div>
+        <div class="demo-controls">
+          <button id="bstep">Passo a passo</button>
+          <button id="brun" class="ghost">Rodar 20.000 vezes</button>
+          <button id="breset" class="ghost">Limpar</button>
+        </div>
+        <p class="legend">
+          <span><i class="swatch" style="background:var(--ray)"></i> frequência medida</span>
+          <span><i class="swatch" style="background:var(--ink)"></i> proporção esperada (w / Σw)</span>
+          <span><i class="swatch" style="background:var(--radiance)"></i> amostra guardada agora</span>
+        </p>
+      </div>
+    </div>
+
+    <div class="wrap chapter">
+      <h3>Os quatro números que o reservoir carrega</h3>
+      <dl class="gloss">
+        <dt>Lo, x2, n2</dt>
+        <dd>A amostra em si: <em>onde</em> o raio bateu e <em>quanta luz</em> saía dali. Detalhada no passo 03.</dd>
+        <dt>M</dt>
+        <dd>Quantos candidatos esse reservoir já viu. É o “tamanho da amostragem” — a confiança acumulada.</dd>
+        <dt>wSum</dt>
+        <dd>Soma dos pesos de todos os candidatos vistos. É a máquina interna do sorteio.</dd>
+        <dt>W</dt>
+        <dd>O <strong>peso de contribuição não-enviesado</strong>: o fator que converte a amostra guardada de
+        volta numa estimativa correta da integral. É o número que “desfaz” o sorteio.</dd>
+      </dl>
+      <p>
+        No fim do processo, <code>W</code> é fechado assim:
+      </p>
+      <div class="math">
+W = wSum / (M · p̂(amostra guardada))<span class="cm">   ← ResFinalizeW, ReSTIRReservoir.hlsli:93</span>
+      </div>
+      <p>
+        Leia como: <em>“a média dos pesos que eu vi, dividida pelo quão provável era eu ter escolhido
+        justamente esta amostra”</em>. Se o sorteio favoreceu uma amostra muito brilhante, <code>W</code>
+        fica pequeno para compensar. É esse cancelamento que impede o ReSTIR de deixar a cena
+        artificialmente mais clara.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ 3. ANATOMIA DA AMOSTRA ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">03</span>Anatomia de uma amostra: x₁, x₂, n₂, Lo</h2>
+      <p>
+        Aqui está a decisão de projeto mais importante do ReSTIR GI, e a que mais confunde quem chega
+        agora: o reservoir <strong>não guarda uma direção</strong>. Ele guarda um <strong>ponto</strong>.
+      </p>
+      <ul>
+        <li><span class="term">x₁</span> — o <em>ponto visível</em>: a superfície que o pixel está mostrando na tela. Reconstruída do depth buffer.</li>
+        <li><span class="term">n₁</span> — a normal em x₁, vinda do G-buffer.</li>
+        <li><span class="term">x₂</span> — o <em>ponto de amostra</em>: onde o raio indireto bateu.</li>
+        <li><span class="term">n₂</span> — a normal geométrica em x₂.</li>
+        <li><span class="term">Lo</span> — a radiância que sai de x₂ na direção de x₁: o quanto aquele ponto brilha para você.</li>
+      </ul>
+      <p>
+        Guardar o ponto em vez da direção é o que permite o compartilhamento. Se eu guardasse
+        “30° para nordeste”, essa direção não significa nada para o meu vizinho — a geometria dele é
+        outra. Mas <em>“tem um pedaço de parede iluminado nas coordenadas (12.4, 3.1, −8.7) emitindo
+        essa cor”</em> é uma informação que qualquer pixel próximo pode usar, apenas
+        <span class="term">reconectando</span> o caminho dele até lá.
+      </p>
+    </div>
+
+    <figure class="wide">
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 290" role="img" aria-label="Caminho de luz de dois segmentos: câmera até o ponto visível x1, e x1 até o ponto de amostra x2 iluminado pelo sol.">
+          <text class="s-title" x="16" y="18">O caminho de 2 vértices que o reservoir descreve</text>
+
+          <!-- chão -->
+          <line class="s-surface" x1="60" y1="235" x2="700" y2="235"/>
+          <g class="s-hatch">
+            <line x1="80" y1="235" x2="70" y2="247"/><line x1="130" y1="235" x2="120" y2="247"/>
+            <line x1="180" y1="235" x2="170" y2="247"/><line x1="230" y1="235" x2="220" y2="247"/>
+            <line x1="280" y1="235" x2="270" y2="247"/><line x1="330" y1="235" x2="320" y2="247"/>
+            <line x1="380" y1="235" x2="370" y2="247"/><line x1="430" y1="235" x2="420" y2="247"/>
+            <line x1="480" y1="235" x2="470" y2="247"/><line x1="530" y1="235" x2="520" y2="247"/>
+            <line x1="580" y1="235" x2="570" y2="247"/><line x1="630" y1="235" x2="620" y2="247"/>
+            <line x1="680" y1="235" x2="670" y2="247"/>
+          </g>
+          <!-- parede direita (recebe sol) -->
+          <line class="s-surface" x1="600" y1="235" x2="600" y2="70"/>
+          <g class="s-hatch">
+            <line x1="600" y1="90" x2="612" y2="80"/><line x1="600" y1="120" x2="612" y2="110"/>
+            <line x1="600" y1="150" x2="612" y2="140"/><line x1="600" y1="180" x2="612" y2="170"/>
+            <line x1="600" y1="210" x2="612" y2="200"/>
+          </g>
+          <text class="s-lbl" x="618" y="66">parede iluminada</text>
+
+          <!-- camera -->
+          <path class="s-fillsurf" d="M 60 120 l 34 0 l 0 26 l -34 0 z"/>
+          <path class="s-fillsurf" d="M 94 126 l 18 -10 l 0 34 l -18 -10 z"/>
+          <text class="s-lbl" x="60" y="112">câmera</text>
+          <line class="s-ray-d" x1="112" y1="133" x2="290" y2="228" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-ray" x="150" y="196">raio primário (rasterizado no G-buffer)</text>
+
+          <!-- x1 -->
+          <circle class="s-dot" cx="300" cy="235" r="5"/>
+          <text class="s-lbl-em" x="272" y="262">x₁</text>
+          <text class="s-lbl" x="292" y="276">o pixel</text>
+          <line class="s-norm" x1="300" y1="235" x2="300" y2="180" marker-end="url(#ah-ink)"/>
+          <text class="s-lbl" x="306" y="186">n₁</text>
+
+          <!-- segmento indireto -->
+          <line class="s-ray" x1="300" y1="235" x2="592" y2="140" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-ray" x="372" y="200">raio indireto — 1 por pixel, cosseno-hemisférico</text>
+
+          <!-- x2 -->
+          <circle class="s-dot-rad" cx="600" cy="135" r="5"/>
+          <text class="s-lbl-em" x="608" y="130">x₂</text>
+          <line class="s-norm" x1="600" y1="135" x2="546" y2="135" marker-end="url(#ah-ink)"/>
+          <text class="s-lbl" x="524" y="128">n₂</text>
+
+          <!-- sol -->
+          <circle class="s-dot-rad" cx="676" cy="44" r="11"/>
+          <g class="s-rad"><line x1="676" y1="20" x2="676" y2="12"/><line x1="696" y1="30" x2="702" y2="24"/><line x1="700" y1="52" x2="708" y2="52"/></g>
+          <text class="s-lbl-rad" x="640" y="22">sol</text>
+          <line class="s-rad" x1="666" y1="56" x2="612" y2="122" marker-end="url(#ah-rad)"/>
+          <text class="s-lbl-rad" x="482" y="96">Lo = luz que SAI de x₂ rumo a x₁</text>
+          <path class="s-rad" d="M 592 128 q -14 -10 -26 -4" marker-end="url(#ah-rad)"/>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Dois segmentos, um vértice reutilizável.</b> A câmera até x₁ é dada de graça pelo G-buffer.
+        O que custa é o segundo segmento, x₁ → x₂ — e é exatamente ele que os vizinhos vão poder
+        “religar” ao próprio x₁ deles. Em <code>Lo</code> já entram o sol (com shadow ray), as luzes
+        pontuais e a irradiância do DDGI para os bounces seguintes.
+      </figcaption>
+    </figure>
+
+    <div class="wrap chapter">
+      <h3>p̂ — a função que decide o que é uma amostra “boa”</h3>
+      <p>
+        Todo sorteio ponderado precisa de pesos. O peso de uma amostra no ReSTIR vem da
+        <span class="term">função-alvo</span> <code>p̂</code> (“p-hat”): uma estimativa barata de quanto
+        aquela amostra vai contribuir para o pixel <em>atual</em>.
+      </p>
+      <pre><span class="c">// pHat alvo p/ o pixel (x1,n1) dada a amostra (x2,Lo): luminancia*cosTheta1 (albedo cancela).</span>
+<span class="k">float</span> TargetPHat(float3 x1, float3 n1, float3 x2, float3 Lo) {
+    float3 d = x2 - x1;
+    <span class="k">float</span>  l = length(d);
+    <span class="k">if</span> (l &lt; <span class="n">1e-4f</span>) <span class="k">return</span> <span class="n">0.0f</span>;
+    <span class="k">float</span> cosT = saturate(dot(n1, d / l));
+    <span class="k">return</span> ReSTIR_Luminance(Lo) * cosT;
+}</pre>
+      <p class="src">Shaders/GI/ReSTIRReservoir.hlsli:32</p>
+      <p>
+        Dois fatores, ambos intuitivos: <strong>brilho</strong> (uma amostra escura pouco importa) e
+        <strong>ângulo</strong> (luz que chega raspando a superfície contribui menos — o
+        <code>cos θ</code> da lei de Lambert). O albedo da superfície não entra porque ele multiplica
+        tudo igualmente e cancelaria na razão.
+      </p>
+      <div class="note">
+        <p class="tag">O ponto crucial</p>
+        <p>
+          <code>p̂</code> é avaliado <strong>com o x₁ e a n₁ de quem está recebendo</strong>. É por isso
+          que roubar a amostra do vizinho não borra a imagem: a amostra dele é reponderada pela
+          geometria <em>sua</em>. Se o ângulo não favorece você, ela quase não tem chance de ser
+          escolhida.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. PASS A ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">04</span>Pass A — traçar e reusar o passado</h2>
+      <p>
+        A engine roda dois compute shaders por frame. O primeiro é
+        <code>ReSTIRGITrace.cs.hlsl</code>, em grupos de 8×8 pixels. Ele faz três coisas.
+      </p>
+
+      <h3>4.1 · Gerar a amostra inicial</h3>
+      <p>
+        Reconstrói <code>x₁</code> do depth com a <code>InvViewProj</code>, lê <code>n₁</code> do G-buffer,
+        e sorteia uma direção com <strong>distribuição cosseno-hemisférica</strong> (método de Malley:
+        pontos uniformes num disco, projetados no hemisfério — dá mais amostras onde o
+        <code>cos θ</code> é grande, que é onde elas importam). Traça o raio, e no ponto de impacto
+        calcula <code>Lo</code>: albedo × (sol direto com shadow ray + luzes pontuais + irradiância do
+        DDGI para os bounces mais profundos).
+      </p>
+      <p>
+        O peso desse candidato é a razão clássica de <em>importance sampling</em>:
+      </p>
+      <div class="math">
+p_src = cos θ / π<span class="cm">   ← a pdf com que eu sorteei a direção</span>
+w_init = p̂ / p_src<span class="cm">   ← o quanto essa amostra vale acima do que era esperado</span>
+      </div>
+
+      <h3>4.2 · Reuso temporal — pegar o reservoir de ontem</h3>
+      <p>
+        O mesmo pedaço de mundo provavelmente estava visível no frame anterior, em outro pixel (a câmera
+        e os objetos se moveram). O <span class="term">motion vector</span> diz para onde olhar:
+        <code>prevUv = uv − velocity</code>. Lá está o reservoir do frame passado, com todo o histórico
+        acumulado dele.
+      </p>
+      <p>
+        Mas nem todo histórico é válido — se a câmera girou e agora aquele pixel mostra <em>outra
+        superfície</em>, usar o histórico é vazamento de luz. Daí três testes de rejeição, todos em
+        <code>ReSTIRGITrace.cs.hlsl:243</code>:
+      </p>
+    </div>
+
+    <figure class="wide">
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 300" role="img" aria-label="Reprojeção temporal por motion vector e os três testes de rejeição do histórico.">
+          <text class="s-title" x="16" y="18">Reprojeção temporal e os filtros de aceitação</text>
+
+          <!-- frame anterior -->
+          <rect class="s-fillsurf" x="30" y="42" width="196" height="140" rx="2"/>
+          <text class="s-lbl" x="30" y="34">frame N−1 (histórico)</text>
+          <g class="s-guide">
+            <line x1="30" y1="77" x2="226" y2="77"/><line x1="30" y1="112" x2="226" y2="112"/>
+            <line x1="30" y1="147" x2="226" y2="147"/>
+            <line x1="79" y1="42" x2="79" y2="182"/><line x1="128" y1="42" x2="128" y2="182"/>
+            <line x1="177" y1="42" x2="177" y2="182"/>
+          </g>
+          <rect x="79" y="112" width="49" height="35" fill="var(--ray)" opacity=".55"/>
+          <text class="s-lbl-ray" x="42" y="202">reservoir { x₁, x₂, n₂, Lo, M, W }</text>
+
+          <!-- frame atual -->
+          <rect class="s-fillsurf" x="330" y="42" width="196" height="140" rx="2"/>
+          <text class="s-lbl" x="330" y="34">frame N (atual)</text>
+          <g class="s-guide">
+            <line x1="330" y1="77" x2="526" y2="77"/><line x1="330" y1="112" x2="526" y2="112"/>
+            <line x1="330" y1="147" x2="526" y2="147"/>
+            <line x1="379" y1="42" x2="379" y2="182"/><line x1="428" y1="42" x2="428" y2="182"/>
+            <line x1="477" y1="42" x2="477" y2="182"/>
+          </g>
+          <rect x="428" y="77" width="49" height="35" fill="var(--radiance)" opacity=".55"/>
+          <text class="s-lbl-rad" x="356" y="202">pixel px sendo processado</text>
+
+          <!-- motion vector -->
+          <path class="s-ray" d="M 240 128 C 285 128 285 96 316 96" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-ray" x="234" y="80">motion vector</text>
+          <text class="s-lbl" x="230" y="146">uv − velocity</text>
+
+          <!-- testes -->
+          <text class="s-title" x="560" y="52">3 testes</text>
+          <g>
+            <circle class="s-dot-ray" cx="566" cy="76" r="3.5"/>
+            <text class="s-lbl" x="578" y="80">normal: dot(n₁ᵖʳᵉᵛ, n₁) ≥ 0.9</text>
+            <circle class="s-dot-ray" cx="566" cy="104" r="3.5"/>
+            <text class="s-lbl" x="578" y="108">distância: |Δx₁| &lt; 1% da dist. da câmera</text>
+            <circle class="s-dot-ray" cx="566" cy="132" r="3.5"/>
+            <text class="s-lbl" x="578" y="136">plano: |n₁·Δx₁| pequeno (degrau)</text>
+          </g>
+          <text class="s-lbl-rej" x="560" y="164">falha qualquer um → histórico descartado</text>
+
+          <!-- barra M -->
+          <text class="s-title" x="16" y="246">MCap: o freio de mão do histórico</text>
+          <rect x="16" y="256" width="330" height="16" rx="2" fill="var(--surface2)"/>
+          <rect x="16" y="256" width="120" height="16" rx="2" fill="var(--ray)" opacity=".7"/>
+          <line x1="136" y1="250" x2="136" y2="278" stroke="var(--reject)" stroke-width="2"/>
+          <text class="s-lbl-rej" x="144" y="252">M = 20 (MCap)</text>
+          <text class="s-lbl" x="144" y="286">acima daqui o histórico é truncado: reagir a mudanças &gt; acumular confiança</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Por que limitar M.</b> Sem o <code>MCap</code>, um pixel parado acumularia M enorme e ficaria
+        “teimoso” — uma amostra velha teria peso tão grande que luz nova levaria segundos para aparecer.
+        A engine usa <code>MCap = 20</code>: no máximo 20 amostras de confiança, o que dá uma janela de
+        reação de poucos frames.
+      </figcaption>
+    </figure>
+
+    <div class="wrap chapter">
+      <p>
+        Passados os testes, o histórico é fundido no reservoir novo com <code>ResMerge</code>. Note que
+        aqui não se adiciona um candidato de peso 1 e sim um reservoir <em>inteiro</em>, e o peso leva
+        <code>M</code> e <code>W</code> dele:
+      </p>
+      <div class="math">
+w = p̂<sub>(no meu x₁)</sub> · W<sub>outro</sub> · M<sub>outro</sub> · J<span class="cm">   ← ResMerge, ReSTIRReservoir.hlsli:68</span>
+      </div>
+      <p>
+        Aquele <code>J</code> no final é o Jacobiano de reconexão — o assunto do próximo passo, e a parte
+        que faz o reuso ser <em>correto</em> e não apenas plausível.
+      </p>
+
+      <h3>4.3 · Duas defesas contra fantasmas</h3>
+      <p>
+        Uma amostra guardada é uma foto do passado, e fotos envelhecem. A engine tem dois mecanismos
+        para isso, ambos hoje configuráveis e documentados no código com o histórico do <em>bisect</em>
+        que os calibrou:
+      </p>
+      <ul>
+        <li>
+          <strong>Idade máxima</strong> (<code>maxAge</code>) — <code>M</code> limita o <em>peso</em> do
+          histórico, não a <em>vida</em> da amostra. Uma amostra brilhante e rara pode se revalidar
+          eternamente num canto escuro e virar mancha fixa. A idade é empacotada junto com M no mesmo
+          canal float (múltiplos de 1024) e a expiração é <em>escalonada</em> por hash do pixel — se
+          todo pixel expirasse no mesmo frame, o artefato sumiria em onda visível.
+        </li>
+        <li>
+          <strong>Revalidação periódica</strong> (<code>validateInterval</code>) — para 1 em cada N pixels
+          por frame, retraça x₁ → x₂ e re-sombreia <code>Lo</code>. Se a geometria se moveu ou apareceu um
+          oclusor, a amostra é descartada. Está desligada na config estável atual; o comentário no
+          código avisa para religar em 8 quando o sol animado do TimeOfDay voltar a importar.
+        </li>
+      </ul>
+      <div class="note warn">
+        <p class="tag">Anti-firefly</p>
+        <p>
+          Uma amostra absurdamente brilhante (um pixel de sol especular, um erro numérico) seria
+          <em>travada</em> pelo WRS — ela ganha todo sorteio — e viraria um ponto branco piscante que
+          nenhum denoiser remove bem. Por isso <code>Lo</code> passa por um teto de luminância
+          (<code>fireflyMax</code>: 8 no caminho com NRD, 4 mais apertado no GI cru) tanto na amostra
+          inicial quanto na revalidada.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5. JACOBIANO ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">05</span>O Jacobiano de reconexão — a correção que ninguém adivinha</h2>
+      <p>
+        Este é o único pedaço realmente matemático, e vale entender pela intuição. Quando eu pego a
+        amostra <code>x₂</code> do meu vizinho e religo ao meu <code>x₁</code>, eu <strong>mudei a
+        geometria do caminho</strong>. A amostra foi sorteada em termos de <em>direções</em> vistas do
+        vizinho; para mim, aquele mesmo pedacinho de superfície ocupa um <em>ângulo sólido diferente</em>.
+      </p>
+      <div class="analogy">
+        <p class="tag">Analogia</p>
+        <p>
+          Uma janela de 1 m² vista de 2 metros ocupa um pedaço enorme do seu campo de visão. A mesma
+          janela vista de 20 metros é um selo. Se você e eu concordamos que “a luz vem daquela janela”,
+          mas eu estou 10× mais longe e de esguelha, a contribuição dela <em>para mim</em> é muito menor.
+          O Jacobiano é exatamente o fator de conversão entre esses dois pontos de vista.
+        </p>
+      </div>
+      <div class="math">
+J = (cos φ<sub>dst</sub> / cos φ<sub>src</sub>) · (|x₂ − x₁<sup>src</sup>|² / |x₂ − x₁<sup>dst</sup>|²)
+      </div>
+      <p>
+        Duas razões multiplicadas: o <strong>encurtamento por ângulo</strong> (a superfície de x₂ vista
+        de esguelha entrega menos) e a <strong>lei do inverso do quadrado</strong> (dobrar a distância
+        divide por quatro).
+      </p>
+    </div>
+
+    <figure class="wide">
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 280" role="img" aria-label="O mesmo ponto de amostra x2 visto por dois pontos visíveis diferentes, com ângulos sólidos e ângulos de incidência distintos.">
+          <text class="s-title" x="16" y="18">O mesmo x₂, dois pontos de vista — por isso J existe</text>
+
+          <!-- superficie do x2 -->
+          <line class="s-surface" x1="150" y1="62" x2="560" y2="62"/>
+          <g class="s-hatch">
+            <line x1="170" y1="62" x2="160" y2="50"/><line x1="210" y1="62" x2="200" y2="50"/>
+            <line x1="250" y1="62" x2="240" y2="50"/><line x1="290" y1="62" x2="280" y2="50"/>
+            <line x1="330" y1="62" x2="320" y2="50"/><line x1="370" y1="62" x2="360" y2="50"/>
+            <line x1="410" y1="62" x2="400" y2="50"/><line x1="450" y1="62" x2="440" y2="50"/>
+            <line x1="490" y1="62" x2="480" y2="50"/><line x1="530" y1="62" x2="520" y2="50"/>
+          </g>
+          <text class="s-lbl" x="150" y="44">superfície que emite Lo</text>
+
+          <!-- patch em x2 -->
+          <line x1="316" y1="62" x2="384" y2="62" stroke="var(--radiance)" stroke-width="6"/>
+          <circle class="s-dot-rad" cx="350" cy="62" r="5"/>
+          <text class="s-lbl-em" x="342" y="40">x₂</text>
+          <line class="s-norm" x1="350" y1="62" x2="350" y2="106" marker-end="url(#ah-ink)"/>
+          <text class="s-lbl" x="356" y="98">n₂</text>
+
+          <!-- chao -->
+          <line class="s-surface" x1="60" y1="230" x2="690" y2="230"/>
+          <g class="s-hatch">
+            <line x1="90" y1="230" x2="80" y2="242"/><line x1="150" y1="230" x2="140" y2="242"/>
+            <line x1="210" y1="230" x2="200" y2="242"/><line x1="270" y1="230" x2="260" y2="242"/>
+            <line x1="330" y1="230" x2="320" y2="242"/><line x1="390" y1="230" x2="380" y2="242"/>
+            <line x1="450" y1="230" x2="440" y2="242"/><line x1="510" y1="230" x2="500" y2="242"/>
+            <line x1="570" y1="230" x2="560" y2="242"/><line x1="630" y1="230" x2="620" y2="242"/>
+            <line x1="680" y1="230" x2="670" y2="242"/>
+          </g>
+
+          <!-- x1 src (perto, de frente) -->
+          <circle class="s-dot-ray" cx="330" cy="230" r="5"/>
+          <text class="s-lbl-em" x="286" y="252">x₁ src</text>
+          <text class="s-lbl-ray" x="252" y="268">quem sorteou a amostra</text>
+          <path d="M 316 62 L 330 230 L 384 62 Z" fill="var(--ray)" opacity=".16"/>
+          <line class="s-ray" x1="330" y1="230" x2="348" y2="70" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-ray" x="336" y="160">perto, quase frontal</text>
+          <text class="s-lbl-ray" x="336" y="176">→ ângulo sólido grande</text>
+
+          <!-- x1 dst (longe, de esguelha) -->
+          <circle class="s-dot" cx="654" cy="230" r="5"/>
+          <text class="s-lbl-em" x="628" y="252">x₁ dst</text>
+          <text class="s-lbl" x="556" y="268">quem quer reusar</text>
+          <path d="M 316 62 L 654 230 L 384 62 Z" fill="var(--ink)" opacity=".1"/>
+          <line class="s-ray-d" x1="654" y1="230" x2="356" y2="70" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl" x="470" y="196">longe e de esguelha → ângulo sólido pequeno</text>
+
+          <!-- angulos -->
+          <path class="s-guide" d="M 350 92 A 30 30 0 0 0 372 80"/>
+          <text class="s-lbl" x="374" y="92">φ src</text>
+          <path class="s-guide" d="M 350 96 A 34 34 0 0 1 320 84"/>
+          <text class="s-lbl" x="286" y="96">φ dst</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Mesma amostra, contribuições diferentes.</b> As duas cunhas coloridas são o ângulo sólido que o
+        pedacinho de superfície em x₂ ocupa visto de cada x₁. J é a razão entre elas. Sem ele, o pixel
+        distante herdaria a contribuição do pixel próximo e a imagem ficaria clara demais em quinas e
+        contatos.
+      </figcaption>
+    </figure>
+
+    <div class="wrap chapter">
+      <div class="note">
+        <p class="tag">Decisão de engenharia neste repo</p>
+        <p>
+          Quando <code>J</code> sai da faixa <code>[0.1, 10]</code>, o candidato é <strong>rejeitado</strong>,
+          não clampado — nos dois passes. O comentário explica o porquê: “clampar mantém o sample com peso
+          errado (firefly/escurecimento em quinas)”. E o Jacobiano é aplicado também no reuso
+          <em>temporal</em>, não só no espacial: a aceitação tolera o x₁ antigo divergir até ~1% da
+          distância da câmera, e com segmento indireto curto isso muda a medida de verdade — assumir
+          <code>J = 1</code> ali era um viés real.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6. PASS B ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">06</span>Pass B — reuso espacial e a correção de viés</h2>
+      <p>
+        O segundo compute shader, <code>ReSTIRGISpatial.cs.hlsl</code>, lê o reservoir que o Pass A
+        acabou de gravar e funde os vizinhos. Para cada pixel: começa consigo mesmo, depois sorteia
+        <strong>4 vizinhos</strong> num disco de <strong>16 px</strong> de raio (amostragem concêntrica de
+        disco, que distribui melhor que sortear x e y independentes).
+      </p>
+      <p>Cada vizinho passa por uma peneira antes de entrar:</p>
+      <ol>
+        <li>Está dentro da tela e tem profundidade válida.</li>
+        <li><code>dot(n_vizinho, n_meu) ≥ 0.9</code> — praticamente a mesma orientação.</li>
+        <li>Tem histórico (<code>M &gt; 0</code>).</li>
+        <li>Está a menos de 1% da distância da câmera de mim (rejeição radial).</li>
+        <li>O Jacobiano de reconexão cai em <code>[0.1, 10]</code>.</li>
+      </ol>
+    </div>
+
+    <figure class="wide">
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 270" role="img" aria-label="Vizinhos sorteados num disco ao redor do pixel, com aceitos e rejeitados por normal e por profundidade.">
+          <text class="s-title" x="16" y="18">Quem entra no sorteio espacial</text>
+
+          <!-- grid de pixels -->
+          <g class="s-guide">
+            <line x1="40" y1="40" x2="424" y2="40"/><line x1="40" y1="72" x2="424" y2="72"/>
+            <line x1="40" y1="104" x2="424" y2="104"/><line x1="40" y1="136" x2="424" y2="136"/>
+            <line x1="40" y1="168" x2="424" y2="168"/><line x1="40" y1="200" x2="424" y2="200"/>
+            <line x1="40" y1="232" x2="424" y2="232"/>
+            <line x1="40" y1="40" x2="40" y2="232"/><line x1="88" y1="40" x2="88" y2="232"/>
+            <line x1="136" y1="40" x2="136" y2="232"/><line x1="184" y1="40" x2="184" y2="232"/>
+            <line x1="232" y1="40" x2="232" y2="232"/><line x1="280" y1="40" x2="280" y2="232"/>
+            <line x1="328" y1="40" x2="328" y2="232"/><line x1="376" y1="40" x2="376" y2="232"/>
+            <line x1="424" y1="40" x2="424" y2="232"/>
+          </g>
+
+          <!-- borda de objeto: normal diferente a partir da coluna 280 -->
+          <path d="M 280 40 L 424 40 L 424 232 L 280 232 Z" fill="var(--reject)" opacity=".08"/>
+          <line x1="280" y1="40" x2="280" y2="232" stroke="var(--reject)" stroke-width="2"/>
+          <text class="s-lbl-rej" x="288" y="248">outra superfície (normal ≠)</text>
+
+          <!-- disco de busca -->
+          <circle cx="184" cy="136" r="86" class="s-ray-d"/>
+          <text class="s-lbl-ray" x="72" y="34">disco de raio 16 px</text>
+
+          <!-- pixel central -->
+          <rect x="160" y="120" width="48" height="32" fill="var(--radiance)" opacity=".55"/>
+          <text class="s-lbl-em" x="168" y="142" fill="var(--ink)">px</text>
+
+          <!-- vizinhos aceitos -->
+          <g>
+            <rect x="112" y="88" width="48" height="32" fill="var(--ray)" opacity=".45"/>
+            <rect x="208" y="168" width="48" height="32" fill="var(--ray)" opacity=".45"/>
+            <rect x="112" y="168" width="48" height="32" fill="var(--ray)" opacity=".45"/>
+            <text class="s-lbl-ray" x="124" y="108">✓</text><text class="s-lbl-ray" x="220" y="188">✓</text>
+            <text class="s-lbl-ray" x="124" y="188">✓</text>
+          </g>
+          <!-- vizinho rejeitado -->
+          <rect x="256" y="88" width="48" height="32" fill="var(--reject)" opacity=".35"/>
+          <text class="s-lbl-rej" x="268" y="108">✗</text>
+
+          <!-- painel de pesos -->
+          <text class="s-title" x="470" y="40">o WRS funde os aceitos</text>
+          <g font-family="var(--mono)" font-size="11">
+            <rect x="470" y="56" width="24" height="14" fill="var(--radiance)" opacity=".55"/>
+            <text class="s-lbl" x="502" y="67">self · w = p̂·W·M·1</text>
+            <rect x="470" y="82" width="80" height="14" fill="var(--ray)" opacity=".45"/>
+            <text class="s-lbl" x="558" y="93">vizinho · w = p̂·W·M·J</text>
+            <rect x="470" y="108" width="46" height="14" fill="var(--ray)" opacity=".45"/>
+            <text class="s-lbl" x="524" y="119">vizinho · w = …</text>
+            <rect x="470" y="134" width="14" height="14" fill="var(--ray)" opacity=".45"/>
+            <text class="s-lbl" x="492" y="145">vizinho · w = …</text>
+          </g>
+          <line class="s-guide" x1="470" y1="160" x2="700" y2="160"/>
+          <text class="s-lbl-rad" x="470" y="180">1 vencedor sorteado ∝ w</text>
+          <text class="s-lbl" x="470" y="200">M total = soma dos M (confiança somada)</text>
+          <text class="s-lbl" x="470" y="220">→ W recalculado pela correção de viés</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Nada de média.</b> O pixel não mistura as cores dos vizinhos: ele fica com <em>uma</em> das
+        amostras, sorteada proporcionalmente ao valor que ela tem <em>para ele</em>. É por isso que
+        detalhes de sombra sobrevivem ao reuso — o que se compartilha é o material bruto da estimativa,
+        não o resultado.
+      </figcaption>
+    </figure>
+
+    <div class="wrap chapter">
+      <h3>Correção de viés: “quem mais poderia ter sorteado isso?”</h3>
+      <p>
+        Aqui aparece a sutileza que separa uma implementação ingênua de uma correta. Ao juntar amostras
+        de N vizinhos, é fácil <strong>contar em excesso</strong>. Um vizinho que jamais poderia ter
+        gerado a amostra vencedora — porque está virado para o outro lado, ou porque tem uma parede no
+        caminho — não pode entrar na conta de <code>M</code> como se pudesse. Se entrar, o pixel divide
+        por gente demais e a imagem escurece nas bordas de oclusão.
+      </p>
+      <p>
+        A engine resolve com a <span class="term">balance heuristic</span> de MIS, estilo RTXDI: para
+        cada participante <code>c</code>, calcula-se <code>p̂</code> da amostra <strong>vencedora</strong>
+        avaliada no domínio <em>dele</em>, e o peso final fica:
+      </p>
+      <div class="math">
+W = wSum · p<sub>i</sub> / (p̂<sub>sel</sub> · Σ<sub>c</sub> p<sub>c</sub>·M<sub>c</sub>)<span class="cm">   ← ReSTIRGISpatial.cs.hlsl:208</span>
+      </div>
+      <p>
+        Um vizinho que “mal” poderia ter gerado a amostra tem <code>p_c</code> pequeno e vota pouco no
+        denominador. Isso é melhor que o teste binário “podia ou não podia” que a versão anterior usava:
+        menos variância, transição suave. E com o toggle de visibilidade ligado, um vizinho
+        <strong>ocluído</strong> da amostra vencedora tem <code>p_c = 0</code> por raio — porque a
+        probabilidade real dele ter gerado aquilo é zero mesmo: a amostragem inicial só produz pontos
+        mutuamente visíveis.
+      </p>
+    </div>
+
+    <figure class="wide">
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 250" role="img" aria-label="Três candidatos avaliando a amostra vencedora, um deles ocluído por uma parede e portanto com peso zero.">
+          <text class="s-title" x="16" y="18">O denominador só conta quem realmente poderia ter gerado a amostra</text>
+
+          <circle class="s-dot-rad" cx="360" cy="62" r="6"/>
+          <text class="s-lbl-em" x="372" y="58">x₂ vencedor</text>
+          <line class="s-surface" x1="240" y1="50" x2="480" y2="50"/>
+
+          <line class="s-surface" x1="60" y1="212" x2="660" y2="212"/>
+          <g class="s-hatch">
+            <line x1="90" y1="212" x2="80" y2="224"/><line x1="160" y1="212" x2="150" y2="224"/>
+            <line x1="230" y1="212" x2="220" y2="224"/><line x1="300" y1="212" x2="290" y2="224"/>
+            <line x1="370" y1="212" x2="360" y2="224"/><line x1="440" y1="212" x2="430" y2="224"/>
+            <line x1="510" y1="212" x2="500" y2="224"/><line x1="580" y1="212" x2="570" y2="224"/>
+            <line x1="650" y1="212" x2="640" y2="224"/>
+          </g>
+
+          <!-- candidato 1: bom -->
+          <circle class="s-dot-rad" cx="330" cy="212" r="5"/>
+          <line class="s-ray" x1="330" y1="212" x2="356" y2="72" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-em" x="300" y="234">c = self</text>
+          <text class="s-lbl-ray" x="286" y="248">p = alto</text>
+
+          <!-- candidato 2: de esguelha -->
+          <circle class="s-dot-ray" cx="530" cy="212" r="5"/>
+          <line class="s-ray" x1="530" y1="212" x2="372" y2="72" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-em" x="504" y="234">c = viz. 1</text>
+          <text class="s-lbl-ray" x="490" y="248">p = baixo (esguelha)</text>
+
+          <!-- candidato 3: ocluido -->
+          <circle class="s-dot-ray" cx="140" cy="212" r="5"/>
+          <line class="s-rej" x1="140" y1="212" x2="342" y2="74" stroke-dasharray="5 4"/>
+          <rect x="216" y="96" width="16" height="92" class="s-fillsurf"/>
+          <text class="s-lbl" x="180" y="90">oclusor</text>
+          <circle cx="228" cy="153" r="9" fill="none" stroke="var(--reject)" stroke-width="2"/>
+          <line x1="222" y1="147" x2="234" y2="159" stroke="var(--reject)" stroke-width="2"/>
+          <line x1="234" y1="147" x2="222" y2="159" stroke="var(--reject)" stroke-width="2"/>
+          <text class="s-lbl-em" x="112" y="234">c = viz. 2</text>
+          <text class="s-lbl-rej" x="98" y="248">p = 0 (visibility ray)</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Sem viés significa contar direito.</b> O vizinho ocluído sai do denominador em vez de diluir a
+        estimativa. Foi essa mudança que removeu o escurecimento residual nas bordas de oclusão.
+      </figcaption>
+    </figure>
+
+    <div class="wrap chapter">
+      <h3>O visibility ray e a sombra de contato de graça</h3>
+      <p>
+        Por último, opcionalmente, o Pass B traça <strong>um</strong> raio da conexão escolhida,
+        <code>x₁ → x₂</code>, com alpha-test (para folhagem ocluir de verdade). Se estiver bloqueada,
+        <code>W = 0</code>: aquele pixel não recebe indireto neste frame.
+      </p>
+      <p>
+        Isso parece brutal — e é, por pixel. Mas cada pixel sorteia uma conexão diferente, então o
+        resultado é um padrão estocástico 0/1 que o <strong>denoiser transforma num gradiente suave</strong>.
+        O efeito visual final é uma sombra de contato macia no bounce indireto, uma espécie de AO
+        fisicamente motivado. O comentário no código chama de “AO do bounce”, e há um modo de debug
+        (<code>RESTIR_DEBUG_VIS_KILLS</code>) que pinta esses pixels de vermelho puro para inspecionar o
+        padrão com o NRD desligado.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ 7. RESOLVE + PIPELINE ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">07</span>Do reservoir ao pixel: o resolve</h2>
+      <p>
+        Depois de todo o reuso, a amostra guardada volta a ser luz com uma linha:
+      </p>
+      <div class="math">
+gi = Lo · cos θ₁ · W / π<span class="cm">   ← ResResolve, ReSTIRReservoir.hlsli:100</span>
+      </div>
+      <p>
+        <code>Lo · cos θ₁</code> é a contribuição bruta da amostra, <code>W</code> é o fator não-enviesado
+        que carrega todo o histórico temporal e espacial, e <code>/ π</code> vem da convenção da engine:
+        o valor gravado é <code>(1/π)·E</code>, exatamente o que a BRDF lambertiana no deferred vai
+        multiplicar pelo albedo. Um firefly clamp final protege a saída, porque o brilho vem de
+        <code>wSum/M·W</code> — clampar só o <code>Lo</code> normalizaria a cor sem conter o pico.
+      </p>
+      <p>
+        No canal alpha vai a distância da amostra <strong>vencedora</strong>, não a do raio original: é o
+        <code>hitDist</code> que o denoiser usa para dimensionar o kernel de filtro, e ele precisa
+        corresponder ao caminho que de fato produziu a radiância.
+      </p>
+    </div>
+
+    <div class="wide">
+      <div class="pipe">
+        <div class="pipe-row">
+          <div class="box"><p class="bt">entrada</p><p class="bn">G-buffer + Depth</p><p class="bd">x₁ e n₁ de cada pixel, de graça da rasterização</p></div>
+          <div class="box"><p class="bt">entrada</p><p class="bn">TLAS + Instances</p><p class="bd">a cena para os raios; VB/IB bindless</p></div>
+          <div class="box"><p class="bt">entrada</p><p class="bn">DDGI + SkyLUT</p><p class="bd">radiance cache: bounces além do primeiro</p></div>
+        </div>
+        <p class="arrow">↓</p>
+        <div class="pipe-row">
+          <div class="box accent">
+            <p class="bt">Pass A · compute 8×8</p><p class="bn">ReSTIRGITrace</p>
+            <p class="bd">1 raio cosseno-hemisférico → sombreia o hit → funde o reservoir do frame anterior (motion vector + J + rejeições) → resolve provisório</p>
+          </div>
+          <div class="box">
+            <p class="bt">estado · ping-pong</p><p class="bn">4 texturas de reservoir</p>
+            <p class="bd">A: x₁+M/idade (32F) · B: x₂+W (32F) · C: Lo+n₁.x (16F) · D: n₂+n₁.y (16F)</p>
+          </div>
+        </div>
+        <p class="arrow">↓</p>
+        <div class="pipe-row">
+          <div class="box accent">
+            <p class="bt">Pass B · compute 8×8</p><p class="bn">ReSTIRGISpatial</p>
+            <p class="bd">funde 4 vizinhos num disco de 16 px → balance heuristic para o viés → visibility ray opcional → resolve final. <strong>Não</strong> realimenta o temporal</p>
+          </div>
+          <div class="box accent2">
+            <p class="bt">saída</p><p class="bn">GITexture</p><p class="bd">rgb = irradiância/π · a = distância da amostra vencedora</p></div>
+        </div>
+        <p class="arrow">↓</p>
+        <div class="pipe-row">
+          <div class="box accent2"><p class="bt">opcional</p><p class="bn">NRD pack + RELAX</p><p class="bd">empacota viewZ, normal/rough, motion e radiância+hitDist para o denoiser</p></div>
+          <div class="box"><p class="bt">consumo</p><p class="bn">Deferred lighting</p><p class="bd">t16 aponta para a saída do NRD ou para o sinal cru, conforme o toggle</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wrap chapter">
+      <div class="note">
+        <p class="tag">Por que o espacial não realimenta o temporal</p>
+        <p>
+          Se o resultado do Pass B voltasse para as texturas de reservoir, o viés residual de cada frame
+          seria reamostrado no frame seguinte, e no seguinte — acumulando. O Pass B lê o estado e
+          escreve só na saída de cor. É também por isso que ligar/desligar os toggles de
+          <em>spatial</em> e <em>visibility</em> não invalida o histórico, enquanto mudar o modo de
+          sombreamento do hit invalida (muda o <code>Lo</code> já gravado).
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 8. MAPA + PARAMS ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">08</span>Onde cada conceito vive no código</h2>
+    </div>
+    <div class="wide">
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Conceito</th><th>Arquivo</th><th>Símbolo</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>A estrutura do reservoir</td><td class="mono">Shaders/GI/ReSTIRReservoir.hlsli:17</td><td class="mono">struct Reservoir</td></tr>
+            <tr><td>Sorteio ponderado (WRS)</td><td class="mono">ReSTIRReservoir.hlsli:54</td><td class="mono">ResUpdate</td></tr>
+            <tr><td>Fusão de dois reservoirs</td><td class="mono">ReSTIRReservoir.hlsli:68</td><td class="mono">ResMerge</td></tr>
+            <tr><td>Função-alvo p̂</td><td class="mono">ReSTIRReservoir.hlsli:32</td><td class="mono">TargetPHat</td></tr>
+            <tr><td>Jacobiano de reconexão</td><td class="mono">ReSTIRReservoir.hlsli:81</td><td class="mono">ReconnectionJacobian</td></tr>
+            <tr><td>Fechamento de W</td><td class="mono">ReSTIRReservoir.hlsli:93</td><td class="mono">ResFinalizeW</td></tr>
+            <tr><td>Resolve para irradiância</td><td class="mono">ReSTIRReservoir.hlsli:100</td><td class="mono">ResResolve</td></tr>
+            <tr><td>M + idade num só canal</td><td class="mono">ReSTIRReservoir.hlsli:45</td><td class="mono">ResPackMAge</td></tr>
+            <tr><td>Amostra inicial (Malley)</td><td class="mono">ReSTIRGITrace.cs.hlsl:97</td><td class="mono">GGX_Rand2 + TangentBasis</td></tr>
+            <tr><td>Sombreamento do hit</td><td class="mono">Shaders/GI/HitShading.hlsli:276</td><td class="mono">ShadeSurfaceHit</td></tr>
+            <tr><td>Reuso temporal + rejeições</td><td class="mono">ReSTIRGITrace.cs.hlsl:222</td><td class="mono">ReuseParams.w</td></tr>
+            <tr><td>Revalidação periódica</td><td class="mono">ReSTIRGITrace.cs.hlsl:271</td><td class="mono">validateInterval</td></tr>
+            <tr><td>Política de backface</td><td class="mono">ReSTIRGITrace.cs.hlsl:150</td><td class="mono">PolicyParams.x</td></tr>
+            <tr><td>Reuso espacial</td><td class="mono">ReSTIRGISpatial.cs.hlsl:129</td><td class="mono">loop de K vizinhos</td></tr>
+            <tr><td>Correção de viés (MIS)</td><td class="mono">ReSTIRGISpatial.cs.hlsl:176</td><td class="mono">balance heuristic</td></tr>
+            <tr><td>Shading visibility</td><td class="mono">ReSTIRGISpatial.cs.hlsl:215</td><td class="mono">ReuseParams.z</td></tr>
+            <tr><td>Recursos, PSOs, ping-pong</td><td class="mono">Engine/Source/Graphics/ReSTIRGI.cpp:280</td><td class="mono">RecordTrace</td></tr>
+            <tr><td>Toggles e tunáveis</td><td class="mono">Engine/Include/Smile/Graphics/ReSTIRGI.h:192</td><td class="mono">FReSTIRGI</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="wrap chapter">
+      <h3>Os tunáveis, e o que acontece se você mexer</h3>
+    </div>
+    <div class="wide">
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Parâmetro</th><th class="num">Padrão</th><th>Sobe demais</th><th>Desce demais</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="mono">MCap</td><td class="num">20</td><td>histórico teimoso, luz nova demora a aparecer</td><td>mais ruído, menos convergência temporal</td></tr>
+            <tr><td class="mono">SpatialRadius</td><td class="num">16 px</td><td>vazamento entre superfícies distintas</td><td>menos diversidade de amostras</td></tr>
+            <tr><td class="mono">SpatialCount</td><td class="num">4</td><td>custo por pixel, retorno decrescente</td><td>ruído espacial visível</td></tr>
+            <tr><td class="mono">NormalReject</td><td class="num">0.9</td><td>vizinhos quase nunca aceitos</td><td>luz vaza entre paredes de ângulos diferentes</td></tr>
+            <tr><td class="mono">PosRejectScale</td><td class="num">0.01</td><td>aceita vizinhos longe demais → vazamento</td><td>rejeita quase tudo em cenas grandes</td></tr>
+            <tr><td class="mono">FireflyMax</td><td class="num">8 / 4 cru</td><td>pontos brilhantes piscando</td><td>perde alto brilho legítimo, GI apagado</td></tr>
+            <tr><td class="mono">J aceito</td><td class="num">[0.1, 10]</td><td>fireflies e escurecimento em quinas</td><td>reuso raro, ruído</td></tr>
+            <tr><td class="mono">ValidateInterval</td><td class="num">0 (off)</td><td>custo de retrace por frame</td><td>radiância velha persiste com sol animado</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 9. GLOSSARIO ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">09</span>Glossário de sobrevivência</h2>
+      <dl class="gloss">
+        <dt>ReSTIR</dt><dd>Reservoir-based Spatio-Temporal Importance Resampling.</dd>
+        <dt>x₁ / n₁</dt><dd>Ponto visível na tela e sua normal. O “aqui”.</dd>
+        <dt>x₂ / n₂</dt><dd>Ponto onde o raio indireto bateu e sua normal. O “de onde vem a luz”.</dd>
+        <dt>Lo</dt><dd>Radiância saindo de x₂ na direção de x₁.</dd>
+        <dt>p̂ (pHat)</dt><dd>Função-alvo: o quanto uma amostra vale para <em>este</em> pixel. Luminância × cos.</dd>
+        <dt>M</dt><dd>Número de candidatos que o reservoir viu. Confiança.</dd>
+        <dt>wSum</dt><dd>Soma dos pesos vistos. Máquina interna do sorteio.</dd>
+        <dt>W</dt><dd>Peso de contribuição não-enviesado da amostra guardada.</dd>
+        <dt>J</dt><dd>Jacobiano de reconexão: converte a amostra do domínio de um pixel para o de outro.</dd>
+        <dt>WRS</dt><dd>Weighted Reservoir Sampling: guardar 1 de N em streaming, com peso.</dd>
+        <dt>MIS</dt><dd>Multiple Importance Sampling: como combinar estimadores sem contar em excesso.</dd>
+        <dt>DDGI</dt><dd>Grade de probes de irradiância. Aqui atua como radiance cache nos hits.</dd>
+        <dt>NRD</dt><dd>NVIDIA Real-Time Denoisers. O RELAX limpa o sinal do ReSTIR.</dd>
+        <dt>firefly</dt><dd>Pixel absurdamente brilhante gerado por uma amostra de baixa probabilidade.</dd>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ============ 10. MODELO MENTAL ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">10</span>O modelo mental para levar embora</h2>
+      <p>
+        Se você guardar só uma coisa: <strong>ReSTIR não acumula luz, ele acumula
+        <em>candidatas</em></strong>. Um filtro temporal comum (TAA, um acumulador exponencial) mistura
+        <em>resultados</em> — e por isso borra, arrasta e escurece bordas. ReSTIR mistura o estágio
+        anterior: as amostras cruas, cada uma com peso reavaliado para a geometria de quem recebe, e um
+        sorteio que preserva a média exata.
+      </p>
+      <p>
+        O resultado é um estimador de <strong>uma amostra</strong> cuja variância cai como se você tivesse
+        traçado dezenas de raios, sem borrar nada, custando um raio de gather por pixel (mais um
+        visibility ray opcional). Todo o resto do código — os epsilons de origem de raio, a política de
+        backface, a expiração por idade, o firefly clamp, o Jacobiano rejeitando em vez de clampar — é
+        a engenharia necessária para que essa teoria bonita não produza manchas, vazamentos e pontinhos
+        brancos numa cena real.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>
+      Baseado na implementação em <code>Shaders/GI/</code> e <code>Engine/Source/Graphics/ReSTIRGI.cpp</code>
+      deste repositório. Algoritmo original: Ouyang, Liu, Kettunen, Pharr, Pantaleoni,
+      <em>ReSTIR GI: Path Resampling for Real-Time Path Tracing</em> (2021). Correção de viés e
+      revalidação seguem as práticas do RTXDI.
+    </p>
+    <p>Números de linha conferem com o estado do branch no momento em que este documento foi escrito.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var CANDS = [
+    { name: 'A', w: 0.4 },
+    { name: 'B', w: 3.1 },
+    { name: 'C', w: 0.9 },
+    { name: 'D', w: 6.2 },
+    { name: 'E', w: 1.4 },
+    { name: 'F', w: 2.0 }
+  ];
+  var total = CANDS.reduce(function (s, c) { return s + c.w; }, 0);
+
+  var list  = document.getElementById('cands');
+  var state = document.getElementById('dstate');
+  var bStep = document.getElementById('bstep');
+  var bRun  = document.getElementById('brun');
+  var bRst  = document.getElementById('breset');
+
+  var rows = CANDS.map(function (c) {
+    var row = document.createElement('div');
+    row.className = 'cand';
+    row.innerHTML =
+      '<span class="cname">' + c.name + '</span>' +
+      '<span class="cw">w ' + c.w.toFixed(1) + '</span>' +
+      '<span class="track"><i class="fill"></i><i class="tick"></i></span>' +
+      '<span class="cpct">—</span>';
+    list.appendChild(row);
+    return {
+      el: row,
+      fill: row.querySelector('.fill'),
+      tick: row.querySelector('.tick'),
+      pct: row.querySelector('.cpct')
+    };
+  });
+
+  // marca a proporcao esperada
+  rows.forEach(function (r, i) {
+    r.tick.style.left = 'calc(' + (CANDS[i].w / total * 100).toFixed(2) + '% - 1px)';
+  });
+
+  var timer = null;
+
+  function clearRows() {
+    rows.forEach(function (r) {
+      r.el.classList.remove('seen', 'held');
+      r.fill.style.width = '0';
+      r.pct.textContent = '—';
+    });
+  }
+
+  function reset() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    clearRows();
+    state.innerHTML = 'wSum = <b>0</b> · M = <b>0</b> · guardado: <b>—</b>';
+    bStep.disabled = false;
+    bRun.disabled = false;
+    bStep.textContent = 'Passo a passo';
+  }
+
+  function walk() {
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    clearRows();
+    bStep.disabled = true;
+    bRun.disabled = true;
+    var i = 0, wSum = 0, held = -1;
+
+    function step() {
+      var w = CANDS[i].w;
+      wSum += w;
+      var adopted = Math.random() * wSum <= w;
+      if (adopted) {
+        if (held >= 0) rows[held].el.classList.remove('held');
+        held = i;
+        rows[i].el.classList.add('held');
+      }
+      rows[i].el.classList.add('seen');
+      rows[i].pct.textContent = adopted ? 'adotada' : 'passou';
+      state.innerHTML =
+        'wSum = <b>' + wSum.toFixed(1) + '</b> · M = <b>' + (i + 1) +
+        '</b> · guardado: <b>' + (held >= 0 ? CANDS[held].name : '—') + '</b>' +
+        ' · chance dessa: ' + (w / wSum * 100).toFixed(0) + '%';
+      i++;
+      if (i < CANDS.length) {
+        timer = setTimeout(step, reduce ? 0 : 620);
+      } else {
+        bStep.disabled = false;
+        bRun.disabled = false;
+        bStep.textContent = 'Rodar de novo';
+        timer = null;
+      }
+    }
+    step();
+  }
+
+  function runMany() {
+    var N = 20000;
+    var counts = new Array(CANDS.length).fill(0);
+    for (var t = 0; t < N; t++) {
+      var wSum = 0, held = -1;
+      for (var i = 0; i < CANDS.length; i++) {
+        var w = CANDS[i].w;
+        wSum += w;
+        if (Math.random() * wSum <= w) held = i;
+      }
+      counts[held]++;
+    }
+    var max = Math.max.apply(null, counts.map(function (c, i) {
+      return Math.max(c / N, CANDS[i].w / total);
+    }));
+    rows.forEach(function (r, i) {
+      var f = counts[i] / N;
+      r.el.classList.add('seen');
+      r.el.classList.remove('held');
+      r.fill.style.width = (f * 100).toFixed(2) + '%';
+      r.pct.textContent = (f * 100).toFixed(1) + '%';
+      r.tick.style.left = 'calc(' + (CANDS[i].w / total * 100).toFixed(2) + '% - 1px)';
+    });
+    state.innerHTML = '20.000 execuções · frequência medida <b>≈</b> w / Σw em todas as candidatas';
+    void max;
+  }
+
+  bStep.addEventListener('click', walk);
+  bRun.addEventListener('click', runMany);
+  bRst.addEventListener('click', reset);
+  reset();
+})();
+</script>
+</body>
+</html>
