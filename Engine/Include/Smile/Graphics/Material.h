@@ -56,6 +56,25 @@ namespace Smile {
     public:
         std::string Name; // nome do material cozido (SSceneMaterial::Name) — editor/outliner
 
+        // Identidade ESTAVEL do material, para persistencia (sidecar do editor). O nome nao serve:
+        // o Cooker copia o nome do FBX sem garantir unicidade, e nas cenas atuais ha homonimos
+        // (EmeraldSquare tem 5, BistroInterior 1). Chavear override por nome fazia dois materiais
+        // distintos compartilharem edicao — o caso real e "Cap_03", em que um dos dois usa as
+        // texturas do Cap_02.
+        //
+        // E um hash do CONTEUDO do registro cozido (SSceneMaterial inteiro: nome, os 6 paths de
+        // textura e todos os fatores/flags), calculado no SceneLoader. Escolha deliberada:
+        //   - homonimos com conteudo DIFERENTE recebem ids diferentes -> fim da contaminacao;
+        //   - materiais byte-a-byte IDENTICOS recebem o mesmo id de proposito. Sao
+        //     indistinguiveis para o usuario (mesmo nome, mesmas texturas, mesmos fatores), entao
+        //     compartilhar override e o comportamento certo — e o que ja acontecia por nome.
+        //     Nas cenas atuais isso colapsa 220 -> 214 materiais no Emerald e 71 -> 70 no Bistro.
+        //   - independe da ORDEM no arquivo, entao reordenar o FBX nao embaralha os overrides.
+        //
+        // Fica FORA do formato cozido de proposito: e derivavel dos bytes que ja existem, entao
+        // nao custa bump de kCookedVersion nem recozinhar as cenas.
+        u64 Id = 0;
+
         FTexture* Albedo            = nullptr;
         FTexture* Normal            = nullptr; 
         FTexture* MetallicRoughness = nullptr; 

@@ -185,11 +185,27 @@ namespace Smile {
             return (it != texByPath.end()) ? it->second : nullptr;
         };
 
+        // FNV-1a 64 sobre os bytes crus do registro cozido = identidade estavel do material
+        // (ver FMaterial::Id). Hashear o struct inteiro e seguro aqui: SSceneMaterial nao tem
+        // padding (1664B de char arrays, divisivel por 4, seguidos so de f32/u32 = 1724B) e o
+        // Cooker o preenche a partir de `SSceneMaterial out{}` com SetStr fazendo memset antes
+        // do strncpy — ou seja, todo byte e deterministico, inclusive o resto dos char arrays.
+        auto MaterialContentId = [](const SSceneMaterial& _Sm) -> u64 {
+            const auto* Bytes = reinterpret_cast<const u8*>(&_Sm);
+            u64 H = 1469598103934665603ull;               // offset basis
+            for (size_t b = 0; b < sizeof(SSceneMaterial); ++b) {
+                H ^= Bytes[b];
+                H *= 1099511628211ull;                    // prime
+            }
+            return H;
+        };
+
         std::vector<FMaterial*> matPtrs(sh.MaterialCount, nullptr);
         for (u32 i = 0; i < sh.MaterialCount; ++i) {
             const SSceneMaterial& sm = mats[i];
             auto mat = std::make_unique<FMaterial>();
             mat->Name = std::string(sm.Name, strnlen(sm.Name, kCookedMaxName));
+            mat->Id   = MaterialContentId(sm);
 
             FTexture* baseT  = getTex(sm.BaseColor);
             FTexture* specT  = getTex(sm.Specular);

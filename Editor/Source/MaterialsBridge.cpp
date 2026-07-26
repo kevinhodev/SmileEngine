@@ -95,6 +95,7 @@ namespace SmileEditor {
             // Persistencia acompanha a cena principal (mesma convencao do .visibility.json).
             JsonPath = Info.path() + "/" + Info.completeBaseName() + ".materials.json";
             OverrideCache.clear();
+            LegacyOverrideCache.clear();
             // O load nao-aditivo LIBEROU os FMaterial/FTexture antigos: todo cache por
             // ponteiro esta stale (um material novo no mesmo endereco pegaria snapshot
             // errado). Zera tudo antes do Rebuild re-snapshotar.
@@ -118,13 +119,25 @@ namespace SmileEditor {
                 QJsonParseError Err{};
                 const QJsonDocument Doc = QJsonDocument::fromJson(File.readAll(), &Err);
                 if (Err.error == QJsonParseError::NoError && Doc.isObject()) {
-                    for (const QJsonValue& V : Doc.object().value(QStringLiteral("materials")).toArray()) {
-                        const QJsonObject O = V.toObject();
-                        const QString Name = O.value(QStringLiteral("name")).toString();
-                        if (!Name.isEmpty()) OverrideCache.insert(Name, O);
+                    const QJsonObject Root = Doc.object();
+                    // v2 chaveia por id (hex do FMaterial::Id); v1 chaveava por nome. Sidecar
+                    // antigo continua sendo lido — aplicado por nome uma vez e migrado no save.
+                    const int SidecarVer = Root.value(QStringLiteral("version")).toInt(1);
+                    for (const QJsonValue& V : Root.value(QStringLiteral("materials")).toArray()) {
+                        const QJsonObject O  = V.toObject();
+                        const QString Name   = O.value(QStringLiteral("name")).toString();
+                        const QString IdText = O.value(QStringLiteral("id")).toString();
+                        bool IdOk = false;
+                        const quint64 Id = IdText.toULongLong(&IdOk, 16);
+                        if (SidecarVer >= 2 && IdOk && Id != 0) OverrideCache.insert(Id, O);
+                        else if (!Name.isEmpty())               LegacyOverrideCache.insert(Name, O);
                     }
-                    Smile::LogInfo("Materiais: " + std::to_string(OverrideCache.size()) +
-                                   " override(s) de " + JsonPath.toStdString());
+                    const size_t Total = OverrideCache.size() + LegacyOverrideCache.size();
+                    Smile::LogInfo("Materiais: " + std::to_string(Total) + " override(s) de " +
+                                   JsonPath.toStdString() +
+                                   (LegacyOverrideCache.isEmpty()
+                                        ? ""
+                                        : " (formato antigo por nome; sera migrado no proximo save)"));
                 } else {
                     Smile::LogWarning("Materiais: sidecar invalido, ignorando: " +
                                       JsonPath.toStdString());
@@ -299,12 +312,20 @@ namespace SmileEditor {
     }
 
     void MaterialsBridge::ApplyOverrides(const QSet<const Smile::FMaterial*>& _Fresh) {
-        if (!Renderer || OverrideCache.isEmpty()) return;
+        if (!Renderer || (OverrideCache.isEmpty() && LegacyOverrideCache.isEmpty())) return;
         for (const auto& M : Renderer->GetMaterials()) {
             if (!_Fresh.contains(M.get())) continue; // ja carregado: nao pisa em edicao pendente
-            const auto It = OverrideCache.constFind(QString::fromStdString(M->Name));
-            if (It == OverrideCache.constEnd()) continue;
-            JsonToMaterial(It.value(), *M);
+            // Id primeiro; nome so como ponte p/ sidecar v1 ainda nao migrado.
+            const QJsonObject* Ovr = nullptr;
+            if (const auto It = OverrideCache.constFind(M->Id); It != OverrideCache.constEnd()) {
+                Ovr = &It.value();
+            } else if (const auto L =
+                           LegacyOverrideCache.constFind(QString::fromStdString(M->Name));
+                       L != LegacyOverrideCache.constEnd()) {
+                Ovr = &L.value();
+            }
+            if (!Ovr) continue;
+            JsonToMaterial(*Ovr, *M);
             M->UpdateConstants();
             // O sidecar reescreve cor base, emissivo, rough/metal, cutoff e shading model — tudo
             // que o InstanceGeo copia. Sem isto a persistencia so valia p/ o raster: a cena reabria
@@ -313,7 +334,7 @@ namespace SmileEditor {
 
             // Texturas trocadas: recarrega do path e reaplica no slot (falha -> slot segue
             // no mapa cozido, so loga). Cargas aditivas pulam quem ja tem override aplicado.
-            const QJsonObject Tex = It.value().value(QStringLiteral("textures")).toObject();
+            const QJsonObject Tex = Ovr->value(QStringLiteral("textures")).toObject();
             if (Tex.isEmpty()) continue;
             for (auto T = Tex.constBegin(); T != Tex.constEnd(); ++T) {
                 bool Ok = false;
@@ -1150,7 +1171,8 @@ namespace SmileEditor {
         TexOverrides.remove(M);
         M->UpdateConstants();
         // O override salvo (se houver) tambem cai — senao voltaria no proximo load.
-        OverrideCache.remove(QString::fromStdString(M->Name));
+        OverrideCache.remove(M->Id);
+        LegacyOverrideCache.remove(QString::fromStdString(M->Name));
         TouchSelectedRT(); // reverte TUDO, inclusive os campos que o RT le
     }
 
@@ -1242,17 +1264,24 @@ namespace SmileEditor {
         // Overrides = materiais que divergem do default cozido AGORA. O cache tambem e
         // atualizado: um material revertido some do arquivo.
         QJsonArray Arr;
-        QHash<QString, QJsonObject> NewCache;
+        QHash<quint64, QJsonObject> NewCache;
         for (const auto& M : Renderer->GetMaterials()) {
             if (M->Name.empty() || !IsModified(M.get())) continue;
-            const QJsonObject O = MaterialToJson(*M);
-            NewCache.insert(QString::fromStdString(M->Name), O);
+            QJsonObject O = MaterialToJson(*M);
+            // Chave = id de conteudo em hex. O "name" continua no arquivo, mas so p/ leitura
+            // humana — nao e mais usado para casar override com material.
+            O[QStringLiteral("id")] = QString::number(M->Id, 16);
+            // Materiais identicos compartilham id de proposito (ver FMaterial::Id): o insert
+            // colapsa as copias numa entrada so, que o load reaplica em todas.
+            if (NewCache.contains(M->Id)) continue;
+            NewCache.insert(M->Id, O);
             Arr.push_back(O);
         }
         OverrideCache = std::move(NewCache);
+        LegacyOverrideCache.clear(); // migrado: o arquivo abaixo ja sai em v2
 
         QJsonObject Root;
-        Root[QStringLiteral("version")]   = 1;
+        Root[QStringLiteral("version")]   = 2; // v2 = chaveado por id; v1 era por nome
         Root[QStringLiteral("materials")] = Arr;
 
         QFile File(JsonPath);

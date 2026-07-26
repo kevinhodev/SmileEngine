@@ -266,7 +266,12 @@ namespace SmileEditor {
         QString          JsonPath;                     // <cena>.materials.json (nao-aditiva)
         bool             JsonDirty = false;
         QHash<const Smile::FMaterial*, FSnapshot> Defaults;   // default cozido por material
-        QHash<QString, QJsonObject>               OverrideCache; // sidecar carregado, por nome
+        // Sidecar carregado, por FMaterial::Id (hash de conteudo). Nome nao serve de chave: ha
+        // homonimos nas cenas cozidas e eles compartilhavam override indevidamente.
+        QHash<quint64, QJsonObject>               OverrideCache;
+        // Sidecar v1 (chaveado por NOME) ainda em disco: aplicado por nome uma unica vez, no load,
+        // e reescrito como v2 no proximo save. Some depois disso.
+        QHash<QString, QJsonObject>               LegacyOverrideCache;
         // Texturas trocadas no editor: material -> (slot -> path; "" = slot limpo).
         QHash<const Smile::FMaterial*, QHash<int, QString>> TexOverrides;
         QHash<QString, Smile::FTexture*> PathTexCache; // mesma imagem em 2 slots = 1 upload
