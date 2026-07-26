@@ -285,20 +285,59 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                         vray.TMax      = TraceParams.y;
                         // NONE pelo mesmo motivo do gather: este re-trace tem que reencontrar a
                         // MESMA superficie da amostra guardada, e cullar mudaria o que ele acha.
-                        // Quando a revalidacao for religada (ValidateInterval > 0, hoje 0), ela
-                        // precisa da mesma politica de backface do gather.
                         RayQuery<RAY_FLAG_NONE> vq;
                         vq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, vray);
                         SMILE_RT_PROCEED(vq)
+
+                        // MESMA politica de backface do gather, sob o mesmo toggle. Aqui o
+                        // RETRACE importa mais que no gather: sem ele, uma auto-interseccao
+                        // proxima daria t << len, cairia fora da tolerancia de re-hit e a
+                        // revalidacao DESCARTARIA uma amostra boa como se um oclusor tivesse
+                        // aparecido. O kill fecha o outro lado: se o x2 guardado passou a ficar
+                        // atras de geometria one-sided, a amostra vale zero, nao a radiancia
+                        // velha.
+                        bool vKill = false;
+                        if (PolicyParams.x > 0.5f &&
+                            vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+                            bool  vTwoSided;
+                            bool  vBack = HitIsBackface(vq.CommittedInstanceID(),
+                                                        vq.CommittedPrimitiveIndex(),
+                                                        vq.CommittedWorldToObject3x4(),
+                                                        vray.Direction, vTwoSided);
+                            float vt    = vq.CommittedRayT();
+
+                            float vSkip = -1.0f;
+                            if (vTwoSided && vt < kSelfIsectTwoSidedDist)
+                                vSkip = vt + kSelfIsectRetraceBias;
+                            else if (!vTwoSided && vBack && vt < kSelfIsectBackfaceDist)
+                                vSkip = kSelfIsectBackfaceDist;
+
+                            if (vSkip > 0.0f) {
+                                vray.TMin = vSkip;
+                                vq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, vray);
+                                SMILE_RT_PROCEED(vq)
+                                vray.TMin = 0.0f;
+                                vBack = (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) &&
+                                        HitIsBackface(vq.CommittedInstanceID(),
+                                                      vq.CommittedPrimitiveIndex(),
+                                                      vq.CommittedWorldToObject3x4(),
+                                                      vray.Direction, vTwoSided);
+                            }
+                            vKill = vBack && !vTwoSided &&
+                                    vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+                        }
+
                         if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                             float t = vq.CommittedRayT();
                             if (abs(t - len) <= max(kRevalidateRelTol * len, kRevalidateAbsTol)) {
                                 float vsd;
-                                prev.Lo = ShadeSurfaceHit(vq.CommittedInstanceID(),
-                                                          vq.CommittedPrimitiveIndex(),
-                                                          vq.CommittedTriangleBarycentrics(),
-                                                          vq.CommittedWorldToObject3x4(),
-                                                          vorg, vray.Direction, t, P, vsd);
+                                prev.Lo = vKill
+                                    ? float3(0.0f, 0.0f, 0.0f)
+                                    : ShadeSurfaceHit(vq.CommittedInstanceID(),
+                                                      vq.CommittedPrimitiveIndex(),
+                                                      vq.CommittedTriangleBarycentrics(),
+                                                      vq.CommittedWorldToObject3x4(),
+                                                      vorg, vray.Direction, t, P, vsd);
                                 // Geometria pode ter se movido DENTRO da tolerancia: refresca
                                 // x2/n2 pro hit re-tracado, senao a radiancia nova fica
                                 // associada a geometria velha (Jacobiano/reuso espacial

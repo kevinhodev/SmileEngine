@@ -2598,11 +2598,13 @@ Rectangle {
                               "two-sided a menos de 1 cm) é tratado como auto-interseção e o raio " +
                               "é relançado dali; o verso que sobrar é geometria real vista por " +
                               "dentro, e o caminho termina sem luz em vez de seguir até o céu.\n\n" +
-                              "Desligado, o raio atravessa a casca e traz a luz da rua para " +
-                              "dentro do prédio — foi o que a medição no alvo cru mostrou. " +
-                              "Ligado, espere alguma sobre-oclusão em cantos: é o mesmo preço que " +
-                              "a Unreal aceita. Este é o A/B da defesa contra vazamento; o " +
-                              "toggle de culling acima não serve para isso."
+                              "Vale para o gather e para a revalidação temporal.\n\n" +
+                              "Desligada por padrão: como o gather já traça sem culling, o verso " +
+                              "bloqueia o raio por conta própria, e a medição no alvo cru não " +
+                              "mostrou diferença visível — só dentro da geometria. Ela existe " +
+                              "como defesa: passa a valer se o culling voltar ao gather, e o " +
+                              "passo do relançamento protege contra auto-interseção, que é outro " +
+                              "sintoma. Ligada, espere alguma sobre-oclusão em cantos."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11

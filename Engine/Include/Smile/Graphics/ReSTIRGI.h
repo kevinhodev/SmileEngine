@@ -106,10 +106,13 @@ namespace Smile {
         void SetFoliageShadows(bool V) { if (V != FoliageShadows) NeedsClear = true;
                                          FoliageShadows = V; }
 
-        // Politica de backface do gather (retrace de auto-interseccao + terminacao preta no verso
-        // one-sided). Default LIGADA, como o AvoidSelfIntersections=3 da UE. Existe como toggle
-        // porque o A/B dela nao pode ser feito pelo toggle de culling: o gather traca sem culling
-        // justamente para a politica poder classificar o hit.
+        // Politica de backface do gather e da revalidacao (retrace de auto-interseccao +
+        // terminacao preta no verso one-sided). A UE liga a equivalente por default
+        // (AvoidSelfIntersections=3), mas aqui o DEFAULT E OFF: com o gather tracando sem culling,
+        // o backface ja bloqueia o raio por si, entao a terminacao preta so troca "quase preto"
+        // por "exatamente zero" — diferenca invisivel na matriz 2x2 medida no alvo cru, contra um
+        // HitIsBackface por raio. Fica como instrumento, a religar quando o custo/beneficio for
+        // medido (ou se o culling voltar ao gather, quando ela deixa de ser inerte).
         void SetBackfacePolicy(bool V) { if (V != BackfacePolicy) NeedsClear = true;
                                          BackfacePolicy = V; }
         bool GetBackfacePolicy() const { return BackfacePolicy; }
@@ -193,7 +196,7 @@ namespace Smile {
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
         bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
-        bool BackfacePolicy = true;   // retrace + terminacao preta no verso one-sided
+        bool BackfacePolicy = false;  // retrace + terminacao preta no verso one-sided (ver setter)
         bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B
