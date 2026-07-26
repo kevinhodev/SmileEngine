@@ -101,7 +101,7 @@ namespace SmileEditor {
     }
 
     bool ViewportWidget::IsGIBackfacePolicyEnabled() const {
-        return Renderer && Renderer->GetReSTIRGI().GetBackfacePolicy();
+        return Renderer && Renderer->GetGIBackfacePolicy();
     }
 
     bool ViewportWidget::IsGTAOEnabled() const {
@@ -802,8 +802,9 @@ namespace SmileEditor {
 
     void ViewportWidget::ToggleGIBackfacePolicy() {
         if (!Renderer) return;
-        auto& GI = Renderer->GetReSTIRGI();
-        GI.SetBackfacePolicy(!GI.GetBackfacePolicy()); // ja invalida os reservoirs
+        // Pelo Renderer: alem dos reservoirs, o NRD/RR/TAA acumulam sobre o resultado e
+        // precisam cair juntos, senao o A/B denoisado compara estado misturado.
+        Renderer->SetGIBackfacePolicy(!Renderer->GetGIBackfacePolicy());
         emit ViewSettingsChanged();
     }
 

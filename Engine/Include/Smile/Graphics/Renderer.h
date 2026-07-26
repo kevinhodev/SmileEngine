@@ -497,6 +497,19 @@ namespace Smile {
             TAARanLastFrame = false;
         }
 
+        // Politica de backface do gather do ReSTIR. Passa pelo Renderer, e nao direto no
+        // FReSTIRGI, porque o clear dos reservoirs sozinho nao basta: o NRD e o RR acumulam SOBRE
+        // eles e o TAA sobre o resultado, entao um A/B feito so com o clear compararia um estado
+        // misturado. DDGI e reflexoes ficam de fora de proposito — a politica so toca no gather.
+        bool GetGIBackfacePolicy() const { return ReSTIRGI.GetBackfacePolicy(); }
+        void SetGIBackfacePolicy(bool V) {
+            if (V == ReSTIRGI.GetBackfacePolicy()) return;
+            ReSTIRGI.SetBackfacePolicy(V); // ja marca NeedsClear nos reservoirs
+            Nrd.InvalidateHistory();
+            RRResetPending  = true;
+            TAARanLastFrame = false;
+        }
+
         // Editar no editor uma propriedade de material que o RAY TRACING enxerga (AlphaTest,
         // TwoSided, emissivo...) deixava tres estados obsoletos de uma vez, porque o setter do
         // material so reescrevia o constant buffer dele:
