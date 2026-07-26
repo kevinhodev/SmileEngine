@@ -51,8 +51,8 @@ namespace SmileEditor {
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY ViewSettingsChanged)
-        // Culling seletivo no RT: back-face cull volta a valer fora de folhagem/vidro.
-        Q_PROPERTY(bool selectiveRTCulling READ IsSelectiveRTCullingEnabled NOTIFY ViewSettingsChanged)
+        // Back-face culling nos raios de reflexao (politica por passe).
+        Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY ViewSettingsChanged)
         // Politica de backface do gather do ReSTIR (retrace + terminacao preta).
         Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
@@ -189,7 +189,7 @@ namespace SmileEditor {
         bool              IsReSTIRGIEnabled() const;
         bool              IsReSTIRGIVisibilityEnabled() const;
         bool              AreGIFoliageShadowsEnabled() const;
-        bool              IsSelectiveRTCullingEnabled() const;
+        bool              IsReflectionsCullBackfaceEnabled() const;
         bool              IsGIBackfacePolicyEnabled() const;
         bool              IsGTAOEnabled() const;
         bool              IsGTAOHalfRes() const;
@@ -308,7 +308,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleReSTIRGI();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
         Q_INVOKABLE void ToggleGIFoliageShadows();
-        Q_INVOKABLE void ToggleSelectiveRTCulling();
+        Q_INVOKABLE void ToggleReflectionsCullBackface();
         Q_INVOKABLE void ToggleGIBackfacePolicy();
         Q_INVOKABLE void ToggleGTAO();
         Q_INVOKABLE void ToggleGTAOHalfRes();

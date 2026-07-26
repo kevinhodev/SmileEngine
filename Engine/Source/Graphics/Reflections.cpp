@@ -412,6 +412,7 @@ namespace Smile {
                                                                 : kRTMaskShadowFast) };
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
                                 RayEps.HitShadowRayBias };
+        CPU.PolicyParams    = { BackfaceCull ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,

@@ -96,8 +96,8 @@ namespace SmileEditor {
         return Renderer && Renderer->GetDDGI().GetFoliageShadows();
     }
 
-    bool ViewportWidget::IsSelectiveRTCullingEnabled() const {
-        return Renderer && Renderer->GetSelectiveRTCulling();
+    bool ViewportWidget::IsReflectionsCullBackfaceEnabled() const {
+        return Renderer && Renderer->GetReflectionsCullBackface();
     }
 
     bool ViewportWidget::IsGIBackfacePolicyEnabled() const {
@@ -792,11 +792,9 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
-    void ViewportWidget::ToggleSelectiveRTCulling() {
+    void ViewportWidget::ToggleReflectionsCullBackface() {
         if (!Renderer) return;
-        // O Renderer cuida do rebuild da TLAS e das invalidacoes de historico — o efeito so
-        // aparece no frame seguinte, quando a TLAS nova entra.
-        Renderer->SetSelectiveRTCulling(!Renderer->GetSelectiveRTCulling());
+        Renderer->SetReflectionsCullBackface(!Renderer->GetReflectionsCullBackface());
         emit ViewSettingsChanged();
     }
 

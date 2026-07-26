@@ -124,7 +124,8 @@ namespace Smile {
 
             // Culling. A instance flag VENCE a ray flag na spec do DXR, entao enquanto isto saia
             // incondicionalmente TODO RAY_FLAG_CULL_BACK_FACING_TRIANGLES da engine era no-op — a
-            // cena inteira era double-sided no RT enquanto o raster cullava.
+            // cena inteira era double-sided no RT enquanto o raster cullava. A flag agora descreve
+            // so a GEOMETRIA; quem decide cullar e cada passe, pela ray flag.
             //
             // Criterio = FMaterial::IsTwoSidedForRT, que espelha o que o RASTER desenha two-sided:
             // o G-buffer escolhe PSOGBufferTwoSided por `TwoSided || AlphaTest`, e o passe forward
@@ -137,8 +138,7 @@ namespace Smile {
             // "probe dentro de geometria" depende de ENXERGAR o backface (distancia assinada em
             // DDGITrace). Ray flag e por raio, instance flag e por instancia — por isso os dois
             // regimes convivem na mesma TLAS.
-            const bool TwoSidedInstance = R.Material && R.Material->IsTwoSidedForRT();
-            if (!SelectiveCulling || TwoSidedInstance)
+            if (R.Material && R.Material->IsTwoSidedForRT())
                 Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
             Inst.AccelerationStructure               = It->second;
             _Out.push_back(Inst);

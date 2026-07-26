@@ -1746,8 +1746,9 @@ namespace Smile {
             }
         }
 
-        // TlasFlagsDirty: as flags de instancia (culling seletivo) mudaram sem a cena se mexer,
-        // entao a versao de transforms sozinha nao pediria rebuild.
+        // TlasFlagsDirty: mask/FORCE_NON_OPAQUE/two-sided de uma instancia mudaram (edicao de
+        // material no editor) sem a cena se mexer, entao a versao de transforms sozinha nao
+        // pediria rebuild.
         if (RaytracingScene.IsBuilt() &&
             (Scene.TransformsVersion() != TlasTransformsVersion || TlasFlagsDirty)) {
             Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> TlasCL;

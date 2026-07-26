@@ -37,12 +37,10 @@ namespace Smile {
         u32  InstanceCount()  const { return InstanceCount_; }
         u32  BlasCount()      const { return BlasCount_; }
 
-        // Culling seletivo: quando ligado, TRIANGLE_CULL_DISABLE sai so nas instancias que o
-        // RASTER tambem desenha two-sided (TwoSided || AlphaTest), e o RAY_FLAG_CULL_BACK dos
-        // shaders volta a valer no resto da cena. Desligado = flag em TODA instancia (legado).
-        // Trocar exige rebuild da TLAS — quem chama e o Renderer, que marca TlasFlagsDirty.
-        void SetSelectiveCulling(bool V) { SelectiveCulling = V; }
-        bool GetSelectiveCulling() const { return SelectiveCulling; }
+        // A TLAS descreve a GEOMETRIA: TRIANGLE_CULL_DISABLE sai apenas nas instancias que sao
+        // mesmo two-sided (FMaterial::IsTwoSidedForRT). Nao ha mais chave global — quem decide se
+        // culla e cada PASSE, pela ray flag, como no Lumen. Antes isto era um toggle, e ligar ou
+        // desligar mexia em TODOS os passes de uma vez: eixo errado.
 
     private:
         void CollectInstances(const FScene& Scene,
@@ -65,6 +63,5 @@ namespace Smile {
         u8*                                    InstanceMapped[kInstanceSlots] = {};
         Microsoft::WRL::ComPtr<ID3D12Resource> TlasScratch;
         u32                                    InstanceCapacity = 0;
-        bool                                   SelectiveCulling = false;
     };
 }

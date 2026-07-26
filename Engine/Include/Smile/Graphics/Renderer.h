@@ -479,21 +479,18 @@ namespace Smile {
             TAARanLastFrame   = false;      // sem upscaler, o TAA acumula por conta propria
         }
 
-        // Culling seletivo no RT (ver FRaytracingScene::SetSelectiveCulling). Muda a flag das
-        // instancias, entao exige RE-BUILD da TLAS — e a TLAS so e reconstruida quando a versao
-        // de transforms muda, o que nao acontece aqui. Dai o dirty explicito.
-        bool GetSelectiveRTCulling() const { return RaytracingScene.GetSelectiveCulling(); }
-        void SetSelectiveRTCulling(bool V) {
-            if (V == RaytracingScene.GetSelectiveCulling()) return;
-            RaytracingScene.SetSelectiveCulling(V);
-            TlasFlagsDirty = true;
-            // Muda QUAIS superficies os raios enxergam -> todo Lo/hitT gravado antes e de outra
-            // cena. Mesmo conjunto de invalidacoes do SetRayEpsilons.
-            ReSTIRGI.InvalidateHistory();
-            Nrd.InvalidateHistory();
-            RRResetPending = true;
-            DDGI.ResetHistoryOnce();
-            Reflections.InvalidateHistory();
+        // Culling nos raios de REFLEXAO. Substituiu a antiga chave global da TLAS: aquela mexia em
+        // todos os passes de uma vez, e a TLAS agora descreve so a geometria (two-sided de
+        // verdade), com cada passe escolhendo a ray flag. Nao precisa de rebuild da TLAS — e
+        // parametro de shader. Invalida so o que acumula reflexo: o ReSTIR e o DDGI nao veem
+        // esta chave.
+        bool GetReflectionsCullBackface() const { return Reflections.GetBackfaceCull(); }
+        void SetReflectionsCullBackface(bool V) {
+            if (V == Reflections.GetBackfaceCull()) return;
+            Reflections.SetBackfaceCull(V);
+            Reflections.InvalidateHistory(); // acumulacao temporal propria (caminho sem NRD)
+            Nrd.InvalidateHistory();         // o specular do NRD acumula sobre o mesmo sinal
+            RRResetPending  = true;
             TAARanLastFrame = false;
         }
 
@@ -788,7 +785,7 @@ namespace Smile {
  
         FRaytracingScene RaytracingScene;
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
-        bool             TlasFlagsDirty        = false; // flags de instancia mudaram (culling seletivo)
+        bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
         FDDGI            DDGI;
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;

@@ -19,7 +19,13 @@ cbuffer ReflectionCB : register(b0) {
     row_major float4x4 View;
     float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+    float4 PolicyParams;    // x = cullar backface nos raios de reflexao (0/1)
 };
+
+// Ver ReflectionTrace.cs.hlsl: politica por passe, no molde do Context.CullingMode do Lumen.
+uint ReflectionCullFlags() {
+    return (PolicyParams.x > 0.5f) ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : RAY_FLAG_NONE;
+}
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
 
@@ -91,9 +97,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
 
-    RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
+    RayQuery<RAY_FLAG_NONE> q;
     // ALL: reflexao inclui translucido (ver ReflectionTrace.cs.hlsl).
-    q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, SMILE_RT_MASK_ALL, ray);
+    q.TraceRayInline(Scene, ReflectionCullFlags(), SMILE_RT_MASK_ALL, ray);
     SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;

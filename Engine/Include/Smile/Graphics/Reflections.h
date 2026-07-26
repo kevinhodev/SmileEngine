@@ -34,6 +34,7 @@ namespace Smile {
         // Perfil de epsilons (FRayEpsilonProfile), anexado no FIM p/ nao deslocar offsets.
         Vec4  RayEpsA;           // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4  RayEpsB;           // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+        Vec4  PolicyParams;      // x = cullar backface nos raios de reflexao (0/1); yzw livres
     };
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
@@ -122,6 +123,16 @@ namespace Smile {
         f32  GetRoughnessFade() const { return RoughnessFadeLength; }
         void SetRealHitShading(bool V){ RealHit = V; }
         bool GetRealHitShading() const{ return RealHit; }
+        // Back-face culling NOS RAIOS DE REFLEXAO. Politica por passe, no lugar da chave global
+        // que existia na TLAS: o Lumen culla no passe de reflexao
+        // (LumenReflectionHardwareRayTracing.usf:181) e NAO culla no gather do ReSTIR
+        // (LumenReSTIRGather.usf:315) — os dois regimes convivem porque a ray flag e por raio.
+        // Default OFF = comportamento historico da Smile (nada cullava, ja que a TLAS marcava
+        // tudo como two-sided). Ligar aproxima da UE e precisa de A/B proprio: reflexo de contato
+        // e de parede sao os lugares onde muda.
+        void SetBackfaceCull(bool V) { BackfaceCull = V; }
+        bool GetBackfaceCull() const { return BackfaceCull; }
+
         void SetFoliageShadows(bool V){ FoliageShadows = V; }
         bool GetFoliageShadows() const{ return FoliageShadows; }
         void SetTemporal(bool V)      { Temporal = V; }
@@ -227,6 +238,7 @@ namespace Smile {
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)
         bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
         bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (GATHER vs OPAQUE)
+        bool BackfaceCull        = false; // culling nos raios de reflexao (ver setter)
         bool UseNrd              = false; // denoise via NRD RELAX especular (unificado c/ o GI)
         bool RawSpec             = false; // reflexao crua p/ o DLSS Ray Reconstruction (denoise = RR)
         // Temporal (Fase 3).
