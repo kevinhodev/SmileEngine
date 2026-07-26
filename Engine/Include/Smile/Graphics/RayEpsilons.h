@@ -21,9 +21,21 @@ namespace Smile {
     struct FRayEpsilonProfile {
         // --- Familia (1): ORIGEM do raio que sai do G-buffer (OffsetRayGBuffer) ---------------
 
-        // Piso constante somado ao offset ULP. 0.2 = modo legado; e a causa medida das manchas
-        // nas cortinas do Bistro (a origem nasce fora do predio). Alvo do sweep, incluindo 0.
-        f32 OriginFloorMin      = 2e-1f;
+        // Piso constante somado ao offset ULP.
+        //
+        // 2e-2 (2 cm) e o resultado do sweep de 2026-07-25, medido no Bistro:
+        //   - 2e-1 (o legado) alem das manchas ILUMINAVA a cena errado: os raios de gather
+        //     nasciam fora do predio, viam a rua e traziam a energia de volta. Com o piso baixo o
+        //     interior escurece — e escurecer e o correto.
+        //   - manchas ja limpas em 2e-2.
+        //   - abaixo de ~9e-3 os quadros embutidos na parede ficam PRETOS. Isso e bug de ASSET,
+        //     nao de renderer: confirmado movendo o prop p/ frente com o piso em 0 — volta a
+        //     iluminar. Quando os assets forem corrigidos, este piso pode cair de verdade.
+        //
+        // NAO tentar substituir por bias angular: ele da o maximo ao raio RASANTE e 20% ao
+        // perpendicular, e o gather cosseno e quase todo perpendicular — precisaria de 45 mm no
+        // maximo p/ entregar 9 mm onde importa. Fica pior que um piso liso.
+        f32 OriginFloorMin      = 2e-2f;
 
         // Termo proporcional a distancia da camera. Heuristico: a quantizacao do depth (D32
         // reverse-Z, near 0.1 / far 4000) da ~0,003 mm a 50 m, e este termo da 10 mm na mesma
