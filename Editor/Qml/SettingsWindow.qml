@@ -2532,6 +2532,54 @@ Rectangle {
                         }
                     }
                 }
+
+                // Card proprio, e nao mais um knob da tabela de epsilons: isto nao e um valor
+                // continuo p/ varrer, e sim uma troca de REGIME da TLAS (reconstroi a estrutura).
+                Card {
+                    id: rtCullCard
+                    width: parent.width
+                    title: "Culling no ray tracing"
+                    height: cullLabel.y + cullLabel.height + contentPadding + 8
+
+                    Text {
+                        id: cullHelper
+                        x: 20
+                        y: rtCullCard.headerHeight + rtCullCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Desligado, toda instância entra na TLAS como two-sided e o " +
+                              "back-face culling pedido pelos raios de GI e reflexo é ignorado " +
+                              "(a flag da instância vence a do raio). Ligado, só folhagem, " +
+                              "cutouts e vidro seguem two-sided — o mesmo critério que o " +
+                              "rasterizador usa —, e o resto da cena volta a ser cullado.\n\n" +
+                              "O que observar: paredes de casca única deixam de bloquear o raio " +
+                              "pelo verso, então vazamento de luz para dentro de ambientes " +
+                              "fechados é o risco a vigiar; em troca, backfaces param de virar " +
+                              "oclusores fantasmas nos raios de visibilidade. O DDGI não muda: " +
+                              "ele traça sem culling de propósito, porque detecta probe " +
+                              "enterrada justamente enxergando o verso."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: cullLabel
+                        x: 20
+                        y: cullHelper.y + cullHelper.height + 18
+                        text: "Back-face culling seletivo"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        id: cullToggle
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: cullLabel.y - 6
+                        checked: viewportModel.selectiveRTCulling
+                        onToggled: viewportModel.ToggleSelectiveRTCulling()
+                    }
+                }
             }
         }
 

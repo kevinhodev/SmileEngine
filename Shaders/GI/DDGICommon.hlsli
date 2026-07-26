@@ -31,7 +31,9 @@ struct InstanceGeo {
     uint   IndexSrv;
     uint   AlbedoIndex;
     uint   HasAlbedo;
-    uint   TwoSided;
+    uint   TwoSidedRT;   // = FMaterial::IsTwoSidedForRT: TwoSided OU AlphaTest. NAO e a flag crua
+                         // do material — cutout tem so um lado de geometria, entao p/ o RT ele e
+                         // two-sided tanto no culling da TLAS quanto aqui.
     uint   Flags;
     float  AlphaCutoff;
     float  RoughnessFactor;

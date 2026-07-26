@@ -145,8 +145,31 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     float3 nWrld = mul(nObj, (float3x3)worldToObject);
     float  nLen  = length(nWrld);
     float3 geomN = (nLen > 1e-5f) ? (nWrld / nLen) : normalize(-rayDir);
-    bool   backface = (geo.TwoSided == 0) && (dot(geomN, rayDir) > 0.0f);
-    outSignedDist   = backface ? -hitDist : hitDist;
+
+    // FACING — duas perguntas DIFERENTES que antes compartilhavam a mesma variavel `backface`:
+    //
+    //  (1) "o raio veio pelo verso desta face?" — pergunta puramente geometrica, responde se a
+    //      normal de SHADING precisa ser virada. Vale para QUALQUER material: uma folha ou uma
+    //      cortina atingida por tras tem que iluminar pelo lado de tras. O raster ja faz isso sem
+    //      gate nenhum (GBuffer.ps.hlsl: `if (!input.frontFace) GeoN = -GeoN;`) e o Lumen tambem
+    //      (LumenHardwareRayTracingCommon.ush: vira a normal quando IsTwoSided && !IsFrontFace).
+    //      Com o gate `TwoSided == 0` que existia aqui, folhagem/cortina atingida por tras ficava
+    //      com a normal apontando p/ LONGE do raio: N.L errado, Lo errado, e o sample do DDGI
+    //      lido do lado errado da superficie.
+    //
+    //  (2) "este hit significa que o raio esta DENTRO de geometria solida?" — pergunta de
+    //      topologia, e so ela justifica o gate por TwoSided. Alimenta o outSignedDist, que o
+    //      DDGITrace usa p/ encurtar a distancia (0.2x) e deixar o Chebyshev escurecer probes
+    //      enterradas. Bater no verso de uma FOLHA nao quer dizer estar dentro de nada — por isso
+    //      material two-sided continua reportando distancia POSITIVA. O gate fica aqui.
+    //
+    // O teste sai da normal de FACE (nao da interpolada): em malha suavizada a interpolada erra o
+    // sinal perto da silhueta, e era essa impressao que o gate mascarava.
+    float3 faceN;
+    const bool faceOk       = HitFaceNormal(Verts, i0, i1, i2, worldToObject, faceN);
+    const bool hitFromBehind = faceOk ? (dot(faceN,  rayDir) > 0.0f)
+                                      : (dot(geomN,  rayDir) > 0.0f);
+    outSignedDist = (geo.TwoSidedRT == 0 && hitFromBehind) ? -hitDist : hitDist;
 
     // Normal de FACE, so p/ a ORIGEM dos shadow rays. A interpolada (hitN, abaixo) continua
     // mandando na BRDF, no N.L e no sample do DDGI — o offset e um problema de escapar do PLANO
@@ -160,14 +183,9 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     // mas acima do de shading), virar a face p/ a luz empurraria a origem ATRAVES da superficie —
     // o remedio ali e bias modulado por angulo, que entra no sweep da rodada 3.
     //
-    // MUDANCA DE COMPORTAMENTO em material TWO-SIDED: o `backface` acima e gateado por
-    // TwoSided == 0, entao folha/cortina atingida por tras tinha hitN apontando p/ longe do raio e
-    // a origem do shadow ray era empurrada p/ DENTRO da superficie. Aqui a orientacao nao tem
-    // gate. Em geometria one-sided o resultado e identico ao de antes.
-    float3 faceN;
-    float3 offsetN = HitFaceNormal(Verts, i0, i1, i2, worldToObject, faceN)
-                   ? ((dot(faceN, rayDir) > 0.0f) ? -faceN : faceN)
-                   : ((dot(geomN, rayDir) > 0.0f) ? -geomN : geomN); // degenerado: interpolada
+    // Reusa o facing (1) ja calculado — a face e a orientacao sao as mesmas do teste acima.
+    float3 offsetN = faceOk ? (hitFromBehind ? -faceN : faceN)
+                            : (hitFromBehind ? -geomN : geomN); // degenerado: interpolada
 
     float2 uv = Verts[i0].TexCoord * (1.0f - bary.x - bary.y)
               + Verts[i1].TexCoord * bary.x
@@ -175,7 +193,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
 
     float3 hitN = normalize(-rayDir);
     if (P.RealHitShading) {
-        hitN = backface ? -geomN : geomN;
+        hitN = hitFromBehind ? -geomN : geomN; // facing (1): sem gate, igual ao raster
         if (geo.HasAlbedo != 0) {
             Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
             albedo *= albedoTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).rgb;

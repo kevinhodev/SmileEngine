@@ -479,6 +479,45 @@ namespace Smile {
             TAARanLastFrame   = false;      // sem upscaler, o TAA acumula por conta propria
         }
 
+        // Culling seletivo no RT (ver FRaytracingScene::SetSelectiveCulling). Muda a flag das
+        // instancias, entao exige RE-BUILD da TLAS — e a TLAS so e reconstruida quando a versao
+        // de transforms muda, o que nao acontece aqui. Dai o dirty explicito.
+        bool GetSelectiveRTCulling() const { return RaytracingScene.GetSelectiveCulling(); }
+        void SetSelectiveRTCulling(bool V) {
+            if (V == RaytracingScene.GetSelectiveCulling()) return;
+            RaytracingScene.SetSelectiveCulling(V);
+            TlasFlagsDirty = true;
+            // Muda QUAIS superficies os raios enxergam -> todo Lo/hitT gravado antes e de outra
+            // cena. Mesmo conjunto de invalidacoes do SetRayEpsilons.
+            ReSTIRGI.InvalidateHistory();
+            Nrd.InvalidateHistory();
+            RRResetPending = true;
+            DDGI.ResetHistoryOnce();
+            Reflections.InvalidateHistory();
+            TAARanLastFrame = false;
+        }
+
+        // Editar no editor uma propriedade de material que o RAY TRACING enxerga (AlphaTest,
+        // TwoSided, emissivo...) deixava tres estados obsoletos de uma vez, porque o setter do
+        // material so reescrevia o constant buffer dele:
+        //   - a TLAS, que carrega InstanceMask, FORCE_NON_OPAQUE e o culling por instancia;
+        //   - o InstanceGeo, snapshot criado UMA vez no SetupForScene e lido por todo o RT;
+        //   - os historicos acumulados sobre a aparencia antiga.
+        // O Flush e necessario: o InstanceGeo e um upload heap sem versao por frame em voo, entao
+        // reescrever com frames voando corromperia o que eles leem. Custa um stall, mas isto so
+        // dispara em edicao manual de material.
+        void NotifyMaterialRTStateChanged() {
+            CommandQueue.Flush();
+            DDGI.RefreshInstanceGeo(Scene);
+            TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
+            ReSTIRGI.InvalidateHistory();
+            Nrd.InvalidateHistory();
+            RRResetPending = true;
+            DDGI.ResetHistoryOnce();
+            Reflections.InvalidateHistory();
+            TAARanLastFrame = false;
+        }
+
         void SetDenoiser(EDenoiser D) {
             if (D == EDenoiser::DLSS_RR && !DlssRR.Available()) D = EDenoiser::NRD; // fallback: sem NVIDIA/RR
             if (D == Denoiser) return;
@@ -736,6 +775,7 @@ namespace Smile {
  
         FRaytracingScene RaytracingScene;
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
+        bool             TlasFlagsDirty        = false; // flags de instancia mudaram (culling seletivo)
         FDDGI            DDGI;
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;

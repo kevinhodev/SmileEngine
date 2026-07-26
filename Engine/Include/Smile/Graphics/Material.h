@@ -70,6 +70,20 @@ namespace Smile {
         bool TwoSided = false;
         bool Blend    = false; // translucido -> desenhado no passe forward (alpha-blend), nao no GBuffer
 
+        // "Esta superficie e visivel pelo verso?" — UMA definicao para os tres consumidores, que
+        // antes carregavam a expressao solta e ja divergiam: o raster escolhe PSOGBufferTwoSided
+        // por `TwoSided || AlphaTest`, a TLAS decide o TRIANGLE_CULL_DISABLE por instancia, e o
+        // InstanceGeo.TwoSided que os shaders de RT leem vinha so de `TwoSided`. Com os assets
+        // atuais os tres coincidem (o Cooker deriva AlphaTest e TwoSided da MESMA condicao), mas
+        // nada garantia isso: um material masked sem a flag TwoSided ficava sem culling na TLAS e
+        // ao mesmo tempo marcado como solido no shader, e ai um hit no verso de uma folha contava
+        // como "probe enterrada" na distancia assinada do DDGI.
+        //
+        // Cutout entra porque um card de folhagem so tem um lado de geometria: cullar o verso o
+        // faria sumir. Blend NAO entra: translucido nao passa pelo G-buffer e o vidro cozido ja
+        // vem com TwoSided proprio.
+        bool IsTwoSidedForRT() const { return TwoSided || Constants.AlphaTest; }
+
         void Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
         void Release(FTextureSRVHeap& SRVHeap);

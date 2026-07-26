@@ -106,7 +106,7 @@ namespace Smile {
                     Inst.Transform[Row][Col] = T.M[Row][Col];
             Inst.InstanceID                          = ThisIdx;
             Inst.InstanceContributionToHitGroupIndex = 0;
-            Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+            Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
             // Masks segmentadas (SMILE_RT_MASK_* em DDGICommon.hlsli): raios normais tracejam
             // com ALL (uniao dos bits = tudo visivel, comportamento identico ao 0xFF antigo);
             // shadow rays podem usar so OPAQUE p/ pular folhagem (toggle no editor).
@@ -116,6 +116,24 @@ namespace Smile {
             Inst.InstanceMask = AlphaTest ? 0x02u : 0x01u;
             if (AlphaTest)
                 Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
+
+            // Culling. A instance flag VENCE a ray flag na spec do DXR, entao enquanto isto saia
+            // incondicionalmente TODO RAY_FLAG_CULL_BACK_FACING_TRIANGLES da engine era no-op — a
+            // cena inteira era double-sided no RT enquanto o raster cullava.
+            //
+            // Criterio = o MESMO do raster (Renderer.cpp escolhe PSOGBufferTwoSided por
+            // `TwoSided || AlphaTest`): so assim as duas visoes da cena concordam sobre o que e
+            // visivel pelo verso. No cozido atual `TwoSided` e `AlphaTest` saem da mesma condicao
+            // (cutout, em Cooker/main.cpp), mais vidro translucido com TwoSided sozinho — na
+            // pratica isto isola folhagem/cutouts/vidro e deixa arquitetura one-sided.
+            //
+            // DDGI nao e afetado: ele traca com RAY_FLAG_NONE de proposito, porque a deteccao de
+            // "probe dentro de geometria" depende de ENXERGAR o backface (distancia assinada em
+            // DDGITrace). Ray flag e por raio, instance flag e por instancia — por isso os dois
+            // regimes convivem na mesma TLAS.
+            const bool TwoSidedInstance = R.Material && R.Material->IsTwoSidedForRT();
+            if (!SelectiveCulling || TwoSidedInstance)
+                Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
             Inst.AccelerationStructure               = It->second;
             _Out.push_back(Inst);
         }

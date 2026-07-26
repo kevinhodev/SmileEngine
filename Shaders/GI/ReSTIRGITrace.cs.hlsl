@@ -112,6 +112,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
+    // CULL_BACK so tem efeito nas instancias que NAO carregam TRIANGLE_CULL_DISABLE — a flag da
+    // instancia vence a do raio (spec do DXR). Com o culling seletivo ligado
+    // (FRaytracingScene::SetSelectiveCulling) isso vale em tudo menos folhagem/cutout/vidro;
+    // desligado, a linha inteira e no-op e a cena e double-sided, que era o regime historico.
     RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
     q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, ray);
     SMILE_RT_PROCEED(q)

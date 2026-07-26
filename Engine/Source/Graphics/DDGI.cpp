@@ -46,7 +46,7 @@ namespace Smile {
             u32  IndexSrv    = 0; 
             u32  AlbedoIndex = 0;
             u32  HasAlbedo   = 0;
-            u32  TwoSided    = 0;
+            u32  TwoSidedRT  = 0; // = FMaterial::IsTwoSidedForRT (inclui AlphaTest), nao a flag crua
             u32  Flags       = 0;
             f32  AlphaCutoff = 0.5f;
             f32  RoughnessFactor = 0.5f;
@@ -152,6 +152,66 @@ namespace Smile {
         Ready = false;
     }
 
+    // Preenche o snapshot de materiais/geometria que TODO o RT le (DDGI, ReSTIR, reflexoes).
+    // Extraido do SetupForScene p/ poder ser REFEITO: editar AlphaTest/TwoSided/emissivo de um
+    // material no editor mudava so o constant buffer do material e deixava este snapshot velho.
+    void FDDGI::FillInstanceGeo(const FScene& _Scene, u8* _Mapped, u32 _Count) const {
+        for (u32 i = 0; i < _Count; ++i) {
+            const FRenderable& R = _Scene.Renderables()[i];
+            DDGIInstanceGeo g{};
+            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
+            if (R.Material) {
+                const MaterialConstants& MC = R.Material->Constants;
+                g.BaseColor = MC.BaseColorFactor;
+                // Mesmo criterio da flag de culling da TLAS (ver FMaterial::IsTwoSidedForRT):
+                // este campo e o que decide, no shader, se um hit pelo verso significa "dentro de
+                // solido" — tem que concordar com quem o raio consegue enxergar pelo verso.
+                g.TwoSidedRT = R.Material->IsTwoSidedForRT() ? 1u : 0u;
+                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
+                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
+                    g.HasAlbedo   = 1;
+                }
+
+                g.AlphaCutoff     = MC.AlphaCutoff;
+                g.RoughnessFactor = MC.RoughnessFactor;
+                g.EmissiveFactor  = { MC.EmissiveFactor.X * MC.EmissiveStrength,
+                                      MC.EmissiveFactor.Y * MC.EmissiveStrength,
+                                      MC.EmissiveFactor.Z * MC.EmissiveStrength,
+                                      MC.MetallicFactor };
+                if (MC.AlphaTest)        g.Flags |= 1u;
+                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
+                if (R.Material->IsFinalized()) {
+                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
+                    if (MC.HasEmissiveMap) {
+                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
+                        g.Flags |= 2u;
+                    }
+                    if (MC.HasMetallicRoughnessMap) {
+                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
+                        g.Flags |= 8u;
+                    }
+                }
+            }
+            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
+            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
+            std::memcpy(_Mapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
+        }
+    }
+
+    // Re-upload do snapshot. O chamador (Renderer::NotifyMaterialRTStateChanged) e responsavel
+    // por garantir que a GPU nao esteja lendo o buffer — e um upload heap unico, sem versao por
+    // frame em voo, entao escrever com frames em voo corromperia o que eles estao lendo.
+    void FDDGI::RefreshInstanceGeo(const FScene& _Scene) {
+        if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
+        const u32 Count = std::min(InstanceGeoCount,
+                                   static_cast<u32>(_Scene.Renderables().size()));
+        u8*         Mapped = nullptr;
+        D3D12_RANGE NoRead{ 0, 0 };
+        if (FAILED(InstanceGeoBuf->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)))) return;
+        FillInstanceGeo(_Scene, Mapped, Count);
+        InstanceGeoBuf->Unmap(0, nullptr);
+    }
+
     void FDDGI::SetupForScene(ID3D12Device* _Device, FCommandQueue& _Queue,
                               FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
                               const Vec3& _AABBMin, const Vec3& _AABBMax,
@@ -190,7 +250,7 @@ namespace Smile {
         DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT);
         ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat);
 
-        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot; 
+        MeshGeoSlot.clear(); // membro: sobrevive p/ o RefreshInstanceGeo
         std::vector<const FGpuMesh*> UniqueMeshes;
         for (u32 i = 0; i < NumRenderables; ++i) {
             const FGpuMesh* M = _Scene.Renderables()[i].Mesh;
@@ -229,43 +289,8 @@ namespace Smile {
         u8* GeoMapped = nullptr;
         InstanceGeoBuf = CreateUploadBuffer(_Device,
             static_cast<UINT64>(NumRenderables) * sizeof(DDGIInstanceGeo), &GeoMapped);
-        for (u32 i = 0; i < NumRenderables; ++i) {
-            const FRenderable& R = _Scene.Renderables()[i];
-            DDGIInstanceGeo g{};
-            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
-            if (R.Material) {
-                const MaterialConstants& MC = R.Material->Constants;
-                g.BaseColor = MC.BaseColorFactor;
-                g.TwoSided  = R.Material->TwoSided ? 1u : 0u;
-                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
-                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
-                    g.HasAlbedo   = 1;
-                }
-
-                g.AlphaCutoff     = MC.AlphaCutoff;
-                g.RoughnessFactor = MC.RoughnessFactor;
-                g.EmissiveFactor  = { MC.EmissiveFactor.X * MC.EmissiveStrength,
-                                      MC.EmissiveFactor.Y * MC.EmissiveStrength,
-                                      MC.EmissiveFactor.Z * MC.EmissiveStrength,
-                                      MC.MetallicFactor };
-                if (MC.AlphaTest)        g.Flags |= 1u;
-                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
-                if (R.Material->IsFinalized()) {
-                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
-                    if (MC.HasEmissiveMap) {
-                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
-                        g.Flags |= 2u;
-                    }
-                    if (MC.HasMetallicRoughnessMap) {
-                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
-                        g.Flags |= 8u;
-                    }
-                }
-            }
-            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
-            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
-            std::memcpy(GeoMapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
-        }
+        InstanceGeoCount = NumRenderables;
+        FillInstanceGeo(_Scene, GeoMapped, NumRenderables);
         InstanceGeoBuf->Unmap(0, nullptr);
 
         AtlasSRVSlot       = _SRVHeap.Allocate(1);

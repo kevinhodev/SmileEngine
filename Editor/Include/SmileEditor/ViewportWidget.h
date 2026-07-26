@@ -51,6 +51,8 @@ namespace SmileEditor {
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY ViewSettingsChanged)
+        // Culling seletivo no RT: back-face cull volta a valer fora de folhagem/vidro.
+        Q_PROPERTY(bool selectiveRTCulling READ IsSelectiveRTCullingEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
@@ -185,6 +187,7 @@ namespace SmileEditor {
         bool              IsReSTIRGIEnabled() const;
         bool              IsReSTIRGIVisibilityEnabled() const;
         bool              AreGIFoliageShadowsEnabled() const;
+        bool              IsSelectiveRTCullingEnabled() const;
         bool              IsGTAOEnabled() const;
         bool              IsGTAOHalfRes() const;
         bool              AreReflectionsEnabled() const;
@@ -302,6 +305,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleReSTIRGI();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
         Q_INVOKABLE void ToggleGIFoliageShadows();
+        Q_INVOKABLE void ToggleSelectiveRTCulling();
         Q_INVOKABLE void ToggleGTAO();
         Q_INVOKABLE void ToggleGTAOHalfRes();
         Q_INVOKABLE void ToggleReflections();

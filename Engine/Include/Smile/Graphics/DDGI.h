@@ -6,11 +6,13 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <unordered_map>
 
 namespace Smile {
     class FTextureSRVHeap;
     class FCommandQueue;
     class FScene;
+    class FGpuMesh;
 
     struct alignas(256) DDGIConstants {
         Vec4 GridMinSpacing;  // xyz = origem do grid (mundo), w = espacamento
@@ -40,6 +42,12 @@ namespace Smile {
         void SetupForScene(ID3D12Device* Device, FCommandQueue& Queue, FTextureSRVHeap& SRVHeap,
                            const FScene& Scene, const Vec3& AABBMin, const Vec3& AABBMax,
                            u32 TlasSRVSlot, u32 SkyViewSRVSlot);
+
+        // Re-upload do snapshot de materiais que TODO o RT le (DDGI, ReSTIR, reflexoes). Chamar
+        // quando uma propriedade de material que o RT enxerga muda em runtime (AlphaTest,
+        // TwoSided, emissivo...): o snapshot e criado uma vez no SetupForScene e nao acompanha a
+        // edicao. O CHAMADOR precisa garantir GPU ociosa — e um upload heap sem versao por frame.
+        void RefreshInstanceGeo(const FScene& Scene);
 
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, u32 PunctualLightCount = 0);
@@ -163,6 +171,9 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> DistAtlas;        
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbesTrace;      
         Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;
+        u32                                    InstanceGeoCount = 0; // capacidade do snapshot acima
+        // Definido no .cpp (DDGIInstanceGeo e local daquele arquivo); _Mapped tem _Count entradas.
+        void FillInstanceGeo(const FScene& Scene, u8* Mapped, u32 Count) const;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeDataBuf;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeRayCountBuf; 
 
@@ -178,6 +189,9 @@ namespace Smile {
         // base+2i+1 = IB) — o InstanceGeo carrega os índices; substitui os merged buffers.
         u32 MeshGeoSlotBase    = kInvalidSlot;
         u32 MeshGeoSlotCount   = 0;
+        // Mesh -> slot bindless do VB (IB = +1). Era local do SetupForScene; virou membro porque
+        // o RefreshInstanceGeo precisa remontar o snapshot sem refazer a alocacao de descriptors.
+        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot;
         u32 ProbeDataSRVSlot   = kInvalidSlot;
         u32 ProbeDataUAVSlot   = kInvalidSlot;
         u32 ProbeRayCountSRVSlot = kInvalidSlot;

@@ -1746,11 +1746,15 @@ namespace Smile {
             }
         }
 
-        if (RaytracingScene.IsBuilt() && Scene.TransformsVersion() != TlasTransformsVersion) {
+        // TlasFlagsDirty: as flags de instancia (culling seletivo) mudaram sem a cena se mexer,
+        // entao a versao de transforms sozinha nao pediria rebuild.
+        if (RaytracingScene.IsBuilt() &&
+            (Scene.TransformsVersion() != TlasTransformsVersion || TlasFlagsDirty)) {
             Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> TlasCL;
             if (SUCCEEDED(CommandList->QueryInterface(IID_PPV_ARGS(&TlasCL))) &&
                 RaytracingScene.RecordTlasRebuild(TlasCL.Get(), Scene, FrameSlot)) {
                 TlasTransformsVersion = Scene.TransformsVersion();
+                TlasFlagsDirty        = false;
             }
         }
 
@@ -2230,7 +2234,7 @@ namespace Smile {
             for (const VisItem& V : VisibleScratch) {
                 FMaterial* Mat = V.Mat;
                 if (Mat->Blend) continue;
-                const bool TwoSided = Mat->TwoSided || Mat->Constants.AlphaTest;
+                const bool TwoSided = Mat->IsTwoSidedForRT();
                 ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
                                                      : PipelineState.PSOGBuffer();
                 if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }

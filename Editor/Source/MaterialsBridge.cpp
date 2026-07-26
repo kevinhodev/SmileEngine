@@ -655,6 +655,10 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.AlphaTest = _V ? 1 : 0;
         M->UpdateConstants();
+        // AlphaTest nao e so raster: decide a InstanceMask e o FORCE_NON_OPAQUE da TLAS, entra no
+        // criterio de culling (IsTwoSidedForRT) e vive no snapshot do InstanceGeo. Sem isto o RT
+        // seguia com o estado do load.
+        if (Renderer) Renderer->NotifyMaterialRTStateChanged();
         TouchSelected();
     }
 
@@ -689,6 +693,9 @@ namespace SmileEditor {
     void MaterialsBridge::SetTwoSided(bool _V) {
         auto* M = SelMat(); if (!M) return;
         M->TwoSided = _V; // PSO escolhido por draw, por frame
+        // No RT nao e por draw: alimenta o culling da instancia na TLAS e o TwoSidedRT do
+        // InstanceGeo (que decide se um hit pelo verso conta como "dentro de solido").
+        if (Renderer) Renderer->NotifyMaterialRTStateChanged();
         TouchSelected();
     }
 
