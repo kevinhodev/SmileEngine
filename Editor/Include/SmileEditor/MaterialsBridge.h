@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QQuickImageProvider>
+#include <QSet>
 #include <QString>
 #include <QVariantList>
 #include <QVector>
@@ -229,6 +230,10 @@ namespace SmileEditor {
         void   ApplySlotTexture(Smile::FMaterial& M, int Slot, Smile::FTexture* T);
         Smile::FTexture* LoadTextureCached(const QString& Path, int Slot);
         void   ApplyIsolation();         // Visible = (Material == selecionado)
+        // Desliga o isolar RESTAURANDO o Visible salvo (prefixo comum, p/ o caso de carga
+        // aditiva ter crescido o vetor de renderables). Usar sempre que a cena continuar viva —
+        // largar SavedVisibility sem restaurar deixa a cena escondida sem volta pela UI.
+        void   StopIsolation();
         void   RenderPreviewIfNeeded();  // Refresh: renderiza quando dirty + janela aberta
         void   MarkPreviewDirty() { PreviewDirty = true; }
         void   EnsureDefaultEnv();       // HDRI padrao (uma tentativa por sessao/cena)
@@ -240,7 +245,10 @@ namespace SmileEditor {
         // (badges/swatch/dot de modificado podem mudar).
         void   TouchSelected();
         bool   IsModified(const Smile::FMaterial* M) const;
-        void   ApplyOverrides();                       // aplica OverrideCache por nome
+        // Aplica OverrideCache por nome, SO nos materiais recem-vistos (_Fresh). Reaplicar em
+        // material ja carregado descartaria a edicao nao salva dele — o Rebuild dispara tambem
+        // em carga aditiva, nao so na abertura da cena.
+        void   ApplyOverrides(const QSet<const Smile::FMaterial*>& _Fresh);
         QJsonObject MaterialToJson(const Smile::FMaterial& M) const;
         void   JsonToMaterial(const QJsonObject& O, Smile::FMaterial& M) const;
 

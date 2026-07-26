@@ -261,6 +261,10 @@ namespace SmileEditor {
         if (Renderer) {
             // Snapshot do default cozido de quem ainda nao tem (cargas novas), depois
             // overrides do sidecar por nome — a ordem garante que "Reverter" volta ao cooker.
+            // "Fresh" = material que ainda nao tinha snapshot, ou seja, entrou nesta carga. Numa
+            // carga nao-aditiva o OnSceneLoaded limpou Defaults, entao sao todos; numa aditiva,
+            // so os novos — e os antigos preservam o que o usuario editou e ainda nao salvou.
+            QSet<const Smile::FMaterial*> Fresh;
             for (const auto& M : Renderer->GetMaterials()) {
                 if (Defaults.contains(M.get())) continue;
                 FSnapshot S{ M->Constants, M->TwoSided, M->Blend, {} };
@@ -269,16 +273,19 @@ namespace SmileEditor {
                 S.Slots[4] = M->Emissive; S.Slots[5] = M->Height;
                 S.Slots[6] = M->Metalness; S.Slots[7] = M->Roughness;
                 Defaults.insert(M.get(), S);
+                Fresh.insert(M.get());
             }
-            ApplyOverrides();
+            ApplyOverrides(Fresh);
             CachedMatCount = int(Renderer->GetMaterials().size());
             if (SelectedMat >= CachedMatCount) SelectedMat = -1;
             MarkPreviewDirty();
-            // Estrutura da cena mudou: o isolar perdeu a referencia dos Visible antigos.
+            // Estrutura da cena mudou (carga aditiva): o isolar nao consegue mais mapear indice
+            // -> renderable com seguranca, entao desliga. RESTAURANDO o Visible do prefixo comum:
+            // limpar SavedVisibility direto deixava toda mesh de outro material invisivel p/
+            // sempre, e o chip da UI ja voltava p/ "off" — sem caminho de volta pela interface.
             if (IsolatingOn &&
                 SavedVisibility.size() != (qsizetype)Renderer->GetScene().Renderables().size()) {
-                IsolatingOn = false;
-                SavedVisibility.clear();
+                StopIsolation();
                 emit IsolatingChanged();
             }
         } else {
@@ -291,9 +298,10 @@ namespace SmileEditor {
         RebuildRows();
     }
 
-    void MaterialsBridge::ApplyOverrides() {
+    void MaterialsBridge::ApplyOverrides(const QSet<const Smile::FMaterial*>& _Fresh) {
         if (!Renderer || OverrideCache.isEmpty()) return;
         for (const auto& M : Renderer->GetMaterials()) {
+            if (!_Fresh.contains(M.get())) continue; // ja carregado: nao pisa em edicao pendente
             const auto It = OverrideCache.constFind(QString::fromStdString(M->Name));
             if (It == OverrideCache.constEnd()) continue;
             JsonToMaterial(It.value(), *M);
@@ -909,6 +917,25 @@ namespace SmileEditor {
         emit VisibilityChanged();
     }
 
+    // Nao emite IsolatingChanged: quem chama ja emite (setIsolate no fim, Rebuild no seu ramo).
+    void MaterialsBridge::StopIsolation() {
+        if (!IsolatingOn) return;
+        IsolatingOn = false;
+        if (Renderer) {
+            // Prefixo comum: em carga aditiva o vetor cresceu, mas os N primeiros renderables
+            // continuam sendo os mesmos objetos — restaurar o que da e melhor que largar tudo
+            // escondido. Os novos ja entram com o Visible que o loader definiu.
+            auto& Rnds = Renderer->GetScene().Renderables();
+            const int N = int(std::min<qsizetype>(SavedVisibility.size(), (qsizetype)Rnds.size()));
+            for (int i = 0; i < N; ++i) Rnds[i].Visible = SavedVisibility[i];
+            if (N > 0) {
+                Renderer->GetScene().BumpTransformsVersion();
+                emit VisibilityChanged();
+            }
+        }
+        SavedVisibility.clear();
+    }
+
     // ---- Preview offscreen (F3) ----
     bool MaterialsBridge::PreviewReady() const {
         return Renderer && Renderer->MaterialPreviewReady();
@@ -1078,14 +1105,8 @@ namespace SmileEditor {
             }
             IsolatingOn = true;
             ApplyIsolation();
-        } else if (IsolatingOn) {
-            IsolatingOn = false;
-            const int N = int(std::min<qsizetype>(SavedVisibility.size(),
-                                                  (qsizetype)Rnds.size()));
-            for (int i = 0; i < N; ++i) Rnds[i].Visible = SavedVisibility[i];
-            SavedVisibility.clear();
-            Renderer->GetScene().BumpTransformsVersion();
-            emit VisibilityChanged();
+        } else {
+            StopIsolation();
         }
         emit IsolatingChanged();
     }

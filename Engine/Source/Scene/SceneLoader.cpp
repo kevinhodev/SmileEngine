@@ -109,6 +109,15 @@ namespace Smile {
         // Em carga aditiva preservamos meshes/materiais/texturas ja carregados; so
         // limpamos a cena anterior no modo de substituicao (padrao).
         if (!_Additive) {
+            // Os frames em voo (kFramesInFlight) ainda referenciam o que vem abaixo: os
+            // ID3D12Resource das texturas (FTexture::Release faz Reset() no recurso), os ranges do
+            // SRV heap SHADER-VISIBLE (FMaterial::Release devolve a tabela, e a cena nova realoca o
+            // mesmo range e sobrescreve os descritores) e os slots do pool de CBV (o memcpy do
+            // Finalize cai no endereco que o root CBV do frame anterior aponta). Sem drenar a fila
+            // antes, isso e use-after-free — e o editor chama LoadCookedScene direto do handler de
+            // menu, com o timer de render ativo. Mesmo motivo do Flush em RecreateObjectCB.
+            CommandQueue.Flush();
+
             Scene.Clear();
             for (auto& m : ImportedMaterials) m->Release(SRVHeap);
             ImportedMaterials.clear();
