@@ -132,17 +132,62 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.NumLights      = (int)JitterParams.z; // F5
     P.ShadowRayMask  = (uint)SunColor.w;
 
+    // POLITICA DE BACKFACE (Lumen AvoidSelfIntersections modo Retrace + terminacao preta).
+    //
+    // Os dois passos sao UMA politica so e nao podem ser separados: sozinha, a terminacao preta
+    // transformaria toda auto-interseccao proxima — a mesma familia de erro que o sweep do ray
+    // offset atacou — em MANCHA PRETA, trocando um artefato por outro. Primeiro se descarta o hit
+    // proximo suspeito, e SO o que sobrar vira oclusao.
+    //
+    // Terminacao preta em vez de deixar o raio seguir: bater no verso de uma superficie one-sided
+    // significa que o raio esta DENTRO de geometria. Deixa-lo continuar ate o ceu e exatamente o
+    // vazamento medido no A/B do culling. A UE comenta a mesma linha com "to minimize leaking" e
+    // aceita a sobre-oclusao que isso causa (LumenHardwareRayTracingCommon.ush:1018).
+    bool killPath = false;
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+        bool  twoSided;
+        bool  backface = HitIsBackface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                       q.CommittedWorldToObject3x4(), ray.Direction, twoSided);
+        float t        = q.CommittedRayT();
+
+        float skipDist = -1.0f;
+        if (twoSided && t < kSelfIsectTwoSidedDist)            skipDist = t + kSelfIsectRetraceBias;
+        else if (!twoSided && backface && t < kSelfIsectBackfaceDist)
+                                                               skipDist = kSelfIsectBackfaceDist;
+        if (skipDist > 0.0f) {
+            ray.TMin = skipDist;
+            q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, SMILE_RT_MASK_GATHER, ray);
+            SMILE_RT_PROCEED(q)
+            ray.TMin = 0.0f; // a origem nao mudou; so o intervalo daquela consulta
+            // Re-classifica SO aqui: no caminho comum (sem retrace) a classificacao de cima ja
+            // vale, e HitIsBackface custa 3 indices + 3 posicoes.
+            backface = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) &&
+                       HitIsBackface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                     q.CommittedWorldToObject3x4(), ray.Direction, twoSided);
+        }
+
+        // O que sobrou de verso one-sided ja passou do teste de proximidade: e geometria real
+        // vista por dentro, nao BLAS desalinhada.
+        killPath = backface && !twoSided &&
+                   q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+    }
+
     float3 Lo, x2, n2;
     float  hitDist;
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         float sd;
         hitDist = q.CommittedRayT();
-        Lo = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
-                             q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
-                             ray.Origin, ray.Direction, hitDist, P, sd);
         n2 = HitGeomNormal(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                            q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(), ray.Direction);
         x2 = ray.Origin + ray.Direction * hitDist;
+        // Hit preto: continua sendo uma AMOSTRA VALIDA (x2/n2/hitDist reais, entra no M e no
+        // Jacobiano) com contribuicao zero — nao um "sem hit". Tratar como miss mandaria o ceu
+        // p/ dentro da parede, que e o bug que estamos fechando.
+        Lo = killPath ? float3(0.0f, 0.0f, 0.0f)
+                      : ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                        q.CommittedTriangleBarycentrics(),
+                                        q.CommittedWorldToObject3x4(),
+                                        ray.Origin, ray.Direction, hitDist, P, sd);
     } else {
         hitDist = TraceParams.y;
         Lo = ShadeSky(dir, sunDir, P.SkyIntensity);

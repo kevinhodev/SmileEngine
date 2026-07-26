@@ -25,6 +25,17 @@
 #define kLightRayEndMargin      0.05f  // para antes da luz
 #define kLightRayMinTMax        0.02f  // piso do TMax p/ luz muito proxima
 
+// --- (2) INTERVALO — politica de auto-interseccao (estilo Lumen AvoidSelfIntersections) -------
+// Distancias em que um hit e tratado como auto-interseccao em vez de geometria de verdade, e o
+// raio e RE-TRACADO a partir dali. Valores da UE convertidos p/ metros:
+//   r.Lumen.HardwareRayTracing.SkipBackFaceHitDistance = 5 cm  (LumenHardwareRayTracingMaterials.cpp:25)
+//   r.Lumen.HardwareRayTracing.SkipTwoSidedHitDistance = 1 cm  (idem :32)
+// O two-sided tem distancia menor e regra propria porque nele o teste de face nao discrimina
+// nada — qualquer lado e "frente", entao so o hit MUITO proximo e suspeito.
+#define kSelfIsectBackfaceDist  0.05f
+#define kSelfIsectTwoSidedDist  0.01f
+#define kSelfIsectRetraceBias   0.0001f // avanco do TMin no re-trace do caso two-sided
+
 // --- (3) CORRESPONDENCIA ----------------------------------------------------------------------
 // So entram em jogo com ValidateInterval > 0, que hoje esta desligado. Quando a revalidacao
 // periodica for religada (8, ou os 6 frames do paper), estes NUNCA foram calibrados contra nada
