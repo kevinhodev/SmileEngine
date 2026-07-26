@@ -1215,10 +1215,210 @@ gi = Lo · cos θ₁ · W / π<span class="cm">   ← ResResolve, ReSTIRReservoi
     </div>
   </section>
 
-  <!-- ============ 8. MAPA + PARAMS ============ -->
+  <!-- ============ 8. DDGI ============ -->
   <section>
     <div class="wrap chapter">
-      <h2><span class="num">08</span>Onde cada conceito vive no código</h2>
+      <h2><span class="num">08</span>Onde o DDGI entra: o cache que fecha o caminho</h2>
+      <p>
+        ReSTIR traça <strong>um</strong> raio. Isso dá <strong>um</strong> bounce. Mas quando o raio chega
+        em x₂, para calcular <code>Lo</code> a engine precisa saber quanta luz sai daquele ponto — e parte
+        dessa luz chegou lá vinda de <em>outras</em> superfícies. Resolver isso com raios exigiria bounce
+        2, 3, 4… recursão que tempo real não paga.
+      </p>
+      <p>
+        A saída é o <span class="term">DDGI</span> agindo como <strong>radiance cache</strong>: uma grade
+        de probes que já sabe, aproximadamente, quanta luz indireta existe em qualquer ponto do volume.
+        No hit, um lookup de textura substitui toda a recursão:
+      </p>
+      <pre><span class="k">float3</span> indirect = SampleDDGIIrradiance(IrradAtlas, LinearClamp, hitPos, hitN,
+                                       P.GridMin, P.Spacing, P.Count,
+                                       P.AtlasTile, P.AtlasInvSize);
+<span class="c">// ...</span>
+<span class="k">return</span> albedo * (Edirect / SMILE_PI + indirect) + emissive;</pre>
+      <p class="src">Shaders/GI/HitShading.hlsli:276 e :291</p>
+
+      <h3>A divisão de trabalho</h3>
+      <p>
+        As duas técnicas não competem — elas cobrem frequências diferentes do mesmo sinal:
+      </p>
+      <ul>
+        <li><strong>ReSTIR faz o bounce 1</strong>, em resolução de pixel, com raio de verdade, sombra de verdade e reservoir. É daí que vem sombra de contato, gradiente fino, cor sangrando de uma parede próxima.</li>
+        <li><strong>DDGI faz os bounces 2 até ∞</strong>, em resolução de probe (metros). É a cauda de energia: o preenchimento suave que impede a cena de ficar escura demais.</li>
+      </ul>
+      <p>
+        Se você usasse só DDGI, a GI seria interpolada numa grade de poucos metros: sem detalhe, sem
+        contato. Se usasse só ReSTIR sem cache, você teria exatamente um bounce e uma cena
+        subiluminada.
+      </p>
+    </div>
+
+    <figure class="wide">
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 300" role="img" aria-label="A cadeia de energia: sol ilumina x2 diretamente, os probes do DDGI fornecem os bounces seguintes em x2, e ReSTIR transporta tudo para x1.">
+          <text class="s-title" x="16" y="18">A cadeia de energia até o pixel</text>
+
+          <!-- chao -->
+          <line class="s-surface" x1="50" y1="248" x2="690" y2="248"/>
+          <g class="s-hatch">
+            <line x1="80" y1="248" x2="70" y2="260"/><line x1="150" y1="248" x2="140" y2="260"/>
+            <line x1="220" y1="248" x2="210" y2="260"/><line x1="290" y1="248" x2="280" y2="260"/>
+            <line x1="360" y1="248" x2="350" y2="260"/><line x1="430" y1="248" x2="420" y2="260"/>
+            <line x1="500" y1="248" x2="490" y2="260"/><line x1="570" y1="248" x2="560" y2="260"/>
+            <line x1="640" y1="248" x2="630" y2="260"/>
+          </g>
+          <!-- parede -->
+          <line class="s-surface" x1="580" y1="248" x2="580" y2="76"/>
+
+          <!-- probes -->
+          <g>
+            <circle class="s-dot-ray" cx="360" cy="110" r="4" opacity=".75"/>
+            <circle class="s-dot-ray" cx="440" cy="110" r="4" opacity=".75"/>
+            <circle class="s-dot-ray" cx="520" cy="110" r="4" opacity=".75"/>
+            <circle class="s-dot-ray" cx="360" cy="180" r="4" opacity=".75"/>
+            <circle class="s-dot-ray" cx="440" cy="180" r="4" opacity=".75"/>
+            <circle class="s-dot-ray" cx="520" cy="180" r="4" opacity=".75"/>
+            <g class="s-guide">
+              <line x1="360" y1="110" x2="520" y2="110"/><line x1="360" y1="180" x2="520" y2="180"/>
+              <line x1="360" y1="110" x2="360" y2="180"/><line x1="440" y1="110" x2="440" y2="180"/>
+              <line x1="520" y1="110" x2="520" y2="180"/>
+            </g>
+          </g>
+          <text class="s-lbl-ray" x="336" y="96">grade de probes DDGI — espaçamento em metros</text>
+
+          <!-- sol -->
+          <circle class="s-dot-rad" cx="668" cy="42" r="10"/>
+          <text class="s-lbl-rad" x="636" y="24">sol</text>
+          <line class="s-rad" x1="660" y1="52" x2="596" y2="128" marker-end="url(#ah-rad)"/>
+          <text class="s-lbl-rad" x="600" y="80">direto:</text>
+          <text class="s-lbl-rad" x="600" y="94">shadow ray</text>
+
+          <!-- x2 -->
+          <circle class="s-dot-rad" cx="580" cy="140" r="6"/>
+          <text class="s-lbl-em" x="588" y="158">x₂</text>
+
+          <!-- probes -> x2 -->
+          <line class="s-ray-d" x1="528" y1="118" x2="568" y2="134" marker-end="url(#ah-ray)"/>
+          <line class="s-ray-d" x1="528" y1="174" x2="568" y2="148" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-ray" x="392" y="212">bounces 2..∞ num único lookup trilinear</text>
+
+          <!-- x2 -> x1 -->
+          <line class="s-rad" x1="572" y1="146" x2="266" y2="242" marker-end="url(#ah-rad)"/>
+          <text class="s-lbl-rad" x="300" y="182">Lo = albedo·(E_direto/π + DDGI) + emissivo</text>
+
+          <!-- x1 -->
+          <circle class="s-dot" cx="258" cy="248" r="5"/>
+          <text class="s-lbl-em" x="236" y="272">x₁</text>
+
+          <!-- camera -->
+          <path class="s-fillsurf" d="M 60 176 l 32 0 l 0 24 l -32 0 z"/>
+          <path class="s-fillsurf" d="M 92 181 l 17 -9 l 0 31 l -17 -9 z"/>
+          <text class="s-lbl" x="60" y="168">câmera</text>
+          <line class="s-ray-d" x1="248" y1="242" x2="112" y2="192" marker-end="url(#ah-ray)"/>
+          <text class="s-lbl-ray" x="126" y="232">ReSTIR: bounce 1 em</text>
+          <text class="s-lbl-ray" x="126" y="246">resolução de pixel</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Um bounce medido, o resto cacheado.</b> O único raio do ReSTIR compra o transporte de x₂ até
+        x₁ com precisão de pixel. Tudo que é mais profundo que isso vem de graça do atlas de probes —
+        e é por isso que <code>Lo</code> pode conter luz de quinta ordem sem traçar nada.
+      </figcaption>
+    </figure>
+
+    <div class="wrap chapter">
+      <h3>O loop de bounce infinito (e por que ele é de mão única)</h3>
+      <p>
+        De onde os probes tiram <em>a luz deles</em>? Do frame anterior. O
+        <code>DDGITrace.cs.hlsl</code> chama <strong>a mesmíssima</strong> função
+        <code>ShadeSurfaceHit</code> do ReSTIR e binda o mesmo <code>IrradAtlas</code> em <code>t3</code>.
+        Ou seja: o raio do probe no frame N lê a irradiância acumulada até o frame N−1. Cada frame
+        acrescenta um bounce, com histerese amortecendo (<code>lerp(result, prev, hyst)</code>). Depois
+        de alguns frames, o atlas converge para uma solução de bounces infinitos.
+      </p>
+    </div>
+
+    <div class="wide">
+      <div class="pipe">
+        <div class="pipe-row">
+          <div class="box accent2">
+            <p class="bt">frame N−1</p><p class="bn">IrradAtlas</p>
+            <p class="bd">irradiância acumulada nos probes, com gamma 1.5 para precisão</p>
+          </div>
+          <div class="box">
+            <p class="bt">DDGITrace + DDGIUpdate</p><p class="bn">raios dos probes</p>
+            <p class="bd">sombreiam o hit com <code>ShadeSurfaceHit</code> — que lê o atlas de N−1. Um bounce novo por frame</p>
+          </div>
+          <div class="box accent2">
+            <p class="bt">frame N</p><p class="bn">IrradAtlas</p>
+            <p class="bd"><code>lerp(novo, anterior, hyst)</code> — histerese zerada em probe recém-relocado</p>
+          </div>
+        </div>
+        <p class="arrow">↓ &nbsp; mesmo frame, mais adiante na fila &nbsp; ↓</p>
+        <div class="pipe-row">
+          <div class="box accent">
+            <p class="bt">Pass A do ReSTIR</p><p class="bn">ShadeSurfaceHit em x₂</p>
+            <p class="bd">lê o atlas já atualizado deste frame. <strong>Não escreve nada de volta</strong></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wrap chapter">
+      <div class="note">
+        <p class="tag">Mão única, e isso é de propósito</p>
+        <p>
+          DDGI → ReSTIR, nunca ReSTIR → DDGI. Os probes traçam os próprios raios; a saída do ReSTIR
+          jamais realimenta o cache. O ganho: o detalhe de alta frequência do ReSTIR (o padrão
+          estocástico do visibility ray, por exemplo) não contamina os probes, e um artefato no ReSTIR
+          não entra em loop de realimentação. O custo: melhorias no ReSTIR não aparecem nos bounces
+          2 em diante.
+        </p>
+      </div>
+
+      <h3>Três detalhes que só se vê lendo o código</h3>
+      <ul>
+        <li>
+          <strong>As unidades casam por convenção, não por acaso.</strong> O <code>DDGIUpdate</code> grava
+          <code>sum/wsum</code> — média de radiância ponderada por cosseno, que é <code>E/π</code>. O
+          resolve do ReSTIR produz <code>Lo·cos·W/π</code>, também <code>(1/π)E</code>. Por isso a soma
+          <code>Edirect/π + indirect</code> não leva fator nenhum: os três termos vivem no mesmo espaço,
+          e quem multiplica pelo albedo é a BRDF lambertiana lá no fim.
+        </li>
+        <li>
+          <strong>O hit usa a variante barata do lookup.</strong> No hit é
+          <code>SampleDDGIIrradiance</code>: trilinear puro em 8 probes, sem teste de visibilidade de
+          Chebyshev, sem atlas de distância, sem <code>DDGI_SurfaceBias</code>. O deferred lighting usa
+          a variante completa, <code>SampleDDGIIrradianceCheb</code>. Faz sentido: em x₂ o resultado
+          ainda vai ser multiplicado pelo albedo e está um bounce mais fundo, então vazamento residual
+          é atenuado — e é 1 amostra por pixel por frame, custo direto. Mas é o primeiro lugar para
+          olhar se aparecer luz vazando parede no GI.
+        </li>
+        <li>
+          <strong>Fora do volume não fica escuro, fica esticado.</strong> O lookup faz
+          <code>clamp(base + off, 0, count − 1)</code> nas coordenadas de probe, e <code>wsum</code> nunca
+          é zero. Um hit fora da grade recebe a irradiância dos probes de borda espalhada. Isso evita
+          buracos pretos e, em troca, pode injetar luz de contexto errado longe do volume.
+        </li>
+      </ul>
+
+      <div class="note warn">
+        <p class="tag">Dependência dura</p>
+        <p>
+          Não é opcional: <code>SetupReflectionsForScene</code> começa com
+          <code>if (!Device.RaytracingSupported() || !DDGI.IsReady()) return;</code> — e é lá dentro que
+          <code>ReSTIRGI.SetGIParams</code> e <code>ReSTIRGI.SetupForResize</code> são chamados
+          (Renderer.cpp:463). Sem DDGI pronto, o ReSTIR GI nunca é configurado,
+          <code>IsReady()</code> fica false e <code>ReSTIRGIActive</code> também. O ReSTIR até herda o
+          <code>MaxRayDistance</code> do DDGI. Nesta engine, ReSTIR GI não existe sem DDGI.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 9. MAPA + PARAMS ============ -->
+  <section>
+    <div class="wrap chapter">
+      <h2><span class="num">09</span>Onde cada conceito vive no código</h2>
     </div>
     <div class="wide">
       <div class="tablewrap">
@@ -1237,6 +1437,9 @@ gi = Lo · cos θ₁ · W / π<span class="cm">   ← ResResolve, ReSTIRReservoi
             <tr><td>M + idade num só canal</td><td class="mono">ReSTIRReservoir.hlsli:45</td><td class="mono">ResPackMAge</td></tr>
             <tr><td>Amostra inicial (Malley)</td><td class="mono">ReSTIRGITrace.cs.hlsl:97</td><td class="mono">GGX_Rand2 + TangentBasis</td></tr>
             <tr><td>Sombreamento do hit</td><td class="mono">Shaders/GI/HitShading.hlsli:276</td><td class="mono">ShadeSurfaceHit</td></tr>
+            <tr><td>Lookup do DDGI no hit</td><td class="mono">Shaders/GI/DDGICommon.hlsli:144</td><td class="mono">SampleDDGIIrradiance</td></tr>
+            <tr><td>Loop de bounce infinito</td><td class="mono">Shaders/GI/DDGIUpdate.cs.hlsl:66</td><td class="mono">sum/wsum + histerese</td></tr>
+            <tr><td>Grade e atlas passados ao ReSTIR</td><td class="mono">Engine/Source/Graphics/Renderer.cpp:463</td><td class="mono">SetGIParams</td></tr>
             <tr><td>Reuso temporal + rejeições</td><td class="mono">ReSTIRGITrace.cs.hlsl:222</td><td class="mono">ReuseParams.w</td></tr>
             <tr><td>Revalidação periódica</td><td class="mono">ReSTIRGITrace.cs.hlsl:271</td><td class="mono">validateInterval</td></tr>
             <tr><td>Política de backface</td><td class="mono">ReSTIRGITrace.cs.hlsl:150</td><td class="mono">PolicyParams.x</td></tr>
@@ -1277,7 +1480,7 @@ gi = Lo · cos θ₁ · W / π<span class="cm">   ← ResResolve, ReSTIRReservoi
   <!-- ============ 9. GLOSSARIO ============ -->
   <section>
     <div class="wrap chapter">
-      <h2><span class="num">09</span>Glossário de sobrevivência</h2>
+      <h2><span class="num">10</span>Glossário de sobrevivência</h2>
       <dl class="gloss">
         <dt>ReSTIR</dt><dd>Reservoir-based Spatio-Temporal Importance Resampling.</dd>
         <dt>x₁ / n₁</dt><dd>Ponto visível na tela e sua normal. O “aqui”.</dd>
@@ -1300,7 +1503,7 @@ gi = Lo · cos θ₁ · W / π<span class="cm">   ← ResResolve, ReSTIRReservoi
   <!-- ============ 10. MODELO MENTAL ============ -->
   <section>
     <div class="wrap chapter">
-      <h2><span class="num">10</span>O modelo mental para levar embora</h2>
+      <h2><span class="num">11</span>O modelo mental para levar embora</h2>
       <p>
         Se você guardar só uma coisa: <strong>ReSTIR não acumula luz, ele acumula
         <em>candidatas</em></strong>. Um filtro temporal comum (TAA, um acumulador exponencial) mistura
