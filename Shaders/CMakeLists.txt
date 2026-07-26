@@ -7,13 +7,24 @@ smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
 smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(GBufferDebug.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
+# Visualizador generico de render targets (absorve o GBufferDebug via DECODE_GBUFFER_FIELD)
+smile_compile_shader(DebugView.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(DeferredLighting.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+# Passe forward de translucidos (materiais Blend: vidro etc.), por cima do HDR iluminado
+smile_compile_shader(ForwardBlend.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Skybox.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
+# Preview do Editor de Materiais (offscreen 512x512): forward PBR isolado + fundo do HDRI
+smile_compile_shader(Preview/MaterialPreview.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Preview/MaterialPreview.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Preview/PreviewSky.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+
 # Depth pre-pass com saida de normal geometrica (G-buffer leve p/ o GTAO)
 smile_compile_shader(DepthNormal.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+# Variantes masked/two-sided do prepass (alpha-clip, estilo UE masked prepass)
+smile_compile_shader(DepthNormalMasked.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(DepthMasked.ps.hlsl       ps_6_0 main SHADER_OUTPUTS)
 
 # Cascaded Shadow Maps (sol direcional) — depth pass das cascatas
 smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
@@ -37,6 +48,7 @@ smile_compile_shader(GI/DDGIDebugVolume.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugRays.vs.hlsl   vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugRays.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugStats.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGIDebugPoint.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 
 # Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
 smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_6 main SHADER_OUTPUTS)
@@ -45,10 +57,27 @@ smile_compile_shader(Reflections/ReflectionResolve.cs.hlsl     cs_6_0 main SHADE
 smile_compile_shader(Reflections/ReflectionTemporal.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionSpatial.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+# Pack do sinal especular p/ o NRD (RELAX) — inclui NRD.hlsli p/ o RELAX_FrontEnd_Pack*
+smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
+
+# DLSS Ray Reconstruction — guides de material (albedo difuso/especular, normal-roughness) derivados
+# do G-buffer + extracao do hitDist especular do Resolved. Alimentam o slEvaluateFeature(kFeatureDLSS_RR).
+smile_compile_shader(Upscale/DlssRRGuides.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Upscale/DlssRRSpecHit.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+
+# Motion vector do background (ceu/nuvens/fog) — preenche o velocity ZERO que o G-buffer deixa, senao o
+# DLSS/RR/TAA reprojeta o historico do ceu do lugar errado ao girar a camera (ghosting).
+smile_compile_shader(Upscale/BackgroundVelocity.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
-smile_compile_shader(AO/GTAO.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
-smile_compile_shader(AO/GTAOBlur.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+# Occlusion culling — cadeia HZB (min-reduce do depth em reverse-Z, estilo UE)
+# + teste de AABB (1 thread/objeto, port do HZBTestPS/NaniteHZBCull)
+smile_compile_shader(HZB/HZBBuild.cs.hlsl    cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(HZB/HZBTest.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
+
+smile_compile_shader(AO/GTAO.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(AO/GTAOBlur.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(AO/GTAOUpsample.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 smile_compile_shader(IBL/EquirectToCube.cs.hlsl        cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(IBL/MipGen.cs.hlsl                cs_6_0 main SHADER_OUTPUTS)
@@ -63,18 +92,47 @@ smile_compile_shader(Atmosphere/BakeSkyView.cs.hlsl       cs_6_0 main SHADER_OUT
 smile_compile_shader(Atmosphere/SkyAtmosphere.vs.hlsl     vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/SkyAtmosphere.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Atmosphere/BakeAerialPerspective.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/IntegrateSkyAmbient.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/BakeSkyReflection.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/StarField.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Atmosphere/StarField.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 
 # Fog deferido (UE5): aerial perspective froxel + exponential height fog
 smile_compile_shader(Fog/FogFullscreen.vs.hlsl            vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Fog/FogFullscreen.ps.hlsl            ps_6_0 main SHADER_OUTPUTS)
+# Froxel volumetric fog (UE): densidade -> scattering (sol CSM + ambiente DDGI) -> integracao
+smile_compile_shader(Fog/VolumetricFogSetup.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/VolumetricFogScattering.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/VolumetricFogIntegrate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Fog/VolumetricFogConsDepth.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+
+# Chuva — F1 wetness deferred no G-buffer + F3 cortina de gotas (estilo CRainStage/SceneRain)
+smile_compile_shader(Rain/RainWetness.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Rain/RainCurtain.ps.hlsl             ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Rain/RainParticles.vs.hlsl           vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Rain/RainParticles.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Rain/RainSplash.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Rain/RainSplash.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
+
+# Sun shafts volumetricos — raymarch CSM meia-res + acumulacao temporal (fog consome via t2)
+smile_compile_shader(SunShafts/SunShaftsVolumetric.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(SunShafts/SunShaftsTemporal.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
 # Nuvens volumetricas — bake de ruido 3D + raymarch + composite
 smile_compile_shader(Clouds/BakeBaseNoise.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/BakeDetailNoise.cs.hlsl       cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/BakeWeather.cs.hlsl           cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudRaymarch.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/CloudTemporal.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Clouds/CloudShadowMap.cs.hlsl        cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudComposite.vs.hlsl        vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Clouds/CloudComposite.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
+
+# Terreno F1 — heightmap + morph continuo de LOD (Flax/CDLOD) + LOD por screen-size (UE)
+smile_compile_shader(Terrain/Terrain.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Terrain/TerrainShadow.vs.hlsl        vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Terrain/TerrainGBuffer.ps.hlsl       ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Terrain/TerrainDepthNormal.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
 # Oceano (port fiel da CryEngine) — superficie (projected grid + shading)
 smile_compile_shader(Water/WaterSurface.vs.hlsl           vs_6_0 main SHADER_OUTPUTS)
@@ -109,6 +167,9 @@ smile_compile_shader(Selection/SelectionOutline.ps.hlsl   ps_6_0 main SHADER_OUT
 # DebugDraw: servico de desenho 3D imediato p/ tooling do editor (gizmo etc.)
 smile_compile_shader(Gizmo/DebugDraw.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Gizmo/DebugDraw.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/DebugDrawOccluded.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/LightIcon.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/LightIcon.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
 
 add_custom_target(Shaders
@@ -117,7 +178,7 @@ add_custom_target(Shaders
         Common/DepthConfig.hlsli
         GBuffer.hlsli
         GBuffer.ps.hlsl
-        GBufferDebug.ps.hlsl
+        DebugView.ps.hlsl
         DeferredLighting.ps.hlsl
         BRDF.hlsli
         Triangle.vs.hlsl
@@ -140,6 +201,7 @@ add_custom_target(Shaders
         GI/DDGIDebugRays.vs.hlsl
         GI/DDGIDebugRays.ps.hlsl
         GI/DDGIDebugStats.cs.hlsl
+        GI/DDGIDebugPoint.cs.hlsl
         Reflections/GGXSample.hlsli
         Reflections/ReflectionTrace.cs.hlsl
         Reflections/ReflectionTraceMirror.cs.hlsl
@@ -147,6 +209,12 @@ add_custom_target(Shaders
         Reflections/ReflectionTemporal.cs.hlsl
         Reflections/ReflectionSpatial.cs.hlsl
         Reflections/ReflectionComposite.ps.hlsl
+        Reflections/ReflectionNrdPack.cs.hlsl
+        Upscale/DlssRRGuides.cs.hlsl
+        Upscale/DlssRRSpecHit.cs.hlsl
+        Upscale/BackgroundVelocity.cs.hlsl
+        HZB/HZBBuild.cs.hlsl
+        HZB/HZBTest.cs.hlsl
         AO/GTAOCommon.hlsli
         AO/GTAO.cs.hlsl
         AO/GTAOBlur.cs.hlsl
@@ -163,10 +231,28 @@ add_custom_target(Shaders
         Atmosphere/SkyAtmosphere.vs.hlsl
         Atmosphere/SkyAtmosphere.ps.hlsl
         Atmosphere/BakeAerialPerspective.cs.hlsl
+        Atmosphere/IntegrateSkyAmbient.cs.hlsl
+        Atmosphere/BakeSkyReflection.cs.hlsl
+        Atmosphere/StarField.vs.hlsl
+        Atmosphere/StarField.ps.hlsl
         Fog/FogCommon.hlsli
         Fog/FogApply.hlsli
         Fog/FogFullscreen.vs.hlsl
         Fog/FogFullscreen.ps.hlsl
+        Fog/VolumetricFogCommon.hlsli
+        Fog/VolumetricFogSetup.cs.hlsl
+        Fog/VolumetricFogScattering.cs.hlsl
+        Fog/VolumetricFogIntegrate.cs.hlsl
+        Fog/VolumetricFogConsDepth.cs.hlsl
+        Rain/RainCommon.hlsli
+        Rain/RainWetness.ps.hlsl
+        Rain/RainCurtain.ps.hlsl
+        Rain/RainParticles.vs.hlsl
+        Rain/RainParticles.ps.hlsl
+        Rain/RainSplash.vs.hlsl
+        Rain/RainSplash.ps.hlsl
+        SunShafts/SunShaftsVolumetric.ps.hlsl
+        SunShafts/SunShaftsTemporal.ps.hlsl
         Clouds/CloudNoiseCommon.hlsli
         Clouds/CloudDensity.hlsli
         Clouds/CloudLighting.hlsli
@@ -174,6 +260,8 @@ add_custom_target(Shaders
         Clouds/BakeDetailNoise.cs.hlsl
         Clouds/BakeWeather.cs.hlsl
         Clouds/CloudRaymarch.cs.hlsl
+        Clouds/CloudTemporal.cs.hlsl
+        Clouds/CloudShadowMap.cs.hlsl
         Clouds/CloudComposite.vs.hlsl
         Clouds/CloudComposite.ps.hlsl
         Water/WaterCommon.hlsli
@@ -200,6 +288,9 @@ add_custom_target(Shaders
         Selection/SelectionOutline.ps.hlsl
         Gizmo/DebugDraw.vs.hlsl
         Gizmo/DebugDraw.ps.hlsl
+        Gizmo/DebugDrawOccluded.ps.hlsl
+        Gizmo/LightIcon.vs.hlsl
+        Gizmo/LightIcon.ps.hlsl
 )
 
 # Mantem a pasta Shaders visivel no Visual Studio com seus .hlsl

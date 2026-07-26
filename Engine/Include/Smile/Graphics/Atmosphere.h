@@ -6,11 +6,14 @@
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/VolumeTexture.h"
+#include "Smile/Graphics/CubeTexture.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
 namespace Smile {
     class FCommandQueue;
+    class FUploadQueue;
 
     struct alignas(256) AtmosphereConstants {
         Vec4 RayleighScattering; // rgb km^-1, w = Rayleigh density scale height (km)
@@ -33,6 +36,12 @@ namespace Smile {
 
         Vec4 MoonDir;            // xyz = direction TO moon (world), w = cos(raio angular do disco)
         Vec4 MoonParams;         // x = brilho do disco, y = intensidade estrelas, z = night factor, w = tempo (cintilacao)
+        Vec4 StarAxis;           // xyz = polo celeste (mundo), w = angulo da rotacao diurna (rad)
+        Vec4 NightSky;           // x = iluminancia da lua no scattering (2a luz), y = corona, zw = livres
+
+        Mat44 ViewProjNoTrans;   // view-proj SEM translacao — projeta o quad das estrelas
+        Mat44 StarMatrix;        // frame do catalogo (polo=+Y) -> mundo, com rotacao diurna
+        Vec4  StarView;          // x = viewport W, y = viewport H, z = catalogo ativo, w = livre
     };
 
     struct FLut2D {
@@ -65,17 +74,23 @@ namespace Smile {
         static constexpr f32 kGroundAltitudeKm = 0.5f;
 
         void Initialize(ID3D12Device* Device, FCommandQueue& CmdQueue,
-                        FTextureSRVHeap& SRVHeap,
+                        FUploadQueue& UploadQueue, FTextureSRVHeap& SRVHeap,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         void RecreateSky(ID3D12Device* Device,
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
 
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation,
-                            const Mat44& InvViewProjFull, const Vec3& CameraWorldPos, f32 KmPerWorldUnit);
+                            const Mat44& ViewProjNoTranslation, const Mat44& InvViewProjFull,
+                            const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
+                            f32 ViewportW, f32 ViewportH);
 
         void SetNightParams(const Vec3& DirToMoon, f32 CosDiskRadius, f32 DiskBrightness,
                             f32 StarIntensity, f32 NightFactor, f32 TimeSec);
+        void SetStarRotation(const Vec3& PoleAxis, f32 AngleRad);
+        // Lua como 2a luz atmosferica: SkyIllumScale = fracao da iluminancia do SOL usada no
+        // scattering do luar (fase/intensidade ja fatoradas pelo chamador); Corona = halo 0..1.
+        void SetMoonSkyLight(f32 SkyIllumScale, f32 CoronaIntensity);
 
         void SetSunDiskHalfAngle(f32 DegHalfAngle);
         void SetSunGlare(f32 Intensity);
@@ -84,6 +99,17 @@ namespace Smile {
 
         void RecordSkyViewBake(ID3D12GraphicsCommandList* CommandList);
         void RecordAerialPerspectiveBake(ID3D12GraphicsCommandList* CommandList);
+
+        // Cube de reflexo da atmosfera: baka o SkyView LUT num cubemap 64² + prefiltra GGX
+        // (MipGen+SpecularPrefilter do IBL) — a água amostra com roughness→mip igual ao HDRI.
+        void RecordSkyReflectionBake(ID3D12GraphicsCommandList* CommandList);
+        u32  SkyReflectionSRV() const { return SkyReflSpec.SRVSlot(); }
+
+        // Ambient fisico: CS integra o SkyView LUT cos-weighted (ceu + chao virtual) num buffer
+        // 2x float4 copiado p/ readback — a CPU le com kFramesInFlight de latencia e escreve nos
+        // slots SkyAmbientColor/GroundAmbientColor do FrameConstants (consumidores intactos).
+        void RecordSkyAmbientIntegration(ID3D12GraphicsCommandList* CommandList);
+        bool GetSkyAmbient(u32 FrameSlot, Vec3& OutSky, Vec3& OutGround) const;
 
         void RenderSky(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
@@ -98,9 +124,16 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
         bool IsInitialized() const { return Initialized; }
 
-        void LoadMoonTexture(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        void LoadMoonTexture(ID3D12Device* Device, FUploadQueue& UploadQueue,
                              FTextureSRVHeap& SRVHeap, const std::wstring& Path);
         bool HasMoonTexture() const { return MoonTexLoaded; }
+
+        // Catalogo de estrelas real (Assets/Sky/stars.sstars, Yale BSC via HYG). Com ele ativo o
+        // hash procedural do sky pass desliga e RenderStars desenha um quad de ~2px por estrela.
+        void LoadStarCatalog(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                             const std::wstring& Path);
+        bool HasStarCatalog() const { return StarCount > 0; }
+        void RenderStars(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         Vec3 SunTransmittance(const Vec3& DirToSun) const;
 
@@ -112,6 +145,7 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
         void BuildInputTables(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         void BuildSkyRootSignature(ID3D12Device* Device);
+        void BuildStarPipeline(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void BuildSkyPSO(ID3D12Device* Device,
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Bake(ID3D12Device* Device, FCommandQueue& CmdQueue);
@@ -130,8 +164,33 @@ namespace Smile {
         FVolumeTexture      AerialPerspectiveVolume;
         FVolumetricPipeline AerialPerspectivePSO;
 
-        u32 SkyViewBakeTableStart = 0; 
-        u32 SkyRenderTableStart   = 0; 
+        static constexpr u32 kSkyReflSize    = 64;
+        static constexpr u32 kSkyReflMips    = 7;  // 64..1 — casa com kSpecularMaxMip=6 da água
+        static constexpr u32 kSkyReflSamples = 64; // céu é liso; 64 taps GGX bastam por frame
+        FCubeTexture        SkyReflRaw;   // fonte (SkyView→cube + mip chain)
+        FCubeTexture        SkyReflSpec;  // prefiltrado GGX (consumido pela água)
+        FVolumetricPipeline SkyReflBakePSO;
+        FComputePipeline    SkyReflMipGenPSO;
+        FComputePipeline    SkyReflPrefilterPSO;
+
+        FVolumetricPipeline IntegrateAmbientPSO;
+        Microsoft::WRL::ComPtr<ID3D12Resource> AmbientBuffer;   // DEFAULT, 2x float4, UAV
+        Microsoft::WRL::ComPtr<ID3D12Resource> AmbientReadback; // READBACK ring (kFramesInFlight)
+        u8* AmbientMapped   = nullptr;
+        u32 AmbientUAVSlot  = 0;
+        u32 AmbientRecorded = 0; // integracoes gravadas; valido apos >= kFramesInFlight
+
+        u32 SkyViewBakeTableStart = 0;
+        u32 SkyRenderTableStart   = 0;
+
+        DXGI_FORMAT SkyRTFormat = DXGI_FORMAT_UNKNOWN; // formatos do sky pass (p/ PSOs tardios)
+        DXGI_FORMAT SkyDSFormat = DXGI_FORMAT_UNKNOWN;
+
+        Microsoft::WRL::ComPtr<ID3D12Resource>      StarBuffer; // upload heap, N x FStar (20B)
+        u32                                         StarCount = 0;
+        u32                                         StarTableStart = 0; // [stars SRV, transmittance SRV]
+        Microsoft::WRL::ComPtr<ID3D12RootSignature> StarRootSig;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> StarPSO;
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> SkyRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> SkyPSO;

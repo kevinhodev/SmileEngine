@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RayEpsilons.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -19,12 +20,19 @@ namespace Smile {
         Vec4  GridCount;       // DDGI: xyz = nº de probes por eixo
         Vec4  AtlasParams;     // DDGI irradiancia: x = tile, y = W, z = H
         Vec4  SunDirIntensity; // xyz = direcao P/ o sol (norm.), w = intensidade
-        Vec4  SunColor;        // rgb = cor do sol
-        Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = normalBias
-        Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD
+        Vec4  SunColor;        // rgb = cor do sol, w = ShadowRayMask (mask dos shadow rays no hit)
+        Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
+                               // (so sombras no hit; origem de raio do G-buffer usa offset robusto)
+        Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD, z = fireflyMax, w = validateInterval
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
+        Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
         Mat44 View;            // anexado p/ o pack do NRD (worldPos -> view.z = IN_VIEWZ)
+        // Perfil de epsilons (FRayEpsilonProfile). Anexado no FIM p/ nao deslocar nenhum offset
+        // existente — em especial o View, que o ReSTIRNrdPack le em 256.
+        Vec4  RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+        Vec4  RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+        Vec4  PolicyParams;    // x = politica de backface no gather (0/1); yzw livres
     };
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
@@ -39,13 +47,19 @@ namespace Smile {
 
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 VertexSlot, u32 IndexSlot, u32 DepthSlot, u32 GBufferSlot,
+                            u32 DepthSlot, u32 GBufferSlot,
                             u32 VelocitySlot);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
-                            const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity, f32 NormalBias,
-                            const Mat44& View);
+                            const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
+                            const Mat44& View, const Vec2& JitterDeltaUv,
+                            u32 PunctualLightCount = 0);
+
+        // F5: copia o SRV do buffer de luzes puntuais do frame pro t13 da tabela de trace da
+        // paridade CORRENTE (a outra pertence ao frame em voo — descriptor versioning).
+        void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                  u32 StagingSlot);
 
         void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
@@ -62,14 +76,49 @@ namespace Smile {
         void SetUseNrd(bool V) { UseNrd = V; }
         bool GetUseNrd() const { return UseNrd; }
 
-        bool IsReady() const   { return Ready; }
-        // Tabela t16 do deferred: NRD OUT quando o NRD esta ligado, senao a GITexture crua.
-        u32  GITexSRVSlot() const { return (UseNrd && NrdOutSRV != kInvalidSlot) ? NrdOutSRV : GITexSRV; }
+        // Perfil compartilhado de epsilons. O Renderer empurra todo frame (copia barata) e e ele
+        // quem invalida na borda de mudanca — aqui invalidar seria NeedsClear todo frame.
+        void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
 
-        void SetRealHitShading(bool V) { RealHit = V; }
+        bool IsReady() const   { return Ready; }
+        // true quando a tabela t16 aponta p/ a OUT do NRD (radiancia em YCoCg) e nao p/ a
+        // GITexture crua (RGB linear). Quem le o alvo precisa saber qual dos dois recebeu.
+        bool IsNrdOutput() const  { return UseNrd && NrdOutSRV != kInvalidSlot; }
+        // Tabela t16 do deferred: NRD OUT quando o NRD esta ligado, senao a GITexture crua.
+        u32  GITexSRVSlot() const { return IsNrdOutput() ? NrdOutSRV : GITexSRV; }
+        // As duas pontas, para quem precisa de uma especifica em vez da vigente (visualizador
+        // de debug: o sinal CRU e o que mostra ruido/convergencia; o do NRD, o resultado).
+        u32  GITexRawSRVSlot() const { return GITexSRV; }
+        u32  NrdOutSRVSlot() const   { return NrdOutSRV; }
+
+        // Invalida o historico temporal: arma o clear dos reservoirs no proximo RecordTrace.
+        // Chamar em toggles e mudancas discretas de cena/iluminacao (o continuo — sol do
+        // TimeOfDay — e coberto pela validacao periodica no shader, ver ValidateInterval).
+        void InvalidateHistory()   { NeedsClear = true; }
+
+        // Invalidam o historico: mudam o Lo JA GRAVADO nos reservoirs, e com ValidateInterval = 0
+        // (config estavel atual) nao ha re-shade periodico — sem o clear, a radiancia do modo
+        // anterior sobrevive ate a reprojecao rejeitar por posicao, e o toggle fica meio aplicado.
+        void SetRealHitShading(bool V) { if (V != RealHit) NeedsClear = true; RealHit = V; }
         bool GetRealHitShading() const { return RealHit; }
-        void SetTemporal(bool V)   { Temporal = V; }
+        void SetTemporal(bool V)   { if (V && !Temporal) NeedsClear = true; Temporal = V; }
         bool GetTemporal() const   { return Temporal; }
+        void SetFoliageShadows(bool V) { if (V != FoliageShadows) NeedsClear = true;
+                                         FoliageShadows = V; }
+
+        // Politica de backface do gather e da revalidacao (retrace de auto-interseccao +
+        // terminacao preta no verso one-sided). A UE liga a equivalente por default
+        // (AvoidSelfIntersections=3), mas aqui o DEFAULT E OFF: com o gather tracando sem culling,
+        // o backface ja bloqueia o raio por si, entao a terminacao preta so troca "quase preto"
+        // por "exatamente zero" — diferenca invisivel na matriz 2x2 medida no alvo cru, contra um
+        // HitIsBackface por raio. Fica como instrumento, a religar quando o custo/beneficio for
+        // medido (ou se o culling voltar ao gather, quando ela deixa de ser inerte).
+        void SetBackfacePolicy(bool V) { if (V != BackfacePolicy) NeedsClear = true;
+                                         BackfacePolicy = V; }
+        bool GetBackfacePolicy() const { return BackfacePolicy; }
+        bool GetFoliageShadows() const { return FoliageShadows; }
+        // NAO invalidam: o espacial nao realimenta o temporal, entao nem Spatial nem Visibility
+        // (que so atua no Pass B e no resolve final) tocam o que esta gravado no reservoir.
         void SetSpatial(bool V)    { Spatial = V; }
         bool GetSpatial() const    { return Spatial; }
         void SetVisibility(bool V) { Visibility = V; }
@@ -82,8 +131,8 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;   // 13 SRV, 5 UAV, heap-directly-indexed (Pass A)
-        FVolumetricPipeline SpatialPSO; // 7 SRV, 1 UAV (Pass B)
+        FVolumetricPipeline TracePSO;   // 14 SRV, 5 UAV, heap-directly-indexed (Pass A)
+        FVolumetricPipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
         FVolumetricPipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> GITexture;
@@ -106,12 +155,17 @@ namespace Smile {
         u32 ResBUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResCUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResDUAV[2] = { kInvalidSlot, kInvalidSlot };
-        // Por paridade: TraceTable[p] = 13 SRVs [TLAS,sky,inst,irrad,verts,idx,depth,gbuf,vel,prevA..D]
-        // (prev = Res*[1-p]); TraceUAVTable[p] = 5 UAVs [GITex,currA..D] (curr = Res*[p]).
-        // SpatialTable[p] = 7 SRVs [TLAS, currA..D, gbuf, depth].
-        u32 TraceTable[2]    = { kInvalidSlot, kInvalidSlot };
-        u32 TraceUAVTable[2] = { kInvalidSlot, kInvalidSlot };
-        u32 SpatialTable[2]  = { kInvalidSlot, kInvalidSlot };
+        // Indexadas pela PARIDADE do ping-pong (FrameParity), nao pelo FrameSlot do frame em voo:
+        // o conteudo da tabela depende de qual conjunto de reservoirs e prev e qual e curr.
+        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,inst,inst,depth,gbuf,vel,prevA..D,luzes]
+        //                    (prev = Res*[1-p]; o 14o, t13, e reescrito por frame — ver
+        //                     SetPunctualLightsSRV, que DEVE usar a mesma paridade do RecordTrace).
+        // TraceUAVTable[p] = 5 UAVs  [GITex, currA..D] (curr = Res*[p]).
+        // SpatialTable[p]  = 10 SRVs [TLAS, currA..D, gbuf, depth, inst, inst, inst].
+        static constexpr u32 kParityTables = 2;
+        u32 TraceTable[kParityTables]    = { kInvalidSlot, kInvalidSlot };
+        u32 TraceUAVTable[kParityTables] = { kInvalidSlot, kInvalidSlot };
+        u32 SpatialTable[kParityTables]  = { kInvalidSlot, kInvalidSlot };
         // NRD pack (Fase C). PackSrvTable = [GITex,gbuf,depth,vel]; PackUavTable = [viewZ,nr,mv,radHit].
         u32 PackSrvTable = kInvalidSlot;
         u32 PackUavTable = kInvalidSlot;
@@ -131,7 +185,6 @@ namespace Smile {
 
         u32  Width = 0, Height = 0;
         u32  FrameParity = 0;
-        u32  CurrParity  = 0;
         bool NeedsClear  = false;
         bool Initialized = false;
         bool Ready       = false;
@@ -142,12 +195,27 @@ namespace Smile {
         bool Temporal       = true;
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
-        bool Visibility     = false;  // visibility ray no resolve espacial — caro; off por padrao
+        bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
+        bool BackfacePolicy = false;  // retrace + terminacao preta no verso one-sided (ver setter)
+        bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
+                                      // visibilidade nos pesos MIS da correcao de bias (ate K raios).
+                                      // Off por padrao (custo); toggle no editor p/ A/B
         f32  MCap           = 20.0f;
+        // MaxAge saiu daqui p/ o FRayEpsilonProfile: virou knob de calibracao junto com os
+        // epsilons de raio, e o perfil e compartilhado com reflexoes/DDGI.
         f32  PosRejectScale = 0.01f;
-        f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off)
+        f32  ValidateInterval = 0.0f; // re-shade periodico da amostra temporal: 0 = off (config
+                                      // estavel do bisect 2026-07-12). ATENCAO: com TimeOfDay
+                                      // animando, radiancia velha persiste no reservoir — religar
+                                      // com 8 quando o sol dinamico voltar a importar
+        f32  FireflyMax     = 8.0f;   // teto de luminancia do sample (anti-firefly; 0 = off) — caminho NRD
+        f32  FireflyMaxRaw  = 4.0f;   // teto mais apertado p/ GI CRU (RR/None): sem o NRD limpando o
+                                      // residuo, o RR/deferred mostra os sparkles direto (0 = off)
         f32  SpatialRadius  = 16.0f;  // raio (px) dos vizinhos
         f32  SpatialCount   = 4.0f;   // nº de vizinhos
         f32  NormalReject   = 0.9f;   // dot(n_q, n_r) minimo
+
+        // Perfil compartilhado (dono = Renderer). Escrito em RayEpsA/B + TraceParams.w.
+        FRayEpsilonProfile RayEps;
     };
 }

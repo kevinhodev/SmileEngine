@@ -36,6 +36,7 @@ namespace SmileEditor {
         if (!Window) return;
         if (Window->isMaximized()) Window->showNormal();
         else                       Window->showMaximized();
+        emit MaximizedChanged();
     }
 
     void WindowBridge::close() {

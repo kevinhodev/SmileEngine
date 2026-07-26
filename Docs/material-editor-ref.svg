@@ -1,0 +1,399 @@
+<svg viewBox="0 0 1480 920" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, sans-serif">
+  <defs>
+    <!-- Ceu do preview (TOD fim de tarde) -->
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232c3d"/>
+      <stop offset="0.55" stop-color="#4a4a52"/>
+      <stop offset="0.78" stop-color="#8a6748"/>
+      <stop offset="0.82" stop-color="#5a4433"/>
+      <stop offset="1" stop-color="#16140f"/>
+    </linearGradient>
+    <radialGradient id="sunGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f0c98a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#f0c98a" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Esfera PBR (tijolo) -->
+    <radialGradient id="sphere" cx="0.36" cy="0.32" r="0.95">
+      <stop offset="0" stop-color="#d99b76"/>
+      <stop offset="0.35" stop-color="#9a5a44"/>
+      <stop offset="0.75" stop-color="#5e3527"/>
+      <stop offset="1" stop-color="#2c1a13"/>
+    </radialGradient>
+    <radialGradient id="spec" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff3df" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#fff3df" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="1" y1="0.2" x2="0.4" y2="0.6">
+      <stop offset="0" stop-color="#ffb36b" stop-opacity="0.5"/>
+      <stop offset="0.35" stop-color="#ffb36b" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Thumbnails de textura -->
+    <linearGradient id="tAlbedo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a05a42"/><stop offset="1" stop-color="#6e3c2a"/>
+    </linearGradient>
+    <linearGradient id="tNormal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8d8df0"/><stop offset="1" stop-color="#5757b8"/>
+    </linearGradient>
+    <linearGradient id="tMR" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3f7f5f"/><stop offset="1" stop-color="#274e3a"/>
+    </linearGradient>
+    <linearGradient id="tAO" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#bdb8ac"/><stop offset="1" stop-color="#57534a"/>
+    </linearGradient>
+    <linearGradient id="tEmis" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a2a14"/><stop offset="1" stop-color="#c97b2d"/>
+    </linearGradient>
+    <linearGradient id="tHeight" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e8e4da"/><stop offset="1" stop-color="#3a382f"/>
+    </linearGradient>
+    <!-- Mini-esferas da lista -->
+    <radialGradient id="mBrick" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#d99b76"/><stop offset="1" stop-color="#4a2a1d"/>
+    </radialGradient>
+    <radialGradient id="mStone" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#c9c4b8"/><stop offset="1" stop-color="#4e4a42"/>
+    </radialGradient>
+    <radialGradient id="mLeaf" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#8fbf5f"/><stop offset="1" stop-color="#2c4a1e"/>
+    </radialGradient>
+    <radialGradient id="mGlass" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#bcd8e8" stop-opacity="0.9"/><stop offset="1" stop-color="#2e4452"/>
+    </radialGradient>
+    <radialGradient id="mMetal" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#e8e9ec"/><stop offset="1" stop-color="#3c3e44"/>
+    </radialGradient>
+    <radialGradient id="mWood" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#b98a56"/><stop offset="1" stop-color="#4a3218"/>
+    </radialGradient>
+    <radialGradient id="mRed" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#e07a6a"/><stop offset="1" stop-color="#6e2318"/>
+    </radialGradient>
+    <radialGradient id="mLantern" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#ffd98a"/><stop offset="1" stop-color="#7a4a12"/>
+    </radialGradient>
+    <radialGradient id="mCurtain" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#d8cfc2"/><stop offset="1" stop-color="#5e5648"/>
+    </radialGradient>
+    <!-- fade do fim da lista -->
+    <linearGradient id="listFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#141511" stop-opacity="0"/>
+      <stop offset="1" stop-color="#141511"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ===== Janela ===== -->
+  <rect x="0" y="0" width="1480" height="920" rx="10" fill="#141511"/>
+  <rect x="0.5" y="0.5" width="1479" height="919" rx="10" fill="none" stroke="#2a2b24"/>
+
+  <!-- Barra de titulo -->
+  <text x="18" y="24" font-size="12" fill="#e6e2d8" font-weight="600">Editor de Materiais</text>
+  <text x="148" y="24" font-size="12" fill="#6c6a61">—  Bistro_Exterior.sscene</text>
+  <circle cx="1416" cy="19" r="5" fill="#23241d"/><circle cx="1436" cy="19" r="5" fill="#23241d"/><circle cx="1456" cy="19" r="5" fill="#23241d"/>
+  <line x1="0" y1="36" x2="1480" y2="36" stroke="#23241d"/>
+
+  <!-- ===== Toolbar ===== -->
+  <!-- Pegar da cena (conta-gotas, Cry) -->
+  <rect x="16" y="44" width="128" height="28" rx="6" fill="#1a1b15" stroke="#2a2b24"/>
+  <path d="M30 64 l7-7 m0 0 l3 3 5-7 -1 -1 -7 5 z" stroke="#5b9dff" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  <text x="48" y="62" font-size="11" fill="#c8c2b4">Pegar da cena</text>
+  <!-- Salvar / Reverter -->
+  <rect x="152" y="44" width="76" height="28" rx="6" fill="#5b9dff"/>
+  <text x="190" y="62" font-size="11" fill="#10151d" font-weight="600" text-anchor="middle">Salvar</text>
+  <rect x="236" y="44" width="82" height="28" rx="6" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="277" y="62" font-size="11" fill="#9a958a" text-anchor="middle">Reverter</text>
+  <line x1="332" y1="46" x2="332" y2="70" stroke="#23241d"/>
+  <!-- Aplicar ao vivo (Flax) -->
+  <text x="346" y="62" font-size="11" fill="#c8c2b4">Aplicar ao vivo</text>
+  <rect x="428" y="48" width="36" height="20" rx="10" fill="#5b9dff"/>
+  <circle cx="454" cy="58" r="7" fill="#f2efe6"/>
+  <!-- Busca de parametro (UE) -->
+  <rect x="1188" y="44" width="276" height="28" rx="6" fill="#1a1b15" stroke="#2a2b24"/>
+  <circle cx="1204" cy="58" r="5" fill="none" stroke="#6c6a61" stroke-width="1.4"/>
+  <line x1="1208" y1="62" x2="1212" y2="66" stroke="#6c6a61" stroke-width="1.4"/>
+  <text x="1222" y="62" font-size="11" fill="#6c6a61">Buscar parâmetro…  (Ctrl+F)</text>
+
+  <!-- ===== Painel esquerdo: browser de materiais ===== -->
+  <rect x="12" y="84" width="280" height="798" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <rect x="26" y="98" width="252" height="28" rx="6" fill="#141511" stroke="#2a2b24"/>
+  <circle cx="42" cy="112" r="5" fill="none" stroke="#6c6a61" stroke-width="1.4"/>
+  <line x1="46" y1="116" x2="50" y2="120" stroke="#6c6a61" stroke-width="1.4"/>
+  <text x="58" y="116" font-size="11" fill="#6c6a61">Buscar material…</text>
+  <!-- chips de filtro -->
+  <rect x="26" y="136" width="46" height="20" rx="10" fill="#5b9dff"/>
+  <text x="49" y="150" font-size="10" fill="#10151d" font-weight="600" text-anchor="middle">Todos</text>
+  <rect x="78" y="136" width="52" height="20" rx="10" fill="#141511" stroke="#2a2b24"/>
+  <text x="104" y="150" font-size="10" fill="#9a958a" text-anchor="middle">Opacos</text>
+  <rect x="136" y="136" width="44" height="20" rx="10" fill="#141511" stroke="#2a2b24"/>
+  <text x="158" y="150" font-size="10" fill="#9a958a" text-anchor="middle">Blend</text>
+  <rect x="186" y="136" width="56" height="20" rx="10" fill="#141511" stroke="#2a2b24"/>
+  <text x="214" y="150" font-size="10" fill="#9a958a" text-anchor="middle">Foliage</text>
+  <rect x="248" y="136" width="40" height="20" rx="10" fill="#141511" stroke="#2a2b24"/>
+  <text x="268" y="150" font-size="10" fill="#9a958a" text-anchor="middle">POM</text>
+
+  <!-- item selecionado -->
+  <rect x="20" y="168" width="264" height="52" rx="6" fill="#20261f"/>
+  <rect x="20" y="172" width="3" height="44" rx="1.5" fill="#5b9dff"/>
+  <circle cx="48" cy="194" r="16" fill="url(#mBrick)"/>
+  <text x="74" y="190" font-size="11.5" fill="#e6e2d8" font-weight="600">M_Bricks_Facade</text>
+  <text x="74" y="206" font-size="10" fill="#9a958a">14 meshes · 34,2 MB</text>
+  <rect x="236" y="182" width="40" height="16" rx="8" fill="#141511" stroke="#2a2b24"/>
+  <text x="256" y="193.5" font-size="9" fill="#e8c565" text-anchor="middle">POM</text>
+
+  <!-- demais itens -->
+  <g font-size="11.5" fill="#c8c2b4">
+    <circle cx="48" cy="248" r="16" fill="url(#mStone)"/>
+    <text x="74" y="244">M_Cobblestone</text>
+    <text x="74" y="260" font-size="10" fill="#6c6a61">22 meshes · 28,6 MB</text>
+    <rect x="236" y="236" width="40" height="16" rx="8" fill="#141511" stroke="#2a2b24"/>
+    <text x="256" y="247.5" font-size="9" fill="#e8c565" text-anchor="middle">POM</text>
+
+    <circle cx="48" cy="302" r="16" fill="url(#mLeaf)"/>
+    <text x="74" y="298">M_Foliage_Linde</text>
+    <text x="74" y="314" font-size="10" fill="#6c6a61">31 meshes · 18,1 MB</text>
+    <rect x="236" y="290" width="40" height="16" rx="8" fill="#141511" stroke="#2a2b24"/>
+    <text x="256" y="301.5" font-size="9" fill="#8fbf5f" text-anchor="middle">FOL</text>
+
+    <circle cx="48" cy="356" r="16" fill="url(#mGlass)"/>
+    <text x="74" y="352">M_Glass_Windows</text>
+    <text x="74" y="368" font-size="10" fill="#6c6a61">9 meshes · 4,4 MB</text>
+    <rect x="230" y="344" width="46" height="16" rx="8" fill="#141511" stroke="#2a2b24"/>
+    <text x="253" y="355.5" font-size="9" fill="#7fb8d8" text-anchor="middle">BLEND</text>
+
+    <circle cx="48" cy="410" r="16" fill="url(#mMetal)"/>
+    <text x="74" y="406">M_Metal_Trim</text>
+    <text x="74" y="422" font-size="10" fill="#6c6a61">17 meshes · 12,3 MB</text>
+
+    <circle cx="48" cy="464" r="16" fill="url(#mWood)"/>
+    <text x="74" y="460">M_Wood_Doors</text>
+    <text x="74" y="476" font-size="10" fill="#6c6a61">11 meshes · 16,8 MB</text>
+
+    <circle cx="48" cy="518" r="16" fill="url(#mRed)"/>
+    <text x="74" y="514">M_Awning_Red</text>
+    <text x="74" y="530" font-size="10" fill="#6c6a61">6 meshes · 8,2 MB</text>
+    <rect x="244" y="506" width="32" height="16" rx="8" fill="#141511" stroke="#2a2b24"/>
+    <text x="260" y="517.5" font-size="9" fill="#9a958a" text-anchor="middle">2S</text>
+
+    <circle cx="48" cy="572" r="16" fill="url(#mCurtain)"/>
+    <text x="74" y="568">M_Curtains</text>
+    <text x="74" y="584" font-size="10" fill="#6c6a61">8 meshes · 6,0 MB</text>
+    <rect x="244" y="560" width="32" height="16" rx="8" fill="#141511" stroke="#2a2b24"/>
+    <text x="260" y="571.5" font-size="9" fill="#9a958a" text-anchor="middle">2S</text>
+
+    <circle cx="48" cy="626" r="16" fill="url(#mLantern)"/>
+    <text x="74" y="622">M_Lantern_Glass</text>
+    <text x="74" y="638" font-size="10" fill="#6c6a61">12 meshes · 2,1 MB</text>
+    <rect x="238" y="614" width="38" height="16" rx="8" fill="#141511" stroke="#2a2b24"/>
+    <text x="257" y="625.5" font-size="9" fill="#e8c565" text-anchor="middle">EMIS</text>
+
+    <circle cx="48" cy="680" r="16" fill="url(#mStone)" opacity="0.85"/>
+    <text x="74" y="676">M_Roof_Tiles</text>
+    <text x="74" y="692" font-size="10" fill="#6c6a61">19 meshes · 21,4 MB</text>
+
+    <circle cx="48" cy="734" r="16" fill="url(#mWood)" opacity="0.85"/>
+    <text x="74" y="730">M_Fence_Planks</text>
+    <text x="74" y="746" font-size="10" fill="#6c6a61">7 meshes · 9,7 MB</text>
+
+    <circle cx="48" cy="788" r="16" fill="url(#mMetal)" opacity="0.85"/>
+    <text x="74" y="784">M_Street_Lamp</text>
+    <text x="74" y="800" font-size="10" fill="#6c6a61">10 meshes · 5,5 MB</text>
+  </g>
+  <rect x="14" y="770" width="276" height="86" fill="url(#listFade)"/>
+  <!-- scrollbar fino -->
+  <rect x="284" y="200" width="3" height="180" rx="1.5" fill="#33342c"/>
+  <line x1="12" y1="850" x2="292" y2="850" stroke="#23241d"/>
+  <text x="26" y="870" font-size="10.5" fill="#6c6a61">42 materiais na cena · ordenar por VRAM ▾</text>
+
+  <!-- ===== Centro: preview ===== -->
+  <rect x="304" y="84" width="776" height="798" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <!-- toolbar do preview -->
+  <g>
+    <!-- primitivas: esfera (ativa), cubo, cilindro, plano, mesh da cena -->
+    <rect x="318" y="96" width="30" height="26" rx="6" fill="#20261f" stroke="#5b9dff"/>
+    <circle cx="333" cy="109" r="8" fill="none" stroke="#e6e2d8" stroke-width="1.5"/>
+    <ellipse cx="333" cy="109" rx="8" ry="3.2" fill="none" stroke="#e6e2d8" stroke-width="0.9"/>
+    <rect x="352" y="96" width="30" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <path d="M361 106 l6-4 6 4 v7 l-6 4 -6-4 z M361 106 l6 4 6-4 M367 110 v7" fill="none" stroke="#9a958a" stroke-width="1.2"/>
+    <rect x="386" y="96" width="30" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <path d="M394 104 a7 2.6 0 0 0 14 0 v10 a7 2.6 0 0 1 -14 0 z" fill="none" stroke="#9a958a" stroke-width="1.2"/>
+    <rect x="420" y="96" width="30" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <path d="M427 114 l7-9 9 0 -7 9 z" fill="none" stroke="#9a958a" stroke-width="1.2"/>
+    <rect x="454" y="96" width="96" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <text x="502" y="113" font-size="10.5" fill="#9a958a" text-anchor="middle">Mesh da cena ▾</text>
+    <!-- ambiente TOD -->
+    <rect x="700" y="96" width="150" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <circle cx="716" cy="109" r="5" fill="#e8c565"/>
+    <text x="728" y="113" font-size="10.5" fill="#c8c2b4">Ambiente: TOD 17:30 ▾</text>
+    <!-- girar luz / wireframe / isolar -->
+    <rect x="858" y="96" width="30" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <path d="M866 109 a7 7 0 1 1 3 6 M866 109 l-2-4 M866 109 l4-1" fill="none" stroke="#9a958a" stroke-width="1.3"/>
+    <rect x="892" y="96" width="30" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <path d="M899 116 l6-13 6 13 z M902 110 h7" fill="none" stroke="#9a958a" stroke-width="1.2"/>
+    <rect x="926" y="96" width="140" height="26" rx="6" fill="#141511" stroke="#2a2b24"/>
+    <text x="996" y="113" font-size="10.5" fill="#5b9dff" text-anchor="middle">Isolar meshes na cena</text>
+  </g>
+
+  <!-- viewport -->
+  <rect x="318" y="134" width="748" height="672" rx="6" fill="url(#sky)"/>
+  <circle cx="470" cy="640" r="130" fill="url(#sunGlow)"/>
+  <!-- grade do chao em perspectiva -->
+  <g stroke="#3a362c" stroke-width="1" opacity="0.5">
+    <line x1="318" y1="700" x2="1066" y2="700"/>
+    <line x1="318" y1="726" x2="1066" y2="726"/>
+    <line x1="318" y1="760" x2="1066" y2="760"/>
+    <line x1="452" y1="806" x2="612" y2="662"/>
+    <line x1="612" y1="806" x2="666" y2="662"/>
+    <line x1="772" y1="806" x2="720" y2="662"/>
+    <line x1="932" y1="806" x2="774" y2="662"/>
+  </g>
+  <rect x="318" y="656" width="748" height="6" fill="#241f17" opacity="0.6"/>
+  <!-- sombra + esfera -->
+  <ellipse cx="692" cy="682" rx="150" ry="26" fill="#0c0b08" opacity="0.55"/>
+  <circle cx="692" cy="446" r="168" fill="url(#sphere)"/>
+  <circle cx="692" cy="446" r="168" fill="url(#rim)"/>
+  <circle cx="626" cy="380" r="34" fill="url(#spec)"/>
+  <!-- bumps sutis (normal map) -->
+  <g fill="#2c1a13" opacity="0.18">
+    <circle cx="640" cy="480" r="7"/><circle cx="700" cy="520" r="6"/><circle cx="756" cy="470" r="7"/>
+    <circle cx="720" cy="410" r="5"/><circle cx="600" cy="430" r="5"/><circle cx="668" cy="560" r="5"/>
+    <circle cx="770" cy="530" r="4"/><circle cx="742" cy="352" r="4"/><circle cx="648" cy="330" r="4"/>
+  </g>
+  <text x="334" y="792" font-size="10" fill="#9a958a" opacity="0.85">RMB orbita · Scroll zoom · L arrasta a luz</text>
+
+  <!-- stats do preview -->
+  <line x1="304" y1="818" x2="1080" y2="818" stroke="#23241d"/>
+  <g font-size="10.5" fill="#9a958a">
+    <text x="322" y="856">Esfera · 960 tris</text>
+    <text x="452" y="856">Texturas: 6/8 slots · 34,2 MB VRAM</text>
+    <text x="682" y="856">DefaultLit · POM ON · 2 lados OFF</text>
+    <text x="1048" y="856" text-anchor="end" fill="#8fbf5f">Preview 1,9 ms</text>
+  </g>
+
+  <!-- ===== Painel direito: propriedades ===== -->
+  <!-- Cabecalho do material -->
+  <rect x="1092" y="84" width="376" height="60" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <circle cx="1116" cy="114" r="14" fill="url(#mBrick)"/>
+  <text x="1140" y="110" font-size="12.5" fill="#e6e2d8" font-weight="600">M_Bricks_Facade</text>
+  <text x="1140" y="128" font-size="10.5" fill="#9a958a">usado por 14 meshes ·</text>
+  <text x="1262" y="128" font-size="10.5" fill="#5b9dff">selecionar no Outliner</text>
+
+  <!-- Card Base -->
+  <rect x="1092" y="154" width="376" height="188" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="1106" y="176" font-size="12" fill="#e6e2d8" font-weight="500">Base</text>
+  <line x1="1092" y1="188" x2="1468" y2="188" stroke="#23241d"/>
+  <g font-size="11" fill="#c8c2b4">
+    <text x="1106" y="212">Cor base</text>
+    <rect x="1330" y="200" width="46" height="18" rx="4" fill="#9a5a44" stroke="#2a2b24"/>
+    <text x="1454" y="212" text-anchor="end" fill="#9a958a">#9A5A44</text>
+
+    <text x="1106" y="242">Metálico</text>
+    <rect x="1250" y="236" width="140" height="4" rx="2" fill="#23241d"/>
+    <rect x="1250" y="236" width="0" height="4" rx="2" fill="#5b9dff"/>
+    <circle cx="1252" cy="238" r="6" fill="#f2efe6"/>
+    <text x="1454" y="242" text-anchor="end" fill="#9a958a">0,00</text>
+
+    <text x="1106" y="272">Rugosidade</text>
+    <rect x="1250" y="266" width="140" height="4" rx="2" fill="#23241d"/>
+    <rect x="1250" y="266" width="87" height="4" rx="2" fill="#5b9dff"/>
+    <circle cx="1337" cy="268" r="6" fill="#f2efe6"/>
+    <text x="1454" y="272" text-anchor="end" fill="#9a958a">0,62</text>
+
+    <text x="1106" y="302">Força do AO</text>
+    <rect x="1250" y="296" width="140" height="4" rx="2" fill="#23241d"/>
+    <rect x="1250" y="296" width="140" height="4" rx="2" fill="#5b9dff"/>
+    <circle cx="1390" cy="298" r="6" fill="#f2efe6"/>
+    <text x="1454" y="302" text-anchor="end" fill="#9a958a">1,00</text>
+
+    <text x="1106" y="332">Emissivo</text>
+    <rect x="1330" y="320" width="46" height="18" rx="4" fill="#141511" stroke="#2a2b24"/>
+    <text x="1454" y="332" text-anchor="end" fill="#9a958a">× 1,0</text>
+  </g>
+
+  <!-- Card Texturas -->
+  <rect x="1092" y="352" width="376" height="228" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="1106" y="374" font-size="12" fill="#e6e2d8" font-weight="500">Texturas</text>
+  <rect x="1346" y="360" width="108" height="20" rx="5" fill="#141511" stroke="#2a2b24"/>
+  <text x="1400" y="374" font-size="10" fill="#9a958a" text-anchor="middle">Packing: MR ▾</text>
+  <line x1="1092" y1="386" x2="1468" y2="386" stroke="#23241d"/>
+  <!-- grade 4x2 -->
+  <g font-size="9.5" fill="#9a958a" text-anchor="middle">
+    <rect x="1106" y="398" width="80" height="54" rx="5" fill="url(#tAlbedo)" stroke="#2a2b24"/>
+    <text x="1146" y="466">Albedo · BC7</text>
+    <rect x="1194" y="398" width="80" height="54" rx="5" fill="url(#tNormal)" stroke="#2a2b24"/>
+    <text x="1234" y="466">Normal · BC5</text>
+    <rect x="1282" y="398" width="80" height="54" rx="5" fill="url(#tMR)" stroke="#2a2b24"/>
+    <text x="1322" y="466">MetalRough</text>
+    <rect x="1370" y="398" width="80" height="54" rx="5" fill="url(#tAO)" stroke="#2a2b24"/>
+    <text x="1410" y="466">AO</text>
+
+    <rect x="1106" y="480" width="80" height="54" rx="5" fill="url(#tEmis)" stroke="#2a2b24"/>
+    <text x="1146" y="548">Emissivo</text>
+    <rect x="1194" y="480" width="80" height="54" rx="5" fill="url(#tHeight)" stroke="#2a2b24"/>
+    <text x="1234" y="548">Height</text>
+    <rect x="1282" y="480" width="80" height="54" rx="5" fill="none" stroke="#33342c" stroke-dasharray="4 3"/>
+    <text x="1322" y="511" font-size="16" fill="#6c6a61">+</text>
+    <text x="1322" y="548">Metal (solto)</text>
+    <rect x="1370" y="480" width="80" height="54" rx="5" fill="none" stroke="#33342c" stroke-dasharray="4 3"/>
+    <text x="1410" y="511" font-size="16" fill="#6c6a61">+</text>
+    <text x="1410" y="548">Rough (solto)</text>
+  </g>
+  <text x="1106" y="570" font-size="10" fill="#6c6a61">Clique troca · botão direito limpa · arraste um arquivo pro slot</text>
+
+  <!-- Card Normal -->
+  <rect x="1092" y="590" width="376" height="92" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="1106" y="612" font-size="12" fill="#e6e2d8" font-weight="500">Normal</text>
+  <line x1="1092" y1="624" x2="1468" y2="624" stroke="#23241d"/>
+  <g font-size="11" fill="#c8c2b4">
+    <text x="1106" y="648">Força</text>
+    <rect x="1250" y="642" width="140" height="4" rx="2" fill="#23241d"/>
+    <rect x="1250" y="642" width="112" height="4" rx="2" fill="#5b9dff"/>
+    <circle cx="1362" cy="644" r="6" fill="#f2efe6"/>
+    <text x="1454" y="648" text-anchor="end" fill="#9a958a">0,80</text>
+    <text x="1106" y="672">Flip Y (DirectX)</text>
+    <rect x="1216" y="660" width="36" height="20" rx="10" fill="#23241d" stroke="#33342c"/>
+    <circle cx="1225" cy="670" r="7" fill="#6c6a61"/>
+    <text x="1300" y="672">BC5 → reconstruir Z</text>
+    <rect x="1418" y="660" width="36" height="20" rx="10" fill="#5b9dff"/>
+    <circle cx="1444" cy="670" r="7" fill="#f2efe6"/>
+  </g>
+
+  <!-- Card Parallax -->
+  <rect x="1092" y="692" width="376" height="118" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="1106" y="714" font-size="12" fill="#e6e2d8" font-weight="500">Parallax (POM)</text>
+  <rect x="1418" y="698" width="36" height="20" rx="10" fill="#5b9dff"/>
+  <circle cx="1444" cy="708" r="7" fill="#f2efe6"/>
+  <line x1="1092" y1="726" x2="1468" y2="726" stroke="#23241d"/>
+  <g font-size="11" fill="#c8c2b4">
+    <text x="1106" y="750">Altura</text>
+    <rect x="1250" y="744" width="140" height="4" rx="2" fill="#23241d"/>
+    <rect x="1250" y="744" width="42" height="4" rx="2" fill="#5b9dff"/>
+    <circle cx="1292" cy="746" r="6" fill="#f2efe6"/>
+    <text x="1454" y="750" text-anchor="end" fill="#9a958a">0,05</text>
+    <text x="1106" y="776">Passos (mín/máx)</text>
+    <rect x="1250" y="764" width="60" height="20" rx="5" fill="#141511" stroke="#2a2b24"/>
+    <text x="1280" y="778" text-anchor="middle" fill="#9a958a">8</text>
+    <rect x="1318" y="764" width="60" height="20" rx="5" fill="#141511" stroke="#2a2b24"/>
+    <text x="1348" y="778" text-anchor="middle" fill="#9a958a">32</text>
+    <text x="1106" y="800">Auto-sombra</text>
+    <rect x="1216" y="788" width="36" height="20" rx="10" fill="#23241d" stroke="#33342c"/>
+    <circle cx="1225" cy="798" r="7" fill="#6c6a61"/>
+    <text x="1300" y="800">Refino binário</text>
+    <rect x="1418" y="788" width="36" height="20" rx="10" fill="#23241d" stroke="#33342c"/>
+    <circle cx="1427" cy="798" r="7" fill="#6c6a61"/>
+  </g>
+
+  <!-- Cards colapsados -->
+  <rect x="1092" y="820" width="376" height="30" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="1106" y="840" font-size="12" fill="#e6e2d8" font-weight="500">Transparência</text>
+  <text x="1360" y="840" font-size="10.5" fill="#6c6a61">AlphaTest OFF · Blend OFF</text>
+  <text x="1454" y="840" font-size="11" fill="#6c6a61" text-anchor="end">▸</text>
+  <rect x="1092" y="856" width="376" height="26" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="1106" y="874" font-size="12" fill="#e6e2d8" font-weight="500">Shading</text>
+  <text x="1332" y="874" font-size="10.5" fill="#6c6a61">DefaultLit · 2 lados OFF</text>
+  <text x="1454" y="874" font-size="11" fill="#6c6a61" text-anchor="end">▸</text>
+
+  <!-- ===== Status bar ===== -->
+  <line x1="0" y1="892" x2="1480" y2="892" stroke="#23241d"/>
+  <text x="16" y="910" font-size="10.5" fill="#6c6a61">Overrides → Bistro_Exterior.materials.json (sidecar, mesmo padrão do .visibility.json)</text>
+  <circle cx="1310" cy="906" r="3.5" fill="#e8c565"/>
+  <text x="1320" y="910" font-size="10.5" fill="#c8c2b4">3 alterações não salvas · Ctrl+S</text>
+</svg>

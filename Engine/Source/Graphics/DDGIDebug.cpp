@@ -6,6 +6,8 @@
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
@@ -136,6 +138,7 @@ namespace Smile {
         BuildPSOs(_Device, _RTFormat, _DSFormat);
 
         StatsPSO.Initialize(_Device, "DDGIDebugStats.cs_6_0.cso", 1, 1);
+        PointDiagnosticPSO.Initialize(_Device, "DDGIDebugPoint.cs_6_0.cso", 5, 1);
 
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
@@ -151,14 +154,22 @@ namespace Smile {
                  D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
         D3D12_RANGE NoRead{ 0, 0 };
         SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBBase)));
+        CreatePointDiagnosticResources(_Device);
     }
 
     void FDDGIDebug::Recreate(ID3D12Device* _Device,
                               DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         BuildPSOs(_Device, _RTFormat, _DSFormat);
+        StatsPSO = FVolumetricPipeline{};
+        PointDiagnosticPSO = FVolumetricPipeline{};
+        StatsPSO.Initialize(_Device, "DDGIDebugStats.cs_6_0.cso", 1, 1);
+        PointDiagnosticPSO.Initialize(
+            _Device, "DDGIDebugPoint.cs_6_0.cso", 5, 1);
     }
 
     void FDDGIDebug::SetupForScene(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap, u32 _NumProbes) {
+        CancelPointDiagnostic();
+        PointInputsReady = false;
         auto FreeSlot = [&](u32& Slot) {
             if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, 1); Slot = kInvalidSlot; }
         };
@@ -203,6 +214,297 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, ProbeStatsBuf.Get(), Uav, ProbeStatsUAVSlot);
     }
 
+    void FDDGIDebug::CreatePointDiagnosticResources(ID3D12Device* _Device) {
+        static_assert(FCommandQueue::kFramesInFlight == 2,
+                      "Atualize os arrays de readback do diagnostico DDGI");
+
+        D3D12_RESOURCE_DESC Desc{};
+        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
+                                sizeof(PointDiagnosticConstants);
+        Desc.Height           = 1;
+        Desc.DepthOrArraySize = 1;
+        Desc.MipLevels        = 1;
+        Desc.Format           = DXGI_FORMAT_UNKNOWN;
+        Desc.SampleDesc       = { 1, 0 };
+        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        D3D12_HEAP_PROPERTIES UploadHeap{};
+        UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&PointDiagnosticCB)));
+        D3D12_RANGE NoRead{ 0, 0 };
+        SMILE_HR(PointDiagnosticCB->Map(
+            0, &NoRead, reinterpret_cast<void**>(&PointDiagnosticMappedCB)));
+
+        Desc.Width = static_cast<UINT64>(kPointOutputRows) * sizeof(Vec4);
+        Desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        D3D12_HEAP_PROPERTIES DefaultHeap{};
+        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&PointDiagnosticOutput)));
+        PointOutputState = D3D12_RESOURCE_STATE_COMMON;
+
+        Desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_HEAP_PROPERTIES ReadbackHeap{};
+        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+        for (u32 I = 0; I < FCommandQueue::kFramesInFlight; ++I) {
+            SMILE_HR(_Device->CreateCommittedResource(
+                &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &Desc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                IID_PPV_ARGS(&PointDiagnosticReadback[I])));
+            PointReadbackPending[I] = false;
+            PointReadbackVersion[I] = 0;
+        }
+    }
+
+    void FDDGIDebug::SetupPointDiagnosticInputs(
+            ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+            u32 _GBufferTableStart, const FDDGI& _DDGI) {
+        PointInputsReady = false;
+        if (!_DDGI.IsReady() || _GBufferTableStart == kInvalidSlot ||
+            _DDGI.IrradianceAtlasSRV() == kInvalidSlot ||
+            _DDGI.DistAtlasSRV() == kInvalidSlot ||
+            _DDGI.ProbeDataSRV() == kInvalidSlot ||
+            !PointDiagnosticOutput) {
+            return;
+        }
+
+        if (PointInputTableStart == kInvalidSlot)
+            PointInputTableStart = _SRVHeap.Allocate(5);
+        if (PointOutputUAVSlot == kInvalidSlot)
+            PointOutputUAVSlot = _SRVHeap.Allocate(1);
+
+        const D3D12_CPU_DESCRIPTOR_HANDLE Sources[5] = {
+            _SRVHeap.CpuHandleStaging(_GBufferTableStart + 1u), // normal oct
+            _SRVHeap.CpuHandleStaging(_GBufferTableStart + 3u), // depth
+            _SRVHeap.CpuHandleStaging(_DDGI.IrradianceAtlasSRV()),
+            _SRVHeap.CpuHandleStaging(_DDGI.DistAtlasSRV()),
+            _SRVHeap.CpuHandleStaging(_DDGI.ProbeDataSRV()),
+        };
+        UINT SourceCounts[5] = { 1, 1, 1, 1, 1 };
+        D3D12_CPU_DESCRIPTOR_HANDLE Destination =
+            _SRVHeap.CpuHandle(PointInputTableStart);
+        UINT DestinationCount = 5;
+        _Device->CopyDescriptors(
+            1, &Destination, &DestinationCount,
+            5, Sources, SourceCounts, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
+        Uav.ViewDimension       = D3D12_UAV_DIMENSION_BUFFER;
+        Uav.Format              = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        Uav.Buffer.FirstElement = 0;
+        Uav.Buffer.NumElements  = kPointOutputRows;
+        _SRVHeap.CreateUAV(
+            _Device, PointDiagnosticOutput.Get(), Uav, PointOutputUAVSlot);
+        PointInputsReady = true;
+    }
+
+    bool FDDGIDebug::RequestPointDiagnostic(u32 _X, u32 _Y) {
+        if (!PointInputsReady || PointRequestPending) return false;
+        PointRequestX = _X;
+        PointRequestY = _Y;
+        PointRequestPending = true;
+        PointResultReady = false;
+        ++PointRequestVersion;
+        return true;
+    }
+
+    void FDDGIDebug::CancelPointDiagnostic() {
+        PointRequestPending = false;
+        PointResultReady = false;
+        PointResult = {};
+        ++PointRequestVersion;
+    }
+
+    void FDDGIDebug::RecordPointDiagnostic(
+            u32 _FrameSlot, ID3D12GraphicsCommandList* _CL,
+            FTextureSRVHeap& _SRVHeap, const FDDGI& _DDGI,
+            const Mat44& _InvViewProj, const Vec3& _CameraPos,
+            u32 _Width, u32 _Height, u32 _GIFlags) {
+        if (!PointRequestPending || !PointInputsReady || !_DDGI.IsReady() ||
+            _FrameSlot >= FCommandQueue::kFramesInFlight ||
+            _Width == 0 || _Height == 0) {
+            return;
+        }
+
+        PointDiagnosticConstants* C =
+            reinterpret_cast<PointDiagnosticConstants*>(
+                PointDiagnosticMappedCB +
+                static_cast<size_t>(_FrameSlot) * sizeof(PointDiagnosticConstants));
+        const Vec3 GridMin = _DDGI.GridMin();
+        const Vec3 GridCount = _DDGI.GridCount();
+        C->InvViewProj = _InvViewProj;
+        C->GridMinSpacing = {
+            GridMin.X, GridMin.Y, GridMin.Z, _DDGI.Spacing()
+        };
+        C->GridCount = {
+            GridCount.X, GridCount.Y, GridCount.Z,
+            static_cast<f32>(_DDGI.NumProbesCount())
+        };
+        C->AtlasParams = {
+            _DDGI.TileSizeF(), _DDGI.AtlasW(), _DDGI.AtlasH(), 0.0f
+        };
+        C->DistAtlasParams = {
+            _DDGI.DistTileSizeF(), _DDGI.DistAtlasW(), _DDGI.DistAtlasH(),
+            _DDGI.DistanceMomentMax()
+        };
+        C->CameraPositionFlags = {
+            _CameraPos.X, _CameraPos.Y, _CameraPos.Z, static_cast<f32>(_GIFlags)
+        };
+        C->PixelParams = {
+            static_cast<f32>(std::min(PointRequestX, _Width - 1u)),
+            static_cast<f32>(std::min(PointRequestY, _Height - 1u)),
+            static_cast<f32>(_Width), static_cast<f32>(_Height)
+        };
+
+        if (PointOutputState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+            D3D12_RESOURCE_BARRIER ToUAV{};
+            ToUAV.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            ToUAV.Transition.pResource   = PointDiagnosticOutput.Get();
+            ToUAV.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ToUAV.Transition.StateBefore = PointOutputState;
+            ToUAV.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            _CL->ResourceBarrier(1, &ToUAV);
+            PointOutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+
+        PointDiagnosticPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(
+            0, PointDiagnosticCB->GetGPUVirtualAddress() +
+               static_cast<UINT64>(_FrameSlot) * sizeof(PointDiagnosticConstants));
+        _CL->SetComputeRootDescriptorTable(
+            1, _SRVHeap.GpuHandle(PointInputTableStart));
+        _CL->SetComputeRootDescriptorTable(
+            2, _SRVHeap.GpuHandle(PointOutputUAVSlot));
+        _CL->Dispatch(1, 1, 1);
+
+        D3D12_RESOURCE_BARRIER ToCopy{};
+        ToCopy.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        ToCopy.Transition.pResource   = PointDiagnosticOutput.Get();
+        ToCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        ToCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        ToCopy.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        _CL->ResourceBarrier(1, &ToCopy);
+        PointOutputState = D3D12_RESOURCE_STATE_COPY_SOURCE;
+
+        _CL->CopyBufferRegion(
+            PointDiagnosticReadback[_FrameSlot].Get(), 0,
+            PointDiagnosticOutput.Get(), 0,
+            static_cast<UINT64>(kPointOutputRows) * sizeof(Vec4));
+        PointReadbackPending[_FrameSlot] = true;
+        PointReadbackVersion[_FrameSlot] = PointRequestVersion;
+        PointRequestPending = false;
+    }
+
+    void FDDGIDebug::CollectPointDiagnostic(u32 _FrameSlot) {
+        if (_FrameSlot >= FCommandQueue::kFramesInFlight ||
+            !PointReadbackPending[_FrameSlot]) {
+            return;
+        }
+        PointReadbackPending[_FrameSlot] = false;
+        if (PointReadbackVersion[_FrameSlot] != PointRequestVersion) return;
+
+        void* Mapped = nullptr;
+        const SIZE_T Bytes = static_cast<SIZE_T>(kPointOutputRows) * sizeof(Vec4);
+        D3D12_RANGE ReadRange{ 0, Bytes };
+        SMILE_HR(PointDiagnosticReadback[_FrameSlot]->Map(
+            0, &ReadRange, &Mapped));
+        const Vec4* Rows = static_cast<const Vec4*>(Mapped);
+
+        FDDGIPointDiagnostic Result{};
+        Result.Valid = Rows[0].W > 0.5f;
+        if (Result.Valid) {
+            Result.WorldPosition = { Rows[0].X, Rows[0].Y, Rows[0].Z };
+            Result.WorldNormal   = { Rows[1].X, Rows[1].Y, Rows[1].Z };
+            Result.TotalWeight   = Rows[1].W;
+            f32 BestWeight = -1.0f;
+            // Abaixo deste limiar a perda de visibilidade e residual; nao destaque
+            // uma probe como "risco" apenas porque ela foi a maior entre oito zeros.
+            f32 BestRisk = 0.005f;
+            for (u32 I = 0; I < kPointProbeCount; ++I) {
+                const Vec4& A = Rows[2u + I * 3u];
+                const Vec4& B = Rows[3u + I * 3u];
+                const Vec4& C = Rows[4u + I * 3u];
+                FDDGIPointProbeDiagnostic& P = Result.Probes[I];
+                P.Active = A.X >= 0.0f && B.Z >= 0.0f;
+                const f32 IndexValue = P.Active ? A.X : (-A.X - 1.0f);
+                P.ProbeIndex = static_cast<u32>(
+                    std::max(0.0f, std::round(IndexValue)));
+                P.DistanceToPoint    = A.Y;
+                P.MeanDistance       = A.Z;
+                P.DistanceDeviation  = A.W;
+                P.TrilinearWeight    = B.X;
+                P.Visibility         = B.Y;
+                P.RawWeight          = P.Active ? B.Z : 0.0f;
+                P.NormalizedWeight   = P.Active ? B.W : 0.0f;
+                P.Irradiance         = { C.X, C.Y, C.Z };
+                P.LeakRisk           = P.Active ? C.W : 0.0f;
+                if (P.Active && P.NormalizedWeight > BestWeight) {
+                    BestWeight = P.NormalizedWeight;
+                    Result.DominantSlot = static_cast<i32>(I);
+                }
+                if (P.Active && P.LeakRisk > BestRisk) {
+                    BestRisk = P.LeakRisk;
+                    Result.RiskSlot = static_cast<i32>(I);
+                }
+            }
+        }
+
+        D3D12_RANGE NoWrite{ 0, 0 };
+        PointDiagnosticReadback[_FrameSlot]->Unmap(0, &NoWrite);
+        PointResult = Result;
+        PointResultReady = true;
+    }
+
+    bool FDDGIDebug::ConsumePointDiagnostic(
+            FDDGIPointDiagnostic& _OutDiagnostic) {
+        if (!PointResultReady) return false;
+        _OutDiagnostic = PointResult;
+        PointResultReady = false;
+        return true;
+    }
+
+    void FDDGIDebug::SetSelectedProbe(i32 _Probe) {
+        SelectedProbes.fill(-1);
+        SelectedWeights.fill(0.0f);
+        SelectedRiskSlot = -1;
+        FocusedProbe = _Probe;
+        if (_Probe >= 0) {
+            SelectedProbes[0] = _Probe;
+            SelectedWeights[0] = 1.0f;
+            SelectedProbeCount = 1;
+        } else {
+            SelectedProbeCount = 0;
+        }
+    }
+
+    void FDDGIDebug::SetSelectedProbes(
+            const u32* _ProbeIndices, const f32* _Weights,
+            u32 _Count, i32 _RiskSlot) {
+        SelectedProbes.fill(-1);
+        SelectedWeights.fill(0.0f);
+        SelectedProbeCount = std::min(_Count, kPointProbeCount);
+        for (u32 I = 0; I < SelectedProbeCount; ++I) {
+            SelectedProbes[I] = static_cast<i32>(_ProbeIndices[I]);
+            SelectedWeights[I] = _Weights ? std::max(_Weights[I], 0.0f) : 1.0f;
+        }
+        const bool FocusStillSelected = std::find(
+            SelectedProbes.begin(),
+            SelectedProbes.begin() + SelectedProbeCount,
+            FocusedProbe) != SelectedProbes.begin() + SelectedProbeCount;
+        if (!FocusStillSelected) {
+            FocusedProbe = SelectedProbeCount > 0 ? SelectedProbes[0] : -1;
+        }
+        SelectedRiskSlot = _RiskSlot >= 0 &&
+                           static_cast<u32>(_RiskSlot) < SelectedProbeCount
+                         ? _RiskSlot : -1;
+    }
+
     void FDDGIDebug::Render(u32 _FrameSlot, ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap,
                             FDDGI& _DDGI, const Mat44& _ViewProj, const Vec3& _CameraPos, u32 _FrameIndex) {
         if (!Enabled || !_DDGI.IsReady() || NumProbes == 0) return;
@@ -216,11 +518,32 @@ namespace Smile {
         C->GridCount       = { GCnt.X, GCnt.Y, GCnt.Z, (f32)_DDGI.NumProbesCount() };
         C->AtlasParams     = { _DDGI.TileSizeF(), _DDGI.AtlasW(), _DDGI.AtlasH(), 0.0f };
         C->DistAtlasParams = { _DDGI.DistTileSizeF(), _DDGI.DistAtlasW(), _DDGI.DistAtlasH(),
-                               _DDGI.MaxRayDistance() };
+                               _DDGI.DistanceMomentMax() };
         C->DebugParams     = { (f32)Mode, ProbeRadius, _DDGI.Spacing() * 0.45f,
                                _DDGI.GetDeactivationThreshold() }; 
-        C->CameraPos       = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z, 0.0f };
-        C->RayParams       = { (f32)_FrameIndex, RayRadius, 0.0f, 0.0f };
+        C->CameraPos       = {
+            _CameraPos.X, _CameraPos.Y, _CameraPos.Z,
+            static_cast<f32>(FocusedProbe)
+        };
+        C->RayParams       = { (f32)_FrameIndex, RayRadius,
+                               static_cast<f32>(SelectedProbeCount),
+                               static_cast<f32>(SelectedRiskSlot) };
+        C->SelectedIndices0 = {
+            static_cast<f32>(SelectedProbes[0]), static_cast<f32>(SelectedProbes[1]),
+            static_cast<f32>(SelectedProbes[2]), static_cast<f32>(SelectedProbes[3])
+        };
+        C->SelectedIndices1 = {
+            static_cast<f32>(SelectedProbes[4]), static_cast<f32>(SelectedProbes[5]),
+            static_cast<f32>(SelectedProbes[6]), static_cast<f32>(SelectedProbes[7])
+        };
+        C->SelectedWeights0 = {
+            SelectedWeights[0], SelectedWeights[1],
+            SelectedWeights[2], SelectedWeights[3]
+        };
+        C->SelectedWeights1 = {
+            SelectedWeights[4], SelectedWeights[5],
+            SelectedWeights[6], SelectedWeights[7]
+        };
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr =
             CB->GetGPUVirtualAddress() + static_cast<UINT64>(_FrameSlot) * sizeof(DDGIDebugConstants);
 
@@ -235,7 +558,10 @@ namespace Smile {
             _CL->ResourceBarrier(1, &B);
             State = After;
         };
-        if (Mode == EMode::Classification) {
+        // Stability e um retrato do trace ATUAL. ProbeData.w so e atualizado durante a
+        // fase transiente de relocation e fica obsoleto depois; por isso este modo calcula
+        // as estatisticas sob demanda a partir de ProbesTrace.
+        if (Mode == EMode::Stability) {
             Transition(ProbeStatsBuf.Get(), ProbeStatsState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             StatsPSO.Bind(_CL);
             _CL->SetComputeRootConstantBufferView(0, CBAddr);
@@ -257,7 +583,10 @@ namespace Smile {
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->IASetVertexBuffers(0, 0, nullptr);
         _CL->IASetIndexBuffer(nullptr);
-        _CL->DrawInstanced(kSphereVerts, NumProbes, 0, 0);
+        const bool SelectedMode = Mode == EMode::Selected &&
+                                  SelectedProbeCount > 0;
+        const u32 InstanceCount = SelectedMode ? SelectedProbeCount : NumProbes;
+        _CL->DrawInstanced(kSphereVerts, InstanceCount, 0, 0);
 
         if (ShowVolume) {
             _CL->SetPipelineState(VolumePSO.Get());
@@ -268,7 +597,8 @@ namespace Smile {
         if (ShowRays) {
             _CL->SetPipelineState(RaysPSO.Get());
             _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            _CL->DrawInstanced(6, NumProbes, 0, 0); 
+            // O inspector desliga rays. Nos demais modos, desenha o volume inteiro como antes.
+            _CL->DrawInstanced(6, SelectedMode ? 0u : NumProbes, 0, 0);
         }
     }
 }

@@ -41,39 +41,60 @@ VSOutput main(VSInput IN) {
         float atten = saturate(camDist * 0.5);
         atten *= atten;
 
-        float farFade = WaterDistanceFade(camDist, OceanFade.x, OceanFade.y);
-        float farNormalFade = WaterNormalFade(camDist);
+        float s = atten * 0.06 * OceanParams1.x * OceanFFT.y;
 
-        float s = atten * farFade * 0.06 * OceanParams1.x * OceanFFT.y;
-
-        float2 tcFFT = WaterFFTSampleUV(sampleWorldXZ);
-        float4 disp = WaterSampleFFTUv(tcFFT);
-
-        worldPos.x += disp.x * s * OceanFFT.z;
-        worldPos.z += disp.y * s * OceanFFT.z;
-        worldPos.y += disp.z * s;
-
-        float hC = disp.z;
-        float hX = WaterSampleFFTUv(tcFFT + float2(1.0 / 256.0, 0.0)).z;
-        float hZ = WaterSampleFFTUv(tcFFT + float2(0.0, 1.0 / 256.0)).z;
-        normal = normalize(float3(hC - hX, OceanFFT.w, hC - hZ));
-        normal = normalize(lerp(float3(0.0, 1.0, 0.0), normal, farNormalFade));
+        // Multi-cascata: soma das 3 escalas. Bandas de espectro disjuntas (config no
+        // C++) — a soma não duplica energia. Boost por cascata (OceanFade.zw, ~razão
+        // dos tiles) mantém steepness auto-similar: onda maior = mais alta, mesma
+        // inclinação. Fades: cascata maior persiste mais longe (×4/×16).
+        const float boosts[3] = { 1.0, OceanFade.z, OceanFade.w };
+        uint  numC = (uint)CascadeParams.w;
+        float3 dispSum  = float3(0.0, 0.0, 0.0);
+        float2 slopeAcc = float2(0.0, 0.0);
+        float  fadeMul  = 1.0;
+        [unroll] for (uint c = 0; c < 3; ++c) {
+            if (c < numC) {
+                float farFade = WaterDistanceFade(camDist, OceanFade.x * fadeMul,
+                                                  OceanFade.y * fadeMul);
+                float nFade = WaterDistanceFade(camDist,
+                                                max(OceanFade.x * 2.5, 1000.0) * fadeMul,
+                                                max(OceanFade.y * 3.0, 4500.0) * fadeMul);
+                if (farFade > 0.0 || nFade > 0.0) {
+                    float2 tc = WaterCascadeUV(c, sampleWorldXZ);
+                    float4 d  = WaterSampleFFTCascadeUv(c, tc);
+                    float  w  = boosts[c] * farFade;
+                    dispSum.x += d.x * w * OceanFFT.z;
+                    dispSum.z += d.y * w * OceanFFT.z;
+                    dispSum.y += d.z * w;
+                    float hX = WaterSampleFFTCascadeUv(c, tc + float2(1.0 / 256.0, 0.0)).z;
+                    float hZ = WaterSampleFFTCascadeUv(c, tc + float2(0.0, 1.0 / 256.0)).z;
+                    // boost × (1/texelWorld) cancelam → peso igual por cascata
+                    slopeAcc += float2(d.z - hX, d.z - hZ) * nFade;
+                }
+            }
+            fadeMul *= 4.0;
+        }
+        worldPos += dispSum * s;
+        normal = normalize(float3(slopeAcc.x, OceanFFT.w, slopeAcc.y));
     }
 
-    float2 flowDir = OceanParams1.yz;
-    float2 trans = Misc.x * OceanParams0.y * 0.0025 * flowDir;
-    float2 vTex = worldPos.xz * 0.005;
-    o.baseTC.xy = vTex * BumpParams.x + trans;
-    o.baseTC.zw = vTex * (2.0 * BumpParams.x * BumpParams.y) + trans * 2.0;
+    // UVs físicas das cascatas (o PS usa as normais reais de cada escala; a cascata 2
+    // é recomputada no PS a partir do worldPos).
+    o.baseTC.xy = WaterCascadeUV(1, worldPos.xz);
+    o.baseTC.zw = WaterCascadeUV(0, worldPos.xz);
     o.debugData = float4(tileSize, subsetPattern, internalLod, geomorph);
     o.tileUV = localUV;
 
     o.worldPos = worldPos;
     o.vView = camPos - worldPos;
     o.pos = mul(float4(worldPos, 1.0), ViewProj);
+    // Velocity so de camera: mesma posicao deslocada projetada pelas VPs sem jitter
+    // (fase da onda entre frames fica de fora — residuo pequeno pro TAA/FSR).
+    o.curClip  = mul(float4(worldPos, 1.0), ViewProjNoJitter);
+    o.prevClip = mul(float4(worldPos, 1.0), PrevViewProj);
 
-    float normalScreenFade = WaterNormalFade(max(o.pos.w, 0.0));
-    o.normal = normalize(lerp(float3(0.0, 1.0, 0.0), normal, normalScreenFade));
+    // Fade da normal já aplicado por cascata (nFade) — o swell mantém normal no horizonte.
+    o.normal = normal;
 
     o.screenProj.xy = o.pos.xy * float2(0.5, -0.5) + 0.5 * o.pos.w;
     o.screenProj.w = o.pos.w;

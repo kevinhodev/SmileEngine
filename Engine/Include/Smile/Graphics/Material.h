@@ -6,6 +6,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <memory>
+#include <string>
 
 namespace Smile {
     struct alignas(256) MaterialConstants {
@@ -53,7 +54,28 @@ namespace Smile {
 
     class FMaterial {
     public:
-        FTexture* Albedo            = nullptr; 
+        std::string Name; // nome do material cozido (SSceneMaterial::Name) — editor/outliner
+
+        // Identidade ESTAVEL do material, para persistencia (sidecar do editor). O nome nao serve:
+        // o Cooker copia o nome do FBX sem garantir unicidade, e nas cenas atuais ha homonimos
+        // (EmeraldSquare tem 5, BistroInterior 1). Chavear override por nome fazia dois materiais
+        // distintos compartilharem edicao — o caso real e "Cap_03", em que um dos dois usa as
+        // texturas do Cap_02.
+        //
+        // E um hash do CONTEUDO do registro cozido (SSceneMaterial inteiro: nome, os 6 paths de
+        // textura e todos os fatores/flags), calculado no SceneLoader. Escolha deliberada:
+        //   - homonimos com conteudo DIFERENTE recebem ids diferentes -> fim da contaminacao;
+        //   - materiais byte-a-byte IDENTICOS recebem o mesmo id de proposito. Sao
+        //     indistinguiveis para o usuario (mesmo nome, mesmas texturas, mesmos fatores), entao
+        //     compartilhar override e o comportamento certo — e o que ja acontecia por nome.
+        //     Nas cenas atuais isso colapsa 220 -> 214 materiais no Emerald e 71 -> 70 no Bistro.
+        //   - independe da ORDEM no arquivo, entao reordenar o FBX nao embaralha os overrides.
+        //
+        // Fica FORA do formato cozido de proposito: e derivavel dos bytes que ja existem, entao
+        // nao custa bump de kCookedVersion nem recozinhar as cenas.
+        u64 Id = 0;
+
+        FTexture* Albedo            = nullptr;
         FTexture* Normal            = nullptr; 
         FTexture* MetallicRoughness = nullptr; 
         FTexture* AO                = nullptr;
@@ -65,6 +87,26 @@ namespace Smile {
         MaterialConstants Constants;
 
         bool TwoSided = false;
+        bool Blend    = false; // translucido -> desenhado no passe forward (alpha-blend), nao no GBuffer
+
+        // "Esta superficie e visivel pelo verso?" — UMA definicao para os tres consumidores, que
+        // antes carregavam a expressao solta e ja divergiam: o raster escolhe PSOGBufferTwoSided
+        // por `TwoSided || AlphaTest`, a TLAS decide o TRIANGLE_CULL_DISABLE por instancia, e o
+        // InstanceGeo.TwoSided que os shaders de RT leem vinha so de `TwoSided`. Com os assets
+        // atuais os tres coincidem (o Cooker deriva AlphaTest e TwoSided da MESMA condicao), mas
+        // nada garantia isso: um material masked sem a flag TwoSided ficava sem culling na TLAS e
+        // ao mesmo tempo marcado como solido no shader, e ai um hit no verso de uma folha contava
+        // como "probe enterrada" na distancia assinada do DDGI.
+        //
+        // Cutout entra porque um card de folhagem so tem um lado de geometria: cullar o verso o
+        // faria sumir. Blend entra porque o PSO do passe forward e cull NONE para todo
+        // translucido (PipelineState.cpp, PipelineStateForwardBlend) — sem ele, marcar um
+        // material one-sided como Blend no editor faria o raster mostrar o verso enquanto as
+        // reflexoes com culling seletivo o descartavam. Os vidros cozidos do Bistro ja vem com
+        // TwoSided proprio, entao hoje isto e coerencia, nao mudanca de imagem.
+        //
+        // Nao afeta a escolha de PSO do G-buffer: aquele loop pula Blend antes de consultar isto.
+        bool IsTwoSidedForRT() const { return TwoSided || Constants.AlphaTest || Blend; }
 
         void Finalize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
@@ -77,7 +119,7 @@ namespace Smile {
         void UpdateTextureSlot(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                u32 LocalSlot, FTexture* Texture);
 
-        bool IsFinalized() const { return CBV != nullptr; }
+        bool IsFinalized() const { return MappedCBV != nullptr; }
 
         u32  AlbedoDescriptorIndex() const { return SRVTableStart; }
         bool HasAlbedoTexture()      const { return Constants.HasAlbedoMap != 0; }
@@ -85,8 +127,13 @@ namespace Smile {
     private:
         static constexpr u32 kInvalidTable = 0xFFFFFFFFu;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
+        // CBV vem de um POOL paginado compartilhado (Material.cpp): paginas upload de 64KB com
+        // slots de 256B. Antes cada material criava um committed buffer proprio de 256B — que o
+        // D3D12 arredonda p/ 64KB de heap — desperdicando ~64KB por material (Bistro: 132
+        // materiais = ~8MB; Emerald pior) + alloc count. O slot devolve GPU VA + ptr mapeado.
         MaterialConstants* MappedCBV = nullptr;
+        D3D12_GPU_VIRTUAL_ADDRESS CBGpuVA = 0;
+        u32 CBSlot                   = kInvalidTable;
         u32 SRVTableStart            = kInvalidTable;
     };
 } 

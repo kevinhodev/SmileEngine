@@ -18,7 +18,19 @@ namespace SmileEditor {
         constexpr float kHitRadius = 9.0f;   // pixels
     }
 
-    bool GizmoController::GetPivot(Smile::Renderer& R, Vec3& OutPivot, int& OutIdx) const {
+    bool GizmoController::GetPivot(Smile::Renderer& R, Vec3& OutPivot, int& OutIdx,
+                                   bool& OutIsLight) const {
+        // Luz selecionada tem prioridade (o editor mantem as duas selecoes exclusivas).
+        const int LightIdx = R.GetSelectedLight();
+        const auto& Lights = R.GetScene().Lights();
+        if (LightIdx >= 0 && LightIdx < static_cast<int>(Lights.size())) {
+            OutIdx     = LightIdx;
+            OutIsLight = true;
+            OutPivot   = Lights[static_cast<size_t>(LightIdx)].Position;
+            return true;
+        }
+
+        OutIsLight = false;
         OutIdx = R.GetSelectedObject();
         if (OutIdx < 0) return false;
         const auto& List = R.GetScene().Renderables();
@@ -34,8 +46,8 @@ namespace SmileEditor {
     }
 
     GizmoController::EAxis GizmoController::HitTest(Smile::Renderer& _Renderer, u32 _X, u32 _Y) const {
-        Vec3 Pivot; int Idx;
-        if (!GetPivot(_Renderer, Pivot, Idx)) return EAxis::None;
+        Vec3 Pivot; int Idx; bool IsLight;
+        if (!GetPivot(_Renderer, Pivot, Idx, IsLight)) return EAxis::None;
         const float Scale = ScaleFor(_Renderer, Pivot);
         float px0, py0;
         if (!_Renderer.WorldToScreen(Pivot, px0, py0)) return EAxis::None;
@@ -67,10 +79,48 @@ namespace SmileEditor {
         return (b*e - d) / denom;
     }
 
+    void GizmoController::SubmitLightShapes(Smile::Renderer& R) const {
+        const auto& Lights = R.GetScene().Lights();
+        if (Lights.empty()) return;
+
+        Smile::FDebugDraw& DD = R.GetDebugDraw();
+        const int Selected = R.GetSelectedLight();
+
+        for (int i = 0; i < static_cast<int>(Lights.size()); ++i) {
+            const Smile::FLight& L = Lights[static_cast<size_t>(i)];
+
+            // Icone billboard (lampada/spot, glifo SDF) em TODAS as luzes — cor da propria luz,
+            // cinza quando apagada; a selecionada ganha o anel branco. Tamanho constante em
+            // tela (ScaleFor ja escala por distancia), ~44px de altura a 1080p (calibrado na
+            // referencia dos viewport icons do Flax). E o alvo do clique de selecao.
+            // O wireframe do volume (esfera/cone) saiu de cena por ora — decisao do usuario
+            // 2026-07-10; o caminho LineOccluded segue disponivel pra quando ele voltar.
+            const float S = ScaleFor(R, L.Position) * 0.22f;
+            const Vec3 MCol = L.Enabled
+                ? Vec3{ std::max(L.Color.X, 0.15f), std::max(L.Color.Y, 0.15f),
+                        std::max(L.Color.Z, 0.15f) }
+                : Vec3{ 0.35f, 0.35f, 0.35f };
+            const bool IsSel = (i == Selected);
+            DD.Icon(L.Position, S, MCol,
+                    L.Type == Smile::ELightType::Spot ? 1u : 0u, IsSel);
+
+            // Spot selecionado: toco curto indicando a direcao (unico feedback do apontamento
+            // sem o wire do volume; some junto com a selecao).
+            if (IsSel && L.Type == Smile::ELightType::Spot) {
+                const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f), MCol);
+            }
+        }
+    }
+
     void GizmoController::Submit(Smile::Renderer& _Renderer) {
         if (!Enabled) return;
-        Vec3 Pivot; int Idx;
-        if (!GetPivot(_Renderer, Pivot, Idx)) return;
+
+        // Visualizacao das luzes independe de haver selecao (markers sempre visiveis).
+        SubmitLightShapes(_Renderer);
+
+        Vec3 Pivot; int Idx; bool IsLight;
+        if (!GetPivot(_Renderer, Pivot, Idx, IsLight)) return;
         const float Scale = ScaleFor(_Renderer, Pivot);
 
         Smile::FDebugDraw& DebugDraw = _Renderer.GetDebugDraw();
@@ -103,15 +153,18 @@ namespace SmileEditor {
         if (Axis == EAxis::None) return false;
         Vec3 O, Dir;
         if (!R.ScreenToRay(X, Y, O, Dir)) return false;
-        Vec3 Pivot; int Idx;
-        if (!GetPivot(R, Pivot, Idx)) return false;
+        Vec3 Pivot; int Idx; bool IsLight;
+        if (!GetPivot(R, Pivot, Idx, IsLight)) return false;
 
         Active         = Axis;
         Hovered        = Axis;
         Dragging       = true;
         DragIdx        = Idx;
+        DragIsLight    = IsLight;
         DragStartPivot = Pivot;
-        DragStartPos   = R.GetScene().Renderables()[static_cast<size_t>(Idx)].Transform.Position;
+        DragStartPos   = IsLight
+            ? R.GetScene().Lights()[static_cast<size_t>(Idx)].Position
+            : R.GetScene().Renderables()[static_cast<size_t>(Idx)].Transform.Position;
         DragStartT     = AxisParam(O, Dir, AxisDir(Axis), Pivot);
         return true;
     }
@@ -126,6 +179,13 @@ namespace SmileEditor {
         const float T = AxisParam(O, Dir, A, DragStartPivot);
         const Vec3 NewPos = DragStartPos + A * (T - DragStartT);
 
+        if (DragIsLight) {
+            auto& Lights = R.GetScene().Lights();
+            if (DragIdx >= static_cast<int>(Lights.size())) return;
+            Lights[static_cast<size_t>(DragIdx)].Position = NewPos;
+            return;
+        }
+
         auto& List = R.GetScene().Renderables();
         if (DragIdx >= static_cast<int>(List.size())) return;
         Smile::FRenderable& Rn = List[static_cast<size_t>(DragIdx)];
@@ -133,11 +193,13 @@ namespace SmileEditor {
         Rn.Transform.Position = NewPos;
         Rn.AABBMin += Step; // a AABB de mundo acompanha (frustum culling)
         Rn.AABBMax += Step;
+        R.GetScene().BumpTransformsVersion(); // TLAS segue o objeto (rebuild leve no frame)
     }
 
     void GizmoController::OnMouseRelease() {
-        Dragging = false;
-        Active   = EAxis::None;
-        DragIdx  = -1;
+        Dragging    = false;
+        Active      = EAxis::None;
+        DragIdx     = -1;
+        DragIsLight = false;
     }
 }

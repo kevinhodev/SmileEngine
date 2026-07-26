@@ -1,4 +1,6 @@
 #include "Smile/Graphics/DDGI.h"
+#include "Smile/Graphics/RTMasks.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Scene/Scene.h"
@@ -35,18 +37,26 @@ namespace Smile {
             ComPtr<ID3D12Resource> Tex;
             SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
+            VramTracker::Register(Tex.Get(), EVramCategory::GI);
             return Tex;
         }
 
         struct DDGIInstanceGeo {
-            Vec4 BaseColor;    
-            u32  VertexBase;   
-            u32  IndexBase;    
-            u32  AlbedoIndex = 0; 
-            u32  HasAlbedo   = 0; 
-            u32  TwoSided    = 0; 
-            u32  Pad0 = 0, Pad1 = 0, Pad2 = 0; 
+            Vec4 BaseColor;
+            u32  VertexSrv   = 0; 
+            u32  IndexSrv    = 0; 
+            u32  AlbedoIndex = 0;
+            u32  HasAlbedo   = 0;
+            u32  TwoSidedRT  = 0; // = FMaterial::IsTwoSidedForRT (inclui AlphaTest), nao a flag crua
+            u32  Flags       = 0;
+            f32  AlphaCutoff = 0.5f;
+            f32  RoughnessFactor = 0.5f;
+            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; 
+            u32  EmissiveMapIndex = 0;
+            u32  MrMapIndex       = 0;
+            u32  GeoPad0 = 0, GeoPad1 = 0;
         };
+        static_assert(sizeof(DDGIInstanceGeo) == 80, "DDGIInstanceGeo deve casar com o HLSL (80B)");
 
         ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                    D3D12_RESOURCE_STATES _State,
@@ -65,6 +75,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> Buf;
             SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                      _State, nullptr, IID_PPV_ARGS(&Buf)));
+            VramTracker::Register(Buf.Get(), EVramCategory::GI);
             return Buf;
         }
 
@@ -92,9 +103,9 @@ namespace Smile {
     }
 
     void FDDGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 8, 1, true);
-        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 1, 1);
-        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 1, 1);
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); 
+        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
+        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
         RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
         CreateConstantBuffer(_Device);
         Initialized = true;
@@ -116,20 +127,22 @@ namespace Smile {
         FreeSlot(ProbesTraceSRVSlot, 1);
         FreeSlot(ProbesTraceUAVSlot, 1);
         FreeSlot(InstanceSRVSlot, 1);
-        FreeSlot(VertexSRVSlot, 1);
-        FreeSlot(IndexSRVSlot, 1);
+        if (MeshGeoSlotBase != kInvalidSlot) {
+            _SRVHeap.Free(MeshGeoSlotBase, MeshGeoSlotCount);
+            MeshGeoSlotBase  = kInvalidSlot;
+            MeshGeoSlotCount = 0;
+        }
         FreeSlot(ProbeDataSRVSlot, 1);
         FreeSlot(ProbeRayCountSRVSlot, 1);
         FreeSlot(ProbeDataUAVSlot, 2); 
         ProbeRayCountUAVSlot = kInvalidSlot;
-        FreeSlot(TraceTableStart, 8);
+        for (u32 i = 0; i < kTraceTables; ++i) FreeSlot(TraceTable[i], 9);
         FreeSlot(SceneGITableStart_, 3);
+        FreeSlot(UpdateTableStart, 2);
         IrradAtlas.Reset();
         DistAtlas.Reset();
         ProbesTrace.Reset();
         InstanceGeoBuf.Reset();
-        MergedVertexBuf.Reset();
-        MergedIndexBuf.Reset();
         ProbeDataBuf.Reset();
         ProbeRayCountBuf.Reset();
         AtlasState         = D3D12_RESOURCE_STATE_COMMON;
@@ -138,6 +151,66 @@ namespace Smile {
         ProbeDataState     = D3D12_RESOURCE_STATE_COMMON;
         ProbeRayCountState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
+    }
+
+    // Preenche o snapshot de materiais/geometria que TODO o RT le (DDGI, ReSTIR, reflexoes).
+    // Extraido do SetupForScene p/ poder ser REFEITO: editar AlphaTest/TwoSided/emissivo de um
+    // material no editor mudava so o constant buffer do material e deixava este snapshot velho.
+    void FDDGI::FillInstanceGeo(const FScene& _Scene, u8* _Mapped, u32 _Count) const {
+        for (u32 i = 0; i < _Count; ++i) {
+            const FRenderable& R = _Scene.Renderables()[i];
+            DDGIInstanceGeo g{};
+            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
+            if (R.Material) {
+                const MaterialConstants& MC = R.Material->Constants;
+                g.BaseColor = MC.BaseColorFactor;
+                // Mesmo criterio da flag de culling da TLAS (ver FMaterial::IsTwoSidedForRT):
+                // este campo e o que decide, no shader, se um hit pelo verso significa "dentro de
+                // solido" — tem que concordar com quem o raio consegue enxergar pelo verso.
+                g.TwoSidedRT = R.Material->IsTwoSidedForRT() ? 1u : 0u;
+                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
+                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
+                    g.HasAlbedo   = 1;
+                }
+
+                g.AlphaCutoff     = MC.AlphaCutoff;
+                g.RoughnessFactor = MC.RoughnessFactor;
+                g.EmissiveFactor  = { MC.EmissiveFactor.X * MC.EmissiveStrength,
+                                      MC.EmissiveFactor.Y * MC.EmissiveStrength,
+                                      MC.EmissiveFactor.Z * MC.EmissiveStrength,
+                                      MC.MetallicFactor };
+                if (MC.AlphaTest)        g.Flags |= 1u;
+                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
+                if (R.Material->IsFinalized()) {
+                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
+                    if (MC.HasEmissiveMap) {
+                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
+                        g.Flags |= 2u;
+                    }
+                    if (MC.HasMetallicRoughnessMap) {
+                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
+                        g.Flags |= 8u;
+                    }
+                }
+            }
+            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
+            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
+            std::memcpy(_Mapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
+        }
+    }
+
+    // Re-upload do snapshot. O chamador (Renderer::NotifyMaterialRTStateChanged) e responsavel
+    // por garantir que a GPU nao esteja lendo o buffer — e um upload heap unico, sem versao por
+    // frame em voo, entao escrever com frames em voo corromperia o que eles estao lendo.
+    void FDDGI::RefreshInstanceGeo(const FScene& _Scene) {
+        if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
+        const u32 Count = std::min(InstanceGeoCount,
+                                   static_cast<u32>(_Scene.Renderables().size()));
+        u8*         Mapped = nullptr;
+        D3D12_RANGE NoRead{ 0, 0 };
+        if (FAILED(InstanceGeoBuf->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)))) return;
+        FillInstanceGeo(_Scene, Mapped, Count);
+        InstanceGeoBuf->Unmap(0, nullptr);
     }
 
     void FDDGI::SetupForScene(ID3D12Device* _Device, FCommandQueue& _Queue,
@@ -167,33 +240,48 @@ namespace Smile {
         GridMinV = { _AABBMin.X - 0.5f * SpacingV, _AABBMin.Y - 0.5f * SpacingV,
                      _AABBMin.Z - 0.5f * SpacingV };
         NumProbes       = static_cast<u32>(CountX) * CountY * CountZ;
-        AtlasWidth      = static_cast<u32>(CountX) * CountZ * kTileSize;
-        AtlasHeight     = static_cast<u32>(CountY) * kTileSize;
-        DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * kDistTileSize;
-        DistAtlasHeight = static_cast<u32>(CountY) * kDistTileSize;
+
+        AtlasWidth      = static_cast<u32>(CountX) * CountZ * (kTileSize + 2);
+        AtlasHeight     = static_cast<u32>(CountY) * (kTileSize + 2);
+        DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * (kDistTileSize + 2);
+        DistAtlasHeight = static_cast<u32>(CountY) * (kDistTileSize + 2);
         MaxRayDist      = std::sqrt(ext.X * ext.X + ext.Y * ext.Y + ext.Z * ext.Z) * 1.5f;
 
         IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat);
         DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT);
         ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat);
 
-        std::unordered_map<const FGpuMesh*, std::pair<u32, u32>> MeshBase; 
+        MeshGeoSlot.clear(); // membro: sobrevive p/ o RefreshInstanceGeo
         std::vector<const FGpuMesh*> UniqueMeshes;
-        u32 TotalVerts = 0, TotalIndices = 0;
         for (u32 i = 0; i < NumRenderables; ++i) {
             const FGpuMesh* M = _Scene.Renderables()[i].Mesh;
-            if (!M || !M->IsValid() || MeshBase.count(M)) continue;
-            MeshBase[M] = { TotalVerts, TotalIndices };
+            if (!M || !M->IsValid() || MeshGeoSlot.count(M)) continue;
+            MeshGeoSlot[M] = 0;
             UniqueMeshes.push_back(M);
-            TotalVerts   += M->VertexCount();
-            TotalIndices += M->GetIndexCount();
         }
-        const u32 VertElems = std::max(TotalVerts, 1u);
-        const u32 IdxElems  = std::max(TotalIndices, 1u);
-        MergedVertexBuf = CreateDefaultBuffer(_Device,
-            static_cast<UINT64>(VertElems) * sizeof(Vertex), D3D12_RESOURCE_STATE_COPY_DEST);
-        MergedIndexBuf  = CreateDefaultBuffer(_Device,
-            static_cast<UINT64>(IdxElems) * sizeof(u32), D3D12_RESOURCE_STATE_COPY_DEST);
+        MeshGeoSlotCount = static_cast<u32>(UniqueMeshes.size()) * 2;
+        MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
+            GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
+            GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            for (u32 i = 0; i < static_cast<u32>(UniqueMeshes.size()); ++i) {
+                const FGpuMesh* M      = UniqueMeshes[i];
+                const u32       VbSlot = MeshGeoSlotBase + i * 2;
+
+                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
+                GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
+                GeoSrv.Buffer.NumElements         = M->VertexCount();
+                GeoSrv.Buffer.StructureByteStride = sizeof(Vertex);
+                _SRVHeap.CreateSRV(_Device, M->VertexResource(), GeoSrv, VbSlot);
+                GeoSrv.Format                     = DXGI_FORMAT_R32_UINT;
+                GeoSrv.Buffer.FirstElement        = M->IndexFirstElement();
+                GeoSrv.Buffer.NumElements         = M->GetIndexCount();
+                GeoSrv.Buffer.StructureByteStride = 0;
+                _SRVHeap.CreateSRV(_Device, M->IndexResource(), GeoSrv, VbSlot + 1);
+                MeshGeoSlot[M] = VbSlot;
+            }
+        }
         ProbeDataBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(Vec4),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
@@ -202,22 +290,8 @@ namespace Smile {
         u8* GeoMapped = nullptr;
         InstanceGeoBuf = CreateUploadBuffer(_Device,
             static_cast<UINT64>(NumRenderables) * sizeof(DDGIInstanceGeo), &GeoMapped);
-        for (u32 i = 0; i < NumRenderables; ++i) {
-            const FRenderable& R = _Scene.Renderables()[i];
-            DDGIInstanceGeo g{};
-            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f }; 
-            if (R.Material) {
-                g.BaseColor = R.Material->Constants.BaseColorFactor;
-                g.TwoSided  = R.Material->TwoSided ? 1u : 0u; 
-                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
-                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
-                    g.HasAlbedo   = 1;
-                }
-            }
-            auto It = R.Mesh ? MeshBase.find(R.Mesh) : MeshBase.end();
-            if (It != MeshBase.end()) { g.VertexBase = It->second.first; g.IndexBase = It->second.second; }
-            std::memcpy(GeoMapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
-        }
+        InstanceGeoCount = NumRenderables;
+        FillInstanceGeo(_Scene, GeoMapped, NumRenderables);
         InstanceGeoBuf->Unmap(0, nullptr);
 
         AtlasSRVSlot       = _SRVHeap.Allocate(1);
@@ -227,8 +301,6 @@ namespace Smile {
         ProbesTraceSRVSlot = _SRVHeap.Allocate(1);
         ProbesTraceUAVSlot = _SRVHeap.Allocate(1);
         InstanceSRVSlot    = _SRVHeap.Allocate(1);
-        VertexSRVSlot      = _SRVHeap.Allocate(1);
-        IndexSRVSlot       = _SRVHeap.Allocate(1);
         ProbeDataSRVSlot     = _SRVHeap.Allocate(1);
         ProbeRayCountSRVSlot = _SRVHeap.Allocate(1);
 
@@ -263,15 +335,6 @@ namespace Smile {
         BufSrv.Buffer.StructureByteStride = sizeof(DDGIInstanceGeo);
         _SRVHeap.CreateSRV(_Device, InstanceGeoBuf.Get(), BufSrv, InstanceSRVSlot);
 
-        BufSrv.Buffer.NumElements         = VertElems;
-        BufSrv.Buffer.StructureByteStride = sizeof(Vertex);
-        _SRVHeap.CreateSRV(_Device, MergedVertexBuf.Get(), BufSrv, VertexSRVSlot);
-
-        BufSrv.Format                     = DXGI_FORMAT_R32_UINT;
-        BufSrv.Buffer.NumElements         = IdxElems;
-        BufSrv.Buffer.StructureByteStride = 0;
-        _SRVHeap.CreateSRV(_Device, MergedIndexBuf.Get(), BufSrv, IndexSRVSlot);
-
         BufSrv.Format                     = DXGI_FORMAT_R32G32B32A32_FLOAT;
         BufSrv.Buffer.NumElements         = NumProbes;
         BufSrv.Buffer.StructureByteStride = 0;
@@ -291,21 +354,23 @@ namespace Smile {
         BufUav.Format              = DXGI_FORMAT_R32_UINT;
         _SRVHeap.CreateUAV(_Device, ProbeRayCountBuf.Get(), BufUav, ProbeRayCountUAVSlot);
 
-        TraceTableStart = _SRVHeap.Allocate(8);
-        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
             _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
-            _SRVHeap.CpuHandleStaging(VertexSRVSlot),
-            _SRVHeap.CpuHandleStaging(IndexSRVSlot),
+            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
         };
         UINT DstCount = 8; UINT SrcCounts[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
-        _Device->CopyDescriptors(1, &Dst, &DstCount, 8, Src, SrcCounts,
-                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        for (u32 i = 0; i < kTraceTables; ++i) {
+            TraceTable[i] = _SRVHeap.Allocate(9);
+            D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[i]);
+            _Device->CopyDescriptors(1, &Dst, &DstCount, 8, Src, SrcCounts,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
 
         SceneGITableStart_ = _SRVHeap.Allocate(3);
         D3D12_CPU_DESCRIPTOR_HANDLE GDst = _SRVHeap.CpuHandle(SceneGITableStart_);
@@ -318,6 +383,16 @@ namespace Smile {
         _Device->CopyDescriptors(1, &GDst, &GDstCount, 3, GSrc, GSrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+        UpdateTableStart = _SRVHeap.Allocate(2);
+        D3D12_CPU_DESCRIPTOR_HANDLE UDst = _SRVHeap.CpuHandle(UpdateTableStart);
+        D3D12_CPU_DESCRIPTOR_HANDLE USrc[2] = {
+            _SRVHeap.CpuHandleStaging(ProbesTraceSRVSlot),
+            _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
+        };
+        UINT UDstCount = 2; UINT USrcCounts[2] = { 1, 1 };
+        _Device->CopyDescriptors(1, &UDst, &UDstCount, 2, USrc, USrcCounts,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
         CPU.GridMinSpacing  = { GridMinV.X, GridMinV.Y, GridMinV.Z, SpacingV };
         CPU.GridCountRays   = { (f32)CountX, (f32)CountY, (f32)CountZ, (f32)kRaysPerProbe };
         CPU.AtlasParams     = { (f32)kTileSize, (f32)AtlasWidth, (f32)AtlasHeight, (f32)NumProbes };
@@ -327,37 +402,6 @@ namespace Smile {
         ID3D12GraphicsCommandList* CL = _Queue.List();
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         CL->SetDescriptorHeaps(1, Heaps);
-
-        auto PushBarrier = [](std::vector<D3D12_RESOURCE_BARRIER>& V, ID3D12Resource* R,
-                              D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = R;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = Before;
-            B.Transition.StateAfter  = After;
-            V.push_back(B);
-        };
-        std::vector<D3D12_RESOURCE_BARRIER> ToCopy, FromCopy;
-        for (const FGpuMesh* M : UniqueMeshes) {
-            if (!M->IsDefaultHeap()) continue;
-            PushBarrier(ToCopy,   M->VertexResource(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            PushBarrier(ToCopy,   M->IndexResource(),  D3D12_RESOURCE_STATE_INDEX_BUFFER,               D3D12_RESOURCE_STATE_COPY_SOURCE);
-            PushBarrier(FromCopy, M->VertexResource(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-            PushBarrier(FromCopy, M->IndexResource(),  D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_INDEX_BUFFER);
-        }
-        if (!ToCopy.empty()) CL->ResourceBarrier(static_cast<UINT>(ToCopy.size()), ToCopy.data());
-        for (const FGpuMesh* M : UniqueMeshes) {
-            const auto Base = MeshBase[M];
-            CL->CopyBufferRegion(MergedVertexBuf.Get(), static_cast<UINT64>(Base.first) * sizeof(Vertex),
-                                 M->VertexResource(), 0, static_cast<UINT64>(M->VertexCount()) * sizeof(Vertex));
-            CL->CopyBufferRegion(MergedIndexBuf.Get(), static_cast<UINT64>(Base.second) * sizeof(u32),
-                                 M->IndexResource(), 0, static_cast<UINT64>(M->GetIndexCount()) * sizeof(u32));
-        }
-
-        PushBarrier(FromCopy, MergedVertexBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        PushBarrier(FromCopy, MergedIndexBuf.Get(),  D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        CL->ResourceBarrier(static_cast<UINT>(FromCopy.size()), FromCopy.data());
 
         Transition(CL, IrradAtlas.Get(), AtlasState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, DistAtlas.Get(),  DistState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -395,18 +439,47 @@ namespace Smile {
                 std::to_string(AtlasWidth) + "x" + std::to_string(AtlasHeight));
     }
 
+    void FDDGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                     u32 _StagingSlot, u32 _FrameSlot) {
+        static_assert(kTraceTables == FCommandQueue::kFramesInFlight,
+                      "tabela de trace versionada por frame em voo");
+        if (!Ready) return;
+        // Escreve so na tabela DESTE FrameSlot: a outra pertence ao frame em voo.
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[_FrameSlot] + 8);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
+        UINT One = 1;
+        _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
     void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,
-                               const Vec3& _SunColor, u32 _FrameIndex) {
+                               const Vec3& _SunColor, u32 _FrameIndex, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.SunDirIntensity = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, _SunIntensity };
-        CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z, Hysteresis };
-        CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity, NormalBias };
+        // Histerese 0 enquanto houver reset pendente: o update SUBSTITUI o atlas em vez de
+        // misturar 99% do conteudo velho (ver ResetHistoryOnce). O flag so e consumido quando o
+        // passe realmente roda, no RecordUpdate.
+        CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z,
+                                HysteresisResetPending ? 0.0f : Hysteresis };
+        CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity,
+                                RayEps.HitShadowRayBias };
+        CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
+                                RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
+        CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
+                                FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
         const f32 EffMin = AdaptiveRays ? (f32)MinRays : 64.0f;
         CPU.MiscParams      = { Relocation ? 1.0f : 0.0f, DeactivationThreshold, EffMax, EffMin };
+        // Marca de "recem-ativado" so quando o Relocate ainda tem >=1 frame agendado DEPOIS
+        // deste (a marca precisa do proximo Relocate p/ o auto-demote; orfa = hyst 0 eterno).
+        // z = ShadowRayMask (ver ReSTIRGI.cpp: translucido fora dos dois casos).
+        CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f,
+                                static_cast<f32>(_PunctualLightCount),
+                                static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
+                                                                : kRTMaskShadowFast), 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }
@@ -424,13 +497,32 @@ namespace Smile {
         _State = _After;
     }
 
+    void FDDGI::TransitionForUpdate(ID3D12GraphicsCommandList* _CL) {
+        if (!Ready) return;
+        // Sai de kAtlasRead (contem PIXEL) -> UAV: so em fila direta. ProbeData fica de
+        // fora: o trace ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    void FDDGI::TransitionForRead(ID3D12GraphicsCommandList* _CL) {
+        if (!Ready) return;
+        Transition(_CL, IrradAtlas.Get(),   AtlasState,     kAtlasRead);
+        Transition(_CL, DistAtlas.Get(),    DistState,      kAtlasRead);
+        Transition(_CL, ProbeDataBuf.Get(), ProbeDataState, kAtlasRead);
+    }
+
     void FDDGI::RecordUpdate(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (!Ready) return;
+        // Daqui em diante o update roda de fato, entao o reset one-shot foi consumido — o CB
+        // deste frame ja foi escrito com histerese 0 pelo UpdatePerFrame.
+        HysteresisResetPending = false;
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTableStart));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbesTraceUAVSlot));
         _CL->Dispatch(NumProbes, 1, 1);
 
@@ -439,14 +531,14 @@ namespace Smile {
 
         UpdatePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(AtlasUAVSlot));
         _CL->Dispatch(NumProbes, 1, 1);
 
         Transition(_CL, DistAtlas.Get(), DistState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         UpdateDistPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
-        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DistUAVSlot));
         _CL->Dispatch(NumProbes, 1, 1);
 
@@ -459,11 +551,9 @@ namespace Smile {
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbeDataUAVSlot)); 
             _CL->Dispatch((NumProbes + 63) / 64, 1, 1);
-            Transition(_CL, ProbeDataBuf.Get(),     ProbeDataState,     kAtlasRead); 
+            // ProbeData -> kAtlasRead fica no TransitionForRead (estado com PIXEL; e o
+            // relocate so roda no caminho sincrono — ver CanRunAsync).
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
-
-        Transition(_CL, IrradAtlas.Get(), AtlasState, kAtlasRead);
-        Transition(_CL, DistAtlas.Get(),  DistState,  kAtlasRead);
     }
 }

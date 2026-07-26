@@ -14,15 +14,14 @@ namespace SmileEditor {
     }
 
 #ifdef Q_OS_WIN
-    static constexpr int kResizeBorder = 6; // px da borda de redimensionamento
+    static constexpr int kResizeBorder = 6; 
 
     void NativeWindowFilter::EnableFrameless(WId _Target) {
         HWND hWnd = reinterpret_cast<HWND>(_Target);
         if (!hWnd) return;
-        // Margem pequena -> DWM volta a desenhar a sombra/arredondado da janela, mesmo sem moldura.
+
         const MARGINS Margins{ 0, 0, 0, 1 };
         ::DwmExtendFrameIntoClientArea(hWnd, &Margins);
-        // Forca o WM_NCCALCSIZE a recalcular o frame agora que o filtro ja esta instalado.
         ::SetWindowPos(hWnd, nullptr, 0, 0, 0, 0,
                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
@@ -37,8 +36,7 @@ namespace SmileEditor {
         switch (Msg->message) {
         case WM_NCCALCSIZE: {
             if (!IsTop || Msg->wParam == FALSE) return false;
-            // Client = janela inteira (remove a moldura visual). No maximizado, insere a borda
-            // (cxWindowBorders) senao o conteudo vaza pra fora da tela / cobre a taskbar — Slate.
+
             auto* Params = reinterpret_cast<NCCALCSIZE_PARAMS*>(Msg->lParam);
             if (::IsZoomed(Top)) {
                 WINDOWINFO Wi{}; Wi.cbSize = sizeof(Wi);
@@ -52,19 +50,15 @@ namespace SmileEditor {
             return true;
         }
         case WM_NCHITTEST: {
-            // lParam = coords de tela; medimos sempre relativo ao TOP-LEVEL (vale p/ filhos tb).
             RECT Tr; ::GetWindowRect(Top, &Tr);
             const int X = GET_X_LPARAM(Msg->lParam) - Tr.left;
             const int Y = GET_Y_LPARAM(Msg->lParam) - Tr.top;
             const int W = Tr.right - Tr.left;
             const int H = Tr.bottom - Tr.top;
 
-            // X/Y/W/H estao em pixels FISICOS (lParam/GetWindowRect). Espessura da borda escalada
-            // pelo DPI p/ manter a mesma "grossura" visual em telas 125%/150%.
             const qreal Dpr = Bridge ? Bridge->Dpr() : 1.0;
             const int Border = static_cast<int>(kResizeBorder * Dpr + 0.5);
 
-            // Borda de resize relativa ao top-level (desativada no maximizado).
             int Edge = 0;
             if (!::IsZoomed(Top)) {
                 const bool L = X >= 0 && X < Border;
@@ -78,19 +72,15 @@ namespace SmileEditor {
             }
 
             if (!IsTop) {
-                // Janela filha nativa (barra/viewport) engole o hit-test do top-level. Perto da
-                // borda, devolve pro pai (HTTRANSPARENT) p/ habilitar o resize por cima dela.
                 if (Edge && ::GetAncestor(Msg->hwnd, GA_ROOT) == Top) {
                     *_Result = HTTRANSPARENT;
                     return true;
                 }
-                return false; // resto: comportamento normal do filho (HTCLIENT)
+                return false; 
             }
 
             if (Edge) { *_Result = Edge; return true; }
 
-            // Faixa da barra: a altura/rects vem da QML em pixels LOGICOS; converte o ponto
-            // fisico p/ logico antes de comparar. Controles -> HTCLIENT; vazio -> HTCAPTION.
             const int BarH = Bridge ? Bridge->TitleBarHeight() : 0;
             const int LX = (Dpr > 0.0) ? static_cast<int>(X / Dpr) : X;
             const int LY = (Dpr > 0.0) ? static_cast<int>(Y / Dpr) : Y;

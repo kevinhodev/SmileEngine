@@ -2,6 +2,7 @@
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -42,6 +43,10 @@ namespace Smile {
         void* p = nullptr;
         SMILE_HR(ObjectCB->Map(0, &NoRead, &p));
         MappedObjectCB = reinterpret_cast<u8*>(p);
+
+        // Buffers de bounds/visibilidade do occlusion culling acompanham a capacidade
+        // (a fila ja foi flushada acima; recriar aqui e seguro).
+        HiZ.SetupObjects(Device.Native(), SRVHeap, MaxObjects);
     }
 
     namespace {
@@ -104,6 +109,15 @@ namespace Smile {
         // Em carga aditiva preservamos meshes/materiais/texturas ja carregados; so
         // limpamos a cena anterior no modo de substituicao (padrao).
         if (!_Additive) {
+            // Os frames em voo (kFramesInFlight) ainda referenciam o que vem abaixo: os
+            // ID3D12Resource das texturas (FTexture::Release faz Reset() no recurso), os ranges do
+            // SRV heap SHADER-VISIBLE (FMaterial::Release devolve a tabela, e a cena nova realoca o
+            // mesmo range e sobrescreve os descritores) e os slots do pool de CBV (o memcpy do
+            // Finalize cai no endereco que o root CBV do frame anterior aponta). Sem drenar a fila
+            // antes, isso e use-after-free — e o editor chama LoadCookedScene direto do handler de
+            // menu, com o timer de render ativo. Mesmo motivo do Flush em RecreateObjectCB.
+            CommandQueue.Flush();
+
             Scene.Clear();
             for (auto& m : ImportedMaterials) m->Release(SRVHeap);
             ImportedMaterials.clear();
@@ -111,21 +125,24 @@ namespace Smile {
             ImportedTextures.clear();
         }
 
-        std::unordered_map<std::string, bool> uniquePaths; 
-        auto consider = [&](const char* rel, bool srgb) {
-            if (rel && rel[0]) uniquePaths.emplace(std::string(rel), srgb);
+        struct TexLoad { bool srgb; bool isNormal; };
+        std::unordered_map<std::string, TexLoad> uniquePaths;
+        auto consider = [&](const char* rel, bool srgb, bool isNormal) {
+            if (rel && rel[0]) uniquePaths.emplace(std::string(rel), TexLoad{ srgb, isNormal });
         };
         for (u32 i = 0; i < sh.MaterialCount; ++i) {
-            consider(mats[i].BaseColor, true);
-            consider(mats[i].Emissive, true);
-            consider(mats[i].Specular, false);
-            consider(mats[i].Normal,   false);
+            consider(mats[i].BaseColor, true,  false);
+            consider(mats[i].Emissive,  true,  false);
+            consider(mats[i].Specular,  false, false);
+            consider(mats[i].Normal,    false, true);
+            consider(mats[i].Metalness, false, false);
+            consider(mats[i].Roughness, false, false);
         }
 
         std::vector<std::string> relList;
-        std::vector<bool>        srgbList;
+        std::vector<TexLoad>     flagList;
         relList.reserve(uniquePaths.size());
-        for (auto& kv : uniquePaths) { relList.push_back(kv.first); srgbList.push_back(kv.second); }
+        for (auto& kv : uniquePaths) { relList.push_back(kv.first); flagList.push_back(kv.second); }
 
         std::vector<FTextureCPUData> cpuData(relList.size());
         {
@@ -134,7 +151,12 @@ namespace Smile {
             auto worker = [&](unsigned tid) {
                 for (size_t i = tid; i < relList.size(); i += nthreads) {
                     std::wstring full = (sceneDir / fs::path(relList[i])).wstring();
-                    cpuData[i] = FTexture::LoadDDSCPU(full, srgbList[i]);
+                    // DDS = formato BC pre-cozido; qualquer outra extensao (PNG/TGA/...) vai pelo WIC.
+                    std::string ext = fs::path(relList[i]).extension().string();
+                    for (char& c : ext) if (c >= 'A' && c <= 'Z') c += 32;
+                    cpuData[i] = (ext == ".dds")
+                        ? FTexture::LoadDDSCPU(full, flagList[i].srgb)
+                        : FTexture::LoadCPU(full, flagList[i].isNormal, flagList[i].srgb);
                 }
             };
             std::vector<std::thread> pool;
@@ -145,7 +167,7 @@ namespace Smile {
         const double msDecode = MsSince(t0) - msRead;
 
         std::vector<FTexture> texs =
-            FTexture::CreateBatchFromCPU(Device.Native(), CommandQueue, SRVHeap, cpuData);
+            FTexture::CreateBatchFromCPU(Device.Native(), UploadQueue, SRVHeap, cpuData);
         const double msTexUpload = MsSince(tDecodeEnd);
         std::unordered_map<std::string, FTexture*> texByPath;
         u32 uploaded = 0;
@@ -163,24 +185,43 @@ namespace Smile {
             return (it != texByPath.end()) ? it->second : nullptr;
         };
 
+        // FNV-1a 64 sobre os bytes crus do registro cozido = identidade estavel do material
+        // (ver FMaterial::Id). Hashear o struct inteiro e seguro aqui: SSceneMaterial nao tem
+        // padding (1664B de char arrays, divisivel por 4, seguidos so de f32/u32 = 1724B) e o
+        // Cooker o preenche a partir de `SSceneMaterial out{}` com SetStr fazendo memset antes
+        // do strncpy — ou seja, todo byte e deterministico, inclusive o resto dos char arrays.
+        auto MaterialContentId = [](const SSceneMaterial& _Sm) -> u64 {
+            const auto* Bytes = reinterpret_cast<const u8*>(&_Sm);
+            u64 H = 1469598103934665603ull;               // offset basis
+            for (size_t b = 0; b < sizeof(SSceneMaterial); ++b) {
+                H ^= Bytes[b];
+                H *= 1099511628211ull;                    // prime
+            }
+            return H;
+        };
+
         std::vector<FMaterial*> matPtrs(sh.MaterialCount, nullptr);
         for (u32 i = 0; i < sh.MaterialCount; ++i) {
             const SSceneMaterial& sm = mats[i];
             auto mat = std::make_unique<FMaterial>();
+            mat->Name = std::string(sm.Name, strnlen(sm.Name, kCookedMaxName));
+            mat->Id   = MaterialContentId(sm);
 
-            FTexture* baseT = getTex(sm.BaseColor);
-            FTexture* specT = getTex(sm.Specular);
-            FTexture* normT = getTex(sm.Normal);
-            FTexture* emisT = getTex(sm.Emissive);
+            FTexture* baseT  = getTex(sm.BaseColor);
+            FTexture* specT  = getTex(sm.Specular);
+            FTexture* normT  = getTex(sm.Normal);
+            FTexture* emisT  = getTex(sm.Emissive);
+            FTexture* metalT = getTex(sm.Metalness);
+            FTexture* roughT = getTex(sm.Roughness);
 
-            mat->Albedo            = baseT ? baseT : &TexDefaultWhite;
-            mat->Normal            = normT ? normT : &TexDefaultNormal;
-            mat->MetallicRoughness = specT ? specT : &TexDefaultWhite;
+            mat->Albedo            = baseT  ? baseT  : &TexDefaultWhite;
+            mat->Normal            = normT  ? normT  : &TexDefaultNormal;
+            mat->MetallicRoughness = specT  ? specT  : &TexDefaultWhite;
             mat->AO                = &TexDefaultWhite;
-            mat->Emissive          = emisT ? emisT : &TexDefaultBlack;
+            mat->Emissive          = emisT  ? emisT  : &TexDefaultBlack;
             mat->Height            = &TexDefaultWhite;
-            mat->Metalness         = &TexDefaultWhite;
-            mat->Roughness         = &TexDefaultWhite;
+            mat->Metalness         = metalT ? metalT : &TexDefaultWhite;
+            mat->Roughness         = roughT ? roughT : &TexDefaultWhite;
 
             mat->Constants.BaseColorFactor = Vec4{ sm.BaseColorFactor[0], sm.BaseColorFactor[1],
                                                    sm.BaseColorFactor[2], sm.BaseColorFactor[3] };
@@ -193,15 +234,21 @@ namespace Smile {
             mat->Constants.HasAlbedoMap            = baseT ? 1u : 0u;
             mat->Constants.HasNormalMap            = normT ? 1u : 0u;
             mat->Constants.HasMetallicRoughnessMap = specT ? 1u : 0u;
-            mat->Constants.HasAOMap                = 0u; 
+            mat->Constants.HasAOMap                = 0u;
             mat->Constants.HasEmissiveMap          = emisT ? 1u : 0u;
             mat->Constants.HasHeightMap            = 0u;
-            mat->Constants.HasMetalnessMap         = 0u;
-            mat->Constants.HasRoughnessMap         = 0u;
+            mat->Constants.HasMetalnessMap         = metalT ? 1u : 0u;
+            mat->Constants.HasRoughnessMap         = roughT ? 1u : 0u;
 
-            mat->Constants.SpecularPacking    = specT ? 1u : 0u; 
-            mat->Constants.MetallicFactor     = specT ? 1.0f : 0.0f;
-            mat->Constants.RoughnessFactor    = specT ? 1.0f : 0.8f;
+            // O fator multiplica o mapa no shader (Metallic = Factor * map.r); precisa ser 1 quando
+            // existe mapa (packed Specular OU Metalness/Roughness separados) p/ nao zerar o produto.
+            // Sem mapa, usa o fator cozido do material (ex.: vidro rough=0 reflexivo, lampada ~0.4).
+            mat->Constants.SpecularPacking    = specT ? 1u : 0u;
+            mat->Constants.MetallicFactor     = (specT || metalT) ? 1.0f : sm.MetallicFactor;
+            mat->Constants.RoughnessFactor    = (specT || roughT) ? 1.0f : sm.RoughnessFactor;
+
+            // Translucido (alpha-blend no passe forward); o alpha vem de BaseColorFactor.w (× textura).
+            mat->Blend = (sm.Blend != 0u);
 
             mat->Constants.AOStrength         = 0.0f;
             mat->Constants.NormalFlipY        = 1u;              
@@ -228,70 +275,46 @@ namespace Smile {
         auto matOf = [&](u32 mi) -> FMaterial* {
             return (mi != kNoMaterial && mi < sh.MaterialCount) ? matPtrs[mi] : nullptr;
         };
+        // Nome do renderable p/ o Scene Outliner: o cozido v6 nao guarda nome por no (o cooker
+        // baka o transform no vertice), entao o melhor nome disponivel e o do material.
+        auto nameOf = [&](u32 mi, u32 fallbackIdx) -> std::string {
+            if (mi != kNoMaterial && mi < sh.MaterialCount && mats[mi].Name[0] != '\0') {
+                const char* n = mats[mi].Name;
+                return std::string(n, strnlen(n, kCookedMaxName));
+            }
+            return "Mesh " + std::to_string(fallbackIdx);
+        };
 
         const Clock::time_point tMeshStart = Clock::now();
-        if (!MergeByMaterial) {
-            std::vector<FMesh> meshesCPU(mh.MeshCount);
-            for (u32 i = 0; i < mh.MeshCount; ++i) {
-                const SMeshEntry& e = entries[i];
-                meshesCPU[i].Vertices.resize(e.VertexCount);
-                std::memcpy(meshesCPU[i].Vertices.data(), geoBase + e.VertexOffset, e.VertexCount * sizeof(Vertex));
-                meshesCPU[i].Indices.resize(e.IndexCount);
-                std::memcpy(meshesCPU[i].Indices.data(), geoBase + e.IndexOffset, e.IndexCount * sizeof(u32));
-            }
-            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), CommandQueue, meshesCPU);
-            for (u32 i = 0; i < sh.RenderableCount; ++i) {
-                const SSceneRenderable& r = rnds[i];
-                if (r.MeshIndex >= mh.MeshCount) continue;
-                FRenderable out;
-                out.Mesh     = meshPtrs[r.MeshIndex];
-                out.Material = matOf(r.MaterialIndex);
-                const SMeshEntry& e = entries[r.MeshIndex];
-                out.AABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
-                out.AABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
-                Scene.AddRenderable(out);
-            }
-        } else {
-            std::unordered_map<u32, std::vector<u32>> groups; 
-            groups.reserve(sh.MaterialCount + 1);
-            for (u32 i = 0; i < sh.RenderableCount; ++i) {
-                if (rnds[i].MeshIndex >= mh.MeshCount) continue;
-                groups[rnds[i].MaterialIndex].push_back(rnds[i].MeshIndex);
-            }
-            std::vector<FMesh> meshesCPU;  meshesCPU.reserve(groups.size());
-            std::vector<u32>   groupMat;   groupMat.reserve(groups.size());
-            std::vector<Vec3>  gMin, gMax; gMin.reserve(groups.size()); gMax.reserve(groups.size());
-            for (auto& g : groups) {
-                FMesh m;
-                f32 mn[3] = {  1e30f,  1e30f,  1e30f };
-                f32 mx[3] = { -1e30f, -1e30f, -1e30f };
-                for (u32 ei : g.second) {
-                    const SMeshEntry& e = entries[ei];
-                    const u32 base = static_cast<u32>(m.Vertices.size());
-                    const Vertex* vsrc = reinterpret_cast<const Vertex*>(geoBase + e.VertexOffset);
-                    m.Vertices.insert(m.Vertices.end(), vsrc, vsrc + e.VertexCount);
-                    const u32* isrc = reinterpret_cast<const u32*>(geoBase + e.IndexOffset);
-                    m.Indices.reserve(m.Indices.size() + e.IndexCount);
-                    for (u32 k = 0; k < e.IndexCount; ++k) m.Indices.push_back(isrc[k] + base);
-                    for (int c = 0; c < 3; ++c) { mn[c] = std::min(mn[c], e.AABBMin[c]); mx[c] = std::max(mx[c], e.AABBMax[c]); }
-                }
-                meshesCPU.push_back(std::move(m));
-                groupMat.push_back(g.first);
-                gMin.push_back(Vec3{ mn[0], mn[1], mn[2] });
-                gMax.push_back(Vec3{ mx[0], mx[1], mx[2] });
-            }
-            std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), CommandQueue, meshesCPU);
-            for (size_t k = 0; k < meshPtrs.size(); ++k) {
-                FRenderable out;
-                out.Mesh     = meshPtrs[k];
-                out.Material = matOf(groupMat[k]);
-                out.AABBMin  = gMin[k];
-                out.AABBMax  = gMax[k];
-                Scene.AddRenderable(out);
-            }
+        std::vector<FMesh> meshesCPU(mh.MeshCount);
+        for (u32 i = 0; i < mh.MeshCount; ++i) {
+            const SMeshEntry& e = entries[i];
+            meshesCPU[i].Vertices.resize(e.VertexCount);
+            std::memcpy(meshesCPU[i].Vertices.data(), geoBase + e.VertexOffset, e.VertexCount * sizeof(Vertex));
+            meshesCPU[i].Indices.resize(e.IndexCount);
+            std::memcpy(meshesCPU[i].Indices.data(), geoBase + e.IndexOffset, e.IndexCount * sizeof(u32));
+        }
+        std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
+        for (u32 i = 0; i < sh.RenderableCount; ++i) {
+            const SSceneRenderable& r = rnds[i];
+            if (r.MeshIndex >= mh.MeshCount) continue;
+            FRenderable out;
+            out.Name     = nameOf(r.MaterialIndex, i);
+            out.Mesh     = meshPtrs[r.MeshIndex];
+            out.Material = matOf(r.MaterialIndex);
+            const SMeshEntry& e = entries[r.MeshIndex];
+            out.AABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
+            out.AABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
+            Scene.AddRenderable(out);
         }
 
         const double msMesh = MsSince(tMeshStart);
+
+        // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
+        // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
+        const Clock::time_point tSyncStart = Clock::now();
+        UploadQueue.WaitIdle();
+        const double msSync = MsSince(tSyncStart);
 
         // Dimensiona o ObjectCB pelo total de renderaveis da cena (cobre carga aditiva,
         // onde os renderaveis do interior se somam aos do exterior ja presentes).
@@ -313,6 +336,7 @@ namespace Smile {
                 " decode=" + std::to_string((int)msDecode) +
                 " uploadTex=" + std::to_string((int)msTexUpload) +
                 " meshes=" + std::to_string((int)msMesh) +
+                " syncUpload=" + std::to_string((int)msSync) +
                 " | total=" + std::to_string((int)MsSince(t0)));
 
         // AABB de uniao sobre TODA a cena (exterior + interior em carga aditiva), para
@@ -328,8 +352,125 @@ namespace Smile {
             sceneMax.Z = std::max(sceneMax.Z, r.AABBMax.Z);
         }
 
+        // Terreno (F1): sidecar <cena>.terrain.json ao lado da cena — JSON PLANO, so
+        // chaves de primeiro nivel ("heightmap" relativo a pasta da cena, "size",
+        // "unitsPerTexel", "heightScale", "originX/Y/Z"). Sem sidecar em carga de
+        // substituicao, descarrega o terreno anterior.
+        {
+            fs::path terrainPath = base; terrainPath += L".terrain.json";
+            if (fs::exists(terrainPath)) {
+                std::ifstream tf(terrainPath);
+                std::string js((std::istreambuf_iterator<char>(tf)),
+                               std::istreambuf_iterator<char>());
+                auto FindNum = [&](const char* key, f32 def) -> f32 {
+                    const std::string k = std::string("\"") + key + "\"";
+                    size_t p = js.find(k);
+                    if (p == std::string::npos) return def;
+                    p = js.find(':', p + k.size());
+                    if (p == std::string::npos) return def;
+                    return std::strtof(js.c_str() + p + 1, nullptr);
+                };
+                auto FindStr = [&](const char* key) -> std::string {
+                    const std::string k = std::string("\"") + key + "\"";
+                    size_t p = js.find(k);
+                    if (p == std::string::npos) return {};
+                    p = js.find(':', p + k.size());
+                    if (p == std::string::npos) return {};
+                    p = js.find('"', p);
+                    if (p == std::string::npos) return {};
+                    const size_t e = js.find('"', p + 1);
+                    if (e == std::string::npos) return {};
+                    return js.substr(p + 1, e - p - 1);
+                };
+                const std::string hm = FindStr("heightmap");
+                if (!hm.empty()) {
+                    FTerrainDesc td;
+                    td.HeightmapPath = (sceneDir / fs::path(hm)).wstring();
+                    td.HeightmapSize = static_cast<u32>(FindNum("size", 0.0f));
+                    td.UnitsPerTexel = FindNum("unitsPerTexel", 1.0f);
+                    td.HeightScale   = FindNum("heightScale", 100.0f);
+                    td.Origin        = { FindNum("originX", 0.0f), FindNum("originY", 0.0f),
+                                         FindNum("originZ", 0.0f) };
+                    // F2: camadas de material ("tex0".."tex3" albedo, "nrm0".."nrm3" normal,
+                    // "tile0".."tile3" metros por tile, "rough0".."rough3") + regras dos
+                    // pesos procedurais. Paths relativos a pasta da cena.
+                    for (u32 l = 0; l < FTerrainDesc::kLayers; ++l) {
+                        const std::string suf = std::to_string(l);
+                        const std::string alb = FindStr(("tex" + suf).c_str());
+                        const std::string nrm = FindStr(("nrm" + suf).c_str());
+                        if (!alb.empty())
+                            td.LayerAlbedo[l] = (sceneDir / fs::path(alb)).wstring();
+                        if (!nrm.empty())
+                            td.LayerNormal[l] = (sceneDir / fs::path(nrm)).wstring();
+                        td.LayerTile[l]  = FindNum(("tile" + suf).c_str(), td.LayerTile[l]);
+                        td.LayerRough[l] = FindNum(("rough" + suf).c_str(), td.LayerRough[l]);
+                    }
+                    td.RockSlopeStart = FindNum("rockSlopeStart", td.RockSlopeStart);
+                    td.RockSlopeEnd   = FindNum("rockSlopeEnd",   td.RockSlopeEnd);
+                    td.DirtScale      = FindNum("dirtScale",      td.DirtScale);
+                    td.DirtAmount     = FindNum("dirtAmount",     td.DirtAmount);
+                    td.HighStart      = FindNum("highStart",      td.HighStart);
+                    td.HighEnd        = FindNum("highEnd",        td.HighEnd);
+                    td.BlendContrast  = FindNum("blendContrast",  td.BlendContrast);
+                    td.MacroAmount    = FindNum("macroAmount",    td.MacroAmount);
+                    if (Terrain.Load(Device.Native(), UploadQueue, SRVHeap, td)) {
+                        // F3: proxy do terreno na TLAS — renderable RaytracingOnly (fora do
+                        // raster/CSM/picking; o terreno real rasteriza pelo FTerrain). Entra
+                        // ANTES do BuildRaytracingScene logo abaixo, e DEPOIS da uniao de
+                        // AABB da cena (o volume de GI nao estica pro terreno de proposito).
+                        // Material = cor media do vale (e o que o bounce do GI enxerga).
+                        FMesh Proxy;
+                        if (Terrain.BuildProxyMesh(Proxy)) {
+                            std::vector<FMesh> ProxyList;
+                            ProxyList.push_back(std::move(Proxy));
+                            std::vector<FGpuMesh*> ProxyMesh =
+                                Scene.AddMeshesBatch(Device.Native(), UploadQueue, ProxyList);
+                            UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
+
+                            auto mat = std::make_unique<FMaterial>();
+                            mat->Albedo            = &TexDefaultWhite;
+                            mat->Normal            = &TexDefaultNormal;
+                            mat->MetallicRoughness = &TexDefaultWhite;
+                            mat->AO                = &TexDefaultWhite;
+                            mat->Emissive          = &TexDefaultBlack;
+                            mat->Height            = &TexDefaultWhite;
+                            mat->Metalness         = &TexDefaultWhite;
+                            mat->Roughness         = &TexDefaultWhite;
+                            mat->Constants.BaseColorFactor = { 0.26f, 0.32f, 0.19f, 1.0f };
+                            mat->Constants.MetallicFactor  = 0.0f;
+                            mat->Constants.RoughnessFactor = 0.95f;
+                            mat->Finalize(Device.Native(), SRVHeap);
+                            mat->UpdateConstants();
+
+                            FRenderable proxy;
+                            proxy.Name           = "TerrainRTProxy";
+                            proxy.Mesh           = ProxyMesh.empty() ? nullptr : ProxyMesh[0];
+                            proxy.Material       = mat.get();
+                            proxy.RaytracingOnly = true;
+                            Terrain.GetBounds(proxy.AABBMin, proxy.AABBMax);
+                            if (proxy.Mesh) {
+                                Scene.AddRenderable(proxy);
+                                ImportedMaterials.push_back(std::move(mat));
+                            }
+                        }
+                    }
+                } else {
+                    LogError("Terreno: sidecar sem chave \"heightmap\": " + terrainPath.string());
+                }
+            } else if (!_Additive) {
+                Terrain.Unload(SRVHeap);
+            }
+        }
+
+        // O volume de GI NAO inclui o terreno de proposito: um terreno de km esticaria o
+        // grid de probes do DDGI. Fora do volume o shading cai no fallback de ambiente;
+        // terreno no GI de verdade vem na F3 (BLAS proxy na TLAS).
         BuildRaytracingScene();
         SetupGIForScene(sceneMin, sceneMax);
+
+        // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
+        // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
+        if (!_Additive) ClearLightSelection();
         return true;
     }
 }

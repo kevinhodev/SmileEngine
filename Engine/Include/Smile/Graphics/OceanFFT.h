@@ -19,10 +19,28 @@ namespace Smile {
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
-        void SetTime(f32 ElapsedTime) { SimTime = 0.125f * ElapsedTime; }
+        void SetTime(f32 ElapsedTime) { SimTime = 0.125f * TimeFactor * ElapsedTime; RealTime = ElapsedTime; }
         void SetWindDirection(f32 Rad);
         void SetWindSpeed(f32 V);
         void SetAmplitude(f32 A);
+
+        // Config por cascata (multi-cascata): seed própria (padrões descorrelacionados),
+        // fator de tempo (dispersão física: cascata maior evolui ~1/sqrt(T_i/T_0) mais
+        // devagar) e banda do espectro em CICLOS por tile [Low, High) — bandas disjuntas
+        // entre cascatas evitam energia duplicada na soma. Chamar ANTES do Initialize
+        // (ou seguido de re-bake via setters de vento/amplitude).
+        void ConfigureCascade(u32 SeedValue, f32 TimeScale, f32 CyclesLow, f32 CyclesHigh) {
+            Seed = SeedValue; TimeFactor = TimeScale;
+            CutoffLowCycles = CyclesLow; CutoffHighCycles = CyclesHigh;
+        }
+
+        // Acopla o Jacobiano (espuma) ao choppy EFETIVO da superfície: recebe o produto
+        // dos sliders (choppy × dispScale × wavesSize × wavesAmount); a calibração
+        // preserva o look validado nos defaults (0.15 em 1.5×1.0×0.75×1.5).
+        void SetChoppyFactors(f32 SliderProduct) {
+            ChoppyJacobianScale = kChoppyJacobianCalib * (SliderProduct < 0.0f ? 0.0f : SliderProduct);
+        }
+        void SetFoamRecovery(f32 PerSecond) { FoamRecovery = PerSecond; }
 
         void RecordCompute(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
@@ -58,10 +76,19 @@ namespace Smile {
         f32 MaxWaveSize     = 200.0f;
         f32 ChoppyWaveScale = 400.0f;
         f32 NormalUp        = 8.0f;
+        static constexpr f32 kChoppyJacobianCalib = 0.15f / (1.5f * 1.0f * 0.75f * 1.5f);
         f32 ChoppyJacobianScale = 0.15f;
         f32 SimTime         = 0.0f;
+        f32 RealTime        = 0.0f;
+        f32 LastRealTime    = 0.0f;
+        f32 FoamRecovery    = 0.18f; // J recupera 0.18/s → espuma some em ~3-4 s
+        bool FoamHistoryValid = false;
 
         std::mt19937 Rng{ 1337u };
+        u32  Seed             = 1337u;
+        f32  TimeFactor       = 1.0f;
+        f32  CutoffLowCycles  = 0.0f;    // banda do espectro em ciclos/tile [Low, High)
+        f32  CutoffHighCycles = 1.0e9f;
         bool GaussianHasLast = false;
         f32  GaussianLast    = 0.0f;
 
@@ -71,7 +98,9 @@ namespace Smile {
             f32 HeightScale;
             f32 NormalUp;
             f32 JacobianScale;
-            f32 _Pad[3];
+            f32 DeltaTime;
+            f32 FoamRecovery;
+            f32 FoamReset;
         };
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8*      MappedCBBase = nullptr;

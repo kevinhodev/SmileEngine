@@ -8,14 +8,25 @@ cbuffer FogCB : register(b0) {
     float4 FogInscatteringColor;        
     float4 DirectionalInscatteringColor; 
     float4 InscatteringLightDirection;   
-    row_major float4x4 InvViewProj;      
-    float4 CameraWorldPos;          
-    float4 AerialParams;               
-    float4 ScreenParams;      
-    float4 DepthParams;        
+    row_major float4x4 InvViewProj;
+    float4 CameraWorldPos;
+    float4 AerialParams;
+    float4 ScreenParams;
+    float4 DepthParams;
+    float4 VolFogParams;   // froxel fog: x=B, y=O, z=S (slice = log2(z*B+O)*S), w=GridSizeZ
+    float4 VolFogParams2;  // x = alcance (m), y = ligado (>0.5), zw unused
+    float4 CamForwardVF;   // xyz = frente da camera (exclusao do analitico + slice por dist)
 };
 
 Texture3D<float4> AerialVolume     : register(t1);
+// Sun shafts: inscatter direcional volumétrico meia-res (raymarch CSM + temporal).
+// Quando AerialParams.w > 0.5, substitui o termo analítico DirectionalInscattering
+// (o CPU zera InscatteringLightDirection.w pra desligar o analítico junto).
+Texture2D<float4> VolumetricShafts : register(t2);
+// Froxel volumetric fog integrado (VolumetricFogIntegrate.cs): rgb = inscatter
+// acumulado ate o slice, a = transmitancia. Cobre 0..VolFogParams2.x; alem disso
+// o height fog analitico continua (excluido do range coberto, receita da UE).
+Texture3D<float4> VolumetricFogTex : register(t3);
 SamplerState      LinearClampSampler : register(s0);
 
 float CalculateLineIntegralShared(float falloff, float rayDirZ, float rayOriginTerms) {
@@ -25,20 +36,25 @@ float CalculateLineIntegralShared(float falloff, float rayDirZ, float rayOriginT
     return rayOriginTerms * (abs(Falloff) > 0.01f ? LineIntegral : LineIntegralTaylor);
 }
 
-float4 GetExponentialHeightFog(float3 worldPosRelCam) {
-    const float MinFogOpacity = FogInscatteringColor.w; 
+// excludeDist: alem do StartDistance do usuario, exclui o trecho coberto pelo froxel
+// volumetric fog (0 = sem exclusao). Com o alvo DENTRO do range excluido, o rayLength
+// fica negativo e o saturate(exp2(...)) zera o fog analitico — mesmo comportamento da UE.
+float4 GetExponentialHeightFog(float3 worldPosRelCam, float excludeDist) {
+    const float MinFogOpacity = FogInscatteringColor.w;
 
     float3 c2r = worldPosRelCam;
     float  len = max(length(c2r), 1e-4f);
     float3 dir = c2r / len;
 
     float rayLength       = len;
-    float rayDirZ         = c2r.y;                      
-    float rayOriginTerms  = ExponentialFogParameters.x; 
+    float rayDirZ         = c2r.y;
+    float rayOriginTerms  = ExponentialFogParameters.x;
     float rayOriginTerms2 = ExponentialFogParameters2.x;
 
-    float startDist = ExponentialFogParameters.w;
-    if (startDist > 0.0f && len > startDist) {
+    float startDist = max(ExponentialFogParameters.w, excludeDist);
+    // SEM guard de len > startDist (igual a UE): alvo dentro do range excluido da
+    // excludeT > 1 -> rayLength negativo -> saturate(exp2(-integral)) = 1 = sem fog.
+    if (startDist > 0.0f) {
         float excludeT = startDist / len;
         float startY   = CameraWorldPos.y + excludeT * c2r.y;
         rayLength      = (1.0f - excludeT) * len;

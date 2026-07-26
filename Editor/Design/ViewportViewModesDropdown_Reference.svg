@@ -1,0 +1,163 @@
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" font-family="Segoe UI, system-ui, sans-serif">
+  <title>Referência visual — dropdown de view modes no toolbar do viewport</title>
+  <desc>Mockup do viewport do SmileEngine com o dropdown Lit aberto: modos de visualização (Lit, Path tracer, buffers, heatmap) e toggles de DDGI, ReSTIR GI, GTAO, Reflexos RT e NRD. Cena de fundo com oceano FFT e esfera selecionada.</desc>
+  <defs>
+    <clipPath id="vp"><rect x="8" y="8" width="944" height="584" rx="10"/></clipPath>
+  </defs>
+
+  <rect x="8" y="8" width="944" height="584" rx="10" fill="#0d0e0c" stroke="#2e2f28"/>
+
+  <g clip-path="url(#vp)">
+    <circle cx="620" cy="100" r="1.2" fill="#23261c"/>
+    <circle cx="700" cy="180" r="1" fill="#23261c"/>
+    <circle cx="860" cy="90" r="1.2" fill="#23261c"/>
+    <circle cx="912" cy="200" r="1" fill="#23261c"/>
+    <circle cx="668" cy="128" r="1" fill="#23261c"/>
+    <circle cx="790" cy="140" r="24" fill="#15170f" stroke="#20221a"/>
+    <circle cx="799" cy="133" r="22" fill="#0d0e0c"/>
+
+    <rect x="8" y="380" width="944" height="212" fill="#0b0d09"/>
+    <line x1="8" y1="380" x2="952" y2="380" stroke="#1e2318"/>
+    <path d="M8 406 q40 -8 80 0 t80 0 t80 0 t80 0 t80 0 t80 0 t80 0 t80 0 t80 0 t80 0 t80 0 t80 0" fill="none" stroke="#151a10" stroke-width="1.3"/>
+    <path d="M8 438 q50 -10 100 0 t100 0 t100 0 t100 0 t100 0 t100 0 t100 0 t100 0 t100 0 t100 0" fill="none" stroke="#151a10" stroke-width="1.3"/>
+    <path d="M8 480 q60 -12 120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0" fill="none" stroke="#141810" stroke-width="1.4"/>
+    <path d="M8 532 q70 -14 140 0 t140 0 t140 0 t140 0 t140 0 t140 0 t140 0" fill="none" stroke="#141810" stroke-width="1.4"/>
+
+    <circle cx="700" cy="380" r="58" fill="#12140e" stroke="#1e2118"/>
+    <path d="M638 382 q15 7 31 0 t31 0 t31 0 t31 0 v62 h-124 z" fill="#0b0d09"/>
+    <path d="M642 380 A58 58 0 0 1 758 380" fill="none" stroke="#5b9dff" stroke-width="1.6"/>
+    <line x1="672" y1="466" x2="712" y2="466" stroke="#1a2015" stroke-width="1.5"/>
+    <line x1="688" y1="482" x2="724" y2="482" stroke="#1a2015" stroke-width="1.5"/>
+    <line x1="664" y1="498" x2="696" y2="498" stroke="#1a2015" stroke-width="1.5"/>
+
+    <g stroke-width="1.5" fill="none">
+      <line x1="908" y1="544" x2="932" y2="552" stroke="#b05a48"/>
+      <line x1="908" y1="544" x2="908" y2="518" stroke="#7da05a"/>
+      <line x1="908" y1="544" x2="884" y2="554" stroke="#5b9dff"/>
+    </g>
+    <text x="938" y="557" font-size="10" fill="#b05a48">X</text>
+    <text x="908" y="512" font-size="10" fill="#7da05a" text-anchor="middle">Y</text>
+    <text x="878" y="562" font-size="10" fill="#5b9dff" text-anchor="end">Z</text>
+
+    <rect x="8" y="8" width="944" height="36" fill="#141511"/>
+    <line x1="8" y1="44" x2="952" y2="44" stroke="#23241d"/>
+
+    <rect x="20" y="14" width="26" height="22" rx="5" fill="#23241d" stroke="#33342c"/>
+    <g stroke="#e6e2d8" stroke-width="1.3" fill="none">
+      <line x1="33" y1="19" x2="33" y2="31"/>
+      <line x1="27" y1="25" x2="39" y2="25"/>
+      <polyline points="31,21 33,19 35,21"/>
+      <polyline points="31,29 33,31 35,29"/>
+    </g>
+    <g stroke="#9a958a" stroke-width="1.3" fill="none">
+      <circle cx="65" cy="25" r="6"/>
+      <polyline points="69,17 71,20 68,22"/>
+    </g>
+    <g stroke="#9a958a" stroke-width="1.3" fill="none">
+      <rect x="89" y="23" width="7" height="7"/>
+      <line x1="96" y1="23" x2="102" y2="17"/>
+      <polyline points="98,17 102,17 102,21"/>
+    </g>
+    <line x1="118" y1="16" x2="118" y2="34" stroke="#23241d"/>
+
+    <rect x="126" y="14" width="104" height="22" rx="5" fill="#1b1c17" stroke="#2a2b24"/>
+    <text x="136" y="29" font-size="11" fill="#c8c2b4">Perspectiva</text>
+    <polyline points="212,23 216,27 220,23" fill="none" stroke="#9a958a" stroke-width="1.3"/>
+
+    <rect x="238" y="14" width="60" height="22" rx="5" fill="#16233f" stroke="#27406e"/>
+    <text x="248" y="29" font-size="11" fill="#5b9dff">Lit</text>
+    <polyline points="268,23 272,27 276,23" fill="none" stroke="#5b9dff" stroke-width="1.3"/>
+
+    <rect x="306" y="14" width="84" height="22" rx="5" fill="#1b1c17" stroke="#2a2b24"/>
+    <text x="316" y="29" font-size="11" fill="#c8c2b4">Mostrar</text>
+    <polyline points="370,23 374,27 378,23" fill="none" stroke="#9a958a" stroke-width="1.3"/>
+
+    <rect x="796" y="14" width="84" height="22" rx="5" fill="#1b1c17" stroke="#2a2b24"/>
+    <g stroke="#9a958a" stroke-width="1.2" fill="none">
+      <rect x="806" y="20" width="13" height="9" rx="2"/>
+      <circle cx="812.5" cy="24.5" r="2.5"/>
+    </g>
+    <text x="828" y="29" font-size="11" fill="#9a958a">4,0</text>
+    <g stroke="#9a958a" stroke-width="1.1" fill="none">
+      <rect x="890" y="18" width="13" height="13" rx="1.5"/>
+      <line x1="894.3" y1="18" x2="894.3" y2="31"/>
+      <line x1="898.6" y1="18" x2="898.6" y2="31"/>
+      <line x1="890" y1="22.3" x2="903" y2="22.3"/>
+      <line x1="890" y1="26.6" x2="903" y2="26.6"/>
+    </g>
+    <g stroke="#9a958a" stroke-width="1.3" fill="none">
+      <polyline points="918,22 918,18 922,18"/>
+      <polyline points="932,18 936,18 936,22"/>
+      <polyline points="936,27 936,31 932,31"/>
+      <polyline points="922,31 918,31 918,27"/>
+    </g>
+
+    <text x="936" y="70" font-size="11" fill="#6c6a61" text-anchor="end">118 fps · 8,4 ms · 1 243 draws</text>
+
+    <rect x="238" y="44" width="280" height="416" rx="8" fill="#1b1c17" stroke="#33342c"/>
+
+    <text x="252" y="66" font-size="11" fill="#6c6a61">Modo de visualização</text>
+
+    <rect x="246" y="74" width="264" height="26" rx="5" fill="#16233f"/>
+    <circle cx="258" cy="87" r="5" fill="none" stroke="#5b9dff" stroke-width="1.3"/>
+    <circle cx="258" cy="87" r="2.5" fill="#5b9dff"/>
+    <text x="272" y="91" font-size="12" fill="#e6e2d8">Lit</text>
+    <text x="504" y="91" font-size="10" fill="#8fb4e8" text-anchor="end">Alt+1</text>
+
+    <circle cx="258" cy="117" r="5" fill="none" stroke="#4a4b41" stroke-width="1.3"/>
+    <text x="272" y="121" font-size="12" fill="#c8c2b4">Path tracer</text>
+    <rect x="342" y="107" width="32" height="13" rx="6.5" fill="#33260f" stroke="#57431a"/>
+    <text x="358" y="117" font-size="10" fill="#d8a03a" text-anchor="middle">beta</text>
+    <text x="504" y="121" font-size="10" fill="#6c6a61" text-anchor="end">Alt+2</text>
+    <text x="272" y="135" font-size="10" fill="#6c6a61">desliga Reflexos RT, GTAO e ReSTIR GI</text>
+
+    <circle cx="258" cy="159" r="5" fill="none" stroke="#4a4b41" stroke-width="1.3"/>
+    <text x="272" y="163" font-size="12" fill="#c8c2b4">Buffers do GBuffer</text>
+    <polyline points="500,154 505,159 500,164" fill="none" stroke="#6c6a61" stroke-width="1.3"/>
+
+    <circle cx="258" cy="187" r="5" fill="none" stroke="#4a4b41" stroke-width="1.3"/>
+    <text x="272" y="191" font-size="12" fill="#c8c2b4">Heatmap de reflexos</text>
+    <text x="504" y="191" font-size="10" fill="#6c6a61" text-anchor="end">Alt+5</text>
+
+    <line x1="252" y1="208" x2="504" y2="208" stroke="#23241d"/>
+    <text x="252" y="228" font-size="11" fill="#6c6a61">Iluminação global</text>
+
+    <text x="272" y="253" font-size="12" fill="#c8c2b4">DDGI</text>
+    <text x="310" y="253" font-size="10" fill="#6c6a61">· radiance cache</text>
+    <rect x="468" y="241" width="28" height="16" rx="8" fill="#5b9dff"/>
+    <circle cx="487" cy="249" r="5.5" fill="#f2efe6"/>
+
+    <text x="272" y="281" font-size="12" fill="#c8c2b4">ReSTIR GI</text>
+    <rect x="468" y="269" width="28" height="16" rx="8" fill="#5b9dff"/>
+    <circle cx="487" cy="277" r="5.5" fill="#f2efe6"/>
+
+    <rect x="246" y="292" width="264" height="26" rx="5" fill="#22231c"/>
+    <text x="272" y="309" font-size="12" fill="#e6e2d8">GTAO</text>
+    <rect x="468" y="297" width="28" height="16" rx="8" fill="#5b9dff"/>
+    <circle cx="487" cy="305" r="5.5" fill="#f2efe6"/>
+    <polygon points="452,299 452,315 456,311 459,318 461.5,317 458.5,310 464,310" fill="#e6e2d8" stroke="#10110f" stroke-width="0.6"/>
+
+    <line x1="252" y1="326" x2="504" y2="326" stroke="#23241d"/>
+    <text x="252" y="346" font-size="11" fill="#6c6a61">Reflexos e denoise</text>
+
+    <text x="272" y="371" font-size="12" fill="#c8c2b4">Reflexos RT</text>
+    <rect x="468" y="359" width="28" height="16" rx="8" fill="#5b9dff"/>
+    <circle cx="487" cy="367" r="5.5" fill="#f2efe6"/>
+
+    <text x="272" y="399" font-size="12" fill="#c8c2b4">NRD REBLUR</text>
+    <text x="360" y="399" font-size="10" fill="#6c6a61">· difuso + especular</text>
+    <rect x="468" y="387" width="28" height="16" rx="8" fill="#5b9dff"/>
+    <circle cx="487" cy="395" r="5.5" fill="#f2efe6"/>
+
+    <line x1="252" y1="416" x2="504" y2="416" stroke="#23241d"/>
+    <g stroke="#9a958a" stroke-width="1.2" fill="none">
+      <circle cx="259" cy="437" r="3.2"/>
+      <line x1="259" y1="431" x2="259" y2="433"/>
+      <line x1="259" y1="441" x2="259" y2="443"/>
+      <line x1="253" y1="437" x2="255" y2="437"/>
+      <line x1="263" y1="437" x2="265" y2="437"/>
+    </g>
+    <text x="272" y="441" font-size="12" fill="#9a958a">Configurações de renderização…</text>
+    <text x="504" y="441" font-size="10" fill="#6c6a61" text-anchor="end">Ctrl+,</text>
+  </g>
+</svg>

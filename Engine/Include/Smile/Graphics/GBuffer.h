@@ -2,16 +2,19 @@
 
 #include <d3d12.h>
 #include "Smile/Core/Types.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 
 namespace Smile {
     class FTextureSRVHeap;
 
     // G-Buffer do deferred shading: 3 render targets + depth (externo).
-    // Layout (ver Shaders/GBuffer.hlsli, manter em sincronia):
-    //   A  R8G8B8A8_UNORM      .rgb = BaseColor   .a = AO
-    //   B  R16G16B16A16_FLOAT  .rg  = OctNormal   .b = Roughness  .a = Metallic
-    //   C  R16G16B16A16_FLOAT  .rgb = Emissive    .a = ShadingModelID
+    // Layout pos-dieta (ver Shaders/GBuffer.hlsli, manter em sincronia):
+    //   A  R8G8B8A8_UNORM_SRGB  .rgb = BaseColor  .a = AO (alpha fica LINEAR em formato sRGB)
+    //   B  R10G10B10A2_UNORM  .rg  = OctNormal   .b = Roughness  .a = ShadingModelID (2 bits)
+    //   C  R8G8B8A8_UNORM     .r   = Metallic    .gba = livres (subsurface/specular futuros)
+    // Emissivo NAO mora aqui: o geometry pass escreve direto no SceneColor HDR (5o MRT) e o
+    // deferred lighting soma a luz por cima (blend aditivo).
     //
     // Os 3 SRVs sao alocados CONTIGUOS no heap compartilhado (SRVTableStart()) p/ bind do passe
     // de iluminacao como uma unica descriptor table. O depth fica com o Renderer.
@@ -19,9 +22,14 @@ namespace Smile {
     public:
         static constexpr u32 kTargetCount = 3;
 
-        static constexpr DXGI_FORMAT kFormatA = DXGI_FORMAT_R8G8B8A8_UNORM;     // BaseColor + AO
-        static constexpr DXGI_FORMAT kFormatB = DXGI_FORMAT_R16G16B16A16_FLOAT; // OctNormal + Rough + Metal
-        static constexpr DXGI_FORMAT kFormatC = DXGI_FORMAT_R16G16B16A16_FLOAT; // Emissive + ShadingModelID
+        // sRGB (como o GBufferC da UE, bLegacyAlbedoSrgb): o hardware encoda na escrita e
+        // decoda na leitura de graca — os 8 bits viram perceptualmente uniformes e o albedo
+        // ESCURO ganha ~2 bits efetivos (sem banding sob GI fraca/noite). Shaders seguem
+        // 100% em linear; nenhum leitor/writer muda. UAV em sRGB nao existe — o G-buffer
+        // nao tem UAV (so RTV/SRV/CopyResource, todos ok).
+        static constexpr DXGI_FORMAT kFormatA = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; // BaseColor + AO
+        static constexpr DXGI_FORMAT kFormatB = DXGI_FORMAT_R10G10B10A2_UNORM; // OctNormal + Rough + ID
+        static constexpr DXGI_FORMAT kFormatC = DXGI_FORMAT_R8G8B8A8_UNORM;    // Metallic + canais livres
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
@@ -49,6 +57,9 @@ namespace Smile {
         ID3D12Resource* Resource(u32 Index) const { return Targets[Index].Get(); }
 
         // Transicoes (rastreiam o estado interno por-target). Read = combinacao de estados de leitura.
+        // AppendTransitions empilha num batch compartilhado (transicoes vizinhas de outros
+        // recursos saem no MESMO ResourceBarrier); os To* emitem na hora, num batch proprio.
+        void AppendTransitions(FBarrierBatch& Batch, D3D12_RESOURCE_STATES Target);
         void TransitionToRead(ID3D12GraphicsCommandList* Cmd, D3D12_RESOURCE_STATES ReadState);
         void TransitionToWrite(ID3D12GraphicsCommandList* Cmd);
 

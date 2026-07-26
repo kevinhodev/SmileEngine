@@ -11,4 +11,34 @@ namespace SmileEditor {
         ConsoleVis = _V;
         emit ConsoleVisibleChanged();
     }
+
+    void MenuBridge::SetTimeOfDayVisible(bool _V) {
+        if (TimeOfDayVis == _V) return;
+        TimeOfDayVis = _V;
+        emit TimeOfDayVisibleChanged();
+    }
+
+    void MenuBridge::SetLightsVisible(bool _V) {
+        if (LightsVis == _V) return;
+        LightsVis = _V;
+        emit LightsVisibleChanged();
+    }
+
+    void MenuBridge::SetStatsVisible(bool _V) {
+        if (StatsVis == _V) return;
+        StatsVis = _V;
+        emit StatsVisibleChanged();
+    }
+
+    void MenuBridge::SetDebugTargetsVisible(bool _V) {
+        if (DebugTargetsVis == _V) return;
+        DebugTargetsVis = _V;
+        emit DebugTargetsVisibleChanged();
+    }
+
+    void MenuBridge::SetMaterialsVisible(bool _V) {
+        if (MaterialsVis == _V) return;
+        MaterialsVis = _V;
+        emit MaterialsVisibleChanged();
+    }
 }

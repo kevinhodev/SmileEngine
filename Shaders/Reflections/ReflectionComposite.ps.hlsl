@@ -13,14 +13,17 @@ cbuffer CompositeCB : register(b0) {
     float4 TraceParams;
     float4 HalfScreenParams;
     row_major float4x4 PrevViewProj;
-    float4 TemporalParams;  
-    float4 DebugParams;     
+    float4 TemporalParams;
+    float4 DebugParams;
+    row_major float4x4 View;        // (padding p/ casar o layout do ReflectionConstants)
 };
 
-Texture2D<float4> Reflection : register(t0); 
-Texture2D<float4> GBuffer    : register(t1); 
-Texture2D<float>  Depth      : register(t2); 
-Texture2D<float4> BRDFLut    : register(t3); 
+Texture2D<float4> Reflection : register(t0);
+Texture2D<float4> GBuffer    : register(t1); // GBufferB: octNormal + rough + shadingID
+Texture2D<float>  Depth      : register(t2);
+Texture2D<float4> BRDFLut    : register(t3);
+Texture2D<float4> GBufferC   : register(t4); // .r = metallic (dieta do G-buffer)
+Texture2D<float4> GBufferA   : register(t5); // .rgb = BaseColor (sRGB->linear no Load) — tint do metal
 
 SamplerState LinearClamp : register(s0);
 
@@ -34,7 +37,7 @@ float4 main(VSOutput input) : SV_TARGET {
 
     float4 gb        = GBuffer.Load(int3(px, 0));
     float  roughness = gb.b;
-    float  metallic  = gb.a;
+    float  metallic  = GBufferC.Load(int3(px, 0)).r;
     float  combineAlpha = saturate((ReflectParams.x - roughness) / max(ReflectParams.y, 1e-4f));
 
     float deviceZ = Depth.Load(int3(px, 0)).r;
@@ -61,9 +64,15 @@ float4 main(VSOutput input) : SV_TARGET {
     float3 V = normalize(CameraPos.xyz - worldPos);
     float  NoV = saturate(dot(N, V));
 
-    float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), float3(1.0f, 1.0f, 1.0f), metallic);
+    // Metal tinge o reflexo pela BaseColor (F0 = BaseColor p/ metal); antes usava branco, o que deixava
+    // metal colorido (ex.: scooter azul) refletindo sem tint E desalinhava do guide do RR (DlssRRGuides usa
+    // BaseColor). Agora casa com o guide -> o RR demodula o especular corretamente.
+    float3 baseColor = GBufferA.Load(int3(px, 0)).rgb;
+    float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), baseColor, metallic);
     float2 brdf = BRDFLut.SampleLevel(LinearClamp, float2(NoV, roughness), 0.0f).rg;
 
+    // O RELAX escreve a OUT_SPEC em radiancia LINEAR (o REBLUR escrevia em YCoCg e exigia um
+    // desempacotamento aqui). Vale p/ os dois caminhos: NRD ligado ou Resolved cru.
     float3 reflRad = Reflection.Load(int3(px, 0)).rgb;
     float3 spec    = reflRad * (F0 * brdf.x + brdf.y) * combineAlpha;
 

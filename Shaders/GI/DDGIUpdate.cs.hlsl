@@ -13,7 +13,19 @@ cbuffer DDGICB : register(b0) {
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
+Buffer<float4>      ProbeData   : register(t1); // w>=1 = probe recem-ativado/relocado
 RWTexture2D<float4> IrradAtlas  : register(u0);
+
+// Tabela de copia da borda octaedrica (wrap com fold; do Wicked, mesma que o Flax usa):
+// uint4(srcX, srcY, dstX, dstY) em coords do tile COM borda (0..7 p/ interior 6).
+#define DDGI_BORDER_COUNT 28
+static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
+    uint4(6,1, 1,0), uint4(5,1, 2,0), uint4(4,1, 3,0), uint4(3,1, 4,0), uint4(2,1, 5,0), uint4(1,1, 6,0),
+    uint4(6,6, 1,7), uint4(5,6, 2,7), uint4(4,6, 3,7), uint4(3,6, 4,7), uint4(2,6, 5,7), uint4(1,6, 6,7),
+    uint4(1,1, 0,6), uint4(1,2, 0,5), uint4(1,3, 0,4), uint4(1,4, 0,3), uint4(1,5, 0,2), uint4(1,6, 0,1),
+    uint4(6,1, 7,6), uint4(6,2, 7,5), uint4(6,3, 7,4), uint4(6,4, 7,3), uint4(6,5, 7,2), uint4(6,6, 7,1),
+    uint4(1,1, 7,7), uint4(6,1, 0,7), uint4(1,6, 7,0), uint4(6,6, 0,0)
+};
 
 [numthreads(DDGI_TILE, DDGI_TILE, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
@@ -43,7 +55,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         if (tr.a < -1e8f) continue; 
         ++realCount;
         if (tr.a < 0.0f) { ++backfaceCount; continue; } 
-        float3 rdir = DDGI_RayDirection(r, DDGI_RAYS, frame);
+        float3 rdir = DDGI_RayDirection(r, DDGI_RAYS, frame, (uint)probeIdx);
         float  w    = max(0.0f, dot(texelDir, rdir));
         if (w <= 0.0f) continue;
         sum  += tr.rgb * w;
@@ -55,9 +67,23 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     result = pow(max(result, 0.0f), 1.0f / DDGI_IRRADIANCE_GAMMA);
 
     int2   texel = tileOrigin + local;
-    float3 prev  = IrradAtlas[texel].rgb; 
-    
-    float  hyst    = SunColorHyst.w;
+    float3 prev  = IrradAtlas[texel].rgb;
+
+    // Probe recem-ativado/relocado (marcado pelo Relocate): historia e do lugar antigo (ou
+    // preto de dentro da parede) — descarta e toma a estimativa nova inteira.
+    float  hyst    = (ProbeData[probeIdx].w >= 1.0f) ? 0.0f : SunColorHyst.w;
     float3 blended = lerp(result, prev, hyst);
     IrradAtlas[texel] = float4(blended, 1.0f);
+
+    // Copia a borda de 1px do tile (fold octaedrico) p/ o bilinear ser continuo na costura.
+    // Barrier de DEVICE: as fontes sao texels do atlas escritos por outras threads do grupo.
+    // Sem divergencia no return de cima: probeIdx e uniforme no grupo inteiro.
+    DeviceMemoryBarrierWithGroupSync();
+    uint groupIdx  = GTid.y * DDGI_TILE + GTid.x;
+    int2 padOrigin = tileOrigin - 1;
+    [loop]
+    for (uint b = groupIdx; b < DDGI_BORDER_COUNT; b += DDGI_TILE * DDGI_TILE) {
+        uint4 bo = kBorderOffsets[b];
+        IrradAtlas[padOrigin + int2(bo.zw)] = IrradAtlas[padOrigin + int2(bo.xy)];
+    }
 }

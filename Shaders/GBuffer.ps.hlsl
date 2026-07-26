@@ -1,46 +1,13 @@
 #include "GBuffer.hlsli"
 
 cbuffer FrameCB : register(b0) {
-    float4 CameraPosition;
+    float4 CameraPosition : packoffset(c0);
+    // x = mip bias global (FSR upscale: log2(render/display) - 1; 0 sem upscale).
+    // c18 = logo apos o InvViewProj do FrameConstants (ver Renderer.h).
+    float4 RenderParams   : packoffset(c18);
 };
 
-cbuffer MaterialCB : register(b1) {
-    float4 BaseColorFactor;
-    float  MetallicFactor;
-    float  RoughnessFactor;
-    float  AOStrength;
-    float  EmissiveStrength;
-    float4 EmissiveFactor;
-    uint   HasAlbedoMap;
-    uint   HasNormalMap;
-    uint   HasMetallicRoughnessMap;
-    uint   HasAOMap;
-    uint   HasEmissiveMap;
-    float  NormalStrength;
-    uint   NormalFlipY;
-
-    uint   HasHeightMap;
-    float  HeightScale;
-    float  ParallaxMinSteps;
-    float  ParallaxMaxSteps;
-    uint   ParallaxSelfShadow;
-    float  ParallaxShadowSteps;
-    float  ParallaxFadeStart;
-    float  ParallaxFadeRange;
-    uint   ParallaxRefine;
-    uint   ParallaxRefineSteps;
-
-    uint   HasMetalnessMap;
-    uint   HasRoughnessMap;
-
-    uint   SpecularPacking;
-    uint   AlphaTest;
-    float  AlphaCutoff;
-    uint   NormalReconstructZ;
-
-    uint   ShadingModel;
-    float4 SubsurfaceColor;
-};
+#include "MaterialCB.hlsli"
 
 Texture2D AlbedoMap            : register(t0);
 Texture2D NormalMap            : register(t1);
@@ -153,15 +120,28 @@ GBufferOutput main(PSInput input) {
         }
     }
 
-    float4 AlbedoSample = HasAlbedoMap ? AlbedoMap.Sample(MaterialSampler, UV) : float4(1.0f, 1.0f, 1.0f, 1.0f);
+    // Bias negativo de mip nas texturas de material quando o FSR upscala (recupera o detalhe
+    // que a render res menor perderia); 0 em nativo/SSAA. Nao se aplica ao parallax (SampleGrad).
+    float MipBias = RenderParams.x;
+
+    float4 AlbedoSample = HasAlbedoMap ? AlbedoMap.SampleBias(MaterialSampler, UV, MipBias) : float4(1.0f, 1.0f, 1.0f, 1.0f);
     float3 BaseColor    = BaseColorFactor.rgb * AlbedoSample.rgb;
-    if (AlphaTest)
-        clip(AlbedoSample.a * BaseColorFactor.a - AlphaCutoff);
+    if (AlphaTest) {
+        // A cobertura do recorte (alfa) NAO usa o MipBias negativo do FSR: puxar o alfa p/ um
+        // mip mais nitido deixa a borda da folhagem alta-frequencia e a cobertura instavel entre
+        // frames com jitter -> cintilacao no upscale (Qualidade+). O bias fica so no RGB (detalhe);
+        // o alfa e amostrado no mip da render res (bias 0), mantendo a silhueta estavel p/ o FSR.
+        // Sem upscale (MipBias==0) reaproveita AlbedoSample.a — sem fetch extra.
+        float ClipAlpha = (MipBias < 0.0f && HasAlbedoMap)
+                        ? AlbedoMap.SampleBias(MaterialSampler, UV, 0.0f).a
+                        : AlbedoSample.a;
+        MaterialAlphaClip(ClipAlpha);
+    }
 
     float3 N        = GeoN;
     float  ToksvigT = 1.0f;
     if (HasNormalMap) {
-        float4 NrmSample = NormalMap.Sample(MaterialSampler, UV);
+        float4 NrmSample = NormalMap.SampleBias(MaterialSampler, UV, MipBias);
         float3 Encoded   = NrmSample.rgb;
         if (NormalReconstructZ) {
             float2 xy = NrmSample.rg * 2.0f - 1.0f;
@@ -177,7 +157,7 @@ GBufferOutput main(PSInput input) {
     float Metallic  = MetallicFactor;
     float Roughness = RoughnessFactor;
     if (HasMetallicRoughnessMap) {
-        float4 MR = MetallicRoughnessMap.Sample(MaterialSampler, UV);
+        float4 MR = MetallicRoughnessMap.SampleBias(MaterialSampler, UV, MipBias);
         if (SpecularPacking) {
             Roughness *= MR.g;
             Metallic  *= MR.b;
@@ -186,8 +166,8 @@ GBufferOutput main(PSInput input) {
             Roughness *= MR.g;
         }
     }
-    if (HasMetalnessMap) Metallic  *= MetalnessMap.Sample(MaterialSampler, UV).r;
-    if (HasRoughnessMap) Roughness *= RoughnessMap.Sample(MaterialSampler, UV).r;
+    if (HasMetalnessMap) Metallic  *= MetalnessMap.SampleBias(MaterialSampler, UV, MipBias).r;
+    if (HasRoughnessMap) Roughness *= RoughnessMap.SampleBias(MaterialSampler, UV, MipBias).r;
     Roughness = max(Roughness, 0.04f);
 
     {
@@ -203,15 +183,20 @@ GBufferOutput main(PSInput input) {
 
     float AO = 1.0f;
     if (SpecularPacking && HasMetallicRoughnessMap)
-        AO = lerp(1.0f, MetallicRoughnessMap.Sample(MaterialSampler, UV).r, AOStrength);
+        AO = lerp(1.0f, MetallicRoughnessMap.SampleBias(MaterialSampler, UV, MipBias).r, AOStrength);
     else if (HasAOMap)
-        AO = lerp(1.0f, AOMap.Sample(MaterialSampler, UV).r, AOStrength);
+        AO = lerp(1.0f, AOMap.SampleBias(MaterialSampler, UV, MipBias).r, AOStrength);
 
     float3 Emissive = EmissiveFactor.rgb * EmissiveStrength;
     if (HasEmissiveMap)
-        Emissive *= EmissiveMap.Sample(MaterialSampler, UV).rgb;
+        Emissive *= EmissiveMap.SampleBias(MaterialSampler, UV, MipBias).rgb;
 
-    GBufferOutput o = EncodeGBuffer(BaseColor, AO, N, Roughness, Metallic, Emissive, ShadingModel);
+    // Subsurface premultiplicado (tint x intensidade) — vai no C.gba; o deferred faz
+    // TransColor = BaseColor * isto. Default do loader p/ folhagem = (1,1,1)x0.6.
+    float3 Subsurface = SubsurfaceColor.rgb * SubsurfaceColor.a;
+
+    GBufferOutput o = EncodeGBuffer(BaseColor, AO, N, Roughness, Metallic, Emissive, ShadingModel,
+                                    Subsurface);
 
     float2 curNDC  = input.curClip.xy  / input.curClip.w;
     float2 prevNDC = input.prevClip.xy / input.prevClip.w;

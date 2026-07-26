@@ -93,8 +93,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     lumTotal *= invSamples;
     fmsTotal *= invSamples;
 
-    float3 fms2 = fmsTotal * fmsTotal;
-    float3 sumContribution = 1.0f + fmsTotal + fms2 + fmsTotal * fms2 + fms2 * fms2;
-    float3 psiMs = lumTotal * sumContribution;
+    // Serie geometrica infinita em forma fechada (Hillaire eq. 9 / UE SkyAtmosphere.usf):
+    // truncar em poucos termos subestima o multiscatter com fms alto (crepusculo).
+    float3 psiMs = lumTotal / max(1.0f - fmsTotal, 1e-4f);
     OutMultiScatter[id.xy] = float4(psiMs, 1.0f);
 }

@@ -1,5 +1,6 @@
 #include "Smile/Graphics/SunShadows.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -45,6 +46,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommittedResource(
             &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
             ArrayState, &Clear, IID_PPV_ARGS(&DepthArray)));
+        VramTracker::Register(DepthArray.Get(), EVramCategory::Shadows);
 
         DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kNumCascades, false);
         for (u32 c = 0; c < kNumCascades; ++c) {
@@ -144,7 +146,11 @@ namespace Smile {
         // sunlight pass through walls even though the RT/DDGI path can still hit those triangles.
         Raster.CullMode              = D3D12_CULL_MODE_NONE;
         Raster.FrontCounterClockwise = FALSE;
-        Raster.DepthClipEnable       = TRUE;
+        // Shadow pancaking: casters entre o sol e o near plane do ortho seriam clipados
+        // (vazando luz com sol baixo); com depth clip off o hardware clampa a profundidade
+        // deles pra 0, achatando-os no near plane — mesma solucao do Flax (PSO de shadow
+        // depth) e equivalente ao clamp de VS da Unreal (bClampToNearPlane).
+        Raster.DepthClipEnable       = FALSE;
         Raster.DepthBias             = 0;
         Raster.SlopeScaledDepthBias  = 1.0f;
         Raster.DepthBiasClamp        = 0.0f;
@@ -220,15 +226,24 @@ namespace Smile {
 
     void FSunShadows::UpdatePerFrame(u32 _FrameSlot, bool _Enabled, const Mat44& _View,
                                      const Vec3& _CamPos, f32 _FovYRadians, f32 _Aspect,
-                                     const Vec3& _DirToSun, f32 _NearZ) {
+                                     const Vec3& _DirToSun, f32 _NearZ, f32 _NoiseFrame) {
         FrameSlot = _FrameSlot;
-        (void)_CamPos; 
+        (void)_CamPos;
         CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
                                  1.0f / static_cast<f32>(kResolution), _Enabled ? 1.0f : 0.0f };
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
                                  DebugCascades ? 1.0f : 0.0f };
+        const f32 PcssTan = SunAngularSizeDeg > 0.0f
+            ? std::tan(0.5f * SunAngularSizeDeg * 3.14159265f / 180.0f) : 0.0f;
+        CPUConstants.Params3 = { _NoiseFrame, PcssTan, MaxPenumbraTexels, 0.0f };
+        CPUConstants.BiasScale = { CascadeBiasScale[0], CascadeBiasScale[1],
+                                   CascadeBiasScale[2], CascadeBiasScale[3] };
 
-        if (_Enabled) {
+        UpdateMask = 0;
+        if (!_Enabled) {
+            InvalidateCache(); // cena/estado podem mudar enquanto off; re-fita tudo ao religar
+        } else {
+            ++UpdateCounter;
             auto Accum = [](f32 E, int Idx, int Count) -> f32 {
                 f32 Cur = 1.0f, Total = 0.0f, Ret = 0.0f;
                 for (int i = 0; i < Count; ++i) { if (i < Idx) Ret += Cur; Total += Cur; Cur *= E; }
@@ -262,7 +277,8 @@ namespace Smile {
             BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
             BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
 
-            f32* sf = &CPUConstants.CascadeTexelWorld.X; 
+            f32* sf = &CPUConstants.CascadeTexelWorld.X;
+            f32* dr = &CPUConstants.DepthRangeWorld.X;
             for (int c = 0; c < numC; ++c) {
                 const f32 dn = Splits[c], df = Splits[c + 1];
                 const f32 FarX = tanH*df, FarY = tanV*df, NearX = tanH*dn, NearY = tanV*dn;
@@ -281,10 +297,37 @@ namespace Smile {
                             const f32 d = x*x + y*y + z*z;
                             if (d > r2) r2 = d;
                         }
-                f32 radius = std::ceil(std::sqrt(r2));
-                if (radius < 1.0f) radius = 1.0f;
+                f32 idealRadius = std::ceil(std::sqrt(r2));
+                if (idealRadius < 1.0f) idealRadius = 1.0f;
+
+                // Cascatas distantes cacheadas ganham 10% de folga na esfera: tolera o
+                // drift da camera entre re-renderizacoes sem perder cobertura.
+                constexpr f32 kCacheSlack = 1.10f;
+                const bool Cacheable = CacheEnabled && c >= 2;
+                const f32  radius = Cacheable ? std::ceil(idealRadius * kCacheSlack) : idealRadius;
 
                 const Vec3 centerWorld = TransformPoint(InvView, Vec3{ 0.0f, 0.0f, czv });
+
+                if (Cacheable && CacheValid[c]) {
+                    // Round-robin defasado: c2 nos frames pares, c3 a cada 4 (fase 1) —
+                    // nunca as duas no mesmo frame (estilo update-rate do Flax).
+                    const u64 Period = (c == 2) ? 2u : 4u;
+                    const u64 Phase  = (c == 2) ? 0u : 1u;
+                    bool Refresh = (UpdateCounter % Period) == Phase;
+                    // Sol girou alem de ~0.05 graus (TOD rapido derruba o cache, correto).
+                    constexpr f32 kSunDirCos = 0.99999962f;
+                    if (!Refresh && CachedFwd[c].Dot(fwd) < kSunDirCos) Refresh = true;
+                    if (!Refresh) {
+                        // Esfera ideal escapou da congelada (teleporte/voo rapido).
+                        const Vec3 d{ centerWorld.X - CachedCenter[c].X,
+                                      centerWorld.Y - CachedCenter[c].Y,
+                                      centerWorld.Z - CachedCenter[c].Z };
+                        const f32 slack = CachedRadius[c] - idealRadius;
+                        if (slack < 0.0f || d.Dot(d) > slack * slack) Refresh = true;
+                    }
+                    if (!Refresh) continue; // congelada: WorldToShadow/texel do CB ficam como estao
+                }
+
                 const f32 texel = 2.0f * radius / static_cast<f32>(kResolution);
                 const f32 cx = std::floor(centerWorld.Dot(right) / texel) * texel;
                 const f32 cy = std::floor(centerWorld.Dot(up)    / texel) * texel;
@@ -297,8 +340,15 @@ namespace Smile {
                 const Mat44 LightViewProj = LightView * LightProj;
 
                 CPUConstants.WorldToShadow[c] = LightViewProj * BiasUV;
-                CascadeViewProj[c]            = LightViewProj; 
-                sf[c] = texel; 
+                CascadeViewProj[c]            = LightViewProj;
+                sf[c] = texel;
+                dr[c] = 2.0f * radius + CasterPullback; // range do ortho em mundo (PCSS)
+
+                UpdateMask |= (1u << c);
+                CacheValid[c]   = Cacheable;
+                CachedFwd[c]    = fwd;
+                CachedCenter[c] = snapped;
+                CachedRadius[c] = radius;
 
                 ShadowCascadeConstants Cascade{ LightViewProj };
                 std::memcpy(MappedCascade +
@@ -327,9 +377,9 @@ namespace Smile {
 
     void FSunShadows::RecordDepthPass(ID3D12GraphicsCommandList* _CommandList,
                                       FTextureSRVHeap& _SRVHeap,
-                                      const FShadowDrawItem* _Items, size_t _Count) {
+                                      const FShadowDrawItem* _Items, size_t _Count,
+                                      const FExtraCascadeDraw& _ExtraDraw) {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        _CommandList->SetGraphicsRootSignature(RootSig.Get());
 
         D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
                            static_cast<FLOAT>(kResolution), 0.0f, 1.0f };
@@ -338,6 +388,10 @@ namespace Smile {
         _CommandList->RSSetScissorRects(1, &SC);
 
         for (u32 c = 0; c < kNumCascades; ++c) {
+            if (!(UpdateMask & (1u << c))) continue; // cascata congelada: depth do update anterior segue valido
+            // Root sig por cascata (nao uma vez fora do loop): o ExtraDraw (terreno) troca
+            // root signature/PSO no fim da cascata anterior.
+            _CommandList->SetGraphicsRootSignature(RootSig.Get());
             auto DSV = DSVHeap.CpuHandle(c);
             _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
             _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -348,16 +402,17 @@ namespace Smile {
             const Vec4 c1{ VP.M[0][1], VP.M[1][1], VP.M[2][1], VP.M[3][1] };
             const Vec4 c2{ VP.M[0][2], VP.M[1][2], VP.M[2][2], VP.M[3][2] };
             const Vec4 c3{ VP.M[0][3], VP.M[1][3], VP.M[2][3], VP.M[3][3] };
-            const Vec4 Planes[6] = {
-                { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W }, 
-                { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W }, 
-                { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W }, 
-                { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W }, 
-                { c2.X, c2.Y, c2.Z, c2.W },                    
-                { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W }, 
+            // Sem o plano near: com pancaking (depth clip off) casters atras do near plane
+            // ainda projetam sombra (achatados nele), entao nao podem ser descartados aqui.
+            const Vec4 Planes[5] = {
+                { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W },
+                { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W },
+                { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W },
+                { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W },
+                { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W },
             };
             auto Outside = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
-                for (int i = 0; i < 6; ++i) {
+                for (int i = 0; i < 5; ++i) {
                     const Vec4& p = Planes[i];
                     const f32 px = (p.X >= 0.0f) ? Mx.X : Mn.X;
                     const f32 py = (p.Y >= 0.0f) ? Mx.Y : Mn.Y;
@@ -367,18 +422,33 @@ namespace Smile {
                 return false;
             };
 
+            // Caster menor que N texels da cascata nao contribui sombra legivel — pula
+            // (corta micro-objetos das cascatas distantes, estilo min caster size da Cry/UE).
+            const f32 MinExtent = MinCasterTexels * (&CPUConstants.CascadeTexelWorld.X)[c];
+
             ID3D12PipelineState* Cur = nullptr;
             for (size_t k = 0; k < _Count; ++k) {
                 const FShadowDrawItem& It = _Items[k];
                 if (!It.Mesh) continue;
+                if (MinExtent > 0.0f) {
+                    const f32 ExX = It.AABBMax.X - It.AABBMin.X;
+                    const f32 ExY = It.AABBMax.Y - It.AABBMin.Y;
+                    const f32 ExZ = It.AABBMax.Z - It.AABBMin.Z;
+                    f32 MaxExt = ExX > ExY ? ExX : ExY;
+                    if (ExZ > MaxExt) MaxExt = ExZ;
+                    if (MaxExt < MinExtent) continue;
+                }
                 if (Outside(It.AABBMin, It.AABBMax)) continue;
                 const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
                 ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
-                _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB); 
-                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);                
+                _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
+                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);
                 It.Mesh->Draw(_CommandList);
             }
+
+            if (_ExtraDraw)
+                _ExtraDraw(_CommandList, c, CascadeCBAddr(c), CascadeViewProj[c]);
         }
 
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -386,5 +456,10 @@ namespace Smile {
 
     void FSunShadows::EnsureReadable(ID3D12GraphicsCommandList* _CommandList) {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
+
+    void FSunShadows::EnsureReadableCompute(ID3D12GraphicsCommandList* _CommandList) {
+        TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 }

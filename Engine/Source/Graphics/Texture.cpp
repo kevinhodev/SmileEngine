@@ -1,10 +1,12 @@
 #include "Smile/Graphics/Texture.h"
-#include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/UploadQueue.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -31,8 +33,49 @@ namespace Smile {
     }
 
     namespace {
+        // sRGB -> linear, 256 entradas (o dominio de entrada e um u8, entao a tabela e exata).
+        const float* SrgbToLinearLUT() {
+            static const std::array<float, 256> Lut = [] {
+                std::array<float, 256> T{};
+                for (int i = 0; i < 256; ++i) {
+                    const float c = float(i) / 255.0f;
+                    T[i] = (c <= 0.04045f) ? (c / 12.92f)
+                                           : std::pow((c + 0.055f) / 1.055f, 2.4f);
+                }
+                return T;
+            }();
+            return Lut.data();
+        }
+
+        // linear -> sRGB. Sem pow no loop quente: a saida e u8, entao basta a tabela dos PONTOS
+        // MEDIOS (em linear) entre niveis sRGB consecutivos — o upper_bound devolve o nivel mais
+        // proximo em 8 comparacoes, com arredondamento exato. Um pow por canal por texel custaria
+        // ~16M chamadas numa textura 2K (mip chain inteira), em 135 PNGs so no Sponza.
+        u8 LinearToSrgbU8(float _L) {
+            static const std::array<float, 255> Mid = [] {
+                const float* Lin = SrgbToLinearLUT();
+                std::array<float, 255> M{};
+                for (int i = 0; i < 255; ++i) M[i] = 0.5f * (Lin[i] + Lin[i + 1]);
+                return M;
+            }();
+            const auto It = std::upper_bound(Mid.begin(), Mid.end(), _L);
+            return static_cast<u8>(It - Mid.begin());
+        }
+
+        // _SrgbSpace = os bytes de ENTRADA estao codificados em sRGB (albedo/emissivo). Nesse caso
+        // a media tem que acontecer em LINEAR: media aritmetica de bytes gama escurece a mip. Um
+        // 2x2 de 0 e 255 dava 127 (que o hardware le como ~0.216 linear) quando o certo e 0.5
+        // linear = 188 em sRGB. O erro aparece em toda mip de toda textura nao-DDS, acumulando
+        // nivel a nivel — as DDS escapam porque trazem a mip chain pronta do disco.
+        //
+        // Mapas de dado (roughness/metal/AO/height) tem _SrgbSpace = false e seguem na media
+        // direta, que para eles ja e a correta: sao lidos como UNORM, nao ha gama envolvida.
+        //
+        // O ALFA nunca passa pela conversao, mesmo em textura sRGB: alfa e linear por definicao
+        // no formato, e e ele que alimenta o clip do alpha-test.
         void DownsampleColor2x2(const u8* Src, u32 SrcW, u32 SrcH,
-                                u8* Dst, u32 DstW, u32 DstH) {
+                                u8* Dst, u32 DstW, u32 DstH, bool _SrgbSpace) {
+            const float* ToLin = _SrgbSpace ? SrgbToLinearLUT() : nullptr;
             for (u32 y = 0; y < DstH; ++y) {
                 u32 sy0 = std::min(y * 2u,       SrcH - 1);
                 u32 sy1 = std::min(y * 2u + 1u,  SrcH - 1);
@@ -44,8 +87,16 @@ namespace Smile {
                     const u8* p10 = Src + (sy1 * SrcW + sx0) * 4;
                     const u8* p11 = Src + (sy1 * SrcW + sx1) * 4;
                     u8* d = Dst + (y * DstW + x) * 4;
-                    for (u32 c = 0; c < 4; ++c)
-                        d[c] = static_cast<u8>((u32(p00[c]) + p01[c] + p10[c] + p11[c] + 2) / 4);
+                    for (u32 c = 0; c < 3; ++c) {
+                        if (ToLin) {
+                            const float L = 0.25f * (ToLin[p00[c]] + ToLin[p01[c]] +
+                                                     ToLin[p10[c]] + ToLin[p11[c]]);
+                            d[c] = LinearToSrgbU8(L);
+                        } else {
+                            d[c] = static_cast<u8>((u32(p00[c]) + p01[c] + p10[c] + p11[c] + 2) / 4);
+                        }
+                    }
+                    d[3] = static_cast<u8>((u32(p00[3]) + p01[3] + p10[3] + p11[3] + 2) / 4);
                 }
             }
         }
@@ -100,7 +151,8 @@ namespace Smile {
     FTexture FTexture::RecordUpload(ID3D12Device* _Device, ID3D12GraphicsCommandList* _CommandList,
                                     FTextureSRVHeap& _SRVHeap,
                                     const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
-                                    std::vector<ComPtr<ID3D12Resource>>& _StagingOut) {
+                                    std::vector<ComPtr<ID3D12Resource>>& _StagingOut,
+                                    EVramCategory _Category) {
         const u32 MipCount = static_cast<u32>(_Mips.size());
         const u32 Width    = _Mips[0].Width;
         const u32 Height   = _Mips[0].Height;
@@ -119,10 +171,14 @@ namespace Smile {
         D3D12_HEAP_PROPERTIES DefaultHeap{};
         DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
+        // COMMON, nao COPY_DEST: recurso acessado em fila COPY tem que ENTRAR nela em
+        // COMMON (a promotion COMMON->COPY_DEST acontece la; iniciar em COPY_DEST viola
+        // o layout esperado e o debug layer reclama por subresource).
         ComPtr<ID3D12Resource> GPUTexture;
         SMILE_HR(_Device->CreateCommittedResource(
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&GPUTexture)));
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&GPUTexture)));
+        VramTracker::Register(GPUTexture.Get(), _Category);
 
         std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> Layouts(MipCount);
         std::vector<UINT>   NumRows(MipCount);
@@ -176,13 +232,9 @@ namespace Smile {
             _CommandList->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
         }
 
-        D3D12_RESOURCE_BARRIER ResourceBarrier{};
-        ResourceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        ResourceBarrier.Transition.pResource   = GPUTexture.Get();
-        ResourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        ResourceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        _CommandList->ResourceBarrier(1, &ResourceBarrier);
+        // Sem transition barrier: o upload roda na fila COPY (que nem aceita transicao pra
+        // estado de shader) — a textura decai pra COMMON no fim do batch e promove pra
+        // SRV implicitamente no primeiro read da fila direta.
 
         u32 Slot = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -205,47 +257,46 @@ namespace Smile {
         return Result;
     }
 
-    std::vector<FTexture> FTexture::CreateBatchFromCPU(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    std::vector<FTexture> FTexture::CreateBatchFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                                        FTextureSRVHeap& _SRVHeap,
                                                        const std::vector<FTextureCPUData>& _Data) {
         std::vector<FTexture> Out(_Data.size());
-        constexpr size_t kStagingBudget = 256ull * 1024 * 1024; 
+        constexpr size_t kStagingBudget = 256ull * 1024 * 1024;
 
+        // Submit nao bloqueia: enquanto a GPU copia o batch N, o CPU ja prepara o N+1
+        // (stagings retidos pela fila ate a fence). O chamador da o WaitIdle antes do
+        // primeiro consumo (SceneLoader espera depois dos meshes).
         size_t i = 0;
         while (i < _Data.size()) {
-            _CommandQueue.ResetForRecording();
-            ID3D12GraphicsCommandList* CommandList = _CommandQueue.List();
+            ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
             std::vector<ComPtr<ID3D12Resource>> Staging;
             size_t BatchBytes = 0;
-            bool   AnyRecorded = false;
 
             for (; i < _Data.size(); ++i) {
-                if (!_Data[i].Valid()) continue; 
+                if (!_Data[i].Valid()) continue;
                 Out[i] = RecordUpload(_Device, CommandList, _SRVHeap,
                                       _Data[i].Mips, _Data[i].Format, Staging);
-                AnyRecorded = true;
                 for (const auto& m : _Data[i].Mips) BatchBytes += m.Pixels.size();
                 if (BatchBytes >= kStagingBudget) { ++i; break; }
             }
 
-            SMILE_HR(CommandList->Close());
-            ID3D12CommandList* Lists[] = { CommandList };
-            _CommandQueue.ExecuteAndSync(Lists, 1);
-            (void)AnyRecorded;
+            _UploadQueue.Submit(std::move(Staging));
         }
         return Out;
     }
 
-    FTexture FTexture::Upload(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::Upload(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                FTextureSRVHeap& _SRVHeap,
-                               const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format) {
-        _CommandQueue.ResetForRecording();
-        ID3D12GraphicsCommandList* CommandList = _CommandQueue.List();
+                               const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
+                               EVramCategory _Category) {
+        ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
         std::vector<ComPtr<ID3D12Resource>> Staging;
-        FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format, Staging);
-        SMILE_HR(CommandList->Close());
-        ID3D12CommandList* Lists[] = { CommandList };
-        _CommandQueue.ExecuteAndSync(Lists, 1);
+        FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format, Staging,
+                                       _Category);
+        _UploadQueue.Submit(std::move(Staging));
+        // Carga avulsa (default/lua/weather map): o chamador usa a textura em seguida,
+        // entao espera aqui mesmo — o ganho de overlap e do caminho em batch.
+        _UploadQueue.WaitIdle();
         return Result;
     }
 
@@ -257,10 +308,11 @@ namespace Smile {
         GpuResource.Reset();
     }
 
-    FTextureCPUData FTexture::LoadCPU(const std::wstring& _Path, bool _IsNormalMap) {
+    FTextureCPUData FTexture::LoadCPU(const std::wstring& _Path, bool _IsNormalMap, bool _sRGB) {
         FTextureCPUData Data;
         Data.IsNormalMap = _IsNormalMap;
-        Data.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
+        // Mesmos bytes RGBA decodificados por WIC; so a view muda (sRGB faz a HW linearizar no sample).
+        Data.Format      = _sRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
         try {
             auto Factory = GetWICFactory();
 
@@ -318,7 +370,7 @@ namespace Smile {
                     MinT = std::min(MinT, AvgT);
                 } else {
                     DownsampleColor2x2(Prev.Pixels.data(), PrevW, PrevH,
-                                       Next.Pixels.data(), W, H);
+                                       Next.Pixels.data(), W, H, _sRGB);
                 }
                 Mips.push_back(std::move(Next));
             }
@@ -341,16 +393,17 @@ namespace Smile {
         return Data;
     }
 
-    FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
-                                     FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data) {
-        if (!_Data.Valid()) return FTexture{}; 
-        return Upload(_Device, _CommandQueue, _SRVHeap, _Data.Mips, _Data.Format);
+    FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
+                                     FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data,
+                                     EVramCategory _Category) {
+        if (!_Data.Valid()) return FTexture{};
+        return Upload(_Device, _UploadQueue, _SRVHeap, _Data.Mips, _Data.Format, _Category);
     }
 
-    FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                      FTextureSRVHeap& _SRVHeap,
                                      const std::wstring& _Path, bool _IsNormalMap) {
-        return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
+        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
     }
 
     namespace {
@@ -464,12 +517,12 @@ namespace Smile {
         return Data;
     }
 
-    FTexture FTexture::LoadDDS(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::LoadDDS(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                               FTextureSRVHeap& _SRVHeap, const std::wstring& _Path, bool _sRGB) {
-        return CreateFromCPU(_Device, _CommandQueue, _SRVHeap, LoadDDSCPU(_Path, _sRGB));
+        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap, LoadDDSCPU(_Path, _sRGB));
     }
 
-    FTexture FTexture::CreateDefault(ID3D12Device* _Device, FCommandQueue& _CommandQueue,
+    FTexture FTexture::CreateDefault(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                       FTextureSRVHeap& _SRVHeap,
                                       EDefaultTexture _Type) {
         FMipData Mip;
@@ -495,6 +548,6 @@ namespace Smile {
         }
         std::vector<FMipData> Mips;
         Mips.push_back(std::move(Mip));
-        return Upload(_Device, _CommandQueue, _SRVHeap, Mips, DXGI_FORMAT_R8G8B8A8_UNORM);
+        return Upload(_Device, _UploadQueue, _SRVHeap, Mips, DXGI_FORMAT_R8G8B8A8_UNORM);
     }
 }

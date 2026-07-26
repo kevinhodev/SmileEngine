@@ -1,4 +1,5 @@
 #include "Smile/Graphics/NrdDenoiser.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -13,7 +14,6 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
-    // AllocationCallbacks explicitos (blindagem): alocacao deterministica e alinhada.
     void* NRD_CALL NrdAlloc(void*, size_t size, size_t alignment)            { return _aligned_malloc(size, alignment ? alignment : 16); }
     void* NRD_CALL NrdRealloc(void*, void* mem, size_t size, size_t alignment){ return _aligned_realloc(mem, size, alignment ? alignment : 16); }
     void  NRD_CALL NrdFree(void*, void* mem)                                 { _aligned_free(mem); }
@@ -76,7 +76,9 @@ namespace {
             case E::IO_NORMAL_ROUGHNESS:      return DXGI_FORMAT_R10G10B10A2_UNORM;
             case E::IO_VIEWZ:                 return DXGI_FORMAT_R32_FLOAT;
             case E::IO_DIFF_RADIANCE_HITDIST: return DXGI_FORMAT_R16G16B16A16_FLOAT;
-            case E::IO_OUT:                   return DXGI_FORMAT_R16G16B16A16_FLOAT;
+            case E::IO_SPEC_RADIANCE_HITDIST: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+            case E::IO_OUT_DIFF:              return DXGI_FORMAT_R16G16B16A16_FLOAT;
+            case E::IO_OUT_SPEC:              return DXGI_FORMAT_R16G16B16A16_FLOAT;
             default:                          return DXGI_FORMAT_R16G16B16A16_FLOAT;
         }
     }
@@ -97,6 +99,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> T;
             SMILE_HR(Dev->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &D,
                      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&T)));
+            VramTracker::Register(T.Get(), EVramCategory::GI);
             return T;
         }
     }
@@ -115,7 +118,7 @@ namespace Smile {
 
         nrd::DenoiserDesc denoiser{};
         denoiser.identifier = 0;
-        denoiser.denoiser   = nrd::Denoiser::RELAX_DIFFUSE;
+        denoiser.denoiser   = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
         nrd::InstanceCreationDesc icd{};
         icd.allocationCallbacks = { NrdAlloc, NrdRealloc, NrdFree, nullptr };
         icd.denoisers           = &denoiser;
@@ -135,15 +138,17 @@ namespace Smile {
         CbSpace        = d.constantBufferAndSamplersSpaceIndex;
         CbReg          = d.constantBufferRegisterIndex;
         SamplerBaseReg = d.samplersBaseRegisterIndex;
-        LogInfo("NRD RELAX_DIFFUSE: pipelines=" + std::to_string(d.pipelinesNum) +
+        LogInfo("NRD RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
                 " perm=" + std::to_string(d.permanentPoolSize) +
                 " trans=" + std::to_string(d.transientPoolSize) +
                 " samplers=" + std::to_string(d.samplersNum) +
                 " cbMax=" + std::to_string(d.constantBufferMaxDataSize));
 
-        // RELAX: liga o anti-firefly proprio (vem OFF por padrao) — mata os fireflies residuais que
-        // o firefly clamp do ReSTIR nao pega. SetDenoiserSettings 1x (nao precisa por frame).
         nrd::RelaxSettings relax{};
+        // Defaults do NRD para o resto: o RELAX foi desenhado para sinal estilo RTXDI/ReSTIR
+        // (prepass 30/50, atrous 5 iteracoes, roughness edge stopping ON) — e o que temos.
+        // O antilag fica no default; o README recomenda desliga-lo so no bring-up inicial
+        // (antilagSettings.accelerationAmount/resetAmount = 0) se aparecer instabilidade.
         relax.enableAntiFirefly = true;
         nrd::SetDenoiserSettings(*Instance, 0, &relax);
 
@@ -159,7 +164,6 @@ namespace Smile {
 
 #if SMILE_NRD_ENABLED
     void FNrdDenoiser::BuildRootSignature(ID3D12Device* _Device) {
-        // Tabela: SRV range [PerSetTex] + UAV range [PerSetUav], ambos no resourcesSpace, base reg 0.
         D3D12_DESCRIPTOR_RANGE ranges[2]{};
         ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         ranges[0].NumDescriptors = PerSetTex;
@@ -225,7 +229,6 @@ namespace Smile {
         const nrd::InstanceDesc& d = *nrd::GetInstanceDesc(*Instance);
         HandleSize = _Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        // StagingHeap NON-shader-visible: SRV+UAV p/ cada textura (pools + IO).
         StagingCount = (d.permanentPoolSize + d.transientPoolSize + IO_COUNT) * 2;
         D3D12_DESCRIPTOR_HEAP_DESC sh{};
         sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -233,7 +236,6 @@ namespace Smile {
         sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         SMILE_HR(_Device->CreateDescriptorHeap(&sh, IID_PPV_ARGS(&StagingHeap)));
 
-        // TableHeap shader-visible: ring de SetsMax*TableStride por frame, × frames in flight.
         const u32 frames = (u32)FCommandQueue::kFramesInFlight;
         TableRingCapacity = SetsMax * TableStride * frames;
         D3D12_DESCRIPTOR_HEAP_DESC th{};
@@ -243,7 +245,6 @@ namespace Smile {
         SMILE_HR(_Device->CreateDescriptorHeap(&th, IID_PPV_ARGS(&TableHeap)));
         TableRingOffset = 0;
 
-        // CB ring (upload): uma entrada por dispatch.
         CbStride    = ((d.constantBufferMaxDataSize + 255u) / 256u) * 256u;
         CbRingCount = SetsMax * frames;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -297,7 +298,7 @@ namespace Smile {
             DXGI_FORMAT fmt = ToDXGI(td.format);
             ComPtr<ID3D12Resource> res = CreateTex(_Device, DivUp(RtWidth, td.downsampleFactor),
                                                    DivUp(RtHeight, td.downsampleFactor), fmt);
-            Init(PermPool[i], res.Get(), fmt); // FNrdTexture.Res (ComPtr) segura a referencia
+            Init(PermPool[i], res.Get(), fmt); 
         }
         TransPool.resize(d.transientPoolSize);
         for (u32 i = 0; i < d.transientPoolSize; ++i) {
@@ -323,7 +324,7 @@ namespace Smile {
 
 #if SMILE_NRD_ENABLED
     void FNrdDenoiser::ReleaseResize() {
-        PermPool.clear(); TransPool.clear(); // FNrdTexture.Res (ComPtr) libera os recursos
+        PermPool.clear(); TransPool.clear(); 
         for (u32 i = 0; i < IO_COUNT; ++i) Io[i] = FNrdTexture{};
         Ready = false;
     }
@@ -335,7 +336,9 @@ namespace Smile {
             case RT::IN_NORMAL_ROUGHNESS:      return &Io[IO_NORMAL_ROUGHNESS];
             case RT::IN_VIEWZ:                 return &Io[IO_VIEWZ];
             case RT::IN_DIFF_RADIANCE_HITDIST: return &Io[IO_DIFF_RADIANCE_HITDIST];
-            case RT::OUT_DIFF_RADIANCE_HITDIST:return &Io[IO_OUT];
+            case RT::IN_SPEC_RADIANCE_HITDIST: return &Io[IO_SPEC_RADIANCE_HITDIST];
+            case RT::OUT_DIFF_RADIANCE_HITDIST:return &Io[IO_OUT_DIFF];
+            case RT::OUT_SPEC_RADIANCE_HITDIST:return &Io[IO_OUT_SPEC];
             case RT::PERMANENT_POOL: return (indexInPool < PermPool.size())  ? &PermPool[indexInPool]  : nullptr;
             case RT::TRANSIENT_POOL: return (indexInPool < TransPool.size()) ? &TransPool[indexInPool] : nullptr;
             default: return nullptr;
@@ -349,8 +352,6 @@ namespace Smile {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
         nrd::CommonSettings cs{};
-        // memcpy direto: a engine e row-major; o NRD le column-major (= transposta), que e o que ele
-        // quer (convencao de vetor-coluna). NAO transpor.
         std::memcpy(cs.viewToClipMatrix,      _ViewToClip.M,      sizeof(float) * 16);
         std::memcpy(cs.viewToClipMatrixPrev,  _ViewToClipPrev.M,  sizeof(float) * 16);
         std::memcpy(cs.worldToViewMatrix,     _WorldToView.M,     sizeof(float) * 16);
@@ -394,15 +395,12 @@ namespace Smile {
         for (uint32_t di = 0; di < num; ++di) {
             const nrd::DispatchDesc& dd = dispatches[di];
 
-            // --- Ring guards (blindagem) ---
             if (TableRingOffset + TableStride > TableRingCapacity) TableRingOffset = 0;
             if (CbRingOffset + 1 > CbRingCount) CbRingOffset = 0;
             assert(dd.resourcesNum <= TableStride && "NRD dispatch excede a tabela");
 
-            // --- Resolve recursos: SRVs em [0..PerSetTex-1], UAVs em [PerSetTex..] ---
-            // Default-fill com descritores validos (Io[IO_OUT]) p/ slots nao usados.
-            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvSrc(PerSetTex, StagingCpu(Io[IO_OUT].SrvStaging));
-            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> uavSrc(PerSetUav, StagingCpu(Io[IO_OUT].UavStaging));
+            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvSrc(PerSetTex, StagingCpu(Io[IO_OUT_DIFF].SrvStaging));
+            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> uavSrc(PerSetUav, StagingCpu(Io[IO_OUT_DIFF].UavStaging));
             std::vector<D3D12_RESOURCE_BARRIER> barriers;
             u32 srvIdx = 0, uavIdx = 0;
             for (uint32_t ri = 0; ri < dd.resourcesNum; ++ri) {
@@ -417,7 +415,7 @@ namespace Smile {
                         b.Transition.StateBefore = t->State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                         barriers.push_back(b); t->State = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                     }
-                } else { // STORAGE_TEXTURE (UAV)
+                } else {
                     if (uavIdx < PerSetUav) uavSrc[uavIdx++] = StagingCpu(t->UavStaging);
                     if (t->State != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
                         D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -426,13 +424,12 @@ namespace Smile {
                         barriers.push_back(b); t->State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
                     } else {
                         D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                        b.UAV.pResource = t->Res.Get(); barriers.push_back(b); // WAW/RAW hazard
+                        b.UAV.pResource = t->Res.Get(); barriers.push_back(b); 
                     }
                 }
             }
             if (!barriers.empty()) _CL->ResourceBarrier((UINT)barriers.size(), barriers.data());
 
-            // --- Monta a tabela do dispatch (SRV block + UAV block) ---
             D3D12_CPU_DESCRIPTOR_HANDLE dstSrv = tableCpu0; dstSrv.ptr += (SIZE_T)TableRingOffset * HandleSize;
             D3D12_CPU_DESCRIPTOR_HANDLE dstUav = dstSrv;    dstUav.ptr += (SIZE_T)PerSetTex * HandleSize;
             std::vector<UINT> onesS(PerSetTex, 1u), onesU(PerSetUav, 1u);
@@ -442,7 +439,6 @@ namespace Smile {
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             D3D12_GPU_DESCRIPTOR_HANDLE tableGpu = tableGpu0; tableGpu.ptr += (UINT64)TableRingOffset * HandleSize;
 
-            // --- CB ---
             u8* cbDst = CbRingMapped + (size_t)CbRingOffset * CbStride;
             std::memcpy(cbDst, dd.constantBufferData, dd.constantBufferDataSize);
             D3D12_GPU_VIRTUAL_ADDRESS cbAddr = cbBase + (UINT64)CbRingOffset * CbStride;
@@ -485,7 +481,8 @@ namespace Smile {
     void FNrdDenoiser::TransitionInputsToWrite(ID3D12GraphicsCommandList* _CL) {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
-        const EIo ins[4] = { IO_MV, IO_NORMAL_ROUGHNESS, IO_VIEWZ, IO_DIFF_RADIANCE_HITDIST };
+        const EIo ins[5] = { IO_MV, IO_NORMAL_ROUGHNESS, IO_VIEWZ,
+                             IO_DIFF_RADIANCE_HITDIST, IO_SPEC_RADIANCE_HITDIST };
         std::vector<D3D12_RESOURCE_BARRIER> bs;
         for (EIo e : ins) {
             FNrdTexture& t = Io[e];
@@ -504,12 +501,18 @@ namespace Smile {
     void FNrdDenoiser::TransitionOutputToRead(ID3D12GraphicsCommandList* _CL) {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
-        FNrdTexture& t = Io[IO_OUT];
-        if (!t.Res || t.State == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) return;
-        D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        b.Transition.StateBefore = t.State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        _CL->ResourceBarrier(1, &b); t.State = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+        const EIo outs[2] = { IO_OUT_DIFF, IO_OUT_SPEC };
+        std::vector<D3D12_RESOURCE_BARRIER> bs;
+        for (EIo e : outs) {
+            FNrdTexture& t = Io[e];
+            if (!t.Res || t.State == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) continue;
+            D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = t.State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            bs.push_back(b); t.State = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+        if (!bs.empty()) _CL->ResourceBarrier((UINT)bs.size(), bs.data());
 #else
         (void)_CL;
 #endif

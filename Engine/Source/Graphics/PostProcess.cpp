@@ -1,4 +1,5 @@
 #include "Smile/Graphics/PostProcess.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -79,6 +80,7 @@ namespace Smile {
                 &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
                 IID_PPV_ARGS(&BloomBuffers[i])));
+            VramTracker::Register(BloomBuffers[i].Get(), EVramCategory::RenderTargets);
         }
 
         for (int i = 0; i < kNumBloomLevels - 1; ++i) {
@@ -88,6 +90,7 @@ namespace Smile {
                 &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
                 IID_PPV_ARGS(&BloomBlurBuffers[i])));
+            VramTracker::Register(BloomBlurBuffers[i].Get(), EVramCategory::RenderTargets);
         }
 
         if (!BloomRTVHeap.Native())

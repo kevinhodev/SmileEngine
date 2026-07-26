@@ -12,7 +12,7 @@
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[10]{};
+        D3D12_ROOT_PARAMETER RootParams[12]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -114,6 +114,28 @@ namespace Smile {
         RootParams[9].DescriptorTable.pDescriptorRanges   = &ReSTIRGIRange;
         RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
+        // Luzes puntuais (t17): StructuredBuffer<FGPULight> como ROOT SRV — endereco de GPU
+        // direto, sem passar pelo descriptor heap. So o deferred lighting referencia t17; os
+        // outros PSOs desta root sig nao acessam o registro, entao nao precisam do bind.
+        RootParams[10].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        RootParams[10].Descriptor.ShaderRegister = 17;
+        RootParams[10].Descriptor.RegisterSpace  = 0;
+        RootParams[10].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // Sombras locais: t18 = atlas 2D dos spots (F3a), t19 = cube array dos points (F3b) —
+        // descritores contiguos no heap (FLocalShadows aloca os 2 SRVs juntos).
+        D3D12_DESCRIPTOR_RANGE LocalShadowRange{};
+        LocalShadowRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        LocalShadowRange.NumDescriptors                    = 2;
+        LocalShadowRange.BaseShaderRegister                = 18;
+        LocalShadowRange.RegisterSpace                     = 0;
+        LocalShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[11].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[11].DescriptorTable.pDescriptorRanges   = &LocalShadowRange;
+        RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;
         StaticSamplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -141,10 +163,15 @@ namespace Smile {
         StaticSamplers[1].RegisterSpace    = 0;
         StaticSamplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+        // BORDER branco (= "iluminado"), nao CLAMP: com CLAMP um tap do PCF que sai do slice
+        // repete o texel da borda em vez de devolver sem sombra. Na maioria dos spots a
+        // mascara de cone ja zerou ali, mas com inner ~ outer ela vira degrau e continua 1
+        // ate a borda — o texel replicado aparece. O passe volumetrico ja usa BORDER branco
+        // nos MESMOS mapas (VolumetricFog.cpp, s2); isto alinha o deferred com ele.
         StaticSamplers[2].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
-        StaticSamplers[2].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        StaticSamplers[2].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        StaticSamplers[2].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        StaticSamplers[2].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        StaticSamplers[2].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        StaticSamplers[2].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
         StaticSamplers[2].MaxAnisotropy    = 1;
         StaticSamplers[2].ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         StaticSamplers[2].BorderColor      = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
@@ -255,19 +282,43 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthNormal)));
         PipelineStateDepthNormal = NewPSODepthNormal;
 
+        // Variantes masked/two-sided do prepass (GTAO F4): cull NONE (cards de folhagem) + PS
+        // com alpha-clip condicional (AlphaTest=0 em two-sided opaco -> so rasteriza os 2 lados).
+        auto DepthNormalMaskedPSBlob = LoadShaderBytecode("DepthNormalMasked.ps_6_0.cso");
+        auto DepthMaskedPSBlob       = LoadShaderBytecode("DepthMasked.ps_6_0.cso");
+
+        D3D12_RASTERIZER_DESC RasterizerNone = RasterizerDesc;
+        RasterizerNone.CullMode = D3D12_CULL_MODE_NONE;
+
+        PSODesc.RasterizerState = RasterizerNone;
+        PSODesc.PS              = { DepthNormalMaskedPSBlob.data(), DepthNormalMaskedPSBlob.size() };
+        ComPtr<ID3D12PipelineState> NewPSODepthNormalMasked;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthNormalMasked)));
+        PipelineStateDepthNormalMasked = NewPSODepthNormalMasked;
+
+        PSODesc.PS            = { DepthMaskedPSBlob.data(), DepthMaskedPSBlob.size() };
+        PSODesc.BlendState    = NoColor;
+        PSODesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        ComPtr<ID3D12PipelineState> NewPSODepthOnlyMasked;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthOnlyMasked)));
+        PipelineStateDepthOnlyMasked = NewPSODepthOnlyMasked;
+
         // --- Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs) -------------------------
         // Opaco: depth EQUAL (reusa o depth do prepass). Two-sided/alpha-test (folhagem): nao
         // entram no prepass, entao escrevem o proprio depth (depth LESS + write).
+        // Dieta: +2 MRTs alem do G-buffer — velocity e o SceneColor HDR, onde o emissivo e
+        // escrito DIRETO (o deferred lighting soma a luz por cima com blend aditivo).
         auto GBufferPSBlob = LoadShaderBytecode("GBuffer.ps_6_0.cso");
         PSODesc.VS                = { VertexShaderBlob.data(), VertexShaderBlob.size() };
         PSODesc.PS                = { GBufferPSBlob.data(), GBufferPSBlob.size() };
         PSODesc.BlendState        = BlendDesc;     // opaco, escreve todos os canais
         PSODesc.DepthStencilState = DepthEqual;    // le o depth do prepass, nao escreve
-        PSODesc.NumRenderTargets  = FGBuffer::kTargetCount + 1; // +1 = velocity (motion vector)
+        PSODesc.NumRenderTargets  = FGBuffer::kTargetCount + 2; // +velocity +SceneColor (emissivo)
         PSODesc.RTVFormats[0]     = FGBuffer::kFormatA;
         PSODesc.RTVFormats[1]     = FGBuffer::kFormatB;
         PSODesc.RTVFormats[2]     = FGBuffer::kFormatC;
         PSODesc.RTVFormats[3]     = DXGI_FORMAT_R16G16_FLOAT; // SV_Target3 = motion vector (UV)
+        PSODesc.RTVFormats[4]     = DXGI_FORMAT_R16G16B16A16_FLOAT; // SV_Target4 = emissivo -> HDR
         PSODesc.DSVFormat         = DXGI_FORMAT_D32_FLOAT;
         PSODesc.SampleDesc        = { 1, 0 };
 
@@ -279,15 +330,58 @@ namespace Smile {
 
         RasterizerDesc.CullMode   = D3D12_CULL_MODE_NONE; // folhagem / alpha-test two-sided
         PSODesc.RasterizerState   = RasterizerDesc;
-        PSODesc.DepthStencilState = DepthLess;            // escreve o proprio depth
+        // Masked/two-sided agora TAMBEM entram no prepass (F4): o depth deles ja existe, entao
+        // LESS_EQUAL p/ passar no empate (LESS estrito descartava tudo); write mantido p/ o
+        // caso do prepass desligado.
+        D3D12_DEPTH_STENCIL_DESC DepthLessEqual = DepthLess;
+        DepthLessEqual.DepthFunc  = kDepthFuncLessEqual;
+        PSODesc.DepthStencilState = DepthLessEqual;
         ComPtr<ID3D12PipelineState> NewPSOGBufferTwoSided;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSided)));
         PipelineStateGBufferTwoSided = NewPSOGBufferTwoSided;
 
+        // --- Forward de translucidos (materiais Blend: vidro): sobre o HDR ja iluminado. -------
+        // Blend PREMULTIPLICADO (SrcBlend=ONE): o shader pesa o tinte por alpha e soma o especular
+        // inteiro. Depth read-only (testa contra o opaco, nao escreve) e cull none (two-sided).
+        auto ForwardBlendPSBlob = LoadShaderBytecode("ForwardBlend.ps_6_0.cso");
+
+        D3D12_BLEND_DESC PremulBlend = BlendDesc;
+        PremulBlend.RenderTarget[0].BlendEnable    = TRUE;
+        PremulBlend.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
+        PremulBlend.RenderTarget[0].DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
+        PremulBlend.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
+        PremulBlend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+
+        D3D12_DEPTH_STENCIL_DESC DepthReadOnly = DepthLess;
+        DepthReadOnly.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+        PSODesc.PS                = { ForwardBlendPSBlob.data(), ForwardBlendPSBlob.size() };
+        PSODesc.BlendState        = PremulBlend;
+        PSODesc.DepthStencilState = DepthReadOnly;
+        PSODesc.NumRenderTargets  = 1;
+        PSODesc.RTVFormats[0]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[2]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[3]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[4]     = DXGI_FORMAT_UNKNOWN;
+        ComPtr<ID3D12PipelineState> NewPSOForwardBlend;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOForwardBlend)));
+        PipelineStateForwardBlend = NewPSOForwardBlend;
+
         // --- Deferred lighting: fullscreen (PostProcess.vs), le o G-buffer e ilumina -> HDR. ----
         // Usa a root signature principal (a tabela de material e religada p/ [A,B,C,Depth]).
+        // Blend ADITIVO na cor (o emissivo ja esta no SceneColor via geometry pass) com alpha
+        // sobrescrito p/ 1. A variante OPACA e usada nos modos de debug (SSAO/GI view), onde o
+        // shader retorna a visualizacao inteira e nao pode somar com o emissivo por baixo.
         auto LightVSBlob = LoadShaderBytecode("PostProcess.vs_6_0.cso");
         auto LightPSBlob = LoadShaderBytecode("DeferredLighting.ps_6_0.cso");
+
+        D3D12_BLEND_DESC LightAdditive = BlendDesc;
+        LightAdditive.RenderTarget[0].BlendEnable    = TRUE;
+        LightAdditive.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
+        LightAdditive.RenderTarget[0].DestBlend      = D3D12_BLEND_ONE;
+        LightAdditive.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
+        LightAdditive.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
 
         D3D12_RASTERIZER_DESC LightRaster{};
         LightRaster.FillMode        = D3D12_FILL_MODE_SOLID;
@@ -302,7 +396,7 @@ namespace Smile {
         LightDesc.pRootSignature        = RootSignature.Get();
         LightDesc.VS                    = { LightVSBlob.data(), LightVSBlob.size() };
         LightDesc.PS                    = { LightPSBlob.data(), LightPSBlob.size() };
-        LightDesc.BlendState            = BlendDesc;
+        LightDesc.BlendState            = LightAdditive;
         LightDesc.SampleMask            = UINT_MAX;
         LightDesc.RasterizerState       = LightRaster;
         LightDesc.DepthStencilState     = LightDepth;
@@ -315,5 +409,10 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> NewPSODeferredLighting;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&LightDesc, IID_PPV_ARGS(&NewPSODeferredLighting)));
         PipelineStateDeferredLighting = NewPSODeferredLighting;
+
+        LightDesc.BlendState = BlendDesc; // opaco: debug views substituem a tela
+        ComPtr<ID3D12PipelineState> NewPSODeferredLightingDebug;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&LightDesc, IID_PPV_ARGS(&NewPSODeferredLightingDebug)));
+        PipelineStateDeferredLightingDebug = NewPSODeferredLightingDebug;
     }
 }

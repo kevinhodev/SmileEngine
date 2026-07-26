@@ -3,12 +3,13 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
+#include "Smile/Scene/Light.h"
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace Smile {
-    class FCommandQueue;
+    class FUploadQueue;
 
     struct FTransform {
         Vec3 Position      = { 0.0f, 0.0f, 0.0f };
@@ -24,6 +25,10 @@ namespace Smile {
         FGpuMesh*   Mesh     = nullptr;
         FMaterial*  Material = nullptr;
         bool        Visible  = true;
+        // So existe pro ray tracing (TLAS + tabelas de hit shading): fica FORA do raster,
+        // prepass, CSM e picking. Uso: proxy do terreno (F3) — o terreno real rasteriza
+        // pelo FTerrain, o proxy da o chao pro DDGI/ReSTIR/reflexoes.
+        bool        RaytracingOnly = false;
 
         Vec3        AABBMin  = { -1e9f, -1e9f, -1e9f };
         Vec3        AABBMax  = {  1e9f,  1e9f,  1e9f };
@@ -33,7 +38,7 @@ namespace Smile {
     public:
         FGpuMesh* AddMesh(ID3D12Device* Device, const FMesh& Mesh);
 
-        std::vector<FGpuMesh*> AddMeshesBatch(ID3D12Device* Device, FCommandQueue& Queue,
+        std::vector<FGpuMesh*> AddMeshesBatch(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                               const std::vector<FMesh>& Meshes);
 
         FRenderable& AddRenderable(const FRenderable& Renderable);
@@ -41,10 +46,28 @@ namespace Smile {
         std::vector<FRenderable>&       Renderables()       { return RenderableList; }
         const std::vector<FRenderable>& Renderables() const { return RenderableList; }
 
+        FLight& AddLight(const FLight& Light);
+
+        std::vector<FLight>&       Lights()       { return LightList; }
+        const std::vector<FLight>& Lights() const { return LightList; }
+
+        // Proximo FLight::Id livre. Nunca devolve 0 (0 = "sem identidade"). O editor faz
+        // push_back direto na lista, entao quem consome (renderer) atribui pra quem chegou
+        // com Id 0 — nao da pra centralizar tudo no AddLight.
+        u64 AllocLightId() { return ++NextLightId_; }
+
         void Clear();
+
+        // Versao dos transforms dos renderables — quem muta transform (gizmo do editor)
+        // bumpa; o Renderer compara por frame p/ reconstruir SO a TLAS (BLAS intactos).
+        u64  TransformsVersion() const { return TransformsVersion_; }
+        void BumpTransformsVersion()   { ++TransformsVersion_; }
 
     private:
         std::vector<std::unique_ptr<FGpuMesh>> MeshLibrary;
         std::vector<FRenderable>               RenderableList;
+        std::vector<FLight>                    LightList;
+        u64                                    TransformsVersion_ = 0;
+        u64                                    NextLightId_       = 0;
     };
 }

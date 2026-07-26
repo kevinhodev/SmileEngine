@@ -299,8 +299,17 @@ Slots de textura do material (`kMaterialTextureSlots = 8`, ordem em `FMaterial`)
 | t7 | Roughness (separado, alternativa a t2) | White |
 
 Cada `FMaterial` aloca **8 slots contíguos** no SRV heap (`SRVTableStart`) + um CBV de
-256B (`MaterialConstants`). `Finalize()` cria o CBV e preenche a tabela; `Bind()` seta
-o root CBV b1 e a tabela t0..t7. Flags `HasXMap` no CB dizem ao shader quais usar.
+256B (`MaterialConstants`, vindo de um pool paginado). `Finalize()` preenche a tabela;
+`Bind()` seta o root CBV b1 e a tabela t0..t7. Flags `HasXMap` no CB dizem ao shader quais usar.
+
+`SRVTableStart` **não é privado do raster**: o snapshot `InstanceGeo` do ray tracing publica
+`SRVTableStart + {0,2,4}` como índices bindless (albedo / metal-rough / emissivo) lidos via
+`ResourceDescriptorHeap`. Por isso um re-`Finalize()` **reusa** o range em vez de realocar — trocá-lo
+faria os raios amostrarem a textura de outro material.
+
+O layout do `MaterialConstants` em HLSL vive num único lugar, `Shaders/MaterialCB.hlsli`, incluído
+pelos 6 shaders que consomem material (G-buffer, forward blend, os dois depth masked, shadow depth
+e o preview). Campo novo no struct C++ = editar esse header, e só ele.
 
 ### Root sig do compute volumétrico
 `b0` CBV · tabela `t0..t(N-1)` · tabela `u0..u(M-1)` · `s0` linear-clamp · `s1` linear-wrap.
@@ -462,8 +471,10 @@ Shaders/
 - **Render loop:** `QTimer` (`OnRenderTimer`) → coleta input (`HeldKeys`, `MouseDelta`,
   mouse-look) → monta `CameraInput` → `UpdateCamera` + `RenderFrame` → mede FPS → `FrameReady`.
 - **Painéis** chamam **setters** do `Renderer` diretamente (não há sistema de
-  reflection/property ainda). `MaterialEditorPanel` edita o material ativo + slots de
-  textura; `EnvironmentPanel` faz IBL/HDR; `SkyCloudPanel` controla sol/atmosfera/nuvens.
+  reflection/property ainda). A janela de Materiais é QML (`Qml/MaterialsWindow.qml` +
+  `MaterialsBridge`): browser dos materiais importados, edição ao vivo dos `MaterialConstants`,
+  8 slots de textura, preview offscreen e persistência em `<cena>.materials.json`;
+  `EnvironmentPanel` faz IBL/HDR; `SkyCloudPanel` controla sol/atmosfera/nuvens.
 - **Logger → UI:** `Smile::SetLogSink` redireciona `LogInfo/Warning/Error` para o
   `QTextEdit` com cores por nível.
 - **Tema:** paleta Fusion dark (estilo VSCode) + `.qss` mínimos, com hot-reload.
@@ -492,7 +503,7 @@ Mapeamento de conceitos de outras engines para onde encaixam na Smile.
 |--------------------------------|-------------------|------------|
 | RHI / `FRHICommandList` | `FCommandQueue` + `ID3D12GraphicsCommandList` | `Graphics/CommandQueue.*` |
 | `FRDGBuilder` / frame graph | **manual** em `Renderer::RenderFrame` (barriers explícitos) | `Graphics/Renderer.cpp` |
-| `UMaterial` / material graph | `FMaterial` + `MaterialConstants` + `Triangle.ps` | `Graphics/Material.*`, `Shaders/Triangle.ps.hlsl` |
+| `UMaterial` / material graph | `FMaterial` + `MaterialConstants` (uber-shader, sem grafo) | `Graphics/Material.*`, `Shaders/MaterialCB.hlsli`, `Shaders/GBuffer.ps.hlsl` |
 | Sky Atmosphere component | `FAtmosphere` (já é o modelo Hillaire) | `Graphics/Atmosphere.*` |
 | Volumetric Cloud component | `FCloudNoise` + `FVolumetricClouds` | `Graphics/VolumetricClouds.*` |
 | Reflection capture / IBL | `FHDREnvironment` | `Graphics/HDREnvironment.*` |

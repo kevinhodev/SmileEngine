@@ -3,24 +3,32 @@
 #define DDGI_RAYS 64 
 
 cbuffer DDGICB : register(b0) {
-    float4 GridMinSpacing;  
-    float4 GridCountRays;   
-    float4 AtlasParams;     
+    float4 GridMinSpacing;
+    float4 GridCountRays;
+    float4 AtlasParams;
     float4 SunDirIntensity;
-    float4 SunColorHyst;    
-    float4 TraceParams;     
-    float4 DistAtlasParams; 
-    float4 MiscParams;      
+    float4 SunColorHyst;
+    float4 TraceParams;
+    float4 DistAtlasParams;
+    float4 MiscParams;
+    float4 MiscParams2;     // y = nº de luzes puntuais no SceneLights (F5)
+    // Perfil de epsilons: o DDGI so usa a familia (2) — os raios dele partem de PROBES, nao do
+    // G-buffer, entao nao passa pelo OffsetRayGBuffer. Mas o HitShading.hlsli le RayEpsA.w e
+    // RayEpsB.x nos shadow rays do 2o hit, que sao os mesmos p/ os tres passes.
+    float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+    float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
 Texture2D<float4>               SkyViewLUT  : register(t1);
 StructuredBuffer<InstanceGeo>   Instances   : register(t2);
 Texture2D<float4>               IrradAtlas  : register(t3); 
-StructuredBuffer<DDGIVertex>    Vertices    : register(t4); 
-Buffer<uint>                    Indices     : register(t5); 
-Buffer<float4>                  ProbeData   : register(t6); 
-Buffer<uint>                    ProbeRayCount:register(t7); 
+// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
+Buffer<float4>                  ProbeData   : register(t6);
+Buffer<uint>                    ProbeRayCount:register(t7);
+
+#include "../LightsCommon.hlsli"
+StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais no GI
 
 RWTexture2D<float4>             ProbesTrace : register(u0);
 
@@ -51,7 +59,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
 
     float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, spacing) + ProbeData[probeIdx].xyz;
 
-    float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x);
+    float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x, (uint)probeIdx);
 
     float3 sunDir = normalize(SunDirIntensity.xyz);
     float  maxT   = TraceParams.y;
@@ -63,18 +71,23 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     ray.TMax      = maxT;
 
     RayQuery<RAY_FLAG_NONE> q;
-    q.TraceRayInline(Scene, RAY_FLAG_NONE, 0xFF, ray);
-    while (q.Proceed()) {}
+    // GATHER (sem translucido): o vidro nao pode barrar a luz que alimenta as probes, senao
+    // ambiente envidracado fica escuro demais. RAY_FLAG_NONE segue de proposito — a deteccao de
+    // probe enterrada precisa ENXERGAR backface (distancia assinada abaixo).
+    q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
+    SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
     P.GridMin        = GridMinSpacing.xyz;  P.Spacing      = spacing;
     P.Count          = count;               P.AtlasTile    = (int)AtlasParams.x;
     P.AtlasInvSize   = float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z);
     P.SunDir         = sunDir;              P.SunIntensity = SunDirIntensity.w;
-    P.SunColor       = SunColorHyst.rgb;    P.NormalBias   = TraceParams.w;
+    P.SunColor       = SunColorHyst.rgb;    P.ShadowRayBias = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = maxT;
-    P.AlbedoLOD      = 4.0f; 
+    P.AlbedoLOD      = 4.0f;
     P.RealHitShading = DistAtlasParams.w > 0.5f;
+    P.NumLights      = (int)MiscParams2.y;
+    P.ShadowRayMask  = (uint)MiscParams2.z;
 
     float3 radiance;
     float  signedDist;
@@ -83,6 +96,10 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         radiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                    q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
                                    ray.Origin, ray.Direction, q.CommittedRayT(), P, signedDist);
+        // Backface: encurta a distancia (RTXGI usa 0.2x) — o UpdateDist usa abs(), entao a media
+        // de distancia perto/dentro de geometria cai e o Chebyshev escurece mais agressivo ali.
+        // So aqui no DDGI: o HitShading e compartilhado e reflexoes/ReSTIR precisam do hitT real.
+        if (signedDist < 0.0f) signedDist *= 0.2f;
     } else {
         radiance   = ShadeSky(dir, sunDir, P.SkyIntensity);
         signedDist = maxT;

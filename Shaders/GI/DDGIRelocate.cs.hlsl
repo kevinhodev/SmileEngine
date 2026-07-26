@@ -9,9 +9,10 @@ cbuffer DDGICB : register(b0) {
     float4 AtlasParams;  
     float4 SunDirIntensity;
     float4 SunColorHyst;
-    float4 TraceParams;    
+    float4 TraceParams;
     float4 DistAtlasParams;
-    float4 MiscParams;      
+    float4 MiscParams;
+    float4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado)
 };
 
 Texture2D<float4> ProbesTrace  : register(t0);
@@ -42,7 +43,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     float  spacing = GridMinSpacing.w;
     uint   frame   = (uint)TraceParams.x;
-    float3 offset  = ProbeData[probeIdx].xyz;
+    float4 prev    = ProbeData[probeIdx];
+    float3 offset  = prev.xyz;
 
     int    backfaceCount   = 0;
     int    realCount       = 0;
@@ -55,7 +57,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         float  d   = ProbesTrace[int2(r, probeIdx)].a;
         if (d < -1e8f) continue; 
         ++realCount;
-        float3 dir = DDGI_RayDirection(r, DDGI_RAYS, frame);
+        float3 dir = DDGI_RayDirection(r, DDGI_RAYS, frame, (uint)probeIdx);
         if (d < 0.0f) {
             backfaceCount++;
         } else {
@@ -80,12 +82,25 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float L = length(target);
     if (L > maxOff) target *= (maxOff / L);
 
-    offset = lerp(offset, target, 0.25f);
+    float3 newOffset = lerp(offset, target, 0.25f);
 
     float thresh = MiscParams.y;
     bool inactive = (backRatio > thresh) && (backfaceCount >= 6);
-    float w = inactive ? -1.0f : backRatio;
-    ProbeData[probeIdx] = float4(offset, w);
+
+    // Marca "recem-ativado/relocado" com w em [1,2] (= 1 + backRatio): Update/UpdateDist zeram
+    // a hysteresis por 1 frame e tomam a estimativa nova inteira (estilo ACTIVATED do Flax) —
+    // senao um probe que sai de dentro da parede converge do preto a 0.99 (~4s de fade). O
+    // sampler so testa w<0, entao probe marcado continua amostravel. Auto-demote no frame
+    // seguinte: prevW>=1 nao e "inativo" e o passo do lerp ja decaiu abaixo do limiar. O CPU
+    // zera MiscParams2.x no ULTIMO frame agendado da relocacao p/ a marca nunca ficar orfa
+    // (hyst 0 permanente = flicker eterno naquele probe).
+    bool wasInactive = prev.w < 0.0f;
+    bool bigJump     = length(newOffset - offset) > spacing * 0.10f;
+    bool canMark     = MiscParams2.x > 0.5f;
+    bool activated   = !inactive && canMark && (wasInactive || bigJump);
+
+    float w = inactive ? -1.0f : (activated ? 1.0f + backRatio : backRatio);
+    ProbeData[probeIdx] = float4(newOffset, w);
 
     float prox = (realCount > 0) ? closestFront : (spacing * 8.0f); 
     ProbeRayCount[probeIdx] = DDGI_DesiredRays(prox, spacing, minRays, maxRays);

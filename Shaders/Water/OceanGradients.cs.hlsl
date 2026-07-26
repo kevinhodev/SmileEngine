@@ -35,5 +35,13 @@ void main(uint3 id : SV_DispatchThreadID) {
     float Jzx = JacobianScale * dDzdx;
     float J   = Jxx * Jzz - Jxz * Jzx;
 
-    OceanOut[loc] = float4(c.xyz, J);
+    // Acumulacao temporal da espuma: .w guarda um MINIMO RELAXADO de J — onde a onda
+    // dobrou (J baixo) a espuma persiste e o valor recupera rumo ao J do frame a
+    // FoamRecovery/s (espuma some em ~coverage/recovery segundos). Semantica de J
+    // preservada: PS/sliders/debug intactos. Ler e escrever o MESMO texel via UAV e ok.
+    float prevJ = OceanOut[loc].w;
+    float Jout  = (FoamReset > 0.5f) ? J
+                                     : min(J, prevJ + FoamRecovery * DeltaTime);
+
+    OceanOut[loc] = float4(c.xyz, Jout);
 }

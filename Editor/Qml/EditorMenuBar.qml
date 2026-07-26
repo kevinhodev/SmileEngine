@@ -124,14 +124,42 @@ MenuBar {
     DarkMenu {
         title: "Janela"
         MItem {
-            text: "Ambiente & Céu"; shortcutText: "Ctrl+Shift+A"
-            onTriggered: menuBridge.openEnvironment()
-        }
-        MSep {}
-        MItem {
             text: "Console"; checkColumn: true
             markVisible: menuBridge.consoleVisible // estado real do dock (pode fechar sozinho)
             onTriggered: menuBridge.toggleConsole()
+        }
+        MItem {
+            text: "Time of Day"; checkColumn: true
+            markVisible: menuBridge.timeOfDayVisible
+            onTriggered: menuBridge.toggleTimeOfDay()
+        }
+        MItem {
+            text: "Cena"; checkColumn: true
+            markVisible: menuBridge.lightsVisible
+            onTriggered: menuBridge.toggleLights()
+        }
+        MItem {
+            text: "Estatísticas"; checkColumn: true
+            markVisible: menuBridge.statsVisible
+            onTriggered: menuBridge.toggleStats()
+        }
+        MItem {
+            text: "Render targets"; checkColumn: true; shortcutText: "Ctrl+Shift+T"
+            markVisible: menuBridge.debugTargetsVisible
+            onTriggered: menuBridge.toggleDebugTargets()
+        }
+        MItem {
+            text: "Materiais"; checkColumn: true
+            markVisible: menuBridge.materialsVisible
+            onTriggered: menuBridge.toggleMaterials()
+        }
+    }
+
+    DarkMenu {
+        title: "Opções"
+        MItem {
+            text: "Configurações…"; shortcutText: "Ctrl+,"
+            onTriggered: menuBridge.openSettings()
         }
     }
 

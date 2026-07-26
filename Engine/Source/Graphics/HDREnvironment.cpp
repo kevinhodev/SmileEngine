@@ -1,4 +1,5 @@
 #include "Smile/Graphics/HDREnvironment.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -68,6 +69,7 @@ namespace Smile {
                 &Heap, D3D12_HEAP_FLAG_NONE, &LutDesc,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
                 IID_PPV_ARGS(&BRDFLutResource)));
+            VramTracker::Register(BRDFLutResource.Get(), EVramCategory::SceneTextures);
 
             BRDFLutSRVSlot = _SRVHeap.Allocate(1);
             BRDFLutUAVSlot = _SRVHeap.Allocate(1);
@@ -150,6 +152,7 @@ namespace Smile {
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
             IID_PPV_ARGS(&Equirect2DResource)));
+        VramTracker::Register(Equirect2DResource.Get(), EVramCategory::SceneTextures);
 
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT Layout{};
         UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;

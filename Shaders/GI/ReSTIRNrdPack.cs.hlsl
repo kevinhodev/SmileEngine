@@ -1,8 +1,12 @@
-// ReSTIR GI -> NRD: empacota os inputs do RELAX_DIFFUSE (Fase C0).
+// ReSTIR GI -> NRD: empacota os inputs comuns + o sinal DIFUSO do RELAX_DIFFUSE_SPECULAR.
+// O sinal ESPECULAR (reflexao) e empacotado por ReflectionNrdPack; MV/NormalRough/ViewZ aqui sao
+// compartilhados pelos dois sinais.
 //   IN_VIEWZ              = view.z linear (positivo); ceu = grande (> denoisingRange) p/ ser ignorado
 //   IN_NORMAL_ROUGHNESS  = NRD_FrontEnd_PackNormalAndRoughness (R10G10B10A2 — casa com o decode do NRD)
 //   IN_MV                = velocity (curUV - prevUV); o NRD usa motionVectorScale=(-1,-1,0) p/ inverter
-//   IN_DIFF_RADIANCE_HITDIST = RELAX_FrontEnd_PackRadianceAndHitDist (identidade: rgb=gi, a=hitDist)
+//   IN_DIFF_RADIANCE_HITDIST = RELAX_FrontEnd_PackRadianceAndHitDist — radiancia LINEAR (sem YCoCg) +
+//                              hitDist CRU em unidades de mundo. O RELAX nao normaliza hitDist
+//                              (isso era exigencia do REBLUR e sumiu junto com NrdHitDistParams).
 //
 // Inclui o NRD.hlsli (via -I D:/Engines/NRD/Shaders) p/ o encode normal/roughness bater EXATAMENTE
 // com o decode interno do NRD. Os macros de encoding sao fixados aqui (normal=R10G10B10A2, rough=linear).
@@ -25,6 +29,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ShadeParams;
     float4 ReuseParams;
     float4 SpatialParams;
+    float4 JitterParams;            // nao usado aqui; mantem o layout comum do ReSTIRCB
     row_major float4x4 View;        // anexado p/ o pack: worldPos -> view.z (IN_VIEWZ)
 };
 
@@ -64,6 +69,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     float4 gi = GITex.Load(int3(px, 0));
 
+    // RELAX consome hitDist CRU (unidades de mundo, >= 0). O sanitize do pack ja clampa NaN/Inf e
+    // negativos; hitDist 0 (disocclusion do ReSTIR) o RELAX ignora se houver vizinho valido.
     OutViewZ[px]       = viewZ;
     OutNormalRough[px] = NRD_FrontEnd_PackNormalAndRoughness(N, rough, 0.0f);
     OutMv[px]          = Velocity.Load(int3(px, 0)).rg;

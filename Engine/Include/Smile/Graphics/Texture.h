@@ -2,13 +2,14 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/VramTracker.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <string>
 #include <vector>
 
 namespace Smile {
-    class FCommandQueue;
+    class FUploadQueue;
 
     enum class EDefaultTexture {
         White,
@@ -35,27 +36,30 @@ namespace Smile {
 
     class FTexture {
     public:
-        static FTexture LoadFromFile(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        static FTexture LoadFromFile(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                      FTextureSRVHeap& SRVHeap,
                                      const std::wstring& Path,
                                      bool IsNormalMap = false);
 
-        static FTextureCPUData LoadCPU(const std::wstring& Path, bool IsNormalMap = false);
+        static FTextureCPUData LoadCPU(const std::wstring& Path, bool IsNormalMap = false, bool sRGB = false);
 
-        static FTexture CreateFromCPU(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        // Category permite contabilizar a VRAM fora de SceneTextures (ex.: heightmap do
+        // terreno na categoria Terrain).
+        static FTexture CreateFromCPU(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                       FTextureSRVHeap& SRVHeap,
-                                      const FTextureCPUData& Data);
+                                      const FTextureCPUData& Data,
+                                      EVramCategory Category = EVramCategory::SceneTextures);
 
         static FTextureCPUData LoadDDSCPU(const std::wstring& Path, bool sRGB);
-        static FTexture        LoadDDS(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        static FTexture        LoadDDS(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                        FTextureSRVHeap& SRVHeap,
                                        const std::wstring& Path, bool sRGB);
 
-        static std::vector<FTexture> CreateBatchFromCPU(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        static std::vector<FTexture> CreateBatchFromCPU(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                                         FTextureSRVHeap& SRVHeap,
                                                         const std::vector<FTextureCPUData>& Data);
 
-        static FTexture CreateDefault(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        static FTexture CreateDefault(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                       FTextureSRVHeap& SRVHeap,
                                       EDefaultTexture Type);
 
@@ -70,15 +74,17 @@ namespace Smile {
         bool            IsValid()   const { return GpuResource != nullptr; }
 
     private:
-        static FTexture Upload(ID3D12Device* Device, FCommandQueue& CmdQueue,
+        static FTexture Upload(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                FTextureSRVHeap& SRVHeap,
                                const std::vector<FMipData>& Mips,
-                               DXGI_FORMAT Format);
+                               DXGI_FORMAT Format,
+                               EVramCategory Category = EVramCategory::SceneTextures);
 
         static FTexture RecordUpload(ID3D12Device* Device, ID3D12GraphicsCommandList* CommandList,
                                      FTextureSRVHeap& SRVHeap,
                                      const std::vector<FMipData>& Mips, DXGI_FORMAT Format,
-                                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& StagingOut);
+                                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& StagingOut,
+                                     EVramCategory Category = EVramCategory::SceneTextures);
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
 

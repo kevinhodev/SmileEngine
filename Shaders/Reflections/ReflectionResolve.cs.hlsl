@@ -120,6 +120,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             float3 dirToHit = normalize(hitPos - worldPos);
             float3 H        = normalize(V + dirToHit);
             float  w        = GGX_D(a2, saturate(dot(N, H))) / max(nray.w, 1e-6f);
+            // Clamp de peso na FONTE do firefly: com pdf pequeno, GGX_D/pdf explode e uma unica amostra RT
+            // domina o sum => sparkle/mancha colorida. Limita o vizinho a 8x o peso do centro (mirror),
+            // preservando a media sem deixar um outlier sequestrar o pixel.
+            w = min(w, w0 * 8.0f);
 
             sum  += nrad.rgb * w;
             wsum += w;

@@ -1,6 +1,5 @@
-#include "../GI/DDGICommon.hlsli" 
-#include "GGXSample.hlsli"        
-
+#include "../GI/DDGICommon.hlsli"
+#include "GGXSample.hlsli"
 cbuffer ReflectionCB : register(b0) {
     row_major float4x4 InvViewProj; 
     float4 CameraPos;       
@@ -11,21 +10,41 @@ cbuffer ReflectionCB : register(b0) {
     float4 AtlasParams;     
     float4 SunDirIntensity; 
     float4 SunColor;        
-    float4 TraceParams;     
+    float4 TraceParams;
     float4 HalfScreenParams;
+    // Campos abaixo nao sao usados por este shader; declarados p/ os offsets do CB baterem ate o
+    // perfil de epsilons, que vem no fim do ReflectionConstants.
+    row_major float4x4 PrevViewProj;
+    float4 TemporalParams;
+    float4 DebugParams;
+    row_major float4x4 View;
+    float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
+    float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+    float4 PolicyParams;    // x = cullar backface nos raios de reflexao (0/1)
 };
+
+// Politica de culling DESTE passe. O Lumen culla na reflexao e nao culla no gather do ReSTIR; a
+// ray flag e por raio, entao os dois regimes convivem na mesma TLAS (que marca
+// TRIANGLE_CULL_DISABLE so no que e mesmo two-sided).
+uint ReflectionCullFlags() {
+    return (PolicyParams.x > 0.5f) ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : RAY_FLAG_NONE;
+}
+
+#include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
 
 RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
 StructuredBuffer<InstanceGeo>   Instances  : register(t2);
 Texture2D<float4>               IrradAtlas : register(t3);
-StructuredBuffer<DDGIVertex>    Vertices   : register(t4);
-Buffer<uint>                    Indices    : register(t5);
+// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
 
-Texture2D<float>                Depth      : register(t6); 
-Texture2D<float4>               GBuffer    : register(t7); 
+Texture2D<float>                Depth      : register(t6);
+Texture2D<float4>               GBuffer    : register(t7);
 
-RWTexture2D<float4>             RWReflection : register(u0); 
+#include "../LightsCommon.hlsli"
+StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais nos hits
+
+RWTexture2D<float4>             RWReflection : register(u0);
 RWTexture2D<float4>             RWRayData    : register(u1); 
 
 SamplerState LinearClamp : register(s0);
@@ -81,25 +100,35 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
         float3 sunDir = normalize(SunDirIntensity.xyz);
 
+        // Offset robusto (so anti self-hit): o bias 0.2 na origem deslocava o reflexo de
+        // contato e inflava o hitT entregue ao NRD/temporal.
         RayDesc ray;
-        ray.Origin    = worldPos + N * max(TraceParams.w, 1e-3f);
+        ray.Origin    = OffsetRayGBuffer(worldPos, N, R, length(CameraPos.xyz - worldPos));
         ray.Direction = R;
         ray.TMin      = 0.0f;
         ray.TMax      = TraceParams.y;
 
-        RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
-        q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, ray);
-        while (q.Proceed()) {}
+        RayQuery<RAY_FLAG_NONE> q;
+        // ALL, e nao GATHER: reflexao PRECISA ver o vidro (a vitrine tem que aparecer no reflexo).
+        // E a divisao do Lumen — o gather difuso ignora translucido, o passe de reflexao o inclui.
+        //
+        // Culling DINAMICO (PolicyParams.x), no molde do Context.CullingMode do Lumen: a flag do
+        // template fica em NONE e a decisao vai na chamada, porque as duas sao combinadas pela
+        // spec do DXR e uma flag estatica de culling nao teria como ser desligada.
+        q.TraceRayInline(Scene, ReflectionCullFlags(), SMILE_RT_MASK_ALL, ray);
+        SMILE_RT_PROCEED(q)
 
         FHitShadeParams P;
         P.GridMin        = GridMinSpacing.xyz;  P.Spacing      = GridMinSpacing.w;
         P.Count          = (int3)GridCount.xyz; P.AtlasTile    = (int)AtlasParams.x;
         P.AtlasInvSize   = float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z);
         P.SunDir         = sunDir;              P.SunIntensity = SunDirIntensity.w;
-        P.SunColor       = SunColor.rgb;        P.NormalBias   = TraceParams.w;
+        P.SunColor       = SunColor.rgb;        P.ShadowRayBias = TraceParams.w;
         P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
         P.AlbedoLOD      = ReflectParams.w;
         P.RealHitShading = ReflectParams.z > 0.5f;
+        P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
+        P.ShadowRayMask  = (uint)SunColor.w;
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
             float sd;

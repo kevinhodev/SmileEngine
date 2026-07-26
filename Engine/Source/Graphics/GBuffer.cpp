@@ -1,11 +1,12 @@
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 
 namespace Smile {
 
     // Valores de clear canonicos (precisam casar com o D3D12_CLEAR_VALUE da criacao do recurso).
-    //   A: preto, AO=0     B: normal "p/ frente" (0,0,1) + rough/metal 0   C: emissive 0, model 0
+    //   A: preto, AO=0   B: normal "p/ frente" (0,0,1) + rough 0 + ID 0   C: metallic 0, livres 0
     static const FLOAT kClearA[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     static const FLOAT kClearB[4] = { 0.5f, 0.5f, 0.0f, 0.0f }; // OctEncode((0,0,1)) = (0.5,0.5)
     static const FLOAT kClearC[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -18,7 +19,9 @@ namespace Smile {
         if (!RTVHeap.Native())
             RTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kTargetCount, false);
         if (SRVSlotBase == kInvalidSlot)
-            SRVSlotBase = _SRVHeap.Allocate(kTargetCount + 1); // +1 = depth (4o slot contiguo)
+            SRVSlotBase = _SRVHeap.Allocate(kTargetCount + 2); // +1 = depth (4o slot contiguo);
+                                                               // +2 = shadow map das nuvens (t4
+                                                               // do deferred, Renderer copia)
         CreateTargets(_Device, _SRVHeap, _Width, _Height);
     }
 
@@ -61,6 +64,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateCommittedResource(
                 &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
                 D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&Targets[i])));
+            VramTracker::Register(Targets[i].Get(), EVramCategory::RenderTargets);
             States[i] = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
             D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
@@ -87,20 +91,15 @@ namespace Smile {
         _SRVHeap.CreateSRV(_Device, _Depth, SRVDesc, SRVSlotBase + kTargetCount);
     }
 
+    void FGBuffer::AppendTransitions(FBarrierBatch& _Batch, D3D12_RESOURCE_STATES _Target) {
+        for (u32 i = 0; i < kTargetCount; ++i)
+            _Batch.TransitionTracked(Targets[i].Get(), States[i], _Target);
+    }
+
     void FGBuffer::TransitionToRead(ID3D12GraphicsCommandList* _Cmd, D3D12_RESOURCE_STATES _ReadState) {
-        D3D12_RESOURCE_BARRIER Barriers[kTargetCount]{};
-        u32 Count = 0;
-        for (u32 i = 0; i < kTargetCount; ++i) {
-            if (States[i] == _ReadState) continue;
-            Barriers[Count].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            Barriers[Count].Transition.pResource   = Targets[i].Get();
-            Barriers[Count].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            Barriers[Count].Transition.StateBefore = States[i];
-            Barriers[Count].Transition.StateAfter  = _ReadState;
-            States[i] = _ReadState;
-            ++Count;
-        }
-        if (Count > 0) _Cmd->ResourceBarrier(Count, Barriers);
+        FBarrierBatch Batch;
+        AppendTransitions(Batch, _ReadState);
+        Batch.Flush(_Cmd);
     }
 
     void FGBuffer::TransitionToWrite(ID3D12GraphicsCommandList* _Cmd) {

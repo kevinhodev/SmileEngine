@@ -1,9 +1,15 @@
 #include "WaterCommon.hlsli"
+#include "../Shadow/CSMCommon.hlsli"
 
 TextureCube SpecularCube : register(t0);
 SamplerState LinearClamp  : register(s1);
 
-float4 main(VSOutput IN) : SV_Target {
+struct PSOutput {
+    float4 Color    : SV_Target0;
+    float2 Velocity : SV_Target1; // mesmo contrato do GBuffer.ps: curUV - prevUV
+};
+
+float4 ShadeWater(VSOutput IN) {
     int debugMode = (int)floor(DebugParams.x + 0.5f);
 
     if (debugMode == 1) {
@@ -55,16 +61,30 @@ float4 main(VSOutput IN) : SV_Target {
     float detailFade = WaterDistanceFade(camDist, 0.0, BumpParams2.w);
     float swellFade = WaterDistanceFade(camDist, BumpParams2.w, max(BumpParams2.w * 16.0, 4500.0));
     swellFade = lerp(0.30, 1.0, swellFade);
+    // Camadas de normal = cascatas REAIS: hi = cascata 0 (detalhe), lo = cascatas 1/2.
+    float2 uv2  = WaterCascadeUV(2, IN.worldPos.xz);
     float2 hiDx = ddx(IN.baseTC.zw);
     float2 hiDy = ddy(IN.baseTC.zw);
     float2 loDx = ddx(IN.baseTC.xy);
     float2 loDy = ddy(IN.baseTC.xy);
+    float2 lo2Dx = ddx(uv2);
+    float2 lo2Dy = ddy(uv2);
     if (BumpParams2.z > 0.5 && (detailFade > 0.0 || swellFade > 0.0)) {
         float2 pofs = BumpParallaxOffset(IN.baseTC, V, BumpParams2.y * max(detailFade, swellFade * 0.35));
-        float4 sHi  = SampleWaterNormalGrad(IN.baseTC.zw + pofs, hiDx, hiDy); // alta freq
-        float4 sLo0 = SampleWaterNormalGrad(IN.baseTC.xy * 0.25 + pofs, loDx * 0.25, loDy * 0.25);
-        float4 sLo1 = SampleWaterNormalGrad(IN.baseTC.xy + pofs, loDx, loDy);
+        float4 sHi  = SampleWaterNormalGradCascade(0, IN.baseTC.zw + pofs, hiDx, hiDy);
+        float4 sLo0 = SampleWaterNormalGradCascade(1, IN.baseTC.xy + pofs, loDx, loDy);
+        float4 sLo1 = SampleWaterNormalGradCascade(2, uv2 + pofs, lo2Dx, lo2Dy);
         float2 hiSlope = (sHi.xz  / max(sHi.y,  0.05)) * BumpParams.w;
+        // Camada de RIPPLE fino (glitter granulado estilo AC4): cascata 0 re-amostrada
+        // a 6x com deriva pelo vento — devolve a alta frequência que o tiling fake
+        // antigo dava e as UVs físicas perderam. Fade curto (~120 m).
+        float ripFade = WaterDistanceFade(camDist, 0.0, 120.0);
+        float4 sRip = float4(0.0, 1.0, 0.0, 1.0);
+        if (ripFade > 0.0) {
+            float2 uvRip = IN.baseTC.zw * 6.0 + OceanParams1.yz * (Misc.x * 0.02);
+            sRip = SampleWaterNormalGradCascade(0, uvRip, hiDx * 6.0, hiDy * 6.0);
+            hiSlope += (sRip.xz / max(sRip.y, 0.05)) * (BumpParams.w * 0.7 * ripFade);
+        }
         float2 loSlope = ((sLo0.xz / max(sLo0.y, 0.05)) + (sLo1.xz / max(sLo1.y, 0.05))) *
                          (0.5 * BumpParams.z);
         float layerToksvigT = min(lerp(1.0, sHi.w, detailFade),
@@ -116,10 +136,20 @@ float4 main(VSOutput IN) : SV_Target {
         return float4(F.xxx, 1.0f);
     }
 
-    float3 body = DeepColorDensity.rgb;
+    // Sombra do sol (CSM) na água: gate dos termos solares (in-scatter/SSS/spec/espuma).
+    // A normal geométrica é o plano d'água — offset anti-acne na vertical.
+    float sunVis = SampleCSM(IN.worldPos, float3(0.0, 1.0, 0.0), IN.pos.xy);
+
+    // Luz que ilumina o corpo d'água (estilo UE SingleLayerWater: sol + ambiente do céu
+    // iluminam o espalhamento). Antes o in-scatter era uma COR CONSTANTE — água turquesa
+    // de meio-dia mesmo no pôr-do-sol = o look "leitoso" (A/B 2026-07-16).
+    float3 bodyLight = WaterAmbient.rgb +
+                       SunColor.rgb * (SunDirection.w * saturate(SunDirection.y) * 0.35 * sunVis);
+
+    float3 body = DeepColorDensity.rgb * bodyLight;
     float  columnDebug = 0.0f;
     float  softDebug   = 0.0f;
-    float  fA   = 1.0; 
+    float  fA   = 1.0;
     if (DepthParams.z > 0.5) {
         float  waterDepth = IN.screenProj.w;                 
         float2 screenUV   = IN.screenProj.xy / IN.screenProj.w;
@@ -140,16 +170,32 @@ float4 main(VSOutput IN) : SV_Target {
 
         float opticalLen = pathLen * max(RefractionParams.z, 0.0f) * 0.08f;
         float3 transmit  = exp2(-AbsorptionColor.rgb * opticalLen);
-        float3 inScatter = InScatterColor.rgb * (1.0 - exp2(-InScatterColor.w * opticalLen));
+        float3 inScatter = InScatterColor.rgb * bodyLight *
+                           (1.0 - exp2(-InScatterColor.w * opticalLen));
         body = refrColor * transmit + inScatter;
 
         float cameraSoft = saturate(waterDepth - 0.33);
         fA = softIntersect * cameraSoft;
     }
 
-    float slopeEnergy = saturate(length(N.xz) * 1.45f);
-    float surfaceReflection = 0.18f + 0.32f * slopeEnergy;
-    float reflectionWeight = saturate(max(F * fA, surfaceReflection * fA) * ShadeParams.y);
+    // SSS de crista (porte do Watercfx da Cry): luz vazando pela onda — ambiente do céu
+    // + lobo forward-scatter do sol, pesados pela altura da crista e pela inclinação.
+    if (WaterFXParams.x > 0.0) {
+        float waveHeight = saturate((IN.worldPos.y - OceanParams1.w) * WaterFXParams.z);
+        // Clamp do peso + termo de ambiente ×0.25: sem isso o céu HDR inteiro somava no
+        // corpo d'água e lavava o mar de branco (A/B 2026-07-16, look "chantilly").
+        float whf = saturate(waveHeight * 0.5 + NoV * (1.0 - saturate(N.y)));
+        float3 sssTint = InScatterColor.rgb * WaterFXParams.x;
+        float3 sssEnv = (Misc.y > 0.5)
+            ? SpecularCube.SampleLevel(LinearClamp, -V, clamp(whf, 0.2, 0.7) * Misc.w).rgb * Misc.z
+            : AnalyticSky(-V);
+        float EdotL = saturate(dot(-SunDirection.xyz, V));
+        body += sssTint * sssEnv * whf * fA * 0.25;
+        body += sssTint * pow(EdotL, WaterFXParams.y) *
+                (SunColor.rgb * SunDirection.w) * whf * fA * sunVis;
+    }
+
+    float reflectionWeight = saturate(F * fA);
     float3 color = lerp(body, reflection, reflectionWeight);
     if (debugMode == 6) {
         return float4(body / (body + 1.0f), 1.0f);
@@ -166,11 +212,27 @@ float4 main(VSOutput IN) : SV_Target {
     float3 foamLit = float3(0.0, 0.0, 0.0);
     float  JDebug  = 1.0;
     if (FoamParams.z > 0.0 || debugMode == 8) {
-        JDebug = WaterSampleFFT(IN.worldPos.xz).w;
+        // J combinado: soma PONDERADA dos desvios (det(I+A+B+C) ≈ 1+trA+trB+trC).
+        // Cascatas grandes pesam menos — sem isso a cobertura triplicava contra o
+        // mesmo threshold e a espuma tomava o mar (A/B 2026-07-16).
+        uint numFoamC = (uint)CascadeParams.w;
+        JDebug = WaterSampleFFTCascade(0, IN.worldPos.xz).w;
+        if (numFoamC > 1) JDebug += (WaterSampleFFTCascade(1, IN.worldPos.xz).w - 1.0) * 0.6;
+        if (numFoamC > 2) JDebug += (WaterSampleFFTCascade(2, IN.worldPos.xz).w - 1.0) * 0.35;
         foam = saturate((FoamParams.x - JDebug) / max(FoamParams.y, 1e-3));
         foam = foam * foam * (3.0 - 2.0 * foam);
+        // Breakup procedural (estilo FoamTex da Cry, sem asset): 2 oitavas de value
+        // noise advectadas pelo fluxo do vento — quebra o "adesivo chapado".
+        float2 flow   = OceanParams1.yz * Misc.x;
+        float2 foamUV = IN.worldPos.xz * 0.35 + flow * 0.05;
+        float  pat = WaterValueNoise(foamUV) * 0.65 +
+                     WaterValueNoise(foamUV * 3.7 - flow * 0.11) * 0.35;
+        foam *= saturate(0.35 + 1.55 * pat * pat);
         foam = saturate(foam * FoamParams.z * WaterDistanceFade(camDist, 0.0, FoamParams.w));
-        foamLit = FoamColor.rgb * (SunColor.rgb * SunDirection.w * 0.16 + 0.30);
+        // Espuma iluminada estilo Cry (sol×NdotL×sombra + céu): o piso constante 0.30
+        // brilhava no escuro — agora é o ambiente físico do céu.
+        foamLit = FoamColor.rgb * (SunColor.rgb * SunDirection.w * 0.16 * sunVis +
+                                   WaterAmbient.rgb * 0.8);
     }
     if (debugMode == 8) {
         return float4(saturate((1.0f - JDebug) * 2.0f), foam, saturate(JDebug), 1.0f);
@@ -179,12 +241,23 @@ float4 main(VSOutput IN) : SV_Target {
     float specAA = saturate(1.0 - reflectionRoughness * 1.25);
     float sunShininess = lerp(24.0, ShadeParams.z, specAA * specAA);
     float spec = SunSpecularLobes(N, V, normalize(SunDirection.xyz), sunShininess) * specAA;
-    float3 sunSpecCol = SunColor.rgb * (spec * SunDirection.w * ShadeParams.w);
-    sunSpecCol = min(sunSpecCol, AbsorptionColor.w); 
-    sunSpecCol *= (1.0 - foam * FoamColor.w);        
+    float3 sunSpecCol = SunColor.rgb * (spec * SunDirection.w * ShadeParams.w) * sunVis;
+    sunSpecCol *= (1.0 - foam * FoamColor.w);
     color += sunSpecCol;
 
     color = lerp(color, foamLit, foam);
 
     return float4(color, 1.0);
+}
+
+PSOutput main(VSOutput IN) {
+    PSOutput o;
+    o.Color = ShadeWater(IN);
+
+    float2 curNDC  = IN.curClip.xy  / IN.curClip.w;
+    float2 prevNDC = IN.prevClip.xy / IN.prevClip.w;
+    float2 curUV   = float2(curNDC.x  * 0.5f + 0.5f, 0.5f - curNDC.y  * 0.5f);
+    float2 prevUV  = float2(prevNDC.x * 0.5f + 0.5f, 0.5f - prevNDC.y * 0.5f);
+    o.Velocity = curUV - prevUV;
+    return o;
 }

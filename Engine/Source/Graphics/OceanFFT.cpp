@@ -1,4 +1,5 @@
 #include "Smile/Graphics/OceanFFT.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -53,8 +54,10 @@ namespace Smile {
         const f32 start        = N / 2.0f;
         const UINT rowPitch    = H0Footprint.Footprint.RowPitch;
 
-        Rng.seed(1337u);
+        Rng.seed(Seed);
         GaussianHasLast = false;
+
+        const f32 kTwoPiRcp = 1.0f / kTwoPi;
 
         for (int m = 0; m < M; ++m) {
             const f32 ky = (start - static_cast<f32>(m)) * pi2OverWorld;
@@ -66,8 +69,14 @@ namespace Smile {
 
                 f32 sqrtP = 0.0f;
                 if (kx != 0.0f || ky != 0.0f) {
-                    const f32 P = ComputePhillips(kx, ky);
-                    sqrtP = (P > 0.0f) ? std::sqrt(P) : 0.0f;
+                    // Banda por cascata: componente com c ciclos/tile só entra se
+                    // c ∈ [CutoffLow, CutoffHigh) — bandas disjuntas somam sem duplicar.
+                    const f32 cycles = std::sqrt(kx * kx + ky * ky) *
+                                       WorldSize * kTwoPiRcp;
+                    if (cycles >= CutoffLowCycles && cycles < CutoffHighCycles) {
+                        const f32 P = ComputePhillips(kx, ky);
+                        sqrtP = (P > 0.0f) ? std::sqrt(P) : 0.0f;
+                    }
                 }
 
                 const f32 h0x   = sqrtP * FrandGaussian() * recipSqrt2;
@@ -128,6 +137,7 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> Res;
         SMILE_HR(_Device->CreateCommittedResource(
             &Heap, D3D12_HEAP_FLAG_NONE, &Desc, _InitialState, nullptr, IID_PPV_ARGS(&Res)));
+        VramTracker::Register(Res.Get(), EVramCategory::Water);
         return Res;
     }
 
@@ -305,11 +315,18 @@ namespace Smile {
             H0Dirty = false;
         }
 
+        const f32 Dt = std::clamp(RealTime - LastRealTime, 0.0f, 0.1f);
+        LastRealTime = RealTime;
+
         MappedCB->Time          = SimTime;
         MappedCB->ChoppyScale   = ChoppyWaveScale;
         MappedCB->HeightScale   = MaxWaveSize;
         MappedCB->NormalUp      = NormalUp;
         MappedCB->JacobianScale = ChoppyJacobianScale;
+        MappedCB->DeltaTime     = Dt;
+        MappedCB->FoamRecovery  = FoamRecovery;
+        MappedCB->FoamReset     = FoamHistoryValid ? 0.0f : 1.0f;
+        FoamHistoryValid = true;
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress() +
             static_cast<UINT64>(FrameSlot) * sizeof(OceanCB);
 

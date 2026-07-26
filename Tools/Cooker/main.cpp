@@ -34,6 +34,8 @@ using Smile::Vertex;
 
 // --- RH(Y-up) -> LH(Y-up): inverter winding (par com a negacao de Z nas posicoes).
 // Se a cena sair "inside-out" (culling invertido), trocar p/ false e rebuildar.
+// Nos ESPELHADOS (det(geometry_to_world) < 0) invertem o winding de novo, por no —
+// mesmo criterio do IsOddNegativeScale da Unreal (FbxMesh.cpp do Interchange).
 static constexpr bool kReverseWinding = true;
 
 // ----------------------------------------------------------------------------
@@ -90,23 +92,36 @@ static void SetStr(char* dst, size_t cap, const std::string& s) {
     std::strncpy(dst, s.c_str(), cap - 1);
 }
 
-// Procura "Textures/<base>.dds" no diretorio da cena (case-insensitive no basename).
-// Retorna o caminho relativo ("Textures/Foo.dds") se existir, senao "".
-static std::string FindDDS(const fs::path& sceneDir, const std::string& base) {
+// Extensoes de textura aceitas, em ordem de preferencia (DDS BC primeiro; PNG/etc decodificados
+// por WIC no runtime). O runtime escolhe o loader pela extensao do caminho gravado.
+static bool IsTexExt(const std::string& lowerExt) {
+    return lowerExt == ".dds" || lowerExt == ".png" || lowerExt == ".tga" ||
+           lowerExt == ".jpg" || lowerExt == ".jpeg" || lowerExt == ".bmp";
+}
+
+// Procura "Textures/<base>.<ext>" no diretorio da cena (case-insensitive no basename; em Windows
+// "Textures" tambem casa com "textures"). Retorna o caminho relativo se existir, senao "".
+static std::string FindTexture(const fs::path& sceneDir, const std::string& base) {
     if (base.empty()) return "";
-    fs::path rel = fs::path("Textures") / (base + ".dds");
-    if (fs::exists(sceneDir / rel)) return rel.generic_string();
-    // Tentativa case-insensitive: varre a pasta Textures uma vez.
-    static std::vector<std::pair<std::string,std::string>> cache; // (lowerStem -> relPath)
+    // Caminho rapido: tenta cada extensao na ordem de preferencia.
+    static const char* kExts[] = { ".dds", ".png", ".tga", ".jpg", ".jpeg", ".bmp" };
+    for (const char* ext : kExts) {
+        fs::path rel = fs::path("Textures") / (base + ext);
+        if (fs::exists(sceneDir / rel)) return rel.generic_string();
+    }
+    // Fallback case-insensitive: varre a pasta Textures uma vez (DDS tem prioridade sobre o resto).
+    static std::vector<std::pair<std::string,std::string>> cache; // (lowerStem -> relPath), DDS na frente
     static bool built = false;
     if (!built) {
         fs::path texDir = sceneDir / "Textures";
         if (fs::exists(texDir)) {
             for (auto& e : fs::directory_iterator(texDir)) {
                 if (!e.is_regular_file()) continue;
-                if (ToLower(e.path().extension().string()) != ".dds") continue;
-                cache.emplace_back(ToLower(e.path().stem().string()),
-                                   (fs::path("Textures") / e.path().filename()).generic_string());
+                std::string ext = ToLower(e.path().extension().string());
+                if (!IsTexExt(ext)) continue;
+                std::string rel = (fs::path("Textures") / e.path().filename()).generic_string();
+                if (ext == ".dds") cache.emplace(cache.begin(), ToLower(e.path().stem().string()), rel);
+                else               cache.emplace_back(ToLower(e.path().stem().string()), rel);
             }
         }
         built = true;
@@ -116,16 +131,42 @@ static std::string FindDDS(const fs::path& sceneDir, const std::string& base) {
     return "";
 }
 
-// Classifica o sufixo do basename de uma textura nos 4 slots do material.
-enum class Slot { None, BaseColor, Specular, Normal, Emissive };
+// Classifica o sufixo do basename de uma textura nos slots do material.
+// Metalness/Roughness SEPARADOS tem precedencia sobre o ORM packed (Specular): so cai em Specular
+// quando o nome indica canais combinados (orm/metalrough/metallicroughness).
+enum class Slot { None, BaseColor, Specular, Normal, Emissive, Metalness, Roughness };
 static Slot ClassifySuffix(const std::string& base) {
     std::string b = ToLower(base);
-    auto has = [&](const char* s){ return b.find(s) != std::string::npos; };
-    if (has("basecolor") || has("base_color") || has("albedo") || has("diffuse")) return Slot::BaseColor;
-    if (has("normal"))                                                            return Slot::Normal;
-    if (has("specular") || has("_orm") || has("metalrough"))                      return Slot::Specular;
-    if (has("emissive") || has("emission"))                                       return Slot::Emissive;
-    return Slot::None;
+    // Ganha o token que TERMINA mais a direita (sufixo real), com desempate p/ o match mais longo.
+    // Substring simples em ordem fixa classificava "Emissive_Light_2_Inst_Specular" como Emissive
+    // (contem "emissive") — a lanterna da Emerald Square emitia o proprio spec map (verde puro,
+    // G=roughness do packing Falcor) e a textura emissiva real ficava de fora. O desempate por
+    // comprimento mantem "MetallicRoughness" no slot packed (Specular), nao em Roughness.
+    struct KV { const char* k; Slot s; };
+    static const KV kMap[] = {
+        { "basecolor",         Slot::BaseColor }, { "base_color", Slot::BaseColor },
+        { "albedo",            Slot::BaseColor }, { "diffuse",    Slot::BaseColor },
+        { "normal",            Slot::Normal    },
+        { "emissive",          Slot::Emissive  }, { "emission",   Slot::Emissive  },
+        { "_orm",              Slot::Specular  }, { "metalrough", Slot::Specular  },
+        { "metallicroughness", Slot::Specular  }, { "specular",   Slot::Specular  },
+        { "roughness",         Slot::Roughness }, { "_rough",     Slot::Roughness },
+        { "metalness",         Slot::Metalness }, { "metallic",   Slot::Metalness },
+        { "_metal",            Slot::Metalness },
+    };
+    Slot   best     = Slot::None;
+    size_t bestEnd  = 0;
+    size_t bestLen  = 0;
+    for (const KV& kv : kMap) {
+        const size_t len = std::strlen(kv.k);
+        const size_t pos = b.rfind(kv.k);
+        if (pos == std::string::npos) continue;
+        const size_t end = pos + len;
+        if (end > bestEnd || (end == bestEnd && len > bestLen)) {
+            best = kv.s; bestEnd = end; bestLen = len;
+        }
+    }
+    return best;
 }
 
 // Heuristica de material masked/two-sided (folhagem/toldos do Bistro) pelo nome.
@@ -183,16 +224,35 @@ static bool LooksCutout(const std::vector<std::string>& toks) {
                             "grill","wire","wires","net","nets","lattice","grid" });
 }
 
+// Vidro -> translucido (Blend, passe forward). Override por NOME porque o FBX nao carrega
+// transmissao (todo vidro do Bistro vem com opacity=1) — mesmo espirito dos overrides que o
+// Falcor faz no .pyscene (specularTransmission=1, IoR 1.55). Vidro EMISSIVO fica de fora:
+// cooka opaco p/ manter o glow no caminho deferred (lanterna/spotlight). SO o token "glass";
+// "window" pegaria caixilho/moldura opaca junto.
+static bool LooksGlass(const std::vector<std::string>& toks) {
+    if (HasToken(toks, { "emissive", "emission" })) return false;
+    return HasToken(toks, { "glass" });
+}
+
 // ----------------------------------------------------------------------------
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao]\n");
+    // --opaque-glass: vidro cooka OPACO (entra no G-buffer -> reflexoes RT pintam nele) em vez
+    // de translucido. P/ cenas de casca oca (Emerald Square: predios vazios atras da janela);
+    // cenas com interior real atras do vidro (Bistro) ficam no default translucido.
+    bool opaqueGlass = false;
+    std::vector<fs::path> positional;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--opaque-glass") { opaqueGlass = true; continue; }
+        positional.emplace_back(argv[i]);
+    }
+    if (positional.empty()) {
+        std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao] [--opaque-glass]\n");
         return 1;
     }
-    fs::path inPath = argv[1];
+    fs::path inPath = positional[0];
     fs::path sceneDir = inPath.parent_path();
-    fs::path outBase = (argc >= 3) ? fs::path(argv[2])
-                                   : (sceneDir / inPath.stem());
+    fs::path outBase = (positional.size() >= 2) ? positional[1]
+                                                : (sceneDir / inPath.stem());
 
     std::printf("[Cooker] Carregando FBX: %s\n", inPath.string().c_str());
 
@@ -225,12 +285,25 @@ int main(int argc, char** argv) {
         if (name.empty()) name = "Material_" + std::to_string(materials.size());
         SetStr(out.Name, Smile::kCookedMaxName, name);
 
-        out.BaseColorFactor[0] = out.BaseColorFactor[1] = out.BaseColorFactor[2] = out.BaseColorFactor[3] = 1.0f;
-        out.EmissiveFactor[0] = out.EmissiveFactor[1] = out.EmissiveFactor[2] = 0.0f;
+        // Fatores PBR constantes do material (ufbx mapeia Phong/Lambert/PBR -> pbr.*). Lidos aqui, mas
+        // so ASSINADOS apos resolver texturas: com textura o fator e neutro (a textura E a cor); este
+        // FBX traz base_color=0.5 ate em materiais texturizados, e aplica-lo escureceria tudo 2x.
+        const ufbx_material_pbr_maps& pbr = m->pbr;
+        auto mapVec = [](const ufbx_material_map& mm, float def, float out4[4]) {
+            if (mm.has_value) { out4[0]=(float)mm.value_vec4.x; out4[1]=(float)mm.value_vec4.y;
+                                out4[2]=(float)mm.value_vec4.z; out4[3]=(float)mm.value_vec4.w; }
+            else { out4[0]=out4[1]=out4[2]=out4[3]=def; }
+        };
+        float baseFac[4]; mapVec(pbr.base_color, 1.0f, baseFac);
+        float emisCol[4]; mapVec(pbr.emission_color, 0.0f, emisCol);
+        const float opacity = pbr.opacity.has_value         ? (float)pbr.opacity.value_real         : 1.0f;
+        const float emisFac = pbr.emission_factor.has_value ? (float)pbr.emission_factor.value_real : 1.0f;
+        out.MetallicFactor  = pbr.metalness.has_value ? (float)pbr.metalness.value_real : 0.0f;
+        out.RoughnessFactor = pbr.roughness.has_value ? (float)pbr.roughness.value_real : 0.8f;
         out.EmissiveStrength = 1.0f;
-        out.AlphaCutoff = 0.5f;
+        out.AlphaCutoff      = 0.5f;
 
-        std::string base, spec, norm, emis;
+        std::string base, spec, norm, emis, metal, rough;
 
         // 1) Texturas referenciadas pelo proprio material (ufbx), classificadas por sufixo.
         for (size_t t = 0; t < m->textures.count; ++t) {
@@ -239,26 +312,46 @@ int main(int argc, char** argv) {
             const ufbx_string& fn = tex->relative_filename.length ? tex->relative_filename : tex->filename;
             if (!fn.length) continue;
             std::string b = BaseNameNoExt(std::string(fn.data, fn.length));
-            std::string rel = FindDDS(sceneDir, b);
+            std::string rel = FindTexture(sceneDir, b);
             if (rel.empty()) continue;
             switch (ClassifySuffix(b)) {
-                case Slot::BaseColor: if (base.empty()) base = rel; break;
-                case Slot::Specular:  if (spec.empty()) spec = rel; break;
-                case Slot::Normal:    if (norm.empty()) norm = rel; break;
-                case Slot::Emissive:  if (emis.empty()) emis = rel; break;
+                case Slot::BaseColor: if (base.empty())  base  = rel; break;
+                case Slot::Specular:  if (spec.empty())  spec  = rel; break;
+                case Slot::Normal:    if (norm.empty())  norm  = rel; break;
+                case Slot::Emissive:  if (emis.empty())  emis  = rel; break;
+                case Slot::Metalness: if (metal.empty()) metal = rel; break;
+                case Slot::Roughness: if (rough.empty()) rough = rel; break;
                 default: break;
             }
         }
-        // 2) Fallback pela convencao de nome do material: <Nome>_<Sufixo>.dds
-        if (base.empty()) base = FindDDS(sceneDir, name + "_BaseColor");
-        if (spec.empty()) spec = FindDDS(sceneDir, name + "_Specular");
-        if (norm.empty()) norm = FindDDS(sceneDir, name + "_Normal");
-        if (emis.empty()) emis = FindDDS(sceneDir, name + "_Emissive");
+        // 2) Fallback pela convencao de nome do material: <Nome>_<Sufixo>.<ext>
+        if (base.empty())  base  = FindTexture(sceneDir, name + "_BaseColor");
+        if (spec.empty())  spec  = FindTexture(sceneDir, name + "_Specular");
+        if (norm.empty())  norm  = FindTexture(sceneDir, name + "_Normal");
+        if (emis.empty())  emis  = FindTexture(sceneDir, name + "_Emissive");
+        if (metal.empty()) metal = FindTexture(sceneDir, name + "_Metalness");
+        if (rough.empty()) rough = FindTexture(sceneDir, name + "_Roughness");
 
         SetStr(out.BaseColor, Smile::kCookedMaxPath, base);
         SetStr(out.Specular,  Smile::kCookedMaxPath, spec);
         SetStr(out.Normal,    Smile::kCookedMaxPath, norm);
         SetStr(out.Emissive,  Smile::kCookedMaxPath, emis);
+        SetStr(out.Metalness, Smile::kCookedMaxPath, metal);
+        SetStr(out.Roughness, Smile::kCookedMaxPath, rough);
+
+        // Fator neutro (1.0) quando ha textura naquele slot — a textura E a cor. Sem textura, usa o
+        // valor do material (vidro=preto, lampada=cinza). Opacidade SEMPRE conta (translucidos).
+        const bool hasBaseTex = !base.empty();
+        const bool hasEmisTex = !emis.empty();
+        out.BaseColorFactor[0] = hasBaseTex ? 1.0f : baseFac[0];
+        out.BaseColorFactor[1] = hasBaseTex ? 1.0f : baseFac[1];
+        out.BaseColorFactor[2] = hasBaseTex ? 1.0f : baseFac[2];
+        out.BaseColorFactor[3] = std::min(hasBaseTex ? 1.0f : baseFac[3], opacity);
+        out.EmissiveFactor[0]  = (hasEmisTex ? 1.0f : emisCol[0]) * emisFac;
+        out.EmissiveFactor[1]  = (hasEmisTex ? 1.0f : emisCol[1]) * emisFac;
+        out.EmissiveFactor[2]  = (hasEmisTex ? 1.0f : emisCol[2]) * emisFac;
+        // Translucido: opacidade < 1 (alpha-blend no passe forward; ex.: dirt_decal).
+        out.Blend = (out.BaseColorFactor[3] < 0.999f) ? 1u : 0u;
 
         {
             const std::vector<std::string> toks = Tokenize(name);
@@ -267,6 +360,29 @@ int main(int argc, char** argv) {
             out.Foliage   = foliage ? 1u : 0u;
             out.AlphaTest = cutout  ? 1u : 0u;
             out.TwoSided  = cutout  ? 1u : 0u;
+
+            // Vidro: translucido no passe forward. Alpha por tipo: janela/vitrine 0.4 (lamina
+            // fina, transmissao alta); GARRAFA 0.75 (vidro grosso e escuro, quase opaco — a 0.4
+            // a garrafa de vinho praticamente sumia). O especular vem do Fresnel no shader,
+            // nao do alpha. Two-sided (lamina fina).
+            if (LooksGlass(toks)) {
+                if (opaqueGlass) {
+                    // --opaque-glass: janela-espelho — opaco no G-buffer, reflexoes RT pintam o
+                    // ceu/rua (look da Falcor p/ casca oca). Liso e dieletrico; alpha restaurado.
+                    out.Blend     = 0u;
+                    out.AlphaTest = 0u;
+                    out.TwoSided  = 0u;
+                    out.BaseColorFactor[3] = 1.0f;
+                    out.MetallicFactor  = 0.0f;
+                    out.RoughnessFactor = std::min(out.RoughnessFactor, 0.08f);
+                } else {
+                    out.Blend     = 1u;
+                    out.AlphaTest = 0u; // mutuamente exclusivo com blend
+                    out.TwoSided  = 1u;
+                    const float glassAlpha = HasToken(toks, { "bottle", "bottles" }) ? 0.75f : 0.4f;
+                    out.BaseColorFactor[3] = std::min(out.BaseColorFactor[3], glassAlpha);
+                }
+            }
         }
 
         uint32_t idx = static_cast<uint32_t>(materials.size());
@@ -290,6 +406,13 @@ int main(int argc, char** argv) {
         if (!node || !node->mesh) continue;
         const ufbx_mesh* mesh = node->mesh;
         triBuf.resize(std::max<size_t>(mesh->max_face_triangles * 3, 3));
+
+        // Normais em mundo pela inversa-transposta (correta sob escala nao-uniforme; a matriz
+        // direta entortaria a normal). Tambem ja flipa a normal se o no for espelhado.
+        const ufbx_matrix normalMat = ufbx_matrix_for_normals(&node->geometry_to_world);
+        // No espelhado inverte o winding daquele no (XOR com a inversao global RH->LH).
+        const bool mirrored = ufbx_matrix_determinant(&node->geometry_to_world) < 0.0f;
+        const bool reverseWinding = kReverseWinding != mirrored;
 
         for (size_t pi = 0; pi < mesh->material_parts.count; ++pi) {
             const ufbx_mesh_part& part = mesh->material_parts.data[pi];
@@ -317,7 +440,7 @@ int main(int argc, char** argv) {
                                     ? ufbx_get_vertex_vec2(&mesh->vertex_uv, corner[c])
                                     : ufbx_vec2{0,0};
                         p = ufbx_transform_position(&node->geometry_to_world, p);
-                        n = ufbx_transform_direction(&node->geometry_to_world, n);
+                        n = ufbx_transform_direction(&normalMat, n);
                         // normaliza
                         double nl = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
                         if (nl > 1e-12) { n.x/=nl; n.y/=nl; n.z/=nl; }
@@ -327,7 +450,7 @@ int main(int argc, char** argv) {
                         v.TexCoord[0] = (float)uv.x; v.TexCoord[1] = 1.0f - (float)uv.y; // V flip (FBX->D3D)
                         outIdx[c] = sm.Add(v);
                     }
-                    if (kReverseWinding) {
+                    if (reverseWinding) {
                         sm.Indices.push_back(outIdx[0]);
                         sm.Indices.push_back(outIdx[2]);
                         sm.Indices.push_back(outIdx[1]);

@@ -9,7 +9,6 @@ set(EDITOR_HEADERS
     Include/SmileEditor/AboutDialog.h
     Include/SmileEditor/SmileLogo.h
     Include/SmileEditor/LucideIcon.h
-    Include/SmileEditor/EnvironmentWindow.h
     Include/SmileEditor/GizmoController.h
     Include/SmileEditor/LogBridge.h
     Include/SmileEditor/QmlHost.h
@@ -18,6 +17,10 @@ set(EDITOR_HEADERS
     Include/SmileEditor/SmileLogoImageProvider.h
     Include/SmileEditor/MenuBridge.h
     Include/SmileEditor/StatusBridge.h
+    Include/SmileEditor/TimeOfDayBridge.h
+    Include/SmileEditor/LightsBridge.h
+    Include/SmileEditor/SceneOutlinerBridge.h
+    Include/SmileEditor/MaterialsBridge.h
 )
 
 set(EDITOR_SOURCES
@@ -28,7 +31,6 @@ set(EDITOR_SOURCES
     Source/AboutDialog.cpp
     Source/SmileLogo.cpp
     Source/LucideIcon.cpp
-    Source/EnvironmentWindow.cpp
     Source/GizmoController.cpp
     Source/LogBridge.cpp
     Source/QmlHost.cpp
@@ -36,6 +38,10 @@ set(EDITOR_SOURCES
     Source/NativeWindowFilter.cpp
     Source/MenuBridge.cpp
     Source/StatusBridge.cpp
+    Source/TimeOfDayBridge.cpp
+    Source/LightsBridge.cpp
+    Source/SceneOutlinerBridge.cpp
+    Source/MaterialsBridge.cpp
 )
 
 # WIN32 = subsistema Windows (sem console preto atras)
@@ -116,6 +122,15 @@ if(WIN32)
         COMMENT "Copiando paineis QML para o diretorio de build"
     )
 
+    # Fontes empacotadas (Inter, SIL OFL) — registradas no boot por RegisterBundledFonts().
+    # Vao em Fonts/ ao lado do exe, que e onde o main.cpp procura.
+    add_custom_command(TARGET SmileEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/Fonts"
+                "$<TARGET_FILE_DIR:SmileEditor>/Fonts"
+        COMMENT "Copiando fontes empacotadas para o diretorio de build"
+    )
+
     # Copia a NRD.dll ao lado do exe (o NRD usa o caminho D3D12 direto via import lib + DLL).
     if(SMILE_NRD_DLL AND EXISTS "${SMILE_NRD_DLL}")
         add_custom_command(TARGET SmileEditor POST_BUILD
@@ -125,5 +140,27 @@ if(WIN32)
             COMMENT "Copiando NRD.dll para o diretorio de build"
         )
     endif()
+
+    # Copia a amd_fidelityfx_dx12.dll ao lado do exe (o FSR/ffx-api usa import lib + DLL, igual ao NRD).
+    if(SMILE_FSR_DLL AND EXISTS "${SMILE_FSR_DLL}")
+        add_custom_command(TARGET SmileEditor POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${SMILE_FSR_DLL}"
+                    "$<TARGET_FILE_DIR:SmileEditor>"
+            COMMENT "Copiando amd_fidelityfx_dx12.dll para o diretorio de build"
+        )
+    endif()
+
+    # Copia os DLLs (production) do Streamline/DLSS ao lado do exe (manual hooking: import lib + DLLs).
+    foreach(_sl_dll ${SMILE_SL_DLLS})
+        if(EXISTS "${_sl_dll}")
+            add_custom_command(TARGET SmileEditor POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_sl_dll}"
+                        "$<TARGET_FILE_DIR:SmileEditor>"
+                COMMENT "Copiando ${_sl_dll} para o diretorio de build"
+            )
+        endif()
+    endforeach()
 endif()
 

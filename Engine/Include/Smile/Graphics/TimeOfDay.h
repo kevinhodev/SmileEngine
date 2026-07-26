@@ -37,6 +37,9 @@ namespace Smile {
         f32  MoonPhaseOffsetHours = 12.0f;
         f32  MoonIntensity      = 0.25f; // forca do luar (2a direcional); "artistico", nao fisico
         f32  MoonDiskSize       = 1.5f;  // tamanho angular relativo do disco da lua no ceu
+        // Luminancia do disco. Baixa de proposito: >~2 cai no ombro do tonemap e esmaga o
+        // contraste dos mares da textura pra branco (a lua real de dia e ~2x o ceu, nao 10x).
+        f32  MoonDiskBrightness = 1.6f;
         f32  StarIntensity      = 1.0f;  // brilho das estrelas procedurais
 
         // Avanca o relogio pelo dt real (so quando Enabled && Running). Faz wrap em 24h.
@@ -55,10 +58,10 @@ namespace Smile {
         // 12 a lua fica oposta ao sol (cheia, alta a meia-noite); em 0 acompanha o sol (nova).
         Vec3 MoonDirection() const { return DirAtHour(TimeHours + MoonPhaseOffsetHours); }
 
-    private:
         // Direcao celeste (mundo, +Y up) na convencao do Renderer::SetSunAzimuthElevation:
         // dir = (cosEl*sinAz, sinEl, cosEl*cosAz), Az do +Z (norte) p/ +X (leste). Compartilhado
-        // por sol e lua (a lua e o mesmo modelo com a hora deslocada).
+        // por sol e lua (a lua e o mesmo modelo com a hora deslocada). Publico: o painel TOD do
+        // editor amostra a curva do dia inteiro p/ desenhar o arco do ceu.
         Vec3 DirAtHour(f32 _Hours) const {
             const f32 d2r = 3.14159265358979f / 180.0f;
 

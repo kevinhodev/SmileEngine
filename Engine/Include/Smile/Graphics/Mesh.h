@@ -16,5 +16,8 @@ namespace Smile {
 
         static FMesh CreateCube();
         static FMesh CreateSphere(u32 Slices = 64, u32 Stacks = 32, f32 Radius = 0.5f);
+        // Primitivas do preview de material: plano XZ (normal +Y) e cilindro em Y.
+        static FMesh CreatePlane(f32 Size = 1.0f);
+        static FMesh CreateCylinder(u32 Slices = 64, f32 Radius = 0.35f, f32 Height = 0.9f);
     };
 } 
