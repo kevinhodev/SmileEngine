@@ -24,7 +24,7 @@ namespace Smile {
     //    face no hardware e a profundidade de referencia sai do EIXO DOMINANTE (mesma
     //    projecao das faces) — t19, indice do cubo em SpotParams.y.
 
-    // Alocador LRU de slices por IDENTIDADE de luz (FLight::Id), nao por posicao no ranking.
+    // Tabela de slices chaveada pela IDENTIDADE da luz (FLight::Id), nao pela posicao no ranking.
     // Modelo do Flax (ShadowsPass mantem Dictionary<Guid, ShadowAtlasLight> com LastFrameUsed
     // e reciclagem por frame) e do shadow pool da Cry. Antes o slice era o indice do sort por
     // distancia: a camera andar um metro reordenava o ranking e a mesma luz caia noutro slice.
@@ -35,13 +35,12 @@ namespace Smile {
     struct TShadowSlotCache {
         static constexpr u32 kNoSlot = 0xFFFFFFFFu;
 
-        // Resolve a selecao INTEIRA de uma vez, em DUAS FASES. A API e em lote de proposito:
-        // resolver luz a luz remapeia em cascata e destroi a estabilidade que este cache
-        // existe pra dar. Com slots [A,B,C,D] e selecao [E,A,B,C], o novato E entra primeiro,
-        // nao acha slot livre e rouba o LRU — que e o de A. Ai A tambem virou novato, rouba o
-        // de B, B rouba o de C, C rouba o de D: uma entrada remapeou os quatro. Reservando
-        // todos os donos ANTES de alocar qualquer novato, a evicao so alcanca luz que nao
-        // esta selecionada neste frame, e quem sobrevive fica no mesmo slice.
+        // Resolve a selecao INTEIRA de uma vez, em DUAS FASES: donos atuais reservam o proprio
+        // slice, e so entao os novatos ocupam o que estiver LIVRE. A API e em lote de proposito
+        // — resolvendo luz a luz, o novato processado primeiro rouba o slot de um selecionado,
+        // que vira novato e rouba o do seguinte, remapeando todos em cascata.
+        //
+        // A liberacao e por FADE, nunca por evicao: ver a fase 2 e o UpdateFades.
         void AcquireBatch(const u64* _LightIds, u32 _Count, u32* _OutSlots) {
             // Id 0 = "sem identidade" (colide com slot livre) e Id repetido faz duas luzes
             // convergirem pro mesmo slice — uma sobrescreveria a sombra da outra em silencio.
@@ -55,52 +54,90 @@ namespace Smile {
                     assert(_LightIds[a] != _LightIds[b] && "FLight::Id duplicado no lote");
             }
 #endif
-            // Epoch PROPRIO em vez do FrameIndex do renderer: nao acopla o cache ao contador de
-            // frames (que e u32 e daria wrap) e a unica coisa que o LRU precisa e uma ordem
-            // monotonica das chamadas. 0 fica reservado p/ "slot nunca usado".
-            const u64 Stamp = ++Epoch;
-
-            // Fase 1 — donos atuais reservam o proprio slice e ficam protegidos (LastUse = Stamp).
+            // Fase 1 — dono atual mantem o proprio slice, independente da ordem no lote.
             for (u32 c = 0; c < _Count; ++c) {
                 _OutSlots[c] = kNoSlot;
                 for (u32 i = 0; i < N; ++i)
-                    if (Owner[i] == _LightIds[c]) { LastUse[i] = Stamp; _OutSlots[c] = i; break; }
+                    if (Owner[i] == _LightIds[c]) { _OutSlots[c] = i; break; }
             }
 
-            // Fase 2 — novatos pegam slot virgem ou o LRU entre os NAO reservados.
+            // Fase 2 — novato so ocupa slot LIVRE. NAO existe evicao direta: quem perde a
+            // selecao apenas sai de `active`, o UpdateFades derruba o fade dele e o slot se
+            // libera sozinho ao chegar em zero. Sobrescrever o perdedor aqui apagava o dono
+            // ANTES de qualquer fade — dava fade-in no novato e sumico instantaneo na luz
+            // removida, que e exatamente o pop que isto existe pra matar, no caso mais comum
+            // (orcamento cheio). O preco e o novato esperar a transicao pra ganhar sombra.
             for (u32 c = 0; c < _Count; ++c) {
                 if (_OutSlots[c] != kNoSlot) continue;
-                u32 Best   = kNoSlot;
-                u64 Oldest = ~0ull;
                 for (u32 i = 0; i < N; ++i) {
-                    if (Owner[i] == 0) { Best = i; break; }   // slot virgem: pega direto
-                    if (LastUse[i] == Stamp) continue;        // reservado neste frame: intocavel
-                    if (LastUse[i] < Oldest) { Oldest = LastUse[i]; Best = i; }
+                    if (Owner[i] != 0) continue;
+                    Owner[i]     = _LightIds[c];
+                    Fade[i]      = 0.0f; // dono novo entra fazendo fade-in
+                    _OutSlots[c] = i;
+                    break;
                 }
-                if (Best == kNoSlot) continue;                // orcamento cheio: fica sem sombra
-                Owner[Best]   = _LightIds[c];
-                LastUse[Best] = Stamp;
-                _OutSlots[c]  = Best;
             }
         }
+
+        bool Owns(u64 _LightId) const {
+            for (u32 i = 0; i < N; ++i) if (Owner[i] == _LightId) return true;
+            return false;
+        }
+
+        // Avanca o fade de cada slot: sobe pra 1 se o dono esta na lista ativa, desce pra 0 se
+        // nao (a luz saiu da selecao). Slot que chega a 0 e liberado — e assim que uma luz
+        // "aposentada" devolve o slice sem que ninguem precise expulsa-la.
+        // Chamar DEPOIS do AcquireBatch do frame.
+        void UpdateFades(const u64* _ActiveIds, u32 _Count, f32 _Dt, f32 _Rate) {
+            const f32 Step = _Dt * _Rate;
+            for (u32 i = 0; i < N; ++i) {
+                if (Owner[i] == 0) { Fade[i] = 0.0f; continue; }
+                bool Active = false;
+                for (u32 c = 0; c < _Count && !Active; ++c) Active = (_ActiveIds[c] == Owner[i]);
+                if (Active) {
+                    Fade[i] = Fade[i] + Step >= 1.0f ? 1.0f : Fade[i] + Step;
+                } else {
+                    Fade[i] = Fade[i] - Step <= 0.0f ? 0.0f : Fade[i] - Step;
+                    if (Fade[i] <= 0.0f) Owner[i] = 0; // terminou de sumir: slot livre
+                }
+            }
+        }
+
+        u64 OwnerAt(u32 _Slot) const { return Owner[_Slot]; }
+        f32 FadeAt(u32 _Slot)  const { return Fade[_Slot]; }
 
         // Troca de cena: os Ids antigos morreram junto com as luzes.
         void Reset() {
-            for (u32 i = 0; i < N; ++i) { Owner[i] = 0; LastUse[i] = 0; }
+            for (u32 i = 0; i < N; ++i) { Owner[i] = 0; Fade[i] = 0.0f; }
         }
 
-        u64 Owner[N]   = {}; // FLight::Id do dono (0 = livre)
-        u64 LastUse[N] = {};
-        u64 Epoch      = 0;
+        u64 Owner[N] = {}; // FLight::Id do dono (0 = livre)
+        f32 Fade[N]  = {}; // 0 = sem sombra, 1 = cheia. Vive no SLOT: e ele que guarda o depth
     };
 
     class FLocalShadows {
     public:
-        static constexpr u32 kMaxShadows     = 8;
+        // Slices FISICOS vs teto de SELECAO: sempre sobra um slice de cada tipo como espaco de
+        // manobra. Sem ele a troca e sequencial — o perdedor precisa terminar de sumir pra
+        // liberar o slot, e a luz promovida fica ~250 ms sem sombra (vazando parede) justo
+        // quando a camera chegou perto dela. Com o extra, o novato entra no slice livre e faz
+        // fade-in enquanto o perdedor faz fade-out no dele: cross-fade de verdade.
+        // O extra atende UMA transicao por tipo; desbancando duas luzes no mesmo frame, a
+        // segunda espera a primeira devolver o slice (custo e VRAM seguem previsiveis).
+        static constexpr u32 kMaxShadows     = 9; // 8 ativos + 1 de transicao  (36 MiB)
+        static constexpr u32 kActiveShadows  = 8;
         static constexpr u32 kResolution     = 1024;
-        static constexpr u32 kMaxCubeShadows = 4;
+        static constexpr u32 kMaxCubeShadows = 5; // 4 ativos + 1 de transicao  (30 MiB)
+        static constexpr u32 kActiveCubes    = 4;
         static constexpr u32 kCubeResolution = 512;
         static constexpr u32 kNoSlot         = 0xFFFFFFFFu; // Acquire*: orcamento cheio
+
+        // Politica de selecao (item 4). Incumbente vale kHysteresis a mais no ranking: sem isso
+        // duas luzes de importancia parecida trocam de slot todo frame e a sombra pisca — o
+        // oposto do que a estabilidade de slot veio dar. kFadeRate = 1/segundos da transicao;
+        // 4 = 250 ms, curto o bastante pra nao parecer bug e longo pra matar o pop.
+        static constexpr f32 kHysteresis     = 1.5f;
+        static constexpr f32 kFadeRate       = 4.0f;
         static constexpr f32 kPointNear      = 0.05f; // near de TODAS as projecoes locais (spot e
                                                       // faces do cubo) — o shader reconstroi o refZ
                                                       // linear com ele (LightParams2.y)
@@ -161,6 +198,26 @@ namespace Smile {
             CubeSlots.AcquireBatch(LightIds, Count, OutSlots);
         }
         void ResetSlots() { SpotSlots.Reset(); CubeSlots.Reset(); }
+
+        // Consulta p/ a selecao (histerese) e p/ varrer os slots em fade-out.
+        bool SpotOwns(u64 LightId) const { return SpotSlots.Owns(LightId); }
+        bool CubeOwns(u64 LightId) const { return CubeSlots.Owns(LightId); }
+        u64  SpotOwnerAt(u32 Slot) const { return SpotSlots.OwnerAt(Slot); }
+        u64  CubeOwnerAt(u32 Slot) const { return CubeSlots.OwnerAt(Slot); }
+        f32  SpotFadeAt(u32 Slot)  const { return SpotSlots.FadeAt(Slot); }
+        f32  CubeFadeAt(u32 Slot)  const { return CubeSlots.FadeAt(Slot); }
+
+        // O slice em fade-out CONTINUA sendo redesenhado enquanto a luz estiver visivel (o
+        // Renderer emite job pra ele tambem). E o que mantem o mapa valido se a luz ou os
+        // casters se moverem durante a transicao — sem isso seria preciso congelar a matriz e a
+        // pose de captura e abortar o fade quando divergissem, o que ainda deixava o caster
+        // movido errado. O custo e um slice a mais (dai o extra em kMaxShadows).
+        void UpdateSpotFades(const u64* ActiveIds, u32 Count, f32 Dt) {
+            SpotSlots.UpdateFades(ActiveIds, Count, Dt, kFadeRate);
+        }
+        void UpdateCubeFades(const u64* ActiveIds, u32 Count, f32 Dt) {
+            CubeSlots.UpdateFades(ActiveIds, Count, Dt, kFadeRate);
+        }
 
         // Garante os arrays legiveis (PIXEL_SHADER_RESOURCE) mesmo em frame sem job novo.
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);

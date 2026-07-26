@@ -1862,9 +1862,24 @@ namespace Smile {
                 MappedLightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULight));
             u32 NumLights = 0;
 
-            struct ShadowCand { u32 Gpu; u32 LightIdx; f32 Dist2; };
+            struct ShadowCand { u32 Gpu; u32 LightIdx; u64 Id; f32 Key; };
             std::vector<ShadowCand> ShadowCands;
-            std::vector<ShadowCand> CubeCands; 
+            std::vector<ShadowCand> CubeCands;
+
+            // Importancia da luz p/ a camera: energia x fracao angular que ela ocupa. O termo
+            // R^2/(d^2+R^2) satura em 1 quando a camera entra no raio (sem singularidade em
+            // d=0) e vira inverse-square quando ela se afasta. So distancia da camera (o
+            // criterio antigo) fazia uma vela a 2 m ganhar de um refletor a 8 m.
+            // Nao e a formula do Flax: la o sort e por ScreenSize, com soma da cor de desempate
+            // e hash do ID como criterio final (LightPass.cpp, SortLights). Aqui a area angular
+            // faz o papel do ScreenSize e a luminancia entra multiplicando em vez de desempatar.
+            auto ShadowScore = [&](const FLight& L) -> f32 {
+                const f32 Energy = L.Intensity * (L.Color.X * 0.2126f + L.Color.Y * 0.7152f +
+                                                  L.Color.Z * 0.0722f);
+                const Vec3 ToCam = L.Position - CameraPosition;
+                const f32 R2 = L.AttenuationRadius * L.AttenuationRadius;
+                return Energy * R2 / (ToCam.LengthSq() + R2);
+            };
 
             auto& SceneLights = Scene.Lights();
             for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
@@ -1900,79 +1915,144 @@ namespace Smile {
                     G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
                                       -1.0f, 0.0f, 0.0f };
                     if (L.CastShadows && LocalShadows.IsInitialized()) {
-                        const Vec3 ToCam = L.Position - CameraPosition;
-                        ShadowCands.push_back({ NumLights, li, ToCam.LengthSq() });
+                        // Histerese: quem ja tem o slot vale mais no ranking, entao o novato
+                        // precisa ser sensivelmente melhor pra tomar. Sem isso duas luzes de
+                        // importancia parecida trocam de slice todo frame.
+                        const f32 Bias = LocalShadows.SpotOwns(L.Id)
+                                       ? FLocalShadows::kHysteresis : 1.0f;
+                        ShadowCands.push_back({ NumLights, li, L.Id, ShadowScore(L) * Bias });
                     }
                 } else {
                     G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f }; // -2 = sem mascara de cone
                     G.SpotParams  = { 0.0f, -1.0f, 0.0f, 0.0f };
                     if (L.CastShadows && LocalShadows.IsInitialized()) {
-                        const Vec3 ToCam = L.Position - CameraPosition;
-                        CubeCands.push_back({ NumLights, li, ToCam.LengthSq() });
+                        const f32 Bias = LocalShadows.CubeOwns(L.Id)
+                                       ? FLocalShadows::kHysteresis : 1.0f;
+                        CubeCands.push_back({ NumLights, li, L.Id, ShadowScore(L) * Bias });
                     }
                 }
                 DstLights[NumLights++] = G;
             }
 
-            std::sort(ShadowCands.begin(), ShadowCands.end(),
-                      [](const ShadowCand& a, const ShadowCand& b) { return a.Dist2 < b.Dist2; });
+            // Matrizes do slice de spot (so quem redesenha o mapa precisa recalcular; quem esta
+            // em fade-out reusa a matriz guardada no slot).
+            auto SpotShadowVP = [&](const FLight& L, Mat44& OutLVP, f32& OutFar) {
+                const Vec3 D  = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
+                                                       : Vec3{ 0.0f, 1.0f, 0.0f };
+                const f32 OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * ToRad;
+                const f32 NearP    = FLocalShadows::kPointNear;
+                OutFar = std::max(L.AttenuationRadius, NearP * 2.0f);
+                OutLVP = Mat44::LookAtLH(L.Position, L.Position + D, Up) *
+                         Mat44::PerspectiveFovLH(2.0f * OuterRad, 1.0f, NearP, OutFar);
+            };
+            auto ToShadowUV = [](const Mat44& LVP) {
+                Mat44 BiasUV = Mat44::Identity();
+                BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
+                BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
+                return LVP * BiasUV;
+            };
+
+            // Id como desempate (mesma ideia do hash do ID no SortLights do Flax): std::sort nao
+            // e estavel, entao scores empatados poderiam trocar de ordem entre frames e mudar
+            // quem fica com o slot livre.
+            auto ByScore = [](const ShadowCand& a, const ShadowCand& b) {
+                return a.Key != b.Key ? a.Key > b.Key : a.Id < b.Id;
+            };
+            std::sort(ShadowCands.begin(), ShadowCands.end(), ByScore);
             const u32 NumShadowed = std::min<u32>(static_cast<u32>(ShadowCands.size()),
-                                                  FLocalShadows::kMaxShadows);
+                                                  FLocalShadows::kActiveShadows);
             // Slice pela IDENTIDADE da luz, nao por 's' (a posicao no ranking). Com 's' a mesma
             // luz trocava de slice sempre que a camera reordenava o sort — nenhum cache de
             // depth entre frames era possivel e nao havia como saber se a luz ja tinha sombra
             // no frame anterior (pre-requisito de histerese/fade). Resolve a selecao INTEIRA de
             // uma vez: um a um, o novato evicta um selecionado e dispara remapeamento em
             // cascata (ver TShadowSlotCache::AcquireBatch).
-            u64 SpotIds[FLocalShadows::kMaxShadows];
-            u32 SpotSlot[FLocalShadows::kMaxShadows];
+            u64 SpotIds[FLocalShadows::kActiveShadows];
+            u32 SpotSlot[FLocalShadows::kActiveShadows];
             for (u32 s = 0; s < NumShadowed; ++s)
                 SpotIds[s] = SceneLights[ShadowCands[s].LightIdx].Id;
             LocalShadows.AcquireSpotSlots(SpotIds, NumShadowed, SpotSlot);
+            LocalShadows.UpdateSpotFades(SpotIds, NumShadowed, LastDeltaTime);
 
             for (u32 s = 0; s < NumShadowed; ++s) {
                 const u32 Slice = SpotSlot[s];
                 if (Slice == FLocalShadows::kNoSlot) continue;
 
                 const FLight& L = SceneLights[ShadowCands[s].LightIdx];
-                const Vec3 D  = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
-                const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
-                                                       : Vec3{ 0.0f, 1.0f, 0.0f };
-                const f32 OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * ToRad;
+                Mat44 LVP; f32 FarP;
+                SpotShadowVP(L, LVP, FarP);
 
-                const f32 NearP    = FLocalShadows::kPointNear;
-                const f32 FarP     = std::max(L.AttenuationRadius, NearP * 2.0f);
-                const Mat44 LView = Mat44::LookAtLH(L.Position, L.Position + D, Up);
-                const Mat44 LProj = Mat44::PerspectiveFovLH(2.0f * OuterRad, 1.0f, NearP, FarP);
-                const Mat44 LVP   = LView * LProj;
-
-                Mat44 BiasUV = Mat44::Identity();
-                BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
-                BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
-
-                FGPULight& G  = DstLights[ShadowCands[s].Gpu];
-                G.ShadowMatrix = LVP * BiasUV;
+                FGPULight& G   = DstLights[ShadowCands[s].Gpu];
+                G.ShadowMatrix = ToShadowUV(LVP);
                 G.SpotParams.Y = static_cast<f32>(Slice);
+                G.SpotParams.Z = LocalShadows.SpotFadeAt(Slice);
                 LocalShadowJobs.push_back({ LVP, L.Position, FarP, Slice });
             }
 
-            std::sort(CubeCands.begin(), CubeCands.end(),
-                      [](const ShadowCand& a, const ShadowCand& b) { return a.Dist2 < b.Dist2; });
+            // Slices em FADE-OUT: a luz saiu da selecao mas o slot ainda nao zerou. Ela continua
+            // sendo tratada como caster normal — matriz recalculada e JOB emitido — so que com o
+            // fade caindo. Redesenhar (em vez de congelar o mapa do frame anterior) e o que
+            // mantem a sombra correta se a luz ou os casters se moverem durante a transicao.
+            // E o slice extra de kMaxShadows que paga por isso.
+            for (u32 i = 0; i < FLocalShadows::kMaxShadows; ++i) {
+                const u64 Owner = LocalShadows.SpotOwnerAt(i);
+                if (Owner == 0 || LocalShadows.SpotFadeAt(i) <= 0.0f) continue;
+                bool Active = false;
+                for (u32 s = 0; s < NumShadowed && !Active; ++s) Active = (SpotIds[s] == Owner);
+                if (Active) continue;
+                // Precisa seguir visivel (ter entrada em DstLights) p/ valer o redesenho.
+                for (const ShadowCand& C : ShadowCands) {
+                    if (C.Id != Owner) continue;
+                    const FLight& Lr = SceneLights[C.LightIdx];
+                    Mat44 LVP; f32 FarP;
+                    SpotShadowVP(Lr, LVP, FarP);
+                    FGPULight& G   = DstLights[C.Gpu];
+                    G.ShadowMatrix = ToShadowUV(LVP);
+                    G.SpotParams.Y = static_cast<f32>(i);
+                    G.SpotParams.Z = LocalShadows.SpotFadeAt(i);
+                    LocalShadowJobs.push_back({ LVP, Lr.Position, FarP, i });
+                    break;
+                }
+            }
+
+            std::sort(CubeCands.begin(), CubeCands.end(), ByScore);
             const u32 NumCubes = std::min<u32>(static_cast<u32>(CubeCands.size()),
-                                               FLocalShadows::kMaxCubeShadows);
-            u64 CubeIds[FLocalShadows::kMaxCubeShadows];
-            u32 CubeSlot[FLocalShadows::kMaxCubeShadows];
+                                               FLocalShadows::kActiveCubes);
+            u64 CubeIds[FLocalShadows::kActiveCubes];
+            u32 CubeSlot[FLocalShadows::kActiveCubes];
             for (u32 c = 0; c < NumCubes; ++c)
                 CubeIds[c] = SceneLights[CubeCands[c].LightIdx].Id;
             LocalShadows.AcquireCubeSlots(CubeIds, NumCubes, CubeSlot);
+            LocalShadows.UpdateCubeFades(CubeIds, NumCubes, LastDeltaTime);
 
             for (u32 c = 0; c < NumCubes; ++c) {
                 const u32 Cube = CubeSlot[c];
                 if (Cube == FLocalShadows::kNoSlot) continue;
 
                 const FLight& L = SceneLights[CubeCands[c].LightIdx];
-                DstLights[CubeCands[c].Gpu].SpotParams.Y = static_cast<f32>(Cube);
+                FGPULight& G   = DstLights[CubeCands[c].Gpu];
+                G.SpotParams.Y = static_cast<f32>(Cube);
+                G.SpotParams.Z = LocalShadows.CubeFadeAt(Cube);
                 LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, Cube });
+            }
+
+            // Cubos em fade-out (mesma logica dos spots; o point nem matriz precisa).
+            for (u32 i = 0; i < FLocalShadows::kMaxCubeShadows; ++i) {
+                const u64 Owner = LocalShadows.CubeOwnerAt(i);
+                if (Owner == 0 || LocalShadows.CubeFadeAt(i) <= 0.0f) continue;
+                bool Active = false;
+                for (u32 c = 0; c < NumCubes && !Active; ++c) Active = (CubeIds[c] == Owner);
+                if (Active) continue;
+                for (const ShadowCand& C : CubeCands) {
+                    if (C.Id != Owner) continue;
+                    const FLight& Lr = SceneLights[C.LightIdx];
+                    FGPULight& G   = DstLights[C.Gpu];
+                    G.SpotParams.Y = static_cast<f32>(i);
+                    G.SpotParams.Z = LocalShadows.CubeFadeAt(i);
+                    LocalCubeJobs.push_back({ Lr.Position, Lr.AttenuationRadius, i });
+                    break;
+                }
             }
 
             MappedCB->LightParams  = { static_cast<f32>(NumLights),

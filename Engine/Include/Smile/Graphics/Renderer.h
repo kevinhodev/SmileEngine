@@ -96,13 +96,14 @@ namespace Smile {
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
-    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes); SpotParams.zw
+    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes); SpotParams.w
     // reservado p/ a F4 (source length).
     struct FGPULight {
         Vec4  PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
         Vec4  ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
         Vec4  DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
-        Vec4  SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem)
+        Vec4  SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem),
+                                 // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia)
         Mat44 ShadowMatrix;      // world -> UVZ do slice (perspectiva: dividir por w no shader)
     };
 

@@ -38,10 +38,10 @@ namespace Smile {
         f32  OuterConeDeg = 40.0f;      // spot: cone externo (contribuicao zero)
 
         bool Enabled = true;
-        // Projeta sombras. Spot vai pro atlas 2D (budget FLocalShadows::kMaxShadows) e point
-        // pro cube array (kMaxCubeShadows) — os mais proximos da camera ganham slot, e o slot
-        // e mantido pela identidade da luz entre frames. Acima do budget a luz continua
-        // iluminando, so que SEM oclusao (vaza parede) ate sobrar slot.
+        // Projeta sombras. Spot vai pro atlas 2D (budget FLocalShadows::kActiveShadows) e point
+        // pro cube array (kActiveCubes) — ganham slot as de maior influencia na camera (energia
+        // x area angular, com histerese), e o slot e mantido pela identidade da luz entre
+        // frames. Acima do budget a luz continua iluminando, so que SEM oclusao (vaza parede).
         bool CastShadows = true;
     };
 }

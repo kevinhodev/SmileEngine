@@ -19,7 +19,8 @@ struct FGPULight {
     float4 PosInvRadius;      // xyz = posicao, w = 1/raio de atenuacao
     float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulbo (distancia minima)
     float4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point
-    float4 SpotParams;        // x = 1/(cosInner-cosOuter), y = slice de sombra (-1 = sem)
+    float4 SpotParams;        // x = 1/(cosInner-cosOuter), y = slice de sombra (-1 = sem),
+                              // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia)
     row_major float4x4 ShadowMatrix; // world -> UVZ do slice (dividir por w)
 };
 
@@ -117,7 +118,8 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
 
         // Sombra local (mesmo caminho linear de refZ do deferred, sem normal-offset).
         if (Lp.SpotParams.y >= 0.0f) {
-            float farP = max(1.0f / Lp.PosInvRadius.w, LightParamsVF2.x * 2.0f);
+            float farP   = max(1.0f / Lp.PosInvRadius.w, LightParamsVF2.x * 2.0f);
+            float shadow = 1.0f;
             if (Lp.DirCosOuter.w > -1.5f) {
                 float4 sp = mul(float4(wp, 1.0f), Lp.ShadowMatrix);
                 if (sp.w > 0.0f) {
@@ -126,7 +128,7 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
                         uvz.z > 0.0f && uvz.z < 1.0f) {
                         float viewZ = dot(wp - Lp.PosInvRadius.xyz, Lp.DirCosOuter.xyz);
                         float refZ  = VolFog_LocalNdcDepth(viewZ - VolFog_LocalBias(viewZ), farP);
-                        atten *= LocalShadowMap.SampleCmpLevelZero(
+                        shadow = LocalShadowMap.SampleCmpLevelZero(
                                      ShadowCmp, float3(uvz.xy, Lp.SpotParams.y), refZ);
                     }
                 }
@@ -139,10 +141,13 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
                     float3 ad    = abs(l2p);
                     float  viewZ = max(ad.x, max(ad.y, ad.z));
                     float  refZ  = VolFog_LocalNdcDepth(viewZ - VolFog_LocalBias(viewZ) * 1.5f, farP);
-                    atten *= LocalCubeShadow.SampleCmpLevelZero(
+                    shadow = LocalCubeShadow.SampleCmpLevelZero(
                                  ShadowCmp, float4(normalize(l2p), Lp.SpotParams.y), refZ);
                 }
             }
+            // Mesmo fade de slot do deferred (SpotParams.z) — senao o god ray da luz que perde
+            // o slice reapareceria de um frame pro outro enquanto a superficie some suave.
+            atten *= lerp(1.0f, shadow, Lp.SpotParams.z);
         }
         if (atten <= 0.0f) continue;
 

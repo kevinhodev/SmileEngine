@@ -27,13 +27,14 @@ cbuffer FrameCB : register(b0) {
     float4 LightParams2;       // x = 1/res do cube shadow (point), y = near das faces, zw = -
 };
 
-// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.zw reservado
-// (source length na F4).
+// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z = fade do slot
+// de sombra; .w reservado (source length na F4).
 struct FGPULight {
     float4 PosInvRadius;      // xyz = posicao, w = 1/raio de atenuacao
     float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulb (distancia minima)
     float4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
-    float4 SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem)
+    float4 SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem),
+                              // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia)
     row_major float4x4 ShadowMatrix; // world -> UVZ do slice (dividir por w: perspectiva)
 };
 
@@ -327,6 +328,7 @@ float4 main(VSOutput input) : SV_Target {
             // contra acne de contato.
             if (Lp.SpotParams.y >= 0.0f) {
                 float3 offPos = worldPos + N * 0.02f;
+                float  shadow = 1.0f;
                 if (Lp.DirCosOuter.w > -1.5f) {
                     float4 sp = mul(float4(offPos, 1.0f), Lp.ShadowMatrix);
                     if (sp.w > 0.0f) {
@@ -340,15 +342,19 @@ float4 main(VSOutput input) : SV_Target {
                             float farP  = max(1.0f / Lp.PosInvRadius.w,
                                               LightParams2.y * 2.0f);
                             float refZ  = LocalNdcDepth(viewZ - LocalShadowBias(viewZ), farP);
-                            Atten *= LocalShadowPCF(uvz.xy, refZ, Lp.SpotParams.y);
+                            shadow = LocalShadowPCF(uvz.xy, refZ, Lp.SpotParams.y);
                         }
                     }
                 } else {
-                    Atten *= LocalCubeShadowPCF(offPos - Lp.PosInvRadius.xyz,
+                    shadow = LocalCubeShadowPCF(offPos - Lp.PosInvRadius.xyz,
                                                 Lp.SpotParams.y,
                                                 max(1.0f / Lp.PosInvRadius.w,
                                                     LightParams2.y * 2.0f));
                 }
+                // Fade do slot: a luz que perde o slice nao vira sem-sombra de um frame pro
+                // outro (a luz passaria a vazar parede num piscar). O slice segue valido
+                // enquanto o fade cai, e o mapa some suave.
+                Atten *= lerp(1.0f, shadow, Lp.SpotParams.z);
             }
             if (Atten <= 0.0f) continue;
 
