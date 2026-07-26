@@ -250,6 +250,7 @@ namespace Smile {
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
         CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y,
                                 static_cast<f32>(_PunctualLightCount), RayEps.MaxAge }; // z = luzes (F5)
+        CPU.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,

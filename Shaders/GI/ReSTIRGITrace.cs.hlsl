@@ -34,6 +34,7 @@ cbuffer ReSTIRCB : register(b0) {
                                     // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
     float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
                                     // w=angularMinRatio
+    float4 PolicyParams;            // x = politica de backface (0/1) — A/B da defesa anti-vazamento
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
@@ -112,12 +113,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
-    // CULL_BACK so tem efeito nas instancias que NAO carregam TRIANGLE_CULL_DISABLE — a flag da
-    // instancia vence a do raio (spec do DXR). Com o culling seletivo ligado
-    // (FRaytracingScene::SetSelectiveCulling) isso vale em tudo menos folhagem/cutout/vidro;
-    // desligado, a linha inteira e no-op e a cena e double-sided, que era o regime historico.
-    RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
-    q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, SMILE_RT_MASK_GATHER, ray);
+    // SEM culling, igual ao `CullingMode = 0` do Lumen no passe equivalente
+    // (LumenReSTIRGather.usf:315 e :422). O gather PRECISA enxergar o verso: e a politica de
+    // backface abaixo que decide entre re-tracar (auto-interseccao) e matar o caminho (geometria
+    // real vista por dentro). Deixar o DXR cullar descartaria o hit antes da classificacao e a
+    // politica viraria codigo morto justamente com o culling seletivo ligado.
+    // As flags do template RayQuery<> e as do TraceRayInline sao COMBINADAS (spec do DXR), entao
+    // as duas tem que ficar em NONE.
+    RayQuery<RAY_FLAG_NONE> q;
+    q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
@@ -144,7 +148,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // vazamento medido no A/B do culling. A UE comenta a mesma linha com "to minimize leaking" e
     // aceita a sobre-oclusao que isso causa (LumenHardwareRayTracingCommon.ush:1018).
     bool killPath = false;
-    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+    if (PolicyParams.x > 0.5f && q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         bool  twoSided;
         bool  backface = HitIsBackface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                        q.CommittedWorldToObject3x4(), ray.Direction, twoSided);
@@ -156,7 +160,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                                                skipDist = kSelfIsectBackfaceDist;
         if (skipDist > 0.0f) {
             ray.TMin = skipDist;
-            q.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, SMILE_RT_MASK_GATHER, ray);
+            q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
             SMILE_RT_PROCEED(q)
             ray.TMin = 0.0f; // a origem nao mudou; so o intervalo daquela consulta
             // Re-classifica SO aqui: no caminho comum (sem retrace) a classificacao de cima ja
@@ -180,9 +184,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         n2 = HitGeomNormal(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                            q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(), ray.Direction);
         x2 = ray.Origin + ray.Direction * hitDist;
-        // Hit preto: continua sendo uma AMOSTRA VALIDA (x2/n2/hitDist reais, entra no M e no
-        // Jacobiano) com contribuicao zero — nao um "sem hit". Tratar como miss mandaria o ceu
-        // p/ dentro da parede, que e o bug que estamos fechando.
+        // Hit preto = amostra de contribuicao ZERO, nao um "sem hit": tratar como miss mandaria o
+        // ceu p/ dentro da parede, que e o bug que estamos fechando. Ela conta no M (a media do
+        // reservoir sabe que aquela direcao nao rende nada) mas, com wInit = 0, o WRS nao a
+        // seleciona — x2/n2 sao calculados p/ o hitDist do NRD e NAO chegam a entrar no
+        // reservoir nem no Jacobiano.
         Lo = killPath ? float3(0.0f, 0.0f, 0.0f)
                       : ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                         q.CommittedTriangleBarycentrics(),
@@ -277,9 +283,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                         vray.Direction = toS / len;
                         vray.TMin      = 0.0f;
                         vray.TMax      = TraceParams.y;
-                        RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> vq;
-                        vq.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
-                                          SMILE_RT_MASK_GATHER, vray);
+                        // NONE pelo mesmo motivo do gather: este re-trace tem que reencontrar a
+                        // MESMA superficie da amostra guardada, e cullar mudaria o que ele acha.
+                        // Quando a revalidacao for religada (ValidateInterval > 0, hoje 0), ela
+                        // precisa da mesma politica de backface do gather.
+                        RayQuery<RAY_FLAG_NONE> vq;
+                        vq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, vray);
                         SMILE_RT_PROCEED(vq)
                         if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                             float t = vq.CommittedRayT();

@@ -36,6 +36,7 @@ cbuffer ReSTIRCB : register(b0) {
                                     // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
     float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
                                     // w=angularMinRatio
+    float4 PolicyParams;            // so o Pass A usa (politica de backface); layout comum
 };
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
@@ -191,10 +192,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     mray.Direction = mToS / mLen;
                     mray.TMin      = RayEpsB.y;
                     mray.TMax      = mLen - RayEpsB.z;
-                    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                             RAY_FLAG_CULL_BACK_FACING_TRIANGLES> mq;
-                    mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                                      RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+                    // SEM culling: isto e teste de OCLUSAO, e uma parede oclui a conexao seja qual
+                    // for o lado que o raio encontra. Cullar o verso faria a casca do comodo
+                    // deixar passar a conexao vista de dentro.
+                    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> mq;
+                    mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                                       SMILE_RT_MASK_GATHER, mray);
                     SMILE_RT_PROCEED(mq)
                     if (mq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ps = 0.0f;
@@ -225,15 +227,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             vray.Direction = toS / len;
             vray.TMin      = RayEpsB.y;
             vray.TMax      = len - RayEpsB.z; // > TMin garantido; para antes do x2
-            // MESMAS flags do trace inicial (CULL_BACK) — senao backfaces viram oclusores
-            // fantasmas que a amostra original nunca viu. Alpha-test via SMILE_RT_PROCEED
+            // MESMAS flags do trace inicial, que agora e NONE. Teste de oclusao nao culla: a
+            // parede tem que bloquear a conexao pelo lado que o raio encontrar, e com culling a
+            // casca do comodo deixaria passar tudo que fosse visto de dentro. O receio antigo de
+            // "backface vira oclusor fantasma" nao se aplica a um segmento x1->x2 que ja para
+            // antes da superficie do x2 (margem no TMax). Alpha-test via SMILE_RT_PROCEED
             // (Instances/Vertices/Indices bindados no M6): folhagem masked oclui correto e
-            // paredes atras de candidato masked nao sao mais perdidas (o CULL_NON_OPAQUE
-            // antigo ignorava os dois casos).
-            const uint VisFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                                  RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
-            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                     RAY_FLAG_CULL_BACK_FACING_TRIANGLES> vq;
+            // paredes atras de candidato masked nao sao mais perdidas.
+            const uint VisFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> vq;
             vq.TraceRayInline(Scene, VisFlags, SMILE_RT_MASK_GATHER, vray);
             SMILE_RT_PROCEED(vq)
             if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {

@@ -32,6 +32,7 @@ namespace Smile {
         // existente — em especial o View, que o ReSTIRNrdPack le em 256.
         Vec4  RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4  RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+        Vec4  PolicyParams;    // x = politica de backface no gather (0/1); yzw livres
     };
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
@@ -104,6 +105,14 @@ namespace Smile {
         bool GetTemporal() const   { return Temporal; }
         void SetFoliageShadows(bool V) { if (V != FoliageShadows) NeedsClear = true;
                                          FoliageShadows = V; }
+
+        // Politica de backface do gather (retrace de auto-interseccao + terminacao preta no verso
+        // one-sided). Default LIGADA, como o AvoidSelfIntersections=3 da UE. Existe como toggle
+        // porque o A/B dela nao pode ser feito pelo toggle de culling: o gather traca sem culling
+        // justamente para a politica poder classificar o hit.
+        void SetBackfacePolicy(bool V) { if (V != BackfacePolicy) NeedsClear = true;
+                                         BackfacePolicy = V; }
+        bool GetBackfacePolicy() const { return BackfacePolicy; }
         bool GetFoliageShadows() const { return FoliageShadows; }
         // NAO invalidam: o espacial nao realimenta o temporal, entao nem Spatial nem Visibility
         // (que so atua no Pass B e no resolve final) tocam o que esta gravado no reservoir.
@@ -184,6 +193,7 @@ namespace Smile {
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
         bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
+        bool BackfacePolicy = true;   // retrace + terminacao preta no verso one-sided
         bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B

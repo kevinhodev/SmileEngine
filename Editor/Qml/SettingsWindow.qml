@@ -2580,6 +2580,51 @@ Rectangle {
                         onToggled: viewportModel.ToggleSelectiveRTCulling()
                     }
                 }
+
+                Card {
+                    id: backfaceCard
+                    width: parent.width
+                    title: "Backface no gather do ReSTIR"
+                    height: bfLabel.y + bfLabel.height + contentPadding + 8
+
+                    Text {
+                        id: bfHelper
+                        x: 20
+                        y: backfaceCard.headerHeight + backfaceCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "O gather traça sem back-face culling e classifica cada acerto por " +
+                              "conta própria. Um acerto no verso a menos de 5 cm (ou de material " +
+                              "two-sided a menos de 1 cm) é tratado como auto-interseção e o raio " +
+                              "é relançado dali; o verso que sobrar é geometria real vista por " +
+                              "dentro, e o caminho termina sem luz em vez de seguir até o céu.\n\n" +
+                              "Desligado, o raio atravessa a casca e traz a luz da rua para " +
+                              "dentro do prédio — foi o que a medição no alvo cru mostrou. " +
+                              "Ligado, espere alguma sobre-oclusão em cantos: é o mesmo preço que " +
+                              "a Unreal aceita. Este é o A/B da defesa contra vazamento; o " +
+                              "toggle de culling acima não serve para isso."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: bfLabel
+                        x: 20
+                        y: bfHelper.y + bfHelper.height + 18
+                        text: "Política de backface"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        id: bfToggle
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: bfLabel.y - 6
+                        checked: viewportModel.giBackfacePolicy
+                        onToggled: viewportModel.ToggleGIBackfacePolicy()
+                    }
+                }
             }
         }
 

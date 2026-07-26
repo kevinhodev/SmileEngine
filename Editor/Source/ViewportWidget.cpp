@@ -100,6 +100,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetSelectiveRTCulling();
     }
 
+    bool ViewportWidget::IsGIBackfacePolicyEnabled() const {
+        return Renderer && Renderer->GetReSTIRGI().GetBackfacePolicy();
+    }
+
     bool ViewportWidget::IsGTAOEnabled() const {
         return Renderer && Renderer->GetUseAO();
     }
@@ -793,6 +797,13 @@ namespace SmileEditor {
         // O Renderer cuida do rebuild da TLAS e das invalidacoes de historico — o efeito so
         // aparece no frame seguinte, quando a TLAS nova entra.
         Renderer->SetSelectiveRTCulling(!Renderer->GetSelectiveRTCulling());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleGIBackfacePolicy() {
+        if (!Renderer) return;
+        auto& GI = Renderer->GetReSTIRGI();
+        GI.SetBackfacePolicy(!GI.GetBackfacePolicy()); // ja invalida os reservoirs
         emit ViewSettingsChanged();
     }
 
