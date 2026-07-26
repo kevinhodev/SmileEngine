@@ -51,6 +51,11 @@ namespace Smile {
         std::vector<FLight>&       Lights()       { return LightList; }
         const std::vector<FLight>& Lights() const { return LightList; }
 
+        // Proximo FLight::Id livre. Nunca devolve 0 (0 = "sem identidade"). O editor faz
+        // push_back direto na lista, entao quem consome (renderer) atribui pra quem chegou
+        // com Id 0 — nao da pra centralizar tudo no AddLight.
+        u64 AllocLightId() { return ++NextLightId_; }
+
         void Clear();
 
         // Versao dos transforms dos renderables — quem muta transform (gizmo do editor)
@@ -63,5 +68,6 @@ namespace Smile {
         std::vector<FRenderable>               RenderableList;
         std::vector<FLight>                    LightList;
         u64                                    TransformsVersion_ = 0;
+        u64                                    NextLightId_       = 0;
     };
 }

@@ -72,8 +72,17 @@ namespace Smile {
         void RenderGBuffer(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap);
         // Uma cascata do CSM (chamada pelo callback do FSunShadows::RecordDepthPass); culling
         // proprio contra o frustum da cascata (5 planos, sem near — pancaking).
+        // Depth do terreno numa view de sombra qualquer (cascata do CSM, slice de spot ou face
+        // de cubo de point). PerspectiveView escolhe as duas coisas que separam os dois casos:
+        // PSO com depth clip ligado (contra o pancaking grampear o chunk no near e virar
+        // oclusor falso colado na luz) e o plano near no culling. O CSM e ortho e quer o
+        // oposto nas duas — caster atras do near dele ainda projeta sombra valida.
+        // LightRadius > 0 liga a broad phase esferica (sombras locais): o chunk precisa estar
+        // dentro do alcance da luz, nao so do frustum dela. Ver FLocalShadows::FExtraLocalDraw.
         void RenderShadowCascade(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
-                                 D3D12_GPU_VIRTUAL_ADDRESS CascadeCB, const Mat44& CascadeVP);
+                                 D3D12_GPU_VIRTUAL_ADDRESS CascadeCB, const Mat44& CascadeVP,
+                                 bool PerspectiveView = false,
+                                 const Vec3& LightPos = Vec3{}, f32 LightRadius = 0.0f);
 
         void GetBounds(Vec3& OutMin, Vec3& OutMax) const { OutMin = BoundsMin; OutMax = BoundsMax; }
         u32  VisibleChunkCount() const { return static_cast<u32>(Visible.size()); }
@@ -127,7 +136,18 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSODepthOnly;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSODepthNormal;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSOGBuffer;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSOShadow;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSOShadow;      // CSM: ortho + pancaking
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSOShadowLocal; // spot/point: depth clip
+        // Lista de chunks visiveis de UMA view de sombra. Membro so pra nao alocar por view:
+        // com sombras locais sao ate 8 slices + 24 faces de cubo por frame.
+        std::vector<u32>                            ShadowCullScratch;
+        // Chunks dentro da esfera da luz corrente. O FLocalShadows chama as 6 faces de um point
+        // em sequencia com a MESMA esfera, entao a broad phase roda uma vez por luz e as faces
+        // so refinam por frustum — que e o contrato "broad phase por luz + frustum por face".
+        // Memoizar aqui evita partir o callback num par PrepareLight/DrawView.
+        std::vector<u32>                            ShadowSphereSubset;
+        Vec3                                        ShadowSphereCenter = { 0.0f, 0.0f, 0.0f };
+        f32                                         ShadowSphereRadius = -1.0f; // <0 = sem cache
 
         FGrid Grids[kMaxLods];
 

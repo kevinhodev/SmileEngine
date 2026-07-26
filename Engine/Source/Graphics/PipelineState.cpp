@@ -163,10 +163,15 @@ namespace Smile {
         StaticSamplers[1].RegisterSpace    = 0;
         StaticSamplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+        // BORDER branco (= "iluminado"), nao CLAMP: com CLAMP um tap do PCF que sai do slice
+        // repete o texel da borda em vez de devolver sem sombra. Na maioria dos spots a
+        // mascara de cone ja zerou ali, mas com inner ~ outer ela vira degrau e continua 1
+        // ate a borda — o texel replicado aparece. O passe volumetrico ja usa BORDER branco
+        // nos MESMOS mapas (VolumetricFog.cpp, s2); isto alinha o deferred com ele.
         StaticSamplers[2].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
-        StaticSamplers[2].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        StaticSamplers[2].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-        StaticSamplers[2].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        StaticSamplers[2].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        StaticSamplers[2].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        StaticSamplers[2].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
         StaticSamplers[2].MaxAnisotropy    = 1;
         StaticSamplers[2].ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         StaticSamplers[2].BorderColor      = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;

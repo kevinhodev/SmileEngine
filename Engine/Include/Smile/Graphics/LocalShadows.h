@@ -5,6 +5,9 @@
 #include "Smile/Graphics/DescriptorHeap.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <functional>
+#include <vector>
+#include <cassert>
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -20,12 +23,84 @@ namespace Smile {
     //    luz, convencao de faces D3D). O lookup nao usa matriz: o vetor luz->pixel escolhe a
     //    face no hardware e a profundidade de referencia sai do EIXO DOMINANTE (mesma
     //    projecao das faces) — t19, indice do cubo em SpotParams.y.
+
+    // Alocador LRU de slices por IDENTIDADE de luz (FLight::Id), nao por posicao no ranking.
+    // Modelo do Flax (ShadowsPass mantem Dictionary<Guid, ShadowAtlasLight> com LastFrameUsed
+    // e reciclagem por frame) e do shadow pool da Cry. Antes o slice era o indice do sort por
+    // distancia: a camera andar um metro reordenava o ranking e a mesma luz caia noutro slice.
+    // Isso (a) impede cachear o depth entre frames — o conteudo do slice nao pertence a
+    // ninguem — e (b) impede histerese/fade, porque nao da pra perguntar "esta luz tinha
+    // sombra no frame passado?". Slot estavel e pre-requisito das duas coisas.
+    template <u32 N>
+    struct TShadowSlotCache {
+        static constexpr u32 kNoSlot = 0xFFFFFFFFu;
+
+        // Resolve a selecao INTEIRA de uma vez, em DUAS FASES. A API e em lote de proposito:
+        // resolver luz a luz remapeia em cascata e destroi a estabilidade que este cache
+        // existe pra dar. Com slots [A,B,C,D] e selecao [E,A,B,C], o novato E entra primeiro,
+        // nao acha slot livre e rouba o LRU — que e o de A. Ai A tambem virou novato, rouba o
+        // de B, B rouba o de C, C rouba o de D: uma entrada remapeou os quatro. Reservando
+        // todos os donos ANTES de alocar qualquer novato, a evicao so alcanca luz que nao
+        // esta selecionada neste frame, e quem sobrevive fica no mesmo slice.
+        void AcquireBatch(const u64* _LightIds, u32 _Count, u32* _OutSlots) {
+            // Id 0 = "sem identidade" (colide com slot livre) e Id repetido faz duas luzes
+            // convergirem pro mesmo slice — uma sobrescreveria a sombra da outra em silencio.
+            // Os caminhos de criacao de hoje garantem os dois, mas FScene::Lights() devolve o
+            // vetor mutavel, entao uma copia direta futura reintroduziria Id duplicado sem
+            // aviso. O(n^2) sobre <= 8 entradas, so em Debug.
+#ifndef NDEBUG
+            for (u32 a = 0; a < _Count; ++a) {
+                assert(_LightIds[a] != 0 && "FLight::Id nao atribuido antes do AcquireBatch");
+                for (u32 b = a + 1; b < _Count; ++b)
+                    assert(_LightIds[a] != _LightIds[b] && "FLight::Id duplicado no lote");
+            }
+#endif
+            // Epoch PROPRIO em vez do FrameIndex do renderer: nao acopla o cache ao contador de
+            // frames (que e u32 e daria wrap) e a unica coisa que o LRU precisa e uma ordem
+            // monotonica das chamadas. 0 fica reservado p/ "slot nunca usado".
+            const u64 Stamp = ++Epoch;
+
+            // Fase 1 — donos atuais reservam o proprio slice e ficam protegidos (LastUse = Stamp).
+            for (u32 c = 0; c < _Count; ++c) {
+                _OutSlots[c] = kNoSlot;
+                for (u32 i = 0; i < N; ++i)
+                    if (Owner[i] == _LightIds[c]) { LastUse[i] = Stamp; _OutSlots[c] = i; break; }
+            }
+
+            // Fase 2 — novatos pegam slot virgem ou o LRU entre os NAO reservados.
+            for (u32 c = 0; c < _Count; ++c) {
+                if (_OutSlots[c] != kNoSlot) continue;
+                u32 Best   = kNoSlot;
+                u64 Oldest = ~0ull;
+                for (u32 i = 0; i < N; ++i) {
+                    if (Owner[i] == 0) { Best = i; break; }   // slot virgem: pega direto
+                    if (LastUse[i] == Stamp) continue;        // reservado neste frame: intocavel
+                    if (LastUse[i] < Oldest) { Oldest = LastUse[i]; Best = i; }
+                }
+                if (Best == kNoSlot) continue;                // orcamento cheio: fica sem sombra
+                Owner[Best]   = _LightIds[c];
+                LastUse[Best] = Stamp;
+                _OutSlots[c]  = Best;
+            }
+        }
+
+        // Troca de cena: os Ids antigos morreram junto com as luzes.
+        void Reset() {
+            for (u32 i = 0; i < N; ++i) { Owner[i] = 0; LastUse[i] = 0; }
+        }
+
+        u64 Owner[N]   = {}; // FLight::Id do dono (0 = livre)
+        u64 LastUse[N] = {};
+        u64 Epoch      = 0;
+    };
+
     class FLocalShadows {
     public:
         static constexpr u32 kMaxShadows     = 8;
         static constexpr u32 kResolution     = 1024;
         static constexpr u32 kMaxCubeShadows = 4;
         static constexpr u32 kCubeResolution = 512;
+        static constexpr u32 kNoSlot         = 0xFFFFFFFFu; // Acquire*: orcamento cheio
         static constexpr f32 kPointNear      = 0.05f; // near de TODAS as projecoes locais (spot e
                                                       // faces do cubo) — o shader reconstroi o refZ
                                                       // linear com ele (LightParams2.y)
@@ -39,7 +114,8 @@ namespace Smile {
         };
 
         // Um slice de SPOT a renderizar neste frame: matriz da luz + esfera de influencia
-        // (cull de casters — AABB vs esfera; o cone exato fica pra depois, a esfera corta bem).
+        // (broad phase dos casters; o frustum do cone refina em cima da lista curta).
+        // Slice vem do TShadowSlotCache — e a identidade da luz, nao a posicao no ranking.
         struct FShadowJob {
             Mat44 ViewProj;
             Vec3  LightPos;
@@ -55,13 +131,36 @@ namespace Smile {
             u32  CubeIndex;
         };
 
+        // Caster extra por slice/face (terreno) — chamado depois dos itens, com o CB e a
+        // matriz daquela view. Pode trocar root signature/PSO: o loop re-liga os desta
+        // classe no inicio do proximo slice (mesmo contrato do FSunShadows).
+        // Recebe TAMBEM a esfera de influencia da luz porque o frustum sozinho nao basta como
+        // filtro: num spot de 89 graus ele abre ~57R lateralmente no far plane, enquanto a luz
+        // morre radialmente em R. Sem a esfera o caster extra desenharia geometria a dezenas
+        // de raios de distancia, que nunca vai iluminar nada.
+        using FExtraLocalDraw = std::function<void(ID3D12GraphicsCommandList*,
+                                                   D3D12_GPU_VIRTUAL_ADDRESS SliceCB,
+                                                   const Mat44& SliceViewProj,
+                                                   const Vec3& LightPos, f32 Radius)>;
+
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         bool IsInitialized() const { return Initialized; }
 
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              u32 FrameSlot, const FShadowDrawItem* Items, size_t Count,
                              const FShadowJob* Jobs, u32 JobCount,
-                             const FCubeShadowJob* CubeJobs, u32 CubeJobCount);
+                             const FCubeShadowJob* CubeJobs, u32 CubeJobCount,
+                             const FExtraLocalDraw& ExtraDraw = {});
+
+        // Slot persistente por luz (ver TShadowSlotCache). Em LOTE: a selecao inteira do frame
+        // de uma vez, senao a alocacao remapeia em cascata. Slot kNoSlot = ficou sem sombra.
+        void AcquireSpotSlots(const u64* LightIds, u32 Count, u32* OutSlots) {
+            SpotSlots.AcquireBatch(LightIds, Count, OutSlots);
+        }
+        void AcquireCubeSlots(const u64* LightIds, u32 Count, u32* OutSlots) {
+            CubeSlots.AcquireBatch(LightIds, Count, OutSlots);
+        }
+        void ResetSlots() { SpotSlots.Reset(); CubeSlots.Reset(); }
 
         // Garante os arrays legiveis (PIXEL_SHADER_RESOURCE) mesmo em frame sem job novo.
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);
@@ -98,6 +197,12 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12Resource>      SliceCB; // Mat44 por slice por frame em voo
         u8*                                         MappedSlice = nullptr;
+
+        TShadowSlotCache<kMaxShadows>               SpotSlots;
+        TShadowSlotCache<kMaxCubeShadows>           CubeSlots;
+        // Broad phase por luz: indices em Items dentro da esfera de influencia. Membro (e nao
+        // local) so pra nao realocar por slice — as 6 faces do point reusam a MESMA lista.
+        std::vector<u32>                            CullScratch;
 
         f32  DepthBias   = 0.02f; // bias constante em METROS (o shader converte pra NDC pelo
                                   // caminho linear; + termo relativo por distancia no shader).

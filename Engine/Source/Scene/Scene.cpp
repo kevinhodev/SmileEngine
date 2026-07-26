@@ -118,6 +118,7 @@ namespace Smile {
 
     FLight& FScene::AddLight(const FLight& _Light) {
         LightList.push_back(_Light);
+        LightList.back().Id = AllocLightId(); // identidade nova mesmo se veio de uma copia
         return LightList.back();
     }
 

@@ -252,6 +252,17 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> NewShadow;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&NewShadow)));
         PSOShadow = NewShadow;
+
+        // Variante para sombras LOCAIS (spot/point): projecao perspectiva, depth clip LIGADO.
+        // Com pancaking numa perspectiva o chunk que cruza o near da luz nao e descartado — ele
+        // e GRAMPEADO no near e escreve profundidade ~0, virando um oclusor falso colado na
+        // lampada (uma luz pousada no terreno se auto-sombrearia inteira). O near so pode ser
+        // ignorado no ortho do CSM, onde o caster achatado ainda projeta sombra valida.
+        ShadowRaster.DepthClipEnable = TRUE;
+        Desc.RasterizerState         = ShadowRaster;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> NewShadowLocal;
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&NewShadowLocal)));
+        PSOShadowLocal = NewShadowLocal;
     }
 
     void FTerrain::BuildGrids(ID3D12Device* _Device) {
@@ -559,6 +570,11 @@ namespace Smile {
         if (!IsLoaded()) return;
         FrameSlot_ = _FrameSlot;
 
+        // Invalida a broad phase esferica das sombras locais: o memo so precisa sobreviver as
+        // 6 faces consecutivas de um point DENTRO do frame. Zerando aqui ele nunca fica velho
+        // se o heightmap ou os chunks mudarem entre frames.
+        ShadowSphereRadius = -1.0f;
+
         TerrainConstants CB{};
         CB.ViewProj         = _ViewProj;
         CB.ViewProjNoJitter = _ViewProjNoJitter;
@@ -719,47 +735,117 @@ namespace Smile {
 
     void FTerrain::RenderShadowCascade(ID3D12GraphicsCommandList* _Cmd, FTextureSRVHeap& _SRVHeap,
                                        D3D12_GPU_VIRTUAL_ADDRESS _CascadeCB,
-                                       const Mat44& _CascadeVP) {
+                                       const Mat44& _CascadeVP, bool _PerspectiveView,
+                                       const Vec3& _LightPos, f32 _LightRadius) {
         if (!IsLoaded()) return;
 
-        // Culling da cascata: 5 planos (sem o near — pancaking, igual ao FSunShadows).
+        // Culling da view: 5 planos (o near sai por padrao — pancaking do CSM) ou 6 quando
+        // o chamador e perspectiva com depth clip (sombras locais).
         const Mat44& M = _CascadeVP;
         const Vec4 c0{ M.M[0][0], M.M[1][0], M.M[2][0], M.M[3][0] };
         const Vec4 c1{ M.M[0][1], M.M[1][1], M.M[2][1], M.M[3][1] };
         const Vec4 c2{ M.M[0][2], M.M[1][2], M.M[2][2], M.M[3][2] };
         const Vec4 c3{ M.M[0][3], M.M[1][3], M.M[2][3], M.M[3][3] };
-        const Vec4 Planes[5] = {
+        const Vec4 Planes[6] = {
             { c3.X + c0.X, c3.Y + c0.Y, c3.Z + c0.Z, c3.W + c0.W },
             { c3.X - c0.X, c3.Y - c0.Y, c3.Z - c0.Z, c3.W - c0.W },
             { c3.X + c1.X, c3.Y + c1.Y, c3.Z + c1.Z, c3.W + c1.W },
             { c3.X - c1.X, c3.Y - c1.Y, c3.Z - c1.Z, c3.W - c1.W },
             { c3.X - c2.X, c3.Y - c2.Y, c3.Z - c2.Z, c3.W - c2.W },
+            { c2.X,        c2.Y,        c2.Z,        c2.W        }, // near — so se pedido
+        };
+        const int NumPlanes = _PerspectiveView ? 6 : 5;
+
+        auto OutsideView = [&](const Vec3& _Mn, const Vec3& _Mx) -> bool {
+            for (int p = 0; p < NumPlanes; ++p) {
+                const Vec4& P = Planes[p];
+                const f32 px = (P.X >= 0.0f) ? _Mx.X : _Mn.X;
+                const f32 py = (P.Y >= 0.0f) ? _Mx.Y : _Mn.Y;
+                const f32 pz = (P.Z >= 0.0f) ? _Mx.Z : _Mn.Z;
+                if (P.X * px + P.Y * py + P.Z * pz + P.W < 0.0f) return true;
+            }
+            return false;
         };
 
+        // Broad phase esferica das sombras LOCAIS (raio 0 = CSM, que nao tem alcance radial).
+        // O frustum sozinho nao filtra: num spot de 89 graus ele abre ~57R lateralmente no far
+        // plane enquanto a luz morre em R — sem a esfera o terreno inteiro entraria na lista.
+        const bool  UseSphere = _LightRadius > 0.0f;
+        const f32   R2 = _LightRadius * _LightRadius;
+        const f32   LP[3] = { _LightPos.X, _LightPos.Y, _LightPos.Z };
+        auto OutsideSphere = [&](const Vec3& _Mn, const Vec3& _Mx) -> bool {
+            if (!UseSphere) return false;
+            const f32 Lo[3] = { _Mn.X, _Mn.Y, _Mn.Z };
+            const f32 Hi[3] = { _Mx.X, _Mx.Y, _Mx.Z };
+            f32 D2 = 0.0f;
+            for (int a = 0; a < 3; ++a) {
+                if (LP[a] < Lo[a])      { const f32 d = Lo[a] - LP[a]; D2 += d * d; }
+                else if (LP[a] > Hi[a]) { const f32 d = LP[a] - Hi[a]; D2 += d * d; }
+            }
+            return D2 > R2;
+        };
+
+        // Teste unico contra a AABB do terreno inteiro antes de varrer chunk a chunk. Com
+        // sombras locais isto passou a valer muito: sao ate 8 slices + 24 faces por frame e a
+        // grande maioria das faces de um point nao ve terreno nenhum (aponta pro ceu, pra
+        // dentro de um predio, pro lado oposto) — sem este early-out cada uma pagaria a
+        // varredura completa de ChunksPerSide^2.
+        if (OutsideSphere(BoundsMin, BoundsMax) || OutsideView(BoundsMin, BoundsMax)) return;
+
         const f32 ChunkWorld = kChunkQuads * Desc_.UnitsPerTexel;
-        std::vector<u32> List;
-        List.reserve(ChunkLods.size());
-        for (u32 cz = 0; cz < ChunksPerSide; ++cz) {
-            for (u32 cx = 0; cx < ChunksPerSide; ++cx) {
-                const size_t Idx = static_cast<size_t>(cz) * ChunksPerSide + cx;
-                const Vec3 Mn{ Desc_.Origin.X + cx * ChunkWorld,
-                               Desc_.Origin.Y + ChunkMinH[Idx] * Desc_.HeightScale,
-                               Desc_.Origin.Z + cz * ChunkWorld };
-                const Vec3 Mx{ Mn.X + ChunkWorld,
-                               Desc_.Origin.Y + ChunkMaxH[Idx] * Desc_.HeightScale,
-                               Mn.Z + ChunkWorld };
-                bool Outside = false;
-                for (int p = 0; p < 5 && !Outside; ++p) {
-                    const Vec4& P = Planes[p];
-                    const f32 px = (P.X >= 0.0f) ? Mx.X : Mn.X;
-                    const f32 py = (P.Y >= 0.0f) ? Mx.Y : Mn.Y;
-                    const f32 pz = (P.Z >= 0.0f) ? Mx.Z : Mn.Z;
-                    Outside = (P.X * px + P.Y * py + P.Z * pz + P.W < 0.0f);
+        auto ChunkBounds = [&](size_t _Idx, u32 _Cx, u32 _Cz, Vec3& _Mn, Vec3& _Mx) {
+            _Mn = { Desc_.Origin.X + _Cx * ChunkWorld,
+                    Desc_.Origin.Y + ChunkMinH[_Idx] * Desc_.HeightScale,
+                    Desc_.Origin.Z + _Cz * ChunkWorld };
+            _Mx = { _Mn.X + ChunkWorld,
+                    Desc_.Origin.Y + ChunkMaxH[_Idx] * Desc_.HeightScale,
+                    _Mn.Z + ChunkWorld };
+        };
+
+        // BROAD PHASE (uma vez por luz): as 6 faces de um point chegam em sequencia com a mesma
+        // esfera, entao so a primeira varre ChunksPerSide^2 — as outras cinco reusam a sublista.
+        if (UseSphere) {
+            const bool SameLight = ShadowSphereRadius == _LightRadius &&
+                                   ShadowSphereCenter.X == _LightPos.X &&
+                                   ShadowSphereCenter.Y == _LightPos.Y &&
+                                   ShadowSphereCenter.Z == _LightPos.Z;
+            if (!SameLight) {
+                ShadowSphereSubset.clear();
+                for (u32 cz = 0; cz < ChunksPerSide; ++cz) {
+                    for (u32 cx = 0; cx < ChunksPerSide; ++cx) {
+                        const size_t Idx = static_cast<size_t>(cz) * ChunksPerSide + cx;
+                        Vec3 Mn, Mx; ChunkBounds(Idx, cx, cz, Mn, Mx);
+                        if (!OutsideSphere(Mn, Mx))
+                            ShadowSphereSubset.push_back(static_cast<u32>(Idx));
+                    }
                 }
-                if (!Outside)
-                    List.push_back(static_cast<u32>(Idx));
+                ShadowSphereCenter = _LightPos;
+                ShadowSphereRadius = _LightRadius;
+            }
+            if (ShadowSphereSubset.empty()) return;
+        }
+
+        // NARROW PHASE (por view): frustum desta face/slice sobre a lista curta.
+        ShadowCullScratch.clear();
+        if (UseSphere) {
+            for (const u32 Idx : ShadowSphereSubset) {
+                Vec3 Mn, Mx;
+                ChunkBounds(Idx, Idx % ChunksPerSide, Idx / ChunksPerSide, Mn, Mx);
+                if (!OutsideView(Mn, Mx)) ShadowCullScratch.push_back(Idx);
+            }
+        } else {
+            for (u32 cz = 0; cz < ChunksPerSide; ++cz) {
+                for (u32 cx = 0; cx < ChunksPerSide; ++cx) {
+                    const size_t Idx = static_cast<size_t>(cz) * ChunksPerSide + cx;
+                    Vec3 Mn, Mx; ChunkBounds(Idx, cx, cz, Mn, Mx);
+                    if (!OutsideView(Mn, Mx))
+                        ShadowCullScratch.push_back(static_cast<u32>(Idx));
+                }
             }
         }
-        DrawChunks(_Cmd, _SRVHeap, PSOShadow.Get(), List, _CascadeCB);
+        if (ShadowCullScratch.empty()) return;
+        DrawChunks(_Cmd, _SRVHeap,
+                   _PerspectiveView ? PSOShadowLocal.Get() : PSOShadow.Get(),
+                   ShadowCullScratch, _CascadeCB);
     }
 }

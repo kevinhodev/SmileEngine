@@ -131,12 +131,17 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
                     }
                 }
             } else {
-                float3 l2p   = wp - Lp.PosInvRadius.xyz;
-                float3 ad    = abs(l2p);
-                float  viewZ = max(ad.x, max(ad.y, ad.z));
-                float  refZ  = VolFog_LocalNdcDepth(viewZ - VolFog_LocalBias(viewZ) * 1.5f, farP);
-                atten *= LocalCubeShadow.SampleCmpLevelZero(
-                             ShadowCmp, float4(normalize(l2p), Lp.SpotParams.y), refZ);
+                float3 l2p = wp - Lp.PosInvRadius.xyz;
+                // Froxel centrado na luz: normalize(0) = NaN e o NaN sobrevive a integracao
+                // e ao historico temporal do froxel (vira coluna corrompida, nao um voxel).
+                // A luz nao se oclui de si mesma, entao o tap simplesmente nao acontece.
+                if (dot(l2p, l2p) > 1e-12f) {
+                    float3 ad    = abs(l2p);
+                    float  viewZ = max(ad.x, max(ad.y, ad.z));
+                    float  refZ  = VolFog_LocalNdcDepth(viewZ - VolFog_LocalBias(viewZ) * 1.5f, farP);
+                    atten *= LocalCubeShadow.SampleCmpLevelZero(
+                                 ShadowCmp, float4(normalize(l2p), Lp.SpotParams.y), refZ);
+                }
             }
         }
         if (atten <= 0.0f) continue;

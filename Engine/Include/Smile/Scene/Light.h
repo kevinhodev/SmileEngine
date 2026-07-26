@@ -14,6 +14,14 @@ namespace Smile {
     // superficie encostada na luz nao estoura a branco. Na F4 ele vira tambem o raio da fonte
     // p/ o especular de area (representative point).
     struct FLight {
+        // Identidade ESTAVEL da luz (0 = ainda nao atribuida; o renderer atribui no primeiro
+        // frame em que ve a luz). O indice na FScene::Lights() NAO serve: remover a luz 0
+        // desloca todo mundo e duplicar copia o struct inteiro. Quem depende disso e o slot
+        // persistente de shadow map — sem identidade, o slice era a posicao no ranking por
+        // distancia e trocava sozinho quando a camera andava, o que impede cache do depth
+        // entre frames e histerese/fade na troca de slot.
+        u64 Id = 0;
+
         std::string Name = "Luz";
         ELightType  Type = ELightType::Point;
 
@@ -30,8 +38,10 @@ namespace Smile {
         f32  OuterConeDeg = 40.0f;      // spot: cone externo (contribuicao zero)
 
         bool Enabled = true;
-        // F3: projeta sombras (spot; budget FLocalShadows::kMaxShadows por frame — os mais
-        // proximos da camera ganham slice). Point ainda nao suporta (cubemap vem depois).
+        // Projeta sombras. Spot vai pro atlas 2D (budget FLocalShadows::kMaxShadows) e point
+        // pro cube array (kMaxCubeShadows) — os mais proximos da camera ganham slot, e o slot
+        // e mantido pela identidade da luz entre frames. Acima do budget a luz continua
+        // iluminando, so que SEM oclusao (vaza parede) ate sobrar slot.
         bool CastShadows = true;
     };
 }

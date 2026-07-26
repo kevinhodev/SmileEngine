@@ -87,7 +87,12 @@ float AreaSphereSpecular(float SourceRadius, float Roughness, float3 ToLightCent
     float3 centerToRay = closestPointOnRay - ToLightCenter;
     float3 closest = ToLightCenter + centerToRay *
         saturate(SourceRadius * rsqrt(max(dot(centerToRay, centerToRay), 1e-8f)));
-    Ls = normalize(closest);
+    // Superficie EXATAMENTE na posicao da luz => closest = 0 e normalize(0) = 0/0 = NaN.
+    // NaN aqui nao custa um pixel: ele sobrevive ao bloom (downsample espalha) e ao
+    // historico do TAA/upscaler, entao vira um bloco corrompido persistente. Cai pra
+    // normal — a essa distancia o especular ja esta no piso do bulbo e nao se ve.
+    float closest2 = dot(closest, closest);
+    Ls = (closest2 > 1e-12f) ? closest * rsqrt(closest2) : N;
     return energy;
 }
 
@@ -96,6 +101,10 @@ float AreaSphereSpecular(float SourceRadius, float Roughness, float3 ToLightCent
 // graus com que as faces foram renderizadas), entao nao precisa de matriz por luz. PCF de
 // 4 taps em grade rotacionada na base tangente da direcao.
 float LocalCubeShadowPCF(float3 lightToPixel, float cube, float farP) {
+    // Pixel na posicao exata da luz: nao existe direcao de lookup (normalize(0) = NaN) e
+    // nada pode ocluir a luz dela mesma — devolve iluminado.
+    if (dot(lightToPixel, lightToPixel) < 1e-12f) return 1.0f;
+
     float3 ad    = abs(lightToPixel);
     float  viewZ = max(ad.x, max(ad.y, ad.z));
 

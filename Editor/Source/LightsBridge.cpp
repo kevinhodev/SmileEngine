@@ -263,6 +263,9 @@ namespace SmileEditor {
         auto& Lights = Renderer->GetScene().Lights();
         if (_Index < 0 || _Index >= (int)Lights.size()) return;
         Smile::FLight Copy = Lights[(size_t)_Index];
+        Copy.Id = 0; // copia nasce SEM identidade: o renderer atribui uma nova no proximo
+                     // frame. Herdar o Id faria as duas luzes disputarem o mesmo slot de
+                     // shadow map (uma piscaria em cima da outra).
         Copy.Name += " (copia)";
         Copy.Position.X += 1.0f; // desloca pro marker nao nascer em cima do original
         Lights.push_back(Copy);

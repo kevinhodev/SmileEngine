@@ -1866,9 +1866,12 @@ namespace Smile {
             std::vector<ShadowCand> ShadowCands;
             std::vector<ShadowCand> CubeCands; 
 
-            const auto& SceneLights = Scene.Lights();
+            auto& SceneLights = Scene.Lights();
             for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
-                const FLight& L = SceneLights[li];
+                FLight& L = SceneLights[li];
+                // Identidade estavel na primeira vez que vemos a luz. O editor faz push_back
+                // direto em Lights(), entao a atribuicao mora aqui e nao no AddLight.
+                if (L.Id == 0) L.Id = Scene.AllocLightId();
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
                 if (NumLights >= kMaxLights) break;
 
@@ -1915,7 +1918,22 @@ namespace Smile {
                       [](const ShadowCand& a, const ShadowCand& b) { return a.Dist2 < b.Dist2; });
             const u32 NumShadowed = std::min<u32>(static_cast<u32>(ShadowCands.size()),
                                                   FLocalShadows::kMaxShadows);
+            // Slice pela IDENTIDADE da luz, nao por 's' (a posicao no ranking). Com 's' a mesma
+            // luz trocava de slice sempre que a camera reordenava o sort — nenhum cache de
+            // depth entre frames era possivel e nao havia como saber se a luz ja tinha sombra
+            // no frame anterior (pre-requisito de histerese/fade). Resolve a selecao INTEIRA de
+            // uma vez: um a um, o novato evicta um selecionado e dispara remapeamento em
+            // cascata (ver TShadowSlotCache::AcquireBatch).
+            u64 SpotIds[FLocalShadows::kMaxShadows];
+            u32 SpotSlot[FLocalShadows::kMaxShadows];
+            for (u32 s = 0; s < NumShadowed; ++s)
+                SpotIds[s] = SceneLights[ShadowCands[s].LightIdx].Id;
+            LocalShadows.AcquireSpotSlots(SpotIds, NumShadowed, SpotSlot);
+
             for (u32 s = 0; s < NumShadowed; ++s) {
+                const u32 Slice = SpotSlot[s];
+                if (Slice == FLocalShadows::kNoSlot) continue;
+
                 const FLight& L = SceneLights[ShadowCands[s].LightIdx];
                 const Vec3 D  = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
                 const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
@@ -1934,18 +1952,27 @@ namespace Smile {
 
                 FGPULight& G  = DstLights[ShadowCands[s].Gpu];
                 G.ShadowMatrix = LVP * BiasUV;
-                G.SpotParams.Y = static_cast<f32>(s);
-                LocalShadowJobs.push_back({ LVP, L.Position, FarP, s });
+                G.SpotParams.Y = static_cast<f32>(Slice);
+                LocalShadowJobs.push_back({ LVP, L.Position, FarP, Slice });
             }
 
             std::sort(CubeCands.begin(), CubeCands.end(),
                       [](const ShadowCand& a, const ShadowCand& b) { return a.Dist2 < b.Dist2; });
             const u32 NumCubes = std::min<u32>(static_cast<u32>(CubeCands.size()),
                                                FLocalShadows::kMaxCubeShadows);
+            u64 CubeIds[FLocalShadows::kMaxCubeShadows];
+            u32 CubeSlot[FLocalShadows::kMaxCubeShadows];
+            for (u32 c = 0; c < NumCubes; ++c)
+                CubeIds[c] = SceneLights[CubeCands[c].LightIdx].Id;
+            LocalShadows.AcquireCubeSlots(CubeIds, NumCubes, CubeSlot);
+
             for (u32 c = 0; c < NumCubes; ++c) {
+                const u32 Cube = CubeSlot[c];
+                if (Cube == FLocalShadows::kNoSlot) continue;
+
                 const FLight& L = SceneLights[CubeCands[c].LightIdx];
-                DstLights[CubeCands[c].Gpu].SpotParams.Y = static_cast<f32>(c);
-                LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, c });
+                DstLights[CubeCands[c].Gpu].SpotParams.Y = static_cast<f32>(Cube);
+                LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, Cube });
             }
 
             MappedCB->LightParams  = { static_cast<f32>(NumLights),
@@ -2092,12 +2119,29 @@ namespace Smile {
             }
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Sombras — locais");
+                // Terreno tambem projeta nas luzes locais. Sem isto o terreno era iluminado
+                // por point/spot (escreve G-buffer) mas nao aparecia nos shadow maps delas:
+                // poste atravessava a colina, e a volumetrica — que le os MESMOS t18/t19 —
+                // mostrava o god ray passando pelo terreno.
+                FLocalShadows::FExtraLocalDraw TerrainCasters;
+                if (UseTerrain && Terrain.IsLoaded())
+                    TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd,
+                                            D3D12_GPU_VIRTUAL_ADDRESS SliceCB,
+                                            const Mat44& SliceVP,
+                                            const Vec3& LightPos, f32 Radius) {
+                        // Perspectiva com depth clip (o near corta de verdade, ao contrario da
+                        // cascata ortho do sol) + a esfera da luz, o mesmo filtro que os meshes
+                        // recebem na broad phase.
+                        Terrain.RenderShadowCascade(Cmd, SRVHeap, SliceCB, SliceVP, true,
+                                                    LightPos, Radius);
+                    };
                 LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
                                              LocalCasters.data(), LocalCasters.size(),
                                              LocalShadowJobs.data(),
                                              static_cast<u32>(LocalShadowJobs.size()),
                                              LocalCubeJobs.data(),
-                                             static_cast<u32>(LocalCubeJobs.size()));
+                                             static_cast<u32>(LocalCubeJobs.size()),
+                                             TerrainCasters);
             }
 
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);

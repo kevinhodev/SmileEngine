@@ -265,37 +265,75 @@ namespace Smile {
         CubeState = _After;
     }
 
+    // Planos do frustum (espaco de mundo) de um ViewProj row-major com x' = x * M. Ao
+    // contrario do CSM, aqui INCLUI o near: a projecao e perspectiva com depth clip ligado,
+    // entao caster antes do near da luz nao rasteriza de jeito nenhum. No CSM o plano e
+    // omitido porque com pancaking (depth clip off) o caster ainda achata no near e projeta.
+    static void ExtractFrustumPlanes(const Mat44& _M, Vec4 _Out[6]) {
+        const Vec4 c0{ _M.M[0][0], _M.M[1][0], _M.M[2][0], _M.M[3][0] };
+        const Vec4 c1{ _M.M[0][1], _M.M[1][1], _M.M[2][1], _M.M[3][1] };
+        const Vec4 c2{ _M.M[0][2], _M.M[1][2], _M.M[2][2], _M.M[3][2] };
+        const Vec4 c3{ _M.M[0][3], _M.M[1][3], _M.M[2][3], _M.M[3][3] };
+        _Out[0] = { c3.X + c0.X, c3.Y + c0.Y, c3.Z + c0.Z, c3.W + c0.W }; // esquerda
+        _Out[1] = { c3.X - c0.X, c3.Y - c0.Y, c3.Z - c0.Z, c3.W - c0.W }; // direita
+        _Out[2] = { c3.X + c1.X, c3.Y + c1.Y, c3.Z + c1.Z, c3.W + c1.W }; // baixo
+        _Out[3] = { c3.X - c1.X, c3.Y - c1.Y, c3.Z - c1.Z, c3.W - c1.W }; // cima
+        _Out[4] = { c2.X,        c2.Y,        c2.Z,        c2.W        }; // near (z' >= 0)
+        _Out[5] = { c3.X - c2.X, c3.Y - c2.Y, c3.Z - c2.Z, c3.W - c2.W }; // far
+    }
+
+    static bool AABBOutsidePlanes(const Vec4 _Planes[6], const Vec3& _Mn, const Vec3& _Mx) {
+        for (int i = 0; i < 6; ++i) {
+            const Vec4& p = _Planes[i];
+            const f32 px = (p.X >= 0.0f) ? _Mx.X : _Mn.X;
+            const f32 py = (p.Y >= 0.0f) ? _Mx.Y : _Mn.Y;
+            const f32 pz = (p.Z >= 0.0f) ? _Mx.Z : _Mn.Z;
+            if (p.X * px + p.Y * py + p.Z * pz + p.W < 0.0f) return true;
+        }
+        return false;
+    }
+
     void FLocalShadows::RecordDepthPass(ID3D12GraphicsCommandList* _CommandList,
                                         FTextureSRVHeap& _SRVHeap, u32 _FrameSlot,
                                         const FShadowDrawItem* _Items, size_t _Count,
                                         const FShadowJob* _Jobs, u32 _JobCount,
-                                        const FCubeShadowJob* _CubeJobs, u32 _CubeJobCount) {
+                                        const FCubeShadowJob* _CubeJobs, u32 _CubeJobCount,
+                                        const FExtraLocalDraw& _ExtraDraw) {
         if (!Initialized) return;
         if (_JobCount == 0 && _CubeJobCount == 0) { EnsureReadable(_CommandList); return; }
 
-        _CommandList->SetGraphicsRootSignature(RootSig.Get());
-
-        // Desenha os casters de um slice ja com DSV/CB setados. Cull AABB vs esfera da luz
-        // (o frustum exato de face/cone cortaria mais, mas a esfera nunca corta errado).
-        auto DrawSlice = [&](const Vec3& LightPos, f32 Radius) {
-            const f32 R2 = Radius * Radius;
-            auto OutsideSphere = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
+        // Broad phase por LUZ (uma varredura da cena, AABB vs esfera de influencia). As views
+        // que vem depois — 1 slice do spot, 6 faces do point — refinam com o proprio frustum
+        // SO em cima desta lista curta. Antes cada face repetia o teste de esfera na cena
+        // inteira e mandava o resto pro clipper: ate 32*N testes de CPU por frame e draws que
+        // so morriam na GPU. Duas fases e o que Cry e Flax fazem (broad phase por luz, depois
+        // um contexto/frustum por face).
+        auto BroadPhase = [&](const Vec3& _LightPos, f32 _Radius) {
+            CullScratch.clear();
+            const f32 R2 = _Radius * _Radius;
+            const f32 P[3] = { _LightPos.X, _LightPos.Y, _LightPos.Z };
+            for (u32 k = 0; k < static_cast<u32>(_Count); ++k) {
+                const FShadowDrawItem& It = _Items[k];
+                if (!It.Mesh) continue;
+                const f32 Lo[3] = { It.AABBMin.X, It.AABBMin.Y, It.AABBMin.Z };
+                const f32 Hi[3] = { It.AABBMax.X, It.AABBMax.Y, It.AABBMax.Z };
                 f32 D2 = 0.0f;
-                const f32 P[3]  = { LightPos.X, LightPos.Y, LightPos.Z };
-                const f32 Lo[3] = { Mn.X, Mn.Y, Mn.Z };
-                const f32 Hi[3] = { Mx.X, Mx.Y, Mx.Z };
                 for (int a = 0; a < 3; ++a) {
                     if (P[a] < Lo[a])      { const f32 d = Lo[a] - P[a]; D2 += d * d; }
                     else if (P[a] > Hi[a]) { const f32 d = P[a] - Hi[a]; D2 += d * d; }
                 }
-                return D2 > R2;
-            };
+                if (D2 <= R2) CullScratch.push_back(k);
+            }
+        };
 
-            ID3D12PipelineState* Cur = nullptr;
-            for (size_t k = 0; k < _Count; ++k) {
+        // Narrow phase + draws desta view (DSV/CB ja setados pelo chamador).
+        auto DrawView = [&](const Mat44& _ViewProj) {
+            Vec4 Planes[6];
+            ExtractFrustumPlanes(_ViewProj, Planes);
+            ID3D12PipelineState* Cur = nullptr; // local: o ExtraDraw da view anterior trocou o PSO
+            for (u32 k : CullScratch) {
                 const FShadowDrawItem& It = _Items[k];
-                if (!It.Mesh) continue;
-                if (OutsideSphere(It.AABBMin, It.AABBMax)) continue;
+                if (AABBOutsidePlanes(Planes, It.AABBMin, It.AABBMax)) continue;
                 const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
                 ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
@@ -325,14 +363,22 @@ namespace Smile {
 
                 const size_t CBOffset = FrameCBBase + static_cast<size_t>(Slice) * 256;
                 std::memcpy(MappedSlice + CBOffset, &Job.ViewProj, sizeof(Mat44));
+                const D3D12_GPU_VIRTUAL_ADDRESS SliceCBAddr =
+                    SliceCB->GetGPUVirtualAddress() + CBOffset;
 
+                // Root sig por slice (nao uma vez fora do loop): o ExtraDraw do slice anterior
+                // trocou root signature e PSO.
+                _CommandList->SetGraphicsRootSignature(RootSig.Get());
                 auto DSV = DSVHeap.CpuHandle(Slice);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-                _CommandList->SetGraphicsRootConstantBufferView(
-                    0, SliceCB->GetGPUVirtualAddress() + CBOffset);
+                _CommandList->SetGraphicsRootConstantBufferView(0, SliceCBAddr);
 
-                DrawSlice(Job.LightPos, Job.Radius);
+                BroadPhase(Job.LightPos, Job.Radius);
+                DrawView(Job.ViewProj);
+
+                if (_ExtraDraw)
+                    _ExtraDraw(_CommandList, SliceCBAddr, Job.ViewProj, Job.LightPos, Job.Radius);
             }
 
             TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -368,6 +414,9 @@ namespace Smile {
 
                 const Mat44 Proj = Mat44::PerspectiveFovLH(kHalfPi, 1.0f, kPointNear, FarP);
 
+                // Uma broad phase para as SEIS faces: a esfera de influencia e a mesma.
+                BroadPhase(Job.LightPos, FarP);
+
                 for (u32 f = 0; f < 6; ++f) {
                     const Mat44 FaceVP =
                         Mat44::LookAtLH(Job.LightPos, Job.LightPos + kFaceFwd[f], kFaceUp[f]) * Proj;
@@ -375,14 +424,19 @@ namespace Smile {
                     const u32 CBSlot  = kMaxShadows + Cube * 6 + f;
                     const size_t CBOffset = FrameCBBase + static_cast<size_t>(CBSlot) * 256;
                     std::memcpy(MappedSlice + CBOffset, &FaceVP, sizeof(Mat44));
+                    const D3D12_GPU_VIRTUAL_ADDRESS FaceCBAddr =
+                        SliceCB->GetGPUVirtualAddress() + CBOffset;
 
+                    _CommandList->SetGraphicsRootSignature(RootSig.Get());
                     auto DSV = CubeDSVHeap.CpuHandle(Cube * 6 + f);
                     _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                     _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-                    _CommandList->SetGraphicsRootConstantBufferView(
-                        0, SliceCB->GetGPUVirtualAddress() + CBOffset);
+                    _CommandList->SetGraphicsRootConstantBufferView(0, FaceCBAddr);
 
-                    DrawSlice(Job.LightPos, FarP);
+                    DrawView(FaceVP);
+
+                    if (_ExtraDraw)
+                        _ExtraDraw(_CommandList, FaceCBAddr, FaceVP, Job.LightPos, FarP);
                 }
             }
 
