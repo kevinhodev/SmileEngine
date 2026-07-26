@@ -1934,8 +1934,8 @@ namespace Smile {
                 DstLights[NumLights++] = G;
             }
 
-            // Matrizes do slice de spot (so quem redesenha o mapa precisa recalcular; quem esta
-            // em fade-out reusa a matriz guardada no slot).
+            // Matrizes do slice de spot. Usadas por todo mundo que emite job — inclusive quem
+            // esta em fade-out, que segue sendo redesenhado da pose atual.
             auto SpotShadowVP = [&](const FLight& L, Mat44& OutLVP, f32& OutFar) {
                 const Vec3 D  = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
                 const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }

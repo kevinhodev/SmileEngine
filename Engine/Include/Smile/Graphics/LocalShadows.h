@@ -122,8 +122,11 @@ namespace Smile {
         // liberar o slot, e a luz promovida fica ~250 ms sem sombra (vazando parede) justo
         // quando a camera chegou perto dela. Com o extra, o novato entra no slice livre e faz
         // fade-in enquanto o perdedor faz fade-out no dele: cross-fade de verdade.
-        // O extra atende UMA transicao por tipo; desbancando duas luzes no mesmo frame, a
-        // segunda espera a primeira devolver o slice (custo e VRAM seguem previsiveis).
+        // O extra atende UMA transicao por tipo. Com duas ou mais substituicoes no mesmo frame
+        // TODOS os perdedores comecam o fade-out juntos, mas so o primeiro novato acha slice
+        // livre pra cruzar com eles; os outros entram conforme os slices se liberam e portanto
+        // fazem fade-in SEM o fade-out correspondente (o perdedor deles ja terminou de sumir).
+        // E o fallback sequencial esperado com uma reserva so — mantem VRAM e custo previsiveis.
         static constexpr u32 kMaxShadows     = 9; // 8 ativos + 1 de transicao  (36 MiB)
         static constexpr u32 kActiveShadows  = 8;
         static constexpr u32 kResolution     = 1024;
