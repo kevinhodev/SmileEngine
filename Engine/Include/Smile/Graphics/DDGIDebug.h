@@ -57,6 +57,9 @@ namespace Smile {
         void Render(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                     FDDGI& DDGI, const Mat44& ViewProj, const Vec3& CameraPos, u32 FrameIndex);
         bool RequestPointDiagnostic(u32 X, u32 Y);
+        // Re-executa o ultimo ponto (ver .cpp): knob que muda o peso das probes tem que
+        // reexecutar o diagnostico, senao o painel mostra o snapshot do estado anterior.
+        bool RepeatPointDiagnostic();
         void CancelPointDiagnostic();
         void RecordPointDiagnostic(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList,
                                    FTextureSRVHeap& SRVHeap, const FDDGI& DDGI,
@@ -110,7 +113,8 @@ namespace Smile {
             Vec4  DistAtlasParams;
             Vec4  CameraPositionFlags;
             Vec4  PixelParams;
-            u8    _Tail[256 - 64 - 6 * 16] = {};
+            Vec4  BiasParams; // x = escala do self-shadow bias, y = teto em metros (0 = sem teto)
+            u8    _Tail[256 - 64 - 7 * 16] = {};
         };
         static_assert(sizeof(PointDiagnosticConstants) == 256,
                       "PointDiagnosticConstants must be 256 bytes");
@@ -148,6 +152,7 @@ namespace Smile {
         u32 PointOutputUAVSlot = kInvalidSlot;
         bool PointInputsReady = false;
         bool PointRequestPending = false;
+        bool PointHasLastRequest = false; // ja houve um clique: habilita o RepeatPointDiagnostic
         u32 PointRequestX = 0;
         u32 PointRequestY = 0;
         u64 PointRequestVersion = 1;

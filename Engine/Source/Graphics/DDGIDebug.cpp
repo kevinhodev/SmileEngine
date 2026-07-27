@@ -308,6 +308,19 @@ namespace Smile {
         if (!PointInputsReady || PointRequestPending) return false;
         PointRequestX = _X;
         PointRequestY = _Y;
+        PointHasLastRequest = true;
+        PointRequestPending = true;
+        PointResultReady = false;
+        ++PointRequestVersion;
+        return true;
+    }
+
+    // Re-executa o ULTIMO ponto pedido. O diagnostico e one-shot por clique, entao mudar um knob
+    // que altera o peso das probes deixava o painel exibindo o snapshot anterior — dois estados
+    // diferentes com numeros identicos, que e o modo de falha mais caro possivel numa ferramenta
+    // de auditoria (parece que o knob nao funciona). Chamado pelos setters de amostragem do GI.
+    bool FDDGIDebug::RepeatPointDiagnostic() {
+        if (!PointInputsReady || !PointHasLastRequest || PointRequestPending) return false;
         PointRequestPending = true;
         PointResultReady = false;
         ++PointRequestVersion;
@@ -316,6 +329,7 @@ namespace Smile {
 
     void FDDGIDebug::CancelPointDiagnostic() {
         PointRequestPending = false;
+        PointHasLastRequest = false;
         PointResultReady = false;
         PointResult = {};
         ++PointRequestVersion;
@@ -360,6 +374,11 @@ namespace Smile {
             static_cast<f32>(std::min(PointRequestX, _Width - 1u)),
             static_cast<f32>(std::min(PointRequestY, _Height - 1u)),
             static_cast<f32>(_Width), static_cast<f32>(_Height)
+        };
+        // Os mesmos knobs que o deferred usa — o diagnostico tem que pesar as probes com o
+        // bias real, senao volta a relatar numeros de outro gather.
+        C->BiasParams = {
+            _DDGI.GetSurfaceBiasScale(), _DDGI.GetSurfaceBiasMax(), 0.0f, 0.0f
         };
 
         if (PointOutputState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {

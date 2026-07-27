@@ -146,6 +146,27 @@ namespace Smile {
         void SetRelocation(bool V) { Relocation = V; RelocateFramesLeft = V ? kRelocateConvergeFrames : 4; }
         bool GetRelocation() const { return Relocation; }
 
+        // Amostragem (nao afeta o atlas — sao knobs do SAMPLER, lidos pelo deferred/forward e
+        // pelo diagnostico pontual). Ficam aqui, e nao no FRayEpsilonProfile, porque nao sao
+        // epsilons de RAIO: o perfil descreve a geometria dos raios de GI/reflexo/sombra e sua
+        // troca limpa reservoirs e denoiser, o que nao faz sentido para um offset de leitura.
+        //
+        // Teto do bias em METROS. 0 = sem teto = comportamento historico (bias = 0.75*spacing*
+        // scale, formula do Flax). Existe porque o espacamento do grid aqui vem da AABB da cena
+        // inteira: com spacing de 8 m o bias historico vale 1,20 m e o ponto de amostragem
+        // atravessa parede. O RTXGI moderno resolve com normalBias/viewBias absolutos; o teto e
+        // a versao barata, que preserva cena pequena e corta cena grande.
+        void SetSurfaceBiasMax(f32 V)   { SurfaceBiasMax = V < 0.0f ? 0.0f : V; }
+        f32  GetSurfaceBiasMax() const  { return SurfaceBiasMax; }
+        void SetSurfaceBiasScale(f32 V) { SurfaceBiasScale = V; }
+        f32  GetSurfaceBiasScale() const{ return SurfaceBiasScale; }
+
+        // Peso de backface medido da posicao SEM bias (o que o Flax faz, DDGI.hlsl:210-215):
+        // o teste pergunta de que lado da superficie REAL a probe esta, e o ponto viesado pode
+        // ja estar do outro lado da parede. Default false = legado.
+        void SetUnbiasedBackface(bool V) { UnbiasedBackface = V; }
+        bool GetUnbiasedBackface() const { return UnbiasedBackface; }
+
     private:
         void CreateConstantBuffer(ID3D12Device* Device);
         void ReleaseSceneResources(FTextureSRVHeap& SRVHeap);
@@ -238,9 +259,14 @@ namespace Smile {
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)
         bool Relocation     = true; 
         f32  DeactivationThreshold = 0.20f; 
-        bool AdaptiveRays   = false; 
-        int  MaxRays        = 64;    
-        int  MinRays        = 16;    
+        bool AdaptiveRays   = false;
+        int  MaxRays        = 64;
+        int  MinRays        = 16;
+        f32  SurfaceBiasScale = 0.2f;  // o `bias` do GetDDGISurfaceBias do Flax
+        // Defaults LIGADOS (o legado seria 0.0f / false). Com o grid dimensionado pela AABB da
+        // cena, o bias sem teto vale 1,20 m no Bistro — o ponto de amostragem atravessa parede.
+        f32  SurfaceBiasMax   = 0.40f; // metros; 0 = sem teto (comportamento historico)
+        bool UnbiasedBackface = true;  // backface medido do ponto SEM bias, como o Flax
         static constexpr u32 kRelocateConvergeFrames = 180;
         static constexpr u32 kReclassifyFrames = 6;
         u32  RelocateFramesLeft = 0;

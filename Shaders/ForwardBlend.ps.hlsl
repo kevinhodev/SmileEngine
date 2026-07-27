@@ -31,6 +31,14 @@ cbuffer FrameCB : register(b0) {
     float4 MoonDirection;
     float4 MoonColor;
     row_major float4x4 InvViewProj;
+    // Nao usados aqui; mantem os offsets do FrameConstants ate o DDGIBiasParams, que o
+    // SampleSceneDDGI abaixo le. Espelha Renderer.h — acrescentar campo la exige acrescentar aqui.
+    float4 RenderParams;
+    float4 CloudShadowParams;
+    float4 CloudShadowParams2;
+    float4 LightParams;
+    float4 LightParams2;
+    float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem teto)
 };
 
 #include "MaterialCB.hlsli"
@@ -68,15 +76,17 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     bool useChebyshev = (giFlags & 1) != 0;
     bool skip         = (giFlags & 2) != 0;
     bool fallback     = (giFlags & 4) != 0;
+    bool unbiasedBf   = (giFlags & 8) != 0; // backface medido da posicao SEM bias (estilo Flax)
     uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
     if (useChebyshev) {
         float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
         float3 V = normalize(CameraPosition.xyz - worldPos);
-        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w);
+        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w,
+                                          DDGIBiasParams.x, DDGIBiasParams.y);
         return SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
                    worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
                    (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                   DDGIProbeData, skipMode);
+                   DDGIProbeData, skipMode, unbiasedBf);
     }
     return SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
                DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,

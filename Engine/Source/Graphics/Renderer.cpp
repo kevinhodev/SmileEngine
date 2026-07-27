@@ -1120,6 +1120,11 @@ namespace Smile {
         DDGIDebugPass.CancelPointDiagnostic();
     }
 
+    void Renderer::RepeatDebugProbePoint() {
+        if (DebugProbeIndex == kNoDebugProbe || !DDGI.IsReady()) return;
+        DDGIDebugPass.RepeatPointDiagnostic();
+    }
+
     bool Renderer::ConsumeDebugProbePoint(
             FDDGIPointDiagnostic& _OutDiagnostic) {
         return DDGIDebugPass.ConsumePointDiagnostic(_OutDiagnostic);
@@ -1473,14 +1478,18 @@ namespace Smile {
                                         DDGI.AtlasW(), DDGI.AtlasH() };
 
             const f32 GIFlags = (GIChebyshev ? 1.0f : 0.0f) + (GISkipInactiveProbes ? 2.0f : 0.0f)
-                              + (GISkipInactiveFallback ? 4.0f : 0.0f);
+                              + (GISkipInactiveFallback ? 4.0f : 0.0f)
+                              + (DDGI.GetUnbiasedBackface() ? 8.0f : 0.0f);
             MappedCB->DDGIDistParams = { DDGI.DistTileSizeF(), DDGI.DistAtlasW(),
                                          DDGI.DistAtlasH(), GIFlags };
+            MappedCB->DDGIBiasParams = { DDGI.GetSurfaceBiasScale(), DDGI.GetSurfaceBiasMax(),
+                                         0.0f, 0.0f };
         } else {
             MappedCB->DDGIGridMin    = { 0.0f, 0.0f, 0.0f, 1.0f };
             MappedCB->DDGIGridCount  = { 0.0f, 0.0f, 0.0f, 0.0f };
             MappedCB->DDGIParams     = { 0.0f, 6.0f, 1.0f, 1.0f };
             MappedCB->DDGIDistParams = { 14.0f, 1.0f, 1.0f, 0.0f };
+            MappedCB->DDGIBiasParams = { 0.2f, 0.0f, 0.0f, 0.0f };
         }
 
         const bool ReflectionsActive = UseReflections && Reflections.IsReady();
@@ -2550,7 +2559,8 @@ namespace Smile {
             const u32 PointGIFlags =
                 (GIChebyshev ? 1u : 0u) |
                 (GISkipInactiveProbes ? 2u : 0u) |
-                (GISkipInactiveFallback ? 4u : 0u);
+                (GISkipInactiveFallback ? 4u : 0u) |
+                (DDGI.GetUnbiasedBackface() ? 8u : 0u);
             DDGIDebugPass.RecordPointDiagnostic(
                 FrameSlot, CommandList, SRVHeap, DDGI,
                 InvViewProjFull, CameraPosition,

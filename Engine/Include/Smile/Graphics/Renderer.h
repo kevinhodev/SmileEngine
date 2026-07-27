@@ -93,6 +93,14 @@ namespace Smile {
                                   // y = 1/res do atlas de sombra local, z = bias (NDC), w = -
         Vec4  LightParams2;       // 16 bytes — x = 1/res do cube shadow (point), y = near das
                                   // faces do cubo (formula do refZ), zw = -
+
+        // Amostragem do DDGI (append no fim: nao mexe nos offsets acima).
+        // x = escala do self-shadow bias (0.2 = Flax/legado)
+        // y = TETO do bias em metros (0 = sem teto = comportamento historico). Ver
+        //     DDGI_SurfaceBias em DDGICommon.hlsli: a formula escala com o espacamento do grid,
+        //     que aqui vem da AABB da cena inteira (8 m medidos no Bistro = 1,20 m de bias).
+        // zw = reservados (fallback fora do volume)
+        Vec4  DDGIBiasParams;
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
@@ -343,6 +351,9 @@ namespace Smile {
         void SetDebugProbeSampleUV(f32 U, f32 V);
         bool ConsumeDebugProbeSample(FDebugProbeSample& OutSample);
         bool RequestDebugProbePoint(u32 X, u32 Y);
+        // Reexecuta o ultimo ponto diagnosticado. Chamado pelos knobs que mudam o peso das
+        // probes: sem isso o painel continua com os numeros do estado anterior do knob.
+        void RepeatDebugProbePoint();
         void CancelDebugProbePoint();
         bool ConsumeDebugProbePoint(FDDGIPointDiagnostic& OutDiagnostic);
         void SetDebugProbeContributors(const FDDGIPointDiagnostic& Diagnostic);
@@ -478,6 +489,50 @@ namespace Smile {
             DDGI.ResetHistoryOnce();        // Hysteresis 0.99 -> 99% do atlas velho sobrevive por update
             Reflections.InvalidateHistory();// historico temporal proprio (caminho legado, sem NRD)
             TAARanLastFrame   = false;      // sem upscaler, o TAA acumula por conta propria
+        }
+
+        // Comum aos knobs de amostragem do DDGI.
+        //
+        // NAO chamar ResetHistoryOnce aqui, por mais tentador que pareca: estes knobs sao do
+        // SAMPLER e o atlas nao depende deles, entao sem reset as duas tomadas do A/B leem
+        // LITERALMENTE o mesmo atlas e a unica variavel e o sampler — comparacao limpa e
+        // imediata. Resetar faria o oposto do que parece: a histerese zero substitui o atlas pela
+        // estimativa de UM frame, cuja rotacao de direcoes depende do frameIndex
+        // (DDGI_RayDirection), ou seja cada tomada receberia uma realizacao aleatoria DIFERENTE.
+        //
+        // O TAA cai porque acumula a imagem final, que muda. E o RepeatDebugProbePoint e
+        // obrigatorio: o diagnostico pontual e one-shot por clique, entao sem ele o painel exibe
+        // os numeros do knob ANTERIOR e a ferramenta passa a mentir justamente durante o A/B.
+        void OnGISamplingChanged() {
+            TAARanLastFrame = false;
+            RepeatDebugProbePoint();
+        }
+
+        // Amostragem do DDGI — os DOIS eixos do A/B do bias, deliberadamente SEPARADOS para a
+        // matriz 2x2 (baseline / so teto / so backface / ambos). Defaults LIGADOS (teto 0,40 m e
+        // backface sem bias); o comportamento historico e teto 0 + toggle desligado.
+        //
+        // Estes knobs sao do SAMPLER: o atlas nao depende deles e a troca vale ja no proximo
+        // frame. O ResetHistoryOnce aqui NAO e dependencia funcional — e protocolo de captura:
+        // garante que as quatro tomadas partam do mesmo estado do atlas em vez de comparar uma
+        // hysteresis de 0,99 em fase diferente. O TAA cai pelo mesmo motivo (acumula a imagem).
+        f32  GetGISurfaceBiasMax() const { return DDGI.GetSurfaceBiasMax(); }
+        void SetGISurfaceBiasMax(f32 V) {
+            if (V == DDGI.GetSurfaceBiasMax()) return;
+            DDGI.SetSurfaceBiasMax(V);
+            OnGISamplingChanged();
+        }
+        f32  GetGISurfaceBiasScale() const { return DDGI.GetSurfaceBiasScale(); }
+        void SetGISurfaceBiasScale(f32 V) {
+            if (V == DDGI.GetSurfaceBiasScale()) return;
+            DDGI.SetSurfaceBiasScale(V);
+            OnGISamplingChanged();
+        }
+        bool GetGIUnbiasedBackface() const { return DDGI.GetUnbiasedBackface(); }
+        void SetGIUnbiasedBackface(bool V) {
+            if (V == DDGI.GetUnbiasedBackface()) return;
+            DDGI.SetUnbiasedBackface(V);
+            OnGISamplingChanged();
         }
 
         // Culling nos raios de REFLEXAO. Substituiu a antiga chave global da TLAS: aquela mexia em

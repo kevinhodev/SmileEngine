@@ -2424,7 +2424,10 @@ Rectangle {
             // Repeater — reconstruindo os delegates DEBAIXO do mouse durante o arrasto. Recarrega
             // so nos momentos discretos: abrir a pagina e restaurar padroes.
             property var epsModel: []
-            function reloadEps() { epsModel = viewportModel.rayEpsilons }
+            function reloadEps() {
+                epsModel = viewportModel.rayEpsilons
+                biasMaxSlider.uiValue = viewportModel.giSurfaceBiasMax
+            }
             Component.onCompleted: reloadEps()
             onVisibleChanged: if (visible) reloadEps()
 
@@ -2625,6 +2628,83 @@ Rectangle {
                         y: bfLabel.y - 6
                         checked: viewportModel.giBackfacePolicy
                         onToggled: viewportModel.ToggleGIBackfacePolicy()
+                    }
+                }
+
+                Card {
+                    id: ddgiSampleCard
+                    width: parent.width
+                    title: "Amostragem do DDGI — bias de auto-sombra"
+                    height: ubLabel.y + ubLabel.height + contentPadding + 8
+
+                    Text {
+                        id: ddgiSampleHelper
+                        x: 20
+                        y: ddgiSampleCard.headerHeight + ddgiSampleCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Antes de ler a irradiância, o ponto sombreado é deslocado na normal " +
+                              "e na direção da câmera para não se auto-ocluir. O deslocamento " +
+                              "escala com o espaçamento do grid, e o grid aqui é dimensionado pela " +
+                              "caixa da cena inteira — no Bistro isso dá 8 m entre sondas, ou seja " +
+                              "1,20 m de deslocamento: o ponto atravessa a parede e lê a célula do " +
+                              "outro lado.\n\n" +
+                              "O teto limita esse deslocamento em metros; 0 volta ao " +
+                              "comportamento histórico, sem teto. Padrão 0,40 m.\n\n" +
+                              "O segundo controle mede o teste de backface a partir do ponto sem " +
+                              "deslocamento — o teste pergunta de que lado da superfície real a " +
+                              "sonda está, e o ponto deslocado pode já estar do outro lado da " +
+                              "parede.\n\n" +
+                              "Os dois são independentes de propósito: capture referência, só " +
+                              "teto, só backface e ambos, com a câmera travada. O atlas NÃO é " +
+                              "reiniciado na troca — os dois estados leem o mesmo atlas, e a " +
+                              "única variável é a amostragem."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    ShadowSlider {
+                        id: biasMaxSlider
+                        x: 20
+                        y: ddgiSampleHelper.y + ddgiSampleHelper.height + 16
+                        width: parent.width - 40
+                        label: "Teto do bias"
+                        from: 0.0
+                        to: 2.0
+                        step: 0.01
+                        // Igual aos epsilons: o rótulo acompanha o arrasto, a engine só é tocada
+                        // ao soltar — cada pixel de arrasto reinicia atlas e TAA. Sem binding
+                        // direto em viewportModel (escrever emite ViewSettingsChanged e o valor
+                        // saltaria de volta no meio do arrasto); recarrega em reloadEps().
+                        property real uiValue: 0.0
+                        value: uiValue
+                        valueText: uiValue === 0.0
+                                       ? "sem teto"
+                                       : uiValue.toFixed(2).replace(".", ",") + " m"
+                        onCommitted: (v) => biasMaxSlider.uiValue = v
+                        onReleased: (v) => {
+                            biasMaxSlider.uiValue = v
+                            viewportModel.SetGISurfaceBiasMax(v)
+                        }
+                    }
+
+                    Text {
+                        id: ubLabel
+                        x: 20
+                        y: biasMaxSlider.y + biasMaxSlider.height + 18
+                        text: "Backface sem bias"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        id: ubToggle
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: ubLabel.y - 6
+                        checked: viewportModel.giUnbiasedBackface
+                        onToggled: viewportModel.ToggleGIUnbiasedBackface()
                     }
                 }
             }

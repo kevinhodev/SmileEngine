@@ -21,6 +21,7 @@ cbuffer DDGIPointDebugCB : register(b0) {
     float4 DistAtlasParams;
     float4 CameraPositionFlags; // xyz = camera; w = GI flags
     float4 PixelParams;         // xy = pixel interno; zw = tamanho interno
+    float4 BiasParams;          // x = escala do bias, y = teto em metros (0 = sem teto)
 };
 
 Texture2D<float4> GBufferB        : register(t0);
@@ -56,10 +57,11 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const bool useChebyshev = (flags & 1) != 0;
     const bool skipInactive = (flags & 2) != 0;
     const bool useFallback  = (flags & 4) != 0;
+    const bool unbiasedBf   = (flags & 8) != 0;
     const uint skipMode = skipInactive ? (useFallback ? 2u : 1u) : 0u;
 
     const float3 biasVec = useChebyshev
-        ? DDGI_SurfaceBias(N, V, GridMinSpacing.w) : 0.0f;
+        ? DDGI_SurfaceBias(N, V, GridMinSpacing.w, BiasParams.x, BiasParams.y) : 0.0f;
     const float3 biasPos = worldPos + biasVec;
     const float3 g = (biasPos - GridMinSpacing.xyz) / GridMinSpacing.w;
     const int3 base = (int3)floor(g);
@@ -84,10 +86,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             // A MESMA funcao que o SampleDDGIIrradianceCheb usa p/ pesar cada probe: e o
             // que garante que o numero relatado aqui e o numero que iluminou o pixel.
             tap = DDGI_EvaluateTapCheb(
-                (int)i, base, fracPart, biasPos, N,
+                (int)i, base, fracPart, biasPos, worldPos, N,
                 GridMinSpacing.xyz, GridMinSpacing.w, count,
                 DistanceAtlas, LinearClamp, (int)DistAtlasParams.x,
-                1.0f / DistAtlasParams.yz, ProbeData, skipMode);
+                1.0f / DistAtlasParams.yz, ProbeData, skipMode, unbiasedBf);
         } else {
             // Com o Chebyshev desligado o consumidor e o SampleDDGIIrradiance: trilinear
             // puro, sem bias, sem relocacao e sem skip de probe inativa. Os momentos ainda

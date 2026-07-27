@@ -178,8 +178,21 @@ float2 DDGI_SampleProbeRG(Texture2D<float4> distAtlas, SamplerState samp, int2 t
 // Self-shadow bias do paper (e do Flax, GetDDGISurfaceBias): desloca o ponto de amostragem na
 // normal E na direcao da camera — o componente de view e o que evita dark banding/shadow leak
 // em parede vista de raspao, onde bias so-normal nao tira o ponto da zona de auto-oclusao.
-float3 DDGI_SurfaceBias(float3 N, float3 V, float spacing) {
-    return (N * 0.2f + V * 0.8f) * (0.75f * spacing * 0.2f);
+//
+// `scale` = o `bias` do Flax (0.2 = legado). `maxMeters` = TETO ABSOLUTO em metros; 0 desliga o
+// teto e reproduz o comportamento historico bit a bit.
+//
+// Por que o teto existe: a formula original escala com o espacamento do grid, e o grid daqui e
+// dimensionado pela AABB da cena inteira (DDGI.cpp: spacing = maxExt/23). No Bistro isso da
+// spacing = 8,02 m medido, ou seja 0.75*8.02*0.2 = 1,20 m de deslocamento — o ponto de
+// amostragem atravessa parede e le a celula do outro lado. O Flax nao sofre disso porque a
+// cascata mais fina tem spacing de ~1 m; o RTXGI resolveu tornando normalBias/viewBias
+// absolutos (metros), independentes do grid. O teto e a versao barata dessa correcao: preserva
+// o comportamento em cena pequena e corta o absurdo em cena grande.
+float3 DDGI_SurfaceBias(float3 N, float3 V, float spacing, float scale, float maxMeters) {
+    float s = 0.75f * spacing * scale;
+    if (maxMeters > 0.0f) s = min(s, maxMeters);
+    return (N * 0.2f + V * 0.8f) * s;
 }
 
 // Um tap do gather com Chebyshev: tudo que decide o peso de UMA das 8 probes da celula.
@@ -199,10 +212,10 @@ struct DDGITapCheb {
 };
 
 DDGITapCheb DDGI_EvaluateTapCheb(
-        int i, int3 base, float3 frac, float3 biasPos, float3 N,
+        int i, int3 base, float3 frac, float3 biasPos, float3 rawPos, float3 N,
         float3 gridMin, float spacing, int3 count,
         Texture2D<float4> distAtlas, SamplerState samp, int distTile, float2 distInvSize,
-        Buffer<float4> probeData, uint skipMode) {
+        Buffer<float4> probeData, uint skipMode, bool unbiasedBackface) {
     int3 off = int3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
     int3 c   = clamp(base + off, int3(0, 0, 0), count - 1);
 
@@ -242,10 +255,23 @@ DDGITapCheb DDGI_EvaluateTapCheb(
     tap.DistToProbe     = length(probeToPoint);
     float3 dirPP        = probeToPoint / max(tap.DistToProbe, 1e-4f);
 
+    // Direcao usada no teste de backface. O Flax separa as duas (DDGI.hlsl:210-215):
+    // `worldPosToProbe` — posicao SEM bias — decide se a probe esta atras da superficie, e a
+    // posicao COM bias fica so para a distancia/Chebyshev. Faz sentido: o teste pergunta de que
+    // lado da superficie REAL a probe esta, e o bias e um deslocamento artificial que, quando
+    // grande, muda a resposta. Com 1,2 m de bias (ver DDGI_SurfaceBias) o ponto viesado ja pode
+    // estar do outro lado da parede, e ai a probe de la parece "de frente".
+    // Legado = usar o viesado nos dois; o toggle existe para o A/B.
+    float3 dirBackface = dirPP;
+    if (unbiasedBackface) {
+        float3 rawToProbe = rawPos - probePos;
+        dirBackface = rawToProbe / max(length(rawToProbe), 1e-4f);
+    }
+
     // Pesos DEFENSIVOS com piso (receita do Flax, DDGI.hlsl): backface e Chebyshev se
     // auto-sabotam em geometria densa/fina (miolo de sebe, cantos, frestas) — os pisos
     // garantem que wsum nunca colapsa a zero => nunca retorna preto absoluto, so escurece.
-    float backface = dot(-dirPP, N) * 0.5f + 0.5f;
+    float backface = dot(-dirBackface, N) * 0.5f + 0.5f;
     float w = backface * backface + 0.05f;
 
     int2   distOrigin = DDGI_TileOrigin(c, count, distTile);
@@ -279,7 +305,7 @@ float3 SampleDDGIIrradianceCheb(
         Texture2D<float4> irrAtlas, Texture2D<float4> distAtlas, SamplerState samp,
         float3 worldPos, float3 N, float3 gridMin, float spacing, int3 count,
         int irrTile, float2 irrInvSize, int distTile, float2 distInvSize, float3 biasVec,
-        Buffer<float4> probeData, uint skipMode) {
+        Buffer<float4> probeData, uint skipMode, bool unbiasedBackface) {
     float3 biasPos = worldPos + biasVec;
     float3 g    = (biasPos - gridMin) / spacing;
     int3   base = (int3)floor(g);
@@ -290,9 +316,10 @@ float3 SampleDDGIIrradianceCheb(
 
     [unroll]
     for (int i = 0; i < 8; ++i) {
-        DDGITapCheb tap = DDGI_EvaluateTapCheb(i, base, frac, biasPos, N, gridMin, spacing,
-                                               count, distAtlas, samp, distTile, distInvSize,
-                                               probeData, skipMode);
+        DDGITapCheb tap = DDGI_EvaluateTapCheb(i, base, frac, biasPos, worldPos, N,
+                                               gridMin, spacing, count, distAtlas, samp,
+                                               distTile, distInvSize, probeData, skipMode,
+                                               unbiasedBackface);
         if (tap.Ignored) continue;
 
         int2   irrOrigin = DDGI_TileOrigin(tap.Coord, count, irrTile);

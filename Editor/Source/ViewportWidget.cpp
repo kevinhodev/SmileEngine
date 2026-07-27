@@ -104,6 +104,14 @@ namespace SmileEditor {
         return Renderer && Renderer->GetGIBackfacePolicy();
     }
 
+    double ViewportWidget::GetGISurfaceBiasMax() const {
+        return Renderer ? static_cast<double>(Renderer->GetGISurfaceBiasMax()) : 0.0;
+    }
+
+    bool ViewportWidget::IsGIUnbiasedBackfaceEnabled() const {
+        return Renderer && Renderer->GetGIUnbiasedBackface();
+    }
+
     bool ViewportWidget::IsGTAOEnabled() const {
         return Renderer && Renderer->GetUseAO();
     }
@@ -803,6 +811,18 @@ namespace SmileEditor {
         // Pelo Renderer: alem dos reservoirs, o NRD/RR/TAA acumulam sobre o resultado e
         // precisam cair juntos, senao o A/B denoisado compara estado misturado.
         Renderer->SetGIBackfacePolicy(!Renderer->GetGIBackfacePolicy());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::SetGISurfaceBiasMax(double _Meters) {
+        if (!Renderer) return;
+        Renderer->SetGISurfaceBiasMax(static_cast<float>(qBound(0.0, _Meters, 2.0)));
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleGIUnbiasedBackface() {
+        if (!Renderer) return;
+        Renderer->SetGIUnbiasedBackface(!Renderer->GetGIUnbiasedBackface());
         emit ViewSettingsChanged();
     }
 
