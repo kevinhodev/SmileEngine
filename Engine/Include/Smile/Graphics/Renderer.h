@@ -495,35 +495,31 @@ namespace Smile {
             TAARanLastFrame   = false;      // sem upscaler, o TAA acumula por conta propria
         }
 
-        // Invalidacao LEVE — para knob de amostragem que so o consumidor final enxerga (hoje: o
-        // fade de borda do volume). Nao mexe no atlas de proposito: sem reset, as duas tomadas
-        // de um A/B leem LITERALMENTE o mesmo atlas e a unica variavel e o sampler. Resetar faria
-        // o oposto do que parece — a histerese zero substitui o atlas pela estimativa de UM
-        // frame, cuja rotacao de direcoes depende do frameIndex (DDGI_RayDirection), entao cada
-        // tomada receberia uma realizacao aleatoria diferente.
+        // Invalidacao dos knobs de amostragem do DDGI. TODOS eles entram hoje no ShadeSurfaceHit
+        // — o bias desde que o 2o bounce passou a usar o gather completo, o fade de borda desde
+        // que ele tambem parou de extrapolar la — e por isso mudam o que fica GRAVADO, nao so o
+        // que aparece na tela: o valor sombreado no hit volta para o atlas do DDGI (hysteresis
+        // 0,99), para os reservoirs do ReSTIR, para o historico das reflexoes, para o inscatter
+        // acumulado do fog e, por cima de tudo isso, para NRD/RR/TAA.
         //
-        // O TAA cai porque acumula a imagem final. E o RepeatDebugProbePoint e obrigatorio: o
-        // diagnostico pontual e one-shot por clique, entao sem ele o painel exibe os numeros do
-        // knob ANTERIOR e a ferramenta passa a mentir justamente durante o A/B.
-        void OnGISamplingChanged() {
-            TAARanLastFrame = false;
-            RepeatDebugProbePoint();
-        }
-
-        // Invalidacao PESADA — para knob que entra no ShadeSurfaceHit e portanto muda o que fica
-        // GRAVADO nos acumuladores. Desde que o 2o bounce passou a usar o gather completo, o bias
-        // e um deles: o valor sombreado no hit volta para o atlas do DDGI (hysteresis 0,99), para
-        // os reservoirs do ReSTIR, para o historico das reflexoes e, por cima de tudo isso, para
-        // NRD/RR/TAA. Sem derrubar o conjunto, o slider compara estados misturados por segundos.
-        // O preco e o mesmo do SetRayEpsilons: a tomada volta a passar pela realizacao aleatoria
-        // de um frame, entao esperar convergir antes de medir.
+        // Houve aqui uma variante LEVE, so com TAA, para quando o knob fosse exclusivo do
+        // consumidor final. Ela ficou sem usuarios e saiu — e a licao vale a nota: os dois knobs
+        // NASCERAM sendo de sampler puro e deixaram de ser DEPOIS, em commits que nao voltaram
+        // no setter. Ao levar um parametro para dentro do hit, reveja a invalidacao dele.
+        //
+        // O preco e o mesmo do SetRayEpsilons: o reset faz a tomada passar de novo pela
+        // realizacao aleatoria de um frame (as direcoes giram com o frameIndex), entao para
+        // medir A/B e preciso esperar convergir. Sem o reset seria pior: estados misturados.
         void OnGIHitSamplingChanged() {
             DDGI.ResetHistoryOnce();
             ReSTIRGI.InvalidateHistory();
             Reflections.InvalidateHistory();
             Nrd.InvalidateHistory();
+            VolumetricFog.ResetHistory(); // acumula o proprio inscatter, que le o DDGI
             RRResetPending = true;
             TAARanLastFrame = false;
+            // O diagnostico pontual e one-shot por clique: sem reexecutar, o painel exibiria os
+            // numeros do knob ANTERIOR e a ferramenta mentiria justamente durante o A/B.
             RepeatDebugProbePoint();
         }
 
@@ -544,15 +540,13 @@ namespace Smile {
             OnGIHitSamplingChanged();
         }
         // Fade para o ambiente hemisferico nas bordas do volume (em celulas; 0 = desligado).
+        // Invalidacao PESADA: o fade tambem entra no 2o bounce (ver OnGIHitSamplingChanged) —
+        // la ele multiplica o indireto do hit, que e parte do valor devolvido as sondas.
         f32  GetGIVolumeFadeProbes() const { return DDGI.GetVolumeFadeProbes(); }
         void SetGIVolumeFadeProbes(f32 V) {
             if (V == DDGI.GetVolumeFadeProbes()) return;
             DDGI.SetVolumeFadeProbes(V);
-            OnGISamplingChanged();
-            // O fog volumetrico acumula temporalmente o proprio inscatter, e o ambiente dele
-            // muda com este knob — sem derrubar a historia, a troca aparece esmaecida por
-            // varios frames e o A/B compara estados misturados.
-            VolumetricFog.ResetHistory();
+            OnGIHitSamplingChanged();
         }
 
         // Culling nos raios de REFLEXAO. Substituiu a antiga chave global da TLAS: aquela mexia em

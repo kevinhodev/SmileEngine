@@ -2655,9 +2655,11 @@ Rectangle {
                               "O teste de backface das sondas usa sempre o ponto sem " +
                               "deslocamento, e só a distância do Chebyshev usa o deslocado — é a " +
                               "separação que o Flax faz, e não é ajustável.\n\n" +
-                              "O atlas NÃO é reiniciado ao mexer aqui: os dois estados leem o " +
-                              "mesmo atlas, então a única variável é a amostragem e a comparação " +
-                              "vale já no frame seguinte."
+                              "O bias também vale no segundo quique, dentro das próprias sondas, " +
+                              "então mexer aqui reinicia o atlas e os históricos que se apoiam " +
+                              "nele — reflexos, ReSTIR, denoiser e névoa. Espere convergir antes " +
+                              "de comparar: logo após a troca a imagem passa pelo ruído de um " +
+                              "único quadro de sondas."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2674,10 +2676,10 @@ Rectangle {
                         to: 2.0
                         step: 0.01
                         // Igual aos epsilons: o rótulo acompanha o arrasto, a engine só é tocada
-                        // ao soltar — cada pixel de arrasto derrubaria o TAA e reexecutaria o
-                        // diagnóstico. Sem binding direto em viewportModel (escrever emite
-                        // ViewSettingsChanged e o valor saltaria de volta no meio do arrasto);
-                        // recarrega em reloadEps().
+                        // ao soltar — cada pixel de arrasto reiniciaria o atlas do DDGI e todos
+                        // os históricos que se apoiam nele. Sem binding direto em viewportModel
+                        // (escrever emite ViewSettingsChanged e o valor saltaria de volta no meio
+                        // do arrasto); recarrega em reloadEps().
                         property real uiValue: 0.0
                         value: uiValue
                         valueText: uiValue === 0.0
@@ -2716,7 +2718,12 @@ Rectangle {
                               "escolhida, medida em células da grade e contada para FORA da " +
                               "borda. Dentro do volume nada muda: o volume é justo, então o chão " +
                               "nasce a meia célula da face inferior e um desvanecimento para " +
-                              "dentro lavaria o piso inteiro. 0 volta ao comportamento histórico."
+                              "dentro lavaria o piso inteiro. 0 volta ao comportamento " +
+                              "histórico.\n\n" +
+                              "Vale também nos raios das sondas, onde o indireto desvanece para " +
+                              "o escuro em vez do ambiente — fora do volume a luz da borda seria " +
+                              "reinjetada no próprio atlas. Por isso mexer aqui reinicia o atlas " +
+                              "e os históricos; espere convergir antes de comparar."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
