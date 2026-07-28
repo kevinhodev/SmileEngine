@@ -322,10 +322,20 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
     float3 hitBias = DDGI_SurfaceBias(hitN, -rayDir, P.Spacing,
                                       GIBiasParams.x, GIBiasParams.y);
-    float3 indirect = SampleDDGIIrradianceCheb(
-        IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN,
-        P.GridMin, P.Spacing, P.Count, P.AtlasTile, P.AtlasInvSize,
-        (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, (uint)GIDistParams.w);
+    // Fora do volume o gather clampa e estende a ultima fileira de sondas ao infinito. Na tela
+    // isso e substituido pelo ambiente hemisferico; aqui a radiancia do hit REALIMENTA o atlas,
+    // entao extrapolar seria pior — a borda se reinjetaria. Sem o ambiente colorido do deferred
+    // (nao existe no CB de um passe de RT), o hit desvanece o indireto para ZERO: escurece o
+    // bounce distante em vez de inventar luz. O direto do hit (sol e puntuais) segue inteiro.
+    float volW = DDGI_VolumeWeight(hitPos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
+    float3 indirect = float3(0.0f, 0.0f, 0.0f);
+    if (volW > 0.0f) {
+        indirect = SampleDDGIIrradianceCheb(
+            IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN,
+            P.GridMin, P.Spacing, P.Count, P.AtlasTile, P.AtlasInvSize,
+            (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, (uint)GIDistParams.w);
+        if (volW < 1.0f) indirect *= volW;
+    }
 
     // Emissivo do hit (mesma formula do GBuffer.ps: factor*strength ja bakeado no InstanceGeo,
     // x mapa quando ha) — sem isto, superficies emissivas nao alimentam GI nem aparecem em

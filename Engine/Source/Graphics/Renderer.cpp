@@ -1533,6 +1533,7 @@ namespace Smile {
                              ? (GISkipInactiveFallback ? 2.0f : 1.0f) : 0.0f;
             GIHit.BiasScale  = DDGI.GetSurfaceBiasScale();
             GIHit.BiasMax    = DDGI.GetSurfaceBiasMax();
+            GIHit.FadeProbes = DDGI.GetVolumeFadeProbes();
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
             ReSTIRGI.SetGIHitSampling(GIHit);

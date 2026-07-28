@@ -258,7 +258,7 @@ namespace Smile {
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipMode };
-        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, 0.0f, 0.0f };
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }

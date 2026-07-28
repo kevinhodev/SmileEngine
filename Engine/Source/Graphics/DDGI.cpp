@@ -484,7 +484,7 @@ namespace Smile {
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipMode };
-        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, 0.0f, 0.0f };
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
         CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
@@ -516,11 +516,18 @@ namespace Smile {
 
     void FDDGI::TransitionForUpdate(ID3D12GraphicsCommandList* _CL) {
         if (!Ready) return;
-        // Sai de kAtlasRead (contem PIXEL) -> UAV: so em fila direta. ProbeData fica de
-        // fora: o trace ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        // Sai de kAtlasRead (contem PIXEL) -> so em fila direta. ProbeData fica de fora: o trace
+        // ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        //
+        // Os ATLASES vao para NON_PIXEL, e NAO para UAV: o proximo passe e o TRACE, que os le
+        // como SRV (t3 = irradiancia e t4 = distancia) no gather do 2o bounce. Estado de escrita
+        // nao se combina com estado de leitura no D3D12, entao le-los em UAV era comportamento
+        // indefinido — e isso ja valia para a irradiancia desde que o bounce existe; o atlas de
+        // distancia so herdou o problema quando o bounce ganhou o Chebyshev. A promocao para UAV
+        // acontece DEPOIS do trace, dentro do RecordUpdate, onde e compute-legal.
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
     void FDDGI::TransitionForRead(ID3D12GraphicsCommandList* _CL) {

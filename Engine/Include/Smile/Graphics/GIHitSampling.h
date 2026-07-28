@@ -20,5 +20,6 @@ namespace Smile {
         f32 SkipMode   = 0.0f;  // 0 = nao pula sonda inativa, 1 = pula, 2 = procura substituta
         f32 BiasScale  = 0.2f;  // o `bias` do GetDDGISurfaceBias do Flax
         f32 BiasMax    = 0.0f;  // teto do bias em metros; 0 = sem teto (comportamento historico)
+        f32 FadeProbes = 0.0f;  // celulas de fade na borda do volume; 0 = desligado
     };
 }
