@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
+#include "Smile/Graphics/GIHitSampling.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <unordered_map>
@@ -29,6 +30,10 @@ namespace Smile {
         // so usa a familia (2) — os raios dele partem de probes, nao do G-buffer.
         Vec4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+        // Gather do 2o bounce no hit (contrato do HitShading.hlsli). Duplica tile/W/H que ja
+        // estao no DistAtlasParams porque o contrato e por NOME e vale para os tres passes.
+        Vec4 GIDistParams;    // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
+        Vec4 GIBiasParams;    // x=escala do bias de superficie, y=teto em metros, zw=-
     };
 
     class FDDGI {
@@ -115,6 +120,8 @@ namespace Smile {
         f32  GetIntensity() const { return Intensity; }
         // Perfil compartilhado de epsilons (dono = Renderer, empurra todo frame).
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+        // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
+        void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
 
         // Reset one-shot do atlas: o proximo update que REALMENTE rodar usa histerese 0, ou seja,
         // substitui o conteudo em vez de misturar. Necessario p/ calibracao: com Hysteresis 0.99
@@ -259,6 +266,7 @@ namespace Smile {
         // DDGI (o nome era historico), entao vive no perfil compartilhado — sem isso o sweep de
         // calibracao deixaria o DDGI em 20 cm enquanto os outros descem.
         FRayEpsilonProfile RayEps; // perfil compartilhado (dono = Renderer)
+        FGIHitSampling     GIHit;
         f32  MaxRayDist   = 0.0f;
         bool RealHitShading = true;
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)

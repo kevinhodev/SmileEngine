@@ -6,11 +6,13 @@
 #include "../RayEpsilons.hlsli"
 
 // Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, SkyViewLUT,
-// IrradAtlas, LinearClamp/Wrap e — F5 — SceneLights (StructuredBuffer<FPunctualLight> com
-// TODAS as luzes ativas, sem frustum cull). VB/IB vem bindless via InstanceGeo
-// (ResourceDescriptorHeap), nao ha mais Vertices/Indices globais.
+// IrradAtlas, GIDistAtlas, GIProbeData, LinearClamp/Wrap e — F5 — SceneLights
+// (StructuredBuffer<FPunctualLight> com TODAS as luzes ativas, sem frustum cull). VB/IB vem
+// bindless via InstanceGeo (ResourceDescriptorHeap), nao ha mais Vertices/Indices globais.
 // Contrato de CBUFFER: RayEpsA/RayEpsB declarados no b0 (ver RayOffset.hlsli) — daqui saem o
-// piso do ShadowRayBias (RayEpsA.w) e o TMin dos shadow rays (RayEpsB.x).
+// piso do ShadowRayBias (RayEpsA.w) e o TMin dos shadow rays (RayEpsB.x) — mais GIDistParams
+// (x=tile, y=W, z=H do atlas de distancia, w=skipMode) e GIBiasParams (x=escala do bias,
+// y=teto em metros), que alimentam o gather completo do 2o bounce (ver ShadeSurfaceHit).
 struct FHitShadeParams {
     float3 GridMin;       float Spacing;
     int3   Count;         int   AtlasTile;
@@ -308,9 +310,22 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += contrib;
     }
 
-    float3 indirect = SampleDDGIIrradiance(IrradAtlas, LinearClamp, hitPos, hitN,
-                                           P.GridMin, P.Spacing, P.Count,
-                                           P.AtlasTile, P.AtlasInvSize);
+    // 2o bounce com o gather COMPLETO — Chebyshev, bias de superficie, offset de relocacao e
+    // skip de sonda inativa —, o mesmo que o deferred usa. Antes aqui era a trilinear pura, e
+    // isso era o pior lugar possivel para vazar: o resultado do hit volta para o atlas do DDGI,
+    // que reamostra com hysteresis 0,99, entao o leak se REALIMENTA frame a frame. O Flax
+    // tambem usa o sampler completo no bounce do surface atlas.
+    //
+    // O papel de "direcao da camera" no bias e do raio: quem observa este ponto e a origem do
+    // raio, entao V = -rayDir. Sem isso o termo de view empurraria o ponto para uma direcao sem
+    // relacao com a visada e o bias perderia o sentido geometrico.
+    float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
+    float3 hitBias = DDGI_SurfaceBias(hitN, -rayDir, P.Spacing,
+                                      GIBiasParams.x, GIBiasParams.y);
+    float3 indirect = SampleDDGIIrradianceCheb(
+        IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN,
+        P.GridMin, P.Spacing, P.Count, P.AtlasTile, P.AtlasInvSize,
+        (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, (uint)GIDistParams.w);
 
     // Emissivo do hit (mesma formula do GBuffer.ps: factor*strength ja bakeado no InstanceGeo,
     // x mapa quando ha) — sem isto, superficies emissivas nao alimentam GI nem aparecem em

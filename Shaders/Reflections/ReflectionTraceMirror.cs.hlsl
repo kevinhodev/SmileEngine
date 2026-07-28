@@ -19,7 +19,10 @@ cbuffer ReflectionCB : register(b0) {
     row_major float4x4 View;
     float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
-    float4 PolicyParams;    // x = cullar backface nos raios de reflexao (0/1)
+    float4 PolicyParams;            // x = politica deste passe (backface/culling)
+    // Gather do 2o bounce (contrato do HitShading.hlsli).
+    float4 GIDistParams;            // x=distTile, y=distW, z=distH, w=skipMode
+    float4 GIBiasParams;            // x=escala do bias, y=teto em metros, zw=-
 };
 
 // Ver ReflectionTrace.cs.hlsl: politica por passe, no molde do Context.CullingMode do Lumen.
@@ -33,7 +36,10 @@ RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
 StructuredBuffer<InstanceGeo>   Instances  : register(t2);
 Texture2D<float4>               IrradAtlas : register(t3);
-// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
+// t4/t5: atlas de distancia e ProbeData do DDGI — o 2o bounce usa o gather COMPLETO
+// (Chebyshev + bias + skip), igual ao deferred. Antes eram filler do VB/IB bindless.
+Texture2D<float4>               GIDistAtlas : register(t4);
+Buffer<float4>                  GIProbeData : register(t5);
 Texture2D<float>                Depth      : register(t6);
 Texture2D<float4>               GBuffer    : register(t7);
 

@@ -17,14 +17,19 @@ cbuffer DDGICB : register(b0) {
     // RayEpsB.x nos shadow rays do 2o hit, que sao os mesmos p/ os tres passes.
     float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+    // Gather do 2o bounce (contrato do HitShading.hlsli): dist atlas + skipMode, bias.
+    float4 GIDistParams;    // x=distTile, y=distW, z=distH, w=skipMode
+    float4 GIBiasParams;    // x=escala do bias, y=teto em metros, zw=-
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
 Texture2D<float4>               SkyViewLUT  : register(t1);
 StructuredBuffer<InstanceGeo>   Instances   : register(t2);
-Texture2D<float4>               IrradAtlas  : register(t3); 
-// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
-Buffer<float4>                  ProbeData   : register(t6);
+Texture2D<float4>               IrradAtlas  : register(t3);
+// t4 = atlas de distancia (2o bounce com Chebyshev; ver ShadeSurfaceHit). t5 segue filler.
+Texture2D<float4>               GIDistAtlas : register(t4);
+// Offsets de relocacao: usados aqui na origem do raio E no gather do 2o bounce.
+Buffer<float4>                  GIProbeData : register(t6);
 Buffer<uint>                    ProbeRayCount:register(t7);
 
 #include "../LightsCommon.hlsli"
@@ -57,7 +62,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         return;
     }
 
-    float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, spacing) + ProbeData[probeIdx].xyz;
+    float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, spacing) + GIProbeData[probeIdx].xyz;
 
     float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x, (uint)probeIdx);
 

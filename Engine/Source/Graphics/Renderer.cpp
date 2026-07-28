@@ -458,14 +458,16 @@ namespace Smile {
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
-            GBuffer.SRVSlot(0)); // GBufferA = BaseColor (tint do metal no reflexo)
+            GBuffer.SRVSlot(0), // GBufferA = BaseColor (tint do metal no reflexo)
+            DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
-            DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot);
+            DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot,
+            DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
 
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
@@ -1518,6 +1520,23 @@ namespace Smile {
         ReSTIRGI.SetRayEpsilons(RayEps);
         Reflections.SetRayEpsilons(RayEps);
         DDGI.SetRayEpsilons(RayEps);
+
+        // Gather do 2o bounce (ShadeSurfaceHit): mesmo raciocinio do perfil de epsilons — um so
+        // para os tres passes, empurrado todo frame. O skipMode espelha exatamente o que o
+        // deferred usa, senao o bounce pesaria as sondas com uma politica e a tela com outra.
+        {
+            FGIHitSampling GIHit;
+            GIHit.DistTile   = DDGI.DistTileSizeF();
+            GIHit.DistAtlasW = DDGI.DistAtlasW();
+            GIHit.DistAtlasH = DDGI.DistAtlasH();
+            GIHit.SkipMode   = GISkipInactiveProbes
+                             ? (GISkipInactiveFallback ? 2.0f : 1.0f) : 0.0f;
+            GIHit.BiasScale  = DDGI.GetSurfaceBiasScale();
+            GIHit.BiasMax    = DDGI.GetSurfaceBiasMax();
+            DDGI.SetGIHitSampling(GIHit);
+            Reflections.SetGIHitSampling(GIHit);
+            ReSTIRGI.SetGIHitSampling(GIHit);
+        }
 
         ReSTIRGI.SetUseNrd(NrdMode);           // RRMode => NrdMode=false => ReSTIR entrega GI cru (ruidoso)
         Reflections.SetUseNrd(NrdMode);

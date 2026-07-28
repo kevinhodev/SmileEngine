@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
+#include "Smile/Graphics/GIHitSampling.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -35,6 +36,10 @@ namespace Smile {
         Vec4  RayEpsA;           // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4  RayEpsB;           // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
         Vec4  PolicyParams;      // x = cullar backface nos raios de reflexao (0/1); yzw livres
+        // Gather do 2o bounce no hit (contrato do HitShading.hlsli): o mesmo sampler completo
+        // do deferred, com Chebyshev e skip de sonda inativa.
+        Vec4  GIDistParams;      // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
+        Vec4  GIBiasParams;      // x=escala do bias de superficie, y=teto em metros, zw=-
     };
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
@@ -53,7 +58,10 @@ namespace Smile {
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
                             u32 DepthSlot, u32 GBufferSlot, u32 GBufferCSlot, u32 BRDFLutSlot,
-                            u32 GBufferASlot);
+                            u32 GBufferASlot,
+                            // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
+                            // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
+                            u32 DistSlot, u32 ProbeDataSlot);
 
         // Params estaticos do volume DDGI (grid/atlas) p/ o CB. Chamar quando o volume e (re)criado.
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
@@ -91,6 +99,8 @@ namespace Smile {
 
         // Perfil compartilhado de epsilons (dono = Renderer, empurra todo frame).
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+        // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
+        void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         // Limpa o historico temporal PROPRIO (caminho legado, sem NRD) no proximo RecordTrace.
         void InvalidateHistory()  { NeedsHistoryClear = true; }
 
@@ -233,6 +243,7 @@ namespace Smile {
         // Tunaveis.
         bool Enabled             = true;
         FRayEpsilonProfile RayEps;        // perfil compartilhado (dono = Renderer)
+        FGIHitSampling     GIHit;
         f32  MaxRoughnessToTrace = 0.6f;  // acima -> so DDGI (combine do Lumen)
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)

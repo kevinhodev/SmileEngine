@@ -90,7 +90,8 @@ namespace Smile {
     void FReSTIRGI::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                    u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
                                    u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
-                                   u32 _GBufferSlot, u32 _VelocitySlot) {
+                                   u32 _GBufferSlot, u32 _VelocitySlot,
+                                   u32 _DistSlot, u32 _ProbeDataSlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         // Valida os SETE slots, nao so tres: todos vao direto p/ CpuHandleStaging ao montar as
@@ -154,8 +155,8 @@ namespace Smile {
                 _SRVHeap.CpuHandleStaging(_SkyViewSlot),
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
                 _SRVHeap.CpuHandleStaging(_IrradSlot),
-                _SRVHeap.CpuHandleStaging(_InstanceSlot),
-                _SRVHeap.CpuHandleStaging(_InstanceSlot),
+                _SRVHeap.CpuHandleStaging(_DistSlot),
+                _SRVHeap.CpuHandleStaging(_ProbeDataSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_VelocitySlot),
@@ -255,6 +256,9 @@ namespace Smile {
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
+        CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
+                                GIHit.SkipMode };
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }

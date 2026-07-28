@@ -371,7 +371,9 @@ namespace Smile {
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
             _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
-            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            // t4 = atlas de distancia (gather completo no 2o bounce). t5 segue filler: aqui o
+            // ProbeData ja esta em t6, usado tambem pela origem do raio.
+            _SRVHeap.CpuHandleStaging(DistSRVSlot),
             _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
@@ -480,6 +482,9 @@ namespace Smile {
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
+        CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
+                                GIHit.SkipMode };
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, 0.0f, 0.0f };
         CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;

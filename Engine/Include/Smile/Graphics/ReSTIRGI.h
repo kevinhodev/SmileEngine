@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
+#include "Smile/Graphics/GIHitSampling.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -32,7 +33,11 @@ namespace Smile {
         // existente — em especial o View, que o ReSTIRNrdPack le em 256.
         Vec4  RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4  RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
-        Vec4  PolicyParams;    // x = politica de backface no gather (0/1); yzw livres
+        Vec4  PolicyParams;      // x = politica de backface no gather (0/1); yzw livres
+        // Gather do 2o bounce no hit (contrato do HitShading.hlsli): o mesmo sampler completo
+        // do deferred, com Chebyshev e skip de sonda inativa.
+        Vec4  GIDistParams;      // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
+        Vec4  GIBiasParams;      // x=escala do bias de superficie, y=teto em metros, zw=-
     };
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
@@ -48,7 +53,10 @@ namespace Smile {
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
                             u32 DepthSlot, u32 GBufferSlot,
-                            u32 VelocitySlot);
+                            u32 VelocitySlot,
+                            // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
+                            // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
+                            u32 DistSlot, u32 ProbeDataSlot);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
@@ -79,6 +87,8 @@ namespace Smile {
         // Perfil compartilhado de epsilons. O Renderer empurra todo frame (copia barata) e e ele
         // quem invalida na borda de mudanca — aqui invalidar seria NeedsClear todo frame.
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+        // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
+        void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
 
         bool IsReady() const   { return Ready; }
         // true quando a tabela t16 aponta p/ a OUT do NRD (radiancia em YCoCg) e nao p/ a
@@ -217,5 +227,6 @@ namespace Smile {
 
         // Perfil compartilhado (dono = Renderer). Escrito em RayEpsA/B + TraceParams.w.
         FRayEpsilonProfile RayEps;
+        FGIHitSampling     GIHit;
     };
 }
