@@ -152,13 +152,13 @@ float4 main(PSInput input) : SV_Target {
     {
         float3 Lsun = normalize(SunDirection.xyz);
         BRDF_DirectSplit(N, V, Lsun, SunColor.rgb * SunDirection.w,
-                         DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                         DiffuseColor, SpecularColor, Roughness, a2,
                          float3(0.0f, 0.0f, 0.0f), DirectDiffuse, DirectSpecular);
         if (MoonDirection.w > 0.0f) {
             float3 Lmoon = normalize(MoonDirection.xyz);
             float3 MoonDiffuse, MoonSpecular;
             BRDF_DirectSplit(N, V, Lmoon, MoonColor.rgb * MoonDirection.w,
-                             DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                             DiffuseColor, SpecularColor, Roughness, a2,
                              float3(0.0f, 0.0f, 0.0f), MoonDiffuse, MoonSpecular);
             DirectDiffuse  += MoonDiffuse;
             DirectSpecular += MoonSpecular;
@@ -174,12 +174,12 @@ float4 main(PSInput input) : SV_Target {
     bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
     if (UseGI) {
         float giIntensity = (DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
-        AmbientDiffuse = (1.0f - Metallic) * DiffuseColor *
-                         SampleSceneDDGI(input.worldPos, N) * giIntensity;
+        // Sem (1 - Metallic): ele ja esta no DiffuseColor (convencao em BRDF.hlsli).
+        AmbientDiffuse = DiffuseColor * SampleSceneDDGI(input.worldPos, N) * giIntensity;
     } else if (UseAtmoAmbient) {
         float  hemi       = saturate(N.y * 0.5f + 0.5f);
         float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
-        AmbientDiffuse = (1.0f - Metallic) * DiffuseColor * ambientCol * GroundAmbientColor.w;
+        AmbientDiffuse = DiffuseColor * ambientCol * GroundAmbientColor.w;
     }
 
     // --- Especular ambiente (IBL): e o que faz vidro parecer vidro. Soma SEM peso de alpha. ---

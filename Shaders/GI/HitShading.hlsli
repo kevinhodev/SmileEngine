@@ -222,6 +222,41 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         }
     }
 
+    // METALLIC: o difuso do hit e albedo*(1 - metallic), a mesma convencao do raster
+    // (DiffuseColor = BaseColor*(1-Metallic), ver BRDF.hlsli). Sem isto um metal puro
+    // fabricava difuso e injetava luz colorida nas probes, nas reflexoes e no ReSTIR.
+    //
+    // O fator sozinho NAO basta: o loader deixa MetallicFactor = 1 justamente para multiplicar
+    // pelo mapa, entao um material texturizado (quase todo dieletrico) apareceria como metal
+    // puro. Por isso, quando ha mapa mas nao estamos amostrando textura (RealHitShading off),
+    // o mais seguro e nao aplicar nada — errar para o lado do comportamento antigo em vez de
+    // apagar o difuso de uma superficie inteira.
+    //
+    // LIMITE CONHECIDO: o hit continua sem termo ESPECULAR, entao metal passa a contribuir
+    // ~zero para o indireto em vez de contribuir errado. E o que o Flax faz no surface atlas
+    // (GetDiffuseColor zera o metal). Metal visto dentro de reflexo/GI fica escuro; o conserto
+    // e dar especular ao hit, que e outro trabalho.
+    {
+        const bool hasMetalMap =
+            (geo.Flags & (INSTGEO_FLAG_MRMAP | INSTGEO_FLAG_METALMAP)) != 0u;
+        float metallic = 0.0f;
+        if (P.RealHitShading) {
+            metallic = geo.EmissiveFactor.w; // MetallicFactor
+            if ((geo.Flags & INSTGEO_FLAG_MRMAP) != 0u) {
+                Texture2D<float4> mrTex = ResourceDescriptorHeap[geo.MrMapIndex];
+                float4 mr = mrTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD);
+                metallic *= ((geo.Flags & INSTGEO_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
+            }
+            if ((geo.Flags & INSTGEO_FLAG_METALMAP) != 0u) {
+                Texture2D<float4> metalTex = ResourceDescriptorHeap[geo.MetalMapIndex];
+                metallic *= metalTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
+            }
+        } else if (!hasMetalMap) {
+            metallic = geo.EmissiveFactor.w; // sem mapa, o fator descreve o material sozinho
+        }
+        albedo *= saturate(1.0f - metallic);
+    }
+
     float ndl = saturate(dot(hitN, P.SunDir));
     float vis = 1.0f;
     if (ndl > 0.0f) {

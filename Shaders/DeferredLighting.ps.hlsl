@@ -297,14 +297,14 @@ float4 main(VSOutput input) : SV_Target {
         float3 Lsun        = normalize(SunDirection.xyz);
         float3 SunRadiance = SunColor.rgb * SunDirection.w;
         float3 SunLit      = BRDF_Direct(N, V, Lsun, SunRadiance,
-                                         DiffuseColor, SpecularColor, Metallic, Roughness, a2, TransColor);
+                                         DiffuseColor, SpecularColor, Roughness, a2, TransColor);
 
         float3 MoonLit = float3(0.0f, 0.0f, 0.0f);
         if (MoonDirection.w > 0.0f) {
             float3 Lmoon        = normalize(MoonDirection.xyz);
             float3 MoonRadiance = MoonColor.rgb * MoonDirection.w;
             MoonLit = BRDF_Direct(N, V, Lmoon, MoonRadiance,
-                                  DiffuseColor, SpecularColor, Metallic, Roughness, a2, TransColor);
+                                  DiffuseColor, SpecularColor, Roughness, a2, TransColor);
         }
 
         // Sombra das nuvens: projeta o ponto ate a base da camada na direcao da key light
@@ -399,7 +399,7 @@ float4 main(VSOutput input) : SV_Target {
                                                    ToLight, V, N, Ls);
             Lighting += BRDF_DirectArea(N, V, L, Ls, SpecEnergy,
                                         Lp.ColorSourceRadius.rgb * Atten,
-                                        DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                                        DiffuseColor, SpecularColor, Roughness, a2,
                                         TransColor);
         }
     }
@@ -413,8 +413,8 @@ float4 main(VSOutput input) : SV_Target {
     if (UseAtmoAmbient && !UseGI) {
         float  hemi       = saturate(N.y * 0.5f + 0.5f);
         float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
-        float3 KdAmb      = (1.0f - Metallic);
-        Ambient += KdAmb * DiffuseColor * ambientCol * AODiffuse * GroundAmbientColor.w;
+        // Sem (1 - Metallic) aqui: ele ja esta no DiffuseColor (convencao em BRDF.hlsli).
+        Ambient += DiffuseColor * ambientCol * AODiffuse * GroundAmbientColor.w;
     }
 
     if (IBLParams.w > 0.5f) {
@@ -423,7 +423,7 @@ float4 main(VSOutput input) : SV_Target {
         float3 RotR = RotateY(R, IBLParams.y);
 
         float3 F     = F_SchlickRoughness(SpecularColor, NoV, Roughness);
-        float3 KdIBL = (1.0f - F) * (1.0f - Metallic);
+        float3 KdIBL = (1.0f - F); // o (1 - Metallic) vive no DiffuseColor
 
         float3 Irradiance  = IrradianceMap.SampleLevel(IBLSampler, RotN, 0.0f).rgb;
         float3 DiffuseIBL  = KdIBL * DiffuseColor * Irradiance;
@@ -481,8 +481,8 @@ float4 main(VSOutput input) : SV_Target {
 
         // Intensidade do GI: usa o slider do DDGI quando ha grid; senao (ReSTIR sem DDGI) cai em 1.
         float giIntensity = (UseGI && DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
-        float3 KdGI = (1.0f - Metallic);
-        Ambient += KdGI * DiffuseColor * gi * giIntensity * AODiffuse;
+        // idem: metallic ja aplicado no DiffuseColor
+        Ambient += DiffuseColor * gi * giIntensity * AODiffuse;
 
         if (IBLParams.w <= 0.5f) {
             float3 Fa = F_SchlickRoughness(SpecularColor, NoV, Roughness);

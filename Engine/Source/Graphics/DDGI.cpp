@@ -54,7 +54,8 @@ namespace Smile {
             Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; 
             u32  EmissiveMapIndex = 0;
             u32  MrMapIndex       = 0;
-            u32  GeoPad0 = 0, GeoPad1 = 0;
+            u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
+            u32  GeoPad0 = 0;
         };
         static_assert(sizeof(DDGIInstanceGeo) == 80, "DDGIInstanceGeo deve casar com o HLSL (80B)");
 
@@ -190,6 +191,17 @@ namespace Smile {
                     if (MC.HasMetallicRoughnessMap) {
                         g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
                         g.Flags |= 8u;
+                        // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem
+                        // este bit o RT leria o canal errado e um material viraria metal (ou
+                        // dielétrico) por engano no bounce.
+                        if (MC.SpecularPacking) g.Flags |= 16u;
+                    }
+                    // Mapa Metalness SEPARADO (slot +6). Precisa existir aqui porque o loader
+                    // deixa MetallicFactor = 1 quando ha mapa — sem enxergar o mapa, o RT leria
+                    // "metal puro" e zeraria o difuso de um material que e quase todo dieletrico.
+                    if (MC.HasMetalnessMap) {
+                        g.MetalMapIndex = R.Material->AlbedoDescriptorIndex() + 6;
+                        g.Flags |= 32u;
                     }
                 }
             }

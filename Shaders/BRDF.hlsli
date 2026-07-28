@@ -66,9 +66,22 @@ float3 FoliageTransmission(float3 N, float3 V, float3 L, float3 Radiance, float3
 // Variante com saidas SEPARADAS de difuso e especular. Usada pelos translucidos: o tinte
 // difuso e pesado por alpha, mas o reflexo especular da superficie soma inteiro (estilo
 // ThinTranslucent da UE). A transmissao de folhagem entra no difuso.
+// CONVENCAO DE METALLIC (vale para as tres funcoes deste arquivo e para todo o ambiente):
+// o fator (1 - Metallic) e aplicado UMA UNICA VEZ, na montagem do DiffuseColor
+// (`BaseColor * (1 - Metallic)`, no G-buffer/deferred/forward). Aqui dentro o Kd carrega so a
+// conservacao de energia com o especular — Kulla-Conty ou (1 - F). O `Metallic` saiu da
+// assinatura porque virou parametro morto: o SpecularColor ja encapsula o metal
+// (lerp(0.04, BaseColor, Metallic)).
+//
+// Antes o Kd comecava em `1 - Metallic` e multiplicava um DiffuseColor que JA trazia o fator,
+// ou seja (1-M)^2 — em M = 0,5 o difuso saia com 0,25*BaseColor em vez de 0,5*BaseColor. Isso
+// valia igualmente no direto e no ambiente, entao nao havia divergencia entre eles: a cadeia
+// difusa inteira estava escura. Referencias: Filament (diffuseColor = baseColor*(1-metallic)),
+// glTF 2.0 (interpolacao linear dielectrico<->metal) e o Flax, que calcula GetDiffuseColor uma
+// vez e a consome direto no direto e no bounce do DDGI.
 void BRDF_DirectSplit(float3 N, float3 V, float3 L, float3 Radiance,
                       float3 DiffuseColor, float3 SpecularColor,
-                      float Metallic, float Roughness, float a2, float3 TransColor,
+                      float Roughness, float a2, float3 TransColor,
                       out float3 OutDiffuse, out float3 OutSpecular) {
     OutDiffuse  = float3(0.0f, 0.0f, 0.0f);
     OutSpecular = float3(0.0f, 0.0f, 0.0f);
@@ -89,7 +102,7 @@ void BRDF_DirectSplit(float3 N, float3 V, float3 L, float3 Radiance,
         float3 F = F_Schlick(SpecularColor, VoH);
         float3 Specular = (D * Vis) * F;
 
-        float3 Kd = 1.0f - Metallic;
+        float3 Kd = 1.0f; // metallic ja esta no DiffuseColor (ver a nota da convencao acima)
 
         #if USE_KULLA_CONTY_ENERGY_CONSERVATION
             float E_val, Ef_val;
@@ -121,10 +134,10 @@ void BRDF_DirectSplit(float3 N, float3 V, float3 L, float3 Radiance,
 
 float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
                    float3 DiffuseColor, float3 SpecularColor,
-                   float Metallic, float Roughness, float a2, float3 TransColor) {
+                   float Roughness, float a2, float3 TransColor) {
     float3 Diffuse, Specular;
     BRDF_DirectSplit(N, V, L, Radiance, DiffuseColor, SpecularColor,
-                     Metallic, Roughness, a2, TransColor, Diffuse, Specular);
+                     Roughness, a2, TransColor, Diffuse, Specular);
     return Diffuse + Specular;
 }
 
@@ -135,7 +148,7 @@ float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
 // estourar. Sol/lua e caminhos sem area seguem no BRDF_Direct.
 float3 BRDF_DirectArea(float3 N, float3 V, float3 Ld, float3 Ls, float SpecEnergy,
                        float3 Radiance, float3 DiffuseColor, float3 SpecularColor,
-                       float Metallic, float Roughness, float a2, float3 TransColor) {
+                       float Roughness, float a2, float3 TransColor) {
     float3 Result = float3(0.0f, 0.0f, 0.0f);
 
     float NoLd = saturate(dot(N, Ld));
@@ -155,7 +168,7 @@ float3 BRDF_DirectArea(float3 N, float3 V, float3 Ld, float3 Ls, float SpecEnerg
         float3 F = F_Schlick(SpecularColor, VoH);
         float3 Specular = (D * Vis) * F * SpecEnergy;
 
-        float3 Kd = 1.0f - Metallic;
+        float3 Kd = 1.0f; // metallic ja esta no DiffuseColor (ver a nota da convencao acima)
 
         #if USE_KULLA_CONTY_ENERGY_CONSERVATION
             float E_val, Ef_val;
