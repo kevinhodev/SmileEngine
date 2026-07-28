@@ -425,6 +425,10 @@ namespace SmileEditor {
         void EnsureRendererIsInitialized();
         void InvalidateDebugPreview();
         void ResetDebugProbePoint(bool CancelRendererRequest = true);
+        // Seleciona a probe da SESSAO — as escolhas EXPLICITAS do usuario: abrir a inspecao,
+        // navegar pelo grid, clicar num contribuinte, fechar. O foco automatico do point-pick
+        // chama o renderer direto e NAO passa por aqui, de proposito (ver DebugProbeBaseIndex).
+        void SelectDebugProbe(int ProbeIndex);
         bool GetDebugProbeCoordValues(int& X, int& Y, int& Z,
                                       int& CountX, int& CountY, int& CountZ) const;
 
@@ -455,10 +459,12 @@ namespace SmileEditor {
         QString        DebugProbeDirection;
         QString        DebugProbeSample;
         bool           DebugProbePointPickArmed = false;
-        // Probe selecionada ANTES do point-pick. O pick sobrescreve a selecao pela dominante do
-        // ponto, mas fora do volume nao existe dominante — sem guardar a base, o cabecalho e o
-        // preview do tile ficariam presos na dominante do pick ANTERIOR enquanto o resumo diz
-        // "so ambiente". -1 = nao ha pick em andamento.
+        // Probe da SESSAO: a ultima que o USUARIO escolheu (SelectDebugProbe). O point-pick
+        // sobrescreve a probe do renderer pela dominante do ponto, mas isso e foco TEMPORARIO e
+        // nao entra aqui — fora do volume nao existe dominante, e e daqui que sai a probe para
+        // onde voltar. Se o pick atualizasse a base, uma cadeia de cliques faria a dominante de
+        // um pick virar "selecao do usuario" e o proximo clique fora do volume restauraria um
+        // contribuinte no lugar da probe original. -1 = nenhuma (fora de inspecao).
         int            DebugProbeBaseIndex = -1;
         QString        DebugProbePointSummary;
         QVariantList   DebugProbeContributors;

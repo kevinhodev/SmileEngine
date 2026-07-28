@@ -604,7 +604,7 @@ namespace SmileEditor {
         ResetDebugProbePoint();
         Renderer->SetDebugSelection(DetailTargets);
         Renderer->SetDebugColumns(DetailTargets.size() > 1 ? 2u : 1u);
-        Renderer->SetDebugProbeIndex(ProbeIndex);
+        SelectDebugProbe(ProbeIndex);
         InvalidateDebugPreview();
         emit DebugProbeDirectionChanged();
         emit DebugProbeSampleChanged();
@@ -620,7 +620,7 @@ namespace SmileEditor {
         const int Index = NX + NY * CountX + NZ * CountX * CountY;
         if (Index == GetDebugProbeIndex()) return;
         ResetDebugProbePoint();
-        Renderer->SetDebugProbeIndex(Index);
+        SelectDebugProbe(Index);
         if (!DebugProbeSample.isEmpty()) {
             DebugProbeSample.clear();
             emit DebugProbeSampleChanged();
@@ -632,7 +632,7 @@ namespace SmileEditor {
     void ViewportWidget::ClearDebugProbeInspection() {
         if (!Renderer || !DebugProbeSessionActive) return;
         ResetDebugProbePoint();
-        Renderer->SetDebugProbeIndex(-1);
+        SelectDebugProbe(-1);
 
         std::vector<Smile::u32> Restored;
         Restored.reserve(static_cast<size_t>(DebugProbePreviousTargets.size()));
@@ -653,6 +653,14 @@ namespace SmileEditor {
         emit DebugProbeDirectionChanged();
         emit DebugProbeSampleChanged();
         emit ViewSettingsChanged();
+    }
+
+    // Ver o header: so as escolhas EXPLICITAS do usuario passam por aqui. O foco automatico do
+    // point-pick chama Renderer->SetDebugProbeIndex direto, para nao virar "selecao da sessao".
+    void ViewportWidget::SelectDebugProbe(int _ProbeIndex) {
+        if (!Renderer) return;
+        Renderer->SetDebugProbeIndex(_ProbeIndex);
+        DebugProbeBaseIndex = _ProbeIndex;
     }
 
     void ViewportWidget::ResetDebugProbePoint(bool _CancelRendererRequest) {
@@ -713,7 +721,9 @@ namespace SmileEditor {
         }
         if (!Found) return;
 
-        Renderer->SetDebugProbeIndex(_ProbeIndex);
+        // Clicar num contribuinte e escolha do usuario: vira a probe da sessao, e um pick
+        // seguinte fora do volume volta para ELA, nao para a dominante automatica anterior.
+        SelectDebugProbe(_ProbeIndex);
         Renderer->SetDebugProbeContributors(
             DebugProbeContributorIndices.data(),
             DebugProbeContributorWeights.data(),
@@ -1864,11 +1874,9 @@ namespace SmileEditor {
                     DebugProbeContributors.clear();
                     DebugProbeContributorCount = 0;
                     DebugProbeContributorRiskSlot = -1;
-                    // Guarda a probe da sessao antes que o resultado do pick a sobrescreva pela
-                    // dominante do ponto — e o que permite voltar atras quando o ponto cai fora
-                    // do volume e nao ha dominante nenhuma.
-                    DebugProbeBaseIndex =
-                        static_cast<int>(Renderer->GetDebugProbeIndex());
+                    // A probe da sessao NAO e capturada aqui: ela ja foi registrada quando o
+                    // usuario a escolheu (SelectDebugProbe). Capturar no clique leria o foco
+                    // deixado pelo pick ANTERIOR e o promoveria a "selecao do usuario".
                     if (Renderer->RequestDebugProbePoint(Px, Py)) {
                         DebugProbePointSummary =
                             QStringLiteral("Lendo o ponto da cena...");
