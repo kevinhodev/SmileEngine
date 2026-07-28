@@ -1162,15 +1162,20 @@ namespace Smile {
         }
     }
 
-    // Apaga a visualizacao de contribuintes SEM encerrar a sessao de point-pick. As duas coisas
-    // sao separadas de proposito: passar contagem zero para SetDebugProbeContributors NAO limpa
-    // — ele cai no ramo acima e restaura o destaque da probe selecionada, que no caso "fora do
-    // volume" seria a dominante do pick ANTERIOR, sem contribuicao nenhuma no ponto atual. E
-    // SetDebugProbeIndex(-1) tambem nao serve: zerar o indice faz o RequestDebugProbePoint
-    // recusar o proximo clique, matando a inspecao no meio.
+    // Descarta a lista de contribuintes de um point-pick e volta a destacar SO a probe da
+    // sessao, sem encerra-la. Serve ao caso "ponto fora do volume", em que nenhuma das oito
+    // contribui: o chamador restaura antes a probe-base (senao o indice da sessao ainda e a
+    // dominante do pick anterior, e destacar essa seria apontar quem nao iluminou o ponto).
+    //
+    // Por que nao dava para reaproveitar o que ja existia: SetDebugProbeContributors com
+    // contagem zero NAO limpa — ele cai no ramo de restauracao acima, sem zerar a lista; e
+    // SetDebugProbeIndex(-1) faria o RequestDebugProbePoint recusar o proximo clique, matando a
+    // inspecao no meio. Este caminho e incondicional, entao tambem funciona quando o indice da
+    // sessao nao mudou (o setter faz early-out nesse caso e a lista velha sobreviveria).
     void Renderer::ClearDebugProbeContributors() {
-        DDGIDebugPass.SetSelectedProbe(-1); // limpa lista, pesos, risco e a probe focada
-        ++DebugPreviewConfigVersion;        // o painel refaz o preview do tile
+        DDGIDebugPass.SetSelectedProbe(DebugProbeIndex != kNoDebugProbe
+                                       ? static_cast<i32>(DebugProbeIndex) : -1);
+        ++DebugPreviewConfigVersion; // o painel refaz o preview do tile
     }
 
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {

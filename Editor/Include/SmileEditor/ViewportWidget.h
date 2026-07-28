@@ -455,6 +455,11 @@ namespace SmileEditor {
         QString        DebugProbeDirection;
         QString        DebugProbeSample;
         bool           DebugProbePointPickArmed = false;
+        // Probe selecionada ANTES do point-pick. O pick sobrescreve a selecao pela dominante do
+        // ponto, mas fora do volume nao existe dominante — sem guardar a base, o cabecalho e o
+        // preview do tile ficariam presos na dominante do pick ANTERIOR enquanto o resumo diz
+        // "so ambiente". -1 = nao ha pick em andamento.
+        int            DebugProbeBaseIndex = -1;
         QString        DebugProbePointSummary;
         QVariantList   DebugProbeContributors;
         std::array<Smile::u32, 8> DebugProbeContributorIndices{};

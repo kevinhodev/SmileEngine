@@ -1662,6 +1662,13 @@ namespace SmileEditor {
                     .arg(QLocale().toString(PointDiagnostic.WorldPosition.X, 'f', 2))
                     .arg(QLocale().toString(PointDiagnostic.WorldPosition.Y, 'f', 2))
                     .arg(QLocale().toString(PointDiagnostic.WorldPosition.Z, 'f', 2));
+                // Devolve a selecao a probe que o usuario tinha antes do pick: o cabecalho e o
+                // preview do tile saem do indice selecionado, e mante-lo na dominante do pick
+                // anterior mostraria "PROBE #N" com o oct-map dela ao lado de um resumo que diz
+                // que nenhuma probe contribuiu. Restaurar tambem mantem a sessao viva — indice
+                // valido e pre-requisito do proximo RequestDebugProbePoint.
+                if (DebugProbeBaseIndex >= 0)
+                    Renderer->SetDebugProbeIndex(DebugProbeBaseIndex);
                 Renderer->ClearDebugProbeContributors();
                 InvalidateDebugPreview();
                 emit ViewSettingsChanged();
@@ -1857,6 +1864,11 @@ namespace SmileEditor {
                     DebugProbeContributors.clear();
                     DebugProbeContributorCount = 0;
                     DebugProbeContributorRiskSlot = -1;
+                    // Guarda a probe da sessao antes que o resultado do pick a sobrescreva pela
+                    // dominante do ponto — e o que permite voltar atras quando o ponto cai fora
+                    // do volume e nao ha dominante nenhuma.
+                    DebugProbeBaseIndex =
+                        static_cast<int>(Renderer->GetDebugProbeIndex());
                     if (Renderer->RequestDebugProbePoint(Px, Py)) {
                         DebugProbePointSummary =
                             QStringLiteral("Lendo o ponto da cena...");

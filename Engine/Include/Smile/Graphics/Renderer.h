@@ -359,8 +359,9 @@ namespace Smile {
         void SetDebugProbeContributors(const FDDGIPointDiagnostic& Diagnostic);
         void SetDebugProbeContributors(const u32* Indices, const f32* Weights,
                                        u32 Count, i32 RiskSlot);
-        // Apaga a visualizacao de contribuintes preservando a sessao de point-pick (ver .cpp):
-        // contagem zero no setter acima NAO limpa, e SetDebugProbeIndex(-1) encerraria a sessao.
+        // Descarta os contribuintes de um point-pick e volta a destacar so a probe da sessao,
+        // preservando-a (ver .cpp): contagem zero no setter acima NAO limpa, e
+        // SetDebugProbeIndex(-1) encerraria a sessao. Restaure a probe-base ANTES de chamar.
         void ClearDebugProbeContributors();
         void SetDebugPreviewEnabled(bool Enabled) {
             if (DebugPreviewEnabled == Enabled) return;

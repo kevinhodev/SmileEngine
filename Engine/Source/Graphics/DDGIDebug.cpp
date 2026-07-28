@@ -604,8 +604,11 @@ namespace Smile {
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->IASetVertexBuffers(0, 0, nullptr);
         _CL->IASetIndexBuffer(nullptr);
-        const bool SelectedMode = Mode == EMode::Selected &&
-                                  SelectedProbeCount > 0;
+        // O modo Selected manda mesmo com contagem ZERO: "nenhuma probe selecionada" tem que
+        // desenhar NENHUMA, e nao o grid inteiro. Com o `SelectedProbeCount > 0` que existia
+        // aqui, limpar a selecao (ponto fora do volume de sondas, onde nenhuma contribui) caia
+        // no ramo de baixo e despejava as ~4,4 mil esferas do volume na tela.
+        const bool SelectedMode = Mode == EMode::Selected;
         const u32 InstanceCount = SelectedMode ? SelectedProbeCount : NumProbes;
         _CL->DrawInstanced(kSphereVerts, InstanceCount, 0, 0);
 
