@@ -108,8 +108,8 @@ namespace SmileEditor {
         return Renderer ? static_cast<double>(Renderer->GetGISurfaceBiasMax()) : 0.0;
     }
 
-    bool ViewportWidget::IsGIUnbiasedBackfaceEnabled() const {
-        return Renderer && Renderer->GetGIUnbiasedBackface();
+    double ViewportWidget::GetGIVolumeFadeProbes() const {
+        return Renderer ? static_cast<double>(Renderer->GetGIVolumeFadeProbes()) : 0.0;
     }
 
     bool ViewportWidget::IsGTAOEnabled() const {
@@ -820,9 +820,9 @@ namespace SmileEditor {
         emit ViewSettingsChanged();
     }
 
-    void ViewportWidget::ToggleGIUnbiasedBackface() {
+    void ViewportWidget::SetGIVolumeFadeProbes(double _Probes) {
         if (!Renderer) return;
-        Renderer->SetGIUnbiasedBackface(!Renderer->GetGIUnbiasedBackface());
+        Renderer->SetGIVolumeFadeProbes(static_cast<float>(qBound(0.0, _Probes, 3.0)));
         emit ViewSettingsChanged();
     }
 
@@ -1651,6 +1651,20 @@ namespace SmileEditor {
                 DebugProbePointSummary =
                     QStringLiteral("Nenhuma superfície encontrada nesse pixel");
                 Renderer->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
+            } else if (PointDiagnostic.VolumeWeight <= 0.001f) {
+                // Fora do volume o pixel usa SO o ambiente de fallback: as oito sondas nao
+                // contribuem com nada. Anunciar "dominante"/"maior risco" e destacar uma delas
+                // no viewport seria apontar para quem nao iluminou o ponto. O Clear e explicito
+                // (e nao contagem zero no setter) porque aquele caminho RESTAURA o destaque da
+                // probe do pick anterior — ver Renderer::ClearDebugProbeContributors.
+                DebugProbePointSummary = QStringLiteral(
+                    "ponto %1 · %2 · %3 m  •  fora do volume de sondas — só ambiente")
+                    .arg(QLocale().toString(PointDiagnostic.WorldPosition.X, 'f', 2))
+                    .arg(QLocale().toString(PointDiagnostic.WorldPosition.Y, 'f', 2))
+                    .arg(QLocale().toString(PointDiagnostic.WorldPosition.Z, 'f', 2));
+                Renderer->ClearDebugProbeContributors();
+                InvalidateDebugPreview();
+                emit ViewSettingsChanged();
             } else {
                 const auto& DDGI = Renderer->GetDDGI();
                 const Smile::Vec3 GridCount = DDGI.GridCount();
@@ -1731,15 +1745,26 @@ namespace SmileEditor {
                     ? static_cast<int>(PointDiagnostic.Probes[
                         static_cast<size_t>(PointDiagnostic.RiskSlot)].ProbeIndex)
                     : -1;
+                // Peso do volume: so aparece quando NAO e 1, senao polui a linha no caso comum.
+                // Sem ele, mexer no fade de borda reexecutaria o diagnostico sem mover nada no
+                // painel — os pesos por sonda nao dependem do fade, so o resultado do pixel.
+                // O peso e uma FRACAO do gather (o resto vem do ambiente), nao uma contagem de
+                // sondas — a largura do fade e que e medida em celulas, no slider. (O caso
+                // peso = 0 nem chega aqui: tem ramo proprio, sem dominante nem contribuintes.)
+                const QString VolumeNote = PointDiagnostic.VolumeWeight >= 0.999f
+                    ? QString()
+                    : QStringLiteral("  •  borda do volume (%1% DDGI)")
+                          .arg(Locale.toString(PointDiagnostic.VolumeWeight * 100.0f, 'f', 0));
                 DebugProbePointSummary = QStringLiteral(
-                    "ponto %1 · %2 · %3 m  •  dominante #%4%5")
+                    "ponto %1 · %2 · %3 m  •  dominante #%4%5%6")
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.X, 'f', 2))
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.Y, 'f', 2))
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.Z, 'f', 2))
                     .arg(DominantIndex)
                     .arg(RiskIndex >= 0
                         ? QStringLiteral("  •  maior risco #%1").arg(RiskIndex)
-                        : QStringLiteral("  •  sem risco relevante"));
+                        : QStringLiteral("  •  sem risco relevante"))
+                    .arg(VolumeNote);
                 InvalidateDebugPreview();
                 emit ViewSettingsChanged();
             }

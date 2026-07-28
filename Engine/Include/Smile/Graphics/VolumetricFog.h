@@ -32,6 +32,11 @@ namespace Smile {
             Vec3  SunColorTimesIntensity{};  // radiancia real da key light (cor x int)
             Vec4  CollapsedFog{};            // FFogPass::CollapsedFogParams (mesmo meio do frame)
             Vec3  SkyAmbient{};              // fallback do ambiente quando DDGI off
+            // Largura, em celulas do grid, do fade do DDGI para o SkyAmbient nas bordas do
+            // volume de sondas (0 = desligado). O fog cobre o frustum inteiro, entao a maior
+            // parte dele fica fora do grid: sem isto, voxel distante herda a irradiancia da
+            // ultima fileira de sondas estendida ao infinito.
+            f32   DDGIVolumeFadeProbes = 0.0f;
             f32   NearZ = 0.1f;
             u32   RenderW = 0, RenderH = 0;  // res de render (conservative depth)
             Vec4  DDGIGridMin{};             // xyz = origem, w = spacing

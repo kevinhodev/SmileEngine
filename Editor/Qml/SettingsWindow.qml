@@ -2427,6 +2427,7 @@ Rectangle {
             function reloadEps() {
                 epsModel = viewportModel.rayEpsilons
                 biasMaxSlider.uiValue = viewportModel.giSurfaceBiasMax
+                fadeSlider.uiValue    = viewportModel.giVolumeFadeProbes
             }
             Component.onCompleted: reloadEps()
             onVisibleChanged: if (visible) reloadEps()
@@ -2635,7 +2636,7 @@ Rectangle {
                     id: ddgiSampleCard
                     width: parent.width
                     title: "Amostragem do DDGI — bias de auto-sombra"
-                    height: ubLabel.y + ubLabel.height + contentPadding + 8
+                    height: biasMaxSlider.y + biasMaxSlider.height + contentPadding + 8
 
                     Text {
                         id: ddgiSampleHelper
@@ -2651,14 +2652,12 @@ Rectangle {
                               "outro lado.\n\n" +
                               "O teto limita esse deslocamento em metros; 0 volta ao " +
                               "comportamento histórico, sem teto. Padrão 0,40 m.\n\n" +
-                              "O segundo controle mede o teste de backface a partir do ponto sem " +
-                              "deslocamento — o teste pergunta de que lado da superfície real a " +
-                              "sonda está, e o ponto deslocado pode já estar do outro lado da " +
-                              "parede.\n\n" +
-                              "Os dois são independentes de propósito: capture referência, só " +
-                              "teto, só backface e ambos, com a câmera travada. O atlas NÃO é " +
-                              "reiniciado na troca — os dois estados leem o mesmo atlas, e a " +
-                              "única variável é a amostragem."
+                              "O teste de backface das sondas usa sempre o ponto sem " +
+                              "deslocamento, e só a distância do Chebyshev usa o deslocado — é a " +
+                              "separação que o Flax faz, e não é ajustável.\n\n" +
+                              "O atlas NÃO é reiniciado ao mexer aqui: os dois estados leem o " +
+                              "mesmo atlas, então a única variável é a amostragem e a comparação " +
+                              "vale já no frame seguinte."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2675,9 +2674,10 @@ Rectangle {
                         to: 2.0
                         step: 0.01
                         // Igual aos epsilons: o rótulo acompanha o arrasto, a engine só é tocada
-                        // ao soltar — cada pixel de arrasto reinicia atlas e TAA. Sem binding
-                        // direto em viewportModel (escrever emite ViewSettingsChanged e o valor
-                        // saltaria de volta no meio do arrasto); recarrega em reloadEps().
+                        // ao soltar — cada pixel de arrasto derrubaria o TAA e reexecutaria o
+                        // diagnóstico. Sem binding direto em viewportModel (escrever emite
+                        // ViewSettingsChanged e o valor saltaria de volta no meio do arrasto);
+                        // recarrega em reloadEps().
                         property real uiValue: 0.0
                         value: uiValue
                         valueText: uiValue === 0.0
@@ -2690,21 +2690,58 @@ Rectangle {
                         }
                     }
 
+                }
+
+                Card {
+                    id: volumeFadeCard
+                    width: parent.width
+                    title: "Fora do volume de sondas"
+                    height: fadeSlider.y + fadeSlider.height + contentPadding + 8
+
                     Text {
-                        id: ubLabel
+                        id: fadeHelper
                         x: 20
-                        y: biasMaxSlider.y + biasMaxSlider.height + 18
-                        text: "Backface sem bias"
-                        color: root.textNormal
+                        y: volumeFadeCard.headerHeight + volumeFadeCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "O volume cobre a caixa da cena, e o terreno fica de fora de " +
+                              "propósito — um terreno de quilômetros esticaria a grade inteira. " +
+                              "Só que o gather não falha fora do volume: ele grampeia as " +
+                              "coordenadas e estende a última fileira de sondas ao infinito, " +
+                              "enquanto o ambiente difuso comum fica desligado porque o GI está " +
+                              "ligado. Na prática o terreno inteiro herda a irradiância da borda " +
+                              "da grade.\n\n" +
+                              "Este controle desvanece para o ambiente hemisférico da atmosfera " +
+                              "— o mesmo que a cena usaria sem GI — ao longo da largura " +
+                              "escolhida, medida em células da grade e contada para FORA da " +
+                              "borda. Dentro do volume nada muda: o volume é justo, então o chão " +
+                              "nasce a meia célula da face inferior e um desvanecimento para " +
+                              "dentro lavaria o piso inteiro. 0 volta ao comportamento histórico."
+                        color: root.textSecondary
                         font.family: C.Theme.fontFamily
-                        font.pixelSize: 13
+                        font.pixelSize: 11
+                        lineHeight: 1.35
                     }
-                    Toggle {
-                        id: ubToggle
-                        anchors.right: parent.right; anchors.rightMargin: 20
-                        y: ubLabel.y - 6
-                        checked: viewportModel.giUnbiasedBackface
-                        onToggled: viewportModel.ToggleGIUnbiasedBackface()
+
+                    ShadowSlider {
+                        id: fadeSlider
+                        x: 20
+                        y: fadeHelper.y + fadeHelper.height + 16
+                        width: parent.width - 40
+                        label: "Largura do fade"
+                        from: 0.0
+                        to: 3.0
+                        step: 0.25
+                        property real uiValue: 0.0
+                        value: uiValue
+                        valueText: uiValue === 0.0
+                                       ? "desligado"
+                                       : uiValue.toFixed(2).replace(".", ",") + " células"
+                        onCommitted: (v) => fadeSlider.uiValue = v
+                        onReleased: (v) => {
+                            fadeSlider.uiValue = v
+                            viewportModel.SetGIVolumeFadeProbes(v)
+                        }
                     }
                 }
             }

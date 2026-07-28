@@ -58,7 +58,8 @@ namespace SmileEditor {
         // Amostragem do DDGI: teto do self-shadow bias (metros; 0 = sem teto) e peso de backface
         // medido da posicao sem bias. Eixos separados de proposito — a matriz 2x2 e o experimento.
         Q_PROPERTY(double giSurfaceBiasMax READ GetGISurfaceBiasMax NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool giUnbiasedBackface READ IsGIUnbiasedBackfaceEnabled NOTIFY ViewSettingsChanged)
+        // Fade para o ambiente hemisferico nas bordas do volume (em celulas; 0 = desligado).
+        Q_PROPERTY(double giVolumeFadeProbes READ GetGIVolumeFadeProbes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
@@ -196,7 +197,7 @@ namespace SmileEditor {
         bool              IsReflectionsCullBackfaceEnabled() const;
         bool              IsGIBackfacePolicyEnabled() const;
         double            GetGISurfaceBiasMax() const;
-        bool              IsGIUnbiasedBackfaceEnabled() const;
+        double            GetGIVolumeFadeProbes() const;
         bool              IsGTAOEnabled() const;
         bool              IsGTAOHalfRes() const;
         bool              AreReflectionsEnabled() const;
@@ -317,7 +318,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleReflectionsCullBackface();
         Q_INVOKABLE void ToggleGIBackfacePolicy();
         Q_INVOKABLE void SetGISurfaceBiasMax(double meters);
-        Q_INVOKABLE void ToggleGIUnbiasedBackface();
+        Q_INVOKABLE void SetGIVolumeFadeProbes(double probes);
         Q_INVOKABLE void ToggleGTAO();
         Q_INVOKABLE void ToggleGTAOHalfRes();
         Q_INVOKABLE void ToggleReflections();

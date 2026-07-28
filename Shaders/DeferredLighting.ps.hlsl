@@ -181,27 +181,57 @@ float SpecularOcclusionFromAO(float noV, float roughness, float ao) {
 // Amostra o indireto do DDGI respeitando os flags do frame (Chebyshev/skip de probes inativos).
 // Caminho UNICO p/ geometria e folhagem — com os pisos defensivos do Chebyshev (DDGICommon),
 // folhagem densa nao crusha mais a preto e nao precisa de sampling separado.
+// Ambiente indireto para pontos FORA do volume de sondas: reproduz o que este mesmo shader
+// usaria se o GI estivesse desligado, e nessa ordem — ambiente atmosferico hemisferico quando
+// ligado (o ramo UseAtmoAmbient), senao o difuso do IBL (o ramo IBLParams.w), senao nada.
+// Seguir o gate importa: sem ele, desligar o ambiente atmosferico deixaria o fallback usando as
+// cores dele assim mesmo, que nao e o que o resto da cena faz.
+//
+// O caller multiplica por giIntensity, entao dividimos aqui: o ambiente de fora do volume nao
+// deve escalar com o slider de intensidade do GI — a promessa e "o mesmo que existiria sem GI".
+float3 DDGI_FallbackAmbient(float3 N) {
+    float3 amb = float3(0.0f, 0.0f, 0.0f);
+    if (SkyAmbientColor.w > 0.5f) {
+        float hemi = saturate(N.y * 0.5f + 0.5f);
+        amb = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi) * GroundAmbientColor.w;
+    } else if (IBLParams.w > 0.5f) {
+        amb = IrradianceMap.SampleLevel(IBLSampler, RotateY(N, IBLParams.y), 0.0f).rgb
+            * IBLParams.x;
+    }
+    float giI = (DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f; // espelha o giIntensity do caller
+    return amb / giI;
+}
+
 float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
     int  giFlags      = (int)DDGIDistParams.w;
     bool useChebyshev = (giFlags & 1) != 0;
     bool skip         = (giFlags & 2) != 0;
     bool fallback     = (giFlags & 4) != 0;
-    bool unbiasedBf   = (giFlags & 8) != 0; // backface medido da posicao SEM bias (estilo Flax)
     uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+
+    // Fora do volume o gather nao falha: ele CLAMPA e estende as probes de borda ao infinito.
+    // Quando o peso cai a zero nem vale pagar os 8 taps.
+    float volW = DDGI_VolumeWeight(worldPos, DDGIGridMin.xyz, DDGIGridMin.w,
+                                   (int3)DDGIGridCount.xyz, DDGIBiasParams.z);
+    if (volW <= 0.0f) return DDGI_FallbackAmbient(N);
+
+    float3 gi;
     if (useChebyshev) {
         float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
         float3 V = normalize(CameraPosition.xyz - worldPos);
         float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w,
                                           DDGIBiasParams.x, DDGIBiasParams.y);
-        return SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
-                   worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                   (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                   DDGIProbeData, skipMode, unbiasedBf);
+        gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
+                 worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
+                 DDGIProbeData, skipMode);
+    } else {
+        gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
+                 DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize);
     }
-    return SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-               DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-               (int)DDGIParams.y, atlasInvSize);
+    return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }
 
 float4 main(VSOutput input) : SV_Target {

@@ -33,6 +33,9 @@ namespace Smile {
         std::array<FDDGIPointProbeDiagnostic, 8> Probes{};
         i32 DominantSlot = -1;
         i32 RiskSlot = -1;
+        // Peso do volume de sondas no ponto: 1 = dentro, <1 = mistura com o ambiente de fora,
+        // 0 = so ambiente. Os pesos por probe nao dependem dele — por isso e reportado a parte.
+        f32 VolumeWeight = 1.0f;
     };
 
     class FDDGIDebug {
@@ -140,7 +143,9 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCBBase = nullptr;
 
-        static constexpr u32 kPointOutputRows = 2 + kPointProbeCount * 3;
+        // +1 no fim = peso do volume; espelha DDGI_POINT_ROWS no DDGIDebugPoint.cs.hlsl.
+        static constexpr u32 kPointOutputRows    = 3 + kPointProbeCount * 3;
+        static constexpr u32 kPointRowVolumeIdx  = 2 + kPointProbeCount * 3;
         Microsoft::WRL::ComPtr<ID3D12Resource> PointDiagnosticCB;
         u8* PointDiagnosticMappedCB = nullptr;
         Microsoft::WRL::ComPtr<ID3D12Resource> PointDiagnosticOutput;

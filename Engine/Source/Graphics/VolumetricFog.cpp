@@ -275,7 +275,8 @@ namespace Smile {
         c.DDGIGridMin    = _P.DDGIGridMin;
         c.DDGIGridCount  = _P.DDGIGridCount;
         c.DDGIParams     = _P.DDGIParams;
-        c.AmbientFallback= { _P.SkyAmbient.X, _P.SkyAmbient.Y, _P.SkyAmbient.Z, 0.0f };
+        c.AmbientFallback= { _P.SkyAmbient.X, _P.SkyAmbient.Y, _P.SkyAmbient.Z,
+                             _P.DDGIVolumeFadeProbes };
 
         // Temporal: historia valida so com PrevVP guardado E frame anterior ativo.
         const bool UseHistory = Temporal && HistoryValid && HasPrevFrame;

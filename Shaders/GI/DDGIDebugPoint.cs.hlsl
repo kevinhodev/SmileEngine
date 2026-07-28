@@ -21,7 +21,8 @@ cbuffer DDGIPointDebugCB : register(b0) {
     float4 DistAtlasParams;
     float4 CameraPositionFlags; // xyz = camera; w = GI flags
     float4 PixelParams;         // xy = pixel interno; zw = tamanho interno
-    float4 BiasParams;          // x = escala do bias, y = teto em metros (0 = sem teto)
+    float4 BiasParams;          // x = escala do bias, y = teto em metros (0 = sem teto),
+                                // z = largura do fade de borda em celulas (0 = desligado)
 };
 
 Texture2D<float4> GBufferB        : register(t0);
@@ -33,7 +34,10 @@ RWBuffer<float4>  DiagnosticOut   : register(u0);
 SamplerState      LinearClamp     : register(s0);
 
 static const uint DDGI_POINT_PROBES = 8u;
-static const uint DDGI_POINT_ROWS   = 2u + DDGI_POINT_PROBES * 3u;
+// +1 no fim: peso do volume (fade de borda). Acrescentado no FIM de proposito — as linhas por
+// probe ficam nos mesmos indices e o parser do editor nao se desloca.
+static const uint DDGI_POINT_ROWS   = 3u + DDGI_POINT_PROBES * 3u;
+static const uint DDGI_POINT_ROW_VOLUME = 2u + DDGI_POINT_PROBES * 3u;
 
 [numthreads(1, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
@@ -57,7 +61,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const bool useChebyshev = (flags & 1) != 0;
     const bool skipInactive = (flags & 2) != 0;
     const bool useFallback  = (flags & 4) != 0;
-    const bool unbiasedBf   = (flags & 8) != 0;
     const uint skipMode = skipInactive ? (useFallback ? 2u : 1u) : 0u;
 
     const float3 biasVec = useChebyshev
@@ -89,7 +92,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 (int)i, base, fracPart, biasPos, worldPos, N,
                 GridMinSpacing.xyz, GridMinSpacing.w, count,
                 DistanceAtlas, LinearClamp, (int)DistAtlasParams.x,
-                1.0f / DistAtlasParams.yz, ProbeData, skipMode, unbiasedBf);
+                1.0f / DistAtlasParams.yz, ProbeData, skipMode);
         } else {
             // Com o Chebyshev desligado o consumidor e o SampleDDGIIrradiance: trilinear
             // puro, sem bias, sem relocacao e sem skip de probe inativa. Os momentos ainda
@@ -136,6 +139,13 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     DiagnosticOut[0] = float4(worldPos, 1.0f);
     DiagnosticOut[1] = float4(N, totalWeight);
+    // Peso do volume no ponto: 1 = dentro (gather integral), <1 = mistura com o ambiente de
+    // fora, 0 = so ambiente. Os pesos por probe acima NAO mudam com o fade — sem publicar isto,
+    // mexer no slider reexecutaria o diagnostico e nada no painel se moveria, exatamente a
+    // impressao de "knob morto" que o re-disparo veio corrigir.
+    DiagnosticOut[DDGI_POINT_ROW_VOLUME] = float4(
+        DDGI_VolumeWeight(worldPos, GridMinSpacing.xyz, GridMinSpacing.w, count, BiasParams.z),
+        0.0f, 0.0f, 0.0f);
     [unroll]
     for (uint i = 0u; i < DDGI_POINT_PROBES; ++i) {
         const float normalized = totalWeight > 0.0f

@@ -70,27 +70,50 @@ struct PSInput {
 };
 
 // Mesmo sampling de DDGI do DeferredLighting (flags de Chebyshev/skip do frame).
+// Espelha o DeferredLighting: fora do volume de sondas, o indireto vira o que este shader usaria
+// sem GI — atmosferico hemisferico, senao difuso do IBL, senao nada — ja dividido pelo
+// giIntensity que o caller aplica (o ambiente de fora do volume nao segue o slider do GI).
+float3 DDGI_FallbackAmbient(float3 N) {
+    float3 amb = float3(0.0f, 0.0f, 0.0f);
+    if (SkyAmbientColor.w > 0.5f) {
+        float hemi = saturate(N.y * 0.5f + 0.5f);
+        amb = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi) * GroundAmbientColor.w;
+    } else if (IBLParams.w > 0.5f) {
+        amb = IrradianceMap.SampleLevel(IBLSampler, RotateY(N, IBLParams.y), 0.0f).rgb
+            * IBLParams.x;
+    }
+    float giI = (DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
+    return amb / giI;
+}
+
 float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
     int  giFlags      = (int)DDGIDistParams.w;
     bool useChebyshev = (giFlags & 1) != 0;
     bool skip         = (giFlags & 2) != 0;
     bool fallback     = (giFlags & 4) != 0;
-    bool unbiasedBf   = (giFlags & 8) != 0; // backface medido da posicao SEM bias (estilo Flax)
     uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+
+    float volW = DDGI_VolumeWeight(worldPos, DDGIGridMin.xyz, DDGIGridMin.w,
+                                   (int3)DDGIGridCount.xyz, DDGIBiasParams.z);
+    if (volW <= 0.0f) return DDGI_FallbackAmbient(N);
+
+    float3 gi;
     if (useChebyshev) {
         float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
         float3 V = normalize(CameraPosition.xyz - worldPos);
         float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w,
                                           DDGIBiasParams.x, DDGIBiasParams.y);
-        return SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
-                   worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                   (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                   DDGIProbeData, skipMode, unbiasedBf);
+        gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
+                 worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
+                 DDGIProbeData, skipMode);
+    } else {
+        gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
+                 DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize);
     }
-    return SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-               DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-               (int)DDGIParams.y, atlasInvSize);
+    return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }
 
 float4 main(PSInput input) : SV_Target {

@@ -157,12 +157,25 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
 
     // Ambiente: DDGI amostrado "olhando" pra camera (direcao dominante do inscatter
     // forward) / pi — mesma escala do difuso em superficie. Fora do DDGI, SkyAmbient.
+    //
+    // O fade de borda vale AQUI TAMBEM, e aqui ele importa mais que em superficie: o volume de
+    // fog cobre o frustum inteiro, entao a maior parte dele fica FORA do grid de sondas em cena
+    // com terreno, e sem o fade cada voxel distante herdava a irradiancia da ultima fileira de
+    // sondas estendida ao infinito. O alvo do lerp e o mesmo AmbientFallback que ja servia ao
+    // caso "DDGI desligado" — sem termo novo no CB, so a largura em AmbientFallback.w.
     float3 amb;
     if (DDGIGridCount.w > 0.5f) {
         float2 invSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
-        amb = SampleDDGIIrradiance(DDGIIrradianceAtlas, LinearClamp, wp, -dir,
-                  DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                  (int)DDGIParams.y, invSize) * (DDGIParams.x / SMILE_PI);
+        float  volW = DDGI_VolumeWeight(wp, DDGIGridMin.xyz, DDGIGridMin.w,
+                                        (int3)DDGIGridCount.xyz, AmbientFallback.w);
+        if (volW <= 0.0f) {
+            amb = AmbientFallback.rgb;
+        } else {
+            float3 gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, LinearClamp, wp, -dir,
+                            DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                            (int)DDGIParams.y, invSize) * (DDGIParams.x / SMILE_PI);
+            amb = (volW >= 1.0f) ? gi : lerp(AmbientFallback.rgb, gi, volW);
+        }
     } else {
         amb = AmbientFallback.rgb;
     }

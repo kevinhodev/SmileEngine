@@ -1162,6 +1162,17 @@ namespace Smile {
         }
     }
 
+    // Apaga a visualizacao de contribuintes SEM encerrar a sessao de point-pick. As duas coisas
+    // sao separadas de proposito: passar contagem zero para SetDebugProbeContributors NAO limpa
+    // — ele cai no ramo acima e restaura o destaque da probe selecionada, que no caso "fora do
+    // volume" seria a dominante do pick ANTERIOR, sem contribuicao nenhuma no ponto atual. E
+    // SetDebugProbeIndex(-1) tambem nao serve: zerar o indice faz o RequestDebugProbePoint
+    // recusar o proximo clique, matando a inspecao no meio.
+    void Renderer::ClearDebugProbeContributors() {
+        DDGIDebugPass.SetSelectedProbe(-1); // limpa lista, pesos, risco e a probe focada
+        ++DebugPreviewConfigVersion;        // o painel refaz o preview do tile
+    }
+
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
         Camera.Update(_Input, _DeltaTime);
         ElapsedTime  += _DeltaTime;
@@ -1478,12 +1489,11 @@ namespace Smile {
                                         DDGI.AtlasW(), DDGI.AtlasH() };
 
             const f32 GIFlags = (GIChebyshev ? 1.0f : 0.0f) + (GISkipInactiveProbes ? 2.0f : 0.0f)
-                              + (GISkipInactiveFallback ? 4.0f : 0.0f)
-                              + (DDGI.GetUnbiasedBackface() ? 8.0f : 0.0f);
+                              + (GISkipInactiveFallback ? 4.0f : 0.0f);
             MappedCB->DDGIDistParams = { DDGI.DistTileSizeF(), DDGI.DistAtlasW(),
                                          DDGI.DistAtlasH(), GIFlags };
             MappedCB->DDGIBiasParams = { DDGI.GetSurfaceBiasScale(), DDGI.GetSurfaceBiasMax(),
-                                         0.0f, 0.0f };
+                                         DDGI.GetVolumeFadeProbes(), 0.0f };
         } else {
             MappedCB->DDGIGridMin    = { 0.0f, 0.0f, 0.0f, 1.0f };
             MappedCB->DDGIGridCount  = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -1579,6 +1589,7 @@ namespace Smile {
                 VF.DDGIGridCount = { GCnt.X, GCnt.Y, GCnt.Z, 1.0f };
                 VF.DDGIParams    = { DDGI.GetIntensity(), DDGI.TileSizeF(),
                                      DDGI.AtlasW(), DDGI.AtlasH() };
+                VF.DDGIVolumeFadeProbes = DDGI.GetVolumeFadeProbes();
             }
             VolumetricFog.UpdatePerFrame(FrameSlot, VF);
         } else if (VolumetricFog.IsInitialized()) {
@@ -2559,8 +2570,7 @@ namespace Smile {
             const u32 PointGIFlags =
                 (GIChebyshev ? 1u : 0u) |
                 (GISkipInactiveProbes ? 2u : 0u) |
-                (GISkipInactiveFallback ? 4u : 0u) |
-                (DDGI.GetUnbiasedBackface() ? 8u : 0u);
+                (GISkipInactiveFallback ? 4u : 0u);
             DDGIDebugPass.RecordPointDiagnostic(
                 FrameSlot, CommandList, SRVHeap, DDGI,
                 InvViewProjFull, CameraPosition,

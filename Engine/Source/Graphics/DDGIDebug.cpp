@@ -378,7 +378,8 @@ namespace Smile {
         // Os mesmos knobs que o deferred usa — o diagnostico tem que pesar as probes com o
         // bias real, senao volta a relatar numeros de outro gather.
         C->BiasParams = {
-            _DDGI.GetSurfaceBiasScale(), _DDGI.GetSurfaceBiasMax(), 0.0f, 0.0f
+            _DDGI.GetSurfaceBiasScale(), _DDGI.GetSurfaceBiasMax(),
+            _DDGI.GetVolumeFadeProbes(), 0.0f
         };
 
         if (PointOutputState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
@@ -441,6 +442,7 @@ namespace Smile {
             Result.WorldPosition = { Rows[0].X, Rows[0].Y, Rows[0].Z };
             Result.WorldNormal   = { Rows[1].X, Rows[1].Y, Rows[1].Z };
             Result.TotalWeight   = Rows[1].W;
+            Result.VolumeWeight  = Rows[kPointRowVolumeIdx].X;
             f32 BestWeight = -1.0f;
             // Abaixo deste limiar a perda de visibilidade e residual; nao destaque
             // uma probe como "risco" apenas porque ela foi a maior entre oito zeros.

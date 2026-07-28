@@ -161,11 +161,16 @@ namespace Smile {
         void SetSurfaceBiasScale(f32 V) { SurfaceBiasScale = V; }
         f32  GetSurfaceBiasScale() const{ return SurfaceBiasScale; }
 
-        // Peso de backface medido da posicao SEM bias (o que o Flax faz, DDGI.hlsl:210-215):
-        // o teste pergunta de que lado da superficie REAL a probe esta, e o ponto viesado pode
-        // ja estar do outro lado da parede. Default false = legado.
-        void SetUnbiasedBackface(bool V) { UnbiasedBackface = V; }
-        bool GetUnbiasedBackface() const { return UnbiasedBackface; }
+        // O peso de backface e sempre medido da posicao SEM bias (o que o Flax faz,
+        // DDGI.hlsl:210-215). Teve toggle enquanto era hipotese; virou comportamento fixo depois
+        // do A/B — nao e trade-off, e correcao, e o modo antigo so serviria p/ reintroduzir o bug.
+
+        // Largura, EM CELULAS, do fade para o ambiente hemisferico nas bordas do volume.
+        // 0 = desligado (o gather clampa e estende as probes de borda ao infinito, que e o
+        // comportamento historico). O terreno fica fora do volume de proposito, entao sem isto
+        // ele inteiro herda a irradiancia da ultima fileira de probes.
+        void SetVolumeFadeProbes(f32 V) { VolumeFadeProbes = V < 0.0f ? 0.0f : V; }
+        f32  GetVolumeFadeProbes() const { return VolumeFadeProbes; }
 
     private:
         void CreateConstantBuffer(ID3D12Device* Device);
@@ -266,7 +271,7 @@ namespace Smile {
         // Defaults LIGADOS (o legado seria 0.0f / false). Com o grid dimensionado pela AABB da
         // cena, o bias sem teto vale 1,20 m no Bistro — o ponto de amostragem atravessa parede.
         f32  SurfaceBiasMax   = 0.40f; // metros; 0 = sem teto (comportamento historico)
-        bool UnbiasedBackface = true;  // backface medido do ponto SEM bias, como o Flax
+        f32  VolumeFadeProbes = 1.0f;  // celulas de fade na borda; 0 = sem fallback (historico)
         static constexpr u32 kRelocateConvergeFrames = 180;
         static constexpr u32 kReclassifyFrames = 6;
         u32  RelocateFramesLeft = 0;

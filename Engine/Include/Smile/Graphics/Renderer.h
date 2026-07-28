@@ -359,6 +359,9 @@ namespace Smile {
         void SetDebugProbeContributors(const FDDGIPointDiagnostic& Diagnostic);
         void SetDebugProbeContributors(const u32* Indices, const f32* Weights,
                                        u32 Count, i32 RiskSlot);
+        // Apaga a visualizacao de contribuintes preservando a sessao de point-pick (ver .cpp):
+        // contagem zero no setter acima NAO limpa, e SetDebugProbeIndex(-1) encerraria a sessao.
+        void ClearDebugProbeContributors();
         void SetDebugPreviewEnabled(bool Enabled) {
             if (DebugPreviewEnabled == Enabled) return;
             DebugPreviewEnabled = Enabled;
@@ -508,14 +511,10 @@ namespace Smile {
             RepeatDebugProbePoint();
         }
 
-        // Amostragem do DDGI — os DOIS eixos do A/B do bias, deliberadamente SEPARADOS para a
-        // matriz 2x2 (baseline / so teto / so backface / ambos). Defaults LIGADOS (teto 0,40 m e
-        // backface sem bias); o comportamento historico e teto 0 + toggle desligado.
-        //
-        // Estes knobs sao do SAMPLER: o atlas nao depende deles e a troca vale ja no proximo
-        // frame. O ResetHistoryOnce aqui NAO e dependencia funcional — e protocolo de captura:
-        // garante que as quatro tomadas partam do mesmo estado do atlas em vez de comparar uma
-        // hysteresis de 0,99 em fase diferente. O TAA cai pelo mesmo motivo (acumula a imagem).
+        // Teto do self-shadow bias, em metros (0 = sem teto = comportamento historico). Segue
+        // como knob porque o 0,40 m saiu de raciocinio, nao de varredura — a escala relevante e a
+        // espessura de parede da cena, nao o espacamento do grid. Vira constante depois do sweep.
+        // (Sobre a invalidacao destes knobs, ver OnGISamplingChanged acima.)
         f32  GetGISurfaceBiasMax() const { return DDGI.GetSurfaceBiasMax(); }
         void SetGISurfaceBiasMax(f32 V) {
             if (V == DDGI.GetSurfaceBiasMax()) return;
@@ -528,11 +527,16 @@ namespace Smile {
             DDGI.SetSurfaceBiasScale(V);
             OnGISamplingChanged();
         }
-        bool GetGIUnbiasedBackface() const { return DDGI.GetUnbiasedBackface(); }
-        void SetGIUnbiasedBackface(bool V) {
-            if (V == DDGI.GetUnbiasedBackface()) return;
-            DDGI.SetUnbiasedBackface(V);
+        // Fade para o ambiente hemisferico nas bordas do volume (em celulas; 0 = desligado).
+        f32  GetGIVolumeFadeProbes() const { return DDGI.GetVolumeFadeProbes(); }
+        void SetGIVolumeFadeProbes(f32 V) {
+            if (V == DDGI.GetVolumeFadeProbes()) return;
+            DDGI.SetVolumeFadeProbes(V);
             OnGISamplingChanged();
+            // O fog volumetrico acumula temporalmente o proprio inscatter, e o ambiente dele
+            // muda com este knob — sem derrubar a historia, a troca aparece esmaecida por
+            // varios frames e o A/B compara estados misturados.
+            VolumetricFog.ResetHistory();
         }
 
         // Culling nos raios de REFLEXAO. Substituiu a antiga chave global da TLAS: aquela mexia em
