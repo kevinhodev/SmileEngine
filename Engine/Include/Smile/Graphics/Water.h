@@ -127,6 +127,12 @@ namespace Smile {
         void SetSoftIntersection(f32 V)    { SoftIntersectionFactor = V; }
         void SetFogDensity(f32 V)          { FogDensity = V; }
         f32  GetRefractionBumpScale() const { return RefractionBumpScale; }
+
+        // Variante diagnostica do PSO: agua sem escrever depth nem velocity (cor identica). Existe
+        // p/ isolar o conflito de guides do Ray Reconstruction — ver Water.cpp e Renderer.h.
+        // Instrumento, nao knob de look: a agua deixa de ocluir tudo que le o depth buffer.
+        void SetGuideInvisible(bool V)  { GuideInvisible = V; }
+        bool GetGuideInvisible() const  { return GuideInvisible; }
         f32  GetFogDensity() const          { return FogDensity; }
 
         void SetWaterClarity(f32 V)        { WaterClarity = V < 0.1f ? 0.1f : V; }
@@ -257,6 +263,8 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSignature;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> WireframePSO;
+        // Sem escrita de depth/velocity; ver SetGuideInvisible.
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> GuideInvisiblePSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
         u8*             MappedCBVBase = nullptr;
@@ -331,7 +339,8 @@ namespace Smile {
         f32  BumpFadeDist      = 250.0f;
 
         f32  ReflectionBumpScale    = 0.18f; 
-        f32  RefractionBumpScale    = 0.1f;  
+        f32  RefractionBumpScale    = 0.1f;
+        bool GuideInvisible         = false; // A/B do conflito de guides; ver SetGuideInvisible  
         f32  SoftIntersectionFactor = 1.0f;  
         f32  FogDensity             = 0.1f;  
         f32  WaterClarity           = 8.0f;  

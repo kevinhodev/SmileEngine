@@ -216,22 +216,41 @@ namespace Smile {
         Depth.DepthFunc      = kDepthFuncLess; 
         Depth.StencilEnable  = FALSE;
 
-        auto CreateWaterPSO = [&](D3D12_FILL_MODE _FillMode,
+        // _WriteGuides = false: variante DIAGNOSTICA. A agua vira overlay so de cor — nao escreve
+        // depth nem velocity —, entao depth, velocity e G-buffer voltam a descrever coerentemente a
+        // superficie ATRAS dela. E o unico jeito de isolar o conflito de guides do Ray
+        // Reconstruction: no PSO normal a agua escreve depth e velocity SEM escrever G-buffer, e o
+        // RR recebe profundidade/movimento da superficie com albedo/normal/roughness do fundo.
+        // A cor sai identica nas duas variantes de proposito: o A/B mexe so nos guides.
+        auto CreateWaterPSO = [&](D3D12_FILL_MODE _FillMode, bool _WriteGuides,
                                   Microsoft::WRL::ComPtr<ID3D12PipelineState>& _Out) {
             D3D12_RASTERIZER_DESC Raster{};
             Raster.FillMode              = _FillMode;
-            Raster.CullMode              = D3D12_CULL_MODE_NONE; 
+            Raster.CullMode              = D3D12_CULL_MODE_NONE;
             Raster.FrontCounterClockwise = FALSE;
             Raster.DepthClipEnable       = TRUE;
+
+            D3D12_BLEND_DESC         LocalBlend = Blend;
+            D3D12_DEPTH_STENCIL_DESC LocalDepth = Depth;
+            if (!_WriteGuides) {
+                // Continua testando profundidade (fica ocluida certo pelo que esta na frente), so
+                // nao GRAVA. E a velocity precisa do IndependentBlendEnable: com ele em FALSE o
+                // D3D12 aplica o RenderTarget[0] a TODOS os alvos, entao mascarar so o RT1 sem
+                // liga-lo nao teria efeito nenhum.
+                LocalDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+                LocalBlend.IndependentBlendEnable = TRUE;
+                LocalBlend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+                LocalBlend.RenderTarget[1].RenderTargetWriteMask = 0;
+            }
 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC Desc{};
             Desc.pRootSignature        = RootSignature.Get();
             Desc.VS                    = { VS.data(), VS.size() };
             Desc.PS                    = { PS.data(), PS.size() };
-            Desc.BlendState            = Blend;
+            Desc.BlendState            = LocalBlend;
             Desc.SampleMask            = UINT_MAX;
             Desc.RasterizerState       = Raster;
-            Desc.DepthStencilState     = Depth;
+            Desc.DepthStencilState     = LocalDepth;
             Desc.InputLayout           = { InputLayout, _countof(InputLayout) };
             Desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
             Desc.NumRenderTargets      = 2;
@@ -243,8 +262,9 @@ namespace Smile {
             SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&_Out)));
         };
 
-        CreateWaterPSO(D3D12_FILL_MODE_SOLID, PSO);
-        CreateWaterPSO(D3D12_FILL_MODE_WIREFRAME, WireframePSO);
+        CreateWaterPSO(D3D12_FILL_MODE_SOLID,     true,  PSO);
+        CreateWaterPSO(D3D12_FILL_MODE_WIREFRAME, true,  WireframePSO);
+        CreateWaterPSO(D3D12_FILL_MODE_SOLID,     false, GuideInvisiblePSO);
     }
 
     void FWaterRenderer::BuildGenerateDrawsPipeline(ID3D12Device* _Device) {
@@ -1047,8 +1067,11 @@ namespace Smile {
         ID3D12DescriptorHeap* GraphicsHeaps[] = { _SRVHeap.Native() };
         _CommandList->SetDescriptorHeaps(_countof(GraphicsHeaps), GraphicsHeaps);
         _CommandList->SetGraphicsRootSignature(RootSignature.Get());
+        // Wireframe tem precedencia: e visualizacao, e quem o liga quer ver a malha acima de tudo.
         ID3D12PipelineState* ActivePSO =
-            (DebugMode == EDebugMode::Wireframe && WireframePSO) ? WireframePSO.Get() : PSO.Get();
+            (DebugMode == EDebugMode::Wireframe && WireframePSO) ? WireframePSO.Get()
+          : (GuideInvisible && GuideInvisiblePSO)                ? GuideInvisiblePSO.Get()
+                                                                 : PSO.Get();
         _CommandList->SetPipelineState(ActivePSO);
         _CommandList->SetGraphicsRootConstantBufferView(
             0, CBV->GetGPUVirtualAddress() + static_cast<UINT64>(FrameSlot) * sizeof(WaterConstants));

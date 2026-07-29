@@ -564,6 +564,23 @@ namespace Smile {
             TAARanLastFrame = false;
         }
 
+        // Agua "invisivel aos guides" — A/B do SEGUNDO eixo do problema da agua sob Ray
+        // Reconstruction. A agua e o unico passe que escreve depth e velocity SEM escrever
+        // G-buffer: no pixel de agua o RR recebe profundidade e movimento da superficie com
+        // albedo/normal/roughness do fundo, um jogo de guides contraditorio entre si — pior que um
+        // uniformemente errado. Ligando, a agua vira overlay so de cor e os guides voltam a
+        // descrever coerentemente o que esta atras; a cor sai identica, entao o A/B mexe so nisso.
+        // Complementa o eixo do WARP (a refracao amostrando o SceneColor ruidoso em UV deslocada):
+        // sao problemas independentes, e um resultado negativo num nao absolve o outro.
+        // NAO e knob de look — sem escrita de depth a agua deixa de ocluir quem le o depth buffer.
+        bool GetWaterGuideInvisible() const { return Water.GetGuideInvisible(); }
+        void SetWaterGuideInvisible(bool V) {
+            if (V == Water.GetGuideInvisible()) return;
+            Water.SetGuideInvisible(V);
+            RRResetPending  = true;  // muda os guides do RR: historico neural velho mente
+            TAARanLastFrame = false;
+        }
+
         // Politica de backface do gather do ReSTIR. Passa pelo Renderer, e nao direto no
         // FReSTIRGI, porque o clear dos reservoirs sozinho nao basta: o NRD e o RR acumulam SOBRE
         // eles e o TAA sobre o resultado, entao um A/B feito so com o clear compararia um estado
