@@ -176,9 +176,14 @@ namespace Smile {
 
                 g.AlphaCutoff     = MC.AlphaCutoff;
                 g.RoughnessFactor = MC.RoughnessFactor;
-                g.EmissiveFactor  = { MC.EmissiveFactor.X * MC.EmissiveStrength,
-                                      MC.EmissiveFactor.Y * MC.EmissiveStrength,
-                                      MC.EmissiveFactor.Z * MC.EmissiveStrength,
+                // O RTEmissiveScale entra SO aqui: este InstanceGeo e o que os hits de RT leem
+                // (DDGI, ReSTIR GI e reflexoes). O raster segue com o EmissiveStrength puro, entao
+                // baixar a escala tira a malha de iluminar o ambiente sem apagar o brilho dela na
+                // tela. Ver MaterialConstants::RTEmissiveScale.
+                const f32 EmiRT = MC.EmissiveStrength * MC.RTEmissiveScale;
+                g.EmissiveFactor  = { MC.EmissiveFactor.X * EmiRT,
+                                      MC.EmissiveFactor.Y * EmiRT,
+                                      MC.EmissiveFactor.Z * EmiRT,
                                       MC.MetallicFactor };
                 if (MC.AlphaTest)        g.Flags |= 1u;
                 if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage

@@ -37,6 +37,8 @@ namespace SmileEditor {
         Q_PROPERTY(double intensity READ Intensity WRITE SetIntensity NOTIFY LightChanged)
         Q_PROPERTY(double radius READ Radius WRITE SetRadius NOTIFY LightChanged)
         Q_PROPERTY(double sourceRadius READ SourceRadius WRITE SetSourceRadius NOTIFY LightChanged)
+        // Peso da luz so no indireto (GI/reflexoes/DDGI). 0 tira a luz do RT sem tocar no raster.
+        Q_PROPERTY(double rtWeight READ RTWeight WRITE SetRTWeight NOTIFY LightChanged)
         Q_PROPERTY(double innerConeDeg READ InnerConeDeg WRITE SetInnerConeDeg NOTIFY LightChanged)
         Q_PROPERTY(double outerConeDeg READ OuterConeDeg WRITE SetOuterConeDeg NOTIFY LightChanged)
         Q_PROPERTY(double posX READ PosX WRITE SetPosX NOTIFY LightChanged)
@@ -62,6 +64,7 @@ namespace SmileEditor {
         int     LightType() const;
         bool    LightEnabled() const;
         bool    CastShadows() const;
+        double  RTWeight() const;
         QColor  Color() const;
         double  Intensity() const;
         double  Radius() const;
@@ -77,6 +80,7 @@ namespace SmileEditor {
         void SetName(const QString& V);
         void SetLightEnabled(bool V);
         void SetCastShadows(bool V);
+        void SetRTWeight(double V);
         void SetColor(const QColor& V);
         void SetIntensity(double V);
         void SetRadius(double V);

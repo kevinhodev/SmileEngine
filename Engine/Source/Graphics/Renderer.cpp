@@ -1775,13 +1775,18 @@ namespace Smile {
                 MappedGILightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULightGI));
             for (const FLight& L : Scene.Lights()) {
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
+                // Peso de RT: com 0 a luz sai da lista do indireto por completo (nao so escurece —
+                // some do hit, economizando o shadow ray dela). E o caso da luz que so existia p/
+                // representar uma malha emissiva que agora ilumina sozinha. O raster nao ve isto.
+                if (L.RTWeight <= 0.0f) continue;
                 if (GILightCount >= kMaxLights) break;
 
+                const f32 RTW = L.RTWeight;
                 FGPULightGI G;
                 G.PosInvRadius      = { L.Position.X, L.Position.Y, L.Position.Z,
                                         1.0f / L.AttenuationRadius };
-                G.ColorSourceRadius = { L.Color.X * L.Intensity, L.Color.Y * L.Intensity,
-                                        L.Color.Z * L.Intensity,
+                G.ColorSourceRadius = { L.Color.X * L.Intensity * RTW, L.Color.Y * L.Intensity * RTW,
+                                        L.Color.Z * L.Intensity * RTW,
                                         std::max(L.SourceRadius, 0.01f) };
                 if (L.Type == ELightType::Spot) {
                     const Vec3 D = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });

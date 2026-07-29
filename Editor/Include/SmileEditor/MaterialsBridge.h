@@ -48,6 +48,8 @@ namespace SmileEditor {
         // continua em MaterialConstants e o shader continua lendo — so nao e mais editavel.
         Q_PROPERTY(QColor emissiveColor READ EmissiveColor WRITE SetEmissiveColor NOTIFY SelectionChanged)
         Q_PROPERTY(qreal emissiveStrength READ EmissiveStrength WRITE SetEmissiveStrength NOTIFY SelectionChanged)
+        // Escala do emissivo SO no indireto: separa "brilha na tela" de "ilumina o ambiente".
+        Q_PROPERTY(qreal rtEmissiveScale READ RTEmissiveScale WRITE SetRTEmissiveScale NOTIFY SelectionChanged)
         Q_PROPERTY(qreal normalStrength READ NormalStrength WRITE SetNormalStrength NOTIFY SelectionChanged)
         Q_PROPERTY(bool normalFlipY READ NormalFlipY WRITE SetNormalFlipY NOTIFY SelectionChanged)
         Q_PROPERTY(bool normalReconstructZ READ NormalReconstructZ WRITE SetNormalReconstructZ NOTIFY SelectionChanged)
@@ -123,6 +125,8 @@ namespace SmileEditor {
         void    SetEmissiveColor(const QColor& V);
         qreal   EmissiveStrength() const;
         void    SetEmissiveStrength(qreal V);
+        qreal   RTEmissiveScale() const;
+        void    SetRTEmissiveScale(qreal V);
         qreal   NormalStrength() const;
         void    SetNormalStrength(qreal V);
         bool    NormalFlipY() const;

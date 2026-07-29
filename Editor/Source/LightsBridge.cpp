@@ -93,6 +93,7 @@ namespace SmileEditor {
     double LightsBridge::Intensity() const    { const auto* L = SelOf(Renderer); return L ? L->Intensity : 0.0; }
     double LightsBridge::Radius() const       { const auto* L = SelOf(Renderer); return L ? L->AttenuationRadius : 0.0; }
     double LightsBridge::SourceRadius() const { const auto* L = SelOf(Renderer); return L ? L->SourceRadius : 0.05; }
+    double LightsBridge::RTWeight() const     { const auto* L = SelOf(Renderer); return L ? L->RTWeight : 1.0; }
     double LightsBridge::InnerConeDeg() const { const auto* L = SelOf(Renderer); return L ? L->InnerConeDeg : 25.0; }
     double LightsBridge::OuterConeDeg() const { const auto* L = SelOf(Renderer); return L ? L->OuterConeDeg : 40.0; }
     double LightsBridge::PosX() const         { const auto* L = SelOf(Renderer); return L ? L->Position.X : 0.0; }
@@ -155,6 +156,13 @@ namespace SmileEditor {
     void LightsBridge::SetSourceRadius(double _V) {
         auto* L = SelOf(Renderer); if (!L) return;
         L->SourceRadius = (float)std::clamp(_V, 0.01, 2.0);
+        Touch(false);
+    }
+    void LightsBridge::SetRTWeight(double _V) {
+        auto* L = SelOf(Renderer); if (!L) return;
+        // Teto em 1: isto e para REMOVER duplicata de emissivo, nao para inflar o indireto acima do
+        // que a luz entrega no direto. Quem quiser mais energia sobe a Intensity, que vale nos dois.
+        L->RTWeight = (float)std::clamp(_V, 0.0, 1.0);
         Touch(false);
     }
     void LightsBridge::SetInnerConeDeg(double _V) {
@@ -366,6 +374,8 @@ namespace SmileEditor {
             L.OuterConeDeg      = (float)O.value(QStringLiteral("outerConeDeg")).toDouble(L.OuterConeDeg);
             L.Enabled           = O.value(QStringLiteral("enabled")).toBool(true);
             L.CastShadows       = O.value(QStringLiteral("castShadows")).toBool(true);
+            // Default 1.0: cena salva antes deste campo existir continua com a luz cheia no RT.
+            L.RTWeight          = (float)O.value(QStringLiteral("rtWeight")).toDouble(1.0);
             Lights.push_back(L);
             ++Loaded;
             // Mantem os sequenciais de nome a frente dos "Point N"/"Spot N" carregados.
@@ -396,6 +406,7 @@ namespace SmileEditor {
             O[QStringLiteral("outerConeDeg")] = L.OuterConeDeg;
             O[QStringLiteral("enabled")]      = L.Enabled;
             O[QStringLiteral("castShadows")]  = L.CastShadows;
+            O[QStringLiteral("rtWeight")]     = L.RTWeight;
             Arr.append(O);
         }
         QJsonObject Root;

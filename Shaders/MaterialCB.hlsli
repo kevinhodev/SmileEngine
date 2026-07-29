@@ -52,6 +52,10 @@ cbuffer MaterialCB : register(b1) {
 
     uint   ShadingModel;
     float4 SubsurfaceColor;
+    // Nenhum shader de raster le este campo (o RT o consome ao empacotar o InstanceGeo), mas ele
+    // esta aqui porque a regra acima e espelhar MaterialConstants campo a campo — um buraco no
+    // espelho e exatamente como os offsets divergem em silencio.
+    float  RTEmissiveScale;
 };
 
 // Recorte do cutout. Era a MESMA expressao escrita cinco vezes (GBuffer.ps, ShadowDepth.ps,

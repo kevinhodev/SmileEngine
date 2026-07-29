@@ -568,6 +568,20 @@ namespace SmileEditor {
         TouchSelectedRT(); // multiplica o EmissiveFactor no InstanceGeo
     }
 
+    qreal MaterialsBridge::RTEmissiveScale() const {
+        const auto* M = SelMat();
+        return M ? M->Constants.RTEmissiveScale : 1.0;
+    }
+
+    void MaterialsBridge::SetRTEmissiveScale(qreal _V) {
+        auto* M = SelMat(); if (!M) return;
+        // Teto em 1: o objetivo e devolver o emissivo ao papel decorativo, nao inflar o indireto
+        // acima do que a superficie mostra. Quem quer mais energia sobe o EmissiveStrength.
+        M->Constants.RTEmissiveScale = float(std::clamp(_V, 0.0, 1.0));
+        M->UpdateConstants();
+        TouchSelectedRT(); // reempacota o InstanceGeo: e la que a escala entra
+    }
+
     qreal MaterialsBridge::NormalStrength() const {
         const auto* M = SelMat();
         return M ? M->Constants.NormalStrength : 1.0;
@@ -1177,6 +1191,7 @@ namespace SmileEditor {
         // usuario nao tem mais como ajustar nem reverter pela UI. JsonToMaterial tambem o ignora.
         O[QStringLiteral("emissive")]           = ColorToJson(C.EmissiveFactor.X, C.EmissiveFactor.Y, C.EmissiveFactor.Z);
         O[QStringLiteral("emissiveStrength")]   = C.EmissiveStrength;
+        O[QStringLiteral("rtEmissiveScale")]    = C.RTEmissiveScale;
         O[QStringLiteral("normalStrength")]     = C.NormalStrength;
         O[QStringLiteral("normalFlipY")]        = C.NormalFlipY != 0;
         O[QStringLiteral("normalReconstructZ")] = C.NormalReconstructZ != 0;
@@ -1223,6 +1238,9 @@ namespace SmileEditor {
         // "aoStrength" de sidecar antigo e ignorado de proposito (ver MaterialToJson).
         Color3("emissive", C.EmissiveFactor.X, C.EmissiveFactor.Y, C.EmissiveFactor.Z);
         Num("emissiveStrength", C.EmissiveStrength);
+        // Ausente em sidecar antigo => fica no default 1.0 do struct: emissivo segue iluminando
+        // cheio no RT, que e o comportamento de hoje. Nada muda sem alguem mexer.
+        Num("rtEmissiveScale", C.RTEmissiveScale);
         Num("normalStrength", C.NormalStrength);
         Flag("normalFlipY", C.NormalFlipY);
         Flag("normalReconstructZ", C.NormalReconstructZ);

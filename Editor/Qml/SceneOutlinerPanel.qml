@@ -954,6 +954,16 @@ Rectangle {
                     boundValue: lightsModel.sourceRadius
                     onMoved: v => lightsModel.sourceRadius = v
                 }
+                // Peso da luz SO no indireto. Serve para quando a luz existe apenas para
+                // representar uma malha emissiva que, com ray tracing, ja ilumina sozinha.
+                SliderRow {
+                    label: "Peso no indireto"
+                    valueText: lightsModel.rtWeight <= 0.001 ? "fora do RT"
+                                                            : root.fmt(lightsModel.rtWeight, 2) + "×"
+                    from: 0; to: 1
+                    boundValue: lightsModel.rtWeight
+                    onMoved: v => lightsModel.rtWeight = v
+                }
 
                 // ---- Sombras (spot: atlas 2D; point: cubemap) ----
                 Item {

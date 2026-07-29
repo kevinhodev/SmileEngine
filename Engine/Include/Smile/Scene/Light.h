@@ -37,6 +37,16 @@ namespace Smile {
         f32  InnerConeDeg = 25.0f;      // spot: onde o falloff angular comeca
         f32  OuterConeDeg = 40.0f;      // spot: cone externo (contribuicao zero)
 
+        // Peso da luz SO no mundo indireto (GI/reflexoes/DDGI); o raster nao ve este campo.
+        // Existe porque a autoria costuma pôr uma luz analitica DENTRO de uma malha emissiva
+        // (luminaria, letreiro, tela) para representar a emissao dela. Com o RT, a malha passa a
+        // iluminar por conta propria — os raios do gather acertam o emissivo e trazem a radiancia —,
+        // e a luz analitica vira contribuicao DUPLICADA no indireto. Baixar este peso (ou zerar)
+        // remove a duplicata sem tocar no direto rasterizado, que continua precisando da luz.
+        // 0 tira a luz da lista do GI de vez, o que tambem economiza o hit. Ver o par do outro lado
+        // em MaterialConstants::RTEmissiveScale.
+        f32  RTWeight = 1.0f;
+
         bool Enabled = true;
         // Projeta sombras. Spot vai pro atlas 2D (budget FLocalShadows::kActiveShadows) e point
         // pro cube array (kActiveCubes) — ganham slot as de maior influencia na camera (energia
