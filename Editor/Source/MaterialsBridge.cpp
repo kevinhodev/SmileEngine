@@ -1241,6 +1241,10 @@ namespace SmileEditor {
         // Ausente em sidecar antigo => fica no default 1.0 do struct: emissivo segue iluminando
         // cheio no RT, que e o comportamento de hoje. Nada muda sem alguem mexer.
         Num("rtEmissiveScale", C.RTEmissiveScale);
+        // Clamp na fronteira de entrada, e nao so no setter: sidecar e arquivo editavel a mao.
+        // Negativo chegaria ao InstanceGeo e viraria EMISSAO NEGATIVA no hit shader (o emissivo
+        // entra somando, sem saturate); acima de 1 furaria o teto deliberado do recurso.
+        C.RTEmissiveScale = std::clamp(C.RTEmissiveScale, 0.0f, 1.0f);
         Num("normalStrength", C.NormalStrength);
         Flag("normalFlipY", C.NormalFlipY);
         Flag("normalReconstructZ", C.NormalReconstructZ);

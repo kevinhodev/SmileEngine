@@ -1309,6 +1309,13 @@ namespace Smile {
             MaterialRTStateDirty = false;
             NotifyMaterialRTStateChanged();
         }
+        // Idem para energia de luz no indireto. Fica DEPOIS e em if separado de proposito: se os
+        // dois cairem no mesmo frame, o de material ja invalidou tudo e este vira no-op barato —
+        // mas ele nao pode DEPENDER daquele, porque mexer so no peso da luz nao marca material.
+        if (IndirectLightingDirty) {
+            IndirectLightingDirty = false;
+            NotifyIndirectLightingChanged();
+        }
 
         CommandQueue.BeginFrame();
 

@@ -15,7 +15,8 @@
 //   - HLSL nao deixa um membro atravessar fronteira de 16B, entao float4 sempre cai em multiplo
 //     de 16. Hoje BaseColorFactor@0, EmissiveFactor@32 e SubsurfaceColor@144 ja caem alinhados
 //     naturalmente — nao ha padding implicito divergindo do C++.
-//   - o total (160B usados) cabe no CBV de 256B que o FMaterial::Bind liga em b1.
+//   - o total (164B usados, RTEmissiveScale em 160) cabe no CBV de 256B que o FMaterial::Bind
+//     liga em b1.
 cbuffer MaterialCB : register(b1) {
     float4 BaseColorFactor;
     float  MetallicFactor;

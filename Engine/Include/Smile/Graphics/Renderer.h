@@ -609,6 +609,24 @@ namespace Smile {
         // permanente. O RenderFrame consome a flag uma vez, antes do BeginFrame.
         void MarkMaterialRTStateDirty() { MaterialRTStateDirty = true; }
 
+        // Mesma ideia, para edicao de LUZ que muda a energia do indireto (hoje: FLight::RTWeight).
+        // Precisa de invalidacao mas NAO de refresh: a lista do GI (FGPULightGI) e reempacotada da
+        // FScene a cada frame, entao nao ha Flush da fila nem RefreshInstanceGeo a fazer — so
+        // derrubar quem ACUMULOU energia da luz antiga. Sem isto, o slider parece inerte por muitos
+        // frames: o DDGI tem Hysteresis 0,99, ou seja, 99% do atlas velho sobrevive por update, e a
+        // calibracao seria feita contra energia que o usuario ja mandou remover.
+        void MarkIndirectLightingDirty() { IndirectLightingDirty = true; }
+
+        void NotifyIndirectLightingChanged() {
+            DDGI.ResetHistoryOnce();
+            ReSTIRGI.InvalidateHistory();   // reservoirs guardam Lo medido com a luz antiga
+            Reflections.InvalidateHistory();
+            Nrd.InvalidateHistory();
+            VolumetricFog.ResetHistory();   // acumula o proprio inscatter, que le o DDGI
+            RRResetPending  = true;
+            TAARanLastFrame = false;
+        }
+
         void NotifyMaterialRTStateChanged() {
             CommandQueue.Flush();
             DDGI.RefreshInstanceGeo(Scene);
@@ -880,6 +898,7 @@ namespace Smile {
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
         bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
         bool             MaterialRTStateDirty  = false; // pedido de refresh coalescido p/ o proximo frame
+        bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
         FDDGI            DDGI;
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;

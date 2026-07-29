@@ -163,6 +163,11 @@ namespace SmileEditor {
         // Teto em 1: isto e para REMOVER duplicata de emissivo, nao para inflar o indireto acima do
         // que a luz entrega no direto. Quem quiser mais energia sobe a Intensity, que vale nos dois.
         L->RTWeight = (float)std::clamp(_V, 0.0, 1.0);
+        // O Touch so mexe em UI e persistencia. Quem consome este peso — DDGI, ReSTIR GI e
+        // reflexoes — ACUMULOU energia da luz antiga, e o DDGI com Hysteresis 0,99 seguraria essa
+        // energia por muitos frames: o slider pareceria inerte e a calibracao seria contra um
+        // estado que o usuario ja mandou embora. Coalescido (uma vez por frame, no Renderer).
+        if (Renderer) Renderer->MarkIndirectLightingDirty();
         Touch(false);
     }
     void LightsBridge::SetInnerConeDeg(double _V) {
@@ -375,7 +380,12 @@ namespace SmileEditor {
             L.Enabled           = O.value(QStringLiteral("enabled")).toBool(true);
             L.CastShadows       = O.value(QStringLiteral("castShadows")).toBool(true);
             // Default 1.0: cena salva antes deste campo existir continua com a luz cheia no RT.
-            L.RTWeight          = (float)O.value(QStringLiteral("rtWeight")).toDouble(1.0);
+            // Clamp TAMBEM aqui: o setter limita a [0,1], mas o JSON e fronteira de entrada — um
+            // arquivo editado a mao reintroduziria peso > 1 e inflaria o indireto acima do direto,
+            // que e exatamente o contrato que o teto existe p/ garantir. Negativo viraria energia
+            // negativa no hit.
+            L.RTWeight          = std::clamp(
+                (float)O.value(QStringLiteral("rtWeight")).toDouble(1.0), 0.0f, 1.0f);
             Lights.push_back(L);
             ++Loaded;
             // Mantem os sequenciais de nome a frente dos "Point N"/"Spot N" carregados.
