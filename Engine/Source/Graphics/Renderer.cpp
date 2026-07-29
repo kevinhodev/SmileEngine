@@ -2784,6 +2784,9 @@ namespace Smile {
             Batch.Flush(CommandList);
         }
 
+        // Registrado no proprio sitio (e nao reavaliando a condicao la embaixo) porque o que importa
+        // p/ o RR e se a geometria de debug FOI desenhada no HDR, nao se ela estava habilitada.
+        bool DDGIDebugDrew = false;
         if (Device.RaytracingSupported() && DDGIDebugPass.GetEnabled() && DDGI.IsReady()) {
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
@@ -2791,6 +2794,7 @@ namespace Smile {
             CommandList->RSSetScissorRects(1, &ScissorRect);
             DDGIDebugPass.Render(FrameSlot, CommandList, SRVHeap, DDGI, ViewProjection, CameraPosition,
                                  FrameIndex);
+            DDGIDebugDrew = true;
         }
 
         if ((UseHeightFog || UseAerialPerspective) && Fog.IsInitialized()) {
@@ -2877,6 +2881,19 @@ namespace Smile {
         // A janela e uma ferramenta interativa: capturar so 1/3 dos frames fazia o jitter
         // temporal aparecer como tremedeira e deixava o movimento visivelmente defasado.
         const bool CapturePreview  = PreviewActive;
+
+        // Conteudo que NAO e a cena entrando no HDRColorBuffer envenena a ENTRADA do Ray
+        // Reconstruction: o visualizador fullscreen SOBRESCREVE o buffer com falsa cor, e o overlay
+        // de sondas do DDGI desenha geometria de ferramenta por cima. Em qualquer dos dois a rede
+        // reconstruiria isso guiada pelos buffers de material da cena real — lixo, e ainda contamina
+        // o historico temporal dela. Enquanto durar, o eval do RR e PULADO (ver o bloco do upscale).
+        // Por que pular em vez de mover o debug p/ depois do RR: a OUT do RR so tem UAV (sem RTV,
+        // DlssRRPass.cpp), o FDebugView e instanciado POR FORMATO de render target, e o overlay do
+        // DDGI precisa de depth por hardware na resolucao de render, que nao existe mais depois do
+        // upscale. Pulando, o debug continua no caminho de cor de sempre (HDR -> tonemap); a unica
+        // diferenca e que sai em resolucao de render, o que p/ um visualizador e irrelevante.
+        // Espirito do GPU Zen 3 cap. 7 §7.13.3: nao entregar ao denoiser o que ele nao sabe ler.
+        const bool RRPoisoned = RRMode && (MainDebugActive || DDGIDebugDrew);
 
         if ((MainDebugActive || CapturePreview) &&
             GBuffer.IsInitialized() && DebugViewPass.IsInitialized()) {
@@ -3119,7 +3136,7 @@ namespace Smile {
             PostInput    = TemporalAA.DisplayOutputResource();
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             TAARanLastFrame = true;
-        } else if (UpscaleActive) {
+        } else if (UpscaleActive && !RRPoisoned) {
             // RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
             // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
             // MESMO predicado do bloco de sinal (RRMode, ja em escopo): recalcular so pelo Denoiser
@@ -3219,7 +3236,19 @@ namespace Smile {
             PostInput    = ActiveUp->OutputResource();
             PostInputSRV = ActiveUp->OutputSRVSlot();
             TAARanLastFrame = false;
+            RRSkipLogged    = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
         } else {
+            // Eval pulado por debug na cena: arma o reset p/ o proximo eval real nao reprojetar de
+            // um historico interrompido (o RR ficou N frames sem ver a cena).
+            if (RRPoisoned) {
+                RRResetPending = true;
+                if (!RRSkipLogged) {
+                    LogWarning("Ray Reconstruction pausado: ha debug desenhado na cena "
+                               "(visualizador de alvo ou sondas do DDGI). A imagem sai em resolucao "
+                               "de render ate o debug sair — desligue-o p/ voltar a avaliar o RR");
+                    RRSkipLogged = true;
+                }
+            }
             TAARanLastFrame = false;
         }
 

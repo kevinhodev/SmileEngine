@@ -879,6 +879,9 @@ namespace Smile {
         FBackgroundVelocity BgVelocity;       // motion vector do ceu/nuvens/fog (velocity ZERO do G-buffer)
         Mat44            PrevVPNoTrans{};      // frame anterior: ViewNoTrans * ProjUnjittered (reproj do ceu)
         bool             RRResetPending = true;// descarta o historico do RR (troca de modo/scene/resize)
+        // Borda de log do "RR pulado por debug na cena" (ver RRPoisoned no RenderFrame): sem isto o
+        // aviso sairia todo frame enquanto o visualizador estivesse ligado.
+        bool             RRSkipLogged   = false;
         EDenoiser        Denoiser = EDenoiser::None; // {None, NRD, DLSS_RR}; default = sem denoise
         Mat44            NrdPrevView{};        // prev view/proj NAO-jitteradas p/ a reprojecao do NRD
         Mat44            NrdPrevProj{};
