@@ -69,9 +69,20 @@ namespace Smile {
 
         // --- Frescor temporal ------------------------------------------------------------------
 
-        // Idade maxima da amostra no reservoir, em frames (RTXDI maxReservoirAge = 30).
-        // 0 = expiracao desligada, que e o estado atual.
-        f32 MaxAge              = 0.0f;
+        // Idade maxima da amostra no reservoir, em frames (RTXDI maxReservoirAge = 30). 0 = sem
+        // expiracao. O ganho REAL dela e latencia de iluminacao, nao mancha (ver medicao abaixo).
+        //
+        // Medido em 2026-07-28, Bistro exterior, camera travada, TimeOfDay 4:40->7:34, 0 vs 8:
+        //   - saida do NRD (o que envia): ruido 1,09% (8) vs 1,11% (0) — o denoiser absorve a
+        //     penalidade inteira. No alvo CRU o 8 custa 1,38x mais ruido, mas ninguem ve o cru.
+        //   - responsividade: com 0, a amplitude no MESMO intervalo de TOD cai p/ 0,892 do que o
+        //     8 entrega (atraso equivalente a ~10 frames). Cru: 0,932 / ~9 frames. O atraso PIORA
+        //     depois do NRD porque o historico dele empilha em cima do reservoir velho.
+        //   - mancha travada: padrao fixo na media deu 4,00% (8) vs 4,03% (0). Empate — a
+        //     expiracao NAO resolve mancha, ao contrario do que o comentario do trace dizia.
+        // 4 e 12 nao foram medidos; 8 e o numero do GPU Zen 3 cap. 7 (CP2077 trocou o passe de
+        // validacao do ReSTIR GI por um cap de 8 frames com resultado comparavel).
+        f32 MaxAge              = 8.0f;
 
         // Razao entre o bias angular perpendicular e o rasante (Lumen: 0.01/0.05). Nao e knob de
         // UI — muda a FORMA da curva, nao a magnitude; fica aqui p/ nao virar literal no shader.

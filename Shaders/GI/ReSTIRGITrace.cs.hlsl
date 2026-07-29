@@ -257,10 +257,14 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 prev.W  = pb.w; prev.wSum = 0.0f;
 
                 // Idade maxima da amostra (RTXDI maxReservoirAge): o MCap limita o PESO do
-                // historico, nao a vida da amostra — uma amostra brilhante rara travada num
-                // bolsao escuro re-valida a si mesma e vira mancha persistente (bisect nas
-                // cortinas do Bistro: Temporal OFF = manchas somem). Expira com stagger por
-                // hash do pixel (0.75x..1.25x) senao as manchas expirariam em onda sincrona.
+                // historico, nao a vida da amostra. Expira com stagger por hash do pixel
+                // (0.75x..1.25x) senao a expiracao viria em onda sincrona.
+                // ATENCAO ao motivo: isto foi escrito supondo que a expiracao matava a mancha
+                // persistente (amostra brilhante travada em bolsao escuro re-validando a si
+                // mesma, bisect nas cortinas do Bistro). A medicao de 2026-07-28 desmentiu:
+                // padrao fixo na media 4,00% com MaxAge=8 vs 4,03% com 0 — empate. O que a
+                // expiracao entrega de verdade e LATENCIA sob luz mudando (~10 frames na saida
+                // do NRD). Ver o bloco de medicao no RayEpsilons.h antes de mexer no default.
                 bool prevValid = true;
                 float maxAge = JitterParams.w;
                 if (maxAge > 0.0f) {
