@@ -1969,8 +1969,12 @@ namespace Smile {
                     const f32 CosOuter  = std::cos(OuterDeg * ToRad);
                     const f32 CosInner  = std::cos(InnerDeg * ToRad);
                     G.DirCosOuter = { D.X, D.Y, D.Z, CosOuter };
+                    // w = fracao do DI-lite (ver FGPULight). Comeca em 1 quando a luz QUER sombra:
+                    // se ela ganhar slice, o bloco de resolucao abaixo baixa p/ 1 - fade. Com
+                    // CastShadows = false fica 0 — sem-sombra por escolha do artista, e o raio nao
+                    // deve desfazer isso.
                     G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
-                                      -1.0f, 0.0f, 0.0f };
+                                      -1.0f, 0.0f, L.CastShadows ? 1.0f : 0.0f };
                     if (L.CastShadows && LocalShadows.IsInitialized()) {
                         // Histerese: quem ja tem o slot vale mais no ranking, entao o novato
                         // precisa ser sensivelmente melhor pra tomar. Sem isso duas luzes de
@@ -1981,7 +1985,7 @@ namespace Smile {
                     }
                 } else {
                     G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f }; // -2 = sem mascara de cone
-                    G.SpotParams  = { 0.0f, -1.0f, 0.0f, 0.0f };
+                    G.SpotParams  = { 0.0f, -1.0f, 0.0f, L.CastShadows ? 1.0f : 0.0f };
                     if (L.CastShadows && LocalShadows.IsInitialized()) {
                         const f32 Bias = LocalShadows.CubeOwns(L.Id)
                                        ? FLocalShadows::kHysteresis : 1.0f;
@@ -2044,6 +2048,7 @@ namespace Smile {
                 G.ShadowMatrix = ToShadowUV(LVP);
                 G.SpotParams.Y = static_cast<f32>(Slice);
                 G.SpotParams.Z = LocalShadows.SpotFadeAt(Slice);
+                G.SpotParams.W = 1.0f - G.SpotParams.Z; // complemento do fade p/ o DI-lite
                 LocalShadowJobs.push_back({ LVP, L.Position, FarP, Slice });
             }
 
@@ -2068,6 +2073,7 @@ namespace Smile {
                     G.ShadowMatrix = ToShadowUV(LVP);
                     G.SpotParams.Y = static_cast<f32>(i);
                     G.SpotParams.Z = LocalShadows.SpotFadeAt(i);
+                    G.SpotParams.W = 1.0f - G.SpotParams.Z; // idem (spot em fade-out)
                     LocalShadowJobs.push_back({ LVP, Lr.Position, FarP, i });
                     break;
                 }
@@ -2091,6 +2097,7 @@ namespace Smile {
                 FGPULight& G   = DstLights[CubeCands[c].Gpu];
                 G.SpotParams.Y = static_cast<f32>(Cube);
                 G.SpotParams.Z = LocalShadows.CubeFadeAt(Cube);
+                G.SpotParams.W = 1.0f - G.SpotParams.Z; // idem (cube ativo)
                 LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, Cube });
             }
 
@@ -2107,6 +2114,7 @@ namespace Smile {
                     FGPULight& G   = DstLights[C.Gpu];
                     G.SpotParams.Y = static_cast<f32>(i);
                     G.SpotParams.Z = LocalShadows.CubeFadeAt(i);
+                    G.SpotParams.W = 1.0f - G.SpotParams.Z; // idem (cube em fade-out)
                     LocalCubeJobs.push_back({ Lr.Position, Lr.AttenuationRadius, i });
                     break;
                 }

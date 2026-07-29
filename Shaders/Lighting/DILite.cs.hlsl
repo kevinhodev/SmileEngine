@@ -27,6 +27,7 @@
 #include "../BRDF.hlsli"
 #include "../LightsCommon.hlsli"
 #include "../Reflections/GGXSample.hlsli"
+#include "../GI/DDGICommon.hlsli" // InstanceGeo + DDGIVertex (so structs/defines, sem registers)
 
 // Espelha o FGPULight do Renderer.h — o MESMO buffer que o deferred le em t17. De proposito: o
 // campo que diz "esta luz tem slice de sombra" (SpotParams.y) vive nele, e nao no FGPULightGI
@@ -35,7 +36,15 @@ struct FGPULightFull {
     float4 PosInvRadius;
     float4 ColorSourceRadius;
     float4 DirCosOuter;
-    float4 SpotParams;        // y = slice de sombra (-1 = SEM slot -> e nosso)
+    // x = 1/(cosInner-cosOuter), y = slice de sombra (-1 = sem), z = fade do slot [0..1],
+    // w = FRACAO DESTA LUZ QUE E RESPONSABILIDADE DO DI-LITE. O w e o contrato, e nao "y < 0":
+    //   - CastShadows = false          -> w = 0. A luz e sem-sombra por DECISAO do artista; tracar
+    //                                     raio aqui contrariaria a escolha dele.
+    //   - com slice, fade f           -> w = 1-f. O shadow map cobre f, o raio cobre o resto. Sem
+    //                                     isso havia POP ao cruzar a fronteira do orcamento: no
+    //                                     meio do fade a luz ficava parcialmente sem oclusao.
+    //   - sem slice, CastShadows true -> w = 1. Perdeu o orcamento; e todo nosso.
+    float4 SpotParams;
     row_major float4x4 ShadowMatrix; // nao usado aqui; existe p/ o stride casar com o deferred
 };
 
@@ -55,10 +64,14 @@ Texture2D<float4> GBufferA : register(t0);
 Texture2D<float4> GBufferB : register(t1);
 Texture2D<float4> GBufferC : register(t2);
 Texture2D<float>  Depth    : register(t3);
-StructuredBuffer<FGPULightFull> Lights : register(t4);
-RaytracingAccelerationStructure Scene  : register(t5);
+StructuredBuffer<FGPULightFull> Lights    : register(t4);
+RaytracingAccelerationStructure Scene     : register(t5);
+StructuredBuffer<InstanceGeo>   Instances : register(t6); // contrato do RTAlphaTest.hlsli
+SamplerState LinearWrap : register(s0);                   // idem (amostra o albedo do cutout)
 
 RWTexture2D<float4> OutDirect : register(u0);
+
+#include "../GI/RTAlphaTest.hlsli" // DEPOIS de Instances/LinearWrap: e o contrato do header
 
 // RngNext local: o ReSTIRReservoir.hlsli tem o mesmo, mas puxa a struct de reservoir junto e aqui
 // nao ha reservoir de estado — a selecao e por stream, num registro.
@@ -104,18 +117,21 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // percorre a lista inteira) e o resultado domina qualquer proposta. A licao do GPU Zen 3
     // (p. 198) — ponderar a PROPOSTA por potencia/distancia nao supera uniforme — nao se aplica
     // aqui: nao ha proposta a ponderar quando o stream ve todo mundo.
-    float  wSum    = 0.0f;
-    float  selW    = 0.0f;
-    float3 selLit  = 0.0f;
-    float3 selL    = 0.0f;
-    float  selDist = 0.0f;
-    bool   found   = false;
+    float  wSum      = 0.0f;
+    float  selW      = 0.0f;
+    float3 selLit    = 0.0f;
+    float3 selL      = 0.0f;
+    float3 selLightPos = 0.0f; // posicao da luz, p/ recalcular o segmento da origem DESLOCADA
+    bool   found     = false;
 
     const uint NumLights = (uint)Params.x;
     [loop]
     for (uint li = 0; li < NumLights; ++li) {
         FGPULightFull Lp = Lights[li];
-        if (Lp.SpotParams.y >= 0.0f) continue; // tem slice: o deferred sombreia com shadow map
+        // Fracao que e nossa (ver o comentario do struct). Zero = a luz nao e responsabilidade do
+        // DI-lite, seja porque o artista a quer sem sombra, seja porque o shadow map cobre tudo.
+        const float rtShare = Lp.SpotParams.w;
+        if (rtShare <= 0.0f) continue;
 
         FPunctualLight lt;
         lt.PosInvRadius      = Lp.PosInvRadius;
@@ -124,7 +140,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         lt.SpotParams        = Lp.SpotParams;
 
         float3 L; float dist;
-        const float3 incoming = PunctualLightIncoming(lt, worldPos, L, dist);
+        // A fracao entra como escala linear na radiancia incidente: o deferred fica com (1-share)
+        // e nos com share, entao a soma dos dois e a luz inteira, sem dobrar nem faltar energia.
+        const float3 incoming = PunctualLightIncoming(lt, worldPos, L, dist) * rtShare;
         if (all(incoming <= 0.0f)) continue; // janela de raio / cone ja zeraram
 
         float3 Ls;
@@ -140,7 +158,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
         wSum += w;
         if (DIRandNext(rng) * wSum < w) {
-            selW = w; selLit = lit; selL = L; selDist = dist; found = true;
+            selW = w; selLit = lit; selL = L; selLightPos = Lp.PosInvRadius.xyz; found = true;
         }
     }
 
@@ -148,21 +166,32 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     // Estimador RIS/WRS: f(x)/pHat(x) * (1/M) * soma(w_i). Com proposta uniforme sobre as M
     // elegiveis, w_i = pHat_i * M, entao (1/M)*soma(w_i) = soma(pHat_i) = wSum, e f/pHat colapsa
-    // em selLit/selW. Nao enviesado.
-    float3 estimate = selLit * (wSum / max(selW, 1e-6f));
+    // em selLit/selW. Nao enviesado — e SEM clamp no divisor de proposito: `w <= 0` acima ja
+    // barra o unico risco de divisao, e um piso ali (max(selW, eps)) enviesaria justamente as
+    // amostras de peso minusculo, trocando exatidao por uma protecao que nao e necessaria.
+    float3 estimate = selLit * (wSum / selW);
 
     // ---- Um raio de sombra, p/ o vencedor ------------------------------------------------------
-    const float3 origin = OffsetRayGBuffer(worldPos, N, selL, camDist);
-    const float  tMax   = selDist - max(Params.w, 0.0f);
-    if (tMax > RayEpsB.x) {
+    // O segmento e recalculado da origem DESLOCADA, nao da worldPos: o offset move a origem em
+    // direcao a normal, e reaproveitar a direcao/comprimento medidos antes dele deixa o raio
+    // apontando de leve para o lado e sobrando comprimento — que e o erro que o HitShading.hlsli
+    // ja tinha corrigido no shadow ray das puntuais.
+    const float3 origin  = OffsetRayGBuffer(worldPos, N, selL, camDist);
+    const float3 toLight = selLightPos - origin;
+    const float  len     = length(toLight);
+    const float  tMax    = len - max(Params.w, 0.0f);
+    if (len > 1e-6f && tMax > RayEpsB.x) {
         RayDesc r;
         r.Origin    = origin;
-        r.Direction = selL;
+        r.Direction = toLight / len;
         r.TMin      = RayEpsB.x;
         r.TMax      = tMax;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
         q.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, (uint)Params.z, r);
-        q.Proceed();
+        // SMILE_RT_PROCEED, e nao Proceed() nu: instancia com alpha-test e FORCE_NON_OPAQUE na
+        // TLAS, entao o candidato nao-opaco SO oclui se passar no recorte — e so comita se o
+        // shader comitar. Com Proceed() nu, card de folhagem nao projetaria sombra nenhuma.
+        SMILE_RT_PROCEED(q)
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) estimate = 0.0f;
     }
     // tMax <= TMin: luz a poucos centimetros da superficie. O trecho nao testado e menor que os

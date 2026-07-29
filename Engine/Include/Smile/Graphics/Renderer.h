@@ -111,7 +111,15 @@ namespace Smile {
         Vec4  ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
         Vec4  DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
         Vec4  SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem),
-                                 // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia)
+                                 // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia),
+                                 // w = fracao da luz que e responsabilidade do DI-LITE.
+        // INVARIANTE do w, para quem adicionar um sitio novo de atribuicao de slice: ele e o
+        // COMPLEMENTO do fade, w = 1 - z, e vale 0 quando CastShadows e false. Quem escreve z
+        // escreve w na mesma linha — sao quatro sitios hoje (spot ativo, spot em fade-out, cube
+        // ativo, cube em fade-out) e esquecer um faz a luz ser sombreada duas vezes (shadow map
+        // + raio) ou nenhuma. O deferred fica com (1-w) e o DI-lite com w; a soma e a luz inteira.
+        // Nao inferir "e do DI-lite" de y < 0: isso confunde "perdeu o orcamento" com
+        // "CastShadows = false", que e escolha do artista e nao deve ganhar sombra por raio.
         Mat44 ShadowMatrix;      // world -> UVZ do slice (perspectiva: dividir por w no shader)
     };
 
