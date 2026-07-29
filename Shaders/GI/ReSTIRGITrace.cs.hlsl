@@ -96,12 +96,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float3 x1  = wH.xyz / wH.w;
     float  camDist = length(CameraPos.xyz - x1);
 
-    // Salt no seed: sem ele, RngSeed(px, frame) == s0 do GGX_Rand2(px, frame) usado na direcao do
-    // raio (mesma cadeia PCG) — a selecao do WRS ficaria correlacionada com o sample inicial.
-    uint rng = RngSeed(px, (uint)TraceParams.x ^ 0xA511E9B3u);
+    // Streams por efeito (ver GGXSample.hlsli). Antes isto era um XOR magico no frame, que
+    // decorrelacionava o WRS da direcao do raio AQUI DENTRO mas deixava o GI sorteando a mesma
+    // sequencia das reflexoes — correlacao entre efeitos, que o Ray Reconstruction delata.
+    uint rng = RngSeed(px, (uint)TraceParams.x, SMILE_RNG_GI_WRS);
 
     // --- (1) Sample inicial: raio cosseno-hemisferico (Malley) -------------------------------
-    float2 E    = GGX_Rand2(px, (uint)TraceParams.x);
+    float2 E    = GGX_Rand2E(px, (uint)TraceParams.x, SMILE_RNG_GI_INITIAL);
     float  rr   = sqrt(E.x);
     float  phi  = 2.0f * SMILE_PI * E.y;
     float  cosT = sqrt(saturate(1.0f - E.x));

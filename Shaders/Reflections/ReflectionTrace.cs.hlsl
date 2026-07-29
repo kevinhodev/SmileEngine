@@ -92,7 +92,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         if (roughness < 0.05f) {
             R = reflect(-V, N);
         } else {
-            float2 E = GGX_Rand2((uint2)fullPx, (uint)TraceParams.x);
+            float2 E = GGX_Rand2E((uint2)fullPx, (uint)TraceParams.x, SMILE_RNG_REFL_GLOSSY);
             E.y *= 1.0f - 0.1f; 
             float3x3 basis = GGX_TangentBasis(N);
             float3   Vt    = mul(basis, V);          

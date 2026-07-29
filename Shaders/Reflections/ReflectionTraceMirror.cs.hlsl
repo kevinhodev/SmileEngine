@@ -83,7 +83,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         R = reflect(-V, N);                      
     } else {
         float    alpha = max(roughness * roughness, 1e-3f);
-        float2   E     = GGX_Rand2((uint2)px, (uint)TraceParams.x);
+        float2   E     = GGX_Rand2E((uint2)px, (uint)TraceParams.x, SMILE_RNG_REFL_MIRROR);
         E.y *= 1.0f - 0.1f;
         float3x3 basis = GGX_TangentBasis(N);
         float3   Vt    = mul(basis, V);

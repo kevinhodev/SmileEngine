@@ -10,8 +10,9 @@
 
 float ReSTIR_Luminance(float3 c) { return dot(c, float3(0.2126f, 0.7152f, 0.0722f)); }
 
-// RNG por pixel (PCG) com estado, p/ a selecao estocastica do WRS.
-uint  RngSeed(uint2 px, uint frame) { return GGX_PCG(px.x + GGX_PCG(px.y + GGX_PCG(frame))); }
+// RNG por pixel com estado, p/ a selecao estocastica do WRS. O `effect` separa o stream do WRS
+// do stream que gera a direcao do raio (e dos outros efeitos) — ver GGXSample.hlsli.
+uint  RngSeed(uint2 px, uint frame, uint effect) { return GGX_SeedE(px, frame, effect); }
 float RngNext(inout uint s) { s = GGX_PCG(s); return (s & 0x00FFFFFFu) / 16777216.0f; }
 
 struct Reservoir {

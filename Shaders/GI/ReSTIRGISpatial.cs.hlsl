@@ -95,7 +95,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float4 dd = ResD.Load(int3(px, 0));
     float3 x1 = a.xyz;
 
-    uint rng = RngSeed(px, (uint)TraceParams.x ^ 0x9E3779B9u);
+    uint rng = RngSeed(px, (uint)TraceParams.x, SMILE_RNG_SPATIAL_WRS);
 
     // Participantes do WRS (self + ate K vizinhos aceitos), guardados p/ a correcao de bias:
     // precisamos re-avaliar o sample VENCEDOR no dominio de cada um depois da selecao. selCand
@@ -127,7 +127,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float normalRej = SpatialParams.w;
 
     for (int i = 0; i < K; ++i) {
-        float2 E   = GGX_Rand2(px, ((uint)TraceParams.x * 7u + (uint)i * 131u));
+        float2 E   = GGX_Rand2E(px, (uint)TraceParams.x, SMILE_RNG_SPATIAL_TAP + (uint)i);
         float2 off = GGX_ConcentricDisk(E) * radius;
         int2   qpx = int2(px) + int2(round(off));
         if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)ScreenParams.x || qpx.y >= (int)ScreenParams.y)
