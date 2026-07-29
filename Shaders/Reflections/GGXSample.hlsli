@@ -76,6 +76,7 @@ uint GGX_XXHash32(uint4 p) {
 #define SMILE_RNG_SPATIAL_TAP   4000u // + i: offset do i-esimo vizinho do reuso espacial
 #define SMILE_RNG_REFL_GLOSSY   5000u // VNDF da reflexao glossy
 #define SMILE_RNG_REFL_MIRROR   6000u // VNDF do passe mirror
+#define SMILE_RNG_DI_LITE       7000u // selecao do WRS no DI-lite (luz local sem slot de sombra)
 
 uint GGX_SeedE(uint2 px, uint frame, uint effect) {
     return GGX_XXHash32(uint4(frame, px.x, px.y, effect));

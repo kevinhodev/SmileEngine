@@ -50,6 +50,9 @@ smile_compile_shader(GI/DDGIDebugRays.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugStats.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugPoint.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 
+# DI-lite — 1 raio de sombra por PIXEL (WRS) p/ as luzes locais sem slot de shadow map
+smile_compile_shader(Lighting/DILite.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+
 # Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
 smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_6 main SHADER_OUTPUTS)

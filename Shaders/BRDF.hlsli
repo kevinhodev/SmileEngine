@@ -141,6 +141,37 @@ float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
     return Diffuse + Specular;
 }
 
+// F4 — representative point na ESFERA da fonte (porte da parte de esfera do AreaLightSpecular do
+// Flax / UE): desloca a direcao do especular pro ponto da esfera mais proximo do raio refletido e
+// devolve a normalizacao de energia do lobo alargado (sem ela o highlight de fonte grande estoura).
+// Difuso/atenuacao/sombra seguem usando o CENTRO.
+//
+// Mora aqui, e nao no DeferredLighting.ps, porque tem DOIS consumidores: o loop de luzes locais do
+// deferred e o DI-lite (que sombreia a luz excedente e precisa do mesmo especular, senao a luz
+// muda de aparencia ao cruzar a fronteira do orcamento de shadow map).
+float AreaSphereSpecular(float SourceRadius, float Roughness, float3 ToLightCenter,
+                         float3 V, float3 N, out float3 Ls) {
+    float  m = Roughness * Roughness;
+    float3 r = reflect(-V, N);
+    float  invDist = rsqrt(dot(ToLightCenter, ToLightCenter));
+
+    float sphereAngle = saturate(SourceRadius * invDist);
+    float e = m / saturate(m + 0.5f * sphereAngle);
+    float energy = e * e;
+
+    float3 closestPointOnRay = dot(ToLightCenter, r) * r;
+    float3 centerToRay = closestPointOnRay - ToLightCenter;
+    float3 closest = ToLightCenter + centerToRay *
+        saturate(SourceRadius * rsqrt(max(dot(centerToRay, centerToRay), 1e-8f)));
+    // Superficie EXATAMENTE na posicao da luz => closest = 0 e normalize(0) = 0/0 = NaN.
+    // NaN aqui nao custa um pixel: ele sobrevive ao bloom (downsample espalha) e ao
+    // historico do TAA/upscaler, entao vira um bloco corrompido persistente. Cai pra
+    // normal — a essa distancia o especular ja esta no piso do bulbo e nao se ve.
+    float closest2 = dot(closest, closest);
+    Ls = (closest2 > 1e-12f) ? closest * rsqrt(closest2) : N;
+    return energy;
+}
+
 // F4 (luzes de area "soft", estilo UE/Flax): variante do BRDF_Direct com direcoes SEPARADAS —
 // difuso usa o CENTRO da fonte (Ld: e de la que vem a energia media), especular usa o
 // representative point na superficie da fonte (Ls) com o fator de normalizacao do lobo
