@@ -207,6 +207,8 @@ namespace Smile {
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
         bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
         bool BackfacePolicy = false;  // retrace + terminacao preta no verso one-sided (ver setter)
+        // Permutation sampling (RTXDI) no fetch temporal: SEMPRE ligado, sem knob. Ver o bloco de
+        // comentario no ReSTIRGITrace.cs.hlsl (inclui o ponto de atencao sobre folhagem).
         bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B

@@ -239,6 +239,44 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             // manchas/rastejo; re-introduzir so com A/B dedicado. Unpack do M mantido (ResA.w
             // fica no formato M+idade empacotados; expiracao hoje desligada via MaxAge=0).
             int2 ppx = int2(prevUv * ScreenParams.xy);
+
+            // Permutation sampling (RTXDI_ApplyPermutationSampling, RtxdiHelpers.hlsli). SEMPRE
+            // ligado: o A/B de 2026-07-29 eliminou o sparkle do DLSS-RR e nao houve caso a favor
+            // do caminho antigo, entao o toggle saiu junto.
+            //
+            // O DLSS-RR Integration Guide §3.5 exige amostras independentes e diz explicitamente:
+            // "RR assumes independent samples, which is violated by ReSTIR temporal and spatial
+            // reuse. Permutation sampling helps avoid correlation artifacts."
+            //
+            // POR QUE ISTO NAO E A BUSCA 2x2 QUE REGREDIU NO BISECT: o numero aleatorio e
+            // UNIFORME NA TELA (derivado so do frame), entao o mapa e uma BIJECAO — cada texel do
+            // frame anterior e lido por EXATAMENTE UM pixel atual. A busca "melhor x1" nao era
+            // bijetiva: varios pixels vizinhos podiam convergir no mesmo reservoir e duplicar uma
+            // amostra brilhante pela vizinhanca, que e o mecanismo da mancha/random walk. Esta
+            // troca embaralha QUEM le QUEM sem alterar a contagem de amostras.
+            //
+            // PONTO DE ATENCAO (nao portado): o RTXDI DESLIGA a permutacao em superficie fina/alto
+            // detalhe (`usePermutationSampling = !IsComplexSurface(...)`, TemporalResampling.hlsl),
+            // com o comentario "Permutation sampling makes more noise on thin, high-detail
+            // objects". Folhagem e exatamente esse caso e ja e ponto sensivel na engine. Se
+            // aparecer cintilacao NOVA em vegetacao, suspeitar daqui ANTES de mexer em alpha-test
+            // ou upscaler: o conserto e o gate por complexidade, nao remover a permutacao.
+            bool permOk;
+            {
+                uint  rnd    = GGX_PCG((uint)TraceParams.x);
+                int2  offset = int2(rnd & 3u, (rnd >> 2u) & 3u);
+                int2  perm   = ppx + offset;
+                perm.x ^= 3; perm.y ^= 3;
+                perm -= offset;
+                // Fora da tela nao ha parceiro: ABANDONA o reuso deste pixel em vez de cair no ppx
+                // original. Cair de volta quebraria a bijecao (o texel do ppx ja e lido por outro
+                // pixel) e reintroduziria justamente a duplicacao que a permutacao existe p/
+                // evitar. Afeta so uma borda de 3 px. Nao pode ser `return`: o reservoir do sample
+                // inicial ainda precisa ser gravado no fim do main.
+                permOk = all(perm >= int2(0, 0)) && all(perm < int2(ScreenParams.xy));
+                if (permOk) ppx = perm;
+            }
+
             float4 pa = PrevResA.Load(int3(ppx, 0));
             float4 pc = PrevResC.Load(int3(ppx, 0));
             float4 pd = PrevResD.Load(int3(ppx, 0));
@@ -247,7 +285,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             float3 prevN1 = DDGI_OctDecode(float2(pc.a, pd.a));
             float prevM, prevAge;
             ResUnpackMAge(pa.w, prevM, prevAge);
-            bool accept = prevM > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
+            bool accept = permOk && prevM > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
                           length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject;
 
             if (accept) {
