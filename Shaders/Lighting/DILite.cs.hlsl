@@ -64,9 +64,13 @@ Texture2D<float4> GBufferA : register(t0);
 Texture2D<float4> GBufferB : register(t1);
 Texture2D<float4> GBufferC : register(t2);
 Texture2D<float>  Depth    : register(t3);
-StructuredBuffer<FGPULightFull> Lights    : register(t4);
-RaytracingAccelerationStructure Scene     : register(t5);
-StructuredBuffer<InstanceGeo>   Instances : register(t6); // contrato do RTAlphaTest.hlsli
+RaytracingAccelerationStructure Scene     : register(t4);
+StructuredBuffer<InstanceGeo>   Instances : register(t5); // contrato do RTAlphaTest.hlsli
+// As luzes ficam no FIM da tabela de proposito: o SRV delas e por frame em voo (o buffer tem uma
+// fatia por frame), entao e o unico descritor que varia. No fim, a tabela e montada uma vez por
+// fatia no setup e nada precisa ser reescrito por frame — sem risco de mexer numa tabela que a
+// GPU ainda esta lendo, que e o cuidado que o FReflections resolve com versionamento.
+StructuredBuffer<FGPULightFull> Lights    : register(t6);
 // s1 e WRAP, s0 e CLAMP — e a ordem que o FVolumetricPipeline cria nos samplers estaticos, e a
 // mesma que os outros consumidores do RTAlphaTest declaram. Aqui em s0 o nome diria "wrap" e o
 // hardware faria clamp: cutout com UV fora de [0,1] amostraria o texel de borda, e a silhueta da

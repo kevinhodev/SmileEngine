@@ -114,6 +114,7 @@ set(ENGINE_SOURCES
     Source/Graphics/ReSTIRGI.cpp
     Source/Graphics/NrdDenoiser.cpp
     Source/Graphics/Reflections.cpp
+    Source/Graphics/DILite.cpp
     Source/Graphics/AmbientOcclusion.cpp
     Source/Graphics/HiZOcclusion.cpp
     Source/Graphics/ShaderUtils.cpp
