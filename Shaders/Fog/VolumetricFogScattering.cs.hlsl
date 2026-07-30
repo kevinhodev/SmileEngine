@@ -82,7 +82,14 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
         }
     }
 
-    float ph  = VolFog_PhaseHG(SunDirPhase.w, dot(SunDirPhase.xyz, -dir));
+    // cosTheta = dot(dir p/ a luz, dir camera->ponto): o VolFog_PhaseHG usa a forma
+    // 1+g^2-2g*cos, que maximiza em +1, entao o argumento tem que ser +dot(L, dir).
+    // Estava com -dir aqui (convencao PBRT, que exige a forma com +2g*cos) e o g>0
+    // virava BACK-scattering: fog forte de costas pro sol e fraco olhando pra ele.
+    // Convencao unica da engine: SunShaftsVolumetric, AtmosphereCommon (dot(viewDir,
+    // sunDir)), CloudLighting, UE (ParticipatingMediaCommon+VolumetricFog.usf) e Cry
+    // (VolumetricFogcfi dotLE + Schlick) todas maximizam olhando PARA a luz.
+    float ph  = VolFog_PhaseHG(SunDirPhase.w, dot(SunDirPhase.xyz, dir));
     float3 lighting = SunColorInt.rgb * (vis * ph);
 
     // Luzes puntuais: atenuacao identica ao deferred + fase HG + sombra por tap unico
@@ -151,7 +158,9 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
         }
         if (atten <= 0.0f) continue;
 
-        float phL = VolFog_PhaseHG(SunDirPhase.w, dot(L, -dir));
+        // mesmo sinal do sol acima: L = ponto->luz, dir = camera->ponto, pico olhando
+        // PARA a luz (halo do poste brilha de frente, nao de costas)
+        float phL = VolFog_PhaseHG(SunDirPhase.w, dot(L, dir));
         lighting += Lp.ColorSourceRadius.rgb * (atten * phL * LightParamsVF.w);
     }
 
