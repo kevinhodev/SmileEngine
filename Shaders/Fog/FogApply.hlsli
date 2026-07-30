@@ -75,9 +75,21 @@ float4 FogApplyMain(float2 pixelXY) {
         vol = VolumetricFogTex.SampleLevel(LinearClampSampler, float3(uv, uvz), 0.0f);
     }
 
-    // Ceu: sem height fog/aerial daqui (o sky shader ja tem a atmosfera), mas o
-    // volume froxel na frente do horizonte existe fisicamente — aplica so ele.
-    if (dist >= DepthParams.y * 0.97f) return float4(vol.rgb, vol.a);
+    // Ceu: sem height fog/aerial daqui (o sky shader ja tem a atmosfera), mas o que
+    // esta FISICAMENTE entre a camera e o horizonte existe — volume froxel E sun shafts.
+    // Os shafts entram com a MESMA ordem do ramo de geometria la embaixo (shafts atras
+    // do volume => x vol.a): com convencao diferente nos dois lados, a silhueta da
+    // roofline/copa quebraria o feixe na borda. Antes o early-return era antes do
+    // += SampleVolumetricShafts, o que (a) cortava o feixe exatamente na silhueta —
+    // e feixe contra o ceu e a foto classica de god ray —, (b) pagava o raymarch do
+    // ceu e jogava fora (SunShaftsVolumetric marcha o alcance todo no ceu de proposito)
+    // e (c) deixava o skyCenter do upsample bilateral como codigo morto.
+    if (dist >= DepthParams.y * 0.97f) {
+        float3 skyInscatter = vol.rgb;
+        if (AerialParams.w > 0.5f)
+            skyInscatter += SampleVolumetricShafts(uv, dist, SmileIsSky(depthNdc)) * vol.a;
+        return float4(skyInscatter, vol.a);
+    }
 
     float4 hf = float4(0.0f, 0.0f, 0.0f, 1.0f);
     // Exclui o analitico no trecho coberto pelo volume (0..alcance/cosA), UE-style.
