@@ -183,7 +183,9 @@ namespace Smile {
         if (!P || !P->Created || P->RW == 0) return;
         const f32 Ratio = static_cast<f32>(P->SW) / static_cast<f32>(P->RW);
         u32 Phase = static_cast<u32>(8.0f * Ratio * Ratio + 0.5f);
-        if (Phase == 0) Phase = 1;
+        // DLSS-RR Integration Guide §3.6 recomenda pelo menos 32 posicoes, inclusive em DLAA.
+        // Mantem a formula do SR caso uma razao futura produza uma sequencia ainda maior.
+        if (Phase < 32u) Phase = 32u;
         const u32 Idx = (FrameIndex % Phase) + 1;   // Halton e 1-based
         OutX = Impl::Halton(Idx, 2) - 0.5f;
         OutY = Impl::Halton(Idx, 3) - 0.5f;

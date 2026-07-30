@@ -672,6 +672,9 @@ namespace Smile {
             // Sem invalidar, o Lo clampado no teto antigo sobrevive no historico — e com
             // ValidateInterval = 0 nao ha re-shade que o corrija.
             ReSTIRGI.InvalidateHistory();
+            // NRD/RR param no Resolved cru e deixam History[] das reflexoes sem escrita. Ao voltar
+            // ao caminho legado, esse historico pode ter frames antigos e paridade ja avancada.
+            Reflections.InvalidateHistory();
             Denoiser = D;
             RRResetPending = true;              // trocar de/para RR: descarta o historico neural velho
             if (Denoiser == EDenoiser::DLSS_RR) // RR faz o upscale; trava o upscaler em DLSS
