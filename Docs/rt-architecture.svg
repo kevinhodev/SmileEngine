@@ -1,0 +1,435 @@
+<svg viewBox="0 0 1600 1320" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Inter, sans-serif">
+  <style>
+    .t   { font-size: 26px; font-weight: 700; fill: #1b2333; letter-spacing: .3px; }
+    .sub { font-size: 13px; fill: #5a6478; }
+    .ph  { font-size: 13.5px; font-weight: 700; letter-spacing: .6px; }
+    .bh  { font-size: 12px; font-weight: 700; fill: #26304a; }
+    .b   { font-size: 10.5px; fill: #3d475c; }
+    .bd  { font-size: 10.5px; fill: #3d475c; font-weight: 600; }
+    .c   { font-size: 10px; fill: #2b3448; font-family: Consolas, "SF Mono", monospace; }
+    .n   { font-size: 10px; fill: #6b7488; font-style: italic; }
+    .tag { font-size: 9.5px; font-weight: 700; fill: #ffffff; }
+    .num { font-size: 10.5px; font-weight: 700; fill: #ffffff; }
+  </style>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8598"/>
+    </marker>
+    <marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3f8f6b"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="1320" fill="#fbfcfe"/>
+
+  <!-- ================= HEADER ================= -->
+  <text class="t" x="26" y="40">SMILEENGINE — ARQUITETURA DE RAY TRACING (DXR 1.1 INLINE / RayQuery)</text>
+  <text class="sub" x="26" y="64">Verificado contra o código: RaytracingScene.cpp · Renderer.cpp · Shaders/GI · Shaders/Reflections · Shaders/CMakeLists.txt</text>
+
+  <!-- ================= FONTES DE DADOS ================= -->
+  <g>
+    <rect x="24" y="88" width="286" height="600" rx="10" fill="#f4f6fb" stroke="#c8d1e2"/>
+    <text class="ph" x="38" y="112" fill="#3b4a68">FONTES DE DADOS (entram na TLAS)</text>
+
+    <rect x="38" y="124" width="258" height="134" rx="7" fill="#eaf1fd" stroke="#a9c2e8"/>
+    <text class="bh" x="50" y="143">GEOMETRIA</text>
+    <text class="b"  x="50" y="162">• 1 BLAS por FGpuMesh único (estático)</text>
+    <text class="b"  x="50" y="179">• 1 instância por FRenderable visível</text>
+    <text class="b"  x="50" y="196">• Proxy do terreno (RaytracingOnly=true)</text>
+    <text class="b"  x="50" y="213">• Só triângulos — sem AABB procedural</text>
+    <text class="n"  x="50" y="232">Sem skinning: BLAS não é reconstruído</text>
+    <text class="n"  x="50" y="247">nem refitado após o load.</text>
+
+    <rect x="38" y="270" width="258" height="134" rx="7" fill="#eaf7ee" stroke="#a8d3ba"/>
+    <text class="bh" x="50" y="289">MATERIAIS</text>
+    <text class="b"  x="50" y="308">• InstanceGeo (80 B) por instância, em</text>
+    <text class="b"  x="50" y="325">  StructuredBuffer (t2)</text>
+    <text class="b"  x="50" y="342">• BaseColor · Emissive · Metal/Rough</text>
+    <text class="b"  x="50" y="359">• AlphaCutoff + flags (ALPHATEST,</text>
+    <text class="b"  x="50" y="376">  EMISSIVE, FOLIAGE, MRMAP)</text>
+    <text class="n"  x="50" y="394">Texturas: índices bindless (SM 6.6).</text>
+
+    <rect x="38" y="416" width="258" height="112" rx="7" fill="#fdf4e6" stroke="#e8cb9a"/>
+    <text class="bh" x="50" y="435">LUZES (vistas pelo hit shading)</text>
+    <text class="b"  x="50" y="454">• Sol direcional (SunDir / SunColor)</text>
+    <text class="b"  x="50" y="471">• FPunctualLight: point / spot (t13)</text>
+    <text class="b"  x="50" y="488">• Emissivo do material (factor × mapa)</text>
+    <text class="n"  x="50" y="507">Sem area lights e sem light list por</text>
+    <text class="n"  x="50" y="521">célula: laço sobre TODAS as luzes.</text>
+
+    <rect x="38" y="540" width="258" height="124" rx="7" fill="#f2eefb" stroke="#c3b5e4"/>
+    <text class="bh" x="50" y="559">OUTROS</text>
+    <text class="b"  x="50" y="578">• Atlas de irradiância do DDGI (t3)</text>
+    <text class="b"  x="50" y="595">• SkyView LUT (raio que escapa; t1)</text>
+    <text class="b"  x="50" y="612">• Depth + G-buffer + velocity: origem</text>
+    <text class="b"  x="50" y="629">  dos raios de tela (ReSTIR/reflexões)</text>
+    <text class="b"  x="50" y="646">• Reservoirs ReSTIR (ping-pong, t9–t12)</text>
+  </g>
+
+  <!-- ================= LEGENDA / NOTAS ================= -->
+  <g>
+    <rect x="24" y="704" width="286" height="342" rx="10" fill="#f7f8fb" stroke="#cfd6e4"/>
+    <text class="ph" x="38" y="728" fill="#3b4a68">LEGENDA</text>
+
+    <line x1="42" y1="748" x2="86" y2="748" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <text class="b" x="96" y="752">Fluxo de execução</text>
+    <line x1="42" y1="772" x2="86" y2="772" stroke="#7b8598" stroke-width="1.4" stroke-dasharray="5 4"/>
+    <text class="b" x="96" y="776">Leitura / dependência de recurso</text>
+    <rect x="42" y="790" width="44" height="14" rx="4" fill="#eaf1fd" stroke="#a9c2e8"/>
+    <text class="b" x="96" y="801">Bloco / módulo real do código</text>
+    <rect x="42" y="814" width="44" height="14" rx="4" fill="#ffe9e6" stroke="#e8a79c"/>
+    <text class="b" x="96" y="825">Correção vs. diagrama anterior</text>
+
+    <text class="ph" x="38" y="860" fill="#3b4a68">FATOS-CHAVE</text>
+    <text class="bd" x="42" y="882">Ray tracing só em compute shaders</text>
+    <text class="b"  x="42" y="899">Todo RayQuery/TraceRayInline vive em</text>
+    <text class="b"  x="42" y="916">*.cs.hlsl compilados em cs_6_6. Nenhum</text>
+    <text class="b"  x="42" y="933">*.ps.hlsl da engine traça raios.</text>
+
+    <text class="bd" x="42" y="957">Sem ray shaders e sem SBT</text>
+    <text class="b"  x="42" y="974">Não há lib_6_x, raygen, any-hit,</text>
+    <text class="b"  x="42" y="991">closest-hit, miss nem payload.</text>
+
+    <text class="bd" x="42" y="1015">Iluminação direta da câmera = raster</text>
+    <text class="b"  x="42" y="1032">Deferred com CSM + shadow maps locais.</text>
+  </g>
+
+  <!-- ================= ACELERAÇÃO ================= -->
+  <g>
+    <rect x="326" y="88" width="852" height="248" rx="10" fill="#eef4fd" stroke="#a9c2e8"/>
+    <text class="ph" x="340" y="112" fill="#2d5188">ESTRUTURAS DE ACELERAÇÃO (FRaytracingScene)</text>
+
+    <rect x="340" y="128" width="265" height="190" rx="7" fill="#ffffff" stroke="#a9c2e8"/>
+    <text class="bh" x="352" y="148">BLAS — build único no load</text>
+    <text class="c"  x="352" y="167">GEOMETRY_TYPE_TRIANGLES</text>
+    <text class="c"  x="352" y="182">GEOMETRY_FLAG_OPAQUE</text>
+    <text class="c"  x="352" y="197">PREFER_FAST_TRACE | ALLOW_COMPACTION</text>
+    <text class="b"  x="352" y="217">• Pool único suballocado (256 B) em</text>
+    <text class="b"  x="352" y="233">  vez de 1 recurso por BLAS</text>
+    <text class="b"  x="352" y="250">• Compaction: postbuild size → readback</text>
+    <text class="b"  x="352" y="266">  → CopyRaytracingAS(COMPACT)</text>
+    <rect x="352" y="278" width="241" height="30" rx="5" fill="#ffe9e6" stroke="#e8a79c"/>
+    <text class="b"  x="360" y="291">Sem ALLOW_UPDATE: BLAS NUNCA é</text>
+    <text class="b"  x="360" y="304">refitado nem atualizado seletivamente.</text>
+
+    <rect x="619" y="128" width="265" height="190" rx="7" fill="#ffffff" stroke="#a9c2e8"/>
+    <text class="bh" x="631" y="148">TLAS — rebuild sob demanda</text>
+    <text class="c"  x="631" y="167">PREFER_FAST_TRACE (sem ALLOW_UPDATE)</text>
+    <text class="b"  x="631" y="187">• RecordTlasRebuild() na command list</text>
+    <text class="b"  x="631" y="203">  do frame, in-place (mesmo VA e SRV)</text>
+    <text class="b"  x="631" y="219">• Dispara por TransformsVersion ou</text>
+    <text class="b"  x="631" y="235">  TlasFlagsDirty — não é todo frame</text>
+    <text class="b"  x="631" y="251">• Upload de instâncias versionado em</text>
+    <text class="b"  x="631" y="267">  2 slots (frames em voo)</text>
+    <rect x="631" y="278" width="241" height="30" rx="5" fill="#ffe9e6" stroke="#e8a79c"/>
+    <text class="b"  x="639" y="291">Sempre REBUILD completo — não existe</text>
+    <text class="b"  x="639" y="304">refit nem update incremental.</text>
+
+    <rect x="898" y="128" width="265" height="190" rx="7" fill="#ffffff" stroke="#a9c2e8"/>
+    <text class="bh" x="910" y="148">Máscaras &amp; flags por instância</text>
+    <text class="c"  x="910" y="167">MASK_OPAQUE      0x01</text>
+    <text class="c"  x="910" y="182">MASK_ALPHATEST   0x02</text>
+    <text class="c"  x="910" y="197">MASK_TRANSLUCENT 0x04</text>
+    <text class="b"  x="910" y="217">• ALPHATEST → FORCE_NON_OPAQUE</text>
+    <text class="b"  x="910" y="233">• IsTwoSidedForRT → CULL_DISABLE</text>
+    <text class="b"  x="910" y="249">• InstanceID = índice do renderable</text>
+    <text class="n"  x="910" y="268">Cada instância carrega UMA categoria;</text>
+    <text class="n"  x="910" y="283">quem escolhe o que enxerga é o PASSE,</text>
+    <text class="n"  x="910" y="298">pela ray flag + mask (modelo Lumen).</text>
+
+    <line x1="605" y1="223" x2="617" y2="223" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="884" y1="223" x2="896" y2="223" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+  </g>
+
+  <!-- ================= NÚCLEO RT INLINE ================= -->
+  <g>
+    <rect x="326" y="352" width="852" height="372" rx="10" fill="#eef8f1" stroke="#8fc4a6"/>
+    <text class="ph" x="340" y="376" fill="#2b6b4b">RT INLINE (RayQuery) — TRACE E SHADING EM COMPUTE SHADERS (cs_6_6)</text>
+    <rect x="964" y="360" width="200" height="20" rx="10" fill="#c0392b"/>
+    <text class="tag" x="978" y="374">CORRIGIDO: NÃO É PIXEL SHADER</text>
+
+    <rect x="340" y="392" width="405" height="150" rx="7" fill="#ffffff" stroke="#8fc4a6"/>
+    <circle cx="356" cy="410" r="9" fill="#3f8f6b"/><text class="num" x="353" y="414">1</text>
+    <text class="bh" x="372" y="414">PREPARO DO RAIO</text>
+    <text class="c"  x="352" y="435">RayDesc ray;  ray.Origin / Direction</text>
+    <text class="c"  x="352" y="450">ray.TMin = eps;  ray.TMax = MaxRayDist;</text>
+    <text class="b"  x="352" y="472">• Origem de tela: OffsetRayGBuffer(pos, N, R, dist)</text>
+    <text class="b"  x="352" y="489">• Origem de probe: probePos + offset de relocação</text>
+    <text class="b"  x="352" y="506">• Epsilons vêm do CB (RayEpsA / RayEpsB)</text>
+    <rect x="352" y="516" width="381" height="18" rx="5" fill="#ffe9e6" stroke="#e8a79c"/>
+    <text class="b"  x="360" y="529">Não existe payload nem SBT — inline RT não usa nenhum dos dois.</text>
+
+    <rect x="759" y="392" width="405" height="150" rx="7" fill="#ffffff" stroke="#8fc4a6"/>
+    <circle cx="775" cy="410" r="9" fill="#3f8f6b"/><text class="num" x="772" y="414">2</text>
+    <text class="bh" x="791" y="414">TRACE INLINE</text>
+    <text class="c"  x="771" y="435">RayQuery&lt;RAY_FLAG_NONE&gt; q;</text>
+    <text class="c"  x="771" y="450">q.TraceRayInline(Scene, RayFlags,</text>
+    <text class="c"  x="771" y="465">                 InstanceMask, ray);</text>
+    <text class="b"  x="771" y="486">• 4 argumentos — não há parâmetro extra de "modo"</text>
+    <text class="b"  x="771" y="503">• Flags do template e da chamada são COMBINADAS</text>
+    <text class="b"  x="771" y="520">• Culling é dinâmico por passe (ReflectionCullFlags)</text>
+
+    <rect x="340" y="558" width="405" height="150" rx="7" fill="#ffffff" stroke="#8fc4a6"/>
+    <circle cx="356" cy="576" r="9" fill="#3f8f6b"/><text class="num" x="353" y="580">3</text>
+    <text class="bh" x="372" y="580">TRAVERSAL EM HW + Proceed()</text>
+    <text class="b"  x="352" y="601">• O hardware faz o traversal da BVH</text>
+    <text class="b"  x="352" y="618">• SMILE_RT_PROCEED: laço while(q.Proceed()) só para</text>
+    <text class="b"  x="352" y="635">  candidatos NÃO-OPACOS (FORCE_NON_OPAQUE)</text>
+    <text class="b"  x="352" y="652">• AlphaTestPass (RTAlphaTest.hlsli): lê VB/IB bindless,</text>
+    <text class="b"  x="352" y="669">  interpola UV, amostra albedo.a vs AlphaCutoff</text>
+    <text class="b"  x="352" y="686">• Commit → CommittedInstanceID / PrimitiveIndex /</text>
+    <text class="b"  x="352" y="700">  TriangleBarycentrics / RayT / WorldToObject3x4</text>
+
+    <rect x="759" y="558" width="405" height="150" rx="7" fill="#ffffff" stroke="#8fc4a6"/>
+    <circle cx="775" cy="576" r="9" fill="#3f8f6b"/><text class="num" x="772" y="580">4</text>
+    <text class="bh" x="791" y="580">SHADING DO HIT — NO MESMO COMPUTE</text>
+    <text class="b"  x="771" y="601">HitShading.hlsli :: ShadeSurfaceHit()</text>
+    <text class="b"  x="771" y="618">• InstanceGeo + VB/IB bindless → normal de face e de</text>
+    <text class="b"  x="771" y="635">  vértice, UV, albedo (SampleLevel com LOD fixo)</text>
+    <text class="b"  x="771" y="652">• 1 shadow ray p/ o sol + 1 por luz puntual relevante</text>
+    <text class="b"  x="771" y="669">  (ACCEPT_FIRST_HIT_AND_END_SEARCH)</text>
+    <text class="b"  x="771" y="686">• Indireta do 2º bounce: irradiância do DDGI no hit</text>
+    <text class="b"  x="771" y="700">• Retorna albedo·(Edireta/π + indireta) + emissivo</text>
+
+    <line x1="745" y1="467" x2="757" y2="467" stroke="#3f8f6b" stroke-width="1.6" marker-end="url(#arg)"/>
+    <line x1="961" y1="542" x2="961" y2="556" stroke="#3f8f6b" stroke-width="1.6" marker-end="url(#arg)"/>
+    <line x1="745" y1="633" x2="757" y2="633" stroke="#3f8f6b" stroke-width="1.6" marker-end="url(#arg)"/>
+  </g>
+
+  <!-- ================= PASSES QUE TRAÇAM ================= -->
+  <g>
+    <rect x="326" y="740" width="852" height="150" rx="10" fill="#f6f2fc" stroke="#c3b5e4"/>
+    <text class="ph" x="340" y="764" fill="#5a4a86">PASSES QUE TRAÇAM RAIOS (todos compute, cs_6_6)</text>
+
+    <rect x="340" y="780" width="156" height="96" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="350" y="798">DDGITrace.cs</text>
+    <text class="b"  x="350" y="815">64 raios / probe</text>
+    <text class="b"  x="350" y="830">MASK_GATHER</text>
+    <text class="b"  x="350" y="845">RAY_FLAG_NONE (vê</text>
+    <text class="b"  x="350" y="858">o verso: dist. assinada</text>
+    <text class="b"  x="350" y="871">→ probe enterrada)</text>
+
+    <rect x="506" y="780" width="156" height="96" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="516" y="798">ReSTIRGITrace.cs</text>
+    <text class="b"  x="516" y="815">1 raio cosseno / pixel</text>
+    <text class="b"  x="516" y="830">+ reservoir temporal</text>
+    <text class="b"  x="516" y="845">+ retrace anti auto-</text>
+    <text class="b"  x="516" y="858">interseção</text>
+    <text class="b"  x="516" y="871">MASK_GATHER</text>
+
+    <rect x="672" y="780" width="156" height="96" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="682" y="798">ReSTIRGISpatial.cs</text>
+    <text class="b"  x="682" y="815">Reuso espacial (WRS)</text>
+    <text class="b"  x="682" y="830">+ raios de visibilidade</text>
+    <text class="b"  x="682" y="845">ACCEPT_FIRST_HIT</text>
+    <text class="b"  x="682" y="858">MASK_GATHER</text>
+
+    <rect x="838" y="780" width="156" height="96" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="848" y="798">ReflectionTrace.cs</text>
+    <text class="b"  x="848" y="815">Half-res, GGX VNDF</text>
+    <text class="b"  x="848" y="830">MASK_ALL (precisa</text>
+    <text class="b"  x="848" y="845">enxergar o vidro)</text>
+    <text class="b"  x="848" y="858">Culling dinâmico por</text>
+    <text class="b"  x="848" y="871">PolicyParams</text>
+
+    <rect x="1004" y="780" width="156" height="96" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="1014" y="798">ReflectionTraceMirror</text>
+    <text class="b"  x="1014" y="815">Full-res p/ rugosidade</text>
+    <text class="b"  x="1014" y="830">baixa (near-mirror)</text>
+    <text class="b"  x="1014" y="845">MASK_ALL</text>
+    <text class="n"  x="1014" y="862">Mesmo HitShading dos</text>
+    <text class="n"  x="1014" y="874">demais passes.</text>
+  </g>
+
+  <!-- ================= RECURSOS / BINDING ================= -->
+  <g>
+    <rect x="326" y="906" width="852" height="140" rx="10" fill="#fdf6e9" stroke="#e8cb9a"/>
+    <text class="ph" x="340" y="930" fill="#8a6320">MODELO DE BINDING DOS PASSES DE RT</text>
+
+    <rect x="340" y="944" width="405" height="88" rx="7" fill="#ffffff" stroke="#e8cb9a"/>
+    <text class="bh" x="352" y="962">Descriptor tables por registrador (o grosso)</text>
+    <text class="c"  x="352" y="980">t0 TLAS · t1 SkyViewLUT · t2 InstanceGeo · t3 IrradAtlas</text>
+    <text class="c"  x="352" y="995">t6 Depth · t7 GBuffer · t8 Velocity · t9–t12 Reservoirs</text>
+    <text class="c"  x="352" y="1010">t13 SceneLights · b0 CB · u0–u4 saídas · s0/s1 samplers</text>
+    <text class="n"  x="352" y="1026">Samplers: só LinearClamp (s0) e LinearWrap (s1).</text>
+
+    <rect x="759" y="944" width="405" height="88" rx="7" fill="#ffffff" stroke="#e8cb9a"/>
+    <text class="bh" x="771" y="962">Bindless SM 6.6 (ResourceDescriptorHeap) — parcial</text>
+    <text class="b"  x="771" y="981">• VB/IB do mesh: geo.VertexSrv / geo.IndexSrv</text>
+    <text class="b"  x="771" y="998">• Albedo, emissivo e metallic-roughness do hit</text>
+    <rect x="771" y="1006" width="381" height="18" rx="5" fill="#ffe9e6" stroke="#e8a79c"/>
+    <text class="b"  x="779" y="1019">Não é "tudo bindless": shadow maps não entram no RT.</text>
+  </g>
+
+  <!-- ================= USOS REAIS ================= -->
+  <g>
+    <rect x="1194" y="88" width="382" height="330" rx="10" fill="#f4f6fb" stroke="#c8d1e2"/>
+    <text class="ph" x="1208" y="112" fill="#3b4a68">O QUE O RT ALIMENTA HOJE</text>
+
+    <rect x="1208" y="124" width="354" height="66" rx="7" fill="#ffffff" stroke="#a9c2e8"/>
+    <text class="bh" x="1220" y="143">ReSTIR GI (difuso)</text>
+    <text class="b"  x="1220" y="161">Trace + reservoir temporal/espacial; entra no</text>
+    <text class="b"  x="1220" y="178">deferred como iluminação indireta difusa.</text>
+
+    <rect x="1208" y="198" width="354" height="66" rx="7" fill="#ffffff" stroke="#a9c2e8"/>
+    <text class="bh" x="1220" y="217">Reflexões especulares (estilo Lumen)</text>
+    <text class="b"  x="1220" y="235">Trace half-res + mirror full-res → resolve →</text>
+    <text class="b"  x="1220" y="252">temporal/spatial ou NRD → composite aditivo.</text>
+
+    <rect x="1208" y="272" width="354" height="66" rx="7" fill="#ffffff" stroke="#a9c2e8"/>
+    <text class="bh" x="1220" y="291">DDGI (probes de irradiância)</text>
+    <text class="b"  x="1220" y="309">64 raios/probe por frame; o atlas realimenta o</text>
+    <text class="b"  x="1220" y="326">próprio hit shading (bounce infinito aproximado).</text>
+
+    <rect x="1208" y="346" width="354" height="60" rx="7" fill="#ffffff" stroke="#a9c2e8"/>
+    <text class="bh" x="1220" y="365">Sombras — só DENTRO do hit shading</text>
+    <text class="b"  x="1220" y="383">Shadow rays do sol e das luzes puntuais no 2º</text>
+    <text class="b"  x="1220" y="400">hit. Não há passe de sombra RT em tela.</text>
+  </g>
+
+  <!-- ================= O QUE NÃO É RT ================= -->
+  <g>
+    <rect x="1194" y="434" width="382" height="200" rx="10" fill="#fff3f1" stroke="#e8a79c"/>
+    <text class="ph" x="1208" y="458" fill="#a3402f">NÃO USA RT (o diagrama anterior sugeria que sim)</text>
+
+    <text class="bd" x="1210" y="482">Oclusão de ambiente</text>
+    <text class="b"  x="1210" y="499">GTAO screen-space (Shaders/AO/GTAO.cs.hlsl),</text>
+    <text class="b"  x="1210" y="514">sem nenhum RayQuery. Não existe RTAO.</text>
+
+    <text class="bd" x="1210" y="538">Sombras da luz direta</text>
+    <text class="b"  x="1210" y="555">CSM do sol (SunShadows) + shadow maps locais</text>
+    <text class="b"  x="1210" y="570">com slots/cross-fade (LocalShadows).</text>
+
+    <text class="bd" x="1210" y="594">Picking e SSR</text>
+    <text class="b"  x="1210" y="611">Picking é passe de ID rasterizado. Não existe</text>
+    <text class="b"  x="1210" y="626">SSR: o fallback da reflexão é DDGI + céu.</text>
+  </g>
+
+  <!-- ================= CORREÇÕES ================= -->
+  <g>
+    <rect x="1194" y="650" width="382" height="396" rx="10" fill="#f7f8fb" stroke="#cfd6e4"/>
+    <text class="ph" x="1208" y="674" fill="#3b4a68">PRINCIPAIS CORREÇÕES FEITAS AQUI</text>
+
+    <text class="bd" x="1210" y="698">1 · Compute, não pixel shader</text>
+    <text class="b"  x="1210" y="714">Os 5 passes que traçam são cs_6_6; o shading do</text>
+    <text class="b"  x="1210" y="729">hit acontece no mesmo compute.</text>
+
+    <text class="bd" x="1210" y="753">2 · Sem payload e sem SBT</text>
+    <text class="b"  x="1210" y="769">Conceitos de DXR 1.0; o código não os tem.</text>
+
+    <text class="bd" x="1210" y="793">3 · TraceRayInline tem 4 argumentos</text>
+    <text class="b"  x="1210" y="809">(AS, RayFlags, InstanceMask, RayDesc).</text>
+
+    <text class="bd" x="1210" y="833">4 · Sem refit / update incremental</text>
+    <text class="b"  x="1210" y="849">Nenhum build usa ALLOW_UPDATE. BLAS: 1× no</text>
+    <text class="b"  x="1210" y="864">load. TLAS: rebuild inteiro quando suja.</text>
+
+    <text class="bd" x="1210" y="882">5 · Compaction é de BLAS</text>
+    <text class="b"  x="1210" y="898">Não existe "compacted instances" na TLAS.</text>
+
+    <text class="bd" x="1210" y="918">6 · Só geometria de triângulos</text>
+    <text class="b"  x="1210" y="934">Nada de AABB procedural; terreno entra por</text>
+    <text class="b"  x="1210" y="949">um proxy de malha (RaytracingOnly).</text>
+
+    <text class="bd" x="1210" y="969">7 · Bindless é parcial</text>
+    <text class="b"  x="1210" y="985">Convive com descriptor tables por registrador;</text>
+    <text class="b"  x="1210" y="1000">não há normal/ORM nem shadow map no hit.</text>
+
+    <text class="bd" x="1210" y="1020">8 · NRD roda ANTES do deferred lighting</text>
+    <text class="b"  x="1210" y="1036">Quem roda depois é o DLSS-RR, que o substitui.</text>
+  </g>
+
+  <!-- ================= PIPELINE DO FRAME ================= -->
+  <g>
+    <rect x="24" y="1062" width="1552" height="240" rx="10" fill="#f2eefb" stroke="#c3b5e4"/>
+    <text class="ph" x="38" y="1086" fill="#5a4a86">PIPELINE DO FRAME (ordem real de Renderer::RenderFrame — passes marcados em roxo tocam a TLAS)</text>
+
+    <!-- linha 1 -->
+    <rect x="38" y="1100" width="238" height="80" rx="7" fill="#efe8fb" stroke="#a58fd0"/>
+    <text class="bh" x="50" y="1119">1 · Rebuild da TLAS</text>
+    <text class="b"  x="50" y="1137">Só se TransformsVersion mudou</text>
+    <text class="b"  x="50" y="1153">ou TlasFlagsDirty. In-place, na</text>
+    <text class="b"  x="50" y="1169">command list do frame.</text>
+
+    <rect x="292" y="1100" width="238" height="80" rx="7" fill="#efe8fb" stroke="#a58fd0"/>
+    <text class="bh" x="304" y="1119">2 · DDGI update</text>
+    <text class="b"  x="304" y="1137">Trace das probes + update de</text>
+    <text class="b"  x="304" y="1153">irradiância/distância. Pode ir</text>
+    <text class="b"  x="304" y="1169">para a fila de async compute.</text>
+
+    <rect x="546" y="1100" width="238" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="558" y="1119">3 · Shadow maps</text>
+    <text class="b"  x="558" y="1137">CSM do sol + sombras locais</text>
+    <text class="b"  x="558" y="1153">(raster). Nada de RT aqui.</text>
+
+    <rect x="800" y="1100" width="238" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="812" y="1119">4 · Z-prepass → HZB → GTAO</text>
+    <text class="b"  x="812" y="1137">Depth/normal prepass, HZB para</text>
+    <text class="b"  x="812" y="1153">occlusion culling e AO screen-</text>
+    <text class="b"  x="812" y="1169">space em meia resolução.</text>
+
+    <rect x="1054" y="1100" width="238" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="1066" y="1119">5 · G-buffer + terreno</text>
+    <text class="b"  x="1066" y="1137">Geometria opaca e terreno,</text>
+    <text class="b"  x="1066" y="1153">mais velocity do background.</text>
+
+    <rect x="1308" y="1100" width="254" height="80" rx="7" fill="#efe8fb" stroke="#a58fd0"/>
+    <text class="bh" x="1320" y="1119">6 · ReSTIR GI</text>
+    <text class="b"  x="1320" y="1137">Trace temporal + reuso espacial</text>
+    <text class="b"  x="1320" y="1153">a partir do G-buffer.</text>
+
+    <!-- linha 2 -->
+    <rect x="38" y="1200" width="238" height="80" rx="7" fill="#efe8fb" stroke="#a58fd0"/>
+    <text class="bh" x="50" y="1219">7 · Reflexões (trace)</text>
+    <text class="b"  x="50" y="1237">Half-res + mirror → resolve.</text>
+    <text class="b"  x="50" y="1253">Com NRD para no resolved; sem</text>
+    <text class="b"  x="50" y="1269">NRD segue temporal + spatial.</text>
+
+    <rect x="292" y="1200" width="238" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="304" y="1219">8 · NRD denoise</text>
+    <text class="b"  x="304" y="1237">Pack de GI difuso + especular,</text>
+    <text class="b"  x="304" y="1253">denoise, saída lida pelo passe</text>
+    <text class="b"  x="304" y="1269">seguinte. Roda ANTES do deferred.</text>
+
+    <rect x="546" y="1200" width="238" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="558" y="1219">9 · Deferred lighting (PS)</text>
+    <text class="b"  x="558" y="1237">Luz direta com shadow maps +</text>
+    <text class="b"  x="558" y="1253">composição do GI (ReSTIR/DDGI)</text>
+    <text class="b"  x="558" y="1269">e do AO.</text>
+
+    <rect x="800" y="1200" width="238" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="812" y="1219">10 · Composite + forward</text>
+    <text class="b"  x="812" y="1237">Reflexões somadas, translúcidos,</text>
+    <text class="b"  x="812" y="1253">água, nuvens, fog volumétrico,</text>
+    <text class="b"  x="812" y="1269">sun shafts, chuva.</text>
+
+    <rect x="1054" y="1200" width="238" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="1066" y="1219">11 · TAA ou upscale</text>
+    <text class="b"  x="1066" y="1237">TAA, DLSS-SR, FSR — ou DLSS-RR,</text>
+    <text class="b"  x="1066" y="1253">que SUBSTITUI o NRD e faz</text>
+    <text class="b"  x="1066" y="1269">denoise + upscale de uma vez.</text>
+
+    <rect x="1308" y="1200" width="254" height="80" rx="7" fill="#ffffff" stroke="#c3b5e4"/>
+    <text class="bh" x="1320" y="1219">12 · Pós + present</text>
+    <text class="b"  x="1320" y="1237">Bloom, exposição, tonemap,</text>
+    <text class="b"  x="1320" y="1253">overlays do editor e swap chain.</text>
+
+    <line x1="276" y1="1140" x2="290" y2="1140" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="530" y1="1140" x2="544" y2="1140" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="784" y1="1140" x2="798" y2="1140" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="1038" y1="1140" x2="1052" y2="1140" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="1292" y1="1140" x2="1306" y2="1140" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="276" y1="1240" x2="290" y2="1240" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="530" y1="1240" x2="544" y2="1240" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="784" y1="1240" x2="798" y2="1240" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="1038" y1="1240" x2="1052" y2="1240" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+    <line x1="1292" y1="1240" x2="1306" y2="1240" stroke="#7b8598" stroke-width="1.6" marker-end="url(#ar)"/>
+  </g>
+
+  <!-- Dependências (tracejadas): TLAS/InstanceGeo lidos pelos passes de trace -->
+  <line x1="752" y1="336" x2="752" y2="352" stroke="#7b8598" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+  <line x1="752" y1="724" x2="752" y2="740" stroke="#7b8598" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+  <line x1="752" y1="890" x2="752" y2="906" stroke="#7b8598" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+  <line x1="310" y1="330" x2="324" y2="330" stroke="#7b8598" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+</svg>
