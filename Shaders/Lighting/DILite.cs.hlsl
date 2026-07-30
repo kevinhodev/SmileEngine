@@ -67,7 +67,11 @@ Texture2D<float>  Depth    : register(t3);
 StructuredBuffer<FGPULightFull> Lights    : register(t4);
 RaytracingAccelerationStructure Scene     : register(t5);
 StructuredBuffer<InstanceGeo>   Instances : register(t6); // contrato do RTAlphaTest.hlsli
-SamplerState LinearWrap : register(s0);                   // idem (amostra o albedo do cutout)
+// s1 e WRAP, s0 e CLAMP — e a ordem que o FVolumetricPipeline cria nos samplers estaticos, e a
+// mesma que os outros consumidores do RTAlphaTest declaram. Aqui em s0 o nome diria "wrap" e o
+// hardware faria clamp: cutout com UV fora de [0,1] amostraria o texel de borda, e a silhueta da
+// sombra divergiria da silhueta que o raster recorta — o casamento que aquele header exige.
+SamplerState LinearWrap : register(s1);
 
 RWTexture2D<float4> OutDirect : register(u0);
 
