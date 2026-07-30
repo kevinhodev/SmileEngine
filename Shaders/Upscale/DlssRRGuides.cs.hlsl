@@ -71,9 +71,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     float deviceZ = Depth.Load(int3(px, 0)).r;
     if (deviceZ <= 0.0f) {
-        // Ceu/background: sem material. Albedo 0 avisa o RR que a cor ja e final (nao demodula/denoisa).
+        // Ceu/background: o Integration Guide §3.4.2 recomenda specular albedo neutro 0.5.
         OutDiffuseAlbedo[px]   = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        OutSpecularAlbedo[px]  = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        OutSpecularAlbedo[px]  = float4(0.5f, 0.5f, 0.5f, 1.0f);
         OutNormalRoughness[px] = float4(0.0f, 0.0f, 1.0f, 1.0f);
         return;
     }
