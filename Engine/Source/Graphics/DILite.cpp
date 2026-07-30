@@ -21,6 +21,11 @@ namespace Smile {
         Initialized = true;
     }
 
+    void FDILite::RecreatePSO(ID3D12Device* _Device) {
+        if (!Initialized) return;
+        PSO.Initialize(_Device, "DILite.cs_6_6.cso", kTableSize, 1, true);
+    }
+
     void FDILite::CreateConstantBuffer(ID3D12Device* _Device) {
         const UINT64 Size = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(DILiteConstants);
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;

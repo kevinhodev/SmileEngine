@@ -38,6 +38,10 @@ namespace Smile {
     public:
         void Initialize(ID3D12Device* Device);
 
+        // Hot reload do DILite.cs. Recria SO a pipeline: o alvo, o CB e as tabelas de descritores
+        // nao dependem do bytecode, entao nao ha SetupForResize a repetir.
+        void RecreatePSO(ID3D12Device* Device);
+
         // (Re)cria o alvo e monta as tabelas. Uma tabela por frame em voo: o unico descritor que
         // varia entre elas e o das luzes (t6), cujo SRV descreve a fatia daquele frame. Chamar no
         // setup da cena e em TODO resize (depth/gbuffer recriados).

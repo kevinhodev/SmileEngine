@@ -819,8 +819,14 @@ namespace Smile {
         VolumetricClouds.RecreateComposite(Device.Native(), RT, DS);
         Water.Recreate(Device.Native(), RT, DS, DXGI_FORMAT_R16G16_FLOAT);
         Terrain.RecreatePSOs(Device.Native());
-        if (Device.RaytracingSupported())
+        if (Device.RaytracingSupported()) {
             DDGIDebugPass.Recreate(Device.Native(), RT, DS);
+            // Sem isto, o reload COMPLETO (e o fallback de stem nao mapeado) logava sucesso e
+            // deixava o DI-lite rodando o CSO antigo — a ferramenta mentiria justo no milestone
+            // que vai iterar neste shader. Os outros passes de compute (ReSTIR, reflexoes, trace
+            // do DDGI) seguem fora do reload; quando um deles precisar, e o mesmo padrao.
+            DILite.RecreatePSO(Device.Native());
+        }
     }
 
     bool Renderer::ReloadShaders(const std::string& _ChangedStem) {
@@ -859,6 +865,8 @@ namespace Smile {
                     "DDGIDebugStats.cs", "DDGIDebugPoint.cs" },
                   [&] { if (Device.RaytracingSupported())
                             DDGIDebugPass.Recreate(Dev, RT, DS); } },
+                { { "DILite.cs" },
+                  [&] { if (Device.RaytracingSupported()) DILite.RecreatePSO(Dev); } },
             };
 
             if (_ChangedStem.empty()) {

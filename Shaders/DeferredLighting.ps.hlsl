@@ -23,14 +23,18 @@ cbuffer FrameCB : register(b0) {
     float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = forca (0 = off)
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     float4 LightParams;        // x = nº de luzes puntuais no buffer t17,
-                               // y = 1/res do atlas de sombra local, z = bias (NDC z), w = -
+                               // y = 1/res do atlas de sombra local, z = bias (NDC z),
+                               // w = DI-lite ativo (0/1): liga a subtracao do rtShare no laco de
+                               // luzes locais E a soma do alvo. Os dois juntos, sempre.
     float4 LightParams2;       // x = 1/res do cube shadow (point), y = near das faces, zw = -
     float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem
                                // teto), zw = reservados
 };
 
-// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z = fade do slot
-// de sombra; .w reservado (source length na F4).
+// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z = fade do slot de
+// sombra; .w = fracao da luz que o DI-lite sombreia por raio (era reserva p/ source length da F4 e
+// deixou de ser). O laco de luzes locais SUBTRAI esse .w da visibilidade base — e o invariante que
+// mantem a energia igual com a chave ligada ou desligada, entao o campo NAO esta livre.
 struct FGPULight {
     float4 PosInvRadius;      // xyz = posicao, w = 1/raio de atenuacao
     float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulb (distancia minima)

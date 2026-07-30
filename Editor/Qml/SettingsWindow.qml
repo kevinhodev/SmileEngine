@@ -2660,8 +2660,14 @@ Rectangle {
                               "espera receber; sob NRD ele não passa por denoiser nenhum, porque " +
                               "o NRD trata GI e reflexão, não este alvo. O conserto é o reuso " +
                               "temporal, que é o passo que transforma isto em ReSTIR DI.\n\n" +
-                              "Onde olhar: cena com mais de 12 luzes locais, na que ficou sem " +
-                              "slice — a sombra dela aparece."
+                              "Quando há excedente: os dois orçamentos são INDEPENDENTES, então " +
+                              "basta passar de 8 spots OU de 4 points — contando só os visíveis e " +
+                              "com \"projeta sombras\" ligado. Não é o total de luzes: 6 spots e " +
+                              "6 points não estouram nada, e 9 spots estouram mesmo sem nenhum " +
+                              "point na cena.\n\n" +
+                              "Onde olhar: a luz que ficou sem slice — a sombra dela aparece. " +
+                              "Costumam ser as mais distantes, porque a seleção do orçamento " +
+                              "ranqueia por influência na câmera."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11

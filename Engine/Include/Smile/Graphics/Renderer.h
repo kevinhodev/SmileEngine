@@ -105,8 +105,9 @@ namespace Smile {
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
-    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes); SpotParams.w
-    // reservado p/ a F4 (source length).
+    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes). O SpotParams.w era
+    // reserva p/ source length da F4 e deixou de ser: hoje ele carrega a fracao do DI-lite e
+    // sustenta o invariante de energia entre shadow map e raio — ver o comentario do campo.
     struct FGPULight {
         Vec4  PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
         Vec4  ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
