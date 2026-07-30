@@ -100,6 +100,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetReflectionsCullBackface();
     }
 
+    bool ViewportWidget::IsDILiteEnabled() const {
+        return Renderer && Renderer->GetUseDILite();
+    }
+
     bool ViewportWidget::IsGIBackfacePolicyEnabled() const {
         return Renderer && Renderer->GetGIBackfacePolicy();
     }
@@ -813,6 +817,12 @@ namespace SmileEditor {
     void ViewportWidget::ToggleReflectionsCullBackface() {
         if (!Renderer) return;
         Renderer->SetReflectionsCullBackface(!Renderer->GetReflectionsCullBackface());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleDILite() {
+        if (!Renderer) return;
+        Renderer->SetUseDILite(!Renderer->GetUseDILite());
         emit ViewSettingsChanged();
     }
 

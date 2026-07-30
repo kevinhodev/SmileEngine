@@ -74,7 +74,14 @@ namespace Smile {
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 OutSRV = kInvalidSlot;
         u32 OutUAV = kInvalidSlot;
-        u32 Table[FCommandQueue::kFramesInFlight] = {};
+        // kInvalidSlot em TODAS as entradas, e NAO `= {}`. O ReleaseResize trata qualquer valor
+        // diferente de kInvalidSlot como slot vivo, e o SetupForResize chama ReleaseResize ANTES da
+        // primeira alocacao: com zero-init, a primeira chamada faria Free(0, kTableSize) uma vez por
+        // frame em voo, devolvendo ao allocator descritores 0..6 que pertencem a outro recurso.
+        // Corromperia o heap antes deste passe alocar qualquer coisa.
+        u32 Table[FCommandQueue::kFramesInFlight] = { kInvalidSlot, kInvalidSlot };
+        static_assert(FCommandQueue::kFramesInFlight == 2,
+                      "ajustar o inicializador de Table[] — cada entrada precisa nascer kInvalidSlot");
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB  = nullptr;

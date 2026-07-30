@@ -2633,6 +2633,59 @@ Rectangle {
                 }
 
                 Card {
+                    id: diLiteCard
+                    width: parent.width
+                    title: "Sombra por raio nas luzes sem orçamento (DI-lite)"
+                    height: diLabel.y + diLabel.height + contentPadding + 8
+
+                    Text {
+                        id: diHelper
+                        x: 20
+                        y: diLiteCard.headerHeight + diLiteCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "O orçamento de shadow map é fixo: 8 spots e 4 points por quadro. " +
+                              "A luz que não ganha slice continua iluminando, mas SEM oclusão " +
+                              "nenhuma — vaza parede. Aumentar o orçamento custa VRAM e um passe " +
+                              "de rasterização por luz.\n\n" +
+                              "Ligado, essas luzes ganham sombra por ray tracing com UM raio por " +
+                              "PIXEL, não por luz: todas as excedentes entram num sorteio " +
+                              "ponderado, uma vence, e um único raio mede a visibilidade dela. O " +
+                              "estimador devolve a contribuição do conjunto sem viés.\n\n" +
+                              "A luz com slice não muda de caminho, e a marcada para não projetar " +
+                              "sombra continua sem — a divisão é por luz, e o quadro inteiro " +
+                              "soma sempre a mesma energia.\n\n" +
+                              "DESLIGADO por padrão: o sinal é de um raio por pixel, então tem " +
+                              "ruído de visibilidade. Sob DLSS Ray Reconstruction é o que a rede " +
+                              "espera receber; sob NRD ele não passa por denoiser nenhum, porque " +
+                              "o NRD trata GI e reflexão, não este alvo. O conserto é o reuso " +
+                              "temporal, que é o passo que transforma isto em ReSTIR DI.\n\n" +
+                              "Onde olhar: cena com mais de 12 luzes locais, na que ficou sem " +
+                              "slice — a sombra dela aparece."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: diLabel
+                        x: 20
+                        y: diHelper.y + diHelper.height + 18
+                        text: "DI-lite"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        id: diToggle
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: diLabel.y - 6
+                        checked: viewportModel.diLite
+                        onToggled: viewportModel.ToggleDILite()
+                    }
+                }
+
+                Card {
                     id: ddgiSampleCard
                     width: parent.width
                     title: "Amostragem do DDGI — bias de auto-sombra"

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RTMasks.h" // kRTMaskShadowFull: mascara do shadow ray do DI-lite
 #include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/Mesh.h"
 #include "Smile/Graphics/DepthConfig.h"
@@ -181,6 +182,7 @@ namespace Smile {
             ReSTIRGI.Initialize(Device.Native());
             Nrd.Initialize(Device.Native());
             Reflections.Initialize(Device.Native());
+            DILite.Initialize(Device.Native());
             DDGIDebugPass.Initialize(Device.Native(),
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         }
@@ -338,6 +340,20 @@ namespace Smile {
             SRVHeap.CreateSRV(Device.Native(), GILightBuffer.Get(), Srv, GILightSRVSlot[i]);
         }
 
+        // Idem para o LightBuffer do deferred (FGPULight, com slice/fade/fracao de RT). O deferred
+        // o le como root SRV e nunca precisou de slot; o DI-lite le por tabela de descritores.
+        for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i) {
+            DILightSRVSlot[i] = SRVHeap.Allocate(1);
+            D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
+            Srv.Format                     = DXGI_FORMAT_UNKNOWN;
+            Srv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            Srv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+            Srv.Buffer.FirstElement        = static_cast<UINT64>(i) * kMaxLights;
+            Srv.Buffer.NumElements         = kMaxLights;
+            Srv.Buffer.StructureByteStride = sizeof(FGPULight);
+            SRVHeap.CreateSRV(Device.Native(), LightBuffer.Get(), Srv, DILightSRVSlot[i]);
+        }
+
         RecreateObjectCB();
     }
 
@@ -460,6 +476,12 @@ namespace Smile {
             DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
             GBuffer.SRVSlot(0), // GBufferA = BaseColor (tint do metal no reflexo)
             DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
+
+        // DI-lite: G-buffer A/B/C + depth, TLAS, InstanceGeo (alpha-test) e o LightBuffer do
+        // deferred, uma fatia por frame em voo.
+        DILite.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+            GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), DepthSRVSlot,
+            RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(), DILightSRVSlot);
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
@@ -2120,9 +2142,14 @@ namespace Smile {
                 }
             }
 
+            FrameLightCount = NumLights; // consumido pelo dispatch do DI-lite, mais adiante
+            // .w = interruptor do DI-lite no deferred. O MESMO predicado do dispatch: com ele
+            // ligado o deferred subtrai a fracao w de cada luz E soma o alvo; desligado, nao faz
+            // nem um nem outro. Divergir aqui apagaria ou dobraria a luz das excedentes.
             MappedCB->LightParams  = { static_cast<f32>(NumLights),
                                        1.0f / static_cast<f32>(FLocalShadows::kResolution),
-                                       LocalShadows.GetDepthBias(), 0.0f };
+                                       LocalShadows.GetDepthBias(),
+                                       DILiteActive() ? 1.0f : 0.0f };
             MappedCB->LightParams2 = { 1.0f / static_cast<f32>(FLocalShadows::kCubeResolution),
                                        FLocalShadows::kPointNear, 0.0f, 0.0f };
 
@@ -2567,6 +2594,21 @@ namespace Smile {
             Batch.Transition(DepthBuffer.Get(), DepthBefore, DeferredReadState);
             Batch.Flush(CommandList);
 
+            // DI-lite ANTES do deferred, e aqui: o DeferredReadState inclui NON_PIXEL, que e o que
+            // o compute precisa para ler G-buffer e depth, e o alvo tem de estar pronto quando o
+            // deferred o somar. UM predicado manda no dispatch e na subtracao (ver DILiteActive):
+            // dispatch sem subtracao dobraria a luz; subtracao sem dispatch a apagaria.
+            const bool DILiteOn = DILiteActive();
+            if (DILiteOn) {
+                FGpuScope Scope(GpuProfiler, CommandList, "DI-lite (luzes sem slot)");
+                DILite.SetRayEpsilons(RayEps);
+                DILite.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
+                                      RenderWidth(), RenderHeight(), FrameIndex,
+                                      FrameLightCount, kRTMaskShadowFull);
+                DILite.RecordDispatch(CommandList, SRVHeap);
+                DILite.TransitionForRead(CommandList);
+            }
+
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr); 
             CommandList->RSSetViewports(1, &Viewport);
@@ -2590,6 +2632,13 @@ namespace Smile {
             {
                 const u32 ReSTIRTable = ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
+            }
+            {
+                // t20. Fallback no IBLTableStart quando inativo — descritor VALIDO, exatamente como
+                // o t16 do ReSTIR e o t14 do AO fazem: a root sig exige a tabela ligada mesmo que o
+                // shader nao a leia (LightParams.w = 0 fecha a leitura).
+                const u32 DILiteTable = DILiteOn ? DILite.OutputSRVSlot() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(12, SRVHeap.GpuHandle(DILiteTable));
             }
             CommandList->SetGraphicsRootShaderResourceView(
                 10, LightBuffer->GetGPUVirtualAddress() +

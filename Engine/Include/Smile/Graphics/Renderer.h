@@ -38,6 +38,7 @@
 #include "Smile/Graphics/ReSTIRGI.h"
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
+#include "Smile/Graphics/DILite.h"
 #include "Smile/Graphics/AmbientOcclusion.h"
 #include "Smile/Graphics/HiZOcclusion.h"
 #include "Smile/Graphics/PostProcess.h"
@@ -475,6 +476,20 @@ namespace Smile {
             UseReflections = V;
         }
         bool GetUseReflections() const     { return UseReflections; }
+
+        // DI-lite. UM predicado manda em tudo — dispatch, subtracao no deferred e leitura do alvo:
+        // se a UI dissesse "ligado" mas o passe nao estivesse pronto (sem DXR, antes do resize), o
+        // deferred subtrairia a parcela w de uma luz que ninguem sombreou e a energia desapareceria.
+        bool GetUseDILite() const  { return UseDILite; }
+        bool DILiteActive() const  { return UseDILite && DILite.IsReady(); }
+        void SetUseDILite(bool V) {
+            if (V == UseDILite) return;
+            UseDILite = V;
+            // Muda a direta do opaco: o que acumula sobre ela tem de cair junto.
+            Nrd.InvalidateHistory();
+            RRResetPending  = true;
+            TAARanLastFrame = false;
+        }
 
         // Religar invalida o historico: reservoirs/acumulacao guardam radiancia do frame em que
         // o toggle desligou (sol/emissivos/DDGI antigos sobreviveriam por tempo indeterminado).
@@ -935,6 +950,18 @@ namespace Smile {
 
         FReflections     Reflections;
         bool             UseReflections = true;
+
+        // DI-lite: direta das luzes locais SEM slot de shadow map, 1 raio/pixel via WRS.
+        FDILite          DILite;
+        bool             UseDILite = false; // default OFF: o sinal e ruidoso e, sob NRD, nao passa
+                                            // por denoiser nenhum (ver DILite.h)
+        // SRV do LightBuffer (FGPULight) por frame em voo. O deferred le esse buffer como root SRV
+        // e por isso nao precisava de slot no heap; o DI-lite le por tabela e precisa.
+        u32              DILightSRVSlot[FCommandQueue::kFramesInFlight] = { kInvalidSlot, kInvalidSlot };
+        // Nº de luzes escritas no LightBuffer deste frame. Sai do bloco de empacotamento (que o
+        // calcula) para o dispatch do DI-lite, bem depois — o shader precisa saber onde a lista
+        // termina, e ler mais que isso traria luz de lixo do frame anterior.
+        u32              FrameLightCount = 0;
 
         FAmbientOcclusion AO;
         bool              UseAO   = true;

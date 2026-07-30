@@ -12,7 +12,7 @@
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[12]{};
+        D3D12_ROOT_PARAMETER RootParams[13]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -135,6 +135,21 @@ namespace Smile {
         RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[11].DescriptorTable.pDescriptorRanges   = &LocalShadowRange;
         RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // DI-lite (t20): direta das luzes locais sem slot de shadow map, full-res. Mesma forma do
+        // t16 do ReSTIR — tabela de 1 SRV, ligada so quando o passe esta pronto. Os outros PSOs
+        // desta root sig nao referenciam t20, entao o parametro extra e inofensivo p/ eles.
+        D3D12_DESCRIPTOR_RANGE DILiteRange{};
+        DILiteRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DILiteRange.NumDescriptors                    = 1;
+        DILiteRange.BaseShaderRegister                = 20;
+        DILiteRange.RegisterSpace                     = 0;
+        DILiteRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[12].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[12].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[12].DescriptorTable.pDescriptorRanges   = &DILiteRange;
+        RootParams[12].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;

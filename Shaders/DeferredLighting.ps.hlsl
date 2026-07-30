@@ -127,6 +127,9 @@ Texture2D<float>  SceneAO             : register(t14);
 // ReSTIR GI: irradiancia difusa por pixel (final-gather sobre o DDGI). Ativa via ReflectionParams.w.
 // Quando ligada, substitui o termo difuso do DDGI; o DDGI segue como cache no trace (multi-bounce).
 Texture2D<float4> ReSTIRGITex         : register(t16);
+// DI-lite (t20): direta das luzes locais SEM slot de shadow map, ja com BRDF aplicada e sombreada
+// por 1 raio/pixel. Ligado so quando o passe esta pronto; LightParams.w e o interruptor.
+Texture2D<float4> DILiteTex           : register(t20);
 
 SamplerState IBLSampler : register(s1); 
 
@@ -337,6 +340,8 @@ float4 main(VSOutput input) : SV_Target {
             // Sombra local: spot projeta pelo ShadowMatrix (slice 2D, F3a); point vai pelo
             // cube array com refZ do eixo dominante (F3b). Normal offset pequeno nos dois
             // contra acne de contato.
+            // Visibilidade BASE: o que o shadow map entrega. Fica 1 quando a luz nao tem slice.
+            float baseVis = 1.0f;
             if (Lp.SpotParams.y >= 0.0f) {
                 float3 offPos = worldPos + N * 0.02f;
                 float  shadow = 1.0f;
@@ -365,8 +370,18 @@ float4 main(VSOutput input) : SV_Target {
                 // Fade do slot: a luz que perde o slice nao vira sem-sombra de um frame pro
                 // outro (a luz passaria a vazar parede num piscar). O slice segue valido
                 // enquanto o fade cai, e o mapa some suave.
-                Atten *= lerp(1.0f, shadow, Lp.SpotParams.z);
+                baseVis = lerp(1.0f, shadow, Lp.SpotParams.z);
             }
+            // Fracao que o DI-lite ja sombreou por raio, num alvo proprio (somado no fim). SUBTRAI
+            // da visibilidade base em vez de multiplicar por (1-w): o baseVis JA contem o fade,
+            // entao multiplicar aplicaria o fade duas vezes. Nao vai a negativo — com slice,
+            // baseVis = (1-f) + f*shadow >= (1-f) == w; sem slice, baseVis = 1 >= w.
+            //   DI-lite off .................. rtShare 0    -> baseVis, identico a antes
+            //   com slice, fade f ............ w = 1-f       -> f * shadow
+            //   sem slice, quer sombra ....... w = 1         -> 0 (o alvo do DI-lite responde)
+            //   CastShadows = false .......... w = 0         -> 1 (segue sem sombra, por escolha)
+            const float rtShare = (LightParams.w > 0.5f) ? Lp.SpotParams.w : 0.0f;
+            Atten *= (baseVis - rtShare);
             if (Atten <= 0.0f) continue;
 
             // F4: especular de area — SourceRadius alarga o highlight (representative point);
@@ -379,6 +394,12 @@ float4 main(VSOutput input) : SV_Target {
                                         DiffuseColor, SpecularColor, Roughness, a2,
                                         TransColor);
         }
+
+        // Parcela do DI-lite: as luzes sem slot, ja com BRDF e com a visibilidade medida por raio.
+        // Somada aqui e nao dentro do laco porque e UM valor por pixel — o passe resolveu o
+        // conjunto todo num estimador. Complementa exatamente o que o rtShare subtraiu acima.
+        if (LightParams.w > 0.5f)
+            Lighting += DILiteTex.Load(int3(px, 0)).rgb;
     }
 
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);
