@@ -351,7 +351,7 @@ Rectangle {
         x: viewModeButton.x + leftTools.x
         y: root.height
         width: 280
-        height: 424
+        height: 452
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
@@ -430,33 +430,39 @@ Rectangle {
             }
             ToggleRow {
                 x: 8; y: 234; width: 264; height: 28
+                label: "ReGIR"; detail: "hits secundários"
+                checked: viewportModel.reGIREnabled
+                onToggled: viewportModel.ToggleReGIR()
+            }
+            ToggleRow {
+                x: 8; y: 262; width: 264; height: 28
                 label: "Folhagem sombreia GI"; detail: "alpha-test"
                 checked: viewportModel.giFoliageShadows
                 onToggled: viewportModel.ToggleGIFoliageShadows()
             }
             ToggleRow {
-                x: 8; y: 262; width: 264; height: 28
+                x: 8; y: 290; width: 264; height: 28
                 label: "GTAO"
                 checked: viewportModel.gtaoEnabled
                 onToggled: viewportModel.ToggleGTAO()
             }
             ToggleRow {
-                x: 8; y: 290; width: 264; height: 28
+                x: 8; y: 318; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
                 checked: viewportModel.gtaoHalfRes
                 onToggled: viewportModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 322; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 350; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 332
+                x: 14; y: 360
                 text: "Reflexos"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 350; width: 264; height: 28
+                x: 8; y: 378; width: 264; height: 28
                 label: "Reflexos RT"
                 checked: viewportModel.reflectionsEnabled
                 onToggled: viewportModel.ToggleReflections()
@@ -464,9 +470,9 @@ Rectangle {
             // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
             // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.
 
-            Rectangle { x: 14; y: 382; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 410; width: 252; height: 1; color: "#23241d" }
             Rectangle {
-                x: 8; y: 388; width: 264; height: 28; radius: 5
+                x: 8; y: 416; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? "#22231c" : "transparent"
                 Text {
                     x: 8

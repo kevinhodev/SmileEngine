@@ -490,6 +490,10 @@ namespace Smile {
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipMode };
         CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+        CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
+        CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
+        CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
+        CPU.ReGIRResources        = ReGIRParams.Resources;
         CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;

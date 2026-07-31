@@ -27,7 +27,15 @@ struct FHitShadeParams {
     uint   ShadowRayMask; // instance mask dos shadow rays: GATHER = folhagem sombreia (alpha-test
                           // por candidato); OPAQUE = pula folhagem (rapido, traversal pura).
                           // Nenhum dos dois inclui TRANSLUCENT — vidro nao faz sombra dura.
+    float3 ReGIRGridMin;       uint ReGIRSlotsPerCell;
+    float3 ReGIRInvCellSize;   bool ReGIREnabled;
+    int3   ReGIRGridCount;     int  ReGIRSampleCount;
+    uint   ReGIRSlotsSRV;      uint ReGIRAverageSRV;
+    uint   FrameIndex;         uint ReGIRPad;
 };
+
+// Requer SceneLights e o heap bindless declarados pelo shader hospedeiro.
+#include "ReGIRSampling.hlsli"
 
 static const float kSkyBottomR = 6360.0f;
 static const float kSkyViewH   = 6360.5f;
@@ -274,10 +282,39 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     }
     float3 Edirect = P.SunColor * P.SunIntensity * vis * ndl;
 
-    // F5: luzes puntuais no hit — mesma atenuacao do deferred (LightsCommon) + shadow ray
-    // inline SO pra luz que contribui de verdade (a janela de raio + cone ja zeram a
-    // maioria por hit). E a visibilidade RT que impede o poste de vazar parede no GI.
-    [loop] for (int li = 0; li < P.NumLights; ++li) {
+    // ReGIR substitui o loop O(N) por 8 propostas do pool da celula + UM shadow ray. O sol fica
+    // dedicado acima. Fora da grade (ou com o toggle off), o loop historico permanece como
+    // referencia exata e fallback funcional.
+    uint regirLight;
+    float3 regirEstimate;
+    bool regirHandled = false;
+    [branch] if (P.ReGIREnabled) {
+        regirHandled = ReGIRSelectPunctual(
+            hitPos, hitN, P.ReGIRGridMin, P.ReGIRInvCellSize, P.ReGIRGridCount,
+            P.ReGIRSlotsPerCell, (uint)P.ReGIRSampleCount, P.ReGIRSlotsSRV,
+            P.ReGIRAverageSRV, P.FrameIndex, (uint)P.NumLights,
+            regirLight, regirEstimate);
+    }
+
+    if (regirHandled && regirLight != REGIR_INVALID_LIGHT) {
+        const float3 lorg = hitPos + offsetN * max(P.ShadowRayBias, RayEpsA.w);
+        const float3 toL = SceneLights[regirLight].PosInvRadius.xyz - lorg;
+        const float lenL = max(length(toL), 1e-4f);
+        const float lTMax = lenL - kLightRayEndMargin;
+        if (lTMax <= RayEpsB.x + kLightRayMinTMax) {
+            Edirect += regirEstimate;
+        } else {
+            RayDesc lray;
+            lray.Origin = lorg; lray.Direction = toL / lenL;
+            lray.TMin = RayEpsB.x; lray.TMax = lTMax;
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
+            lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                              P.ShadowRayMask, lray);
+            SMILE_RT_PROCEED(lq)
+            if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += regirEstimate;
+        }
+    } else if (!regirHandled) {
+      [loop] for (int li = 0; li < P.NumLights; ++li) {
         float3 Ll; float distL;
         float3 contrib = PunctualLightIncoming(SceneLights[li], hitPos, Ll, distL)
                        * saturate(dot(hitN, Ll));
@@ -308,6 +345,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)
         if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += contrib;
+      }
     }
 
     // 2o bounce com o gather COMPLETO — Chebyshev, bias de superficie, offset de relocacao e

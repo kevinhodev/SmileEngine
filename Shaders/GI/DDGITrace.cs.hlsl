@@ -20,6 +20,10 @@ cbuffer DDGICB : register(b0) {
     // Gather do 2o bounce (contrato do HitShading.hlsli): dist atlas + skipMode, bias.
     float4 GIDistParams;    // x=distTile, y=distW, z=distH, w=skipMode
     float4 GIBiasParams;    // x=escala do bias, y=teto em metros, zw=-
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -93,6 +97,16 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.RealHitShading = DistAtlasParams.w > 0.5f;
     P.NumLights      = (int)MiscParams2.y;
     P.ShadowRayMask  = (uint)MiscParams2.z;
+    P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
+    P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
+    P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
+    P.ReGIREnabled       = ReGIRInvCellEnabled.w > 0.5f;
+    P.ReGIRGridCount     = (int3)ReGIRGridCountSamples.xyz;
+    P.ReGIRSampleCount   = (int)ReGIRGridCountSamples.w;
+    P.ReGIRSlotsSRV      = (uint)ReGIRResources.x;
+    P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
+    P.FrameIndex         = (uint)TraceParams.x;
+    P.ReGIRPad           = 0u;
 
     float3 radiance;
     float  signedDist;

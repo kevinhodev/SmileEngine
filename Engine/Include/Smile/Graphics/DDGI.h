@@ -5,9 +5,11 @@
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/ReGIR.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <unordered_map>
+#include <cstddef>
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -34,7 +36,13 @@ namespace Smile {
         // estao no DistAtlasParams porque o contrato e por NOME e vale para os tres passes.
         Vec4 GIDistParams;    // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
         Vec4 GIBiasParams;    // x=escala do bias de superficie, y=teto em metros, zw=-
+        Vec4 ReGIRGridMinSlots;
+        Vec4 ReGIRInvCellEnabled;
+        Vec4 ReGIRGridCountSamples;
+        Vec4 ReGIRResources;
     };
+    static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
+                  "DDGIConstants divergiu do cbuffer DDGICB");
 
     class FDDGI {
     public:
@@ -122,6 +130,7 @@ namespace Smile {
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
 
         // Reset one-shot do atlas: o proximo update que REALMENTE rodar usa histerese 0, ou seja,
         // substitui o conteudo em vez de misturar. Necessario p/ calibracao: com Hysteresis 0.99
@@ -267,6 +276,7 @@ namespace Smile {
         // calibracao deixaria o DDGI em 20 cm enquanto os outros descem.
         FRayEpsilonProfile RayEps; // perfil compartilhado (dono = Renderer)
         FGIHitSampling     GIHit;
+        FReGIRShaderParams ReGIRParams{};
         f32  MaxRayDist   = 0.0f;
         bool RealHitShading = true;
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)

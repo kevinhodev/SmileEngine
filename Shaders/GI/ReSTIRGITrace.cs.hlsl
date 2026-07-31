@@ -38,6 +38,10 @@ cbuffer ReSTIRCB : register(b0) {
     // Gather do 2o bounce (contrato do HitShading.hlsli).
     float4 GIDistParams;            // x=distTile, y=distW, z=distH, w=skipMode
     float4 GIBiasParams;            // x=escala do bias, y=teto em metros, zw=-
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
@@ -142,6 +146,16 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.RealHitShading = ShadeParams.x > 0.5f;
     P.NumLights      = (int)JitterParams.z; // F5
     P.ShadowRayMask  = (uint)SunColor.w;
+    P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
+    P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
+    P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
+    P.ReGIREnabled       = ReGIRInvCellEnabled.w > 0.5f;
+    P.ReGIRGridCount     = (int3)ReGIRGridCountSamples.xyz;
+    P.ReGIRSampleCount   = (int)ReGIRGridCountSamples.w;
+    P.ReGIRSlotsSRV      = (uint)ReGIRResources.x;
+    P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
+    P.FrameIndex         = (uint)TraceParams.x;
+    P.ReGIRPad           = 0u;
 
     // POLITICA DE BACKFACE (Lumen AvoidSelfIntersections modo Retrace + terminacao preta).
     //

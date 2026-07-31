@@ -421,6 +421,10 @@ namespace Smile {
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipMode };
         CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+        CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
+        CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
+        CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
+        CPU.ReGIRResources        = ReGIRParams.Resources;
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReflectionConstants),

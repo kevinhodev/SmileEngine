@@ -36,6 +36,7 @@
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/DDGIDebug.h"
 #include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/ReGIR.h"
 #include "Smile/Graphics/ReSTIRDI.h"
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
@@ -464,6 +465,22 @@ namespace Smile {
         FDDGI& GetDDGI()               { return DDGI; }
         void SetUseGI(bool V)           { UseGI = V; }
         bool GetUseGI() const           { return UseGI; }
+
+        // ReGIR e um sampler de luzes do MUNDO para hits secundarios. Nao substitui o ReSTIR DI
+        // de tela; troca apenas o loop de luzes dentro de ShadeSurfaceHit.
+        void SetUseReGIR(bool V) {
+            if (V == UseReGIR) return;
+            UseReGIR = V;
+            ReGIR.InvalidateHistory();
+            DDGI.ResetHistoryOnce();
+            ReSTIRGI.InvalidateHistory();
+            Reflections.InvalidateHistory();
+            Nrd.InvalidateHistory();
+            RRResetPending = true;
+            TAARanLastFrame = false;
+        }
+        bool GetUseReGIR() const { return UseReGIR; }
+        bool ReGIRActive() const { return UseReGIR && ReGIR.IsReady(); }
 
         // F3: DDGI na fila de compute, sobrepondo CSM/prepass/G-buffer (default ON).
         void SetUseAsyncCompute(bool V) { UseAsyncCompute = V; }
@@ -953,6 +970,8 @@ namespace Smile {
         bool             MaterialRTStateDirty  = false; // pedido de refresh coalescido p/ o proximo frame
         bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
         FDDGI            DDGI;
+        FReGIR           ReGIR;
+        bool             UseReGIR = false; // bring-up: hits secundarios; default OFF para A/B
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;
         bool             GIDebug     = false; 

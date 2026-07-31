@@ -5,8 +5,10 @@
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/ReGIR.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <cstddef>
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -38,7 +40,13 @@ namespace Smile {
         // do deferred, com Chebyshev e skip de sonda inativa.
         Vec4  GIDistParams;      // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
         Vec4  GIBiasParams;      // x=escala do bias de superficie, y=teto em metros, zw=-
+        Vec4  ReGIRGridMinSlots;
+        Vec4  ReGIRInvCellEnabled;
+        Vec4  ReGIRGridCountSamples;
+        Vec4  ReGIRResources;
     };
+    static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
+                  "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
     // A3: Pass A (trace + reservoir temporal) -> Pass B (reuso espacial + Jacobiano + resolve).
@@ -89,6 +97,7 @@ namespace Smile {
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
 
         bool IsReady() const   { return Ready; }
         // true quando a tabela t16 aponta p/ a OUT do NRD (radiancia em YCoCg) e nao p/ a
@@ -230,5 +239,6 @@ namespace Smile {
         // Perfil compartilhado (dono = Renderer). Escrito em RayEpsA/B + TraceParams.w.
         FRayEpsilonProfile RayEps;
         FGIHitSampling     GIHit;
+        FReGIRShaderParams ReGIRParams{};
     };
 }

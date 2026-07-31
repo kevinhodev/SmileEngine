@@ -179,6 +179,7 @@ namespace Smile {
 
         if (Device.RaytracingSupported()) {
             DDGI.Initialize(Device.Native());
+            ReGIR.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
             Nrd.Initialize(Device.Native());
             NrdDirect.Initialize(Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
@@ -209,6 +210,7 @@ namespace Smile {
         if (!Atmosphere.IsInitialized()) return; 
         DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
                            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV());
+        ReGIR.SetupForScene(Device.Native(), SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
 
         SetupReflectionsForScene();
 
@@ -852,6 +854,7 @@ namespace Smile {
             // do DDGI) seguem fora do reload; quando um deles precisar, e o mesmo padrao.
             DILite.RecreatePSO(Device.Native());
             ReSTIRDI.RecreatePSO(Device.Native());
+            ReGIR.RecreatePSO(Device.Native());
         }
     }
 
@@ -896,6 +899,8 @@ namespace Smile {
                 { { "ReSTIRDIInitialTemporal.cs", "ReSTIRDISpatial.cs",
                     "ReSTIRDINrdPack.cs", "ReSTIRDINrdComposite.cs" },
                   [&] { if (Device.RaytracingSupported()) ReSTIRDI.RecreatePSO(Dev); } },
+                { { "ReGIRBuild.cs", "ReGIRAverage.cs" },
+                  [&] { if (Device.RaytracingSupported()) ReGIR.RecreatePSO(Dev); } },
             };
 
             if (_ChangedStem.empty()) {
@@ -1843,10 +1848,14 @@ namespace Smile {
         }
 
         u32 GILightCount = 0;
+        u64 GILightSetSignature = 1469598103934665603ull; // FNV-1a dos IDs na ordem compacta
         {
             FGPULightGI* Dst = reinterpret_cast<FGPULightGI*>(
                 MappedGILightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULightGI));
-            for (const FLight& L : Scene.Lights()) {
+            for (FLight& L : Scene.Lights()) {
+                // O caminho direto atribui a identidade mais adiante, mas o ReGIR e construido
+                // antes dele. Atribuir aqui garante que o historico nunca use indice como ID.
+                if (L.Id == 0) L.Id = Scene.AllocLightId();
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
                 // Peso de RT: com 0 a luz sai da lista do indireto por completo (nao so escurece —
                 // some do hit, economizando o shadow ray dela). E o caso da luz que so existia p/
@@ -1875,8 +1884,11 @@ namespace Smile {
                     G.SpotParams  = { 0.0f, 0.0f, 0.0f, 0.0f };
                 }
                 Dst[GILightCount++] = G;
+                GILightSetSignature ^= L.Id;
+                GILightSetSignature *= 1099511628211ull;
             }
         }
+        GILightSetSignature ^= static_cast<u64>(GILightCount);
 
         // TlasFlagsDirty: mask/FORCE_NON_OPAQUE/two-sided de uma instancia mudaram (edicao de
         // material no editor) sem a cena se mexer, entao a versao de transforms sozinha nao
@@ -1890,6 +1902,24 @@ namespace Smile {
                 TlasFlagsDirty        = false;
             }
         }
+
+        // ReGIR nasce na fila direta antes do ponto onde o DDGI pode bifurcar para compute. No
+        // caminho async, SubmitSegmentAndContinue publica estas escritas e a fila compute espera
+        // o mesmo fence; no sincrono/reflexoes, a ordem da propria command list basta.
+        // Nao reconstrua os 2048 pools se nenhum passe vai consultar hits secundarios neste
+        // frame. O toggle sozinho nao basta: DDGI, reflexoes e ReSTIR GI podem estar todos off.
+        const bool HasReGIRConsumer = (UseGI && DDGI.IsReady()) ||
+                                      ReflectionsActive || ReSTIRGIActive;
+        const bool ReGIROn = ReGIRActive() && HasReGIRConsumer && GILightCount > 0;
+        if (ReGIROn) {
+            FGpuScope Scope(GpuProfiler, CommandList, "ReGIR (build)");
+            ReGIR.UpdatePerFrame(FrameSlot, FrameIndex, GILightCount, GILightSetSignature);
+            ReGIR.RecordBuild(CommandList, SRVHeap);
+        }
+        const FReGIRShaderParams ReGIRCB = ReGIR.ShaderParams(ReGIROn);
+        DDGI.SetReGIRParams(ReGIRCB);
+        Reflections.SetReGIRParams(ReGIRCB);
+        ReSTIRGI.SetReGIRParams(ReGIRCB);
 
         u64 GIComputeFence = 0;
         if (UseGI && DDGI.IsReady()) {

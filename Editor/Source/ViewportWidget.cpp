@@ -88,6 +88,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetUseReSTIRGI();
     }
 
+    bool ViewportWidget::IsReGIREnabled() const {
+        return Renderer && Renderer->GetUseReGIR();
+    }
+
     bool ViewportWidget::IsReSTIRGIVisibilityEnabled() const {
         return Renderer && Renderer->GetReSTIRGI().GetVisibility();
     }
@@ -798,6 +802,12 @@ namespace SmileEditor {
     void ViewportWidget::ToggleReSTIRGI() {
         if (!Renderer) return;
         Renderer->SetUseReSTIRGI(!Renderer->GetUseReSTIRGI());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleReGIR() {
+        if (!Renderer) return;
+        Renderer->SetUseReGIR(!Renderer->GetUseReGIR());
         emit ViewSettingsChanged();
     }
 

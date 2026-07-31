@@ -23,6 +23,10 @@ cbuffer ReflectionCB : register(b0) {
     // Gather do 2o bounce (contrato do HitShading.hlsli).
     float4 GIDistParams;            // x=distTile, y=distW, z=distH, w=skipMode
     float4 GIBiasParams;            // x=escala do bias, y=teto em metros, zw=-
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
 };
 
 // Ver ReflectionTrace.cs.hlsl: politica por passe, no molde do Context.CullingMode do Lumen.
@@ -119,6 +123,16 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     P.RealHitShading = ReflectParams.z > 0.5f;
     P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
     P.ShadowRayMask  = (uint)SunColor.w;
+    P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
+    P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
+    P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
+    P.ReGIREnabled       = ReGIRInvCellEnabled.w > 0.5f;
+    P.ReGIRGridCount     = (int3)ReGIRGridCountSamples.xyz;
+    P.ReGIRSampleCount   = (int)ReGIRGridCountSamples.w;
+    P.ReGIRSlotsSRV      = (uint)ReGIRResources.x;
+    P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
+    P.FrameIndex         = (uint)TraceParams.x;
+    P.ReGIRPad           = 0u;
 
     float3 radiance;
     float  hitDist = TraceParams.y;

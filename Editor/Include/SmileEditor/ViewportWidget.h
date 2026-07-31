@@ -49,6 +49,7 @@ namespace SmileEditor {
         Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool reGIREnabled READ IsReGIREnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY ViewSettingsChanged)
         // Back-face culling nos raios de reflexao (politica por passe).
@@ -195,6 +196,7 @@ namespace SmileEditor {
         QString           GetViewModeLabel() const;
         bool              IsDDGIEnabled() const;
         bool              IsReSTIRGIEnabled() const;
+        bool              IsReGIREnabled() const;
         bool              IsReSTIRGIVisibilityEnabled() const;
         bool              AreGIFoliageShadowsEnabled() const;
         bool              IsReflectionsCullBackfaceEnabled() const;
@@ -318,6 +320,7 @@ namespace SmileEditor {
         }
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
+        Q_INVOKABLE void ToggleReGIR();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
         Q_INVOKABLE void ToggleGIFoliageShadows();
         Q_INVOKABLE void ToggleReflectionsCullBackface();

@@ -2633,6 +2633,50 @@ Rectangle {
                 }
 
                 Card {
+                    id: regirCard
+                    width: parent.width
+                    title: "ReGIR — luzes nos hits secundários"
+                    height: regirLabel.y + regirLabel.height + contentPadding + 8
+
+                    Text {
+                        id: regirHelper
+                        x: 20
+                        y: regirCard.headerHeight + regirCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Troca o loop de todas as luzes locais dentro dos hits de GI e " +
+                              "reflexão por um pool de reservoirs em grade de mundo: 16×8×16 " +
+                              "células, 64 amostras por célula, 8 propostas no hit e um único " +
+                              "shadow ray para a vencedora. O histórico é limitado a 8 quadros " +
+                              "e luzes dinâmicas são reponderadas a cada construção.\n\n" +
+                              "Não substitui o ReSTIR DI: a superfície primária continua no " +
+                              "caminho de tela, onde a reprojeção é mais precisa. Fora da AABB " +
+                              "do grid, o shader cai no loop completo como referência.\n\n" +
+                              "Default OFF para A/B. Compare principalmente reflexos e a " +
+                              "estabilidade do DDGI com muitas luzes locais."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: regirLabel
+                        x: 20
+                        y: regirHelper.y + regirHelper.height + 18
+                        text: "ReGIR nos hits secundários"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: regirLabel.y - 6
+                        checked: viewportModel.reGIREnabled
+                        onToggled: viewportModel.ToggleReGIR()
+                    }
+                }
+
+                Card {
                     id: diLiteCard
                     width: parent.width
                     title: "Sombra por raio nas luzes sem orçamento (DI-lite)"

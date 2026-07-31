@@ -5,8 +5,10 @@
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/ReGIR.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <cstddef>
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -40,7 +42,13 @@ namespace Smile {
         // do deferred, com Chebyshev e skip de sonda inativa.
         Vec4  GIDistParams;      // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
         Vec4  GIBiasParams;      // x=escala do bias de superficie, y=teto em metros, zw=-
+        Vec4  ReGIRGridMinSlots;
+        Vec4  ReGIRInvCellEnabled;
+        Vec4  ReGIRGridCountSamples;
+        Vec4  ReGIRResources;
     };
+    static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 464,
+                  "ReflectionConstants divergiu do cbuffer ReflectionCB");
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
     // Fase 1: mirror, full-res, sem denoise. Passe de compute (trace, sombreado pelo MESMO
@@ -101,6 +109,7 @@ namespace Smile {
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
         // Limpa o historico temporal PROPRIO (caminho legado, sem NRD) no proximo RecordTrace.
         void InvalidateHistory()  { NeedsHistoryClear = true; }
 
@@ -244,6 +253,7 @@ namespace Smile {
         bool Enabled             = true;
         FRayEpsilonProfile RayEps;        // perfil compartilhado (dono = Renderer)
         FGIHitSampling     GIHit;
+        FReGIRShaderParams ReGIRParams{};
         f32  MaxRoughnessToTrace = 0.6f;  // acima -> so DDGI (combine do Lumen)
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)

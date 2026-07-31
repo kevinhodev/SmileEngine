@@ -38,6 +38,9 @@ smile_compile_shader(GI/DDGIRelocate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 # ReSTIR GI — final-gather difuso por pixel (reservoir espaciotemporal) sobre o DDGI (cache)
 smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReSTIRGISpatial.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+# ReGIR — pools de luz em grade de mundo para os hits secundarios.
+smile_compile_shader(GI/ReGIRBuild.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(GI/ReGIRAverage.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 # Pack dos inputs do NRD (inclui NRD.hlsli p/ o encode R10G10B10A2 que casa com o decode interno)
 smile_compile_shader(GI/ReSTIRNrdPack.cs.hlsl   cs_6_6 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 # Debug do DDGI (passe grafico separado): esferas de probe + wireframe do volume + stats
@@ -199,6 +202,10 @@ add_custom_target(Shaders
         Shadow/ShadowDepth.ps.hlsl
         GI/DDGICommon.hlsli
         GI/HitShading.hlsli
+        GI/ReGIRCommon.hlsli
+        GI/ReGIRSampling.hlsli
+        GI/ReGIRBuild.cs.hlsl
+        GI/ReGIRAverage.cs.hlsl
         GI/DDGITrace.cs.hlsl
         GI/DDGIUpdate.cs.hlsl
         GI/DDGIUpdateDist.cs.hlsl
