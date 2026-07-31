@@ -48,6 +48,7 @@
 #include <QStatusBar>
 #include <QTime>
 #include <QTimer>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -201,6 +202,16 @@ namespace SmileEditor {
     }
 
     bool MainWindow::eventFilter(QObject* _Obj, QEvent* _Event) {
+        // Cada viewport e sua toolbar apontam para o mesmo alvo. Foco ou clique em qualquer
+        // superficie torna esse alvo o destinatario dos atalhos globais do viewport.
+        if (_Event->type() == QEvent::FocusIn || _Event->type() == QEvent::MouseButtonPress) {
+            const QVariant TargetProperty = _Obj->property("smileViewportTarget");
+            if (QObject* TargetObject = TargetProperty.value<QObject*>()) {
+                if (auto* TargetViewport = qobject_cast<ViewportWidget*>(TargetObject))
+                    ActiveViewport = TargetViewport;
+            }
+        }
+
         // Reflete mostrar/esconder da janela TOD no check do menu "Janela" (cobre o X da
         // propria janela, que fecha via WindowBridge sem passar pelo toggle do menu).
         if (TodDlg && _Obj == TodDlg &&
@@ -383,6 +394,27 @@ namespace SmileEditor {
         AddShortcut(QKeySequence(tr("Ctrl+Shift+T")), [this]{ Menus->toggleDebugTargets(); });
         AddShortcut(QKeySequence(tr("Ctrl+,")),       [this]{ ShowSettings(); });
         AddShortcut(QKeySequence::Quit,               [this]{ close(); });
+        AddShortcut(QKeySequence(tr("Alt+1")), [this] {
+            if (ActiveViewport) ActiveViewport->SelectLit();
+        });
+        AddShortcut(QKeySequence(tr("Alt+5")), [this] {
+            if (ActiveViewport) ActiveViewport->SelectReflectionHeatmap();
+        });
+    }
+
+    void MainWindow::RegisterViewport(ViewportWidget* _Viewport, QWidget* _Toolbar) {
+        if (!_Viewport) return;
+
+        const QVariant Target = QVariant::fromValue(static_cast<QObject*>(_Viewport));
+        _Viewport->setProperty("smileViewportTarget", Target);
+        _Viewport->installEventFilter(this);
+
+        if (_Toolbar) {
+            _Toolbar->setProperty("smileViewportTarget", Target);
+            _Toolbar->installEventFilter(this);
+        }
+
+        if (!ActiveViewport) ActiveViewport = _Viewport;
     }
 
     QWidget* MainWindow::CreateViewportChrome() {
@@ -398,13 +430,21 @@ namespace SmileEditor {
         Viewport = new ViewportWidget(Shell);
         Viewport->setObjectName("MainViewport");
 
+        QVariantMap ToolbarProperties;
+        ToolbarProperties.insert(
+            QStringLiteral("viewportModel"),
+            QVariant::fromValue(static_cast<QObject*>(Viewport)));
+
         QQuickWidget* Toolbar = CreateQmlPanel(
             QStringLiteral("ViewportToolbar.qml"),
-            { { QStringLiteral("viewportModel"), Viewport } },
-            Shell);
+            {},
+            Shell,
+            {},
+            ToolbarProperties);
         Toolbar->setObjectName("ViewportToolbar");
         Toolbar->setFixedHeight(34);
         Toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        RegisterViewport(Viewport, Toolbar);
         Layout->addWidget(Toolbar);
         Layout->addWidget(Viewport, 1);
 

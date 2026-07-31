@@ -2,10 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import "components" as C
 
-// Toolbar do viewport e dropdown de view modes. `viewportModel` e o ViewportWidget
-// exposto pelo C++; ele aplica os modos/toggles diretamente no Renderer.
+// Toolbar do viewport e dropdown de view modes. Cada instancia recebe explicitamente o
+// ViewportWidget que controla; os atalhos globais sao roteados pelo MainWindow para a ativa.
 Rectangle {
     id: root
+
+    required property var viewportModel
+
     color: "#131410"
     implicitWidth: 900
     implicitHeight: 34
@@ -331,7 +334,7 @@ Rectangle {
         C.ToolbarButton {
             id: viewModeButton
             iconName: "lit"
-            label: root.compact ? "" : viewportModel.viewModeLabel
+            label: root.compact ? "" : root.viewportModel.viewModeLabel
             dropDown: true
             active: true
             onTapped: {
@@ -425,14 +428,14 @@ Rectangle {
             ModeRow {
                 x: 8; y: 30; width: 264; height: 26
                 label: "Lit"; shortcutText: "Alt+1"
-                selected: viewportModel.viewMode === 0 && viewportModel.debugTargetIndex < 0
-                onTapped: { viewportModel.SelectLit(); viewModesPopup.close() }
+                selected: root.viewportModel.viewMode === 0 && root.viewportModel.debugTargetIndex < 0
+                onTapped: { root.viewportModel.SelectLit(); viewModesPopup.close() }
             }
             ModeRow {
                 x: 8; y: 60; width: 264; height: 28
                 label: "Heatmap de reflexos"; shortcutText: "Alt+5"
-                selected: viewportModel.viewMode === 3 && viewportModel.debugTargetIndex < 0
-                onTapped: { viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
+                selected: root.viewportModel.viewMode === 3 && root.viewportModel.debugTargetIndex < 0
+                onTapped: { root.viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
             }
             // Visualizador generico: lista TODOS os alvos publicados em DebugTargets, incluindo
             // os campos do G-buffer. A lista vem do bridge (debugTargetNames), entao passe novo
@@ -440,7 +443,7 @@ Rectangle {
             ModeRow {
                 x: 8; y: 90; width: 264; height: 28
                 label: "Render targets"; hasSubmenu: true
-                selected: viewportModel.debugTargetIndex >= 0
+                selected: root.viewportModel.debugTargetIndex >= 0
                 onTapped: {
                     if (debugTargetPopup.opened) debugTargetPopup.close()
                     else debugTargetPopup.open()
@@ -458,45 +461,45 @@ Rectangle {
             ToggleRow {
                 x: 8; y: 150; width: 264; height: 28
                 label: "DDGI"; detail: "radiance cache"
-                checked: viewportModel.ddgiEnabled
-                onToggled: viewportModel.ToggleDDGI()
+                checked: root.viewportModel.ddgiEnabled
+                onToggled: root.viewportModel.ToggleDDGI()
             }
             ToggleRow {
                 x: 8; y: 178; width: 264; height: 28
                 label: "ReSTIR GI"
-                checked: viewportModel.restirGIEnabled
-                onToggled: viewportModel.ToggleReSTIRGI()
+                checked: root.viewportModel.restirGIEnabled
+                onToggled: root.viewportModel.ToggleReSTIRGI()
             }
             ToggleRow {
                 x: 8; y: 206; width: 264; height: 28
                 label: "ReSTIR visibility"; detail: "raio extra"
-                checked: viewportModel.restirGIVisibilityEnabled
-                interactive: viewportModel.restirGIEnabled
-                onToggled: viewportModel.ToggleReSTIRGIVisibility()
+                checked: root.viewportModel.restirGIVisibilityEnabled
+                interactive: root.viewportModel.restirGIEnabled
+                onToggled: root.viewportModel.ToggleReSTIRGIVisibility()
             }
             ToggleRow {
                 x: 8; y: 234; width: 264; height: 28
                 label: "ReGIR"; detail: "hits secundários"
-                checked: viewportModel.reGIREnabled
-                onToggled: viewportModel.ToggleReGIR()
+                checked: root.viewportModel.reGIREnabled
+                onToggled: root.viewportModel.ToggleReGIR()
             }
             ToggleRow {
                 x: 8; y: 262; width: 264; height: 28
                 label: "Folhagem sombreia GI"; detail: "alpha-test"
-                checked: viewportModel.giFoliageShadows
-                onToggled: viewportModel.ToggleGIFoliageShadows()
+                checked: root.viewportModel.giFoliageShadows
+                onToggled: root.viewportModel.ToggleGIFoliageShadows()
             }
             ToggleRow {
                 x: 8; y: 290; width: 264; height: 28
                 label: "GTAO"
-                checked: viewportModel.gtaoEnabled
-                onToggled: viewportModel.ToggleGTAO()
+                checked: root.viewportModel.gtaoEnabled
+                onToggled: root.viewportModel.ToggleGTAO()
             }
             ToggleRow {
                 x: 8; y: 318; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
-                checked: viewportModel.gtaoHalfRes
-                onToggled: viewportModel.ToggleGTAOHalfRes()
+                checked: root.viewportModel.gtaoHalfRes
+                onToggled: root.viewportModel.ToggleGTAOHalfRes()
             }
 
             Rectangle { x: 14; y: 350; width: 252; height: 1; color: "#23241d" }
@@ -510,8 +513,8 @@ Rectangle {
             ToggleRow {
                 x: 8; y: 378; width: 264; height: 28
                 label: "Reflexos RT"
-                checked: viewportModel.reflectionsEnabled
-                onToggled: viewportModel.ToggleReflections()
+                checked: root.viewportModel.reflectionsEnabled
+                onToggled: root.viewportModel.ToggleReflections()
             }
             // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
             // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.
@@ -549,7 +552,7 @@ Rectangle {
                 TapHandler {
                     onTapped: {
                         viewModesPopup.close()
-                        viewportModel.RequestSettings()
+                        root.viewportModel.RequestSettings()
                     }
                 }
                 C.ToolTip {
@@ -569,7 +572,7 @@ Rectangle {
         y: root.height + 56
         width: 232
         // Cresce com a lista (+1 pela linha "Desligado"), com teto p/ nao estourar a tela.
-        height: Math.min(12 + (viewportModel.debugTargetNames.length + 1) * 28, 460)
+        height: Math.min(12 + (root.viewportModel.debugTargetNames.length + 1) * 28, 460)
         padding: 6
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
@@ -589,7 +592,7 @@ Rectangle {
                     RadioMark {
                         anchors.left: parent.left; anchors.leftMargin: 7
                         anchors.verticalCenter: parent.verticalCenter
-                        checked: viewportModel.debugTargetIndex < 0
+                        checked: root.viewportModel.debugTargetIndex < 0
                     }
                     Text {
                         anchors.left: parent.left; anchors.leftMargin: 27
@@ -602,14 +605,14 @@ Rectangle {
                     HoverHandler { id: offHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
                         onTapped: {
-                            viewportModel.SelectDebugTarget(-1)
+                            root.viewportModel.SelectDebugTarget(-1)
                             debugTargetPopup.close()
                             viewModesPopup.close()
                         }
                     }
                 }
                 Repeater {
-                    model: viewportModel.debugTargetNames
+                    model: root.viewportModel.debugTargetNames
                     delegate: Rectangle {
                         required property string modelData
                         required property int index
@@ -618,7 +621,7 @@ Rectangle {
                         RadioMark {
                             anchors.left: parent.left; anchors.leftMargin: 7
                             anchors.verticalCenter: parent.verticalCenter
-                            checked: viewportModel.debugTargetIndex === index
+                            checked: root.viewportModel.debugTargetIndex === index
                         }
                         Text {
                             anchors.left: parent.left; anchors.leftMargin: 27
@@ -633,7 +636,7 @@ Rectangle {
                         HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
                             onTapped: {
-                                viewportModel.SelectDebugTarget(index)
+                                root.viewportModel.SelectDebugTarget(index)
                                 debugTargetPopup.close()
                                 viewModesPopup.close()
                             }
@@ -644,14 +647,4 @@ Rectangle {
         }
     }
 
-    Shortcut {
-        sequence: "Alt+1"
-        context: Qt.ApplicationShortcut
-        onActivated: viewportModel.SelectLit()
-    }
-    Shortcut {
-        sequence: "Alt+5"
-        context: Qt.ApplicationShortcut
-        onActivated: viewportModel.SelectReflectionHeatmap()
-    }
 }

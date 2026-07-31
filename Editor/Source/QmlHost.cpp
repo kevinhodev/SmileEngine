@@ -90,7 +90,8 @@ namespace SmileEditor {
     QQuickWidget* CreateQmlPanel(const QString& _QmlFileName,
                                  const QVector<QPair<QString, QObject*>>& _ContextProps,
                                  QWidget* _Parent,
-                                 const QVector<QPair<QString, QQmlImageProviderBase*>>& _ImageProviders) {
+                                 const QVector<QPair<QString, QQmlImageProviderBase*>>& _ImageProviders,
+                                 const QVariantMap& _InitialProperties) {
         auto* Widget = new QQuickWidget(_Parent);
         Widget->setResizeMode(QQuickWidget::SizeRootObjectToView);
         Widget->setClearColor(QColor(0x10, 0x11, 0x0f)); // mesmo fundo do tema (#10110f)
@@ -100,6 +101,11 @@ namespace SmileEditor {
 
         for (const auto& Prop : _ContextProps)
             Widget->rootContext()->setContextProperty(Prop.first, Prop.second);
+
+        // Propriedades do componente raiz sao aplicadas durante a criacao, antes de qualquer
+        // binding. Diferente de context properties, isso torna o contrato visivel no proprio QML.
+        if (!_InitialProperties.isEmpty())
+            Widget->setInitialProperties(_InitialProperties);
 
         const QString Path = ResolveQmlPath(_QmlFileName);
         Widget->setSource(QUrl::fromLocalFile(Path));

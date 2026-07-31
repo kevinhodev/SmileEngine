@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QVariantMap>
 #include <QVector>
 #include <QPair>
 
@@ -16,7 +17,8 @@ namespace SmileEditor {
     QString ResolveQmlPath(const QString& qmlFileName);
 
     // Cria um QQuickWidget hospedando Qml/<qmlFileName>, com fundo opaco do tema e
-    // SizeRootObjectToView. contextProps expoe objetos C++ ao QML (ex.: a LogBridge);
+    // SizeRootObjectToView. contextProps expoe objetos C++ globais ao QML (ex.: a LogBridge);
+    // initialProperties satisfaz propriedades declaradas no componente raiz (inclusive required);
     // imageProviders registra fontes "image://<nome>/..." (ex.: smilelogo). Tudo e setado
     // ANTES do setSource, entao ja esta visivel na carga do QML. A engine assume a posse
     // dos providers.
@@ -25,5 +27,6 @@ namespace SmileEditor {
     QQuickWidget* CreateQmlPanel(const QString& qmlFileName,
                                  const QVector<QPair<QString, QObject*>>& contextProps,
                                  QWidget* parent,
-                                 const QVector<QPair<QString, QQmlImageProviderBase*>>& imageProviders = {});
+                                 const QVector<QPair<QString, QQmlImageProviderBase*>>& imageProviders = {},
+                                 const QVariantMap& initialProperties = {});
 }

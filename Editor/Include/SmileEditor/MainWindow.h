@@ -60,9 +60,11 @@ namespace SmileEditor {
         void CreateStatusBar();   // barra de status QML (StatusBar.qml) no slot do QStatusBar
         void CreateDocks();
         QWidget* CreateViewportChrome();
+        void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
 
         QString               StartupScenePath;
         ViewportWidget*       Viewport    = nullptr;
+        QPointer<ViewportWidget> ActiveViewport;
         QPointer<AboutDialog> AboutDlg;
         QPointer<QDialog>     SettingsDlg;
 
