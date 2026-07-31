@@ -153,6 +153,7 @@ namespace SmileEditor {
         Q_PROPERTY(QString vramNonLocalText READ GetVRAMNonLocalText NOTIFY FrameReady)
         Q_PROPERTY(QVariantList vramBreakdown READ GetVRAMBreakdown NOTIFY FrameReady)
         Q_PROPERTY(QString gpuFrameText READ GetGpuFrameText NOTIFY FrameReady)
+        Q_PROPERTY(double gpuFrameMs READ GetGpuFrameMs NOTIFY FrameReady)
         Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY FrameReady)
 
     public:
@@ -286,6 +287,7 @@ namespace SmileEditor {
         QString           GetVRAMNonLocalText() const;
         QVariantList      GetVRAMBreakdown() const;
         QString           GetGpuFrameText() const;
+        double            GetGpuFrameMs() const;
         QVariantList      GetGpuTimings() const;
 
         Q_INVOKABLE void SelectLit();
@@ -455,6 +457,9 @@ namespace SmileEditor {
         bool          IgnoreNextMove   = false;
         float         LastFPS          = 0.0f;
         QElapsedTimer FrameTimer;
+        // Ranking visual dos passes GPU. Mutavel porque GetGpuTimings e um getter Qt const,
+        // mas a ordem precisa de histerese entre snapshots para nao ficar trocando em empates.
+        mutable QStringList GpuTimingOrder;
         int           CurrentViewMode  = Lit;
         QImage         DebugPreviewImage;
         mutable QMutex DebugPreviewMutex;

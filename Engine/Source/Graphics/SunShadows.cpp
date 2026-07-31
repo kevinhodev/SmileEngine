@@ -1,4 +1,5 @@
 #include "Smile/Graphics/SunShadows.h"
+#include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/Material.h"
@@ -378,7 +379,8 @@ namespace Smile {
     void FSunShadows::RecordDepthPass(ID3D12GraphicsCommandList* _CommandList,
                                       FTextureSRVHeap& _SRVHeap,
                                       const FShadowDrawItem* _Items, size_t _Count,
-                                      const FExtraCascadeDraw& _ExtraDraw) {
+                                      const FExtraCascadeDraw& _ExtraDraw,
+                                      FGpuProfiler* _Profiler) {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
         D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
@@ -387,8 +389,11 @@ namespace Smile {
         _CommandList->RSSetViewports(1, &VP);
         _CommandList->RSSetScissorRects(1, &SC);
 
+        static constexpr const char* CascadeScopes[kNumCascades] = {
+            "Cascata 0", "Cascata 1", "Cascata 2", "Cascata 3" };
         for (u32 c = 0; c < kNumCascades; ++c) {
             if (!(UpdateMask & (1u << c))) continue; // cascata congelada: depth do update anterior segue valido
+            if (_Profiler) _Profiler->Begin(_CommandList, CascadeScopes[c]);
             // Root sig por cascata (nao uma vez fora do loop): o ExtraDraw (terreno) troca
             // root signature/PSO no fim da cascata anterior.
             _CommandList->SetGraphicsRootSignature(RootSig.Get());
@@ -449,6 +454,7 @@ namespace Smile {
 
             if (_ExtraDraw)
                 _ExtraDraw(_CommandList, c, CascadeCBAddr(c), CascadeViewProj[c]);
+            if (_Profiler) _Profiler->End(_CommandList);
         }
 
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

@@ -26,6 +26,7 @@ Texture2D<float4> GBufferB    : register(t3);
 Texture2D<float4> GBufferC    : register(t4);
 Texture2D<float>  Depth       : register(t5);
 Texture2D<float2> Velocity    : register(t6);
+Texture2D<float4> ShadowMotion : register(t7);
 
 RWTexture2D<float>  OutViewZ       : register(u0);
 RWTexture2D<float4> OutNormalRough : register(u1);
@@ -78,7 +79,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     OutViewZ[px] = viewZ;
     OutNormalRough[px] = NRD_FrontEnd_PackNormalAndRoughness(
         g.WorldNormal, max(g.Roughness, 0.04f), 0.0f);
-    OutMv[px] = Velocity.Load(int3(px, 0));
+    const float2 baseMotion = Velocity.Load(int3(px, 0));
+    const float4 shadowMotion = ShadowMotion.Load(int3(px, 0));
+    OutMv[px] = lerp(baseMotion, shadowMotion.xy,
+                     saturate(shadowMotion.z) * saturate(shadowMotion.w));
     OutDiffRadHit[px] = RELAX_FrontEnd_PackRadianceAndHitDist(
         diffuse, max(rawDiffuse.a, 0.0f), true);
     OutSpecRadHit[px] = RELAX_FrontEnd_PackRadianceAndHitDist(

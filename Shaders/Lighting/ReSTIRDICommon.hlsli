@@ -9,6 +9,7 @@ struct FGPULightFull {
     float4 DirCosOuter;
     float4 SpotParams;
     row_major float4x4 ShadowMatrix;
+    float4 PrevPosInvRadius;
 };
 
 struct ReSTIRDIReservoir {

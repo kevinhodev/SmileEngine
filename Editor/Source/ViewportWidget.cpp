@@ -322,16 +322,22 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetGpuFrameText() const {
-        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        const double FrameMs = GetGpuFrameMs();
+        if (FrameMs <= 0.0) return QStringLiteral("—");
+        return QLocale(QLocale::Portuguese, QLocale::Brazil)
+                   .toString(FrameMs, 'f', 2) + QStringLiteral(" ms");
+    }
+
+    double ViewportWidget::GetGpuFrameMs() const {
+        if (!Renderer || !Renderer->IsInitialized()) return 0.0;
         for (const auto& R : Renderer->GetGpuProfiler().Results())
-            if (std::strcmp(R.Name, kGpuFrameScope) == 0)
-                return QLocale(QLocale::Portuguese, QLocale::Brazil)
-                           .toString(R.Milliseconds, 'f', 2) + QStringLiteral(" ms");
-        return QStringLiteral("—");
+            if (std::strcmp(R.Name, kGpuFrameScope) == 0) return R.Milliseconds;
+        return 0.0;
     }
 
     // Tabela "GPU por passe": escopos do FGpuProfiler (sem o total, que vira o header),
-    // ordenados do mais caro pro mais barato; frac relativo ao frame total de GPU.
+    // em ordem de custo com histerese; frac relativo ao frame total de GPU. A margem conserva
+    // a leitura por consumo sem deixar passes quase empatados trocarem de lugar a cada snapshot.
     QVariantList ViewportWidget::GetGpuTimings() const {
         QVariantList Rows;
         if (!Renderer || !Renderer->IsInitialized()) return Rows;
@@ -342,27 +348,137 @@ namespace SmileEditor {
         for (const auto& R : Results)
             if (std::strcmp(R.Name, kGpuFrameScope) == 0) FrameMs = R.Milliseconds;
 
-        // Passes da fila de COMPUTE (DDGI async) entram na mesma tabela — o tempo e
-        // medido na fila propria e o frac continua relativo ao frame da fila direta
-        // (mostra quanto do frame o trabalho sobreposto ocupa).
+        // Passes da fila de COMPUTE (DDGI async) entram na mesma tabela. O FGpuProfiler agora
+        // preserva Depth, portanto os scopes aninhados viram subpasses expansíveis no QML.
         const auto ComputeResults = Renderer->GetAsyncComputeTimings();
 
-        std::vector<const Smile::FGpuProfiler::FScopeResult*> Sorted;
-        Sorted.reserve(Results.size() + ComputeResults.size());
-        for (const auto& R : Results)
-            if (std::strcmp(R.Name, kGpuFrameScope) != 0) Sorted.push_back(&R);
-        for (const auto& R : ComputeResults) Sorted.push_back(&R);
-        std::sort(Sorted.begin(), Sorted.end(),
-                  [](const auto* A, const auto* B) { return A->Milliseconds > B->Milliseconds; });
+        struct FTimingGroup {
+            const Smile::FGpuProfiler::FScopeResult* Parent = nullptr;
+            std::vector<const Smile::FGpuProfiler::FScopeResult*> Children;
+            bool Async = false;
+        };
+        std::vector<FTimingGroup> Groups;
+        Groups.reserve(Results.size() + ComputeResults.size());
+
+        FTimingGroup* Current = nullptr;
+        for (const auto& R : Results) {
+            if (std::strcmp(R.Name, kGpuFrameScope) == 0) continue;
+            // A fila direta tem "Frame (GPU)" em Depth 0. Seus passes ficam em 1 e os
+            // subpasses em 2+. Níveis mais profundos são achatados no pai visual imediato.
+            if (R.Depth <= 1 || !Current) {
+                Groups.push_back({ &R, {}, false });
+                Current = &Groups.back();
+            } else {
+                Current->Children.push_back(&R);
+            }
+        }
+        for (const auto& R : ComputeResults)
+            Groups.push_back({ &R, {}, true });
+
+        auto GroupName = [](const FTimingGroup& Group) {
+            return QString::fromUtf8(Group.Parent->Name);
+        };
+        if (GpuTimingOrder.isEmpty()) {
+            std::stable_sort(Groups.begin(), Groups.end(),
+                             [](const FTimingGroup& A, const FTimingGroup& B) {
+                                 return A.Parent->Milliseconds > B.Parent->Milliseconds;
+                             });
+        } else {
+            // Comeca pelo ranking anterior. Passes novos entram no fim e sobem pela mesma regra
+            // de histerese; assim toggles de render nao embaralham o restante da tabela.
+            std::stable_sort(Groups.begin(), Groups.end(),
+                             [&](const FTimingGroup& A, const FTimingGroup& B) {
+                                 const int IA = GpuTimingOrder.indexOf(GroupName(A));
+                                 const int IB = GpuTimingOrder.indexOf(GroupName(B));
+                                 const int KA = IA >= 0 ? IA : GpuTimingOrder.size();
+                                 const int KB = IB >= 0 ? IB : GpuTimingOrder.size();
+                                 return KA < KB;
+                             });
+            // Insertion sort com margem: diferenca real (>5% ou >0,02 ms) muda o ranking;
+            // ruido/empate conserva a posicao anterior.
+            for (size_t i = 1; i < Groups.size(); ++i) {
+                size_t j = i;
+                while (j > 0) {
+                    const double Ahead = Groups[j - 1].Parent->Milliseconds;
+                    const double Behind = Groups[j].Parent->Milliseconds;
+                    const double Margin = std::max(0.02, Ahead * 0.05);
+                    if (Behind <= Ahead + Margin) break;
+                    std::swap(Groups[j - 1], Groups[j]);
+                    --j;
+                }
+            }
+        }
+        GpuTimingOrder.clear();
+        for (const FTimingGroup& Group : Groups)
+            GpuTimingOrder.push_back(GroupName(Group));
 
         const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
-        for (const auto* R : Sorted) {
+        for (const FTimingGroup& Group : Groups) {
+            const auto* R = Group.Parent;
+            QVariantList Children;
+            double ChildTotalMs = 0.0;
+            auto MakeChildRow = [&](const Smile::FGpuProfiler::FScopeResult* Child) {
+                ChildTotalMs += Child->Milliseconds;
+                QVariantMap ChildRow;
+                ChildRow.insert(QStringLiteral("name"), QString::fromUtf8(Child->Name));
+                ChildRow.insert(QStringLiteral("text"),
+                                Loc.toString(Child->Milliseconds, 'f', 2) + QStringLiteral(" ms"));
+                ChildRow.insert(QStringLiteral("frac"), R->Milliseconds > 0.0
+                    ? std::min(1.0, Child->Milliseconds / R->Milliseconds) : 0.0);
+                ChildRow.insert(QStringLiteral("shareText"), R->Milliseconds > 0.0
+                    ? Loc.toString(100.0 * Child->Milliseconds / R->Milliseconds, 'f', 0) +
+                          QStringLiteral("%")
+                    : QStringLiteral("—"));
+                ChildRow.insert(QStringLiteral("active"), true);
+                return ChildRow;
+            };
+
+            if (std::strcmp(R->Name, "Sombras — sol (CSM)") == 0) {
+                // O cache atualiza apenas parte das cascatas em cada frame. As ausentes seguem
+                // sendo usadas com o depth anterior: mantemos as quatro linhas para a arvore nao
+                // crescer/encolher e marcamos visualmente as que vieram do cache.
+                static constexpr const char* CascadeNames[4] = {
+                    "Cascata 0", "Cascata 1", "Cascata 2", "Cascata 3" };
+                for (const char* CascadeName : CascadeNames) {
+                    const Smile::FGpuProfiler::FScopeResult* Found = nullptr;
+                    for (const auto* Child : Group.Children) {
+                        if (std::strcmp(Child->Name, CascadeName) == 0) {
+                            Found = Child;
+                            break;
+                        }
+                    }
+                    if (Found) {
+                        Children.push_back(MakeChildRow(Found));
+                    } else {
+                        QVariantMap CachedRow;
+                        CachedRow.insert(QStringLiteral("name"), QString::fromUtf8(CascadeName));
+                        CachedRow.insert(QStringLiteral("text"), QStringLiteral("—"));
+                        CachedRow.insert(QStringLiteral("frac"), 0.0);
+                        CachedRow.insert(QStringLiteral("shareText"), QStringLiteral("CACHE"));
+                        CachedRow.insert(QStringLiteral("active"), false);
+                        Children.push_back(CachedRow);
+                    }
+                }
+            } else {
+                for (const auto* Child : Group.Children)
+                    Children.push_back(MakeChildRow(Child));
+            }
+
             QVariantMap Row;
             Row.insert(QStringLiteral("name"), QString::fromUtf8(R->Name));
             Row.insert(QStringLiteral("text"), Loc.toString(R->Milliseconds, 'f', 2) +
                                                QStringLiteral(" ms"));
             Row.insert(QStringLiteral("frac"),
                        FrameMs > 0.0 ? std::min(1.0, R->Milliseconds / FrameMs) : 0.0);
+            Row.insert(QStringLiteral("percentText"), FrameMs > 0.0
+                ? Loc.toString(100.0 * R->Milliseconds / FrameMs, 'f', 1) + QStringLiteral("%")
+                : QStringLiteral("—"));
+            Row.insert(QStringLiteral("selfText"),
+                       Loc.toString(std::max(0.0, R->Milliseconds - ChildTotalMs), 'f', 2) +
+                           QStringLiteral(" ms"));
+            Row.insert(QStringLiteral("async"), Group.Async);
+            Row.insert(QStringLiteral("hasChildren"), !Children.isEmpty());
+            Row.insert(QStringLiteral("children"), Children);
             Rows.push_back(Row);
         }
         return Rows;

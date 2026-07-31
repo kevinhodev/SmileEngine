@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Reflections.h"
+#include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
@@ -35,10 +36,10 @@ namespace Smile {
     }
 
     void FReflections::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_6.cso", 9, 2, true);       // t8 = luzes (F5)
-        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 9, 1, true);
-        ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 4, 1, false);
-        TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 4, 1, false);
+        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_6.cso", 12, 3, true);
+        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 12, 2, true);
+        ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 5, 2, false);
+        TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 5, 1, false);
         SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 3, 1, false);
         NrdPackPSO.Initialize(_Device, "ReflectionNrdPack.cs_6_0.cso", 3, 1, false);
         CreateCompositePipeline(_Device);
@@ -146,15 +147,19 @@ namespace Smile {
         };
         Free(RadianceSRVSlot, 1);
         Free(RayDataSRVSlot, 1);
+        Free(RayMotionSRVSlot, 1);
         Free(ResolvedSRVSlot, 1);
         Free(ResolvedUAVSlot, 1);
+        Free(ResolvedMotionSRVSlot, 1);
+        Free(ResolvedMotionUAVSlot, 1);
         Free(HistorySRVSlot[0], 1); Free(HistorySRVSlot[1], 1);
         Free(HistoryUAVSlot[0], 1); Free(HistoryUAVSlot[1], 1);
         Free(DenoisedSRVSlot, 1); Free(DenoisedUAVSlot, 1);
-        Free(TraceUAVTable, 2);
-        for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 9);
-        Free(ResolveTableStart, 4);
-        Free(TemporalTable[0], 4); Free(TemporalTable[1], 4);
+        Free(TraceUAVTable, 3);
+        Free(ResolvedUAVTable, 2);
+        for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 12);
+        Free(ResolveTableStart, 5);
+        Free(TemporalTable[0], 5); Free(TemporalTable[1], 5);
         Free(SpatialTable[0], 3); Free(SpatialTable[1], 3);
         Free(CompositeTable[0], 6); Free(CompositeTable[1], 6);
         Free(SpecPackSrvTable, 3);
@@ -165,12 +170,16 @@ namespace Smile {
         Free(CompositeTableRaw, 6);
         Radiance.Reset();
         RayData.Reset();
+        RayMotion.Reset();
         Resolved.Reset();
+        ResolvedMotion.Reset();
         History[0].Reset(); History[1].Reset();
         Denoised.Reset();
         RadianceState = D3D12_RESOURCE_STATE_COMMON;
         RayDataState  = D3D12_RESOURCE_STATE_COMMON;
+        RayMotionState = D3D12_RESOURCE_STATE_COMMON;
         ResolvedState = D3D12_RESOURCE_STATE_COMMON;
+        ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
         DenoisedState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
@@ -180,11 +189,15 @@ namespace Smile {
                                       u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
                                       u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
                                       u32 _GBufferSlot, u32 _GBufferCSlot, u32 _BRDFLutSlot,
-                                      u32 _GBufferASlot, u32 _DistSlot, u32 _ProbeDataSlot) {
+                                      u32 _GBufferASlot, u32 _DistSlot, u32 _ProbeDataSlot,
+                                      const u32 _TransformSlots[FCommandQueue::kFramesInFlight],
+                                      const u32 _SurfaceSlots[FCommandQueue::kFramesInFlight]) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot)
             return;
+        for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
+            if (_TransformSlots[f] == kInvalidSlot || _SurfaceSlots[f] == kInvalidSlot) return;
 
         Width = _Width; Height = _Height;
         HalfWidth = (_Width + 1) / 2; HalfHeight = (_Height + 1) / 2;
@@ -192,11 +205,14 @@ namespace Smile {
         GBufferCSlotCached = _GBufferCSlot; GBufferASlotCached = _GBufferASlot;
         Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
         RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
+        RayMotion = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
         Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        ResolvedMotion = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        RadianceState = RayDataState = ResolvedState = D3D12_RESOURCE_STATE_COMMON;
+        RadianceState = RayDataState = RayMotionState = ResolvedState =
+            ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
         DenoisedState = D3D12_RESOURCE_STATE_COMMON;
         NeedsHistoryClear = true; FrameParity = 0;
@@ -212,15 +228,21 @@ namespace Smile {
 
         RadianceSRVSlot = _SRVHeap.Allocate(1);
         RayDataSRVSlot  = _SRVHeap.Allocate(1);
+        RayMotionSRVSlot = _SRVHeap.Allocate(1);
         ResolvedSRVSlot = _SRVHeap.Allocate(1);
         ResolvedUAVSlot = _SRVHeap.Allocate(1);
+        ResolvedMotionSRVSlot = _SRVHeap.Allocate(1);
+        ResolvedMotionUAVSlot = _SRVHeap.Allocate(1);
         HistorySRVSlot[0] = _SRVHeap.Allocate(1); HistorySRVSlot[1] = _SRVHeap.Allocate(1);
         HistoryUAVSlot[0] = _SRVHeap.Allocate(1); HistoryUAVSlot[1] = _SRVHeap.Allocate(1);
         DenoisedSRVSlot = _SRVHeap.Allocate(1); DenoisedUAVSlot = _SRVHeap.Allocate(1);
         _SRVHeap.CreateSRV(_Device, Radiance.Get(), Srv, RadianceSRVSlot);
         _SRVHeap.CreateSRV(_Device, RayData.Get(),  Srv, RayDataSRVSlot);
+        _SRVHeap.CreateSRV(_Device, RayMotion.Get(), Srv, RayMotionSRVSlot);
         _SRVHeap.CreateSRV(_Device, Resolved.Get(), Srv, ResolvedSRVSlot);
         _SRVHeap.CreateUAV(_Device, Resolved.Get(), Uav, ResolvedUAVSlot);
+        _SRVHeap.CreateSRV(_Device, ResolvedMotion.Get(), Srv, ResolvedMotionSRVSlot);
+        _SRVHeap.CreateUAV(_Device, ResolvedMotion.Get(), Uav, ResolvedMotionUAVSlot);
         _SRVHeap.CreateSRV(_Device, History[0].Get(), Srv, HistorySRVSlot[0]);
         _SRVHeap.CreateSRV(_Device, History[1].Get(), Srv, HistorySRVSlot[1]);
         _SRVHeap.CreateUAV(_Device, History[0].Get(), Uav, HistoryUAVSlot[0]);
@@ -228,11 +250,17 @@ namespace Smile {
         _SRVHeap.CreateSRV(_Device, Denoised.Get(), Srv, DenoisedSRVSlot);
         _SRVHeap.CreateUAV(_Device, Denoised.Get(), Uav, DenoisedUAVSlot);
 
-        TraceUAVTable = _SRVHeap.Allocate(2);
+        TraceUAVTable = _SRVHeap.Allocate(3);
         _SRVHeap.CreateUAV(_Device, Radiance.Get(), Uav, TraceUAVTable);
         _SRVHeap.CreateUAV(_Device, RayData.Get(),  Uav, TraceUAVTable + 1);
+        _SRVHeap.CreateUAV(_Device, RayMotion.Get(), Uav, TraceUAVTable + 2);
 
-        // t0..t7 fixos + t8 = luzes puntuais (F5; copiado por frame no SetPunctualLightsSRV).
+        ResolvedUAVTable = _SRVHeap.Allocate(2);
+        _SRVHeap.CreateUAV(_Device, Resolved.Get(), Uav, ResolvedUAVTable);
+        _SRVHeap.CreateUAV(_Device, ResolvedMotion.Get(), Uav, ResolvedUAVTable + 1);
+
+        // t0..t7 fixos; t8 = luzes; t9 = transform atual<->anterior; t10/t11 = superficies
+        // atual/anterior. As tres ultimas entradas sao versionadas pelo FrameSlot.
         // Uma tabela por frame em voo: o t8 muda todo frame e a tabela do frame anterior ainda
         // pode estar sendo lida pela GPU (descriptor versioning). t4/t5 eram os merged VB/IB,
         // aposentados pelo bindless (InstanceGeo); hoje levam o atlas de distancia e o ProbeData
@@ -249,36 +277,48 @@ namespace Smile {
         };
         UINT TDstCount = 8; UINT TSrcCounts[8] = { 1,1,1,1,1,1,1,1 };
         for (u32 i = 0; i < kTraceTables; ++i) {
-            TraceTable[i] = _SRVHeap.Allocate(9);
+            TraceTable[i] = _SRVHeap.Allocate(12);
             D3D12_CPU_DESCRIPTOR_HANDLE TDst = _SRVHeap.CpuHandle(TraceTable[i]);
             _Device->CopyDescriptors(1, &TDst, &TDstCount, 8, TSrc, TSrcCounts,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            D3D12_CPU_DESCRIPTOR_HANDLE MotionDst = _SRVHeap.CpuHandle(TraceTable[i] + 9);
+            D3D12_CPU_DESCRIPTOR_HANDLE MotionSrc[3] = {
+                _SRVHeap.CpuHandleStaging(_TransformSlots[i]),
+                _SRVHeap.CpuHandleStaging(_SurfaceSlots[i]),
+                _SRVHeap.CpuHandleStaging(_SurfaceSlots[1u - i]),
+            };
+            UINT MotionCount = 3; UINT MotionOnes[3] = { 1,1,1 };
+            _Device->CopyDescriptors(1, &MotionDst, &MotionCount, 3, MotionSrc, MotionOnes,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
 
-        ResolveTableStart = _SRVHeap.Allocate(4);
+        ResolveTableStart = _SRVHeap.Allocate(5);
         D3D12_CPU_DESCRIPTOR_HANDLE RDst = _SRVHeap.CpuHandle(ResolveTableStart);
-        D3D12_CPU_DESCRIPTOR_HANDLE RSrc[4] = {
+        D3D12_CPU_DESCRIPTOR_HANDLE RSrc[5] = {
             _SRVHeap.CpuHandleStaging(RadianceSRVSlot),
             _SRVHeap.CpuHandleStaging(RayDataSRVSlot),
+            _SRVHeap.CpuHandleStaging(RayMotionSRVSlot),
             _SRVHeap.CpuHandleStaging(_DepthSlot),
             _SRVHeap.CpuHandleStaging(_GBufferSlot),
         };
-        UINT RDstCount = 4; UINT RSrcCounts[4] = { 1,1,1,1 };
-        _Device->CopyDescriptors(1, &RDst, &RDstCount, 4, RSrc, RSrcCounts,
+        UINT RDstCount = 5; UINT RSrcCounts[5] = { 1,1,1,1,1 };
+        _Device->CopyDescriptors(1, &RDst, &RDstCount, 5, RSrc, RSrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        UINT Four = 4; UINT Ones[4] = { 1,1,1,1 };
+        UINT Five = 5; UINT Ones[5] = { 1,1,1,1,1 };
         for (u32 curr = 0; curr < 2; ++curr) {
             const u32 prev = 1u - curr;
-            TemporalTable[curr] = _SRVHeap.Allocate(4);
+            TemporalTable[curr] = _SRVHeap.Allocate(5);
             D3D12_CPU_DESCRIPTOR_HANDLE TDst2 = _SRVHeap.CpuHandle(TemporalTable[curr]);
-            D3D12_CPU_DESCRIPTOR_HANDLE TSrc2[4] = {
+            D3D12_CPU_DESCRIPTOR_HANDLE TSrc2[5] = {
                 _SRVHeap.CpuHandleStaging(ResolvedSRVSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(HistorySRVSlot[prev]),
+                _SRVHeap.CpuHandleStaging(ResolvedMotionSRVSlot),
             };
-            _Device->CopyDescriptors(1, &TDst2, &Four, 4, TSrc2, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            _Device->CopyDescriptors(1, &TDst2, &Five, 5, TSrc2, Ones,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
             // Spatial le o History[curr] (recem-acumulado) + gbuf + depth -> Denoised.
             SpatialTable[curr] = _SRVHeap.Allocate(3);
@@ -385,18 +425,23 @@ namespace Smile {
     }
 
     void FReflections::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Mat44& _PrevViewProj,
-                                      const Vec3& _CameraPos, u32 _Width, u32 _Height, const Vec3& _SunDir,
+                                      const Vec3& _CameraPos, const Vec3& _PrevCameraPos,
+                                      u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
                                       f32 _SkyIntensity, bool _RealHitShading,
-                                      const Mat44& _View, u32 _PunctualLightCount) {
+                                      const Mat44& _View, u32 _PunctualLightCount,
+                                      u32 _TemporalInstanceCount, bool _MotionHistoryValid) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
         CPU.PrevViewProj    = _PrevViewProj;
+        CPU.PrevCameraPos   = { _PrevCameraPos.X, _PrevCameraPos.Y, _PrevCameraPos.Z,
+                                static_cast<f32>(_TemporalInstanceCount) };
         CPU.View            = _View;
         CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, SpatialRadius,
                                 FullResMaxRough };
-        CPU.DebugParams     = { (f32)DebugMode, MaxFrames, 0.0f, 0.0f }; // y = cap real p/ debug acumulacao
+        CPU.DebugParams     = { (f32)DebugMode, MaxFrames,
+                                _MotionHistoryValid ? 1.0f : 0.0f, 0.0f };
         // w = nº de luzes puntuais no t8 (F5) — o componente era constante 1.0, livre.
         CPU.CameraPos       = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z,
                                 static_cast<f32>(_PunctualLightCount) };
@@ -462,13 +507,16 @@ namespace Smile {
                static_cast<UINT64>(FrameSlot) * sizeof(ReflectionConstants);
     }
 
-    void FReflections::RecordTrace(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+    void FReflections::RecordTrace(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap,
+                                    FGpuProfiler* _Profiler) {
         if (!Ready) return;
         const u32 HGX = (HalfWidth + 7) / 8, HGY = (HalfHeight + 7) / 8; 
         const u32 FGX = (Width + 7) / 8,     FGY = (Height + 7) / 8;     
 
+        if (_Profiler) _Profiler->Begin(_CL, "Trace half-res");
         Transition(_CL, Radiance.Get(), RadianceState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, RayData.Get(),  RayDataState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, RayMotion.Get(), RayMotionState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
@@ -477,34 +525,46 @@ namespace Smile {
 
         Transition(_CL, Radiance.Get(), RadianceState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, RayData.Get(),  RayDataState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, RayMotion.Get(), RayMotionState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if (_Profiler) _Profiler->End(_CL);
+
+        if (_Profiler) _Profiler->Begin(_CL, "Resolve half para full");
         Transition(_CL, Resolved.Get(), ResolvedState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, ResolvedMotion.Get(), ResolvedMotionState,
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         ResolvePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ResolveTableStart));
-        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVSlot));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVTable));
         _CL->Dispatch(FGX, FGY, 1);
+        if (_Profiler) _Profiler->End(_CL);
 
         // Mirror full-res: traca os pixels quase-espelho em resolucao cheia e sobrescreve o
         // Resolved (cromado fino fica nitido/estavel, sem o shimmer do half-res). Reusa as 8 SRVs
         // do trace e o UAV do Resolved. O UAV barrier garante que o resolve terminou antes.
+        if (_Profiler) _Profiler->Begin(_CL, "Mirror full-res");
         {
-            D3D12_RESOURCE_BARRIER UB{};
-            UB.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-            UB.UAV.pResource = Resolved.Get();
-            _CL->ResourceBarrier(1, &UB);
+            D3D12_RESOURCE_BARRIER UB[2]{};
+            UB[0].Type = UB[1].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            UB[0].UAV.pResource = Resolved.Get();
+            UB[1].UAV.pResource = ResolvedMotion.Get();
+            _CL->ResourceBarrier(2, UB);
         }
         TraceMirrorPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
-        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVSlot));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVTable));
         _CL->Dispatch(FGX, FGY, 1);
+        if (_Profiler) _Profiler->End(_CL);
 
         // NRD/RR: para no Resolved (radiancia crua + hitDist). O denoise fica a cargo do NRD
         // (RecordNrdPack -> Nrd.Denoise) ou do DLSS Ray Reconstruction (RawSpec: o composite le o
         // Resolved cru). Deixa o Resolved legivel por compute (NON_PIXEL) e pula Temporal/Spatial.
         if (UseNrd || RawSpec) {
             Transition(_CL, Resolved.Get(), ResolvedState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Transition(_CL, ResolvedMotion.Get(), ResolvedMotionState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             CurrParity = FrameParity;
             FrameParity ^= 1u;
             return;
@@ -524,7 +584,10 @@ namespace Smile {
             NeedsHistoryClear = false;
         }
 
+        if (_Profiler) _Profiler->Begin(_CL, "Acumulacao temporal");
         Transition(_CL, Resolved.Get(),       ResolvedState,      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, ResolvedMotion.Get(), ResolvedMotionState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, History[prev].Get(),  HistoryState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, History[curr].Get(),  HistoryState[curr], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TemporalPSO.Bind(_CL);
@@ -532,10 +595,12 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TemporalTable[curr]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(HistoryUAVSlot[curr]));
         _CL->Dispatch(FGX, FGY, 1);
+        if (_Profiler) _Profiler->End(_CL);
 
         // Denoise espacial pos-temporal: History[curr] (acumulado) -> Denoised. Limpa as bordas
         // (acumulacao baixa) sem borrar o interior convergido. O History[curr] segue intacto p/
         // virar History[prev] no proximo frame (sem feedback do blur na acumulacao).
+        if (_Profiler) _Profiler->Begin(_CL, "Filtro espacial");
         Transition(_CL, History[curr].Get(), HistoryState[curr], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, Denoised.Get(),      DenoisedState,      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         SpatialPSO.Bind(_CL);
@@ -545,6 +610,7 @@ namespace Smile {
         _CL->Dispatch(FGX, FGY, 1);
 
         Transition(_CL, Denoised.Get(), DenoisedState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        if (_Profiler) _Profiler->End(_CL);
         FrameParity ^= 1u;
     }
 

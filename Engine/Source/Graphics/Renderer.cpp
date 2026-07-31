@@ -185,6 +185,7 @@ namespace Smile {
             NrdDirect.Initialize(Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
             Reflections.Initialize(Device.Native());
             ReSTIRDI.Initialize(Device.Native());
+            TemporalMotion.Initialize(Device.Native());
             DDGIDebugPass.Initialize(Device.Native(),
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         }
@@ -205,10 +206,13 @@ namespace Smile {
         // Uma probe selecionada pertence ao volume anterior; nunca deixa o marcador apontar
         // para o mesmo indice numerico de uma grade recem-criada.
         SetDebugProbeIndex(-1);
+        PreviousDirectLightPositions.clear();
         if (!Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
         if (!Atmosphere.IsInitialized()) return; 
         DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
                            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV());
+        TemporalMotion.SetupForScene(Device.Native(), SRVHeap, Scene,
+                                     RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV());
         ReGIR.SetupForScene(Device.Native(), SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
 
         SetupReflectionsForScene();
@@ -475,16 +479,26 @@ namespace Smile {
         // A direta local usa o snapshot InstanceGeo que hoje e propriedade do DDGI, mas nao usa
         // atlas/probes. Se o snapshot ainda nao existe, o passe degenera para not-ready por conta
         // propria; assim uma troca de cena nunca deixa um alvo direto antigo aparentemente valido.
+        TemporalMotion.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+                                      DepthSRVSlot, VelocitySRVSlot);
+        const u32 ReliableVelocitySlot = TemporalMotion.IsReady()
+            ? TemporalMotion.MotionSRV() : VelocitySRVSlot;
+        const u32 TemporalTransformSlots[FCommandQueue::kFramesInFlight] = {
+            TemporalMotion.TransformSRV(0), TemporalMotion.TransformSRV(1) };
+        const u32 TemporalSurfaceSlots[FCommandQueue::kFramesInFlight] = {
+            TemporalMotion.SurfaceSRV(0), TemporalMotion.SurfaceSRV(1) };
+
         ReSTIRDI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), DepthSRVSlot,
-            VelocitySRVSlot, RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(), DirectLightSRVSlot);
+            ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(),
+            DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots);
         // A direta nao depende do volume DDGI. Mantenha sua instancia RELAX e o pack antes do
         // early-out abaixo para o ReSTIR DI continuar denoisado mesmo numa cena sem probes.
         NrdDirect.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
         if (NrdDirect.IsReady()) {
             ReSTIRDI.SetupNrdPack(Device.Native(), SRVHeap,
                 GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2),
-                DepthSRVSlot, VelocitySRVSlot,
+                DepthSRVSlot, ReliableVelocitySlot,
                 NrdDirect.IoResource(FNrdDenoiser::IO_VIEWZ),
                 NrdDirect.IoResource(FNrdDenoiser::IO_NORMAL_ROUGHNESS),
                 NrdDirect.IoResource(FNrdDenoiser::IO_MV),
@@ -503,14 +517,15 @@ namespace Smile {
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
             GBuffer.SRVSlot(0), // GBufferA = BaseColor (tint do metal no reflexo)
-            DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
+            DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV(),
+            TemporalTransformSlots, TemporalSurfaceSlots);
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
-            DepthSRVSlot, GBuffer.SRVSlot(1), VelocitySRVSlot,
+            DepthSRVSlot, GBuffer.SRVSlot(1), ReliableVelocitySlot,
             DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
 
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
@@ -1577,6 +1592,9 @@ namespace Smile {
         // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
         const bool RRMode  = (Denoiser == EDenoiser::DLSS_RR) && DlssRR.IsInitialized() && RRGuides.IsReady();
         const bool ReSTIRDIActiveFrame = UseReSTIRDI && ReSTIRDI.IsReady();
+        const bool ReliableMotionActive = TemporalMotion.IsReady() &&
+            (ReflectionsActive || ReSTIRGIActive || ReSTIRDIActiveFrame);
+        const bool MotionHistoryValidThisFrame = TemporalMotion.HasHistory();
         const bool NrdIndirectMode = ReSTIRGIActive && Nrd.IsReady() &&
                                      Denoiser == EDenoiser::NRD;
         const bool NrdDirectMode = ReSTIRDIActiveFrame && ReSTIRDI.IsNrdReady() &&
@@ -1909,6 +1927,16 @@ namespace Smile {
         Reflections.SetReGIRParams(ReGIRCB);
         ReSTIRGI.SetReGIRParams(ReGIRCB);
 
+        if (ReliableMotionActive) {
+            TemporalMotion.UpdatePerFrame(FrameSlot, Scene, InvViewProjFull,
+                                          ViewProjUnjittered, PrevViewProj,
+                                          CameraPosition);
+        } else {
+            // O historico de superficie nao e atualizado enquanto nenhum consumidor existe;
+            // ao religar, o primeiro frame deve cair no velocity raster em vez de ler pose velha.
+            TemporalMotion.InvalidateHistory();
+        }
+
         u64 GIComputeFence = 0;
         if (UseGI && DDGI.IsReady()) {
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
@@ -1945,10 +1973,12 @@ namespace Smile {
         if (ReflectionsActive) {
             Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             const f32 ReflSkyIntensity = 1.0f - RainSky * 0.65f;
-            Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj, CameraPosition,
+            Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj,
+                                       CameraPosition, PrevCameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
                                        KeyColor, FrameIndex, ReflSkyIntensity,
-                                       Reflections.GetRealHitShading(), View, GILightCount);
+                                       Reflections.GetRealHitShading(), View, GILightCount,
+                                       TemporalMotion.InstanceCount(), MotionHistoryValidThisFrame);
         }
 
         if (ReSTIRGIActive) {
@@ -2029,6 +2059,11 @@ namespace Smile {
                 // Identidade estavel na primeira vez que vemos a luz. O editor faz push_back
                 // direto em Lights(), entao a atribuicao mora aqui e nao no AddLight.
                 if (L.Id == 0) L.Id = Scene.AllocLightId();
+                Vec3 PreviousLightPos = L.Position;
+                if (const auto It = PreviousDirectLightPositions.find(L.Id);
+                    It != PreviousDirectLightPositions.end())
+                    PreviousLightPos = It->second;
+                PreviousDirectLightPositions[L.Id] = L.Position;
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
                 if (NumLights >= kMaxLights) break;
 
@@ -2047,6 +2082,8 @@ namespace Smile {
                                         L.Color.Z * L.Intensity,
                                         std::max(L.SourceRadius, 0.01f) };
                 G.ShadowMatrix      = Mat44::Identity();
+                G.PrevPosInvRadius  = { PreviousLightPos.X, PreviousLightPos.Y,
+                                        PreviousLightPos.Z, 1.0f / L.AttenuationRadius };
                 if (L.Type == ELightType::Spot) {
                     const Vec3 D = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
                     const f32 OuterDeg  = std::clamp(L.OuterConeDeg, 1.0f, 89.0f);
@@ -2325,7 +2362,7 @@ namespace Smile {
                             Terrain.RenderShadowCascade(Cmd, SRVHeap, CascadeCB, CascadeVP);
                         };
                     SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size(),
-                                               TerrainCasters);
+                                               TerrainCasters, &GpuProfiler);
                 }
 
                 auto SceneRTV = HDRRTVHeap.CpuHandle(0);
@@ -2411,26 +2448,34 @@ namespace Smile {
             } else {
                 CommandList->SetPipelineState(PipelineState.PSODepthOnly());
             }
-            for (const VisItem& V : VisibleScratch) {
-                if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
-                CommandList->SetGraphicsRootConstantBufferView(
-                    4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                V.R->Mesh->Draw(CommandList);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Z - opacos");
+                for (const VisItem& V : VisibleScratch) {
+                    if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    V.R->Mesh->Draw(CommandList);
+                }
             }
 
             CommandList->SetPipelineState(AOWillRun ? PipelineState.PSODepthNormalMasked()
                                                     : PipelineState.PSODepthOnlyMasked());
-            for (const VisItem& V : VisibleScratch) {
-                if (V.Mat->Blend) continue;
-                if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
-                CommandList->SetGraphicsRootConstantBufferView(
-                    4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                V.Mat->Bind(CommandList, SRVHeap);
-                V.R->Mesh->Draw(CommandList);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Z - mascarados");
+                for (const VisItem& V : VisibleScratch) {
+                    if (V.Mat->Blend) continue;
+                    if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    V.Mat->Bind(CommandList, SRVHeap);
+                    V.R->Mesh->Draw(CommandList);
+                }
             }
 
-            if (UseTerrain && Terrain.IsLoaded())
+            if (UseTerrain && Terrain.IsLoaded()) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Z - terreno");
                 Terrain.RenderDepthPrepass(CommandList, SRVHeap, AOWillRun);
+            }
             GpuProfiler.End(CommandList); // Z-prepass
         }
 
@@ -2520,22 +2565,25 @@ namespace Smile {
                 0, ConstantBuffer->GetGPUVirtualAddress() +
                    static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
 
-            ID3D12PipelineState* CurGeomPSO = nullptr;
-            for (const VisItem& V : VisibleScratch) {
-                FMaterial* Mat = V.Mat;
-                if (Mat->Blend) continue;
-                const bool TwoSided = Mat->IsTwoSidedForRT();
-                ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
-                                                     : PipelineState.PSOGBuffer();
-                if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
-                CommandList->SetGraphicsRootConstantBufferView(
-                    4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                Mat->Bind(CommandList, SRVHeap);
-                V.R->Mesh->Draw(CommandList);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - meshes");
+                ID3D12PipelineState* CurGeomPSO = nullptr;
+                for (const VisItem& V : VisibleScratch) {
+                    FMaterial* Mat = V.Mat;
+                    if (Mat->Blend) continue;
+                    const bool TwoSided = Mat->IsTwoSidedForRT();
+                    ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
+                                                         : PipelineState.PSOGBuffer();
+                    if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    Mat->Bind(CommandList, SRVHeap);
+                    V.R->Mesh->Draw(CommandList);
+                }
             }
 
             if (UseTerrain && Terrain.IsLoaded()) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Terreno");
+                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - terreno");
                 Terrain.RenderGBuffer(CommandList, SRVHeap);
             }
             Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
@@ -2589,6 +2637,22 @@ namespace Smile {
                                 RenderWidth(), RenderHeight());
         }
 
+        if (ReliableMotionActive) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Motion temporal confiavel");
+            FBarrierBatch Batch;
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+            TemporalMotion.Record(CommandList, SRVHeap, &GpuProfiler);
+            Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+        }
+
         if (GIComputeFence != 0) {
             CommandQueue.SubmitSegmentAndContinue();
             CommandQueue.GpuWait(ComputeQueue.NativeFence(), GIComputeFence);
@@ -2610,24 +2674,32 @@ namespace Smile {
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR GI");
-                ReSTIRGI.RecordTrace(CommandList, SRVHeap);
+                ReSTIRGI.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
             }
 
             if (NrdIndirectMode) {
                 if (ReflectionsActive) {
                     FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (trace)");
-                    Reflections.RecordTrace(CommandList, SRVHeap);
+                    Reflections.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
                 }
                 GpuProfiler.Begin(CommandList, "NRD denoise");
-                Nrd.TransitionInputsToWrite(CommandList);
-                ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
-
-                if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
-                else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
-                Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
-                             JitterPx, PrevJitterPx, FrameIndex);
-                Nrd.Denoise(CommandList);
-                Nrd.TransitionOutputToRead(CommandList);
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Pack GI + reflexos");
+                    Nrd.TransitionInputsToWrite(CommandList);
+                    ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
+                    if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
+                    else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
+                }
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "RELAX indireto");
+                    Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
+                                 JitterPx, PrevJitterPx, FrameIndex);
+                    Nrd.Denoise(CommandList);
+                }
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Saida NRD indireta");
+                    Nrd.TransitionOutputToRead(CommandList);
+                }
                 GpuProfiler.End(CommandList); // NRD denoise
                 ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
                 CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
@@ -2670,25 +2742,37 @@ namespace Smile {
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
                     ReSTIRDI.SetRayEpsilons(RayEps);
-                    ReSTIRDI.UpdatePerFrame(FrameSlot, InvViewProjFull, View, CameraPosition,
+                    ReSTIRDI.UpdatePerFrame(FrameSlot, InvViewProjFull, View, PrevViewProj,
+                                            CameraPosition,
                                             RenderWidth(), RenderHeight(), FrameIndex,
                                             FrameLightCount, kRTMaskShadowFull,
-                                            /*EnableTemporalPermutation=*/RRMode);
-                    ReSTIRDI.Record(CommandList, SRVHeap);
+                                            /*EnableTemporalPermutation=*/RRMode,
+                                            TemporalMotion.InstanceCount(),
+                                            MotionHistoryValidThisFrame);
+                    ReSTIRDI.Record(CommandList, SRVHeap, &GpuProfiler);
                 }
 
                 if (NrdDirectMode) {
                     FGpuScope Scope(GpuProfiler, CommandList, "NRD direta");
-                    NrdDirect.TransitionInputsToWrite(CommandList);
-                    ReSTIRDI.RecordNrdPack(CommandList, SRVHeap);
-                    NrdDirect.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
-                                       JitterPx, PrevJitterPx, FrameIndex);
-                    NrdDirect.Denoise(CommandList);
-                    NrdDirect.TransitionOutputToRead(CommandList);
-                    // O NRD liga seu heap privado; o composite pertence ao heap da engine.
-                    ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
-                    CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
-                    ReSTIRDI.RecordNrdComposite(CommandList, SRVHeap);
+                    {
+                        FGpuScope ChildScope(GpuProfiler, CommandList, "Pack direto");
+                        NrdDirect.TransitionInputsToWrite(CommandList);
+                        ReSTIRDI.RecordNrdPack(CommandList, SRVHeap);
+                    }
+                    {
+                        FGpuScope ChildScope(GpuProfiler, CommandList, "RELAX direto");
+                        NrdDirect.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
+                                           JitterPx, PrevJitterPx, FrameIndex);
+                        NrdDirect.Denoise(CommandList);
+                    }
+                    {
+                        FGpuScope ChildScope(GpuProfiler, CommandList, "Composite direto");
+                        NrdDirect.TransitionOutputToRead(CommandList);
+                        // O NRD liga seu heap privado; o composite pertence ao heap da engine.
+                        ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                        CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
+                        ReSTIRDI.RecordNrdComposite(CommandList, SRVHeap);
+                    }
                 }
 
                 // Os consumidores posteriores historicamente partem de PIXEL (inclusive o bloco
@@ -3412,6 +3496,7 @@ namespace Smile {
         }
 
         PrevViewProj  = ViewProjUnjittered;
+        PrevCameraPosition = CameraPosition;
         PrevVPNoTrans = VPNoTransUnjit;   // frame anterior p/ a reprojecao do background (velocity do ceu)
         NrdPrevProj   = ProjUnjittered;
         NrdPrevView   = View;

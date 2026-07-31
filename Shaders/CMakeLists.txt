@@ -79,6 +79,10 @@ smile_compile_shader(Upscale/DlssRRSpecHit.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 # DLSS/RR/TAA reprojeta o historico do ceu do lugar errado ao girar a camera (ghosting).
 smile_compile_shader(Upscale/BackgroundVelocity.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
+# Vetores temporais confiaveis (RT Gems II, cap. 25): historico de superficie + vetor dual.
+smile_compile_shader(Temporal/TemporalSurface.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Temporal/DualMotion.cs.hlsl      cs_6_0 main SHADER_OUTPUTS)
+
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
 # Occlusion culling — cadeia HZB (min-reduce do depth em reverse-Z, estilo UE)
 # + teste de AABB (1 thread/objeto, port do HZBTestPS/NaniteHZBCull)
@@ -222,6 +226,7 @@ add_custom_target(Shaders
         Lighting/ReSTIRDINrdPack.cs.hlsl
         Lighting/ReSTIRDINrdComposite.cs.hlsl
         Reflections/GGXSample.hlsli
+        Reflections/ReflectionMotion.hlsli
         Reflections/ReflectionTrace.cs.hlsl
         Reflections/ReflectionTraceMirror.cs.hlsl
         Reflections/ReflectionResolve.cs.hlsl
@@ -232,6 +237,9 @@ add_custom_target(Shaders
         Upscale/DlssRRGuides.cs.hlsl
         Upscale/DlssRRSpecHit.cs.hlsl
         Upscale/BackgroundVelocity.cs.hlsl
+        Temporal/TemporalMotionCommon.hlsli
+        Temporal/TemporalSurface.cs.hlsl
+        Temporal/DualMotion.cs.hlsl
         HZB/HZBBuild.cs.hlsl
         HZB/HZBTest.cs.hlsl
         AO/GTAOCommon.hlsli

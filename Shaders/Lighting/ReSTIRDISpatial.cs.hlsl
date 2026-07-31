@@ -20,6 +20,7 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 RayEpsA;
     float4 RayEpsB;
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
+    row_major float4x4 PrevViewProj;
 };
 
 #include "../RayOffset.hlsli"
@@ -33,13 +34,65 @@ StructuredBuffer<InstanceGeo> Instances : register(t5);
 Texture2D<float4> ResA : register(t6);
 Texture2D<float4> ResB : register(t7);
 StructuredBuffer<FGPULightFull> Lights : register(t8);
+#include "../Temporal/TemporalMotionCommon.hlsli"
+StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);
+Texture2D<float4> CurrentSurface : register(t10);
+Texture2D<float4> PreviousSurface : register(t11);
 
 SamplerState LinearWrap : register(s1);
 RWTexture2D<float4> OutDirect : register(u0);
 RWTexture2D<float4> OutDiffuse : register(u1);
 RWTexture2D<float4> OutSpecular : register(u2);
+RWTexture2D<float4> OutShadowMotion : register(u3); // xy=curUV-prevUV, z=confianca, w=valido
 
 #include "../GI/RTAlphaTest.hlsli"
+
+float4 ComputeShadowMotion(int2 px, float3 receiverPos, float3 receiverNormal,
+                           float3 blockerPos, uint blockerId, FGPULightFull light) {
+    if (TemporalPolicy.y < 0.5f) return 0.0f;
+    const uint instanceCount = (uint)CameraPos.w;
+    uint receiverId;
+    if (!TemporalDecodeInstance(CurrentSurface.Load(int3(px, 0)).w,
+                                instanceCount, receiverId) || blockerId >= instanceCount)
+        return 0.0f;
+
+    const float3 prevReceiver = TemporalTransformPoint(
+        receiverPos, TemporalTransforms[receiverId].CurrentToPrevious);
+    const float3 prevNormal = TemporalTransformDirection(
+        receiverNormal, TemporalTransforms[receiverId].CurrentToPrevious);
+    const float3 prevBlocker = TemporalTransformPoint(
+        blockerPos, TemporalTransforms[blockerId].CurrentToPrevious);
+    const float3 prevLight = light.PrevPosInvRadius.xyz;
+
+    const float3 blockerLine = prevBlocker - prevLight;
+    const float denom = dot(prevNormal, blockerLine);
+    if (abs(denom) <= 1.0e-5f) return 0.0f;
+    const float t = dot(prevNormal, prevReceiver - prevLight) / denom;
+    if (t <= 0.0f) return 0.0f;
+    const float3 intersection = prevLight + blockerLine * t;
+
+    float2 prevUv;
+    if (!TemporalProjectUv(intersection, PrevViewProj, prevUv)) return 0.0f;
+
+    const int2 prevPx = clamp(int2(prevUv * ScreenParams.xy), int2(0, 0),
+                              int2(ScreenParams.xy) - 1);
+    const float4 previous = PreviousSurface.Load(int3(prevPx, 0));
+    uint previousId;
+    if (!TemporalDecodeInstance(previous.w, instanceCount, previousId)) return 0.0f;
+
+    // Eq. 25.4: confianca maxima quando o ponto real anterior se desloca no plano virtual
+    // (theta ~= pi/2). A forma gaussiana reduz o peso em receptores curvos/descontinuos.
+    const float3 delta = previous.xyz - prevReceiver;
+    const float deltaLen = length(delta);
+    float confidence = 1.0f;
+    if (deltaLen > 1.0e-5f) {
+        const float theta = acos(clamp(dot(delta / deltaLen, prevNormal), -1.0f, 1.0f));
+        const float angleError = theta - 1.57079632679f;
+        confidence = exp(-0.5f * angleError * angleError / (0.1f * 0.1f));
+    }
+    const float2 uv = (float2(px) + 0.5f) * ScreenParams.zw;
+    return float4(uv - prevUv, confidence, 1.0f);
+}
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
@@ -51,6 +104,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const uint lightCount = (uint)Params.x;
     if (deviceZ <= 0.0f || lightCount == 0u) {
         OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
+        OutShadowMotion[px] = 0.0f;
         return;
     }
 
@@ -108,6 +162,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     if (r.LightIndex >= lightCount) {
         OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
+        OutShadowMotion[px] = 0.0f;
         return;
     }
 
@@ -117,6 +172,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                              diffuse, specular, L, dist);
     DIResFinalize(r, selectedTarget);
     float visibility = 1.0f;
+    float4 shadowMotion = 0.0f;
 
     if (r.W > 0.0f && DI_IsShadowCaster(selected)) {
         const float camDist = length(CameraPos.xyz - x1);
@@ -134,7 +190,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             query.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                                  (uint)Params.z, ray);
             SMILE_RT_PROCEED(query)
-            if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) visibility = 0.0f;
+            if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+                visibility = 0.0f;
+                const float3 blockerPos = ray.Origin + ray.Direction * query.CommittedRayT();
+                shadowMotion = ComputeShadowMotion(px, x1, n1, blockerPos,
+                                                   query.CommittedInstanceID(), selected);
+            }
         }
     }
 
@@ -147,4 +208,5 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     OutDirect[px]  = float4(diffuseEstimate + specularEstimate, hitDist);
     OutDiffuse[px] = float4(diffuseEstimate, hitDist);
     OutSpecular[px] = float4(specularEstimate, hitDist);
+    OutShadowMotion[px] = shadowMotion;
 }

@@ -11,6 +11,7 @@
 #include <cstddef>
 
 namespace Smile {
+    class FGpuProfiler;
     class FTextureSRVHeap;
 
     // Constantes do ReSTIR GI (b0 dos passes). alignas(256); casa campo-a-campo com o cbuffer de
@@ -77,7 +78,8 @@ namespace Smile {
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                   u32 StagingSlot);
 
-        void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+        void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
+                         FGpuProfiler* Profiler = nullptr);
 
         // NRD (Fase C): cria o pack pipeline + UAVs das IN textures do NRD + SRV da OUT (no SRVHeap
         // da engine). Chamar apos SetupForResize (depende dos slots cacheados) e do Nrd.SetupForResize.

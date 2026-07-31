@@ -62,6 +62,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/DlssRRPass.h
     Include/Smile/Graphics/DlssRRGuides.h
     Include/Smile/Graphics/BackgroundVelocity.h
+    Include/Smile/Graphics/TemporalMotionVectors.h
     Include/Smile/Graphics/DebugTargets.h
     Include/Smile/Graphics/DebugView.h
     Include/Smile/Graphics/OceanFFT.h
@@ -128,6 +129,7 @@ set(ENGINE_SOURCES
     Source/Graphics/DlssRRPass.cpp
     Source/Graphics/DlssRRGuides.cpp
     Source/Graphics/BackgroundVelocity.cpp
+    Source/Graphics/TemporalMotionVectors.cpp
     Source/Graphics/DebugTargets.cpp
     Source/Graphics/DebugView.cpp
     Source/Graphics/FlickerHeatmap.cpp

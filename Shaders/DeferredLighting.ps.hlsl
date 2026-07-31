@@ -39,6 +39,7 @@ struct FGPULight {
     float4 SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem),
                               // z = fade do slot [0..1], w = CastShadows (0/1)
     row_major float4x4 ShadowMatrix; // world -> UVZ do slice (dividir por w: perspectiva)
+    float4 PrevPosInvRadius;          // xyz = posicao anterior (consumida pelo ReSTIR DI)
 };
 
 StructuredBuffer<FGPULight> Lights : register(t17);

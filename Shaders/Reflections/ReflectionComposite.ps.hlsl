@@ -13,6 +13,7 @@ cbuffer CompositeCB : register(b0) {
     float4 TraceParams;
     float4 HalfScreenParams;
     row_major float4x4 PrevViewProj;
+    float4 PrevCameraPos;
     float4 TemporalParams;
     float4 DebugParams;
     row_major float4x4 View;        // (padding p/ casar o layout do ReflectionConstants)

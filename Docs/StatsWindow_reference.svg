@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="790" viewBox="0 0 880 790">
+  <defs>
+    <linearGradient id="frameGlow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18231b"/>
+      <stop offset="1" stop-color="#1a1b15"/>
+    </linearGradient>
+    <linearGradient id="vramGlow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17202d"/>
+      <stop offset="1" stop-color="#1a1b15"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#000" flood-opacity=".32"/>
+    </filter>
+    <style>
+      .ui { font-family: Inter, 'Segoe UI', sans-serif; }
+      .mono { font-family: Consolas, 'Cascadia Mono', monospace; }
+      .title { fill:#e6e2d8; font-size:13px; font-weight:600; }
+      .label { fill:#c8c2b4; font-size:11px; }
+      .muted { fill:#6c6a61; font-size:10px; }
+      .secondary { fill:#9a958a; font-size:10px; }
+      .value { fill:#e6e2d8; font-size:11px; font-weight:600; }
+      .sub { fill:#9a958a; font-size:10px; }
+      .tiny { fill:#6c6a61; font-size:9px; letter-spacing:.5px; }
+    </style>
+  </defs>
+
+  <rect width="880" height="790" rx="14" fill="#0e0f0c"/>
+  <rect x="1" y="1" width="878" height="788" rx="13" fill="#141511" stroke="#34362e" filter="url(#shadow)"/>
+
+  <!-- title bar -->
+  <rect x="1" y="1" width="878" height="48" rx="13" fill="#171814"/>
+  <path d="M1 36V49H879V36" fill="#171814"/>
+  <line x1="1" y1="49" x2="879" y2="49" stroke="#292b24"/>
+  <rect x="18" y="18" width="12" height="12" rx="3" fill="#24344d" stroke="#5b9dff"/>
+  <path d="M21 27v-4m3 4v-7m3 7v-2" stroke="#79adff" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="42" y="29" class="ui title">Estatísticas</text>
+  <text x="123" y="29" class="ui muted">NVIDIA GeForce RTX 3060 Ti</text>
+  <rect x="668" y="13" width="116" height="24" rx="12" fill="#1d2735" stroke="#31486b"/>
+  <circle cx="682" cy="25" r="3" fill="#9ac055"/>
+  <text x="692" y="29" class="ui secondary">TEMPO REAL</text>
+  <path d="M819 25h10" stroke="#9a958a" stroke-width="1.5"/>
+  <path d="M853 20l10 10m0-10l-10 10" stroke="#9a958a" stroke-width="1.5"/>
+
+  <!-- summary cards -->
+  <rect x="20" y="69" width="332" height="128" rx="10" fill="url(#frameGlow)" stroke="#2d3128"/>
+  <text x="38" y="94" class="ui tiny">FRAME GPU</text>
+  <text x="38" y="132" class="mono" fill="#e6e2d8" font-size="28" font-weight="700">12,73</text>
+  <text x="129" y="132" class="ui secondary">ms</text>
+  <text x="38" y="154" class="ui label">78,6 FPS</text>
+  <rect x="133" y="142" width="74" height="20" rx="10" fill="#20291a" stroke="#3d4b2a"/>
+  <text x="147" y="156" class="ui" fill="#9ac055" font-size="9">60 FPS ✓</text>
+  <text x="38" y="179" class="ui muted">3,94 ms livres no orçamento de 16,67 ms</text>
+  <rect x="228" y="88" width="104" height="24" rx="6" fill="#23241d" stroke="#33342c"/>
+  <text x="246" y="104" class="ui secondary">DLSS QUALIDADE</text>
+  <path d="M236 172h15l10-22 11 10 10-29 11 19 11-7 16 9" fill="none" stroke="#9ac055" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="366" y="69" width="494" height="128" rx="10" fill="url(#vramGlow)" stroke="#293345"/>
+  <text x="384" y="94" class="ui tiny">VRAM DO PROCESSO</text>
+  <text x="384" y="130" class="mono" fill="#6da7ff" font-size="25" font-weight="700">2,22 / 7,1 GB</text>
+  <text x="581" y="130" class="ui" fill="#6da7ff" font-size="12" font-weight="600">31%</text>
+  <rect x="384" y="147" width="456" height="8" rx="4" fill="#23241d"/>
+  <rect x="384" y="147" width="141" height="8" rx="4" fill="#9ac055"/>
+  <text x="384" y="178" class="ui muted">Budget dinâmico saudável</text>
+  <text x="591" y="178" class="ui muted">Compartilhada</text>
+  <text x="674" y="178" class="mono secondary">0 MB</text>
+  <text x="758" y="178" class="ui muted">Dedicada</text>
+  <text x="811" y="178" class="mono secondary">7,8 GB</text>
+
+  <!-- GPU hierarchy -->
+  <rect x="20" y="213" width="552" height="557" rx="10" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="38" y="241" class="ui title">GPU por passe</text>
+  <text x="38" y="260" class="ui muted">Clique em um passe para ver os timestamps internos</text>
+  <text x="470" y="241" class="ui tiny">MS</text>
+  <text x="525" y="241" class="ui tiny">FRAME</text>
+  <line x1="38" y1="272" x2="554" y2="272" stroke="#292b24"/>
+
+  <!-- row: ReSTIR GI expanded -->
+  <path d="M42 290l4 4 4-4" fill="none" stroke="#9a958a" stroke-width="1.4"/>
+  <rect x="58" y="282" width="3" height="24" rx="1.5" fill="#9ac055"/>
+  <text x="70" y="298" class="ui label" font-weight="600">ReSTIR GI</text>
+  <text x="466" y="298" class="mono value">3,02</text>
+  <text x="526" y="298" class="mono secondary">23,7%</text>
+  <rect x="70" y="307" width="462" height="3" rx="1.5" fill="#23241d"/>
+  <rect x="70" y="307" width="110" height="3" rx="1.5" fill="#9ac055"/>
+  <line x1="60" y1="317" x2="60" y2="361" stroke="#32342b"/>
+  <circle cx="60" cy="330" r="2" fill="#6c6a61"/>
+  <text x="74" y="334" class="ui sub">Temporal + trace secundário</text>
+  <text x="470" y="334" class="mono sub">2,18</text>
+  <text x="526" y="334" class="mono muted">72%</text>
+  <circle cx="60" cy="354" r="2" fill="#6c6a61"/>
+  <text x="74" y="358" class="ui sub">Reuso espacial + resolve</text>
+  <text x="470" y="358" class="mono sub">0,84</text>
+  <text x="526" y="358" class="mono muted">28%</text>
+
+  <!-- row: CSM expanded -->
+  <path d="M42 381l4 4 4-4" fill="none" stroke="#9a958a" stroke-width="1.4"/>
+  <rect x="58" y="373" width="3" height="24" rx="1.5" fill="#e8c565"/>
+  <text x="70" y="389" class="ui label" font-weight="600">Sombras — sol (CSM)</text>
+  <text x="466" y="389" class="mono value">2,46</text>
+  <text x="526" y="389" class="mono secondary">19,3%</text>
+  <rect x="70" y="398" width="462" height="3" rx="1.5" fill="#23241d"/>
+  <rect x="70" y="398" width="89" height="3" rx="1.5" fill="#e8c565"/>
+  <line x1="60" y1="408" x2="60" y2="476" stroke="#32342b"/>
+  <text x="74" y="423" class="ui sub">Cascata 0 · 2048²</text><text x="470" y="423" class="mono sub">1,05</text><text x="526" y="423" class="mono muted">43%</text>
+  <text x="74" y="443" class="ui sub">Cascata 1 · 2048²</text><text x="470" y="443" class="mono sub">0,74</text><text x="526" y="443" class="mono muted">30%</text>
+  <text x="74" y="463" class="ui sub">Cascatas distantes · cache</text><text x="470" y="463" class="mono sub">0,67</text><text x="526" y="463" class="mono muted">27%</text>
+
+  <!-- row: NRD expanded -->
+  <path d="M42 497l4 4 4-4" fill="none" stroke="#9a958a" stroke-width="1.4"/>
+  <rect x="58" y="489" width="3" height="24" rx="1.5" fill="#5b9dff"/>
+  <text x="70" y="505" class="ui label" font-weight="600">NRD denoise</text>
+  <text x="466" y="505" class="mono value">1,42</text>
+  <text x="526" y="505" class="mono secondary">11,2%</text>
+  <rect x="70" y="514" width="462" height="3" rx="1.5" fill="#23241d"/>
+  <rect x="70" y="514" width="52" height="3" rx="1.5" fill="#5b9dff"/>
+  <line x1="60" y1="524" x2="60" y2="576" stroke="#32342b"/>
+  <text x="74" y="539" class="ui sub">Pack de guides</text><text x="470" y="539" class="mono sub">0,18</text><text x="526" y="539" class="mono muted">13%</text>
+  <text x="74" y="559" class="ui sub">RELAX diffuse + specular</text><text x="470" y="559" class="mono sub">1,09</text><text x="526" y="559" class="mono muted">77%</text>
+  <text x="74" y="579" class="ui sub">Transições de saída</text><text x="470" y="579" class="mono sub">0,15</text><text x="526" y="579" class="mono muted">10%</text>
+
+  <!-- compact rows -->
+  <path d="M42 604l4 4 4-4" fill="none" stroke="#9a958a" stroke-width="1.4"/>
+  <text x="58" y="612" class="ui label">NRD direta</text><text x="466" y="612" class="mono value">1,27</text><text x="526" y="612" class="mono secondary">10,0%</text>
+  <line x1="38" y1="624" x2="554" y2="624" stroke="#25271f"/>
+  <path d="M43 640l4 4-4 4" fill="none" stroke="#6c6a61" stroke-width="1.4"/>
+  <text x="58" y="648" class="ui label">DLSS-SR</text><text x="466" y="648" class="mono value">0,88</text><text x="526" y="648" class="mono secondary">6,9%</text>
+  <line x1="38" y1="660" x2="554" y2="660" stroke="#25271f"/>
+  <path d="M42 677l4 4 4-4" fill="none" stroke="#9a958a" stroke-width="1.4"/>
+  <text x="58" y="685" class="ui label">Motion temporal confiável</text><text x="466" y="685" class="mono value">0,71</text><text x="526" y="685" class="mono secondary">5,6%</text>
+  <line x1="60" y1="696" x2="60" y2="738" stroke="#32342b"/>
+  <text x="74" y="712" class="ui sub">Captura de superfície</text><text x="470" y="712" class="mono sub">0,49</text><text x="526" y="712" class="mono muted">69%</text>
+  <text x="74" y="734" class="ui sub">Dual motion</text><text x="470" y="734" class="mono sub">0,22</text><text x="526" y="734" class="mono muted">31%</text>
+  <text x="38" y="756" class="ui muted">+ 12 passes abaixo de 0,70 ms</text>
+
+  <!-- right column -->
+  <rect x="588" y="213" width="272" height="318" rx="10" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="606" y="241" class="ui title">Memória por categoria</text>
+  <text x="820" y="241" class="ui tiny" text-anchor="end">USO</text>
+  <line x1="606" y1="255" x2="842" y2="255" stroke="#292b24"/>
+  <g class="ui">
+    <text x="606" y="280" class="label">Render targets</text><text x="842" y="280" class="mono value" text-anchor="end">684 MB</text>
+    <rect x="606" y="288" width="236" height="4" rx="2" fill="#23241d"/><rect x="606" y="288" width="115" height="4" rx="2" fill="#5b9dff"/>
+    <text x="606" y="318" class="label">GI / temporal</text><text x="842" y="318" class="mono value" text-anchor="end">462 MB</text>
+    <rect x="606" y="326" width="236" height="4" rx="2" fill="#23241d"/><rect x="606" y="326" width="78" height="4" rx="2" fill="#6d8fd8"/>
+    <text x="606" y="356" class="label">Texturas</text><text x="842" y="356" class="mono value" text-anchor="end">398 MB</text>
+    <rect x="606" y="364" width="236" height="4" rx="2" fill="#23241d"/><rect x="606" y="364" width="67" height="4" rx="2" fill="#5b9dff"/>
+    <text x="606" y="394" class="label">Geometria</text><text x="842" y="394" class="mono value" text-anchor="end">236 MB</text>
+    <rect x="606" y="402" width="236" height="4" rx="2" fill="#23241d"/><rect x="606" y="402" width="40" height="4" rx="2" fill="#5b9dff"/>
+    <text x="606" y="432" class="label">Aceleração RT</text><text x="842" y="432" class="mono value" text-anchor="end">181 MB</text>
+    <rect x="606" y="440" width="236" height="4" rx="2" fill="#23241d"/><rect x="606" y="440" width="31" height="4" rx="2" fill="#5b9dff"/>
+    <text x="606" y="470" class="muted">Não rastreado</text><text x="842" y="470" class="mono secondary" text-anchor="end">259 MB</text>
+  </g>
+  <rect x="606" y="489" width="236" height="26" rx="6" fill="#202119" stroke="#2d2f26"/>
+  <text x="618" y="506" class="ui muted">RAM compartilhada</text><text x="830" y="506" class="mono secondary" text-anchor="end">0 / 15,9 GB</text>
+
+  <rect x="588" y="547" width="272" height="223" rx="10" fill="#1a1b15" stroke="#2a2b24"/>
+  <text x="606" y="575" class="ui title">Contexto do frame</text>
+  <line x1="606" y1="589" x2="842" y2="589" stroke="#292b24"/>
+  <text x="606" y="616" class="ui muted">RESOLUÇÃO INTERNA</text><text x="842" y="616" class="mono value" text-anchor="end">1280 × 720</text>
+  <text x="606" y="645" class="ui muted">SAÍDA</text><text x="842" y="645" class="mono value" text-anchor="end">1920 × 1080</text>
+  <text x="606" y="674" class="ui muted">DRAWS VISÍVEIS</text><text x="842" y="674" class="mono value" text-anchor="end">1.284 / 1.506</text>
+  <text x="606" y="703" class="ui muted">FILA ASYNC</text><text x="842" y="703" class="mono" fill="#9ac055" font-size="11" text-anchor="end">DDGI · 2,10 ms</text>
+  <rect x="606" y="724" width="236" height="28" rx="6" fill="#1d2735" stroke="#31486b"/>
+  <circle cx="620" cy="738" r="3" fill="#5b9dff"/>
+  <text x="630" y="742" class="ui" fill="#8bb8ff" font-size="10">EMA 0,1 · leitura 2 frames depois</text>
+</svg>

@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 
 namespace Smile {
+    class FGpuProfiler;
     class FTextureSRVHeap;
 
     // b0 compartilhado pelos passes de Lighting/ReSTIRDI*.cs.hlsl.
@@ -23,9 +24,10 @@ namespace Smile {
         Vec4  RayEpsA;
         Vec4  RayEpsB;
         Mat44 View;          // world -> view; pack do NRD calcula viewZ linear
+        Mat44 PrevViewProj;  // shadow motion vector: mundo anterior -> UV anterior
     };
-    static_assert(sizeof(ReSTIRDIConstants) == 256,
-                  "ReSTIRDIConstants deve ocupar uma fatia CBV inteira");
+    static_assert(sizeof(ReSTIRDIConstants) == 512,
+                  "ReSTIRDIConstants deve ocupar fatias CBV alinhadas a 256 bytes");
 
     // ReSTIR DI de superficie primaria para TODAS as luzes locais analiticas. Pass A gera
     // candidatas uniformes e combina o historico; Pass B combina vizinhos e traca no maximo um
@@ -40,7 +42,9 @@ namespace Smile {
                             u32 Width, u32 Height,
                             u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                             u32 DepthSlot, u32 VelocitySlot, u32 TlasSlot, u32 InstanceSlot,
-                            const u32 LightSlots[FCommandQueue::kFramesInFlight]);
+                            const u32 LightSlots[FCommandQueue::kFramesInFlight],
+                            const u32 TransformSlots[FCommandQueue::kFramesInFlight],
+                            const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
         void SetupNrdPack(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                           u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                           u32 DepthSlot, u32 VelocitySlot,
@@ -50,10 +54,13 @@ namespace Smile {
                           ID3D12Resource* NrdOutDiff, ID3D12Resource* NrdOutSpec);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& View,
+                            const Mat44& PrevViewProj,
                             const Vec3& CameraPos,
                             u32 Width, u32 Height, u32 FrameIndex, u32 LightCount,
-                            u32 ShadowRayMask, bool EnableTemporalPermutation);
-        void Record(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+                            u32 ShadowRayMask, bool EnableTemporalPermutation,
+                            u32 TemporalInstanceCount, bool MotionHistoryValid);
+        void Record(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
+                    FGpuProfiler* Profiler = nullptr);
         void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
         void RecordNrdComposite(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
@@ -76,18 +83,20 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
         FVolumetricPipeline InitialTemporalPSO; // 8 SRV, 2 UAV
-        FVolumetricPipeline SpatialPSO;         // 9 SRV, 3 UAV, bindless alpha-test
-        FVolumetricPipeline NrdPackPSO;          // 7 SRV, 5 UAV
+        FVolumetricPipeline SpatialPSO;         // 12 SRV, 4 UAV, bindless alpha-test
+        FVolumetricPipeline NrdPackPSO;          // 8 SRV, 5 UAV
         FVolumetricPipeline NrdCompositePSO;     // 6 SRV, 1 UAV
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Output;
         Microsoft::WRL::ComPtr<ID3D12Resource> RawDiffuse;  // rgb modulado, a = distancia da luz
         Microsoft::WRL::ComPtr<ID3D12Resource> RawSpecular; // rgb modulado, a = distancia da luz
+        Microsoft::WRL::ComPtr<ID3D12Resource> ShadowMotion;// xy=MV, z=confianca, w=valido
         Microsoft::WRL::ComPtr<ID3D12Resource> ResA[2]; // RGBA32F: x1.xyz, W
         Microsoft::WRL::ComPtr<ID3D12Resource> ResB[2]; // RGBA16F: light, M+age, n1 oct
         D3D12_RESOURCE_STATES OutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawDiffuseState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawSpecularState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES ShadowMotionState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ResAState[2] = {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
         D3D12_RESOURCE_STATES ResBState[2] = {
@@ -101,6 +110,8 @@ namespace Smile {
         u32 RawDiffuseUAV = kInvalidSlot;
         u32 RawSpecularSRV = kInvalidSlot;
         u32 RawSpecularUAV = kInvalidSlot;
+        u32 ShadowMotionSRV = kInvalidSlot;
+        u32 ShadowMotionUAV = kInvalidSlot;
         u32 ResASRV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResBSRV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResAUAV[2] = { kInvalidSlot, kInvalidSlot };

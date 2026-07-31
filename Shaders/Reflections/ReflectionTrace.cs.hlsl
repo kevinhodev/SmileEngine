@@ -15,6 +15,7 @@ cbuffer ReflectionCB : register(b0) {
     // Campos abaixo nao sao usados por este shader; declarados p/ os offsets do CB baterem ate o
     // perfil de epsilons, que vem no fim do ReflectionConstants.
     row_major float4x4 PrevViewProj;
+    float4 PrevCameraPos;
     float4 TemporalParams;
     float4 DebugParams;
     row_major float4x4 View;
@@ -53,14 +54,20 @@ Texture2D<float4>               GBuffer    : register(t7);
 
 #include "../LightsCommon.hlsli"
 StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais nos hits
+#include "../Temporal/TemporalMotionCommon.hlsli"
+StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);
+Texture2D<float4> TemporalSurface : register(t10);
+Texture2D<float4> PrevTemporalSurface : register(t11);
 
 RWTexture2D<float4>             RWReflection : register(u0);
 RWTexture2D<float4>             RWRayData    : register(u1); 
+RWTexture2D<float4>             RWGlossyMotion : register(u2);
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
 
 #include "../GI/HitShading.hlsli" 
+#include "ReflectionMotion.hlsli"
 
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
@@ -73,6 +80,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float3 outRadiance = float3(0.0f, 0.0f, 0.0f);
     float  outHitDist  = TraceParams.y;
     float4 outRay      = float4(0.0f, 0.0f, 0.0f, 0.0f); 
+    float4 outMotion   = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     float4 gb        = GBuffer.Load(int3(fullPx, 0));
     float  roughness = gb.b;
@@ -156,6 +164,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             outRadiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                           q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
                                           ray.Origin, ray.Direction, outHitDist, P, sd);
+            const float3 secondaryHit = ray.Origin + ray.Direction * outHitDist;
+            outMotion = ComputeGlossyMotion((uint2)fullPx, worldPos, N, secondaryHit,
+                                            q.CommittedInstanceID(), roughness,
+                                            SMILE_RNG_REFL_GLOSSY + 137u);
         } else {
             outRadiance = ShadeSky(R, sunDir, P.SkyIntensity);
         }
@@ -163,4 +175,5 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     RWReflection[halfPx] = float4(outRadiance, outHitDist);
     RWRayData[halfPx]    = outRay;
+    RWGlossyMotion[halfPx] = outMotion;
 }

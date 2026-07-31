@@ -13,6 +13,7 @@ cbuffer ReflectionCB : register(b0) {
     float4 TraceParams;
     float4 HalfScreenParams;
     row_major float4x4 PrevViewProj; 
+    float4 PrevCameraPos;
     float4 TemporalParams;   
 };
 
@@ -20,6 +21,7 @@ Texture2D<float4> Resolved    : register(t0);
 Texture2D<float4> GBuffer     : register(t1);
 Texture2D<float>  Depth       : register(t2);
 Texture2D<float4> HistoryPrev : register(t3); 
+Texture2D<float4> GlossyMotion : register(t4);
 
 RWTexture2D<float4> RWHistory : register(u0); 
 
@@ -60,17 +62,30 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float3 V = normalize(CameraPos.xyz - worldPos);
     float3 R = reflect(-V, N);
     float3 reprojPos = (roughness < 0.15f) ? (worldPos + R * current.a) : worldPos;
-    float4 prevClip = mul(float4(reprojPos, 1.0f), PrevViewProj);
     float3 history = current.rgb;
     float  frames  = 0.0f;
-    if (prevClip.w > 0.0f) {
-        float2 prevNdc = prevClip.xy / prevClip.w;
-        float2 prevUv  = float2(prevNdc.x * 0.5f + 0.5f, 0.5f - prevNdc.y * 0.5f);
-        if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
-            float4 h = HistoryPrev.SampleLevel(LinearClamp, prevUv, 0.0f);
-            history = h.rgb;
-            frames  = h.a;
+    float  historyConfidence = 1.0f;
+    float2 prevUv = 0.0f;
+    bool hasReprojection = false;
+    const float4 reliable = GlossyMotion.Load(int3(px, 0));
+    if (reliable.w > 0.5f && reliable.z > 0.01f) {
+        // O centro estocastico pode continuar valido mesmo quando a projecao especular
+        // deterministica cai atras da camera anterior; portanto ele e avaliado primeiro.
+        prevUv = uv - reliable.xy;
+        historyConfidence = saturate(reliable.z);
+        hasReprojection = true;
+    } else {
+        const float4 prevClip = mul(float4(reprojPos, 1.0f), PrevViewProj);
+        if (prevClip.w > 0.0f) {
+            const float2 prevNdc = prevClip.xy / prevClip.w;
+            prevUv = float2(prevNdc.x * 0.5f + 0.5f, 0.5f - prevNdc.y * 0.5f);
+            hasReprojection = true;
         }
+    }
+    if (hasReprojection && all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
+        const float4 h = HistoryPrev.SampleLevel(LinearClamp, prevUv, 0.0f);
+        history = h.rgb;
+        frames  = h.a;
     }
 
     const float planeThresh = max(length(worldPos - CameraPos.xyz) * 0.05f, 1e-3f);
@@ -101,7 +116,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     float3 curRGB = max(YCoCgToRGB(clamp(RGBToYCoCg(max(current.rgb, 0.0f)), boxMin, boxMax)), 0.0f);
 
-    frames = min(frames + 1.0f, TemporalParams.x);
+    // A Eq. 25.4 reduz a dependencia temporal em receptores nao planares. Converter a confianca
+    // em comprimento de historico preserva o acumulador existente e aumenta alpha suavemente.
+    frames = min(frames * historyConfidence + 1.0f, TemporalParams.x);
     float  alpha  = 1.0f / frames;
     float3 result = lerp(history, curRGB, alpha);
 

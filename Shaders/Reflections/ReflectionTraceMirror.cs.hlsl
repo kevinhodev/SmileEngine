@@ -13,6 +13,7 @@ cbuffer ReflectionCB : register(b0) {
     float4 TraceParams;     
     float4 HalfScreenParams;
     row_major float4x4 PrevViewProj;
+    float4 PrevCameraPos;
     float4 TemporalParams;
     // Nao usados aqui; declarados p/ os offsets do CB baterem ate o perfil de epsilons.
     float4 DebugParams;
@@ -49,13 +50,19 @@ Texture2D<float4>               GBuffer    : register(t7);
 
 #include "../LightsCommon.hlsli"
 StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais nos hits
+#include "../Temporal/TemporalMotionCommon.hlsli"
+StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);
+Texture2D<float4> TemporalSurface : register(t10);
+Texture2D<float4> PrevTemporalSurface : register(t11);
 
 RWTexture2D<float4>             RWResolved : register(u0);
+RWTexture2D<float4>             RWResolvedMotion : register(u1);
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
 
 #include "../GI/HitShading.hlsli"
+#include "ReflectionMotion.hlsli"
 
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
@@ -136,15 +143,21 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     float3 radiance;
     float  hitDist = TraceParams.y;
+    float4 glossyMotion = 0.0f;
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         float sd;
         hitDist  = q.CommittedRayT();
         radiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                    q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
                                    ray.Origin, ray.Direction, hitDist, P, sd);
+        const float3 secondaryHit = ray.Origin + ray.Direction * hitDist;
+        glossyMotion = ComputeGlossyMotion(px, worldPos, N, secondaryHit,
+                                           q.CommittedInstanceID(), roughness,
+                                           SMILE_RNG_REFL_MIRROR + 137u);
     } else {
         radiance = ShadeSky(R, sunDir, P.SkyIntensity);
     }
 
     RWResolved[px] = float4(radiance, hitDist);
+    RWResolvedMotion[px] = glossyMotion;
 }

@@ -6,11 +6,13 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/CommandQueue.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstddef>
 
 namespace Smile {
+    class FGpuProfiler;
     class FTextureSRVHeap;
 
     // Constantes do Specular GI (b0 do trace E do composite). O prefixo (InvViewProj, CameraPos,
@@ -31,6 +33,7 @@ namespace Smile {
                                  // (so sombras no hit; origem do raio usa offset robusto)
         Vec4  HalfScreenParams;  // halfW, halfH, 1/halfW, 1/halfH (trace e half-res; Fase 2b)
         Mat44 PrevViewProj;      // VP (sem jitter) do frame anterior — reprojeção do temporal (Fase 3)
+        Vec4  PrevCameraPos;     // xyz = camera anterior; w = numero de transforms temporais
         Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), z=spatialRadius, w=mirrorMaxRoughness
         Vec4  DebugParams;       // x = modo de debug do reflexo (0=off, 1=acumulacao, 2=mascara espelho)
         Mat44 View;              // worldPos -> view.z (IN_VIEWZ)
@@ -47,7 +50,7 @@ namespace Smile {
         Vec4  ReGIRGridCountSamples;
         Vec4  ReGIRResources;
     };
-    static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 464,
+    static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 480,
                   "ReflectionConstants divergiu do cbuffer ReflectionCB");
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
@@ -69,17 +72,21 @@ namespace Smile {
                             u32 GBufferASlot,
                             // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
                             // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
-                            u32 DistSlot, u32 ProbeDataSlot);
+                            u32 DistSlot, u32 ProbeDataSlot,
+                            const u32 TransformSlots[FCommandQueue::kFramesInFlight],
+                            const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
 
         // Params estaticos do volume DDGI (grid/atlas) p/ o CB. Chamar quando o volume e (re)criado.
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
                          f32 AtlasTile, f32 AtlasW, f32 AtlasH, f32 MaxRayDist);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
-                            const Vec3& CameraPos, u32 Width, u32 Height, const Vec3& SunDir,
+                            const Vec3& CameraPos, const Vec3& PrevCameraPos,
+                            u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
                             bool RealHitShading, const Mat44& View,
-                            u32 PunctualLightCount = 0);
+                            u32 PunctualLightCount, u32 TemporalInstanceCount,
+                            bool MotionHistoryValid);
 
         // F5: copia o SRV do buffer de luzes puntuais do frame pro t8 da tabela de trace DO
         // FrameSlot (compartilhada pelo trace glossy e pelo mirror; versionada por frame em voo).
@@ -90,7 +97,8 @@ namespace Smile {
         // transicionou depth/gbuffer p/ legiveis por shader. Deixa a radiancia legivel por PS.
         // Com UseNrd: para no Resolved (Trace->Resolve->Mirror) e o NRD faz o denoise; sem UseNrd:
         // segue o denoiser caseiro (Resolve->Temporal->Spatial).
-        void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+        void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
+                         FGpuProfiler* Profiler = nullptr);
 
         // NRD (unificado): cria o UAV da IN_SPEC (pack escreve) + SRV da OUT_SPEC (composite le) e a
         // tabela do composite-NRD. Chamar apos SetupForResize e Nrd.SetupForResize.
@@ -173,10 +181,10 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;       // 8 SRV, 2 UAV [radiance, raydata], heap-directly-indexed
-        FVolumetricPipeline TraceMirrorPSO; // 8 SRV (== trace), 1 UAV [resolved]; full-res near-mirror
-        FVolumetricPipeline ResolvePSO;  // 4 SRV [radiance, raydata, depth, gbuf], 1 UAV [resolved]
-        FVolumetricPipeline TemporalPSO; // 4 SRV [resolved, gbuf, depth, histPrev], 1 UAV [histCurr]
+        FVolumetricPipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
+        FVolumetricPipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
+        FVolumetricPipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
+        FVolumetricPipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
         FVolumetricPipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
         FVolumetricPipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRS;
@@ -186,34 +194,42 @@ namespace Smile {
         // Temporal -> History[curr] (acumulado; ping-pong). Composite le History[curr]. RGBA16F.
         Microsoft::WRL::ComPtr<ID3D12Resource> Radiance;
         Microsoft::WRL::ComPtr<ID3D12Resource> RayData;
+        Microsoft::WRL::ComPtr<ID3D12Resource> RayMotion;
         Microsoft::WRL::ComPtr<ID3D12Resource> Resolved;
+        Microsoft::WRL::ComPtr<ID3D12Resource> ResolvedMotion;
         Microsoft::WRL::ComPtr<ID3D12Resource> History[2];
         Microsoft::WRL::ComPtr<ID3D12Resource> Denoised; // saida do spatial; lida pelo composite
         D3D12_RESOURCE_STATES RadianceState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RayDataState  = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES RayMotionState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ResolvedState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES HistoryState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
         D3D12_RESOURCE_STATES DenoisedState = D3D12_RESOURCE_STATE_COMMON;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 RadianceSRVSlot     = kInvalidSlot;
         u32 RayDataSRVSlot      = kInvalidSlot;
+        u32 RayMotionSRVSlot    = kInvalidSlot;
         u32 ResolvedSRVSlot     = kInvalidSlot;
         u32 ResolvedUAVSlot     = kInvalidSlot;
+        u32 ResolvedMotionSRVSlot = kInvalidSlot;
+        u32 ResolvedMotionUAVSlot = kInvalidSlot;
         u32 HistorySRVSlot[2]   = { kInvalidSlot, kInvalidSlot };
         u32 HistoryUAVSlot[2]   = { kInvalidSlot, kInvalidSlot };
         u32 DenoisedSRVSlot     = kInvalidSlot;
         u32 DenoisedUAVSlot     = kInvalidSlot;
-        u32 TraceUAVTable       = kInvalidSlot; // 2 UAVs contiguos [radiance, raydata]
+        u32 TraceUAVTable       = kInvalidSlot; // 3 UAVs [radiance, raydata, raymotion]
+        u32 ResolvedUAVTable    = kInvalidSlot; // 2 UAVs [resolved, resolvedmotion]
         // 8 SRVs [TLAS,skyview,inst,irrad,verts,idx,depth,gbuf] + t8 (luzes, por frame). Uma
         // tabela por frame em voo: o t8 muda todo frame e a do frame anterior ainda pode estar
         // sendo lida pela GPU (descriptor versioning).
         static constexpr u32 kTraceTables = 2; // == FCommandQueue::kFramesInFlight (assert no .cpp)
         u32 TraceTable[kTraceTables] = { kInvalidSlot, kInvalidSlot };
-        u32 ResolveTableStart   = kInvalidSlot; // 4 SRVs [radiance, raydata, depth, gbuf]
+        u32 ResolveTableStart   = kInvalidSlot; // 5 SRVs [radiance, raydata, motion, depth, gbuf]
         // Por paridade (curr=0/1): temporal le History[1-curr] e escreve History[curr]; composite
         // le History[curr]. 2 tabelas pre-montadas (sem CopyDescriptors por frame).
-        u32 TemporalTable[2]    = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [resolved, gbuf, depth, hist[1-curr]]
+        u32 TemporalTable[2]    = { kInvalidSlot, kInvalidSlot }; // + resolved motion
         u32 SpatialTable[2]     = { kInvalidSlot, kInvalidSlot }; // 3 SRVs [hist[curr], gbuf, depth]
         u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 5 SRVs [denoised, gbuf, depth, brdfLut, gbufC]
         // NRD unificado: pack especular + composite lendo a OUT_SPEC do NRD em vez do Denoised caseiro.

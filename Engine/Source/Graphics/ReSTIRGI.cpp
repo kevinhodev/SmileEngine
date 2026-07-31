@@ -1,4 +1,5 @@
 #include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
@@ -285,7 +286,8 @@ namespace Smile {
                static_cast<UINT64>(FrameSlot) * sizeof(ReSTIRGIConstants);
     }
 
-    void FReSTIRGI::RecordTrace(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+    void FReSTIRGI::RecordTrace(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap,
+                                 FGpuProfiler* _Profiler) {
         if (!Ready) return;
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
         const u32 p = FrameParity, prev = 1u - FrameParity;
@@ -314,13 +316,16 @@ namespace Smile {
         Transition(_CL, ResD[p].Get(), ResDState[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+        if (_Profiler) _Profiler->Begin(_CL, "Temporal + Trace Secundário");
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[p]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable[p]));
         _CL->Dispatch(GX, GY, 1);
+        if (_Profiler) _Profiler->End(_CL);
 
         if (Spatial) {
+            if (_Profiler) _Profiler->Begin(_CL, "Reuso Espacial + Resolve");
             Transition(_CL, ResA[p].Get(), ResAState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Transition(_CL, ResB[p].Get(), ResBState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Transition(_CL, ResC[p].Get(), ResCState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -335,6 +340,7 @@ namespace Smile {
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpatialTable[p]));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(GITexUAV));
             _CL->Dispatch(GX, GY, 1);
+            if (_Profiler) _Profiler->End(_CL);
         }
 
         // Estado combinado em vez de escolher por UseNrd. Sao TRES leitores: o deferred (t16,

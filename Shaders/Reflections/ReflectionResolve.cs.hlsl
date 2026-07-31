@@ -17,10 +17,12 @@ cbuffer ReflectionCB : register(b0) {
 
 Texture2D<float4> Radiance : register(t0); 
 Texture2D<float4> RayData  : register(t1); 
-Texture2D<float>  Depth    : register(t2); 
-Texture2D<float4> GBuffer  : register(t3); 
+Texture2D<float4> RayMotion : register(t2);
+Texture2D<float>  Depth    : register(t3);
+Texture2D<float4> GBuffer  : register(t4);
 
 RWTexture2D<float4> RWResolved : register(u0); 
+RWTexture2D<float4> RWResolvedMotion : register(u1);
 
 #define RESOLVE_SAMPLES 8
 
@@ -43,6 +45,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     float3 resolved   = float3(0.0f, 0.0f, 0.0f);
     float  outHitDist = 0.0f; 
+    float4 outMotion  = 0.0f;
 
     if (deviceZ > 0.0f && combineAlpha > 0.0f) {
         float3 N        = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
@@ -82,13 +85,18 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             float4 hrad = Radiance.Load(int3(h, 0));
             centerRad += hrad.rgb * wb;
             centerW   += wb;
-            if (wb > bestW) { bestW = wb; centerHitDist = hrad.a; }
+            if (wb > bestW) {
+                bestW = wb;
+                centerHitDist = hrad.a;
+                outMotion = RayMotion.Load(int3(h, 0));
+            }
         }
         if (centerW > 1e-6f) {
             centerRad /= centerW;
         } else {
             float4 c = Radiance.Load(int3(centerHalf, 0));           
             centerRad = c.rgb; centerHitDist = c.a;
+            outMotion = RayMotion.Load(int3(centerHalf, 0));
         }
         outHitDist = centerHitDist;
 
@@ -133,4 +141,5 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     }
 
     RWResolved[DTid.xy] = float4(resolved, outHitDist);
+    RWResolvedMotion[DTid.xy] = outMotion;
 }

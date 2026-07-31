@@ -9,6 +9,7 @@
 
 namespace Smile {
     class FTextureSRVHeap;
+    class FGpuProfiler;
     class FGpuMesh;
     class FMaterial;
 
@@ -54,7 +55,8 @@ namespace Smile {
 
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              const FShadowDrawItem* Items, size_t Count,
-                             const FExtraCascadeDraw& ExtraDraw = {});
+                             const FExtraCascadeDraw& ExtraDraw = {},
+                             FGpuProfiler* Profiler = nullptr);
 
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);
         // Leitura tambem em compute (volumetric fog): PIXEL | NON_PIXEL.

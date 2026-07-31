@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 #include "Smile/Math/Math.h"
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Graphics/D3D12Device.h"
@@ -53,6 +54,7 @@
 #include "Smile/Graphics/DlssRRPass.h"
 #include "Smile/Graphics/DlssRRGuides.h"
 #include "Smile/Graphics/BackgroundVelocity.h"
+#include "Smile/Graphics/TemporalMotionVectors.h"
 #include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Graphics/OceanFFT.h"
 #include "Smile/Graphics/Water.h"
@@ -107,7 +109,8 @@ namespace Smile {
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
-    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes).
+    // (StructuredBuffer t17, root SRV). PrevPosInvRadius fica no fim para os shaders raster
+    // continuarem com o prefixo historico intacto.
     struct FGPULight {
         Vec4  PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
         Vec4  ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
@@ -117,6 +120,7 @@ namespace Smile {
                                  // w = CastShadows pedido pelo artista (0/1). O raster usa y/z;
                                  // o ReSTIR DI usa w para decidir se emite o shadow ray.
         Mat44 ShadowMatrix;      // world -> UVZ do slice (perspectiva: dividir por w no shader)
+        Vec4  PrevPosInvRadius;  // xyz = posicao no frame anterior (shadow motion vector)
     };
 
     // Luz puntual COMPACTA pro mundo indireto (F5) — espelha o FPunctualLight do
@@ -653,6 +657,7 @@ namespace Smile {
 
         void NotifyIndirectLightingChanged() {
             DDGI.ResetHistoryOnce();
+            TemporalMotion.InvalidateHistory();
             ReSTIRGI.InvalidateHistory();   // reservoirs guardam Lo medido com a luz antiga
             Reflections.InvalidateHistory();
             Nrd.InvalidateHistory();
@@ -665,6 +670,7 @@ namespace Smile {
             CommandQueue.Flush();
             DDGI.RefreshInstanceGeo(Scene);
             TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
+            TemporalMotion.InvalidateHistory();
             ReSTIRGI.InvalidateHistory();
             ReSTIRDI.InvalidateHistory();
             NrdDirect.InvalidateHistory();
@@ -825,6 +831,9 @@ namespace Smile {
         static constexpr u32     kMaxLights = 256;
         ComPtr<ID3D12Resource>   LightBuffer;
         u8*                      MappedLightBase = nullptr;
+        // Posicao anterior por identidade estavel. Alimenta o shadow motion vector; separar por
+        // Id evita que frustum culling/reordenacao da lista transforme uma luz em outra.
+        std::unordered_map<u64, Vec3> PreviousDirectLightPositions;
 
         // F5: lista compacta pro mundo indireto (sem cull/sombra), um slice por frame em voo,
         // com um SRV de staging por slice — copiado por frame pras tabelas de trace do
@@ -870,6 +879,7 @@ namespace Smile {
         f32                      TAAStationaryMargin = 4.0f; // margem do AABB do history parado (ref Flax); 0 desliga
         u32                      TAADebugMode     = 0;
         Mat44                    PrevViewProj{};
+        Vec3                     PrevCameraPosition{ 0.0f, 0.0f, 0.0f };
         bool                     TAARanLastFrame = false;
 
         // === Upscaler (None/FSR/DLSS) — substitui o TAA custom quando != None ===
@@ -958,6 +968,7 @@ namespace Smile {
         FDlssRRPass      DlssRR;              // DLSS Ray Reconstruction (denoise+upscale num eval)
         FDlssRRGuides    RRGuides;            // buffers de material que o RR consome (albedo/normal/hitDist)
         FBackgroundVelocity BgVelocity;       // motion vector do ceu/nuvens/fog (velocity ZERO do G-buffer)
+        FTemporalMotionVectors TemporalMotion; // vetor dual + historico de superficies (RT Gems II cap. 25)
         Mat44            PrevVPNoTrans{};      // frame anterior: ViewNoTrans * ProjUnjittered (reproj do ceu)
         bool             RRResetPending = true;// descarta o historico do RR (troca de modo/scene/resize)
         // Borda de log do "RR pulado por debug na cena" (ver RRPoisoned no RenderFrame): sem isto o

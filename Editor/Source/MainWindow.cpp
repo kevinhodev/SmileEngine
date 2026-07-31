@@ -677,13 +677,13 @@ namespace SmileEditor {
             // Mesmo padrao do TimeOfDayWindow: QDialog frameless nao-modal com chrome QML.
             auto* Dialog = new QDialog(this);
             Dialog->setObjectName(QStringLiteral("StatsWindow"));
-            Dialog->setWindowTitle(tr("Estatísticas — SmileEngine"));
+            Dialog->setWindowTitle(tr("Profiler — SmileEngine"));
             Dialog->setWindowIcon(windowIcon());
             Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
                                    Qt::WindowMinimizeButtonHint);
             Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
-            Dialog->resize(420, 680);
-            Dialog->setMinimumSize(420, 560);
+            Dialog->resize(880, 760);
+            Dialog->setMinimumSize(760, 620);
 
             auto* StatsWindowBridge = new WindowBridge(Dialog, Dialog);
             QQuickWidget* Panel = CreateQmlPanel(
