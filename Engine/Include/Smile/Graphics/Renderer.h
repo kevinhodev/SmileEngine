@@ -36,6 +36,7 @@
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/DDGIDebug.h"
 #include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/ReSTIRDI.h"
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
 #include "Smile/Graphics/DILite.h"
@@ -91,7 +92,8 @@ namespace Smile {
                                   // zw = keyDir.xz/keyDir.y (projecao ate a base da camada)
 
         Vec4  LightParams;        // 16 bytes — x = nº de luzes puntuais no buffer t17,
-                                  // y = 1/res do atlas de sombra local, z = bias (NDC), w = -
+                                  // y = 1/res do atlas de sombra local, z = bias (NDC),
+                                  // w = modo local: 0 legado, 1 DI-lite parcial, 2 ReSTIR DI integral
         Vec4  LightParams2;       // 16 bytes — x = 1/res do cube shadow (point), y = near das
                                   // faces do cubo (formula do refZ), zw = -
 
@@ -485,10 +487,25 @@ namespace Smile {
         bool DILiteActive() const  { return UseDILite && DILite.IsReady(); }
         void SetUseDILite(bool V) {
             if (V == UseDILite) return;
+            if (V) UseReSTIRDI = false; // caminhos alternativos da mesma parcela local
             UseDILite = V;
             // Muda a direta do opaco: o que acumula sobre ela tem de cair junto.
             Nrd.InvalidateHistory();
             RRResetPending  = true;
+            TAARanLastFrame = false;
+        }
+
+        bool GetUseReSTIRDI() const { return UseReSTIRDI; }
+        bool ReSTIRDIActive() const { return UseReSTIRDI && ReSTIRDI.IsReady(); }
+        void SetUseReSTIRDI(bool V) {
+            if (V == UseReSTIRDI) return;
+            if (V) {
+                UseDILite = false;
+                ReSTIRDI.InvalidateHistory();
+            }
+            UseReSTIRDI = V;
+            Nrd.InvalidateHistory();
+            RRResetPending = true;
             TAARanLastFrame = false;
         }
 
@@ -512,6 +529,7 @@ namespace Smile {
             // TUDO que acumula precisa cair junto, senao o knob parece inerte enquanto o valor
             // antigo vaza pelo historico:
             ReSTIRGI.InvalidateHistory();   // reservoirs guardam Lo/x2 medidos com o epsilon velho
+            ReSTIRDI.InvalidateHistory();   // shadow ray final usa o mesmo perfil
             Nrd.InvalidateHistory();        // acumula sobre esses reservoirs
             RRResetPending    = true;       // historico neural do Ray Reconstruction
             DDGI.ResetHistoryOnce();        // Hysteresis 0.99 -> 99% do atlas velho sobrevive por update
@@ -656,6 +674,7 @@ namespace Smile {
             DDGI.RefreshInstanceGeo(Scene);
             TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
             ReSTIRGI.InvalidateHistory();
+            ReSTIRDI.InvalidateHistory();
             Nrd.InvalidateHistory();
             RRResetPending = true;
             DDGI.ResetHistoryOnce();
@@ -672,6 +691,9 @@ namespace Smile {
             // Sem invalidar, o Lo clampado no teto antigo sobrevive no historico — e com
             // ValidateInterval = 0 nao ha re-shade que o corrija.
             ReSTIRGI.InvalidateHistory();
+            // O DI usa permutation temporal somente no RR. Ao trocar de denoiser, nao misture
+            // reservoirs produzidos por politicas de reprojecao diferentes.
+            ReSTIRDI.InvalidateHistory();
             // NRD/RR param no Resolved cru e deixam History[] das reflexoes sem escrita. Ao voltar
             // ao caminho legado, esse historico pode ter frames antigos e paridade ja avancada.
             Reflections.InvalidateHistory();
@@ -959,13 +981,15 @@ namespace Smile {
         FDILite          DILite;
         bool             UseDILite = false; // default OFF: o sinal e ruidoso e, sob NRD, nao passa
                                             // por denoiser nenhum (ver DILite.h)
+        FReSTIRDI        ReSTIRDI;
+        bool             UseReSTIRDI = false; // bring-up: substitui TODA a direta local; default OFF
         // SRV do LightBuffer (FGPULight) por frame em voo. O deferred le esse buffer como root SRV
-        // e por isso nao precisava de slot no heap; o DI-lite le por tabela e precisa.
+        // e por isso nao precisava de slot no heap; os passes de direta local leem por tabela.
         u32              DILightSRVSlot[FCommandQueue::kFramesInFlight] = { kInvalidSlot, kInvalidSlot };
-        // Nº de luzes escritas no LightBuffer deste frame. Sai do bloco de empacotamento (que o
-        // calcula) para o dispatch do DI-lite, bem depois — o shader precisa saber onde a lista
-        // termina, e ler mais que isso traria luz de lixo do frame anterior.
+        // Nº de luzes escritas no LightBuffer deste frame. Sai do bloco de empacotamento para os
+        // dispatches de direta local; ler alem traria luz de lixo do frame anterior.
         u32              FrameLightCount = 0;
+        u64              FrameLightSetSignature = 0; // IDs na ordem do buffer; invalida indices antigos
 
         FAmbientOcclusion AO;
         bool              UseAO   = true;

@@ -57,6 +57,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY ViewSettingsChanged)
         // DI-lite: sombra por raio nas luzes locais que ficaram sem slot de shadow map.
         Q_PROPERTY(bool diLite READ IsDILiteEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool reSTIRDI READ IsReSTIRDIEnabled NOTIFY ViewSettingsChanged)
         // Amostragem do DDGI: teto do self-shadow bias (metros; 0 = sem teto) e peso de backface
         // medido da posicao sem bias. Eixos separados de proposito — a matriz 2x2 e o experimento.
         Q_PROPERTY(double giSurfaceBiasMax READ GetGISurfaceBiasMax NOTIFY ViewSettingsChanged)
@@ -199,6 +200,7 @@ namespace SmileEditor {
         bool              IsReflectionsCullBackfaceEnabled() const;
         bool              IsGIBackfacePolicyEnabled() const;
         bool              IsDILiteEnabled() const;
+        bool              IsReSTIRDIEnabled() const;
         double            GetGISurfaceBiasMax() const;
         double            GetGIVolumeFadeProbes() const;
         bool              IsGTAOEnabled() const;
@@ -321,6 +323,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleReflectionsCullBackface();
         Q_INVOKABLE void ToggleGIBackfacePolicy();
         Q_INVOKABLE void ToggleDILite();
+        Q_INVOKABLE void ToggleReSTIRDI();
         Q_INVOKABLE void SetGISurfaceBiasMax(double meters);
         Q_INVOKABLE void SetGIVolumeFadeProbes(double probes);
         Q_INVOKABLE void ToggleGTAO();

@@ -177,10 +177,12 @@ float AreaSphereSpecular(float SourceRadius, float Roughness, float3 ToLightCent
 // representative point na superficie da fonte (Ls) com o fator de normalizacao do lobo
 // alargado (SpecEnergy) — o highlight cresce com o tamanho aparente da fonte em vez de
 // estourar. Sol/lua e caminhos sem area seguem no BRDF_Direct.
-float3 BRDF_DirectArea(float3 N, float3 V, float3 Ld, float3 Ls, float SpecEnergy,
-                       float3 Radiance, float3 DiffuseColor, float3 SpecularColor,
-                       float Roughness, float a2, float3 TransColor) {
-    float3 Result = float3(0.0f, 0.0f, 0.0f);
+void BRDF_DirectAreaSplit(float3 N, float3 V, float3 Ld, float3 Ls, float SpecEnergy,
+                          float3 Radiance, float3 DiffuseColor, float3 SpecularColor,
+                          float Roughness, float a2, float3 TransColor,
+                          out float3 OutDiffuse, out float3 OutSpecular) {
+    OutDiffuse  = float3(0.0f, 0.0f, 0.0f);
+    OutSpecular = float3(0.0f, 0.0f, 0.0f);
 
     float NoLd = saturate(dot(N, Ld));
     float NoLs = saturate(dot(N, Ls));
@@ -221,13 +223,21 @@ float3 BRDF_DirectArea(float3 N, float3 V, float3 Ld, float3 Ls, float SpecEnerg
             float3 Diffuse = (Kd * DiffuseColor) / BRDF_PI;
         #endif
 
-        Result += Diffuse * Radiance * NoLd + Specular * Radiance * NoLs;
+        OutDiffuse  = Diffuse * Radiance * NoLd;
+        OutSpecular = Specular * Radiance * NoLs;
     }
 
     if (any(TransColor > 0.0f))
-        Result += FoliageTransmission(N, V, Ld, Radiance, TransColor);
+        OutDiffuse += FoliageTransmission(N, V, Ld, Radiance, TransColor);
+}
 
-    return Result;
+float3 BRDF_DirectArea(float3 N, float3 V, float3 Ld, float3 Ls, float SpecEnergy,
+                       float3 Radiance, float3 DiffuseColor, float3 SpecularColor,
+                       float Roughness, float a2, float3 TransColor) {
+    float3 Diffuse, Specular;
+    BRDF_DirectAreaSplit(N, V, Ld, Ls, SpecEnergy, Radiance, DiffuseColor, SpecularColor,
+                         Roughness, a2, TransColor, Diffuse, Specular);
+    return Diffuse + Specular;
 }
 
 #endif

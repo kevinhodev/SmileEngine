@@ -24,8 +24,7 @@ cbuffer FrameCB : register(b0) {
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     float4 LightParams;        // x = nº de luzes puntuais no buffer t17,
                                // y = 1/res do atlas de sombra local, z = bias (NDC z),
-                               // w = DI-lite ativo (0/1): liga a subtracao do rtShare no laco de
-                               // luzes locais E a soma do alvo. Os dois juntos, sempre.
+                               // w = modo local: 0 legado, 1 DI-lite parcial, 2 ReSTIR DI integral
     float4 LightParams2;       // x = 1/res do cube shadow (point), y = near das faces, zw = -
     float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem
                                // teto), zw = reservados
@@ -131,9 +130,9 @@ Texture2D<float>  SceneAO             : register(t14);
 // ReSTIR GI: irradiancia difusa por pixel (final-gather sobre o DDGI). Ativa via ReflectionParams.w.
 // Quando ligada, substitui o termo difuso do DDGI; o DDGI segue como cache no trace (multi-bounce).
 Texture2D<float4> ReSTIRGITex         : register(t16);
-// DI-lite (t20): direta das luzes locais SEM slot de shadow map, ja com BRDF aplicada e sombreada
-// por 1 raio/pixel. Ligado so quando o passe esta pronto; LightParams.w e o interruptor.
-Texture2D<float4> DILiteTex           : register(t20);
+// Direta local resolvida fora do PS: parcela DI-lite no modo 1, conjunto integral ReSTIR no modo 2.
+// Ja chega com BRDF e visibilidade aplicadas; LightParams.w seleciona produtor e forma de composite.
+Texture2D<float4> DirectLocalTex      : register(t20);
 
 SamplerState IBLSampler : register(s1); 
 
@@ -316,6 +315,8 @@ float4 main(VSOutput input) : SV_Target {
     // SEM sombra na F1 (luz vaza parede) — sombras locais chegam na F3.
     {
         uint NumLights = (uint)LightParams.x;
+        // mode 2 = ReSTIR DI: resolve o conjunto local inteiro; o loop legado nao participa.
+        if (LightParams.w < 1.5f) {
         [loop]
         for (uint li = 0; li < NumLights; ++li) {
             FGPULight Lp = Lights[li];
@@ -399,11 +400,11 @@ float4 main(VSOutput input) : SV_Target {
                                         TransColor);
         }
 
-        // Parcela do DI-lite: as luzes sem slot, ja com BRDF e com a visibilidade medida por raio.
-        // Somada aqui e nao dentro do laco porque e UM valor por pixel — o passe resolveu o
-        // conjunto todo num estimador. Complementa exatamente o que o rtShare subtraiu acima.
+        // Modo 1 complementa o rtShare subtraido acima; modo 2 fornece o conjunto local inteiro,
+        // pois o loop foi pulado. Nos dois casos ha um unico valor por pixel ja resolvido.
+        }
         if (LightParams.w > 0.5f)
-            Lighting += DILiteTex.Load(int3(px, 0)).rgb;
+            Lighting += DirectLocalTex.Load(int3(px, 0)).rgb;
     }
 
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);

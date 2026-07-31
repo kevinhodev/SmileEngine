@@ -136,9 +136,8 @@ namespace Smile {
         RootParams[11].DescriptorTable.pDescriptorRanges   = &LocalShadowRange;
         RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // DI-lite (t20): direta das luzes locais sem slot de shadow map, full-res. Mesma forma do
-        // t16 do ReSTIR — tabela de 1 SRV, ligada so quando o passe esta pronto. Os outros PSOs
-        // desta root sig nao referenciam t20, entao o parametro extra e inofensivo p/ eles.
+        // Direta local por compute (t20): DI-lite parcial ou ReSTIR DI integral, full-res. Mesma
+        // forma de t16: tabela de 1 SRV; os outros PSOs nao referenciam t20.
         D3D12_DESCRIPTOR_RANGE DILiteRange{};
         DILiteRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         DILiteRange.NumDescriptors                    = 1;

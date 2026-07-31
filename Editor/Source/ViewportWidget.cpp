@@ -104,6 +104,10 @@ namespace SmileEditor {
         return Renderer && Renderer->GetUseDILite();
     }
 
+    bool ViewportWidget::IsReSTIRDIEnabled() const {
+        return Renderer && Renderer->GetUseReSTIRDI();
+    }
+
     bool ViewportWidget::IsGIBackfacePolicyEnabled() const {
         return Renderer && Renderer->GetGIBackfacePolicy();
     }
@@ -823,6 +827,12 @@ namespace SmileEditor {
     void ViewportWidget::ToggleDILite() {
         if (!Renderer) return;
         Renderer->SetUseDILite(!Renderer->GetUseDILite());
+        emit ViewSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleReSTIRDI() {
+        if (!Renderer) return;
+        Renderer->SetUseReSTIRDI(!Renderer->GetUseReSTIRDI());
         emit ViewSettingsChanged();
     }
 

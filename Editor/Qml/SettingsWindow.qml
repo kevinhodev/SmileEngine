@@ -2657,13 +2657,13 @@ Rectangle {
                               "soma sempre a mesma energia.\n\n" +
                               "DESLIGADO por padrão: o sinal é de um raio por pixel, então tem " +
                               "ruído de visibilidade. Sob DLSS Ray Reconstruction é o que a rede " +
-                              "espera receber; sob NRD ele não passa por denoiser nenhum, porque " +
-                              "o NRD trata GI e reflexão, não este alvo. O conserto é o reuso " +
-                              "temporal, que é o passo que transforma isto em ReSTIR DI.\n\n" +
+                               "espera receber; sob NRD ele não passa por denoiser nenhum, porque " +
+                               "o NRD trata GI e reflexão, não este alvo. O ReSTIR DI experimental " +
+                               "abaixo já acrescenta reuso temporal e espacial para A/B.\n\n" +
                               "Quando há excedente: os dois orçamentos são INDEPENDENTES, então " +
                               "basta passar de 8 spots OU de 4 points — contando só os visíveis e " +
-                              "com \"projeta sombras\" ligado. Não é o total de luzes: 6 spots e " +
-                              "6 points não estouram nada, e 9 spots estouram mesmo sem nenhum " +
+                              "com \"projeta sombras\" ligado. Não é o total de luzes: 8 spots e " +
+                              "4 points não estouram nada, e 9 spots estouram mesmo sem nenhum " +
                               "point na cena.\n\n" +
                               "Onde olhar: a luz que ficou sem slice — a sombra dela aparece. " +
                               "Costumam ser as mais distantes, porque a seleção do orçamento " +
@@ -2688,6 +2688,46 @@ Rectangle {
                         y: diLabel.y - 6
                         checked: viewportModel.diLite
                         onToggled: viewportModel.ToggleDILite()
+                    }
+                }
+
+                Card {
+                    id: restirDICard
+                    width: parent.width
+                    title: "ReSTIR DI experimental"
+                    height: restirDILabel.y + restirDILabel.height + contentPadding + 8
+
+                    Text {
+                        id: restirDIHelper
+                        x: 20
+                        y: restirDICard.headerHeight + restirDICard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Substitui o loop inteiro de luzes locais analíticas por 8 candidatas uniformes " +
+                              "por pixel, reuso temporal e 4 vizinhos espaciais. Apenas a amostra " +
+                              "final dispara shadow ray; sol e lua continuam no caminho dedicado.\n\n" +
+                              "O DI-lite permanece como referência A/B e os dois modos são " +
+                              "mutuamente exclusivos. Default OFF enquanto a integração direta " +
+                              "com o NRD ainda não estiver fechada."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: restirDILabel
+                        x: 20
+                        y: restirDIHelper.y + restirDIHelper.height + 18
+                        text: "ReSTIR DI"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: restirDILabel.y - 6
+                        checked: viewportModel.reSTIRDI
+                        onToggled: viewportModel.ToggleReSTIRDI()
                     }
                 }
 
