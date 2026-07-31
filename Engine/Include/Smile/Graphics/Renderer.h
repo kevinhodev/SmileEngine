@@ -504,6 +504,7 @@ namespace Smile {
                 ReSTIRDI.InvalidateHistory();
             }
             UseReSTIRDI = V;
+            NrdDirect.InvalidateHistory();
             Nrd.InvalidateHistory();
             RRResetPending = true;
             TAARanLastFrame = false;
@@ -530,6 +531,7 @@ namespace Smile {
             // antigo vaza pelo historico:
             ReSTIRGI.InvalidateHistory();   // reservoirs guardam Lo/x2 medidos com o epsilon velho
             ReSTIRDI.InvalidateHistory();   // shadow ray final usa o mesmo perfil
+            NrdDirect.InvalidateHistory();  // acumula a direta resolvida por esse shadow ray
             Nrd.InvalidateHistory();        // acumula sobre esses reservoirs
             RRResetPending    = true;       // historico neural do Ray Reconstruction
             DDGI.ResetHistoryOnce();        // Hysteresis 0.99 -> 99% do atlas velho sobrevive por update
@@ -675,6 +677,7 @@ namespace Smile {
             TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
             ReSTIRGI.InvalidateHistory();
             ReSTIRDI.InvalidateHistory();
+            NrdDirect.InvalidateHistory();
             Nrd.InvalidateHistory();
             RRResetPending = true;
             DDGI.ResetHistoryOnce();
@@ -686,6 +689,7 @@ namespace Smile {
             if (D == EDenoiser::DLSS_RR && !DlssRR.Available()) D = EDenoiser::NRD; // fallback: sem NVIDIA/RR
             if (D == Denoiser) return;
             Nrd.InvalidateHistory();            // muda a natureza do sinal -> reinicia acumulacao
+            NrdDirect.InvalidateHistory();      // instancia independente da iluminacao direta
             // O teto de firefly do ReSTIR depende do denoiser (FireflyMax 8 com NRD, FireflyMaxRaw
             // 4 sem ele) e e aplicado ao Lo NA HORA DO TRACE, ou seja, fica gravado no reservoir.
             // Sem invalidar, o Lo clampado no teto antigo sobrevive no historico — e com
@@ -982,6 +986,7 @@ namespace Smile {
         bool             UseDILite = false; // default OFF: o sinal e ruidoso e, sob NRD, nao passa
                                             // por denoiser nenhum (ver DILite.h)
         FReSTIRDI        ReSTIRDI;
+        FNrdDenoiser     NrdDirect; // RELAX dedicado ao DI: historico/tuning nao contaminam GI/refl
         bool             UseReSTIRDI = false; // bring-up: substitui TODA a direta local; default OFF
         // SRV do LightBuffer (FGPULight) por frame em voo. O deferred le esse buffer como root SRV
         // e por isso nao precisava de slot no heap; os passes de direta local leem por tabela.

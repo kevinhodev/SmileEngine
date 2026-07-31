@@ -19,6 +19,7 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 TemporalPolicy; // x=permutation temporal (0/1); yzw reservados
     float4 RayEpsA;      // layout compartilhado com o Pass B
     float4 RayEpsB;
+    row_major float4x4 View; // layout comum; consumido pelo pack do NRD
 };
 
 Texture2D<float4> GBufferA : register(t0);

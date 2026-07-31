@@ -55,6 +55,9 @@ smile_compile_shader(Lighting/DILite.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 # ReSTIR DI: candidatas uniformes + temporal, depois spatial + um shadow ray final.
 smile_compile_shader(Lighting/ReSTIRDIInitialTemporal.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(Lighting/ReSTIRDISpatial.cs.hlsl         cs_6_6 main SHADER_OUTPUTS)
+# Instancia RELAX dedicada ao direto: pack demodulado e composite remodulado.
+smile_compile_shader(Lighting/ReSTIRDINrdPack.cs.hlsl          cs_6_6 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
+smile_compile_shader(Lighting/ReSTIRDINrdComposite.cs.hlsl     cs_6_6 main SHADER_OUTPUTS)
 
 # Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
 smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_6 main SHADER_OUTPUTS)
@@ -211,6 +214,8 @@ add_custom_target(Shaders
         Lighting/ReSTIRDICommon.hlsli
         Lighting/ReSTIRDIInitialTemporal.cs.hlsl
         Lighting/ReSTIRDISpatial.cs.hlsl
+        Lighting/ReSTIRDINrdPack.cs.hlsl
+        Lighting/ReSTIRDINrdComposite.cs.hlsl
         Reflections/GGXSample.hlsli
         Reflections/ReflectionTrace.cs.hlsl
         Reflections/ReflectionTraceMirror.cs.hlsl

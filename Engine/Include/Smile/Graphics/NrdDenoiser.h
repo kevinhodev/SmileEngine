@@ -19,7 +19,10 @@ namespace Smile {
     // pelo caller apos Denoise/RunSelfTest (o NRD liga heap proprio).
     class FNrdDenoiser {
     public:
-        void Initialize(ID3D12Device* Device);  // instancia + root sig compartilhada + 15 PSOs
+        enum class ESignalProfile : u8 { Indirect = 0, Direct = 1 };
+
+        void Initialize(ID3D12Device* Device,
+                        ESignalProfile Profile = ESignalProfile::Indirect);
         void Shutdown();
         bool IsAvailable() const { return Available; }
 
@@ -45,7 +48,7 @@ namespace Smile {
         void InvalidateHistory() { NeedsClear = true; }
 
         // Sincroniza o tracking interno com escritas externas (pack): IN -> UAV antes do pack,
-        // OUT -> PIXEL apos o Denoise (p/ o deferred ler).
+        // OUT -> leitura combinada apos o Denoise (deferred em pixel ou composite em compute).
         void TransitionInputsToWrite(ID3D12GraphicsCommandList* CL);
         void TransitionOutputToRead(ID3D12GraphicsCommandList* CL);
 
@@ -81,6 +84,7 @@ namespace Smile {
         void RecordDispatches(ID3D12GraphicsCommandList* CL); // loop comum (self-test e Denoise)
 
         nrd::Instance* Instance = nullptr;
+        ESignalProfile SignalProfile = ESignalProfile::Indirect;
         bool Available = false;
         bool Ready     = false;
         bool SelfTestLogged = false;

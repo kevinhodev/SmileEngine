@@ -181,6 +181,7 @@ namespace Smile {
             DDGI.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
             Nrd.Initialize(Device.Native());
+            NrdDirect.Initialize(Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
             Reflections.Initialize(Device.Native());
             DILite.Initialize(Device.Native());
             ReSTIRDI.Initialize(Device.Native());
@@ -480,6 +481,21 @@ namespace Smile {
         ReSTIRDI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), DepthSRVSlot,
             VelocitySRVSlot, RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(), DILightSRVSlot);
+        // A direta nao depende do volume DDGI. Mantenha sua instancia RELAX e o pack antes do
+        // early-out abaixo para o ReSTIR DI continuar denoisado mesmo numa cena sem probes.
+        NrdDirect.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
+        if (NrdDirect.IsReady()) {
+            ReSTIRDI.SetupNrdPack(Device.Native(), SRVHeap,
+                GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2),
+                DepthSRVSlot, VelocitySRVSlot,
+                NrdDirect.IoResource(FNrdDenoiser::IO_VIEWZ),
+                NrdDirect.IoResource(FNrdDenoiser::IO_NORMAL_ROUGHNESS),
+                NrdDirect.IoResource(FNrdDenoiser::IO_MV),
+                NrdDirect.IoResource(FNrdDenoiser::IO_DIFF_RADIANCE_HITDIST),
+                NrdDirect.IoResource(FNrdDenoiser::IO_SPEC_RADIANCE_HITDIST),
+                NrdDirect.IoResource(FNrdDenoiser::IO_OUT_DIFF),
+                NrdDirect.IoResource(FNrdDenoiser::IO_OUT_SPEC));
+        }
 
         // Reflexoes, ReSTIR GI e NRD abaixo consomem efetivamente os recursos do volume.
         if (!DDGI.IsReady()) return;
@@ -877,7 +893,8 @@ namespace Smile {
                             DDGIDebugPass.Recreate(Dev, RT, DS); } },
                 { { "DILite.cs" },
                   [&] { if (Device.RaytracingSupported()) DILite.RecreatePSO(Dev); } },
-                { { "ReSTIRDIInitialTemporal.cs", "ReSTIRDISpatial.cs" },
+                { { "ReSTIRDIInitialTemporal.cs", "ReSTIRDISpatial.cs",
+                    "ReSTIRDINrdPack.cs", "ReSTIRDINrdComposite.cs" },
                   [&] { if (Device.RaytracingSupported()) ReSTIRDI.RecreatePSO(Dev); } },
             };
 
@@ -1566,7 +1583,11 @@ namespace Smile {
         // DLSS Ray Reconstruction: denoiser neural que substitui NRD + SR. Precisa do RR inicializado
         // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
         const bool RRMode  = (Denoiser == EDenoiser::DLSS_RR) && DlssRR.IsInitialized() && RRGuides.IsReady();
-        const bool NrdMode = ReSTIRGIActive && Nrd.IsReady() && Denoiser == EDenoiser::NRD;
+        const bool ReSTIRDIActiveFrame = UseReSTIRDI && ReSTIRDI.IsReady();
+        const bool NrdIndirectMode = ReSTIRGIActive && Nrd.IsReady() &&
+                                     Denoiser == EDenoiser::NRD;
+        const bool NrdDirectMode = ReSTIRDIActiveFrame && ReSTIRDI.IsNrdReady() &&
+                                   NrdDirect.IsReady() && Denoiser == EDenoiser::NRD;
         // Perfil de epsilons: um so p/ a engine inteira, empurrado todo frame (copia barata). Sem
         // isto cada passe teria a propria copia e o sweep de calibracao mexeria em metade deles.
         ReSTIRGI.SetRayEpsilons(RayEps);
@@ -1591,13 +1612,13 @@ namespace Smile {
             ReSTIRGI.SetGIHitSampling(GIHit);
         }
 
-        ReSTIRGI.SetUseNrd(NrdMode);           // RRMode => NrdMode=false => ReSTIR entrega GI cru (ruidoso)
-        Reflections.SetUseNrd(NrdMode);
+        ReSTIRGI.SetUseNrd(NrdIndirectMode); // RRMode => false => ReSTIR entrega GI cru (ruidoso)
+        Reflections.SetUseNrd(NrdIndirectMode);
         Reflections.SetRawSpec(RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
 
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        ReflectionsActive ? 1.0f : 0.0f,
-                                       ReSTIRGIActive ? (NrdMode ? 2.0f : 1.0f) : 0.0f };
+                                       ReSTIRGIActive ? (NrdIndirectMode ? 2.0f : 1.0f) : 0.0f };
         ++FrameIndex;
 
         Mat44 ViewNoTrans = View;
@@ -2169,7 +2190,10 @@ namespace Smile {
             }
 
             FrameLightCount = NumLights; // consumido pelos dispatches de direta local, mais adiante
-            FrameLightSetSignature = LightSetSignature ^ static_cast<u64>(NumLights);
+            const u64 NewLightSetSignature = LightSetSignature ^ static_cast<u64>(NumLights);
+            if (NewLightSetSignature != FrameLightSetSignature)
+                NrdDirect.InvalidateHistory();
+            FrameLightSetSignature = NewLightSetSignature;
             ReSTIRDI.SetLightSetSignature(FrameLightSetSignature);
             // .w escolhe um unico produtor da direta local. O MESMO predicado manda no dispatch e
             // no deferred: modo 1 subtrai/soma a parcela DI-lite; modo 2 substitui o loop inteiro.
@@ -2578,7 +2602,7 @@ namespace Smile {
                 ReSTIRGI.RecordTrace(CommandList, SRVHeap);
             }
 
-            if (NrdMode) {
+            if (NrdIndirectMode) {
                 if (ReflectionsActive) {
                     FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (trace)");
                     Reflections.RecordTrace(CommandList, SRVHeap);
@@ -2612,7 +2636,7 @@ namespace Smile {
             constexpr D3D12_RESOURCE_STATES DeferredReadState =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            const bool ReSTIRDIOn = ReSTIRDIActive();
+            const bool ReSTIRDIOn = ReSTIRDIActiveFrame;
             // O G-buffer rastreia o proprio estado (AppendTransitions so recebe o alvo); o depth
             // nao, entao o estado de origem depende de o bloco do ReSTIR ter rodado — ele deixa o
             // depth em NON_PIXEL de proposito, em vez de devolver p/ DEPTH_WRITE.
@@ -2633,13 +2657,29 @@ namespace Smile {
             // unico modo manda no dispatch e no gate do shader: divergir dobra ou apaga a luz.
             const bool DILiteOn = !ReSTIRDIOn && DILiteActive();
             if (ReSTIRDIOn) {
-                FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
-                ReSTIRDI.SetRayEpsilons(RayEps);
-                ReSTIRDI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
-                                        RenderWidth(), RenderHeight(), FrameIndex,
-                                        FrameLightCount, kRTMaskShadowFull,
-                                        /*EnableTemporalPermutation=*/RRMode);
-                ReSTIRDI.Record(CommandList, SRVHeap);
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
+                    ReSTIRDI.SetRayEpsilons(RayEps);
+                    ReSTIRDI.UpdatePerFrame(FrameSlot, InvViewProjFull, View, CameraPosition,
+                                            RenderWidth(), RenderHeight(), FrameIndex,
+                                            FrameLightCount, kRTMaskShadowFull,
+                                            /*EnableTemporalPermutation=*/RRMode);
+                    ReSTIRDI.Record(CommandList, SRVHeap);
+                }
+
+                if (NrdDirectMode) {
+                    FGpuScope Scope(GpuProfiler, CommandList, "NRD direta");
+                    NrdDirect.TransitionInputsToWrite(CommandList);
+                    ReSTIRDI.RecordNrdPack(CommandList, SRVHeap);
+                    NrdDirect.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
+                                       JitterPx, PrevJitterPx, FrameIndex);
+                    NrdDirect.Denoise(CommandList);
+                    NrdDirect.TransitionOutputToRead(CommandList);
+                    // O NRD liga seu heap privado; o composite pertence ao heap da engine.
+                    ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                    CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
+                    ReSTIRDI.RecordNrdComposite(CommandList, SRVHeap);
+                }
 
                 // Os consumidores posteriores historicamente partem de PIXEL (inclusive o bloco
                 // de upscale, que usa barreira explicita). Nao deixe o estado combinado vazar.
@@ -2762,7 +2802,7 @@ namespace Smile {
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
-                if (!NrdMode) Reflections.RecordTrace(CommandList, SRVHeap);
+                if (!NrdIndirectMode) Reflections.RecordTrace(CommandList, SRVHeap);
                 // RR: extrai o hitDist especular do Resolved ENQUANTO ele esta NON_PIXEL (o composite
                 // cru abaixo o transiciona p/ PIXEL). O RecordTrace acima parou no Resolved (RawSpec).
                 if (RRMode)
@@ -3451,6 +3491,7 @@ namespace Smile {
         ComputeQueue.Shutdown();
         UploadQueue.Shutdown();
         Nrd.Shutdown();
+        NrdDirect.Shutdown();
         Fsr.Shutdown();
         Dlss.Shutdown();
         DlssRR.Shutdown();

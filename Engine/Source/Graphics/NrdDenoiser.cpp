@@ -105,13 +105,15 @@ namespace Smile {
     }
 #endif
 
-    void FNrdDenoiser::Initialize(ID3D12Device* _Device) {
+    void FNrdDenoiser::Initialize(ID3D12Device* _Device, ESignalProfile _Profile) {
 #if SMILE_NRD_ENABLED
         if (Available) return;
         Dev = _Device;
+        SignalProfile = _Profile;
+        const char* ProfileName = SignalProfile == ESignalProfile::Direct ? "direta" : "indireta";
 
         const nrd::LibraryDesc& lib = *nrd::GetLibraryDesc();
-        LogInfo("NRD v" + std::to_string(lib.versionMajor) + "." + std::to_string(lib.versionMinor) +
+        LogInfo("NRD " + std::string(ProfileName) + " v" + std::to_string(lib.versionMajor) + "." + std::to_string(lib.versionMinor) +
                 "." + std::to_string(lib.versionBuild) +
                 " | normalEnc=" + std::to_string((int)lib.normalEncoding) +
                 " roughEnc=" + std::to_string((int)lib.roughnessEncoding));
@@ -138,7 +140,7 @@ namespace Smile {
         CbSpace        = d.constantBufferAndSamplersSpaceIndex;
         CbReg          = d.constantBufferRegisterIndex;
         SamplerBaseReg = d.samplersBaseRegisterIndex;
-        LogInfo("NRD RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
+        LogInfo("NRD " + std::string(ProfileName) + " RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
                 " perm=" + std::to_string(d.permanentPoolSize) +
                 " trans=" + std::to_string(d.transientPoolSize) +
                 " samplers=" + std::to_string(d.samplersNum) +
@@ -150,6 +152,18 @@ namespace Smile {
         // O antilag fica no default; o README recomenda desliga-lo so no bring-up inicial
         // (antilagSettings.accelerationAmount/resetAmount = 0) se aparecer instabilidade.
         relax.enableAntiFirefly = true;
+        if (SignalProfile == ESignalProfile::Direct) {
+            // Preset inicial alinhado ao FullSample do RTXDI: historico mais curto porque o ReSTIR
+            // volta a poucas candidatas nas disoclusoes, luma difusa mais seletiva e estimativa de
+            // variancia espacial ja no primeiro frame. A instancia separada permite calibrar isto
+            // sem mudar a resposta do GI/reflexos.
+            relax.diffuseMaxAccumulatedFrameNum = 20;
+            relax.specularMaxAccumulatedFrameNum = 20;
+            relax.diffuseMaxFastAccumulatedFrameNum = 3;
+            relax.specularMaxFastAccumulatedFrameNum = 3;
+            relax.diffusePhiLuminance = 1.0f;
+            relax.spatialVarianceEstimationHistoryThreshold = 1;
+        }
         nrd::SetDenoiserSettings(*Instance, 0, &relax);
 
         BuildRootSignature(_Device);
@@ -157,7 +171,7 @@ namespace Smile {
         CreateHeapsAndCB(_Device);
         Available = true;
 #else
-        (void)_Device;
+        (void)_Device; (void)_Profile;
         LogWarning("NRD desabilitado (SMILE_NRD_ENABLED=0)");
 #endif
     }
@@ -502,15 +516,18 @@ namespace Smile {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
 
+        constexpr D3D12_RESOURCE_STATES ShaderRead =
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         const EIo outs[2] = { IO_OUT_DIFF, IO_OUT_SPEC };
         std::vector<D3D12_RESOURCE_BARRIER> bs;
         for (EIo e : outs) {
             FNrdTexture& t = Io[e];
-            if (!t.Res || t.State == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) continue;
+            if (!t.Res || t.State == ShaderRead) continue;
             D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            b.Transition.StateBefore = t.State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            bs.push_back(b); t.State = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            b.Transition.StateBefore = t.State; b.Transition.StateAfter = ShaderRead;
+            bs.push_back(b); t.State = ShaderRead;
         }
         if (!bs.empty()) _CL->ResourceBarrier((UINT)bs.size(), bs.data());
 #else

@@ -19,6 +19,7 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 TemporalPolicy; // mantem o layout de b0 identico ao Pass A
     float4 RayEpsA;
     float4 RayEpsB;
+    row_major float4x4 View; // layout comum; consumido pelo pack do NRD
 };
 
 #include "../RayOffset.hlsli"
@@ -35,6 +36,8 @@ StructuredBuffer<FGPULightFull> Lights : register(t8);
 
 SamplerState LinearWrap : register(s1);
 RWTexture2D<float4> OutDirect : register(u0);
+RWTexture2D<float4> OutDiffuse : register(u1);
+RWTexture2D<float4> OutSpecular : register(u2);
 
 #include "../GI/RTAlphaTest.hlsli"
 
@@ -46,7 +49,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     const float deviceZ = Depth.Load(int3(px, 0));
     const uint lightCount = (uint)Params.x;
-    if (deviceZ <= 0.0f || lightCount == 0u) { OutDirect[px] = 0.0f; return; }
+    if (deviceZ <= 0.0f || lightCount == 0u) {
+        OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
+        return;
+    }
 
     const GBufferData g = DecodeGBuffer(GBufferA.Load(int3(px, 0)),
                                         GBufferB.Load(int3(px, 0)),
@@ -100,14 +106,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         DIResMerge(r, nb, target, rng);
     }
 
-    if (r.LightIndex >= lightCount) { OutDirect[px] = 0.0f; return; }
+    if (r.LightIndex >= lightCount) {
+        OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
+        return;
+    }
 
     const FGPULightFull selected = Lights[r.LightIndex];
     float3 diffuse, specular, L; float dist;
     const float selectedTarget = DI_Evaluate(selected, g, x1, CameraPos.xyz,
                                              diffuse, specular, L, dist);
     DIResFinalize(r, selectedTarget);
-    float3 estimate = (diffuse + specular) * r.W;
+    float visibility = 1.0f;
 
     if (r.W > 0.0f && DI_IsShadowCaster(selected)) {
         const float camDist = length(CameraPos.xyz - x1);
@@ -125,9 +134,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             query.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                                  (uint)Params.z, ray);
             SMILE_RT_PROCEED(query)
-            if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) estimate = 0.0f;
+            if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) visibility = 0.0f;
         }
     }
 
-    OutDirect[px] = float4(estimate, dist);
+    const float3 diffuseEstimate = diffuse * (r.W * visibility);
+    const float3 specularEstimate = specular * (r.W * visibility);
+    // Igual ao RTXDI: hit distance zero quando a amostra nao entrega radiancia valida. Isso evita
+    // ensinar ao RELAX uma superficie virtual atraves de um bloqueador ou de um reservoir vazio.
+    const float hitDist = (visibility > 0.0f && r.W > 0.0f &&
+                           any(diffuseEstimate + specularEstimate > 0.0f)) ? dist : 0.0f;
+    OutDirect[px]  = float4(diffuseEstimate + specularEstimate, hitDist);
+    OutDiffuse[px] = float4(diffuseEstimate, hitDist);
+    OutSpecular[px] = float4(specularEstimate, hitDist);
 }

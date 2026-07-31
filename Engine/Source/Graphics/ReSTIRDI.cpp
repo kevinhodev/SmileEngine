@@ -14,6 +14,10 @@ namespace Smile {
         constexpr u32 kInitialSRVs = 8;
         constexpr u32 kInitialUAVs = 2;
         constexpr u32 kSpatialSRVs = 9;
+        constexpr u32 kSpatialUAVs = 3;
+        constexpr u32 kNrdPackSRVs = 7;
+        constexpr u32 kNrdPackUAVs = 5;
+        constexpr u32 kNrdCompositeSRVs = 6;
 
         ComPtr<ID3D12Resource> CreateUAVTexture(ID3D12Device* Device, u32 Width, u32 Height,
                                                 DXGI_FORMAT Format) {
@@ -40,7 +44,12 @@ namespace Smile {
     void FReSTIRDI::Initialize(ID3D12Device* Device) {
         InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_6.cso",
                                       kInitialSRVs, kInitialUAVs, false);
-        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso", kSpatialSRVs, 1, true);
+        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso",
+                              kSpatialSRVs, kSpatialUAVs, true);
+        NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
+                              kNrdPackSRVs, kNrdPackUAVs, false);
+        NrdCompositePSO.Initialize(Device, "ReSTIRDINrdComposite.cs_6_6.cso",
+                                   kNrdCompositeSRVs, 1, false);
         CreateConstantBuffer(Device);
         Initialized = true;
     }
@@ -49,7 +58,12 @@ namespace Smile {
         if (!Initialized) return;
         InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_6.cso",
                                       kInitialSRVs, kInitialUAVs, false);
-        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso", kSpatialSRVs, 1, true);
+        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso",
+                              kSpatialSRVs, kSpatialUAVs, true);
+        NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
+                              kNrdPackSRVs, kNrdPackUAVs, false);
+        NrdCompositePSO.Initialize(Device, "ReSTIRDINrdComposite.cs_6_6.cso",
+                                   kNrdCompositeSRVs, 1, false);
     }
 
     void FReSTIRDI::CreateConstantBuffer(ID3D12Device* Device) {
@@ -81,6 +95,13 @@ namespace Smile {
             if (Slot != kInvalidSlot) { SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
         };
         Free(OutSRV, 1); Free(OutUAV, 1);
+        Free(RawDiffuseSRV, 1); Free(RawDiffuseUAV, 1);
+        Free(RawSpecularSRV, 1); Free(RawSpecularUAV, 1);
+        Free(SpatialUAVTable, kSpatialUAVs);
+        Free(NrdPackSrvTable, kNrdPackSRVs);
+        Free(NrdPackUavTable, kNrdPackUAVs);
+        Free(NrdCompositeSrvTable, kNrdCompositeSRVs);
+        Free(NrdOutDiffuseSRV, 1); Free(NrdOutSpecularSRV, 1);
         for (u32 p = 0; p < kParityCount; ++p) {
             Free(ResASRV[p], 1); Free(ResBSRV[p], 1);
             Free(ResAUAV[p], 1); Free(ResBUAV[p], 1);
@@ -92,8 +113,9 @@ namespace Smile {
             ResA[p].Reset(); ResB[p].Reset();
             ResAState[p] = ResBState[p] = D3D12_RESOURCE_STATE_COMMON;
         }
-        Output.Reset();
-        OutputState = D3D12_RESOURCE_STATE_COMMON;
+        Output.Reset(); RawDiffuse.Reset(); RawSpecular.Reset();
+        OutputState = RawDiffuseState = RawSpecularState = D3D12_RESOURCE_STATE_COMMON;
+        NrdReady = false;
         Ready = false;
     }
 
@@ -114,6 +136,8 @@ namespace Smile {
 
         Width = NewWidth; Height = NewHeight;
         Output = CreateUAVTexture(Device, Width, Height, kOutputFormat);
+        RawDiffuse = CreateUAVTexture(Device, Width, Height, kOutputFormat);
+        RawSpecular = CreateUAVTexture(Device, Width, Height, kOutputFormat);
         for (u32 p = 0; p < kParityCount; ++p) {
             ResA[p] = CreateUAVTexture(Device, Width, Height, kResAFormat);
             ResB[p] = CreateUAVTexture(Device, Width, Height, kResBFormat);
@@ -134,6 +158,8 @@ namespace Smile {
             SRVHeap.CreateUAV(Device, Resource, U, UAV);
         };
         MakeViews(Output.Get(), kOutputFormat, OutSRV, OutUAV);
+        MakeViews(RawDiffuse.Get(), kOutputFormat, RawDiffuseSRV, RawDiffuseUAV);
+        MakeViews(RawSpecular.Get(), kOutputFormat, RawSpecularSRV, RawSpecularUAV);
         for (u32 p = 0; p < kParityCount; ++p) {
             MakeViews(ResA[p].Get(), kResAFormat, ResASRV[p], ResAUAV[p]);
             MakeViews(ResB[p].Get(), kResBFormat, ResBSRV[p], ResBUAV[p]);
@@ -151,6 +177,11 @@ namespace Smile {
             Device->CopyDescriptors(1, &Dst, &DstCount, Count, Src, SrcCounts,
                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         };
+
+        SpatialUAVTable = SRVHeap.Allocate(kSpatialUAVs);
+        const u32 SpatialUAVSlots[kSpatialUAVs] = {
+            OutUAV, RawDiffuseUAV, RawSpecularUAV };
+        CopyTable(SpatialUAVTable, SpatialUAVSlots, kSpatialUAVs);
 
         for (u32 p = 0; p < kParityCount; ++p) {
             const u32 Prev = 1u - p;
@@ -178,7 +209,81 @@ namespace Smile {
         Ready = true;
     }
 
+    void FReSTIRDI::SetupNrdPack(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                 u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
+                                 u32 DepthSlot, u32 VelocitySlot,
+                                 ID3D12Resource* NrdInViewZ,
+                                 ID3D12Resource* NrdInNormalRough,
+                                 ID3D12Resource* NrdInMv,
+                                 ID3D12Resource* NrdInDiffRadHit,
+                                 ID3D12Resource* NrdInSpecRadHit,
+                                 ID3D12Resource* NrdOutDiff,
+                                 ID3D12Resource* NrdOutSpec) {
+        NrdReady = false;
+        if (!Ready || !NrdInViewZ || !NrdInNormalRough || !NrdInMv ||
+            !NrdInDiffRadHit || !NrdInSpecRadHit || !NrdOutDiff || !NrdOutSpec ||
+            GBufferASlot == kInvalidSlot || GBufferBSlot == kInvalidSlot ||
+            GBufferCSlot == kInvalidSlot || DepthSlot == kInvalidSlot ||
+            VelocitySlot == kInvalidSlot) return;
+
+        auto MakeUAV = [&](ID3D12Resource* Resource, DXGI_FORMAT Format, u32& Slot) {
+            Slot = SRVHeap.Allocate(1);
+            D3D12_UNORDERED_ACCESS_VIEW_DESC U{};
+            U.Format = Format;
+            U.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            SRVHeap.CreateUAV(Device, Resource, U, Slot);
+        };
+        auto MakeSRV = [&](ID3D12Resource* Resource, DXGI_FORMAT Format, u32& Slot) {
+            Slot = SRVHeap.Allocate(1);
+            D3D12_SHADER_RESOURCE_VIEW_DESC S{};
+            S.Format = Format;
+            S.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            S.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            S.Texture2D.MipLevels = 1;
+            SRVHeap.CreateSRV(Device, Resource, S, Slot);
+        };
+        auto CopyTable = [&](u32 DstSlot, const u32* Slots, u32 Count) {
+            D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(DstSlot);
+            D3D12_CPU_DESCRIPTOR_HANDLE Src[7]{};
+            UINT SrcCounts[7]{};
+            for (u32 i = 0; i < Count; ++i) {
+                Src[i] = SRVHeap.CpuHandleStaging(Slots[i]);
+                SrcCounts[i] = 1;
+            }
+            UINT DstCount = Count;
+            Device->CopyDescriptors(1, &Dst, &DstCount, Count, Src, SrcCounts,
+                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        };
+
+        u32 NrdInputUAV[kNrdPackUAVs]{};
+        MakeUAV(NrdInViewZ,       DXGI_FORMAT_R32_FLOAT,             NrdInputUAV[0]);
+        MakeUAV(NrdInNormalRough, DXGI_FORMAT_R10G10B10A2_UNORM,    NrdInputUAV[1]);
+        MakeUAV(NrdInMv,          DXGI_FORMAT_R16G16_FLOAT,          NrdInputUAV[2]);
+        MakeUAV(NrdInDiffRadHit,  DXGI_FORMAT_R16G16B16A16_FLOAT,   NrdInputUAV[3]);
+        MakeUAV(NrdInSpecRadHit,  DXGI_FORMAT_R16G16B16A16_FLOAT,   NrdInputUAV[4]);
+        MakeSRV(NrdOutDiff, DXGI_FORMAT_R16G16B16A16_FLOAT, NrdOutDiffuseSRV);
+        MakeSRV(NrdOutSpec, DXGI_FORMAT_R16G16B16A16_FLOAT, NrdOutSpecularSRV);
+
+        NrdPackSrvTable = SRVHeap.Allocate(kNrdPackSRVs);
+        const u32 PackSRVs[kNrdPackSRVs] = {
+            RawDiffuseSRV, RawSpecularSRV, GBufferASlot, GBufferBSlot, GBufferCSlot,
+            DepthSlot, VelocitySlot };
+        CopyTable(NrdPackSrvTable, PackSRVs, kNrdPackSRVs);
+
+        NrdPackUavTable = SRVHeap.Allocate(kNrdPackUAVs);
+        CopyTable(NrdPackUavTable, NrdInputUAV, kNrdPackUAVs);
+        for (u32& Slot : NrdInputUAV) SRVHeap.Free(Slot, 1);
+
+        NrdCompositeSrvTable = SRVHeap.Allocate(kNrdCompositeSRVs);
+        const u32 CompositeSRVs[kNrdCompositeSRVs] = {
+            NrdOutDiffuseSRV, NrdOutSpecularSRV,
+            GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot };
+        CopyTable(NrdCompositeSrvTable, CompositeSRVs, kNrdCompositeSRVs);
+        NrdReady = true;
+    }
+
     void FReSTIRDI::UpdatePerFrame(u32 NewFrameSlot, const Mat44& InvViewProj,
+                                   const Mat44& View,
                                    const Vec3& CameraPos, u32 NewWidth, u32 NewHeight,
                                    u32 FrameIndex, u32 LightCount, u32 ShadowRayMask,
                                    bool EnableTemporalPermutation) {
@@ -200,6 +305,7 @@ namespace Smile {
                         RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin,
                         RayEps.VisRayEndMargin, FRayEpsilonProfile::kOriginAngularMinRatio };
+        CPU.View = View;
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRDIConstants),
                     &CPU, sizeof(CPU));
     }
@@ -226,6 +332,8 @@ namespace Smile {
         Transition(CL, ResA[P].Get(), ResAState[P], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, ResB[P].Get(), ResBState[P], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, Output.Get(), OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(CL, RawDiffuse.Get(), RawDiffuseState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(CL, RawSpecular.Get(), RawSpecularState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         InitialTemporalPSO.Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr());
@@ -244,11 +352,36 @@ namespace Smile {
         SpatialPSO.Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr());
         CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(SpatialTable[P][FrameSlot]));
-        CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(OutUAV));
+        CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(SpatialUAVTable));
         CL->Dispatch((Width + 7) / 8, (Height + 7) / 8, 1);
 
         Transition(CL, Output.Get(), OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Transition(CL, RawDiffuse.Get(), RawDiffuseState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(CL, RawSpecular.Get(), RawSpecularState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         NeedsClear = false;
         FrameParity = Prev;
+    }
+
+    void FReSTIRDI::RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap) {
+        if (!NrdReady) return;
+        NrdPackPSO.Bind(CL);
+        CL->SetComputeRootConstantBufferView(0, CBAddr());
+        CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(NrdPackSrvTable));
+        CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(NrdPackUavTable));
+        CL->Dispatch((Width + 7) / 8, (Height + 7) / 8, 1);
+    }
+
+    void FReSTIRDI::RecordNrdComposite(ID3D12GraphicsCommandList* CL,
+                                       FTextureSRVHeap& SRVHeap) {
+        if (!NrdReady) return;
+        Transition(CL, Output.Get(), OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        NrdCompositePSO.Bind(CL);
+        CL->SetComputeRootConstantBufferView(0, CBAddr());
+        CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(NrdCompositeSrvTable));
+        CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(OutUAV));
+        CL->Dispatch((Width + 7) / 8, (Height + 7) / 8, 1);
+        Transition(CL, Output.Get(), OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 }
