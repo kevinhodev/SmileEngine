@@ -6,3 +6,6 @@ Card 1.0 Card.qml
 SliderRow 1.0 SliderRow.qml
 Chip 1.0 Chip.qml
 ColorRow 1.0 ColorRow.qml
+ToolTip 1.0 ToolTip.qml
+ToolbarIcon 1.0 ToolbarIcon.qml
+ToolbarButton 1.0 ToolbarButton.qml

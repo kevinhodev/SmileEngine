@@ -403,7 +403,7 @@ namespace SmileEditor {
             { { QStringLiteral("viewportModel"), Viewport } },
             Shell);
         Toolbar->setObjectName("ViewportToolbar");
-        Toolbar->setFixedHeight(36);
+        Toolbar->setFixedHeight(34);
         Toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         Layout->addWidget(Toolbar);
         Layout->addWidget(Viewport, 1);

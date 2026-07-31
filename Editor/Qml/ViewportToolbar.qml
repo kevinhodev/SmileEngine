@@ -6,97 +6,53 @@ import "components" as C
 // exposto pelo C++; ele aplica os modos/toggles diretamente no Renderer.
 Rectangle {
     id: root
-    color: "#141511"
+    color: "#131410"
     implicitWidth: 900
-    implicitHeight: 36
+    implicitHeight: 34
 
     readonly property color textPrimary: "#e6e2d8"
     readonly property color textNormal: "#c8c2b4"
     readonly property color textMuted: "#6c6a61"
     readonly property color blue: "#5b9dff"
-
-    component Chevron: Canvas {
-        id: chevron
-        property color color: root.textMuted
-        implicitWidth: 10
-        implicitHeight: 7
-        onColorChanged: requestPaint()
-        onPaint: {
-            const ctx = getContext("2d")
-            ctx.reset()
-            ctx.strokeStyle = color
-            ctx.lineWidth = 1.35
-            ctx.lineCap = "round"
-            ctx.lineJoin = "round"
-            ctx.beginPath()
-            ctx.moveTo(1.5, 1.5)
-            ctx.lineTo(5, 5)
-            ctx.lineTo(8.5, 1.5)
-            ctx.stroke()
-        }
-    }
-
-    component ToolButton: Rectangle {
-        id: toolButton
-        property string label
-        property bool active: false
-        property bool dropDown: false
-        property string tip: ""
-        signal tapped()
-
-        implicitHeight: 22
-        implicitWidth: labelText.implicitWidth + (dropDown ? 34 : 20)
-        radius: 5
-        color: active ? "#16233f" : (toolHover.hovered ? "#23241d" : "#1b1c17")
-        border.color: active ? "#27406e" : "#2a2b24"
-        border.width: 1
-
-        Text {
-            id: labelText
-            anchors.left: parent.left
-            anchors.leftMargin: 10
-            anchors.verticalCenter: parent.verticalCenter
-            text: toolButton.label
-            color: toolButton.active ? root.blue : root.textNormal
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 11
-        }
-        Chevron {
-            visible: toolButton.dropDown
-            anchors.right: parent.right
-            anchors.rightMargin: 9
-            anchors.verticalCenter: parent.verticalCenter
-            color: toolButton.active ? root.blue : "#9a958a"
-        }
-        HoverHandler { id: toolHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: toolButton.tapped() }
-        ToolTip.visible: toolButton.tip !== "" && toolHover.hovered
-        ToolTip.text: toolButton.tip
-        ToolTip.delay: 500
-    }
+    readonly property bool compact: width < 1040
+    readonly property bool narrow: width < 760
 
     component IconToolButton: Rectangle {
         id: iconButton
-        property string glyph
+        property string iconName
         property string tip: ""
+        property bool active: false
+        property bool enabledVisual: true
+        property bool framed: false
+        property string tipShortcut: ""
         signal tapped()
         implicitWidth: 26
         implicitHeight: 22
         radius: 5
-        color: iconHover.hovered ? "#23241d" : "transparent"
-        border.color: iconHover.hovered ? "#33342c" : "transparent"
-        Text {
+        opacity: enabledVisual ? 1.0 : 0.38
+        color: active ? "#182c4b"
+                      : (iconHover.hovered && enabledVisual ? "#22241e"
+                         : (framed ? "#1a1c17" : "transparent"))
+        border.color: active ? "#315b91"
+                             : (iconHover.hovered && enabledVisual ? "#393b32"
+                                : (framed ? "#2d2f28" : "transparent"))
+        border.width: 1
+        C.ToolbarIcon {
             anchors.centerIn: parent
-            text: iconButton.glyph
-            color: "#9a958a"
-            font.family: "Segoe UI Symbol"
-            font.pixelSize: 14
+            width: 14; height: 14
+            name: iconButton.iconName
+            color: iconButton.active ? "#72adff" : "#a7a397"
         }
-        HoverHandler { id: iconHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: iconButton.tapped() }
-        ToolTip.visible: iconButton.tip !== "" && iconHover.hovered
-        ToolTip.text: iconButton.tip
-        ToolTip.delay: 500
+        HoverHandler {
+            id: iconHover
+            cursorShape: iconButton.enabledVisual ? Qt.PointingHandCursor : Qt.ArrowCursor
+        }
+        TapHandler { enabled: iconButton.enabledVisual; onTapped: iconButton.tapped() }
+        C.ToolTip {
+            active: iconButton.tip !== "" && iconHover.hovered
+            text: iconButton.tip
+            shortcut: iconButton.tipShortcut
+        }
     }
 
     component RadioMark: Item {
@@ -278,36 +234,104 @@ Rectangle {
         }
     }
 
+    // Camada visual apenas. Exceto o seletor Lit, os novos controles serão conectados
+    // progressivamente aos bridges do editor em etapas próprias.
     Row {
         id: leftTools
         anchors.left: parent.left
         anchors.leftMargin: 12
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 8
+        spacing: 3
 
         Row {
+            anchors.verticalCenter: parent.verticalCenter
             spacing: 1
-            IconToolButton { glyph: "＋"; tip: "Adicionar (em breve)" }
-            IconToolButton { glyph: "↻"; tip: "Orbitar câmera (em breve)" }
-            IconToolButton { glyph: "↗"; tip: "Enquadrar seleção (em breve)" }
+            IconToolButton { iconName: "undo"; tip: "Desfazer"; tipShortcut: "Ctrl+Z" }
+            IconToolButton {
+                iconName: "redo"
+                tip: "Nada para refazer"
+                enabledVisual: false
+            }
         }
 
         Rectangle {
             width: 1; height: 18
             anchors.verticalCenter: parent.verticalCenter
-            color: "#2a2b24"
+            color: "#2d2f28"
         }
 
-        ToolButton {
-            width: 104
-            label: "Perspectiva"
-            dropDown: true
-            tip: "Projeção da câmera (em breve)"
+        Item {
+            width: 107; height: 22
+            anchors.verticalCenter: parent.verticalCenter
+            Rectangle {
+                anchors.fill: parent
+                radius: 5
+                color: "#181a15"
+                border.color: "#2d2f28"
+            }
+            Row {
+                anchors.fill: parent
+                spacing: 1
+                IconToolButton { width: 26; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q" }
+                IconToolButton { width: 26; iconName: "move"; active: true; tip: "Mover"; tipShortcut: "W" }
+                IconToolButton { width: 26; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E" }
+                IconToolButton { width: 26; iconName: "scale"; tip: "Escalar"; tipShortcut: "R" }
+            }
         }
-        ToolButton {
+
+        C.ToolbarButton {
+            visible: !root.narrow
+            iconName: "world"
+            label: root.compact ? "" : "Global"
+            dropDown: true
+            tip: "Espaço de transformação: Global"
+        }
+
+        Rectangle {
+            width: 1; height: 18
+            visible: !root.narrow
+            anchors.verticalCenter: parent.verticalCenter
+            color: "#2d2f28"
+        }
+
+        C.ToolbarButton {
+            iconName: "magnet"
+            label: "10 cm"
+            dropDown: true
+            active: true
+            tip: "Snap de movimento: 10 cm"
+        }
+        C.ToolbarButton {
+            visible: !root.compact
+            iconName: "angle"
+            label: "15°"
+            dropDown: true
+            tip: "Snap de rotação: 15°"
+        }
+        C.ToolbarButton {
+            visible: !root.compact
+            iconName: "percent"
+            label: "10%"
+            dropDown: true
+            tip: "Snap de escala: 10%"
+        }
+
+        Rectangle {
+            width: 1; height: 18
+            anchors.verticalCenter: parent.verticalCenter
+            color: "#2d2f28"
+        }
+
+        C.ToolbarButton {
+            iconName: "camera"
+            label: root.compact ? "" : "Perspectiva"
+            dropDown: true
+            tip: "Projeção e vistas da câmera"
+        }
+        C.ToolbarButton {
             id: viewModeButton
-            width: Math.max(60, implicitWidth)
-            label: viewportModel.viewModeLabel
+            iconName: "lit"
+            label: root.compact ? "" : viewportModel.viewModeLabel
             dropDown: true
             active: true
             onTapped: {
@@ -315,26 +339,48 @@ Rectangle {
                 else viewModesPopup.open()
             }
         }
-        ToolButton {
-            width: 84
+        C.ToolbarButton {
+            visible: !root.narrow
+            iconName: "eye"
             label: "Mostrar"
             dropDown: true
-            tip: "Filtros de visibilidade (em breve)"
+            tip: "Filtros de visibilidade"
         }
     }
 
     Row {
+        id: rightTools
         anchors.right: parent.right
         anchors.rightMargin: 12
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 6
-        ToolButton {
-            width: 84
-            label: "▣  4,0"
-            tip: "Velocidade da câmera (em breve)"
+        spacing: root.compact ? 2 : 4
+
+        IconToolButton {
+            visible: !root.narrow
+            iconName: "focus"
+            tip: "Enquadrar seleção"
+            tipShortcut: "F"
         }
-        IconToolButton { glyph: "▦"; tip: "Grade (em breve)" }
-        IconToolButton { glyph: "⛶"; tip: "Maximizar viewport (em breve)" }
+        C.ToolbarButton {
+            iconName: "speed"
+            label: root.compact ? "" : "4,0×"
+            dropDown: true
+            tip: "Velocidade da câmera: 4,0×"
+        }
+        C.ToolbarButton {
+            visible: !root.narrow
+            iconName: "stats"
+            label: root.compact ? "" : "Stats"
+            tip: "Estatísticas de desempenho"
+        }
+        IconToolButton {
+            iconName: "grid"
+            active: true
+            framed: true
+            tip: "Grade visível"
+        }
+        IconToolButton { iconName: "maximize"; tip: "Maximizar viewport" }
+        IconToolButton { iconName: "more"; tip: "Mais opções" }
     }
 
     Rectangle {
@@ -342,13 +388,13 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: "#23241d"
+        color: "#292b24"
     }
 
     Popup {
         id: viewModesPopup
         popupType: Popup.Window
-        x: viewModeButton.x + leftTools.x
+        x: leftTools.x + viewModeButton.x
         y: root.height
         width: 280
         height: 452
@@ -506,9 +552,10 @@ Rectangle {
                         viewportModel.RequestSettings()
                     }
                 }
-                ToolTip.visible: settingsHover.hovered
-                ToolTip.text: "Abrir configurações de renderização"
-                ToolTip.delay: 500
+                C.ToolTip {
+                    active: settingsHover.hovered
+                    text: "Abrir configurações de renderização"
+                }
             }
         }
     }
