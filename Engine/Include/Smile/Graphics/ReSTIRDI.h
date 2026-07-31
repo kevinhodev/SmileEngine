@@ -30,7 +30,7 @@ namespace Smile {
     // ReSTIR DI de superficie primaria para TODAS as luzes locais analiticas. Pass A gera
     // candidatas uniformes e combina o historico; Pass B combina vizinhos e traca no maximo um
     // shadow ray. Materiais emissivos ainda nao sao candidatos: isso exige extrair mesh lights e
-    // suas PDFs. O sol fica no caminho dedicado do deferred. O DI-lite permanece separado para A/B.
+    // suas PDFs. O sol fica no caminho dedicado do deferred; desligado, o fallback e o loop raster.
     class FReSTIRDI {
     public:
         void Initialize(ID3D12Device* Device);

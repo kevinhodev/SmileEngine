@@ -24,22 +24,20 @@ cbuffer FrameCB : register(b0) {
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     float4 LightParams;        // x = nº de luzes puntuais no buffer t17,
                                // y = 1/res do atlas de sombra local, z = bias (NDC z),
-                               // w = modo local: 0 legado, 1 DI-lite parcial, 2 ReSTIR DI integral
+                               // w = direta local: 0 raster, 1 ReSTIR DI
     float4 LightParams2;       // x = 1/res do cube shadow (point), y = near das faces, zw = -
     float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem
                                // teto), zw = reservados
 };
 
-// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z = fade do slot de
-// sombra; .w = fracao da luz que o DI-lite sombreia por raio (era reserva p/ source length da F4 e
-// deixou de ser). O laco de luzes locais SUBTRAI esse .w da visibilidade base — e o invariante que
-// mantem a energia igual com a chave ligada ou desligada, entao o campo NAO esta livre.
+// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z e o fade do slot de
+// sombra; .w preserva o pedido CastShadows para o ReSTIR DI, independentemente do orcamento.
 struct FGPULight {
     float4 PosInvRadius;      // xyz = posicao, w = 1/raio de atenuacao
     float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulb (distancia minima)
     float4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
     float4 SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem),
-                              // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia)
+                              // z = fade do slot [0..1], w = CastShadows (0/1)
     row_major float4x4 ShadowMatrix; // world -> UVZ do slice (dividir por w: perspectiva)
 };
 
@@ -75,9 +73,8 @@ float LocalShadowPCF(float2 uv, float refZ, float slice) {
     return vis * (1.0f / 9.0f);
 }
 
-// AreaSphereSpecular vive no BRDF.hlsli, junto da BRDF_DirectArea que consome a saida dela. Estava
-// aqui e mudou quando o DI-lite passou a precisar do MESMO especular de area para a luz excedente:
-// duas definicoes divergiriam em silencio, que e o modo de falha narrado no MaterialCB.hlsli.
+// AreaSphereSpecular vive no BRDF.hlsli, junto da BRDF_DirectArea que consome a saida dela. O
+// deferred e o ReSTIR DI precisam do mesmo especular de area para preservar a aparencia das luzes.
 
 // Sombra de POINT: o vetor luz->pixel escolhe a face do cubo no hardware; a profundidade de
 // referencia usa o EIXO DOMINANTE (viewZ da face que vai responder — mesma projecao de 90
@@ -130,8 +127,8 @@ Texture2D<float>  SceneAO             : register(t14);
 // ReSTIR GI: irradiancia difusa por pixel (final-gather sobre o DDGI). Ativa via ReflectionParams.w.
 // Quando ligada, substitui o termo difuso do DDGI; o DDGI segue como cache no trace (multi-bounce).
 Texture2D<float4> ReSTIRGITex         : register(t16);
-// Direta local resolvida fora do PS: parcela DI-lite no modo 1, conjunto integral ReSTIR no modo 2.
-// Ja chega com BRDF e visibilidade aplicadas; LightParams.w seleciona produtor e forma de composite.
+// Direta local integral resolvida pelo ReSTIR DI. Ja chega com BRDF e visibilidade aplicadas;
+// LightParams.w escolhe entre este alvo e o loop raster abaixo.
 Texture2D<float4> DirectLocalTex      : register(t20);
 
 SamplerState IBLSampler : register(s1); 
@@ -314,9 +311,8 @@ float4 main(VSOutput input) : SV_Target {
     // luz nao estoura a branco) + mascara de cone quadratica no spot (UE/Flax identicas).
     // SEM sombra na F1 (luz vaza parede) — sombras locais chegam na F3.
     {
-        uint NumLights = (uint)LightParams.x;
-        // mode 2 = ReSTIR DI: resolve o conjunto local inteiro; o loop legado nao participa.
-        if (LightParams.w < 1.5f) {
+        // ReSTIR DI resolve o conjunto local inteiro; o loop raster nao participa.
+        uint NumLights = (LightParams.w < 0.5f) ? (uint)LightParams.x : 0u;
         [loop]
         for (uint li = 0; li < NumLights; ++li) {
             FGPULight Lp = Lights[li];
@@ -377,16 +373,7 @@ float4 main(VSOutput input) : SV_Target {
                 // enquanto o fade cai, e o mapa some suave.
                 baseVis = lerp(1.0f, shadow, Lp.SpotParams.z);
             }
-            // Fracao que o DI-lite ja sombreou por raio, num alvo proprio (somado no fim). SUBTRAI
-            // da visibilidade base em vez de multiplicar por (1-w): o baseVis JA contem o fade,
-            // entao multiplicar aplicaria o fade duas vezes. Nao vai a negativo — com slice,
-            // baseVis = (1-f) + f*shadow >= (1-f) == w; sem slice, baseVis = 1 >= w.
-            //   DI-lite off .................. rtShare 0    -> baseVis, identico a antes
-            //   com slice, fade f ............ w = 1-f       -> f * shadow
-            //   sem slice, quer sombra ....... w = 1         -> 0 (o alvo do DI-lite responde)
-            //   CastShadows = false .......... w = 0         -> 1 (segue sem sombra, por escolha)
-            const float rtShare = (LightParams.w > 0.5f) ? Lp.SpotParams.w : 0.0f;
-            Atten *= (baseVis - rtShare);
+            Atten *= baseVis;
             if (Atten <= 0.0f) continue;
 
             // F4: especular de area — SourceRadius alarga o highlight (representative point);
@@ -398,10 +385,6 @@ float4 main(VSOutput input) : SV_Target {
                                         Lp.ColorSourceRadius.rgb * Atten,
                                         DiffuseColor, SpecularColor, Roughness, a2,
                                         TransColor);
-        }
-
-        // Modo 1 complementa o rtShare subtraido acima; modo 2 fornece o conjunto local inteiro,
-        // pois o loop foi pulado. Nos dois casos ha um unico valor por pixel ja resolvido.
         }
         if (LightParams.w > 0.5f)
             Lighting += DirectLocalTex.Load(int3(px, 0)).rgb;

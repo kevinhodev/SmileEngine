@@ -1,10 +1,8 @@
 #ifndef SMILE_RESTIR_DI_COMMON_HLSLI
 #define SMILE_RESTIR_DI_COMMON_HLSLI
 
-// Contrato do LightBuffer do deferred. O ReSTIR DI amostra o conjunto LOCAL inteiro; SpotParams.w
-// continua pertencendo ao DI-lite enquanto os dois caminhos coexistem. Para saber se o artista
-// pediu sombra, use DI_IsShadowCaster: uma luz com slice tem y >= 0; uma que perdeu o orçamento
-// conserva w > 0; CastShadows=false e o unico caso y < 0 && w == 0.
+// Contrato do LightBuffer do deferred. O ReSTIR DI amostra o conjunto LOCAL inteiro;
+// SpotParams.w preserva o pedido CastShadows do artista, tenha a luz recebido slice raster ou nao.
 struct FGPULightFull {
     float4 PosInvRadius;
     float4 ColorSourceRadius;
@@ -102,7 +100,7 @@ void DI_StoreReservoir(ReSTIRDIReservoir r, float age,
 }
 
 bool DI_IsShadowCaster(FGPULightFull light) {
-    return light.SpotParams.y >= 0.0f || light.SpotParams.w > 0.0f;
+    return light.SpotParams.w > 0.5f;
 }
 
 // Avalia a target PDF nao normalizada do ReSTIR: luminancia da contribuicao SEM visibilidade.

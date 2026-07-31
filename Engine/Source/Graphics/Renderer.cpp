@@ -184,7 +184,6 @@ namespace Smile {
             Nrd.Initialize(Device.Native());
             NrdDirect.Initialize(Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
             Reflections.Initialize(Device.Native());
-            DILite.Initialize(Device.Native());
             ReSTIRDI.Initialize(Device.Native());
             DDGIDebugPass.Initialize(Device.Native(),
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
@@ -344,10 +343,10 @@ namespace Smile {
             SRVHeap.CreateSRV(Device.Native(), GILightBuffer.Get(), Srv, GILightSRVSlot[i]);
         }
 
-        // Idem para o LightBuffer do deferred (FGPULight, com slice/fade/fracao de RT). O deferred
-        // o le como root SRV e nunca precisou de slot; o DI-lite le por tabela de descritores.
+        // Idem para o LightBuffer do deferred (FGPULight, com slice/fade e intencao de sombra). O
+        // deferred o le como root SRV; o ReSTIR DI o le pela propria tabela de descritores.
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i) {
-            DILightSRVSlot[i] = SRVHeap.Allocate(1);
+            DirectLightSRVSlot[i] = SRVHeap.Allocate(1);
             D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
             Srv.Format                     = DXGI_FORMAT_UNKNOWN;
             Srv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -355,7 +354,7 @@ namespace Smile {
             Srv.Buffer.FirstElement        = static_cast<UINT64>(i) * kMaxLights;
             Srv.Buffer.NumElements         = kMaxLights;
             Srv.Buffer.StructureByteStride = sizeof(FGPULight);
-            SRVHeap.CreateSRV(Device.Native(), LightBuffer.Get(), Srv, DILightSRVSlot[i]);
+            SRVHeap.CreateSRV(Device.Native(), LightBuffer.Get(), Srv, DirectLightSRVSlot[i]);
         }
 
         RecreateObjectCB();
@@ -473,16 +472,12 @@ namespace Smile {
         if (!Device.RaytracingSupported()) return;
         if (!GBuffer.IsInitialized() || DepthSRVSlot == kInvalidSlot) return;
 
-        // Direta local usa o snapshot InstanceGeo que hoje e propriedade do DDGI, mas nao usa
-        // atlas/probes. Monte e, se o snapshot ainda nao existe, deixe os passes degenerarem para
-        // not-ready por conta propria. Assim um DDGI sem volume nunca deixa um alvo direto antigo
-        // aparentemente valido depois de troca de cena.
-        DILite.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
-            GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), DepthSRVSlot,
-            RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(), DILightSRVSlot);
+        // A direta local usa o snapshot InstanceGeo que hoje e propriedade do DDGI, mas nao usa
+        // atlas/probes. Se o snapshot ainda nao existe, o passe degenera para not-ready por conta
+        // propria; assim uma troca de cena nunca deixa um alvo direto antigo aparentemente valido.
         ReSTIRDI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), DepthSRVSlot,
-            VelocitySRVSlot, RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(), DILightSRVSlot);
+            VelocitySRVSlot, RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(), DirectLightSRVSlot);
         // A direta nao depende do volume DDGI. Mantenha sua instancia RELAX e o pack antes do
         // early-out abaixo para o ReSTIR DI continuar denoisado mesmo numa cena sem probes.
         NrdDirect.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
@@ -848,11 +843,6 @@ namespace Smile {
         Terrain.RecreatePSOs(Device.Native());
         if (Device.RaytracingSupported()) {
             DDGIDebugPass.Recreate(Device.Native(), RT, DS);
-            // Sem isto, o reload COMPLETO (e o fallback de stem nao mapeado) logava sucesso e
-            // deixava o DI-lite rodando o CSO antigo — a ferramenta mentiria justo no milestone
-            // que vai iterar neste shader. Os outros passes de compute (ReSTIR, reflexoes, trace
-            // do DDGI) seguem fora do reload; quando um deles precisar, e o mesmo padrao.
-            DILite.RecreatePSO(Device.Native());
             ReSTIRDI.RecreatePSO(Device.Native());
             ReGIR.RecreatePSO(Device.Native());
         }
@@ -894,8 +884,6 @@ namespace Smile {
                     "DDGIDebugStats.cs", "DDGIDebugPoint.cs" },
                   [&] { if (Device.RaytracingSupported())
                             DDGIDebugPass.Recreate(Dev, RT, DS); } },
-                { { "DILite.cs" },
-                  [&] { if (Device.RaytracingSupported()) DILite.RecreatePSO(Dev); } },
                 { { "ReSTIRDIInitialTemporal.cs", "ReSTIRDISpatial.cs",
                     "ReSTIRDINrdPack.cs", "ReSTIRDINrdComposite.cs" },
                   [&] { if (Device.RaytracingSupported()) ReSTIRDI.RecreatePSO(Dev); } },
@@ -2066,10 +2054,8 @@ namespace Smile {
                     const f32 CosOuter  = std::cos(OuterDeg * ToRad);
                     const f32 CosInner  = std::cos(InnerDeg * ToRad);
                     G.DirCosOuter = { D.X, D.Y, D.Z, CosOuter };
-                    // w = fracao do DI-lite (ver FGPULight). Comeca em 1 quando a luz QUER sombra:
-                    // se ela ganhar slice, o bloco de resolucao abaixo baixa p/ 1 - fade. Com
-                    // CastShadows = false fica 0 — sem-sombra por escolha do artista, e o raio nao
-                    // deve desfazer isso.
+                    // w preserva a intencao do artista independentemente do orcamento de slices.
+                    // O raster usa y/z; o ReSTIR DI usa w para decidir se traca shadow ray.
                     G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
                                       -1.0f, 0.0f, L.CastShadows ? 1.0f : 0.0f };
                     if (L.CastShadows && LocalShadows.IsInitialized()) {
@@ -2147,7 +2133,6 @@ namespace Smile {
                 G.ShadowMatrix = ToShadowUV(LVP);
                 G.SpotParams.Y = static_cast<f32>(Slice);
                 G.SpotParams.Z = LocalShadows.SpotFadeAt(Slice);
-                G.SpotParams.W = 1.0f - G.SpotParams.Z; // complemento do fade p/ o DI-lite
                 LocalShadowJobs.push_back({ LVP, L.Position, FarP, Slice });
             }
 
@@ -2172,7 +2157,6 @@ namespace Smile {
                     G.ShadowMatrix = ToShadowUV(LVP);
                     G.SpotParams.Y = static_cast<f32>(i);
                     G.SpotParams.Z = LocalShadows.SpotFadeAt(i);
-                    G.SpotParams.W = 1.0f - G.SpotParams.Z; // idem (spot em fade-out)
                     LocalShadowJobs.push_back({ LVP, Lr.Position, FarP, i });
                     break;
                 }
@@ -2196,7 +2180,6 @@ namespace Smile {
                 FGPULight& G   = DstLights[CubeCands[c].Gpu];
                 G.SpotParams.Y = static_cast<f32>(Cube);
                 G.SpotParams.Z = LocalShadows.CubeFadeAt(Cube);
-                G.SpotParams.W = 1.0f - G.SpotParams.Z; // idem (cube ativo)
                 LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, Cube });
             }
 
@@ -2213,7 +2196,6 @@ namespace Smile {
                     FGPULight& G   = DstLights[C.Gpu];
                     G.SpotParams.Y = static_cast<f32>(i);
                     G.SpotParams.Z = LocalShadows.CubeFadeAt(i);
-                    G.SpotParams.W = 1.0f - G.SpotParams.Z; // idem (cube em fade-out)
                     LocalCubeJobs.push_back({ Lr.Position, Lr.AttenuationRadius, i });
                     break;
                 }
@@ -2225,10 +2207,9 @@ namespace Smile {
                 NrdDirect.InvalidateHistory();
             FrameLightSetSignature = NewLightSetSignature;
             ReSTIRDI.SetLightSetSignature(FrameLightSetSignature);
-            // .w escolhe um unico produtor da direta local. O MESMO predicado manda no dispatch e
-            // no deferred: modo 1 subtrai/soma a parcela DI-lite; modo 2 substitui o loop inteiro.
-            // Divergir aqui apagaria ou dobraria luz.
-            const f32 DirectLocalMode = ReSTIRDIActive() ? 2.0f : (DILiteActive() ? 1.0f : 0.0f);
+            // Um bit escolhe o produtor da direta local: raster ou ReSTIR DI. O mesmo predicado
+            // manda no dispatch e no deferred; divergir aqui apagaria ou dobraria luz.
+            const f32 DirectLocalMode = ReSTIRDIActiveFrame ? 1.0f : 0.0f;
             MappedCB->LightParams  = { static_cast<f32>(NumLights),
                                        1.0f / static_cast<f32>(FLocalShadows::kResolution),
                                        LocalShadows.GetDepthBias(),
@@ -2682,10 +2663,9 @@ namespace Smile {
                 Batch.TransitionTracked(VelocityBuffer.Get(), VelocityState, DeferredReadState);
             Batch.Flush(CommandList);
 
-            // Direta local por compute roda ANTES do deferred. DeferredReadState inclui NON_PIXEL,
-            // exigido para G-buffer/depth, e o alvo precisa estar pronto quando o PS o somar. Um
-            // unico modo manda no dispatch e no gate do shader: divergir dobra ou apaga a luz.
-            const bool DILiteOn = !ReSTIRDIOn && DILiteActive();
+            // ReSTIR DI roda ANTES do deferred. DeferredReadState inclui NON_PIXEL, exigido para
+            // G-buffer/depth, e o alvo precisa estar pronto quando o PS o somar. Um unico modo
+            // manda no dispatch e no gate do shader: divergir dobra ou apaga a luz.
             if (ReSTIRDIOn) {
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
@@ -2718,16 +2698,6 @@ namespace Smile {
                                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 RestoreVelocity.Flush(CommandList);
             }
-            if (DILiteOn) {
-                FGpuScope Scope(GpuProfiler, CommandList, "DI-lite (luzes sem slot)");
-                DILite.SetRayEpsilons(RayEps);
-                DILite.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
-                                      RenderWidth(), RenderHeight(), FrameIndex,
-                                      FrameLightCount, kRTMaskShadowFull);
-                DILite.RecordDispatch(CommandList, SRVHeap);
-                DILite.TransitionForRead(CommandList);
-            }
-
             auto SceneRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr); 
             CommandList->RSSetViewports(1, &Viewport);
@@ -2757,7 +2727,7 @@ namespace Smile {
                 // o t16 do ReSTIR e o t14 do AO fazem: a root sig exige a tabela ligada mesmo que o
                 // shader nao a leia (LightParams.w = 0 fecha a leitura).
                 const u32 DirectLocalTable = ReSTIRDIOn ? ReSTIRDI.OutputSRVSlot()
-                    : (DILiteOn ? DILite.OutputSRVSlot() : IBLTableStart);
+                                                        : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(12, SRVHeap.GpuHandle(DirectLocalTable));
             }
             CommandList->SetGraphicsRootShaderResourceView(

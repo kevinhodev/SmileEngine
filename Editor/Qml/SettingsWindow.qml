@@ -2677,68 +2677,9 @@ Rectangle {
                 }
 
                 Card {
-                    id: diLiteCard
-                    width: parent.width
-                    title: "Sombra por raio nas luzes sem orçamento (DI-lite)"
-                    height: diLabel.y + diLabel.height + contentPadding + 8
-
-                    Text {
-                        id: diHelper
-                        x: 20
-                        y: diLiteCard.headerHeight + diLiteCard.contentPadding
-                        width: parent.width - 40
-                        wrapMode: Text.WordWrap
-                        text: "O orçamento de shadow map é fixo: 8 spots e 4 points por quadro. " +
-                              "A luz que não ganha slice continua iluminando, mas SEM oclusão " +
-                              "nenhuma — vaza parede. Aumentar o orçamento custa VRAM e um passe " +
-                              "de rasterização por luz.\n\n" +
-                              "Ligado, essas luzes ganham sombra por ray tracing com UM raio por " +
-                              "PIXEL, não por luz: todas as excedentes entram num sorteio " +
-                              "ponderado, uma vence, e um único raio mede a visibilidade dela. O " +
-                              "estimador devolve a contribuição do conjunto sem viés.\n\n" +
-                              "A luz com slice não muda de caminho, e a marcada para não projetar " +
-                              "sombra continua sem — a divisão é por luz, e o quadro inteiro " +
-                              "soma sempre a mesma energia.\n\n" +
-                              "DESLIGADO por padrão: o sinal é de um raio por pixel, então tem " +
-                              "ruído de visibilidade. Sob DLSS Ray Reconstruction é o que a rede " +
-                               "espera receber; sob NRD ele não passa por denoiser nenhum, porque " +
-                               "o NRD trata GI e reflexão, não este alvo. O ReSTIR DI experimental " +
-                               "abaixo já acrescenta reuso temporal e espacial para A/B.\n\n" +
-                              "Quando há excedente: os dois orçamentos são INDEPENDENTES, então " +
-                              "basta passar de 8 spots OU de 4 points — contando só os visíveis e " +
-                              "com \"projeta sombras\" ligado. Não é o total de luzes: 8 spots e " +
-                              "4 points não estouram nada, e 9 spots estouram mesmo sem nenhum " +
-                              "point na cena.\n\n" +
-                              "Onde olhar: a luz que ficou sem slice — a sombra dela aparece. " +
-                              "Costumam ser as mais distantes, porque a seleção do orçamento " +
-                              "ranqueia por influência na câmera."
-                        color: root.textSecondary
-                        font.family: C.Theme.fontFamily
-                        font.pixelSize: 11
-                        lineHeight: 1.35
-                    }
-                    Text {
-                        id: diLabel
-                        x: 20
-                        y: diHelper.y + diHelper.height + 18
-                        text: "DI-lite"
-                        color: root.textNormal
-                        font.family: C.Theme.fontFamily
-                        font.pixelSize: 13
-                    }
-                    Toggle {
-                        id: diToggle
-                        anchors.right: parent.right; anchors.rightMargin: 20
-                        y: diLabel.y - 6
-                        checked: viewportModel.diLite
-                        onToggled: viewportModel.ToggleDILite()
-                    }
-                }
-
-                Card {
                     id: restirDICard
                     width: parent.width
-                    title: "ReSTIR DI experimental"
+                    title: "ReSTIR DI — direta local"
                     height: restirDILabel.y + restirDILabel.height + contentPadding + 8
 
                     Text {
@@ -2750,9 +2691,10 @@ Rectangle {
                         text: "Substitui o loop inteiro de luzes locais analíticas por 8 candidatas uniformes " +
                               "por pixel, reuso temporal e 4 vizinhos espaciais. Apenas a amostra " +
                               "final dispara shadow ray; sol e lua continuam no caminho dedicado.\n\n" +
-                              "O DI-lite permanece como referência A/B e os dois modos são " +
-                              "mutuamente exclusivos. Default OFF enquanto a integração direta " +
-                              "com o NRD ainda não estiver fechada."
+                              "Ligado, substitui integralmente a direta local raster e usa uma " +
+                              "instância ReLAX dedicada sob NRD; sob Ray Reconstruction entrega " +
+                              "o sinal cru. Desligado, o deferred volta ao loop raster com os " +
+                              "shadow maps locais."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11

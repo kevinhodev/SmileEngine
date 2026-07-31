@@ -146,9 +146,8 @@ float3 BRDF_Direct(float3 N, float3 V, float3 L, float3 Radiance,
 // devolve a normalizacao de energia do lobo alargado (sem ela o highlight de fonte grande estoura).
 // Difuso/atenuacao/sombra seguem usando o CENTRO.
 //
-// Mora aqui, e nao no DeferredLighting.ps, porque tem DOIS consumidores: o loop de luzes locais do
-// deferred e o DI-lite (que sombreia a luz excedente e precisa do mesmo especular, senao a luz
-// muda de aparencia ao cruzar a fronteira do orcamento de shadow map).
+// Mora aqui, e nao no DeferredLighting.ps, porque tem DOIS consumidores: o loop raster de luzes
+// locais e o ReSTIR DI. Uma unica definicao impede que a aparencia da luz mude ao trocar o caminho.
 float AreaSphereSpecular(float SourceRadius, float Roughness, float3 ToLightCenter,
                          float3 V, float3 N, out float3 Ls) {
     float  m = Roughness * Roughness;

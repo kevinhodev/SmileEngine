@@ -136,18 +136,18 @@ namespace Smile {
         RootParams[11].DescriptorTable.pDescriptorRanges   = &LocalShadowRange;
         RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // Direta local por compute (t20): DI-lite parcial ou ReSTIR DI integral, full-res. Mesma
-        // forma de t16: tabela de 1 SRV; os outros PSOs nao referenciam t20.
-        D3D12_DESCRIPTOR_RANGE DILiteRange{};
-        DILiteRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        DILiteRange.NumDescriptors                    = 1;
-        DILiteRange.BaseShaderRegister                = 20;
-        DILiteRange.RegisterSpace                     = 0;
-        DILiteRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        // Direta local integral do ReSTIR DI (t20), full-res. Mesma forma de t16: tabela de
+        // 1 SRV; os outros PSOs nao referenciam t20.
+        D3D12_DESCRIPTOR_RANGE DirectLocalRange{};
+        DirectLocalRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DirectLocalRange.NumDescriptors                    = 1;
+        DirectLocalRange.BaseShaderRegister                = 20;
+        DirectLocalRange.RegisterSpace                     = 0;
+        DirectLocalRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
         RootParams[12].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[12].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[12].DescriptorTable.pDescriptorRanges   = &DILiteRange;
+        RootParams[12].DescriptorTable.pDescriptorRanges   = &DirectLocalRange;
         RootParams[12].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};

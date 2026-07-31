@@ -76,7 +76,6 @@ uint GGX_XXHash32(uint4 p) {
 #define SMILE_RNG_SPATIAL_TAP   4000u // + i: offset do i-esimo vizinho do reuso espacial
 #define SMILE_RNG_REFL_GLOSSY   5000u // VNDF da reflexao glossy
 #define SMILE_RNG_REFL_MIRROR   6000u // VNDF do passe mirror
-#define SMILE_RNG_DI_LITE       7000u // selecao do WRS no DI-lite (luz local sem slot de sombra)
 #define SMILE_RNG_DI_INITIAL    8000u // proposta uniforme das candidatas iniciais do ReSTIR DI
 #define SMILE_RNG_DI_TEMPORAL   9000u // WRS inicial + temporal do ReSTIR DI
 #define SMILE_RNG_DI_SPATIAL   10000u // WRS espacial do ReSTIR DI

@@ -1,6 +1,6 @@
 // ReSTIR DI - Pass A: candidatas iniciais uniformes por pixel + reuso temporal.
-// Escreve o reservoir que vira historico. O espacial nao realimenta este buffer: evita acumular o
-// vies do filtro espacial e deixa o DI-lite intacto como referencia A/B durante o bring-up.
+// Escreve o reservoir que vira historico. O espacial nao realimenta este buffer, evitando acumular
+// o vies do filtro espacial no historico temporal.
 
 #include "../GBuffer.hlsli"
 #include "../BRDF.hlsli"

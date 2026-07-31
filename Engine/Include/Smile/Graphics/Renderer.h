@@ -40,7 +40,6 @@
 #include "Smile/Graphics/ReSTIRDI.h"
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
-#include "Smile/Graphics/DILite.h"
 #include "Smile/Graphics/AmbientOcclusion.h"
 #include "Smile/Graphics/HiZOcclusion.h"
 #include "Smile/Graphics/PostProcess.h"
@@ -94,7 +93,7 @@ namespace Smile {
 
         Vec4  LightParams;        // 16 bytes — x = nº de luzes puntuais no buffer t17,
                                   // y = 1/res do atlas de sombra local, z = bias (NDC),
-                                  // w = modo local: 0 legado, 1 DI-lite parcial, 2 ReSTIR DI integral
+                                  // w = direta local: 0 raster, 1 ReSTIR DI
         Vec4  LightParams2;       // 16 bytes — x = 1/res do cube shadow (point), y = near das
                                   // faces do cubo (formula do refZ), zw = -
 
@@ -108,23 +107,15 @@ namespace Smile {
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
-    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes). O SpotParams.w era
-    // reserva p/ source length da F4 e deixou de ser: hoje ele carrega a fracao do DI-lite e
-    // sustenta o invariante de energia entre shadow map e raio — ver o comentario do campo.
+    // (StructuredBuffer t17, root SRV). 4 float4 + Mat44 por luz (128 bytes).
     struct FGPULight {
         Vec4  PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
         Vec4  ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
         Vec4  DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
         Vec4  SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem),
                                  // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia),
-                                 // w = fracao da luz que e responsabilidade do DI-LITE.
-        // INVARIANTE do w, para quem adicionar um sitio novo de atribuicao de slice: ele e o
-        // COMPLEMENTO do fade, w = 1 - z, e vale 0 quando CastShadows e false. Quem escreve z
-        // escreve w na mesma linha — sao quatro sitios hoje (spot ativo, spot em fade-out, cube
-        // ativo, cube em fade-out) e esquecer um faz a luz ser sombreada duas vezes (shadow map
-        // + raio) ou nenhuma. O deferred fica com (1-w) e o DI-lite com w; a soma e a luz inteira.
-        // Nao inferir "e do DI-lite" de y < 0: isso confunde "perdeu o orcamento" com
-        // "CastShadows = false", que e escolha do artista e nao deve ganhar sombra por raio.
+                                 // w = CastShadows pedido pelo artista (0/1). O raster usa y/z;
+                                 // o ReSTIR DI usa w para decidir se emite o shadow ray.
         Mat44 ShadowMatrix;      // world -> UVZ do slice (perspectiva: dividir por w no shader)
     };
 
@@ -497,29 +488,11 @@ namespace Smile {
         }
         bool GetUseReflections() const     { return UseReflections; }
 
-        // DI-lite. UM predicado manda em tudo — dispatch, subtracao no deferred e leitura do alvo:
-        // se a UI dissesse "ligado" mas o passe nao estivesse pronto (sem DXR, antes do resize), o
-        // deferred subtrairia a parcela w de uma luz que ninguem sombreou e a energia desapareceria.
-        bool GetUseDILite() const  { return UseDILite; }
-        bool DILiteActive() const  { return UseDILite && DILite.IsReady(); }
-        void SetUseDILite(bool V) {
-            if (V == UseDILite) return;
-            if (V) UseReSTIRDI = false; // caminhos alternativos da mesma parcela local
-            UseDILite = V;
-            // Muda a direta do opaco: o que acumula sobre ela tem de cair junto.
-            Nrd.InvalidateHistory();
-            RRResetPending  = true;
-            TAARanLastFrame = false;
-        }
-
         bool GetUseReSTIRDI() const { return UseReSTIRDI; }
         bool ReSTIRDIActive() const { return UseReSTIRDI && ReSTIRDI.IsReady(); }
         void SetUseReSTIRDI(bool V) {
             if (V == UseReSTIRDI) return;
-            if (V) {
-                UseDILite = false;
-                ReSTIRDI.InvalidateHistory();
-            }
+            if (V) ReSTIRDI.InvalidateHistory();
             UseReSTIRDI = V;
             NrdDirect.InvalidateHistory();
             Nrd.InvalidateHistory();
@@ -1000,16 +973,12 @@ namespace Smile {
         FReflections     Reflections;
         bool             UseReflections = true;
 
-        // DI-lite: direta das luzes locais SEM slot de shadow map, 1 raio/pixel via WRS.
-        FDILite          DILite;
-        bool             UseDILite = false; // default OFF: o sinal e ruidoso e, sob NRD, nao passa
-                                            // por denoiser nenhum (ver DILite.h)
         FReSTIRDI        ReSTIRDI;
         FNrdDenoiser     NrdDirect; // RELAX dedicado ao DI: historico/tuning nao contaminam GI/refl
         bool             UseReSTIRDI = false; // bring-up: substitui TODA a direta local; default OFF
         // SRV do LightBuffer (FGPULight) por frame em voo. O deferred le esse buffer como root SRV
-        // e por isso nao precisava de slot no heap; os passes de direta local leem por tabela.
-        u32              DILightSRVSlot[FCommandQueue::kFramesInFlight] = { kInvalidSlot, kInvalidSlot };
+        // e por isso nao precisava de slot no heap; o ReSTIR DI le por tabela.
+        u32              DirectLightSRVSlot[FCommandQueue::kFramesInFlight] = { kInvalidSlot, kInvalidSlot };
         // Nº de luzes escritas no LightBuffer deste frame. Sai do bloco de empacotamento para os
         // dispatches de direta local; ler alem traria luz de lixo do frame anterior.
         u32              FrameLightCount = 0;
