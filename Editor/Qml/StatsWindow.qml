@@ -108,43 +108,44 @@ Rectangle {
         height: 48
 
         Rectangle {
-            x: 16
+            x: 18
             anchors.verticalCenter: parent.verticalCenter
-            width: 9
-            height: 9
-            radius: 2
-            color: root.blue
+            width: 12
+            height: 12
+            radius: 3
+            color: "#24344d"
+            border.color: root.blue
+            border.width: 1
+
+            Rectangle {
+                x: 2.25; y: 5
+                width: 1.5; height: 4
+                radius: 0.75
+                color: "#79adff"
+            }
+            Rectangle {
+                x: 5.25; y: 2
+                width: 1.5; height: 7
+                radius: 0.75
+                color: "#79adff"
+            }
+            Rectangle {
+                x: 8.25; y: 7
+                width: 1.5; height: 2
+                radius: 0.75
+                color: "#79adff"
+            }
         }
 
         Text {
             id: titleText
-            x: 37
+            x: 42
             anchors.verticalCenter: parent.verticalCenter
-            text: "Estatísticas"
+            text: "Mini Profiler"
             color: root.textPrimary
             font.family: C.Theme.fontFamily
             font.pixelSize: 14
             font.weight: Font.DemiBold
-        }
-
-        Rectangle {
-            anchors.left: titleText.right
-            anchors.leftMargin: 12
-            anchors.verticalCenter: parent.verticalCenter
-            width: liveLabel.implicitWidth + 16
-            height: 22
-            radius: 11
-            color: "#1d2a1c"
-            border.color: "#35482f"
-            Text {
-                id: liveLabel
-                anchors.centerIn: parent
-                text: "●  AO VIVO"
-                color: root.green
-                font.family: C.Theme.fontFamily
-                font.pixelSize: 9
-                font.weight: Font.DemiBold
-            }
         }
 
         Text {

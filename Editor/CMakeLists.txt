@@ -44,10 +44,25 @@ set(EDITOR_SOURCES
     Source/MaterialsBridge.cpp
 )
 
+# Arquivos de interface aparecem no projeto do Visual Studio para edicao e navegacao.
+# Continuam carregados do disco pelo QmlHost (hot-reload) e copiados no pos-build.
+file(GLOB_RECURSE EDITOR_QML_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.qml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/qmldir"
+)
+file(GLOB_RECURSE EDITOR_QML_ASSETS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.svg"
+)
+set_source_files_properties(${EDITOR_QML_FILES} ${EDITOR_QML_ASSETS}
+    PROPERTIES HEADER_FILE_ONLY TRUE
+)
+
 # WIN32 = subsistema Windows (sem console preto atras)
 qt_add_executable(SmileEditor WIN32
     ${EDITOR_HEADERS}
     ${EDITOR_SOURCES}
+    ${EDITOR_QML_FILES}
+    ${EDITOR_QML_ASSETS}
 )
 
 target_include_directories(SmileEditor
@@ -87,6 +102,9 @@ add_dependencies(SmileEditor Shaders)
 
 # Organizacao no Visual Studio
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${EDITOR_HEADERS} ${EDITOR_SOURCES})
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/Qml" PREFIX "QML"
+    FILES ${EDITOR_QML_FILES} ${EDITOR_QML_ASSETS}
+)
 
 # Pos-build: copia DLLs do Qt para o lado do executavel via windeployqt
 # Necessario para o exe rodar standalone (Qt6Core.dll, Qt6Gui.dll, plataformas, estilos, etc.)

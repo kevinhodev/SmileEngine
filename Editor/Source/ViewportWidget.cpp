@@ -238,13 +238,10 @@ namespace SmileEditor {
 
         const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
         const double GiB = 1024.0 * 1024.0 * 1024.0;
-        const double Pct = VM.LocalBudget > 0
-            ? 100.0 * static_cast<double>(VM.LocalUsage) / static_cast<double>(VM.LocalBudget)
-            : 0.0;
         return Loc.toString(static_cast<double>(VM.LocalUsage) / GiB, 'f', 2) +
                QStringLiteral(" / ") +
                Loc.toString(static_cast<double>(VM.LocalBudget) / GiB, 'f', 1) +
-               QStringLiteral(" GB (") + Loc.toString(Pct, 'f', 0) + QStringLiteral("%)");
+               QStringLiteral(" GB");
     }
 
     bool ViewportWidget::IsVRAMOverBudget() const {

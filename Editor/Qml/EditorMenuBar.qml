@@ -139,7 +139,7 @@ MenuBar {
             onTriggered: menuBridge.toggleLights()
         }
         MItem {
-            text: "Estatísticas"; checkColumn: true
+            text: "Mini Profiler"; checkColumn: true
             markVisible: menuBridge.statsVisible
             onTriggered: menuBridge.toggleStats()
         }
