@@ -231,8 +231,8 @@ namespace Smile {
         OutY = Impl::Halton(Idx, 3) - 0.5f;
     }
 
-    void FDlssPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
-        if (!P || !P->Created || !Cmd || !In.Color || !In.Depth || !In.Velocity) return;
+    void FDlssPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& _UpscaleParams) {
+        if (!P || !P->Created || !Cmd || !_UpscaleParams.Color || !_UpscaleParams.Depth || !_UpscaleParams.Velocity) return;
 
         Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -240,7 +240,7 @@ namespace Smile {
         auto* CmdBuf = reinterpret_cast<sl::CommandBuffer*>(Cmd);
 
         sl::FrameToken* Frame = nullptr;
-        const uint32_t  FrameIdx = In.Reset ? 0u : 0u; // token por frame (indice opcional)
+        const uint32_t  FrameIdx = _UpscaleParams.Reset ? 0u : 0u; // token por frame (indice opcional)
         if (slGetNewFrameToken(Frame, nullptr) != sl::Result::eOk || !Frame) {
             LogError("DLSS: slGetNewFrameToken falhou");
             Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -251,43 +251,43 @@ namespace Smile {
 
         // --- Constants (matrizes row-major SEM jitter; o Renderer preencheu ViewToClip/ClipToPrevClip) ---
         sl::Constants C{};
-        C.cameraViewToClip = ToSL(In.ViewToClip);
-        C.clipToCameraView = ToSL(In.ViewToClip.Inverse());
-        C.clipToPrevClip   = ToSL(In.ClipToPrevClip);
-        C.prevClipToClip   = ToSL(In.ClipToPrevClip.Inverse());
-        C.jitterOffset        = { In.JitterX, In.JitterY };
+        C.cameraViewToClip = ToSL(_UpscaleParams.ViewToClip);
+        C.clipToCameraView = ToSL(_UpscaleParams.ViewToClip.Inverse());
+        C.clipToPrevClip   = ToSL(_UpscaleParams.ClipToPrevClip);
+        C.prevClipToClip   = ToSL(_UpscaleParams.ClipToPrevClip.Inverse());
+        C.jitterOffset        = { _UpscaleParams.JitterX, _UpscaleParams.JitterY };
         C.cameraPinholeOffset = { 0.0f, 0.0f };   // pinhole convencional (senao fica INVALID_FLOAT)
         // Velocity da engine = curUV-prevUV; o plugin faz NGX MV_Scale = mvecScale*W/H (dlss*Entry.cpp), ou
         // seja o NGX ja converte p/ pixels => mvecScale=-1 casa (prevUV-curUV)*W. Confirmado na fonte do SL.
         C.mvecScale        = { -1.0f, -1.0f };
-        C.cameraPos        = ToSL(In.CamPos);
-        C.cameraUp         = ToSL(In.CamUp);
-        C.cameraRight      = ToSL(In.CamRight);
-        C.cameraFwd        = ToSL(In.CamFwd);
-        C.cameraNear       = In.NearZ;
-        C.cameraFar        = In.FarZ;
-        C.cameraFOV        = In.FovYRadians;
-        C.cameraAspectRatio = In.AspectRatio;
+        C.cameraPos        = ToSL(_UpscaleParams.CamPos);
+        C.cameraUp         = ToSL(_UpscaleParams.CamUp);
+        C.cameraRight      = ToSL(_UpscaleParams.CamRight);
+        C.cameraFwd        = ToSL(_UpscaleParams.CamFwd);
+        C.cameraNear       = _UpscaleParams.NearZ;
+        C.cameraFar        = _UpscaleParams.FarZ;
+        C.cameraFOV        = _UpscaleParams.FovYRadians;
+        C.cameraAspectRatio = _UpscaleParams.AspectRatio;
         C.depthInverted        = sl::Boolean::eTrue;   // engine usa reverse-Z
         C.cameraMotionIncluded = sl::Boolean::eTrue;
         C.motionVectors3D      = sl::Boolean::eFalse;
-        C.reset            = (In.Reset || P->FirstDispatch) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+        C.reset            = (_UpscaleParams.Reset || P->FirstDispatch) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
         slSetConstants(C, *Frame, P->Viewport);
 
         // --- Options (modo por qualidade; HDR; auto-exposure como no FSR) ---
-        sl::DLSSOptions Opt{};
-        Opt.mode            = ModeForQuality(In.Quality);
-        Opt.outputWidth     = P->SW;
-        Opt.outputHeight    = P->SH;
-        Opt.colorBuffersHDR = sl::Boolean::eTrue;
-        Opt.useAutoExposure = sl::Boolean::eTrue;
-        slDLSSSetOptions(P->Viewport, Opt);
+        sl::DLSSOptions DLSSOptions{};
+        DLSSOptions.mode            = ModeForQuality(_UpscaleParams.Quality);
+        DLSSOptions.outputWidth     = P->SW;
+        DLSSOptions.outputHeight    = P->SH;
+        DLSSOptions.colorBuffersHDR = sl::Boolean::eTrue;
+        DLSSOptions.useAutoExposure = sl::Boolean::eTrue;
+        slDLSSSetOptions(P->Viewport, DLSSOptions);
 
         // --- Tags (estado ATUAL de cada recurso; o chamador poe cor/depth/vel em COMPUTE_READ) ---
-        sl::Resource ColorRes (sl::ResourceType::eTex2d, In.Color,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-        sl::Resource DepthRes (sl::ResourceType::eTex2d, In.Depth,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-        sl::Resource MvecRes  (sl::ResourceType::eTex2d, In.Velocity,    static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-        sl::Resource OutputRes(sl::ResourceType::eTex2d, P->Output.Get(),static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+        sl::Resource ColorRes (sl::ResourceType::eTex2d, _UpscaleParams.Color,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+        sl::Resource DepthRes (sl::ResourceType::eTex2d, _UpscaleParams.Depth,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+        sl::Resource MvecRes  (sl::ResourceType::eTex2d, _UpscaleParams.Velocity,    static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+        sl::Resource OutputRes(sl::ResourceType::eTex2d, P->Output.Get(),            static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
 
         const sl::Extent RenderExtent{ 0, 0, P->RW, P->RH };
         const sl::Extent OutputExtent{ 0, 0, P->SW, P->SH };
