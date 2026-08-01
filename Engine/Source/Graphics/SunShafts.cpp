@@ -19,7 +19,7 @@ namespace Smile {
         CreateConstantBuffers(_Device);
         CreateRTs(_Device, _SRVHeap, _Width, _Height);
         Initialized = true;
-        LogInfo("Sun shafts (raymarch CSM + temporal) inicializado");
+        LogDebug("Sun shafts (raymarch CSM + temporal) inicializado");
     }
 
     void FSunShafts::Resize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,

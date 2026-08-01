@@ -7,6 +7,7 @@
 
 namespace Smile {
     enum class LogLevel {
+        Debug,
         Info,
         Warning,
         Error
@@ -29,6 +30,9 @@ namespace Smile {
     void SetLogSink(LogSink sink);
     void Log(LogLevel level, std::string_view message) noexcept;
 
+    // Debug continua no arquivo persistente/OutputDebugString, mas o console do editor o oculta
+    // por padrao. Use para detalhes de boot, recursos e pipelines sem valor acionavel imediato.
+    inline void LogDebug(std::string_view m) noexcept   { Log(LogLevel::Debug, m); }
     inline void LogInfo(std::string_view m) noexcept    { Log(LogLevel::Info, m); }
     inline void LogWarning(std::string_view m) noexcept { Log(LogLevel::Warning, m); }
     inline void LogError(std::string_view m) noexcept   { Log(LogLevel::Error, m); }

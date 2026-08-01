@@ -13,8 +13,8 @@
       <stop offset="1" stop-color="#0c0f0e"/>
     </linearGradient>
     <linearGradient id="activeBg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1c345d"/>
-      <stop offset="1" stop-color="#142642"/>
+      <stop offset="0" stop-color="#26351a"/>
+      <stop offset="1" stop-color="#1c2815"/>
     </linearGradient>
     <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#20221c" stop-opacity="0.98"/>
@@ -51,7 +51,7 @@
       .shortcut { font-size: 9px; font-weight: 600; fill: #77786d; }
       .icon { fill: none; stroke: #a7a397; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
       .iconMuted { fill: none; stroke: #64655b; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
-      .iconBlue { fill: none; stroke: #68a7ff; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; }
+      .iconBlue { fill: none; stroke: #9ac055; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; }
       .chev { fill: none; stroke: #77786d; stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
     </style>
   </defs>
@@ -59,9 +59,9 @@
   <rect width="1600" height="720" fill="url(#pageBg)"/>
   <g class="ui">
     <text x="28" y="31" class="title">Viewport toolbar</text>
-    <rect x="184" y="14" width="91" height="23" rx="11.5" fill="#17243a" stroke="#294b7a"/>
-    <circle cx="198" cy="25.5" r="3" fill="#5b9dff" filter="url(#blueGlow)"/>
-    <text x="207" y="29.5" font-size="9.5" font-weight="650" letter-spacing=".8" fill="#86b7ff">PROPOSTA V2</text>
+    <rect x="184" y="14" width="91" height="23" rx="11.5" fill="#202b17" stroke="#4b672f"/>
+    <circle cx="198" cy="25.5" r="3" fill="#9ac055" filter="url(#blueGlow)"/>
+    <text x="207" y="29.5" font-size="9.5" font-weight="650" letter-spacing=".8" fill="#b4da70">PROPOSTA V2</text>
     <text x="1572" y="29" text-anchor="end" class="subtitle">SmileEngine · Editor UI System</text>
 
     <!-- viewport -->
@@ -138,9 +138,9 @@
 
       <!-- translate snap -->
       <g transform="translate(413 63)">
-        <rect width="86" height="30" rx="6" fill="url(#activeBg)" stroke="#2b5285"/>
+        <rect width="86" height="30" rx="6" fill="url(#activeBg)" stroke="#4b672f"/>
         <path d="M9 8v8a5 5 0 0 0 10 0V8M9 8h4v6a1 1 0 0 0 2 0V8h4" class="iconBlue"/>
-        <text x="27" y="19" font-size="10.5" fill="#a9ccff">10 cm</text>
+        <text x="27" y="19" font-size="10.5" fill="#b4da70">10 cm</text>
         <path d="M72 13l4 4 4-4" class="chev"/>
       </g>
       <!-- rotation snap -->
@@ -167,10 +167,10 @@
         <path d="M98 13l4 4 4-4" class="chev"/>
       </g>
       <g transform="translate(786 63)">
-        <rect width="70" height="30" rx="6" fill="url(#activeBg)" stroke="#2b5285"/>
-        <circle cx="13" cy="15" r="5.5" fill="#5b9dff" opacity=".18"/>
+        <rect width="70" height="30" rx="6" fill="url(#activeBg)" stroke="#4b672f"/>
+        <circle cx="13" cy="15" r="5.5" fill="#9ac055" opacity=".18"/>
         <path d="M9 16l3-4 3 2 3-5" class="iconBlue"/>
-        <text x="25" y="19" font-size="11" fill="#83b5ff">Lit</text>
+        <text x="25" y="19" font-size="11" fill="#b4da70">Lit</text>
         <path d="M56 13l4 4 4-4" class="chev"/>
       </g>
       <g transform="translate(862 63)">
@@ -199,7 +199,7 @@
         <text x="27" y="19" class="label">Stats</text>
       </g>
       <g transform="translate(1452 63)">
-        <rect width="34" height="30" rx="6" fill="url(#activeBg)" stroke="#2b5285"/>
+        <rect width="34" height="30" rx="6" fill="url(#activeBg)" stroke="#4b672f"/>
         <path d="M9 8v14M15 8v14M21 8v14M8 9h14M8 15h14M8 21h14" class="iconBlue"/>
       </g>
       <g transform="translate(1490 63)">
@@ -224,8 +224,8 @@
         <text x="16" y="67" class="label">Movimento</text>
         <g transform="translate(16 77)">
           <rect width="280" height="32" rx="5" fill="#151713" stroke="#2d3028"/>
-          <rect x="1" y="1" width="54" height="30" rx="4" fill="#1a3154"/>
-          <text x="28" y="20" text-anchor="middle" font-size="10" fill="#82b5ff">10 cm</text>
+          <rect x="1" y="1" width="54" height="30" rx="4" fill="#26351a"/>
+          <text x="28" y="20" text-anchor="middle" font-size="10" fill="#b4da70">10 cm</text>
           <text x="82" y="20" text-anchor="middle" class="small">1 cm</text>
           <text x="134" y="20" text-anchor="middle" class="small">50 cm</text>
           <text x="190" y="20" text-anchor="middle" class="small">1 m</text>
@@ -237,21 +237,21 @@
           <rect width="132" height="32" rx="5" fill="#151713" stroke="#2d3028"/>
           <rect x="1" y="1" width="43" height="30" rx="4" fill="#25271f"/>
           <text x="22" y="20" text-anchor="middle" class="small">5°</text>
-          <rect x="44" y="1" width="43" height="30" fill="#1a3154"/>
-          <text x="65" y="20" text-anchor="middle" font-size="10" fill="#82b5ff">15°</text>
+          <rect x="44" y="1" width="43" height="30" fill="#26351a"/>
+          <text x="65" y="20" text-anchor="middle" font-size="10" fill="#b4da70">15°</text>
           <text x="109" y="20" text-anchor="middle" class="small">45°</text>
         </g>
         <text x="164" y="133" class="label">Escala</text>
         <g transform="translate(164 143)">
           <rect width="132" height="32" rx="5" fill="#151713" stroke="#2d3028"/>
           <text x="22" y="20" text-anchor="middle" class="small">1%</text>
-          <rect x="44" y="1" width="43" height="30" fill="#1a3154"/>
-          <text x="65" y="20" text-anchor="middle" font-size="10" fill="#82b5ff">10%</text>
+          <rect x="44" y="1" width="43" height="30" fill="#26351a"/>
+          <text x="65" y="20" text-anchor="middle" font-size="10" fill="#b4da70">10%</text>
           <text x="109" y="20" text-anchor="middle" class="small">25%</text>
         </g>
 
         <path d="M14 190H298" stroke="#2b2d26"/>
-        <rect x="16" y="204" width="16" height="16" rx="4" fill="#5b9dff"/>
+        <rect x="16" y="204" width="16" height="16" rx="4" fill="#9ac055"/>
         <path d="M20 212l3 3 6-7" fill="none" stroke="#f5f7fb" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         <text x="42" y="217" class="label">Snap relativo à origem do objeto</text>
       </g>
@@ -267,7 +267,7 @@
     <!-- rationale cards -->
     <g transform="translate(20 494)">
       <rect width="500" height="196" rx="10" fill="#141610" stroke="#2b2e26"/>
-      <rect x="16" y="16" width="28" height="28" rx="7" fill="#172943" stroke="#294d7b"/>
+      <rect x="16" y="16" width="28" height="28" rx="7" fill="#202b17" stroke="#4b672f"/>
       <path d="M30 21v18M21 30h18M30 21l-3 4M30 21l3 4M21 30l4-3M21 30l4 3M39 30l-4-3M39 30l-4 3" class="iconBlue"/>
       <text x="56" y="29" class="cardTitle">Criação e transformação</text>
       <text x="56" y="43" class="small">Fluxo primário à esquerda, perto da área de trabalho</text>
@@ -295,9 +295,9 @@
 
     <g transform="translate(1056 494)">
       <rect width="524" height="196" rx="10" fill="#141610" stroke="#2b2e26"/>
-      <rect x="16" y="16" width="28" height="28" rx="7" fill="#172943" stroke="#294d7b"/>
+      <rect x="16" y="16" width="28" height="28" rx="7" fill="#202b17" stroke="#4b672f"/>
       <path d="M22 30s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5z" class="iconBlue"/>
-      <circle cx="30" cy="30" r="2" fill="#68a7ff"/>
+      <circle cx="30" cy="30" r="2" fill="#9ac055"/>
       <text x="56" y="29" class="cardTitle">Visualização e diagnóstico</text>
       <text x="56" y="43" class="small">Ferramentas secundárias agrupadas à direita</text>
       <path d="M16 58H508" stroke="#272a23"/>

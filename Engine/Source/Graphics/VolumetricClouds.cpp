@@ -82,7 +82,7 @@ namespace Smile {
         BuildCompositePSO(_Device, _RTFormat, _DSFormat);
 
         Initialized = true;
-        LogInfo("Nuvens volumetricas inicializadas (B2: raymarch single-scatter + composite)");
+        LogDebug("Nuvens volumetricas inicializadas (B2: raymarch single-scatter + composite)");
     }
 
     void FVolumetricClouds::CreateRT(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,

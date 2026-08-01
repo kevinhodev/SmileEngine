@@ -44,7 +44,7 @@ namespace Smile {
         PendingScopes.resize(FramesInFlight_);
         CurrentScopes.reserve(kMaxScopes);
         OpenStack.reserve(8);
-        LogInfo("[GPU] Profiler de timestamps inicializado (" +
+        LogDebug("[GPU] Profiler de timestamps inicializado (" +
                 std::to_string(kMaxScopes) + " escopos/frame)");
     }
 

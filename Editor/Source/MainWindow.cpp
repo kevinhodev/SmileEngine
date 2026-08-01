@@ -170,7 +170,7 @@ namespace SmileEditor {
                     if (!Watched.contains(F)) ShaderWatcher->addPath(F);
             });
 
-            Smile::LogInfo("Shader Watcher Ativo: " +
+            Smile::LogDebug("Shader Watcher Ativo: " +
                            std::to_string(ShaderFiles.size()) + " Shaders em " +
                            ShadersSourceDir.toStdString());
         } else {
@@ -477,10 +477,11 @@ namespace SmileEditor {
         connect(ConsoleLog, &LogBridge::CloseRequested, ConsoleDock, &QDockWidget::close);
 
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
-        // Piso pra nunca colapsar a ponto de sumir; o tamanho de abertura vem do resizeDocks.
-        Console->setMinimumHeight(120);
+        // Drawer compacto por padrao, mas ainda redimensionavel pelo usuario. Com 82 px cabem
+        // a faixa de comando e duas linhas; a abertura de 124 px mostra quatro eventos inteiros.
+        Console->setMinimumHeight(82);
         // resizeDocks e a API confiavel pra altura inicial (resize() no dock e ignorado pelo layout).
-        resizeDocks({ ConsoleDock }, { 160 }, Qt::Vertical);
+        resizeDocks({ ConsoleDock }, { 124 }, Qt::Vertical);
 
         // Reflete o estado do dock no check do menu "Janela" (inclui o fechar via menu do console).
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);

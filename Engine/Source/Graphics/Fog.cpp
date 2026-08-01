@@ -18,7 +18,7 @@ namespace Smile {
         BuildPSOs(_Device, _RTFormat);
         CreateConstantBuffer(_Device);
         Initialized = true;
-        LogInfo("Fog deferido (aerial perspective + height fog) inicializado");
+        LogDebug("Fog deferido (aerial perspective + height fog) inicializado");
     }
 
     void FFogPass::BuildRootSignature(ID3D12Device* _Device) {

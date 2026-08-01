@@ -55,7 +55,7 @@ namespace Smile {
             u32  EmissiveMapIndex = 0;
             u32  MrMapIndex       = 0;
             u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
-            u32  GeoPad0 = 0;
+            u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
         };
         static_assert(sizeof(DDGIInstanceGeo) == 80, "DDGIInstanceGeo deve casar com o HLSL (80B)");
 
@@ -208,6 +208,10 @@ namespace Smile {
                         g.MetalMapIndex = R.Material->AlbedoDescriptorIndex() + 6;
                         g.Flags |= 32u;
                     }
+                    if (MC.HasRoughnessMap) {
+                        g.RoughMapIndex = R.Material->AlbedoDescriptorIndex() + 7;
+                        g.Flags |= 64u;
+                    }
                 }
             }
             auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
@@ -239,7 +243,7 @@ namespace Smile {
 
         const u32 NumRenderables = static_cast<u32>(_Scene.Renderables().size());
         if (NumRenderables == 0 || _TlasSRVSlot == kInvalidSlot) {
-            LogWarning("[GI] - DDGI: Cena sem Geometria/TLAS; Volume nao Criado");
+            LogDebug("[GI] - DDGI: Cena sem Geometria/TLAS; Volume nao Criado");
             return;
         }
 
@@ -452,7 +456,7 @@ namespace Smile {
 
         Ready = true;
         RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0; 
-        LogInfo("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
+        LogDebug("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
                 "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
                 "), spacing " + std::to_string(SpacingV) + ", atlas " +
                 std::to_string(AtlasWidth) + "x" + std::to_string(AtlasHeight));

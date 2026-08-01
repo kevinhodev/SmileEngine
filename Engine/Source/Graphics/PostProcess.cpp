@@ -33,7 +33,7 @@ namespace Smile {
         CreateBloomTextures(Device, SRVHeap, Width, Height);
 
         Initialized = true;
-        LogInfo("PostProcessor (HDR + Bloom + ACES Filmic) inicializado com sucesso");
+        LogDebug("PostProcessor (HDR + Bloom + ACES Filmic) inicializado com sucesso");
     }
 
     void FPostProcessor::Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height) {

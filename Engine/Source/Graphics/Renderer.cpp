@@ -13,6 +13,7 @@
 #include <exception>
 #include <functional>
 #include <cmath>
+#include <chrono>
 
 namespace Smile {
     namespace {
@@ -69,6 +70,8 @@ namespace Smile {
 
     void Renderer::Initialize(HWND _hWnd, u32 _Width, u32 _Height) {
         if (Initialized) return;
+
+        const auto InitStarted = std::chrono::steady_clock::now();
 
     #ifdef _DEBUG
         constexpr bool kDebugLayer = true;
@@ -193,7 +196,16 @@ namespace Smile {
         BuildRaytracingScene();
 
         Initialized = true;
-        LogInfo("Renderer Inicializado");
+
+        std::string Features = Device.RaytracingSupported() ? "DXR" : "Raster";
+        if (Fsr.Available())    Features += " | FSR";
+        if (Dlss.Available())   Features += " | DLSS";
+        if (DlssRR.Available()) Features += " | DLSS-RR";
+        const auto InitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - InitStarted).count();
+        LogInfo("Renderer pronto em " + std::to_string(InitMs) + " ms | " +
+                std::to_string(SwapChain.GetWidth()) + "x" +
+                std::to_string(SwapChain.GetHeight()) + " | " + Features);
     }
 
     void Renderer::BuildRaytracingScene() {
@@ -3592,6 +3604,6 @@ namespace Smile {
             MappedObjectCB = nullptr;
         }
         Initialized = false;
-        LogInfo("Renderer encerrado");
+        LogDebug("Renderer encerrado");
     }
 } 

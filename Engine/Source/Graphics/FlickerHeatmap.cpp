@@ -43,7 +43,7 @@ namespace Smile {
 
         CreateBuffers(Device, SRVHeap, W, H);
         Initialized = true;
-        LogInfo("FlickerHeatmap (debug: variancia temporal por pixel) inicializado");
+        LogDebug("FlickerHeatmap (debug: variancia temporal por pixel) inicializado");
     }
 
     void FFlickerHeatmap::Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 W, u32 H) {

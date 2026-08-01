@@ -52,7 +52,7 @@ namespace Smile {
         IBLTableStart = _SRVHeap.Allocate(3);
 
         Initialized = true;
-        LogInfo("FMaterialPreview (preview offscreen 512x512) inicializado");
+        LogDebug("FMaterialPreview (preview offscreen 512x512) inicializado");
         return true;
     }
 

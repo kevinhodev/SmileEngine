@@ -18,7 +18,7 @@ namespace Smile {
         BuildPSOs(_Device);
         CreateConstantBuffers(_Device);
         Initialized = true;
-        LogInfo("LocalShadows inicializado: atlas " + std::to_string(kMaxShadows) + "x" +
+        LogDebug("LocalShadows inicializado: atlas " + std::to_string(kMaxShadows) + "x" +
                 std::to_string(kResolution) + "^2 (spot)");
     }
 

@@ -71,7 +71,7 @@ namespace {
             }
             // Loga a familia REAL que o Qt registrou: em fonte variavel o nome nem sempre e o
             // do arquivo, e o Theme precisa bater exatamente com ela.
-            LogQString(Smile::LogLevel::Info,
+            LogQString(Smile::LogLevel::Debug,
                        QStringLiteral("Fonte registrada: %1 -> %2")
                            .arg(F, QFontDatabase::applicationFontFamilies(Id).join(
                                        QStringLiteral(", "))));
@@ -100,19 +100,19 @@ namespace {
         const QString BuildConfig = QStringLiteral("Release");
 #endif
 
-        LogQString(Smile::LogLevel::Info,
+        LogQString(Smile::LogLevel::Debug,
             QStringLiteral("SmileEditor %1 | build %2 | %3 | Qt %4")
                 .arg(QStringLiteral(SMILE_VERSION_STRING),
                      QStringLiteral(SMILE_BUILD_NUMBER),
                      BuildConfig,
                      QString::fromLatin1(qVersion())));
-        LogQString(Smile::LogLevel::Info,
+        LogQString(Smile::LogLevel::Debug,
             QStringLiteral("Sessao: pid=%1 | OS=%2 | arch=%3 | cwd=%4")
                 .arg(QCoreApplication::applicationPid())
                 .arg(QSysInfo::prettyProductName(),
                      QSysInfo::currentCpuArchitecture(),
                      QDir::currentPath()));
-        LogQString(Smile::LogLevel::Info,
+        LogQString(Smile::LogLevel::Debug,
             QStringLiteral("Arquivo de log: %1").arg(QDir::toNativeSeparators(LogPath)));
     }
 
@@ -146,7 +146,7 @@ namespace {
             Smile::SetLogSink({});
         }
 
-        Smile::LogInfo("Sessao encerrada normalmente");
+        Smile::LogDebug("Sessao encerrada normalmente");
         return ExitCode;
     }
 }

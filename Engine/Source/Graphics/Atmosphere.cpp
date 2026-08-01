@@ -182,7 +182,7 @@ namespace Smile {
         Dirty       = true;
         Initialized = true;
         BakeIfDirty(_Device, _CmdQueue); 
-        LogInfo("Atmosfera (Hillaire) inicializada: Transmittance + MultiScatter + SkyView");
+        LogDebug("Atmosfera (Hillaire) inicializada: Transmittance + MultiScatter + SkyView");
     }
 
     void FAtmosphere::CreateConstantBuffer(ID3D12Device* _Device) {
@@ -266,7 +266,7 @@ namespace Smile {
         static_assert(sizeof(FStarRec) == 20, "layout do stars.sstars");
 
         std::ifstream File(_Path, std::ios::binary);
-        if (!File) { LogWarning("Catalogo de estrelas nao encontrado; hash procedural segue"); return; }
+        if (!File) { LogDebug("Catalogo de estrelas nao encontrado; hash procedural segue"); return; }
 
         u32 Header[4]{};
         File.read(reinterpret_cast<char*>(Header), sizeof(Header));
@@ -327,7 +327,7 @@ namespace Smile {
 
         StarCount = Count;
         CPUConstants.StarView.Z = 1.0f; // desliga o hash procedural do sky pass
-        LogInfo("Catalogo de estrelas: " + std::to_string(Count) + " estrelas (Yale BSC)");
+        LogDebug("Catalogo de estrelas: " + std::to_string(Count) + " estrelas (Yale BSC)");
     }
 
     void FAtmosphere::BuildStarPipeline(ID3D12Device* _Device,

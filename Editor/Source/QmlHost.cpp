@@ -47,7 +47,7 @@ namespace SmileEditor {
                 }
             };
             Rearm();
-            Smile::LogInfo("QML hot-reload armado: " + QFileInfo(_Path).fileName().toStdString() +
+            Smile::LogDebug("QML hot-reload armado: " + QFileInfo(_Path).fileName().toStdString() +
                            " (" + std::to_string(Watcher->files().size()) + " .qml em " +
                            Dir.toStdString() + ")");
 

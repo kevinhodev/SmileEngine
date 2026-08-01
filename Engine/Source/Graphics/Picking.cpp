@@ -30,7 +30,7 @@ namespace Smile {
                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Readback)));
 
         Initialized = true;
-        LogInfo("FObjectPicker (GPU ID-buffer picking) inicializado");
+        LogDebug("FObjectPicker (GPU ID-buffer picking) inicializado");
     }
 
     void FObjectPicker::CreateTargets(ID3D12Device* Device, u32 Width, u32 Height) {

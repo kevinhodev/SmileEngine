@@ -67,6 +67,12 @@ namespace Smile {
             }
         }
 
+        bool IsExpectedUnsupportedResult(sl::Result R) {
+            return R == sl::Result::eErrorNoSupportedAdapterFound ||
+                   R == sl::Result::eErrorAdapterNotSupported ||
+                   R == sl::Result::eErrorFeatureNotSupported;
+        }
+
         // Mapa qualidade (0=Native..4=UltraPerf) -> DLSSMode.
         sl::DLSSMode ModeForQuality(int Q) {
             switch (Q) {
@@ -141,7 +147,7 @@ namespace Smile {
                        ") — DLSS indisponivel");
             return false;
         }
-        LogInfo("Streamline inicializado (manual hooking, feature DLSS)");
+        LogDebug("Streamline inicializado (manual hooking, feature DLSS)");
         return true;
     }
     void FDlssPass::SetDevice(ID3D12Device* Device) { if (Device) slSetD3DDevice(Device); }
@@ -164,9 +170,13 @@ namespace Smile {
             // Loga o codigo real: distingue "GPU/driver nao suporta" (eErrorAdapterNotSupported,
             // eErrorDriverOutOfDate) de falha de integracao (eErrorFeatureFailedToLoad = plugin
             // sl.dlss.dll/nvngx_dlss.dll nao carregou; eErrorInitNotCalled = ordem do slInit).
-            LogWarning(std::string("DLSS: slIsFeatureSupported falhou -> ") + SlResultName(SupportRc) +
-                       " (codigo " + std::to_string(static_cast<int>(SupportRc)) +
-                       ") — upscaler DLSS indisponivel");
+            const std::string Message = std::string("DLSS: slIsFeatureSupported falhou -> ") +
+                SlResultName(SupportRc) + " (codigo " +
+                std::to_string(static_cast<int>(SupportRc)) + ") — upscaler DLSS indisponivel";
+            if (IsExpectedUnsupportedResult(SupportRc))
+                LogDebug(Message);
+            else
+                LogWarning(Message);
             return false;
         }
 
@@ -203,7 +213,7 @@ namespace Smile {
         P->Created = true;
         P->FirstDispatch = true;
         P->RW = RenderW; P->RH = RenderH; P->SW = DisplayW; P->SH = DisplayH;
-        LogInfo("DLSS (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
+        LogDebug("DLSS (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
                 std::to_string(RenderH) + " -> display " + std::to_string(DisplayW) + "x" +
                 std::to_string(DisplayH) + ")");
         return true;

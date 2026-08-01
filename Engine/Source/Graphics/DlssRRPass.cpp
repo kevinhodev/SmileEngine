@@ -65,6 +65,12 @@ namespace Smile {
             }
         }
 
+        bool IsExpectedUnsupportedResult(sl::Result R) {
+            return R == sl::Result::eErrorNoSupportedAdapterFound ||
+                   R == sl::Result::eErrorAdapterNotSupported ||
+                   R == sl::Result::eErrorFeatureNotSupported;
+        }
+
         // Mapa qualidade (0=Native..4=UltraPerf) -> DLSSMode. RR roda no MESMO perf mode do SR.
         sl::DLSSMode ModeForQuality(int Q) {
             switch (Q) {
@@ -124,9 +130,14 @@ namespace Smile {
         const sl::Result SupportRc = slIsFeatureSupported(sl::kFeatureDLSS_RR, Adapter);
         P->Supported = (SupportRc == sl::Result::eOk);
         if (!P->Supported) {
-            LogWarning(std::string("DLSS-RR: slIsFeatureSupported falhou -> ") + SlResultName(SupportRc) +
-                       " (codigo " + std::to_string(static_cast<int>(SupportRc)) +
-                       ") — denoiser Ray Reconstruction indisponivel");
+            const std::string Message = std::string("DLSS-RR: slIsFeatureSupported falhou -> ") +
+                SlResultName(SupportRc) + " (codigo " +
+                std::to_string(static_cast<int>(SupportRc)) +
+                ") — denoiser Ray Reconstruction indisponivel";
+            if (IsExpectedUnsupportedResult(SupportRc))
+                LogDebug(Message);
+            else
+                LogWarning(Message);
             return false;
         }
 
@@ -163,7 +174,7 @@ namespace Smile {
         P->Created = true;
         P->FirstDispatch = true;
         P->RW = RenderW; P->RH = RenderH; P->SW = DisplayW; P->SH = DisplayH;
-        LogInfo("DLSS-RR (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
+        LogDebug("DLSS-RR (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
                 std::to_string(RenderH) + " -> display " + std::to_string(DisplayW) + "x" +
                 std::to_string(DisplayH) + ")");
         return true;

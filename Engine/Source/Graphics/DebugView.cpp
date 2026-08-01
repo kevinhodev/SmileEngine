@@ -18,7 +18,7 @@ namespace Smile {
         BuildRootSignature(_Device);
         BuildPSO(_Device, _RTFormat);
         Initialized = true;
-        LogInfo("Visualizador de render targets (FDebugView) inicializado");
+        LogDebug("Visualizador de render targets (FDebugView) inicializado");
     }
 
     void FDebugView::BuildRootSignature(ID3D12Device* _Device) {

@@ -29,7 +29,7 @@ namespace Smile {
         CreateConstantBuffer(Device);
         CreateTextures(Device, SRVHeap, W, H);
         Initialized = true;
-        LogInfo("TemporalAA (reprojecao so-camera + Karis tonemap-weighted) inicializado");
+        LogDebug("TemporalAA (reprojecao so-camera + Karis tonemap-weighted) inicializado");
     }
 
     void FTemporalAA::Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 W, u32 H) {

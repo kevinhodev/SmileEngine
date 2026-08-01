@@ -20,7 +20,7 @@ namespace Smile {
         BuildPSOs(_Device);
         CreateConstantBuffers(_Device);
         Initialized = true;
-        LogInfo("CSM (sombra do sol) inicializado: 4 cascatas 2048^2");
+        LogDebug("CSM (sombra do sol) inicializado: 4 cascatas 2048^2");
     }
 
     void FSunShadows::CreateResources(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {

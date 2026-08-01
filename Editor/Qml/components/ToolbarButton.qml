@@ -19,9 +19,9 @@ Rectangle {
     implicitHeight: 22
     radius: 5
     opacity: enabledVisual ? 1.0 : 0.42
-    color: active ? "#182c4b"
+    color: active ? Theme.greenBg
                   : (hover.hovered && enabledVisual ? Theme.controlHover : "#1a1c17")
-    border.color: active ? "#315b91"
+    border.color: active ? Theme.greenBorder
                          : (hover.hovered && enabledVisual ? "#393b32" : "#2d2f28")
     border.width: 1
 
@@ -35,14 +35,14 @@ Rectangle {
             width: 14; height: 14
             anchors.verticalCenter: parent.verticalCenter
             name: control.iconName
-            color: control.active ? "#72adff" : "#a7a397"
+            color: control.active ? Theme.green : "#a7a397"
         }
 
         Text {
             visible: control.label !== ""
             anchors.verticalCenter: parent.verticalCenter
             text: control.label
-            color: control.active ? "#8abaff" : Theme.textNormal
+            color: control.active ? Theme.greenText : Theme.textNormal
             font.family: Theme.fontFamily
             font.pixelSize: 11
             renderType: Text.NativeRendering
@@ -52,7 +52,7 @@ Rectangle {
             visible: control.dropDown
             width: 10; height: 7
             anchors.verticalCenter: parent.verticalCenter
-            property color strokeColor: control.active ? "#78afff" : "#858176"
+            property color strokeColor: control.active ? Theme.green : "#858176"
             onStrokeColorChanged: requestPaint()
             onPaint: {
                 const ctx = getContext("2d")

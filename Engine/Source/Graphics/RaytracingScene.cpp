@@ -198,7 +198,7 @@ namespace Smile {
             UniqueMeshes.push_back(R.Mesh);
         }
         if (UniqueMeshes.empty()) {
-            LogWarning("[GI] - Cena sem geometria; AS nao construida");
+            LogDebug("[GI] - Cena sem geometria; AS nao construida");
             return;
         }
         const u32 NumBlas = static_cast<u32>(UniqueMeshes.size());
@@ -383,7 +383,7 @@ namespace Smile {
         // Pool de build, scratch e buffers de postbuild/readback morrem aqui (GPU ja sincronizada).
 
         if (Instances.empty()) {
-            LogWarning("[GI] - Nenhuma instancia visivel; TLAS nao construida");
+            LogDebug("[GI] - Nenhuma instancia visivel; TLAS nao construida");
             return;
         }
 
@@ -397,7 +397,7 @@ namespace Smile {
         Built = true;
         const double BuildMB   = static_cast<double>(TotalBuild)   / (1024.0 * 1024.0);
         const double FinalMB   = static_cast<double>(Compact ? TotalCompact : TotalBuild) / (1024.0 * 1024.0);
-        LogInfo("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +
+        LogDebug("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +
                 " instancias / " + std::to_string(NumBlas) + " BLAS (pool " +
                 std::to_string(FinalMB).substr(0, 6) + " MB, build " +
                 std::to_string(BuildMB).substr(0, 6) + " MB, compaction " +

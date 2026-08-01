@@ -328,11 +328,11 @@ namespace Smile {
         if (!_Additive)
             Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
 
-        LogInfo("Cena carregada: " + std::to_string(mh.MeshCount) + " meshes, " +
-                std::to_string(sh.MaterialCount) + " materiais, " +
-                std::to_string(sh.RenderableCount) + " renderaveis, " +
-                std::to_string(uploaded) + " texturas DDS.");
-        LogInfo("Load (ms): leitura=" + std::to_string((int)msRead) +
+        LogDebug("Assets da cena preparados: " + std::to_string(mh.MeshCount) + " meshes, " +
+                 std::to_string(sh.MaterialCount) + " materiais, " +
+                 std::to_string(sh.RenderableCount) + " renderaveis, " +
+                 std::to_string(uploaded) + " texturas DDS");
+        LogDebug("Load (ms): leitura=" + std::to_string((int)msRead) +
                 " decode=" + std::to_string((int)msDecode) +
                 " uploadTex=" + std::to_string((int)msTexUpload) +
                 " meshes=" + std::to_string((int)msMesh) +
@@ -471,6 +471,14 @@ namespace Smile {
         // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
         // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
         if (!_Additive) ClearLightSelection();
+
+        const auto TotalMs = static_cast<long long>(MsSince(t0));
+        LogInfo(std::string(_Additive ? "Cena adicionada" : "Cena carregada") + " em " +
+                std::to_string(TotalMs) + " ms: " + scenePath.filename().string() + " | " +
+                std::to_string(mh.MeshCount) + " meshes, " +
+                std::to_string(sh.MaterialCount) + " materiais, " +
+                std::to_string(sh.RenderableCount) + " renderaveis, " +
+                std::to_string(uploaded) + " texturas");
         return true;
     }
 }

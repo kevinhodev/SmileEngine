@@ -16,7 +16,7 @@ Rectangle {
     readonly property color textPrimary: "#e6e2d8"
     readonly property color textNormal: "#c8c2b4"
     readonly property color textMuted: "#6c6a61"
-    readonly property color blue: "#5b9dff"
+    readonly property color accent: C.Theme.green
     readonly property bool compact: width < 1040
     readonly property bool narrow: width < 760
 
@@ -33,10 +33,10 @@ Rectangle {
         implicitHeight: 22
         radius: 5
         opacity: enabledVisual ? 1.0 : 0.38
-        color: active ? "#182c4b"
+        color: active ? C.Theme.greenBg
                       : (iconHover.hovered && enabledVisual ? "#22241e"
                          : (framed ? "#1a1c17" : "transparent"))
-        border.color: active ? "#315b91"
+        border.color: active ? C.Theme.greenBorder
                              : (iconHover.hovered && enabledVisual ? "#393b32"
                                 : (framed ? "#2d2f28" : "transparent"))
         border.width: 1
@@ -44,7 +44,7 @@ Rectangle {
             anchors.centerIn: parent
             width: 14; height: 14
             name: iconButton.iconName
-            color: iconButton.active ? "#72adff" : "#a7a397"
+            color: iconButton.active ? root.accent : "#a7a397"
         }
         HoverHandler {
             id: iconHover
@@ -73,13 +73,13 @@ Rectangle {
                 const cy = height / 2
                 ctx.reset()
                 ctx.lineWidth = 1.25
-                ctx.strokeStyle = radioMark.checked ? root.blue : "#4a4b41"
+                ctx.strokeStyle = radioMark.checked ? root.accent : "#4a4b41"
                 ctx.beginPath()
                 ctx.arc(cx, cy, 4.75, 0, Math.PI * 2)
                 ctx.stroke()
 
                 if (radioMark.checked) {
-                    ctx.fillStyle = root.blue
+                    ctx.fillStyle = root.accent
                     ctx.beginPath()
                     ctx.arc(cx, cy, 2.25, 0, Math.PI * 2)
                     ctx.fill()
@@ -99,7 +99,7 @@ Rectangle {
         signal tapped()
 
         radius: 5
-        color: selected ? "#16233f" : (modeHover.hovered ? "#22231c" : "transparent")
+        color: selected ? C.Theme.greenBg : (modeHover.hovered ? "#22231c" : "transparent")
 
         RadioMark {
             anchors.left: parent.left
@@ -152,7 +152,7 @@ Rectangle {
             anchors.rightMargin: 7
             anchors.verticalCenter: modeLabel.verticalCenter
             text: modeRow.shortcutText
-            color: modeRow.selected ? "#8fb4e8" : root.textMuted
+            color: modeRow.selected ? C.Theme.greenText : root.textMuted
             font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
@@ -217,8 +217,8 @@ Rectangle {
             anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
             width: 28; height: 16; radius: 8
-            color: toggleRow.checked ? root.blue : "#383931"
-            border.color: toggleRow.checked ? root.blue : "#4a4b41"
+            color: toggleRow.checked ? root.accent : "#383931"
+            border.color: toggleRow.checked ? root.accent : "#4a4b41"
             Rectangle {
                 width: 11; height: 11; radius: 5.5
                 y: 2.5

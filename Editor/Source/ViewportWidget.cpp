@@ -1932,12 +1932,12 @@ namespace SmileEditor {
                 Renderer->SetSelectedObject(PickedIndex);
                 const auto& Renderables = Renderer->GetScene().Renderables();
                 if (PickedIndex < static_cast<int>(Renderables.size())) {
-                    Smile::LogInfo("Selecionado [" + std::to_string(PickedIndex) + "] " +
+                    Smile::LogDebug("Selecionado [" + std::to_string(PickedIndex) + "] " +
                                    Renderables[static_cast<size_t>(PickedIndex)].Name);
                 }
             } else {
                 Renderer->ClearSelection();
-                Smile::LogInfo("Selecao limpa (clique no vazio)");
+                Smile::LogDebug("Selecao limpa (clique no vazio)");
             }
             emit ObjectSelected(PickedIndex);
         }
@@ -2032,7 +2032,7 @@ namespace SmileEditor {
                         Renderer->SetSelectedLight(LightHit);
                         Renderer->ClearSelection(); // selecoes exclusivas
                         const auto& Lights = Renderer->GetScene().Lights();
-                        Smile::LogInfo("Luz selecionada [" + std::to_string(LightHit) + "] " +
+                        Smile::LogDebug("Luz selecionada [" + std::to_string(LightHit) + "] " +
                                        Lights[static_cast<size_t>(LightHit)].Name);
                     } else {
                         Renderer->RequestPick(Px, Py);

@@ -22,7 +22,7 @@ namespace Smile {
         CreateConstantBuffer(_Device);
         CreateScratch(_Device, _SRVHeap, _Width, _Height);
         BuildOcclusion(_Device, _SRVHeap);
-        LogInfo("Chuva deferred (wetness + occlusion map + cortina + particulas) inicializada");
+        LogDebug("Chuva deferred (wetness + occlusion map + cortina + particulas) inicializada");
     }
 
     void FRainWetness::Resize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,

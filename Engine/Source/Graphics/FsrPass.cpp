@@ -112,7 +112,7 @@ namespace Smile {
 
         P->FirstDispatch = true;
         P->RW = RenderW; P->RH = RenderH; P->SW = DisplayW; P->SH = DisplayH;
-        LogInfo("FSR (ffx-api / FSR 3.1) inicializado (render " + std::to_string(RenderW) + "x" +
+        LogDebug("FSR (ffx-api / FSR 3.1) inicializado (render " + std::to_string(RenderW) + "x" +
                 std::to_string(RenderH) + " -> display " + std::to_string(DisplayW) + "x" +
                 std::to_string(DisplayH) + ")");
         return true;

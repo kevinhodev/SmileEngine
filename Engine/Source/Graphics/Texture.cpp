@@ -379,11 +379,11 @@ namespace Smile {
             Data.Height = Height;
 
             if (_IsNormalMap) {
-                LogInfo("Normal map decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
+                LogDebug("Normal map decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
                         ", " + std::to_string(Mips.size()) + " mips, Toksvig minAvg=" +
                         std::to_string(MinT));
             } else {
-                LogInfo("Texture decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
+                LogDebug("Texture decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
                         ", " + std::to_string(Mips.size()) + " mips");
             }
         } catch (const std::exception& e) {

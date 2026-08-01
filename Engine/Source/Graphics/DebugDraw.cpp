@@ -16,7 +16,7 @@ namespace Smile {
         BuildPSOs(Device, RTFormat);
         CreateBuffers(Device);
         Initialized = true;
-        LogInfo("DebugDraw Inicializado");
+        LogDebug("DebugDraw Inicializado");
     }
 
     void FDebugDraw::Line(const Vec3& A, const Vec3& B, const Vec3& C) {

@@ -14,6 +14,9 @@ QtObject {
     // Para numeros que mudam a cada frame (fps, ms, resolucao): digitos de largura fixa
     // evitam o texto "dancando" de largura a cada atualizacao.
     readonly property string fontMono: "Consolas"
+    // Cascadia Mono tem desenho mais aberto e hinting melhor nos tamanhos densos do console.
+    // O Qt usa o fallback do sistema automaticamente caso ela nao esteja disponivel.
+    readonly property string fontConsole: "Cascadia Mono"
 
     readonly property color bg: "#141511"
     readonly property color windowBorder: "#2e2f28"
@@ -31,6 +34,9 @@ QtObject {
     readonly property color blueBorder: "#31486b"
     readonly property color amber: "#e8c565"
     readonly property color green: "#9ac055"
+    readonly property color greenBg: "#202b17"
+    readonly property color greenBorder: "#4b672f"
+    readonly property color greenText: "#b4da70"
     readonly property color warn: "#e0885a"
 
     // Superficies de controle (toggles/chips/inputs)

@@ -113,7 +113,7 @@ namespace Smile {
         const char* ProfileName = SignalProfile == ESignalProfile::Direct ? "direta" : "indireta";
 
         const nrd::LibraryDesc& lib = *nrd::GetLibraryDesc();
-        LogInfo("NRD " + std::string(ProfileName) + " v" + std::to_string(lib.versionMajor) + "." + std::to_string(lib.versionMinor) +
+        LogDebug("NRD " + std::string(ProfileName) + " v" + std::to_string(lib.versionMajor) + "." + std::to_string(lib.versionMinor) +
                 "." + std::to_string(lib.versionBuild) +
                 " | normalEnc=" + std::to_string((int)lib.normalEncoding) +
                 " roughEnc=" + std::to_string((int)lib.roughnessEncoding));
@@ -140,7 +140,7 @@ namespace Smile {
         CbSpace        = d.constantBufferAndSamplersSpaceIndex;
         CbReg          = d.constantBufferRegisterIndex;
         SamplerBaseReg = d.samplersBaseRegisterIndex;
-        LogInfo("NRD " + std::string(ProfileName) + " RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
+        LogDebug("NRD " + std::string(ProfileName) + " RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
                 " perm=" + std::to_string(d.permanentPoolSize) +
                 " trans=" + std::to_string(d.transientPoolSize) +
                 " samplers=" + std::to_string(d.samplersNum) +
@@ -172,7 +172,7 @@ namespace Smile {
         Available = true;
 #else
         (void)_Device; (void)_Profile;
-        LogWarning("NRD desabilitado (SMILE_NRD_ENABLED=0)");
+        LogDebug("NRD desabilitado (SMILE_NRD_ENABLED=0)");
 #endif
     }
 
@@ -467,7 +467,7 @@ namespace Smile {
         }
 
         if (!SelfTestLogged) {
-            LogInfo("NRD driver: " + std::to_string(num) + " dispatches executados (bring-up OK)");
+            LogDebug("NRD driver: " + std::to_string(num) + " dispatches executados (bring-up OK)");
             SelfTestLogged = true;
         }
         NeedsClear = false;

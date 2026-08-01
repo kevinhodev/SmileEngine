@@ -70,7 +70,7 @@ namespace Smile {
         CreateConstantBuffer(_Device);
 
         Initialized = true;
-        LogInfo("Volumetric fog (froxel 160x90x64) inicializado");
+        LogDebug("Volumetric fog (froxel 160x90x64) inicializado");
     }
 
     void FVolumetricFogPass::BuildScatteringRootSignature(ID3D12Device* _Device) {
