@@ -8,7 +8,7 @@ class QTimer;
 namespace SmileEditor {
     // Ponte C++<->QML da barra de status (StatusBar.qml). Stats atualizam por frame (UpdateStats);
     // a mensagem transiente (ex.: reload de shader) volta a "Pronto" apos o timeout. Mesmo
-    // espirito das outras bridges (context property).
+    // espirito das outras bridges (propriedade raiz obrigatoria no QML).
     class StatusBridge : public QObject {
         Q_OBJECT
         Q_PROPERTY(double  fps       READ Fps       NOTIFY StatsChanged)

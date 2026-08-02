@@ -465,7 +465,7 @@ namespace SmileEditor {
                                  QDockWidget::DockWidgetFloatable |
                                  QDockWidget::DockWidgetClosable);
 
-        // Console em QML (ConsolePanel.qml), alimentado pela LogBridge via context property.
+        // Console em QML (ConsolePanel.qml), alimentado pela propriedade raiz logModel.
         QQuickWidget* Console = CreateQmlPanel(
             QStringLiteral("ConsolePanel.qml"),
             { { QStringLiteral("logModel"), ConsoleLog } },

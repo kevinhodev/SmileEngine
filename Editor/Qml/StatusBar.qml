@@ -1,9 +1,10 @@
 import QtQuick
 
-// Barra de status do editor. `statusModel` (StatusBridge) vem por context property:
+// Barra de status do editor. `statusModel` (StatusBridge) e dependencia explicita da raiz:
 // esquerda = mensagem transiente; direita = stats por frame (FPS/Frame/meshes/ocean).
 Rectangle {
     id: bar
+    required property var statusModel
     color: "#141511"
     implicitWidth: 800
     implicitHeight: 22

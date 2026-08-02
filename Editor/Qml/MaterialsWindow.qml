@@ -10,6 +10,9 @@ import "components" as C
 // Mesmo chrome/linguagem do TimeOfDayWindow/StatsWindow.
 Rectangle {
     id: root
+    required property var materialsModel
+    required property var materialsWindow
+
     color: "#141511"
     border.color: "#2e2f28"
     border.width: 1

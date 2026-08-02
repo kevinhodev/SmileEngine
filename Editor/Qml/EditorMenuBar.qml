@@ -2,10 +2,11 @@ import QtQuick
 import QtQuick.Controls
 
 // Barra de menus do editor (Arquivo/Janela/Ajuda), estilo escuro. Liga em `menuBridge`
-// (MenuBridge, context property). Popups usam popupType Window pra escapar do QQuickWidget fino
+// (MenuBridge, propriedade obrigatoria). Popups usam popupType Window pra escapar do QQuickWidget fino
 // da barra (senao recortariam na altura dela) e largura dinamica (cabe ao conteudo).
 MenuBar {
     id: menuBar
+    required property var menuBridge
 
     // ---- Item de topo (Arquivo, Janela, ...) ----
     delegate: MenuBarItem {

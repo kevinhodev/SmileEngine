@@ -7,6 +7,7 @@ import "components" as C
 // concentra titulo, filtros, busca e acoes; cada evento ocupa somente uma linha.
 Rectangle {
     id: root
+    required property var logModel
 
     color: "#0f100e"
     implicitWidth: 700

@@ -9,6 +9,9 @@ import "components" as C
 // gradiente dia/noite e cards em duas colunas no estilo do SettingsWindow.
 Rectangle {
     id: root
+    required property var todModel
+    required property var todWindow
+
     color: "#141511"
     border.color: "#2e2f28"
     border.width: 1

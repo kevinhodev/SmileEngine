@@ -6,6 +6,9 @@ import "components" as C
 // A imagem e uma composicao offscreen produzida pelo renderer; o viewport principal nao muda.
 Rectangle {
     id: root
+    required property var viewportModel
+    required property var debugWindow
+
     color: "#10110f"
     border.color: "#2e2f28"
     border.width: 1

@@ -8,6 +8,9 @@ import "components" as C
 // cada linha principal e um escopo de frame e seus filhos sao timestamps de subpasses.
 Rectangle {
     id: root
+    required property var viewportModel
+    required property var statsWindow
+
     color: C.Theme.bg
     border.color: C.Theme.windowBorder
     border.width: 1

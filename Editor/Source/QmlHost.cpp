@@ -2,7 +2,6 @@
 #include "Smile/Core/Logger.h"
 
 #include <QQuickWidget>
-#include <QQmlContext>
 #include <QQmlEngine>
 #include <QCoreApplication>
 #include <QColor>
@@ -88,7 +87,7 @@ namespace SmileEditor {
     }
 
     QQuickWidget* CreateQmlPanel(const QString& _QmlFileName,
-                                 const QVector<QPair<QString, QObject*>>& _ContextProps,
+                                 const QVector<QPair<QString, QObject*>>& _ObjectProperties,
                                  QWidget* _Parent,
                                  const QVector<QPair<QString, QQmlImageProviderBase*>>& _ImageProviders,
                                  const QVariantMap& _InitialProperties) {
@@ -99,13 +98,13 @@ namespace SmileEditor {
         for (const auto& Provider : _ImageProviders)
             Widget->engine()->addImageProvider(Provider.first, Provider.second); // engine assume posse
 
-        for (const auto& Prop : _ContextProps)
-            Widget->rootContext()->setContextProperty(Prop.first, Prop.second);
-
-        // Propriedades do componente raiz sao aplicadas durante a criacao, antes de qualquer
-        // binding. Diferente de context properties, isso torna o contrato visivel no proprio QML.
-        if (!_InitialProperties.isEmpty())
-            Widget->setInitialProperties(_InitialProperties);
+        // Todo objeto C++ e uma propriedade EXPLICITA do componente raiz. Alem de dar contrato
+        // verificavel ao QML (required property), isto deixa os paines prontos para compartilhar
+        // uma QQmlEngine: rootContext() pertence a engine e vazaria estado entre widgets.
+        QVariantMap Properties = _InitialProperties;
+        for (const auto& Prop : _ObjectProperties)
+            Properties.insert(Prop.first, QVariant::fromValue(Prop.second));
+        if (!Properties.isEmpty()) Widget->setInitialProperties(Properties);
 
         const QString Path = ResolveQmlPath(_QmlFileName);
         Widget->setSource(QUrl::fromLocalFile(Path));

@@ -6,6 +6,9 @@ import "components" as C
 // categorias preservam a estrutura da referencia e recebem conteudo nas proximas iteracoes.
 Rectangle {
     id: root
+    required property var viewportModel
+    required property var settingsWindow
+
     color: "#141511"
     border.color: "#2e2f28"
     border.width: 1

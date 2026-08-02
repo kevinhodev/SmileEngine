@@ -11,6 +11,10 @@ import "components" as C
 // Estilo do TimeOfDayPanel (dark, cards, accent azul).
 Rectangle {
     id: root
+    required property var outlinerModel
+    required property var lightsModel
+    required property var viewportModel
+
     color: "#141511"
     focus: true
 
