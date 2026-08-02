@@ -47,21 +47,21 @@ namespace SmileEditor {
         Q_PROPERTY(QString debugProbePointSummary READ GetDebugProbePointSummary NOTIFY DebugProbePointChanged)
         Q_PROPERTY(QVariantList debugProbeContributors READ GetDebugProbeContributors NOTIFY DebugProbePointChanged)
         Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewStateChanged)
-        Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool reGIREnabled READ IsReGIREnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool reGIREnabled READ IsReGIREnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY GISettingsChanged)
         // Back-face culling nos raios de reflexao (politica por passe).
-        Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY GISettingsChanged)
         // Politica de backface do gather do ReSTIR (retrace + terminacao preta).
-        Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool reSTIRDI READ IsReSTIRDIEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool reSTIRDI READ IsReSTIRDIEnabled NOTIFY GISettingsChanged)
         // Amostragem do DDGI: teto do self-shadow bias (metros; 0 = sem teto) e peso de backface
         // medido da posicao sem bias. Eixos separados de proposito — a matriz 2x2 e o experimento.
-        Q_PROPERTY(double giSurfaceBiasMax READ GetGISurfaceBiasMax NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double giSurfaceBiasMax READ GetGISurfaceBiasMax NOTIFY GISettingsChanged)
         // Fade para o ambiente hemisferico nas bordas do volume (em celulas; 0 = desligado).
-        Q_PROPERTY(double giVolumeFadeProbes READ GetGIVolumeFadeProbes NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(double giVolumeFadeProbes READ GetGIVolumeFadeProbes NOTIFY GISettingsChanged)
         Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
@@ -80,7 +80,7 @@ namespace SmileEditor {
         // Knobs de calibracao dos epsilons de raio (pagina "Iluminacao global"). Lista uniforme
         // em vez de 9 propriedades nomeadas: sao todos do mesmo formato (label/valor/faixa/unidade)
         // e a UI e um Repeater — acrescentar ou tirar um knob vira uma linha na tabela do .cpp.
-        Q_PROPERTY(QVariantList rayEpsilons READ GetRayEpsilons NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QVariantList rayEpsilons READ GetRayEpsilons NOTIFY GISettingsChanged)
         Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool occlusionCullingEnabled READ IsOcclusionCullingEnabled NOTIFY ViewSettingsChanged)
@@ -425,6 +425,7 @@ namespace SmileEditor {
         void ObjectSelected(int sceneIndex); // clique no viewport: indice na cena (-1 = vazio)
         void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
         void DebugSettingsChanged(); // grade, exposicao e sessao de inspecao de probes
+        void GISettingsChanged(); // DDGI/ReSTIR/ReGIR, politicas de raio e epsilons
         void ViewSettingsChanged();
         void SettingsRequested();
         // A lista de alvos so muda quando o Renderer recria os targets (boot/resize/troca de

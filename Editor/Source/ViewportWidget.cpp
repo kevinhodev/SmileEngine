@@ -915,26 +915,26 @@ namespace SmileEditor {
     void ViewportWidget::ToggleDDGI() {
         if (!Renderer) return;
         Renderer->SetUseGI(!Renderer->GetUseGI());
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReSTIRGI() {
         if (!Renderer) return;
         Renderer->SetUseReSTIRGI(!Renderer->GetUseReSTIRGI());
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReGIR() {
         if (!Renderer) return;
         Renderer->SetUseReGIR(!Renderer->GetUseReGIR());
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReSTIRGIVisibility() {
         if (!Renderer) return;
         auto& ReSTIRGI = Renderer->GetReSTIRGI();
         ReSTIRGI.SetVisibility(!ReSTIRGI.GetVisibility());
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleGIFoliageShadows() {
@@ -944,19 +944,19 @@ namespace SmileEditor {
         Renderer->GetDDGI().SetFoliageShadows(V);
         Renderer->GetReSTIRGI().SetFoliageShadows(V);
         Renderer->GetReflections().SetFoliageShadows(V);
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReflectionsCullBackface() {
         if (!Renderer) return;
         Renderer->SetReflectionsCullBackface(!Renderer->GetReflectionsCullBackface());
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReSTIRDI() {
         if (!Renderer) return;
         Renderer->SetUseReSTIRDI(!Renderer->GetUseReSTIRDI());
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleGIBackfacePolicy() {
@@ -964,19 +964,19 @@ namespace SmileEditor {
         // Pelo Renderer: alem dos reservoirs, o NRD/RR/TAA acumulam sobre o resultado e
         // precisam cair juntos, senao o A/B denoisado compara estado misturado.
         Renderer->SetGIBackfacePolicy(!Renderer->GetGIBackfacePolicy());
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::SetGISurfaceBiasMax(double _Meters) {
         if (!Renderer) return;
         Renderer->SetGISurfaceBiasMax(static_cast<float>(qBound(0.0, _Meters, 2.0)));
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::SetGIVolumeFadeProbes(double _Probes) {
         if (!Renderer) return;
         Renderer->SetGIVolumeFadeProbes(static_cast<float>(qBound(0.0, _Probes, 3.0)));
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleGTAO() {
@@ -1115,7 +1115,7 @@ namespace SmileEditor {
             P.*(K.Field) = static_cast<float>(
                 qBound(K.UiMin, _UiValue, K.UiMax) / K.UiScale);
             Renderer->SetRayEpsilons(P); // invalida reservoirs + historico do denoiser
-            emit ViewSettingsChanged();
+            emit GISettingsChanged();
             return;
         }
     }
@@ -1123,7 +1123,7 @@ namespace SmileEditor {
     void ViewportWidget::ResetRayEpsilons() {
         if (!Renderer) return;
         Renderer->SetRayEpsilons(Smile::FRayEpsilonProfile{}); // volta aos defaults do header
-        emit ViewSettingsChanged();
+        emit GISettingsChanged();
     }
 
     void ViewportWidget::SetTAAEnabled(bool _Enabled) {
