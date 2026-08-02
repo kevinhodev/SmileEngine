@@ -178,9 +178,12 @@ namespace Smile {
         FTexture* ImportRuntimeTexture(const std::wstring& Path, bool IsNormalMap, bool sRGB);
 
         // Preview offscreen do Editor de Materiais (FMaterialPreview: HDRI proprio, nao
-        // interfere no IBL da cena). Render sincrono; Out = RGBA8 512x512.
-        bool RenderMaterialPreview(FMaterial* Material, const FMaterialPreview::FParams& Params,
-                                   std::vector<u8>& Out);
+        // interfere no IBL da cena). Submit nunca espera a GPU; Consume so retorna slots prontos.
+        FMaterialPreview::ESubmitResult SubmitMaterialPreview(
+            FMaterial* Material, const FMaterialPreview::FParams& Params, u64 RequestId);
+        bool ConsumeMaterialPreview(FMaterialPreview::FResult& Out) {
+            return MaterialPreview.ConsumeCompleted(Out);
+        }
         bool LoadMaterialPreviewEnvironment(const std::wstring& Path);
         bool MaterialPreviewReady() const { return MaterialPreview.HasEnvironment(); }
 

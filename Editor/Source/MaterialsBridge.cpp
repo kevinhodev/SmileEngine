@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 #include <QFile>
 #include <QFileDialog>
@@ -111,7 +112,10 @@ namespace SmileEditor {
                 ThumbByIdx.clear();
                 ThumbVersion.clear();
                 ThumbPending.clear();
+                ThumbInFlightVersion.clear();
             }
+            ThumbRequests.clear();
+            InvalidatePreview();
             DefaultEnvTried = false; // cena nova pode ter vindo de outro diretorio
 
             QFile File(JsonPath);
@@ -173,7 +177,10 @@ namespace SmileEditor {
             if (ThumbByIdx.contains(R.MatIdx))
                 return QStringLiteral("image://materialthumb/%1_v%2")
                     .arg(R.MatIdx).arg(ThumbVersion.value(R.MatIdx, 0));
-            if (!ThumbPending.contains(R.MatIdx)) ThumbPending.push_back(R.MatIdx);
+            const int Version = ThumbVersion.value(R.MatIdx, 0);
+            if (!ThumbPending.contains(R.MatIdx) &&
+                ThumbInFlightVersion.value(R.MatIdx, -1) != Version)
+                ThumbPending.push_back(R.MatIdx);
             return QString();
         }
         }
@@ -291,7 +298,7 @@ namespace SmileEditor {
             ApplyOverrides(Fresh);
             CachedMatCount = int(Renderer->GetMaterials().size());
             if (SelectedMat >= CachedMatCount) SelectedMat = -1;
-            MarkPreviewDirty();
+            InvalidatePreview();
             // Estrutura da cena mudou (carga aditiva): o isolar nao consegue mais mapear indice
             // -> renderable com seguranca, entao desliga. RESTAURANDO o Visible do prefixo comum:
             // limpar SavedVisibility direto deixava toda mesh de outro material invisivel p/
@@ -362,6 +369,10 @@ namespace SmileEditor {
     void MaterialsBridge::Refresh() {
         if (!Renderer) return;
 
+        // Poll nao bloqueante antes de qualquer early-return: alem de publicar imagens prontas,
+        // libera allocators/readbacks do ring para novas submissoes neste mesmo frame.
+        CollectPreviewResults();
+
         const int MatCount = int(Renderer->GetMaterials().size());
         if (MatCount != CachedMatCount) {
             Rebuild();
@@ -375,7 +386,7 @@ namespace SmileEditor {
             CachedSelMesh = SelMesh;
             // "Mesh da cena" segue a selecao mesmo quando o material e o mesmo.
             if (PreviewParams.Primitive == Smile::FMaterialPreview::PrimSceneMesh)
-                MarkPreviewDirty();
+                InvalidatePreview();
             const auto& Rnds = Renderer->GetScene().Renderables();
             if (SelMesh >= 0 && SelMesh < (int)Rnds.size() && Rnds[SelMesh].Material) {
                 const auto& Mats = Renderer->GetMaterials();
@@ -383,7 +394,7 @@ namespace SmileEditor {
                     if (Mats[i].get() != Rnds[SelMesh].Material) continue;
                     if (SelectedMat != i) {
                         SelectedMat = i;
-                        MarkPreviewDirty();
+                        InvalidatePreview();
                         emit SelectionChanged();
                         if (!Rows.isEmpty())
                             emit dataChanged(index(0), index(Rows.size() - 1), { RSelected });
@@ -396,10 +407,9 @@ namespace SmileEditor {
             }
         }
 
-        // Preview: renderiza no maximo uma vez por frame do viewport, e so quando algo
-        // mudou (parametro/selecao/orbita) com a janela aberta. Thumbnails drenam na fila.
-        RenderPreviewIfNeeded();
-        ProcessThumbQueue();
+        // Um unico submit por frame: preview interativo tem prioridade e thumbnails usam a
+        // folga. Ring cheio nunca espera — o pedido permanece dirty/na fila para o proximo frame.
+        if (!SubmitPreviewIfNeeded()) ProcessThumbQueue();
     }
 
     // ---- Selecao ----
@@ -413,7 +423,7 @@ namespace SmileEditor {
         if (_Row < 0 || _Row >= Rows.size()) return;
         if (SelectedMat == Rows[_Row].MatIdx) return;
         SelectedMat = Rows[_Row].MatIdx;
-        MarkPreviewDirty();
+        InvalidatePreview();
         emit SelectionChanged();
         emit dataChanged(index(0), index(Rows.size() - 1), { RSelected });
         if (IsolatingOn) ApplyIsolation(); // isolar segue o material selecionado
@@ -464,6 +474,9 @@ namespace SmileEditor {
 
     void MaterialsBridge::TouchSelected() {
         MarkDirty();
+        // Edicao de slider/cor tambem e continua: frames anteriores do MESMO material ainda
+        // sao uteis enquanto o ring alcanca o valor mais novo. FMaterialPreview fotografa o CB
+        // por slot, portanto nao ha disputa com UpdateConstants() durante o voo.
         MarkPreviewDirty();
         InvalidateThumb(SelectedMat); // thumbnail do browser acompanha a edicao
         emit SelectionChanged();
@@ -982,13 +995,15 @@ namespace SmileEditor {
     void MaterialsBridge::SetPreviewPrimitive(int _V) {
         if (_V < 0 || _V > 4 || PreviewParams.Primitive == _V) return;
         PreviewParams.Primitive = _V;
-        PreviewDirty = true;
+        InvalidatePreview();
         emit PreviewParamsChanged();
     }
 
     void MaterialsBridge::SetPreviewEnabled(bool _On) {
+        if (PreviewEnabledFlag == _On) return;
         PreviewEnabledFlag = _On;
-        if (_On) PreviewDirty = true;
+        InvalidatePreview();
+        if (!_On) PreviewDirty = false;
     }
 
     QImage MaterialsBridge::PreviewImageCopy() const {
@@ -1003,29 +1018,35 @@ namespace SmileEditor {
 
     void MaterialsBridge::InvalidateThumb(int _MatIdx) {
         QMutexLocker Lock(&ThumbMutex);
-        if (!ThumbByIdx.remove(_MatIdx)) return;
+        ThumbByIdx.remove(_MatIdx);
         ++ThumbVersion[_MatIdx];
+        // Pode haver uma versao antiga em voo. A nova fica pendente em paralelo e o resultado
+        // antigo sera descartado pela versao capturada no momento da submissao.
         if (!ThumbPending.contains(_MatIdx)) ThumbPending.push_back(_MatIdx);
     }
 
     void MaterialsBridge::ProcessThumbQueue() {
         if (!PreviewEnabledFlag || !Renderer) return;
 
-        // Uma renderizacao sincrona por frame. Entradas obsoletas/cached sao descartadas sem
-        // consumir o budget, mas nunca iniciamos uma segunda thumbnail depois de uma render.
-        int MatIdx = -1;
+        // Reserva uma versao antes do submit: data() roda tambem na render thread do QML e nao
+        // pode re-enfileirar a mesma versao enquanto o readback estiver em voo.
+        FThumbRequest Job;
         auto& Mats = Renderer->GetMaterials();
         for (;;) {
             {
                 QMutexLocker Lock(&ThumbMutex);
                 if (ThumbPending.isEmpty()) return;
-                MatIdx = ThumbPending.takeFirst();
-                if (ThumbByIdx.contains(MatIdx)) {
-                    MatIdx = -1;
+                Job.MatIdx  = ThumbPending.takeFirst();
+                Job.Version = ThumbVersion.value(Job.MatIdx, 0);
+                if (ThumbByIdx.contains(Job.MatIdx) ||
+                    ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
                     continue;
-                }
+                ThumbInFlightVersion.insert(Job.MatIdx, Job.Version);
             }
-            if (MatIdx >= 0 && MatIdx < (int)Mats.size()) break;
+            if (Job.MatIdx >= 0 && Job.MatIdx < (int)Mats.size()) break;
+            QMutexLocker Lock(&ThumbMutex);
+            if (ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
+                ThumbInFlightVersion.remove(Job.MatIdx);
         }
 
         EnsureDefaultEnv();
@@ -1034,24 +1055,22 @@ namespace SmileEditor {
         P.TransparentBackground = true;     // estilo UE: so a esfera, sem o ceu
         P.Dist = 1.45f;                     // enquadramento apertado pro icone
         P.RenderSize = Smile::FMaterialPreview::kThumbnailSize;
-        std::vector<Smile::u8> Pixels;
-        if (!Renderer->RenderMaterialPreview(Mats[MatIdx].get(), P, Pixels))
-            return; // infra indisponivel: para a fila (re-enfileira via data())
+        const quint64 RequestId = NextPreviewRequestId++;
+        const auto Submit = Renderer->SubmitMaterialPreview(
+            Mats[Job.MatIdx].get(), P, RequestId);
+        if (Submit == Smile::FMaterialPreview::ESubmitResult::Submitted) {
+            ThumbRequests.insert(RequestId, Job);
+            return;
+        }
 
-        // Premultiplied antes do scale: downscale em alpha reto faria franja escura na
-        // borda da esfera contra o fundo transparente.
-        const int Size = int(Smile::FMaterialPreview::kThumbnailSize);
-        QImage Thumb = QImage(Pixels.data(), Size, Size, QImage::Format_RGBA8888)
-                           .convertToFormat(QImage::Format_ARGB32_Premultiplied)
-                           .scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         {
             QMutexLocker Lock(&ThumbMutex);
-            ThumbByIdx.insert(MatIdx, Thumb);
-        }
-        for (int Row = 0; Row < Rows.size(); ++Row) {
-            if (Rows[Row].MatIdx != MatIdx) continue;
-            emit dataChanged(index(Row), index(Row), { RThumb });
-            break;
+            if (ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
+                ThumbInFlightVersion.remove(Job.MatIdx);
+            if (Submit == Smile::FMaterialPreview::ESubmitResult::Busy &&
+                ThumbVersion.value(Job.MatIdx, 0) == Job.Version &&
+                !ThumbPending.contains(Job.MatIdx))
+                ThumbPending.prepend(Job.MatIdx);
         }
     }
 
@@ -1059,18 +1078,18 @@ namespace SmileEditor {
         PreviewParams.Yaw   += float(_Dx) * 0.01f;
         PreviewParams.Pitch  = std::clamp(PreviewParams.Pitch + float(_Dy) * 0.01f,
                                           -1.45f, 1.45f);
-        PreviewDirty = true;
+        MarkPreviewDirty();
     }
 
     void MaterialsBridge::zoomPreview(qreal _Steps) {
         PreviewParams.Dist = std::clamp(PreviewParams.Dist * std::pow(0.9f, float(_Steps)),
                                         0.7f, 8.0f);
-        PreviewDirty = true;
+        MarkPreviewDirty();
     }
 
     void MaterialsBridge::rotatePreviewEnv(qreal _Dx) {
         PreviewParams.EnvRotation += float(_Dx) * 0.01f;
-        PreviewDirty = true;
+        MarkPreviewDirty();
     }
 
     void MaterialsBridge::browsePreviewHdri() {
@@ -1088,7 +1107,7 @@ namespace SmileEditor {
                             File.toStdString());
             return;
         }
-        PreviewDirty = true;
+        InvalidatePreview();
         emit PreviewUpdated(); // previewReady pode ter mudado
     }
 
@@ -1109,28 +1128,98 @@ namespace SmileEditor {
 #endif
     }
 
-    void MaterialsBridge::RenderPreviewIfNeeded() {
-        if (!PreviewEnabledFlag || !PreviewDirty || !Renderer) return;
+    void MaterialsBridge::CollectPreviewResults() {
+        Smile::FMaterialPreview::FResult Result;
+        Smile::FMaterialPreview::FResult NewestPreview;
+        bool HasNewestPreview = false;
+        while (Renderer && Renderer->ConsumeMaterialPreview(Result)) {
+            auto ThumbIt = ThumbRequests.find(Result.RequestId);
+            if (ThumbIt != ThumbRequests.end()) {
+                const FThumbRequest Job = ThumbIt.value();
+                ThumbRequests.erase(ThumbIt);
+
+                QImage Thumb;
+                const size_t Expected = static_cast<size_t>(Result.Size) * Result.Size * 4u;
+                if (Result.Size > 0 && Result.Pixels.size() == Expected) {
+                    // Premultiplied antes do scale: downscale em alpha reto faria franja escura
+                    // na borda da esfera contra o fundo transparente.
+                    Thumb = QImage(Result.Pixels.data(), int(Result.Size), int(Result.Size),
+                                   QImage::Format_RGBA8888)
+                                .convertToFormat(QImage::Format_ARGB32_Premultiplied)
+                                .scaled(96, 96, Qt::KeepAspectRatio,
+                                        Qt::SmoothTransformation);
+                }
+
+                bool Published = false;
+                {
+                    QMutexLocker Lock(&ThumbMutex);
+                    if (ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
+                        ThumbInFlightVersion.remove(Job.MatIdx);
+                    if (!Thumb.isNull() &&
+                        ThumbVersion.value(Job.MatIdx, 0) == Job.Version) {
+                        ThumbByIdx.insert(Job.MatIdx, Thumb);
+                        Published = true;
+                    } else if (ThumbVersion.value(Job.MatIdx, 0) != Job.Version &&
+                               !ThumbPending.contains(Job.MatIdx)) {
+                        ThumbPending.push_back(Job.MatIdx);
+                    }
+                }
+                if (Published) {
+                    for (int Row = 0; Row < Rows.size(); ++Row) {
+                        if (Rows[Row].MatIdx != Job.MatIdx) continue;
+                        emit dataChanged(index(Row), index(Row), { RThumb });
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            auto PreviewIt = PreviewRequests.find(Result.RequestId);
+            if (PreviewIt == PreviewRequests.end()) continue;
+            const quint64 ResultEpoch = PreviewIt.value();
+            PreviewRequests.erase(PreviewIt);
+
+            // Durante orbit/zoom, um frame concluido continua util mesmo que exista uma camera
+            // mais nova em voo. Invalidation estrutural troca o epoch e continua latest-wins.
+            if (!PreviewEnabledFlag || ResultEpoch != PreviewEpoch) continue;
+            if (!HasNewestPreview || Result.RequestId > NewestPreview.RequestId) {
+                NewestPreview = std::move(Result);
+                HasNewestPreview = true;
+            }
+        }
+
+        if (HasNewestPreview) {
+            const size_t Expected = static_cast<size_t>(NewestPreview.Size) *
+                                    NewestPreview.Size * 4u;
+            if (NewestPreview.Size == 0 || NewestPreview.Pixels.size() != Expected) return;
+            {
+                QMutexLocker Lock(&PreviewMutex);
+                PreviewImg = QImage(NewestPreview.Pixels.data(), int(NewestPreview.Size),
+                                    int(NewestPreview.Size), QImage::Format_RGBA8888).copy();
+            }
+            ++PreviewSeqN;
+            emit PreviewUpdated();
+        }
+    }
+
+    bool MaterialsBridge::SubmitPreviewIfNeeded() {
+        if (!PreviewEnabledFlag || !PreviewDirty || !Renderer) return false;
         auto* M = SelMat();
-        if (!M) return;
+        if (!M) return false;
 
         EnsureDefaultEnv();
 
-        std::vector<Smile::u8> Pixels;
-        if (!Renderer->RenderMaterialPreview(M, PreviewParams, Pixels)) {
+        const quint64 RequestId = NextPreviewRequestId++;
+        const auto Submit = Renderer->SubmitMaterialPreview(M, PreviewParams, RequestId);
+        if (Submit == Smile::FMaterialPreview::ESubmitResult::Failed) {
             PreviewDirty = false; // infra indisponivel: nao insistir todo frame
-            return;
+            return false;
         }
-        {
-            QMutexLocker Lock(&PreviewMutex);
-            PreviewImg = QImage(Pixels.data(),
-                                int(Smile::FMaterialPreview::kSize),
-                                int(Smile::FMaterialPreview::kSize),
-                                QImage::Format_RGBA8888).copy();
-        }
+        if (Submit == Smile::FMaterialPreview::ESubmitResult::Busy) return false;
+
         PreviewDirty = false;
-        ++PreviewSeqN;
-        emit PreviewUpdated();
+        PreviewRequests.insert(RequestId, PreviewEpoch);
+        return true;
     }
 
     void MaterialsBridge::setIsolate(bool _On) {

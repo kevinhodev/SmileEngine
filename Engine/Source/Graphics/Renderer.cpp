@@ -1304,10 +1304,9 @@ namespace Smile {
         return ImportedTextures.back().get();
     }
 
-    bool Renderer::RenderMaterialPreview(FMaterial* _Material,
-                                         const FMaterialPreview::FParams& _Params,
-                                         std::vector<u8>& _Out) {
-        if (!Initialized || !_Material) return false;
+    FMaterialPreview::ESubmitResult Renderer::SubmitMaterialPreview(
+        FMaterial* _Material, const FMaterialPreview::FParams& _Params, u64 _RequestId) {
+        if (!Initialized || !_Material) return FMaterialPreview::ESubmitResult::Failed;
 
         const FGpuMesh* SceneMesh = nullptr;
         Mat44 SceneModel = Mat44::Identity();
@@ -1337,12 +1336,15 @@ namespace Smile {
             }
         }
 
-        return MaterialPreview.Render(Device.Native(), CommandQueue, SRVHeap,
-                                      *_Material, _Params, _Out, SceneMesh, SceneModel);
+        return MaterialPreview.Submit(Device.Native(), CommandQueue, SRVHeap,
+                                      *_Material, _Params, _RequestId, SceneMesh, SceneModel);
     }
 
     bool Renderer::LoadMaterialPreviewEnvironment(const std::wstring& _Path) {
         if (!Initialized) return false;
+        // O HDRI e seus descritores sao compartilhados por jobs de preview. Drenar aqui e raro
+        // (browse explicito) e impede sobrescrever a tabela enquanto uma list assincrona a usa.
+        CommandQueue.Flush();
         return MaterialPreview.LoadEnvironment(Device.Native(), CommandQueue, SRVHeap, _Path);
     }
 

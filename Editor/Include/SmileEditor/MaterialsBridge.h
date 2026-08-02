@@ -225,6 +225,10 @@ namespace SmileEditor {
             bool Blend    = false;
             Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {}; // ponteiros cozidos
         };
+        struct FThumbRequest {
+            int MatIdx  = -1;
+            int Version = 0;
+        };
 
         Smile::FMaterial* SelMat() const;
         void   RebuildRows();
@@ -238,8 +242,17 @@ namespace SmileEditor {
         // aditiva ter crescido o vetor de renderables). Usar sempre que a cena continuar viva —
         // largar SavedVisibility sem restaurar deixa a cena escondida sem volta pela UI.
         void   StopIsolation();
-        void   RenderPreviewIfNeeded();  // Refresh: renderiza quando dirty + janela aberta
+        void   CollectPreviewResults();  // Refresh: consome apenas slots cuja fence terminou
+        bool   SubmitPreviewIfNeeded();  // true se ocupou o budget de submissao deste frame
+        // Camera/env rotation podem mudar mais rapido que o readback. Mantem os resultados da
+        // mesma geracao validos para a UI acompanhar o drag com a latencia natural do ring.
         void   MarkPreviewDirty() { PreviewDirty = true; }
+        // Material, primitiva ou HDRI mudaram: nenhum resultado da geracao anterior e valido.
+        void   InvalidatePreview() {
+            PreviewDirty = true;
+            ++PreviewEpoch;
+            PreviewRequests.clear();
+        }
         void   EnsureDefaultEnv();       // HDRI padrao (uma tentativa por sessao/cena)
         void   ProcessThumbQueue();      // Refresh: no maximo 1 thumbnail por frame
         void   InvalidateThumb(int MatIdx);
@@ -292,6 +305,9 @@ namespace SmileEditor {
         bool           PreviewDirty   = true;
         bool           PreviewEnabledFlag = false;     // janela Materiais visivel
         bool           DefaultEnvTried   = false;      // HDRI padrao ja tentado
+        quint64        NextPreviewRequestId = 1;
+        quint64        PreviewEpoch = 1;               // muda em invalidacao estrutural
+        QHash<quint64, quint64> PreviewRequests;       // request id -> epoch da submissao
 
         // Thumbnails do browser: esfera renderizada a 256 e armazenada em 96x96, sob demanda
         // (data() enfileira, Refresh drena 1/frame). Chaves por INDICE de material — o
@@ -300,6 +316,8 @@ namespace SmileEditor {
         mutable QHash<int, QImage> ThumbByIdx;
         mutable QHash<int, int>    ThumbVersion;
         mutable QVector<int>       ThumbPending;
+        mutable QHash<int, int>    ThumbInFlightVersion;
+        QHash<quint64, FThumbRequest> ThumbRequests;
 
         // Espelhos p/ o Refresh detectar mudanca externa (load de cena, picking).
         int CachedMatCount = -1;

@@ -20,9 +20,9 @@ namespace Smile {
     // FHDREnvironment PROPRIO — carregar HDRI aqui NAO liga IBL na cena principal (o
     // deferred usa Renderer::HDREnv; IBLParams.w segue HasHDRLoaded() de la).
     //
-    // Render sincrono (ResetForRecording + ExecuteAndSync, mesmo caminho das cargas
-    // avulsas) + readback RGBA8 — o editor vira QImage direto. Tudo lazy: nada e criado
-    // ate o primeiro Render/LoadEnvironment.
+    // Render assincrono na fila DIRECT + ring de readback RGBA8. Cada slot tem allocator/list
+    // proprios e uma fence compartilhada; Submit nunca espera a GPU e ConsumeCompleted so mapeia
+    // slots cuja fence ja terminou. Tudo lazy: nada e criado ate o primeiro Submit/LoadEnvironment.
     class FMaterialPreview {
     public:
         // 1024: o painel do preview passa de 512 na janela default — 512 upscalado ficava
@@ -31,6 +31,7 @@ namespace Smile {
         // Browser exibe a thumb em 96px. Renderizar a 256 preserva supersampling suficiente
         // sem pagar o raster/readback de 1024 do preview principal.
         static constexpr u32 kThumbnailSize = 256;
+        static constexpr u32 kReadbackSlots  = 3;
 
         enum EPrimitive { PrimSphere = 0, PrimCube = 1, PrimPlane = 2, PrimCylinder = 3,
                           PrimSceneMesh = 4 };
@@ -48,19 +49,32 @@ namespace Smile {
             bool TransparentBackground = false;
         };
 
+        enum class ESubmitResult : u8 { Submitted, Busy, Failed };
+
+        struct FResult {
+            u64 RequestId = 0;
+            u32 Size      = 0;
+            std::vector<u8> Pixels;
+        };
+
         bool LoadEnvironment(ID3D12Device* Device, FCommandQueue& CmdQueue,
                              FTextureSRVHeap& SRVHeap, const std::wstring& Path);
         bool HasEnvironment() const { return Env.HasHDRLoaded(); }
 
-        // Renderiza o material na primitiva e devolve RGBA8 RenderSize*RenderSize*4 em Out.
-        // false se material invalido ou infra indisponivel (shaders .cso ausentes).
+        // Grava e submete o material sem esperar. Busy significa que os tres slots ainda estao
+        // em voo/aguardando consumo; Failed indica material ou infraestrutura invalidos.
         // Primitive == PrimSceneMesh: desenha SceneMesh com SceneModel (matriz que centra e
         // normaliza a mesh pra caber no enquadramento da esfera — o Renderer monta a partir
         // do AABB do renderable); SceneMesh nulo cai pra esfera.
-        bool Render(ID3D12Device* Device, FCommandQueue& CmdQueue, FTextureSRVHeap& SRVHeap,
-                    FMaterial& Material, const FParams& Params, std::vector<u8>& Out,
-                    const FGpuMesh* SceneMesh = nullptr,
-                    const Mat44& SceneModel = Mat44::Identity());
+        ESubmitResult Submit(ID3D12Device* Device, FCommandQueue& CmdQueue,
+                             FTextureSRVHeap& SRVHeap, FMaterial& Material,
+                             const FParams& Params, u64 RequestId,
+                             const FGpuMesh* SceneMesh = nullptr,
+                             const Mat44& SceneModel = Mat44::Identity());
+
+        // Retorna imediatamente false se nenhuma fence terminou. Resultados sao consumidos na
+        // ordem de submissao; consumir libera o allocator/readback do slot para reuso.
+        bool ConsumeCompleted(FResult& Out);
 
     private:
         bool EnsureInitialized(ID3D12Device* Device, FCommandQueue& CmdQueue,
@@ -70,7 +84,9 @@ namespace Smile {
         void CreateTargets(ID3D12Device* Device);
         void CreateMeshes(ID3D12Device* Device);
 
-        // CB unico (upload, mapeado): slot 0 = mesh (VS+PS), slot 1 = sky.
+        // Upload mapeado e particionado por slot do ring: preview CB + sky CB + snapshot dos
+        // MaterialConstants. O snapshot impede UpdateConstants() do editor de alterar uma
+        // submissao que a GPU ainda nao consumiu.
         struct alignas(256) FMeshCB {
             Mat44 MVP;
             Mat44 Model;
@@ -88,7 +104,6 @@ namespace Smile {
 
         ComPtr<ID3D12Resource>      ColorTarget;
         ComPtr<ID3D12Resource>      DepthTarget;
-        ComPtr<ID3D12Resource>      Readback;
         FDescriptorHeap             RTVHeap;
         FDescriptorHeap             DSVHeap;
 
@@ -97,8 +112,23 @@ namespace Smile {
         ComPtr<ID3D12RootSignature> SkyRootSig;
         ComPtr<ID3D12PipelineState> SkyPSO;
 
-        ComPtr<ID3D12Resource>      ConstantBuffer;
-        u8*                         MappedCB = nullptr;
+        struct FReadbackSlot {
+            ComPtr<ID3D12CommandAllocator>    Allocator;
+            ComPtr<ID3D12GraphicsCommandList> CommandList;
+            ComPtr<ID3D12Resource>            Readback;
+            u64 RequestId = 0;
+            u64 FenceValue = 0;
+            u32 Size = 0;
+            u32 RowPitch = 0;
+            bool Pending = false;
+        };
+
+        ComPtr<ID3D12Resource> ConstantBuffer;
+        u8*                    MappedCB = nullptr;
+        FReadbackSlot          ReadbackSlots[kReadbackSlots];
+        ComPtr<ID3D12Fence>    ReadbackFence;
+        u64                    NextFenceValue = 0;
+        u32                    NextSubmitSlot = 0;
 
         FGpuMesh Meshes[4];              // esfera/cubo/plano/cilindro
         FHDREnvironment Env;             // HDRI do preview (independente da cena)

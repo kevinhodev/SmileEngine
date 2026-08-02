@@ -53,7 +53,7 @@ namespace Smile {
         IBLTableStart = _SRVHeap.Allocate(3);
 
         Initialized = true;
-        LogDebug("FMaterialPreview (preview offscreen ate 1024x1024) inicializado");
+        LogDebug("FMaterialPreview (preview offscreen ate 1024x1024, ring async x3) inicializado");
         return true;
     }
 
@@ -306,8 +306,20 @@ namespace Smile {
             Desc.Format           = DXGI_FORMAT_UNKNOWN;
             Desc.SampleDesc       = { 1, 0 };
             Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            SMILE_HR(_Device->CreateCommittedResource(&ReadbackHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Readback)));
+
+            for (FReadbackSlot& Slot : ReadbackSlots) {
+                SMILE_HR(_Device->CreateCommandAllocator(
+                    D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&Slot.Allocator)));
+                SMILE_HR(_Device->CreateCommandList(
+                    0, D3D12_COMMAND_LIST_TYPE_DIRECT, Slot.Allocator.Get(), nullptr,
+                    IID_PPV_ARGS(&Slot.CommandList)));
+                SMILE_HR(Slot.CommandList->Close());
+                SMILE_HR(_Device->CreateCommittedResource(
+                    &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &Desc,
+                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Slot.Readback)));
+            }
+            SMILE_HR(_Device->CreateFence(
+                0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&ReadbackFence)));
         }
 
         {
@@ -315,7 +327,9 @@ namespace Smile {
             UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
             D3D12_RESOURCE_DESC Desc{};
             Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = sizeof(FMeshCB) + sizeof(FSkyCB);
+            Desc.Width            = static_cast<u64>(kReadbackSlots) *
+                                    (sizeof(FMeshCB) + sizeof(FSkyCB) +
+                                     sizeof(MaterialConstants));
             Desc.Height           = 1;
             Desc.DepthOrArraySize = 1;
             Desc.MipLevels        = 1;
@@ -335,12 +349,27 @@ namespace Smile {
         Meshes[PrimCylinder].Upload(_Device, FMesh::CreateCylinder());
     }
 
-    bool FMaterialPreview::Render(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
-                                  FTextureSRVHeap& _SRVHeap, FMaterial& _Material,
-                                  const FParams& _Params, std::vector<u8>& _Out,
-                                  const FGpuMesh* _SceneMesh, const Mat44& _SceneModel) {
-        if (!EnsureInitialized(_Device, _CmdQueue, _SRVHeap)) return false;
-        if (!_Material.IsFinalized()) return false;
+    FMaterialPreview::ESubmitResult FMaterialPreview::Submit(
+        ID3D12Device* _Device, FCommandQueue& _CmdQueue, FTextureSRVHeap& _SRVHeap,
+        FMaterial& _Material, const FParams& _Params, u64 _RequestId,
+        const FGpuMesh* _SceneMesh, const Mat44& _SceneModel) {
+        if (!EnsureInitialized(_Device, _CmdQueue, _SRVHeap) ||
+            !_Material.IsFinalized() || _RequestId == 0)
+            return ESubmitResult::Failed;
+
+        u32 SlotIndex = kReadbackSlots;
+        for (u32 Offset = 0; Offset < kReadbackSlots; ++Offset) {
+            const u32 Candidate = (NextSubmitSlot + Offset) % kReadbackSlots;
+            if (ReadbackSlots[Candidate].Pending) continue;
+            SlotIndex = Candidate;
+            break;
+        }
+        if (SlotIndex == kReadbackSlots) return ESubmitResult::Busy;
+
+        FReadbackSlot& Slot = ReadbackSlots[SlotIndex];
+        SMILE_HR(Slot.Allocator->Reset());
+        SMILE_HR(Slot.CommandList->Reset(Slot.Allocator.Get(), nullptr));
+        ID3D12GraphicsCommandList* Cl = Slot.CommandList.Get();
 
         const u32 RenderSize = std::clamp(_Params.RenderSize, 1u, kSize);
         const u32 RowPitch =
@@ -386,12 +415,12 @@ namespace Smile {
         SkyCB.CamForward = Vec4(Fwd, _Params.EnvRotation);
         SkyCB.Params     = { 1.5f, 1.0f, 0.0f, 0.0f }; // mip suave, intensidade 1
 
-        std::memcpy(MappedCB, &MeshCB, sizeof(MeshCB));
-        std::memcpy(MappedCB + sizeof(FMeshCB), &SkyCB, sizeof(SkyCB));
-
-        // ---- Gravacao one-shot (mesmo caminho das cargas avulsas) ----
-        _CmdQueue.ResetForRecording();
-        ID3D12GraphicsCommandList* Cl = _CmdQueue.List();
+        const u64 CBStride = sizeof(FMeshCB) + sizeof(FSkyCB) + sizeof(MaterialConstants);
+        const u64 CBOffset = static_cast<u64>(SlotIndex) * CBStride;
+        std::memcpy(MappedCB + CBOffset, &MeshCB, sizeof(MeshCB));
+        std::memcpy(MappedCB + CBOffset + sizeof(FMeshCB), &SkyCB, sizeof(SkyCB));
+        std::memcpy(MappedCB + CBOffset + sizeof(FMeshCB) + sizeof(FSkyCB),
+                    &_Material.Constants, sizeof(MaterialConstants));
 
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         Cl->SetDescriptorHeaps(1, Heaps);
@@ -411,7 +440,8 @@ namespace Smile {
                                   1, &Scissor);
         Cl->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 1, &Scissor);
 
-        const D3D12_GPU_VIRTUAL_ADDRESS CBBase = ConstantBuffer->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS CBBase =
+            ConstantBuffer->GetGPUVirtualAddress() + CBOffset;
 
         // Fundo (so com HDRI carregado; sem ele fica o clear escuro).
         if (Env.HasHDRLoaded() && !_Params.TransparentBackground) {
@@ -429,7 +459,10 @@ namespace Smile {
         Cl->SetGraphicsRootSignature(MeshRootSig.Get());
         Cl->SetPipelineState(MeshPSO.Get());
         Cl->SetGraphicsRootConstantBufferView(0, CBBase);
-        _Material.Bind(Cl, _SRVHeap); // params 1 (CBV) + 2 (tabela t0-t7)
+        Cl->SetGraphicsRootConstantBufferView(
+            1, CBBase + sizeof(FMeshCB) + sizeof(FSkyCB));
+        Cl->SetGraphicsRootDescriptorTable(
+            2, _SRVHeap.GpuHandle(_Material.AlbedoDescriptorIndex()));
         if (IBLTableWritten)
             Cl->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(IBLTableStart));
         else
@@ -450,7 +483,7 @@ namespace Smile {
         Src.SubresourceIndex = 0;
 
         D3D12_TEXTURE_COPY_LOCATION Dst{};
-        Dst.pResource                          = Readback.Get();
+        Dst.pResource                          = Slot.Readback.Get();
         Dst.Type                               = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         Dst.PlacedFootprint.Offset             = 0;
         Dst.PlacedFootprint.Footprint.Format   = kColorFormat;
@@ -467,23 +500,52 @@ namespace Smile {
 
         SMILE_HR(Cl->Close());
         ID3D12CommandList* Lists[] = { Cl };
-        _CmdQueue.ExecuteAndSync(Lists, 1);
+        _CmdQueue.Native()->ExecuteCommandLists(1, Lists);
+        const u64 FenceValue = ++NextFenceValue;
+        SMILE_HR(_CmdQueue.Native()->Signal(ReadbackFence.Get(), FenceValue));
 
-        const size_t TightRow = size_t(RenderSize) * 4u;
-        _Out.resize(TightRow * RenderSize);
+        Slot.RequestId  = _RequestId;
+        Slot.FenceValue = FenceValue;
+        Slot.Size       = RenderSize;
+        Slot.RowPitch   = RowPitch;
+        Slot.Pending    = true;
+        NextSubmitSlot  = (SlotIndex + 1) % kReadbackSlots;
+        return ESubmitResult::Submitted;
+    }
+
+    bool FMaterialPreview::ConsumeCompleted(FResult& _Out) {
+        if (!ReadbackFence) return false;
+
+        const u64 Completed = ReadbackFence->GetCompletedValue();
+        FReadbackSlot* Ready = nullptr;
+        for (FReadbackSlot& Slot : ReadbackSlots) {
+            if (!Slot.Pending || Slot.FenceValue > Completed) continue;
+            if (!Ready || Slot.FenceValue < Ready->FenceValue) Ready = &Slot;
+        }
+        if (!Ready) return false;
+
+        _Out.RequestId = Ready->RequestId;
+        _Out.Size      = Ready->Size;
+        const size_t TightRow = size_t(Ready->Size) * 4u;
+        _Out.Pixels.resize(TightRow * Ready->Size);
         void* Mapped = nullptr;
-        D3D12_RANGE ReadRange{ 0, size_t(RowPitch) * RenderSize };
-        SMILE_HR(Readback->Map(0, &ReadRange, &Mapped));
-        if (RowPitch == TightRow) {
-            std::memcpy(_Out.data(), Mapped, _Out.size());
+        D3D12_RANGE ReadRange{ 0, size_t(Ready->RowPitch) * Ready->Size };
+        SMILE_HR(Ready->Readback->Map(0, &ReadRange, &Mapped));
+        if (Ready->RowPitch == TightRow) {
+            std::memcpy(_Out.Pixels.data(), Mapped, _Out.Pixels.size());
         } else {
             const auto* SrcRow = static_cast<const u8*>(Mapped);
-            for (u32 Y = 0; Y < RenderSize; ++Y)
-                std::memcpy(_Out.data() + size_t(Y) * TightRow,
-                            SrcRow + size_t(Y) * RowPitch, TightRow);
+            for (u32 Y = 0; Y < Ready->Size; ++Y)
+                std::memcpy(_Out.Pixels.data() + size_t(Y) * TightRow,
+                            SrcRow + size_t(Y) * Ready->RowPitch, TightRow);
         }
         D3D12_RANGE WrittenRange{ 0, 0 };
-        Readback->Unmap(0, &WrittenRange);
+        Ready->Readback->Unmap(0, &WrittenRange);
+        Ready->Pending    = false;
+        Ready->RequestId  = 0;
+        Ready->FenceValue = 0;
+        Ready->Size       = 0;
+        Ready->RowPitch   = 0;
         return true;
     }
 }

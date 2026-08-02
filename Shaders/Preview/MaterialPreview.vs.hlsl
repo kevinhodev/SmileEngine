@@ -27,7 +27,13 @@ VSOutput main(VSInput input) {
     VSOutput o;
     o.pos         = mul(float4(input.pos, 1.0f), MVP);
     o.worldPos    = mul(float4(input.pos, 1.0f), Model).xyz;
-    o.worldNormal = mul(input.normal, (float3x3)Model);
+    // Cofator = inverse-transpose sem a divisao pelo determinante. Como o PS normaliza,
+    // preserva a normal correta tambem para a primitiva "Mesh da cena" com escala nao uniforme.
+    const float3x3 M = (float3x3)Model;
+    const float3x3 CofM = float3x3(cross(M[1], M[2]),
+                                   cross(M[2], M[0]),
+                                   cross(M[0], M[1]));
+    o.worldNormal = mul(input.normal, CofM);
     o.uv          = input.uv;
     return o;
 }
