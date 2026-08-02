@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QElapsedTimer>
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
@@ -88,6 +87,5 @@ namespace SmileEditor {
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;
-        QElapsedTimer         StatsThrottle;    // status bar atualiza a ~5Hz, nao por frame
     };
 } 

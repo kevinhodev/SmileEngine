@@ -110,7 +110,7 @@ namespace SmileEditor {
 
         CreateStatusBar();
 
-        connect(Viewport, &ViewportWidget::FrameReady,          this, &MainWindow::UpdateStats);
+        connect(Viewport, &ViewportWidget::TelemetryUpdated,    this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
 
         StylesheetWatcher = new QFileSystemWatcher(this);
@@ -586,9 +586,6 @@ namespace SmileEditor {
 
         // ~5Hz basta: formatar QString + relayout da StatusBar a 100+Hz era so custo —
         // ninguem le FPS piscando por frame.
-        if (StatsThrottle.isValid() && StatsThrottle.elapsed() < 200) return;
-        StatsThrottle.restart();
-
         const float FPS = Viewport->GetFPS();
         const float FrameMs = FPS > 0.0f ? 1000.0f / FPS : 0.0f;
 

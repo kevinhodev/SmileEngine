@@ -138,23 +138,24 @@ namespace SmileEditor {
         Q_PROPERTY(bool rainParticles READ AreRainParticles NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool weatherDriveSky READ IsWeatherDriveSky NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
-        Q_PROPERTY(double frameTimeMs READ GetFrameTimeMs NOTIFY FrameReady)
-        Q_PROPERTY(int visibleDrawCount READ GetVisibleDrawCount NOTIFY FrameReady)
-        Q_PROPERTY(int occludedDrawCount READ GetOccludedDrawCount NOTIFY FrameReady)
-        Q_PROPERTY(int totalDrawCount READ GetTotalDrawCount NOTIFY FrameReady)
-        Q_PROPERTY(QString internalResolution READ GetInternalResolution NOTIFY FrameReady)
-        Q_PROPERTY(QString outputResolution READ GetOutputResolution NOTIFY FrameReady)
+        // Telemetria de UI e publicada a 5 Hz; FrameReady continua sendo o pulso interno por frame.
+        Q_PROPERTY(double fps READ GetFPS NOTIFY TelemetryUpdated)
+        Q_PROPERTY(double frameTimeMs READ GetFrameTimeMs NOTIFY TelemetryUpdated)
+        Q_PROPERTY(int visibleDrawCount READ GetVisibleDrawCount NOTIFY TelemetryUpdated)
+        Q_PROPERTY(int occludedDrawCount READ GetOccludedDrawCount NOTIFY TelemetryUpdated)
+        Q_PROPERTY(int totalDrawCount READ GetTotalDrawCount NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString internalResolution READ GetInternalResolution NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString outputResolution READ GetOutputResolution NOTIFY TelemetryUpdated)
         Q_PROPERTY(QString gpuName READ GetGPUName NOTIFY RendererInitialized)
         Q_PROPERTY(QString vramText READ GetVRAMText NOTIFY RendererInitialized)
-        Q_PROPERTY(QString vramUsageText READ GetVRAMUsageText NOTIFY FrameReady)
-        Q_PROPERTY(bool vramOverBudget READ IsVRAMOverBudget NOTIFY FrameReady)
-        Q_PROPERTY(double vramBudgetFrac READ GetVRAMBudgetFrac NOTIFY FrameReady)
-        Q_PROPERTY(QString vramNonLocalText READ GetVRAMNonLocalText NOTIFY FrameReady)
-        Q_PROPERTY(QVariantList vramBreakdown READ GetVRAMBreakdown NOTIFY FrameReady)
-        Q_PROPERTY(QString gpuFrameText READ GetGpuFrameText NOTIFY FrameReady)
-        Q_PROPERTY(double gpuFrameMs READ GetGpuFrameMs NOTIFY FrameReady)
-        Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY FrameReady)
+        Q_PROPERTY(QString vramUsageText READ GetVRAMUsageText NOTIFY TelemetryUpdated)
+        Q_PROPERTY(bool vramOverBudget READ IsVRAMOverBudget NOTIFY TelemetryUpdated)
+        Q_PROPERTY(double vramBudgetFrac READ GetVRAMBudgetFrac NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString vramNonLocalText READ GetVRAMNonLocalText NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QVariantList vramBreakdown READ GetVRAMBreakdown NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString gpuFrameText READ GetGpuFrameText NOTIFY TelemetryUpdated)
+        Q_PROPERTY(double gpuFrameMs READ GetGpuFrameMs NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY TelemetryUpdated)
 
     public:
         // Valores explicitos preservados (o QML compara viewMode com inteiros fixos; o 1 era o
@@ -418,6 +419,7 @@ namespace SmileEditor {
 
     signals:
         void FrameReady();
+        void TelemetryUpdated(); // 5 Hz: invalida apenas bindings de FPS/GPU/VRAM/resolucao
         void RendererInitialized(); // emitted once when D3D12 renderer is ready
         void ObjectSelected(int sceneIndex); // clique no viewport: indice na cena (-1 = vazio)
         void ViewSettingsChanged();
@@ -466,6 +468,7 @@ namespace SmileEditor {
         bool          IgnoreNextMove   = false;
         float         LastFPS          = 0.0f;
         QElapsedTimer FrameTimer;
+        QElapsedTimer TelemetryTimer;
         // Ranking visual dos passes GPU. Mutavel porque GetGpuTimings e um getter Qt const,
         // mas a ordem precisa de histerese entre snapshots para nao ficar trocando em empates.
         mutable QStringList GpuTimingOrder;

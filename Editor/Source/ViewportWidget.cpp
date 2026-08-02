@@ -1989,6 +1989,13 @@ namespace SmileEditor {
         const float InstFPS = DeltaTime > 0.0f ? 1.0f / DeltaTime : 0.0f;
         LastFPS = (LastFPS > 0.0f) ? (LastFPS * 0.96f + InstFPS * 0.04f) : InstFPS;
         MouseDelta = Smile::Vec2::Zero();
+
+        // QML nao precisa reler/formatar 17 propriedades de telemetria a cada frame. O pulso
+        // FrameReady permanece imediato para preview assincrono, picking, gizmos e bridges.
+        if (!TelemetryTimer.isValid() || TelemetryTimer.elapsed() >= 200) {
+            TelemetryTimer.restart();
+            emit TelemetryUpdated();
+        }
         emit FrameReady();
     }
 

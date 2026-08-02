@@ -57,8 +57,9 @@ Rectangle {
 
     Component.onCompleted: refreshGpuTimingSnapshot()
 
-    // Os valores do profiler ja usam EMA. Um snapshot a 10 Hz mantem a leitura fluida sem
+    // Os valores do profiler ja usam EMA. Um snapshot local a 10 Hz mantem a leitura fluida sem
     // reconstruir os delegates a cada frame — importante para hover, clique e animacao.
+    // Esta arvore tem cadencia propria: nao depende do sinal amplo das demais telemetrias.
     Timer {
         interval: 100
         repeat: true
