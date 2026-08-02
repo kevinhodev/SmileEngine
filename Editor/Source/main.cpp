@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QQuickStyle>
+#include <QQmlEngine>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <cstdlib>
@@ -130,8 +131,11 @@ namespace {
         SmileEditor::ApplyDarkTheme(App);
 
         int ExitCode = EXIT_FAILURE;
+        // Declarada fora do escopo da MainWindow: todos os QQuickWidget morrem antes da engine,
+        // como exige o construtor que recebe QQmlEngine externa.
+        QQmlEngine SharedQmlEngine;
         {
-            SmileEditor::MainWindow Window;
+            SmileEditor::MainWindow Window(SharedQmlEngine);
             // Dev/smoke: caminho de .sscene como 1o argumento carrega a cena no boot.
             const QStringList Args = QApplication::arguments();
             if (Args.size() > 1 &&

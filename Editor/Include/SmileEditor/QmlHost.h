@@ -8,6 +8,7 @@
 class QWidget;
 class QObject;
 class QQuickWidget;
+class QQmlEngine;
 class QQmlImageProviderBase;
 
 namespace SmileEditor {
@@ -22,9 +23,12 @@ namespace SmileEditor {
     // imageProviders registra fontes "image://<nome>/..." (ex.: smilelogo). Tudo e setado
     // ANTES do setSource, entao ja esta visivel na carga do QML. A engine assume a posse
     // dos providers.
-    // Hot-reload: enquanto o .qml for carregado de arquivo em disco (Debug e Release), salvar
-    // qualquer .qml da pasta recarrega o painel vivo, sem recompilar C++.
-    QQuickWidget* CreateQmlPanel(const QString& qmlFileName,
+    // Hot-reload: enquanto os .qml forem carregados de arquivo em disco (Debug e Release), salvar
+    // qualquer .qml da pasta recarrega em conjunto todos os paineis vivos, sem recompilar C++.
+    // A engine e externa e deve sobreviver ao widget. Todos os paines do editor recebem a
+    // mesma instancia criada no main, eliminando heaps/caches QML duplicados.
+    QQuickWidget* CreateQmlPanel(QQmlEngine& engine,
+                                 const QString& qmlFileName,
                                  const QVector<QPair<QString, QObject*>>& objectProperties,
                                  QWidget* parent,
                                  const QVector<QPair<QString, QQmlImageProviderBase*>>& imageProviders = {},

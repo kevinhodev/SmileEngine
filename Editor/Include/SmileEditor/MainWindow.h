@@ -13,6 +13,7 @@ class QWidget;
 class QEvent;
 class QDockWidget;
 class QDialog;
+class QQmlEngine;
 
 namespace SmileEditor {
     class ViewportWidget;
@@ -31,7 +32,7 @@ namespace SmileEditor {
         Q_OBJECT
 
     public:
-        explicit MainWindow(QWidget* parent = nullptr);
+        explicit MainWindow(QQmlEngine& qmlEngine, QWidget* parent = nullptr);
         ~MainWindow() override;
 
         // Cena .sscene passada na linha de comando (dev/smoke): carregada assim que o
@@ -63,6 +64,7 @@ namespace SmileEditor {
         void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
 
         QString               StartupScenePath;
+        QQmlEngine*           SharedQmlEngine = nullptr; // lifetime pertence ao RunEditor
         ViewportWidget*       Viewport    = nullptr;
         QPointer<ViewportWidget> ActiveViewport;
         QPointer<AboutDialog> AboutDlg;

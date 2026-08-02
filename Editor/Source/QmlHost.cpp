@@ -2,70 +2,142 @@
 #include "Smile/Core/Logger.h"
 
 #include <QQuickWidget>
+#include <QQuickImageProvider>
 #include <QQmlEngine>
 #include <QCoreApplication>
 #include <QColor>
 #include <QDir>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QPointer>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 
 namespace SmileEditor {
     namespace {
-        // Hot-reload: observa a pasta do .qml e recarrega o painel quando QUALQUER .qml muda
+        // Hot-reload: observa a pasta dos .qml e recarrega os paineis quando QUALQUER .qml muda
         // (pega tambem componentes compartilhados, ex.: LucideIcon). Ativo sempre que o QML vem
-        // de um arquivo em disco — vale para Debug e Release. As context properties e os image
-        // providers vivem no rootContext/engine e sobrevivem ao setSource, nao precisam re-setar.
-        void InstallQmlHotReload(QQuickWidget* _Widget, const QString& _Path) {
-            const QString Dir = QFileInfo(_Path).absolutePath();
-            if (Dir.isEmpty() || !QFileInfo::exists(_Path)) return;
+        // de arquivo em disco — vale para Debug e Release.
+        struct FQmlPanelRegistration {
+            QPointer<QQuickWidget> Widget;
+            QUrl Url;
+            QString File;
+            QVariantMap InitialProperties;
+        };
 
-            auto* Watcher = new QFileSystemWatcher(_Widget);
+        // Uma engine compartilhada exige uma unica transacao de hot-reload. Primeiro descarregamos
+        // TODAS as arvores registradas; so entao limpamos cache/singletons e carregamos tudo de novo.
+        // Isso evita que um painel mantenha instancias de tipos QML que a mesma engine invalidou,
+        // alem de trocar N watchers e N clears de cache por apenas um de cada.
+        class FQmlHotReloadCoordinator final : public QObject {
+        public:
+            explicit FQmlHotReloadCoordinator(QQmlEngine& _Engine)
+                : QObject(&_Engine), Engine(&_Engine), Watcher(this), Debounce(this) {
+                setObjectName(QStringLiteral("SmileQmlHotReloadCoordinator"));
+                Debounce.setSingleShot(true);
+                Debounce.setInterval(120);
 
-            // Debounce: editores salvam em varios passos (save atomico). Reloda so ao estabilizar.
-            auto* Debounce = new QTimer(_Widget);
-            Debounce->setSingleShot(true);
-            Debounce->setInterval(120);
+                QObject::connect(&Debounce, &QTimer::timeout, this, [this]() { Reload(); });
+                QObject::connect(&Watcher, &QFileSystemWatcher::fileChanged,
+                                 this, [this](const QString&) { Debounce.start(); });
+                QObject::connect(&Watcher, &QFileSystemWatcher::directoryChanged,
+                                 this, [this](const QString&) { Debounce.start(); });
+            }
 
-            // (Re)observa as pastas E todos os .qml delas. Os dois sinais sao necessarios: edicao
-            // in-place dispara fileChanged; save atomico (rename) dispara directoryChanged e ainda
-            // derruba o watch do arquivo trocado — por isso re-armamos os paths a cada evento.
-            // Inclui a subpasta components/ (Theme singleton + componentes compartilhados): salvar
-            // um componente recarrega todos os paineis abertos que o usam.
-            auto Rearm = [Watcher, Dir]() {
-                const QStringList Dirs{ Dir, Dir + "/components" };
-                for (const QString& D : Dirs) {
-                    if (!QFileInfo::exists(D)) continue;
-                    if (!Watcher->directories().contains(D)) Watcher->addPath(D);
-                    const QStringList Files = QDir(D).entryList(QStringList{ "*.qml" }, QDir::Files);
-                    for (const QString& F : Files) {
-                        const QString Fp = D + "/" + F;
-                        if (!Watcher->files().contains(Fp)) Watcher->addPath(Fp);
+            void Register(QQuickWidget* _Widget,
+                          const QString& _Path,
+                          const QVariantMap& _InitialProperties) {
+                const QString Dir = QFileInfo(_Path).absolutePath();
+                if (!_Widget || Dir.isEmpty() || !QFileInfo::exists(_Path)) return;
+
+                for (const FQmlPanelRegistration& Panel : Panels)
+                    if (Panel.Widget == _Widget) return;
+
+                Panels.push_back({ _Widget,
+                                   QUrl::fromLocalFile(_Path),
+                                   QFileInfo(_Path).fileName(),
+                                   _InitialProperties });
+                RootDirs.insert(QDir::cleanPath(Dir));
+                Rearm();
+
+                QObject::connect(_Widget, &QObject::destroyed, this, [this, _Widget]() {
+                    for (qsizetype Index = Panels.size(); Index-- > 0;)
+                        if (Panels[Index].Widget.isNull() || Panels[Index].Widget == _Widget)
+                            Panels.removeAt(Index);
+                });
+
+                Smile::LogDebug("QML compartilhado: " +
+                                std::to_string(Panels.size()) + " painel(is), " +
+                                std::to_string(Watcher.files().size()) + " .qml observados");
+            }
+
+        private:
+            void Rearm() {
+                for (const QString& RootDir : RootDirs) {
+                    const QStringList Dirs{ RootDir, QDir(RootDir).filePath("components") };
+                    for (const QString& Dir : Dirs) {
+                        if (!QFileInfo::exists(Dir)) continue;
+                        if (!Watcher.directories().contains(Dir)) Watcher.addPath(Dir);
+
+                        const QStringList Files =
+                            QDir(Dir).entryList(QStringList{ "*.qml" }, QDir::Files);
+                        for (const QString& File : Files) {
+                            const QString Path = QDir(Dir).absoluteFilePath(File);
+                            if (!Watcher.files().contains(Path)) Watcher.addPath(Path);
+                        }
                     }
                 }
-            };
-            Rearm();
-            Smile::LogDebug("QML hot-reload armado: " + QFileInfo(_Path).fileName().toStdString() +
-                           " (" + std::to_string(Watcher->files().size()) + " .qml em " +
-                           Dir.toStdString() + ")");
+            }
 
-            const QUrl Url = QUrl::fromLocalFile(_Path);
-            const QString File = QFileInfo(_Path).fileName();
-            QObject::connect(Debounce, &QTimer::timeout, _Widget, [_Widget, Url, File, Rearm]() {
-                Smile::LogInfo("QML hot-reload: recarregando " + File.toStdString());
-                Rearm();                                   // re-arma watches perdidos no save
-                _Widget->setSource(QUrl());                // descarrega a arvore atual
-                _Widget->engine()->clearComponentCache();  // forca recompilar do disco
-                _Widget->setSource(Url);
-                if (_Widget->status() == QQuickWidget::Error)
-                    for (const QQmlError& Err : _Widget->errors())
-                        Smile::LogError("QML hot-reload: " + Err.toString().toStdString());
-            });
+            void Reload() {
+                for (qsizetype Index = Panels.size(); Index-- > 0;)
+                    if (Panels[Index].Widget.isNull()) Panels.removeAt(Index);
+                if (Panels.isEmpty()) return;
 
-            auto Kick = [Debounce]() { Debounce->start(); };
-            QObject::connect(Watcher, &QFileSystemWatcher::fileChanged,      Debounce, Kick);
-            QObject::connect(Watcher, &QFileSystemWatcher::directoryChanged, Debounce, Kick);
+                Rearm(); // save atomico pode remover o watch do arquivo substituido
+                Smile::LogInfo("QML hot-reload compartilhado: recarregando " +
+                               std::to_string(Panels.size()) + " painel(is)");
+
+                for (const FQmlPanelRegistration& Panel : Panels)
+                    Panel.Widget->setSource(QUrl());
+
+                Engine->clearComponentCache();
+                Engine->clearSingletons(); // Theme.qml tambem pode ter sido alterado
+
+                for (const FQmlPanelRegistration& Panel : Panels) {
+                    // Nao dependemos de setInitialProperties sobreviver a troca de source.
+                    if (!Panel.InitialProperties.isEmpty())
+                        Panel.Widget->setInitialProperties(Panel.InitialProperties);
+                    Panel.Widget->setSource(Panel.Url);
+                    if (Panel.Widget->status() == QQuickWidget::Error)
+                        for (const QQmlError& Err : Panel.Widget->errors())
+                            Smile::LogError("QML hot-reload [" + Panel.File.toStdString() + "]: " +
+                                            Err.toString().toStdString());
+                }
+            }
+
+            QQmlEngine* Engine = nullptr;
+            QFileSystemWatcher Watcher;
+            QTimer Debounce;
+            QVector<FQmlPanelRegistration> Panels;
+            QSet<QString> RootDirs;
+        };
+
+        FQmlHotReloadCoordinator* HotReloadCoordinator(QQmlEngine& _Engine) {
+            constexpr auto Name = "SmileQmlHotReloadCoordinator";
+            if (QObject* Existing =
+                    _Engine.findChild<QObject*>(QString::fromLatin1(Name),
+                                                Qt::FindDirectChildrenOnly))
+                return static_cast<FQmlHotReloadCoordinator*>(Existing);
+            return new FQmlHotReloadCoordinator(_Engine);
+        }
+
+        void InstallQmlHotReload(QQmlEngine& _Engine,
+                                 QQuickWidget* _Widget,
+                                 const QString& _Path,
+                                 const QVariantMap& _InitialProperties) {
+            HotReloadCoordinator(_Engine)->Register(_Widget, _Path, _InitialProperties);
         }
     }
 
@@ -86,17 +158,25 @@ namespace SmileEditor {
 #endif
     }
 
-    QQuickWidget* CreateQmlPanel(const QString& _QmlFileName,
+    QQuickWidget* CreateQmlPanel(QQmlEngine& _Engine,
+                                 const QString& _QmlFileName,
                                  const QVector<QPair<QString, QObject*>>& _ObjectProperties,
                                  QWidget* _Parent,
                                  const QVector<QPair<QString, QQmlImageProviderBase*>>& _ImageProviders,
                                  const QVariantMap& _InitialProperties) {
-        auto* Widget = new QQuickWidget(_Parent);
+        auto* Widget = new QQuickWidget(&_Engine, _Parent);
         Widget->setResizeMode(QQuickWidget::SizeRootObjectToView);
         Widget->setClearColor(QColor(0x10, 0x11, 0x0f)); // mesmo fundo do tema (#10110f)
 
-        for (const auto& Provider : _ImageProviders)
-            Widget->engine()->addImageProvider(Provider.first, Provider.second); // engine assume posse
+        for (const auto& Provider : _ImageProviders) {
+            if (_Engine.imageProvider(Provider.first)) {
+                Smile::LogError("QML image provider duplicado na engine compartilhada: " +
+                                Provider.first.toStdString());
+                delete Provider.second; // a engine ainda nao assumiu a posse deste duplicado
+                continue;
+            }
+            _Engine.addImageProvider(Provider.first, Provider.second); // engine assume posse
+        }
 
         // Todo objeto C++ e uma propriedade EXPLICITA do componente raiz. Alem de dar contrato
         // verificavel ao QML (required property), isto deixa os paines prontos para compartilhar
@@ -115,7 +195,7 @@ namespace SmileEditor {
                                 Err.toString().toStdString());
         }
 
-        InstallQmlHotReload(Widget, Path); // recarrega ao salvar o .qml (Debug e Release)
+        InstallQmlHotReload(_Engine, Widget, Path, Properties);
         return Widget;
     }
 }

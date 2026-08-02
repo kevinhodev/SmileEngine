@@ -53,8 +53,8 @@
 #include <QWidget>
 
 namespace SmileEditor {
-    MainWindow::MainWindow(QWidget* _Parent)
-        : QMainWindow(_Parent)
+    MainWindow::MainWindow(QQmlEngine& _QmlEngine, QWidget* _Parent)
+        : QMainWindow(_Parent), SharedQmlEngine(&_QmlEngine)
     {
         setWindowTitle(tr("Smile Engine"));
         setWindowIcon(QIcon(MakeSmileLogoPixmap(256)));
@@ -277,7 +277,7 @@ namespace SmileEditor {
     void MainWindow::CreateTopBar() {
         // Barra unificada em QML: windowBridge (min/max/fechar + zonas do hit-test), menuBridge
         // (menus) e smilelogo (logo procedural da engine como image provider).
-        QQuickWidget* Bar = CreateQmlPanel(
+        QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("MainBar.qml"),
             { { QStringLiteral("windowBridge"), WindowBr },
               { QStringLiteral("menuBridge"),   Menus } },
@@ -301,7 +301,7 @@ namespace SmileEditor {
 
     void MainWindow::CreateStatusBar() {
         StatusBr = new StatusBridge(this);
-        QQuickWidget* Bar = CreateQmlPanel(
+        QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("StatusBar.qml"),
             { { QStringLiteral("statusModel"), StatusBr } },
             this);
@@ -441,7 +441,7 @@ namespace SmileEditor {
             QStringLiteral("viewportModel"),
             QVariant::fromValue(static_cast<QObject*>(Viewport)));
 
-        QQuickWidget* Toolbar = CreateQmlPanel(
+        QQuickWidget* Toolbar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ViewportToolbar.qml"),
             {},
             Shell,
@@ -466,7 +466,7 @@ namespace SmileEditor {
                                  QDockWidget::DockWidgetClosable);
 
         // Console em QML (ConsolePanel.qml), alimentado pela propriedade raiz logModel.
-        QQuickWidget* Console = CreateQmlPanel(
+        QQuickWidget* Console = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ConsolePanel.qml"),
             { { QStringLiteral("logModel"), ConsoleLog } },
             ConsoleDock);
@@ -502,7 +502,7 @@ namespace SmileEditor {
                                 QDockWidget::DockWidgetFloatable |
                                 QDockWidget::DockWidgetClosable);
 
-        QQuickWidget* OutlinerPanel = CreateQmlPanel(
+        QQuickWidget* OutlinerPanel = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("SceneOutlinerPanel.qml"),
             { { QStringLiteral("outlinerModel"),  OutlinerBr },
               { QStringLiteral("lightsModel"),    LightsBr },
@@ -644,12 +644,11 @@ namespace SmileEditor {
             Dialog->setMinimumSize(960, 640);
 
             auto* SettingsWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("SettingsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
-                Dialog,
-                { { QStringLiteral("smilelogo"), new SmileLogoImageProvider() } });
+                Dialog);
             Panel->setObjectName(QStringLiteral("SettingsPanel"));
 
             auto* DialogLayout = new QVBoxLayout(Dialog);
@@ -689,7 +688,7 @@ namespace SmileEditor {
             Dialog->setMinimumSize(840, 672);
 
             auto* TodWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("TimeOfDayWindow.qml"),
                 { { QStringLiteral("todModel"), TodBridge },
                   { QStringLiteral("todWindow"), TodWindowBridge } },
@@ -733,7 +732,7 @@ namespace SmileEditor {
             Dialog->setMinimumSize(760, 620);
 
             auto* StatsWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("StatsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("statsWindow"), StatsWindowBridge } },
@@ -778,7 +777,7 @@ namespace SmileEditor {
             Dialog->setMinimumSize(900, 560);
 
             auto* DebugWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("DebugTargetsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("debugWindow"), DebugWindowBridge } },
@@ -823,7 +822,7 @@ namespace SmileEditor {
             Dialog->setMinimumSize(1240, 660);
 
             auto* MaterialsWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("MaterialsWindow.qml"),
                 { { QStringLiteral("materialsModel"),  MaterialsBr },
                   { QStringLiteral("materialsWindow"), MaterialsWindowBridge } },
