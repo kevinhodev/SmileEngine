@@ -2423,7 +2423,7 @@ Rectangle {
             HoverHandler { id: giPageHover }
 
             // SNAPSHOT do model, nao binding direto em viewportModel.rayEpsilons. Escrever um
-            // epsilon emite ViewSettingsChanged, o que re-le a propriedade e trocaria a lista do
+            // epsilon emite GISettingsChanged, o que re-le a propriedade e trocaria a lista do
             // Repeater — reconstruindo os delegates DEBAIXO do mouse durante o arrasto. Recarrega
             // so nos momentos discretos: abrir a pagina e restaurar padroes.
             property var epsModel: []
@@ -2766,7 +2766,7 @@ Rectangle {
                         // Igual aos epsilons: o rótulo acompanha o arrasto, a engine só é tocada
                         // ao soltar — cada pixel de arrasto reiniciaria o atlas do DDGI e todos
                         // os históricos que se apoiam nele. Sem binding direto em viewportModel
-                        // (escrever emite ViewSettingsChanged e o valor saltaria de volta no meio
+                        // (escrever emite GISettingsChanged e o valor saltaria de volta no meio
                         // do arrasto); recarrega em reloadEps().
                         property real uiValue: 0.0
                         value: uiValue

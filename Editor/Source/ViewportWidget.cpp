@@ -982,26 +982,26 @@ namespace SmileEditor {
     void ViewportWidget::ToggleGTAO() {
         if (!Renderer) return;
         Renderer->SetUseAO(!Renderer->GetUseAO());
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::ToggleGTAOHalfRes() {
         if (!Renderer) return;
         auto& AO = Renderer->GetAO();
         AO.SetHalfRes(!AO.GetHalfRes());
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::ToggleReflections() {
         if (!Renderer) return;
         Renderer->SetUseReflections(!Renderer->GetUseReflections());
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::ToggleNrd() {
         if (!Renderer) return;
         Renderer->SetUseNrdDenoise(!Renderer->GetUseNrdDenoise());
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::SetDenoiserMode(int _Mode) {
@@ -1009,25 +1009,25 @@ namespace SmileEditor {
         // 0=Nenhum 1=NRD 2=DLSS RR. Selecionar RR forca e trava o upscaler em DLSS (o RR faz o upscale);
         // o Renderer cai p/ NRD se o RR nao estiver disponivel (sem NVIDIA/SDK).
         Renderer->SetDenoiser(static_cast<Smile::EDenoiser>(_Mode));
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::SetUpscalerMode(int _Mode) {
         if (!Renderer) return;
         Renderer->SetUpscaler(static_cast<Smile::EUpscaler>(_Mode));  // 0=None 1=FSR 2=DLSS; cai p/ None se indisponivel
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::SetUpscalerQuality(int _Quality) {
         if (!Renderer) return;
         Renderer->SetUpscalerQuality(_Quality);  // qualidade compartilhada FSR/DLSS
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::SetRenderScale(double _Scale) {
         if (!Renderer) return;
         Renderer->SetRenderScale(static_cast<float>(_Scale));
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     namespace {
@@ -1129,19 +1129,19 @@ namespace SmileEditor {
     void ViewportWidget::SetTAAEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetUseTAA(_Enabled);
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::SetFrustumCullingEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetFrustumCulling(_Enabled);
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::SetOcclusionCullingEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetOcclusionCulling(_Enabled);
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     bool ViewportWidget::AreSunShadowsEnabled() const {
@@ -1235,7 +1235,7 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShaftsEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetUseSunShafts(_Enabled);
-        emit ViewSettingsChanged();
+        emit SunShaftsSettingsChanged();
     }
 
     double ViewportWidget::GetSunShaftsIntensity() const {
@@ -1245,7 +1245,7 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShaftsIntensity(double _Value) {
         if (!Renderer) return;
         Renderer->GetSunShafts().SetVolIntensity(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit SunShaftsSettingsChanged();
     }
 
     double ViewportWidget::GetSunShaftsDust() const {
@@ -1255,7 +1255,7 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShaftsDust(double _Value) {
         if (!Renderer) return;
         Renderer->GetSunShafts().SetVolDust(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit SunShaftsSettingsChanged();
     }
 
     double ViewportWidget::GetSunShaftsPhaseG() const {
@@ -1265,7 +1265,7 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShaftsPhaseG(double _Value) {
         if (!Renderer) return;
         Renderer->GetSunShafts().SetVolPhaseG(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit SunShaftsSettingsChanged();
     }
 
     int ViewportWidget::GetSunShaftsSteps() const {
@@ -1275,7 +1275,7 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShaftsSteps(int _Value) {
         if (!Renderer) return;
         Renderer->GetSunShafts().SetVolSteps(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit SunShaftsSettingsChanged();
     }
 
     double ViewportWidget::GetSunShaftsRange() const {
@@ -1285,7 +1285,7 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShaftsRange(double _Value) {
         if (!Renderer) return;
         Renderer->GetSunShafts().SetVolMaxDist(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit SunShaftsSettingsChanged();
     }
 
     bool ViewportWidget::AreSunShaftsTemporal() const {
@@ -1295,7 +1295,7 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShaftsTemporal(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetSunShafts().SetVolTemporal(_Enabled);
-        emit ViewSettingsChanged();
+        emit SunShaftsSettingsChanged();
     }
 
     bool ViewportWidget::IsVolFogEnabled() const {
@@ -1305,7 +1305,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetUseVolumetricFog(_Enabled);
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     double ViewportWidget::GetVolFogDistance() const {
@@ -1315,7 +1315,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogDistance(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricFog().SetMaxDistance(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     double ViewportWidget::GetVolFogPhaseG() const {
@@ -1325,7 +1325,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogPhaseG(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricFog().SetPhaseG(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     double ViewportWidget::GetVolFogDensity() const {
@@ -1335,7 +1335,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogDensity(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricFog().SetExtinctionScale(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     double ViewportWidget::GetVolFogAmbient() const {
@@ -1345,7 +1345,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogAmbient(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricFog().SetAmbientIntensity(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     bool ViewportWidget::IsVolFogTemporal() const {
@@ -1355,7 +1355,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogTemporal(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetVolumetricFog().SetTemporal(_Enabled);
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     double ViewportWidget::GetVolFogLights() const {
@@ -1365,7 +1365,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogLights(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricFog().SetLightsIntensity(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     bool ViewportWidget::IsVolFogConsDepth() const {
@@ -1375,7 +1375,7 @@ namespace SmileEditor {
     void ViewportWidget::SetVolFogConsDepth(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetVolumetricFog().SetConservativeDepth(_Enabled);
-        emit ViewSettingsChanged();
+        emit VolFogSettingsChanged();
     }
 
     bool ViewportWidget::AreCloudsEnabled() const {
@@ -1385,7 +1385,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudsEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetUseClouds(_Enabled);
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     bool ViewportWidget::AreCloudsHalfRes() const {
@@ -1399,13 +1399,13 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudsTemporal(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetUseTemporal(_Enabled);
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     void ViewportWidget::SetCloudsHalfRes(bool _HalfRes) {
         if (!Renderer) return;
         Renderer->SetCloudsHalfRes(_HalfRes);
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudCoverage() const {
@@ -1415,7 +1415,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudCoverage(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetCoverage(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudDensity() const {
@@ -1425,7 +1425,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudDensity(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetDensityScale(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudWindSpeed() const {
@@ -1435,7 +1435,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudWindSpeed(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetWindSpeed(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudErosion() const {
@@ -1445,7 +1445,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudErosion(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetErosion(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudPhaseG() const {
@@ -1455,7 +1455,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudPhaseG(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetPhaseG(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudPowder() const {
@@ -1465,7 +1465,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudPowder(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetPowder(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudAmbient() const {
@@ -1475,7 +1475,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudAmbient(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetAmbientScale(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudTypeBias() const {
@@ -1485,7 +1485,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudTypeBias(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetCloudTypeBias(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudPeakVariation() const {
@@ -1495,7 +1495,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudPeakVariation(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetPeakVariation(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     int ViewportWidget::GetCloudWeatherSeed() const {
@@ -1505,7 +1505,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudWeatherSeed(int _Seed) {
         if (!Renderer) return;
         Renderer->SetCloudWeatherSeed(static_cast<Smile::u32>(_Seed < 0 ? 0 : _Seed));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     int ViewportWidget::GetCloudWeatherCells() const {
@@ -1515,7 +1515,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudWeatherCells(int _Mult) {
         if (!Renderer) return;
         Renderer->SetCloudWeatherCells(static_cast<Smile::u32>(_Mult < 1 ? 1 : _Mult));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     bool ViewportWidget::IsCloudWeatherAuthored() const {
@@ -1529,13 +1529,13 @@ namespace SmileEditor {
             tr("Imagens (*.png *.jpg *.jpeg *.tga *.bmp)"));
         if (Path.isEmpty()) return;
         Renderer->LoadCloudWeatherTexture(Path.toStdWString());
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     void ViewportWidget::ClearCloudWeatherTexture() {
         if (!Renderer) return;
         Renderer->ClearCloudWeatherTexture();
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     bool ViewportWidget::AreCloudShadowsEnabled() const {
@@ -1545,7 +1545,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudShadowsEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetShadowsEnabled(_Enabled);
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudShadowStrength() const {
@@ -1555,7 +1555,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudShadowStrength(double _Value) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetShadowStrength(static_cast<Smile::f32>(_Value));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     double ViewportWidget::GetCloudBottomKm() const {
@@ -1570,7 +1570,7 @@ namespace SmileEditor {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetAltitude(static_cast<Smile::f32>(_BottomKm),
                                                     static_cast<Smile::f32>(_ThicknessKm));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     int ViewportWidget::GetCloudMarchSteps() const {
@@ -1580,7 +1580,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCloudMarchSteps(int _Steps) {
         if (!Renderer) return;
         Renderer->GetVolumetricClouds().SetMarchSteps(static_cast<Smile::f32>(_Steps));
-        emit ViewSettingsChanged();
+        emit CloudSettingsChanged();
     }
 
     // ---- Clima (FWeather; defaults espelham o struct p/ antes do renderer existir) ----
@@ -1590,7 +1590,7 @@ namespace SmileEditor {
     void ViewportWidget::SetRainAmount(double _Value) {
         if (!Renderer) return;
         Renderer->GetWeather().RainAmount = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     double ViewportWidget::GetPuddleAmount() const {
@@ -1599,7 +1599,7 @@ namespace SmileEditor {
     void ViewportWidget::SetPuddleAmount(double _Value) {
         if (!Renderer) return;
         Renderer->GetWeather().PuddleAmount = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     double ViewportWidget::GetPuddleScale() const {
@@ -1608,7 +1608,7 @@ namespace SmileEditor {
     void ViewportWidget::SetPuddleScale(double _Value) {
         if (!Renderer) return;
         Renderer->GetWeather().PuddleScale = static_cast<Smile::f32>(std::clamp(_Value, 1.0, 64.0));
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     double ViewportWidget::GetRippleStrength() const {
@@ -1617,7 +1617,7 @@ namespace SmileEditor {
     void ViewportWidget::SetRippleStrength(double _Value) {
         if (!Renderer) return;
         Renderer->GetWeather().RippleStrength = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 2.0));
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     double ViewportWidget::GetWetDarkening() const {
@@ -1626,7 +1626,7 @@ namespace SmileEditor {
     void ViewportWidget::SetWetDarkening(double _Value) {
         if (!Renderer) return;
         Renderer->GetWeather().WetDarkening = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     double ViewportWidget::GetCurtainAmount() const {
@@ -1635,7 +1635,7 @@ namespace SmileEditor {
     void ViewportWidget::SetCurtainAmount(double _Value) {
         if (!Renderer) return;
         Renderer->GetWeather().CurtainAmount = static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0));
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     bool ViewportWidget::IsRainOcclusion() const {
@@ -1644,7 +1644,7 @@ namespace SmileEditor {
     void ViewportWidget::SetRainOcclusion(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetWeather().RainOcclusion = _Enabled;
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     bool ViewportWidget::AreRainParticles() const {
@@ -1653,7 +1653,7 @@ namespace SmileEditor {
     void ViewportWidget::SetRainParticles(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetWeather().RainParticles = _Enabled;
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     bool ViewportWidget::IsWeatherDriveSky() const {
@@ -1662,13 +1662,13 @@ namespace SmileEditor {
     void ViewportWidget::SetWeatherDriveSky(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetWeather().DriveSky = _Enabled;
-        emit ViewSettingsChanged();
+        emit WeatherSettingsChanged();
     }
 
     void ViewportWidget::SetDepthPrepassEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetDepthPrepass(_Enabled);
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::ResetRenderSettings() {
@@ -1680,7 +1680,7 @@ namespace SmileEditor {
         Renderer->SetUseTAA(true);
         Renderer->SetFrustumCulling(true);
         Renderer->SetDepthPrepass(false);
-        emit ViewSettingsChanged();
+        emit RenderSettingsChanged();
     }
 
     void ViewportWidget::RequestSettings() {
