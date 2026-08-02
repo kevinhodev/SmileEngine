@@ -274,7 +274,7 @@ namespace SmileEditor {
         }
         endResetModel();
         emit StructureChanged();
-        emit SelectionChanged();
+        NotifySelectionChanged();
     }
 
     void MaterialsBridge::Rebuild() {
@@ -395,7 +395,7 @@ namespace SmileEditor {
                     if (SelectedMat != i) {
                         SelectedMat = i;
                         InvalidatePreview();
-                        emit SelectionChanged();
+                        NotifySelectionChanged();
                         if (!Rows.isEmpty())
                             emit dataChanged(index(0), index(Rows.size() - 1), { RSelected });
                         const int Row = selectedRowIndex();
@@ -424,7 +424,7 @@ namespace SmileEditor {
         if (SelectedMat == Rows[_Row].MatIdx) return;
         SelectedMat = Rows[_Row].MatIdx;
         InvalidatePreview();
-        emit SelectionChanged();
+        NotifySelectionChanged();
         emit dataChanged(index(0), index(Rows.size() - 1), { RSelected });
         if (IsolatingOn) ApplyIsolation(); // isolar segue o material selecionado
     }
@@ -472,38 +472,73 @@ namespace SmileEditor {
     // Todos os setters seguem o mesmo esquema: muta Constants (ou flag), UpdateConstants()
     // (memcpy no CBV upload mapeado) e TouchSelected() — o proximo frame ja desenha o novo.
 
-    void MaterialsBridge::TouchSelected() {
+    void MaterialsBridge::NotifySelectionChanged() {
+        emit SelectionChanged();
+        emit SurfaceChanged();
+        emit NormalParallaxChanged();
+        emit MaterialModeChanged();
+        emit TextureSlotsChanged();
+        emit MaterialStateChanged();
+    }
+
+    void MaterialsBridge::TouchSelected(EChangeDomain _Domain) {
         MarkDirty();
         // Edicao de slider/cor tambem e continua: frames anteriores do MESMO material ainda
         // sao uteis enquanto o ring alcanca o valor mais novo. FMaterialPreview fotografa o CB
         // por slot, portanto nao ha disputa com UpdateConstants() durante o voo.
         MarkPreviewDirty();
         InvalidateThumb(SelectedMat); // thumbnail do browser acompanha a edicao
-        emit SelectionChanged();
+        switch (_Domain) {
+        case EChangeDomain::Surface:        emit SurfaceChanged();        break;
+        case EChangeDomain::NormalParallax: emit NormalParallaxChanged(); break;
+        case EChangeDomain::MaterialMode:   emit MaterialModeChanged();   break;
+        case EChangeDomain::Textures:       emit TextureSlotsChanged();   break;
+        case EChangeDomain::All:
+            emit SurfaceChanged();
+            emit NormalParallaxChanged();
+            emit MaterialModeChanged();
+            emit TextureSlotsChanged();
+            break;
+        }
+        emit MaterialStateChanged();
+
         const int Row = selectedRowIndex();
         if (Row >= 0) {
-            // Badges/swatch/VRAM/dot podem mudar com a edicao.
+            const bool UpdateSurface = _Domain == EChangeDomain::Surface ||
+                                       _Domain == EChangeDomain::All;
+            const bool UpdateMode = _Domain == EChangeDomain::MaterialMode ||
+                                    _Domain == EChangeDomain::All;
+            const bool UpdateTextures = _Domain == EChangeDomain::Textures ||
+                                        _Domain == EChangeDomain::All;
             auto& R = Rows[Row];
             if (const auto* M = SelMat()) {
-                R.Badges = BadgesOf(*M);
-                const auto& B = M->Constants.BaseColorFactor;
-                R.Swatch = QColor::fromRgbF(std::clamp(B.X, 0.0f, 1.0f),
-                                            std::clamp(B.Y, 0.0f, 1.0f),
-                                            std::clamp(B.Z, 0.0f, 1.0f));
-                R.VramBytes = 0;
-                const Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {
-                    M->Albedo, M->Normal, M->MetallicRoughness, M->AO,
-                    M->Emissive, M->Height, M->Metalness, M->Roughness };
-                for (const auto* T : Slots)
-                    if (T) R.VramBytes += TextureBytes(*T);
+                if (UpdateSurface || UpdateMode || UpdateTextures)
+                    R.Badges = BadgesOf(*M);
+                if (UpdateSurface) {
+                    const auto& B = M->Constants.BaseColorFactor;
+                    R.Swatch = QColor::fromRgbF(std::clamp(B.X, 0.0f, 1.0f),
+                                                std::clamp(B.Y, 0.0f, 1.0f),
+                                                std::clamp(B.Z, 0.0f, 1.0f));
+                }
+                if (UpdateTextures) {
+                    R.VramBytes = 0;
+                    const Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {
+                        M->Albedo, M->Normal, M->MetallicRoughness, M->AO,
+                        M->Emissive, M->Height, M->Metalness, M->Roughness };
+                    for (const auto* T : Slots)
+                        if (T) R.VramBytes += TextureBytes(*T);
+                }
             }
-            emit dataChanged(index(Row), index(Row),
-                             { RBadges, RSwatch, RVramText, RModified });
+            QList<int> Roles{ RModified };
+            if (UpdateSurface || UpdateMode || UpdateTextures) Roles.push_back(RBadges);
+            if (UpdateSurface) Roles.push_back(RSwatch);
+            if (UpdateTextures) Roles.push_back(RVramText);
+            emit dataChanged(index(Row), index(Row), Roles);
         }
     }
 
-    void MaterialsBridge::TouchSelectedRT() {
-        TouchSelected();
+    void MaterialsBridge::TouchSelectedRT(EChangeDomain _Domain) {
+        TouchSelected(_Domain);
         // Coalescido: o Renderer aplica uma vez no proximo frame. Chamar o Notify direto aqui
         // custaria um Flush da fila + reset de todos os historicos POR TICK de slider.
         if (Renderer) Renderer->MarkMaterialRTStateDirty();
@@ -526,7 +561,7 @@ namespace SmileEditor {
         auto& B = M->Constants.BaseColorFactor;
         B.X = float(_V.redF()); B.Y = float(_V.greenF()); B.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.BaseColor = albedo do GI/reflexo
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.BaseColor = albedo do GI/reflexo
     }
 
     qreal MaterialsBridge::Metallic() const {
@@ -538,7 +573,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.MetallicFactor = float(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.EmissiveFactor.w
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.EmissiveFactor.w
     }
 
     qreal MaterialsBridge::Roughness() const {
@@ -550,7 +585,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.RoughnessFactor = float(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.RoughnessFactor
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.RoughnessFactor
     }
 
     QColor MaterialsBridge::EmissiveColor() const {
@@ -566,7 +601,7 @@ namespace SmileEditor {
         auto& E = M->Constants.EmissiveFactor;
         E.X = float(_V.redF()); E.Y = float(_V.greenF()); E.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.EmissiveFactor.rgb — o emissivo ILUMINA o GI
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.EmissiveFactor.rgb — o emissivo ILUMINA o GI
     }
 
     qreal MaterialsBridge::EmissiveStrength() const {
@@ -578,7 +613,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.EmissiveStrength = float(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // multiplica o EmissiveFactor no InstanceGeo
+        TouchSelectedRT(EChangeDomain::Surface); // multiplica o EmissiveFactor no InstanceGeo
     }
 
     qreal MaterialsBridge::RTEmissiveScale() const {
@@ -592,7 +627,7 @@ namespace SmileEditor {
         // acima do que a superficie mostra. Quem quer mais energia sobe o EmissiveStrength.
         M->Constants.RTEmissiveScale = float(std::clamp(_V, 0.0, 1.0));
         M->UpdateConstants();
-        TouchSelectedRT(); // reempacota o InstanceGeo: e la que a escala entra
+        TouchSelectedRT(EChangeDomain::Surface); // reempacota o InstanceGeo: e la que a escala entra
     }
 
     qreal MaterialsBridge::NormalStrength() const {
@@ -604,7 +639,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.NormalStrength = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::NormalFlipY() const {
@@ -616,7 +651,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.NormalFlipY = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::NormalReconstructZ() const {
@@ -628,7 +663,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.NormalReconstructZ = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::HasNormalMap() const {
@@ -650,7 +685,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.HeightScale = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     int MaterialsBridge::ParallaxMinSteps() const {
@@ -662,7 +697,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.ParallaxMinSteps = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     int MaterialsBridge::ParallaxMaxSteps() const {
@@ -674,7 +709,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.ParallaxMaxSteps = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::ParallaxSelfShadow() const {
@@ -686,7 +721,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.ParallaxSelfShadow = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::ParallaxRefine() const {
@@ -698,7 +733,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.ParallaxRefine = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::AlphaTest() const {
@@ -713,7 +748,7 @@ namespace SmileEditor {
         // AlphaTest nao e so raster: decide a InstanceMask e o FORCE_NON_OPAQUE da TLAS, entra no
         // criterio de culling (IsTwoSidedForRT) e vive no snapshot do InstanceGeo. Sem isto o RT
         // seguia com o estado do load.
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     qreal MaterialsBridge::AlphaCutoff() const {
@@ -727,7 +762,7 @@ namespace SmileEditor {
         M->UpdateConstants();
         // InstanceGeo.AlphaCutoff: e o cutoff que o alpha-test dos RAIOS usa (RTAlphaTest.hlsli).
         // O toggle AlphaTest ja sincronizava; o VALOR nao — recorte do raster e do raio divergiam.
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     bool MaterialsBridge::BlendFlag() const {
@@ -741,7 +776,7 @@ namespace SmileEditor {
         // No RT, Blend escolhe a CATEGORIA da instancia na TLAS (kRTMaskTranslucent): translucido
         // sai do gather do GI. Isso mora na TLAS, nao no constant buffer do material — sem o
         // rebuild, o material vira vidro no raster e continua opaco para a iluminacao indireta.
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     bool MaterialsBridge::TwoSided() const {
@@ -754,7 +789,7 @@ namespace SmileEditor {
         M->TwoSided = _V; // PSO escolhido por draw, por frame
         // No RT nao e por draw: alimenta o culling da instancia na TLAS e o TwoSidedRT do
         // InstanceGeo (que decide se um hit pelo verso conta como "dentro de solido").
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     int MaterialsBridge::ShadingModel() const {
@@ -766,7 +801,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.ShadingModel = Smile::u32(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.Flags bit FOLIAGE (ShadingModel == 1)
+        TouchSelectedRT(EChangeDomain::MaterialMode); // InstanceGeo.Flags bit FOLIAGE (ShadingModel == 1)
     }
 
     QColor MaterialsBridge::SubsurfaceColor() const {
@@ -782,7 +817,7 @@ namespace SmileEditor {
         auto& S = M->Constants.SubsurfaceColor;
         S.X = float(_V.redF()); S.Y = float(_V.greenF()); S.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::MaterialMode);
     }
 
     qreal MaterialsBridge::SubsurfaceIntensity() const {
@@ -794,7 +829,7 @@ namespace SmileEditor {
         auto* M = SelMat(); if (!M) return;
         M->Constants.SubsurfaceColor.W = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::MaterialMode);
     }
 
     QVariantList MaterialsBridge::TextureSlots() const {
@@ -928,7 +963,7 @@ namespace SmileEditor {
         }
         ApplySlotTexture(*M, _Slot, T);
         TexOverrides[M][_Slot] = File;
-        TouchSelected();
+        TouchSelected(EChangeDomain::Textures);
     }
 
     void MaterialsBridge::clearSlot(int _Slot) {
@@ -937,7 +972,7 @@ namespace SmileEditor {
         ApplySlotTexture(*M, _Slot, nullptr);
         // "" no override = slot explicitamente limpo (sobrevive ao save/load).
         TexOverrides[M][_Slot] = QString();
-        TouchSelected();
+        TouchSelected(EChangeDomain::Textures);
     }
 
     // ---- Selecionar/isolar na cena (F2) ----
@@ -1266,7 +1301,7 @@ namespace SmileEditor {
         // O override salvo (se houver) tambem cai — senao voltaria no proximo load.
         OverrideCache.remove(M->Id);
         LegacyOverrideCache.remove(QString::fromStdString(M->Name));
-        TouchSelectedRT(); // reverte TUDO, inclusive os campos que o RT le
+        TouchSelectedRT(EChangeDomain::All); // reverte TUDO, inclusive os campos que o RT le
     }
 
     // ---- Persistencia (<cena>.materials.json) ----

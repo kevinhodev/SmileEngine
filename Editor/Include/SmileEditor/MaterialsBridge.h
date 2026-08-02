@@ -39,37 +39,37 @@ namespace SmileEditor {
         Q_PROPERTY(bool hasSelection READ HasSelection NOTIFY SelectionChanged)
         Q_PROPERTY(QString name READ Name NOTIFY SelectionChanged)
         Q_PROPERTY(int meshCount READ MeshCount NOTIFY SelectionChanged)
-        Q_PROPERTY(QString vramText READ VramText NOTIFY SelectionChanged)
-        Q_PROPERTY(QColor baseColor READ BaseColor WRITE SetBaseColor NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal metallic READ Metallic WRITE SetMetallic NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal roughness READ Roughness WRITE SetRoughness NOTIFY SelectionChanged)
+        Q_PROPERTY(QString vramText READ VramText NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(QColor baseColor READ BaseColor WRITE SetBaseColor NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal metallic READ Metallic WRITE SetMetallic NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal roughness READ Roughness WRITE SetRoughness NOTIFY SurfaceChanged)
         // Sem aoStrength: o SceneLoader zera AOStrength em todo material cozido (GTAO + DDGI +
         // oclusao por raio ja cobrem, e somar o mapa por cima escurece a cena toda). O campo
         // continua em MaterialConstants e o shader continua lendo — so nao e mais editavel.
-        Q_PROPERTY(QColor emissiveColor READ EmissiveColor WRITE SetEmissiveColor NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal emissiveStrength READ EmissiveStrength WRITE SetEmissiveStrength NOTIFY SelectionChanged)
+        Q_PROPERTY(QColor emissiveColor READ EmissiveColor WRITE SetEmissiveColor NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal emissiveStrength READ EmissiveStrength WRITE SetEmissiveStrength NOTIFY SurfaceChanged)
         // Escala do emissivo SO no indireto: separa "brilha na tela" de "ilumina o ambiente".
-        Q_PROPERTY(qreal rtEmissiveScale READ RTEmissiveScale WRITE SetRTEmissiveScale NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal normalStrength READ NormalStrength WRITE SetNormalStrength NOTIFY SelectionChanged)
-        Q_PROPERTY(bool normalFlipY READ NormalFlipY WRITE SetNormalFlipY NOTIFY SelectionChanged)
-        Q_PROPERTY(bool normalReconstructZ READ NormalReconstructZ WRITE SetNormalReconstructZ NOTIFY SelectionChanged)
-        Q_PROPERTY(bool hasNormalMap READ HasNormalMap NOTIFY SelectionChanged)
-        Q_PROPERTY(bool hasHeightMap READ HasHeightMap NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal heightScale READ HeightScale WRITE SetHeightScale NOTIFY SelectionChanged)
-        Q_PROPERTY(int parallaxMinSteps READ ParallaxMinSteps WRITE SetParallaxMinSteps NOTIFY SelectionChanged)
-        Q_PROPERTY(int parallaxMaxSteps READ ParallaxMaxSteps WRITE SetParallaxMaxSteps NOTIFY SelectionChanged)
-        Q_PROPERTY(bool parallaxSelfShadow READ ParallaxSelfShadow WRITE SetParallaxSelfShadow NOTIFY SelectionChanged)
-        Q_PROPERTY(bool parallaxRefine READ ParallaxRefine WRITE SetParallaxRefine NOTIFY SelectionChanged)
-        Q_PROPERTY(bool alphaTest READ AlphaTest WRITE SetAlphaTest NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal alphaCutoff READ AlphaCutoff WRITE SetAlphaCutoff NOTIFY SelectionChanged)
-        Q_PROPERTY(bool blend READ BlendFlag WRITE SetBlendFlag NOTIFY SelectionChanged)
-        Q_PROPERTY(bool twoSided READ TwoSided WRITE SetTwoSided NOTIFY SelectionChanged)
-        Q_PROPERTY(int shadingModel READ ShadingModel WRITE SetShadingModel NOTIFY SelectionChanged)
-        Q_PROPERTY(QColor subsurfaceColor READ SubsurfaceColor WRITE SetSubsurfaceColor NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal subsurfaceIntensity READ SubsurfaceIntensity WRITE SetSubsurfaceIntensity NOTIFY SelectionChanged)
+        Q_PROPERTY(qreal rtEmissiveScale READ RTEmissiveScale WRITE SetRTEmissiveScale NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal normalStrength READ NormalStrength WRITE SetNormalStrength NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool normalFlipY READ NormalFlipY WRITE SetNormalFlipY NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool normalReconstructZ READ NormalReconstructZ WRITE SetNormalReconstructZ NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool hasNormalMap READ HasNormalMap NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(bool hasHeightMap READ HasHeightMap NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(qreal heightScale READ HeightScale WRITE SetHeightScale NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(int parallaxMinSteps READ ParallaxMinSteps WRITE SetParallaxMinSteps NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(int parallaxMaxSteps READ ParallaxMaxSteps WRITE SetParallaxMaxSteps NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool parallaxSelfShadow READ ParallaxSelfShadow WRITE SetParallaxSelfShadow NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool parallaxRefine READ ParallaxRefine WRITE SetParallaxRefine NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool alphaTest READ AlphaTest WRITE SetAlphaTest NOTIFY MaterialModeChanged)
+        Q_PROPERTY(qreal alphaCutoff READ AlphaCutoff WRITE SetAlphaCutoff NOTIFY MaterialModeChanged)
+        Q_PROPERTY(bool blend READ BlendFlag WRITE SetBlendFlag NOTIFY MaterialModeChanged)
+        Q_PROPERTY(bool twoSided READ TwoSided WRITE SetTwoSided NOTIFY MaterialModeChanged)
+        Q_PROPERTY(int shadingModel READ ShadingModel WRITE SetShadingModel NOTIFY MaterialModeChanged)
+        Q_PROPERTY(QColor subsurfaceColor READ SubsurfaceColor WRITE SetSubsurfaceColor NOTIFY MaterialModeChanged)
+        Q_PROPERTY(qreal subsurfaceIntensity READ SubsurfaceIntensity WRITE SetSubsurfaceIntensity NOTIFY MaterialModeChanged)
         // Slots de textura: [{ label, has, info, overridden }] × 8 (F2: clique troca o mapa).
-        Q_PROPERTY(QVariantList textureSlots READ TextureSlots NOTIFY SelectionChanged)
-        Q_PROPERTY(bool selectedModified READ SelectedModified NOTIFY SelectionChanged)
+        Q_PROPERTY(QVariantList textureSlots READ TextureSlots NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(bool selectedModified READ SelectedModified NOTIFY MaterialStateChanged)
         // Isolar na cena: só as meshes do material selecionado ficam visíveis (TLAS segue).
         Q_PROPERTY(bool isolating READ Isolating NOTIFY IsolatingChanged)
         // ---- Preview offscreen (F3): imagem via image://materialpreview/p<seq> ----
@@ -200,6 +200,11 @@ namespace SmileEditor {
         void AvailableChanged();
         void StructureChanged();
         void SelectionChanged();
+        void SurfaceChanged();
+        void NormalParallaxChanged();
+        void MaterialModeChanged();
+        void TextureSlotsChanged();
+        void MaterialStateChanged();
         void FiltersChanged();
         void DirtyChanged();
         void CloseRequested();
@@ -258,15 +263,17 @@ namespace SmileEditor {
         void   InvalidateThumb(int MatIdx);
         bool   MatchesFilter(const Smile::FMaterial& M) const;
         void   MarkDirty();
-        // Notifica edicao do selecionado: SelectionChanged + dataChanged da linha
-        // (badges/swatch/dot de modificado podem mudar).
-        void   TouchSelected();
+        enum class EChangeDomain : quint8 { Surface, NormalParallax, MaterialMode, Textures, All };
+        // Troca de material invalida todos os grupos; edicao continua invalida so o dominio
+        // tocado, mais o estado "modificado" e os papeis afetados da linha no browser.
+        void   NotifySelectionChanged();
+        void   TouchSelected(EChangeDomain Domain);
         // Igual ao TouchSelected, mais o pedido de refresh do snapshot InstanceGeo. Use nos
         // setters cujo campo o RAY TRACING le (ver FDDGI::FillInstanceGeo): cor base, metallic,
         // roughness, emissivo, cutoff, shading model, alpha-test/blend/two-sided e troca de
         // textura. Campos so-raster (parallax, NormalStrength, AOStrength, subsurface) devem usar
         // o TouchSelected puro — marcar a toa reseta o historico do GI/denoiser sem motivo.
-        void   TouchSelectedRT();
+        void   TouchSelectedRT(EChangeDomain Domain);
         bool   IsModified(const Smile::FMaterial* M) const;
         // Aplica OverrideCache por nome, SO nos materiais recem-vistos (_Fresh). Reaplicar em
         // material ja carregado descartaria a edicao nao salva dele — o Rebuild dispara tambem
