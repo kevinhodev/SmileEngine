@@ -25,28 +25,28 @@ namespace Smile { class Renderer; }
 namespace SmileEditor {
     class ViewportWidget : public QWidget {
         Q_OBJECT
-        Q_PROPERTY(int viewMode READ GetViewMode NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int viewMode READ GetViewMode NOTIFY ViewStateChanged)
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
-        Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewStateChanged)
         // Janela de debug: selecao multipla (indices), colunas da grade e exposicao.
-        Q_PROPERTY(QVariantList debugSelection READ GetDebugSelection NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int debugColumns READ GetDebugColumns NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double debugExposure READ GetDebugExposure NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QVariantList debugSelection READ GetDebugSelection NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(int debugColumns READ GetDebugColumns NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(double debugExposure READ GetDebugExposure NOTIFY DebugSettingsChanged)
         Q_PROPERTY(int debugPreviewSeq READ GetDebugPreviewSeq NOTIFY DebugPreviewUpdated)
         Q_PROPERTY(bool debugPreviewReady READ IsDebugPreviewReady NOTIFY DebugPreviewUpdated)
-        Q_PROPERTY(bool debugProbeInspecting READ IsDebugProbeInspecting NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int debugProbeIndex READ GetDebugProbeIndex NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeCoord READ GetDebugProbeCoord NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeWorld READ GetDebugProbeWorld NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeGrid READ GetDebugProbeGrid NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeDistanceRange READ GetDebugProbeDistanceRange NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool debugProbeInspecting READ IsDebugProbeInspecting NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(int debugProbeIndex READ GetDebugProbeIndex NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeCoord READ GetDebugProbeCoord NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeWorld READ GetDebugProbeWorld NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeGrid READ GetDebugProbeGrid NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeDistanceRange READ GetDebugProbeDistanceRange NOTIFY DebugSettingsChanged)
         Q_PROPERTY(QString debugProbeDirection READ GetDebugProbeDirection NOTIFY DebugProbeDirectionChanged)
         Q_PROPERTY(QString debugProbeSample READ GetDebugProbeSample NOTIFY DebugProbeSampleChanged)
         Q_PROPERTY(bool debugProbePointPickArmed READ IsDebugProbePointPickArmed NOTIFY DebugProbePointChanged)
         Q_PROPERTY(QString debugProbePointSummary READ GetDebugProbePointSummary NOTIFY DebugProbePointChanged)
         Q_PROPERTY(QVariantList debugProbeContributors READ GetDebugProbeContributors NOTIFY DebugProbePointChanged)
-        Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewStateChanged)
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool reGIREnabled READ IsReGIREnabled NOTIFY ViewSettingsChanged)
@@ -320,7 +320,8 @@ namespace SmileEditor {
             emit DebugTargetsChanged();
             // RegisterDebugTargets remapeia selecoes por nome quando a disponibilidade de
             // DDGI/ReSTIR muda; a QML precisa reler tambem os indices selecionados.
-            emit ViewSettingsChanged();
+            emit ViewStateChanged();
+            emit DebugSettingsChanged();
         }
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
@@ -422,6 +423,8 @@ namespace SmileEditor {
         void TelemetryUpdated(); // 5 Hz: invalida apenas bindings de FPS/GPU/VRAM/resolucao
         void RendererInitialized(); // emitted once when D3D12 renderer is ready
         void ObjectSelected(int sceneIndex); // clique no viewport: indice na cena (-1 = vazio)
+        void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
+        void DebugSettingsChanged(); // grade, exposicao e sessao de inspecao de probes
         void ViewSettingsChanged();
         void SettingsRequested();
         // A lista de alvos so muda quando o Renderer recria os targets (boot/resize/troca de

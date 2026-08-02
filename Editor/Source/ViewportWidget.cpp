@@ -500,7 +500,7 @@ namespace SmileEditor {
         // linhas marcadas.
         Renderer->SetDebugTargetIndex(Smile::Renderer::kNoDebugTarget);
         CurrentViewMode = Lit;
-        emit ViewSettingsChanged();
+        emit ViewStateChanged();
     }
 
     void ViewportWidget::SelectReflectionHeatmap() {
@@ -511,7 +511,7 @@ namespace SmileEditor {
         // existente e a visualizacao funcional mais proxima para este slot do mockup.
         Renderer->SetFlickerMode(2);
         CurrentViewMode = ReflectionHeatmap;
-        emit ViewSettingsChanged();
+        emit ViewStateChanged();
     }
 
     QStringList ViewportWidget::GetDebugTargetNames() const {
@@ -648,7 +648,7 @@ namespace SmileEditor {
         else return;
         Renderer->SetDebugSelection(Sel);
         InvalidateDebugPreview();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     void ViewportWidget::ClearDebugSelection() {
@@ -656,7 +656,7 @@ namespace SmileEditor {
         if (DebugProbeSessionActive) ClearDebugProbeInspection();
         Renderer->SetDebugSelection({});
         InvalidateDebugPreview();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     void ViewportWidget::SetDebugColumns(int _Columns) {
@@ -664,14 +664,14 @@ namespace SmileEditor {
         if (DebugProbeSessionActive) return;
         Renderer->SetDebugColumns(_Columns < 0 ? 0 : static_cast<Smile::u32>(_Columns));
         InvalidateDebugPreview();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     void ViewportWidget::SetDebugExposure(double _Exposure) {
         if (!Renderer) return;
         Renderer->SetDebugExposure(static_cast<float>(_Exposure));
         InvalidateDebugPreview();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     void ViewportWidget::InspectDDGIProbe(
@@ -739,7 +739,7 @@ namespace SmileEditor {
         InvalidateDebugPreview();
         emit DebugProbeDirectionChanged();
         emit DebugProbeSampleChanged();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     void ViewportWidget::StepDebugProbe(int _DX, int _DY, int _DZ) {
@@ -757,7 +757,7 @@ namespace SmileEditor {
             emit DebugProbeSampleChanged();
         }
         InvalidateDebugPreview();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     void ViewportWidget::ClearDebugProbeInspection() {
@@ -783,7 +783,7 @@ namespace SmileEditor {
         InvalidateDebugPreview();
         emit DebugProbeDirectionChanged();
         emit DebugProbeSampleChanged();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     // Ver o header: so as escolhas EXPLICITAS do usuario passam por aqui. O foco automatico do
@@ -861,7 +861,7 @@ namespace SmileEditor {
             DebugProbeContributorCount,
             DebugProbeContributorRiskSlot);
         InvalidateDebugPreview();
-        emit ViewSettingsChanged();
+        emit DebugSettingsChanged();
     }
 
     void ViewportWidget::UpdateDebugProbeDirection(double _U, double _V) {
@@ -909,7 +909,7 @@ namespace SmileEditor {
             Renderer->SetGBufferDebugMode(0);
             CurrentViewMode = Lit;
         }
-        emit ViewSettingsChanged();
+        emit ViewStateChanged();
     }
 
     void ViewportWidget::ToggleDDGI() {
@@ -1856,7 +1856,7 @@ namespace SmileEditor {
                     Renderer->SetDebugProbeIndex(DebugProbeBaseIndex);
                 Renderer->ClearDebugProbeContributors();
                 InvalidateDebugPreview();
-                emit ViewSettingsChanged();
+                emit DebugSettingsChanged();
             } else {
                 const auto& DDGI = Renderer->GetDDGI();
                 const Smile::Vec3 GridCount = DDGI.GridCount();
@@ -1958,7 +1958,7 @@ namespace SmileEditor {
                         : QStringLiteral("  •  sem risco relevante"))
                     .arg(VolumeNote);
                 InvalidateDebugPreview();
-                emit ViewSettingsChanged();
+                emit DebugSettingsChanged();
             }
             emit DebugProbePointChanged();
         }
