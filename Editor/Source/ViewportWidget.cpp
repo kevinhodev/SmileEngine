@@ -1178,44 +1178,44 @@ namespace SmileEditor {
     void ViewportWidget::SetSunShadowsEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->SetUseSunShadows(_Enabled);
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     void ViewportWidget::SetShadowCacheEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetSunShadows().SetCascadeCache(_Enabled);
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     void ViewportWidget::SetShadowDebugCascades(bool _Enabled) {
         if (!Renderer) return;
         Renderer->GetSunShadows().SetDebugCascades(_Enabled);
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     void ViewportWidget::SetShadowMaxDistance(double _Distance) {
         if (!Renderer) return;
         Renderer->GetSunShadows().SetMaxDistance(static_cast<Smile::f32>(_Distance));
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     void ViewportWidget::SetShadowDepthBias(double _Bias) {
         if (!Renderer) return;
         Renderer->GetSunShadows().SetDepthBias(static_cast<Smile::f32>(_Bias));
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     void ViewportWidget::SetShadowMinCasterTexels(double _Texels) {
         if (!Renderer) return;
         Renderer->GetSunShadows().SetMinCasterTexels(static_cast<Smile::f32>(_Texels));
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     void ViewportWidget::SetShadowCascadeBiasScale(int _Cascade, double _Scale) {
         if (!Renderer || _Cascade < 0) return;
         Renderer->GetSunShadows().SetCascadeBiasScale(static_cast<Smile::u32>(_Cascade),
                                                       static_cast<Smile::f32>(_Scale));
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     double ViewportWidget::GetShadowSunAngle() const {
@@ -1225,7 +1225,7 @@ namespace SmileEditor {
     void ViewportWidget::SetShadowSunAngle(double _Degrees) {
         if (!Renderer) return;
         Renderer->GetSunShadows().SetSunAngularSize(static_cast<Smile::f32>(_Degrees));
-        emit ViewSettingsChanged();
+        emit ShadowSettingsChanged();
     }
 
     bool ViewportWidget::AreSunShaftsEnabled() const {

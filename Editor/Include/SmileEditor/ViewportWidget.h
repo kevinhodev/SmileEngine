@@ -84,14 +84,14 @@ namespace SmileEditor {
         Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(bool occlusionCullingEnabled READ IsOcclusionCullingEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool sunShadowsEnabled READ AreSunShadowsEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool shadowCacheEnabled READ IsShadowCacheEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool shadowDebugCascades READ IsShadowDebugCascades NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowMaxDistance READ GetShadowMaxDistance NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowDepthBias READ GetShadowDepthBias NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowSunAngle READ GetShadowSunAngle NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool sunShadowsEnabled READ AreSunShadowsEnabled NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(bool shadowCacheEnabled READ IsShadowCacheEnabled NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(bool shadowDebugCascades READ IsShadowDebugCascades NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(double shadowMaxDistance READ GetShadowMaxDistance NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(double shadowDepthBias READ GetShadowDepthBias NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(double shadowSunAngle READ GetShadowSunAngle NOTIFY ShadowSettingsChanged)
         Q_PROPERTY(bool sunShaftsEnabled READ AreSunShaftsEnabled NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double sunShaftsIntensity READ GetSunShaftsIntensity NOTIFY ViewSettingsChanged)
         Q_PROPERTY(double sunShaftsDust READ GetSunShaftsDust NOTIFY ViewSettingsChanged)
@@ -426,6 +426,7 @@ namespace SmileEditor {
         void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
         void DebugSettingsChanged(); // grade, exposicao e sessao de inspecao de probes
         void GISettingsChanged(); // DDGI/ReSTIR/ReGIR, politicas de raio e epsilons
+        void ShadowSettingsChanged(); // CSM, cache, cascatas, distancia e biases
         void ViewSettingsChanged();
         void SettingsRequested();
         // A lista de alvos so muda quando o Renderer recria os targets (boot/resize/troca de
