@@ -1011,45 +1011,47 @@ namespace SmileEditor {
     void MaterialsBridge::ProcessThumbQueue() {
         if (!PreviewEnabledFlag || !Renderer) return;
 
-        // Ate 2 por frame do viewport: cada thumb e um render sincrono de ~1-2ms; o
-        // browser inteiro (200+ materiais) preenche em poucos segundos sem travar a GUI.
-        for (int Budget = 0; Budget < 2; ++Budget) {
-            int MatIdx = -1;
+        // Uma renderizacao sincrona por frame. Entradas obsoletas/cached sao descartadas sem
+        // consumir o budget, mas nunca iniciamos uma segunda thumbnail depois de uma render.
+        int MatIdx = -1;
+        auto& Mats = Renderer->GetMaterials();
+        for (;;) {
             {
                 QMutexLocker Lock(&ThumbMutex);
                 if (ThumbPending.isEmpty()) return;
                 MatIdx = ThumbPending.takeFirst();
-                if (ThumbByIdx.contains(MatIdx)) { --Budget; continue; }
+                if (ThumbByIdx.contains(MatIdx)) {
+                    MatIdx = -1;
+                    continue;
+                }
             }
-            auto& Mats = Renderer->GetMaterials();
-            if (MatIdx < 0 || MatIdx >= (int)Mats.size()) continue;
+            if (MatIdx >= 0 && MatIdx < (int)Mats.size()) break;
+        }
 
-            EnsureDefaultEnv();
+        EnsureDefaultEnv();
 
-            Smile::FMaterialPreview::FParams P; // esfera, angulo default
-            P.TransparentBackground = true;     // estilo UE: so a esfera, sem o ceu
-            P.Dist = 1.45f;                     // enquadramento apertado pro icone
-            std::vector<Smile::u8> Pixels;
-            if (!Renderer->RenderMaterialPreview(Mats[MatIdx].get(), P, Pixels))
-                return; // infra indisponivel: para a fila (re-enfileira via data())
+        Smile::FMaterialPreview::FParams P; // esfera, angulo default
+        P.TransparentBackground = true;     // estilo UE: so a esfera, sem o ceu
+        P.Dist = 1.45f;                     // enquadramento apertado pro icone
+        P.RenderSize = Smile::FMaterialPreview::kThumbnailSize;
+        std::vector<Smile::u8> Pixels;
+        if (!Renderer->RenderMaterialPreview(Mats[MatIdx].get(), P, Pixels))
+            return; // infra indisponivel: para a fila (re-enfileira via data())
 
-            // Premultiplied antes do scale: downscale em alpha reto faria franja escura
-            // na borda da esfera contra o fundo transparente. Dois passos (fast 256 ->
-            // smooth 96): smooth direto de 1024 custaria ~10ms por thumb na fila.
-            const int Size = int(Smile::FMaterialPreview::kSize);
-            QImage Thumb = QImage(Pixels.data(), Size, Size, QImage::Format_RGBA8888)
-                               .convertToFormat(QImage::Format_ARGB32_Premultiplied)
-                               .scaled(256, 256, Qt::KeepAspectRatio, Qt::FastTransformation)
-                               .scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            {
-                QMutexLocker Lock(&ThumbMutex);
-                ThumbByIdx.insert(MatIdx, Thumb);
-            }
-            for (int Row = 0; Row < Rows.size(); ++Row) {
-                if (Rows[Row].MatIdx != MatIdx) continue;
-                emit dataChanged(index(Row), index(Row), { RThumb });
-                break;
-            }
+        // Premultiplied antes do scale: downscale em alpha reto faria franja escura na
+        // borda da esfera contra o fundo transparente.
+        const int Size = int(Smile::FMaterialPreview::kThumbnailSize);
+        QImage Thumb = QImage(Pixels.data(), Size, Size, QImage::Format_RGBA8888)
+                           .convertToFormat(QImage::Format_ARGB32_Premultiplied)
+                           .scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        {
+            QMutexLocker Lock(&ThumbMutex);
+            ThumbByIdx.insert(MatIdx, Thumb);
+        }
+        for (int Row = 0; Row < Rows.size(); ++Row) {
+            if (Rows[Row].MatIdx != MatIdx) continue;
+            emit dataChanged(index(Row), index(Row), { RThumb });
+            break;
         }
     }
 

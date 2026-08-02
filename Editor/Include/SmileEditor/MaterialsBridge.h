@@ -241,7 +241,7 @@ namespace SmileEditor {
         void   RenderPreviewIfNeeded();  // Refresh: renderiza quando dirty + janela aberta
         void   MarkPreviewDirty() { PreviewDirty = true; }
         void   EnsureDefaultEnv();       // HDRI padrao (uma tentativa por sessao/cena)
-        void   ProcessThumbQueue();      // Refresh: ate 2 thumbnails por frame
+        void   ProcessThumbQueue();      // Refresh: no maximo 1 thumbnail por frame
         void   InvalidateThumb(int MatIdx);
         bool   MatchesFilter(const Smile::FMaterial& M) const;
         void   MarkDirty();
@@ -293,8 +293,8 @@ namespace SmileEditor {
         bool           PreviewEnabledFlag = false;     // janela Materiais visivel
         bool           DefaultEnvTried   = false;      // HDRI padrao ja tentado
 
-        // Thumbnails do browser: esfera renderizada por material, 96x96, sob demanda
-        // (data() enfileira, Refresh drena 2/frame). Chaves por INDICE de material — o
+        // Thumbnails do browser: esfera renderizada a 256 e armazenada em 96x96, sob demanda
+        // (data() enfileira, Refresh drena 1/frame). Chaves por INDICE de material — o
         // provider roda na render thread do QML e nao pode tocar no Renderer.
         mutable QMutex        ThumbMutex;
         mutable QHash<int, QImage> ThumbByIdx;

@@ -5,6 +5,7 @@
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -13,7 +14,7 @@ namespace Smile {
         constexpr DXGI_FORMAT kColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
         constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
         constexpr f32         kFovY        = 0.6981317f; // 40 graus
-        constexpr u32         kRowPitch    = FMaterialPreview::kSize * 4; // 2048, ja 256-aligned
+        constexpr u32         kMaxRowPitch = FMaterialPreview::kSize * 4;
     }
 
     bool FMaterialPreview::LoadEnvironment(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
@@ -52,7 +53,7 @@ namespace Smile {
         IBLTableStart = _SRVHeap.Allocate(3);
 
         Initialized = true;
-        LogDebug("FMaterialPreview (preview offscreen 512x512) inicializado");
+        LogDebug("FMaterialPreview (preview offscreen ate 1024x1024) inicializado");
         return true;
     }
 
@@ -298,7 +299,7 @@ namespace Smile {
             ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
             D3D12_RESOURCE_DESC Desc{};
             Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = u64(kRowPitch) * kSize;
+            Desc.Width            = u64(kMaxRowPitch) * kSize;
             Desc.Height           = 1;
             Desc.DepthOrArraySize = 1;
             Desc.MipLevels        = 1;
@@ -340,6 +341,11 @@ namespace Smile {
                                   const FGpuMesh* _SceneMesh, const Mat44& _SceneModel) {
         if (!EnsureInitialized(_Device, _CmdQueue, _SRVHeap)) return false;
         if (!_Material.IsFinalized()) return false;
+
+        const u32 RenderSize = std::clamp(_Params.RenderSize, 1u, kSize);
+        const u32 RowPitch =
+            (RenderSize * 4u + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u) &
+            ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u);
 
         const bool UseSceneMesh = _Params.Primitive == PrimSceneMesh &&
                                   _SceneMesh && _SceneMesh->IsValid();
@@ -390,8 +396,8 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         Cl->SetDescriptorHeaps(1, Heaps);
 
-        D3D12_VIEWPORT Viewport{ 0.0f, 0.0f, f32(kSize), f32(kSize), 0.0f, 1.0f };
-        D3D12_RECT Scissor{ 0, 0, LONG(kSize), LONG(kSize) };
+        D3D12_VIEWPORT Viewport{ 0.0f, 0.0f, f32(RenderSize), f32(RenderSize), 0.0f, 1.0f };
+        D3D12_RECT Scissor{ 0, 0, LONG(RenderSize), LONG(RenderSize) };
         Cl->RSSetViewports(1, &Viewport);
         Cl->RSSetScissorRects(1, &Scissor);
 
@@ -402,8 +408,8 @@ namespace Smile {
         const f32 ClearDark[4]  = { 0.08f, 0.08f, 0.07f, 1.0f };
         const f32 ClearClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         Cl->ClearRenderTargetView(RTV, _Params.TransparentBackground ? ClearClear : ClearDark,
-                                  0, nullptr);
-        Cl->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+                                  1, &Scissor);
+        Cl->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 1, &Scissor);
 
         const D3D12_GPU_VIRTUAL_ADDRESS CBBase = ConstantBuffer->GetGPUVirtualAddress();
 
@@ -448,11 +454,12 @@ namespace Smile {
         Dst.Type                               = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         Dst.PlacedFootprint.Offset             = 0;
         Dst.PlacedFootprint.Footprint.Format   = kColorFormat;
-        Dst.PlacedFootprint.Footprint.Width    = kSize;
-        Dst.PlacedFootprint.Footprint.Height   = kSize;
+        Dst.PlacedFootprint.Footprint.Width    = RenderSize;
+        Dst.PlacedFootprint.Footprint.Height   = RenderSize;
         Dst.PlacedFootprint.Footprint.Depth    = 1;
-        Dst.PlacedFootprint.Footprint.RowPitch = kRowPitch;
-        Cl->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
+        Dst.PlacedFootprint.Footprint.RowPitch = RowPitch;
+        const D3D12_BOX SourceBox{ 0, 0, 0, RenderSize, RenderSize, 1 };
+        Cl->CopyTextureRegion(&Dst, 0, 0, 0, &Src, &SourceBox);
 
         ToCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
         ToCopy.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -462,11 +469,19 @@ namespace Smile {
         ID3D12CommandList* Lists[] = { Cl };
         _CmdQueue.ExecuteAndSync(Lists, 1);
 
-        _Out.resize(size_t(kSize) * kSize * 4);
+        const size_t TightRow = size_t(RenderSize) * 4u;
+        _Out.resize(TightRow * RenderSize);
         void* Mapped = nullptr;
-        D3D12_RANGE ReadRange{ 0, size_t(kRowPitch) * kSize };
+        D3D12_RANGE ReadRange{ 0, size_t(RowPitch) * RenderSize };
         SMILE_HR(Readback->Map(0, &ReadRange, &Mapped));
-        std::memcpy(_Out.data(), Mapped, _Out.size()); // rowPitch == largura*4: copia direta
+        if (RowPitch == TightRow) {
+            std::memcpy(_Out.data(), Mapped, _Out.size());
+        } else {
+            const auto* SrcRow = static_cast<const u8*>(Mapped);
+            for (u32 Y = 0; Y < RenderSize; ++Y)
+                std::memcpy(_Out.data() + size_t(Y) * TightRow,
+                            SrcRow + size_t(Y) * RowPitch, TightRow);
+        }
         D3D12_RANGE WrittenRange{ 0, 0 };
         Readback->Unmap(0, &WrittenRange);
         return true;

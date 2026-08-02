@@ -15,7 +15,7 @@ namespace Smile {
     class FTextureSRVHeap;
     class FMaterial;
 
-    // Preview offscreen do Editor de Materiais (512x512): primitiva unica com o FMaterial
+    // Preview offscreen do Editor de Materiais (ate 1024x1024): primitiva unica com o FMaterial
     // selecionado, forward PBR isolado (sol fixo + IBL) e fundo do env cube. Tem um
     // FHDREnvironment PROPRIO — carregar HDRI aqui NAO liga IBL na cena principal (o
     // deferred usa Renderer::HDREnv; IBLParams.w segue HasHDRLoaded() de la).
@@ -27,7 +27,10 @@ namespace Smile {
     public:
         // 1024: o painel do preview passa de 512 na janela default — 512 upscalado ficava
         // borrado/serrilhado vs o viewport. A 1024 o QML downscala (efeito SSAA de graca).
-        static constexpr u32 kSize = 1024;
+        static constexpr u32 kSize          = 1024;
+        // Browser exibe a thumb em 96px. Renderizar a 256 preserva supersampling suficiente
+        // sem pagar o raster/readback de 1024 do preview principal.
+        static constexpr u32 kThumbnailSize = 256;
 
         enum EPrimitive { PrimSphere = 0, PrimCube = 1, PrimPlane = 2, PrimCylinder = 3,
                           PrimSceneMesh = 4 };
@@ -39,6 +42,7 @@ namespace Smile {
             f32 Dist         = 1.9f;
             f32 EnvRotation  = 0.0f;   // rad
             f32 SunIntensity = 2.5f;
+            u32 RenderSize   = kSize;  // lado do output, limitado a 1..kSize
             // Thumbnails estilo UE: sem o fundo do HDRI, clear com alpha 0 (o IBL segue
             // iluminando/refletindo — so nao desenha o ceu).
             bool TransparentBackground = false;
@@ -48,7 +52,7 @@ namespace Smile {
                              FTextureSRVHeap& SRVHeap, const std::wstring& Path);
         bool HasEnvironment() const { return Env.HasHDRLoaded(); }
 
-        // Renderiza o material na primitiva e devolve RGBA8 kSize*kSize*4 em Out.
+        // Renderiza o material na primitiva e devolve RGBA8 RenderSize*RenderSize*4 em Out.
         // false se material invalido ou infra indisponivel (shaders .cso ausentes).
         // Primitive == PrimSceneMesh: desenha SceneMesh com SceneModel (matriz que centra e
         // normaliza a mesh pra caber no enquadramento da esfera — o Renderer monta a partir
