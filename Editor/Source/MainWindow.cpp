@@ -289,6 +289,12 @@ namespace SmileEditor {
         // Frameless nativo (Slate-style): instala o filtro no HWND e recalcula o frame/sombra.
         // winId() realiza a janela nativa; o filtro precisa estar ativo antes do primeiro show.
         WinFilter = new NativeWindowFilter(winId(), WindowBr);
+        connect(WinFilter, &NativeWindowFilter::InteractiveResizeStarted, this, [this]() {
+            if (Viewport) Viewport->BeginInteractiveResize();
+        });
+        connect(WinFilter, &NativeWindowFilter::InteractiveResizeFinished, this, [this]() {
+            if (Viewport) Viewport->EndInteractiveResize();
+        });
         qApp->installNativeEventFilter(WinFilter);
         NativeWindowFilter::EnableFrameless(winId());
     }

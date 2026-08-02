@@ -181,6 +181,10 @@ namespace SmileEditor {
         bool              IsDebugPreviewReady() const;
         QImage            DebugPreviewImageCopy() const;
         void              SetDebugPreviewEnabled(bool enabled);
+        // Chamados pelo NativeWindowFilter no WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE. Durante o
+        // arraste o DXGI estica o backbuffer atual; a realocacao pesada acontece so no fim.
+        void              BeginInteractiveResize();
+        void              EndInteractiveResize();
         bool              IsDebugProbeInspecting() const { return DebugProbeSessionActive; }
         int               GetDebugProbeIndex() const;
         QString           GetDebugProbeCoord() const;
@@ -431,6 +435,7 @@ namespace SmileEditor {
 
     private:
         void EnsureRendererIsInitialized();
+        void ApplyPendingResize();
         void InvalidateDebugPreview();
         void ResetDebugProbePoint(bool CancelRendererRequest = true);
         // Seleciona a probe da SESSAO — as escolhas EXPLICITAS do usuario: abrir a inspecao,
@@ -449,7 +454,11 @@ namespace SmileEditor {
         std::unique_ptr<Smile::Renderer> Renderer;
         GizmoController GizmoCtrl; // logica do gizmo de translacao (editor-side)
         QTimer*       RedrawTimer       = nullptr;
+        QTimer*       ResizeDebounce    = nullptr;
         bool          Initialized       = false;
+        bool          InteractiveResize = false;
+        QSize         PendingResizeSize;
+        QSize         AppliedResizeSize;
 
         QSet<int>     HeldKeys;
         Smile::Vec2   MouseDelta       = Smile::Vec2::Zero();

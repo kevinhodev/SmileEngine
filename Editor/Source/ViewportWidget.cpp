@@ -23,6 +23,7 @@
 
 namespace SmileEditor {
     static constexpr float kMouseSensitivity = 0.15f;  
+    static constexpr int   kResizeDebounceMs = 80;
 
     ViewportWidget::ViewportWidget(QWidget* _Parent)
         : QWidget(_Parent),
@@ -44,6 +45,14 @@ namespace SmileEditor {
         RedrawTimer->setInterval(0);
         connect(RedrawTimer, &QTimer::timeout, this, &ViewportWidget::OnRenderTimer);
 
+        // Fallback para Snap, maximizar/restaurar, DPI e resizes programaticos: esses caminhos
+        // podem nao entrar no loop WM_ENTERSIZEMOVE. Eventos consecutivos conservam apenas o
+        // ultimo tamanho e disparam uma unica realocacao depois que a geometria estabiliza.
+        ResizeDebounce = new QTimer(this);
+        ResizeDebounce->setSingleShot(true);
+        ResizeDebounce->setInterval(kResizeDebounceMs);
+        connect(ResizeDebounce, &QTimer::timeout, this, &ViewportWidget::ApplyPendingResize);
+
         // Editor em segundo plano (nenhuma janela nossa com foco): cai pra ~10fps em vez
         // de queimar GPU em FPS livre enquanto o usuario esta em outro app (estilo "Use
         // Less CPU when in Background" da UE). Minimizado ja para de vez (hideEvent).
@@ -57,6 +66,7 @@ namespace SmileEditor {
 
     ViewportWidget::~ViewportWidget() {
         if (RedrawTimer) RedrawTimer->stop();
+        if (ResizeDebounce) ResizeDebounce->stop();
         // O destrutor noexcept do Renderer centraliza o shutdown e absorve falhas tardias.
     }
 
@@ -1687,6 +1697,8 @@ namespace SmileEditor {
         // existem, reaplica a escala (e revalida a disponibilidade) recriando os alvos internos 1x.
         Renderer->SetUpscaler(Renderer->GetUpscaler());
         Initialized = true;
+        AppliedResizeSize = size();
+        PendingResizeSize = {};
         emit RendererInitialized();
         emit DebugTargetsChanged();   // os alvos foram publicados na criacao dos targets internos
     }
@@ -1694,23 +1706,53 @@ namespace SmileEditor {
     void ViewportWidget::showEvent(QShowEvent* _Event) {
         QWidget::showEvent(_Event);
         EnsureRendererIsInitialized();
+        // O layout pode ter mudado enquanto o viewport estava oculto e o debounce parado.
+        PendingResizeSize = size();
+        ApplyPendingResize();
         FrameTimer.restart();
         RedrawTimer->start();
     }
 
     void ViewportWidget::hideEvent(QHideEvent* _Event) {
         RedrawTimer->stop();
+        ResizeDebounce->stop();
         QWidget::hideEvent(_Event);
     }
 
     void ViewportWidget::resizeEvent(QResizeEvent* _Event) {
         QWidget::resizeEvent(_Event);
-        if (Initialized) {
-            Renderer->Resize(static_cast<unsigned int>(_Event->size().width()),
-                             static_cast<unsigned int>(_Event->size().height()));
-            // Resize realoca SRVs: os alvos foram re-registrados com slots novos.
-            emit DebugTargetsChanged();
-        }
+        PendingResizeSize = _Event->size();
+        if (!Initialized || InteractiveResize) return;
+        ResizeDebounce->start();
+    }
+
+    void ViewportWidget::BeginInteractiveResize() {
+        InteractiveResize = true;
+        ResizeDebounce->stop();
+        PendingResizeSize = size();
+    }
+
+    void ViewportWidget::EndInteractiveResize() {
+        if (!InteractiveResize) return;
+        InteractiveResize = false;
+        PendingResizeSize = size();
+        // Sai primeiro do callback nativo WM_EXITSIZEMOVE; Flush/ResizeBuffers no proprio
+        // window-proc prolongaria o dispatch do Windows e aumentaria a chance de reentrancia.
+        ResizeDebounce->start(0);
+    }
+
+    void ViewportWidget::ApplyPendingResize() {
+        if (!Initialized || InteractiveResize || !Renderer || !Renderer->IsInitialized()) return;
+
+        const QSize Target = PendingResizeSize;
+        PendingResizeSize = {};
+        if (Target.width() <= 0 || Target.height() <= 0 || Target == AppliedResizeSize) return;
+
+        Renderer->Resize(static_cast<unsigned int>(Target.width()),
+                         static_cast<unsigned int>(Target.height()));
+        AppliedResizeSize = Target;
+        // Resize realoca SRVs: os alvos foram re-registrados com slots novos.
+        emit DebugTargetsChanged();
     }
 
     void ViewportWidget::paintEvent(QPaintEvent* _Event) {

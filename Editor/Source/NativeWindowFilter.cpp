@@ -34,6 +34,12 @@ namespace SmileEditor {
         const bool IsTop = (Msg->hwnd == Top);
 
         switch (Msg->message) {
+        case WM_ENTERSIZEMOVE:
+            if (IsTop) emit InteractiveResizeStarted();
+            return false;
+        case WM_EXITSIZEMOVE:
+            if (IsTop) emit InteractiveResizeFinished();
+            return false;
         case WM_NCCALCSIZE: {
             if (!IsTop || Msg->wParam == FALSE) return false;
 
