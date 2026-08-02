@@ -35,6 +35,7 @@
 #include <QMessageBox>
 #include <QFileSystemWatcher>
 #include <QFrame>
+#include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeySequence>
@@ -51,6 +52,7 @@
 #include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace SmileEditor {
     MainWindow::MainWindow(QQmlEngine& _QmlEngine, QWidget* _Parent)
@@ -316,6 +318,70 @@ namespace SmileEditor {
         Sb->addWidget(Bar, 1);
     }
 
+    void MainWindow::BeginSceneLoad(const QString& _Path, bool _Additive) {
+        if (SceneLoadInProgress) {
+            if (StatusBr) StatusBr->ShowMessage(tr("Uma cena já está sendo preparada"), 2500);
+            return;
+        }
+        if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized())
+            return;
+
+        SceneLoadInProgress = true;
+        if (StatusBr) {
+            StatusBr->ShowMessage(
+                _Additive ? tr("Preparando cena adicional…") : tr("Preparando cena…"));
+        }
+
+        using Result = Smile::FPreparedCookedScenePtr;
+        auto* Watcher = new QFutureWatcher<Result>(this);
+        connect(Watcher, &QFutureWatcher<Result>::finished, this,
+                [this, Watcher, Path = _Path, Additive = _Additive]() {
+            Result Prepared = Watcher->result();
+            Watcher->deleteLater();
+            if (!Prepared) {
+                SceneLoadInProgress = false;
+                if (StatusBr) StatusBr->ShowMessage(tr("Falha ao preparar a cena"), 5000);
+                QMessageBox::warning(
+                    this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                    tr("Falha ao carregar a cena. Veja o console."));
+                return;
+            }
+
+            // Deixa a barra de status pintar a troca de fase antes do commit GPU, que ainda
+            // precisa executar na thread proprietaria do Renderer.
+            if (StatusBr) StatusBr->ShowMessage(tr("Finalizando recursos da cena…"));
+            QTimer::singleShot(0, this,
+                [this, Path, Additive, Prepared = std::move(Prepared)]() mutable {
+                auto* Renderer = Viewport ? Viewport->GetRenderer() : nullptr;
+                const bool Success = Renderer && Renderer->IsInitialized() &&
+                    Renderer->CommitCookedScene(std::move(Prepared), Additive);
+                SceneLoadInProgress = false;
+
+                if (!Success) {
+                    if (StatusBr) StatusBr->ShowMessage(tr("Falha ao finalizar a cena"), 5000);
+                    QMessageBox::warning(
+                        this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                        tr("Falha ao carregar a cena. Veja o console."));
+                    return;
+                }
+
+                if (LightsBr)    LightsBr->OnSceneLoaded(Path, Additive);
+                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
+                if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
+                if (Viewport)    Viewport->NotifyDebugTargetsChanged();
+                if (StatusBr) {
+                    StatusBr->ShowMessage(
+                        Additive ? tr("Cena adicionada") : tr("Cena carregada"), 3000);
+                }
+            });
+        });
+
+        Watcher->setFuture(QtConcurrent::run(
+            [ScenePath = _Path.toStdWString()]() {
+                return Smile::Renderer::PrepareCookedScene(ScenePath);
+            }));
+    }
+
     void MainWindow::WireMenuActions() {
         // Renderer pronto (ou nullptr). As acoes de cena/render so valem com a engine inicializada.
         auto RendererReady = [this]() -> Smile::Renderer* {
@@ -326,36 +392,20 @@ namespace SmileEditor {
 
         // ---- Arquivo ----
         connect(Menus, &MenuBridge::LoadSceneRequested, this, [this, RendererReady]() {
-            auto* R = RendererReady(); if (!R) return;
+            if (!RendererReady()) return;
             const QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
             const QString File = QFileDialog::getOpenFileName(
                 this, tr("Carregar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            if (!R->LoadCookedScene(File.toStdWString())) {
-                QMessageBox::warning(this, tr("Carregar Cena"),
-                                     tr("Falha ao carregar a cena. Veja o console."));
-            } else {
-                if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/false);
-                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/false);
-                if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/false);
-                if (Viewport) Viewport->NotifyDebugTargetsChanged();
-            }
+            BeginSceneLoad(File, /*additive=*/false);
         });
         connect(Menus, &MenuBridge::AddSceneRequested, this, [this, RendererReady]() {
-            auto* R = RendererReady(); if (!R) return;
+            if (!RendererReady()) return;
             const QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
             const QString File = QFileDialog::getOpenFileName(
                 this, tr("Adicionar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            if (!R->LoadCookedScene(File.toStdWString(), /*Additive=*/true)) {
-                QMessageBox::warning(this, tr("Adicionar Cena"),
-                                     tr("Falha ao adicionar a cena. Veja o console."));
-            } else {
-                if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/true);
-                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/true);
-                if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/true);
-                if (Viewport) Viewport->NotifyDebugTargetsChanged();
-            }
+            BeginSceneLoad(File, /*additive=*/true);
         });
         connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
 
@@ -568,14 +618,7 @@ namespace SmileEditor {
         }
 
         if (!StartupScenePath.isEmpty()) {
-            if (!Viewport->GetRenderer()->LoadCookedScene(StartupScenePath.toStdWString())) {
-                Smile::LogError("Cena de startup falhou: " + StartupScenePath.toStdString());
-            } else {
-                if (LightsBr)    LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
-                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
-                if (MaterialsBr) MaterialsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
-                Viewport->NotifyDebugTargetsChanged();
-            }
+            BeginSceneLoad(StartupScenePath, /*additive=*/false);
         }
     }
 

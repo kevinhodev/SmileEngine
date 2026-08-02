@@ -61,6 +61,7 @@ namespace SmileEditor {
         void CreateDocks();
         QWidget* CreateViewportChrome();
         void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
+        void BeginSceneLoad(const QString& path, bool additive);
 
         QString               StartupScenePath;
         QQmlEngine*           SharedQmlEngine = nullptr; // lifetime pertence ao RunEditor
@@ -87,5 +88,6 @@ namespace SmileEditor {
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;
+        bool                  SceneLoadInProgress = false;
     };
-} 
+}

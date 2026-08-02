@@ -18,7 +18,9 @@ using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     static ComPtr<IWICImagingFactory2> GetWICFactory() {
-        static ComPtr<IWICImagingFactory2> Factory;
+        // A preparacao de cena decodifica imagens em paralelo. Cada worker precisa de seu
+        // proprio apartment COM e factory; compartilhar o ComPtr durante o lazy init era race.
+        thread_local ComPtr<IWICImagingFactory2> Factory;
         if (!Factory) {
             CoInitializeEx(nullptr, COINIT_MULTITHREADED);
             SMILE_HR(CoCreateInstance(CLSID_WICImagingFactory2, nullptr,

@@ -63,6 +63,9 @@
 #include "Smile/Scene/Scene.h"
 
 namespace Smile {
+    struct FPreparedCookedScene;
+    using FPreparedCookedScenePtr = std::shared_ptr<FPreparedCookedScene>;
+
     struct alignas(256) FrameConstants {
         Vec4  CameraPosition;  // 16 bytes
         Vec4  IBLParams;       // 16 bytes — x=intensity, y=rotation(rad), z=maxMip, w=enabled
@@ -187,8 +190,14 @@ namespace Smile {
         bool LoadMaterialPreviewEnvironment(const std::wstring& Path);
         bool MaterialPreviewReady() const { return MaterialPreview.HasEnvironment(); }
 
-        // Additive=true acrescenta a cena cozida sobre a atual (ex.: interior por cima
-        // do exterior da Bistro) sem limpar meshes/materiais/camera ja carregados.
+        // A preparacao e CPU-only (I/O, validacao, decode de texturas e copia dos meshes),
+        // portanto pode rodar em worker enquanto o Renderer continua exibindo a cena atual.
+        // O commit cria/muta recursos D3D12 e deve rodar na thread proprietaria do Renderer.
+        static FPreparedCookedScenePtr PrepareCookedScene(const std::wstring& ScenePath);
+        bool CommitCookedScene(FPreparedCookedScenePtr Prepared, bool Additive = false);
+
+        // Atalho sincrono mantido para consumidores sem event loop. Additive=true acrescenta
+        // a cena cozida sobre a atual sem limpar meshes/materiais/camera ja carregados.
         bool LoadCookedScene(const std::wstring& ScenePath, bool Additive = false);
 
         FTexture& GetDefaultWhite()  { return TexDefaultWhite; }
