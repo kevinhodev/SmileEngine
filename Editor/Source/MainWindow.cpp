@@ -361,6 +361,10 @@ namespace SmileEditor {
                 [this, Watcher, Path = _Path, Additive = _Additive]() {
             Result Prepared = Watcher->result();
             Watcher->deleteLater();
+            if (CloseApproved || RendererShutdownForClose) {
+                SceneLoadInProgress = false;
+                return;
+            }
             if (!Prepared) {
                 SceneLoadInProgress = false;
                 if (StatusBr) StatusBr->ShowMessage(tr("Falha ao preparar a cena"), 5000);
@@ -370,33 +374,38 @@ namespace SmileEditor {
                 return;
             }
 
-            // Deixa a barra de status pintar a troca de fase antes do commit GPU, que espera
-            // um ponto serializado com a thread de renderizacao por meio do RendererHandle.
             if (StatusBr) StatusBr->ShowMessage(tr("Finalizando recursos da cena…"));
-            QTimer::singleShot(0, this,
-                [this, Path, Additive, Prepared = std::move(Prepared)]() mutable {
-                auto Renderer = Viewport ? Viewport->GetRenderer() : RendererHandle{};
-                const bool Success = Renderer && Renderer->IsInitialized() &&
-                    Renderer->CommitCookedScene(std::move(Prepared), Additive);
+            const bool Queued = Viewport && Viewport->CommitPreparedSceneAsync(
+                std::move(Prepared), Additive,
+                [this, Path, Additive](bool _Success, const QString& _Error) {
+                    Q_UNUSED(_Error);
+                    SceneLoadInProgress = false;
+
+                    if (!_Success) {
+                        if (StatusBr)
+                            StatusBr->ShowMessage(tr("Falha ao finalizar a cena"), 5000);
+                        QMessageBox::warning(
+                            this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                            tr("Falha ao carregar a cena. Veja o console."));
+                        return;
+                    }
+
+                    if (LightsBr)    LightsBr->OnSceneLoaded(Path, Additive);
+                    if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
+                    if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
+                    if (Viewport)    Viewport->NotifyDebugTargetsChanged();
+                    if (StatusBr) {
+                        StatusBr->ShowMessage(
+                            Additive ? tr("Cena adicionada") : tr("Cena carregada"), 3000);
+                    }
+                });
+            if (!Queued) {
                 SceneLoadInProgress = false;
-
-                if (!Success) {
-                    if (StatusBr) StatusBr->ShowMessage(tr("Falha ao finalizar a cena"), 5000);
-                    QMessageBox::warning(
-                        this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
-                        tr("Falha ao carregar a cena. Veja o console."));
-                    return;
-                }
-
-                if (LightsBr)    LightsBr->OnSceneLoaded(Path, Additive);
-                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
-                if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
-                if (Viewport)    Viewport->NotifyDebugTargetsChanged();
-                if (StatusBr) {
-                    StatusBr->ShowMessage(
-                        Additive ? tr("Cena adicionada") : tr("Cena carregada"), 3000);
-                }
-            });
+                if (StatusBr) StatusBr->ShowMessage(tr("Renderizador indisponível"), 5000);
+                QMessageBox::warning(
+                    this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                    tr("O renderizador foi encerrado antes de finalizar a cena."));
+            }
         });
 
         Watcher->setFuture(QtConcurrent::run(

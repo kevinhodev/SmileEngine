@@ -65,6 +65,12 @@ namespace SmileEditor {
             std::string Error;
         };
 
+        struct JobCompletion {
+            bool        Success = false;
+            std::string Error;
+        };
+        using RendererJob = std::function<JobCompletion(Smile::Renderer&)>;
+
         struct Callbacks {
             std::function<void()>                             Initialized;
             std::function<void(FrameCompletion)>              FrameCompleted;
@@ -91,10 +97,17 @@ namespace SmileEditor {
         bool RequestFrame();
         void CompleteFrame();
 
+        // Jobs GPU sao serializados no mesmo worker dos frames. JobOutstanding permanece ativo
+        // ate a GUI consumir o callback, impedindo que o proximo frame observe bridges antigas.
+        bool RequestRendererJob(RendererJob Job,
+                                std::function<void(JobCompletion)> Completion);
+        void CompleteJob();
+
         bool IsStarted() const;
         bool IsReady() const;
         bool IsStopped() const;
         bool HasFrameInFlight() const;
+        bool HasJobInFlight() const;
 
         RendererHandle GetRenderer() const { return Handle; }
 

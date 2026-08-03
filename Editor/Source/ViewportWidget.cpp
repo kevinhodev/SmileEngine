@@ -52,7 +52,16 @@ namespace SmileEditor {
         // o pacing continua a cargo do Present (VSync ou FPS livre).
         RedrawTimer = new QTimer(this);
         RedrawTimer->setInterval(0);
+        RedrawTimer->setSingleShot(true);
         connect(RedrawTimer, &QTimer::timeout, this, &ViewportWidget::OnRenderTimer);
+
+        // A janela principal ainda pode maximizar e relayoutar o viewport logo depois do
+        // primeiro showEvent. Inicializa a swapchain apenas quando esse tamanho estabilizar.
+        InitializationDebounce = new QTimer(this);
+        InitializationDebounce->setSingleShot(true);
+        InitializationDebounce->setInterval(kResizeDebounceMs);
+        connect(InitializationDebounce, &QTimer::timeout,
+                this, &ViewportWidget::EnsureRendererIsInitialized);
 
         // Fallback para Snap, maximizar/restaurar, DPI e resizes programaticos: esses caminhos
         // podem nao entrar no loop WM_ENTERSIZEMOVE. Eventos consecutivos conservam apenas o
@@ -75,6 +84,7 @@ namespace SmileEditor {
 
     ViewportWidget::~ViewportWidget() {
         if (RedrawTimer) RedrawTimer->stop();
+        if (InitializationDebounce) InitializationDebounce->stop();
         if (ResizeDebounce) ResizeDebounce->stop();
         // O closeEvent normal espera RendererStopped antes de destruir a arvore Qt. O fallback
         // preserva a vida dos campos em construcao parcial/teardown excepcional.
@@ -86,7 +96,9 @@ namespace SmileEditor {
         if (RendererShutdownRequested) return;
         RendererShutdownRequested = true;
         if (RedrawTimer) RedrawTimer->stop();
+        if (InitializationDebounce) InitializationDebounce->stop();
         if (ResizeDebounce) ResizeDebounce->stop();
+        RendererJobs.clear();
         RendererThread.RequestStop();
         if (RendererThread.IsStopped()) OnRenderThreadStopped();
     }
@@ -228,66 +240,43 @@ namespace SmileEditor {
     }
 
     int ViewportWidget::GetVisibleDrawCount() const {
-        return Renderer ? static_cast<int>(Renderer->GetVisibleCount()) : 0;
+        return Telemetry.VisibleDrawCount;
     }
 
     int ViewportWidget::GetTotalDrawCount() const {
-        return Renderer ? static_cast<int>(Renderer->GetDrawCount()) : 0;
+        return Telemetry.TotalDrawCount;
     }
 
     int ViewportWidget::GetOccludedDrawCount() const {
-        return Renderer ? static_cast<int>(Renderer->GetOccludedCount()) : 0;
+        return Telemetry.OccludedDrawCount;
     }
 
     QString ViewportWidget::GetInternalResolution() const {
-        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
-        return QStringLiteral("%1×%2").arg(Renderer->RenderWidth()).arg(Renderer->RenderHeight());
+        return Telemetry.InternalResolution;
     }
 
     QString ViewportWidget::GetOutputResolution() const {
-        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
-        return QStringLiteral("%1×%2").arg(Renderer->OutputWidth()).arg(Renderer->OutputHeight());
+        return Telemetry.OutputResolution;
     }
 
     QString ViewportWidget::GetGPUName() const {
-        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("Inicializando GPU…");
-        return QString::fromStdWString(Renderer->GetDevice().GetAdapterDescription());
+        return Telemetry.GPUName;
     }
 
     QString ViewportWidget::GetVRAMText() const {
-        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
-        const double GiB = static_cast<double>(
-            Renderer->GetDevice().GetAdapterDedicatedVideoMemory()) / (1024.0 * 1024.0 * 1024.0);
-        return QLocale(QLocale::Portuguese, QLocale::Brazil).toString(GiB, 'f', 1) +
-               QStringLiteral(" GB");
+        return Telemetry.VRAMText;
     }
 
     QString ViewportWidget::GetVRAMUsageText() const {
-        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
-        auto RendererAccess = Renderer.Lock();
-        const auto& VM = Renderer->GetDevice().QueryVideoMemory();
-        if (!VM.Valid) return QStringLiteral("—");
-
-        const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
-        const double GiB = 1024.0 * 1024.0 * 1024.0;
-        return Loc.toString(static_cast<double>(VM.LocalUsage) / GiB, 'f', 2) +
-               QStringLiteral(" / ") +
-               Loc.toString(static_cast<double>(VM.LocalBudget) / GiB, 'f', 1) +
-               QStringLiteral(" GB");
+        return Telemetry.VRAMUsageText;
     }
 
     bool ViewportWidget::IsVRAMOverBudget() const {
-        if (!Renderer || !Renderer->IsInitialized()) return false;
-        return Renderer->GetDevice().QueryVideoMemory().OverBudget;
+        return Telemetry.VRAMOverBudget;
     }
 
     double ViewportWidget::GetVRAMBudgetFrac() const {
-        if (!Renderer || !Renderer->IsInitialized()) return 0.0;
-        auto RendererAccess = Renderer.Lock();
-        const auto& VM = Renderer->GetDevice().QueryVideoMemory();
-        if (!VM.Valid || VM.LocalBudget == 0) return 0.0;
-        return std::min(1.0, static_cast<double>(VM.LocalUsage) /
-                             static_cast<double>(VM.LocalBudget));
+        return Telemetry.VRAMBudgetFrac;
     }
 
     namespace {
@@ -300,23 +289,19 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetVRAMNonLocalText() const {
-        if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
-        auto RendererAccess = Renderer.Lock();
-        const auto& VM = Renderer->GetDevice().QueryVideoMemory();
-        if (!VM.Valid) return QStringLiteral("—");
-        return FormatBytes(VM.NonLocalUsage) + QStringLiteral(" / ") +
-               FormatBytes(VM.NonLocalBudget);
+        return Telemetry.VRAMNonLocalText;
+    }
+
+    QVariantList ViewportWidget::GetVRAMBreakdown() const {
+        return Telemetry.VRAMBreakdown;
     }
 
     // Tabela da janela de Estatisticas: categorias rastreadas (> 0) em ordem decrescente
     // + linha "Nao rastreado" (uso DXGI − soma rastreada: driver, descriptor heaps,
     // swapchain, upload heaps e o que nao foi instrumentado). frac e relativo ao uso total.
-    QVariantList ViewportWidget::GetVRAMBreakdown() const {
+    QVariantList ViewportWidget::BuildVRAMBreakdown(Smile::Renderer& _Renderer) const {
         QVariantList Rows;
-        if (!Renderer || !Renderer->IsInitialized()) return Rows;
-
-        auto RendererAccess = Renderer.Lock();
-        const auto& VM   = Renderer->GetDevice().QueryVideoMemory();
+        const auto& VM   = _Renderer.GetDevice().QueryVideoMemory();
         const auto  Snap = Smile::VramTracker::Snapshot();
         const double Total = VM.Valid && VM.LocalUsage > 0
             ? static_cast<double>(VM.LocalUsage)
@@ -354,28 +339,23 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetGpuFrameText() const {
-        const double FrameMs = GetGpuFrameMs();
-        if (FrameMs <= 0.0) return QStringLiteral("—");
-        return QLocale(QLocale::Portuguese, QLocale::Brazil)
-                   .toString(FrameMs, 'f', 2) + QStringLiteral(" ms");
+        return Telemetry.GPUFrameText;
     }
 
     double ViewportWidget::GetGpuFrameMs() const {
-        if (!Renderer || !Renderer->IsInitialized()) return 0.0;
-        auto RendererAccess = Renderer.Lock();
-        for (const auto& R : Renderer->GetGpuProfiler().Results())
-            if (std::strcmp(R.Name, kGpuFrameScope) == 0) return R.Milliseconds;
-        return 0.0;
+        return Telemetry.GPUFrameMs;
+    }
+
+    QVariantList ViewportWidget::GetGpuTimings() const {
+        return Telemetry.GpuTimings;
     }
 
     // Tabela "GPU por passe": escopos do FGpuProfiler (sem o total, que vira o header),
     // em ordem de custo com histerese; frac relativo ao frame total de GPU. A margem conserva
     // a leitura por consumo sem deixar passes quase empatados trocarem de lugar a cada snapshot.
-    QVariantList ViewportWidget::GetGpuTimings() const {
+    QVariantList ViewportWidget::BuildGpuTimings(Smile::Renderer& _Renderer) {
         QVariantList Rows;
-        if (!Renderer || !Renderer->IsInitialized()) return Rows;
-        auto RendererAccess = Renderer.Lock();
-        const auto& Results = Renderer->GetGpuProfiler().Results();
+        const auto& Results = _Renderer.GetGpuProfiler().Results();
         if (Results.empty()) return Rows;
 
         double FrameMs = 0.0;
@@ -384,7 +364,7 @@ namespace SmileEditor {
 
         // Passes da fila de COMPUTE (DDGI async) entram na mesma tabela. O FGpuProfiler agora
         // preserva Depth, portanto os scopes aninhados viram subpasses expansíveis no QML.
-        const auto ComputeResults = Renderer->GetAsyncComputeTimings();
+        const auto ComputeResults = _Renderer.GetAsyncComputeTimings();
 
         struct FTimingGroup {
             const Smile::FGpuProfiler::FScopeResult* Parent = nullptr;
@@ -518,25 +498,76 @@ namespace SmileEditor {
         return Rows;
     }
 
+    void ViewportWidget::CaptureTelemetry(Smile::Renderer& _Renderer) {
+        FTelemetrySnapshot Next;
+        Next.VisibleDrawCount = static_cast<int>(_Renderer.GetVisibleCount());
+        Next.TotalDrawCount = static_cast<int>(_Renderer.GetDrawCount());
+        Next.OccludedDrawCount = static_cast<int>(_Renderer.GetOccludedCount());
+        Next.InternalResolution = QStringLiteral("%1×%2")
+            .arg(_Renderer.RenderWidth()).arg(_Renderer.RenderHeight());
+        Next.OutputResolution = QStringLiteral("%1×%2")
+            .arg(_Renderer.OutputWidth()).arg(_Renderer.OutputHeight());
+        Next.GPUName = QString::fromStdWString(
+            _Renderer.GetDevice().GetAdapterDescription());
+
+        const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
+        constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
+        Next.VRAMText = Loc.toString(
+            static_cast<double>(_Renderer.GetDevice().GetAdapterDedicatedVideoMemory()) / GiB,
+            'f', 1) + QStringLiteral(" GB");
+
+        const auto& VM = _Renderer.GetDevice().QueryVideoMemory();
+        if (VM.Valid) {
+            Next.VRAMUsageText =
+                Loc.toString(static_cast<double>(VM.LocalUsage) / GiB, 'f', 2) +
+                QStringLiteral(" / ") +
+                Loc.toString(static_cast<double>(VM.LocalBudget) / GiB, 'f', 1) +
+                QStringLiteral(" GB");
+            Next.VRAMOverBudget = VM.OverBudget;
+            Next.VRAMBudgetFrac = VM.LocalBudget > 0
+                ? std::min(1.0, static_cast<double>(VM.LocalUsage) /
+                                  static_cast<double>(VM.LocalBudget))
+                : 0.0;
+            Next.VRAMNonLocalText = FormatBytes(VM.NonLocalUsage) + QStringLiteral(" / ") +
+                                    FormatBytes(VM.NonLocalBudget);
+        }
+        Next.VRAMBreakdown = BuildVRAMBreakdown(_Renderer);
+
+        for (const auto& Result : _Renderer.GetGpuProfiler().Results()) {
+            if (std::strcmp(Result.Name, kGpuFrameScope) == 0) {
+                Next.GPUFrameMs = Result.Milliseconds;
+                break;
+            }
+        }
+        if (Next.GPUFrameMs > 0.0) {
+            Next.GPUFrameText = Loc.toString(Next.GPUFrameMs, 'f', 2) +
+                                QStringLiteral(" ms");
+        }
+        Next.GpuTimings = BuildGpuTimings(_Renderer);
+        Telemetry = std::move(Next);
+    }
+
     void ViewportWidget::SelectLit() {
         if (!Renderer) return;
-        Renderer->SetGBufferDebugMode(0);
-        Renderer->SetFlickerMode(0);
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetGBufferDebugMode(0);
+        RendererAccess->SetFlickerMode(0);
         // Um alvo de debug ativo tem prioridade sobre o caminho normal no Renderer, entao
         // escolher Lit precisa desliga-lo — senao a tela nao muda e o menu fica com duas
         // linhas marcadas.
-        Renderer->SetDebugTargetIndex(Smile::Renderer::kNoDebugTarget);
+        RendererAccess->SetDebugTargetIndex(Smile::Renderer::kNoDebugTarget);
         CurrentViewMode = Lit;
         emit ViewStateChanged();
     }
 
     void ViewportWidget::SelectReflectionHeatmap() {
         if (!Renderer) return;
-        Renderer->SetGBufferDebugMode(0);
-        Renderer->SetDebugTargetIndex(Smile::Renderer::kNoDebugTarget);
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetGBufferDebugMode(0);
+        RendererAccess->SetDebugTargetIndex(Smile::Renderer::kNoDebugTarget);
         // Ainda nao ha um heatmap exclusivo dos raios de reflexao. O heatmap temporal
         // existente e a visualizacao funcional mais proxima para este slot do mockup.
-        Renderer->SetFlickerMode(2);
+        RendererAccess->SetFlickerMode(2);
         CurrentViewMode = ReflectionHeatmap;
         emit ViewStateChanged();
     }
@@ -661,8 +692,9 @@ namespace SmileEditor {
 
     void ViewportWidget::SetDebugPreviewEnabled(bool _Enabled) {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         if (!_Enabled && DebugProbeSessionActive) ClearDebugProbeInspection();
-        Renderer->SetDebugPreviewEnabled(_Enabled);
+        RendererAccess->SetDebugPreviewEnabled(_Enabled);
         if (_Enabled) InvalidateDebugPreview();
     }
 
@@ -671,20 +703,22 @@ namespace SmileEditor {
     void ViewportWidget::ToggleDebugSelection(int _Index) {
         if (!Renderer || _Index < 0) return;
         if (DebugProbeSessionActive) ClearDebugProbeInspection();
-        std::vector<Smile::u32> Sel = Renderer->GetDebugSelection();
+        auto RendererAccess = Renderer.Lock();
+        std::vector<Smile::u32> Sel = RendererAccess->GetDebugSelection();
         const auto It = std::find(Sel.begin(), Sel.end(), static_cast<Smile::u32>(_Index));
         if (It != Sel.end()) Sel.erase(It);
         else if (Sel.size() < 16u) Sel.push_back(static_cast<Smile::u32>(_Index));
         else return;
-        Renderer->SetDebugSelection(Sel);
+        RendererAccess->SetDebugSelection(Sel);
         InvalidateDebugPreview();
         emit DebugSettingsChanged();
     }
 
     void ViewportWidget::ClearDebugSelection() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         if (DebugProbeSessionActive) ClearDebugProbeInspection();
-        Renderer->SetDebugSelection({});
+        RendererAccess->SetDebugSelection({});
         InvalidateDebugPreview();
         emit DebugSettingsChanged();
     }
@@ -774,6 +808,8 @@ namespace SmileEditor {
     }
 
     void ViewportWidget::StepDebugProbe(int _DX, int _DY, int _DZ) {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         int X, Y, Z, CountX, CountY, CountZ;
         if (!GetDebugProbeCoordValues(X, Y, Z, CountX, CountY, CountZ)) return;
         const int NX = std::clamp(X + _DX, 0, CountX - 1);
@@ -793,6 +829,7 @@ namespace SmileEditor {
 
     void ViewportWidget::ClearDebugProbeInspection() {
         if (!Renderer || !DebugProbeSessionActive) return;
+        auto RendererAccess = Renderer.Lock();
         ResetDebugProbePoint();
         SelectDebugProbe(-1);
 
@@ -802,8 +839,8 @@ namespace SmileEditor {
             const Smile::u32 Index = Smile::DebugTargets::IndexOf(Name.toStdString());
             if (Index != Smile::DebugTargets::kInvalid) Restored.push_back(Index);
         }
-        Renderer->SetDebugSelection(Restored);
-        Renderer->SetDebugColumns(
+        RendererAccess->SetDebugSelection(Restored);
+        RendererAccess->SetDebugColumns(
             DebugProbePreviousColumns < 0 ? 0u
                                           : static_cast<Smile::u32>(DebugProbePreviousColumns));
 
@@ -830,9 +867,10 @@ namespace SmileEditor {
                              !DebugProbePointSummary.isEmpty() ||
                              !DebugProbeContributors.isEmpty();
         if (Renderer && _CancelRendererRequest) {
-            Renderer->CancelDebugProbePoint();
+            auto RendererAccess = Renderer.Lock();
+            RendererAccess->CancelDebugProbePoint();
             if (DebugProbeSessionActive) {
-                Renderer->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
+                RendererAccess->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
             }
         }
         DebugProbePointPickArmed = false;
@@ -853,8 +891,11 @@ namespace SmileEditor {
             return;
         }
 
-        Renderer->CancelDebugProbePoint();
-        Renderer->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
+        {
+            auto RendererAccess = Renderer.Lock();
+            RendererAccess->CancelDebugProbePoint();
+            RendererAccess->SetDebugProbeContributors(nullptr, nullptr, 0, -1);
+        }
         DebugProbeContributors.clear();
         DebugProbeContributorIndices.fill(0);
         DebugProbeContributorWeights.fill(0.0f);
@@ -873,6 +914,7 @@ namespace SmileEditor {
 
     void ViewportWidget::SelectDebugProbeContributor(int _ProbeIndex) {
         if (!Renderer || !DebugProbeSessionActive || _ProbeIndex < 0) return;
+        auto RendererAccess = Renderer.Lock();
         bool Found = false;
         for (Smile::u32 I = 0; I < DebugProbeContributorCount; ++I) {
             if (DebugProbeContributorIndices[I] ==
@@ -886,7 +928,7 @@ namespace SmileEditor {
         // Clicar num contribuinte e escolha do usuario: vira a probe da sessao, e um pick
         // seguinte fora do volume volta para ELA, nao para a dominante automatica anterior.
         SelectDebugProbe(_ProbeIndex);
-        Renderer->SetDebugProbeContributors(
+        RendererAccess->SetDebugProbeContributors(
             DebugProbeContributorIndices.data(),
             DebugProbeContributorWeights.data(),
             DebugProbeContributorCount,
@@ -930,14 +972,16 @@ namespace SmileEditor {
 
     void ViewportWidget::SelectDebugTarget(int _Index) {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         // -1 desliga e devolve o viewport ao caminho normal.
-        Renderer->SetDebugTargetIndex(_Index < 0 ? Smile::Renderer::kNoDebugTarget
-                                                 : static_cast<Smile::u32>(_Index));
+        RendererAccess->SetDebugTargetIndex(
+            _Index < 0 ? Smile::Renderer::kNoDebugTarget
+                       : static_cast<Smile::u32>(_Index));
         if (_Index >= 0) {
             // Modo unico: o alvo substitui Lit/Heatmap, entao zera o heatmap temporal e
             // volta o view mode base p/ Lit (é o estado ao qual "Desligado" retorna).
-            Renderer->SetFlickerMode(0);
-            Renderer->SetGBufferDebugMode(0);
+            RendererAccess->SetFlickerMode(0);
+            RendererAccess->SetGBufferDebugMode(0);
             CurrentViewMode = Lit;
         }
         emit ViewStateChanged();
@@ -945,57 +989,65 @@ namespace SmileEditor {
 
     void ViewportWidget::ToggleDDGI() {
         if (!Renderer) return;
-        Renderer->SetUseGI(!Renderer->GetUseGI());
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetUseGI(!RendererAccess->GetUseGI());
         emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReSTIRGI() {
         if (!Renderer) return;
-        Renderer->SetUseReSTIRGI(!Renderer->GetUseReSTIRGI());
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetUseReSTIRGI(!RendererAccess->GetUseReSTIRGI());
         emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReGIR() {
         if (!Renderer) return;
-        Renderer->SetUseReGIR(!Renderer->GetUseReGIR());
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetUseReGIR(!RendererAccess->GetUseReGIR());
         emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReSTIRGIVisibility() {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();
-        auto& ReSTIRGI = Renderer->GetReSTIRGI();
+        auto& ReSTIRGI = RendererAccess->GetReSTIRGI();
         ReSTIRGI.SetVisibility(!ReSTIRGI.GetVisibility());
         emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleGIFoliageShadows() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         // Toggle unico p/ os 3 consumidores do HitShading (DDGI e a fonte da verdade na leitura).
-        const bool V = !Renderer->GetDDGI().GetFoliageShadows();
-        Renderer->GetDDGI().SetFoliageShadows(V);
-        Renderer->GetReSTIRGI().SetFoliageShadows(V);
-        Renderer->GetReflections().SetFoliageShadows(V);
+        const bool V = !RendererAccess->GetDDGI().GetFoliageShadows();
+        RendererAccess->GetDDGI().SetFoliageShadows(V);
+        RendererAccess->GetReSTIRGI().SetFoliageShadows(V);
+        RendererAccess->GetReflections().SetFoliageShadows(V);
         emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReflectionsCullBackface() {
         if (!Renderer) return;
-        Renderer->SetReflectionsCullBackface(!Renderer->GetReflectionsCullBackface());
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetReflectionsCullBackface(
+            !RendererAccess->GetReflectionsCullBackface());
         emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleReSTIRDI() {
         if (!Renderer) return;
-        Renderer->SetUseReSTIRDI(!Renderer->GetUseReSTIRDI());
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetUseReSTIRDI(!RendererAccess->GetUseReSTIRDI());
         emit GISettingsChanged();
     }
 
     void ViewportWidget::ToggleGIBackfacePolicy() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         // Pelo Renderer: alem dos reservoirs, o NRD/RR/TAA acumulam sobre o resultado e
         // precisam cair juntos, senao o A/B denoisado compara estado misturado.
-        Renderer->SetGIBackfacePolicy(!Renderer->GetGIBackfacePolicy());
+        RendererAccess->SetGIBackfacePolicy(!RendererAccess->GetGIBackfacePolicy());
         emit GISettingsChanged();
     }
 
@@ -1013,54 +1065,107 @@ namespace SmileEditor {
 
     void ViewportWidget::ToggleGTAO() {
         if (!Renderer) return;
-        Renderer->SetUseAO(!Renderer->GetUseAO());
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetUseAO(!RendererAccess->GetUseAO());
         emit RenderSettingsChanged();
     }
 
     void ViewportWidget::ToggleGTAOHalfRes() {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();
-        auto& AO = Renderer->GetAO();
+        auto& AO = RendererAccess->GetAO();
         AO.SetHalfRes(!AO.GetHalfRes());
         emit RenderSettingsChanged();
     }
 
     void ViewportWidget::ToggleReflections() {
         if (!Renderer) return;
-        Renderer->SetUseReflections(!Renderer->GetUseReflections());
+        auto RendererAccess = Renderer.Lock();
+        RendererAccess->SetUseReflections(!RendererAccess->GetUseReflections());
         emit RenderSettingsChanged();
     }
 
     void ViewportWidget::ToggleNrd() {
         if (!Renderer) return;
-        Renderer->SetUseNrdDenoise(!Renderer->GetUseNrdDenoise());
-        emit RenderSettingsChanged();
+        EnqueueRendererJob(
+            {},
+            [](Smile::Renderer& _Renderer) {
+                _Renderer.SetUseNrdDenoise(!_Renderer.GetUseNrdDenoise());
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) {
+                    emit RenderSettingsChanged();
+                    NotifyDebugTargetsChanged();
+                }
+            });
     }
 
     void ViewportWidget::SetDenoiserMode(int _Mode) {
         if (!Renderer) return;
         // 0=Nenhum 1=NRD 2=DLSS RR. Selecionar RR forca e trava o upscaler em DLSS (o RR faz o upscale);
         // o Renderer cai p/ NRD se o RR nao estiver disponivel (sem NVIDIA/SDK).
-        Renderer->SetDenoiser(static_cast<Smile::EDenoiser>(_Mode));
-        emit RenderSettingsChanged();
+        EnqueueRendererJob(
+            QStringLiteral("denoiser"),
+            [_Mode](Smile::Renderer& _Renderer) {
+                _Renderer.SetDenoiser(static_cast<Smile::EDenoiser>(_Mode));
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) {
+                    emit RenderSettingsChanged();
+                    NotifyDebugTargetsChanged();
+                }
+            });
     }
 
     void ViewportWidget::SetUpscalerMode(int _Mode) {
         if (!Renderer) return;
-        Renderer->SetUpscaler(static_cast<Smile::EUpscaler>(_Mode));  // 0=None 1=FSR 2=DLSS; cai p/ None se indisponivel
-        emit RenderSettingsChanged();
+        EnqueueRendererJob(
+            QStringLiteral("upscaler-mode"),
+            [_Mode](Smile::Renderer& _Renderer) {
+                // 0=None 1=FSR 2=DLSS; cai p/ None se indisponivel.
+                _Renderer.SetUpscaler(static_cast<Smile::EUpscaler>(_Mode));
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) {
+                    emit RenderSettingsChanged();
+                    NotifyDebugTargetsChanged();
+                }
+            });
     }
 
     void ViewportWidget::SetUpscalerQuality(int _Quality) {
         if (!Renderer) return;
-        Renderer->SetUpscalerQuality(_Quality);  // qualidade compartilhada FSR/DLSS
-        emit RenderSettingsChanged();
+        EnqueueRendererJob(
+            QStringLiteral("upscaler-quality"),
+            [_Quality](Smile::Renderer& _Renderer) {
+                _Renderer.SetUpscalerQuality(_Quality); // qualidade compartilhada FSR/DLSS
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) {
+                    emit RenderSettingsChanged();
+                    NotifyDebugTargetsChanged();
+                }
+            });
     }
 
     void ViewportWidget::SetRenderScale(double _Scale) {
         if (!Renderer) return;
-        Renderer->SetRenderScale(static_cast<float>(_Scale));
-        emit RenderSettingsChanged();
+        EnqueueRendererJob(
+            QStringLiteral("render-scale"),
+            [_Scale](Smile::Renderer& _Renderer) {
+                _Renderer.SetRenderScale(static_cast<float>(_Scale));
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) {
+                    emit RenderSettingsChanged();
+                    NotifyDebugTargetsChanged();
+                }
+            });
     }
 
     namespace {
@@ -1145,10 +1250,11 @@ namespace SmileEditor {
         if (!Renderer) return;
         for (const FEpsKnob& K : kEpsKnobs) {
             if (_Key != QLatin1String(K.Key)) continue;
-            Smile::FRayEpsilonProfile P = Renderer->GetRayEpsilons();
+            auto RendererAccess = Renderer.Lock();
+            Smile::FRayEpsilonProfile P = RendererAccess->GetRayEpsilons();
             P.*(K.Field) = static_cast<float>(
                 qBound(K.UiMin, _UiValue, K.UiMax) / K.UiScale);
-            Renderer->SetRayEpsilons(P); // invalida reservoirs + historico do denoiser
+            RendererAccess->SetRayEpsilons(P); // invalida reservoirs + historico do denoiser
             emit GISettingsChanged();
             return;
         }
@@ -1438,8 +1544,18 @@ namespace SmileEditor {
 
     void ViewportWidget::SetCloudsHalfRes(bool _HalfRes) {
         if (!Renderer) return;
-        Renderer->SetCloudsHalfRes(_HalfRes);
-        emit CloudSettingsChanged();
+        EnqueueRendererJob(
+            QStringLiteral("cloud-half-res"),
+            [_HalfRes](Smile::Renderer& _Renderer) {
+                _Renderer.SetCloudsHalfRes(_HalfRes);
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) {
+                    emit CloudSettingsChanged();
+                    NotifyDebugTargetsChanged();
+                }
+            });
     }
 
     double ViewportWidget::GetCloudCoverage() const {
@@ -1538,8 +1654,16 @@ namespace SmileEditor {
 
     void ViewportWidget::SetCloudWeatherSeed(int _Seed) {
         if (!Renderer) return;
-        Renderer->SetCloudWeatherSeed(static_cast<Smile::u32>(_Seed < 0 ? 0 : _Seed));
-        emit CloudSettingsChanged();
+        const Smile::u32 Seed = static_cast<Smile::u32>(_Seed < 0 ? 0 : _Seed);
+        EnqueueRendererJob(
+            QStringLiteral("cloud-weather-seed"),
+            [Seed](Smile::Renderer& _Renderer) {
+                _Renderer.SetCloudWeatherSeed(Seed);
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) emit CloudSettingsChanged();
+            });
     }
 
     int ViewportWidget::GetCloudWeatherCells() const {
@@ -1548,8 +1672,16 @@ namespace SmileEditor {
 
     void ViewportWidget::SetCloudWeatherCells(int _Mult) {
         if (!Renderer) return;
-        Renderer->SetCloudWeatherCells(static_cast<Smile::u32>(_Mult < 1 ? 1 : _Mult));
-        emit CloudSettingsChanged();
+        const Smile::u32 Cells = static_cast<Smile::u32>(_Mult < 1 ? 1 : _Mult);
+        EnqueueRendererJob(
+            QStringLiteral("cloud-weather-cells"),
+            [Cells](Smile::Renderer& _Renderer) {
+                _Renderer.SetCloudWeatherCells(Cells);
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) emit CloudSettingsChanged();
+            });
     }
 
     bool ViewportWidget::IsCloudWeatherAuthored() const {
@@ -1562,14 +1694,31 @@ namespace SmileEditor {
             this, tr("Weather map (R=cobertura, G=tipo, B=altura de topo)"), QString(),
             tr("Imagens (*.png *.jpg *.jpeg *.tga *.bmp)"));
         if (Path.isEmpty()) return;
-        Renderer->LoadCloudWeatherTexture(Path.toStdWString());
-        emit CloudSettingsChanged();
+        const std::wstring NativePath = Path.toStdWString();
+        EnqueueRendererJob(
+            {},
+            [NativePath](Smile::Renderer& _Renderer) {
+                RenderThread::JobCompletion Result;
+                Result.Success = _Renderer.LoadCloudWeatherTexture(NativePath);
+                if (!Result.Success) Result.Error = "falha ao carregar weather map";
+                return Result;
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) emit CloudSettingsChanged();
+            });
     }
 
     void ViewportWidget::ClearCloudWeatherTexture() {
         if (!Renderer) return;
-        Renderer->ClearCloudWeatherTexture();
-        emit CloudSettingsChanged();
+        EnqueueRendererJob(
+            {},
+            [](Smile::Renderer& _Renderer) {
+                _Renderer.ClearCloudWeatherTexture();
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) emit CloudSettingsChanged();
+            });
     }
 
     bool ViewportWidget::AreCloudShadowsEnabled() const {
@@ -1709,12 +1858,28 @@ namespace SmileEditor {
         if (!Renderer) return;
         // O padrao segue o backend recomendado (DLSS em NVIDIA, senao FSR, senao nativo), mas em
         // escala 1:1 (tier 0 = 100%): reconstroi/faz AA sem upscale. Bate com o default do Renderer.
-        Renderer->SetUpscalerQuality(0);
-        Renderer->SetUpscaler(static_cast<Smile::EUpscaler>(GetRecommendedUpscalerMode()));
-        Renderer->SetUseTAA(true);
-        Renderer->SetFrustumCulling(true);
-        Renderer->SetDepthPrepass(false);
-        emit RenderSettingsChanged();
+        EnqueueRendererJob(
+            {},
+            [](Smile::Renderer& _Renderer) {
+                const Smile::EUpscaler Recommended =
+                    _Renderer.UpscalerAvailable(Smile::EUpscaler::DLSS)
+                        ? Smile::EUpscaler::DLSS
+                        : (_Renderer.UpscalerAvailable(Smile::EUpscaler::FSR)
+                               ? Smile::EUpscaler::FSR
+                               : Smile::EUpscaler::None);
+                _Renderer.SetUpscalerQuality(0);
+                _Renderer.SetUpscaler(Recommended);
+                _Renderer.SetUseTAA(true);
+                _Renderer.SetFrustumCulling(true);
+                _Renderer.SetDepthPrepass(false);
+                return RenderThread::JobCompletion{ true, {} };
+            },
+            [this](bool _Success, const QString&) {
+                if (_Success) {
+                    emit RenderSettingsChanged();
+                    NotifyDebugTargetsChanged();
+                }
+            });
     }
 
     void ViewportWidget::RequestSettings() {
@@ -1778,9 +1943,15 @@ namespace SmileEditor {
         Initialized = true;
         PendingResizeSize = size();
         ApplyPendingResize();
+        {
+            auto RendererAccess = Renderer.Lock();
+            if (RendererAccess && RendererAccess->IsInitialized())
+                CaptureTelemetry(*RendererAccess);
+        }
         FrameTimer.restart();
         emit RendererInitialized();
         emit DebugTargetsChanged();   // os alvos foram publicados na criacao dos targets internos
+        if (isVisible() && RedrawTimer) RedrawTimer->start();
     }
 
     void ViewportWidget::OnRendererInitializationFailed(const QString& _Error) {
@@ -1789,30 +1960,130 @@ namespace SmileEditor {
         if (RedrawTimer) RedrawTimer->stop();
     }
 
+    bool ViewportWidget::CommitPreparedSceneAsync(
+            std::shared_ptr<Smile::FPreparedCookedScene> _Prepared,
+            bool _Additive,
+            SceneCommitCallback _Completion) {
+        if (!_Prepared) return false;
+        return EnqueueRendererJob(
+            {},
+            [Prepared = std::move(_Prepared), _Additive](Smile::Renderer& _Renderer) mutable {
+                RenderThread::JobCompletion Result;
+                Result.Success = _Renderer.CommitCookedScene(
+                    std::move(Prepared), _Additive);
+                if (!Result.Success)
+                    Result.Error = "CommitCookedScene retornou false";
+                return Result;
+            },
+            std::move(_Completion));
+    }
+
+    bool ViewportWidget::EnqueueRendererJob(
+            const QString& _CoalesceKey,
+            RenderThread::RendererJob _Job,
+            SceneCommitCallback _Completion) {
+        if (!_Job || RendererShutdownRequested || !RendererThread.IsReady()) return false;
+
+        // Sliders e toggles podem publicar outro valor enquanto um rebuild anterior trabalha.
+        // Conserva apenas o ultimo job ainda nao iniciado da mesma familia.
+        if (!_CoalesceKey.isEmpty()) {
+            for (auto It = RendererJobs.rbegin(); It != RendererJobs.rend(); ++It) {
+                if (It->CoalesceKey == _CoalesceKey) {
+                    It->Execute = std::move(_Job);
+                    It->Completion = std::move(_Completion);
+                    return true;
+                }
+            }
+        }
+
+        RendererJobs.push_back(FQueuedRendererJob{
+            _CoalesceKey, std::move(_Job), std::move(_Completion) });
+        DispatchNextRendererJob();
+        return true;
+    }
+
+    void ViewportWidget::DispatchNextRendererJob() {
+        if (RendererJobActive || RendererShutdownRequested || RendererJobs.empty()) return;
+
+        FQueuedRendererJob Job = std::move(RendererJobs.front());
+        RendererJobs.pop_front();
+        if (RedrawTimer) RedrawTimer->stop();
+        RendererJobActive = true;
+
+        QPointer<ViewportWidget> Self(this);
+        SceneCommitCallback Completion = std::move(Job.Completion);
+        SceneCommitCallback FailureCompletion = Completion;
+        const bool Queued = RendererThread.RequestRendererJob(
+            std::move(Job.Execute),
+            [Self, Completion = std::move(Completion)](
+                    RenderThread::JobCompletion _Result) mutable {
+                if (!Self) return;
+                const bool Success = _Result.Success;
+                const QString Error = QString::fromStdString(_Result.Error);
+                QMetaObject::invokeMethod(Self,
+                    [Self, Success, Error, Completion = std::move(Completion)]() mutable {
+                        if (!Self) return;
+
+                        // Primeiro publica bridges/sinais; so depois permite que outro job ou
+                        // frame observe o novo estado do renderer.
+                        if (!Self->RendererShutdownRequested && Completion)
+                            Completion(Success, Error);
+                        Self->RendererThread.CompleteJob();
+                        Self->RendererJobActive = false;
+                        Self->DispatchNextRendererJob();
+
+                        if (Self->PendingResizeSize.isValid() &&
+                            Self->PendingResizeSize != Self->AppliedResizeSize &&
+                            Self->ResizeDebounce && !Self->InteractiveResize)
+                            Self->ResizeDebounce->start(0);
+
+                        if (!Self->RendererShutdownRequested &&
+                            Self->RendererJobs.empty() && Self->isVisible() &&
+                            Self->RedrawTimer)
+                            Self->RedrawTimer->start();
+                    }, Qt::QueuedConnection);
+            });
+
+        if (!Queued) {
+            RendererJobActive = false;
+            if (!RendererShutdownRequested && FailureCompletion)
+                FailureCompletion(false, QStringLiteral("render thread indisponivel"));
+            DispatchNextRendererJob();
+            if (RendererJobs.empty() && isVisible() && RedrawTimer) RedrawTimer->start(1);
+        }
+    }
+
     void ViewportWidget::OnRenderThreadStopped() {
         if (RendererStoppedFlag) return;
         RendererThread.Join();
         RendererStoppedFlag = true;
         Initialized = false;
         if (RedrawTimer) RedrawTimer->stop();
+        if (InitializationDebounce) InitializationDebounce->stop();
         if (ResizeDebounce) ResizeDebounce->stop();
         emit RendererStopped();
     }
 
     void ViewportWidget::showEvent(QShowEvent* _Event) {
-        // Cria e limpa o HWND antes de ele se tornar visivel; a inicializacao pesada segue
-        // assincrona na render thread.
-        EnsureRendererIsInitialized();
         QWidget::showEvent(_Event);
-        // O layout pode ter mudado enquanto o viewport estava oculto e o debounce parado.
+        // Espera o primeiro layout terminar antes de fixar o tamanho inicial da swapchain. O
+        // fundo Qt ja e preto; evitar um ResizeBuffers logo depois do Initialize remove um flush
+        // caro da GUI sem atrasar perceptivelmente o boot pesado do renderer.
         PendingResizeSize = size();
-        ApplyPendingResize();
+        if (!RendererThread.IsStarted()) {
+            InitializationDebounce->start();
+        } else {
+            ApplyPendingResize();
+        }
         FrameTimer.restart();
-        if (!RendererStoppedFlag && !RendererThread.HasFrameInFlight()) RedrawTimer->start();
+        if (Initialized && !RendererStoppedFlag && !RendererThread.HasFrameInFlight() &&
+            !RendererThread.HasJobInFlight())
+            RedrawTimer->start();
     }
 
     void ViewportWidget::hideEvent(QHideEvent* _Event) {
         RedrawTimer->stop();
+        InitializationDebounce->stop();
         ResizeDebounce->stop();
         QWidget::hideEvent(_Event);
     }
@@ -1820,7 +2091,11 @@ namespace SmileEditor {
     void ViewportWidget::resizeEvent(QResizeEvent* _Event) {
         QWidget::resizeEvent(_Event);
         PendingResizeSize = _Event->size();
-        if (!Initialized || InteractiveResize) return;
+        if (!Initialized) {
+            if (!RendererThread.IsStarted()) InitializationDebounce->start();
+            return;
+        }
+        if (InteractiveResize) return;
         ResizeDebounce->start();
     }
 
@@ -1842,7 +2117,7 @@ namespace SmileEditor {
     void ViewportWidget::ApplyPendingResize() {
         if (!Initialized || InteractiveResize || !Renderer) return;
 
-        if (RendererThread.HasFrameInFlight()) return;
+        if (RendererThread.HasFrameInFlight() || RendererThread.HasJobInFlight()) return;
         auto RendererAccess = Renderer.TryLock();
         if (!RendererAccess) {
             // Nao congela a GUI esperando Present; conserva PendingResizeSize e tenta de novo
@@ -1871,12 +2146,15 @@ namespace SmileEditor {
         if (RendererShutdownRequested) return;
         EnsureRendererIsInitialized();
         if (!Initialized || !RendererThread.IsReady() ||
-            RendererThread.HasFrameInFlight()) return;
+            RendererThread.HasFrameInFlight() || RendererThread.HasJobInFlight()) return;
 
         // Nunca espera o Present da thread de renderizacao. Se outro comando sincronizado da
         // UI estiver usando o Renderer, este tick e simplesmente coalescido com o proximo.
         auto RendererAccess = Renderer.TryLock();
-        if (!RendererAccess || !RendererAccess->IsInitialized()) return;
+        if (!RendererAccess || !RendererAccess->IsInitialized()) {
+            if (isVisible() && RedrawTimer) RedrawTimer->start(1);
+            return;
+        }
 
         // Resolucao de NANOSEGUNDOS: a >200 FPS o dt em ms inteiros (4/5/6ms) fazia o
         // FPS pular feito louco. nsecsElapsed da precisao sub-ms p/ dt e FPS estaveis.
@@ -1914,7 +2192,7 @@ namespace SmileEditor {
             }
             // Um timer de intervalo zero ficaria acordando a GUI em busy-loop durante o
             // Present. O callback do frame rearma o timer quando o slot unico fica livre.
-            RedrawTimer->stop();
+            // Single-shot: so o callback rearma o proximo tick.
         }
     }
 
@@ -1933,6 +2211,7 @@ namespace SmileEditor {
             if (RedrawTimer) RedrawTimer->stop();
             return;
         }
+        if (RendererThread.HasJobInFlight()) return;
         if (PendingResizeSize.isValid() && PendingResizeSize != AppliedResizeSize &&
             ResizeDebounce && !InteractiveResize)
             ResizeDebounce->start(0);
@@ -2151,6 +2430,7 @@ namespace SmileEditor {
         // FrameReady permanece imediato para preview assincrono, picking, gizmos e bridges.
         if (!TelemetryTimer.isValid() || TelemetryTimer.elapsed() >= 200) {
             TelemetryTimer.restart();
+            CaptureTelemetry(*RendererAccess);
             emit TelemetryUpdated();
         }
         emit FrameReady();

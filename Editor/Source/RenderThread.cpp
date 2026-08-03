@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <exception>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -46,6 +47,11 @@ namespace SmileEditor {
     }
 
     struct RenderThread::Impl {
+        struct QueuedRendererJob {
+            RendererJob Execute;
+            std::function<void(JobCompletion)> Completion;
+        };
+
         explicit Impl(std::shared_ptr<RendererHandle::Access::SharedState> _State)
             : State(std::move(_State)) {}
 
@@ -63,10 +69,12 @@ namespace SmileEditor {
         Callbacks                Hooks;
         bool                     StopRequested = false;
         bool                     FrameRequested = false;
+        std::optional<QueuedRendererJob> PendingRendererJob;
         std::atomic_bool         Started{false};
         std::atomic_bool         Ready{false};
         std::atomic_bool         Exited{false};
         std::atomic_bool         FrameOutstanding{false};
+        std::atomic_bool         JobOutstanding{false};
     };
 
     RenderThread::RenderThread() {
@@ -134,15 +142,44 @@ namespace SmileEditor {
 
             unsigned int ConsecutiveFailures = 0;
             while (Thread.Ready.load(std::memory_order_acquire)) {
+                std::optional<Impl::QueuedRendererJob> RendererJob;
+                bool ExecuteFrame = false;
                 {
                     std::unique_lock WorkLock(Thread.WorkMutex);
                     Thread.WorkReady.wait(WorkLock, [&Thread]() {
-                        return Thread.StopRequested || Thread.FrameRequested;
+                        return Thread.StopRequested || Thread.FrameRequested ||
+                               (Thread.PendingRendererJob.has_value() &&
+                                 !Thread.FrameOutstanding.load(std::memory_order_acquire));
                     });
                     if (Thread.StopRequested) break;
-                    Thread.FrameRequested = false;
+                    if (Thread.PendingRendererJob &&
+                        !Thread.FrameOutstanding.load(std::memory_order_acquire)) {
+                        RendererJob = std::move(Thread.PendingRendererJob);
+                        Thread.PendingRendererJob.reset();
+                    } else if (Thread.FrameRequested) {
+                        Thread.FrameRequested = false;
+                        ExecuteFrame = true;
+                    }
                 }
 
+                if (RendererJob) {
+                    JobCompletion Completion;
+                    try {
+                        auto Renderer = Handle.Lock();
+                        Completion = RendererJob->Execute(*Renderer);
+                    } catch (const std::exception& Error) {
+                        Completion.Error = Error.what();
+                    } catch (...) {
+                        Completion.Error = "falha desconhecida no job do renderer";
+                    }
+                    if (!Completion.Success)
+                        Smile::LogError("Falha no job do renderer: " + Completion.Error);
+                    if (RendererJob->Completion)
+                        RendererJob->Completion(std::move(Completion));
+                    continue;
+                }
+
+                if (!ExecuteFrame) continue;
                 FrameCompletion Completion;
                 try {
                     {
@@ -179,6 +216,20 @@ namespace SmileEditor {
                 if (Thread.Hooks.FrameCompleted)
                     Thread.Hooks.FrameCompleted(std::move(Completion));
                 if (!Thread.Ready.load(std::memory_order_acquire)) break;
+            }
+
+            // Um job enfileirado pode ser cancelado por shutdown ou por uma falha terminal de
+            // frame. Entrega sua conclusao antes de Stopped para a GUI liberar o ownership.
+            std::optional<Impl::QueuedRendererJob> CancelledRendererJob;
+            {
+                std::lock_guard WorkLock(Thread.WorkMutex);
+                CancelledRendererJob = std::move(Thread.PendingRendererJob);
+                Thread.PendingRendererJob.reset();
+            }
+            if (CancelledRendererJob && CancelledRendererJob->Completion) {
+                JobCompletion Completion;
+                Completion.Error = "render thread encerrada antes de executar o job";
+                CancelledRendererJob->Completion(std::move(Completion));
             }
 
             try {
@@ -236,11 +287,13 @@ namespace SmileEditor {
         I.Worker.join();
         I.Started.store(false, std::memory_order_release);
         I.FrameOutstanding.store(false, std::memory_order_release);
+        I.JobOutstanding.store(false, std::memory_order_release);
     }
 
     bool RenderThread::RequestFrame() {
         Impl& I = *Implementation;
-        if (!I.Ready.load(std::memory_order_acquire)) return false;
+        if (!I.Ready.load(std::memory_order_acquire) ||
+            I.JobOutstanding.load(std::memory_order_acquire)) return false;
         bool Expected = false;
         if (!I.FrameOutstanding.compare_exchange_strong(Expected, true,
                                                         std::memory_order_acq_rel))
@@ -258,7 +311,39 @@ namespace SmileEditor {
     }
 
     void RenderThread::CompleteFrame() {
-        Implementation->FrameOutstanding.store(false, std::memory_order_release);
+        Impl& I = *Implementation;
+        I.FrameOutstanding.store(false, std::memory_order_release);
+        I.WorkReady.notify_one();
+    }
+
+    bool RenderThread::RequestRendererJob(
+            RendererJob _Job,
+            std::function<void(JobCompletion)> _Completion) {
+        if (!_Job) return false;
+        Impl& I = *Implementation;
+        if (!I.Ready.load(std::memory_order_acquire)) return false;
+
+        bool Expected = false;
+        if (!I.JobOutstanding.compare_exchange_strong(Expected, true,
+                                                       std::memory_order_acq_rel))
+            return false;
+        {
+            std::lock_guard Lock(I.WorkMutex);
+            if (I.StopRequested || !I.Ready.load(std::memory_order_acquire)) {
+                I.JobOutstanding.store(false, std::memory_order_release);
+                return false;
+            }
+            I.PendingRendererJob.emplace(Impl::QueuedRendererJob{
+                std::move(_Job), std::move(_Completion) });
+        }
+        I.WorkReady.notify_one();
+        return true;
+    }
+
+    void RenderThread::CompleteJob() {
+        Impl& I = *Implementation;
+        I.JobOutstanding.store(false, std::memory_order_release);
+        I.WorkReady.notify_one();
     }
 
     bool RenderThread::IsStarted() const {
@@ -276,5 +361,9 @@ namespace SmileEditor {
 
     bool RenderThread::HasFrameInFlight() const {
         return Implementation->FrameOutstanding.load(std::memory_order_acquire);
+    }
+
+    bool RenderThread::HasJobInFlight() const {
+        return Implementation->JobOutstanding.load(std::memory_order_acquire);
     }
 }

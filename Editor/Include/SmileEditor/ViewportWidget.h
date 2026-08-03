@@ -11,6 +11,8 @@
 #include <QVariantList>
 #include <QStringList>
 #include <array>
+#include <deque>
+#include <functional>
 #include <memory>
 #include "Smile/Math/Math.h"
 #include "SmileEditor/GizmoController.h"
@@ -21,7 +23,10 @@ class QPaintEngine;
 class QKeyEvent;
 class QMouseEvent;
 
-namespace Smile { class Renderer; }
+namespace Smile {
+    class Renderer;
+    struct FPreparedCookedScene;
+}
 
 namespace SmileEditor {
     class ViewportWidget : public QWidget {
@@ -175,7 +180,12 @@ namespace SmileEditor {
         // QObject deve permanecer vivo ate RendererStopped ser emitido.
         void              BeginRendererShutdown();
         bool              IsRendererStopped() const { return RendererStoppedFlag; }
-        RendererHandle GetRenderer() const { return Renderer; }
+        RendererHandle    GetRenderer() const { return Renderer; }
+        using SceneCommitCallback = std::function<void(bool, const QString&)>;
+        bool CommitPreparedSceneAsync(
+            std::shared_ptr<Smile::FPreparedCookedScene> Prepared,
+            bool Additive,
+            SceneCommitCallback Completion);
         float            GetFPS()      const { return LastFPS; }
         int               GetViewMode() const { return CurrentViewMode; }
         QStringList       GetDebugTargetNames() const;
@@ -459,6 +469,13 @@ namespace SmileEditor {
         void OnRenderThreadStopped();
         void FlushPendingGizmoInput(Smile::Renderer& Renderer);
         void ApplyPendingResize();
+        void CaptureTelemetry(Smile::Renderer& Renderer);
+        QVariantList BuildVRAMBreakdown(Smile::Renderer& Renderer) const;
+        QVariantList BuildGpuTimings(Smile::Renderer& Renderer);
+        bool EnqueueRendererJob(const QString& CoalesceKey,
+                                RenderThread::RendererJob Job,
+                                SceneCommitCallback Completion);
+        void DispatchNextRendererJob();
         void InvalidateDebugPreview();
         void ResetDebugProbePoint(bool CancelRendererRequest = true);
         // Seleciona a probe da SESSAO — as escolhas EXPLICITAS do usuario: abrir a inspecao,
@@ -478,6 +495,7 @@ namespace SmileEditor {
         RendererHandle Renderer;
         GizmoController GizmoCtrl; // logica do gizmo de translacao (editor-side)
         QTimer*       RedrawTimer       = nullptr;
+        QTimer*       InitializationDebounce = nullptr;
         QTimer*       ResizeDebounce    = nullptr;
         bool          Initialized       = false;
         bool          RendererShutdownRequested = false;
@@ -491,6 +509,13 @@ namespace SmileEditor {
         bool          MouseLookActive  = false;
         bool          IgnoreNextMove   = false;
         bool          RendererOwnsSurface = false;
+        struct FQueuedRendererJob {
+            QString                     CoalesceKey;
+            RenderThread::RendererJob   Execute;
+            SceneCommitCallback         Completion;
+        };
+        std::deque<FQueuedRendererJob> RendererJobs;
+        bool          RendererJobActive = false;
         bool          GizmoMousePending = false;
         bool          GizmoReleasePending = false;
         Smile::u32    PendingGizmoMouseX = 0;
@@ -499,9 +524,26 @@ namespace SmileEditor {
         float         LastFrameDeltaTime = 0.0f;
         QElapsedTimer FrameTimer;
         QElapsedTimer TelemetryTimer;
-        // Ranking visual dos passes GPU. Mutavel porque GetGpuTimings e um getter Qt const,
-        // mas a ordem precisa de histerese entre snapshots para nao ficar trocando em empates.
-        mutable QStringList GpuTimingOrder;
+        struct FTelemetrySnapshot {
+            int          VisibleDrawCount = 0;
+            int          TotalDrawCount = 0;
+            int          OccludedDrawCount = 0;
+            QString      InternalResolution = QStringLiteral("—");
+            QString      OutputResolution = QStringLiteral("—");
+            QString      GPUName = QStringLiteral("Inicializando GPU…");
+            QString      VRAMText = QStringLiteral("—");
+            QString      VRAMUsageText = QStringLiteral("—");
+            bool         VRAMOverBudget = false;
+            double       VRAMBudgetFrac = 0.0;
+            QString      VRAMNonLocalText = QStringLiteral("—");
+            QVariantList VRAMBreakdown;
+            QString      GPUFrameText = QStringLiteral("—");
+            double       GPUFrameMs = 0.0;
+            QVariantList GpuTimings;
+        } Telemetry;
+        // Ranking visual dos passes GPU precisa de histerese entre snapshots para nao ficar
+        // trocando de posicao quando dois passes tem custo praticamente igual.
+        QStringList GpuTimingOrder;
         int           CurrentViewMode  = Lit;
         QImage         DebugPreviewImage;
         mutable QMutex DebugPreviewMutex;
