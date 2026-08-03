@@ -1679,7 +1679,10 @@ namespace Smile {
         MappedCB->MoonDirection = { MoonN.X, MoonN.Y, MoonN.Z, MoonW };
         MappedCB->MoonColor     = { MoonLightCol.X, MoonLightCol.Y, MoonLightCol.Z, 0.0f };
 
-        const f32 MoonHalfAngleRad = 0.5f * ToRad * TimeOfDay.MoonDiskSize;
+        // MoonDiskSize e multiplicador do diametro lunar medio (0.518 grau), conforme o "x" do
+        // editor. Antes o mesmo 1.5 era tratado como 1.5 grau e o disco ficava ~1.9x maior.
+        const f32 MoonHalfAngleRad = 0.5f * ToRad *
+                                     TimeOfDay.MoonDiskAngularDiameterDeg();
         const f32 CosMoonRadius    = std::cos(MoonHalfAngleRad);
         // x2 sem textura: o disco procedural branco depende do brilho pra ter presenca.
         const f32 MoonDiskBright = MoonOn

@@ -39,7 +39,8 @@ namespace Smile {
         static FTexture LoadFromFile(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                      FTextureSRVHeap& SRVHeap,
                                      const std::wstring& Path,
-                                     bool IsNormalMap = false);
+                                     bool IsNormalMap = false,
+                                     bool sRGB = false);
 
         static FTextureCPUData LoadCPU(const std::wstring& Path, bool IsNormalMap = false, bool sRGB = false);
 

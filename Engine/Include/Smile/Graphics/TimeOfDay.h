@@ -32,11 +32,12 @@ namespace Smile {
         // --- Noite / lua (F2) ---
         bool MoonEnabled        = true;  // lua + luar (2a direcional) + estrelas
         // Deslocamento da lua em horas-equivalentes (governa a FASE): 0 = lua nova (junto do sol,
-        // some de noite); 12 = lua cheia (oposta ao sol, alta a meia-noite). A lua segue o mesmo
-        // arco do sol deslocado por esse offset — fase emerge do angulo lua-sol.
+        // some de noite); 12 = lua cheia (exatamente oposta ao sol, alta a meia-noite). O offset
+        // gira a direcao solar num grande circulo: nova/quartos/cheia ficam exatos mesmo fora do
+        // equinocio, sem herdar a declinacao solar do lado errado do ceu.
         f32  MoonPhaseOffsetHours = 12.0f;
         f32  MoonIntensity      = 0.25f; // forca do luar (2a direcional); "artistico", nao fisico
-        f32  MoonDiskSize       = 1.5f;  // tamanho angular relativo do disco da lua no ceu
+        f32  MoonDiskSize       = 3.0f;  // multiplicador do diametro angular medio real (0.518 grau)
         // Luminancia do disco. Baixa de proposito: >~2 cai no ombro do tonemap e esmaga o
         // contraste dos mares da textura pra branco (a lua real de dia e ~2x o ceu, nao 10x).
         f32  MoonDiskBrightness = 1.6f;
@@ -54,14 +55,32 @@ namespace Smile {
         // Abaixo do horizonte (sinEl<0) e noite: a transmitancia atmosferica zera a luz direta.
         Vec3 SunDirection() const { return DirAtHour(TimeHours); }
 
-        // Direcao PARA a lua: o mesmo arco celeste deslocado por MoonPhaseOffsetHours. Em offset
-        // 12 a lua fica oposta ao sol (cheia, alta a meia-noite); em 0 acompanha o sol (nova).
-        Vec3 MoonDirection() const { return DirAtHour(TimeHours + MoonPhaseOffsetHours); }
+        static constexpr f32 kMeanMoonAngularDiameterDeg = 0.518f;
+
+        // Direcao PARA a lua numa orbita simplificada de grande circulo. A tangente vem do arco
+        // solar seis horas adiante, mas e ortogonalizada contra o sol atual. Portanto o produto
+        // dot(sol,lua) e cos(fase): 0h = nova, 6/18h = quartos e 12h = cheia exata para qualquer
+        // latitude, estacao e hora.
+        Vec3 MoonDirection() const { return MoonDirectionAtHour(TimeHours); }
+
+        Vec3 MoonDirectionAtHour(f32 _Hours) const {
+            constexpr f32 DegToRad = 3.14159265358979f / 180.0f;
+            const Vec3 Sun = DirAtHour(_Hours);
+            const Vec3 QuarterArc = DirAtHour(_Hours + 6.0f);
+            const Vec3 Tangent = (QuarterArc - Sun * Sun.Dot(QuarterArc))
+                .NormalizedSafe(Sun.GetOrthogonal());
+            const f32 Phase = MoonPhaseOffsetHours * 15.0f * DegToRad;
+            return (Sun * std::cos(Phase) + Tangent * std::sin(Phase)).NormalizedSafe(Sun);
+        }
+
+        f32 MoonDiskAngularDiameterDeg() const {
+            return kMeanMoonAngularDiameterDeg * std::max(MoonDiskSize, 0.0f);
+        }
 
         // Direcao celeste (mundo, +Y up) na convencao do Renderer::SetSunAzimuthElevation:
         // dir = (cosEl*sinAz, sinEl, cosEl*cosAz), Az do +Z (norte) p/ +X (leste). Compartilhado
-        // por sol e lua (a lua e o mesmo modelo com a hora deslocada). Publico: o painel TOD do
-        // editor amostra a curva do dia inteiro p/ desenhar o arco do ceu.
+        // pelos modelos de sol e lua. Publico: o painel TOD amostra a curva do dia inteiro p/
+        // desenhar os arcos do ceu.
         Vec3 DirAtHour(f32 _Hours) const {
             const f32 d2r = 3.14159265358979f / 180.0f;
 

@@ -404,8 +404,9 @@ namespace Smile {
 
     FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                      FTextureSRVHeap& _SRVHeap,
-                                     const std::wstring& _Path, bool _IsNormalMap) {
-        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
+                                     const std::wstring& _Path, bool _IsNormalMap, bool _sRGB) {
+        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap,
+                             LoadCPU(_Path, _IsNormalMap, _sRGB));
     }
 
     namespace {

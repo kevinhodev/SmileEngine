@@ -90,7 +90,7 @@ namespace SmileEditor {
     }
     double TimeOfDayBridge::moonElevationAt(double _Hours) const {
         const auto Tod = TodOfConst(Renderer);
-        const auto D = Tod->DirAtHour((float)(_Hours + Tod->MoonPhaseOffsetHours));
+        const auto D = Tod->MoonDirectionAtHour((float)_Hours);
         return std::asin(std::clamp((double)D.Y, -1.0, 1.0)) * kToDeg;
     }
 

@@ -245,7 +245,10 @@ namespace Smile {
     void FAtmosphere::LoadMoonTexture(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                       FTextureSRVHeap& _SRVHeap, const std::wstring& _Path) {
         if (!Initialized) return;
-        FTexture Tex = FTexture::LoadFromFile(_Device, _UploadQueue, _SRVHeap, _Path, false);
+        // LROC color e uma imagem de cor sRGB. O flag tambem faz a cadeia de mips ser filtrada
+        // em linear; o SRV sRGB devolve albedo linear ao shader sem pow manual.
+        FTexture Tex = FTexture::LoadFromFile(_Device, _UploadQueue, _SRVHeap,
+                                              _Path, false, true);
         if (!Tex.IsValid()) return;
 
         MoonTexture.Release(_SRVHeap);
