@@ -16,10 +16,17 @@ namespace Smile {
     // Empirico, calibrado com o wire do volume de luz colado no chao.
     static constexpr f32 kDepthTestBiasNdc = 2e-5f;
 
-    // RESSALVA CONHECIDA do depth do overlay: a franja de AA da linha escreve depth como
-    // qualquer outro pixel, entao um fragmento de ~30% de cobertura bloqueia o que vier atras
-    // DENTRO DO MESMO GRUPO. Separar isso exigiria um prepass de depth com alpha test, o que nao
-    // se paga por 1px de franja em geometria de debug. Fica registrado, nao esquecido.
+    // RESSALVA CONHECIDA: depth WRITE e alpha nao se dao bem, e o overlay escreve depth em tudo
+    // menos no icone. Duas consequencias, ambas so DENTRO DE UM MESMO GRUPO de modo:
+    //   (a) a franja de AA da linha escreve depth como qualquer pixel, entao um fragmento de
+    //       ~30% de cobertura bloqueia o que vier atras;
+    //   (b) primitiva translucida (XRay, ou qualquer cor com alpha < 1) tambem grava o DSV: se a
+    //       mais PERTO for submetida primeiro, ela elimina as de tras em vez de compor; na ordem
+    //       inversa as duas compoem. Ou seja, translucido depende da ordem de submissao.
+    // Nenhuma das duas afeta o que existe hoje — o gizmo e opaco e a franja e de 1px. A saida
+    // certa e a mesma pros dois casos (ordenar de tras pra frente e/ou prepass de depth com
+    // alpha test), e ela se paga quando Scene/XRay ganharem consumidores de verdade. Ate la,
+    // fica registrado e nao esquecido.
 
     void FDebugDraw::Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat) {
         if (Initialized) return;
@@ -196,6 +203,8 @@ namespace Smile {
         // Depth do OVERLAY (buffer proprio, limpo entre grupos): serve pro debug se ordenar
         // contra SI MESMO. Sem ele, a ponta do gizmo vista quase de frente vira um bloco
         // chapado — as 4 faces da piramide se sobrepondo na ordem de submissao.
+        // WRITE_MASK_ALL vale tambem pro XRay e pra qualquer cor com alpha < 1 — ver a RESSALVA
+        // CONHECIDA no topo do arquivo antes de dar translucido a um consumidor novo.
         D3D12_DEPTH_STENCIL_DESC Depth{};
         Depth.DepthEnable    = TRUE;
         Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
@@ -384,8 +393,9 @@ namespace Smile {
         // Buffers do frame na ordem de desenho (kDrawOrder): TODO o Scene, depois XRay, depois
         // Foreground. Agrupar por MODO e nao por topologia e o que sustenta a regra "Foreground
         // fica por cima" — intercalar deixaria um triangulo Scene sobrescrever uma linha
-        // Foreground desenhada antes. Dentro de cada grupo a ordem de submissao decide, porque
-        // nao ha depth entre primitivas de debug (F1c resolve).
+        // Foreground desenhada antes. DENTRO de cada grupo quem ordena e o depth do overlay
+        // (limpo a cada grupo, ver o Draw mais abaixo), entao a ordem de submissao so decide
+        // empate exato de profundidade.
         u8* LineSlot = MappedLineVB + static_cast<size_t>(Slot) * kMaxLines * kLineStride;
         u8* TriSlot  = MappedTriVB  + static_cast<size_t>(Slot) * kMaxTriVerts * kVBStride;
         u32 LineFirst[kModeCount]{}, TriFirst[kModeCount]{};
