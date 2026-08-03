@@ -1427,7 +1427,7 @@ namespace Smile {
         const f32 NearZ = 0.1f;
         const f32 FarZ  = UseWater ? 20000.0f : 4000.0f;
 
-        const f32 FovY  = 60.0f * ToRad;
+        const f32 FovY  = GetFovY();
         const Mat44 ProjUnjittered = kReverseZ
             ? Mat44::PerspectiveFovReverseZLH(FovY, Aspect, NearZ, FarZ)
             : Mat44::PerspectiveFovLH(FovY, Aspect, NearZ, FarZ);

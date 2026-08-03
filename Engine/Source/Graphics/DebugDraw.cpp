@@ -8,8 +8,11 @@
 #include <string>
 
 namespace Smile {
-    static constexpr u32 kFIF      = FCommandQueue::kFramesInFlight;
-    static constexpr u32 kVBStride = sizeof(f32) * 6;
+    static constexpr u32 kFIF = FCommandQueue::kFramesInFlight;
+    // Bias em NDC do teste manual de depth das linhas ocluiveis: sem ele, linha encostada numa
+    // superficie serrilha (o fragmento e a cena caem no mesmo depth e o resultado vira ruido).
+    // Empirico, calibrado com o wire do volume de luz colado no chao.
+    static constexpr f32 kDepthTestBiasNdc = 2e-5f;
 
     void FDebugDraw::Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat) {
         if (Initialized) return;
@@ -20,26 +23,28 @@ namespace Smile {
         LogDebug("DebugDraw Inicializado");
     }
 
-    void FDebugDraw::Line(const Vec3& A, const Vec3& B, const Vec3& C) {
-        LineVerts.push_back({ { A.X, A.Y, A.Z }, { C.X, C.Y, C.Z } });
-        LineVerts.push_back({ { B.X, B.Y, B.Z }, { C.X, C.Y, C.Z } });
+    void FDebugDraw::Line(const Vec3& A, const Vec3& B, const Vec3& Color) {
+        LineVerts.push_back({ { A.X, A.Y, A.Z }, { Color.X, Color.Y, Color.Z } });
+        LineVerts.push_back({ { B.X, B.Y, B.Z }, { Color.X, Color.Y, Color.Z } });
     }
-    void FDebugDraw::LineOccluded(const Vec3& A, const Vec3& B, const Vec3& C) {
-        LineOccVerts.push_back({ { A.X, A.Y, A.Z }, { C.X, C.Y, C.Z } });
-        LineOccVerts.push_back({ { B.X, B.Y, B.Z }, { C.X, C.Y, C.Z } });
+    void FDebugDraw::LineOccluded(const Vec3& A, const Vec3& B, const Vec3& Color) {
+        LineOccVerts.push_back({ { A.X, A.Y, A.Z }, { Color.X, Color.Y, Color.Z } });
+        LineOccVerts.push_back({ { B.X, B.Y, B.Z }, { Color.X, Color.Y, Color.Z } });
     }
-    void FDebugDraw::Triangle(const Vec3& A, const Vec3& B, const Vec3& C, const Vec3& Col) {
-        TriVerts.push_back({ { A.X, A.Y, A.Z }, { Col.X, Col.Y, Col.Z } });
-        TriVerts.push_back({ { B.X, B.Y, B.Z }, { Col.X, Col.Y, Col.Z } });
-        TriVerts.push_back({ { C.X, C.Y, C.Z }, { Col.X, Col.Y, Col.Z } });
+    void FDebugDraw::Triangle(const Vec3& A, const Vec3& B, const Vec3& C, const Vec3& Color) {
+        TriVerts.push_back({ { A.X, A.Y, A.Z }, { Color.X, Color.Y, Color.Z } });
+        TriVerts.push_back({ { B.X, B.Y, B.Z }, { Color.X, Color.Y, Color.Z } });
+        TriVerts.push_back({ { C.X, C.Y, C.Z }, { Color.X, Color.Y, Color.Z } });
     }
 
-    void FDebugDraw::Icon(const Vec3& C, f32 HalfSize, const Vec3& Col, u32 Type, bool Selected) {
-        const f32 T = static_cast<f32>(Type);
-        const f32 S = Selected ? 1.0f : 0.0f;
+    void FDebugDraw::Icon(const Vec3& Center, f32 HalfSize, const Vec3& Color, u32 Type,
+                          bool Selected) {
+        const f32 TypeF = static_cast<f32>(Type);
+        const f32 SelF  = Selected ? 1.0f : 0.0f;
         auto Push = [&](f32 Cx, f32 Cy) {
-            IconVerts.push_back({ { C.X, C.Y, C.Z }, { Col.X, Col.Y, Col.Z },
-                                  { Cx, Cy }, { HalfSize, T, S } });
+            IconVerts.push_back({ { Center.X, Center.Y, Center.Z },
+                                  { Color.X, Color.Y, Color.Z },
+                                  { Cx, Cy }, { HalfSize, TypeF, SelF } });
         };
         Push(-1.0f, -1.0f); Push(1.0f, -1.0f); Push(1.0f, 1.0f);
         Push(-1.0f, -1.0f); Push(1.0f,  1.0f); Push(-1.0f, 1.0f);
@@ -246,7 +251,7 @@ namespace Smile {
         CBData.M = ViewProj;
         CBData.Params[0] = Width  > 0 ? 1.0f / static_cast<f32>(Width)  : 0.0f;
         CBData.Params[1] = Height > 0 ? 1.0f / static_cast<f32>(Height) : 0.0f;
-        CBData.Params[2] = 2e-5f; // bias NDC do teste de depth (linha encostada nao serrilha)
+        CBData.Params[2] = kDepthTestBiasNdc;
         CBData.Params[3] = 0.0f;
         CBData.CamR[0] = CamRight.X; CBData.CamR[1] = CamRight.Y; CBData.CamR[2] = CamRight.Z; CBData.CamR[3] = 0.0f;
         CBData.CamU[0] = CamUp.X;    CBData.CamU[1] = CamUp.Y;    CBData.CamU[2] = CamUp.Z;    CBData.CamU[3] = 0.0f;

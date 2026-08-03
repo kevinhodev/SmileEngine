@@ -46,6 +46,10 @@ namespace Smile {
         void CreateBuffers(ID3D12Device* Device);
 
         struct DDVertex { f32 Pos[3]; f32 Color[3]; };
+        // Stride derivado do tipo. Era sizeof(f32)*6 solto no .cpp — o mesmo numero escrito duas
+        // vezes, e mudar o vertice (alpha, thickness) exigiria lembrar do segundo.
+        static constexpr u32 kVBStride = sizeof(DDVertex);
+
         std::vector<DDVertex> LineVerts;
         std::vector<DDVertex> TriVerts;
         std::vector<DDVertex> LineOccVerts;

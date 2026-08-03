@@ -451,6 +451,13 @@ namespace Smile {
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
         f32  GetPitch()     const { return Camera.GetPitch(); }
         f32  GetYaw()       const { return Camera.GetYaw(); }
+        // FOV vertical da camera da viewport, em radianos. FONTE UNICA: o RenderFrame monta a
+        // Projection com ele e o editor dimensiona o que precisa ser constante em tela (seta do
+        // gizmo, icone de luz) com ele. Eram dois literais de 60 graus em arquivos diferentes,
+        // amarrados so por um comentario. Quando virar configuravel, vira membro aqui e todo
+        // mundo acompanha.
+        static constexpr f32 kFovYDegrees = 60.0f;
+        f32  GetFovY() const { return kFovYDegrees * ToRad; }
         // Eixos da camera em mundo (colunas da view row-vector) — a mesma base que o VS dos
         // icones usa p/ expandir o billboard. O editor le p/ medir a extensao do icone EM
         // TELA (projeta a borda), em vez de carregar um raio em pixels hardcoded.

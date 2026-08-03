@@ -13,7 +13,6 @@ namespace SmileEditor {
             return A == GizmoController::EAxis::X ? Vec3::UnitX()
                  : A == GizmoController::EAxis::Y ? Vec3::UnitY() : Vec3::UnitZ();
         }
-        constexpr float kFovY      = 60.0f * 3.14159265f / 180.0f; // bate com a Projection da camera
         constexpr float kSizeFrac  = 0.18f;  // tamanho da seta ~18% da meia-altura da tela
         constexpr float kHitRadius = 9.0f;   // pixels
         constexpr float kIconFrac  = 0.22f;  // icone da luz = 22% da seta (~44px de altura)
@@ -82,8 +81,9 @@ namespace SmileEditor {
     }
 
     float GizmoController::ScaleFor(Smile::Renderer& R, const Vec3& Pivot) const {
+        // FOV vem do Renderer (fonte unica de quem monta a Projection), nao de um literal local.
         const float Dist = (Pivot - R.GetCameraPos()).Length();
-        return std::max(0.001f, Dist * std::tan(kFovY * 0.5f) * kSizeFrac);
+        return std::max(0.001f, Dist * std::tan(R.GetFovY() * 0.5f) * kSizeFrac);
     }
 
     GizmoController::EAxis GizmoController::HitTest(Smile::Renderer& _Renderer, u32 _X, u32 _Y) const {
