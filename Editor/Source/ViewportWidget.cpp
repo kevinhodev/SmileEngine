@@ -1950,6 +1950,17 @@ namespace SmileEditor {
         }
         FrameTimer.restart();
         emit RendererInitialized();
+        // O QML e criado antes do renderer e, nessa primeira leitura, os getters devolvem os
+        // fallbacks do handle ainda indisponivel. Publica o estado inicial real de todas as
+        // familias agora que a fonte de verdade existe; sem estes NOTIFYs, controles persistentes
+        // (toolbar/outliner) so atualizavam depois da primeira interacao do usuario.
+        emit GISettingsChanged();
+        emit ShadowSettingsChanged();
+        emit RenderSettingsChanged();
+        emit SunShaftsSettingsChanged();
+        emit VolFogSettingsChanged();
+        emit CloudSettingsChanged();
+        emit WeatherSettingsChanged();
         emit DebugTargetsChanged();   // os alvos foram publicados na criacao dos targets internos
         if (isVisible() && RedrawTimer) RedrawTimer->start();
     }
