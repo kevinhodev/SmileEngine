@@ -29,8 +29,9 @@ namespace SmileEditor {
         // Picking do icone de luz — a luz nao entra no ID-buffer do FObjectPicker, entao o teste
         // e analitico em tela. Mora aqui (e nao no ViewportWidget) porque o raio SAI da mesma
         // metrica que desenha o billboard: acompanha FOV, resolucao e qualquer mudanca futura de
-        // escala sem um segundo lugar pra esquecer. -1 = nenhum; sobreposicao ganha o mais perto
-        // da camera.
+        // escala sem um segundo lugar pra esquecer. -1 = nenhum. Sobreposicao ganha o ULTIMO
+        // submetido, que e o que aparece por cima (alpha-blend na ordem do vetor, sem depth) —
+        // NAO e o mais perto da camera, e NAO e oclusao: icone e sempre visivel por design.
         int PickLightIcon(Smile::Renderer& R, Smile::u32 X, Smile::u32 Y) const;
 
         // Eventos de mouse (coords em pixels do backbuffer = coords logicas do widget):

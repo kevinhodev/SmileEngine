@@ -256,11 +256,13 @@ namespace Smile {
         // meio nao explode (o IA descarta a primitiva incompleta), mas o debug aparece mordido
         // sem nada dizendo por que. Linha ja cai par (kMaxVerts par, pushes aos pares); o
         // AlignDown existe pro caso de kMaxVerts/orcamento mudarem — e o triangulo PRECISA dele.
+        // Prioridade do orcamento na MESMA ordem do upload/draw abaixo: uma ordem so na funcao,
+        // pra ninguem ter que casar duas listas na cabeca.
         auto AlignDown = [](u32 V, u32 N) { return V - (V % N); };
         const u32 numOcc  = AlignDown(std::min(WantOcc, kMaxVerts), 2);
-        const u32 numLine = AlignDown(std::min(WantLine, kMaxVerts - numOcc), 2);
-        const u32 numSTri = AlignDown(std::min(WantSTri, kMaxVerts - numOcc - numLine), 3);
-        const u32 numTri  = AlignDown(std::min(WantTri, kMaxVerts - numOcc - numLine - numSTri), 3);
+        const u32 numSTri = AlignDown(std::min(WantSTri, kMaxVerts - numOcc), 3);
+        const u32 numLine = AlignDown(std::min(WantLine, kMaxVerts - numOcc - numSTri), 2);
+        const u32 numTri  = AlignDown(std::min(WantTri, kMaxVerts - numOcc - numSTri - numLine), 3);
         const u32 numIcon = AlignDown(std::min(WantIcon, kMaxIconVerts), 6);
 
         const u32 Dropped = (WantOcc - numOcc) + (WantLine - numLine) + (WantSTri - numSTri) +
@@ -277,9 +279,12 @@ namespace Smile {
             OverflowLogged = false; // coube de novo: rearma p/ o proximo episodio avisar
         }
 
-        // VB do frame, na ordem de desenho: [linhas Scene | linhas Fg | tris Scene | tris Fg].
-        // Quem testa depth vai primeiro e o Foreground por cima — dentro de cada grupo a ordem
-        // de submissao decide, porque nao ha depth entre primitivas de debug (F1c resolve).
+        // VB do frame, na ordem de desenho: TODO o Scene antes de TODO o Foreground —
+        // [linhas Scene | tris Scene | linhas Fg | tris Fg]. Agrupar por MODO e nao por
+        // topologia e o que sustenta a regra "Foreground fica por cima": intercalar
+        // (linhaScene, linhaFg, triScene, triFg) deixaria um triangulo Scene sobrescrever uma
+        // linha Foreground desenhada antes. Dentro de cada grupo a ordem de submissao decide,
+        // porque nao ha depth entre primitivas de debug (F1c resolve).
         u8* VBSlot = MappedVB + static_cast<size_t>(Slot) * kMaxVerts * kVBStride;
         u32 Cursor = 0;
         auto Upload = [&](const std::vector<DDVertex>& Src, u32 Count) {
@@ -287,8 +292,8 @@ namespace Smile {
             Cursor += Count;
         };
         Upload(SceneLineVerts, numOcc);
-        Upload(FgLineVerts,    numLine);
         Upload(SceneTriVerts,  numSTri);
+        Upload(FgLineVerts,    numLine);
         Upload(FgTriVerts,     numTri);
 
         u8* IconSlot = MappedIconVB + static_cast<size_t>(Slot) * kMaxIconVerts * sizeof(IconVertex);
@@ -330,8 +335,8 @@ namespace Smile {
             First += Count;
         };
         Draw(numOcc,  LineScenePSO.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-        Draw(numLine, LinePSO.Get(),      D3D_PRIMITIVE_TOPOLOGY_LINELIST);
         Draw(numSTri, TriScenePSO.Get(),  D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        Draw(numLine, LinePSO.Get(),      D3D_PRIMITIVE_TOPOLOGY_LINELIST);
         Draw(numTri,  TriPSO.Get(),       D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (numIcon) {
             D3D12_VERTEX_BUFFER_VIEW IconVBV{};
