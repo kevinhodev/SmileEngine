@@ -1289,6 +1289,19 @@ namespace Smile {
         // "HDR color": so volta com um passe de captura por copia (e o que a Unreal faz).
 
         // --- Atmosfera / volumetrico -----------------------------------------------------
+        // As tres LUTs 2D do Hillaire. A transmitancia e [0..1] por construcao (fracao de luz
+        // que sobrevive ao caminho), entao entra CRUA: passar tonemap nela mentiria sobre o
+        // valor. Multiscatter e sky-view sao radiancia — HDR, com exposicao propria porque o
+        // sky-view vive na escala de kSunIlluminance (22) e estoura branco em 1.0.
+        // O volume 3D do aerial perspective e o cubo de reflexo ficam de fora: precisam de
+        // decode novo (fatia de volume / cruz de cubo) no DebugView.ps, que e outra rodada.
+        if (Atmosphere.IsInitialized()) {
+            Register("Atmosfera · transmitancia", Atmosphere.TransmittanceSRV(), EDebugDecode::Raw);
+            Register("Atmosfera · multiscatter",  Atmosphere.MultiScatterSRV(),  EDebugDecode::HDR,
+                     0, 1, /*Exposure=*/1.0f);
+            Register("Atmosfera · sky-view",      Atmosphere.SkyViewSRV(),       EDebugDecode::HDR,
+                     0, 1, /*Exposure=*/0.15f);
+        }
         if (SunShafts.IsInitialized())
             Register("Sun shafts", SunShafts.VolumetricSRVSlot(), EDebugDecode::HDR, 0, 1, /*Exposure=*/2.0f);
 
