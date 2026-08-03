@@ -108,7 +108,18 @@ namespace SmileEditor {
             try {
                 {
                     auto Renderer = Handle.Lock();
+                    // Instalado so para o Initialize: o callback e limpo logo depois para nenhum
+                    // caminho posterior segurar referencia ao Impl.
+                    if (Thread.Hooks.Progress) {
+                        Renderer->SetInitProgressCallback(
+                            [&Thread](std::string_view Label, std::string_view Detail,
+                                      Smile::f32 Fraction) {
+                                Thread.Hooks.Progress(std::string(Label), std::string(Detail),
+                                                      Fraction);
+                            });
+                    }
                     Renderer->Initialize(static_cast<HWND>(_NativeWindow), _Width, _Height);
+                    Renderer->SetInitProgressCallback({});
                     // Reaplica a preferencia que existia antes do contexto e cria os targets
                     // internos uma unica vez ja na thread proprietaria.
                     Renderer->SetUpscaler(Renderer->GetUpscaler());

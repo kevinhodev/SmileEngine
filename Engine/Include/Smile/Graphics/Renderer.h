@@ -1,7 +1,9 @@
 #pragma once
 
 #include <Windows.h>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 #include <unordered_map>
@@ -151,6 +153,16 @@ namespace Smile {
 
         Renderer(const Renderer&)            = delete;
         Renderer& operator=(const Renderer&) = delete;
+
+        // Progresso do boot, para a splash screen do editor. Label = etapa corrente, Detail =
+        // texto auxiliar opcional (adaptador, contagens), Fraction = 0..1 monotonica.
+        // Chamada DE DENTRO de Initialize, portanto na thread que a chamou (render thread) e com
+        // o lock do RendererHandle preso: o receptor nao pode tocar no Renderer, so postar p/ a GUI.
+        using FInitProgressCallback =
+            std::function<void(std::string_view Label, std::string_view Detail, f32 Fraction)>;
+        void SetInitProgressCallback(FInitProgressCallback Callback) {
+            InitProgressCallback = std::move(Callback);
+        }
 
         void Initialize(HWND hWnd, u32 Width, u32 Height);
         void Shutdown();
@@ -750,6 +762,10 @@ namespace Smile {
         bool GetUseAO() const          { return UseAO; }
 
     private:
+        // No-op quando ninguem registrou callback (todo caminho que nao seja o editor).
+        void ReportInitProgress(std::string_view Label, std::string_view Detail,
+                                f32 Fraction) const;
+
         void RecreateAllPSOs();
         void BuildDefaultScene();
         void BuildRaytracingScene();
@@ -1078,5 +1094,8 @@ namespace Smile {
         u32  FrameIndex    = 0;
 
         bool Initialized = false;
+
+        // Vive so durante Initialize: o editor a instala antes e limpa depois de inicializar.
+        FInitProgressCallback InitProgressCallback;
     };
 } 

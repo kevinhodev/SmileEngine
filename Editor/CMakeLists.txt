@@ -8,6 +8,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/RenderThread.h
     Include/SmileEditor/DarkTheme.h
     Include/SmileEditor/AboutDialog.h
+    Include/SmileEditor/SplashScreen.h
     Include/SmileEditor/SmileLogo.h
     Include/SmileEditor/LucideIcon.h
     Include/SmileEditor/GizmoController.h
@@ -31,6 +32,7 @@ set(EDITOR_SOURCES
     Source/RenderThread.cpp
     Source/DarkTheme.cpp
     Source/AboutDialog.cpp
+    Source/SplashScreen.cpp
     Source/SmileLogo.cpp
     Source/LucideIcon.cpp
     Source/GizmoController.cpp
@@ -141,6 +143,15 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Qml"
                 "$<TARGET_FILE_DIR:SmileEditor>/Editor/Qml"
         COMMENT "Copiando paineis QML para o diretorio de build"
+    )
+
+    # Arte da splash screen. Em dev o SplashScreen carrega direto do source dir (trocar o PNG
+    # nao precisa de rebuild); esta copia e o caminho de deploy, ao lado do exe.
+    add_custom_command(TARGET SmileEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/Resources"
+                "$<TARGET_FILE_DIR:SmileEditor>/Editor/Resources"
+        COMMENT "Copiando recursos do editor (splash) para o diretorio de build"
     )
 
     # Fontes empacotadas (Inter, SIL OFL) — registradas no boot por RegisterBundledFonts().

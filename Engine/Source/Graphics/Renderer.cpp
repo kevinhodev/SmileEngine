@@ -23,6 +23,19 @@ namespace Smile {
             return r;
         }
 
+        // Só usada pelo relato de progresso do boot (nome do adaptador vem em wchar do DXGI).
+        std::string ToUtf8(const std::wstring& _Wide) {
+            if (_Wide.empty()) return {};
+            const int Size = WideCharToMultiByte(CP_UTF8, 0, _Wide.data(),
+                                                 static_cast<int>(_Wide.size()),
+                                                 nullptr, 0, nullptr, nullptr);
+            if (Size <= 0) return {};
+            std::string Utf8(static_cast<size_t>(Size), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, _Wide.data(), static_cast<int>(_Wide.size()),
+                                Utf8.data(), Size, nullptr, nullptr);
+            return Utf8;
+        }
+
         constexpr DXGI_FORMAT kDebugPreviewFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
         constexpr u32 kDebugPreviewRowPitch =
             (Renderer::kDebugPreviewWidth * 4u + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u) &
@@ -68,6 +81,11 @@ namespace Smile {
         }
     }
 
+    void Renderer::ReportInitProgress(std::string_view _Label, std::string_view _Detail,
+                                      f32 _Fraction) const {
+        if (InitProgressCallback) InitProgressCallback(_Label, _Detail, _Fraction);
+    }
+
     void Renderer::Initialize(HWND _hWnd, u32 _Width, u32 _Height) {
         if (Initialized) return;
 
@@ -79,10 +97,15 @@ namespace Smile {
         constexpr bool kDebugLayer = false;
     #endif
 
+        ReportInitProgress("Criando dispositivo Direct3D 12", {}, 0.04f);
+
         // Streamline (DLSS) em manual hooking: inicializar ANTES de criar o device D3D12.
         FDlssPass::InitStreamline();
         Device.Initialize(kDebugLayer);
         FDlssPass::SetDevice(Device.Native());   // avisa o SL do device (manual hooking)
+        // O adaptador so tem nome depois do Device.Initialize; vira o chip da splash.
+        ReportInitProgress("Criando filas e swap chain",
+                           ToUtf8(Device.GetAdapterDescription()), 0.12f);
         CommandQueue.Initialize(Device.Native(), D3D12_COMMAND_LIST_TYPE_DIRECT);
         UploadQueue.Initialize(Device.Native());
         ComputeQueue.Initialize(Device.Native());
@@ -96,8 +119,10 @@ namespace Smile {
                              _hWnd, _Width, _Height,
                              Device.TearingSupported());
         SRVHeap.Initialize(Device.Native());
+        ReportInitProgress("Compilando pipelines de raster", {}, 0.22f);
         PipelineState.Initialize(Device.Native());
 
+        ReportInitProgress("Alocando G-Buffer e alvos de cena", {}, 0.40f);
         CreateDepthBuffer();
         CreateNormalBuffer();
         GBuffer.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
@@ -112,6 +137,7 @@ namespace Smile {
         CreateDefaultMaterial();
         BuildDefaultScene();
 
+        ReportInitProgress("Pré-computando IBL, céu e atmosfera", {}, 0.50f);
         HDREnv.Initialize(Device.Native(), CommandQueue, SRVHeap);
         CreateIBLDescriptorTable();
 
@@ -121,6 +147,7 @@ namespace Smile {
         Atmosphere.Initialize(Device.Native(), CommandQueue, UploadQueue, SRVHeap,
                               DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
+        ReportInitProgress("Gerando ruídos de nuvem e cascatas do oceano", {}, 0.60f);
         CloudNoise.Initialize(Device.Native(), CommandQueue, SRVHeap);
         VolumetricClouds.Initialize(Device.Native(), SRVHeap, CloudNoise,
                                     Atmosphere.TransmittanceSRV(), Atmosphere.MultiScatterSRV(),
@@ -145,6 +172,7 @@ namespace Smile {
 
         RainWetness.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
 
+        ReportInitProgress("Preparando sombras, terreno e pós-processo", {}, 0.70f);
         SunShadows.Initialize(Device.Native(), SRVHeap);
         LocalShadows.Initialize(Device.Native(), SRVHeap);
 
@@ -158,6 +186,7 @@ namespace Smile {
 
         DebugDraw.Initialize(Device.Native(), FSwapChain::kFormat);
 
+        ReportInitProgress("Iniciando upscalers e oclusão de ambiente", {}, 0.80f);
         TemporalAA.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
         TemporalAA.SetupInputs(Device.Native(), SRVHeap, HDRColorBuffer.Get(), DepthBuffer.Get(), VelocityBuffer.Get());
 
@@ -181,6 +210,7 @@ namespace Smile {
         HiZ.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
 
         if (Device.RaytracingSupported()) {
+            ReportInitProgress("Compilando pipelines de ray tracing", {}, 0.88f);
             DDGI.Initialize(Device.Native());
             ReGIR.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
@@ -193,9 +223,11 @@ namespace Smile {
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         }
 
+        ReportInitProgress("Construindo estruturas de aceleração", {}, 0.96f);
         BuildRaytracingScene();
 
         Initialized = true;
+        ReportInitProgress("Renderizador pronto", {}, 1.0f);
 
         std::string Features = Device.RaytracingSupported() ? "DXR" : "Raster";
         if (Fsr.Available())    Features += " | FSR";

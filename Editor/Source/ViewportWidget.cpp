@@ -1919,6 +1919,16 @@ namespace SmileEditor {
                 if (Self) Self->OnFrameCompleted(Success, Terminal, Error);
             }, Qt::QueuedConnection);
         };
+        Hooks.Progress = [Self](const std::string& Label, const std::string& Detail,
+                                float Fraction) {
+            if (!Self) return;
+            const QString LabelText  = QString::fromUtf8(Label);
+            const QString DetailText = QString::fromUtf8(Detail);
+            QMetaObject::invokeMethod(Self, [Self, LabelText, DetailText, Fraction]() {
+                if (Self) emit Self->InitProgress(LabelText, DetailText,
+                                                  static_cast<qreal>(Fraction));
+            }, Qt::QueuedConnection);
+        };
         Hooks.InitializationFailed = [Self](const std::string& Error) {
             if (!Self) return;
             const QString Message = QString::fromUtf8(Error);

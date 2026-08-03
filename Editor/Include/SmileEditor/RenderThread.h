@@ -76,6 +76,10 @@ namespace SmileEditor {
             std::function<void(FrameCompletion)>              FrameCompleted;
             std::function<void(const std::string&)>            InitializationFailed;
             std::function<void()>                             Stopped;
+            // Etapas do Renderer::Initialize (splash). Chamado na render thread COM o lock do
+            // handle preso: so postar para a GUI, nunca reentrar no Renderer daqui.
+            std::function<void(const std::string& Label,
+                               const std::string& Detail, float Fraction)> Progress;
         };
 
         RenderThread();

@@ -38,6 +38,13 @@ namespace SmileEditor {
         // renderer inicializar (OnRendererReady), sem passar pelo dialogo de arquivo.
         void SetStartupScene(const QString& Path) { StartupScenePath = Path; }
 
+    signals:
+        // Boot: repassa as etapas do Renderer::Initialize para a splash e avisa quando o editor
+        // fica utilizavel (renderer pronto, cena de boot carregada — ou falha, para a splash
+        // nunca sobreviver a um editor que nao vai renderizar).
+        void BootProgress(const QString& label, const QString& detail, qreal fraction);
+        void BootFinished();
+
     protected:
         void changeEvent(QEvent* event) override; // notifica o WindowBridge em max/restore
         bool eventFilter(QObject* obj, QEvent* event) override; // visibilidade da janela TOD -> menu
@@ -62,6 +69,7 @@ namespace SmileEditor {
         QWidget* CreateViewportChrome();
         void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
         void BeginSceneLoad(const QString& path, bool additive);
+        void FinishBootStage();   // idempotente: emite BootFinished uma unica vez
         void ContinueApprovedClose(QCloseEvent* event);
 
         QString               StartupScenePath;
@@ -89,6 +97,7 @@ namespace SmileEditor {
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;
+        bool                  BootSplashActive = true;  // splash ainda esperando o BootFinished
         bool                  SceneLoadInProgress = false;
         bool                  CloseApproved = false;
         bool                  RendererShutdownForClose = false;

@@ -437,6 +437,8 @@ namespace SmileEditor {
         void FrameReady();
         void TelemetryUpdated(); // 5 Hz: invalida apenas bindings de FPS/GPU/VRAM/resolucao
         void RendererInitialized(); // emitted once when D3D12 renderer is ready
+        // Etapas do boot do renderer (splash). Detail traz o adaptador quando ele fica conhecido.
+        void InitProgress(const QString& label, const QString& detail, qreal fraction);
         void ObjectSelected(int sceneIndex); // clique no viewport: indice na cena (-1 = vazio)
         void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
         void DebugSettingsChanged(); // grade, exposicao e sessao de inspecao de probes

@@ -1,5 +1,6 @@
 #include "SmileEditor/DarkTheme.h"
 #include "SmileEditor/MainWindow.h"
+#include "SmileEditor/SplashScreen.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Core/VersionInfo.h"
 #include <QApplication>
@@ -131,6 +132,12 @@ namespace {
         SmileEditor::ApplyDarkTheme(App);
 
         int ExitCode = EXIT_FAILURE;
+        // Sobe antes de qualquer janela: o construtor da MainWindow leva centenas de ms e a
+        // render thread, segundos. Declarada fora do escopo da MainWindow para so morrer
+        // depois dela (a splash e destino de sinais da janela).
+        SmileEditor::SplashScreen Splash;
+        Splash.ShowCentered();
+
         // Declarada fora do escopo da MainWindow: todos os QQuickWidget morrem antes da engine,
         // como exige o construtor que recebe QQmlEngine externa.
         QQmlEngine SharedQmlEngine;
@@ -142,7 +149,24 @@ namespace {
                 Args.at(1).endsWith(QStringLiteral(".sscene"), Qt::CaseInsensitive)) {
                 Window.SetStartupScene(Args.at(1));
             }
+
+            QObject::connect(&Window, &SmileEditor::MainWindow::BootProgress,
+                             &Splash, &SmileEditor::SplashScreen::SetStage);
+            QObject::connect(&Window, &SmileEditor::MainWindow::BootFinished,
+                             &Splash, [&Splash, &Window]() {
+                // Revela de uma vez: a splash dissolve por cima do editor ja pronto. Voltar
+                // a opacidade 1 tambem tira o WS_EX_LAYERED que o Windows poe enquanto ela
+                // e menor que 1 — nao deixar o viewport D3D12 sob janela em camada.
+                Window.setWindowOpacity(1.0);
+                Splash.FinishWith(&Window);
+            });
+
+            // A janela precisa existir cedo (o viewport so cria o device D3D12 depois de ter
+            // HWND), mas o usuario nao pode ver o editor se montando atras da splash: sobe
+            // invisivel e so aparece no BootFinished.
+            Window.setWindowOpacity(0.0);
             Window.show();
+            Splash.raise();   // show() da MainWindow acabou de levantar a janela dela
 
             ExitCode = App.exec();
 

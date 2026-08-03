@@ -4,8 +4,8 @@ cmake_minimum_required(VERSION 3.25)
 project(SmileEngine LANGUAGES C CXX)
 
 # Versao do projeto - usado pelo VersionInfo.h gerado e pela tela About
-set(SMILE_VERSION_MAJOR 0)
-set(SMILE_VERSION_MINOR 1)
+set(SMILE_VERSION_MAJOR 3)
+set(SMILE_VERSION_MINOR 0)
 set(SMILE_VERSION_PATCH 0)
 string(TIMESTAMP SMILE_BUILD_DATE   "%Y-%m-%d %H:%M" UTC)
 string(TIMESTAMP SMILE_BUILD_NUMBER "%Y%m%d")

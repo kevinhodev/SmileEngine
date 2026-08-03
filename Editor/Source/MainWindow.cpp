@@ -114,6 +114,15 @@ namespace SmileEditor {
 
         connect(Viewport, &ViewportWidget::TelemetryUpdated,    this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
+        // Splash: etapas do boot do renderer e rede de seguranca — se a render thread morrer
+        // (falha de init ou parada precoce), a splash sai junto em vez de ficar por cima.
+        connect(Viewport, &ViewportWidget::InitProgress, this,
+                [this](const QString& _Label, const QString& _Detail, qreal _Fraction) {
+            // Com cena de boot o renderer vale 90% da barra; os 10% finais sao o .sscene.
+            const qreal Scale = StartupScenePath.isEmpty() ? 1.0 : 0.9;
+            emit BootProgress(_Label, _Detail, _Fraction * Scale);
+        });
+        connect(Viewport, &ViewportWidget::RendererStopped, this, &MainWindow::FinishBootStage);
 
         StylesheetWatcher = new QFileSystemWatcher(this);
         const QStringList QSSFiles = GetStylesheetFiles();
@@ -346,14 +355,17 @@ namespace SmileEditor {
             if (StatusBr) StatusBr->ShowMessage(tr("Uma cena já está sendo preparada"), 2500);
             return;
         }
-        if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized())
+        if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized()) {
+            FinishBootStage();
             return;
+        }
 
         SceneLoadInProgress = true;
         if (StatusBr) {
             StatusBr->ShowMessage(
                 _Additive ? tr("Preparando cena adicional…") : tr("Preparando cena…"));
         }
+        if (BootSplashActive) emit BootProgress(tr("Preparando cena…"), {}, 0.93);
 
         using Result = Smile::FPreparedCookedScenePtr;
         auto* Watcher = new QFutureWatcher<Result>(this);
@@ -363,10 +375,12 @@ namespace SmileEditor {
             Watcher->deleteLater();
             if (CloseApproved || RendererShutdownForClose) {
                 SceneLoadInProgress = false;
+                FinishBootStage();
                 return;
             }
             if (!Prepared) {
                 SceneLoadInProgress = false;
+                FinishBootStage();
                 if (StatusBr) StatusBr->ShowMessage(tr("Falha ao preparar a cena"), 5000);
                 QMessageBox::warning(
                     this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
@@ -375,11 +389,14 @@ namespace SmileEditor {
             }
 
             if (StatusBr) StatusBr->ShowMessage(tr("Finalizando recursos da cena…"));
+            if (BootSplashActive)
+                emit BootProgress(tr("Finalizando recursos da cena…"), {}, 0.98);
             const bool Queued = Viewport && Viewport->CommitPreparedSceneAsync(
                 std::move(Prepared), Additive,
                 [this, Path, Additive](bool _Success, const QString& _Error) {
                     Q_UNUSED(_Error);
                     SceneLoadInProgress = false;
+                    FinishBootStage();
 
                     if (!_Success) {
                         if (StatusBr)
@@ -401,6 +418,7 @@ namespace SmileEditor {
                 });
             if (!Queued) {
                 SceneLoadInProgress = false;
+                FinishBootStage();
                 if (StatusBr) StatusBr->ShowMessage(tr("Renderizador indisponível"), 5000);
                 QMessageBox::warning(
                     this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
@@ -657,8 +675,19 @@ namespace SmileEditor {
         }
 
         if (!StartupScenePath.isEmpty()) {
+            // A splash so sai quando a cena de boot terminar: fechar antes mostraria um
+            // viewport vazio por segundos. BeginSceneLoad chama FinishBootStage em todo
+            // desfecho, inclusive nos de falha.
             BeginSceneLoad(StartupScenePath, /*additive=*/false);
+        } else {
+            FinishBootStage();
         }
+    }
+
+    void MainWindow::FinishBootStage() {
+        if (!BootSplashActive) return;
+        BootSplashActive = false;
+        emit BootFinished();
     }
 
     void MainWindow::UpdateStats() {
