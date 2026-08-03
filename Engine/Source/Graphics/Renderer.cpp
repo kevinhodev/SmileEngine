@@ -1383,6 +1383,16 @@ namespace Smile {
     }
 
     void Renderer::RenderFrame() {
+        // O DebugDraw e preenchido pelo EDITOR antes do frame e consumido aqui. Se o frame morrer
+        // no meio (excecao — a render thread captura e tenta o proximo) ou sair pelo early return
+        // abaixo, o buffer nao pode sobreviver: o editor submete de novo no tick seguinte e a
+        // geometria duplicaria ate estourar o orcamento. A guarda faz do "limpa em toda saida"
+        // uma invariante do tipo, em vez de uma linha no fim do metodo.
+        struct FDebugDrawClearGuard {
+            FDebugDraw& Target;
+            ~FDebugDrawClearGuard() { Target.Clear(); }
+        } DebugDrawGuard{ DebugDraw };
+
         if (!Initialized) return;
 
         // Edicoes de material chegam da UI ENTRE frames e varias caem no mesmo frame (um arraste
@@ -3539,6 +3549,7 @@ namespace Smile {
 
         if (SelectedIndex >= 0 && SelectedSlot != kInvalidSlot && SelectedMesh
             && SelectionOutline.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Contorno da seleção");
             FSelectionOutline::FDrawItem Item{ SelectedMesh, SelectedModel * ViewProjUnjittered };
             SelectionOutline.RecordMask(CommandList, &Item, 1, FrameSlot);
             auto BackRTV = SwapChain.CurrentRTV();
@@ -3547,6 +3558,7 @@ namespace Smile {
         }
 
         if (DebugDraw.IsInitialized() && !DebugDraw.Empty()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Debug draw (gizmo/ícones)");
             const bool WantDepth = DebugDraw.HasOccluded() && DepthSRVSlot != kInvalidSlot;
             FBarrierBatch Batch;
             if (WantDepth) {
@@ -3567,7 +3579,7 @@ namespace Smile {
                 Batch.Flush(CommandList);
             }
         }
-        DebugDraw.Clear();
+        // (o Clear e da FDebugDrawClearGuard no topo do metodo)
 
         BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                              D3D12_RESOURCE_STATE_PRESENT);

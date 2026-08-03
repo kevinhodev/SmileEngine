@@ -5,6 +5,7 @@
 #include "Smile/Core/Logger.h"
 #include <cstring>
 #include <algorithm>
+#include <string>
 
 namespace Smile {
     static constexpr u32 kFIF      = FCommandQueue::kFramesInFlight;
@@ -34,7 +35,6 @@ namespace Smile {
     }
 
     void FDebugDraw::Icon(const Vec3& C, f32 HalfSize, const Vec3& Col, u32 Type, bool Selected) {
-        if (IconVerts.size() + 6 > kMaxIconVerts) return;
         const f32 T = static_cast<f32>(Type);
         const f32 S = Selected ? 1.0f : 0.0f;
         auto Push = [&](f32 Cx, f32 Cy) {
@@ -201,15 +201,36 @@ namespace Smile {
         if (!Initialized || Empty()) return;
         const u32 Slot = FrameSlot % kFIF;
 
-        // Sem SRV de depth nao ha como testar: as ocluiveis caem fora neste frame.
-        u32 numOcc = DepthSRV.ptr ? static_cast<u32>(LineOccVerts.size()) : 0;
+        // Sem SRV de depth nao ha como testar: as ocluiveis caem fora neste frame. Isso NAO conta
+        // como estouro de orcamento (e o fallback documentado), entao fica fora do aviso.
+        const u32 WantOcc  = DepthSRV.ptr ? static_cast<u32>(LineOccVerts.size()) : 0;
+        const u32 WantLine = static_cast<u32>(LineVerts.size());
+        const u32 WantTri  = static_cast<u32>(TriVerts.size());
+        const u32 WantIcon = static_cast<u32>(IconVerts.size());
 
-        u32 numLine = static_cast<u32>(LineVerts.size());
-        u32 numTri  = static_cast<u32>(TriVerts.size());
-        u32 numIcon = static_cast<u32>(IconVerts.size());
-        if (numOcc > kMaxVerts) numOcc = kMaxVerts;
-        if (numOcc + numLine > kMaxVerts) numLine = kMaxVerts - numOcc;
-        numTri = std::min(numTri, kMaxVerts - numOcc - numLine);
+        // Clamp ALINHADO POR PRIMITIVA: linha precisa de pares, triangulo de trincas. Cortar no
+        // meio nao explode (o IA descarta a primitiva incompleta), mas o debug aparece mordido
+        // sem nada dizendo por que. Linha ja cai par (kMaxVerts par, pushes aos pares); o
+        // AlignDown existe pro caso de kMaxVerts/orcamento mudarem — e o triangulo PRECISA dele.
+        auto AlignDown = [](u32 V, u32 N) { return V - (V % N); };
+        const u32 numOcc  = AlignDown(std::min(WantOcc, kMaxVerts), 2);
+        const u32 numLine = AlignDown(std::min(WantLine, kMaxVerts - numOcc), 2);
+        const u32 numTri  = AlignDown(std::min(WantTri, kMaxVerts - numOcc - numLine), 3);
+        const u32 numIcon = AlignDown(std::min(WantIcon, kMaxIconVerts), 6);
+
+        const u32 Dropped = (WantOcc - numOcc) + (WantLine - numLine) +
+                            (WantTri - numTri) + (WantIcon - numIcon);
+        if (Dropped && !OverflowLogged) {
+            OverflowLogged = true;
+            LogWarning("DebugDraw estourou o orcamento: " + std::to_string(Dropped) +
+                       " vertices descartados (linhas+triangulos " +
+                       std::to_string(WantOcc + WantLine + WantTri) + "/" +
+                       std::to_string(kMaxVerts) + ", icones " + std::to_string(WantIcon) +
+                       "/" + std::to_string(kMaxIconVerts) +
+                       "). O debug desenhado esta INCOMPLETO");
+        } else if (!Dropped) {
+            OverflowLogged = false; // coube de novo: rearma p/ o proximo episodio avisar
+        }
 
         // VB do frame: [ocluiveis | linhas | triangulos] — ocluiveis desenham primeiro,
         // gizmo/markers por cima. Icones tem VB proprio (stride diferente).

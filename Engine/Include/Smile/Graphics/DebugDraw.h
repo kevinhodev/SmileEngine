@@ -21,6 +21,7 @@ namespace Smile {
         // a camera, glifo por SDF no PS (Type 0 = lampada, 1 = spot), alpha-blend, sempre
         // visivel. HalfSize em unidades de mundo (a CPU escala por distancia p/ tamanho de tela
         // constante); Selected desenha o anel branco.
+        // Nao corta por orcamento aqui: quem clampa e relata e o Render(), num lugar so.
         void Icon(const Vec3& Center, f32 HalfSize, const Vec3& Color, u32 Type, bool Selected);
         void Clear() {
             LineVerts.clear(); TriVerts.clear(); LineOccVerts.clear(); IconVerts.clear();
@@ -63,6 +64,9 @@ namespace Smile {
         ComPtr<ID3D12Resource>      VB;      u8* MappedVB     = nullptr;
         ComPtr<ID3D12Resource>      IconVB;  u8* MappedIconVB = nullptr;
         bool                        Initialized = false;
+        // Arma/desarma o aviso de estouro do orcamento: loga na ENTRADA do episodio, nao a cada
+        // frame (a 200fps um log por frame vira spam que esconde o resto).
+        bool                        OverflowLogged = false;
 
         static constexpr u32 kMaxVerts = 4096;
         static constexpr u32 kMaxIconVerts = 256 * 6; // 256 icones/frame

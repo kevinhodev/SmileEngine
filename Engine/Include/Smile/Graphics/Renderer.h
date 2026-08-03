@@ -451,6 +451,17 @@ namespace Smile {
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
         f32  GetPitch()     const { return Camera.GetPitch(); }
         f32  GetYaw()       const { return Camera.GetYaw(); }
+        // Eixos da camera em mundo (colunas da view row-vector) — a mesma base que o VS dos
+        // icones usa p/ expandir o billboard. O editor le p/ medir a extensao do icone EM
+        // TELA (projeta a borda), em vez de carregar um raio em pixels hardcoded.
+        Vec3 GetCameraRight() const {
+            const Mat44 V = Camera.GetViewMatrix();
+            return Vec3{ V.M[0][0], V.M[1][0], V.M[2][0] };
+        }
+        Vec3 GetCameraUp() const {
+            const Mat44 V = Camera.GetViewMatrix();
+            return Vec3{ V.M[0][1], V.M[1][1], V.M[2][1] };
+        }
         // Foco de camera do editor (duplo-clique no Scene Outliner): teleporta mantendo
         // a orientacao atual.
         void SetCameraPose(const Vec3& Pos, f32 PitchDeg, f32 YawDeg) {

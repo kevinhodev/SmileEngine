@@ -2459,25 +2459,6 @@ namespace SmileEditor {
         QWidget::keyReleaseEvent(_Event);
     }
 
-    int ViewportWidget::PickLightMarker(unsigned int _X, unsigned int _Y) const {
-        if (!Renderer || !Renderer->IsInitialized()) return -1;
-        auto RendererAccess = Renderer.Lock();
-        constexpr float kPickRadiusPx = 22.0f; // ~raio do icone billboard (~44px de altura)
-        const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
-
-        const auto& Lights = Renderer->GetScene().Lights();
-        float Best = kPickRadiusPx;
-        int   BestIdx = -1;
-        for (int i = 0; i < static_cast<int>(Lights.size()); ++i) {
-            float sx, sy;
-            if (!Renderer->WorldToScreen(Lights[static_cast<size_t>(i)].Position, sx, sy))
-                continue;
-            const float d = std::sqrt((fx - sx) * (fx - sx) + (fy - sy) * (fy - sy));
-            if (d < Best) { Best = d; BestIdx = i; }
-        }
-        return BestIdx;
-    }
-
     void ViewportWidget::FlushPendingGizmoInput(Smile::Renderer& _Renderer) {
         if (GizmoMousePending) {
             GizmoCtrl.OnMouseMove(_Renderer, PendingGizmoMouseX, PendingGizmoMouseY);
@@ -2543,7 +2524,7 @@ namespace SmileEditor {
                 // 2) Senao, tenta um marker de LUZ (teste 2D em tela — luz nao esta no ID-buffer).
                 // 3) Senao, picking normal por GPU (seleciona o objeto sob o cursor).
                 if (!GizmoCtrl.OnMousePress(*RendererAccess, Px, Py)) {
-                    const int LightHit = PickLightMarker(Px, Py);
+                    const int LightHit = GizmoCtrl.PickLightIcon(*RendererAccess, Px, Py);
                     if (LightHit >= 0) {
                         Renderer->SetSelectedLight(LightHit);
                         Renderer->ClearSelection(); // selecoes exclusivas

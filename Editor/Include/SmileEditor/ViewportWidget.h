@@ -485,10 +485,6 @@ namespace SmileEditor {
         bool GetDebugProbeCoordValues(int& X, int& Y, int& Z,
                                       int& CountX, int& CountY, int& CountZ) const;
 
-        // Teste 2D em tela do clique contra os markers das luzes (nao estao no ID-buffer do
-        // picking GPU). Retorna o indice em Scene.Lights() ou -1; empate = o mais proximo.
-        int PickLightMarker(unsigned int X, unsigned int Y) const;
-
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
         RenderThread   RendererThread;

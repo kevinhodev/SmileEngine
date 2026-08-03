@@ -22,9 +22,16 @@ namespace SmileEditor {
         bool IsDragging() const { return Dragging; }
 
         // Chamado a cada frame APOS UpdateCamera e ANTES de RenderFrame: submete as 3 setas ao
-        // FDebugDraw da Engine (no-op se desabilitado / sem selecao) + a visualizacao das luzes
-        // (marker em todas; esfera do raio / cone do spot na selecionada).
+        // FDebugDraw da Engine (no-op se desabilitado / sem selecao) + os icones billboard das
+        // luzes (um em cada; toco de direcao no spot selecionado).
         void Submit(Smile::Renderer& R);
+
+        // Picking do icone de luz — a luz nao entra no ID-buffer do FObjectPicker, entao o teste
+        // e analitico em tela. Mora aqui (e nao no ViewportWidget) porque o raio SAI da mesma
+        // metrica que desenha o billboard: acompanha FOV, resolucao e qualquer mudanca futura de
+        // escala sem um segundo lugar pra esquecer. -1 = nenhum; sobreposicao ganha o mais perto
+        // da camera.
+        int PickLightIcon(Smile::Renderer& R, Smile::u32 X, Smile::u32 Y) const;
 
         // Eventos de mouse (coords em pixels do backbuffer = coords logicas do widget):
         // press tenta pegar um handle -> retorna true se comecou um arraste (editor NAO faz picking).
@@ -42,7 +49,10 @@ namespace SmileEditor {
         // t do ponto do eixo (Pivot + t*AxisDir) mais proximo do raio (AxisDir e Dir unitarios).
         float  AxisParam(const Smile::Vec3& Origin, const Smile::Vec3& Dir,
                          const Smile::Vec3& AxisDir, const Smile::Vec3& Pivot) const;
-        void   SubmitLightShapes(Smile::Renderer& R) const; // markers + esfera/cone da selecionada
+        void   SubmitLightShapes(Smile::Renderer& R) const; // icone billboard de cada luz
+        // Meia-extensao do billboard do icone (mundo). FONTE UNICA: quem desenha e quem faz o
+        // hit-test passam por aqui — as duas coisas nao podem divergir.
+        float  IconHalfSizeFor(Smile::Renderer& R, const Smile::Vec3& Position) const;
 
         bool        Enabled = true;
         EAxis       Hovered = EAxis::None;
