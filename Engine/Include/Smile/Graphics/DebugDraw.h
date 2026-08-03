@@ -4,6 +4,7 @@
 #include <array>
 #include <vector>
 #include "Smile/Core/Types.h"
+#include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Math/Math.h"
 
 namespace Smile {
@@ -62,6 +63,10 @@ namespace Smile {
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat);
         void CreateBuffers(ID3D12Device* Device);
+        // Depth SO DO OVERLAY (nao e o depth da cena): existe pra o debug se ordenar CONTRA SI
+        // MESMO. Criado sob demanda no Render() a partir da largura/altura que ele ja recebe —
+        // assim nao ha um caminho de resize pra alguem esquecer de chamar.
+        void EnsureOverlayDepth(u32 Width, u32 Height);
 
         // Fracao do alpha que sobrevive atras da geometria, por modo. Vai como root constant:
         // Scene e XRay usam o MESMO PSO e diferem so nisto.
@@ -112,15 +117,25 @@ namespace Smile {
         std::vector<IconVertex> IconVerts;
 
         ComPtr<ID3D12RootSignature> RootSig;
-        ComPtr<ID3D12PipelineState> LinePSO;      // Foreground: sem teste de depth
-        ComPtr<ID3D12PipelineState> LineDepthPSO; // Scene/XRay: teste manual no PS
+        // "Depth" no nome do PSO = teste manual contra o depth da CENA (no PS). O depth do
+        // OVERLAY e estado fixo do pipeline e vale pra todos eles menos o icone.
+        ComPtr<ID3D12PipelineState> LinePSO;      // Foreground: sem teste contra a cena
+        ComPtr<ID3D12PipelineState> LineDepthPSO; // Scene/XRay
         ComPtr<ID3D12PipelineState> TriPSO;
         ComPtr<ID3D12PipelineState> TriDepthPSO;
-        ComPtr<ID3D12PipelineState> IconPSO;
+        ComPtr<ID3D12PipelineState> IconPSO;      // sem depth nenhum: camada de cima, por politica
         ComPtr<ID3D12Resource>      CB;      u8* MappedCB     = nullptr;
         ComPtr<ID3D12Resource>      LineVB;  u8* MappedLineVB = nullptr;
         ComPtr<ID3D12Resource>      TriVB;   u8* MappedTriVB  = nullptr;
         ComPtr<ID3D12Resource>      IconVB;  u8* MappedIconVB = nullptr;
+
+        ComPtr<ID3D12Resource> OverlayDepth;
+        FDescriptorHeap        OverlayDSVHeap;
+        u32                    OverlayWidth  = 0;
+        u32                    OverlayHeight = 0;
+        static constexpr DXGI_FORMAT kOverlayDepthFormat = DXGI_FORMAT_D32_FLOAT;
+
+        ID3D12Device*               Device_     = nullptr;         // p/ criar o depth no resize
         DXGI_FORMAT                 RTFormat_   = DXGI_FORMAT_UNKNOWN; // p/ o RecreatePSOs
         bool                        Initialized = false;
         // Arma/desarma o aviso de estouro do orcamento: loga na ENTRADA do episodio, nao a cada

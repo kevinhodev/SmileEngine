@@ -1,6 +1,8 @@
 #include "Smile/Graphics/DebugDraw.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Graphics/ShaderUtils.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
@@ -14,14 +16,62 @@ namespace Smile {
     // Empirico, calibrado com o wire do volume de luz colado no chao.
     static constexpr f32 kDepthTestBiasNdc = 2e-5f;
 
+    // RESSALVA CONHECIDA do depth do overlay: a franja de AA da linha escreve depth como
+    // qualquer outro pixel, entao um fragmento de ~30% de cobertura bloqueia o que vier atras
+    // DENTRO DO MESMO GRUPO. Separar isso exigiria um prepass de depth com alpha test, o que nao
+    // se paga por 1px de franja em geometria de debug. Fica registrado, nao esquecido.
+
     void FDebugDraw::Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat) {
         if (Initialized) return;
+        Device_   = Device;
         RTFormat_ = RTFormat;
         BuildRootSignature(Device);
         BuildPSOs(Device, RTFormat);
         CreateBuffers(Device);
         Initialized = true;
         LogDebug("DebugDraw Inicializado");
+    }
+
+    void FDebugDraw::EnsureOverlayDepth(u32 Width, u32 Height) {
+        if (!Device_ || Width == 0 || Height == 0) return;
+        if (OverlayDepth && OverlayWidth == Width && OverlayHeight == Height) return;
+
+        if (OverlayDSVHeap.Native() == nullptr)
+            OverlayDSVHeap.Initialize(Device_, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
+
+        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC Desc{};
+        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        Desc.Width            = Width;
+        Desc.Height           = Height;
+        Desc.DepthOrArraySize = 1;
+        Desc.MipLevels        = 1;
+        Desc.Format           = kOverlayDepthFormat;
+        Desc.SampleDesc       = { 1, 0 };
+        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL |
+                                D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+
+        D3D12_CLEAR_VALUE Clear{};
+        Clear.Format               = kOverlayDepthFormat;
+        Clear.DepthStencil.Depth   = kClearDepth;
+        Clear.DepthStencil.Stencil = 0;
+
+        // Sai do escopo antes de criar o novo: o Renderer da Flush na fila antes do resize, entao
+        // ninguem esta lendo o antigo.
+        OverlayDepth.Reset();
+        SMILE_HR(Device_->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
+                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &Clear, IID_PPV_ARGS(&OverlayDepth)));
+        VramTracker::Register(OverlayDepth.Get(), EVramCategory::Misc);
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
+        DSVDesc.Format        = kOverlayDepthFormat;
+        DSVDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        Device_->CreateDepthStencilView(OverlayDepth.Get(), &DSVDesc,
+                                        OverlayDSVHeap.CpuHandle(0));
+
+        OverlayWidth  = Width;
+        OverlayHeight = Height;
     }
 
     void FDebugDraw::RecreatePSOs(ID3D12Device* Device) {
@@ -143,9 +193,13 @@ namespace Smile {
         Raster.CullMode        = D3D12_CULL_MODE_NONE;
         Raster.DepthClipEnable = TRUE;
 
+        // Depth do OVERLAY (buffer proprio, limpo entre grupos): serve pro debug se ordenar
+        // contra SI MESMO. Sem ele, a ponta do gizmo vista quase de frente vira um bloco
+        // chapado — as 4 faces da piramide se sobrepondo na ordem de submissao.
         D3D12_DEPTH_STENCIL_DESC Depth{};
-        Depth.DepthEnable    = FALSE;
-        Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        Depth.DepthEnable    = TRUE;
+        Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        Depth.DepthFunc      = kDepthFuncLessEqual;
 
         // Alpha blend em TUDO agora: e o que faz o AA da borda da linha e o XRay existirem.
         // Com alpha 1 no miolo, o pixel do centro sai igual ao do caminho opaco antigo.
@@ -167,6 +221,7 @@ namespace Smile {
         PSODesc.DepthStencilState     = Depth;
         PSODesc.NumRenderTargets      = 1;
         PSODesc.RTVFormats[0]         = RTFormat;
+        PSODesc.DSVFormat             = kOverlayDepthFormat;
         PSODesc.SampleDesc            = { 1, 0 };
 
         // Dois eixos: primitiva (linha instanciada / triangulo) x PS (Foreground = sem teste,
@@ -211,7 +266,16 @@ namespace Smile {
         IconBlend.RenderTarget[0].BlendOpAlpha          = D3D12_BLEND_OP_ADD;
         IconBlend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-        PSODesc.BlendState = IconBlend;
+        // Icone fica FORA do depth do overlay — nem testa nem escreve. E politica, nao descuido:
+        // billboard alpha-blended nao se resolve com depth (escrever chapa o alpha da borda no
+        // buffer e esconder o que vem depois; testar exige ordenar por distancia, que ninguem
+        // faz ainda). Ate haver sort de transparencia, icone e a camada de cima e ponto.
+        D3D12_DEPTH_STENCIL_DESC IconDepth{};
+        IconDepth.DepthEnable    = FALSE;
+        IconDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+        PSODesc.BlendState        = IconBlend;
+        PSODesc.DepthStencilState = IconDepth;
         Make(IconVS, IconPS, IconLayout, _countof(IconLayout),
              D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, &IconPSO);
     }
@@ -356,7 +420,13 @@ namespace Smile {
         CBData.Screen[2] = 0.0f;                     CBData.Screen[3] = 0.0f;
         std::memcpy(MappedCB + static_cast<size_t>(Slot) * 256, &CBData, sizeof(CBData));
 
-        CmdList->OMSetRenderTargets(1, &BackbufferRTV, FALSE, nullptr);
+        EnsureOverlayDepth(Width, Height);
+        const bool HasOverlayDepth = OverlayDepth != nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE OverlayDSV = HasOverlayDepth
+            ? OverlayDSVHeap.CpuHandle(0) : D3D12_CPU_DESCRIPTOR_HANDLE{};
+
+        CmdList->OMSetRenderTargets(1, &BackbufferRTV, FALSE,
+                                    HasOverlayDepth ? &OverlayDSV : nullptr);
         D3D12_VIEWPORT VP{}; VP.Width = static_cast<FLOAT>(Width); VP.Height = static_cast<FLOAT>(Height);
         VP.MinDepth = 0.0f; VP.MaxDepth = 1.0f;
         D3D12_RECT Sci{}; Sci.right = static_cast<LONG>(Width); Sci.bottom = static_cast<LONG>(Height);
@@ -387,6 +457,15 @@ namespace Smile {
             const EDebugDepthMode Mode = kDrawOrder[i];
             const size_t M = BucketOf(Mode);
             if (!LineCount[M] && !TriCount[M]) continue;
+
+            // Depth do overlay LIMPO A CADA GRUPO. E o que concilia duas regras que brigariam:
+            // dentro do grupo a geometria se ordena em 3D (a piramide da ponta vira ponta), mas
+            // o grupo seguinte continua desenhando POR CIMA do anterior — Foreground nao pode
+            // ser ocluido por uma linha Scene que por acaso esta mais perto. Mesma ideia do
+            // SDPG_World/SDPG_Foreground da Unreal, que tambem sao grupos de depth separados.
+            if (HasOverlayDepth)
+                CmdList->ClearDepthStencilView(OverlayDSV, D3D12_CLEAR_FLAG_DEPTH,
+                                               kClearDepth, 0, 0, nullptr);
 
             // OccludedAlpha e a UNICA diferenca entre Scene e XRay — mesmo PSO, root constant
             // diferente. Foreground nem le (o PS dele nao tem o caminho de depth).
