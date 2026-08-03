@@ -1,0 +1,278 @@
+<svg viewBox="0 0 1000 1046" xmlns="http://www.w3.org/2000/svg" role="img" font-family="Inter, Segoe UI, system-ui, sans-serif">
+  <title>Referência visual — redesenho da marca do SmileEngine</title>
+  <desc>Diagnóstico da marca atual e quatro direções de redesenho, cada uma testada em 96, 32 e 16 px, em uma cor e dentro do badge de ícone do app. Fecha com os lockups da direção recomendada, aplicação em barra de título, splash e About, e a nota de implementação no MakeSmileLogoPixmap.</desc>
+
+  <defs>
+    <linearGradient id="oldGold" x1="0" y1="14" x2="0" y2="84" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffeb62"/>
+      <stop offset="0.32" stop-color="#ffc218"/>
+      <stop offset="0.68" stop-color="#e69700"/>
+      <stop offset="1" stop-color="#ffd334"/>
+    </linearGradient>
+    <radialGradient id="oldGlow">
+      <stop offset="0" stop-color="#ffbf18" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#ffb400" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- ===== marca de hoje (paths reais do MakeSmileLogoPixmap) ===== -->
+    <g id="mkToday">
+      <circle cx="48" cy="47" r="46" fill="url(#oldGlow)"/>
+      <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <g stroke="#000" stroke-opacity="0.67" stroke-width="16">
+          <path d="M78 18 L43 18 C24 18 14 31 18 45 C20.5 54 30 58 43 58 L58 58 C73 58 79 68 70 77 C61 86 39 83 18 70"/>
+          <path d="M42 39 L72 39"/>
+        </g>
+        <g stroke="url(#oldGold)" stroke-width="12">
+          <path d="M78 18 L43 18 C24 18 14 31 18 45 C20.5 54 30 58 43 58 L58 58 C73 58 79 68 70 77 C61 86 39 83 18 70"/>
+          <path d="M42 39 L72 39"/>
+        </g>
+        <g stroke="#fff6aa" stroke-opacity="0.8" stroke-width="2">
+          <path d="M78 18 L43 18 C24 18 14 31 18 45 C20.5 54 30 58 43 58 L58 58 C73 58 79 68 70 77 C61 86 39 83 18 70"/>
+          <path d="M42 39 L72 39"/>
+        </g>
+        <g stroke="#000" stroke-opacity="0.53" stroke-width="5.8" transform="translate(0 1.5)">
+          <path d="M48 66.5 A6 6.5 0 0 0 36 66.5"/><path d="M67 66.5 A6 6.5 0 0 0 55 66.5"/>
+        </g>
+        <g stroke="#ffd527" stroke-width="4.2">
+          <path d="M48 66.5 A6 6.5 0 0 0 36 66.5"/><path d="M67 66.5 A6 6.5 0 0 0 55 66.5"/>
+        </g>
+      </g>
+    </g>
+
+    <!-- ===== 1 · esfera (terminador) ===== -->
+    <g id="mk1">
+      <circle cx="48" cy="48" r="34" fill="none" stroke="currentColor" stroke-width="2.5" opacity="0.4"/>
+      <path d="M69.24 21.44 A34 34 0 1 1 17.76 63.56 A34 34 0 0 0 69.24 21.44 Z" fill="currentColor"/>
+    </g>
+
+    <!-- ===== 2 · monograma S geométrico ===== -->
+    <g id="mk2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="11">
+      <path d="M66 30 A18 18 0 1 0 48 48 A18 18 0 1 1 30 66"/>
+    </g>
+
+    <!-- ===== 3 · cubo isométrico ===== -->
+    <g id="mk3" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M48 14 L78 31 L78 63 L48 80 L18 63 L18 31 Z" stroke-width="4.5"/>
+      <path d="M18 31 L48 48 L78 31 M48 48 L48 80" stroke-width="2.6" opacity="0.42"/>
+      <path d="M29 53 Q48 71 67 53" stroke-width="7"/>
+    </g>
+
+    <!-- ===== 4 · fita S (evolução da atual) ===== -->
+    <g id="mk4" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M74 22 H44 C27 22 19 34 23 45 C26 53 34 57 45 57 H56 C69 57 74 66 66 74 C58 82 40 79 22 68"/>
+    </g>
+  </defs>
+
+  <rect width="1000" height="1046" fill="#101110"/>
+
+  <!-- ================= cabeçalho ================= -->
+  <g color="#d9a514"><use href="#mk1" transform="translate(32 16) scale(0.29)"/></g>
+  <text x="66" y="32" font-size="13" fill="#e6e2d8">Marca — SmileEngine</text>
+  <text x="66" y="46" font-size="10.5" fill="#6c6a61">Quatro direções de redesenho · cada uma testada em 96, 32 e 16 px, em uma cor e no badge do app</text>
+  <text x="900" y="32" font-size="10.5" fill="#6c6a61" text-anchor="end">referência visual · escolher uma antes de codar</text>
+  <text x="900" y="46" font-size="10.5" fill="#9a958a" text-anchor="end">Editor/Source/SmileLogo.cpp</text>
+
+  <!-- ================= o que existe hoje ================= -->
+  <text x="100" y="78" font-size="10" fill="#9a958a" letter-spacing="1.4">O QUE EXISTE HOJE</text>
+  <rect x="100" y="88" width="800" height="132" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+
+  <use href="#mkToday" transform="translate(120 104) scale(1)"/>
+  <use href="#mkToday" transform="translate(232 138) scale(0.3333)"/>
+  <use href="#mkToday" transform="translate(276 146) scale(0.1667)"/>
+  <text x="152" y="214" font-size="8" fill="#6c6a61" text-anchor="middle">96</text>
+  <text x="248" y="214" font-size="8" fill="#6c6a61" text-anchor="middle">32</text>
+  <text x="284" y="214" font-size="8" fill="#6c6a61" text-anchor="middle">16</text>
+
+  <line x1="310" y1="104" x2="310" y2="204" stroke="#2a2b24"/>
+  <g font-size="9.5" fill="#c8c2b4">
+    <text x="332" y="118">Quatro elementos disputando 96 px: fita S + barra central + dois arcos. Abaixo de 32 px vira borrão.</text>
+    <text x="332" y="136">Três espessuras (12 / 4,2 / 2) e uma sombra preta de 16 px — a sombra faz o contraste que devia vir da forma.</text>
+    <text x="332" y="154">Gradiente de quatro paradas: some no ícone pequeno e briga com a arte da splash.</text>
+    <text x="332" y="172">Terminais misturam corte reto e ponta redonda; a curva de baixo é assimétrica sem intenção.</text>
+    <text x="332" y="190" fill="#d98a8a">Não sobrevive em uma cor: sem gradiente e sem sombra as partes colam umas nas outras.</text>
+  </g>
+
+  <line x1="100" y1="240" x2="900" y2="240" stroke="#23241d"/>
+
+  <!-- ================= direções ================= -->
+  <text x="100" y="262" font-size="10" fill="#9a958a" letter-spacing="1.4">DIREÇÕES</text>
+  <text x="900" y="262" font-size="9.5" fill="#6c6a61" text-anchor="end">todas: traço único, cor chapada, sem sombra e sem gradiente</text>
+
+  <!-- card 1 -->
+  <g transform="translate(100 274)">
+    <rect width="185" height="338" rx="8" fill="#1a1b15" stroke="#d9a514" stroke-opacity="0.55"/>
+    <rect x="0" y="0" width="185" height="3" rx="1.5" fill="#d9a514"/>
+    <g color="#d9a514"><use href="#mk1" transform="translate(44.5 22)"/></g>
+    <text x="92.5" y="146" font-size="11.5" font-weight="600" fill="#e6e2d8" text-anchor="middle">1 · Esfera</text>
+    <text x="92.5" y="163" font-size="8.5" fill="#9a958a" text-anchor="middle">O limbo iluminado de uma esfera. Diz</text>
+    <text x="92.5" y="175" font-size="8.5" fill="#9a958a" text-anchor="middle">“renderer” sem palavra, e o sorriso é</text>
+    <text x="92.5" y="187" font-size="8.5" fill="#9a958a" text-anchor="middle">a curva do terminador — não uma cara.</text>
+    <line x1="16" y1="200" x2="169" y2="200" stroke="#23241d"/>
+    <text x="16" y="216" font-size="8" fill="#6c6a61">NO TAMANHO DE ÍCONE</text>
+    <g color="#d9a514">
+      <use href="#mk1" transform="translate(20 226) scale(0.3333)"/>
+      <use href="#mk1" transform="translate(66 234) scale(0.1667)"/>
+    </g>
+    <text x="36" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">32 px</text>
+    <text x="74" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">16 px</text>
+    <rect x="100" y="222" width="66" height="44" rx="6" fill="#e9e4d8"/>
+    <g color="#16170f"><use href="#mk1" transform="translate(117 226) scale(0.3333)"/></g>
+    <text x="133" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">1 cor / claro</text>
+    <line x1="16" y1="288" x2="169" y2="288" stroke="#23241d"/>
+    <rect x="16" y="298" width="44" height="44" rx="10" fill="#16170f" stroke="#d9a514" stroke-opacity="0.22"/>
+    <g color="#d9a514"><use href="#mk1" transform="translate(20 302) scale(0.375)"/></g>
+    <text x="70" y="318" font-size="9" fill="#c8c2b4">ícone do app</text>
+    <text x="70" y="330" font-size="8" fill="#6c6a61">badge 22% radius</text>
+  </g>
+
+  <!-- card 2 -->
+  <g transform="translate(305 274)">
+    <rect width="185" height="338" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+    <g color="#d9a514"><use href="#mk2" transform="translate(44.5 22)"/></g>
+    <text x="92.5" y="146" font-size="11.5" font-weight="600" fill="#e6e2d8" text-anchor="middle">2 · Monograma S</text>
+    <text x="92.5" y="163" font-size="8.5" fill="#9a958a" text-anchor="middle">Dois círculos de mesmo raio, traço</text>
+    <text x="92.5" y="175" font-size="8.5" fill="#9a958a" text-anchor="middle">único. A opção mais segura e a que</text>
+    <text x="92.5" y="187" font-size="8.5" fill="#9a958a" text-anchor="middle">menos diz sobre o produto.</text>
+    <line x1="16" y1="200" x2="169" y2="200" stroke="#23241d"/>
+    <text x="16" y="216" font-size="8" fill="#6c6a61">NO TAMANHO DE ÍCONE</text>
+    <g color="#d9a514">
+      <use href="#mk2" transform="translate(20 226) scale(0.3333)"/>
+      <use href="#mk2" transform="translate(66 234) scale(0.1667)"/>
+    </g>
+    <text x="36" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">32 px</text>
+    <text x="74" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">16 px</text>
+    <rect x="100" y="222" width="66" height="44" rx="6" fill="#e9e4d8"/>
+    <g color="#16170f"><use href="#mk2" transform="translate(117 226) scale(0.3333)"/></g>
+    <text x="133" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">1 cor / claro</text>
+    <line x1="16" y1="288" x2="169" y2="288" stroke="#23241d"/>
+    <rect x="16" y="298" width="44" height="44" rx="10" fill="#16170f" stroke="#d9a514" stroke-opacity="0.22"/>
+    <g color="#d9a514"><use href="#mk2" transform="translate(20 302) scale(0.375)"/></g>
+    <text x="70" y="318" font-size="9" fill="#c8c2b4">ícone do app</text>
+    <text x="70" y="330" font-size="8" fill="#6c6a61">lê como “S” em 16 px</text>
+  </g>
+
+  <!-- card 3 -->
+  <g transform="translate(510 274)">
+    <rect width="185" height="338" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+    <g color="#d9a514"><use href="#mk3" transform="translate(44.5 22)"/></g>
+    <text x="92.5" y="146" font-size="11.5" font-weight="600" fill="#e6e2d8" text-anchor="middle">3 · Cubo</text>
+    <text x="92.5" y="163" font-size="8.5" fill="#9a958a" text-anchor="middle">3D explícito com o sorriso cortando</text>
+    <text x="92.5" y="175" font-size="8.5" fill="#9a958a" text-anchor="middle">as faces. Silhueta forte, mas é o</text>
+    <text x="92.5" y="187" font-size="8.5" fill="#9a958a" text-anchor="middle">clichê do meio (Unity, Godot, Blender).</text>
+    <line x1="16" y1="200" x2="169" y2="200" stroke="#23241d"/>
+    <text x="16" y="216" font-size="8" fill="#6c6a61">NO TAMANHO DE ÍCONE</text>
+    <g color="#d9a514">
+      <use href="#mk3" transform="translate(20 226) scale(0.3333)"/>
+      <use href="#mk3" transform="translate(66 234) scale(0.1667)"/>
+    </g>
+    <text x="36" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">32 px</text>
+    <text x="74" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">16 px</text>
+    <rect x="100" y="222" width="66" height="44" rx="6" fill="#e9e4d8"/>
+    <g color="#16170f"><use href="#mk3" transform="translate(117 226) scale(0.3333)"/></g>
+    <text x="133" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">1 cor / claro</text>
+    <line x1="16" y1="288" x2="169" y2="288" stroke="#23241d"/>
+    <rect x="16" y="298" width="44" height="44" rx="10" fill="#16170f" stroke="#d9a514" stroke-opacity="0.22"/>
+    <g color="#d9a514"><use href="#mk3" transform="translate(20 302) scale(0.375)"/></g>
+    <text x="70" y="318" font-size="9" fill="#c8c2b4">ícone do app</text>
+    <text x="70" y="330" font-size="8" fill="#d98a8a">sorriso fecha em 16 px</text>
+  </g>
+
+  <!-- card 4 -->
+  <g transform="translate(715 274)">
+    <rect width="185" height="338" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+    <g color="#d9a514"><use href="#mk4" transform="translate(44.5 22)"/></g>
+    <text x="92.5" y="146" font-size="11.5" font-weight="600" fill="#e6e2d8" text-anchor="middle">4 · Fita S</text>
+    <text x="92.5" y="163" font-size="8.5" fill="#9a958a" text-anchor="middle">A marca de hoje resolvida: sem barra,</text>
+    <text x="92.5" y="175" font-size="8.5" fill="#9a958a" text-anchor="middle">sem olhos, um peso só. Evolução em</text>
+    <text x="92.5" y="187" font-size="8.5" fill="#9a958a" text-anchor="middle">vez de troca — mantém o que já é seu.</text>
+    <line x1="16" y1="200" x2="169" y2="200" stroke="#23241d"/>
+    <text x="16" y="216" font-size="8" fill="#6c6a61">NO TAMANHO DE ÍCONE</text>
+    <g color="#d9a514">
+      <use href="#mk4" transform="translate(20 226) scale(0.3333)"/>
+      <use href="#mk4" transform="translate(66 234) scale(0.1667)"/>
+    </g>
+    <text x="36" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">32 px</text>
+    <text x="74" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">16 px</text>
+    <rect x="100" y="222" width="66" height="44" rx="6" fill="#e9e4d8"/>
+    <g color="#16170f"><use href="#mk4" transform="translate(117 226) scale(0.3333)"/></g>
+    <text x="133" y="276" font-size="7.5" fill="#6c6a61" text-anchor="middle">1 cor / claro</text>
+    <line x1="16" y1="288" x2="169" y2="288" stroke="#23241d"/>
+    <rect x="16" y="298" width="44" height="44" rx="10" fill="#16170f" stroke="#d9a514" stroke-opacity="0.22"/>
+    <g color="#d9a514"><use href="#mk4" transform="translate(20 302) scale(0.375)"/></g>
+    <text x="70" y="318" font-size="9" fill="#c8c2b4">ícone do app</text>
+    <text x="70" y="330" font-size="8" fill="#6c6a61">herda o desenho atual</text>
+  </g>
+
+  <line x1="100" y1="636" x2="900" y2="636" stroke="#23241d"/>
+
+  <!-- ================= lockups da recomendada ================= -->
+  <text x="100" y="658" font-size="10" fill="#9a958a" letter-spacing="1.4">LOCKUPS — DIREÇÃO 1</text>
+
+  <rect x="100" y="670" width="470" height="150" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(124 690) scale(0.58)"/></g>
+  <text x="190" y="722" font-size="27" font-weight="600" fill="#f7f2e6">SmileEngine</text>
+  <text x="192" y="740" font-size="8.5" font-weight="600" fill="#d9a514" letter-spacing="2.6">REAL-TIME 3D ENGINE</text>
+  <line x1="124" y1="758" x2="546" y2="758" stroke="#23241d"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(124 772) scale(0.3)"/></g>
+  <text x="160" y="789" font-size="15" font-weight="600" fill="#f7f2e6">SmileEngine</text>
+  <text x="270" y="789" font-size="8.5" fill="#6c6a61">altura mínima do lockup: 28 px</text>
+  <text x="546" y="700" font-size="8.5" fill="#6c6a61" text-anchor="end">horizontal · uso padrão</text>
+
+  <rect x="590" y="670" width="150" height="150" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(633 692) scale(0.66)"/></g>
+  <text x="665" y="782" font-size="17" font-weight="600" fill="#f7f2e6" text-anchor="middle">SmileEngine</text>
+  <text x="665" y="798" font-size="7.5" font-weight="600" fill="#d9a514" letter-spacing="2" text-anchor="middle">REAL-TIME 3D</text>
+  <text x="665" y="812" font-size="8.5" fill="#6c6a61" text-anchor="middle">empilhado · splash</text>
+
+  <rect x="760" y="670" width="140" height="150" rx="8" fill="#1a1b15" stroke="#2a2b24"/>
+  <rect x="782" y="690" width="64" height="64" rx="14" fill="#16170f" stroke="#d9a514" stroke-opacity="0.22"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(788 696) scale(0.54)"/></g>
+  <rect x="856" y="690" width="32" height="32" rx="7" fill="#16170f" stroke="#d9a514" stroke-opacity="0.22"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(859 693) scale(0.27)"/></g>
+  <rect x="856" y="730" width="16" height="16" rx="4" fill="#16170f" stroke="#d9a514" stroke-opacity="0.22"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(857.5 731.5) scale(0.135)"/></g>
+  <text x="782" y="772" font-size="8.5" fill="#6c6a61">badge · 64 / 32 / 16</text>
+  <text x="782" y="790" font-size="8.5" fill="#c8c2b4">.ico da janela e da</text>
+  <text x="782" y="802" font-size="8.5" fill="#c8c2b4">barra de tarefas</text>
+
+  <!-- ================= aplicação ================= -->
+  <text x="100" y="852" font-size="10" fill="#9a958a" letter-spacing="1.4">ONDE ELA APARECE</text>
+
+  <rect x="100" y="864" width="256" height="96" rx="8" fill="#141511" stroke="#2a2b24"/>
+  <rect x="100" y="864" width="256" height="30" rx="8" fill="#181916"/>
+  <rect x="100" y="886" width="256" height="8" fill="#181916"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(112 872) scale(0.15)"/></g>
+  <text x="136" y="883" font-size="9.5" fill="#c8c2b4">Smile Engine</text>
+  <g stroke="#6c6a61" stroke-width="1.1" fill="none">
+    <line x1="300" y1="879" x2="308" y2="879"/>
+    <rect x="318" y="875" width="8" height="8"/>
+    <line x1="338" y1="875" x2="346" y2="883"/><line x1="346" y1="875" x2="338" y2="883"/>
+  </g>
+  <text x="116" y="920" font-size="9" fill="#9a958a">barra de título — 16 px, uma cor</text>
+  <text x="116" y="936" font-size="8.5" fill="#6c6a61">o único lugar onde a forma trabalha sozinha,</text>
+  <text x="116" y="948" font-size="8.5" fill="#6c6a61">sem wordmark do lado</text>
+
+  <rect x="372" y="864" width="256" height="96" rx="8" fill="#0c0f13" stroke="#2a2b24"/>
+  <path d="M372 906 H628 V952 A8 8 0 0 1 620 960 H380 A8 8 0 0 1 372 952 Z" fill="#05060a" opacity="0.55"/>
+  <rect x="372" y="872" width="256" height="34" fill="#1d2836"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(392 912) scale(0.3)"/></g>
+  <text x="428" y="932" font-size="15" font-weight="600" fill="#f7f2e6">SmileEngine</text>
+  <text x="429" y="944" font-size="6.5" font-weight="600" fill="#d9a514" letter-spacing="1.8">REAL-TIME 3D ENGINE</text>
+  <rect x="372" y="957" width="180" height="3" fill="#d9a514"/>
+  <text x="388" y="978" font-size="9" fill="#9a958a">splash — 32 px + wordmark</text>
+
+  <rect x="644" y="864" width="256" height="96" rx="8" fill="#10110f" stroke="#2a2b24"/>
+  <rect x="644" y="864" width="4" height="96" fill="#d9a514"/>
+  <g color="#d9a514"><use href="#mk1" transform="translate(664 882) scale(0.48)"/></g>
+  <text x="724" y="898" font-size="16" font-weight="600" fill="#f1eadc">SmileEngine</text>
+  <text x="724" y="912" font-size="8.5" fill="#d9a514">Real-Time 3D Engine</text>
+  <text x="724" y="926" font-family="Consolas, monospace" font-size="8" fill="#9a958a">v3.0.0 · build 20260803</text>
+  <text x="664" y="978" font-size="9" fill="#9a958a">About — 48 px, mesma marca</text>
+
+  <line x1="100" y1="998" x2="900" y2="998" stroke="#23241d"/>
+
+  <!-- ================= recomendação ================= -->
+  <circle cx="106" cy="1017" r="3.5" fill="#d9a514"/>
+  <text x="118" y="1021" font-size="10" fill="#c8c2b4"><tspan fill="#e6e2d8" font-weight="600">Recomendo a 1 (Esfera).</tspan> É a única que fala do produto (limbo iluminado = render), sobrevive em 16 px e em uma cor, e não é o cubo genérico do mercado. A 4 é o plano B se você quiser manter a marca atual.</text>
+  <text x="118" y="1036" font-size="9" fill="#6c6a61">No código: <tspan font-family="Consolas, monospace">MakeSmileLogoPixmap</tspan> cai para ~12 linhas (um círculo + um crescente de dois arcos, cor chapada) — some a sombra de 16 px e o gradiente de 4 paradas; ícone da janela, About e splash herdam sozinhos.</text>
+</svg>
