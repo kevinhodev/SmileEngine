@@ -151,12 +151,17 @@ smile_compile_shader(Terrain/TerrainDepthNormal.ps.hlsl   ps_6_0 main SHADER_OUT
 # Oceano (port fiel da CryEngine) — superficie (projected grid + shading)
 smile_compile_shader(Water/WaterSurface.vs.hlsl           vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 mainBase SHADER_OUTPUTS
+                     OUTPUT_NAME WaterSurfaceBase)
+smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 mainMasks SHADER_OUTPUTS
+                     OUTPUT_NAME WaterSurfaceMasks)
 smile_compile_shader(Water/WaterGenerateDraws.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 # Oceano FFT na GPU (256^2) — espectro -> FFT -> deslocamento -> gradientes/normal
 smile_compile_shader(Water/OceanUpdateSpectrum.cs.hlsl    cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/OceanFFT.cs.hlsl               cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/OceanCreateDisplacement.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/OceanGradients.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Water/OceanDisplacementMip.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/OceanNormalMip.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 
 # Pos-processamento e Tonemapping
@@ -303,6 +308,7 @@ add_custom_target(Shaders
         Water/OceanFFT.cs.hlsl
         Water/OceanCreateDisplacement.cs.hlsl
         Water/OceanGradients.cs.hlsl
+        Water/OceanDisplacementMip.cs.hlsl
         Water/OceanNormalMip.cs.hlsl
         Tonemap/PostProcess.vs.hlsl
         Tonemap/BloomExtract.ps.hlsl

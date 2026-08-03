@@ -50,6 +50,8 @@ Rectangle {
             return "Upscaling, Anti-Aliasing e Resolução Interna do Viewport"
         if (selectedPage === 1)
             return "Geometria dos raios de GI, reflexo e sombra: origem, intervalo e frescor da amostra"
+        if (selectedPage === 4)
+            return "Espectro físico, ganho das ondas e deslocamento geométrico do oceano FFT"
         if (selectedPage === 6)
             return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
         if (selectedPage === 7)
@@ -77,8 +79,9 @@ Rectangle {
         property real value: 0
         property string valueText: ""
         signal committed(real v)
-        // Emitido so ao SOLTAR o mouse. Quem escreve em estado caro (que invalida historicos ou
-        // reconstroi o model da propria lista) deve usar este, nao o committed continuo.
+        // Emitido ao soltar o mouse ou a cada passo de teclado. Quem escreve em estado caro
+        // (que invalida historicos ou reconstroi o model da propria lista) deve usar este,
+        // nao o committed continuo durante um drag.
         signal released(real v)
         height: 46
 
@@ -111,7 +114,13 @@ Rectangle {
             from: srow.from
             to: srow.to
             stepSize: srow.step
-            onMoved: srow.committed(value)
+            onMoved: {
+                srow.committed(value)
+                // Slider::moved tambem cobre setas/PageUp/PageDown. Nao existe um ciclo
+                // pressed/released nesse caminho, entao faz o commit caro aqui uma vez por passo.
+                if (!pressed)
+                    srow.released(value)
+            }
             onPressedChanged: if (!pressed) srow.released(value)
             background: Rectangle {
                 x: sctl.leftPadding
@@ -1542,6 +1551,139 @@ Rectangle {
         }
 
         Flickable {
+            id: oceanPage
+            visible: root.selectedPage === 4
+            anchors.fill: parent
+            anchors.topMargin: 84
+            contentWidth: width
+            contentHeight: oceanCol.height + 40
+            clip: true
+            ScrollBar.vertical: ThinScrollBar { revealed: oceanPageHover.hovered }
+            HoverHandler { id: oceanPageHover }
+
+            Column {
+                id: oceanCol
+                x: 24
+                width: oceanPage.width - 48
+                spacing: 16
+
+                Card {
+                    width: parent.width
+                    height: 112
+                    title: "Oceano FFT"
+
+                    Text {
+                        x: 20; y: 55
+                        text: "Renderizar superfície do oceano"
+                        color: root.textPrimary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        x: 20; y: 76
+                        text: "mantém o toggle do ambiente e todos os parâmetros configurados"
+                        color: root.textMuted
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 20
+                        y: 54
+                        checked: viewportModel.oceanEnabled
+                        onToggled: viewportModel.SetOceanEnabled(!checked)
+                    }
+                }
+
+                Card {
+                    width: parent.width
+                    height: 390
+                    title: "Espectro físico"
+
+                    ShadowSlider {
+                        x: 20; y: 55
+                        width: parent.width - 40
+                        label: "Direção do vento"
+                        from: 0; to: 360; step: 1
+                        value: viewportModel.oceanWindDirectionDegrees
+                        valueText: Math.round(viewportModel.oceanWindDirectionDegrees) + "°"
+                        onReleased: (v) => viewportModel.SetOceanWindDirectionDegrees(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 107
+                        width: parent.width - 40
+                        label: "Velocidade do vento"
+                        from: 0.1; to: 40; step: 0.1
+                        value: viewportModel.oceanWindSpeed
+                        valueText: viewportModel.oceanWindSpeed.toFixed(1).replace(".", ",") + " m/s"
+                        onReleased: (v) => viewportModel.SetOceanWindSpeed(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 159
+                        width: parent.width - 40
+                        label: "Fetch"
+                        from: 1; to: 1000; step: 1
+                        value: viewportModel.oceanFetchKm
+                        valueText: Math.round(viewportModel.oceanFetchKm) + " km"
+                        onReleased: (v) => viewportModel.SetOceanFetchKm(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 211
+                        width: parent.width - 40
+                        label: "Profundidade"
+                        from: 1; to: 5000; step: 1
+                        value: viewportModel.oceanDepthM
+                        valueText: Math.round(viewportModel.oceanDepthM) + " m"
+                        onReleased: (v) => viewportModel.SetOceanDepthM(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 263
+                        width: parent.width - 40
+                        label: "Swell"
+                        from: 0; to: 1; step: 0.01
+                        value: viewportModel.oceanSwell
+                        valueText: viewportModel.oceanSwell.toFixed(2).replace(".", ",")
+                        onReleased: (v) => viewportModel.SetOceanSwell(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 315
+                        width: parent.width - 40
+                        label: "Ganho das ondas (linear)"
+                        from: 0; to: 4; step: 0.05
+                        value: viewportModel.oceanWavesAmount
+                        valueText: "×" + viewportModel.oceanWavesAmount.toFixed(2).replace(".", ",")
+                        onReleased: (v) => viewportModel.SetOceanWavesAmount(v)
+                    }
+                }
+
+                Card {
+                    width: parent.width
+                    height: 166
+                    title: "Deslocamento FFT"
+
+                    ShadowSlider {
+                        x: 20; y: 55
+                        width: parent.width - 40
+                        label: "Amplitude do deslocamento"
+                        from: 0; to: 4; step: 0.05
+                        value: viewportModel.oceanFFTDisplacement
+                        valueText: "×" + viewportModel.oceanFFTDisplacement.toFixed(2).replace(".", ",")
+                        onCommitted: (v) => viewportModel.SetOceanFFTDisplacement(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 107
+                        width: parent.width - 40
+                        label: "Choppy horizontal"
+                        from: 0; to: 4; step: 0.05
+                        value: viewportModel.oceanFFTChoppy
+                        valueText: "×" + viewportModel.oceanFFTChoppy.toFixed(2).replace(".", ",")
+                        onCommitted: (v) => viewportModel.SetOceanFFTChoppy(v)
+                    }
+                }
+            }
+        }
+
+        Flickable {
             id: shadowsPage
             visible: root.selectedPage === 6
             anchors.fill: parent
@@ -2843,7 +2985,7 @@ Rectangle {
         }
 
         Item {
-            visible: root.selectedPage !== 0 && root.selectedPage !== 1 && root.selectedPage !== 6 &&
+            visible: root.selectedPage !== 0 && root.selectedPage !== 1 && root.selectedPage !== 4 && root.selectedPage !== 6 &&
                      root.selectedPage !== 7 && root.selectedPage !== 8
             anchors.fill: parent
             Rectangle {

@@ -158,8 +158,13 @@ namespace Smile {
         D.motionVectors = ffxApiGetResourceDX12(In.Velocity, FFX_API_RESOURCE_STATE_COMPUTE_READ);
         D.output        = ffxApiGetResourceDX12(P->Output.Get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
         D.exposure                   = FfxApiResource{};   // auto-exposure ligado -> sem recurso externo
-        D.reactive                   = FfxApiResource{};
-        D.transparencyAndComposition = FfxApiResource{};
+        D.reactive = In.Reactive
+            ? ffxApiGetResourceDX12(In.Reactive, FFX_API_RESOURCE_STATE_COMPUTE_READ)
+            : FfxApiResource{};
+        D.transparencyAndComposition = In.TransparencyAndComposition
+            ? ffxApiGetResourceDX12(In.TransparencyAndComposition,
+                                    FFX_API_RESOURCE_STATE_COMPUTE_READ)
+            : FfxApiResource{};
 
         D.jitterOffset            = { In.JitterX, In.JitterY };
         // Motion vectors da engine em UV*(-render); convencao preservada da integracao anterior.

@@ -8,6 +8,8 @@
 #include <wrl/client.h>
 
 namespace Smile {
+    class FUploadQueue;
+
     class FWaterRenderer {
     public:
         enum class EDebugMode : u32 {
@@ -23,12 +25,19 @@ namespace Smile {
             Depth        = 9,
         };
 
-        void Initialize(ID3D12Device* Device,
+        enum class EOutputMode : u32 {
+            Base = 0,       // HDR + velocity
+            TemporalMasks, // HDR + velocity + reactive/composition
+            RayReconstruction
+        };
+
+        void Initialize(ID3D12Device* Device, FUploadQueue& UploadQueue,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
                         DXGI_FORMAT VelocityFormat);
         void Recreate(ID3D12Device* Device,
                       DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
                       DXGI_FORMAT VelocityFormat);
+        void RecreateGenerateDraws(ID3D12Device* Device);
         void Resize(ID3D12Device* Device, u32 Width, u32 Height);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& ViewProj, const Mat44& Projection, const Mat44& InvViewProj,
@@ -44,11 +53,13 @@ namespace Smile {
         void RenderSurface(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                            u32 SpecularCubeSRVSlot,
                            const u32 (&FFTDisplacementSRVSlots)[kFFTCascades],
+                           const u32 (&FFTPreviousDisplacementSRVSlots)[kFFTCascades],
                            const u32 (&FFTNormalSRVSlots)[kFFTCascades],
                            u32 SceneCopyTableStart,
                            u32 AtmosphereSkyViewSRVSlot,
                            D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddress,
-                           u32 SunShadowSRVSlot);
+                           u32 SunShadowSRVSlot,
+                           EOutputMode OutputMode);
 
         bool IsInitialized() const { return PSO != nullptr; }
         void SetDebugMode(EDebugMode Mode) { DebugMode = Mode; }
@@ -57,7 +68,7 @@ namespace Smile {
         bool GetGpuFrustumCull() const     { return UseGpuFrustumCull; }
         void SetTileBaseSize(f32 V)        { TileBaseSize = V < 1.0f ? 1.0f : V; }
         f32  GetTileBaseSize() const       { return TileBaseSize; }
-        void SetTileMaxDepth(u32 V)        { TileMaxDepth = V > 10u ? 10u : V; }
+        void SetTileMaxDepth(u32 V)        { TileMaxDepth = V > 11u ? 11u : V; }
         u32  GetTileMaxDepth() const       { return TileMaxDepth; }
         void SetGpuRingRadius(u32 V) {
             if (V < 2u) V = 2u;
@@ -92,9 +103,15 @@ namespace Smile {
         void SetWindDirection(f32 Rad)   { WindDir = Rad; }
         f32  GetWindDirection() const    { return WindDir; }
         void SetWindSpeed(f32 V)         { WindSpeed = V; }
+        void SetSpectrumFetch(f32 Kilometres) { SpectrumFetchKm = Kilometres; }
+        void SetOceanDepth(f32 Metres)        { OceanDepthMetres = Metres; }
+        void SetSwell(f32 V)                   { Swell = V; }
         void SetWavesAmount(f32 V)       { WavesAmount = V; }
         void SetWavesSize(f32 V)         { WavesSize = V; }
         f32  GetWindSpeed() const        { return WindSpeed; }
+        f32  GetSpectrumFetch() const    { return SpectrumFetchKm; }
+        f32  GetOceanDepth() const       { return OceanDepthMetres; }
+        f32  GetSwell() const            { return Swell; }
         f32  GetWavesAmount() const      { return WavesAmount; }
         f32  GetWavesSize() const        { return WavesSize; }
         void SetDeepColor(const Vec3& C) { DeepColor = C; }
@@ -203,7 +220,7 @@ namespace Smile {
                       DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
                       DXGI_FORMAT VelocityFormat);
         void BuildGenerateDrawsPipeline(ID3D12Device* Device);
-        void BuildGrid(ID3D12Device* Device);
+        void BuildGrid(ID3D12Device* Device, FUploadQueue& UploadQueue);
         void BuildInstanceBuffer(ID3D12Device* Device);
         void PrepareGpuTileSources(const Mat44& ViewProj, const Vec3& CameraPos);
         void DispatchGenerateDraws(ID3D12GraphicsCommandList* CommandList);
@@ -262,8 +279,10 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSignature;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> BasePSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> TemporalMasksPSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> WireframePSO;
-        // Sem escrita de depth/velocity; ver SetGuideInvisible.
+        // Variante diagnostica sem depth/velocity/masks/G-buffer; ver SetGuideInvisible.
         Microsoft::WRL::ComPtr<ID3D12PipelineState> GuideInvisiblePSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
@@ -285,12 +304,14 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuTileSourceBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuInstanceBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuIndirectArgsBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> GpuIndirectCountBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuDrawBucketScratchBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuDebugCounterBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> GpuDebugReadbackBuffer;
         D3D12_RESOURCE_STATES GpuTileSourceBufferState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES GpuInstanceBufferState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES GpuIndirectCountBufferState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES GpuDrawBucketScratchState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES GpuDebugCounterState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_VERTEX_BUFFER_VIEW GpuInstanceVBView{};
@@ -316,18 +337,21 @@ namespace Smile {
         f32  WaterLevel      = 0.0f;
         f32  WindDir         = 1.0f;   
         f32  WindSpeed       = 4.0f;
+        f32  SpectrumFetchKm = 100.0f;
+        f32  OceanDepthMetres = 100.0f;
+        f32  Swell           = 0.25f;
         f32  WavesAmount     = 1.5f;
-        f32  WavesSize       = 0.75f;
+        f32  WavesSize       = 1.0f;
         Vec3 DeepColor       = { 0.02f, 0.08f, 0.12f };
         f32  ReflectionScale = 1.0f;
         f32  FresnelGloss    = 0.9f;
 
         bool UseFFT          = true;
-        f32  FFTDispScale    = 1.0f;   
-        f32  FFTChoppyScale  = 1.5f;  
-        f32  FFTNormalUp     = 8.0f;   
-        f32  FFTFadeStart    = 450.0f;  
-        f32  FFTFadeRange    = 2000.0f; 
+        f32  FFTDispScale    = 1.0f;
+        f32  FFTChoppyScale  = 1.5f;
+        f32  FFTNormalUp     = 1.0f;
+        f32  FFTFadeStart    = 450.0f;
+        f32  FFTFadeRange    = 2000.0f;
 
         bool UseBump           = true;
         f32  BumpTilling       = 10.0f; 
@@ -338,9 +362,9 @@ namespace Smile {
         f32  ParallaxHeight    = 0.0f;  
         f32  BumpFadeDist      = 250.0f;
 
-        f32  ReflectionBumpScale    = 0.18f; 
+        f32  ReflectionBumpScale    = 0.45f;
         f32  RefractionBumpScale    = 0.1f;
-        bool GuideInvisible         = false; // A/B do conflito de guides; ver SetGuideInvisible  
+        bool GuideInvisible         = false; // A/B temporal sem participacao da agua nos guides.
         f32  SoftIntersectionFactor = 1.0f;  
         f32  FogDensity             = 0.1f;  
         f32  WaterClarity           = 8.0f;  
@@ -367,7 +391,9 @@ namespace Smile {
         f32  ShoreFoamIntensity = 1.0f;
 
         bool UseGpuFrustumCull     = true;
-        f32 TileBaseSize           = 64.0f;
-        u32 TileMaxDepth           = 9;
+        // 16 m / 32 cells = 0.5 m at the finest ring, matching the shortest
+        // wavelength represented by cascade 0. Depth 11 retains a 32.768 km root.
+        f32 TileBaseSize           = 16.0f;
+        u32 TileMaxDepth           = 11;
     };
 }

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/OceanSpectrum.h"
 #include "Smile/Graphics/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
 #include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/Mesh.h"
@@ -132,6 +133,7 @@ namespace Smile {
         CreateDebugPreviewTargets();
         CreateHDRBuffers();
         CreateVelocityBuffer();
+        CreateUpscaleMasks();
         CreateSceneCopies();
         CreateConstantBuffer();
         CreateDefaultMaterial();
@@ -154,13 +156,16 @@ namespace Smile {
                                     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                                     SwapChain.GetWidth(), SwapChain.GetHeight());
 
-        Ocean[0].ConfigureCascade(1337u, 1.0f,     2.0f, 129.0f);
-        Ocean[1].ConfigureCascade(1338u, 0.4082f,  2.0f, 12.0f);
-        Ocean[2].ConfigureCascade(1339u, 0.2041f,  2.0f, 8.0f);
+        static_assert(kDefaultOceanCascades.size() == kOceanCascades);
+        for (u32 c = 0; c < kOceanCascades; ++c) {
+            const auto& Cascade = kDefaultOceanCascades[c];
+            Ocean[c].ConfigureCascade(Cascade.Seed, Cascade.TileMetres,
+                                      Cascade.LowCycles, Cascade.HighCycles);
+        }
 
         for (u32 c = 0; c < kOceanCascades; ++c)
             Ocean[c].Initialize(Device.Native(), SRVHeap);
-        Water.Initialize(Device.Native(),
+        Water.Initialize(Device.Native(), UploadQueue,
                          DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                          DXGI_FORMAT_R16G16_FLOAT);
 
@@ -323,9 +328,14 @@ namespace Smile {
     }
 
     void Renderer::SetUseWater(bool _Use) {
-        if (_Use && !UseWater)
+        if (_Use == UseWater) return;
+        if (_Use)
             LogInfo("Oceano/agua ativados (FFT 256^2 + superficie)");
         UseWater = _Use;
+        for (u32 Cascade = 0; Cascade < kOceanCascades; ++Cascade)
+            Ocean[Cascade].ResetTemporalHistory();
+        RRResetPending = true;
+        TAARanLastFrame = false;
     }
 
     void Renderer::BuildDefaultScene() {
@@ -842,6 +852,50 @@ namespace Smile {
         SRVHeap.CreateUAV(Device.Native(), VelocityBuffer.Get(), UAVDesc, VelocityUavSlot);
     }
 
+    void Renderer::CreateUpscaleMasks() {
+        const u32 Width = RenderWidth(), Height = RenderHeight();
+        if (Width == 0 || Height == 0) return;
+
+        UpscaleReactiveMask.Reset();
+        UpscaleCompositionMask.Reset();
+
+        if (!UpscaleMaskRTVHeap.Native())
+            UpscaleMaskRTVHeap.Initialize(Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
+
+        D3D12_HEAP_PROPERTIES Heap{};
+        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC Desc{};
+        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        Desc.Width            = Width;
+        Desc.Height           = Height;
+        Desc.DepthOrArraySize = 1;
+        Desc.MipLevels        = 1;
+        Desc.Format           = DXGI_FORMAT_R8_UNORM;
+        Desc.SampleDesc       = { 1, 0 };
+        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_CLEAR_VALUE Clear{};
+        Clear.Format = Desc.Format;
+
+        SMILE_HR(Device.Native()->CreateCommittedResource(
+            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            &Clear, IID_PPV_ARGS(&UpscaleReactiveMask)));
+        SMILE_HR(Device.Native()->CreateCommittedResource(
+            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            &Clear, IID_PPV_ARGS(&UpscaleCompositionMask)));
+        VramTracker::Register(UpscaleReactiveMask.Get(), EVramCategory::RenderTargets);
+        VramTracker::Register(UpscaleCompositionMask.Get(), EVramCategory::RenderTargets);
+        UpscaleReactiveState = UpscaleCompositionState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+        D3D12_RENDER_TARGET_VIEW_DESC RTV{};
+        RTV.Format = Desc.Format;
+        RTV.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        Device.Native()->CreateRenderTargetView(
+            UpscaleReactiveMask.Get(), &RTV, UpscaleMaskRTVHeap.CpuHandle(0));
+        Device.Native()->CreateRenderTargetView(
+            UpscaleCompositionMask.Get(), &RTV, UpscaleMaskRTVHeap.CpuHandle(1));
+    }
+
     void Renderer::CreateSceneCopies() {
         UINT Width = RenderWidth(), Height = RenderHeight();
         if (Width == 0 || Height == 0) return;
@@ -899,6 +953,9 @@ namespace Smile {
         Atmosphere.RecreateSky(Device.Native(), RT, DS);
         VolumetricClouds.RecreateComposite(Device.Native(), RT, DS);
         Water.Recreate(Device.Native(), RT, DS, DXGI_FORMAT_R16G16_FLOAT);
+        Water.RecreateGenerateDraws(Device.Native());
+        for (u32 c = 0; c < kOceanCascades; ++c)
+            Ocean[c].RecreatePipelines(Device.Native());
         Terrain.RecreatePSOs(Device.Native());
         DebugDraw.RecreatePSOs(Device.Native()); // formato proprio: desenha no backbuffer
         if (Device.RaytracingSupported()) {
@@ -931,8 +988,17 @@ namespace Smile {
                   [&] { Atmosphere.RecreateSky(Dev, RT, DS); } },
                 { { "CloudComposite.vs", "CloudComposite.ps" },
                   [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
-                { { "WaterSurface.vs", "WaterSurface.ps" },
+                { { "WaterSurface.vs", "WaterSurface.ps", "WaterSurfaceBase.ps",
+                    "WaterSurfaceMasks.ps" },
                   [&] { Water.Recreate(Dev, RT, DS, DXGI_FORMAT_R16G16_FLOAT); } },
+                { { "WaterGenerateDraws.cs" },
+                  [&] { Water.RecreateGenerateDraws(Dev); } },
+                { { "OceanUpdateSpectrum.cs", "OceanFFT.cs", "OceanCreateDisplacement.cs",
+                    "OceanGradients.cs", "OceanDisplacementMip.cs", "OceanNormalMip.cs" },
+                  [&] {
+                      for (u32 c = 0; c < kOceanCascades; ++c)
+                          Ocean[c].RecreatePipelines(Dev);
+                  } },
                 { { "Terrain.vs", "TerrainShadow.vs", "TerrainGBuffer.ps",
                     "TerrainDepthNormal.ps" },
                   [&] { Terrain.RecreatePSOs(Dev); } },
@@ -971,9 +1037,9 @@ namespace Smile {
                 }
             }
 
-            RecreateAllPSOs();
-            LogInfo("Shader '" + _ChangedStem + "' nao mapeado; reload completo aplicado");
-            return true;
+            LogWarning("Shader '" + _ChangedStem +
+                       "' compilado, mas sem pipeline mapeado para hot reload");
+            return false;
         } catch (const std::exception& e) {
             LogError(std::string("Erro ao recarregar shaders: ") + e.what());
             return false;
@@ -1061,6 +1127,7 @@ namespace Smile {
         GBuffer.Resize(Device.Native(), SRVHeap, RW, RH);
         GBuffer.WriteDepthSRV(Device.Native(), SRVHeap, DepthBuffer.Get());
         CreateVelocityBuffer();
+        CreateUpscaleMasks();
 
         VolumetricClouds.Resize(Device.Native(), SRVHeap, RW, RH);
         Water.Resize(Device.Native(), RW, RH);
@@ -1845,10 +1912,13 @@ namespace Smile {
                 Ocean[c].SetTime(ElapsedTime);
                 Ocean[c].SetWindDirection(Water.GetWindDirection());
                 Ocean[c].SetWindSpeed(Water.GetWindSpeed());
+                Ocean[c].SetSpectrumFetch(Water.GetSpectrumFetch());
+                Ocean[c].SetOceanDepth(Water.GetOceanDepth());
+                Ocean[c].SetSwell(Water.GetSwell());
                 Ocean[c].SetAmplitude(Water.GetWavesAmount());
-                Ocean[c].SetChoppyFactors(Water.GetFFTChoppyScale() *
-                                          Water.GetFFTDisplacementScale() *
-                                          Water.GetWavesSize() * Water.GetWavesAmount());
+                Ocean[c].SetGeometryScales(Water.GetFFTDisplacementScale() *
+                                           Water.GetWavesSize(),
+                                           Water.GetFFTChoppyScale());
             }
         }
 
@@ -1861,11 +1931,20 @@ namespace Smile {
             FBarrierBatch Batch;
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.TransitionTracked(UpscaleReactiveMask.Get(), UpscaleReactiveState,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.TransitionTracked(UpscaleCompositionMask.Get(), UpscaleCompositionState,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
 
             auto HDR_RTV = HDRRTVHeap.CpuHandle(0);
+            const FLOAT MaskClear[] = { 0.0f, 0.0f, 0.0f, 0.0f };
             CommandList->OMSetRenderTargets(1, &HDR_RTV, FALSE, &DSV);
             CommandList->ClearRenderTargetView(HDR_RTV, ClearColor, 0, nullptr);
+            CommandList->ClearRenderTargetView(
+                UpscaleMaskRTVHeap.CpuHandle(0), MaskClear, 0, nullptr);
+            CommandList->ClearRenderTargetView(
+                UpscaleMaskRTVHeap.CpuHandle(1), MaskClear, 0, nullptr);
             CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, kClearDepth, 0, 0, nullptr);
         }
 
@@ -2976,38 +3055,6 @@ namespace Smile {
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
-        {
-            bool AnyBlend = false;
-            for (const VisItem& V : VisibleScratch)
-                if (V.Mat->Blend) { AnyBlend = true; break; }
-            if (AnyBlend) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Translúcidos");
-                auto SceneRTV = HDRRTVHeap.CpuHandle(0);
-                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-                CommandList->RSSetViewports(1, &Viewport);
-                CommandList->RSSetScissorRects(1, &ScissorRect);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-                CommandList->SetGraphicsRootConstantBufferView(
-                    0, ConstantBuffer->GetGPUVirtualAddress() +
-                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
-                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-                {
-                    const u32 GITable = (UseGI && DDGI.IsReady()) ? DDGI.SceneGITableStart() : IBLTableStart;
-                    CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
-                }
-                CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
-                for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
-                    if (!It->Mat->Blend) continue;
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
-                    It->Mat->Bind(CommandList, SRVHeap);
-                    It->R->Mesh->Draw(CommandList);
-                }
-            }
-        }
-
         if (UseWater && Water.IsInitialized() && WaterHasDepth) {
             CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
 
@@ -3046,9 +3093,30 @@ namespace Smile {
             WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
                                          D3D12_RESOURCE_STATE_RENDER_TARGET);
             WaterBatch.Flush(CommandList);
-            D3D12_CPU_DESCRIPTOR_HANDLE WaterRTVs[2] = {
+            const bool ForceFullWaterOutputs = RRMode || Water.GetGuideInvisible() ||
+                Water.GetDebugMode() == FWaterRenderer::EDebugMode::Wireframe;
+            const FWaterRenderer::EOutputMode WaterOutputMode = ForceFullWaterOutputs
+                ? FWaterRenderer::EOutputMode::RayReconstruction
+                : (UpscaleActive ? FWaterRenderer::EOutputMode::TemporalMasks
+                                 : FWaterRenderer::EOutputMode::Base);
+            D3D12_CPU_DESCRIPTOR_HANDLE WaterRTVs[8] = {
                 HDRRTVHeap.CpuHandle(0), VelocityRTVHeap.CpuHandle(0) };
-            CommandList->OMSetRenderTargets(2, WaterRTVs, FALSE, &DSV);
+            u32 WaterRTVCount = 2;
+            if (WaterOutputMode == FWaterRenderer::EOutputMode::TemporalMasks) {
+                WaterRTVs[2] = UpscaleMaskRTVHeap.CpuHandle(0);
+                WaterRTVs[3] = UpscaleMaskRTVHeap.CpuHandle(1);
+                WaterRTVCount = 4;
+            } else if (WaterOutputMode == FWaterRenderer::EOutputMode::RayReconstruction) {
+                RRGuides.PrepareSpecHitForWater(CommandList);
+                WaterRTVs[2] = GBuffer.RTVHandle(0);
+                WaterRTVs[3] = GBuffer.RTVHandle(1);
+                WaterRTVs[4] = GBuffer.RTVHandle(2);
+                WaterRTVs[5] = UpscaleMaskRTVHeap.CpuHandle(0);
+                WaterRTVs[6] = UpscaleMaskRTVHeap.CpuHandle(1);
+                WaterRTVs[7] = RRGuides.SpecHitRTV();
+                WaterRTVCount = 8;
+            }
+            CommandList->OMSetRenderTargets(WaterRTVCount, WaterRTVs, FALSE, &DSV);
 
             const u32 WaterReflCube =
                 (UseAtmosphereSky && Atmosphere.IsInitialized())
@@ -3056,17 +3124,59 @@ namespace Smile {
                     : HDREnv.SpecularSRV();
             const u32 OceanDispSlots[kOceanCascades] = {
                 Ocean[0].SRVSlot(), Ocean[1].SRVSlot(), Ocean[2].SRVSlot() };
+            const u32 OceanPreviousDispSlots[kOceanCascades] = {
+                Ocean[0].PreviousSRVSlot(), Ocean[1].PreviousSRVSlot(),
+                Ocean[2].PreviousSRVSlot() };
             const u32 OceanNormalSlots[kOceanCascades] = {
                 Ocean[0].NormalSRVSlot(), Ocean[1].NormalSRVSlot(), Ocean[2].NormalSRVSlot() };
             Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, OceanDispSlots,
-                                OceanNormalSlots, SceneCopyTableStart, Atmosphere.SkyViewSRV(),
-                                SunShadows.ConstantsAddress(), SunShadows.ShadowSRVSlot());
+                                OceanPreviousDispSlots, OceanNormalSlots, SceneCopyTableStart,
+                                Atmosphere.SkyViewSRV(), SunShadows.ConstantsAddress(),
+                                SunShadows.ShadowSRVSlot(), WaterOutputMode);
 
             WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
                                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             WaterBatch.Flush(CommandList);
             auto PostWaterRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &PostWaterRTV, FALSE, &DSV);
+        }
+
+        // Transparencias foreground sao compostas depois da agua: nao contaminam a copia usada
+        // pela refracao e passam a testar contra a profundidade real da superficie.
+        {
+            bool AnyBlend = false;
+            for (const VisItem& V : VisibleScratch)
+                if (V.Mat->Blend) { AnyBlend = true; break; }
+            if (AnyBlend) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Translúcidos");
+                D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[3] = {
+                    HDRRTVHeap.CpuHandle(0), UpscaleMaskRTVHeap.CpuHandle(0),
+                    UpscaleMaskRTVHeap.CpuHandle(1) };
+                CommandList->OMSetRenderTargets(_countof(BlendRTVs), BlendRTVs, FALSE, &DSV);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                CommandList->SetGraphicsRootConstantBufferView(
+                    0, ConstantBuffer->GetGPUVirtualAddress() +
+                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
+                CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
+                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+                CommandList->SetGraphicsRootDescriptorTable(
+                    6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+                {
+                    const u32 GITable = (UseGI && DDGI.IsReady())
+                        ? DDGI.SceneGITableStart() : IBLTableStart;
+                    CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
+                }
+                CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
+                for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
+                    if (!It->Mat->Blend) continue;
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
+                    It->Mat->Bind(CommandList, SRVHeap);
+                    It->R->Mesh->Draw(CommandList);
+                }
+            }
         }
 
         if (UseClouds && VolumetricClouds.IsInitialized()) {
@@ -3456,6 +3566,10 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Transition(VelocityBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(UpscaleReactiveMask.Get(), UpscaleReactiveState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(UpscaleCompositionMask.Get(), UpscaleCompositionState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
 
@@ -3475,6 +3589,8 @@ namespace Smile {
             UpParams.Color        = HDRColorBuffer.Get();
             UpParams.Depth        = DepthBuffer.Get();
             UpParams.Velocity     = VelocityBuffer.Get();
+            UpParams.Reactive     = UpscaleReactiveMask.Get();
+            UpParams.TransparencyAndComposition = UpscaleCompositionMask.Get();
             UpParams.JitterX      = JitterPxX;
             UpParams.JitterY      = JitterPxY;
             UpParams.NearZ        = NearZ;

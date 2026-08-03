@@ -114,6 +114,12 @@ namespace SmileEditor {
 
         connect(Viewport, &ViewportWidget::TelemetryUpdated,    this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
+        // O oceano pode ser ligado tanto no Outliner quanto na janela de settings.
+        // Propaga a invalidação nos dois sentidos para nenhum painel manter cache stale.
+        connect(OutlinerBr, &SceneOutlinerBridge::EnvChanged,
+                Viewport, &ViewportWidget::OceanSettingsChanged);
+        connect(Viewport, &ViewportWidget::OceanSettingsChanged,
+                OutlinerBr, &SceneOutlinerBridge::Refresh);
         // Splash: etapas do boot do renderer e rede de seguranca — se a render thread morrer
         // (falha de init ou parada precoce), a splash sai junto em vez de ficar por cima.
         connect(Viewport, &ViewportWidget::InitProgress, this,
@@ -977,14 +983,22 @@ namespace SmileEditor {
 #endif
 
         QProcess* CompileProcess = new QProcess(this);
-        QStringList Arguments = { "--build", BuildDir, "--target", "Shaders" };
+#ifdef SMILE_BUILD_CONFIG
+        const QString BuildConfig = QStringLiteral(SMILE_BUILD_CONFIG);
+#elif defined(_DEBUG)
+        const QString BuildConfig = QStringLiteral("Debug");
+#else
+        const QString BuildConfig = QStringLiteral("Release");
+#endif
+        QStringList Arguments = {
+            "--build", BuildDir, "--config", BuildConfig, "--target", "Shaders"
+        };
 
-        Smile::LogInfo("Compilando Shader via CMake...");
+        Smile::LogInfo("Compilando Shader via CMake (" + BuildConfig.toStdString() + ")...");
         CompileProcess->start("cmake", Arguments);
 
         connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess, _Path](int _ExitCode, QProcess::ExitStatus _Status) {
-            Q_UNUSED(_Status);
-            if (_ExitCode == 0) {
+            if (_Status == QProcess::NormalExit && _ExitCode == 0) {
                 if (Viewport && Viewport->GetRenderer()) {
                     // .hlsli (include) afeta varios shaders -> stem vazio forca reload completo.
                     // Caso contrario, deriva o stem do .cso: "WaterSurface.ps.hlsl" -> "WaterSurface.ps".

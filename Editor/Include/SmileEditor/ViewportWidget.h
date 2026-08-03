@@ -113,6 +113,15 @@ namespace SmileEditor {
         Q_PROPERTY(bool volFogTemporal READ IsVolFogTemporal NOTIFY VolFogSettingsChanged)
         Q_PROPERTY(double volFogLights READ GetVolFogLights NOTIFY VolFogSettingsChanged)
         Q_PROPERTY(bool volFogConsDepth READ IsVolFogConsDepth NOTIFY VolFogSettingsChanged)
+        Q_PROPERTY(bool oceanEnabled READ IsOceanEnabled NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanWindDirectionDegrees READ GetOceanWindDirectionDegrees NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanWindSpeed READ GetOceanWindSpeed NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanFetchKm READ GetOceanFetchKm NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanDepthM READ GetOceanDepthM NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanSwell READ GetOceanSwell NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanWavesAmount READ GetOceanWavesAmount NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanFFTDisplacement READ GetOceanFFTDisplacement NOTIFY OceanSettingsChanged)
+        Q_PROPERTY(double oceanFFTChoppy READ GetOceanFFTChoppy NOTIFY OceanSettingsChanged)
         Q_PROPERTY(bool cloudsEnabled READ AreCloudsEnabled NOTIFY CloudSettingsChanged)
         Q_PROPERTY(bool cloudsHalfRes READ AreCloudsHalfRes NOTIFY CloudSettingsChanged)
         Q_PROPERTY(bool cloudsTemporal READ AreCloudsTemporal NOTIFY CloudSettingsChanged)
@@ -263,6 +272,15 @@ namespace SmileEditor {
         bool              IsVolFogTemporal() const;
         double            GetVolFogLights() const;
         bool              IsVolFogConsDepth() const;
+        bool              IsOceanEnabled() const;
+        double            GetOceanWindDirectionDegrees() const;
+        double            GetOceanWindSpeed() const;
+        double            GetOceanFetchKm() const;
+        double            GetOceanDepthM() const;
+        double            GetOceanSwell() const;
+        double            GetOceanWavesAmount() const;
+        double            GetOceanFFTDisplacement() const;
+        double            GetOceanFFTChoppy() const;
         bool              AreCloudsEnabled() const;
         bool              AreCloudsHalfRes() const;
         bool              AreCloudsTemporal() const;
@@ -386,6 +404,15 @@ namespace SmileEditor {
         Q_INVOKABLE void SetVolFogTemporal(bool enabled);
         Q_INVOKABLE void SetVolFogLights(double value);
         Q_INVOKABLE void SetVolFogConsDepth(bool enabled);
+        Q_INVOKABLE void SetOceanEnabled(bool enabled);
+        Q_INVOKABLE void SetOceanWindDirectionDegrees(double degrees);
+        Q_INVOKABLE void SetOceanWindSpeed(double metresPerSecond);
+        Q_INVOKABLE void SetOceanFetchKm(double kilometres);
+        Q_INVOKABLE void SetOceanDepthM(double metres);
+        Q_INVOKABLE void SetOceanSwell(double value);
+        Q_INVOKABLE void SetOceanWavesAmount(double value);
+        Q_INVOKABLE void SetOceanFFTDisplacement(double value);
+        Q_INVOKABLE void SetOceanFFTChoppy(double value);
         Q_INVOKABLE void SetCloudsEnabled(bool enabled);
         Q_INVOKABLE void SetCloudsHalfRes(bool halfRes);
         Q_INVOKABLE void SetCloudsTemporal(bool enabled);
@@ -447,6 +474,7 @@ namespace SmileEditor {
         void RenderSettingsChanged(); // AO/reflexos, denoiser, upscaler, TAA e culling
         void SunShaftsSettingsChanged();
         void VolFogSettingsChanged();
+        void OceanSettingsChanged();
         void CloudSettingsChanged();
         void WeatherSettingsChanged();
         void SettingsRequested();

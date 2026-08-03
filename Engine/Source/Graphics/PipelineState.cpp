@@ -360,11 +360,23 @@ namespace Smile {
         auto ForwardBlendPSBlob = LoadShaderBytecode("ForwardBlend.ps_6_0.cso");
 
         D3D12_BLEND_DESC PremulBlend = BlendDesc;
+        PremulBlend.IndependentBlendEnable = TRUE;
         PremulBlend.RenderTarget[0].BlendEnable    = TRUE;
         PremulBlend.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
         PremulBlend.RenderTarget[0].DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
         PremulBlend.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
         PremulBlend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        for (u32 RT = 1; RT <= 2; ++RT) {
+            PremulBlend.RenderTarget[RT] = BlendDesc.RenderTarget[0];
+            PremulBlend.RenderTarget[RT].BlendEnable = TRUE;
+            PremulBlend.RenderTarget[RT].SrcBlend = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].DestBlend = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].BlendOp = D3D12_BLEND_OP_MAX;
+            PremulBlend.RenderTarget[RT].SrcBlendAlpha = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].DestBlendAlpha = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].BlendOpAlpha = D3D12_BLEND_OP_MAX;
+            PremulBlend.RenderTarget[RT].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED;
+        }
 
         D3D12_DEPTH_STENCIL_DESC DepthReadOnly = DepthLess;
         DepthReadOnly.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -372,10 +384,10 @@ namespace Smile {
         PSODesc.PS                = { ForwardBlendPSBlob.data(), ForwardBlendPSBlob.size() };
         PSODesc.BlendState        = PremulBlend;
         PSODesc.DepthStencilState = DepthReadOnly;
-        PSODesc.NumRenderTargets  = 1;
+        PSODesc.NumRenderTargets  = 3;
         PSODesc.RTVFormats[0]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
-        PSODesc.RTVFormats[2]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[1]     = DXGI_FORMAT_R8_UNORM;
+        PSODesc.RTVFormats[2]     = DXGI_FORMAT_R8_UNORM;
         PSODesc.RTVFormats[3]     = DXGI_FORMAT_UNKNOWN;
         PSODesc.RTVFormats[4]     = DXGI_FORMAT_UNKNOWN;
         ComPtr<ID3D12PipelineState> NewPSOForwardBlend;

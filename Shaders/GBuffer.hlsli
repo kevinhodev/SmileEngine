@@ -6,9 +6,10 @@
 #define SMILE_SHADINGMODEL_SUBSURFACE 2u  // solido translucido (vela/cortina/cera): DefaultLit
                                           // + transmissao direta + termo de tras no GI; mantem
                                           // GTAO e ReSTIR (diferente da folhagem)
+#define SMILE_SHADINGMODEL_WATER      3u  // escrito depois do lighting; consumido pelos guides RR
 // COUNT = 4 = capacidade do alpha de 2 bits E potencia de 2: o encode (id+0.5)/COUNT so cai
 // nos niveis exatos do UNORM2 com COUNT 2 ou 4 (com 3, o id 0 empata entre dois niveis e o
-// arredondamento fica por conta do hardware). Sobra 1 slot (ID 3) p/ um modelo futuro.
+// arredondamento fica por conta do hardware). O ID 3 e reservado ao guide da agua.
 #define SMILE_SHADINGMODEL_COUNT      4u
 
 float2 GBuffer_OctEncode(float3 n) {

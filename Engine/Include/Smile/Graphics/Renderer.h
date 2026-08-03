@@ -775,6 +775,7 @@ namespace Smile {
         void CreateHDRBuffers();
         void CreateSceneCopies();
         void CreateVelocityBuffer();
+        void CreateUpscaleMasks();
         void RecreateInternalTargets(); // recria RTs de cena em RenderWidth/Height (resize + render scale)
         void CreateDefaultMaterial();
         void CreateIBLDescriptorTable();
@@ -867,6 +868,13 @@ namespace Smile {
         u32                      VelocitySRVSlot = 0xFFFFFFFFu;
         u32                      VelocityUavSlot = 0xFFFFFFFFu; // UAV p/ o passe de velocity do background
         D3D12_RESOURCE_STATES    VelocityState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        // FSR 3.1: sinais render-res de conteúdo sem histórico confiável. São MRTs da água e do
+        // forward transparente; permanecem RT durante a cena e viram COMPUTE_READ no dispatch.
+        ComPtr<ID3D12Resource>   UpscaleReactiveMask;
+        ComPtr<ID3D12Resource>   UpscaleCompositionMask;
+        FDescriptorHeap          UpscaleMaskRTVHeap; // [0]=reactive, [1]=composition
+        D3D12_RESOURCE_STATES    UpscaleReactiveState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        D3D12_RESOURCE_STATES    UpscaleCompositionState = D3D12_RESOURCE_STATE_RENDER_TARGET;
         // Perfil unico de epsilons de raio, empurrado p/ ReSTIR/Reflexoes/DDGI todo frame.
         FRayEpsilonProfile       RayEps;
         // Transform por-objeto do frame anterior, indexado pelo indice da cena (Scene.Renderables()).

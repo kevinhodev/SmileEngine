@@ -10,7 +10,8 @@ namespace Smile {
         constexpr DXGI_FORMAT kGuideFormat  = DXGI_FORMAT_R16G16B16A16_FLOAT; // albedo difuso/especular + normal-rough
         constexpr DXGI_FORMAT kHitFormat    = DXGI_FORMAT_R16_FLOAT;          // specHitDist (scalar)
 
-        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* Device, u32 W, u32 H, DXGI_FORMAT Fmt) {
+        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* Device, u32 W, u32 H, DXGI_FORMAT Fmt,
+                                              bool AllowRenderTarget = false) {
             D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
             D3D12_RESOURCE_DESC Desc{};
             Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -21,10 +22,15 @@ namespace Smile {
             Desc.Format           = Fmt;
             Desc.SampleDesc       = { 1, 0 };
             Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
+                                    (AllowRenderTarget ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+                                                       : D3D12_RESOURCE_FLAG_NONE);
             ComPtr<ID3D12Resource> Tex;
+            D3D12_CLEAR_VALUE Clear{};
+            Clear.Format = Fmt;
             SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
+                     D3D12_RESOURCE_STATE_COMMON, AllowRenderTarget ? &Clear : nullptr,
+                     IID_PPV_ARGS(&Tex)));
             VramTracker::Register(Tex.Get(), EVramCategory::RenderTargets);
             return Tex;
         }
@@ -62,7 +68,7 @@ namespace Smile {
         DiffAlb  = CreateUAVTex2D(Device, W, H, kGuideFormat);
         SpecAlb  = CreateUAVTex2D(Device, W, H, kGuideFormat);
         NrmRough = CreateUAVTex2D(Device, W, H, kGuideFormat);
-        SpecHit  = CreateUAVTex2D(Device, W, H, kHitFormat);
+        SpecHit  = CreateUAVTex2D(Device, W, H, kHitFormat, true);
         DiffAlbState = SpecAlbState = NrmRoughState = SpecHitState = D3D12_RESOURCE_STATE_COMMON;
 
         // 3 UAVs contiguos p/ a tabela do guides pass (u0-u2), + 1 UAV standalone p/ o specHitDist.
@@ -77,6 +83,13 @@ namespace Smile {
         SpecHitUav = SRVHeap.Allocate(1);
         Uav.Format = kHitFormat;
         SRVHeap.CreateUAV(Device, SpecHit.Get(), Uav, SpecHitUav);
+
+        if (!SpecHitRTVHeap.Native())
+            SpecHitRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
+        D3D12_RENDER_TARGET_VIEW_DESC Rtv{};
+        Rtv.Format = kHitFormat;
+        Rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        Device->CreateRenderTargetView(SpecHit.Get(), &Rtv, SpecHitRTVHeap.CpuHandle(0));
 
         Ready = true;
     }
@@ -132,6 +145,11 @@ namespace Smile {
         CL->ClearUnorderedAccessViewFloat(SRVHeap.GpuHandle(SpecHitUav),
                                           SRVHeap.CpuHandleStaging(SpecHitUav),
                                           SpecHit.Get(), Zero, 0, nullptr);
+    }
+
+    void FDlssRRGuides::PrepareSpecHitForWater(ID3D12GraphicsCommandList* CL) {
+        if (!Ready) return;
+        Transition(CL, SpecHit.Get(), SpecHitState, D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
     void FDlssRRGuides::TransitionForRR(ID3D12GraphicsCommandList* CL) {

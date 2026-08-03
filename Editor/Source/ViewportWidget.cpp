@@ -27,6 +27,8 @@
 namespace SmileEditor {
     static constexpr float kMouseSensitivity = 0.15f;  
     static constexpr int   kResizeDebounceMs = 80;
+    static constexpr double kRadiansToDegrees = 57.295779513082320876;
+    static constexpr double kDegreesToRadians = 0.01745329251994329577;
 
     ViewportWidget::ViewportWidget(QWidget* _Parent)
         : QWidget(_Parent),
@@ -1518,6 +1520,111 @@ namespace SmileEditor {
         emit VolFogSettingsChanged();
     }
 
+    bool ViewportWidget::IsOceanEnabled() const {
+        return Renderer ? Renderer->GetUseWater() : false;
+    }
+
+    double ViewportWidget::GetOceanWindDirectionDegrees() const {
+        return Renderer
+            ? static_cast<double>(Renderer->GetWater().GetWindDirection()) * kRadiansToDegrees
+            : 1.0 * kRadiansToDegrees;
+    }
+
+    double ViewportWidget::GetOceanWindSpeed() const {
+        return Renderer ? Renderer->GetWater().GetWindSpeed() : 4.0;
+    }
+
+    double ViewportWidget::GetOceanFetchKm() const {
+        return Renderer ? Renderer->GetWater().GetSpectrumFetch() : 100.0;
+    }
+
+    double ViewportWidget::GetOceanDepthM() const {
+        return Renderer ? Renderer->GetWater().GetOceanDepth() : 100.0;
+    }
+
+    double ViewportWidget::GetOceanSwell() const {
+        return Renderer ? Renderer->GetWater().GetSwell() : 0.25;
+    }
+
+    double ViewportWidget::GetOceanWavesAmount() const {
+        return Renderer ? Renderer->GetWater().GetWavesAmount() : 1.5;
+    }
+
+    double ViewportWidget::GetOceanFFTDisplacement() const {
+        return Renderer ? Renderer->GetWater().GetFFTDisplacementScale() : 1.0;
+    }
+
+    double ViewportWidget::GetOceanFFTChoppy() const {
+        return Renderer ? Renderer->GetWater().GetFFTChoppyScale() : 1.5;
+    }
+
+    void ViewportWidget::SetOceanEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetUseWater(_Enabled);
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanWindDirectionDegrees(double _Degrees) {
+        if (!Renderer) return;
+        const double Degrees = std::isfinite(_Degrees)
+            ? std::clamp(_Degrees, 0.0, 360.0) : 1.0 * kRadiansToDegrees;
+        Renderer->GetWater().SetWindDirection(
+            static_cast<Smile::f32>(Degrees * kDegreesToRadians));
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanWindSpeed(double _MetresPerSecond) {
+        if (!Renderer) return;
+        const double Value = std::isfinite(_MetresPerSecond)
+            ? std::clamp(_MetresPerSecond, 0.1, 40.0) : 4.0;
+        Renderer->GetWater().SetWindSpeed(static_cast<Smile::f32>(Value));
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanFetchKm(double _Kilometres) {
+        if (!Renderer) return;
+        const double Value = std::isfinite(_Kilometres)
+            ? std::clamp(_Kilometres, 1.0, 1000.0) : 100.0;
+        Renderer->GetWater().SetSpectrumFetch(static_cast<Smile::f32>(Value));
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanDepthM(double _Metres) {
+        if (!Renderer) return;
+        const double Value = std::isfinite(_Metres)
+            ? std::clamp(_Metres, 1.0, 5000.0) : 100.0;
+        Renderer->GetWater().SetOceanDepth(static_cast<Smile::f32>(Value));
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanSwell(double _Value) {
+        if (!Renderer) return;
+        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 1.0) : 0.25;
+        Renderer->GetWater().SetSwell(static_cast<Smile::f32>(Value));
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanWavesAmount(double _Value) {
+        if (!Renderer) return;
+        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 4.0) : 1.5;
+        Renderer->GetWater().SetWavesAmount(static_cast<Smile::f32>(Value));
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanFFTDisplacement(double _Value) {
+        if (!Renderer) return;
+        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 4.0) : 1.0;
+        Renderer->GetWater().SetFFTDisplacementScale(static_cast<Smile::f32>(Value));
+        emit OceanSettingsChanged();
+    }
+
+    void ViewportWidget::SetOceanFFTChoppy(double _Value) {
+        if (!Renderer) return;
+        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 4.0) : 1.5;
+        Renderer->GetWater().SetFFTChoppyScale(static_cast<Smile::f32>(Value));
+        emit OceanSettingsChanged();
+    }
+
     bool ViewportWidget::AreCloudsEnabled() const {
         return Renderer ? Renderer->GetUseClouds() : false;
     }
@@ -1969,6 +2076,7 @@ namespace SmileEditor {
         emit RenderSettingsChanged();
         emit SunShaftsSettingsChanged();
         emit VolFogSettingsChanged();
+        emit OceanSettingsChanged();
         emit CloudSettingsChanged();
         emit WeatherSettingsChanged();
         emit DebugTargetsChanged();   // os alvos foram publicados na criacao dos targets internos

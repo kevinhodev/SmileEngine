@@ -92,6 +92,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float3 F0    = lerp(float3(0.04f, 0.04f, 0.04f), g.BaseColor, g.Metallic);
     float  rough = max(g.Roughness, 0.04f);
 
+    if (g.ShadingModel == SMILE_SHADINGMODEL_WATER) {
+        // A agua entra depois do deferred: o G-buffer aqui e exclusivamente um guide. BaseColor
+        // carrega o in-scatter aproximado; F0 fisico de agua fica em ~2% e spec-hit e zerado no
+        // proprio draw da superficie (nao herda o hit da geometria que estava atras dela).
+        OutDiffuseAlbedo[px]   = float4(g.BaseColor, 1.0f);
+        OutSpecularAlbedo[px]  = float4(EnvBRDFApprox2(float3(0.02f, 0.02f, 0.02f),
+                                                       rough * rough, NoV), 1.0f);
+        OutNormalRoughness[px] = float4(g.WorldNormal, rough);
+        return;
+    }
+
     OutDiffuseAlbedo[px]   = float4(g.BaseColor * (1.0f - g.Metallic), 1.0f);
     OutSpecularAlbedo[px]  = float4(EnvBRDFApprox2(F0, rough * rough, NoV), 1.0f);
     OutNormalRoughness[px] = float4(g.WorldNormal, rough); // ePacked: normal.xyz + rough linear no .a

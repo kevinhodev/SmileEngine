@@ -2,6 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/DescriptorHeap.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -41,6 +42,11 @@ namespace Smile {
         // Sem reflexoes ativas: zera o specHitDist (evita lixo indefinido entrando no RR). Deixa em UAV.
         void ClearSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
+        // A agua e composta depois da reflexao. Antes do draw, torna o spec-hit um RTV para a
+        // superficie zerar apenas os pixels que substituem o opaco que originou aquele hit.
+        void PrepareSpecHitForWater(ID3D12GraphicsCommandList* CL);
+        D3D12_CPU_DESCRIPTOR_HANDLE SpecHitRTV() const { return SpecHitRTVHeap.CpuHandle(0); }
+
         // Transiciona os 4 guides p/ NON_PIXEL_SHADER_RESOURCE (estado declarado nas tags do RR).
         void TransitionForRR(ID3D12GraphicsCommandList* CL);
 
@@ -58,6 +64,7 @@ namespace Smile {
         FVolumetricPipeline SpecHitPSO;  // 1 SRV [Resolved],     1 UAV [specHitDist]
 
         Microsoft::WRL::ComPtr<ID3D12Resource> DiffAlb, SpecAlb, NrmRough, SpecHit;
+        FDescriptorHeap SpecHitRTVHeap;
         D3D12_RESOURCE_STATES DiffAlbState   = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES SpecAlbState   = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES NrmRoughState  = D3D12_RESOURCE_STATE_COMMON;

@@ -9,7 +9,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= DISP_MAP_SIZE || id.y >= DISP_MAP_SIZE) return;
 
     int2 loc1 = int2(id.xy);
-    int2 loc2 = int2(int(DISP_MAP_SIZE) - loc1.x, int(DISP_MAP_SIZE) - loc1.y);
+    int2 loc2 = (-loc1) & (int(DISP_MAP_SIZE) - 1);
 
     float4 hk    = H0Tex.Load(int3(loc1, 0)); 
     float2 h0_k  = hk.xy;

@@ -23,14 +23,18 @@ endif()
 #   OUT_VAR    - nome de variavel onde o caminho do .cso gerado eh anexado
 #   ARGN       - (opcional) flags extras passadas ao DXC (ex.: -I <dir>, -D MACRO=val)
 function(smile_compile_shader HLSL_FILE PROFILE ENTRY OUT_VAR)
+    cmake_parse_arguments(SCS "" "OUTPUT_NAME" "" ${ARGN})
     get_filename_component(SHADER_NAME ${HLSL_FILE} NAME_WE)
+    if(SCS_OUTPUT_NAME)
+        set(SHADER_NAME ${SCS_OUTPUT_NAME})
+    endif()
     set(SHADER_INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/${HLSL_FILE}")
     set(SHADER_OUTPUT "${SMILE_SHADER_OUTPUT_DIR}/${SHADER_NAME}.${PROFILE}.cso")
     file(GLOB_RECURSE SHADER_INCLUDE_DEPS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/*.hlsli")
 
     # Flags: debug em Debug, otimizacao em Release. ARGN = flags extras (ex.: -I p/ o NRD.hlsli).
-    set(DXC_FLAGS -T ${PROFILE} -E ${ENTRY} -Fo ${SHADER_OUTPUT} ${ARGN})
+    set(DXC_FLAGS -T ${PROFILE} -E ${ENTRY} -Fo ${SHADER_OUTPUT} ${SCS_UNPARSED_ARGUMENTS})
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_CONFIGURATION_TYPES)
         # Multi-config (VS): adiciona -Zi/-Od via expressao de geracao
         list(APPEND DXC_FLAGS
@@ -43,6 +47,7 @@ function(smile_compile_shader HLSL_FILE PROFILE ENTRY OUT_VAR)
 
     add_custom_command(
         OUTPUT  ${SHADER_OUTPUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SMILE_SHADER_OUTPUT_DIR}"
         COMMAND ${SMILE_DXC_EXECUTABLE} ${DXC_FLAGS} ${SHADER_INPUT}
         MAIN_DEPENDENCY ${SHADER_INPUT}
         DEPENDS ${SHADER_INCLUDE_DEPS}

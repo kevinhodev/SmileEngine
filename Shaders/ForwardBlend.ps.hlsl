@@ -116,7 +116,13 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }
 
-float4 main(PSInput input) : SV_Target {
+struct ForwardBlendOutput {
+    float4 Color       : SV_Target0;
+    float  Reactive    : SV_Target1;
+    float  Composition : SV_Target2;
+};
+
+ForwardBlendOutput main(PSInput input) {
     float3 N = normalize(input.worldNormal);
     if (!input.frontFace) N = -N; // two-sided (cull none no PSO)
 
@@ -200,5 +206,11 @@ float4 main(PSInput input) : SV_Target {
     float  Favg     = (F.x + F.y + F.z) * (1.0f / 3.0f);
     float  OutAlpha = saturate(Alpha + Favg * (1.0f - Alpha));
     float3 OutColor = (DirectDiffuse + AmbientDiffuse) * Alpha + DirectSpecular + SpecularIBL;
-    return float4(OutColor, OutAlpha);
+    ForwardBlendOutput Out;
+    Out.Color = float4(OutColor, OutAlpha);
+    // O vidro e composicao forward sem depth proprio. O alpha efetivo (inclui Fresnel) e o peso
+    // conservador que o FSR deve rejeitar/reduzir no historico temporal.
+    Out.Reactive = OutAlpha;
+    Out.Composition = OutAlpha;
+    return Out;
 }

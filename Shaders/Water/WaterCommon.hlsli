@@ -37,6 +37,9 @@ cbuffer WaterCB : register(b0) {
 Texture2D<float4> FFTDisplacement  : register(t1); // cascata 0 (detalhe)
 Texture2D<float4> FFTDisplacement1 : register(t6); // cascata 1
 Texture2D<float4> FFTDisplacement2 : register(t7); // cascata 2 (swell)
+Texture2D<float4> FFTPreviousDisplacement0 : register(t12);
+Texture2D<float4> FFTPreviousDisplacement1 : register(t13);
+Texture2D<float4> FFTPreviousDisplacement2 : register(t14);
 SamplerState      LinearWrap       : register(s0);
 
 float2 WaterFFTSampleUV(float2 worldXZ) {
@@ -55,6 +58,30 @@ float4 WaterSampleFFTCascadeUv(uint c, float2 baseUV) {
     if (c == 1) return FFTDisplacement1.SampleLevel(LinearWrap, baseUV, 0.0);
     if (c == 2) return FFTDisplacement2.SampleLevel(LinearWrap, baseUV, 0.0);
     return FFTDisplacement.SampleLevel(LinearWrap, baseUV, 0.0);
+}
+
+float4 WaterSampleFFTCascadeUvLod(uint c, float2 baseUV, float lod) {
+    if (c == 1) return FFTDisplacement1.SampleLevel(LinearWrap, baseUV, lod);
+    if (c == 2) return FFTDisplacement2.SampleLevel(LinearWrap, baseUV, lod);
+    return FFTDisplacement.SampleLevel(LinearWrap, baseUV, lod);
+}
+
+float4 WaterSampleFFTCascadeUvGrad(uint c, float2 baseUV, float2 dx, float2 dy) {
+    if (c == 1) return FFTDisplacement1.SampleGrad(LinearWrap, baseUV, dx, dy);
+    if (c == 2) return FFTDisplacement2.SampleGrad(LinearWrap, baseUV, dx, dy);
+    return FFTDisplacement.SampleGrad(LinearWrap, baseUV, dx, dy);
+}
+
+float4 WaterSamplePreviousFFTCascadeUv(uint c, float2 baseUV) {
+    if (c == 1) return FFTPreviousDisplacement1.SampleLevel(LinearWrap, baseUV, 0.0);
+    if (c == 2) return FFTPreviousDisplacement2.SampleLevel(LinearWrap, baseUV, 0.0);
+    return FFTPreviousDisplacement0.SampleLevel(LinearWrap, baseUV, 0.0);
+}
+
+float4 WaterSamplePreviousFFTCascadeUvLod(uint c, float2 baseUV, float lod) {
+    if (c == 1) return FFTPreviousDisplacement1.SampleLevel(LinearWrap, baseUV, lod);
+    if (c == 2) return FFTPreviousDisplacement2.SampleLevel(LinearWrap, baseUV, lod);
+    return FFTPreviousDisplacement0.SampleLevel(LinearWrap, baseUV, lod);
 }
 
 float4 WaterSampleFFTCascade(uint c, float2 worldXZ) {
@@ -107,11 +134,12 @@ struct VSOutput {
     float2 tileUV     : TEXCOORD6;
     float4 curClip    : TEXCOORD7; // clip atual sem jitter (velocity)
     float4 prevClip   : TEXCOORD8; // clip anterior sem jitter (velocity)
+    float2 parametricXZ : TEXCOORD9; // pre-displacement material coordinate
 };
 
-float FresnelSchlick(float F0, float cosTheta, float gloss) {
+float FresnelSchlick(float F0, float cosTheta) {
     float f = pow(saturate(1.0 - cosTheta), 5.0);
-    return saturate(F0 + (1.0 - F0) * f * lerp(0.5, 1.0, gloss));
+    return saturate(F0 + (1.0 - F0) * f);
 }
 
 float3 AnalyticSky(float3 dir) {
@@ -184,11 +212,18 @@ float2 BumpParallaxOffset(float4 baseTC, float3 V, float heightScale) {
 }
 
 float SunSpecularLobes(float3 N, float3 V, float3 L, float shininess) {
-    float3 R = reflect(-V, N);
-    float LdotR = saturate(dot(L, R));
-    float wide   = pow(LdotR, shininess);
-    float narrow = pow(LdotR, shininess * 8.0);
-    return wide * 0.5 + narrow * 0.5;
+    const float NoL = saturate(dot(N, L));
+    const float NoV = saturate(dot(N, V));
+    if (NoL <= 0.0f || NoV <= 0.0f) return 0.0f;
+
+    const float3 H = normalize(V + L);
+    const float NoH = saturate(dot(N, H));
+    const float VoH = saturate(dot(V, H));
+    const float F = FresnelSchlick(0.02f, VoH);
+    // Normalized Blinn-Phong BRDF. The previous two unnormalized lobes reached
+    // unit white before Fresnel and produced the large clipped blob in closeups.
+    const float normalization = (shininess + 2.0f) * (1.0f / (8.0f * 3.14159265f));
+    return normalization * pow(NoH, shininess) * F * NoL;
 }
 
 #endif 

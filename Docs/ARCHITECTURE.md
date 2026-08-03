@@ -583,3 +583,12 @@ Atalhos **intencionais** da fase de fundação (substituir em iterações futura
 *Gerado a partir da leitura do código em `Engine/`, `Editor/`, `Shaders/` e do CMake.
 Para detalhes de implementação, os headers em `Engine/Include/Smile/Graphics/` são a
 fonte de verdade da API de cada subsistema.*
+
+---
+
+## 14. Oceano FFT
+
+O oceano combina três cascatas espectrais físicas, IFFT compute, clipmap GPU-driven e
+shading forward integrado aos buffers temporais. O contrato matemático, a ordem dos
+passes, a validação e os limites atuais estão documentados em
+[`OCEAN-AUDIT.md`](OCEAN-AUDIT.md).

@@ -99,6 +99,7 @@ target_compile_definitions(SmileEditor
         SMILE_EDITOR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         SMILE_SHADERS_SOURCE_DIR="${CMAKE_SOURCE_DIR}/Shaders"
         SMILE_CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}"
+        SMILE_BUILD_CONFIG="$<CONFIG>"
         SMILE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
 )
 

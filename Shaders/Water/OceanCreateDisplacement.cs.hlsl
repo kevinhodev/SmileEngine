@@ -15,5 +15,5 @@ void main(uint3 id : SV_DispatchThreadID) {
     float  h = sgn * HeightF.Load(int3(loc, 0)).x;
     float2 D = sgn * ChoppyF.Load(int3(loc, 0)).xy;
 
-    DispOut[loc] = float4(D.x * ChoppyScale, D.y * ChoppyScale, -h * HeightScale, 0.0f);
+    DispOut[loc] = float4(D.x * ChoppyScale, D.y * ChoppyScale, h * HeightScale, 0.0f);
 }
