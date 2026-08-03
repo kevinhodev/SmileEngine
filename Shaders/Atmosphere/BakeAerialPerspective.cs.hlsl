@@ -19,19 +19,22 @@ void main(uint3 id : SV_DispatchThreadID) {
     
     float sliceN = ((float)id.z + 0.5f) / Slices;
     sliceN *= sliceN;                               
-    float kmPerWU = max(kKmPerWorldUnit, 1e-9f);
     float startKm = kAerialStartKm;
     float tKm     = startKm + sliceN * (kAerialDepthKm - startKm); 
 
-    // SkyViewSize.w e apenas o offset numerico do raio (1 m, como PLANET_RADIUS_OFFSET
-    // da UE), compartilhado com o sky-view LUT. O valor antigo de 500 m deslocava a
-    // tangente atmosferica ~0,72 grau abaixo do plano local e criava um anel branco.
-    // O sky-view ja fixa cameras abaixo do nivel zero no raio minimo seguro. Repita o
-    // contrato aqui: sem isso uma camera submersa atravessaria a esfera depois que o
-    // offset numerico foi corrigido de 500 m para 1 m.
-    float3 camKm = float3(CameraWorldPos.x * kmPerWU,
-                          kBottomR + SkyViewSize.w + max(CameraWorldPos.y, 0.0f) * kmPerWU,
-                          CameraWorldPos.z * kmPerWU);
+    // MESMA origem do BakeSkyView.cs.hlsl: o view height unico (kViewHeight), sobre o eixo Y,
+    // com XZ ZERADOS. Duas correcoes num gesto so.
+    //
+    // (1) Reproduzir a formula a mao aqui deixava o valor divergir do sky-view — o piso do
+    //     clamp do view height (0,05 km) nao existia nesta conta, entao os dois bakes usavam
+    //     raios diferentes. Agora ha um valor so, calculado na CPU.
+    //
+    // (2) O XZ absoluto de mundo somava uma altitude FANTASMA de (X²+Z²)/2R e inclinava o "up"
+    //     da atmosfera junto: 8 cm a 1 km da origem, mas 786 m a 100 km. O aerial perspective
+    //     mudava de cor conforme a camera se afastava da origem da cena. Direcoes sao
+    //     invariantes a translacao e o meio e esfericamente simetrico, entao zerar XZ nao muda
+    //     mais nada no shader — worldDir ja vem do InvViewProj e continua igual.
+    float3 camKm = float3(0.0f, kViewHeight, 0.0f);
 
     float3 sunDir = normalize(SunDir.xyz);
 

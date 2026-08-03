@@ -29,6 +29,11 @@ cbuffer ReflectionCB : register(b0) {
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;
     float4 ReGIRResources;
+    // Cauda da agua: nao usada aqui, declarada p/ alcancar o offset do SkyParams (mesma
+    // convencao dos campos de preenchimento acima).
+    row_major float4x4 ViewProj;
+    float4 WaterEnvironmentParams;
+    float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
 };
 
 // Politica de culling DESTE passe. O Lumen culla na reflexao e nao culla no gather do ReSTIR; a
@@ -157,6 +162,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
         P.FrameIndex         = (uint)TraceParams.x;
         P.ReGIRPad           = 0u;
+        P.SkyViewHeightKm    = SkyParams.x;
+        P.SkyBottomRKm       = SkyParams.y;
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
             float sd;
@@ -169,7 +176,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                                             q.CommittedInstanceID(), roughness,
                                             SMILE_RNG_REFL_GLOSSY + 137u);
         } else {
-            outRadiance = ShadeSky(R, sunDir, P.SkyIntensity);
+            outRadiance = ShadeSky(R, sunDir, P.SkyIntensity, P);
         }
     }
 

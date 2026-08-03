@@ -33,41 +33,29 @@ struct FHitShadeParams {
     int3   ReGIRGridCount;     int  ReGIRSampleCount;
     uint   ReGIRSlotsSRV;      uint ReGIRAverageSRV;
     uint   FrameIndex;         uint ReGIRPad;
+    // Parameterizacao do sky-view LUT (ver ShadeSky). Vem do SkyParams do CB de cada dono, que
+    // por sua vez vem do FAtmosphere::ViewHeightKm()/BottomRadiusKm() — a MESMA fonte que o
+    // bake usa. Eram dois literais aqui, e o de view height estava errado.
+    float  SkyViewHeightKm;    float SkyBottomRKm;
 };
 
 // Requer SceneLights e o heap bindless declarados pelo shader hospedeiro.
 #include "ReGIRSampling.hlsli"
 
-static const float kSkyBottomR = 6360.0f;
-static const float kSkyViewH   = 6360.5f;
+// A parameterizacao do sky-view LUT era reescrita a mao aqui, com o raio do planeta e o view
+// height como literais — o unico jeito, porque este header nao pode incluir o
+// AtmosphereCommon.hlsli (o `cbuffer AtmosphereCB : register(b0)` de la colide com o b0 proprio
+// de cada shader de trace). A copia divergiu: 6360.5 contra os 6360.001 do bake, 0,49 grau de
+// erro no dip do horizonte = ~3,8 texels dos 104 do eixo V, justo na banda mais brilhante e de
+// maior gradiente do LUT. GI e reflexoes liam o ceu errado no horizonte.
+//
+// Agora a conta vem do AtmosphereMath.hlsli (matematica pura, sem cbuffer) e os dois numeros
+// chegam por FHitShadeParams. Passar floats soltos sem o header comum consertaria o sintoma de
+// hoje e deixaria a formula divergir de novo na proxima edicao da parameterizacao.
+#include "../Atmosphere/AtmosphereMath.hlsli"
 
-float2 DDGI_SkyViewUv(float viewZenithCos, float lightViewCos) {
-    float vHorizon = sqrt(max(0.0f, kSkyViewH * kSkyViewH - kSkyBottomR * kSkyBottomR));
-    float cosBeta  = vHorizon / max(kSkyViewH, 1e-4f);
-    float beta     = acos(clamp(cosBeta, -1.0f, 1.0f));
-    float zenithHorizonAngle = SMILE_PI - beta;
-
-    float viewZenithAngle = acos(clamp(viewZenithCos, -1.0f, 1.0f));
-    float u, v;
-    if (viewZenithAngle < zenithHorizonAngle) {
-        float coord = 1.0f - viewZenithAngle / max(zenithHorizonAngle, 1e-4f);
-        coord = 1.0f - sqrt(max(0.0f, coord));
-        v = coord * 0.5f;
-    } else {
-        float coord = (viewZenithAngle - zenithHorizonAngle) / max(beta, 1e-4f);
-        v = sqrt(max(0.0f, coord)) * 0.5f + 0.5f;
-    }
-    u = sqrt(max(0.0f, -lightViewCos * 0.5f + 0.5f));
-    return float2(u, v);
-}
-
-float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity) {
-    const float3 up = float3(0.0f, 1.0f, 0.0f);
-    float viewZenithCos = dot(dir, up);
-    float3 viewHoriz = dir    - up * viewZenithCos;
-    float3 sunHoriz  = sunDir - up * dot(sunDir, up);
-    float  lightViewCos = dot(normalize(viewHoriz + 1e-6f), normalize(sunHoriz + 1e-6f));
-    float2 uv = DDGI_SkyViewUv(viewZenithCos, lightViewCos);
+float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity, FHitShadeParams P) {
+    float2 uv = AtmoWorldDirToSkyViewUv(dir, sunDir, P.SkyViewHeightKm, P.SkyBottomRKm);
     return SkyViewLUT.SampleLevel(LinearClamp, uv, 0.0f).rgb * skyIntensity;
 }
 

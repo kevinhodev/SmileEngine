@@ -559,10 +559,21 @@ namespace Smile {
 
         // View height dinamico: sky-view LUT, transmitancia do disco/estrelas e ambient seguem a
         // altitude real da camera sobre o offset numerico do planeta (UE recalcula por frame).
+        //
+        // Este e o UNICO view height da engine: o bake do aerial perspective e o caminho de
+        // GI/reflexoes leem daqui (ViewHeightKm()). Ele decide o angulo do horizonte, logo onde
+        // cai a dobra do warp em v=0.5 do sky-view LUT — dois consumidores com valores
+        // diferentes leem texels diferentes para a MESMA direcao, bem na banda de maior
+        // gradiente. Era o caso: o caminho de GI tinha 6360.5 hardcoded (0,72 grau de dip
+        // contra os 0,032 do bake, ~3,8 texels dos 104).
+        //
+        // O piso do clamp e o proprio offset numerico. Ele era 0.05 km, residuo de quando o
+        // offset nominal valia 0.5 km, e sozinho ja recriava 49 m de divergencia contra o bake.
+        // Nao protege de nada: o max(CameraWorldPos.Y, 0) abaixo garante o limite inferior.
         CPUConstants.SkyViewSize.Z = std::clamp(
             CPUConstants.PlanetRadii.X + kPlanetRadiusOffsetKm +
                 std::max(_CameraWorldPos.Y, 0.0f) * _KmPerWorldUnit,
-            CPUConstants.PlanetRadii.X + 0.05f,
+            CPUConstants.PlanetRadii.X + kPlanetRadiusOffsetKm,
             CPUConstants.PlanetRadii.Y - 1.0f);
 
         if (MappedBase) *Mapped() = CPUConstants;

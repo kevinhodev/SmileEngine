@@ -624,6 +624,7 @@ namespace Smile {
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.SkyParams             = SkyLutParams;
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReflectionConstants),

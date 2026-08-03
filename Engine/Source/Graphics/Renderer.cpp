@@ -2134,6 +2134,17 @@ namespace Smile {
         Reflections.SetReGIRParams(ReGIRCB);
         ReSTIRGI.SetReGIRParams(ReGIRCB);
 
+        // Sky-view LUT: os tres passes de trace sombreiam raio que escapa lendo o MESMO LUT que
+        // o raster, entao precisam da mesma parameterizacao. O view height e o raio do planeta
+        // saem do FAtmosphere (fonte unica) — antes eram literais no HitShading.hlsli, e o de
+        // view height estava 0,5 km acima do valor do bake. Empurrado todo frame porque o view
+        // height segue a altitude da camera.
+        const f32 SkyViewHeightKm = Atmosphere.ViewHeightKm();
+        const f32 SkyBottomRKm    = Atmosphere.BottomRadiusKm();
+        DDGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
+        Reflections.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
+        ReSTIRGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
+
         if (ReliableMotionActive) {
             TemporalMotion.UpdatePerFrame(FrameSlot, Scene, InvViewProjFull,
                                           ViewProjUnjittered, PrevViewProj,

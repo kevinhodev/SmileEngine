@@ -45,9 +45,14 @@ namespace Smile {
         Vec4  ReGIRInvCellEnabled;
         Vec4  ReGIRGridCountSamples;
         Vec4  ReGIRResources;
+        // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
+        // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum.
+        Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
     };
     static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
                   "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
+    static_assert(offsetof(ReSTIRGIConstants, SkyParams) == 464,
+                  "SkyParams deve permanecer anexado ao fim do ReSTIRCB");
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
     // A3: Pass A (trace + reservoir temporal) -> Pass B (reuso espacial + Jacobiano + resolve).
@@ -100,6 +105,11 @@ namespace Smile {
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
+        // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
+        void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
+            SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
+        }
 
         bool IsReady() const   { return Ready; }
         // true quando a tabela t16 aponta p/ a OUT do NRD (radiancia em YCoCg) e nao p/ a
@@ -242,5 +252,6 @@ namespace Smile {
         FRayEpsilonProfile RayEps;
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        Vec4               SkyLutParams{};
     };
 }

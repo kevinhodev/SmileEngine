@@ -51,6 +51,11 @@ namespace Smile {
         Vec4  ReGIRResources;
         Mat44 ViewProj;          // current world -> clip; water contact SSR
         Vec4  WaterEnvironmentParams; // x=atmosphere, y=intensity, z=env max mip, w=scene max mip
+        // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
+        // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum — os shaders
+        // de trace que nao usam a cauda da agua declaram ViewProj/WaterEnvironmentParams como
+        // preenchimento p/ alcancar este offset (convencao ja existente nesses arquivos).
+        Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
     };
     static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 480,
                   "ReflectionConstants divergiu do cbuffer ReflectionCB");
@@ -58,6 +63,8 @@ namespace Smile {
                   "ViewProj deve permanecer anexado ao fim do ReflectionCB");
     static_assert(offsetof(ReflectionConstants, WaterEnvironmentParams) == 608,
                   "WaterEnvironmentParams divergiu do ReflectionCB da agua");
+    static_assert(offsetof(ReflectionConstants, SkyParams) == 624,
+                  "SkyParams deve permanecer anexado ao fim do ReflectionCB");
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
     // Fase 1: mirror, full-res, sem denoise. Passe de compute (trace, sombreado pelo MESMO
@@ -138,6 +145,11 @@ namespace Smile {
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
+        // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
+        void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
+            SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
+        }
         // Limpa o historico temporal PROPRIO (caminho legado, sem NRD) no proximo RecordTrace.
         void InvalidateHistory()  { NeedsHistoryClear = true; NeedsWaterHistoryClear = true; }
 
@@ -318,6 +330,7 @@ namespace Smile {
         FRayEpsilonProfile RayEps;        // perfil compartilhado (dono = Renderer)
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        Vec4               SkyLutParams{};
         f32  MaxRoughnessToTrace = 0.6f;  // acima -> so DDGI (combine do Lumen)
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)

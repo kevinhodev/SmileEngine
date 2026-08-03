@@ -264,6 +264,7 @@ namespace Smile {
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.SkyParams             = SkyLutParams;
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }

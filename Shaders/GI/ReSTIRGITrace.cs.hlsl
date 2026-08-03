@@ -42,6 +42,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;
     float4 ReGIRResources;
+    float4 SkyParams;               // x = view height (km), y = raio do planeta (km) — ShadeSky
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
@@ -156,6 +157,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
     P.FrameIndex         = (uint)TraceParams.x;
     P.ReGIRPad           = 0u;
+    P.SkyViewHeightKm    = SkyParams.x;
+    P.SkyBottomRKm       = SkyParams.y;
 
     // POLITICA DE BACKFACE (Lumen AvoidSelfIntersections modo Retrace + terminacao preta).
     //
@@ -217,7 +220,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                         ray.Origin, ray.Direction, hitDist, P, sd);
     } else {
         hitDist = TraceParams.y;
-        Lo = ShadeSky(dir, sunDir, P.SkyIntensity);
+        Lo = ShadeSky(dir, sunDir, P.SkyIntensity, P);
         x2 = ray.Origin + ray.Direction * hitDist; // ponto distante na direcao do ceu
         n2 = -dir;                                  // normal "virada" p/ o ponto visivel
     }
@@ -415,7 +418,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                 prevValid = false;
                             }
                         } else if (len >= kRevalidateSkyFrac * TraceParams.y) {
-                            prev.Lo = ShadeSky(vray.Direction, sunDir, P.SkyIntensity); // era ceu
+                            prev.Lo = ShadeSky(vray.Direction, sunDir, P.SkyIntensity, P); // era ceu
                         } else {
                             prevValid = false; // superficie sumiu (geometria movida)
                         }

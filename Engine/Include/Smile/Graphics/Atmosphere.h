@@ -124,6 +124,14 @@ namespace Smile {
         u32 SkyViewSRV()       const { return SkyView.SRVSlot; }
         u32 AerialVolumeSRV()  const { return AerialPerspectiveVolume.SRVSlot(); }
         f32 AerialDepthKm()    const { return CPUConstants.AerialParams.X; }
+
+        // Fonte UNICA do "raio do observador" e do raio do planeta, em km. Todo consumidor do
+        // sky-view LUT fora do AtmosphereCB (hoje: DDGI, ReSTIR GI e reflexoes, via SkyParams no
+        // CB de cada um) tem que ler daqui — a parameterizacao do LUT e ancorada na camera por
+        // construcao (Hillaire e UE idem), entao raio de GI NAO usa a altitude da propria
+        // origem: coerencia com o bake e o ponto todo.
+        f32 ViewHeightKm()     const { return CPUConstants.SkyViewSize.Z; }
+        f32 BottomRadiusKm()   const { return CPUConstants.PlanetRadii.X; }
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
         bool IsInitialized() const { return Initialized; }
 

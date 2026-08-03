@@ -270,6 +270,7 @@ add_custom_target(Shaders
         IBL/IrradianceConvolution.cs.hlsl
         IBL/SpecularPrefilter.cs.hlsl
         IBL/BRDFIntegration.cs.hlsl
+        Atmosphere/AtmosphereMath.hlsli
         Atmosphere/AtmosphereCommon.hlsli
         Atmosphere/BakeTransmittance.cs.hlsl
         Atmosphere/BakeMultiScatter.cs.hlsl

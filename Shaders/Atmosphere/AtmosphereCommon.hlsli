@@ -1,7 +1,13 @@
 #ifndef SMILE_ATMOSPHERE_COMMON_HLSLI
 #define SMILE_ATMOSPHERE_COMMON_HLSLI
 
-static const float PI = 3.14159265358979323846f;
+// A matematica vive no AtmosphereMath.hlsli (sem cbuffer). Este header e a camada que injeta o
+// AtmosphereCB nela: todas as funcoes abaixo sao wrappers de uma linha. Quem NAO pode declarar
+// o b0 da atmosfera (os shaders de trace do GI/reflexoes) inclui so o math e passa os
+// parametros do planeta a mao — mesma implementacao, sem copia.
+#include "AtmosphereMath.hlsli"
+
+static const float PI = kAtmoPI;
 
 cbuffer AtmosphereCB : register(b0) {
     float4 RayleighScattering; 
@@ -61,17 +67,9 @@ cbuffer AtmosphereCB : register(b0) {
 SamplerState LinearClampSampler : register(s0);
 SamplerState LinearWrapSampler  : register(s1);
 
-float RayleighPhase(float cosTheta) {
-    return (3.0f / (16.0f * PI)) * (1.0f + cosTheta * cosTheta);
-}
-
-float MiePhaseHG(float g, float cosTheta) {
-    float g2    = g * g;
-    float denom = 1.0f + g2 - 2.0f * g * cosTheta;
-    return (1.0f - g2) / (4.0f * PI * pow(max(denom, 1e-4f), 1.5f));
-}
-
-float UniformPhase() { return 1.0f / (4.0f * PI); }
+float RayleighPhase(float cosTheta)        { return AtmoRayleighPhase(cosTheta); }
+float MiePhaseHG(float g, float cosTheta)  { return AtmoMiePhaseHG(g, cosTheta); }
+float UniformPhase()                       { return AtmoUniformPhase(); }
 
 void SampleMedium(float altitudeKm, out float3 rayleighScatter,
                   out float3 mieScatter, out float3 extinction) {
@@ -89,53 +87,19 @@ void SampleMedium(float altitudeKm, out float3 rayleighScatter,
 }
 
 float RaySphereNearest(float3 ro, float3 rd, float radius) {
-    float b    = dot(ro, rd);
-    float c    = dot(ro, ro) - radius * radius;
-    float disc = b * b - c;
-    if (disc < 0.0f) return -1.0f;
-    float s  = sqrt(disc);
-    float t0 = -b - s;
-    float t1 = -b + s;
-    if (t1 < 0.0f) return -1.0f;
-    return (t0 < 0.0f) ? t1 : t0;
+    return AtmoRaySphereNearest(ro, rd, radius);
 }
 
 float RaySphereFar(float3 ro, float3 rd, float radius) {
-    float b    = dot(ro, rd);
-    float c    = dot(ro, ro) - radius * radius;
-    float disc = b * b - c;
-    if (disc < 0.0f) return -1.0f;
-    return -b + sqrt(disc);
+    return AtmoRaySphereFar(ro, rd, radius);
 }
 
 void UvToTransmittanceParams(out float viewHeight, out float viewZenithCos, float2 uv) {
-    float xMu = uv.x;
-    float xR  = uv.y;
-    float H    = sqrt(max(0.0f, kTopR * kTopR - kBottomR * kBottomR));
-    float rho  = H * xR;
-    viewHeight = sqrt(max(0.0f, rho * rho + kBottomR * kBottomR));
-
-    float dMin = kTopR - viewHeight;
-    float dMax = rho + H;
-    float d    = dMin + xMu * (dMax - dMin);
-    viewZenithCos = (d == 0.0f) ? 1.0f
-                                : (H * H - rho * rho - d * d) / (2.0f * viewHeight * d);
-    viewZenithCos = clamp(viewZenithCos, -1.0f, 1.0f);
+    AtmoUvToTransmittanceParams(viewHeight, viewZenithCos, uv, kBottomR, kTopR);
 }
 
 float2 TransmittanceParamsToUv(float viewHeight, float viewZenithCos) {
-    float H   = sqrt(max(0.0f, kTopR * kTopR - kBottomR * kBottomR));
-    float rho = sqrt(max(0.0f, viewHeight * viewHeight - kBottomR * kBottomR));
-
-    float discriminant = viewHeight * viewHeight * (viewZenithCos * viewZenithCos - 1.0f)
-                       + kTopR * kTopR;
-    float d = max(0.0f, -viewHeight * viewZenithCos + sqrt(max(0.0f, discriminant)));
-
-    float dMin = kTopR - viewHeight;
-    float dMax = rho + H;
-    float xMu  = (d - dMin) / max(dMax - dMin, 1e-5f);
-    float xR   = rho / max(H, 1e-5f);
-    return float2(xMu, xR);
+    return AtmoTransmittanceParamsToUv(viewHeight, viewZenithCos, kBottomR, kTopR);
 }
 
 float3 SampleTransmittanceToTop(Texture2D<float4> tlut, float viewHeight, float viewZenithCos) {
@@ -151,52 +115,11 @@ float3 SampleMultiScatterLUT(Texture2D<float4> mslut, float viewHeight, float su
 
 void UvToSkyViewParams(out float viewZenithCos, out float lightViewCos,
                        float viewHeight, float2 uv) {
-    float vHorizon = sqrt(max(0.0f, viewHeight * viewHeight - kBottomR * kBottomR));
-    float cosBeta  = vHorizon / max(viewHeight, 1e-4f);
-    float beta     = acos(clamp(cosBeta, -1.0f, 1.0f));
-    float zenithHorizonAngle = PI - beta;
-
-    float viewZenithAngle;
-    if (uv.y < 0.5f) {
-        float coord = 2.0f * uv.y;
-        coord = 1.0f - coord;
-        coord = 1.0f - coord * coord;
-        viewZenithAngle = zenithHorizonAngle * coord;
-    } else {
-        float coord = uv.y * 2.0f - 1.0f;
-        coord = coord * coord;
-        viewZenithAngle = zenithHorizonAngle + beta * coord;
-    }
-    viewZenithCos = cos(viewZenithAngle);
-
-    float coord = uv.x;
-    coord = coord * coord;
-    lightViewCos = -(coord * 2.0f - 1.0f);
+    AtmoUvToSkyViewParams(viewZenithCos, lightViewCos, uv, viewHeight, kBottomR);
 }
 
 float2 SkyViewParamsToUv(float viewZenithCos, float lightViewCos, float viewHeight) {
-    float vHorizon = sqrt(max(0.0f, viewHeight * viewHeight - kBottomR * kBottomR));
-    float cosBeta  = vHorizon / max(viewHeight, 1e-4f);
-    float beta     = acos(clamp(cosBeta, -1.0f, 1.0f));
-    float zenithHorizonAngle = PI - beta;
-
-    float viewZenithAngle = acos(clamp(viewZenithCos, -1.0f, 1.0f));
-    float u, v;
-    if (viewZenithAngle < zenithHorizonAngle) {
-        float coord = viewZenithAngle / max(zenithHorizonAngle, 1e-4f);
-        coord = 1.0f - coord;
-        coord = 1.0f - sqrt(max(0.0f, coord));
-        v = coord * 0.5f;
-    } else {
-        float coord = (viewZenithAngle - zenithHorizonAngle) / max(beta, 1e-4f);
-        coord = sqrt(max(0.0f, coord));
-        v = coord * 0.5f + 0.5f;
-    }
-    {
-        float coord = -lightViewCos * 0.5f + 0.5f;
-        u = sqrt(max(0.0f, coord));
-    }
-    return float2(u, v);
+    return AtmoSkyViewParamsToUv(viewZenithCos, lightViewCos, viewHeight, kBottomR);
 }
 
 #endif 

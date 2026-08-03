@@ -24,6 +24,7 @@ cbuffer DDGICB : register(b0) {
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;
     float4 ReGIRResources;
+    float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -107,6 +108,8 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
     P.FrameIndex         = (uint)TraceParams.x;
     P.ReGIRPad           = 0u;
+    P.SkyViewHeightKm    = SkyParams.x;
+    P.SkyBottomRKm       = SkyParams.y;
 
     float3 radiance;
     float  signedDist;
@@ -120,7 +123,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         // So aqui no DDGI: o HitShading e compartilhado e reflexoes/ReSTIR precisam do hitT real.
         if (signedDist < 0.0f) signedDist *= 0.2f;
     } else {
-        radiance   = ShadeSky(dir, sunDir, P.SkyIntensity);
+        radiance   = ShadeSky(dir, sunDir, P.SkyIntensity, P);
         signedDist = maxT;
     }
 

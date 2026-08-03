@@ -40,9 +40,14 @@ namespace Smile {
         Vec4 ReGIRInvCellEnabled;
         Vec4 ReGIRGridCountSamples;
         Vec4 ReGIRResources;
+        // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
+        // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum.
+        Vec4 SkyParams;       // x = view height (km), y = raio do planeta (km), zw = livres
     };
     static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
                   "DDGIConstants divergiu do cbuffer DDGICB");
+    static_assert(offsetof(DDGIConstants, SkyParams) == 272,
+                  "SkyParams deve permanecer anexado ao fim do DDGICB");
 
     class FDDGI {
     public:
@@ -131,6 +136,11 @@ namespace Smile {
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
+        // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
+        void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
+            SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
+        }
 
         // Reset one-shot do atlas: o proximo update que REALMENTE rodar usa histerese 0, ou seja,
         // substitui o conteudo em vez de misturar. Necessario p/ calibracao: com Hysteresis 0.99
@@ -277,6 +287,7 @@ namespace Smile {
         FRayEpsilonProfile RayEps; // perfil compartilhado (dono = Renderer)
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        Vec4               SkyLutParams{};
         f32  MaxRayDist   = 0.0f;
         bool RealHitShading = true;
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)

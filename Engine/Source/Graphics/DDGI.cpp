@@ -498,6 +498,7 @@ namespace Smile {
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.SkyParams             = SkyLutParams;
         CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;

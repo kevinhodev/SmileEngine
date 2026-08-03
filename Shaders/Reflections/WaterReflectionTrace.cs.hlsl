@@ -30,6 +30,7 @@ cbuffer ReflectionCB : register(b0) {
     float4 ReGIRResources;
     row_major float4x4 ViewProj;
     float4 WaterEnvironmentParams; // x=atmosphere, y=intensity, z=env max mip, w=scene max mip
+    float4 SkyParams;              // x = view height (km), y = raio do planeta (km) — ShadeSky
 };
 
 uint ReflectionCullFlags() {
@@ -276,6 +277,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.ReGIRSlotsSRV = (uint)ReGIRResources.x;
         P.ReGIRAverageSRV = (uint)ReGIRResources.y;
         P.FrameIndex = (uint)TraceParams.x; P.ReGIRPad = 0u;
+        P.SkyViewHeightKm = SkyParams.x;    P.SkyBottomRKm = SkyParams.y;
 
         float ssrConfidence;
         float3 ssrRadiance;

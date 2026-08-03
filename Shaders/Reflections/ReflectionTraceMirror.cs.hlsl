@@ -28,6 +28,11 @@ cbuffer ReflectionCB : register(b0) {
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;
     float4 ReGIRResources;
+    // Cauda da agua: nao usada aqui, declarada p/ alcancar o offset do SkyParams (mesma
+    // convencao dos campos de preenchimento acima).
+    row_major float4x4 ViewProj;
+    float4 WaterEnvironmentParams;
+    float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
 };
 
 // Ver ReflectionTrace.cs.hlsl: politica por passe, no molde do Context.CullingMode do Lumen.
@@ -140,6 +145,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
     P.FrameIndex         = (uint)TraceParams.x;
     P.ReGIRPad           = 0u;
+    P.SkyViewHeightKm    = SkyParams.x;
+    P.SkyBottomRKm       = SkyParams.y;
 
     float3 radiance;
     float  hitDist = TraceParams.y;
@@ -155,7 +162,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                                            q.CommittedInstanceID(), roughness,
                                            SMILE_RNG_REFL_MIRROR + 137u);
     } else {
-        radiance = ShadeSky(R, sunDir, P.SkyIntensity);
+        radiance = ShadeSky(R, sunDir, P.SkyIntensity, P);
     }
 
     RWResolved[px] = float4(radiance, hitDist);
