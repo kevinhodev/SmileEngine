@@ -23,18 +23,26 @@ namespace Smile {
         LogDebug("DebugDraw Inicializado");
     }
 
-    void FDebugDraw::Line(const Vec3& A, const Vec3& B, const Vec3& Color) {
-        LineVerts.push_back({ { A.X, A.Y, A.Z }, { Color.X, Color.Y, Color.Z } });
-        LineVerts.push_back({ { B.X, B.Y, B.Z }, { Color.X, Color.Y, Color.Z } });
+    void FDebugDraw::WarnXRayOnce() {
+        if (XRayWarned) return;
+        XRayWarned = true;
+        LogWarning("DebugDraw: modo XRay pedido, mas ele so existe a partir da F1b (precisa do "
+                   "alpha blend). Desenhando como Scene — a parte oculta SOME em vez de ficar "
+                   "translucida");
     }
-    void FDebugDraw::LineOccluded(const Vec3& A, const Vec3& B, const Vec3& Color) {
-        LineOccVerts.push_back({ { A.X, A.Y, A.Z }, { Color.X, Color.Y, Color.Z } });
-        LineOccVerts.push_back({ { B.X, B.Y, B.Z }, { Color.X, Color.Y, Color.Z } });
+
+    void FDebugDraw::Line(const Vec3& A, const Vec3& B, const Vec4& Color,
+                          EDebugDepthMode Mode, f32 Thickness) {
+        if (Mode == EDebugDepthMode::XRay) WarnXRayOnce();
+        if (Mode != EDebugDepthMode::Foreground) ++SceneDepthPrims;
+        LineCmds.push_back({ A, B, Color, Thickness, Mode });
     }
-    void FDebugDraw::Triangle(const Vec3& A, const Vec3& B, const Vec3& C, const Vec3& Color) {
-        TriVerts.push_back({ { A.X, A.Y, A.Z }, { Color.X, Color.Y, Color.Z } });
-        TriVerts.push_back({ { B.X, B.Y, B.Z }, { Color.X, Color.Y, Color.Z } });
-        TriVerts.push_back({ { C.X, C.Y, C.Z }, { Color.X, Color.Y, Color.Z } });
+
+    void FDebugDraw::Triangle(const Vec3& A, const Vec3& B, const Vec3& C, const Vec4& Color,
+                              EDebugDepthMode Mode) {
+        if (Mode == EDebugDepthMode::XRay) WarnXRayOnce();
+        if (Mode != EDebugDepthMode::Foreground) ++SceneDepthPrims;
+        TriCmds.push_back({ A, B, C, Color, Mode });
     }
 
     void FDebugDraw::Icon(const Vec3& Center, f32 HalfSize, const Vec3& Color, u32 Type,
@@ -133,14 +141,18 @@ namespace Smile {
         PSODesc.RTVFormats[0]         = RTFormat;
         PSODesc.SampleDesc            = { 1, 0 };
 
+        // Dois eixos: topologia (linha/triangulo) x PS (Foreground = sem teste, Scene = teste
+        // manual contra o depth da cena). Os 4 PSOs sao o produto dos dois.
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&LinePSO)));
 
         PSODesc.PS = { PSOcc.data(), PSOcc.size() };
-        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&LineOccPSO)));
+        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&LineScenePSO)));
 
-        PSODesc.PS                    = { PS.data(), PS.size() };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&TriScenePSO)));
+
+        PSODesc.PS = { PS.data(), PS.size() };
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&TriPSO)));
 
         // Icones de luz: billboards alpha-blended com glifo SDF (layout de vertice proprio).
@@ -206,11 +218,38 @@ namespace Smile {
         if (!Initialized || Empty()) return;
         const u32 Slot = FrameSlot % kFIF;
 
-        // Sem SRV de depth nao ha como testar: as ocluiveis caem fora neste frame. Isso NAO conta
-        // como estouro de orcamento (e o fallback documentado), entao fica fora do aviso.
-        const u32 WantOcc  = DepthSRV.ptr ? static_cast<u32>(LineOccVerts.size()) : 0;
-        const u32 WantLine = static_cast<u32>(LineVerts.size());
-        const u32 WantTri  = static_cast<u32>(TriVerts.size());
+        // Achatamento comando -> vertice, um bucket por PSO. O alpha da cor e o Thickness ficam
+        // de fora: o vertice ainda e pos+rgb e o render e LINELIST de 1px. Guardar sem usar e o
+        // que permite trocar so o renderizador na F1b, sem tocar em API nem em caller.
+        // Sem SRV de depth nao ha como testar: os modos Scene/XRay caem fora neste frame. Isso
+        // NAO conta como estouro de orcamento (e o fallback documentado), fica fora do aviso.
+        const bool CanTestDepth = DepthSRV.ptr != 0;
+        SceneLineVerts.clear(); FgLineVerts.clear();
+        SceneTriVerts.clear();  FgTriVerts.clear();
+
+        auto PushVert = [](std::vector<DDVertex>& Dst, const Vec3& P, const Vec4& C) {
+            Dst.push_back({ { P.X, P.Y, P.Z }, { C.X, C.Y, C.Z } });
+        };
+        for (const FLineCmd& Cmd : LineCmds) {
+            const bool TestsDepth = Cmd.Mode != EDebugDepthMode::Foreground;
+            if (TestsDepth && !CanTestDepth) continue;
+            auto& Dst = TestsDepth ? SceneLineVerts : FgLineVerts;
+            PushVert(Dst, Cmd.A, Cmd.Color);
+            PushVert(Dst, Cmd.B, Cmd.Color);
+        }
+        for (const FTriCmd& Cmd : TriCmds) {
+            const bool TestsDepth = Cmd.Mode != EDebugDepthMode::Foreground;
+            if (TestsDepth && !CanTestDepth) continue;
+            auto& Dst = TestsDepth ? SceneTriVerts : FgTriVerts;
+            PushVert(Dst, Cmd.A, Cmd.Color);
+            PushVert(Dst, Cmd.B, Cmd.Color);
+            PushVert(Dst, Cmd.C, Cmd.Color);
+        }
+
+        const u32 WantOcc  = static_cast<u32>(SceneLineVerts.size());
+        const u32 WantLine = static_cast<u32>(FgLineVerts.size());
+        const u32 WantSTri = static_cast<u32>(SceneTriVerts.size());
+        const u32 WantTri  = static_cast<u32>(FgTriVerts.size());
         const u32 WantIcon = static_cast<u32>(IconVerts.size());
 
         // Clamp ALINHADO POR PRIMITIVA: linha precisa de pares, triangulo de trincas. Cortar no
@@ -220,16 +259,17 @@ namespace Smile {
         auto AlignDown = [](u32 V, u32 N) { return V - (V % N); };
         const u32 numOcc  = AlignDown(std::min(WantOcc, kMaxVerts), 2);
         const u32 numLine = AlignDown(std::min(WantLine, kMaxVerts - numOcc), 2);
-        const u32 numTri  = AlignDown(std::min(WantTri, kMaxVerts - numOcc - numLine), 3);
+        const u32 numSTri = AlignDown(std::min(WantSTri, kMaxVerts - numOcc - numLine), 3);
+        const u32 numTri  = AlignDown(std::min(WantTri, kMaxVerts - numOcc - numLine - numSTri), 3);
         const u32 numIcon = AlignDown(std::min(WantIcon, kMaxIconVerts), 6);
 
-        const u32 Dropped = (WantOcc - numOcc) + (WantLine - numLine) +
+        const u32 Dropped = (WantOcc - numOcc) + (WantLine - numLine) + (WantSTri - numSTri) +
                             (WantTri - numTri) + (WantIcon - numIcon);
         if (Dropped && !OverflowLogged) {
             OverflowLogged = true;
             LogWarning("DebugDraw estourou o orcamento: " + std::to_string(Dropped) +
                        " vertices descartados (linhas+triangulos " +
-                       std::to_string(WantOcc + WantLine + WantTri) + "/" +
+                       std::to_string(WantOcc + WantLine + WantSTri + WantTri) + "/" +
                        std::to_string(kMaxVerts) + ", icones " + std::to_string(WantIcon) +
                        "/" + std::to_string(kMaxIconVerts) +
                        "). O debug desenhado esta INCOMPLETO");
@@ -237,12 +277,19 @@ namespace Smile {
             OverflowLogged = false; // coube de novo: rearma p/ o proximo episodio avisar
         }
 
-        // VB do frame: [ocluiveis | linhas | triangulos] — ocluiveis desenham primeiro,
-        // gizmo/markers por cima. Icones tem VB proprio (stride diferente).
+        // VB do frame, na ordem de desenho: [linhas Scene | linhas Fg | tris Scene | tris Fg].
+        // Quem testa depth vai primeiro e o Foreground por cima — dentro de cada grupo a ordem
+        // de submissao decide, porque nao ha depth entre primitivas de debug (F1c resolve).
         u8* VBSlot = MappedVB + static_cast<size_t>(Slot) * kMaxVerts * kVBStride;
-        if (numOcc)  std::memcpy(VBSlot, LineOccVerts.data(), numOcc * kVBStride);
-        if (numLine) std::memcpy(VBSlot + numOcc * kVBStride, LineVerts.data(), numLine * kVBStride);
-        if (numTri)  std::memcpy(VBSlot + (numOcc + numLine) * kVBStride, TriVerts.data(), numTri * kVBStride);
+        u32 Cursor = 0;
+        auto Upload = [&](const std::vector<DDVertex>& Src, u32 Count) {
+            if (Count) std::memcpy(VBSlot + Cursor * kVBStride, Src.data(), Count * kVBStride);
+            Cursor += Count;
+        };
+        Upload(SceneLineVerts, numOcc);
+        Upload(FgLineVerts,    numLine);
+        Upload(SceneTriVerts,  numSTri);
+        Upload(FgTriVerts,     numTri);
 
         u8* IconSlot = MappedIconVB + static_cast<size_t>(Slot) * kMaxIconVerts * sizeof(IconVertex);
         if (numIcon) std::memcpy(IconSlot, IconVerts.data(), numIcon * sizeof(IconVertex));
@@ -270,25 +317,22 @@ namespace Smile {
         D3D12_VERTEX_BUFFER_VIEW VBV{};
         VBV.BufferLocation = VB->GetGPUVirtualAddress() + static_cast<u64>(Slot) * kMaxVerts * kVBStride;
         VBV.StrideInBytes  = kVBStride;
-        VBV.SizeInBytes    = (numOcc + numLine + numTri) * kVBStride;
+        VBV.SizeInBytes    = (numOcc + numLine + numSTri + numTri) * kVBStride;
         CmdList->IASetVertexBuffers(0, 1, &VBV);
 
-        if (numOcc) {
-            CmdList->SetGraphicsRootDescriptorTable(1, DepthSRV);
-            CmdList->SetPipelineState(LineOccPSO.Get());
-            CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-            CmdList->DrawInstanced(numOcc, 1, 0, 0);
-        }
-        if (numLine) {
-            CmdList->SetPipelineState(LinePSO.Get());
-            CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-            CmdList->DrawInstanced(numLine, 1, numOcc, 0);
-        }
-        if (numTri) {
-            CmdList->SetPipelineState(TriPSO.Get());
-            CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            CmdList->DrawInstanced(numTri, 1, numOcc + numLine, 0);
-        }
+        if (numOcc || numSTri) CmdList->SetGraphicsRootDescriptorTable(1, DepthSRV);
+        u32 First = 0;
+        auto Draw = [&](u32 Count, ID3D12PipelineState* PSO, D3D12_PRIMITIVE_TOPOLOGY Topo) {
+            if (!Count) return;
+            CmdList->SetPipelineState(PSO);
+            CmdList->IASetPrimitiveTopology(Topo);
+            CmdList->DrawInstanced(Count, 1, First, 0);
+            First += Count;
+        };
+        Draw(numOcc,  LineScenePSO.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        Draw(numLine, LinePSO.Get(),      D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        Draw(numSTri, TriScenePSO.Get(),  D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        Draw(numTri,  TriPSO.Get(),       D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (numIcon) {
             D3D12_VERTEX_BUFFER_VIEW IconVBV{};
             IconVBV.BufferLocation = IconVB->GetGPUVirtualAddress() +

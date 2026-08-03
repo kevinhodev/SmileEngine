@@ -3559,7 +3559,7 @@ namespace Smile {
 
         if (DebugDraw.IsInitialized() && !DebugDraw.Empty()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Debug draw (gizmo/ícones)");
-            const bool WantDepth = DebugDraw.HasOccluded() && DepthSRVSlot != kInvalidSlot;
+            const bool WantDepth = DebugDraw.NeedsSceneDepth() && DepthSRVSlot != kInvalidSlot;
             FBarrierBatch Batch;
             if (WantDepth) {
                 Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,

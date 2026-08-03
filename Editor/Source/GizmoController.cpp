@@ -135,7 +135,8 @@ namespace SmileEditor {
             // tela (ScaleFor ja escala por distancia), ~44px de altura a 1080p (calibrado na
             // referencia dos viewport icons do Flax). E o alvo do clique de selecao.
             // O wireframe do volume (esfera/cone) saiu de cena por ora — decisao do usuario
-            // 2026-07-10; o caminho LineOccluded segue disponivel pra quando ele voltar.
+            // 2026-07-10; quando voltar, e Line(..., EDebugDepthMode::Scene) pra ele parar no
+            // chao em vez de atravessar.
             const float S = IconHalfSizeFor(R, L.Position);
             const Vec3 MCol = L.Enabled
                 ? Vec3{ std::max(L.Color.X, 0.15f), std::max(L.Color.Y, 0.15f),
@@ -149,7 +150,8 @@ namespace SmileEditor {
             // sem o wire do volume; some junto com a selecao).
             if (IsSel && L.Type == Smile::ELightType::Spot) {
                 const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
-                DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f), MCol);
+                DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f),
+                        Smile::Vec4{ MCol, 1.0f });
             }
         }
     }
@@ -175,7 +177,7 @@ namespace SmileEditor {
         for (int i = 0; i < 3; ++i) {
             const Vec3 d   = Axis[i];
             const Vec3 col = (Highlighted == Ids[i]) ? Hi : BaseCol[i];
-            DebugDraw.Line(Pivot, Pivot + d * ShaftEnd, col);
+            DebugDraw.Line(Pivot, Pivot + d * ShaftEnd, Smile::Vec4{ col, 1.0f });
             // Ponta (piramide de 4 faces).
             const Vec3 u = (i == 0) ? Vec3::UnitY() : Vec3::UnitX();
             const Vec3 v = (i == 2) ? Vec3::UnitY() : Vec3::UnitZ();
@@ -184,7 +186,7 @@ namespace SmileEditor {
             const Vec3 c[4] = { bc + u*HeadR + v*HeadR, bc - u*HeadR + v*HeadR,
                                 bc - u*HeadR - v*HeadR, bc + u*HeadR - v*HeadR };
             for (int s = 0; s < 4; ++s)
-                DebugDraw.Triangle(tip, c[s], c[(s + 1) & 3], col);
+                DebugDraw.Triangle(tip, c[s], c[(s + 1) & 3], Smile::Vec4{ col, 1.0f });
         }
     }
 
