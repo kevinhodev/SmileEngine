@@ -270,7 +270,7 @@ swapchain. `NearZ=0.1`, `FarZ=20000`
 
 ### Frame de coordenadas da atmosfera/nuvens
 Atmosfera e nuvens vivem num **frame em km**, desacoplado das unidades da cena. A câmera
-é colocada em `(0, viewHeight, 0)` com `viewHeight = 6360 + kGroundAltitudeKm(0.5)`. A
+é colocada em `(0, viewHeight, 0)` com `viewHeight = 6360 + kPlanetRadiusOffsetKm(0.001)`. A
 reconstrução de raio do mundo usa `InvViewProjNoTrans` (view sem translação · proj)⁻¹.
 
 ---
@@ -361,7 +361,7 @@ há HDR carregado. Recebe `InvVPNoTrans`, intensidade e rotação IBL.
 | Sky-View | 192×104 | **bake por frame** (compute) | céu visto da câmera |
 
 Parâmetros físicos em `AtmosphereConstants` (Rayleigh/Mie/Ozônio em km⁻¹, raios do planeta
-em km — `kGroundAltitudeKm=0.5`). `RenderSky` faz um draw fullscreen reconstruindo o raio
+em km — `kPlanetRadiusOffsetKm=0.001`, offset numérico de 1 m). `RenderSky` faz um draw fullscreen reconstruindo o raio
 via `InvViewProjNoTrans`. Disco solar e glare controláveis sem re-bake. A atmosfera tem
 precedência sobre o skybox HDR quando `UseAtmosphereSky` (default **on**).
 

@@ -30,9 +30,9 @@ VSOutput main(VSInput IN) {
     const float3 camPos = CameraPos.xyz;
 
     float2 localUV = saturate(IN.GridPos.xy);
-    uint nodeX = IN.InstanceData0 & 0x7FFu;
-    uint nodeZ = (IN.InstanceData0 >> 11u) & 0x7FFu;
-    uint nodeScaleLOD = (IN.InstanceData0 >> 22u) & 0x1Fu;
+    uint nodeX = IN.InstanceData0 & 0xFFFu;
+    uint nodeZ = (IN.InstanceData0 >> 12u) & 0xFFFu;
+    uint nodeScaleLOD = (IN.InstanceData0 >> 24u) & 0x1Fu;
     uint subsetRange = IN.InstanceData1;
     uint internalLodU = min(subsetRange / 81u, 2u);
     float internalLod = (float)internalLodU;

@@ -76,11 +76,13 @@ static const uint kDebugCameraCellX      = 12u;
 static const uint kDebugCameraCellZ      = 13u;
 static const uint kDebugCounterCount     = 16u;
 
-uint PackTileData0(uint NodeX, uint NodeZ, uint NodeScaleLOD, uint DensityIndex) {
-    return (NodeX & 0x7FFu) |
-           ((NodeZ & 0x7FFu) << 11u) |
-           ((NodeScaleLOD & 0x1Fu) << 22u) |
-           ((DensityIndex & 0x1Fu) << 27u);
+uint PackTileData0(uint NodeX, uint NodeZ, uint NodeScaleLOD) {
+    // 12 bits por eixo cobrem 4096 folhas. DensityIndex nunca era lido pelo VS e agora
+    // permanece somente em Data1/RangeIndex. Isso permite raiz de 65.536 km com folhas
+    // de 16 m: 32.768 km por eixo a partir da camera, alem do far plane de 20 km.
+    return (NodeX & 0xFFFu) |
+           ((NodeZ & 0xFFFu) << 12u) |
+           ((NodeScaleLOD & 0x1Fu) << 24u);
 }
 
 uint PackTileData2(uint MorphUnorm, uint Pattern, uint CoverageUnorm) {
@@ -269,7 +271,7 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID) {
                     const uint DensityIndex = DensityForLevel(Level);
                     const uint RangeIndex = DensityIndex * 81u + Pattern;
 
-                    Source.Data0 = PackTileData0(NodeX, NodeZ, Level, DensityIndex);
+                    Source.Data0 = PackTileData0(NodeX, NodeZ, Level);
                     Source.Data1 = RangeIndex;
                     Source.Data2 = PackTileData2(MorphUnorm, Pattern, 255u);
                     Source.Pad = 0u;

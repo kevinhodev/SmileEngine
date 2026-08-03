@@ -23,10 +23,14 @@ void main(uint3 id : SV_DispatchThreadID) {
     float startKm = kAerialStartKm;
     float tKm     = startKm + sliceN * (kAerialDepthKm - startKm); 
 
-    // SkyViewSize.w = altitude do chao (0.5km): mesmo offset do sky-view LUT, senao fog e ceu
-    // discordam levemente no horizonte.
+    // SkyViewSize.w e apenas o offset numerico do raio (1 m, como PLANET_RADIUS_OFFSET
+    // da UE), compartilhado com o sky-view LUT. O valor antigo de 500 m deslocava a
+    // tangente atmosferica ~0,72 grau abaixo do plano local e criava um anel branco.
+    // O sky-view ja fixa cameras abaixo do nivel zero no raio minimo seguro. Repita o
+    // contrato aqui: sem isso uma camera submersa atravessaria a esfera depois que o
+    // offset numerico foi corrigido de 500 m para 1 m.
     float3 camKm = float3(CameraWorldPos.x * kmPerWU,
-                          kBottomR + SkyViewSize.w + CameraWorldPos.y * kmPerWU,
+                          kBottomR + SkyViewSize.w + max(CameraWorldPos.y, 0.0f) * kmPerWU,
                           CameraWorldPos.z * kmPerWU);
 
     float3 sunDir = normalize(SunDir.xyz);

@@ -1016,7 +1016,7 @@ namespace Smile {
                   [&] { PipelineState.RecreatePSO(Dev); } },
                 { { "Skybox.vs", "Skybox.ps" },
                   [&] { Skybox.Recreate(Dev, RT, DS); } },
-                { { "SkyAtmosphere.vs", "SkyAtmosphere.ps" },
+                { { "SkyAtmosphere.vs", "SkyAtmosphere.ps", "BakeSkyReflection.cs" },
                   [&] { Atmosphere.RecreateSky(Dev, RT, DS); } },
                 { { "CloudComposite.vs", "CloudComposite.ps" },
                   [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
@@ -1888,7 +1888,7 @@ namespace Smile {
                            VolumetricFog.GridZParams(), CamForwardW);
         Fog.SetDensity(FogDensityBase);
 
-        const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kGroundAltitudeKm;
+        const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kPlanetRadiusOffsetKm;
         const f32 CloudCovBase = VolumetricClouds.GetCoverage();
         if (RainSky > 0.0f) {
             const f32 RainCov = std::min(RainSky * 1.4f, 1.0f) * 0.92f;

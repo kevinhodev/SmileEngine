@@ -87,8 +87,9 @@ namespace Smile {
         CPUConstants.LutSize            = { (f32)kTransmittanceW, (f32)kTransmittanceH,
                                             (f32)kMultiScatterW,  (f32)kMultiScatterH };
 
-        const f32 ViewHeight = CPUConstants.PlanetRadii.X + kGroundAltitudeKm;
-        CPUConstants.SkyViewSize = { (f32)kSkyViewW, (f32)kSkyViewH, ViewHeight, kGroundAltitudeKm };
+        const f32 ViewHeight = CPUConstants.PlanetRadii.X + kPlanetRadiusOffsetKm;
+        CPUConstants.SkyViewSize = { (f32)kSkyViewW, (f32)kSkyViewH, ViewHeight,
+                                     kPlanetRadiusOffsetKm };
 
         const f32 SunDiskHalfAngleRad = 0.7f * 3.14159265358979f / 180.0f;
         CPUConstants.SunDisk          = { std::cos(SunDiskHalfAngleRad), 30.0f, 22.0f, 0.0f };
@@ -529,6 +530,9 @@ namespace Smile {
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (!Initialized) return;
         BuildSkyPSO(_Device, _RTFormat, _DSFormat);
+        // O cubemap atmosferico e a fonte ambiental da agua. Mante-lo fora do hot reload
+        // fazia alteracoes no horizonte parecerem inertes ate reiniciar o editor.
+        SkyReflBakePSO.Initialize(_Device, "BakeSkyReflection.cs_6_0.cso", 1, 1);
     }
 
     void FAtmosphere::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun,
@@ -547,9 +551,9 @@ namespace Smile {
         CPUConstants.StarView.Y = _ViewportH;
 
         // View height dinamico: sky-view LUT, transmitancia do disco/estrelas e ambient seguem a
-        // altitude da camera (UE recalcula por frame; antes ficava congelado em bottomR+0.5km).
+        // altitude real da camera sobre o offset numerico do planeta (UE recalcula por frame).
         CPUConstants.SkyViewSize.Z = std::clamp(
-            CPUConstants.PlanetRadii.X + kGroundAltitudeKm +
+            CPUConstants.PlanetRadii.X + kPlanetRadiusOffsetKm +
                 std::max(_CameraWorldPos.Y, 0.0f) * _KmPerWorldUnit,
             CPUConstants.PlanetRadii.X + 0.05f,
             CPUConstants.PlanetRadii.Y - 1.0f);

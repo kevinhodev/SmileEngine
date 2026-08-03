@@ -763,7 +763,7 @@ namespace Smile {
         GpuTileSourceCandidateCount = 0;
 
         const f32 BaseSize = std::max(TileBaseSize, 1.0f);
-        const u32 Depth = std::min(TileMaxDepth, 11u);
+        const u32 Depth = std::min(TileMaxDepth, 12u);
         const u32 RootCells = 1u << Depth;
         const f32 RootSize = BaseSize * static_cast<f32>(RootCells);
         const f32 SnapX = std::floor(_CameraPos.X / BaseSize) * BaseSize;

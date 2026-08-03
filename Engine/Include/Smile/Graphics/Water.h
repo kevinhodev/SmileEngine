@@ -69,7 +69,7 @@ namespace Smile {
         bool GetGpuFrustumCull() const     { return UseGpuFrustumCull; }
         void SetTileBaseSize(f32 V)        { TileBaseSize = V < 1.0f ? 1.0f : V; }
         f32  GetTileBaseSize() const       { return TileBaseSize; }
-        void SetTileMaxDepth(u32 V)        { TileMaxDepth = V > 11u ? 11u : V; }
+        void SetTileMaxDepth(u32 V)        { TileMaxDepth = V > 12u ? 12u : V; }
         u32  GetTileMaxDepth() const       { return TileMaxDepth; }
         void SetGpuRingRadius(u32 V) {
             if (V < 2u) V = 2u;
@@ -396,8 +396,9 @@ namespace Smile {
 
         bool UseGpuFrustumCull     = true;
         // 16 m / 32 cells = 0.5 m at the finest ring, matching the shortest
-        // wavelength represented by cascade 0. Depth 11 retains a 32.768 km root.
+        // wavelength represented by cascade 0. Depth 12 retains a 65.536 km root,
+        // whose 32.768 km half-extent safely covers the 20 km render far plane.
         f32 TileBaseSize           = 16.0f;
-        u32 TileMaxDepth           = 11;
+        u32 TileMaxDepth           = 12;
     };
 }

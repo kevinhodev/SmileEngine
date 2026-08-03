@@ -45,5 +45,14 @@ void main(uint3 id : SV_DispatchThreadID) {
     float2 lutUV = SkyViewParamsToUv(viewZenithCos, lightViewCos, kViewHeight);
     float3 L = SkyViewLUT.SampleLevel(LinearClampSampler, lutUV, 0.0f).rgb;
 
+    // Este cubemap e exclusivo da reflexao da agua. Radiancia abaixo do plano macroscopico
+    // nao pode iluminar a superficie por reflexao; deixa-la no cubemap fazia o prefilter GGX
+    // integrar o limbo atmosferico do planeta (ligeiramente abaixo do horizonte plano). Em
+    // incidencia rasante esse pico virava uma faixa branca continua. A UE aplica a mesma
+    // politica no capture do skylight: lower hemisphere solid/black antes da convolucao.
+    if (dir.y < 0.0f) {
+        L = 0.0f;
+    }
+
     OutCube[uint3(id.xy, id.z)] = float4(L, 1.0f);
 }

@@ -26,7 +26,7 @@ namespace Smile {
         Vec4 SunDir;             // xyz = direction TO sun, w = sun illuminance
         Vec4 AtmoSteps;          // x = transmittance, y = multiscatter, z = sky-view steps
         Vec4 LutSize;            // x = transW, y = transH, z = multiW, w = multiH
-        Vec4 SkyViewSize;        // x = skyW, y = skyH, z = camera view height (km), w = ground altitude (km)
+        Vec4 SkyViewSize;        // x=skyW, y=skyH, z=camera radius (km), w=planet radius offset (km)
         Vec4 SunDisk;            // x = cos(half angle), y = disk intensity, z = sun illuminance (sky-view)
         Mat44 InvViewProjNoTrans; // sky PS world-ray reconstruction
 
@@ -71,7 +71,9 @@ namespace Smile {
         static constexpr u32 kAerialH        = 32;
         static constexpr u32 kAerialSlices   = 16;
 
-        static constexpr f32 kGroundAltitudeKm = 0.5f;
+        // UE/Hillaire-style numerical offset: keep the camera just outside the
+        // planet without pretending sea level is 500 m above the ground sphere.
+        static constexpr f32 kPlanetRadiusOffsetKm = 0.001f;
 
         void Initialize(ID3D12Device* Device, FCommandQueue& CmdQueue,
                         FUploadQueue& UploadQueue, FTextureSRVHeap& SRVHeap,
