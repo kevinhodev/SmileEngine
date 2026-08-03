@@ -47,6 +47,7 @@ namespace SmileEditor {
         QPixmap       Logo;
         QString       StageLabel;
         QString       AdapterText;
+        QString       Quote;                  // sorteada uma vez por execução, estilo Flax
         qreal         TargetProgress  = 0.0;
         qreal         DisplayProgress = 0.0;   // segue TargetProgress com easing, por tick
         bool          Finishing       = false;

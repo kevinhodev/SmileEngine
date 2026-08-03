@@ -17,9 +17,11 @@
 #include <QPainterPath>
 #include <QPropertyAnimation>
 #include <QRadialGradient>
+#include <QRandomGenerator>
 #include <QScreen>
 #include <QtGlobal>
 #include <QtMath>
+#include <iterator>
 
 namespace SmileEditor {
     namespace {
@@ -39,6 +41,43 @@ namespace SmileEditor {
         const QColor kTextMuted (0x8A, 0x85, 0x7A);
         const QColor kTextDim   (0x6C, 0x6A, 0x61);
         const QColor kBorder    (0x2E, 0x2F, 0x28);
+
+        // Uma frase por execucao, estilo Flax (SplashScreenQuotes). Metade piada de quem faz
+        // engine, metade fato verdadeiro DESTA engine — o fato e mais charmoso que o meme
+        // generico, e envelhece melhor. Orcamento: ~60 caracteres, senao encosta no credito
+        // da arte no canto oposto.
+        const char* const kQuotes[] = {
+            "Compilando o compilador",
+            "Traçando raios que ninguém vai ver",
+            "Convencendo o denoiser",
+            "Isso funcionava ontem",
+            "Alinhando o constant buffer em 256 bytes",
+            "Perguntando pro DXC o que ele quis dizer",
+            "Aquecendo a GPU no capricho",
+            "Uma barreira a menos, um bug a mais",
+            "Reticulando splines",
+            "Café: 100% de ocupação",
+            "Procurando o frame que sumiu",
+            "Isto não é um jogo — ainda",
+            "Feito em casa, com C++20",
+            "Vai dar bom",
+            "Se piscar, é o TAA",
+            "Fazendo as contas que a luz já fez",
+            "O sol daqui usa a atmosfera de Hillaire",
+            "As estrelas vêm do catálogo Yale BSC — 8333 delas",
+            "A lua usa a textura LROC da NASA",
+            "As nuvens têm ruído de Worley cozido na hora",
+            "O oceano é uma FFT de 256² por cascata",
+            "As probes do DDGI se realocam sozinhas",
+            "O ReSTIR reusa a luz do vizinho",
+            "A chuva molha por porosidade, não por textura",
+            "O G-Buffer emagreceu de 192 para 128 bits",
+            "A névoa mora num froxel de 160x90x64",
+            "O terreno faz morph de LOD no vertex shader",
+            "O picking é por ID na GPU, igual hit proxy",
+            "O DDGI roda em fila de compute, escondido no raster",
+            "Tem um HZB decidindo o que você não vê",
+        };
 
         QString ArtworkPath() {
         #ifdef SMILE_EDITOR_SOURCE_DIR
@@ -96,6 +135,8 @@ namespace SmileEditor {
         setWindowTitle(QStringLiteral("SmileEngine"));
 
         StageLabel = tr("Iniciando o editor…");
+        Quote = QString::fromUtf8(
+            kQuotes[QRandomGenerator::global()->bounded(int(std::size(kQuotes)))]);
         LoadArtwork();
         // Sem o badge escuro: sobre a arte a marca dourada flutua, como no About.
         Logo = MakeSmileLogoPixmap(qRound(52.0 * devicePixelRatioF()), /*IncludeBadge=*/false);
@@ -265,6 +306,15 @@ namespace SmileEditor {
             Painter.setPen(kTextNormal);
             Painter.drawText(Chip, Qt::AlignCenter, AdapterText);
         }
+
+        // Frase da execucao. Fica na faixa de cima, como legenda da arte: nao disputa atencao
+        // com a linha de etapa la embaixo, que e a informacao util. Sem os pontinhos animados
+        // da Flax de proposito — la a frase E o indicador de carga, aqui a barra ja e.
+        QFont QuoteFont = UIFont(10.0);
+        QuoteFont.setItalic(true);
+        Painter.setFont(QuoteFont);
+        DrawShadowText(Painter, QPointF(kMarginLeft + 2.0, 62.0), Quote,
+                       QColor(0xDD, 0xD8, 0xCA, 175));
 
         // Credito da arte (a cena e do pacote ORCA, cedida pela Amazon Lumberyard)
         Painter.setFont(UIFont(8.5));
