@@ -588,7 +588,13 @@ fonte de verdade da API de cada subsistema.*
 
 ## 14. Oceano FFT
 
-O oceano combina três cascatas espectrais físicas, IFFT compute, clipmap GPU-driven e
-shading forward integrado aos buffers temporais. O contrato matemático, a ordem dos
-passes, a validação e os limites atuais estão documentados em
+O oceano combina três cascatas espectrais físicas, IFFT compute, clipmap GPU-driven,
+shading forward e reflexão hierárquica posterior à escrita de depth/G-buffer:
+SSR de contato sobre as cópias sem água, DXR no miss ou na cobertura parcial e céu no
+miss final.
+O `SceneColorCopy` é HDR e possui cadeia completa de mips gerada antes da água; o SSR
+seleciona um LOD contínuo pelo footprint GGX em vez de refletir sempre o mip 0.
+Normal, Sol e reflexão compartilham momentos de slope anisotrópicos, e o histórico
+dedicado escreve hit distance válido para Ray Reconstruction. O contrato matemático,
+a ordem dos passes, a validação e os limites atuais estão documentados em
 [`OCEAN-AUDIT.md`](OCEAN-AUDIT.md).

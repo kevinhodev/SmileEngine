@@ -2,6 +2,7 @@
 #define SMILE_WATER_COMMON_HLSLI
 
 #include "../Common/DepthConfig.hlsli"
+#include "../BRDF.hlsli"
 
 cbuffer WaterCB : register(b0) {
     row_major float4x4 ViewProj;
@@ -101,7 +102,7 @@ float3 WaterFFTNormalFromDisplacement(float2 worldXZ, float worldStep, float nor
     return normalize(float3(hL - hR, max(normalUp * 0.65, 1.0), hD - hU));
 }
 
-Texture2D<float4> WaterNormalTex  : register(t4); // cascata 0 (Toksvig mips)
+Texture2D<float4> WaterNormalTex  : register(t4); // cascata 0 (momentos de slope nos mips)
 Texture2D<float4> WaterNormalTex1 : register(t8);
 Texture2D<float4> WaterNormalTex2 : register(t9);
 SamplerState      AnisoWrap      : register(s3); // s2 e o sampler de comparacao do CSM
@@ -121,6 +122,12 @@ float LinearizeDepth(float ndcZ) {
 float SampleSceneDepthLin(float2 uv) {
     int2 px = clamp(int2(uv * ScreenParams.xy), int2(0, 0), int2(ScreenParams.xy) - 1);
     return LinearizeDepth(SceneDepth.Load(int3(px, 0)));
+}
+
+float3 WaterSceneWorldFromDepth(float2 uv, float deviceZ) {
+    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    const float4 worldH = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
+    return worldH.xyz / max(abs(worldH.w), 1.0e-6f) * sign(worldH.w);
 }
 
 struct VSOutput {
@@ -146,27 +153,49 @@ float3 AnalyticSky(float3 dir) {
     float up = saturate(dir.y * 0.5 + 0.5);
     float3 horizon = float3(0.52, 0.62, 0.72);
     float3 zenith  = float3(0.09, 0.24, 0.52);
-    float3 sky = lerp(horizon, zenith, up);
-    float sun = saturate(dot(normalize(dir), normalize(SunDirection.xyz)));
-    sky += SunColor.rgb * pow(sun, 64.0) * 0.5;
-    return sky;
+    // O disco solar e avaliado pelo GGX direto; inclui-lo aqui criaria dois lobos.
+    return lerp(horizon, zenith, up);
+}
+
+float2 WaterWindDirection() {
+    const float len2 = dot(OceanParams1.yz, OceanParams1.yz);
+    return (len2 > 1.0e-6f) ? OceanParams1.yz * rsqrt(len2) : float2(1.0f, 0.0f);
+}
+
+float3 WaterNormalFromSlopeMoments(float4 moments) {
+    const float2 wind = WaterWindDirection();
+    const float2 crossWind = float2(-wind.y, wind.x);
+    const float2 slopeWorld = moments.x * wind + moments.y * crossWind;
+    return normalize(float3(slopeWorld.x, 1.0f, slopeWorld.y));
+}
+
+float2 WaterSlopeVariance(float4 moments) {
+    return max(moments.zw - moments.xy * moments.xy, 0.0f);
+}
+
+float4 WaterDecodeSlopeMoments(float4 moments) {
+    const float3 n = WaterNormalFromSlopeMoments(moments);
+    const float2 variance = WaterSlopeVariance(moments);
+    const float toksvigT = rsqrt(1.0f + variance.x + variance.y);
+    return float4(n, saturate(toksvigT));
+}
+
+float4 SampleWaterSlopeMoments(float2 uv, float2 dx, float2 dy) {
+    return WaterNormalTex.SampleGrad(AnisoWrap, uv, dx, dy);
+}
+
+float4 SampleWaterSlopeMomentsCascade(uint c, float2 uv, float2 dx, float2 dy) {
+    if      (c == 1) return WaterNormalTex1.SampleGrad(AnisoWrap, uv, dx, dy);
+    else if (c == 2) return WaterNormalTex2.SampleGrad(AnisoWrap, uv, dx, dy);
+    return WaterNormalTex.SampleGrad(AnisoWrap, uv, dx, dy);
 }
 
 float4 SampleWaterNormalGrad(float2 uv, float2 dx, float2 dy) {
-    float4 n = WaterNormalTex.SampleGrad(AnisoWrap, uv, dx, dy);
-    n.xyz = normalize(n.xyz);
-    n.w = saturate(n.w);
-    return n;
+    return WaterDecodeSlopeMoments(SampleWaterSlopeMoments(uv, dx, dy));
 }
 
 float4 SampleWaterNormalGradCascade(uint c, float2 uv, float2 dx, float2 dy) {
-    float4 n;
-    if      (c == 1) n = WaterNormalTex1.SampleGrad(AnisoWrap, uv, dx, dy);
-    else if (c == 2) n = WaterNormalTex2.SampleGrad(AnisoWrap, uv, dx, dy);
-    else             n = WaterNormalTex.SampleGrad(AnisoWrap, uv, dx, dy);
-    n.xyz = normalize(n.xyz);
-    n.w = saturate(n.w);
-    return n;
+    return WaterDecodeSlopeMoments(SampleWaterSlopeMomentsCascade(c, uv, dx, dy));
 }
 
 float SmoothWaterStep(float x) {
@@ -211,7 +240,21 @@ float2 BumpParallaxOffset(float4 baseTC, float3 V, float heightScale) {
     return p;
 }
 
-float SunSpecularLobes(float3 N, float3 V, float3 L, float shininess) {
+// GGX compartilhado com o restante do renderer. O piso de alpha representa o disco solar
+// (raio angular ~= 0,2667 graus) no mesmo espirito da variancia minima da Eq. 15 de
+// Bruneton/Neyret/Holzschuch: uma superficie perfeitamente lisa ainda reflete um disco finito.
+float WaterAnisotropicLambda(float3 W, float3 N, float3 T, float3 B,
+                             float alphaWind, float alphaCross) {
+    const float NoW = max(dot(N, W), 1.0e-4f);
+    const float ToW = dot(T, W);
+    const float BoW = dot(B, W);
+    const float alphaTan2 = (alphaWind * alphaWind * ToW * ToW +
+                             alphaCross * alphaCross * BoW * BoW) / (NoW * NoW);
+    return 0.5f * (sqrt(1.0f + alphaTan2) - 1.0f);
+}
+
+float WaterSunSpecularGGX(float3 N, float3 V, float3 L, float2 roughnessAxes,
+                          float2 windDirection) {
     const float NoL = saturate(dot(N, L));
     const float NoV = saturate(dot(N, V));
     if (NoL <= 0.0f || NoV <= 0.0f) return 0.0f;
@@ -219,11 +262,26 @@ float SunSpecularLobes(float3 N, float3 V, float3 L, float shininess) {
     const float3 H = normalize(V + L);
     const float NoH = saturate(dot(N, H));
     const float VoH = saturate(dot(V, H));
-    const float F = FresnelSchlick(0.02f, VoH);
-    // Normalized Blinn-Phong BRDF. The previous two unnormalized lobes reached
-    // unit white before Fresnel and produced the large clipped blob in closeups.
-    const float normalization = (shininess + 2.0f) * (1.0f / (8.0f * 3.14159265f));
-    return normalization * pow(NoH, shininess) * F * NoL;
+    const float sunSlope = 0.0046542f; // tan(0,2667 graus)
+    const float2 alpha = max(roughnessAxes * roughnessAxes, sunSlope.xx);
+    float3 T = float3(windDirection.x, 0.0f, windDirection.y);
+    T = T - N * dot(N, T);
+    if (dot(T, T) <= 1.0e-6f) {
+        const float3 axis = (abs(N.y) < 0.999f) ? float3(0, 1, 0) : float3(1, 0, 0);
+        T = cross(axis, N);
+    }
+    T = normalize(T);
+    const float3 B = normalize(cross(N, T));
+    const float3 Ht = float3(dot(H, T), dot(H, B), NoH);
+    const float denom = Ht.x * Ht.x / (alpha.x * alpha.x) +
+                        Ht.y * Ht.y / (alpha.y * alpha.y) + Ht.z * Ht.z;
+    const float D = rcp(3.14159265359f * alpha.x * alpha.y * denom * denom);
+    const float lambdaV = WaterAnisotropicLambda(V, N, T, B, alpha.x, alpha.y);
+    const float lambdaL = WaterAnisotropicLambda(L, N, T, B, alpha.x, alpha.y);
+    const float G = rcp(1.0f + lambdaV + lambdaL);
+    const float Vis = G / max(4.0f * NoV * NoL, 1.0e-5f);
+    const float F = FresnelSchlick(0.0204f, VoH);
+    return D * Vis * F * NoL;
 }
 
 #endif 

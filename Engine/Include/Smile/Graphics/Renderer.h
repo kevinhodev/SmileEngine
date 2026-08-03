@@ -16,6 +16,7 @@
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/SwapChain.h"
 #include "Smile/Graphics/PipelineState.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/Camera.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Texture.h"
@@ -1080,7 +1081,14 @@ namespace Smile {
         ComPtr<ID3D12Resource> SceneColorCopy;
         ComPtr<ID3D12Resource> SceneDepthCopy;
         u32                    SceneCopyTableStart = kInvalidSlot;
-        D3D12_RESOURCE_STATES  SceneColorCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
+        // Mip 0 preserva a cena HDR sem agua; os demais formam a piramide de radiancia usada
+        // pelo SSR de contato para integrar o footprint do lobo especular.
+        static constexpr u32   kSceneColorMipMax = 16;
+        u32                    SceneColorMipCount = 1;
+        u32                    SceneColorMipSRVStart = kInvalidSlot;
+        u32                    SceneColorMipUAVStart = kInvalidSlot;
+        D3D12_RESOURCE_STATES  SceneColorMipStates[kSceneColorMipMax]{};
+        FComputePipeline       SceneColorMipPSO;
         D3D12_RESOURCE_STATES  SceneDepthCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
 
         bool            ShowSkybox    = true;

@@ -28,6 +28,7 @@ namespace Smile {
         enum class EOutputMode : u32 {
             Base = 0,       // HDR + velocity
             TemporalMasks, // HDR + velocity + reactive/composition
+            ReflectionGuides, // + G-buffer da agua para o passe dedicado de reflexos
             RayReconstruction
         };
 
@@ -44,9 +45,9 @@ namespace Smile {
                             const Mat44& ViewProjNoJitter, const Mat44& PrevViewProjNoJitter,
                             const Vec3& CameraPos, const Vec3& SunDir, f32 SunIntensity,
                             const Vec3& SunColor, const Vec3& SkyAmbient, f32 ElapsedTime,
-                            bool IBLEnabled, f32 IBLIntensity,
-                            u32 ScreenW, u32 ScreenH, f32 NearZ, f32 FarZ, bool HasSceneCopies,
-                            bool UseAtmosphereSky);
+                             bool IBLEnabled, f32 IBLIntensity,
+                             u32 ScreenW, u32 ScreenH, f32 NearZ, f32 FarZ, bool HasSceneCopies,
+                             bool UseAtmosphereSky, bool DedicatedReflections);
 
         static constexpr u32 kFFTCascades = 3;
 
@@ -281,9 +282,12 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> BasePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> TemporalMasksPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> ReflectionGuidesPSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> WireframePSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> ReflectionWireframePSO;
         // Variante diagnostica sem depth/velocity/masks/G-buffer; ver SetGuideInvisible.
         Microsoft::WRL::ComPtr<ID3D12PipelineState> GuideInvisiblePSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> ReflectionGuideInvisiblePSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CBV;
         u8*             MappedCBVBase = nullptr;

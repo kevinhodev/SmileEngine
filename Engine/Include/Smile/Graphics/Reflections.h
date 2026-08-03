@@ -49,9 +49,15 @@ namespace Smile {
         Vec4  ReGIRInvCellEnabled;
         Vec4  ReGIRGridCountSamples;
         Vec4  ReGIRResources;
+        Mat44 ViewProj;          // current world -> clip; water contact SSR
+        Vec4  WaterEnvironmentParams; // x=atmosphere, y=intensity, z=env max mip, w=scene max mip
     };
     static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 480,
                   "ReflectionConstants divergiu do cbuffer ReflectionCB");
+    static_assert(offsetof(ReflectionConstants, ViewProj) == 544,
+                  "ViewProj deve permanecer anexado ao fim do ReflectionCB");
+    static_assert(offsetof(ReflectionConstants, WaterEnvironmentParams) == 608,
+                  "WaterEnvironmentParams divergiu do ReflectionCB da agua");
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
     // Fase 1: mirror, full-res, sem denoise. Passe de compute (trace, sombreado pelo MESMO
@@ -61,6 +67,7 @@ namespace Smile {
     public:
         // Cria a pipeline de trace (compute) + a pipeline de composite (grafica) + o CB. 1x.
         void Initialize(ID3D12Device* Device);
+        void RecreatePipelines(ID3D12Device* Device);
 
         // (Re)cria a textura de saida (radiancia) no tamanho da tela e (re)monta as tabelas de
         // descritores. Chamar no setup da cena e em TODO resize (depth/gbuffer recriados). Os
@@ -69,7 +76,9 @@ namespace Smile {
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
                             u32 DepthSlot, u32 GBufferSlot, u32 GBufferCSlot, u32 BRDFLutSlot,
-                            u32 GBufferASlot,
+                            u32 GBufferASlot, u32 VelocitySlot,
+                            u32 SceneColorSlot, u32 SceneDepthSlot, u32 SceneColorMipCount,
+                            u32 AtmosphereSpecularSlot, u32 HDRSpecularSlot,
                             // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
                             // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
                             u32 DistSlot, u32 ProbeDataSlot,
@@ -80,11 +89,13 @@ namespace Smile {
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
                          f32 AtlasTile, f32 AtlasW, f32 AtlasH, f32 MaxRayDist);
 
-        void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& PrevViewProj,
+        void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Mat44& ViewProj,
+                            const Mat44& PrevViewProj,
                             const Vec3& CameraPos, const Vec3& PrevCameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
-                            bool RealHitShading, const Mat44& View,
+                            bool RealHitShading, const Mat44& View, bool UseAtmosphereSky,
+                            f32 WaterEnvironmentIntensity,
                             u32 PunctualLightCount, u32 TemporalInstanceCount,
                             bool MotionHistoryValid);
 
@@ -99,6 +110,15 @@ namespace Smile {
         // segue o denoiser caseiro (Resolve->Temporal->Spatial).
         void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
                          FGpuProfiler* Profiler = nullptr);
+
+        // Segundo passe, executado DEPOIS que a agua escreveu depth/G-buffer/velocity. Traca apenas
+        // pixels SMILE_SHADINGMODEL_WATER e acumula em historico proprio, sem sobrescrever o sinal
+        // especular dos opacos usado pelo NRD/RR.
+        void RecordWaterTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
+                              FGpuProfiler* Profiler = nullptr);
+        void RecordWaterComposite(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
+                                  D3D12_CPU_DESCRIPTOR_HANDLE HdrRtv, u32 Width, u32 Height);
+        u32 GetWaterSpecHitTable() const { return WaterSpecHitTable; }
 
         // NRD (unificado): cria o UAV da IN_SPEC (pack escreve) + SRV da OUT_SPEC (composite le) e a
         // tabela do composite-NRD. Chamar apos SetupForResize e Nrd.SetupForResize.
@@ -119,7 +139,7 @@ namespace Smile {
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
         // Limpa o historico temporal PROPRIO (caminho legado, sem NRD) no proximo RecordTrace.
-        void InvalidateHistory()  { NeedsHistoryClear = true; }
+        void InvalidateHistory()  { NeedsHistoryClear = true; NeedsWaterHistoryClear = true; }
 
         void SetUseNrd(bool V) { UseNrd = V; }
         bool GetUseNrd() const { return UseNrd; }
@@ -172,6 +192,8 @@ namespace Smile {
         f32  GetFullResMaxRough() const { return FullResMaxRough; }
         void SetDebugMode(u32 V)      { DebugMode = V; }
         u32  GetDebugMode() const     { return DebugMode; }
+        void SetWaterReflectionScale(f32 V) { WaterReflectionScale = V; }
+        void SetWaterWindDirection(f32 Radians) { WaterWindDirection = Radians; }
 
     private:
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
@@ -187,8 +209,11 @@ namespace Smile {
         FVolumetricPipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
         FVolumetricPipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
         FVolumetricPipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
+        FVolumetricPipeline WaterTracePSO;    // 15 SRV [cena + water + copies + env], 2 UAV
+        FVolumetricPipeline WaterTemporalPSO; // 5 SRV, 1 UAV; historico exclusivo da agua
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRS;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> WaterCompositePSO;
 
         // Trace -> Radiance(half) + RayData(half). Resolve -> Resolved(full, denoise espacial+upsample).
         // Temporal -> History[curr] (acumulado; ping-pong). Composite le History[curr]. RGBA16F.
@@ -199,6 +224,9 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> ResolvedMotion;
         Microsoft::WRL::ComPtr<ID3D12Resource> History[2];
         Microsoft::WRL::ComPtr<ID3D12Resource> Denoised; // saida do spatial; lida pelo composite
+        Microsoft::WRL::ComPtr<ID3D12Resource> WaterResolved;
+        Microsoft::WRL::ComPtr<ID3D12Resource> WaterMotion;
+        Microsoft::WRL::ComPtr<ID3D12Resource> WaterHistory[2];
         D3D12_RESOURCE_STATES RadianceState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RayDataState  = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RayMotionState = D3D12_RESOURCE_STATE_COMMON;
@@ -206,6 +234,10 @@ namespace Smile {
         D3D12_RESOURCE_STATES ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES HistoryState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
         D3D12_RESOURCE_STATES DenoisedState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES WaterResolvedState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES WaterMotionState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES WaterHistoryState[2] = {
+            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 RadianceSRVSlot     = kInvalidSlot;
@@ -240,6 +272,18 @@ namespace Smile {
         u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 5 SRVs [nrdOutSpec, gbuf, depth, brdfLut, gbufC]
         // RR: composite lendo o Resolved CRU (parity-independente — Resolved nao faz ping-pong).
         u32 CompositeTableRaw    = kInvalidSlot;                  // 5 SRVs [resolved, gbuf, depth, brdfLut, gbufC]
+        u32 WaterResolvedSRVSlot = kInvalidSlot;
+        u32 WaterResolvedUAVSlot = kInvalidSlot;
+        u32 WaterMotionSRVSlot   = kInvalidSlot;
+        u32 WaterMotionUAVSlot   = kInvalidSlot;
+        u32 WaterHistorySRVSlot[2] = { kInvalidSlot, kInvalidSlot };
+        u32 WaterHistoryUAVSlot[2] = { kInvalidSlot, kInvalidSlot };
+        u32 WaterTraceUAVTable = kInvalidSlot;
+        u32 WaterTraceTable[kTraceTables] = { kInvalidSlot, kInvalidSlot };
+        u32 WaterTemporalTable[2] = { kInvalidSlot, kInvalidSlot };
+        u32 WaterCompositeTable[2] = { kInvalidSlot, kInvalidSlot };
+        u32 WaterCompositeRawTable = kInvalidSlot;
+        u32 WaterSpecHitTable = kInvalidSlot; // [WaterResolved, GBufferB] para o guide do RR
         u32 DepthSlotCached     = kInvalidSlot;
         u32 GBufferSlotCached   = kInvalidSlot;
         u32 GBufferCSlotCached  = kInvalidSlot; // metallic (dieta do G-buffer)
@@ -248,6 +292,10 @@ namespace Smile {
         u32  FrameParity        = 0;     // alterna a cada RecordTrace
         u32  CurrParity         = 0;     // paridade usada neste frame (trace->composite)
         bool NeedsHistoryClear  = false; // limpa os 2 history no 1o RecordTrace pos-setup
+        u32  WaterFrameParity = 0;
+        u32  WaterCurrParity  = 0;
+        bool NeedsWaterHistoryClear = false;
+        bool WaterUseRaw = false;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB  = nullptr;
@@ -285,5 +333,8 @@ namespace Smile {
         f32  SpatialRadius       = 8.0f;  // raio max (px) do denoise espacial pos-temporal na borda
         f32  FullResMaxRough     = 0.4f;  // <= isto -> trace full-res (espelho exato <0.05, senao GGX); resto half-res
         u32  DebugMode           = 0;     // 0=off, 1=acumulacao (frames), 2=mascara espelho (overlay)
+        f32  WaterReflectionScale = 1.0f;
+        f32  WaterWindDirection = 0.0f;
+        f32  WaterSceneColorMaxMip = 0.0f;
     };
 }

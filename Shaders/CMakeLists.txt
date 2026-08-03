@@ -63,10 +63,13 @@ smile_compile_shader(Lighting/ReSTIRDINrdComposite.cs.hlsl     cs_6_6 main SHADE
 # Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
 smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/WaterReflectionTrace.cs.hlsl  cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/WaterReflectionTemporal.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionResolve.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionTemporal.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionSpatial.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/WaterReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 # Pack do sinal especular p/ o NRD (RELAX) — inclui NRD.hlsli p/ o RELAX_FrontEnd_Pack*
 smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 
@@ -74,6 +77,7 @@ smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_
 # do G-buffer + extracao do hitDist especular do Resolved. Alimentam o slEvaluateFeature(kFeatureDLSS_RR).
 smile_compile_shader(Upscale/DlssRRGuides.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Upscale/DlssRRSpecHit.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Upscale/DlssRRWaterSpecHit.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 # Motion vector do background (ceu/nuvens/fog) — preenche o velocity ZERO que o G-buffer deixa, senao o
 # DLSS/RR/TAA reprojeta o historico do ceu do lugar errado ao girar a camera (ghosting).
@@ -155,6 +159,8 @@ smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 mainBase SHADER
                      OUTPUT_NAME WaterSurfaceBase)
 smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 mainMasks SHADER_OUTPUTS
                      OUTPUT_NAME WaterSurfaceMasks)
+smile_compile_shader(Water/WaterSurface.ps.hlsl           ps_6_0 mainReflection SHADER_OUTPUTS
+                     OUTPUT_NAME WaterSurfaceReflection)
 smile_compile_shader(Water/WaterGenerateDraws.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 # Oceano FFT na GPU (256^2) — espectro -> FFT -> deslocamento -> gradientes/normal
 smile_compile_shader(Water/OceanUpdateSpectrum.cs.hlsl    cs_6_0 main SHADER_OUTPUTS)
@@ -163,6 +169,7 @@ smile_compile_shader(Water/OceanCreateDisplacement.cs.hlsl cs_6_0 main SHADER_OU
 smile_compile_shader(Water/OceanGradients.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/OceanDisplacementMip.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Water/OceanNormalMip.cs.hlsl         cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Water/WaterSceneColorMip.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 
 # Pos-processamento e Tonemapping
 smile_compile_shader(Tonemap/PostProcess.vs.hlsl          vs_6_0 main SHADER_OUTPUTS)
@@ -237,13 +244,17 @@ add_custom_target(Shaders
         Reflections/ReflectionMotion.hlsli
         Reflections/ReflectionTrace.cs.hlsl
         Reflections/ReflectionTraceMirror.cs.hlsl
+        Reflections/WaterReflectionTrace.cs.hlsl
+        Reflections/WaterReflectionTemporal.cs.hlsl
         Reflections/ReflectionResolve.cs.hlsl
         Reflections/ReflectionTemporal.cs.hlsl
         Reflections/ReflectionSpatial.cs.hlsl
         Reflections/ReflectionComposite.ps.hlsl
+        Reflections/WaterReflectionComposite.ps.hlsl
         Reflections/ReflectionNrdPack.cs.hlsl
         Upscale/DlssRRGuides.cs.hlsl
         Upscale/DlssRRSpecHit.cs.hlsl
+        Upscale/DlssRRWaterSpecHit.cs.hlsl
         Upscale/BackgroundVelocity.cs.hlsl
         Temporal/TemporalMotionCommon.hlsli
         Temporal/TemporalSurface.cs.hlsl
@@ -310,6 +321,7 @@ add_custom_target(Shaders
         Water/OceanGradients.cs.hlsl
         Water/OceanDisplacementMip.cs.hlsl
         Water/OceanNormalMip.cs.hlsl
+        Water/WaterSceneColorMip.cs.hlsl
         Tonemap/PostProcess.vs.hlsl
         Tonemap/BloomExtract.ps.hlsl
         Tonemap/BloomBlur.ps.hlsl

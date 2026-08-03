@@ -424,7 +424,11 @@ namespace Smile {
         MappedCB->DeltaTime        = Dt;
         MappedCB->FoamRecovery     = FoamRecovery;
         MappedCB->FoamReset        = FoamHistoryValid ? 0.0f : 1.0f;
-        MappedCB->Padding          = 0.0f;
+        MappedCB->Padding0         = 0.0f;
+        MappedCB->WindDirectionX   = std::cos(WindAngle);
+        MappedCB->WindDirectionZ   = std::sin(WindAngle);
+        MappedCB->Padding1         = 0.0f;
+        MappedCB->Padding2         = 0.0f;
         FoamHistoryValid = true;
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress() +
             static_cast<UINT64>(FrameSlot) * sizeof(OceanCB);

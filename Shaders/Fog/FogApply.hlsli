@@ -84,7 +84,11 @@ float4 FogApplyMain(float2 pixelXY) {
     // e feixe contra o ceu e a foto classica de god ray —, (b) pagava o raymarch do
     // ceu e jogava fora (SunShaftsVolumetric marcha o alcance todo no ceu de proposito)
     // e (c) deixava o skyCenter do upsample bilateral como codigo morto.
-    if (dist >= DepthParams.y * 0.97f) {
+    // Ceu e definido pelo depth clear, nao pela distancia reconstruida. A heuristica antiga
+    // (dist >= 97% do far plane) classificava o ultimo anel do oceano como ceu: ele deixava de
+    // receber aerial perspective justamente no horizonte e virava uma faixa especular clara,
+    // especialmente visivel a noite. Geometria valida deve continuar pelo ramo de fog ate o far.
+    if (SmileIsSky(depthNdc)) {
         float3 skyInscatter = vol.rgb;
         if (AerialParams.w > 0.5f)
             skyInscatter += SampleVolumetricShafts(uv, dist, SmileIsSky(depthNdc)) * vol.a;

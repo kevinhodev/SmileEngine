@@ -646,6 +646,54 @@ namespace {
               "displacement mip filter does not reject the Nyquist checkerboard");
     }
 
+    void TestSlopeMomentMipTransfer() {
+        std::cout << "[Normal/BRDF AA] slope moments preserve unresolved directional energy\n";
+
+        struct Slope { double Wind; double Cross; };
+        const std::array<Slope, 4> Samples = {{
+            { 1.0,  0.25 }, { -1.0,  0.25 },
+            { 1.0, -0.25 }, { -1.0, -0.25 }
+        }};
+
+        double MeanWind = 0.0, MeanCross = 0.0;
+        double SecondWind = 0.0, SecondCross = 0.0;
+        for (const Slope& S : Samples) {
+            MeanWind += S.Wind;
+            MeanCross += S.Cross;
+            SecondWind += S.Wind * S.Wind;
+            SecondCross += S.Cross * S.Cross;
+        }
+        MeanWind *= 0.25; MeanCross *= 0.25;
+        SecondWind *= 0.25; SecondCross *= 0.25;
+
+        const double VarianceWind = SecondWind - MeanWind * MeanWind;
+        const double VarianceCross = SecondCross - MeanCross * MeanCross;
+        Check(Near(MeanWind, 0.0) && Near(MeanCross, 0.0),
+              "symmetric subpixel slopes must disappear from the filtered normal");
+        Check(Near(VarianceWind, 1.0) && Near(VarianceCross, 0.0625),
+              "missing normal detail was not transferred to directional slope variance");
+        Check(Near(SecondWind, MeanWind * MeanWind + VarianceWind) &&
+              Near(SecondCross, MeanCross * MeanCross + VarianceCross),
+              "slope moment energy identity was not preserved");
+        Check(VarianceWind > VarianceCross,
+              "wind-aligned spectrum must remain anisotropic after mip filtering");
+
+        const std::array<Slope, 4> Constant = {{
+            { 0.3, -0.2 }, { 0.3, -0.2 }, { 0.3, -0.2 }, { 0.3, -0.2 }
+        }};
+        double ConstantMeanWind = 0.0, ConstantMeanCross = 0.0;
+        double ConstantSecondWind = 0.0, ConstantSecondCross = 0.0;
+        for (const Slope& S : Constant) {
+            ConstantMeanWind += S.Wind * 0.25;
+            ConstantMeanCross += S.Cross * 0.25;
+            ConstantSecondWind += S.Wind * S.Wind * 0.25;
+            ConstantSecondCross += S.Cross * S.Cross * 0.25;
+        }
+        Check(Near(ConstantSecondWind - ConstantMeanWind * ConstantMeanWind, 0.0) &&
+              Near(ConstantSecondCross - ConstantMeanCross * ConstantMeanCross, 0.0),
+              "a resolved constant slope must not create artificial BRDF roughness");
+    }
+
     struct PolarPair {
         bool Accepted = false;
         double First = 0.0;
@@ -703,6 +751,7 @@ int main() {
     TestSingleModeChoppinessSign();
     TestMetricSurfaceDifferentials();
     TestDisplacementMipLowPass();
+    TestSlopeMomentMipTransfer();
     TestGuardedPolarGaussian();
 
     if (Failures != 0) {

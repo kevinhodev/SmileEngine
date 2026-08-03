@@ -122,6 +122,7 @@ namespace Smile {
         SRVHeap.Initialize(Device.Native());
         ReportInitProgress("Compilando pipelines de raster", {}, 0.22f);
         PipelineState.Initialize(Device.Native());
+        SceneColorMipPSO.Initialize(Device.Native(), "WaterSceneColorMip.cs_6_0.cso", false);
 
         ReportInitProgress("Alocando G-Buffer e alvos de cena", {}, 0.40f);
         CreateDepthBuffer();
@@ -571,6 +572,9 @@ namespace Smile {
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
             GBuffer.SRVSlot(0), // GBufferA = BaseColor (tint do metal no reflexo)
+            VelocitySRVSlot,
+            SceneCopyTableStart, SceneCopyTableStart + 1, SceneColorMipCount,
+            Atmosphere.SkyReflectionSRV(), HDREnv.SpecularSRV(),
             DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV(),
             TemporalTransformSlots, TemporalSurfaceSlots);
 
@@ -903,6 +907,11 @@ namespace Smile {
         SceneColorCopy.Reset();
         SceneDepthCopy.Reset();
 
+        SceneColorMipCount = 1;
+        for (u32 Size = std::max(Width, Height);
+             Size > 1 && SceneColorMipCount < kSceneColorMipMax; Size >>= 1)
+            ++SceneColorMipCount;
+
         D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
         D3D12_RESOURCE_DESC ResourceDesc{};
@@ -910,17 +919,20 @@ namespace Smile {
         ResourceDesc.Width            = Width;
         ResourceDesc.Height           = Height;
         ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
+        ResourceDesc.MipLevels        = static_cast<UINT16>(SceneColorMipCount);
         ResourceDesc.SampleDesc       = { 1, 0 };
         ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
         ResourceDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneColorCopy)));
         VramTracker::Register(SceneColorCopy.Get(), EVramCategory::RenderTargets);
-        SceneColorCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
+        for (u32 Mip = 0; Mip < SceneColorMipCount; ++Mip)
+            SceneColorMipStates[Mip] = D3D12_RESOURCE_STATE_COPY_DEST;
 
+        ResourceDesc.MipLevels = 1;
+        ResourceDesc.Flags     = D3D12_RESOURCE_FLAG_NONE;
         ResourceDesc.Format = DXGI_FORMAT_R32_TYPELESS;
         SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneDepthCopy)));
@@ -929,13 +941,30 @@ namespace Smile {
 
         if (SceneCopyTableStart == kInvalidSlot)
             SceneCopyTableStart = SRVHeap.Allocate(2);
+        if (SceneColorMipSRVStart == kInvalidSlot)
+            SceneColorMipSRVStart = SRVHeap.Allocate(kSceneColorMipMax);
+        if (SceneColorMipUAVStart == kInvalidSlot)
+            SceneColorMipUAVStart = SRVHeap.Allocate(kSceneColorMipMax);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
         SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        SRVDesc.Texture2D.MipLevels     = 1;
+        SRVDesc.Texture2D.MipLevels     = SceneColorMipCount;
         SRVHeap.CreateSRV(Device.Native(), SceneColorCopy.Get(), SRVDesc, SceneCopyTableStart);
+
+        SRVDesc.Texture2D.MipLevels = 1;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
+        UAVDesc.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        for (u32 Mip = 0; Mip < SceneColorMipCount; ++Mip) {
+            SRVDesc.Texture2D.MostDetailedMip = Mip;
+            SRVHeap.CreateSRV(Device.Native(), SceneColorCopy.Get(), SRVDesc,
+                              SceneColorMipSRVStart + Mip);
+            UAVDesc.Texture2D.MipSlice = Mip;
+            SRVHeap.CreateUAV(Device.Native(), SceneColorCopy.Get(), UAVDesc,
+                              SceneColorMipUAVStart + Mip);
+        }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC DSRV{};
         DSRV.Format                  = DXGI_FORMAT_R32_FLOAT;
@@ -954,11 +983,14 @@ namespace Smile {
         VolumetricClouds.RecreateComposite(Device.Native(), RT, DS);
         Water.Recreate(Device.Native(), RT, DS, DXGI_FORMAT_R16G16_FLOAT);
         Water.RecreateGenerateDraws(Device.Native());
+        SceneColorMipPSO.Initialize(Device.Native(), "WaterSceneColorMip.cs_6_0.cso", false);
         for (u32 c = 0; c < kOceanCascades; ++c)
             Ocean[c].RecreatePipelines(Device.Native());
         Terrain.RecreatePSOs(Device.Native());
         DebugDraw.RecreatePSOs(Device.Native()); // formato proprio: desenha no backbuffer
         if (Device.RaytracingSupported()) {
+            Reflections.RecreatePipelines(Device.Native());
+            RRGuides.RecreatePSOs(Device.Native());
             DDGIDebugPass.Recreate(Device.Native(), RT, DS);
             ReSTIRDI.RecreatePSO(Device.Native());
             ReGIR.RecreatePSO(Device.Native());
@@ -989,10 +1021,12 @@ namespace Smile {
                 { { "CloudComposite.vs", "CloudComposite.ps" },
                   [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
                 { { "WaterSurface.vs", "WaterSurface.ps", "WaterSurfaceBase.ps",
-                    "WaterSurfaceMasks.ps" },
+                    "WaterSurfaceMasks.ps", "WaterSurfaceReflection.ps" },
                   [&] { Water.Recreate(Dev, RT, DS, DXGI_FORMAT_R16G16_FLOAT); } },
                 { { "WaterGenerateDraws.cs" },
                   [&] { Water.RecreateGenerateDraws(Dev); } },
+                { { "WaterSceneColorMip.cs" },
+                  [&] { SceneColorMipPSO.Initialize(Dev, "WaterSceneColorMip.cs_6_0.cso", false); } },
                 { { "OceanUpdateSpectrum.cs", "OceanFFT.cs", "OceanCreateDisplacement.cs",
                     "OceanGradients.cs", "OceanDisplacementMip.cs", "OceanNormalMip.cs" },
                   [&] {
@@ -1015,6 +1049,13 @@ namespace Smile {
                   [&] { if (Device.RaytracingSupported()) ReSTIRDI.RecreatePSO(Dev); } },
                 { { "ReGIRBuild.cs", "ReGIRAverage.cs" },
                   [&] { if (Device.RaytracingSupported()) ReGIR.RecreatePSO(Dev); } },
+                { { "ReflectionTrace.cs", "ReflectionTraceMirror.cs", "ReflectionResolve.cs",
+                    "ReflectionTemporal.cs", "ReflectionSpatial.cs", "ReflectionNrdPack.cs",
+                    "ReflectionComposite.ps", "WaterReflectionTrace.cs",
+                    "WaterReflectionTemporal.cs", "WaterReflectionComposite.ps" },
+                  [&] { if (Device.RaytracingSupported()) Reflections.RecreatePipelines(Dev); } },
+                { { "DlssRRGuides.cs", "DlssRRSpecHit.cs", "DlssRRWaterSpecHit.cs" },
+                  [&] { if (Device.RaytracingSupported()) RRGuides.RecreatePSOs(Dev); } },
                 // Gizmo/icones: um BuildPSOs so cobre os 5 PSOs, entao os stems de linha,
                 // triangulo e icone caem todos na mesma entrada.
                 { { "DebugDraw.vs", "DebugDraw.ps", "DebugDrawOccluded.ps", "DebugDrawLine.vs",
@@ -1716,6 +1757,10 @@ namespace Smile {
         }
 
         const bool ReflectionsActive = UseReflections && Reflections.IsReady();
+        const bool WaterReflectionDebug =
+            Water.GetDebugMode() == FWaterRenderer::EDebugMode::Reflection;
+        const bool DedicatedWaterReflections = ReflectionsActive &&
+            (Water.GetDebugMode() == FWaterRenderer::EDebugMode::Off || WaterReflectionDebug);
         const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady();
         // DLSS Ray Reconstruction: denoiser neural que substitui NRD + SR. Precisa do RR inicializado
         // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
@@ -1732,6 +1777,8 @@ namespace Smile {
         // isto cada passe teria a propria copia e o sweep de calibracao mexeria em metade deles.
         ReSTIRGI.SetRayEpsilons(RayEps);
         Reflections.SetRayEpsilons(RayEps);
+        Reflections.SetWaterReflectionScale(Water.GetReflectionScale());
+        Reflections.SetWaterWindDirection(Water.GetWindDirection());
         DDGI.SetRayEpsilons(RayEps);
 
         // Gather do 2o bounce (ShadeSurfaceHit): mesmo raciocinio do perfil de epsilons — um so
@@ -1905,8 +1952,8 @@ namespace Smile {
                                  ViewProjUnjittered, PrevViewProj, CameraPosition, KeyDir,
                                  KeyInt, KeyColor, SkyAmbient, ElapsedTime,
                                  WaterAtmoRefl || HDREnv.HasHDRLoaded(), WaterReflIntensity,
-                                 RenderWidth(), RenderHeight(), NearZ, FarZ,
-                                 WaterHasDepth, UseAtmosphereSky);
+                                  RenderWidth(), RenderHeight(), NearZ, FarZ,
+                                  WaterHasDepth, UseAtmosphereSky, DedicatedWaterReflections);
             for (u32 c = 0; c < kOceanCascades; ++c) {
                 if (!Ocean[c].IsInitialized()) continue;
                 Ocean[c].SetTime(ElapsedTime);
@@ -2114,11 +2161,15 @@ namespace Smile {
         if (ReflectionsActive) {
             Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             const f32 ReflSkyIntensity = 1.0f - RainSky * 0.65f;
-            Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, PrevViewProj,
+            const bool WaterUsesAtmosphere = UseAtmosphereSky && Atmosphere.IsInitialized();
+            const f32 WaterEnvironmentIntensity =
+                WaterUsesAtmosphere ? ReflSkyIntensity : IBLIntensity;
+            Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, ViewProjection, PrevViewProj,
                                        CameraPosition, PrevCameraPosition,
                                        RenderWidth(), RenderHeight(), KeyDir, KeyInt,
                                        KeyColor, FrameIndex, ReflSkyIntensity,
-                                       Reflections.GetRealHitShading(), View, GILightCount,
+                                       Reflections.GetRealHitShading(), View,
+                                       WaterUsesAtmosphere, WaterEnvironmentIntensity, GILightCount,
                                        TemporalMotion.InstanceCount(), MotionHistoryValidThisFrame);
         }
 
@@ -3063,23 +3114,66 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_COPY_SOURCE);
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorCopyState,
-                                    D3D12_RESOURCE_STATE_COPY_DEST);
+            Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorMipStates[0],
+                                    D3D12_RESOURCE_STATE_COPY_DEST, 0);
             Batch.TransitionTracked(SceneDepthCopy.Get(), SceneDepthCopyState,
                                     D3D12_RESOURCE_STATE_COPY_DEST);
             Batch.Flush(CommandList);
 
-            CommandList->CopyResource(SceneColorCopy.Get(), HDRColorBuffer.Get());
+            D3D12_TEXTURE_COPY_LOCATION ColorDst{};
+            ColorDst.pResource        = SceneColorCopy.Get();
+            ColorDst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            ColorDst.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION ColorSrc{};
+            ColorSrc.pResource        = HDRColorBuffer.Get();
+            ColorSrc.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            ColorSrc.SubresourceIndex = 0;
+            CommandList->CopyTextureRegion(&ColorDst, 0, 0, 0, &ColorSrc, nullptr);
             CommandList->CopyResource(SceneDepthCopy.Get(), DepthBuffer.Get());
 
             Batch.Transition(HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                              D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorCopyState,
-                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Batch.TransitionTracked(SceneDepthCopy.Get(), SceneDepthCopyState,
-                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            constexpr D3D12_RESOURCE_STATES SceneCopyRead =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorMipStates[0],
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, 0);
+            Batch.TransitionTracked(SceneDepthCopy.Get(), SceneDepthCopyState, SceneCopyRead);
+            Batch.Flush(CommandList);
+
+            if (SceneColorMipCount > 1) {
+                SceneColorMipPSO.Bind(CommandList);
+                const u32 Constants[8] = {
+                    RenderWidth(), RenderHeight(), 0u, 0u, 0u, 0u, 0u, 0u };
+                CommandList->SetComputeRoot32BitConstants(0, _countof(Constants), Constants, 0);
+
+                for (u32 Mip = 1; Mip < SceneColorMipCount; ++Mip) {
+                    Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorMipStates[Mip],
+                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, Mip);
+                    Batch.Flush(CommandList);
+
+                    CommandList->SetComputeRootDescriptorTable(
+                        1, SRVHeap.GpuHandle(SceneColorMipSRVStart + Mip - 1));
+                    CommandList->SetComputeRootDescriptorTable(
+                        2, SRVHeap.GpuHandle(SceneColorMipUAVStart + Mip));
+                    const u32 MipWidth  = std::max(1u, RenderWidth() >> Mip);
+                    const u32 MipHeight = std::max(1u, RenderHeight() >> Mip);
+                    CommandList->Dispatch((MipWidth + 7u) / 8u, (MipHeight + 7u) / 8u, 1);
+
+                    Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorMipStates[Mip],
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, Mip);
+                    Batch.Flush(CommandList);
+                }
+            }
+
+            // O water base usa a mesma copia para refracao no PS, enquanto o trace de reflexo
+            // usa a piramide no compute. Encerrar todos os subrecursos no estado combinado evita
+            // uma transicao do recurso inteiro sobre estados divergentes.
+            for (u32 Mip = 0; Mip < SceneColorMipCount; ++Mip)
+                Batch.TransitionTracked(SceneColorCopy.Get(), SceneColorMipStates[Mip],
+                                        SceneCopyRead, Mip);
             Batch.Flush(CommandList);
 
             auto HDR_RTV_Rebind = HDRRTVHeap.CpuHandle(0);
@@ -3093,12 +3187,20 @@ namespace Smile {
             WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
                                          D3D12_RESOURCE_STATE_RENDER_TARGET);
             WaterBatch.Flush(CommandList);
+            const bool WaterReflectionsActive = DedicatedWaterReflections;
             const bool ForceFullWaterOutputs = RRMode || Water.GetGuideInvisible() ||
                 Water.GetDebugMode() == FWaterRenderer::EDebugMode::Wireframe;
-            const FWaterRenderer::EOutputMode WaterOutputMode = ForceFullWaterOutputs
-                ? FWaterRenderer::EOutputMode::RayReconstruction
-                : (UpscaleActive ? FWaterRenderer::EOutputMode::TemporalMasks
-                                 : FWaterRenderer::EOutputMode::Base);
+            FWaterRenderer::EOutputMode WaterOutputMode;
+            if (RRMode) {
+                WaterOutputMode = FWaterRenderer::EOutputMode::RayReconstruction;
+            } else if (WaterReflectionsActive) {
+                WaterOutputMode = FWaterRenderer::EOutputMode::ReflectionGuides;
+            } else {
+                WaterOutputMode = ForceFullWaterOutputs
+                    ? FWaterRenderer::EOutputMode::RayReconstruction
+                    : (UpscaleActive ? FWaterRenderer::EOutputMode::TemporalMasks
+                                     : FWaterRenderer::EOutputMode::Base);
+            }
             D3D12_CPU_DESCRIPTOR_HANDLE WaterRTVs[8] = {
                 HDRRTVHeap.CpuHandle(0), VelocityRTVHeap.CpuHandle(0) };
             u32 WaterRTVCount = 2;
@@ -3115,6 +3217,13 @@ namespace Smile {
                 WaterRTVs[6] = UpscaleMaskRTVHeap.CpuHandle(1);
                 WaterRTVs[7] = RRGuides.SpecHitRTV();
                 WaterRTVCount = 8;
+            } else if (WaterOutputMode == FWaterRenderer::EOutputMode::ReflectionGuides) {
+                WaterRTVs[2] = GBuffer.RTVHandle(0);
+                WaterRTVs[3] = GBuffer.RTVHandle(1);
+                WaterRTVs[4] = GBuffer.RTVHandle(2);
+                WaterRTVs[5] = UpscaleMaskRTVHeap.CpuHandle(0);
+                WaterRTVs[6] = UpscaleMaskRTVHeap.CpuHandle(1);
+                WaterRTVCount = 7;
             }
             CommandList->OMSetRenderTargets(WaterRTVCount, WaterRTVs, FALSE, &DSV);
 
@@ -3134,9 +3243,36 @@ namespace Smile {
                                 Atmosphere.SkyViewSRV(), SunShadows.ConstantsAddress(),
                                 SunShadows.ShadowSRVSlot(), WaterOutputMode);
 
-            WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
-                                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            WaterBatch.Flush(CommandList);
+            if (WaterReflectionsActive) {
+                WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                GBuffer.AppendTransitions(WaterBatch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Flush(CommandList);
+
+                Reflections.RecordWaterTrace(CommandList, SRVHeap, &GpuProfiler);
+                if (RRMode) {
+                    RRGuides.RecordWaterSpecHitDist(
+                        CommandList, SRVHeap,
+                        SRVHeap.GpuHandle(Reflections.GetWaterSpecHitTable()),
+                        ConstantBuffer->GetGPUVirtualAddress() +
+                            static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
+                }
+                Reflections.RecordWaterComposite(CommandList, SRVHeap, HDRRTVHeap.CpuHandle(0),
+                                                 RenderWidth(), RenderHeight());
+
+                WaterBatch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                      D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                GBuffer.AppendTransitions(WaterBatch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Flush(CommandList);
+            } else {
+                WaterBatch.TransitionTracked(VelocityBuffer.Get(), VelocityState,
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Flush(CommandList);
+            }
             auto PostWaterRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &PostWaterRTV, FALSE, &DSV);
         }

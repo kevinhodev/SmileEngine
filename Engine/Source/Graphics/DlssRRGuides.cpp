@@ -37,9 +37,14 @@ namespace Smile {
     }
 
     void FDlssRRGuides::Initialize(ID3D12Device* Device) {
+        RecreatePSOs(Device);
+        Initialized = true;
+    }
+
+    void FDlssRRGuides::RecreatePSOs(ID3D12Device* Device) {
         GuidesPSO.Initialize(Device, "DlssRRGuides.cs_6_0.cso", 4, 3, false);
         SpecHitPSO.Initialize(Device, "DlssRRSpecHit.cs_6_0.cso", 1, 1, false);
-        Initialized = true;
+        WaterSpecHitPSO.Initialize(Device, "DlssRRWaterSpecHit.cs_6_0.cso", 2, 1, false);
     }
 
     void FDlssRRGuides::Shutdown() {
@@ -133,6 +138,20 @@ namespace Smile {
         // ruidoso no GPU-based validator. Preenche com o CB do frame (custo zero).
         CL->SetComputeRootConstantBufferView(0, FrameCB);
         CL->SetComputeRootDescriptorTable(1, ResolvedSrv);
+        CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(SpecHitUav));
+        const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
+        CL->Dispatch(GX, GY, 1);
+    }
+
+    void FDlssRRGuides::RecordWaterSpecHitDist(ID3D12GraphicsCommandList* CL,
+                                                FTextureSRVHeap& SRVHeap,
+                                                D3D12_GPU_DESCRIPTOR_HANDLE WaterTable,
+                                                D3D12_GPU_VIRTUAL_ADDRESS FrameCB) {
+        if (!Ready) return;
+        Transition(CL, SpecHit.Get(), SpecHitState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        WaterSpecHitPSO.Bind(CL);
+        CL->SetComputeRootConstantBufferView(0, FrameCB);
+        CL->SetComputeRootDescriptorTable(1, WaterTable);
         CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(SpecHitUav));
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
         CL->Dispatch(GX, GY, 1);

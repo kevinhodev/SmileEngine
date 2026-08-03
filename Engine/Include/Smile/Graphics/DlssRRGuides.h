@@ -20,6 +20,7 @@ namespace Smile {
     class FDlssRRGuides {
     public:
         void Initialize(ID3D12Device* Device);   // 2 PSOs compute
+        void RecreatePSOs(ID3D12Device* Device);
         void Shutdown();
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         bool IsReady() const { return Ready; }
@@ -38,6 +39,10 @@ namespace Smile {
         void RecordSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
                                D3D12_GPU_DESCRIPTOR_HANDLE ResolvedSrv,
                                D3D12_GPU_VIRTUAL_ADDRESS FrameCB);
+        // Sobrescreve somente pixels de agua, preservando o hit dos opacos fora dela.
+        void RecordWaterSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
+                                    D3D12_GPU_DESCRIPTOR_HANDLE WaterTable,
+                                    D3D12_GPU_VIRTUAL_ADDRESS FrameCB);
 
         // Sem reflexoes ativas: zera o specHitDist (evita lixo indefinido entrando no RR). Deixa em UAV.
         void ClearSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
@@ -62,6 +67,7 @@ namespace Smile {
 
         FVolumetricPipeline GuidesPSO;   // 4 SRV [A,B,C,Depth], 3 UAV [diffAlb, specAlb, normalRough]
         FVolumetricPipeline SpecHitPSO;  // 1 SRV [Resolved],     1 UAV [specHitDist]
+        FVolumetricPipeline WaterSpecHitPSO; // 2 SRV [waterResolved, GBufferB], 1 UAV
 
         Microsoft::WRL::ComPtr<ID3D12Resource> DiffAlb, SpecAlb, NrmRough, SpecHit;
         FDescriptorHeap SpecHitRTVHeap;

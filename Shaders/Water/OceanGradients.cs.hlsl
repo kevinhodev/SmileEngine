@@ -40,7 +40,15 @@ void main(uint3 id : SV_DispatchThreadID) {
     // Keep the raw J for foam. Only orient the shading normal after a fold.
     if (nrm.y < 0.0f) nrm = -nrm;
     nrm = normalize(nrm);
-    NormalMip0[loc] = float4(nrm, 1.0f);
+
+    // Momentos de slope no referencial do vento. A media reconstrui a normal filtrada;
+    // E[s^2]-E[s]^2 nos mips mede a energia que deixou de caber na normal resolvida.
+    // Isso implementa a transicao normal -> BRDF de Bruneton et al. sem textura extra.
+    const float2 wind = normalize(OceanWindDirection);
+    const float2 crossWind = float2(-wind.y, wind.x);
+    const float2 slopeWorld = nrm.xz / max(nrm.y, 1.0e-4f);
+    const float2 slopeWind = float2(dot(slopeWorld, wind), dot(slopeWorld, crossWind));
+    NormalMip0[loc] = float4(slopeWind, slopeWind * slopeWind);
 
     // Acumulacao temporal da espuma: .w guarda um MINIMO RELAXADO de J — onde a onda
     // dobrou (J baixo) a espuma persiste e o valor recupera rumo ao J do frame a

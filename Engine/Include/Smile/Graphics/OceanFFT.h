@@ -95,8 +95,13 @@ namespace Smile {
             f32 DeltaTime;
             f32 FoamRecovery;
             f32 FoamReset;
-            f32 Padding;
+            f32 Padding0;
+            f32 WindDirectionX;
+            f32 WindDirectionZ;
+            f32 Padding1;
+            f32 Padding2;
         };
+        static_assert(sizeof(OceanCB) == 256, "OceanCB must keep the D3D12 CBV stride");
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8*      MappedCBBase = nullptr;
         OceanCB* MappedCB     = nullptr;

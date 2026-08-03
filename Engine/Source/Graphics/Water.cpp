@@ -215,6 +215,7 @@ namespace Smile {
         auto PS = LoadShaderBytecode("WaterSurface.ps_6_0.cso");
         auto PSBase = LoadShaderBytecode("WaterSurfaceBase.ps_6_0.cso");
         auto PSMasks = LoadShaderBytecode("WaterSurfaceMasks.ps_6_0.cso");
+        auto PSReflection = LoadShaderBytecode("WaterSurfaceReflection.ps_6_0.cso");
 
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -280,13 +281,14 @@ namespace Smile {
             if (_RenderTargetCount == 4) {
                 Desc.RTVFormats[2] = DXGI_FORMAT_R8_UNORM;
                 Desc.RTVFormats[3] = DXGI_FORMAT_R8_UNORM;
-            } else if (_RenderTargetCount == 8) {
+            } else if (_RenderTargetCount >= 7) {
                 Desc.RTVFormats[2] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
                 Desc.RTVFormats[3] = DXGI_FORMAT_R10G10B10A2_UNORM;
                 Desc.RTVFormats[4] = DXGI_FORMAT_R8G8B8A8_UNORM;
                 Desc.RTVFormats[5] = DXGI_FORMAT_R8_UNORM;
                 Desc.RTVFormats[6] = DXGI_FORMAT_R8_UNORM;
-                Desc.RTVFormats[7] = DXGI_FORMAT_R16_FLOAT;
+                if (_RenderTargetCount == 8)
+                    Desc.RTVFormats[7] = DXGI_FORMAT_R16_FLOAT;
             }
             Desc.DSVFormat             = _DSFormat;
             Desc.SampleDesc            = { 1, 0 };
@@ -297,8 +299,13 @@ namespace Smile {
         CreateWaterPSO(PS,      D3D12_FILL_MODE_SOLID,     true,  8, PSO);
         CreateWaterPSO(PSBase,  D3D12_FILL_MODE_SOLID,     true,  2, BasePSO);
         CreateWaterPSO(PSMasks, D3D12_FILL_MODE_SOLID,     true,  4, TemporalMasksPSO);
+        CreateWaterPSO(PSReflection, D3D12_FILL_MODE_SOLID, true, 7, ReflectionGuidesPSO);
         CreateWaterPSO(PS,      D3D12_FILL_MODE_WIREFRAME, true,  8, WireframePSO);
+        CreateWaterPSO(PSReflection, D3D12_FILL_MODE_WIREFRAME, true, 7,
+                       ReflectionWireframePSO);
         CreateWaterPSO(PS,      D3D12_FILL_MODE_SOLID,     false, 8, GuideInvisiblePSO);
+        CreateWaterPSO(PSReflection, D3D12_FILL_MODE_SOLID, false, 7,
+                       ReflectionGuideInvisiblePSO);
     }
 
     void FWaterRenderer::BuildGenerateDrawsPipeline(ID3D12Device* _Device) {
@@ -895,9 +902,10 @@ namespace Smile {
                                         const Mat44& _ViewProjNoJitter, const Mat44& _PrevViewProjNoJitter,
                                         const Vec3& _CameraPos, const Vec3& _SunDir, f32 _SunIntensity,
                                         const Vec3& _SunColor, const Vec3& _SkyAmbient, f32 _ElapsedTime,
-                                        bool _IBLEnabled, f32 _IBLIntensity,
-                                        u32 _ScreenW, u32 _ScreenH, f32 _NearZ, f32 _FarZ,
-                                        bool _HasSceneCopies, bool _UseAtmosphereSky) {
+                                         bool _IBLEnabled, f32 _IBLIntensity,
+                                         u32 _ScreenW, u32 _ScreenH, f32 _NearZ, f32 _FarZ,
+                                         bool _HasSceneCopies, bool _UseAtmosphereSky,
+                                         bool _DedicatedReflections) {
         (void)_Projection;
         if (!MappedCBVBase || !MappedDrawBucketsBase) return;
 
@@ -948,7 +956,8 @@ namespace Smile {
         MappedCBV->DepthParams      = { _NearZ, _FarZ, _HasSceneCopies ? 1.0f : 0.0f,
                                         _UseAtmosphereSky ? 1.0f : 0.0f };
         MappedCBV->RefractionParams = { RefractionBumpScale, SoftIntersectionFactor, FogDensity, ReflectionBumpScale };
-        MappedCBV->DebugParams      = { static_cast<f32>(static_cast<u32>(DebugMode)), 0.0f, 0.0f, 0.0f };
+        MappedCBV->DebugParams      = { static_cast<f32>(static_cast<u32>(DebugMode)),
+                                        _DedicatedReflections ? 1.0f : 0.0f, 0.0f, 0.0f };
         MappedCBV->DeepColorDensity = { DeepColor.X, DeepColor.Y, DeepColor.Z, FogDensity };
         MappedCBV->InScatterColor  = { InScatterColor.X, InScatterColor.Y, InScatterColor.Z, InScatterDensity };
         MappedCBV->AbsorptionColor = { AbsorptionColor.X, AbsorptionColor.Y, AbsorptionColor.Z, 0.0f };
@@ -1153,10 +1162,17 @@ namespace Smile {
             ModePSO = BasePSO.Get();
         else if (_OutputMode == EOutputMode::TemporalMasks && TemporalMasksPSO)
             ModePSO = TemporalMasksPSO.Get();
-        ID3D12PipelineState* ActivePSO =
-            (DebugMode == EDebugMode::Wireframe && WireframePSO) ? WireframePSO.Get()
-          : (GuideInvisible && GuideInvisiblePSO)                ? GuideInvisiblePSO.Get()
-                                                                 : ModePSO;
+        else if (_OutputMode == EOutputMode::ReflectionGuides && ReflectionGuidesPSO)
+            ModePSO = ReflectionGuidesPSO.Get();
+        const bool ReflectionLayout = _OutputMode == EOutputMode::ReflectionGuides;
+        ID3D12PipelineState* ActivePSO = ModePSO;
+        if (DebugMode == EDebugMode::Wireframe) {
+            ActivePSO = ReflectionLayout && ReflectionWireframePSO
+                ? ReflectionWireframePSO.Get() : WireframePSO.Get();
+        } else if (GuideInvisible) {
+            ActivePSO = ReflectionLayout && ReflectionGuideInvisiblePSO
+                ? ReflectionGuideInvisiblePSO.Get() : GuideInvisiblePSO.Get();
+        }
         _CommandList->SetPipelineState(ActivePSO);
         _CommandList->SetGraphicsRootConstantBufferView(
             0, CBV->GetGPUVirtualAddress() + static_cast<UINT64>(FrameSlot) * sizeof(WaterConstants));

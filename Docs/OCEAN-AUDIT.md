@@ -11,7 +11,9 @@ derivadas métricas, motion da fase da onda, integração temporal explícita, g
 Ray Reconstruction correspondentes à superfície e clipmap com geomorph ativo.
 
 A implementação ainda não é um sistema completo de gameplay aquático: flutuação,
-ondas de costa, câmera submersa e reflexão da cena sobre a água continuam ausentes.
+ondas de costa e câmera submersa continuam ausentes. A superfície agora possui SSR de
+contato sobre as cópias sem água, fallback DXR para a cena e céu no miss; reflexão
+planar permanece uma alternativa futura.
 Também permanecem compromissos de rendering descritos em “Limites conhecidos”.
 
 ## Escopo validado
@@ -105,9 +107,11 @@ não reavaliam o campo em `x'`.
 ## Ordem do frame e contrato temporal
 
 ```text
-opacos/deferred/reflexões
+opacos/deferred/reflexões gerais
     -> cópias de cor e profundidade para refração
     -> água forward (HDR + depth + velocity + guides + masks)
+    -> SSR de contato -> cobertura restante DXR -> restante/miss céu
+    -> histórico + composite especular exclusivos da água
     -> transparências foreground
     -> nuvens/fog/chuva
     -> TAA ou upscaler/Ray Reconstruction
@@ -119,7 +123,13 @@ frame e toda mudança de espectro inicializam `previous = current`. A água escr
 - motion `curUV - prevUV`, incluindo animação das ondas;
 - reactive mask e transparency/composition mask;
 - albedo aproximado, normal/roughness e shading model de água nos guides;
-- `specHitDist = 0`, pois a reflexão forward não corresponde ao hit do fundo.
+- `specHitDist` real do raio de reflexão da água; miss do céu usa zero pelo contrato do RR.
+
+Sem Ray Reconstruction, a reflexão usa ping-pong e reprojeção pela velocity da própria
+onda. O histórico da água também guarda a distância do hit e rejeita troca céu/geometria
+ou saltos de profundidade, evitando uma segunda imagem deslocada. Com RR, esse acumulador
+é bypassado: o composite entrega radiância estocástica
+crua e o histórico neural recebe motion, normal/roughness, reactive mask e hit distance.
 
 ## Clipmap e antialiasing
 
@@ -127,14 +137,46 @@ O gerador GPU atribui geomorph suave nas coroas externas que possuem nível mais
 grosso. O VS combina o peso com footprint em pixels e preserva vértices de borda.
 O mesmo footprint em metros seleciona uma cadeia de 9 mips do deslocamento, Jacobiano
 e histórico anterior, filtrando frequências dentro de cada banda antes de a geometria
-deixar de representá-las; o descarte terminal da cascata continua suave. As normais
-usam mips, `SampleGrad`, Toksvig e variância de Karis.
+deixar de representá-las; o descarte terminal da cascata continua suave.
+
+A cadeia de normal guarda momentos de slope `(E[s_w], E[s_c], E[s_w²], E[s_c²])`
+nos eixos vento/transversal. A normal filtrada vem da média; a energia subpixel
+`E[s²]-E[s]²` migra para os dois eixos do GGX usado pelo Sol, pelos reflexos e pelo
+composite. Assim o detalhe que sai da geometria/normal não desaparece nem vira apenas
+um blur isotrópico. A variância de Karis continua como termo isotrópico de footprint.
 
 O A/B visual de 3 de agosto identificou dois contratos ainda agressivos: a grade fina
 era 64/32 = 2 m e o filtro/morph entrava em uma única célula da borda. A grade fina
 agora é 16/32 = 0,5 m, com raiz de 32,768 km no depth 11; morph e low-pass atravessam
 respectivamente quatro e oito células. O lobo solar também passou a usar Fresnel e
 normalização, e a reflexão recebe uma fração maior da normal filtrada.
+
+## Comparação Unreal, Cry e Bruneton
+
+A Unreal 5.8 desenha Single Layer Water no G-buffer, classifica seus tiles, executa
+SSR ou Lumen depois que depth/normal/roughness já representam a água e compõe o
+resultado sobre reflection captures e skylight antes das transparências comuns. Sol
+e ambiente usam o mesmo GGX e os mesmos parâmetros de superfície.
+
+O CryEngine clássico usa para o oceano uma câmera planar refletida com clip plane,
+resolução de 1/4 a 1/2 e atualização amortizada. O RT projetado recebe distorção da
+normal; water volumes também possuem um caminho SSR com fallback de probe/cubemap.
+Sua ordem separa transparências abaixo e acima da água. O material `Watercfx` foi uma
+fonte direta de vários controles do Smile, mas o antigo Phong de dois lóbulos não foi
+reintroduzido.
+
+O Smile adota a arquitetura pós-G-buffer da Unreal: o `SceneColor/Depth` sem água
+resolve primeiro o contato on-screen; o TLAS DXR cobre misses e objetos fora da tela;
+o cubemap atmosférico/HDRI pré-filtrado fecha o restante. Como no composite da Unreal,
+o fallback usa pico off-specular e é misturado pela confiança do SSR, em vez de uma
+troca binária. A reflexão tem alvo, motion, histórico, confiança e hit distance
+exclusivos da água. Planar continua útil como fallback sem ray tracing ou para
+qualidade determinística.
+
+Bruneton, Neyret e Holzschuch determinam o contrato de antialiasing: frequências que
+saem da geometria migram para a normal, e frequências que saem da normal migram para
+a BRDF. A implementação de momentos de slope acima é a versão estacionária desse
+contrato para as cascatas FFT do Smile.
 
 ## Lifetime, configuração e performance
 
@@ -152,10 +194,13 @@ normalização, e a reflexão recebe uma fração maior da normal filtrada.
 O alvo `SmileOceanMathBaselineTests` verifica FFT contra DFT, Hermitian/DC/Nyquist,
 bandas, energia, dispersão, normalização direcional, momentos de `h0`, ganho, sinal
 choppy, derivadas métricas, LUT de twiddles, low-pass dos mips e a guarda gaussiana.
+O teste de AA também verifica que os momentos de slope preservam energia direcional,
+geram variância apenas para detalhe não resolvido e não alargam um slope constante.
 
-Debug e Release passam via CTest. Todos os shaders e o `SmileEditor` completo compilam
-nos dois modos. O executável Debug permaneceu responsivo no smoke test, com a camada
-de debug habilitada e sem saída de erro.
+Debug e Release passam via CTest no marco espectral. Para a integração de reflexos,
+todos os shaders, o teste e o `SmileEditor` completo compilam em Release num build
+isolado. O A/B visual e uma captura com a camada D3D12 continuam obrigatórios antes
+de considerar encerrado o tuning da resposta especular.
 
 ## Limites conhecidos
 
@@ -166,16 +211,27 @@ de debug habilitada e sem saída de erro.
 4. O Jacobiano combinado no PS é aproximação de primeira ordem; espuma exata exigiria
    guardar os tensores diferenciais ou recalculá-los no PS.
 5. O corte entre bandas ainda é uma janela rígida e pode produzir ringing discreto.
-6. Não há reflexão da cena na água, SSR/planar, câmera submersa, batimetria,
-   ondas/espuma de costa, buoyancy ou consulta de altura para gameplay.
+6. O SSR de contato ainda marcha o depth full-resolution: o HZB atual guarda apenas o
+   depth mais distante para occlusion culling, enquanto SSR precisa também do mais
+   próximo. A cor SSR já usa uma pirâmide HDR completa da cena sem água; o mip contínuo
+   vem do footprint do lobo GGX, da distância do hit e da projeção da câmera. Falta
+   tornar o HZB min/max e falta o fallback planar do Cry. Também faltam câmera submersa,
+   batimetria, ondas/espuma de costa, buoyancy e consulta de altura para gameplay.
 7. A redução das cascatas longas foi adiada: 256 está fixo em groupshared, dispatch,
    mips e sampling. Variantes 128/256 devem mudar esse contrato coordenadamente e ser
    comparadas por captura e perfil antes de substituir o padrão.
+8. O primeiro corte da reflexão da água é full-resolution e mantém radiância, motion e
+   dois histories RGBA16F próprios. Tile classification, half-resolution adaptativo e
+   compactação desses alvos dependem primeiro de captura de qualidade e perfil de VRAM/GPU.
 
 ## Referências
 
 - Christopher Horvath, *Empirical Directional Wave Spectra for Computer Graphics*,
   DigiPro 2015, DOI `10.1145/2791261.2791267`.
 - Jerry Tessendorf, *Simulating Ocean Water*.
+- Eric Bruneton, Fabrice Neyret e Nicolas Holzschuch, *Real-time Realistic Ocean
+  Lighting using Seamless Transitions from Geometry to BRDF*, Eurographics 2010.
+- Unreal Engine, `SingleLayerWaterRendering` / `SingleLayerWaterComposite`.
+- CryEngine, `CREWaterOcean` / `Watercfx` / `WaterReflectionsPass`.
 - `blackencino/EncinoWaves`, implementação de referência do autor.
 - `speps/GX-EncinoWaves`, porte HLSL/D3D11 para comparação de convenções.

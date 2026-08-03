@@ -7,6 +7,7 @@
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <cmath>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
@@ -36,15 +37,25 @@ namespace Smile {
     }
 
     void FReflections::Initialize(ID3D12Device* _Device) {
+        RecreatePipelines(_Device);
+        CreateConstantBuffer(_Device);
+        Initialized = true;
+    }
+
+    void FReflections::RecreatePipelines(ID3D12Device* _Device) {
         TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_6.cso", 12, 3, true);
         TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 12, 2, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 5, 2, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 5, 1, false);
         SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 3, 1, false);
         NrdPackPSO.Initialize(_Device, "ReflectionNrdPack.cs_6_0.cso", 3, 1, false);
+        WaterTracePSO.Initialize(_Device, "WaterReflectionTrace.cs_6_6.cso", 15, 2, true);
+        WaterTemporalPSO.Initialize(_Device, "WaterReflectionTemporal.cs_6_0.cso", 5, 1, false);
         CreateCompositePipeline(_Device);
-        CreateConstantBuffer(_Device);
-        Initialized = true;
+        // Hot reload pode mudar o significado dos canais temporais (especialmente hit-distance).
+        // Nunca reaproveitar history produzido por uma versao anterior do shader.
+        NeedsHistoryClear = true;
+        NeedsWaterHistoryClear = true;
     }
 
     void FReflections::CreateConstantBuffer(ID3D12Device* _Device) {
@@ -113,6 +124,7 @@ namespace Smile {
 
         auto VS = LoadShaderBytecode("PostProcess.vs_6_0.cso");
         auto PS = LoadShaderBytecode("ReflectionComposite.ps_6_0.cso");
+        auto WaterPS = LoadShaderBytecode("WaterReflectionComposite.ps_6_0.cso");
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc{};
         PSODesc.pRootSignature = CompositeRS.Get();
@@ -139,6 +151,8 @@ namespace Smile {
         PSODesc.DSVFormat                  = DXGI_FORMAT_UNKNOWN;
         PSODesc.SampleDesc                 = { 1, 0 };
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&CompositePSO)));
+        PSODesc.PS = { WaterPS.data(), WaterPS.size() };
+        SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&WaterCompositePSO)));
     }
 
     void FReflections::ReleaseResize(FTextureSRVHeap& _SRVHeap) {
@@ -168,6 +182,16 @@ namespace Smile {
         NrdInSpec = nullptr;
         Free(CompositeTableNrd[0], 6); Free(CompositeTableNrd[1], 6);
         Free(CompositeTableRaw, 6);
+        Free(WaterResolvedSRVSlot, 1); Free(WaterResolvedUAVSlot, 1);
+        Free(WaterMotionSRVSlot, 1); Free(WaterMotionUAVSlot, 1);
+        Free(WaterHistorySRVSlot[0], 1); Free(WaterHistorySRVSlot[1], 1);
+        Free(WaterHistoryUAVSlot[0], 1); Free(WaterHistoryUAVSlot[1], 1);
+        Free(WaterTraceUAVTable, 2);
+        for (u32 i = 0; i < kTraceTables; ++i) Free(WaterTraceTable[i], 15);
+        Free(WaterTemporalTable[0], 5); Free(WaterTemporalTable[1], 5);
+        Free(WaterCompositeTable[0], 6); Free(WaterCompositeTable[1], 6);
+        Free(WaterCompositeRawTable, 6);
+        Free(WaterSpecHitTable, 2);
         Radiance.Reset();
         RayData.Reset();
         RayMotion.Reset();
@@ -175,6 +199,8 @@ namespace Smile {
         ResolvedMotion.Reset();
         History[0].Reset(); History[1].Reset();
         Denoised.Reset();
+        WaterResolved.Reset(); WaterMotion.Reset();
+        WaterHistory[0].Reset(); WaterHistory[1].Reset();
         RadianceState = D3D12_RESOURCE_STATE_COMMON;
         RayDataState  = D3D12_RESOURCE_STATE_COMMON;
         RayMotionState = D3D12_RESOURCE_STATE_COMMON;
@@ -182,25 +208,36 @@ namespace Smile {
         ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
         DenoisedState = D3D12_RESOURCE_STATE_COMMON;
+        WaterResolvedState = WaterMotionState = D3D12_RESOURCE_STATE_COMMON;
+        WaterHistoryState[0] = WaterHistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
     }
 
     void FReflections::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                       u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
                                       u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
-                                      u32 _GBufferSlot, u32 _GBufferCSlot, u32 _BRDFLutSlot,
-                                      u32 _GBufferASlot, u32 _DistSlot, u32 _ProbeDataSlot,
+                                       u32 _GBufferSlot, u32 _GBufferCSlot, u32 _BRDFLutSlot,
+                                       u32 _GBufferASlot, u32 _VelocitySlot,
+                                       u32 _SceneColorSlot, u32 _SceneDepthSlot,
+                                       u32 _SceneColorMipCount,
+                                       u32 _AtmosphereSpecularSlot, u32 _HDRSpecularSlot,
+                                       u32 _DistSlot, u32 _ProbeDataSlot,
                                       const u32 _TransformSlots[FCommandQueue::kFramesInFlight],
                                       const u32 _SurfaceSlots[FCommandQueue::kFramesInFlight]) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
-        if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot)
+        if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
+            _InstanceSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot ||
+            _SceneColorSlot == kInvalidSlot || _SceneDepthSlot == kInvalidSlot ||
+            _AtmosphereSpecularSlot == kInvalidSlot || _HDRSpecularSlot == kInvalidSlot)
             return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
             if (_TransformSlots[f] == kInvalidSlot || _SurfaceSlots[f] == kInvalidSlot) return;
 
         Width = _Width; Height = _Height;
         HalfWidth = (_Width + 1) / 2; HalfHeight = (_Height + 1) / 2;
+        WaterSceneColorMaxMip = static_cast<f32>(_SceneColorMipCount > 0
+            ? _SceneColorMipCount - 1 : 0);
         DepthSlotCached = _DepthSlot; GBufferSlotCached = _GBufferSlot; BRDFLutSlotCached = _BRDFLutSlot;
         GBufferCSlotCached = _GBufferCSlot; GBufferASlotCached = _GBufferASlot;
         Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
@@ -211,11 +248,19 @@ namespace Smile {
         History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        WaterResolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        WaterMotion   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        WaterHistory[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        WaterHistory[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
         RadianceState = RayDataState = RayMotionState = ResolvedState =
             ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
         DenoisedState = D3D12_RESOURCE_STATE_COMMON;
+        WaterResolvedState = WaterMotionState = D3D12_RESOURCE_STATE_COMMON;
+        WaterHistoryState[0] = WaterHistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
         NeedsHistoryClear = true; FrameParity = 0;
+        NeedsWaterHistoryClear = true; WaterFrameParity = WaterCurrParity = 0;
+        WaterUseRaw = false;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
         Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -236,6 +281,10 @@ namespace Smile {
         HistorySRVSlot[0] = _SRVHeap.Allocate(1); HistorySRVSlot[1] = _SRVHeap.Allocate(1);
         HistoryUAVSlot[0] = _SRVHeap.Allocate(1); HistoryUAVSlot[1] = _SRVHeap.Allocate(1);
         DenoisedSRVSlot = _SRVHeap.Allocate(1); DenoisedUAVSlot = _SRVHeap.Allocate(1);
+        WaterResolvedSRVSlot = _SRVHeap.Allocate(1); WaterResolvedUAVSlot = _SRVHeap.Allocate(1);
+        WaterMotionSRVSlot = _SRVHeap.Allocate(1); WaterMotionUAVSlot = _SRVHeap.Allocate(1);
+        WaterHistorySRVSlot[0] = _SRVHeap.Allocate(1); WaterHistorySRVSlot[1] = _SRVHeap.Allocate(1);
+        WaterHistoryUAVSlot[0] = _SRVHeap.Allocate(1); WaterHistoryUAVSlot[1] = _SRVHeap.Allocate(1);
         _SRVHeap.CreateSRV(_Device, Radiance.Get(), Srv, RadianceSRVSlot);
         _SRVHeap.CreateSRV(_Device, RayData.Get(),  Srv, RayDataSRVSlot);
         _SRVHeap.CreateSRV(_Device, RayMotion.Get(), Srv, RayMotionSRVSlot);
@@ -249,6 +298,14 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, History[1].Get(), Uav, HistoryUAVSlot[1]);
         _SRVHeap.CreateSRV(_Device, Denoised.Get(), Srv, DenoisedSRVSlot);
         _SRVHeap.CreateUAV(_Device, Denoised.Get(), Uav, DenoisedUAVSlot);
+        _SRVHeap.CreateSRV(_Device, WaterResolved.Get(), Srv, WaterResolvedSRVSlot);
+        _SRVHeap.CreateUAV(_Device, WaterResolved.Get(), Uav, WaterResolvedUAVSlot);
+        _SRVHeap.CreateSRV(_Device, WaterMotion.Get(), Srv, WaterMotionSRVSlot);
+        _SRVHeap.CreateUAV(_Device, WaterMotion.Get(), Uav, WaterMotionUAVSlot);
+        for (u32 i = 0; i < 2; ++i) {
+            _SRVHeap.CreateSRV(_Device, WaterHistory[i].Get(), Srv, WaterHistorySRVSlot[i]);
+            _SRVHeap.CreateUAV(_Device, WaterHistory[i].Get(), Uav, WaterHistoryUAVSlot[i]);
+        }
 
         TraceUAVTable = _SRVHeap.Allocate(3);
         _SRVHeap.CreateUAV(_Device, Radiance.Get(), Uav, TraceUAVTable);
@@ -258,6 +315,10 @@ namespace Smile {
         ResolvedUAVTable = _SRVHeap.Allocate(2);
         _SRVHeap.CreateUAV(_Device, Resolved.Get(), Uav, ResolvedUAVTable);
         _SRVHeap.CreateUAV(_Device, ResolvedMotion.Get(), Uav, ResolvedUAVTable + 1);
+
+        WaterTraceUAVTable = _SRVHeap.Allocate(2);
+        _SRVHeap.CreateUAV(_Device, WaterResolved.Get(), Uav, WaterTraceUAVTable);
+        _SRVHeap.CreateUAV(_Device, WaterMotion.Get(), Uav, WaterTraceUAVTable + 1);
 
         // t0..t7 fixos; t8 = luzes; t9 = transform atual<->anterior; t10/t11 = superficies
         // atual/anterior. As tres ultimas entradas sao versionadas pelo FrameSlot.
@@ -289,6 +350,41 @@ namespace Smile {
             };
             UINT MotionCount = 3; UINT MotionOnes[3] = { 1,1,1 };
             _Device->CopyDescriptors(1, &MotionDst, &MotionCount, 3, MotionSrc, MotionOnes,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            // A agua nao pertence ao snapshot temporal dos opacos. Seu trace usa t0..t7 iguais,
+            // t8 versionado para luzes e t9 = velocity que inclui a fase da onda.
+            WaterTraceTable[i] = _SRVHeap.Allocate(15);
+            D3D12_CPU_DESCRIPTOR_HANDLE WDst = _SRVHeap.CpuHandle(WaterTraceTable[i]);
+            _Device->CopyDescriptors(1, &WDst, &TDstCount, 8, TSrc, TSrcCounts,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            D3D12_CPU_DESCRIPTOR_HANDLE WVelDst = _SRVHeap.CpuHandle(WaterTraceTable[i] + 9);
+            D3D12_CPU_DESCRIPTOR_HANDLE WVelSrc = _SRVHeap.CpuHandleStaging(_VelocitySlot);
+            UINT One = 1;
+            _Device->CopyDescriptors(1, &WVelDst, &One, 1, &WVelSrc, &One,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            D3D12_CPU_DESCRIPTOR_HANDLE WDataDst = _SRVHeap.CpuHandle(WaterTraceTable[i] + 10);
+            D3D12_CPU_DESCRIPTOR_HANDLE WDataSrc = _SRVHeap.CpuHandleStaging(_GBufferCSlot);
+            _Device->CopyDescriptors(1, &WDataDst, &One, 1, &WDataSrc, &One,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            D3D12_CPU_DESCRIPTOR_HANDLE WSceneDst =
+                _SRVHeap.CpuHandle(WaterTraceTable[i] + 11);
+            D3D12_CPU_DESCRIPTOR_HANDLE WSceneSrc[2] = {
+                _SRVHeap.CpuHandleStaging(_SceneColorSlot),
+                _SRVHeap.CpuHandleStaging(_SceneDepthSlot),
+            };
+            UINT SceneCount = 2; UINT SceneOnes[2] = { 1, 1 };
+            _Device->CopyDescriptors(1, &WSceneDst, &SceneCount, 2, WSceneSrc, SceneOnes,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            D3D12_CPU_DESCRIPTOR_HANDLE WEnvironmentDst =
+                _SRVHeap.CpuHandle(WaterTraceTable[i] + 13);
+            D3D12_CPU_DESCRIPTOR_HANDLE WEnvironmentSrc[2] = {
+                _SRVHeap.CpuHandleStaging(_AtmosphereSpecularSlot),
+                _SRVHeap.CpuHandleStaging(_HDRSpecularSlot),
+            };
+            UINT EnvironmentCount = 2; UINT EnvironmentOnes[2] = { 1, 1 };
+            _Device->CopyDescriptors(1, &WEnvironmentDst, &EnvironmentCount, 2,
+                                     WEnvironmentSrc, EnvironmentOnes,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
 
@@ -374,6 +470,57 @@ namespace Smile {
         UINT RawSix = 6; UINT RawOnes[6] = { 1,1,1,1,1,1 };
         _Device->CopyDescriptors(1, &RawDst, &RawSix, 6, RawSrc, RawOnes, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+        for (u32 curr = 0; curr < 2; ++curr) {
+            const u32 prev = 1u - curr;
+            WaterTemporalTable[curr] = _SRVHeap.Allocate(5);
+            D3D12_CPU_DESCRIPTOR_HANDLE WTDst = _SRVHeap.CpuHandle(WaterTemporalTable[curr]);
+            D3D12_CPU_DESCRIPTOR_HANDLE WTSrc[5] = {
+                _SRVHeap.CpuHandleStaging(WaterResolvedSRVSlot),
+                _SRVHeap.CpuHandleStaging(_GBufferSlot),
+                _SRVHeap.CpuHandleStaging(_DepthSlot),
+                _SRVHeap.CpuHandleStaging(WaterHistorySRVSlot[prev]),
+                _SRVHeap.CpuHandleStaging(WaterMotionSRVSlot),
+            };
+            _Device->CopyDescriptors(1, &WTDst, &Five, 5, WTSrc, Ones,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            WaterCompositeTable[curr] = _SRVHeap.Allocate(6);
+            D3D12_CPU_DESCRIPTOR_HANDLE WCDst = _SRVHeap.CpuHandle(WaterCompositeTable[curr]);
+            D3D12_CPU_DESCRIPTOR_HANDLE WCSrc[6] = {
+                _SRVHeap.CpuHandleStaging(WaterHistorySRVSlot[curr]),
+                _SRVHeap.CpuHandleStaging(_GBufferSlot),
+                _SRVHeap.CpuHandleStaging(_DepthSlot),
+                _SRVHeap.CpuHandleStaging(_BRDFLutSlot),
+                _SRVHeap.CpuHandleStaging(_GBufferCSlot),
+                _SRVHeap.CpuHandleStaging(_GBufferASlot),
+            };
+            _Device->CopyDescriptors(1, &WCDst, &RawSix, 6, WCSrc, RawOnes,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
+
+        WaterCompositeRawTable = _SRVHeap.Allocate(6);
+        D3D12_CPU_DESCRIPTOR_HANDLE WRawDst = _SRVHeap.CpuHandle(WaterCompositeRawTable);
+        D3D12_CPU_DESCRIPTOR_HANDLE WRawSrc[6] = {
+            _SRVHeap.CpuHandleStaging(WaterResolvedSRVSlot),
+            _SRVHeap.CpuHandleStaging(_GBufferSlot),
+            _SRVHeap.CpuHandleStaging(_DepthSlot),
+            _SRVHeap.CpuHandleStaging(_BRDFLutSlot),
+            _SRVHeap.CpuHandleStaging(_GBufferCSlot),
+            _SRVHeap.CpuHandleStaging(_GBufferASlot),
+        };
+        _Device->CopyDescriptors(1, &WRawDst, &RawSix, 6, WRawSrc, RawOnes,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        WaterSpecHitTable = _SRVHeap.Allocate(2);
+        D3D12_CPU_DESCRIPTOR_HANDLE WHDst = _SRVHeap.CpuHandle(WaterSpecHitTable);
+        D3D12_CPU_DESCRIPTOR_HANDLE WHSrc[2] = {
+            _SRVHeap.CpuHandleStaging(WaterResolvedSRVSlot),
+            _SRVHeap.CpuHandleStaging(_GBufferSlot),
+        };
+        UINT Two = 2; UINT TwoOnes[2] = { 1, 1 };
+        _Device->CopyDescriptors(1, &WHDst, &Two, 2, WHSrc, TwoOnes,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
         Ready = true;
     }
 
@@ -424,20 +571,26 @@ namespace Smile {
         GIMaxRayDist     = _MaxRayDist;
     }
 
-    void FReflections::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Mat44& _PrevViewProj,
+    void FReflections::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj,
+                                      const Mat44& _ViewProj, const Mat44& _PrevViewProj,
                                       const Vec3& _CameraPos, const Vec3& _PrevCameraPos,
                                       u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
                                       f32 _SkyIntensity, bool _RealHitShading,
-                                      const Mat44& _View, u32 _PunctualLightCount,
+                                      const Mat44& _View, bool _UseAtmosphereSky,
+                                      f32 _WaterEnvironmentIntensity, u32 _PunctualLightCount,
                                       u32 _TemporalInstanceCount, bool _MotionHistoryValid) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
+        CPU.ViewProj        = _ViewProj;
         CPU.PrevViewProj    = _PrevViewProj;
         CPU.PrevCameraPos   = { _PrevCameraPos.X, _PrevCameraPos.Y, _PrevCameraPos.Z,
                                 static_cast<f32>(_TemporalInstanceCount) };
         CPU.View            = _View;
+        CPU.WaterEnvironmentParams = { _UseAtmosphereSky ? 1.0f : 0.0f,
+                                       _WaterEnvironmentIntensity, 6.0f,
+                                       WaterSceneColorMaxMip };
         CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, SpatialRadius,
                                 FullResMaxRough };
         CPU.DebugParams     = { (f32)DebugMode, MaxFrames,
@@ -458,7 +611,8 @@ namespace Smile {
                                                                 : kRTMaskShadowFast) };
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
                                 RayEps.HitShadowRayBias };
-        CPU.PolicyParams    = { BackfaceCull ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        CPU.PolicyParams    = { BackfaceCull ? 1.0f : 0.0f, WaterReflectionScale,
+                                std::cos(WaterWindDirection), std::sin(WaterWindDirection) };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
@@ -486,6 +640,9 @@ namespace Smile {
         D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
         UINT One = 1;
         _Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12_CPU_DESCRIPTOR_HANDLE WaterDst = _SRVHeap.CpuHandle(WaterTraceTable[_FrameSlot] + 8);
+        _Device->CopyDescriptors(1, &WaterDst, &One, 1, &Src, &One,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
@@ -614,6 +771,69 @@ namespace Smile {
         FrameParity ^= 1u;
     }
 
+    void FReflections::RecordWaterTrace(ID3D12GraphicsCommandList* _CL,
+                                         FTextureSRVHeap& _SRVHeap,
+                                         FGpuProfiler* _Profiler) {
+        if (!Ready) return;
+        const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
+
+        if (_Profiler) _Profiler->Begin(_CL, "Agua: trace DXR");
+        Transition(_CL, WaterResolved.Get(), WaterResolvedState,
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, WaterMotion.Get(), WaterMotionState,
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        WaterTracePSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(WaterTraceTable[FrameSlot]));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(WaterTraceUAVTable));
+        _CL->Dispatch(GX, GY, 1);
+        const D3D12_RESOURCE_STATES WaterResolvedRead = RawSpec
+            ? (D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+            : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        Transition(_CL, WaterResolved.Get(), WaterResolvedState, WaterResolvedRead);
+        Transition(_CL, WaterMotion.Get(), WaterMotionState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if (_Profiler) _Profiler->End(_CL);
+
+        WaterUseRaw = RawSpec;
+        if (WaterUseRaw) {
+            // O RR recebe o sinal estocastico cru e aplica seu proprio historico neural.
+            // Limpar ao voltar ao caminho comum evita reutilizar history envelhecido.
+            NeedsWaterHistoryClear = true;
+            return;
+        }
+
+        const u32 curr = WaterFrameParity, prev = 1u - curr;
+        WaterCurrParity = curr;
+        if (NeedsWaterHistoryClear) {
+            const float Zero[4] = { 0, 0, 0, 0 };
+            for (u32 i = 0; i < 2; ++i) {
+                Transition(_CL, WaterHistory[i].Get(), WaterHistoryState[i],
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                _CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(WaterHistoryUAVSlot[i]),
+                                                   _SRVHeap.CpuHandleStaging(WaterHistoryUAVSlot[i]),
+                                                   WaterHistory[i].Get(), Zero, 0, nullptr);
+            }
+            NeedsWaterHistoryClear = false;
+        }
+
+        if (_Profiler) _Profiler->Begin(_CL, "Agua: historico de reflexo");
+        Transition(_CL, WaterHistory[prev].Get(), WaterHistoryState[prev],
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, WaterHistory[curr].Get(), WaterHistoryState[curr],
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        WaterTemporalPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(WaterTemporalTable[curr]));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(WaterHistoryUAVSlot[curr]));
+        _CL->Dispatch(GX, GY, 1);
+        Transition(_CL, WaterHistory[curr].Get(), WaterHistoryState[curr],
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        if (_Profiler) _Profiler->End(_CL);
+        WaterFrameParity ^= 1u;
+    }
+
     void FReflections::RecordNrdPack(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (!Ready || SpecPackUAVSlot == kInvalidSlot) return;
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
@@ -657,6 +877,26 @@ namespace Smile {
                       ? CompositeTableNrd[CurrParity] : CompositeTable[CurrParity];
         }
         _CL->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(CompTable));
+        _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        _CL->DrawInstanced(3, 1, 0, 0);
+    }
+
+    void FReflections::RecordWaterComposite(ID3D12GraphicsCommandList* _CL,
+                                             FTextureSRVHeap& _SRVHeap,
+                                             D3D12_CPU_DESCRIPTOR_HANDLE _HdrRtv,
+                                             u32 _Width, u32 _Height) {
+        const u32 Table = WaterUseRaw ? WaterCompositeRawTable
+                                      : WaterCompositeTable[WaterCurrParity];
+        if (!Ready || Table == kInvalidSlot) return;
+        _CL->OMSetRenderTargets(1, &_HdrRtv, FALSE, nullptr);
+        D3D12_VIEWPORT VP{ 0.0f, 0.0f, (f32)_Width, (f32)_Height, 0.0f, 1.0f };
+        D3D12_RECT SR{ 0, 0, (LONG)_Width, (LONG)_Height };
+        _CL->RSSetViewports(1, &VP);
+        _CL->RSSetScissorRects(1, &SR);
+        _CL->SetGraphicsRootSignature(CompositeRS.Get());
+        _CL->SetPipelineState(WaterCompositePSO.Get());
+        _CL->SetGraphicsRootConstantBufferView(0, CBAddr());
+        _CL->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(Table));
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->DrawInstanced(3, 1, 0, 0);
     }
