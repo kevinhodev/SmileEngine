@@ -465,7 +465,7 @@
     <line x1="376" y1="774" x2="624" y2="774" stroke="#23241d"/>
     <text x="392" y="791" fill="#c8c2b4">arte: PNG do Bistro em Editor/Resources</text>
     <text x="392" y="806" fill="#c8c2b4">fallback: gradiente + logo se a arte faltar</text>
-    <text x="392" y="821" fill="#c8c2b4">logo: MakeSmileLogoPixmap() — o mesmo do About</text>
+    <text x="392" y="821" fill="#c8c2b4">logo: MakeSmileLogoPixmap() — o do ícone da janela</text>
     <text x="392" y="836" fill="#c8c2b4">Inter na UI, Consolas na versão</text>
     <text x="392" y="851" fill="#c8c2b4">scrim + vinheta garantem contraste do texto</text>
     <text x="392" y="866" fill="#6c6a61">frase sorteada por execução (30 no array), estilo Flax</text>

@@ -164,8 +164,4 @@ MenuBar {
         }
     }
 
-    DarkMenu {
-        title: "Ajuda"
-        MItem { text: "Sobre o Smile Engine…"; onTriggered: menuBridge.about() }
-    }
 }

@@ -1,5 +1,4 @@
 #include "SmileEditor/MainWindow.h"
-#include "SmileEditor/AboutDialog.h"
 #include "SmileEditor/LogBridge.h"
 #include "SmileEditor/LucideIcon.h"
 #include "SmileEditor/MenuBridge.h"
@@ -491,9 +490,6 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
 
-        // ---- Ajuda ----
-        connect(Menus, &MenuBridge::AboutRequested, this, &MainWindow::OnHelpAbout);
-
         // ---- Atalhos globais (ApplicationShortcut: valem com o foco no viewport, nao so na barra).
         // Disparam o mesmo caminho dos menus (chamam o MenuBridge -> sinal -> handler acima).
         auto AddShortcut = [this](const QKeySequence& Seq, auto Slot) {
@@ -730,20 +726,6 @@ namespace SmileEditor {
         }
 
         StatusBr->SetStats(FPS, FrameMs, SceneText, OceanText);
-    }
-
-    void MainWindow::OnHelpAbout() {
-        if (!AboutDlg) {
-            QString GPU;
-            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized()) {
-                GPU = QString::fromStdWString(Viewport->GetRenderer()->GetDevice().GetAdapterDescription());
-            }
-            AboutDlg = new AboutDialog(GPU, this);
-            AboutDlg->setAttribute(Qt::WA_DeleteOnClose, false);
-        }
-        AboutDlg->show();
-        AboutDlg->raise();
-        AboutDlg->activateWindow();
     }
 
     void MainWindow::ShowSettings() {

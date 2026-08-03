@@ -35,7 +35,6 @@ namespace SmileEditor {
     public slots:
         void loadScene()        { emit LoadSceneRequested(); }
         void addScene()         { emit AddSceneRequested(); }
-        void about()            { emit AboutRequested(); }
         void openSettings()     { emit SettingsRequested(); }
         void quit()             { emit QuitRequested(); }
         void toggleConsole()    { emit ToggleConsoleRequested(); }
@@ -51,7 +50,6 @@ namespace SmileEditor {
     signals:
         void LoadSceneRequested();
         void AddSceneRequested();
-        void AboutRequested();
         void SettingsRequested();
         void QuitRequested();
         void ToggleConsoleRequested();

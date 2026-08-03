@@ -16,7 +16,6 @@ class QQmlEngine;
 
 namespace SmileEditor {
     class ViewportWidget;
-    class AboutDialog;
     class LogBridge;
     class WindowBridge;
     class NativeWindowFilter;
@@ -51,7 +50,6 @@ namespace SmileEditor {
         void closeEvent(QCloseEvent* event) override; // prompt de sidecars nao salvos
 
     private slots:
-        void OnHelpAbout();
         void OnRendererReady();
         void UpdateStats();
         void TriggerShaderCompileAndReload(const QString& Path);
@@ -76,7 +74,6 @@ namespace SmileEditor {
         QQmlEngine*           SharedQmlEngine = nullptr; // lifetime pertence ao RunEditor
         ViewportWidget*       Viewport    = nullptr;
         QPointer<ViewportWidget> ActiveViewport;
-        QPointer<AboutDialog> AboutDlg;
         QPointer<QDialog>     SettingsDlg;
 
         StatusBridge*         StatusBr    = nullptr; // ponte C++ -> StatusBar.qml
