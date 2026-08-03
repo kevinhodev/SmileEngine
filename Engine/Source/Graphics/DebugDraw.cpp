@@ -23,24 +23,21 @@ namespace Smile {
         LogDebug("DebugDraw Inicializado");
     }
 
-    void FDebugDraw::WarnXRayOnce() {
-        if (XRayWarned) return;
-        XRayWarned = true;
-        LogWarning("DebugDraw: modo XRay pedido, mas ele so existe a partir da F1b (precisa do "
-                   "alpha blend). Desenhando como Scene — a parte oculta SOME em vez de ficar "
-                   "translucida");
+    u32 FDebugDraw::PackColor(const Vec4& C) {
+        auto Byte = [](f32 V) -> u32 {
+            return static_cast<u32>(std::clamp(V, 0.0f, 1.0f) * 255.0f + 0.5f);
+        };
+        return Byte(C.X) | (Byte(C.Y) << 8) | (Byte(C.Z) << 16) | (Byte(C.W) << 24);
     }
 
     void FDebugDraw::Line(const Vec3& A, const Vec3& B, const Vec4& Color,
                           EDebugDepthMode Mode, f32 Thickness) {
-        if (Mode == EDebugDepthMode::XRay) WarnXRayOnce();
         if (Mode != EDebugDepthMode::Foreground) ++SceneDepthPrims;
         LineCmds.push_back({ A, B, Color, Thickness, Mode });
     }
 
     void FDebugDraw::Triangle(const Vec3& A, const Vec3& B, const Vec3& C, const Vec4& Color,
                               EDebugDepthMode Mode) {
-        if (Mode == EDebugDepthMode::XRay) WarnXRayOnce();
         if (Mode != EDebugDepthMode::Foreground) ++SceneDepthPrims;
         TriCmds.push_back({ A, B, C, Color, Mode });
     }
@@ -59,9 +56,10 @@ namespace Smile {
     }
 
     void FDebugDraw::BuildRootSignature(ID3D12Device* Device) {
-        // b0 visivel em VS (matriz) e PS (params/bias do teste de depth); t0 = depth da cena
-        // pro caminho ocluivel (os PSOs sem teste simplesmente nao referenciam a tabela).
-        D3D12_ROOT_PARAMETER P[2]{};
+        // b0 (por frame) visivel em VS (matriz, tamanho de tela) e PS (params/bias); t0 = depth
+        // da cena pros PSOs que testam depth (os outros nao referenciam a tabela); b1 (por draw)
+        // = root constants com o OccludedAlpha, que e a UNICA diferenca entre Scene e XRay.
+        D3D12_ROOT_PARAMETER P[3]{};
         P[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         P[0].Descriptor.ShaderRegister = 0;
         P[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
@@ -76,6 +74,11 @@ namespace Smile {
         P[1].DescriptorTable.NumDescriptorRanges = 1;
         P[1].DescriptorTable.pDescriptorRanges   = &DepthRange;
         P[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        P[2].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        P[2].Constants.ShaderRegister = 1;
+        P[2].Constants.Num32BitValues = 4;
+        P[2].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC PointClamp{};
         PointClamp.Filter           = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -107,13 +110,24 @@ namespace Smile {
     }
 
     void FDebugDraw::BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat) {
-        auto VS    = LoadShaderBytecode("DebugDraw.vs_6_0.cso");
-        auto PS    = LoadShaderBytecode("DebugDraw.ps_6_0.cso");
-        auto PSOcc = LoadShaderBytecode("DebugDrawOccluded.ps_6_0.cso");
+        auto TriVS       = LoadShaderBytecode("DebugDraw.vs_6_0.cso");
+        auto TriPS       = LoadShaderBytecode("DebugDraw.ps_6_0.cso");
+        auto TriDepthPS  = LoadShaderBytecode("DebugDrawOccluded.ps_6_0.cso");
+        auto LineVS      = LoadShaderBytecode("DebugDrawLine.vs_6_0.cso");
+        auto LinePS      = LoadShaderBytecode("DebugDrawLine.ps_6_0.cso");
+        auto LineDepthPS = LoadShaderBytecode("DebugDrawLineDepth.ps_6_0.cso");
 
-        D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
+        D3D12_INPUT_ELEMENT_DESC TriLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "COLOR",    0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        };
+        // Linha: TUDO por instancia (um segmento = uma instancia). Os 4 cantos do quad saem do
+        // SV_VertexID no VS, entao nao ha stream por vertice nenhum.
+        D3D12_INPUT_ELEMENT_DESC LineLayout[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+            { "POSITION", 1, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+            { "COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM,  0, 24, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32_FLOAT,       0, 28, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
         };
 
         D3D12_RASTERIZER_DESC Raster{};
@@ -125,35 +139,48 @@ namespace Smile {
         Depth.DepthEnable    = FALSE;
         Depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
+        // Alpha blend em TUDO agora: e o que faz o AA da borda da linha e o XRay existirem.
+        // Com alpha 1 no miolo, o pixel do centro sai igual ao do caminho opaco antigo.
         D3D12_BLEND_DESC Blend{};
+        Blend.RenderTarget[0].BlendEnable           = TRUE;
+        Blend.RenderTarget[0].SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+        Blend.RenderTarget[0].DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+        Blend.RenderTarget[0].BlendOp               = D3D12_BLEND_OP_ADD;
+        Blend.RenderTarget[0].SrcBlendAlpha         = D3D12_BLEND_ONE;
+        Blend.RenderTarget[0].DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+        Blend.RenderTarget[0].BlendOpAlpha          = D3D12_BLEND_OP_ADD;
         Blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc{};
         PSODesc.pRootSignature        = RootSig.Get();
-        PSODesc.VS                    = { VS.data(), VS.size() };
-        PSODesc.PS                    = { PS.data(), PS.size() };
         PSODesc.BlendState            = Blend;
         PSODesc.SampleMask            = UINT_MAX;
         PSODesc.RasterizerState       = Raster;
         PSODesc.DepthStencilState     = Depth;
-        PSODesc.InputLayout           = { InputLayout, _countof(InputLayout) };
         PSODesc.NumRenderTargets      = 1;
         PSODesc.RTVFormats[0]         = RTFormat;
         PSODesc.SampleDesc            = { 1, 0 };
 
-        // Dois eixos: topologia (linha/triangulo) x PS (Foreground = sem teste, Scene = teste
-        // manual contra o depth da cena). Os 4 PSOs sao o produto dos dois.
-        PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&LinePSO)));
-
-        PSODesc.PS = { PSOcc.data(), PSOcc.size() };
-        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&LineScenePSO)));
-
-        PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&TriScenePSO)));
-
-        PSODesc.PS = { PS.data(), PS.size() };
-        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&TriPSO)));
+        // Dois eixos: primitiva (linha instanciada / triangulo) x PS (Foreground = sem teste,
+        // Depth = teste manual contra o depth da cena, com OccludedAlpha decidindo Scene vs
+        // XRay). Cada PSO diz TODO o seu estado — nada de herdar campo do anterior em silencio.
+        auto Make = [&](const std::vector<u8>& VS, const std::vector<u8>& PS,
+                        D3D12_INPUT_ELEMENT_DESC* Layout, u32 LayoutCount,
+                        D3D12_PRIMITIVE_TOPOLOGY_TYPE Topo, ID3D12PipelineState** Out) {
+            PSODesc.VS                    = { VS.data(), VS.size() };
+            PSODesc.PS                    = { PS.data(), PS.size() };
+            PSODesc.InputLayout           = { Layout, LayoutCount };
+            PSODesc.PrimitiveTopologyType = Topo;
+            SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(Out)));
+        };
+        Make(LineVS, LinePS,      LineLayout, _countof(LineLayout),
+             D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, &LinePSO);
+        Make(LineVS, LineDepthPS, LineLayout, _countof(LineLayout),
+             D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, &LineDepthPSO);
+        Make(TriVS,  TriPS,       TriLayout,  _countof(TriLayout),
+             D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, &TriPSO);
+        Make(TriVS,  TriDepthPS,  TriLayout,  _countof(TriLayout),
+             D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, &TriDepthPSO);
 
         // Icones de luz: billboards alpha-blended com glifo SDF (layout de vertice proprio).
         auto IconVS = LoadShaderBytecode("LightIcon.vs_6_0.cso");
@@ -176,11 +203,9 @@ namespace Smile {
         IconBlend.RenderTarget[0].BlendOpAlpha          = D3D12_BLEND_OP_ADD;
         IconBlend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-        PSODesc.VS          = { IconVS.data(), IconVS.size() };
-        PSODesc.PS          = { IconPS.data(), IconPS.size() };
-        PSODesc.BlendState  = IconBlend;
-        PSODesc.InputLayout = { IconLayout, _countof(IconLayout) };
-        SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&IconPSO)));
+        PSODesc.BlendState = IconBlend;
+        Make(IconVS, IconPS, IconLayout, _countof(IconLayout),
+             D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, &IconPSO);
     }
 
     void FDebugDraw::CreateBuffers(ID3D12Device* Device) {
@@ -200,10 +225,15 @@ namespace Smile {
                  D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
         SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
 
-        Desc.Width = static_cast<u64>(kMaxVerts) * kVBStride * kFIF;
+        Desc.Width = static_cast<u64>(kMaxLines) * kLineStride * kFIF;
         SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&VB)));
-        SMILE_HR(VB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedVB)));
+                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&LineVB)));
+        SMILE_HR(LineVB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedLineVB)));
+
+        Desc.Width = static_cast<u64>(kMaxTriVerts) * kVBStride * kFIF;
+        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
+                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&TriVB)));
+        SMILE_HR(TriVB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedTriVB)));
 
         Desc.Width = static_cast<u64>(kMaxIconVerts) * sizeof(IconVertex) * kFIF;
         SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
@@ -218,88 +248,94 @@ namespace Smile {
         if (!Initialized || Empty()) return;
         const u32 Slot = FrameSlot % kFIF;
 
-        // Achatamento comando -> vertice, um bucket por PSO. O alpha da cor e o Thickness ficam
-        // de fora: o vertice ainda e pos+rgb e o render e LINELIST de 1px. Guardar sem usar e o
-        // que permite trocar so o renderizador na F1b, sem tocar em API nem em caller.
-        // Sem SRV de depth nao ha como testar: os modos Scene/XRay caem fora neste frame. Isso
-        // NAO conta como estouro de orcamento (e o fallback documentado), fica fora do aviso.
+        // Achatamento comando -> dado de GPU, um bucket por modo. Linha vira UMA INSTANCIA
+        // (A, B, cor, espessura) e o VS gera os 4 cantos do quad; triangulo segue vertice a
+        // vertice. Sem SRV de depth nao ha como testar: os modos Scene/XRay caem fora neste
+        // frame — isso NAO e estouro de orcamento (e o fallback documentado), fica fora do aviso.
         const bool CanTestDepth = DepthSRV.ptr != 0;
-        SceneLineVerts.clear(); FgLineVerts.clear();
-        SceneTriVerts.clear();  FgTriVerts.clear();
+        for (auto& B : LineBuckets) B.clear();
+        for (auto& B : TriBuckets)  B.clear();
 
-        auto PushVert = [](std::vector<DDVertex>& Dst, const Vec3& P, const Vec4& C) {
-            Dst.push_back({ { P.X, P.Y, P.Z }, { C.X, C.Y, C.Z } });
+        auto BucketOf = [&](EDebugDepthMode Mode) { return static_cast<size_t>(Mode); };
+        auto Drops    = [&](EDebugDepthMode Mode) {
+            return Mode != EDebugDepthMode::Foreground && !CanTestDepth;
         };
         for (const FLineCmd& Cmd : LineCmds) {
-            const bool TestsDepth = Cmd.Mode != EDebugDepthMode::Foreground;
-            if (TestsDepth && !CanTestDepth) continue;
-            auto& Dst = TestsDepth ? SceneLineVerts : FgLineVerts;
-            PushVert(Dst, Cmd.A, Cmd.Color);
-            PushVert(Dst, Cmd.B, Cmd.Color);
+            if (Drops(Cmd.Mode)) continue;
+            LineBuckets[BucketOf(Cmd.Mode)].push_back({
+                { Cmd.A.X, Cmd.A.Y, Cmd.A.Z }, { Cmd.B.X, Cmd.B.Y, Cmd.B.Z },
+                PackColor(Cmd.Color), Cmd.Thickness });
         }
         for (const FTriCmd& Cmd : TriCmds) {
-            const bool TestsDepth = Cmd.Mode != EDebugDepthMode::Foreground;
-            if (TestsDepth && !CanTestDepth) continue;
-            auto& Dst = TestsDepth ? SceneTriVerts : FgTriVerts;
-            PushVert(Dst, Cmd.A, Cmd.Color);
-            PushVert(Dst, Cmd.B, Cmd.Color);
-            PushVert(Dst, Cmd.C, Cmd.Color);
+            if (Drops(Cmd.Mode)) continue;
+            auto& Dst = TriBuckets[BucketOf(Cmd.Mode)];
+            const u32 Packed = PackColor(Cmd.Color);
+            Dst.push_back({ { Cmd.A.X, Cmd.A.Y, Cmd.A.Z }, Packed });
+            Dst.push_back({ { Cmd.B.X, Cmd.B.Y, Cmd.B.Z }, Packed });
+            Dst.push_back({ { Cmd.C.X, Cmd.C.Y, Cmd.C.Z }, Packed });
         }
 
-        const u32 WantOcc  = static_cast<u32>(SceneLineVerts.size());
-        const u32 WantLine = static_cast<u32>(FgLineVerts.size());
-        const u32 WantSTri = static_cast<u32>(SceneTriVerts.size());
-        const u32 WantTri  = static_cast<u32>(FgTriVerts.size());
-        const u32 WantIcon = static_cast<u32>(IconVerts.size());
-
-        // Clamp ALINHADO POR PRIMITIVA: linha precisa de pares, triangulo de trincas. Cortar no
-        // meio nao explode (o IA descarta a primitiva incompleta), mas o debug aparece mordido
-        // sem nada dizendo por que. Linha ja cai par (kMaxVerts par, pushes aos pares); o
-        // AlignDown existe pro caso de kMaxVerts/orcamento mudarem — e o triangulo PRECISA dele.
-        // Prioridade do orcamento na MESMA ordem do upload/draw abaixo: uma ordem so na funcao,
-        // pra ninguem ter que casar duas listas na cabeca.
+        // Orcamento: linha conta em INSTANCIAS (nao precisa alinhar — uma instancia e uma
+        // primitiva inteira); triangulo conta em vertices e PRECISA cair em multiplo de 3, senao
+        // o corte deixa uma primitiva pela metade e o debug aparece mordido sem explicacao.
+        // A prioridade segue a MESMA ordem do upload/draw: uma ordem so na funcao.
         auto AlignDown = [](u32 V, u32 N) { return V - (V % N); };
-        const u32 numOcc  = AlignDown(std::min(WantOcc, kMaxVerts), 2);
-        const u32 numSTri = AlignDown(std::min(WantSTri, kMaxVerts - numOcc), 3);
-        const u32 numLine = AlignDown(std::min(WantLine, kMaxVerts - numOcc - numSTri), 2);
-        const u32 numTri  = AlignDown(std::min(WantTri, kMaxVerts - numOcc - numSTri - numLine), 3);
-        const u32 numIcon = AlignDown(std::min(WantIcon, kMaxIconVerts), 6);
+        u32 LineCount[kModeCount]{}, TriCount[kModeCount]{};
+        u32 LineBudget = kMaxLines, TriBudget = kMaxTriVerts, Dropped = 0;
+        for (u32 i = 0; i < kModeCount; ++i) {
+            const size_t M = BucketOf(kDrawOrder[i]);
+            const u32 WantL = static_cast<u32>(LineBuckets[M].size());
+            const u32 WantT = static_cast<u32>(TriBuckets[M].size());
+            LineCount[M] = std::min(WantL, LineBudget);
+            TriCount[M]  = AlignDown(std::min(WantT, TriBudget), 3);
+            LineBudget -= LineCount[M];
+            TriBudget  -= TriCount[M];
+            Dropped += (WantL - LineCount[M]) + (WantT - TriCount[M]);
+        }
+        const u32 WantIcon = static_cast<u32>(IconVerts.size());
+        const u32 numIcon  = AlignDown(std::min(WantIcon, kMaxIconVerts), 6);
+        Dropped += WantIcon - numIcon;
 
-        const u32 Dropped = (WantOcc - numOcc) + (WantLine - numLine) + (WantSTri - numSTri) +
-                            (WantTri - numTri) + (WantIcon - numIcon);
         if (Dropped && !OverflowLogged) {
             OverflowLogged = true;
             LogWarning("DebugDraw estourou o orcamento: " + std::to_string(Dropped) +
-                       " vertices descartados (linhas+triangulos " +
-                       std::to_string(WantOcc + WantLine + WantSTri + WantTri) + "/" +
-                       std::to_string(kMaxVerts) + ", icones " + std::to_string(WantIcon) +
+                       " primitivas/vertices descartados (linhas " +
+                       std::to_string(LineCmds.size()) + "/" + std::to_string(kMaxLines) +
+                       ", vertices de triangulo " + std::to_string(TriCmds.size() * 3) + "/" +
+                       std::to_string(kMaxTriVerts) + ", icones " + std::to_string(WantIcon) +
                        "/" + std::to_string(kMaxIconVerts) +
                        "). O debug desenhado esta INCOMPLETO");
         } else if (!Dropped) {
             OverflowLogged = false; // coube de novo: rearma p/ o proximo episodio avisar
         }
 
-        // VB do frame, na ordem de desenho: TODO o Scene antes de TODO o Foreground —
-        // [linhas Scene | tris Scene | linhas Fg | tris Fg]. Agrupar por MODO e nao por
-        // topologia e o que sustenta a regra "Foreground fica por cima": intercalar
-        // (linhaScene, linhaFg, triScene, triFg) deixaria um triangulo Scene sobrescrever uma
-        // linha Foreground desenhada antes. Dentro de cada grupo a ordem de submissao decide,
-        // porque nao ha depth entre primitivas de debug (F1c resolve).
-        u8* VBSlot = MappedVB + static_cast<size_t>(Slot) * kMaxVerts * kVBStride;
-        u32 Cursor = 0;
-        auto Upload = [&](const std::vector<DDVertex>& Src, u32 Count) {
-            if (Count) std::memcpy(VBSlot + Cursor * kVBStride, Src.data(), Count * kVBStride);
-            Cursor += Count;
-        };
-        Upload(SceneLineVerts, numOcc);
-        Upload(SceneTriVerts,  numSTri);
-        Upload(FgLineVerts,    numLine);
-        Upload(FgTriVerts,     numTri);
+        // Buffers do frame na ordem de desenho (kDrawOrder): TODO o Scene, depois XRay, depois
+        // Foreground. Agrupar por MODO e nao por topologia e o que sustenta a regra "Foreground
+        // fica por cima" — intercalar deixaria um triangulo Scene sobrescrever uma linha
+        // Foreground desenhada antes. Dentro de cada grupo a ordem de submissao decide, porque
+        // nao ha depth entre primitivas de debug (F1c resolve).
+        u8* LineSlot = MappedLineVB + static_cast<size_t>(Slot) * kMaxLines * kLineStride;
+        u8* TriSlot  = MappedTriVB  + static_cast<size_t>(Slot) * kMaxTriVerts * kVBStride;
+        u32 LineFirst[kModeCount]{}, TriFirst[kModeCount]{};
+        u32 LineCursor = 0, TriCursor = 0;
+        for (u32 i = 0; i < kModeCount; ++i) {
+            const size_t M = BucketOf(kDrawOrder[i]);
+            LineFirst[M] = LineCursor;
+            TriFirst[M]  = TriCursor;
+            if (LineCount[M])
+                std::memcpy(LineSlot + LineCursor * kLineStride, LineBuckets[M].data(),
+                            LineCount[M] * kLineStride);
+            if (TriCount[M])
+                std::memcpy(TriSlot + TriCursor * kVBStride, TriBuckets[M].data(),
+                            TriCount[M] * kVBStride);
+            LineCursor += LineCount[M];
+            TriCursor  += TriCount[M];
+        }
 
         u8* IconSlot = MappedIconVB + static_cast<size_t>(Slot) * kMaxIconVerts * sizeof(IconVertex);
         if (numIcon) std::memcpy(IconSlot, IconVerts.data(), numIcon * sizeof(IconVertex));
 
-        struct { Mat44 M; f32 Params[4]; f32 CamR[4]; f32 CamU[4]; } CBData;
+        struct { Mat44 M; f32 Params[4]; f32 CamR[4]; f32 CamU[4]; f32 Screen[4]; } CBData;
         CBData.M = ViewProj;
         CBData.Params[0] = Width  > 0 ? 1.0f / static_cast<f32>(Width)  : 0.0f;
         CBData.Params[1] = Height > 0 ? 1.0f / static_cast<f32>(Height) : 0.0f;
@@ -307,6 +343,9 @@ namespace Smile {
         CBData.Params[3] = 0.0f;
         CBData.CamR[0] = CamRight.X; CBData.CamR[1] = CamRight.Y; CBData.CamR[2] = CamRight.Z; CBData.CamR[3] = 0.0f;
         CBData.CamU[0] = CamUp.X;    CBData.CamU[1] = CamUp.Y;    CBData.CamU[2] = CamUp.Z;    CBData.CamU[3] = 0.0f;
+        // Tamanho em pixels: o VS da linha converte a espessura de px pra NDC com isto.
+        CBData.Screen[0] = static_cast<f32>(Width);  CBData.Screen[1] = static_cast<f32>(Height);
+        CBData.Screen[2] = 0.0f;                     CBData.Screen[3] = 0.0f;
         std::memcpy(MappedCB + static_cast<size_t>(Slot) * 256, &CBData, sizeof(CBData));
 
         CmdList->OMSetRenderTargets(1, &BackbufferRTV, FALSE, nullptr);
@@ -319,25 +358,49 @@ namespace Smile {
         CmdList->SetGraphicsRootSignature(RootSig.Get());
         CmdList->SetGraphicsRootConstantBufferView(0, CB->GetGPUVirtualAddress() + static_cast<u64>(Slot) * 256);
 
-        D3D12_VERTEX_BUFFER_VIEW VBV{};
-        VBV.BufferLocation = VB->GetGPUVirtualAddress() + static_cast<u64>(Slot) * kMaxVerts * kVBStride;
-        VBV.StrideInBytes  = kVBStride;
-        VBV.SizeInBytes    = (numOcc + numLine + numSTri + numTri) * kVBStride;
-        CmdList->IASetVertexBuffers(0, 1, &VBV);
+        if (CanTestDepth) CmdList->SetGraphicsRootDescriptorTable(1, DepthSRV);
 
-        if (numOcc || numSTri) CmdList->SetGraphicsRootDescriptorTable(1, DepthSRV);
-        u32 First = 0;
-        auto Draw = [&](u32 Count, ID3D12PipelineState* PSO, D3D12_PRIMITIVE_TOPOLOGY Topo) {
-            if (!Count) return;
-            CmdList->SetPipelineState(PSO);
-            CmdList->IASetPrimitiveTopology(Topo);
-            CmdList->DrawInstanced(Count, 1, First, 0);
-            First += Count;
-        };
-        Draw(numOcc,  LineScenePSO.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-        Draw(numSTri, TriScenePSO.Get(),  D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        Draw(numLine, LinePSO.Get(),      D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-        Draw(numTri,  TriPSO.Get(),       D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        D3D12_VERTEX_BUFFER_VIEW LineVBV{};
+        LineVBV.BufferLocation = LineVB->GetGPUVirtualAddress() +
+                                 static_cast<u64>(Slot) * kMaxLines * kLineStride;
+        LineVBV.StrideInBytes  = kLineStride;
+        LineVBV.SizeInBytes    = LineCursor * kLineStride;
+
+        D3D12_VERTEX_BUFFER_VIEW TriVBV{};
+        TriVBV.BufferLocation = TriVB->GetGPUVirtualAddress() +
+                                static_cast<u64>(Slot) * kMaxTriVerts * kVBStride;
+        TriVBV.StrideInBytes  = kVBStride;
+        TriVBV.SizeInBytes    = TriCursor * kVBStride;
+
+        // O quad da linha e um triangle STRIP de 4 vertices gerados no VS: 4 vertices x N
+        // instancias, sem VB por vertice. Triangulo continua TRIANGLELIST comum.
+        ID3D12PipelineState* BoundPSO = nullptr;
+        for (u32 i = 0; i < kModeCount; ++i) {
+            const EDebugDepthMode Mode = kDrawOrder[i];
+            const size_t M = BucketOf(Mode);
+            if (!LineCount[M] && !TriCount[M]) continue;
+
+            // OccludedAlpha e a UNICA diferenca entre Scene e XRay — mesmo PSO, root constant
+            // diferente. Foreground nem le (o PS dele nao tem o caminho de depth).
+            const f32 Occluded = OccludedAlphaFor(Mode);
+            CmdList->SetGraphicsRoot32BitConstants(2, 1, &Occluded, 0);
+            const bool TestsDepth = Mode != EDebugDepthMode::Foreground;
+
+            if (LineCount[M]) {
+                ID3D12PipelineState* PSO = TestsDepth ? LineDepthPSO.Get() : LinePSO.Get();
+                if (PSO != BoundPSO) { CmdList->SetPipelineState(PSO); BoundPSO = PSO; }
+                CmdList->IASetVertexBuffers(0, 1, &LineVBV);
+                CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+                CmdList->DrawInstanced(4, LineCount[M], 0, LineFirst[M]);
+            }
+            if (TriCount[M]) {
+                ID3D12PipelineState* PSO = TestsDepth ? TriDepthPSO.Get() : TriPSO.Get();
+                if (PSO != BoundPSO) { CmdList->SetPipelineState(PSO); BoundPSO = PSO; }
+                CmdList->IASetVertexBuffers(0, 1, &TriVBV);
+                CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                CmdList->DrawInstanced(TriCount[M], 1, TriFirst[M], 0);
+            }
+        }
         if (numIcon) {
             D3D12_VERTEX_BUFFER_VIEW IconVBV{};
             IconVBV.BufferLocation = IconVB->GetGPUVirtualAddress() +

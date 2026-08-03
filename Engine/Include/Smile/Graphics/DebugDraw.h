@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <array>
 #include <vector>
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
@@ -13,9 +14,7 @@ namespace Smile {
     enum class EDebugDepthMode : u8 {
         Foreground = 0, // sempre visivel, por cima da cena (gizmo, markers)
         Scene,          // some atras da geometria (teste manual no PS contra o depth da cena)
-        // Solido na frente, TRANSLUCIDO atras. Precisa do alpha blend que chega na F1b; ate la
-        // cai no Scene (parte oculta some) e avisa uma vez — nao degrada em silencio.
-        XRay,
+        XRay,           // solido na frente, TRANSLUCIDO atras (a parte oculta continua legivel)
     };
 
     class FDebugDraw {
@@ -23,11 +22,9 @@ namespace Smile {
         void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat);
         bool IsInitialized() const { return Initialized; }
 
-        // A API guarda COMANDOS, nao vertices ja achatados: a expansao de linha grossa da F1b
-        // precisa da camera e do viewport, que so existem dentro do Render(). Por ora o alpha da
-        // cor e o Thickness (em PIXELS) sao GUARDADOS E IGNORADOS — o render ainda e LINELIST de
-        // 1px opaco. E de proposito: a API e os callers ja nascem no formato final, e esta fase
-        // fica provadamente sem mudanca de pixel.
+        // A API guarda COMANDOS, nao vertices ja achatados: a expansao da linha grossa acontece
+        // no Render(), unico ponto com camera e viewport. Thickness em PIXELS (constante em tela,
+        // como o Thickness/bScreenSpace do FBatchedElements da Unreal); alpha da cor e usado.
         void Line(const Vec3& A, const Vec3& B, const Vec4& Color,
                   EDebugDepthMode Mode = EDebugDepthMode::Foreground, f32 Thickness = 1.0f);
         void Triangle(const Vec3& A, const Vec3& B, const Vec3& C, const Vec4& Color,
@@ -61,7 +58,13 @@ namespace Smile {
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat);
         void CreateBuffers(ID3D12Device* Device);
-        void WarnXRayOnce();
+
+        // Fracao do alpha que sobrevive atras da geometria, por modo. Vai como root constant:
+        // Scene e XRay usam o MESMO PSO e diferem so nisto.
+        static f32 OccludedAlphaFor(EDebugDepthMode Mode) {
+            return Mode == EDebugDepthMode::XRay ? kXRayAlpha : 0.0f;
+        }
+        static constexpr f32 kXRayAlpha = 0.28f;
 
         struct FLineCmd {
             Vec3 A, B;
@@ -78,14 +81,26 @@ namespace Smile {
         std::vector<FTriCmd>  TriCmds;
         u32                   SceneDepthPrims = 0; // comandos submetidos em Scene/XRay
 
-        struct DDVertex { f32 Pos[3]; f32 Color[3]; };
-        // Stride derivado do tipo. Era sizeof(f32)*6 solto no .cpp — o mesmo numero escrito duas
-        // vezes, e mudar o vertice (alpha, thickness) exigiria lembrar do segundo.
-        static constexpr u32 kVBStride = sizeof(DDVertex);
+        // Cor empacotada em RGBA8: 16B por vertice no lugar de 24B, e o alpha entra de graca no
+        // espaco que o float3 desperdicava. Ordem de byte do R8G8B8A8_UNORM (R no byte baixo).
+        static u32 PackColor(const Vec4& C);
 
-        // Scratch do achatamento comando -> vertice, por bucket de PSO. Membros (e nao locais)
-        // p/ o vector reaproveitar a alocacao entre frames.
-        std::vector<DDVertex> SceneLineVerts, FgLineVerts, SceneTriVerts, FgTriVerts;
+        // Um comando por SEGMENTO, nao 4 vertices: o VS gera os cantos do quad pelo SV_VertexID.
+        struct FLineInstance { f32 A[3]; f32 B[3]; u32 Color; f32 Thickness; };
+        struct DDVertex      { f32 Pos[3]; u32 Color; };
+        static constexpr u32 kLineStride = sizeof(FLineInstance);
+        static constexpr u32 kVBStride   = sizeof(DDVertex);
+
+        // Scratch do achatamento comando -> GPU, um bucket por modo (indice = EDebugDepthMode).
+        // Membros e nao locais p/ o vector reaproveitar a alocacao entre frames.
+        static constexpr u32 kModeCount = 3;
+        std::array<std::vector<FLineInstance>, kModeCount> LineBuckets;
+        std::array<std::vector<DDVertex>, kModeCount>      TriBuckets;
+        // Ordem de desenho: quem testa depth primeiro, Foreground por cima. Agrupar por MODO
+        // (e nao por topologia) e o que sustenta essa regra — ver o Render().
+        static constexpr EDebugDepthMode kDrawOrder[kModeCount] = {
+            EDebugDepthMode::Scene, EDebugDepthMode::XRay, EDebugDepthMode::Foreground
+        };
 
         // Vertice do icone billboard: centro + cor + canto do quad (-1..1) + misc
         // (x = meia-largura mundo, y = tipo, z = selecionada). 6 vertices por icone.
@@ -94,20 +109,21 @@ namespace Smile {
 
         ComPtr<ID3D12RootSignature> RootSig;
         ComPtr<ID3D12PipelineState> LinePSO;      // Foreground: sem teste de depth
-        ComPtr<ID3D12PipelineState> LineScenePSO; // Scene/XRay: teste manual no PS
+        ComPtr<ID3D12PipelineState> LineDepthPSO; // Scene/XRay: teste manual no PS
         ComPtr<ID3D12PipelineState> TriPSO;
-        ComPtr<ID3D12PipelineState> TriScenePSO;
+        ComPtr<ID3D12PipelineState> TriDepthPSO;
         ComPtr<ID3D12PipelineState> IconPSO;
         ComPtr<ID3D12Resource>      CB;      u8* MappedCB     = nullptr;
-        ComPtr<ID3D12Resource>      VB;      u8* MappedVB     = nullptr;
+        ComPtr<ID3D12Resource>      LineVB;  u8* MappedLineVB = nullptr;
+        ComPtr<ID3D12Resource>      TriVB;   u8* MappedTriVB  = nullptr;
         ComPtr<ID3D12Resource>      IconVB;  u8* MappedIconVB = nullptr;
         bool                        Initialized = false;
         // Arma/desarma o aviso de estouro do orcamento: loga na ENTRADA do episodio, nao a cada
         // frame (a 200fps um log por frame vira spam que esconde o resto).
         bool                        OverflowLogged = false;
-        bool                        XRayWarned     = false;
 
-        static constexpr u32 kMaxVerts = 4096;
+        static constexpr u32 kMaxLines     = 2048;    // segmentos/frame (linha = 1 instancia)
+        static constexpr u32 kMaxTriVerts  = 4096;
         static constexpr u32 kMaxIconVerts = 256 * 6; // 256 icones/frame
     };
 }

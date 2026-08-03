@@ -182,6 +182,9 @@ smile_compile_shader(Selection/SelectionOutline.ps.hlsl   ps_6_0 main SHADER_OUT
 smile_compile_shader(Gizmo/DebugDraw.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Gizmo/DebugDraw.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Gizmo/DebugDrawOccluded.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/DebugDrawLine.vs.hlsl          vs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/DebugDrawLine.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Gizmo/DebugDrawLineDepth.ps.hlsl     ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Gizmo/LightIcon.vs.hlsl              vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Gizmo/LightIcon.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
@@ -316,6 +319,9 @@ add_custom_target(Shaders
         Gizmo/DebugDraw.vs.hlsl
         Gizmo/DebugDraw.ps.hlsl
         Gizmo/DebugDrawOccluded.ps.hlsl
+        Gizmo/DebugDrawLine.vs.hlsl
+        Gizmo/DebugDrawLine.ps.hlsl
+        Gizmo/DebugDrawLineDepth.ps.hlsl
         Gizmo/LightIcon.vs.hlsl
         Gizmo/LightIcon.ps.hlsl
 )

@@ -16,6 +16,10 @@ namespace SmileEditor {
         constexpr float kSizeFrac  = 0.18f;  // tamanho da seta ~18% da meia-altura da tela
         constexpr float kHitRadius = 9.0f;   // pixels
         constexpr float kIconFrac  = 0.22f;  // icone da luz = 22% da seta (~44px de altura)
+        // Espessura em pixels (constante em tela). A haste da seta era 1px serrilhado; 3px com
+        // AA e o que deixa o gizmo com o peso do da UE e facil de mirar.
+        constexpr float kAxisThickness = 3.0f;
+        constexpr float kSpotThickness = 2.0f;
     }
 
     float GizmoController::IconHalfSizeFor(Smile::Renderer& R, const Vec3& Position) const {
@@ -151,7 +155,8 @@ namespace SmileEditor {
             if (IsSel && L.Type == Smile::ELightType::Spot) {
                 const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
                 DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f),
-                        Smile::Vec4{ MCol, 1.0f });
+                        Smile::Vec4{ MCol, 1.0f },
+                        Smile::EDebugDepthMode::Foreground, kSpotThickness);
             }
         }
     }
@@ -177,7 +182,8 @@ namespace SmileEditor {
         for (int i = 0; i < 3; ++i) {
             const Vec3 d   = Axis[i];
             const Vec3 col = (Highlighted == Ids[i]) ? Hi : BaseCol[i];
-            DebugDraw.Line(Pivot, Pivot + d * ShaftEnd, Smile::Vec4{ col, 1.0f });
+            DebugDraw.Line(Pivot, Pivot + d * ShaftEnd, Smile::Vec4{ col, 1.0f },
+                           Smile::EDebugDepthMode::Foreground, kAxisThickness);
             // Ponta (piramide de 4 faces).
             const Vec3 u = (i == 0) ? Vec3::UnitY() : Vec3::UnitX();
             const Vec3 v = (i == 2) ? Vec3::UnitY() : Vec3::UnitZ();
