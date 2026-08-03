@@ -3,6 +3,7 @@
 
 #include "DDGICommon.hlsli"
 #include "../LightsCommon.hlsli"
+#include "../BRDF.hlsli"
 #include "../RayEpsilons.hlsli"
 
 // Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, SkyViewLUT,
@@ -232,40 +233,41 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         }
     }
 
-    // METALLIC: o difuso do hit e albedo*(1 - metallic), a mesma convencao do raster
-    // (DiffuseColor = BaseColor*(1-Metallic), ver BRDF.hlsli). Sem isto um metal puro
-    // fabricava difuso e injetava luz colorida nas probes, nas reflexoes e no ReSTIR.
-    //
-    // O fator sozinho NAO basta: o loader deixa MetallicFactor = 1 justamente para multiplicar
-    // pelo mapa, entao um material texturizado (quase todo dieletrico) apareceria como metal
-    // puro. Por isso, quando ha mapa mas nao estamos amostrando textura (RealHitShading off),
-    // o mais seguro e nao aplicar nada — errar para o lado do comportamento antigo em vez de
-    // apagar o difuso de uma superficie inteira.
-    //
-    // LIMITE CONHECIDO: o hit continua sem termo ESPECULAR, entao metal passa a contribuir
-    // ~zero para o indireto em vez de contribuir errado. E o que o Flax faz no surface atlas
-    // (GetDiffuseColor zera o metal). Metal visto dentro de reflexo/GI fica escuro; o conserto
-    // e dar especular ao hit, que e outro trabalho.
-    {
-        const bool hasMetalMap =
-            (geo.Flags & (INSTGEO_FLAG_MRMAP | INSTGEO_FLAG_METALMAP)) != 0u;
-        float metallic = 0.0f;
-        if (P.RealHitShading) {
-            metallic = geo.EmissiveFactor.w; // MetallicFactor
-            if ((geo.Flags & INSTGEO_FLAG_MRMAP) != 0u) {
-                Texture2D<float4> mrTex = ResourceDescriptorHeap[geo.MrMapIndex];
-                float4 mr = mrTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD);
-                metallic *= ((geo.Flags & INSTGEO_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
-            }
-            if ((geo.Flags & INSTGEO_FLAG_METALMAP) != 0u) {
-                Texture2D<float4> metalTex = ResourceDescriptorHeap[geo.MetalMapIndex];
-                metallic *= metalTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
-            }
-        } else if (!hasMetalMap) {
-            metallic = geo.EmissiveFactor.w; // sem mapa, o fator descreve o material sozinho
+    // Metallic/roughness seguem o mesmo workflow do G-buffer. O MR e amostrado uma vez para os
+    // dois parametros; mapas separados ocupam os slots +6/+7. Sem RealHitShading, metallic
+    // texturizado cai para dieletrico: nesses assets o fator costuma ser 1 e, sem ler o mapa,
+    // aplica-lo sozinho apagaria o difuso da superficie inteira.
+    const bool hasMetalMap =
+        (geo.Flags & (INSTGEO_FLAG_MRMAP | INSTGEO_FLAG_METALMAP)) != 0u;
+    float metallic  = 0.0f;
+    float roughness = geo.RoughnessFactor;
+    if (P.RealHitShading) {
+        metallic = geo.EmissiveFactor.w; // MetallicFactor cabe no .w do snapshot
+        if ((geo.Flags & INSTGEO_FLAG_MRMAP) != 0u) {
+            Texture2D<float4> mrTex = ResourceDescriptorHeap[geo.MrMapIndex];
+            const float4 mr = mrTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD);
+            metallic  *= ((geo.Flags & INSTGEO_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
+            roughness *= mr.g;
         }
-        albedo *= saturate(1.0f - metallic);
+        if ((geo.Flags & INSTGEO_FLAG_METALMAP) != 0u) {
+            Texture2D<float4> metalTex = ResourceDescriptorHeap[geo.MetalMapIndex];
+            metallic *= metalTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
+        }
+        if ((geo.Flags & INSTGEO_FLAG_ROUGHMAP) != 0u) {
+            Texture2D<float4> roughTex = ResourceDescriptorHeap[geo.RoughMapIndex];
+            roughness *= roughTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
+        }
+    } else if (!hasMetalMap) {
+        metallic = geo.EmissiveFactor.w;
     }
+    metallic = saturate(metallic);
+    roughness = max(roughness, 0.04f);
+
+    const float3 diffuseColor  = albedo * (1.0f - metallic);
+    const float3 specularColor = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    const float  alpha = roughness * roughness;
+    const float  a2 = alpha * alpha;
+    const float3 hitV = normalize(-rayDir);
 
     float ndl = saturate(dot(hitN, P.SunDir));
     float vis = 1.0f;
@@ -280,7 +282,9 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         SMILE_RT_PROCEED(sq)
         vis = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
     }
-    float3 Edirect = P.SunColor * P.SunIntensity * vis * ndl;
+    float3 directLighting = BRDF_Direct(
+        hitN, hitV, P.SunDir, P.SunColor * P.SunIntensity * vis,
+        diffuseColor, specularColor, roughness, a2, 0.0f);
 
     // ReGIR substitui o loop O(N) por 8 propostas do pool da celula + UM shadow ray. O sol fica
     // dedicado acima. Fora da grade (ou com o toggle off), o loop historico permanece como
@@ -290,7 +294,8 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     bool regirHandled = false;
     [branch] if (P.ReGIREnabled) {
         regirHandled = ReGIRSelectPunctual(
-            hitPos, hitN, P.ReGIRGridMin, P.ReGIRInvCellSize, P.ReGIRGridCount,
+            hitPos, hitN, hitV, diffuseColor, specularColor, roughness, a2,
+            P.ReGIRGridMin, P.ReGIRInvCellSize, P.ReGIRGridCount,
             P.ReGIRSlotsPerCell, (uint)P.ReGIRSampleCount, P.ReGIRSlotsSRV,
             P.ReGIRAverageSRV, P.FrameIndex, (uint)P.NumLights,
             regirLight, regirEstimate);
@@ -302,7 +307,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         const float lenL = max(length(toL), 1e-4f);
         const float lTMax = lenL - kLightRayEndMargin;
         if (lTMax <= RayEpsB.x + kLightRayMinTMax) {
-            Edirect += regirEstimate;
+            directLighting += regirEstimate;
         } else {
             RayDesc lray;
             lray.Origin = lorg; lray.Direction = toL / lenL;
@@ -311,13 +316,15 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
             lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                               P.ShadowRayMask, lray);
             SMILE_RT_PROCEED(lq)
-            if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += regirEstimate;
+            if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+                directLighting += regirEstimate;
         }
     } else if (!regirHandled) {
       [loop] for (int li = 0; li < P.NumLights; ++li) {
         float3 Ll; float distL;
-        float3 contrib = PunctualLightIncoming(SceneLights[li], hitPos, Ll, distL)
-                       * saturate(dot(hitN, Ll));
+        float3 contrib = HitPunctualBRDF(SceneLights[li], hitPos, hitN, hitV,
+                                         diffuseColor, specularColor, roughness, a2,
+                                         Ll, distL);
         if (dot(contrib, float3(0.2126f, 0.7152f, 0.0722f)) < 1e-3f) continue;
 
         // Segmento medido da origem EFETIVA (deslocada pelo ShadowRayBias): com origem em
@@ -334,7 +341,10 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         // Agora o segmento e o real e, se nao sobrar corpo util entre TMin e TMax, a luz conta
         // como VISIVEL (o trecho nao testado e menor que os proprios epsilons).
         float lTMax = lenL - kLightRayEndMargin;
-        if (lTMax <= RayEpsB.x + kLightRayMinTMax) { Edirect += contrib; continue; }
+        if (lTMax <= RayEpsB.x + kLightRayMinTMax) {
+            directLighting += contrib;
+            continue;
+        }
 
         RayDesc lray;
         lray.Origin    = lorg;
@@ -344,7 +354,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
         lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)
-        if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += contrib;
+        if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) directLighting += contrib;
       }
     }
 
@@ -386,7 +396,15 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         emissive *= emissiveTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).rgb;
     }
 
-    return albedo * (Edirect / SMILE_PI + indirect) + emissive;
+    // O atlas fornece irradiancia difusa, nao uma distribuicao direcional que permita integrar
+    // GGX de verdade. O fallback split-sum usa Fresnel roughness-aware e reserva (1-F) para o
+    // difuso: metal devolve energia tingida por F0 sem fingir que o atlas conhece a direcao de
+    // espelho. O direto acima continua sendo a BRDF GGX direcional completa.
+    const float NoV = saturate(dot(hitN, hitV));
+    const float3 ambientF = F_SchlickRoughness(specularColor, NoV, roughness);
+    const float3 indirectLighting = ((1.0f - ambientF) * diffuseColor + ambientF) * indirect;
+
+    return directLighting + indirectLighting + emissive;
 }
 
 #endif

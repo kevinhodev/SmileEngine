@@ -15,6 +15,9 @@
 #include <QLocale>
 #include <QFileDialog>
 #include <QMutexLocker>
+#include <QMetaObject>
+#include <QPointer>
+#include <QPalette>
 #include <QVariantMap>
 #include <algorithm>
 #include <cmath>
@@ -27,20 +30,26 @@ namespace SmileEditor {
 
     ViewportWidget::ViewportWidget(QWidget* _Parent)
         : QWidget(_Parent),
-          Renderer(std::make_unique<Smile::Renderer>())
+          Renderer(RendererThread.GetRenderer())
     {
         setAttribute(Qt::WA_NativeWindow);
         setAttribute(Qt::WA_PaintOnScreen);
-        setAttribute(Qt::WA_NoSystemBackground);
-        setAttribute(Qt::WA_OpaquePaintEvent);
+        // Antes do primeiro Present, deixa o Qt limpar a janela nativa em preto. Sem isso o
+        // HWND aparece branco durante a inicializacao assincrona do Renderer.
+        setAttribute(Qt::WA_NoSystemBackground, false);
+        setAttribute(Qt::WA_OpaquePaintEvent, false);
+        QPalette InitialPalette = palette();
+        InitialPalette.setColor(QPalette::Window, Qt::black);
+        setPalette(InitialPalette);
+        setAutoFillBackground(true);
 
         setFocusPolicy(Qt::StrongFocus);
         setMinimumSize(320, 200);
         setMouseTracking(true); // hover do gizmo precisa de mouse-move sem botao pressionado
 
-        // Interval 0: renderiza continuamente (dispara quando a fila de eventos esvazia,
-        // sem starvar input/resize). O pacing fica a cargo do Present: com VSync ligado
-        // ele trava no vblank; desligado, roda em FPS livre.
+        // Intervalo 0: solicita o proximo frame quando a fila de eventos esvazia. O timer
+        // fica pausado enquanto a thread de renderizacao trabalha e volta no callback;
+        // o pacing continua a cargo do Present (VSync ou FPS livre).
         RedrawTimer = new QTimer(this);
         RedrawTimer->setInterval(0);
         connect(RedrawTimer, &QTimer::timeout, this, &ViewportWidget::OnRenderTimer);
@@ -67,7 +76,19 @@ namespace SmileEditor {
     ViewportWidget::~ViewportWidget() {
         if (RedrawTimer) RedrawTimer->stop();
         if (ResizeDebounce) ResizeDebounce->stop();
-        // O destrutor noexcept do Renderer centraliza o shutdown e absorve falhas tardias.
+        // O closeEvent normal espera RendererStopped antes de destruir a arvore Qt. O fallback
+        // preserva a vida dos campos em construcao parcial/teardown excepcional.
+        RendererThread.RequestStop();
+        RendererThread.Join();
+    }
+
+    void ViewportWidget::BeginRendererShutdown() {
+        if (RendererShutdownRequested) return;
+        RendererShutdownRequested = true;
+        if (RedrawTimer) RedrawTimer->stop();
+        if (ResizeDebounce) ResizeDebounce->stop();
+        RendererThread.RequestStop();
+        if (RendererThread.IsStopped()) OnRenderThreadStopped();
     }
 
     QPaintEngine* ViewportWidget::paintEngine() const {
@@ -243,6 +264,7 @@ namespace SmileEditor {
 
     QString ViewportWidget::GetVRAMUsageText() const {
         if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        auto RendererAccess = Renderer.Lock();
         const auto& VM = Renderer->GetDevice().QueryVideoMemory();
         if (!VM.Valid) return QStringLiteral("—");
 
@@ -261,6 +283,7 @@ namespace SmileEditor {
 
     double ViewportWidget::GetVRAMBudgetFrac() const {
         if (!Renderer || !Renderer->IsInitialized()) return 0.0;
+        auto RendererAccess = Renderer.Lock();
         const auto& VM = Renderer->GetDevice().QueryVideoMemory();
         if (!VM.Valid || VM.LocalBudget == 0) return 0.0;
         return std::min(1.0, static_cast<double>(VM.LocalUsage) /
@@ -278,6 +301,7 @@ namespace SmileEditor {
 
     QString ViewportWidget::GetVRAMNonLocalText() const {
         if (!Renderer || !Renderer->IsInitialized()) return QStringLiteral("—");
+        auto RendererAccess = Renderer.Lock();
         const auto& VM = Renderer->GetDevice().QueryVideoMemory();
         if (!VM.Valid) return QStringLiteral("—");
         return FormatBytes(VM.NonLocalUsage) + QStringLiteral(" / ") +
@@ -291,6 +315,7 @@ namespace SmileEditor {
         QVariantList Rows;
         if (!Renderer || !Renderer->IsInitialized()) return Rows;
 
+        auto RendererAccess = Renderer.Lock();
         const auto& VM   = Renderer->GetDevice().QueryVideoMemory();
         const auto  Snap = Smile::VramTracker::Snapshot();
         const double Total = VM.Valid && VM.LocalUsage > 0
@@ -337,6 +362,7 @@ namespace SmileEditor {
 
     double ViewportWidget::GetGpuFrameMs() const {
         if (!Renderer || !Renderer->IsInitialized()) return 0.0;
+        auto RendererAccess = Renderer.Lock();
         for (const auto& R : Renderer->GetGpuProfiler().Results())
             if (std::strcmp(R.Name, kGpuFrameScope) == 0) return R.Milliseconds;
         return 0.0;
@@ -348,6 +374,7 @@ namespace SmileEditor {
     QVariantList ViewportWidget::GetGpuTimings() const {
         QVariantList Rows;
         if (!Renderer || !Renderer->IsInitialized()) return Rows;
+        auto RendererAccess = Renderer.Lock();
         const auto& Results = Renderer->GetGpuProfiler().Results();
         if (Results.empty()) return Rows;
 
@@ -530,6 +557,7 @@ namespace SmileEditor {
     QVariantList ViewportWidget::GetDebugSelection() const {
         QVariantList L;
         if (!Renderer) return L;
+        auto RendererAccess = Renderer.Lock();
         for (Smile::u32 I : Renderer->GetDebugSelection()) L << static_cast<int>(I);
         return L;
     }
@@ -545,6 +573,7 @@ namespace SmileEditor {
     bool ViewportWidget::GetDebugProbeCoordValues(
             int& _X, int& _Y, int& _Z, int& _CountX, int& _CountY, int& _CountZ) const {
         if (!Renderer || !DebugProbeSessionActive) return false;
+        auto RendererAccess = Renderer.Lock();
         const auto& DDGI = Renderer->GetDDGI();
         const Smile::u32 Index = Renderer->GetDebugProbeIndex();
         if (!DDGI.IsReady() || Index == Smile::Renderer::kNoDebugProbe ||
@@ -581,6 +610,7 @@ namespace SmileEditor {
     QString ViewportWidget::GetDebugProbeWorld() const {
         int X, Y, Z, CX, CY, CZ;
         if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
+        auto RendererAccess = Renderer.Lock();
         const auto& DDGI = Renderer->GetDDGI();
         const Smile::Vec3 Min = DDGI.GridMin();
         const double S = DDGI.Spacing();
@@ -677,6 +707,7 @@ namespace SmileEditor {
     void ViewportWidget::InspectDDGIProbe(
             int _TargetIndex, double _U, double _V, double _TileAspect) {
         if (!Renderer || DebugProbeSessionActive || _TargetIndex < 0) return;
+        auto RendererAccess = Renderer.Lock();
         const auto& Targets = Smile::DebugTargets::All();
         if (static_cast<size_t>(_TargetIndex) >= Targets.size()) return;
         const Smile::FDebugTarget& Clicked = Targets[static_cast<size_t>(_TargetIndex)];
@@ -932,6 +963,7 @@ namespace SmileEditor {
 
     void ViewportWidget::ToggleReSTIRGIVisibility() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         auto& ReSTIRGI = Renderer->GetReSTIRGI();
         ReSTIRGI.SetVisibility(!ReSTIRGI.GetVisibility());
         emit GISettingsChanged();
@@ -987,6 +1019,7 @@ namespace SmileEditor {
 
     void ViewportWidget::ToggleGTAOHalfRes() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         auto& AO = Renderer->GetAO();
         AO.SetHalfRes(!AO.GetHalfRes());
         emit RenderSettingsChanged();
@@ -1091,6 +1124,7 @@ namespace SmileEditor {
     QVariantList ViewportWidget::GetRayEpsilons() const {
         QVariantList Out;
         if (!Renderer) return Out;
+        auto RendererAccess = Renderer.Lock();
         const Smile::FRayEpsilonProfile& P = Renderer->GetRayEpsilons();
         for (const FEpsKnob& K : kEpsKnobs) {
             QVariantMap M;
@@ -1688,29 +1722,93 @@ namespace SmileEditor {
     }
 
     void ViewportWidget::EnsureRendererIsInitialized() {
-        if (Initialized) return;
+        if (RendererShutdownRequested || RendererStoppedFlag || RendererThread.IsStarted()) return;
         const HWND hWnd = reinterpret_cast<HWND>(winId());
-        Renderer->Initialize(hWnd,
-                             static_cast<unsigned int>(width()),
-                             static_cast<unsigned int>(height()));
-        // A selecao de upscaler/qualidade e uma preferencia anterior ao contexto. Agora que os passes
-        // existem, reaplica a escala (e revalida a disponibilidade) recriando os alvos internos 1x.
-        Renderer->SetUpscaler(Renderer->GetUpscaler());
+        // O viewport e um HWND pintado diretamente pelo D3D. Limpa-o antes de iniciar a worker
+        // para que nem um unico WM_PAINT exponha o fundo branco da janela nativa.
+        RECT ClientRect{};
+        if (GetClientRect(hWnd, &ClientRect)) {
+            if (HDC DeviceContext = GetDC(hWnd)) {
+                FillRect(DeviceContext, &ClientRect,
+                         static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+                ReleaseDC(hWnd, DeviceContext);
+            }
+        }
+        const QSize InitialSize = size();
+        AppliedResizeSize = InitialSize;
+
+        QPointer<ViewportWidget> Self(this);
+        RenderThread::Callbacks Hooks;
+        Hooks.Initialized = [Self]() {
+            if (!Self) return;
+            QMetaObject::invokeMethod(Self, [Self]() {
+                if (Self) Self->OnRendererInitialized();
+            }, Qt::QueuedConnection);
+        };
+        Hooks.FrameCompleted = [Self](RenderThread::FrameCompletion Completion) {
+            if (!Self) return;
+            const QString Error = QString::fromUtf8(Completion.Error);
+            QMetaObject::invokeMethod(Self,
+                [Self, Success = Completion.Success,
+                 Terminal = Completion.Terminal, Error]() {
+                if (Self) Self->OnFrameCompleted(Success, Terminal, Error);
+            }, Qt::QueuedConnection);
+        };
+        Hooks.InitializationFailed = [Self](const std::string& Error) {
+            if (!Self) return;
+            const QString Message = QString::fromUtf8(Error);
+            QMetaObject::invokeMethod(Self, [Self, Message]() {
+                if (Self) Self->OnRendererInitializationFailed(Message);
+            }, Qt::QueuedConnection);
+        };
+        Hooks.Stopped = [Self]() {
+            if (!Self) return;
+            QMetaObject::invokeMethod(Self, [Self]() {
+                if (Self) Self->OnRenderThreadStopped();
+            }, Qt::QueuedConnection);
+        };
+        RendererThread.Start(hWnd,
+                             static_cast<unsigned int>(InitialSize.width()),
+                             static_cast<unsigned int>(InitialSize.height()),
+                             std::move(Hooks));
+    }
+
+    void ViewportWidget::OnRendererInitialized() {
+        if (RendererShutdownRequested || Initialized || !RendererThread.IsReady()) return;
         Initialized = true;
-        AppliedResizeSize = size();
-        PendingResizeSize = {};
+        PendingResizeSize = size();
+        ApplyPendingResize();
+        FrameTimer.restart();
         emit RendererInitialized();
         emit DebugTargetsChanged();   // os alvos foram publicados na criacao dos targets internos
     }
 
+    void ViewportWidget::OnRendererInitializationFailed(const QString& _Error) {
+        Q_UNUSED(_Error);
+        Initialized = false;
+        if (RedrawTimer) RedrawTimer->stop();
+    }
+
+    void ViewportWidget::OnRenderThreadStopped() {
+        if (RendererStoppedFlag) return;
+        RendererThread.Join();
+        RendererStoppedFlag = true;
+        Initialized = false;
+        if (RedrawTimer) RedrawTimer->stop();
+        if (ResizeDebounce) ResizeDebounce->stop();
+        emit RendererStopped();
+    }
+
     void ViewportWidget::showEvent(QShowEvent* _Event) {
-        QWidget::showEvent(_Event);
+        // Cria e limpa o HWND antes de ele se tornar visivel; a inicializacao pesada segue
+        // assincrona na render thread.
         EnsureRendererIsInitialized();
+        QWidget::showEvent(_Event);
         // O layout pode ter mudado enquanto o viewport estava oculto e o debounce parado.
         PendingResizeSize = size();
         ApplyPendingResize();
         FrameTimer.restart();
-        RedrawTimer->start();
+        if (!RendererStoppedFlag && !RendererThread.HasFrameInFlight()) RedrawTimer->start();
     }
 
     void ViewportWidget::hideEvent(QHideEvent* _Event) {
@@ -1742,14 +1840,24 @@ namespace SmileEditor {
     }
 
     void ViewportWidget::ApplyPendingResize() {
-        if (!Initialized || InteractiveResize || !Renderer || !Renderer->IsInitialized()) return;
+        if (!Initialized || InteractiveResize || !Renderer) return;
+
+        if (RendererThread.HasFrameInFlight()) return;
+        auto RendererAccess = Renderer.TryLock();
+        if (!RendererAccess) {
+            // Nao congela a GUI esperando Present; conserva PendingResizeSize e tenta de novo
+            // assim que a thread de renderizacao liberar o Renderer.
+            ResizeDebounce->start(1);
+            return;
+        }
+        if (!RendererAccess->IsInitialized()) return;
 
         const QSize Target = PendingResizeSize;
         PendingResizeSize = {};
         if (Target.width() <= 0 || Target.height() <= 0 || Target == AppliedResizeSize) return;
 
-        Renderer->Resize(static_cast<unsigned int>(Target.width()),
-                         static_cast<unsigned int>(Target.height()));
+        RendererAccess->Resize(static_cast<unsigned int>(Target.width()),
+                               static_cast<unsigned int>(Target.height()));
         AppliedResizeSize = Target;
         // Resize realoca SRVs: os alvos foram re-registrados com slots novos.
         emit DebugTargetsChanged();
@@ -1760,20 +1868,31 @@ namespace SmileEditor {
     }
 
     void ViewportWidget::OnRenderTimer() {
+        if (RendererShutdownRequested) return;
         EnsureRendererIsInitialized();
-        if (!Renderer->IsInitialized()) return;
+        if (!Initialized || !RendererThread.IsReady() ||
+            RendererThread.HasFrameInFlight()) return;
+
+        // Nunca espera o Present da thread de renderizacao. Se outro comando sincronizado da
+        // UI estiver usando o Renderer, este tick e simplesmente coalescido com o proximo.
+        auto RendererAccess = Renderer.TryLock();
+        if (!RendererAccess || !RendererAccess->IsInitialized()) return;
 
         // Resolucao de NANOSEGUNDOS: a >200 FPS o dt em ms inteiros (4/5/6ms) fazia o
         // FPS pular feito louco. nsecsElapsed da precisao sub-ms p/ dt e FPS estaveis.
         float DeltaTime = static_cast<float>(static_cast<double>(FrameTimer.nsecsElapsed()) / 1.0e9);
         FrameTimer.restart();
         DeltaTime = Smile::Clamp(DeltaTime, 0.0001f, 0.1f);
+        LastFrameDeltaTime = DeltaTime;
 
         Smile::CameraInput CameraInput;
         CameraInput.Look  = MouseLookActive
             ? Smile::Vec2{ MouseDelta.X * kMouseSensitivity,
                           -MouseDelta.Y * kMouseSensitivity }   
             : Smile::Vec2::Zero();
+        // Consome apenas o delta submetido. Eventos de mouse que chegarem enquanto a render
+        // thread trabalha acumulam para o proximo frame, em vez de serem apagados no callback.
+        MouseDelta = Smile::Vec2::Zero();
         CameraInput.Move  = Smile::Vec3{
             static_cast<float>(IsHeld(Qt::Key_D) - IsHeld(Qt::Key_A)),   
             static_cast<float>(IsHeld(Qt::Key_E) - IsHeld(Qt::Key_Q)),   
@@ -1781,11 +1900,50 @@ namespace SmileEditor {
         };
         CameraInput.Speed = IsHeld(Qt::Key_Shift) ? 4.0f : 1.0f;
 
-        Renderer->UpdateCamera(CameraInput, DeltaTime);
+        RendererAccess->UpdateCamera(CameraInput, DeltaTime);
+        FlushPendingGizmoInput(*RendererAccess);
         // Gizmo (editor-side): submete as setas ao DebugDraw da Engine ANTES do RenderFrame, que
         // as desenha e limpa. Geometria world-space -> projetada com a VP do frame (sem lag).
-        GizmoCtrl.Submit(*Renderer);
-        Renderer->RenderFrame();
+        GizmoCtrl.Submit(*RendererAccess);
+        if (RendererThread.RequestFrame()) {
+            if (!RendererOwnsSurface) {
+                RendererOwnsSurface = true;
+                setAutoFillBackground(false);
+                setAttribute(Qt::WA_NoSystemBackground, true);
+                setAttribute(Qt::WA_OpaquePaintEvent, true);
+            }
+            // Um timer de intervalo zero ficaria acordando a GUI em busy-loop durante o
+            // Present. O callback do frame rearma o timer quando o slot unico fica livre.
+            RedrawTimer->stop();
+        }
+    }
+
+    void ViewportWidget::OnFrameCompleted(bool _Success, bool _Terminal,
+                                          const QString& _Error) {
+        if (!_Success && !_Error.isEmpty() && _Terminal)
+            Smile::LogError("Render thread encerrada apos falhas consecutivas: " +
+                            _Error.toStdString());
+
+        if (_Success && !RendererShutdownRequested) OnFrameRendered();
+
+        // Ownership unico de FrameOutstanding: toda conclusao de frame passa por aqui,
+        // independentemente de sucesso, falha recuperavel ou shutdown concorrente.
+        RendererThread.CompleteFrame();
+        if (RendererShutdownRequested || _Terminal) {
+            if (RedrawTimer) RedrawTimer->stop();
+            return;
+        }
+        if (PendingResizeSize.isValid() && PendingResizeSize != AppliedResizeSize &&
+            ResizeDebounce && !InteractiveResize)
+            ResizeDebounce->start(0);
+        if (isVisible() && RedrawTimer) RedrawTimer->start();
+    }
+
+    void ViewportWidget::OnFrameRendered() {
+        // Conserva o lock ate FrameReady terminar de atualizar todas as bridges. O proximo
+        // frame so pode ser solicitado depois deste callback voltar ao event loop.
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess || !RendererAccess->IsInitialized()) return;
 
         // A captura e produzida dentro do frame, em target offscreen. O readback fica pronto
         // quando o slot de frame volta a ser usado; daqui em diante o QML so enxerga QImage.
@@ -1986,9 +2144,8 @@ namespace SmileEditor {
 
         // FPS suavizado por media exponencial (EMA) — leitura estavel em vez do valor
         // instantaneo 1/dt (que oscila muito frame a frame).
-        const float InstFPS = DeltaTime > 0.0f ? 1.0f / DeltaTime : 0.0f;
+        const float InstFPS = LastFrameDeltaTime > 0.0f ? 1.0f / LastFrameDeltaTime : 0.0f;
         LastFPS = (LastFPS > 0.0f) ? (LastFPS * 0.96f + InstFPS * 0.04f) : InstFPS;
-        MouseDelta = Smile::Vec2::Zero();
 
         // QML nao precisa reler/formatar 17 propriedades de telemetria a cada frame. O pulso
         // FrameReady permanece imediato para preview assincrono, picking, gizmos e bridges.
@@ -2013,6 +2170,7 @@ namespace SmileEditor {
 
     int ViewportWidget::PickLightMarker(unsigned int _X, unsigned int _Y) const {
         if (!Renderer || !Renderer->IsInitialized()) return -1;
+        auto RendererAccess = Renderer.Lock();
         constexpr float kPickRadiusPx = 22.0f; // ~raio do icone billboard (~44px de altura)
         const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
 
@@ -2027,6 +2185,17 @@ namespace SmileEditor {
             if (d < Best) { Best = d; BestIdx = i; }
         }
         return BestIdx;
+    }
+
+    void ViewportWidget::FlushPendingGizmoInput(Smile::Renderer& _Renderer) {
+        if (GizmoMousePending) {
+            GizmoCtrl.OnMouseMove(_Renderer, PendingGizmoMouseX, PendingGizmoMouseY);
+            GizmoMousePending = false;
+        }
+        if (GizmoReleasePending) {
+            GizmoCtrl.OnMouseRelease();
+            GizmoReleasePending = false;
+        }
     }
 
     void ViewportWidget::mousePressEvent(QMouseEvent* _Event) {
@@ -2047,10 +2216,17 @@ namespace SmileEditor {
         // logico do widget (Resize usa size() logico), entao a posicao do evento mapeia 1:1.
         // O passe de ID roda no proximo frame; o resultado e coletado em OnRenderTimer.
         else if (_Event->button() == Qt::LeftButton && !MouseLookActive) {
-            if (Renderer && Renderer->IsInitialized()) {
+            if (Renderer) {
+                auto RendererAccess = Renderer.Lock();
+                if (!RendererAccess || !RendererAccess->IsInitialized()) {
+                    QWidget::mousePressEvent(_Event);
+                    return;
+                }
                 const QPointF P = _Event->position();
                 const unsigned int Px = static_cast<unsigned int>(P.x() > 0.0 ? P.x() : 0.0);
                 const unsigned int Py = static_cast<unsigned int>(P.y() > 0.0 ? P.y() : 0.0);
+                // Resolve hover/release coalescidos antes de iniciar uma nova interacao.
+                FlushPendingGizmoInput(*RendererAccess);
                 if (DebugProbePointPickArmed) {
                     DebugProbePointPickArmed = false;
                     DebugProbeContributors.clear();
@@ -2075,7 +2251,7 @@ namespace SmileEditor {
                 // 1) Tenta pegar um handle do gizmo. Se pegou, comeca o arraste e NAO faz picking.
                 // 2) Senao, tenta um marker de LUZ (teste 2D em tela — luz nao esta no ID-buffer).
                 // 3) Senao, picking normal por GPU (seleciona o objeto sob o cursor).
-                if (!GizmoCtrl.OnMousePress(*Renderer, Px, Py)) {
+                if (!GizmoCtrl.OnMousePress(*RendererAccess, Px, Py)) {
                     const int LightHit = PickLightMarker(Px, Py);
                     if (LightHit >= 0) {
                         Renderer->SetSelectedLight(LightHit);
@@ -2100,7 +2276,21 @@ namespace SmileEditor {
             unsetCursor();
         }
         else if (_Event->button() == Qt::LeftButton) {
-            GizmoCtrl.OnMouseRelease(); // fim do arraste do gizmo (no-op se nao estava arrastando)
+            if (GizmoCtrl.IsDragging() && Renderer) {
+                const QPointF P = _Event->position();
+                PendingGizmoMouseX = static_cast<Smile::u32>(P.x() > 0.0 ? P.x() : 0.0);
+                PendingGizmoMouseY = static_cast<Smile::u32>(P.y() > 0.0 ? P.y() : 0.0);
+                GizmoMousePending = true;
+                GizmoReleasePending = true;
+
+                // Finaliza imediatamente se o frame ja liberou o Renderer; caso contrario,
+                // OnRenderTimer aplica primeiro a ultima posicao e depois encerra o drag.
+                auto RendererAccess = Renderer.TryLock();
+                if (RendererAccess && RendererAccess->IsInitialized())
+                    FlushPendingGizmoInput(*RendererAccess);
+            } else {
+                GizmoCtrl.OnMouseRelease();
+            }
         }
         QWidget::mouseReleaseEvent(_Event);
     }
@@ -2108,12 +2298,17 @@ namespace SmileEditor {
     void ViewportWidget::mouseMoveEvent(QMouseEvent* _Event) {
         if (!MouseLookActive) {
             // Sem camera-look: roteia pro gizmo. Arrastando -> move o objeto; senao -> hover (destaca
-            // o eixo sob o cursor). Coords logicas = pixels do backbuffer (1:1).
-            if (Renderer && Renderer->IsInitialized()) {
+            // o eixo sob o cursor). Se a render thread estiver ocupada, conserva a posicao mais
+            // recente para o proximo frame, sem bloquear nem perder o movimento do drag.
+            if (!GizmoReleasePending) {
                 const QPointF P = _Event->position();
-                const unsigned int Px = static_cast<unsigned int>(P.x() > 0.0 ? P.x() : 0.0);
-                const unsigned int Py = static_cast<unsigned int>(P.y() > 0.0 ? P.y() : 0.0);
-                GizmoCtrl.OnMouseMove(*Renderer, Px, Py); // arraste se ativo, senao hover
+                PendingGizmoMouseX = static_cast<Smile::u32>(P.x() > 0.0 ? P.x() : 0.0);
+                PendingGizmoMouseY = static_cast<Smile::u32>(P.y() > 0.0 ? P.y() : 0.0);
+                GizmoMousePending = true;
+            }
+            auto RendererAccess = Renderer.TryLock();
+            if (RendererAccess && RendererAccess->IsInitialized()) {
+                FlushPendingGizmoInput(*RendererAccess);
             }
             QWidget::mouseMoveEvent(_Event);
             return;

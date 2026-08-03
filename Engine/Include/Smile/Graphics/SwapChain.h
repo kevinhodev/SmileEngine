@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <atomic>
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include "Smile/Core/Types.h"
@@ -24,8 +25,8 @@ namespace Smile {
 
         void Present();
 
-        void SetVSync(bool Enabled) { VSyncEnabled = Enabled; }
-        bool GetVSync() const       { return VSyncEnabled; }
+        void SetVSync(bool Enabled) { VSyncEnabled.store(Enabled, std::memory_order_relaxed); }
+        bool GetVSync() const       { return VSyncEnabled.load(std::memory_order_relaxed); }
 
         UINT CurrentIndex() const { return SwapChain->GetCurrentBackBufferIndex(); }
         ID3D12Resource* CurrentBackBuffer() const { return Buffers[CurrentIndex()].Get(); }
@@ -43,6 +44,7 @@ namespace Smile {
         UINT Width  = 0;
         UINT Height = 0;
         bool AllowTearing = false;
-        bool VSyncEnabled = false; // off por padrao
+        // Pode ser alterado pela GUI enquanto Present roda fora do lock grande do Renderer.
+        std::atomic_bool VSyncEnabled{false}; // off por padrao
     };
 } 

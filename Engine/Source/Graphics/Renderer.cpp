@@ -3581,6 +3581,9 @@ namespace Smile {
 
         AsyncGIRanLastFrame = (GIComputeFence != 0);
         CommandQueue.EndFrame(CommandLists, 1);
+    }
+
+    void Renderer::PresentFrame() {
         SwapChain.Present();
     }
 

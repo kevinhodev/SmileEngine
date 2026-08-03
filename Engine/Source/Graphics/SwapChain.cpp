@@ -29,7 +29,8 @@ namespace Smile {
         ComPtr<IDXGISwapChain1> Swap1;
         SMILE_HR(_Factory->CreateSwapChainForHwnd(_CommandQueue, _hWnd, &SwapChainDesc, nullptr, nullptr, &Swap1));
 
-        SMILE_HR(_Factory->MakeWindowAssociation(_hWnd, DXGI_MWA_NO_ALT_ENTER));
+        SMILE_HR(_Factory->MakeWindowAssociation(
+            _hWnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES));
 
         SMILE_HR(Swap1.As(&SwapChain));
 
@@ -68,7 +69,7 @@ namespace Smile {
 
     void FSwapChain::Present() {
         UINT SyncInterval, Flags;
-        if (VSyncEnabled) {
+        if (VSyncEnabled.load(std::memory_order_relaxed)) {
             SyncInterval = 1;
             Flags        = 0;
         } else {

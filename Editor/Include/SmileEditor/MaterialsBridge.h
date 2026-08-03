@@ -11,8 +11,10 @@
 #include <QQuickImageProvider>
 #include <QSet>
 #include <QString>
+#include <utility>
 #include <QVariantList>
 #include <QVector>
+#include "SmileEditor/RenderThread.h"
 
 namespace Smile { class Renderer; class FTexture; }
 
@@ -95,7 +97,7 @@ namespace SmileEditor {
 
         explicit MaterialsBridge(QObject* parent = nullptr);
 
-        void SetRenderer(Smile::Renderer* R);            // MainWindow, no RendererInitialized
+        void SetRenderer(RendererHandle R);              // MainWindow, no RendererInitialized
         void OnSceneLoaded(const QString& ScenePath, bool Additive);
 
         // QAbstractListModel
@@ -103,7 +105,7 @@ namespace SmileEditor {
         QVariant data(const QModelIndex& Index, int Role) const override;
         QHash<int, QByteArray> roleNames() const override;
 
-        bool    Available() const { return Renderer != nullptr; }
+        bool    Available() const { return static_cast<bool>(Renderer); }
         int     TotalCount() const;
         QString Search() const { return SearchText; }
         void    SetSearch(const QString& V);
@@ -235,7 +237,23 @@ namespace SmileEditor {
             int Version = 0;
         };
 
-        Smile::FMaterial* SelMat() const;
+        class LockedMaterial {
+        public:
+            LockedMaterial() = default;
+            LockedMaterial(RendererHandle::Access Guard, Smile::FMaterial* Material)
+                : Access(std::move(Guard)), Value(Material) {}
+
+            explicit operator bool() const { return Value != nullptr; }
+            operator Smile::FMaterial*() const { return Value; }
+            Smile::FMaterial* operator->() const { return Value; }
+            Smile::FMaterial& operator*() const { return *Value; }
+
+        private:
+            RendererHandle::Access Access;
+            Smile::FMaterial*      Value = nullptr;
+        };
+
+        LockedMaterial SelMat() const;
         void   RebuildRows();
         // Slot helpers (0..7 na ordem Albedo/Normal/MR/AO/Emissivo/Height/Metal/Rough).
         Smile::FTexture** SlotPointer(Smile::FMaterial& M, int Slot) const;
@@ -282,7 +300,7 @@ namespace SmileEditor {
         QJsonObject MaterialToJson(const Smile::FMaterial& M) const;
         void   JsonToMaterial(const QJsonObject& O, Smile::FMaterial& M) const;
 
-        Smile::Renderer* Renderer = nullptr;
+        RendererHandle Renderer;
         QVector<FRow>    Rows;
         int              SelectedMat = -1;             // indice em GetMaterials()
         QString          SearchText;

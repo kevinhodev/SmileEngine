@@ -5,6 +5,7 @@
 set(EDITOR_HEADERS
     Include/SmileEditor/MainWindow.h
     Include/SmileEditor/ViewportWidget.h
+    Include/SmileEditor/RenderThread.h
     Include/SmileEditor/DarkTheme.h
     Include/SmileEditor/AboutDialog.h
     Include/SmileEditor/SmileLogo.h
@@ -27,6 +28,7 @@ set(EDITOR_SOURCES
     Source/main.cpp
     Source/MainWindow.cpp
     Source/ViewportWidget.cpp
+    Source/RenderThread.cpp
     Source/DarkTheme.cpp
     Source/AboutDialog.cpp
     Source/SmileLogo.cpp

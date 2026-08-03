@@ -2,15 +2,34 @@
 #define SMILE_REGIR_SAMPLING
 
 #include "ReGIRCommon.hlsli"
+#include "../BRDF.hlsli"
+
+// Avaliacao compartilhada entre o resampling do ReGIR e o fallback exato do hit. O target e a
+// contribuicao BRDF completa, nao apenas Li*N.L: isso deixa metais e highlights GGX participarem
+// da selecao. A sombra continua no centro da fonte; SourceRadius desloca apenas o representative
+// point especular, igual ao deferred e ao ReSTIR DI de tela.
+float3 HitPunctualBRDF(FPunctualLight light, float3 hitPos, float3 hitN, float3 hitV,
+                       float3 diffuseColor, float3 specularColor, float roughness, float a2,
+                       out float3 L, out float dist) {
+    const float3 radiance = PunctualLightIncoming(light, hitPos, L, dist);
+    const float3 toLight = light.PosInvRadius.xyz - hitPos;
+    float3 Ls;
+    const float specEnergy = AreaSphereSpecular(light.ColorSourceRadius.w, roughness,
+                                                toLight, hitV, hitN, Ls);
+    return BRDF_DirectArea(hitN, hitV, L, Ls, specEnergy, radiance,
+                           diffuseColor, specularColor, roughness, a2, 0.0f);
+}
 
 // Segunda etapa do ReGIR: escolhe uma celula com jitter estocastico, sorteia reservoirs do pool
-// e os resampleia pelo integrando REAL do hit (radiancia incidente * N.L). A visibilidade fica
-// fora do pHat e custa um unico shadow ray para a amostra vencedora.
+// e os resampleia pelo integrando REAL do hit (BRDF * radiancia incidente * N.L). A visibilidade
+// fica fora do pHat e custa um unico shadow ray para a amostra vencedora.
 //
 // Retorna false apenas quando o ponto nao pode usar o grid (desligado/fora dos limites). Dentro
 // dele, zero e uma estimativa valida — cair no full loop quando as 8 propostas falham enviesaria
 // o estimador e faria justamente os pixels dificeis pagarem o pior custo.
-bool ReGIRSelectPunctual(float3 hitPos, float3 hitN,
+bool ReGIRSelectPunctual(float3 hitPos, float3 hitN, float3 hitV,
+                         float3 diffuseColor, float3 specularColor,
+                         float roughness, float a2,
                          float3 gridMin, float3 invCellSize, int3 gridCount,
                          uint slotsPerCell, uint shadingCandidates,
                          uint slotsSRV, uint averageSRV, uint frameIndex, uint numLights,
@@ -48,8 +67,9 @@ bool ReGIRSelectPunctual(float3 hitPos, float3 hitN,
         if (sourcePdf <= 0.0f) continue;
 
         float3 L; float dist;
-        const float3 contribution = PunctualLightIncoming(
-            SceneLights[candidate.LightIndex], hitPos, L, dist) * saturate(dot(hitN, L));
+        const float3 contribution = HitPunctualBRDF(
+            SceneLights[candidate.LightIndex], hitPos, hitN, hitV,
+            diffuseColor, specularColor, roughness, a2, L, dist);
         const float target = ReGIRLuminance(contribution);
         // Casa o dominio do caminho de referencia, que descarta individualmente termos abaixo
         // deste limiar antes de emitir shadow ray.

@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QString>
 #include <QVector>
+#include "SmileEditor/RenderThread.h"
 
 namespace Smile { class Renderer; }
 
@@ -13,7 +14,7 @@ namespace SmileEditor {
     // viram uma lista de linhas visiveis que a ListView virtualiza — expand/colapso, busca e
     // filtro reconstroem a lista aqui no C++ (Rebuild), nunca no QML (2k+ meshes).
     //
-    // Le a cena direto do Renderer (mesma thread da GUI, racional do LightsBridge). As ACOES
+    // Le a cena via RendererHandle (acesso serializado com a thread de renderizacao). As ACOES
     // de luz (add/remover/duplicar/toggle/propriedades) continuam no LightsBridge — o QML
     // chama lightsModel; o MainWindow conecta LightsChanged -> Rebuild daqui. Nuvens ligam no
     // ViewportWidget (viewportModel.cloudsEnabled); o oceano nao tinha toggle no editor, entao
@@ -74,7 +75,7 @@ namespace SmileEditor {
 
         explicit SceneOutlinerBridge(QObject* parent = nullptr);
 
-        void SetRenderer(Smile::Renderer* R);           // MainWindow, no RendererInitialized
+        void SetRenderer(RendererHandle R);             // MainWindow, no RendererInitialized
         void OnSceneLoaded(const QString& ScenePath, bool Additive); // apos LoadCookedScene OK
 
         // QAbstractListModel
@@ -82,7 +83,7 @@ namespace SmileEditor {
         QVariant data(const QModelIndex& Index, int Role) const override;
         QHash<int, QByteArray> roleNames() const override;
 
-        bool    Available() const { return Renderer != nullptr; }
+        bool    Available() const { return static_cast<bool>(Renderer); }
         int     TotalCount() const;
         int     SelectedCount() const;
         int     HiddenCount() const;
@@ -165,7 +166,7 @@ namespace SmileEditor {
         // reseta o chip de filtro se preciso). Retorna a linha, ou -1 se a busca a esconde.
         int  RevealSelection();
 
-        Smile::Renderer* Renderer = nullptr;
+        RendererHandle Renderer;
         QVector<FRow>        Rows;
         QVector<FAssetRange> Assets;
         QString JsonPath;          // <cena>.visibility.json da cena principal (nao-aditiva)

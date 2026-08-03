@@ -242,13 +242,25 @@ namespace SmileEditor {
     }
 
     void MainWindow::closeEvent(QCloseEvent* _Event) {
+        // Nunca destroi o HWND enquanto o worker ainda pode estar em Initialize/Present.
+        // O primeiro close aprovado solicita a parada; Stopped agenda o segundo close.
+        if (RendererShutdownForClose) {
+            _Event->ignore();
+            return;
+        }
+        if (CloseApproved) {
+            ContinueApprovedClose(_Event);
+            return;
+        }
+
         // Sidecars com dirty flag (lights/visibility/materials) fechavam descartando em
         // silencio. Sao baratos de salvar — pergunta uma vez, com Salvar como default.
         const bool LightsDirty    = LightsBr    && LightsBr->Dirty();
         const bool VisDirty       = OutlinerBr  && OutlinerBr->Dirty();
         const bool MaterialsDirty = MaterialsBr && MaterialsBr->Dirty();
         if (!LightsDirty && !VisDirty && !MaterialsDirty) {
-            QMainWindow::closeEvent(_Event);
+            CloseApproved = true;
+            ContinueApprovedClose(_Event);
             return;
         }
 
@@ -272,6 +284,17 @@ namespace SmileEditor {
             if (LightsDirty)    LightsBr->saveLights();
             if (VisDirty)       OutlinerBr->saveVisibility();
             if (MaterialsDirty) MaterialsBr->saveMaterials();
+        }
+        CloseApproved = true;
+        ContinueApprovedClose(_Event);
+    }
+
+    void MainWindow::ContinueApprovedClose(QCloseEvent* _Event) {
+        if (Viewport && !Viewport->IsRendererStopped()) {
+            RendererShutdownForClose = true;
+            _Event->ignore();
+            Viewport->BeginRendererShutdown();
+            return;
         }
         QMainWindow::closeEvent(_Event);
     }
@@ -347,12 +370,12 @@ namespace SmileEditor {
                 return;
             }
 
-            // Deixa a barra de status pintar a troca de fase antes do commit GPU, que ainda
-            // precisa executar na thread proprietaria do Renderer.
+            // Deixa a barra de status pintar a troca de fase antes do commit GPU, que espera
+            // um ponto serializado com a thread de renderizacao por meio do RendererHandle.
             if (StatusBr) StatusBr->ShowMessage(tr("Finalizando recursos da cena…"));
             QTimer::singleShot(0, this,
                 [this, Path, Additive, Prepared = std::move(Prepared)]() mutable {
-                auto* Renderer = Viewport ? Viewport->GetRenderer() : nullptr;
+                auto Renderer = Viewport ? Viewport->GetRenderer() : RendererHandle{};
                 const bool Success = Renderer && Renderer->IsInitialized() &&
                     Renderer->CommitCookedScene(std::move(Prepared), Additive);
                 SceneLoadInProgress = false;
@@ -384,10 +407,10 @@ namespace SmileEditor {
 
     void MainWindow::WireMenuActions() {
         // Renderer pronto (ou nullptr). As acoes de cena/render so valem com a engine inicializada.
-        auto RendererReady = [this]() -> Smile::Renderer* {
+        auto RendererReady = [this]() -> RendererHandle {
             if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
                 return Viewport->GetRenderer();
-            return nullptr;
+            return {};
         };
 
         // ---- Arquivo ----
@@ -460,6 +483,13 @@ namespace SmileEditor {
 
     void MainWindow::RegisterViewport(ViewportWidget* _Viewport, QWidget* _Toolbar) {
         if (!_Viewport) return;
+
+        connect(_Viewport, &ViewportWidget::RendererStopped, this, [this, _Viewport]() {
+            if (!RendererShutdownForClose || _Viewport != Viewport) return;
+            RendererShutdownForClose = false;
+            // Deixa o callback Stopped retornar antes de destruir a arvore QWidget.
+            QTimer::singleShot(0, this, [this]() { close(); });
+        });
 
         const QVariant Target = QVariant::fromValue(static_cast<QObject*>(_Viewport));
         _Viewport->setProperty("smileViewportTarget", Target);
@@ -624,8 +654,9 @@ namespace SmileEditor {
 
     void MainWindow::UpdateStats() {
         if (!Viewport || !StatusBr) return;
-        auto* Renderer = Viewport->GetRenderer();
-        if (!Renderer || !Renderer->IsInitialized()) return;
+        auto Renderer = Viewport->GetRenderer();
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess || !RendererAccess->IsInitialized()) return;
 
         // ~5Hz basta: formatar QString + relayout da StatusBar a 100+Hz era so custo —
         // ninguem le FPS piscando por frame.
@@ -634,8 +665,8 @@ namespace SmileEditor {
 
         // Textos SEM separador inicial — a StatusBar.qml os junta com "  |  ".
         QString OceanText;
-        if (Renderer->GetUseWater()) {
-            const auto& WaterStats = Renderer->GetWater().GetDebugStats();
+        if (RendererAccess->GetUseWater()) {
+            const auto& WaterStats = RendererAccess->GetWater().GetDebugStats();
             OceanText = QString("Ocean GPU: %1/%2 tiles  |  cull F:%3 C:%4 O:%5  |  draws:%6 L:%7 R:%8")
                 .arg(WaterStats.ValidTileCount)
                 .arg(WaterStats.CandidateCount)
@@ -648,10 +679,10 @@ namespace SmileEditor {
         }
 
         QString SceneText;
-        if (Renderer->GetDrawCount() > 0) {
+        if (RendererAccess->GetDrawCount() > 0) {
             SceneText = QString("meshes: %1/%2")
-                .arg(Renderer->GetVisibleCount())
-                .arg(Renderer->GetDrawCount());
+                .arg(RendererAccess->GetVisibleCount())
+                .arg(RendererAccess->GetDrawCount());
         }
 
         StatusBr->SetStats(FPS, FrameMs, SceneText, OceanText);

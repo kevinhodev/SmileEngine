@@ -14,6 +14,7 @@
 #include <memory>
 #include "Smile/Math/Math.h"
 #include "SmileEditor/GizmoController.h"
+#include "SmileEditor/RenderThread.h"
 
 class QTimer;
 class QPaintEngine;
@@ -170,7 +171,11 @@ namespace SmileEditor {
         explicit ViewportWidget(QWidget* parent = nullptr);
         ~ViewportWidget() override;
 
-        Smile::Renderer* GetRenderer() const { return Renderer.get(); }
+        // Para o fechamento da janela: solicita a parada sem bloquear a message pump. O
+        // QObject deve permanecer vivo ate RendererStopped ser emitido.
+        void              BeginRendererShutdown();
+        bool              IsRendererStopped() const { return RendererStoppedFlag; }
+        RendererHandle GetRenderer() const { return Renderer; }
         float            GetFPS()      const { return LastFPS; }
         int               GetViewMode() const { return CurrentViewMode; }
         QStringList       GetDebugTargetNames() const;
@@ -440,12 +445,19 @@ namespace SmileEditor {
         void DebugProbeDirectionChanged();
         void DebugProbeSampleChanged();
         void DebugProbePointChanged();
+        void RendererStopped();
 
     private slots:
         void OnRenderTimer();
 
     private:
         void EnsureRendererIsInitialized();
+        void OnRendererInitialized();
+        void OnFrameCompleted(bool Success, bool Terminal, const QString& Error);
+        void OnFrameRendered();
+        void OnRendererInitializationFailed(const QString& Error);
+        void OnRenderThreadStopped();
+        void FlushPendingGizmoInput(Smile::Renderer& Renderer);
         void ApplyPendingResize();
         void InvalidateDebugPreview();
         void ResetDebugProbePoint(bool CancelRendererRequest = true);
@@ -462,11 +474,14 @@ namespace SmileEditor {
 
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
-        std::unique_ptr<Smile::Renderer> Renderer;
+        RenderThread   RendererThread;
+        RendererHandle Renderer;
         GizmoController GizmoCtrl; // logica do gizmo de translacao (editor-side)
         QTimer*       RedrawTimer       = nullptr;
         QTimer*       ResizeDebounce    = nullptr;
         bool          Initialized       = false;
+        bool          RendererShutdownRequested = false;
+        bool          RendererStoppedFlag = false;
         bool          InteractiveResize = false;
         QSize         PendingResizeSize;
         QSize         AppliedResizeSize;
@@ -475,7 +490,13 @@ namespace SmileEditor {
         Smile::Vec2   MouseDelta       = Smile::Vec2::Zero();
         bool          MouseLookActive  = false;
         bool          IgnoreNextMove   = false;
+        bool          RendererOwnsSurface = false;
+        bool          GizmoMousePending = false;
+        bool          GizmoReleasePending = false;
+        Smile::u32    PendingGizmoMouseX = 0;
+        Smile::u32    PendingGizmoMouseY = 0;
         float         LastFPS          = 0.0f;
+        float         LastFrameDeltaTime = 0.0f;
         QElapsedTimer FrameTimer;
         QElapsedTimer TelemetryTimer;
         // Ranking visual dos passes GPU. Mutavel porque GetGpuTimings e um getter Qt const,

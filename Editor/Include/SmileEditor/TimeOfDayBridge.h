@@ -1,13 +1,14 @@
 #pragma once
 
 #include <QObject>
+#include "SmileEditor/RenderThread.h"
 
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
     // Ponte C++<->QML da janela Time of Day (TimeOfDayWindow.qml). Le/escreve o FTimeOfDay do
-    // Renderer direto — seguro porque o render roda no timer do ViewportWidget, na mesma thread
-    // da GUI. Alem do estado bruto, expoe leituras derivadas (elevacao/azimute de sol e lua,
+    // Renderer direto por meio de RendererHandle, que serializa o acesso com a thread de
+    // renderizacao. Alem do estado bruto, expoe leituras derivadas (elevacao/azimute de sol e lua,
     // fracao de fase) e SunElevationAt/MoonElevationAt p/ a janela desenhar o arco do dia.
     //
     // Sinais: StateChanged = qualquer knob mudou (setter ou hora escrutinada); TimeChanged = o
@@ -42,9 +43,9 @@ namespace SmileEditor {
     public:
         explicit TimeOfDayBridge(QObject* parent = nullptr);
 
-        void SetRenderer(Smile::Renderer* R); // MainWindow chama no RendererInitialized
+        void SetRenderer(RendererHandle R); // MainWindow chama no RendererInitialized
 
-        bool   Available() const { return Renderer != nullptr; }
+        bool   Available() const { return static_cast<bool>(Renderer); }
         bool   Enabled() const;
         bool   Running() const;
         double TimeHours() const;
@@ -96,7 +97,7 @@ namespace SmileEditor {
     private:
         void SyncManualFromRenderer(); // az/el manuais a partir do SunDir atual do Renderer
 
-        Smile::Renderer* Renderer = nullptr;
+        RendererHandle Renderer;
         double ManualAz = 60.0;  // defaults ate o renderer existir
         double ManualEl = 35.0;
         double LastEmittedHours = -1.0;

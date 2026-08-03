@@ -29,7 +29,7 @@ namespace SmileEditor {
     SceneOutlinerBridge::SceneOutlinerBridge(QObject* _Parent)
         : QAbstractListModel(_Parent) {}
 
-    void SceneOutlinerBridge::SetRenderer(Smile::Renderer* _Renderer) {
+    void SceneOutlinerBridge::SetRenderer(RendererHandle _Renderer) {
         Renderer = _Renderer;
         if (Renderer) {
             CachedSelMesh  = Renderer->GetSelectedObject();
@@ -116,7 +116,8 @@ namespace SmileEditor {
     // tudo fica "expandido" e so entram folhas que casam (com seus pais).
     void SceneOutlinerBridge::RebuildRows(QVector<FRow>& _Out) const {
         if (!Renderer) return;
-        const auto& Scene = const_cast<Smile::Renderer*>(Renderer)->GetScene();
+        auto RendererAccess = Renderer.Lock();
+        const auto& Scene = RendererAccess->GetScene();
         const bool Searching = !SearchText.isEmpty();
         const auto GroupOn = [this](int G) {
             return FilterGroup == 0 || FilterGroup == G + 1;
@@ -299,7 +300,8 @@ namespace SmileEditor {
     // ---- Propriedades ----
     int SceneOutlinerBridge::TotalCount() const {
         if (!Renderer) return 0;
-        const auto& Scene = const_cast<Smile::Renderer*>(Renderer)->GetScene();
+        auto RendererAccess = Renderer.Lock();
+        const auto& Scene = RendererAccess->GetScene();
         int Meshes = 0;
         for (const auto& R : Scene.Renderables())
             if (!R.RaytracingOnly) ++Meshes;
@@ -315,7 +317,8 @@ namespace SmileEditor {
 
     int SceneOutlinerBridge::HiddenCount() const {
         if (!Renderer) return 0;
-        const auto& Scene = const_cast<Smile::Renderer*>(Renderer)->GetScene();
+        auto RendererAccess = Renderer.Lock();
+        const auto& Scene = RendererAccess->GetScene();
         int N = 0;
         for (const auto& L : Scene.Lights())
             if (!L.Enabled) ++N;
@@ -357,6 +360,7 @@ namespace SmileEditor {
 
     void SceneOutlinerBridge::SetTerrainVisible(bool _V) {
         if (!Renderer || Renderer->GetUseTerrain() == _V) return;
+        auto RendererAccess = Renderer.Lock();
         Renderer->SetUseTerrain(_V); // gates de prepass/G-buffer/CSM do FTerrain
         // O chao do GI e o proxy RaytracingOnly na TLAS — esconde junto, senao o DDGI
         // continua quicando luz num terreno invisivel.
@@ -378,37 +382,52 @@ namespace SmileEditor {
         return Renderer && Renderer->GetSelectedObject() >= 0;
     }
 
-    // Renderable selecionado ou nullptr (sem renderer / indice invalido).
-    static const Smile::FRenderable* SelMesh(Smile::Renderer* _R) {
-        if (!_R) return nullptr;
-        const auto& List = _R->GetScene().Renderables();
-        const int I = _R->GetSelectedObject();
-        return (I >= 0 && I < (int)List.size()) ? &List[(size_t)I] : nullptr;
+    class LockedSelectedMesh {
+    public:
+        explicit LockedSelectedMesh(const RendererHandle& _Renderer)
+            : Access(_Renderer ? _Renderer.Lock() : RendererHandle::Access{}) {
+            if (!Access) return;
+            const auto& List = Access->GetScene().Renderables();
+            const int Index = Access->GetSelectedObject();
+            if (Index >= 0 && Index < static_cast<int>(List.size()))
+                Value = &List[static_cast<size_t>(Index)];
+        }
+
+        explicit operator bool() const { return Value != nullptr; }
+        const Smile::FRenderable* operator->() const { return Value; }
+
+    private:
+        RendererHandle::Access    Access;
+        const Smile::FRenderable* Value = nullptr;
+    };
+
+    static LockedSelectedMesh SelMesh(const RendererHandle& _R) {
+        return LockedSelectedMesh(_R);
     }
 
     QString SceneOutlinerBridge::MeshName() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return R ? QString::fromStdString(R->Name) : QString();
     }
 
     QString SceneOutlinerBridge::MeshMaterial() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         if (!R || !R->Material) return {};
         return QString::fromStdString(R->Material->Name);
     }
 
     int SceneOutlinerBridge::MeshTris() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return (R && R->Mesh) ? (int)(R->Mesh->GetIndexCount() / 3) : 0;
     }
 
     int SceneOutlinerBridge::MeshVerts() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return (R && R->Mesh) ? (int)R->Mesh->VertexCount() : 0;
     }
 
     QString SceneOutlinerBridge::MeshVramText() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         if (!R || !R->Mesh) return {};
         const double Bytes = (double)R->Mesh->VertexCount() * R->Mesh->VertexStride() +
                              (double)R->Mesh->GetIndexCount() * sizeof(Smile::u32);
@@ -419,7 +438,7 @@ namespace SmileEditor {
     }
 
     QStringList SceneOutlinerBridge::MeshFlags() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         QStringList Flags;
         if (!R || !R->Material) return Flags;
         const auto* M = R->Material;
@@ -431,7 +450,7 @@ namespace SmileEditor {
     }
 
     bool SceneOutlinerBridge::MeshVisible() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return R ? R->Visible : true;
     }
 
@@ -476,6 +495,7 @@ namespace SmileEditor {
 
     void SceneOutlinerBridge::toggleEye(int _Row) {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
+        auto RendererAccess = Renderer.Lock();
         const FRow& Row = Rows[_Row];
         auto& Renderables = Renderer->GetScene().Renderables();
 
@@ -517,6 +537,7 @@ namespace SmileEditor {
 
     void SceneOutlinerBridge::focusRow(int _Row) {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
+        auto RendererAccess = Renderer.Lock();
         const FRow& Row = Rows[_Row];
 
         Smile::Vec3 Center;
@@ -631,6 +652,7 @@ namespace SmileEditor {
             return false;
         }
         const QJsonObject Root = Doc.object();
+        auto RendererAccess = Renderer.Lock();
         auto& Renderables = Renderer->GetScene().Renderables();
         const int Total = (int)Renderables.size();
         bool Applied = false;
@@ -679,6 +701,7 @@ namespace SmileEditor {
 
     bool SceneOutlinerBridge::saveVisibility() {
         if (!Renderer || JsonPath.isEmpty()) return false;
+        auto RendererAccess = Renderer.Lock();
         const auto& Renderables = Renderer->GetScene().Renderables();
         const int Total = (int)Renderables.size();
 
@@ -717,6 +740,7 @@ namespace SmileEditor {
     // ---- Sincronizacao por frame ----
     void SceneOutlinerBridge::Refresh() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         const auto& Scene = Renderer->GetScene();
 
         // Estrutura mudou por fora (load aditivo sem aviso, remocao de luz pelo painel).

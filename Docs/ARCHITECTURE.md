@@ -39,7 +39,8 @@ A SmileEngine é uma engine pessoal de aprendizado/render, reconstruída do zero
 
 Princípios de design observados no código:
 
-- **Composição, não singletons.** Cada `ViewportWidget` cria seu próprio `Smile::Renderer`.
+- **Composição, não singletons.** Cada `ViewportWidget` possui um `RenderThread`, que cria e
+  serializa o acesso ao seu próprio `Smile::Renderer`.
   O `Renderer` é dono (por valor) de todos os subsistemas (`FAtmosphere`, `FVolumetricClouds`, …).
 - **Prefixos por tipo:** `F` para tipos "engine/value-like" (`FD3D12Device`, `FMaterial`,
   `FAtmosphere`), classes "sistema" sem prefixo (`Renderer`, `Camera` via `FCamera`).
@@ -200,8 +201,10 @@ das views (2D/3D/cube) ficam no shader, então a mesma root sig serve a tudo.
 
 ## 5. O frame: render loop e frame graph
 
-O loop é dirigido pelo Editor: `ViewportWidget` tem um `QTimer` (`OnRenderTimer`) que
-chama `Renderer::UpdateCamera(...)` + `Renderer::RenderFrame()` e emite `FrameReady`.
+O loop é dirigido pelo Editor, mas executado fora da GUI. O `QTimer` do `ViewportWidget`
+prepara input/câmera e solicita um frame; `RenderThread` executa `Renderer::RenderFrame()` e
+`Present()` em sua thread dedicada. A conclusão volta por callback enfileirado para a thread Qt,
+que consome readbacks, publica telemetria e emite `FrameReady`.
 
 ### `RenderFrame()` — sequência completa (Renderer.cpp)
 
@@ -466,11 +469,16 @@ Shaders/
 
 - **Viewport nativo:** `ViewportWidget` é um `QWidget` com `WA_NativeWindow` +
   `WA_PaintOnScreen` e `paintEngine() == nullptr` — entrega um `HWND` real ao DX12.
-  Inicializa o `Renderer` lazy no primeiro `showEvent`/`paintEvent`; emite
-  `RendererInitialized` quando pronto.
+  Inicializa o `Renderer` de forma lazy e assíncrona no primeiro `showEvent`; emite
+  `RendererInitialized` na thread Qt quando a render thread fica pronta.
 - **Render loop:** `QTimer` (`OnRenderTimer`) → coleta input (`HeldKeys`, `MouseDelta`,
-  mouse-look) → monta `CameraInput` → `UpdateCamera` + `RenderFrame` → mede FPS → `FrameReady`.
-- **Painéis** chamam **setters** do `Renderer` diretamente (não há sistema de
+  mouse-look e a posição mais recente do gizmo) → monta `CameraInput` → solicita um frame
+  coalescido → `RenderThread` faz
+  `RenderFrame`/`Present` → callback Qt mede FPS e emite `FrameReady`. Existe no máximo um
+  frame em voo, evitando fila e latência acumulada.
+- **Sincronização:** `RendererHandle` protege o acesso das bridges com o mesmo lock recursivo
+  usado pela render thread. Inicialização e shutdown também acontecem na thread de renderização.
+- **Painéis** chamam **setters** do `Renderer` pelo handle sincronizado (não há sistema de
   reflection/property ainda). A janela de Materiais é QML (`Qml/MaterialsWindow.qml` +
   `MaterialsBridge`): browser dos materiais importados, edição ao vivo dos `MaterialConstants`,
   8 slots de textura, preview offscreen e persistência em `<cena>.materials.json`;

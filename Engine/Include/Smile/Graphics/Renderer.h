@@ -165,7 +165,11 @@ namespace Smile {
         bool GetVSync() const       { return SwapChain.GetVSync(); }
 
         void UpdateCamera(const CameraInput& Input, f32 DeltaTime);
+        // Grava e submete o frame. A apresentacao fica separada para que o owner da render
+        // thread solte o lock compartilhado antes de entrar no DXGI.
         void RenderFrame();
+        // Deve ser chamado exatamente uma vez apos RenderFrame, pela thread proprietaria.
+        void PresentFrame();
 
         void SetMaterial(FMaterial* Material);
 
