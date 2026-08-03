@@ -42,5 +42,5 @@ add_test(
 )
 
 set_tests_properties(Smile.TimeOfDayMoon PROPERTIES
-    LABELS "time-of-day;moon;math"
+    LABELS "time-of-day;moon;stars;sidereal;math"
 )

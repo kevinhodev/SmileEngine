@@ -16,7 +16,7 @@ float3 Hash33(float3 p) {
 }
 
 float3 StarField(float3 dir, float time) {
-    // Rotacao diurna em torno do polo celeste (StarAxis.xyz = polo pela latitude do TOD),
+    // Rotacao sideral em torno do polo celeste (StarAxis.xyz = polo pela latitude do TOD),
     // angulo StarAxis.w dirigido pelo relogio do TOD — pausa/acelera junto com sol e lua.
     float3 axis = StarAxis.xyz;
     float  a    = StarAxis.w;
@@ -32,7 +32,15 @@ float3 StarField(float3 dir, float time) {
     float3 starDir = normalize(cell + 0.5f + (rnd - 0.5f) * 0.4f);
 
     float3 delta = starDir - d;
-    float  core  = exp(-dot(delta, delta) * 1.2e6f);  
+    // Derivadas estao em pixels da resolucao INTERNA. Converte para pixels da saida antes
+    // de definir sigma, mantendo o fallback com ~0.65px em qualquer render scale/FOV.
+    float3 dOutDx = ddx(d) * kRenderToOutputX;
+    float3 dOutDy = ddy(d) * kRenderToOutputY;
+    float outputPixelAngle2 = max(0.5f * (dot(dOutDx, dOutDx) + dot(dOutDy, dOutDy)),
+                                      1e-12f);
+    const float sigmaPx = 0.65f;
+    float sigma2 = outputPixelAngle2 * sigmaPx * sigmaPx;
+    float core = exp(-dot(delta, delta) / (2.0f * sigma2));
     float  bright = 0.15f + 0.45f * rnd.y;            
     float  twinkle = 0.65f + 0.35f * sin(time * 3.0f + rnd.z * 6.2831853f);
     float3 tint = lerp(float3(1.0f, 0.82f, 0.65f), float3(0.7f, 0.8f, 1.0f), rnd.z);

@@ -46,6 +46,7 @@ namespace SmileEditor {
     bool   TimeOfDayBridge::Enabled() const        { return TodOfConst(Renderer)->Enabled; }
     bool   TimeOfDayBridge::Running() const        { return TodOfConst(Renderer)->Running; }
     double TimeOfDayBridge::TimeHours() const      { return TodOfConst(Renderer)->TimeHours; }
+    double TimeOfDayBridge::SiderealTimeHours() const { return TodOfConst(Renderer)->LocalSiderealTimeHours(); }
     double TimeOfDayBridge::DayLengthSec() const   { return TodOfConst(Renderer)->DayLengthSec; }
     double TimeOfDayBridge::LatitudeDeg() const    { return TodOfConst(Renderer)->LatitudeDeg; }
     int    TimeOfDayBridge::DayOfYear() const      { return TodOfConst(Renderer)->DayOfYear; }
@@ -128,7 +129,11 @@ namespace SmileEditor {
         emit TimeChanged();
     }
     void TimeOfDayBridge::SetDayOfYear(int _V) {
-        TodOf(Renderer)->DayOfYear = std::clamp(_V, 1, 365);
+        auto Tod = TodOf(Renderer);
+        const int Day = std::clamp(_V, 1, 365);
+        if (Tod->DayOfYear == Day) return;
+        Tod->DayOfYear = Day;
+        LastEmittedDay = Day;
         emit StateChanged();
         emit TimeChanged();
     }
@@ -179,11 +184,17 @@ namespace SmileEditor {
 
     void TimeOfDayBridge::Refresh() {
         if (!Renderer) return;
-        const double Now = TodOfConst(Renderer)->TimeHours;
-        if (std::abs(Now - LastEmittedHours) > 1e-5) {
+        const auto Tod = TodOfConst(Renderer);
+        const double Now = Tod->TimeHours;
+        const int Day = Tod->DayOfYear;
+        const bool TimeChangedNow = std::abs(Now - LastEmittedHours) > 1e-5;
+        const bool DayChangedNow = Day != LastEmittedDay;
+        if (TimeChangedNow || DayChangedNow) {
             LastEmittedHours = Now;
+            LastEmittedDay = Day;
             emit TimeChanged();
         }
+        if (DayChangedNow) emit StateChanged();
     }
 
     void TimeOfDayBridge::SyncManualFromRenderer() {

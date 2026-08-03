@@ -101,7 +101,7 @@ namespace Smile {
         CPUConstants.NightSky       = { 0.0f, 0.0f, 0.0f, 0.0f };
         CPUConstants.ViewProjNoTrans = Mat44::Identity();
         CPUConstants.StarMatrix      = Mat44::Identity();
-        CPUConstants.StarView        = { 1.0f, 1.0f, 0.0f, 0.0f };
+        CPUConstants.StarView        = { 1.0f, 1.0f, 1.0f, 1.0f };
 
         CreateConstantBuffer(_Device);
 
@@ -330,7 +330,7 @@ namespace Smile {
         BuildStarPipeline(_Device, SkyRTFormat, SkyDSFormat);
 
         StarCount = Count;
-        CPUConstants.StarView.Z = 1.0f; // desliga o hash procedural do sky pass
+        CPUConstants.NightSky.Z = 1.0f; // desliga o hash procedural do sky pass
         LogDebug("Catalogo de estrelas: " + std::to_string(Count) + " estrelas (Yale BSC)");
     }
 
@@ -542,7 +542,8 @@ namespace Smile {
                                      const Mat44& _InvViewProjNoTranslation,
                                      const Mat44& _ViewProjNoTranslation,
                                      const Mat44& _InvViewProjFull, const Vec3& _CameraWorldPos,
-                                     f32 _KmPerWorldUnit, f32 _ViewportW, f32 _ViewportH) {
+                                     f32 _KmPerWorldUnit, f32 _RenderW, f32 _RenderH,
+                                     f32 _OutputW, f32 _OutputH) {
         FrameSlot = _FrameSlot;
         Vec3 d = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 0.6f, 0.8f }.Normalized());
         CPUConstants.SunDir = { d.X, d.Y, d.Z, CPUConstants.SunDir.W };
@@ -550,8 +551,11 @@ namespace Smile {
         CPUConstants.ViewProjNoTrans = _ViewProjNoTranslation;
         CPUConstants.InvViewProj    = _InvViewProjFull;
         CPUConstants.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
-        CPUConstants.StarView.X = _ViewportW;
-        CPUConstants.StarView.Y = _ViewportH;
+        const f32 SafeOutputW = std::max(_OutputW, 1.0f);
+        const f32 SafeOutputH = std::max(_OutputH, 1.0f);
+        CPUConstants.StarView = { SafeOutputW, SafeOutputH,
+                                  std::max(_RenderW, 1.0f) / SafeOutputW,
+                                  std::max(_RenderH, 1.0f) / SafeOutputH };
 
         // View height dinamico: sky-view LUT, transmitancia do disco/estrelas e ambient seguem a
         // altitude real da camera sobre o offset numerico do planeta (UE recalcula por frame).
@@ -615,8 +619,8 @@ namespace Smile {
         CPUConstants.StarAxis = { A.X, A.Y, A.Z, _AngleRad };
 
         // Matriz catalogo->mundo p/ o passe de estrelas: +Y do catalogo = polo celeste; X/Z
-        // giram em torno do polo com o relogio (rotacao diurna = -angulo, mesmo sentido do
-        // campo hash: estrelas nascem no leste como o sol).
+        // giram em torno do polo com o tempo sideral (rotacao = -angulo, mesmo sentido do
+        // campo hash: estrelas nascem no leste).
         Vec3 X0 = Vec3{ 0.0f, 1.0f, 0.0f }.Cross(A);
         X0 = X0.NormalizedSafe(Vec3{ 1.0f, 0.0f, 0.0f });
         const Vec3 Z0 = X0.Cross(A);

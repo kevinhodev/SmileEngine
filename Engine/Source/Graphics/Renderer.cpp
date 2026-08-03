@@ -1699,8 +1699,10 @@ namespace Smile {
             const f32  NoR   = TimeOfDay.NorthOffsetDeg * ToRad;
             const Vec3 Pole  = { std::cos(LatR) * std::sin(NoR), std::sin(LatR),
                                  std::cos(LatR) * std::cos(NoR) };
-            const f32  Angle = TimeOfDay.Enabled ? (TimeOfDay.TimeHours * 15.0f * ToRad)
-                                                 : (ElapsedTime * 0.004f);
+            // TOD usa hora sideral local (dia sideral ~23h56m); no modo manual, preserva a
+            // rotacao artistica lenta que existia antes.
+            const f32 Angle = TimeOfDay.Enabled ? TimeOfDay.StarRotationAngleRad()
+                                                : (ElapsedTime * 0.004f);
             Atmosphere.SetStarRotation(Pole, Angle);
         }
 
@@ -1833,7 +1835,8 @@ namespace Smile {
 
         Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans, VPNoTrans,
                                   InvViewProjFull, CameraPosition, kKmPerWorldUnit,
-                                  static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()));
+                                  static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()),
+                                  static_cast<f32>(OutputWidth()), static_cast<f32>(OutputHeight()));
 
         const bool VolShaftsActive = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
         const f32 FogDensityBase = Fog.GetDensity();

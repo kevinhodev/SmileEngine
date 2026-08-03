@@ -796,6 +796,29 @@ Rectangle {
                             boundValue: todModel.starIntensity
                             onMoved: v => todModel.starIntensity = v
                         }
+
+                        Item {
+                            width: parent.width
+                            height: 22
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "Hora sideral local"
+                                color: root.textSecondary
+                                font.family: C.Theme.fontFamily
+                                font.pixelSize: 10
+                            }
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.timeLabel(todModel.siderealTimeHours)
+                                color: root.textNormal
+                                font.family: C.Theme.fontFamily
+                                font.pixelSize: 10
+                                font.weight: Font.Medium
+                            }
+                        }
                     }
 
                 }

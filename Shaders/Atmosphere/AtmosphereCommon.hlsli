@@ -52,9 +52,11 @@ cbuffer AtmosphereCB : register(b0) {
 #define kSunGlareInt    (SunDisk.w)
 #define kMoonSkyIll     (NightSky.x)
 #define kMoonCorona     (NightSky.y)
-#define kViewportW      (StarView.x)
-#define kViewportH      (StarView.y)
-#define kStarCatalogOn  (StarView.z)
+#define kStarCatalogOn   (NightSky.z)
+#define kOutputW         (StarView.x)
+#define kOutputH         (StarView.y)
+#define kRenderToOutputX (StarView.z)
+#define kRenderToOutputY (StarView.w)
 
 SamplerState LinearClampSampler : register(s0);
 SamplerState LinearWrapSampler  : register(s1);

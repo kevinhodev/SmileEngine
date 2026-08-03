@@ -41,14 +41,49 @@ namespace Smile {
         // Luminancia do disco. Baixa de proposito: >~2 cai no ombro do tonemap e esmaga o
         // contraste dos mares da textura pra branco (a lua real de dia e ~2x o ceu, nao 10x).
         f32  MoonDiskBrightness = 1.6f;
-        f32  StarIntensity      = 1.0f;  // brilho das estrelas procedurais
+        f32  StarIntensity      = 1.0f;  // brilho do catalogo (ou fallback procedural)
 
-        // Avanca o relogio pelo dt real (so quando Enabled && Running). Faz wrap em 24h.
+        // Um dia sideral medio dura ~23h56m solares. A referencia (dia 80, 12h) aproxima o
+        // equinocio de marco com o ponto vernal no meridiano local.
+        static constexpr f64 kSiderealRate = 1.00273790935;
+        static constexpr i32 kSiderealReferenceDay = 80;
+
+        // Avanca o relogio pelo dt real (so quando Enabled && Running). Ao cruzar meia-noite,
+        // tambem avanca o calendario: isso mantem sol, estacao e tempo sideral continuos.
         void Tick(f32 _DeltaSeconds) {
             if (!Enabled || !Running || DayLengthSec <= 1e-3f) return;
-            TimeHours += (_DeltaSeconds / DayLengthSec) * 24.0f;
-            TimeHours = std::fmod(TimeHours, 24.0f);
-            if (TimeHours < 0.0f) TimeHours += 24.0f;
+            const f64 DeltaHours = (static_cast<f64>(_DeltaSeconds) /
+                                    static_cast<f64>(DayLengthSec)) * 24.0;
+            const f64 UnwrappedHours = static_cast<f64>(TimeHours) + DeltaHours;
+            const i64 DayDelta = static_cast<i64>(std::floor(UnwrappedHours / 24.0));
+
+            TimeHours = static_cast<f32>(UnwrappedHours -
+                                         static_cast<f64>(DayDelta) * 24.0);
+
+            const i64 ZeroBasedDay = static_cast<i64>(DayOfYear - 1) + DayDelta;
+            const i64 WrappedDay = ((ZeroBasedDay % 365) + 365) % 365;
+            DayOfYear = static_cast<i32>(WrappedDay + 1);
+        }
+
+        // Hora sideral local em [0,24). Como TimeHours representa hora SOLAR local, longitude
+        // nao entra: NorthOffsetDeg continua sendo apenas a orientacao do norte no mundo.
+        f32 LocalSiderealTimeHours() const {
+            const f64 SolarDaysFromReference =
+                static_cast<f64>(DayOfYear - kSiderealReferenceDay) +
+                (static_cast<f64>(TimeHours) - 12.0) / 24.0;
+            f64 Hours = std::fmod(SolarDaysFromReference * kSiderealRate * 24.0, 24.0);
+            if (Hours < 0.0) Hours += 24.0;
+            return static_cast<f32>(Hours);
+        }
+
+        // Convencao da matriz catalogo->mundo: RA=0 esta no meridiano quando Angle=-90 graus;
+        // portanto a hora sideral vira -(LST+6h). remainder mantem o seno/cosseno numericamente
+        // bem condicionado sem mudar a orientacao.
+        f32 StarRotationAngleRad() const {
+            constexpr f64 kPi64 = 3.14159265358979323846;
+            const f64 Angle = -(static_cast<f64>(LocalSiderealTimeHours()) + 6.0) *
+                              15.0 * kPi64 / 180.0;
+            return static_cast<f32>(std::remainder(Angle, 2.0 * kPi64));
         }
 
         // Direcao PARA o sol (mundo, +Y up). Modelo de posicao solar padrao no horario corrente.

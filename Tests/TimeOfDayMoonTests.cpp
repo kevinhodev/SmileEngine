@@ -35,6 +35,11 @@ namespace {
         return std::sqrt(X * X + Y * Y + Z * Z);
     }
 
+    double ForwardHourDistance(double From, double To) {
+        double D = std::fmod(To - From + 24.0, 24.0);
+        return D < 0.0 ? D + 24.0 : D;
+    }
+
     void TestCanonicalPhasesAcrossCalendar() {
         std::cout << "[Moon] canonical phases across latitude, season and time\n";
         const int Days[] = { 1, 80, 172, 266, 355 };
@@ -104,16 +109,65 @@ namespace {
         Check(Tod.MoonDiskAngularDiameterDeg() == 0.0f,
               "negative moon size must clamp to zero diameter");
     }
+    void TestSiderealClockAndCalendarRollover() {
+        std::cout << "[Stars] local sidereal time and calendar rollover\n";
+        Smile::FTimeOfDay Tod;
+
+        Tod.DayOfYear = Smile::FTimeOfDay::kSiderealReferenceDay;
+        Tod.TimeHours = 12.0f;
+        Check(std::abs(Tod.LocalSiderealTimeHours()) < 1.0e-6,
+              "vernal-equinox noon is not the sidereal reference");
+        Check(std::abs(Tod.StarRotationAngleRad() + 0.5 * kPi) < 1.0e-6,
+              "RA zero is not on the meridian at the sidereal reference");
+
+        const double ReferenceLst = Tod.LocalSiderealTimeHours();
+        Tod.DayOfYear += 1;
+        const double NextDayLst = Tod.LocalSiderealTimeHours();
+        const double ExpectedDailyDrift =
+            24.0 * (Smile::FTimeOfDay::kSiderealRate - 1.0);
+        Check(std::abs(ForwardHourDistance(ReferenceLst, NextDayLst) -
+                       ExpectedDailyDrift) < 2.0e-6,
+              "stars do not arrive about 3m56s earlier on the next solar day");
+
+        Tod.DayOfYear = 172;
+        Tod.TimeHours = 12.0f;
+        const double ExpectedSummerLst = std::fmod(
+            (172.0 - Smile::FTimeOfDay::kSiderealReferenceDay) *
+            Smile::FTimeOfDay::kSiderealRate * 24.0, 24.0);
+        Check(std::abs(Tod.LocalSiderealTimeHours() - ExpectedSummerLst) < 2.0e-6,
+              "sidereal time does not include the seasonal day-of-year phase");
+
+        Tod.Enabled = true;
+        Tod.Running = true;
+        Tod.DayLengthSec = 24.0f;
+        Tod.DayOfYear = 80;
+        Tod.TimeHours = 23.0f;
+        const double BeforeMidnight = Tod.LocalSiderealTimeHours();
+        Tod.Tick(2.0f);
+        Check(Tod.DayOfYear == 81 && std::abs(Tod.TimeHours - 1.0f) < 1.0e-6f,
+              "time-of-day did not advance the calendar at midnight");
+        Check(std::abs(ForwardHourDistance(BeforeMidnight, Tod.LocalSiderealTimeHours()) -
+                       2.0 * Smile::FTimeOfDay::kSiderealRate) < 3.0e-6,
+              "sidereal time is discontinuous across midnight");
+
+        Tod.DayOfYear = 365;
+        Tod.TimeHours = 23.0f;
+        Tod.Tick(2.0f);
+        Check(Tod.DayOfYear == 1 && std::abs(Tod.TimeHours - 1.0f) < 1.0e-6f,
+              "calendar did not wrap from day 365 to day 1");
+    }
 }
 
 int main() {
+
     TestCanonicalPhasesAcrossCalendar();
     TestTimelineAndDiskScaleSemantics();
+    TestSiderealClockAndCalendarRollover();
 
     if (Failures != 0) {
-        std::cerr << Failures << " time-of-day moon assertion(s) failed.\n";
+        std::cerr << Failures << " time-of-day celestial assertion(s) failed.\n";
         return 1;
     }
-    std::cout << "All time-of-day moon diagnostics passed.\n";
+    std::cout << "All time-of-day celestial diagnostics passed.\n";
     return 0;
 }

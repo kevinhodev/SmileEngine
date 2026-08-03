@@ -36,12 +36,12 @@ namespace Smile {
 
         Vec4 MoonDir;            // xyz = direction TO moon (world), w = cos(raio angular do disco)
         Vec4 MoonParams;         // x = brilho do disco, y = intensidade estrelas, z = night factor, w = tempo (cintilacao)
-        Vec4 StarAxis;           // xyz = polo celeste (mundo), w = angulo da rotacao diurna (rad)
-        Vec4 NightSky;           // x = iluminancia da lua no scattering (2a luz), y = corona, zw = livres
+        Vec4 StarAxis;           // xyz = polo celeste (mundo), w = angulo sideral da matriz (rad)
+        Vec4 NightSky;           // x = iluminancia lua, y = corona, z = catalogo ativo, w = livre
 
         Mat44 ViewProjNoTrans;   // view-proj SEM translacao — projeta o quad das estrelas
-        Mat44 StarMatrix;        // frame do catalogo (polo=+Y) -> mundo, com rotacao diurna
-        Vec4  StarView;          // x = viewport W, y = viewport H, z = catalogo ativo, w = livre
+        Mat44 StarMatrix;        // frame do catalogo (polo=+Y) -> mundo, com rotacao sideral
+        Vec4  StarView;          // xy = output W/H, zw = escala render/output X/Y
     };
 
     struct FLut2D {
@@ -85,7 +85,8 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation,
                             const Mat44& ViewProjNoTranslation, const Mat44& InvViewProjFull,
                             const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
-                            f32 ViewportW, f32 ViewportH);
+                            f32 RenderW, f32 RenderH,
+                            f32 OutputW, f32 OutputH);
 
         void SetNightParams(const Vec3& DirToMoon, f32 CosDiskRadius, f32 DiskBrightness,
                             f32 StarIntensity, f32 NightFactor, f32 TimeSec);
@@ -131,7 +132,7 @@ namespace Smile {
         bool HasMoonTexture() const { return MoonTexLoaded; }
 
         // Catalogo de estrelas real (Assets/Sky/stars.sstars, Yale BSC via HYG). Com ele ativo o
-        // hash procedural do sky pass desliga e RenderStars desenha um quad de ~2px por estrela.
+        // hash procedural desliga e RenderStars desenha quads medidos em pixels da saida.
         void LoadStarCatalog(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                              const std::wstring& Path);
         bool HasStarCatalog() const { return StarCount > 0; }

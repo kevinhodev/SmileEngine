@@ -20,6 +20,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool enabled READ Enabled WRITE SetEnabled NOTIFY StateChanged)
         Q_PROPERTY(bool running READ Running WRITE SetRunning NOTIFY StateChanged)
         Q_PROPERTY(double timeHours READ TimeHours WRITE SetTimeHours NOTIFY TimeChanged)
+        Q_PROPERTY(double siderealTimeHours READ SiderealTimeHours NOTIFY TimeChanged)
         Q_PROPERTY(double dayLengthSec READ DayLengthSec WRITE SetDayLengthSec NOTIFY StateChanged)
         Q_PROPERTY(double latitudeDeg READ LatitudeDeg WRITE SetLatitudeDeg NOTIFY StateChanged)
         Q_PROPERTY(int dayOfYear READ DayOfYear WRITE SetDayOfYear NOTIFY StateChanged)
@@ -49,6 +50,7 @@ namespace SmileEditor {
         bool   Enabled() const;
         bool   Running() const;
         double TimeHours() const;
+        double SiderealTimeHours() const;
         double DayLengthSec() const;
         double LatitudeDeg() const;
         int    DayOfYear() const;
@@ -101,5 +103,6 @@ namespace SmileEditor {
         double ManualAz = 60.0;  // defaults ate o renderer existir
         double ManualEl = 35.0;
         double LastEmittedHours = -1.0;
+        int LastEmittedDay = -1;
     };
 }
