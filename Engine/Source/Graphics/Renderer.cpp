@@ -868,6 +868,7 @@ namespace Smile {
         VolumetricClouds.RecreateComposite(Device.Native(), RT, DS);
         Water.Recreate(Device.Native(), RT, DS, DXGI_FORMAT_R16G16_FLOAT);
         Terrain.RecreatePSOs(Device.Native());
+        DebugDraw.RecreatePSOs(Device.Native()); // formato proprio: desenha no backbuffer
         if (Device.RaytracingSupported()) {
             DDGIDebugPass.Recreate(Device.Native(), RT, DS);
             ReSTIRDI.RecreatePSO(Device.Native());
@@ -916,6 +917,11 @@ namespace Smile {
                   [&] { if (Device.RaytracingSupported()) ReSTIRDI.RecreatePSO(Dev); } },
                 { { "ReGIRBuild.cs", "ReGIRAverage.cs" },
                   [&] { if (Device.RaytracingSupported()) ReGIR.RecreatePSO(Dev); } },
+                // Gizmo/icones: um BuildPSOs so cobre os 5 PSOs, entao os stems de linha,
+                // triangulo e icone caem todos na mesma entrada.
+                { { "DebugDraw.vs", "DebugDraw.ps", "DebugDrawOccluded.ps", "DebugDrawLine.vs",
+                    "DebugDrawLine.ps", "DebugDrawLineDepth.ps", "LightIcon.vs", "LightIcon.ps" },
+                  [&] { DebugDraw.RecreatePSOs(Dev); } },
             };
 
             if (_ChangedStem.empty()) {

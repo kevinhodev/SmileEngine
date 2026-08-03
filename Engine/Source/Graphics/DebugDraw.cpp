@@ -16,11 +16,19 @@ namespace Smile {
 
     void FDebugDraw::Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat) {
         if (Initialized) return;
+        RTFormat_ = RTFormat;
         BuildRootSignature(Device);
         BuildPSOs(Device, RTFormat);
         CreateBuffers(Device);
         Initialized = true;
         LogDebug("DebugDraw Inicializado");
+    }
+
+    void FDebugDraw::RecreatePSOs(ID3D12Device* Device) {
+        if (!Initialized) return;
+        // Quem chama ja deu Flush na fila (ReloadShaders). So os PSOs: a root signature nao muda
+        // com o shader, e os buffers nao tem nada a ver com isso.
+        BuildPSOs(Device, RTFormat_);
     }
 
     u32 FDebugDraw::PackColor(const Vec4& C) {

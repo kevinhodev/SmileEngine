@@ -21,6 +21,10 @@ namespace Smile {
     public:
         void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat);
         bool IsInitialized() const { return Initialized; }
+        // Hot reload de shader. Reusa o FORMATO GUARDADO no Initialize de proposito: o debug
+        // desenha no BACKBUFFER, nao no RT HDR da cena, entao o formato que o RecreateAllPSOs
+        // passa pros outros passes (R16G16B16A16) criaria estes PSOs errados.
+        void RecreatePSOs(ID3D12Device* Device);
 
         // A API guarda COMANDOS, nao vertices ja achatados: a expansao da linha grossa acontece
         // no Render(), unico ponto com camera e viewport. Thickness em PIXELS (constante em tela,
@@ -117,6 +121,7 @@ namespace Smile {
         ComPtr<ID3D12Resource>      LineVB;  u8* MappedLineVB = nullptr;
         ComPtr<ID3D12Resource>      TriVB;   u8* MappedTriVB  = nullptr;
         ComPtr<ID3D12Resource>      IconVB;  u8* MappedIconVB = nullptr;
+        DXGI_FORMAT                 RTFormat_   = DXGI_FORMAT_UNKNOWN; // p/ o RecreatePSOs
         bool                        Initialized = false;
         // Arma/desarma o aviso de estouro do orcamento: loga na ENTRADA do episodio, nao a cada
         // frame (a 200fps um log por frame vira spam que esconde o resto).
