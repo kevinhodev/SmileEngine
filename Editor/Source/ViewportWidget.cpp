@@ -1303,7 +1303,7 @@ namespace SmileEditor {
     }
 
     double ViewportWidget::GetShadowDepthBias() const {
-        return Renderer ? Renderer->GetSunShadows().GetDepthBias() : 0.0006;
+        return Renderer ? Renderer->GetSunShadows().GetDepthBias() : 2.0; // texels da cascata
     }
 
     double ViewportWidget::GetShadowMinCasterTexels() const {

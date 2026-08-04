@@ -62,10 +62,10 @@ cobre um raio de 1038 m para um alcance de 800 m, com 1,01 m por texel.
 |---|---|---|---|
 | 1 | PCSS devolve "iluminado" quando o blocker search não acha oclusor | alto | **corrigido (F1)** |
 | 2 | `DepthBiasClamp = 0` deixa o slope bias de hardware ilimitado | médio-alto | **corrigido (F1)** |
-| 3 | Bias constante em NDC varia 2,6× em texels entre cascatas | médio | F2 |
+| 3 | Bias constante em NDC varia 2,6× em texels entre cascatas | médio | **corrigido (F2)** |
 | 4 | Bias dobrado no caminho volumétrico desloca o feixe | médio | **corrigido (F1)** |
 | 5 | Piso de 1 texel anula a penumbra constante em mundo | médio | F3 |
-| 6 | Nenhum bias depende de N·L | médio | F2 |
+| 6 | Nenhum bias depende de N·L | médio | **corrigido (F2)** |
 | 7 | Culling de caster contra a caixa ortográfica, não contra a fatia | médio | F4 |
 | 8 | `SampleCSM` chamado onde não há luz direta | baixo-médio | **corrigido (F1)** |
 | 9 | Sampler de comparação do sun shafts com `CLAMP` | baixo | **corrigido (F1)** |
@@ -192,11 +192,50 @@ Dois desses itens mudam a imagem e precisam de A/B: as sombras finas que voltam 
 cascatas 0 e 1, e os feixes de fog e sun shafts que reancoram na origem. Os outros três
 são idênticos pixel a pixel.
 
-## Fila
+## O que a fase 2 aplicou
 
-**F2, bias coerente.** Bias em NDC por cascata proporcional ao texel em mundo, com
-`CascadeBiasScale` rebaixado a multiplicador artístico por cima; normal offset escalado
-por `sqrt(1 − NoL²)` com clamp.
+O bias deixa de ser um escalar em NDC e passa a ser expresso em **texels da cascata**,
+convertido para NDC por cascata na CPU (`DepthBiasTexels × texel[c] / range[c] ×
+CascadeBiasScale[c]`, em `CSMConstants::BiasNdc`). É a identidade que a Unreal obtém com
+`ShadowCascadeBiasDistribution = 1` e a Cry com `e_ShadowsAutoBias`. O cálculo fica fora
+do laço de cascatas de propósito: cascata congelada pelo cache não reescreve texel e
+range, mas os valores retidos no constant buffer continuam descrevendo o mapa que está lá.
+
+O padrão é 2,0 texels, escolhido para não introduzir acne em lugar nenhum — fica dentro
+da faixa que já valia nas cascatas próximas e acima da que valia nas distantes:
+
+| casc | antes (texels) | antes (m) | depois (texels) | depois (m) |
+|---|---|---|---|---|
+| 0 | 3,28 | 0,077 | 2,00 | 0,047 |
+| 1 | 1,75 | 0,162 | 2,00 | 0,186 |
+| 2 | 1,37 | 0,454 | 2,00 | 0,660 |
+| 3 | 1,28 | 1,294 | 2,00 | 2,027 |
+
+O normal offset passa a escalar por `sqrt(1 − NoL²)`, o seno do ângulo entre a normal e a
+luz. O erro que ele combate é a quantização do rasterizador do shadow map — um texel
+guarda uma única profundidade — e o deslocamento lateral necessário para sair da célula
+errada vale `texel × sin(α)`. Em `N·L = 1` esse erro é zero, e o valor constante anterior
+produzia peter-panning de graça, comendo o contato e o auto-sombreamento fino; em
+`N·L → 0` ele é máximo e o valor constante ficava curto, deixando acne na faixa do
+terminador. A Flax usa `saturate(1 − NoL)`, que subestima no ângulo médio — em
+`N·L = 0,5` dá 0,5 contra o 0,866 correto — e custa o mesmo que o seno exato.
+
+| N·L | 1,00 | 0,90 | 0,70 | 0,50 | 0,25 | 0,05 |
+|---|---|---|---|---|---|---|
+| antes (texels) | 2,50 | 2,50 | 2,50 | 2,50 | 2,50 | 2,50 |
+| agora, `sin(α)` | 0,00 | 1,09 | 1,79 | 2,17 | 2,42 | 2,50 |
+| Flax, `1 − NoL` | 0,00 | 0,25 | 0,75 | 1,25 | 1,88 | 2,38 |
+
+A direção da key light entrou no constant buffer (`SunDirection`) porque o offset agora é
+por pixel. O fator não depende da cascata, então é calculado uma vez e serve aos três
+caminhos — cascata atual, fallback e blend —, e o offset continua sendo refeito com o
+texel da cascata seguinte no blend, que é onde esquecer disso produz uma faixa clara ou
+escura na transição.
+
+O slider "Bias de profundidade" mudou de unidade, de NDC para texels; a faixa da UI
+passou a 0–8.
+
+## Fila
 
 **F3, filtro.** Optimized PCF de 5×5 em 9 taps, com pesos bilineares derivados da posição
 fracionária dentro do texel, no lugar dos 16 Poisson rotados — é o que Unreal e Flax

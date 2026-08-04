@@ -1742,9 +1742,9 @@ Rectangle {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Bias de profundidade"
-                    from: 0; to: 0.003; step: 0.0001
+                    from: 0; to: 8; step: 0.1
                     value: viewportModel.shadowDepthBias
-                    valueText: (viewportModel.shadowDepthBias * 10000).toFixed(1).replace(".", ",") + "e-4"
+                    valueText: viewportModel.shadowDepthBias.toFixed(1).replace(".", ",") + " tx"
                     onCommitted: (v) => viewportModel.SetShadowDepthBias(v)
                 }
                 ShadowSlider {

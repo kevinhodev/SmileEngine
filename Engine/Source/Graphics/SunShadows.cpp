@@ -225,7 +225,7 @@ namespace Smile {
         MakeBuffer(static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(CSMConstants),
                    CSMCB, MappedCSM);
 
-        CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
+        CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBiasTexels,
                                  1.0f / static_cast<f32>(kResolution), 0.0f };
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels,
                                  std::clamp(BlendBand, 0.0f, 0.5f),
@@ -239,7 +239,7 @@ namespace Smile {
                                      const Vec3& _CamPos, f32 _FovYRadians, f32 _Aspect,
                                      const Vec3& _DirToSun, f32 _NearZ, f32 _NoiseFrame) {
         FrameSlot = _FrameSlot;
-        CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
+        CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBiasTexels,
                                  1.0f / static_cast<f32>(kResolution), _Enabled ? 1.0f : 0.0f };
         const f32 TransitionFraction = std::clamp(BlendBand, 0.0f, 0.5f);
         CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, TransitionFraction,
@@ -247,8 +247,11 @@ namespace Smile {
         const f32 PcssTan = SunAngularSizeDeg > 0.0f
             ? std::tan(0.5f * SunAngularSizeDeg * 3.14159265f / 180.0f) : 0.0f;
         CPUConstants.Params3 = { _NoiseFrame, PcssTan, MaxPenumbraTexels, 0.0f };
-        CPUConstants.BiasScale = { CascadeBiasScale[0], CascadeBiasScale[1],
-                                   CascadeBiasScale[2], CascadeBiasScale[3] };
+
+        // Direcao PARA a key light (o Renderer ja alterna sol->lua de noite). O normal offset
+        // do receptor escala por sin(alfa) = sqrt(1 - N.L^2) e precisa dela por pixel.
+        const Vec3 ToLight = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 1.0f, 0.0f });
+        CPUConstants.SunDirection = { ToLight.X, ToLight.Y, ToLight.Z, 0.0f };
 
         UpdateMask = 0;
         if (!_Enabled) {
@@ -384,6 +387,28 @@ namespace Smile {
                                 (static_cast<size_t>(FrameSlot) * kNumCascades + c) *
                                     sizeof(ShadowCascadeConstants),
                             &Cascade, sizeof(ShadowCascadeConstants));
+            }
+        }
+
+        // Bias por cascata, resolvido aqui e nao no shader. O bias precisa ser constante em
+        // TEXELS da cascata, senao a proxima cascata (texel 4x maior) fica sub-biasada e a
+        // anterior super-biasada; com um escalar unico em NDC isso valia 3,28 texels na
+        // cascata 0 contra 1,28 na 3. Convertendo por cascata,
+        //     ndc = texels * texelWorld[c] / rangeWorld[c],
+        // o resultado e o mesmo numero de texels em todas — a identidade que a Unreal obtem
+        // com ShadowCascadeBiasDistribution = 1 e a Cry com e_ShadowsAutoBias.
+        //
+        // FORA do laco de propósito: cascata congelada pelo cache faz `continue` e nao
+        // reescreve texel/range, mas os valores retidos no CB continuam validos e sao
+        // exatamente os que descrevem o mapa que ainda esta la.
+        {
+            const f32* sfAll = &CPUConstants.CascadeTexelWorld.X;
+            const f32* drAll = &CPUConstants.DepthRangeWorld.X;
+            f32*       bias  = &CPUConstants.BiasNdc.X;
+            for (u32 c = 0; c < kNumCascades; ++c) {
+                bias[c] = drAll[c] > 0.0f
+                    ? DepthBiasTexels * CascadeBiasScale[c] * (sfAll[c] / drAll[c])
+                    : 0.0f;
             }
         }
 

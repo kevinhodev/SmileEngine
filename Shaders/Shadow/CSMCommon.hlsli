@@ -9,11 +9,14 @@ cbuffer CSMCB : register(b3) {
     float4 CSMParams;
     float4 CSMParams2;
     float4 CSMParams3;    // x = frame do ruido (0 quando TAA/FSR off), y = tan(meio-angulo do sol; 0 = PCSS off), z = penumbra max em texels, w reservado
-    float4 CSMBiasScale;  // multiplicador do depth bias por cascata
+    // Depth bias JA EM NDC e JA por cascata (texels * texelWorld / rangeWorld * escala do
+    // usuario), resolvido na CPU. Nao multiplicar por mais nada aqui.
+    float4 CSMBiasNdc;
     float4 CSMDepthRangeWorld; // extensao em mundo do range de depth do ortho, por cascata (PCSS)
     float4 CSMCascadeSplits;   // far view-depth de cada cascata
     float4 CSMCameraPosition;  // xyz = camera em mundo
     float4 CSMCameraForwardNear; // xyz = frente da camera, w = near plane
+    float4 CSMSunDirection;    // xyz = direcao PARA a key light
 };
 
 Texture2DArray         SunShadowMap : register(t11);
@@ -35,7 +38,7 @@ float CSM_IGN(float2 p) {
 }
 
 float CSM_PCF(float3 uvz, int cascade, float2 screenPos) {
-    float refZ = uvz.z - CSMParams.y * CSMBiasScale[cascade];
+    float refZ = uvz.z - CSMBiasNdc[cascade];
     float a = CSM_IGN(screenPos + 5.588238f * CSMParams3.x) * 6.2831853f;
     float s, c; sincos(a, s, c);
     float2x2 rot = float2x2(c, -s, s, c);
@@ -135,13 +138,28 @@ float SampleCSM(float3 worldPos, float3 worldNormal, float2 screenPos) {
     int cascade = CSM_CascadeFromViewDepth(viewDepth);
     if (cascade < 0) return 1.0f;
 
-    float3 p = worldPos + worldNormal * (CSMTexelWorld[cascade] * CSMParams2.x);
+    // Normal offset proporcional a sin(alfa), com alfa o angulo entre a normal e a luz
+    // (Castano / The Witness). O erro que este offset combate e a quantizacao do
+    // rasterizador do shadow map: um texel inteiro guarda uma unica profundidade, e o
+    // deslocamento LATERAL necessario para sair da celula errada vale texel * sin(alfa).
+    // Em N.L = 1 esse erro e zero e um offset constante so produzia peter-panning de
+    // graca, comendo o contato e o auto-sombreamento fino; em N.L -> 0 ele e maximo e o
+    // valor constante ficava curto, deixando acne na faixa do terminador — a regiao mais
+    // visivel da cena. A Flax usa saturate(1 - N.L), que subestima no angulo medio (em
+    // N.L = 0,5 da 0,5 contra o 0,866 correto); aqui vai o seno exato, que custa o mesmo.
+    //
+    // Nao depende da cascata, entao serve aos tres caminhos abaixo — inclusive o do blend,
+    // onde o offset PRECISA ser refeito com o texel da cascata seguinte.
+    const float NoL = saturate(dot(worldNormal, CSMSunDirection.xyz));
+    const float offsetScale = CSMParams2.x * sqrt(saturate(1.0f - NoL * NoL));
+
+    float3 p = worldPos + worldNormal * (CSMTexelWorld[cascade] * offsetScale);
     float3 uvz = mul(float4(p, 1.0f), WorldToShadow[cascade]).xyz;
     if (!CSM_InBounds(uvz)) {
         // Normal offset ou cache podem empurrar um receptor para fora por poucos
         // texels. Cascatas maiores ainda sao um fallback valido.
         [loop] for (int fallback = cascade + 1; fallback < numC; ++fallback) {
-            p = worldPos + worldNormal * (CSMTexelWorld[fallback] * CSMParams2.x);
+            p = worldPos + worldNormal * (CSMTexelWorld[fallback] * offsetScale);
             uvz = mul(float4(p, 1.0f), WorldToShadow[fallback]).xyz;
             if (CSM_InBounds(uvz)) return CSM_PCF(uvz, fallback, screenPos);
         }
@@ -155,7 +173,7 @@ float SampleCSM(float3 worldPos, float3 worldNormal, float2 screenPos) {
             if (cascade + 1 < numC) {
                 const int nextCascade = cascade + 1;
                 const float3 p2 = worldPos + worldNormal *
-                    (CSMTexelWorld[nextCascade] * CSMParams2.x);
+                    (CSMTexelWorld[nextCascade] * offsetScale);
                 const float3 uvz2 = mul(float4(p2, 1.0f),
                                         WorldToShadow[nextCascade]).xyz;
                 if (CSM_InBounds(uvz2)) {
