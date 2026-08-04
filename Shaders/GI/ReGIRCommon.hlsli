@@ -28,24 +28,50 @@ float ReGIRLuminance(float3 c) {
 }
 
 // Target barato da primeira etapa: energia no centro da celula, sem normal/BRDF/visibilidade.
-// A distancia e limitada pela meia-diagonal da celula para que uma luz dentro dela nao domine
-// arbitrariamente os 64 slots. Janela de alcance e cone continuam identicos ao shading real.
-float ReGIRGridTarget(FPunctualLight lt, float3 cellCenter, float minDistanceSquared) {
+// O FALLOFF fica ancorado no centro, com a distancia limitada pela meia-diagonal para que uma luz
+// dentro da celula nao domine arbitrariamente os slots (e o vies de discretizacao que o cap. 23
+// aceita de proposito).
+//
+// Ja o ALCANCE — janela e cone — e testado contra a CAIXA inteira da celula, e nao contra o centro.
+// Motivo: o estimador de duas etapas so cobre a integral se o suporte desta pdf contiver o da etapa
+// 2. Como `win` e `cone` sao cortes DUROS, avalia-los so no centro faz uma luz que ilumina algum
+// ponto da celula sem alcancar o centro receber target zero em TODAS as celulas: ela nunca entra em
+// slot nenhum e simplesmente SOME do indireto. Isso e perda de energia, nao ruido — nenhum denoiser
+// recupera. Com a grade esticada na AABB da cena as celulas ficam grandes e o caso e comum
+// (luminaria pequena, spot estreito). O preco e trocar esse vies por um pouco de variancia: uma luz
+// que so encosta na celula entra no pool com peso cheio.
+float ReGIRGridTarget(FPunctualLight lt, float3 cellCenter, float3 halfCell) {
+    const float minDistanceSquared = dot(halfCell, halfCell);
+
     float3 toL = lt.PosInvRadius.xyz - cellCenter;
     float distSq = dot(toL, toL);
     float dist = sqrt(distSq);
     float3 L = toL / max(dist, 1e-4f);
 
-    float win = distSq * lt.PosInvRadius.w * lt.PosInvRadius.w;
+    // Janela pela distancia ao ponto MAIS PROXIMO da caixa: zero so quando a esfera de influencia
+    // da luz nao encosta na celula em ponto nenhum.
+    float3 dBox = max(abs(toL) - halfCell, 0.0f);
+    float win = dot(dBox, dBox) * lt.PosInvRadius.w * lt.PosInvRadius.w;
     win = saturate(1.0f - win * win);
     win *= win;
 
     float denom = max(max(distSq, minDistanceSquared),
                       lt.ColorSourceRadius.w * lt.ColorSourceRadius.w);
+
     float cone = 1.0f;
     if (lt.DirCosOuter.w > -1.5f) {
-        float sm = saturate((dot(-L, lt.DirCosOuter.xyz) - lt.DirCosOuter.w) * lt.SpotParams.x);
-        cone = sm * sm;
+        if (distSq > minDistanceSquared) {
+            // Cone alargado pelo raio angular da esfera que envolve a celula:
+            // cos(theta - alpha) = cos theta * cos alpha + sin theta * sin alpha.
+            const float cosSpot = dot(-L, lt.DirCosOuter.xyz);
+            const float sinCell = saturate(sqrt(minDistanceSquared / distSq));
+            const float cosCell = sqrt(saturate(1.0f - sinCell * sinCell));
+            const float sinSpot = sqrt(saturate(1.0f - cosSpot * cosSpot));
+            const float sm = saturate(((cosSpot * cosCell + sinSpot * sinCell)
+                                       - lt.DirCosOuter.w) * lt.SpotParams.x);
+            cone = sm * sm;
+        }
+        // Luz dentro da esfera que envolve a celula: o cone pode varrer qualquer ponto dela.
     }
     return ReGIRLuminance(lt.ColorSourceRadius.rgb) * win * cone / max(denom, 1e-8f);
 }

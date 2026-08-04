@@ -12,6 +12,14 @@ namespace Smile {
         constexpr u32 kCellCount = FReGIR::kGridX * FReGIR::kGridY * FReGIR::kGridZ;
         constexpr u32 kSlotCount = kCellCount * FReGIR::kSlotsPerCell;
 
+        // ReGIRAverage.cs.hlsl fixa numthreads(64,1,1), groupshared[64] e stride inicial 32 da
+        // reducao. Com mais de 64 slots ele promediaria SO os 64 primeiros e mesmo assim dividiria
+        // por slotsPerCell — e esse average e o denominador do sourcePdf da etapa 2, entao o erro
+        // sai como BRILHO errado em toda a luz local indireta, sem nada quebrar visivelmente.
+        static_assert(FReGIR::kSlotsPerCell == 64,
+                      "Ao mudar kSlotsPerCell, ajuste ReGIRAverage.cs.hlsl: numthreads, "
+                      "SharedWeight[] e o stride da reducao (ou faca o load em passos de 64).");
+
         ComPtr<ID3D12Resource> CreateStructuredUAV(ID3D12Device* Device, u32 Count, u32 Stride) {
             D3D12_HEAP_PROPERTIES Heap{};
             Heap.Type = D3D12_HEAP_TYPE_DEFAULT;

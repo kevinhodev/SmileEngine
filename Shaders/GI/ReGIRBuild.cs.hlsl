@@ -27,7 +27,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const uint x = rem - y * gridCount.x;
     const float3 cellCenter = GridMinSlots.xyz + (float3(x, y, z) + 0.5f) * CellSizeHistory.xyz;
     const float3 halfCell = CellSizeHistory.xyz * 0.5f;
-    const float minDistanceSquared = dot(halfCell, halfCell);
 
     const uint numLights = (uint)GridCountLights.w;
     const uint initialCandidates = (uint)BuildParams.z;
@@ -43,7 +42,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     [loop]
     for (uint i = 0; i < initialCandidates && numLights > 0u; ++i) {
         const uint lightIndex = min((uint)(ReGIRRand(rng) * numLights), numLights - 1u);
-        const float target = ReGIRGridTarget(Lights[lightIndex], cellCenter, minDistanceSquared);
+        const float target = ReGIRGridTarget(Lights[lightIndex], cellCenter, halfCell);
         // Proposta uniforme 1/N. O N aparece no peso, como exige o RIS.
         const float w = target * numLights;
         wSum += w;
@@ -61,7 +60,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             // Luzes podem mover/mudar energia. Reponderar e mais caro que reaproveitar o peso
             // velho, mas evita a instabilidade explicitamente apontada no capitulo.
             const float newPrevTarget = ReGIRGridTarget(
-                Lights[prev.LightIndex], cellCenter, minDistanceSquared);
+                Lights[prev.LightIndex], cellCenter, halfCell);
             const float reweightedPrevAverage = prev.AverageWeight *
                                                 (newPrevTarget / prev.SampleTarget);
             const uint prevM = min(prev.HistoryLength, (uint)CellSizeHistory.w - 1u);

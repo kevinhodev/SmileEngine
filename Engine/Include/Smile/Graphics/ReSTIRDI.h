@@ -145,7 +145,10 @@ namespace Smile {
 
         u32 InitialCandidates = 8;
         f32 MCap = 20.0f;
-        u32 SpatialCount = 4;
+        // 2, nao 4: o resolve espacial normaliza por 1/M (Alg. 4, enviesado) e o vies de
+        // escurecimento cresce com o numero de vizinhos. O RTXDI so usa 4 no preset Ultra, onde a
+        // correcao de vies e tracada por raio. Voltar a subir quando o Alg. 6 estiver no Pass B.
+        u32 SpatialCount = 2;
         f32 SpatialRadius = 16.0f;
         f32 PosRejectScale = 0.01f;
         f32 NormalReject = 0.9f;
