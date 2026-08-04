@@ -123,13 +123,27 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     r.X1 = x1;
     r.N1Oct = DDGI_OctEncode(n1);
 
+    // Dominios combinados, p/ a correcao de vies abaixo. [0] e sempre o proprio pixel.
+    int2  candPx[9];
+    float candM[9];
+    int   candCount = 0;
+    int   selCand = 0; // dominio que gerou a amostra vencedora
+
     ReSTIRDIReservoir self = DI_LoadReservoir(ResA.Load(int3(px, 0)), ResB.Load(int3(px, 0)));
     self.M = min(self.M, Sampling.y);
-    if (self.LightIndex < lightCount && self.M > 0.0f && self.W > 0.0f) {
-        float3 diff, spec, L; float dist;
-        const float target = DI_Evaluate(Lights[self.LightIndex], g, x1, CameraPos.xyz,
-                                         diff, spec, L, dist);
-        DIResMerge(r, self, target, rng);
+    // Basta ter M: um reservoir SEM amostra valida (todas as candidatas deram target 0, ou o
+    // Alg. 5 passo 2 descartou a ocluida) ainda sorteou M candidatas e precisa entrar na soma.
+    // Pular o merge inteiro descartaria esse M e INFLARIA o brilho, porque o resolve divide por
+    // ele. Com target 0 o peso e 0, a amostra nunca e adotada, e so o M entra.
+    if (self.M > 0.0f) {
+        float target = 0.0f;
+        if (self.LightIndex < lightCount && self.W > 0.0f) {
+            float3 diff, spec, L; float dist;
+            target = DI_Evaluate(Lights[self.LightIndex], g, x1, CameraPos.xyz,
+                                 diff, spec, L, dist);
+        }
+        if (DIResMerge(r, self, target, rng)) selCand = candCount;
+        candPx[candCount] = px; candM[candCount] = self.M; ++candCount;
     }
 
     const int K = min((int)Sampling.z, 8);
@@ -149,15 +163,22 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         if (dot(qg.WorldNormal, n1) < Reuse.z) continue;
 
         ReSTIRDIReservoir nb = DI_LoadReservoir(ResA.Load(int3(qpx, 0)), ResB.Load(int3(qpx, 0)));
-        if (nb.LightIndex >= lightCount || nb.M <= 0.0f || nb.W <= 0.0f) continue;
+        // So M > 0 — mesma razao do bloco do self. Reservoir invalido (fundo/ceu) tem M = 0 e cai
+        // aqui; um pixel valido que so nao achou luz tem M > 0 e X1 escrito, entao os testes
+        // geometricos abaixo continuam validos.
+        if (nb.M <= 0.0f) continue;
         if (length(nb.X1 - x1) >= posReject ||
             abs(dot(n1, nb.X1 - x1)) >= 0.2f * posReject) continue;
         nb.M = min(nb.M, Sampling.y);
 
-        float3 diff, spec, L; float dist;
-        const float target = DI_Evaluate(Lights[nb.LightIndex], g, x1, CameraPos.xyz,
-                                         diff, spec, L, dist);
-        DIResMerge(r, nb, target, rng);
+        float target = 0.0f;
+        if (nb.LightIndex < lightCount && nb.W > 0.0f) {
+            float3 diff, spec, L; float dist;
+            target = DI_Evaluate(Lights[nb.LightIndex], g, x1, CameraPos.xyz,
+                                 diff, spec, L, dist);
+        }
+        if (DIResMerge(r, nb, target, rng)) selCand = candCount;
+        candPx[candCount] = qpx; candM[candCount] = nb.M; ++candCount;
     }
 
     if (r.LightIndex >= lightCount) {
@@ -170,7 +191,49 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float3 diffuse, specular, L; float dist;
     const float selectedTarget = DI_Evaluate(selected, g, x1, CameraPos.xyz,
                                              diffuse, specular, L, dist);
-    DIResFinalize(r, selectedTarget);
+
+    // Correcao de vies (Alg. 6 / Secao 4.3), mesma convencao do ReSTIRGISpatial.cs.hlsl:
+    // balance heuristic continua no lugar do 1/M. ps_c = pHat da luz VENCEDORA avaliada no
+    // dominio de cada participante; W = wSum * pi / (pHatSel * Σ ps_c·M_c), com pi = ps do
+    // dominio que gerou o vencedor.
+    //
+    // O 1/M puro (Alg. 4) supoe que todo vizinho poderia ter gerado a amostra, e escurece onde
+    // isso e falso: banda do terminador de cada luz (N·L ~ 0 no vizinho), borda do cone do spot
+    // e limite do raio de atenuacao, onde PunctualLightIncoming zera EXATAMENTE. Aqui o vizinho
+    // que mal poderia gerar a amostra vota pouco no denominador — menos variancia que o teste
+    // binario de Z, e degenera em 1/M quando todos os dominios concordam.
+    //
+    // Versao SEM raios extras: a Secao 4.4 pede tambem testar visibilidade de cada vizinho ate a
+    // luz (K raios/pixel). Fica para depois de medir; o resolve de visibilidade abaixo ja cobre
+    // o dominio do proprio pixel.
+    {
+        float pi = 0.0f, piSum = 0.0f;
+        [loop]
+        for (int cd = 0; cd < candCount; ++cd) {
+            // cd 0 e o proprio pixel: ps == selectedTarget por construcao, nao recarrega nada.
+            float ps = selectedTarget;
+            if (cd > 0) {
+                ps = 0.0f;
+                const int2 cp = candPx[cd];
+                const float cz = Depth.Load(int3(cp, 0));
+                if (cz > 0.0f) {
+                    const GBufferData cg = DecodeGBuffer(GBufferA.Load(int3(cp, 0)),
+                                                         GBufferB.Load(int3(cp, 0)),
+                                                         GBufferC.Load(int3(cp, 0)));
+                    const float2 cuv  = (float2(cp) + 0.5f) * ScreenParams.zw;
+                    const float2 cndc = float2(cuv.x * 2.0f - 1.0f, 1.0f - cuv.y * 2.0f);
+                    const float4 cwh  = mul(float4(cndc, cz, 1.0f), InvViewProj);
+                    const float3 cx1  = cwh.xyz / cwh.w;
+                    float3 cdf, csp, cl; float cdst;
+                    ps = DI_Evaluate(selected, cg, cx1, CameraPos.xyz, cdf, csp, cl, cdst);
+                }
+            }
+            piSum += ps * candM[cd];
+            if (cd == selCand) pi = ps;
+        }
+        r.W = (selectedTarget > 0.0f && pi > 0.0f && piSum > 0.0f)
+            ? (r.WeightSum * pi / (piSum * selectedTarget)) : 0.0f;
+    }
     float visibility = 1.0f;
     float4 shadowMotion = 0.0f;
 
