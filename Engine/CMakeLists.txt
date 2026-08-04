@@ -65,6 +65,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/TemporalMotionVectors.h
     Include/Smile/Graphics/DebugTargets.h
     Include/Smile/Graphics/DebugView.h
+    Include/Smile/Graphics/ShaderTimer.h
     Include/Smile/Graphics/OceanSpectrum.h
     Include/Smile/Graphics/OceanFFT.h
     Include/Smile/Graphics/Water.h
@@ -118,6 +119,7 @@ set(ENGINE_SOURCES
     Source/Graphics/ReSTIRGI.cpp
     Source/Graphics/ReGIR.cpp
     Source/Graphics/ReSTIRDI.cpp
+    Source/Graphics/MeshLights.cpp
     Source/Graphics/NrdDenoiser.cpp
     Source/Graphics/Reflections.cpp
     Source/Graphics/AmbientOcclusion.cpp
@@ -133,6 +135,7 @@ set(ENGINE_SOURCES
     Source/Graphics/TemporalMotionVectors.cpp
     Source/Graphics/DebugTargets.cpp
     Source/Graphics/DebugView.cpp
+    Source/Graphics/ShaderTimer.cpp
     Source/Graphics/FlickerHeatmap.cpp
     Source/Graphics/OceanSpectrum.cpp
     Source/Graphics/OceanFFT.cpp
@@ -250,6 +253,24 @@ if(EXISTS "${_nrd_inc}/NRD.h" AND EXISTS "${_nrd_lib}")
 else()
     message(WARNING "NRD nao encontrado em ${SMILE_NRD_ROOT} — NrdDenoiser compila como stub")
     target_compile_definitions(SmileEngine PUBLIC SMILE_NRD_ENABLED=0)
+endif()
+
+# === NVAPI — instrumentacao de timer nos shaders de RT (FShaderTimer) ===========================
+# So p/ a extensao HLSL NvGetSpecial (timer global da GPU). A nvapi64.lib e ESTATICA e carrega a
+# nvapi64.dll do driver sozinha; em maquina sem driver NVIDIA o NvAPI_Initialize apenas falha e a
+# feature se desliga em runtime — nao ha DLL p/ copiar ao lado do exe. Sem o SDK, SMILE_NVAPI_ENABLED=0
+# e as permutacoes instrumentadas nem sao compiladas (ver Shaders/CMakeLists.txt).
+# Origem: github.com/NVIDIA/nvapi (MIT).
+set(SMILE_NVAPI_ROOT "D:/Engines/nvapi" CACHE PATH "Raiz do NVAPI SDK (github.com/NVIDIA/nvapi)")
+set(_nvapi_lib "${SMILE_NVAPI_ROOT}/amd64/nvapi64.lib")
+if(EXISTS "${SMILE_NVAPI_ROOT}/nvapi.h" AND EXISTS "${_nvapi_lib}")
+    message(STATUS "NVAPI encontrado: ${SMILE_NVAPI_ROOT}")
+    target_include_directories(SmileEngine PRIVATE "${SMILE_NVAPI_ROOT}")
+    target_compile_definitions(SmileEngine PUBLIC SMILE_NVAPI_ENABLED=1)
+    target_link_libraries(SmileEngine PUBLIC "${_nvapi_lib}")
+else()
+    message(STATUS "NVAPI nao encontrado em ${SMILE_NVAPI_ROOT} — timer de shader desligado")
+    target_compile_definitions(SmileEngine PUBLIC SMILE_NVAPI_ENABLED=0)
 endif()
 
 # Organizacao no Visual Studio (filters por pasta)

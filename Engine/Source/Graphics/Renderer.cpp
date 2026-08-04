@@ -217,6 +217,11 @@ namespace Smile {
 
         if (Device.RaytracingSupported()) {
             ReportInitProgress("Compilando pipelines de ray tracing", {}, 0.88f);
+            // ANTES das pipelines: o slot falso da extensao da NVAPI precisa estar reservado no
+            // device na hora em que a PSO instrumentada e criada, senao o driver nao reconhece o
+            // padrao do timer e a permutacao nasce invalida. Falhar aqui e normal (GPU nao-NVIDIA):
+            // os passes so nao criam a gemea instrumentada.
+            FShaderTimer::InitializeApi(Device.Native(), SRVHeap);
             DDGI.Initialize(Device.Native());
             ReGIR.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
@@ -246,6 +251,13 @@ namespace Smile {
                 std::to_string(SwapChain.GetHeight()) + " | " + Features);
     }
 
+    bool Renderer::IsRtShaderTimerAvailable() const {
+        // Exige os dois lados: a NVAPI ligada (C++) E as permutacoes instrumentadas criadas
+        // (shader). Ter so um dos dois deixaria o toggle ligar sem produzir imagem nenhuma.
+        return FShaderTimer::IsAvailable() &&
+               ReSTIRGI.HasTimerPipeline() && Reflections.HasTimerPipeline();
+    }
+
     void Renderer::BuildRaytracingScene() {
         if (!Device.RaytracingSupported()) return;
         RaytracingScene.Build(Device, CommandQueue, SRVHeap, Scene);
@@ -257,6 +269,12 @@ namespace Smile {
         // para o mesmo indice numerico de uma grade recem-criada.
         SetDebugProbeIndex(-1);
         PreviousDirectLightPositions.clear();
+
+        // Antes dos early-outs de RT: o levantamento e so leitura de CPU e o numero interessa
+        // mesmo em cena sem ray tracing disponivel.
+        MeshLights.Survey(Scene);
+        MeshLights.LogSummary();
+
         if (!Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
         if (!Atmosphere.IsInitialized()) return; 
         DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
@@ -585,6 +603,12 @@ namespace Smile {
             DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
             DepthSRVSlot, GBuffer.SRVSlot(1), ReliableVelocitySlot,
             DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
+
+        // Alvos de timer: cada um no dominio do SEU dispatch — o gather do ReSTIR e full-res e o
+        // trace de reflexao e half-res. Sem NVAPI, Initialize() e no-op e os alvos nao existem.
+        TimerGI.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        TimerReflections.Initialize(Device.Native(), SRVHeap,
+                                    Reflections.TraceWidth(), Reflections.TraceHeight());
 
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
@@ -1270,6 +1294,17 @@ namespace Smile {
         if (ReSTIRDI.OutputSRVSlot() != kNoSlot)
             Register("ReSTIR DI", ReSTIRDI.OutputSRVSlot(), EDebugDecode::HDR, 0, 1,
                      /*Exposure=*/1.0f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
+        // Instrumentacao de timer (NVAPI). A Exposure e o 1/valor "quente" do artigo da NVIDIA:
+        // escala FIXA de proposito — normalizar pelo maximo do frame faria a mesma cena mudar de
+        // cor conforme a camera anda, e duas capturas deixariam de ser comparaveis.
+        // Filtro linear OFF: cada texel e uma medida por thread, interpolar inventa custo.
+        if (TimerGI.SrvSlot() != kNoSlot)
+            Register("RT · timer · ReSTIR GI", TimerGI.SrvSlot(), EDebugDecode::Heatmap, 0, 1,
+                     /*Exposure=*/kShaderTimerScaleGI, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
+        if (TimerReflections.SrvSlot() != kNoSlot)
+            Register("RT · timer · reflexos", TimerReflections.SrvSlot(), EDebugDecode::Heatmap, 0, 1,
+                     /*Exposure=*/kShaderTimerScaleReflections, /*AtlasTilePx=*/0,
+                     /*LinearFilter=*/false);
         if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
             // O atlas guarda irradiancia comprimida por gamma; o decode generico de HDR
             // deixava o sinal artificialmente claro e nao correspondia ao que o lighting usa.
@@ -1832,6 +1867,15 @@ namespace Smile {
                                      Denoiser == EDenoiser::NRD;
         const bool NrdDirectMode = ReSTIRDIActiveFrame && ReSTIRDI.IsNrdReady() &&
                                    NrdDirect.IsReady() && Denoiser == EDenoiser::NRD;
+        // Instrumentacao de timer: um gate so, empurrado todo frame. kInvalidSlot manda o passe
+        // de volta p/ a PSO normal — desligado nao custa uma instrucao (ver FShaderTimer).
+        TimerCaptureActive = RtShaderTimer && FShaderTimer::IsAvailable() &&
+                             TimerGI.IsReady() && TimerReflections.IsReady();
+        ReSTIRGI.SetTimerSlot(TimerCaptureActive ? TimerGI.UavSlot()
+                                                 : FShaderTimer::kInvalidSlot);
+        Reflections.SetTimerSlot(TimerCaptureActive ? TimerReflections.UavSlot()
+                                                    : FShaderTimer::kInvalidSlot);
+
         // Perfil de epsilons: um so p/ a engine inteira, empurrado todo frame (copia barata). Sem
         // isto cada passe teria a propria copia e o sweep de calibracao mexeria em metade deles.
         ReSTIRGI.SetRayEpsilons(RayEps);
@@ -1912,6 +1956,11 @@ namespace Smile {
         }
 
         const bool VolFogActive = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
+        const f32 ShaftMarchMax = VolShaftsActive
+            ? (VolFogActive
+                ? std::min(SunShafts.GetVolMaxDist(), VolumetricFog.GetMaxDistance())
+                : SunShafts.GetVolMaxDist())
+            : 0.0f;
         if (VolFogActive) {
             FVolumetricFogPass::FFrameParams VF{};
             VF.InvViewProjUnjit = InvViewProjUnjit;
@@ -1922,6 +1971,11 @@ namespace Smile {
             VF.DirToSun         = KeyDir;
             VF.SunColorTimesIntensity = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
                                           KeyColor.Z * KeyInt };
+            // Shafts own the high-frequency solar term only over their configured
+            // near range. The froxel resumes the sun afterwards, while extinction,
+            // ambient, GI and local lights remain present over the full volume.
+            VF.InjectDirectionalLight = true;
+            VF.DirectionalLightStartDistance = VolShaftsActive ? ShaftMarchMax : 0.0f;
             VF.CollapsedFog     = ShaftsFogCollapsed;
             VF.SkyAmbient       = SkyAmbient;
             VF.NearZ            = NearZ;
@@ -1945,6 +1999,25 @@ namespace Smile {
         // HDRI/skybox o SkyView LUT nao descreve o ceu que esta na tela). SunN, nao KeyDir: o
         // LUT e dobrado no azimute do SOL, entao a lua daria uv errado a noite.
         const bool FogSkyAnchor = UseAtmosphereSky && Atmosphere.IsInitialized();
+        FFogPass::FVolumetricMatchParams FogMatch{};
+        FogMatch.Enabled = VolFogActive;
+        if (VolFogActive) {
+            const Vec3 MediumAlbedo = VolumetricFog.GetAlbedo();
+            const f32 AmbientIntensity = VolumetricFog.GetAmbientIntensity();
+            FogMatch.Albedo = MediumAlbedo;
+            FogMatch.AmbientRadiance = { SkyAmbient.X * AmbientIntensity,
+                                         SkyAmbient.Y * AmbientIntensity,
+                                         SkyAmbient.Z * AmbientIntensity };
+            FogMatch.SunRadiance = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
+                                     KeyColor.Z * KeyInt };
+            FogMatch.ExtinctionScale = VolumetricFog.GetExtinctionScale();
+            // The froxel smoothly regains the solar term before its boundary,
+            // so the far analytical continuation always matches the base volume.
+            FogMatch.DirectionalPhaseG = VolumetricFog.GetPhaseG();
+            FogMatch.DirectionalScatteringScale = 1.0f;
+            FogMatch.AmbientTransitionDistance =
+                std::max(25.0f, VolumetricFog.GetMaxDistance() * 0.5f);
+        }
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm(),
@@ -1954,7 +2027,7 @@ namespace Smile {
                            SunN,
                            FogSkyAnchor ? Atmosphere.ViewHeightKm()   : 0.0f,
                            FogSkyAnchor ? Atmosphere.BottomRadiusKm() : 0.0f,
-                           Fog.GetHeightFogSkyContribution());
+                           Fog.GetHeightFogSkyContribution(), FogMatch);
         Fog.SetDensity(FogDensityBase);
 
         const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kPlanetRadiusOffsetKm;
@@ -2001,10 +2074,15 @@ namespace Smile {
             const f32 ShaftNoiseFrame =
                 (TAAActive || UpscaleActive || SunShafts.GetVolTemporal())
                     ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
+            const Vec3 ShaftMediumAlbedo = VolFogActive
+                ? VolumetricFog.GetAlbedo() : Vec3{ 1.0f, 1.0f, 1.0f };
+            const f32 ShaftExtinctionScale = VolFogActive
+                ? VolumetricFog.GetExtinctionScale() : 1.0f;
             SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
                                        ShaftNoiseFrame, InvViewProjFull, CameraPosition,
                                        ViewProjUnjittered, CloudShadowP, CloudShadowP2,
-                                       0.0f);
+                                       ShaftMediumAlbedo, ShaftExtinctionScale,
+                                       0.0f, ShaftMarchMax);
         } else if (SunShafts.IsInitialized()) {
             SunShafts.ResetHistory();
         }
@@ -2940,6 +3018,13 @@ namespace Smile {
             DDGI.TransitionForRead(CommandList);
         }
 
+        // Antes dos dois traces instrumentados: pixel que sai cedo nao escreve, e sem zerar o
+        // alvo ele mostraria a medida de um frame antigo — quente onde nao houve trabalho nenhum.
+        if (TimerCaptureActive) {
+            TimerGI.Clear(CommandList, SRVHeap);
+            TimerReflections.Clear(CommandList, SRVHeap);
+        }
+
         if (ReSTIRGIActive) {
             FBarrierBatch Batch;
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -3547,6 +3632,11 @@ namespace Smile {
         if ((MainDebugActive || CapturePreview) &&
             GBuffer.IsInitialized() && DebugViewPass.IsInitialized()) {
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            // Os alvos de timer sao os unicos publicados que saem do frame em UAV; o visualizador
+            // nao emite barreira por conta propria (ver o comentario no fim do RecordTrace do
+            // ReSTIR GI). Sem captura ativa eles ficam no estado de leitura e isto e no-op.
+            TimerGI.ToRead(CommandList);
+            TimerReflections.ToRead(CommandList);
 
             // Depth e normal podem ser escolhidos tanto no toolbar quanto na janela. Deixa-os
             // legiveis durante os dois draws e restaura exatamente os estados de entrada.
@@ -4000,6 +4090,7 @@ namespace Smile {
         RRGuides.Shutdown();
         BgVelocity.Shutdown();
         FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS/RR
+        FShaderTimer::ShutdownApi();       // libera o slot falso da extensao + o buffer dummy
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);
             MappedFrameBase = nullptr;

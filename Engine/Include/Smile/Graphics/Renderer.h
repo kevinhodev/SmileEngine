@@ -23,6 +23,7 @@
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/DebugView.h"
+#include "Smile/Graphics/ShaderTimer.h"
 #include "Smile/Graphics/HDREnvironment.h"
 #include "Smile/Graphics/Atmosphere.h"
 #include "Smile/Graphics/TimeOfDay.h"
@@ -41,6 +42,7 @@
 #include "Smile/Graphics/DDGIDebug.h"
 #include "Smile/Graphics/ReSTIRGI.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/MeshLights.h"
 #include "Smile/Graphics/ReSTIRDI.h"
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/Reflections.h"
@@ -367,6 +369,15 @@ namespace Smile {
         static constexpr u32 kNoDebugProbe  = 0xFFFFFFFFu;
         void SetDebugTargetIndex(u32 Index)  { DebugTargetIndex = Index; }
         u32  GetDebugTargetIndex() const     { return DebugTargetIndex; }
+
+        // === Instrumentacao de timer nos passes de RT (NVAPI) ============================
+        // Liga a captura: os traces de ReSTIR GI e de reflexao passam a rodar a permutacao
+        // instrumentada e publicam um heatmap de custo POR PIXEL em DebugTargets. Custo zero
+        // desligado (a instrumentacao e permutacao, nao branch). Ver FShaderTimer.
+        void SetRtShaderTimer(bool V)        { RtShaderTimer = V; }
+        bool GetRtShaderTimer() const        { return RtShaderTimer; }
+        // false em GPU nao-NVIDIA ou build sem o SDK: o editor deve desabilitar o toggle.
+        bool IsRtShaderTimerAvailable() const;
 
         // Selecao MULTIPLA da janela de debug. Diferente do alvo unico acima, esta selecao
         // e composta numa textura offscreen e nunca substitui a imagem do viewport principal.
@@ -856,6 +867,23 @@ namespace Smile {
         // Registra em DebugTargets os alvos que ja tem SRV. Chamado no fim de
         // RecreateInternalTargets(), pois o resize realoca slots (o registro sobrescreve por nome).
         void RegisterDebugTargets();
+        // Instrumentacao de timer: um alvo por passe instrumentado, cada um no dominio do seu
+        // dispatch (GI full-res, reflexao half-res).
+        FShaderTimer   TimerGI;
+        FShaderTimer   TimerReflections;
+        bool           RtShaderTimer      = false; // toggle do editor
+        bool           TimerCaptureActive = false; // resolvido por frame (toggle && disponivel)
+        // Escala do heatmap: 1/valor considerado "quente" em ciclos. UMA POR PASSE, porque os
+        // dois vivem em ordens de grandeza diferentes — com o 65000 do artigo nos dois, o gather
+        // do ReSTIR saturava a tela inteira de vermelho e o trace de reflexao afundava todo no
+        // azul do piso. Valores lidos da primeira captura na 3060 Ti; o slider de exposicao do
+        // visualizador multiplica por cima, entao recalibrar nao exige recompilar.
+        // GI: full-res, 1 raio + reuso temporal + revalidacao — o pixel tipico ja passa de 65k.
+        static constexpr f32 kShaderTimerScaleGI = 1.0f / 250000.0f;
+        // Reflexao: half-res e a maioria dos pixels sai cedo por rugosidade (sem traçar raio),
+        // entao o interessante mora numa faixa bem mais baixa.
+        static constexpr f32 kShaderTimerScaleReflections = 1.0f / 32000.0f;
+
         u32            GBufferDebugMode = 0;
         u32            DebugTargetIndex   = kNoDebugTarget;
         std::vector<u32> DebugSelection;          // janela de debug: varios alvos em grade offscreen
@@ -1022,8 +1050,8 @@ namespace Smile {
         FFogPass        Fog;
         FVolumetricFogPass VolumetricFog;
         bool            UseVolumetricFog     = true; // froxel fog; exige height fog ON
-        bool            UseAerialPerspective = false;
-        bool            UseHeightFog         = true;
+        bool            UseAerialPerspective = true;
+        bool            UseHeightFog         = false;
 
         FSunShafts      SunShafts;
         bool            UseSunShafts = true; // raymarch meia-res + temporal; exige height fog ON
@@ -1043,6 +1071,9 @@ namespace Smile {
         bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
         FDDGI            DDGI;
         FReGIR           ReGIR;
+        // Fase 1 do projeto de mesh lights: so levanta a contagem de triangulos emissivos por
+        // cena. Ainda nao produz luz — existe para medir antes de escolher a amostragem.
+        FMeshLights      MeshLights;
         bool             UseReGIR = false; // bring-up: hits secundarios; default OFF para A/B
         FDDGIDebug       DDGIDebugPass; 
         bool             UseGI       = true;
