@@ -1,11 +1,17 @@
 #include "Smile/Graphics/MeshLights.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
+#include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Core/HResultCheck.h"
 
 #include <algorithm>
+#include <cstring>
 #include <string>
+
+using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     namespace {
@@ -82,5 +88,194 @@ namespace Smile {
                     "pool de 64 slots por celula do ReGIR colapsa e precisa do presample "
                     "cooperativo antes de servir de proposta.");
         }
+    }
+
+    namespace {
+        ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* _Device, u64 _Size,
+                                            D3D12_HEAP_TYPE _HeapType,
+                                            D3D12_RESOURCE_STATES _State,
+                                            D3D12_RESOURCE_FLAGS _Flags) {
+            D3D12_HEAP_PROPERTIES Heap{};
+            Heap.Type = _HeapType;
+            D3D12_RESOURCE_DESC Desc{};
+            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            Desc.Width            = _Size;
+            Desc.Height           = 1;
+            Desc.DepthOrArraySize = 1;
+            Desc.MipLevels        = 1;
+            Desc.Format           = DXGI_FORMAT_UNKNOWN;
+            Desc.SampleDesc       = { 1, 0 };
+            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            Desc.Flags            = _Flags;
+            ComPtr<ID3D12Resource> Buffer;
+            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
+                     _State, nullptr, IID_PPV_ARGS(&Buffer)));
+            return Buffer;
+        }
+    }
+
+    void FMeshLights::Initialize(ID3D12Device* _Device) {
+        // Bindless ligado: a extracao le VB/IB e a textura emissiva por ResourceDescriptorHeap.
+        ExtractPSO.Initialize(_Device, "MeshLightExtract.cs_6_6.cso", 2, 1, true);
+        ConstantBuffer = CreateBuffer(_Device, sizeof(MeshLightConstants),
+                                      D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                      D3D12_RESOURCE_FLAG_NONE);
+        D3D12_RANGE NoRead{ 0, 0 };
+        SMILE_HR(ConstantBuffer->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        Initialized = true;
+    }
+
+    void FMeshLights::RecreatePSO(ID3D12Device* _Device) {
+        if (!Initialized) return;
+        ExtractPSO.Initialize(_Device, "MeshLightExtract.cs_6_6.cso", 2, 1, true);
+    }
+
+    D3D12_GPU_VIRTUAL_ADDRESS FMeshLights::CBAddr() const {
+        return ConstantBuffer ? ConstantBuffer->GetGPUVirtualAddress() : 0;
+    }
+
+    void FMeshLights::Release(FTextureSRVHeap& _SRVHeap) {
+        auto FreeSlot = [&](u32& Slot, u32 Count) {
+            if (Slot != 0xFFFFFFFFu) { _SRVHeap.Free(Slot, Count); Slot = 0xFFFFFFFFu; }
+        };
+        FreeSlot(TaskSRV, 1);
+        FreeSlot(LightsSRV, 1);
+        FreeSlot(LightsUAV, 1);
+        FreeSlot(ExtractTable, 2);
+        TaskBuffer.Reset();
+        LightBuffer.Reset();
+        LightState   = D3D12_RESOURCE_STATE_COMMON;
+        NumTasks     = 0;
+        NumTriangles = 0;
+        Ready        = false;
+        Dirty        = false;
+    }
+
+    void FMeshLights::SetupForScene(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                    const FScene& _Scene, u32 _InstanceSlot) {
+        Release(_SRVHeap);
+        Survey(_Scene);
+        LogSummary();
+        if (!Initialized || _InstanceSlot == 0xFFFFFFFFu || SceneStats.EmissiveTriangles == 0)
+            return;
+
+        // Uma task por malha emissiva, em ordem crescente de LightOffset e sem buracos — a busca
+        // binaria do shader depende dessas duas propriedades.
+        std::vector<FMeshLightTaskGPU> Tasks;
+        Tasks.reserve(SceneStats.EmissiveMeshes);
+        u32 Offset = 0;
+        const std::vector<FRenderable>& List = _Scene.Renderables();
+        for (u32 i = 0; i < static_cast<u32>(List.size()); ++i) {
+            const FRenderable& R = List[i];
+            if (!R.Mesh || !R.Mesh->IsValid() || !R.Visible || !R.Material) continue;
+            if (!IsEmissiveForRT(*R.Material)) continue;
+
+            FMeshLightTaskGPU T{};
+            T.InstanceIndex = i;
+            T.TriangleCount = R.Mesh->GetIndexCount() / 3u;
+            T.LightOffset   = Offset;
+            // Transposta, igual ao que o RaytracingScene entrega ao TLAS: as 3 primeiras linhas
+            // da Mat44 transposta sao a matriz 3x4 linha-maior.
+            const Mat44 M = R.Transform.Matrix().GetTransposed();
+            T.Row0 = { M.M[0][0], M.M[0][1], M.M[0][2], M.M[0][3] };
+            T.Row1 = { M.M[1][0], M.M[1][1], M.M[1][2], M.M[1][3] };
+            T.Row2 = { M.M[2][0], M.M[2][1], M.M[2][2], M.M[2][3] };
+            Offset += T.TriangleCount;
+            Tasks.push_back(T);
+        }
+        if (Tasks.empty()) return;
+
+        NumTasks     = static_cast<u32>(Tasks.size());
+        NumTriangles = Offset;
+
+        // Upload heap e escrito UMA vez, aqui. SetupForScene roda depois de um Flush da fila
+        // (SceneLoader), entao nao ha dispatch em voo lendo este buffer.
+        TaskBuffer = CreateBuffer(_Device, sizeof(FMeshLightTaskGPU) * NumTasks,
+                                  D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                  D3D12_RESOURCE_FLAG_NONE);
+        void* Mapped = nullptr;
+        D3D12_RANGE NoRead{ 0, 0 };
+        SMILE_HR(TaskBuffer->Map(0, &NoRead, &Mapped));
+        std::memcpy(Mapped, Tasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
+        TaskBuffer->Unmap(0, nullptr);
+
+        LightBuffer = CreateBuffer(_Device, sizeof(FTriangleLightGPU) * NumTriangles,
+                                   D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON,
+                                   D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        VramTracker::Register(LightBuffer.Get(), EVramCategory::GI);
+        LightState = D3D12_RESOURCE_STATE_COMMON;
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
+        Srv.Format                     = DXGI_FORMAT_UNKNOWN;
+        Srv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+        Srv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        Srv.Buffer.NumElements         = NumTasks;
+        Srv.Buffer.StructureByteStride = sizeof(FMeshLightTaskGPU);
+        TaskSRV = _SRVHeap.Allocate(1);
+        _SRVHeap.CreateSRV(_Device, TaskBuffer.Get(), Srv, TaskSRV);
+
+        Srv.Buffer.NumElements         = NumTriangles;
+        Srv.Buffer.StructureByteStride = sizeof(FTriangleLightGPU);
+        LightsSRV = _SRVHeap.Allocate(1);
+        _SRVHeap.CreateSRV(_Device, LightBuffer.Get(), Srv, LightsSRV);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
+        Uav.Format                     = DXGI_FORMAT_UNKNOWN;
+        Uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+        Uav.Buffer.NumElements         = NumTriangles;
+        Uav.Buffer.StructureByteStride = sizeof(FTriangleLightGPU);
+        LightsUAV = _SRVHeap.Allocate(1);
+        _SRVHeap.CreateUAV(_Device, LightBuffer.Get(), Uav, LightsUAV);
+
+        ExtractTable = _SRVHeap.Allocate(2);
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(ExtractTable);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src[2] = {
+            _SRVHeap.CpuHandleStaging(TaskSRV),
+            _SRVHeap.CpuHandleStaging(_InstanceSlot),
+        };
+        UINT DstCount = 2; UINT Ones[2] = { 1, 1 };
+        _Device->CopyDescriptors(1, &Dst, &DstCount, 2, Src, Ones,
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        MeshLightConstants CPU{};
+        CPU.NumTasks     = NumTasks;
+        CPU.NumTriangles = NumTriangles;
+        std::memcpy(MappedCB, &CPU, sizeof(CPU));
+
+        Ready = true;
+        Dirty = true;
+    }
+
+    void FMeshLights::Record(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+        if (!Ready || !Dirty) return;
+
+        if (LightState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = LightBuffer.Get();
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = LightState;
+            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            _CL->ResourceBarrier(1, &B);
+            LightState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+
+        ExtractPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr());
+        _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ExtractTable));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(LightsUAV));
+        _CL->Dispatch((NumTriangles + 63u) / 64u, 1, 1);
+
+        D3D12_RESOURCE_BARRIER B{};
+        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        B.Transition.pResource   = LightBuffer.Get();
+        B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        B.Transition.StateBefore = LightState;
+        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        _CL->ResourceBarrier(1, &B);
+        LightState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+        // Estatico: sem isto a extracao rodaria todo frame reconstruindo o mesmo dado.
+        Dirty = false;
     }
 }

@@ -224,6 +224,7 @@ namespace Smile {
             FShaderTimer::InitializeApi(Device.Native(), SRVHeap);
             DDGI.Initialize(Device.Native());
             ReGIR.Initialize(Device.Native());
+            MeshLights.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
             Nrd.Initialize(Device.Native());
             NrdDirect.Initialize(Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
@@ -270,11 +271,6 @@ namespace Smile {
         SetDebugProbeIndex(-1);
         PreviousDirectLightPositions.clear();
 
-        // Antes dos early-outs de RT: o levantamento e so leitura de CPU e o numero interessa
-        // mesmo em cena sem ray tracing disponivel.
-        MeshLights.Survey(Scene);
-        MeshLights.LogSummary();
-
         if (!Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
         if (!Atmosphere.IsInitialized()) return; 
         DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
@@ -282,6 +278,10 @@ namespace Smile {
         TemporalMotion.SetupForScene(Device.Native(), SRVHeap, Scene,
                                      RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV());
         ReGIR.SetupForScene(Device.Native(), SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
+        // Depois do DDGI: a extracao le VB/IB bindless e o material emissivo pelo InstanceGeo,
+        // que e o snapshot que o DDGI monta. Faz o levantamento e monta as tasks; a extracao em
+        // si so dispara no Record, e so quando sujo.
+        MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene, DDGI.InstanceSRV());
 
         SetupReflectionsForScene();
 
@@ -1018,6 +1018,7 @@ namespace Smile {
             DDGIDebugPass.Recreate(Device.Native(), RT, DS);
             ReSTIRDI.RecreatePSO(Device.Native());
             ReGIR.RecreatePSO(Device.Native());
+            MeshLights.RecreatePSO(Device.Native());
         }
     }
 
@@ -2255,6 +2256,13 @@ namespace Smile {
         // frame. O toggle sozinho nao basta: DDGI, reflexoes e ReSTIR GI podem estar todos off.
         const bool HasReGIRConsumer = (UseGI && DDGI.IsReady()) ||
                                       ReflectionsActive || ReSTIRGIActive;
+        // Extracao dos triangulos emissivos. Sai de graca no caso comum: a geometria emissiva e
+        // estatica, entao o Record so faz trabalho no primeiro frame apos carregar a cena.
+        if (MeshLights.IsReady()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "MeshLights (extract)");
+            MeshLights.Record(CommandList, SRVHeap);
+        }
+
         const bool ReGIROn = ReGIRActive() && HasReGIRConsumer && GILightCount > 0;
         if (ReGIROn) {
             FGpuScope Scope(GpuProfiler, CommandList, "ReGIR (build)");

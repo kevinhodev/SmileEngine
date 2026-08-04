@@ -1,9 +1,45 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
+#include "Smile/Math/Math.h"
+#include "Smile/Graphics/VolumetricPipeline.h"
+#include <d3d12.h>
+#include <wrl/client.h>
+#include <vector>
 
 namespace Smile {
     class FScene;
+    class FTextureSRVHeap;
+
+    // Espelham MeshLightCommon.hlsli. Os static_assert abaixo sao a unica coisa que impede um
+    // lado mudar sem o outro e corromper o buffer em silencio.
+    struct FMeshLightTaskGPU {
+        u32  InstanceIndex;
+        u32  TriangleCount;
+        u32  LightOffset;
+        u32  Pad;
+        Vec4 Row0;   // 3 linhas da Mat44 TRANSPOSTA, mesma convencao do TLAS
+        Vec4 Row1;
+        Vec4 Row2;
+    };
+    static_assert(sizeof(FMeshLightTaskGPU) == 64);
+
+    struct FTriangleLightGPU {
+        Vec3 Base;
+        u32  Edges0;
+        u32  Edges1;
+        u32  Edges2;
+        u32  Radiance;
+        f32  Flux;
+    };
+    static_assert(sizeof(FTriangleLightGPU) == 32);
+
+    struct alignas(256) MeshLightConstants {
+        u32 NumTasks     = 0;
+        u32 NumTriangles = 0;
+        u32 Pad0         = 0;
+        u32 Pad1         = 0;
+    };
 
     // Levantamento dos triangulos emissivos da cena — primeira fase do projeto de mesh lights.
     //
@@ -41,7 +77,50 @@ namespace Smile {
         u32  EmissiveTriangleCount() const { return SceneStats.EmissiveTriangles; }
         bool HasEmissiveGeometry()   const { return SceneStats.EmissiveTriangles > 0; }
 
+        void Initialize(ID3D12Device* Device);
+        void RecreatePSO(ID3D12Device* Device);
+
+        // Faz o Survey, monta as tasks e cria os buffers. Precisa do SRV do InstanceGeo do DDGI,
+        // que e onde moram VB/IB bindless e os dados de material emissivo.
+        void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene,
+                           u32 InstanceSlot);
+
+        // Dispara a extracao SO quando sujo. A geometria emissiva do projeto e estatica, entao o
+        // caso comum e nao fazer nada — ao contrario do RTXDI, que reconstroi tudo todo frame.
+        void Record(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+
+        // Marcar sujo quando transform, material emissivo ou o conjunto de renderables mudar.
+        void MarkDirty() { Dirty = true; }
+
+        bool IsReady()          const { return Ready; }
+        u32  LightSRVSlot()     const { return LightsSRV; }
+        u32  LightCount()       const { return NumTriangles; }
+
+        void Release(FTextureSRVHeap& SRVHeap);
+
     private:
+        D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
+
         FStats SceneStats{};
+
+        FVolumetricPipeline ExtractPSO;   // 2 SRV, 1 UAV, bindless
+        bool Initialized = false;
+        bool Ready       = false;
+        bool Dirty       = false;
+
+        u32 NumTasks     = 0;
+        u32 NumTriangles = 0;
+
+        Microsoft::WRL::ComPtr<ID3D12Resource> TaskBuffer;   // upload; escrito uma vez por cena
+        Microsoft::WRL::ComPtr<ID3D12Resource> LightBuffer;  // default; saida da extracao
+        Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
+        u8* MappedCB = nullptr;
+
+        D3D12_RESOURCE_STATES LightState = D3D12_RESOURCE_STATE_COMMON;
+
+        u32 TaskSRV   = 0xFFFFFFFFu;
+        u32 LightsSRV = 0xFFFFFFFFu;
+        u32 LightsUAV = 0xFFFFFFFFu;
+        u32 ExtractTable = 0xFFFFFFFFu; // t0 = tasks, t1 = instances
     };
 }

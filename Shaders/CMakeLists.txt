@@ -3,6 +3,16 @@
 
 set(SHADER_OUTPUTS "")
 
+# Instrumentacao de timer nos passes de RT (ver Debug/ShaderTimer.hlsli): as permutacoes "*Timed"
+# precisam dos headers HLSL da NVAPI no -I. Sem o SDK, elas simplesmente nao sao compiladas e o
+# FShaderTimer nunca fica disponivel — o resto dos shaders nao muda.
+set(SMILE_NVAPI_ROOT "D:/Engines/nvapi" CACHE PATH "Raiz do NVAPI SDK (github.com/NVIDIA/nvapi)")
+set(SMILE_SHADER_TIMER_AVAILABLE OFF)
+if(EXISTS "${SMILE_NVAPI_ROOT}/nvHLSLExtns.h")
+    set(SMILE_SHADER_TIMER_AVAILABLE ON)
+    set(SMILE_TIMER_FLAGS -D SMILE_SHADER_TIMER=1 -I "${SMILE_NVAPI_ROOT}")
+endif()
+
 smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
@@ -38,6 +48,10 @@ smile_compile_shader(GI/DDGIRelocate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 # ReSTIR GI — final-gather difuso por pixel (reservoir espaciotemporal) sobre o DDGI (cache)
 smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReSTIRGISpatial.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+if(SMILE_SHADER_TIMER_AVAILABLE)
+    smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+        OUTPUT_NAME ReSTIRGITraceTimed ${SMILE_TIMER_FLAGS})
+endif()
 # ReGIR — pools de luz em grade de mundo para os hits secundarios.
 smile_compile_shader(GI/ReGIRBuild.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReGIRAverage.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
@@ -59,9 +73,15 @@ smile_compile_shader(Lighting/ReSTIRDISpatial.cs.hlsl         cs_6_6 main SHADER
 # Instancia RELAX dedicada ao direto: pack demodulado e composite remodulado.
 smile_compile_shader(Lighting/ReSTIRDINrdPack.cs.hlsl          cs_6_6 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
 smile_compile_shader(Lighting/ReSTIRDINrdComposite.cs.hlsl     cs_6_6 main SHADER_OUTPUTS)
+# Mesh lights: extrai os triangulos emissivos da cena para o pool de luzes.
+smile_compile_shader(Lighting/MeshLightExtract.cs.hlsl         cs_6_6 main SHADER_OUTPUTS)
 
 # Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
 smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_6 main SHADER_OUTPUTS)
+if(SMILE_SHADER_TIMER_AVAILABLE)
+    smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+        OUTPUT_NAME ReflectionTraceTimed ${SMILE_TIMER_FLAGS})
+endif()
 smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/WaterReflectionTrace.cs.hlsl  cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/WaterReflectionTemporal.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
@@ -205,6 +225,7 @@ add_custom_target(Shaders
     DEPENDS ${SHADER_OUTPUTS}
     SOURCES
         Common/DepthConfig.hlsli
+        Debug/ShaderTimer.hlsli
         GBuffer.hlsli
         GBuffer.ps.hlsl
         DebugView.ps.hlsl
@@ -240,6 +261,8 @@ add_custom_target(Shaders
         Lighting/ReSTIRDISpatial.cs.hlsl
         Lighting/ReSTIRDINrdPack.cs.hlsl
         Lighting/ReSTIRDINrdComposite.cs.hlsl
+        Lighting/MeshLightCommon.hlsli
+        Lighting/MeshLightExtract.cs.hlsl
         Reflections/GGXSample.hlsli
         Reflections/ReflectionMotion.hlsli
         Reflections/ReflectionTrace.cs.hlsl
