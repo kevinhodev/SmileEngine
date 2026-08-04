@@ -71,15 +71,17 @@ float4 FogApplyMain(float2 pixelXY) {
         cosA = max(dot(dirV, CamForwardVF.xyz), 0.05f);
         float viewZ = dist * cosA;
         float slice = log2(viewZ * VolFogParams.x + VolFogParams.y) * VolFogParams.z;
-        float uvz   = saturate(slice / VolFogParams.w);
+        // Integrated texel z is the result at the END boundary z+1. Convert
+        // that boundary coordinate to the normalized center of texel z.
+        float uvz   = saturate((slice - 0.5f) / VolFogParams.w);
         vol = VolumetricFogTex.SampleLevel(LinearClampSampler, float3(uv, uvz), 0.0f);
     }
 
     // Ceu: sem height fog/aerial daqui (o sky shader ja tem a atmosfera), mas o que
     // esta FISICAMENTE entre a camera e o horizonte existe — volume froxel E sun shafts.
-    // Os shafts entram com a MESMA ordem do ramo de geometria la embaixo (shafts atras
-    // do volume => x vol.a): com convencao diferente nos dois lados, a silhueta da
-    // roofline/copa quebraria o feixe na borda. Antes o early-return era antes do
+    // O RT de shafts ja contem a integral completa camera->fim da marcha, incluindo
+    // a propria transmitancia. Portanto ele entra direto; multiplicar novamente por
+    // vol.a aplicaria duas vezes a extincao do mesmo meio. Antes o early-return era antes do
     // += SampleVolumetricShafts, o que (a) cortava o feixe exatamente na silhueta —
     // e feixe contra o ceu e a foto classica de god ray —, (b) pagava o raymarch do
     // ceu e jogava fora (SunShaftsVolumetric marcha o alcance todo no ceu de proposito)
@@ -91,7 +93,7 @@ float4 FogApplyMain(float2 pixelXY) {
     if (SmileIsSky(depthNdc)) {
         float3 skyInscatter = vol.rgb;
         if (AerialParams.w > 0.5f)
-            skyInscatter += SampleVolumetricShafts(uv, dist, SmileIsSky(depthNdc)) * vol.a;
+            skyInscatter += SampleVolumetricShafts(uv, dist, true);
         return float4(skyInscatter, vol.a);
     }
 
@@ -100,10 +102,12 @@ float4 FogApplyMain(float2 pixelXY) {
     float excludeDist = volOn ? (VolFogParams2.x / cosA) : 0.0f;
     if (AerialParams.z > 0.5f) hf = GetExponentialHeightFog(c2r, excludeDist);
 
-    // Sun shafts volumétricos: somam no inscatter do height fog. Mesmo tratamento do
-    // dirInscatter analítico: não é atenuado pelo aerial (consistência com o legado).
+    // Sun shafts volumetricos: integral solar de alta frequencia no proprio meio.
+    // Mantemos separado porque ja inclui a transmitancia camera->amostra; ele substitui
+    // a parcela solar do froxel no mesmo intervalo, em vez de ficar atras do volume.
+    float3 shaftInscatter = float3(0.0f, 0.0f, 0.0f);
     if (AerialParams.w > 0.5f)
-        hf.rgb += SampleVolumetricShafts(uv, dist, SmileIsSky(depthNdc));
+        shaftInscatter = SampleVolumetricShafts(uv, dist, false);
 
     float4 ap = float4(0.0f, 0.0f, 0.0f, 1.0f);
     if (AerialParams.y > 0.5f) {
@@ -112,9 +116,9 @@ float4 FogApplyMain(float2 pixelXY) {
     }
 
     // Composicao de longe pra perto: aerial atras do height fog, ambos atras do
-    // volume froxel (meio mais proximo da camera atenua o que vem de tras).
+    // volume froxel. Shafts ja sao a integral do meio proximo e entram uma unica vez.
     float  T         = ap.a * hf.a * vol.a;
-    float3 inscatter = (ap.rgb * hf.a + hf.rgb) * vol.a + vol.rgb;
+    float3 inscatter = (ap.rgb * hf.a + hf.rgb) * vol.a + vol.rgb + shaftInscatter;
     return float4(inscatter, T);
 }
 

@@ -24,12 +24,15 @@ cbuffer FogCB : register(b0) {
     float4 SkyFogParams;   // x = view height (km), y = raio do planeta (km),
                            // z = HeightFogSkyContribution (0 = cor chapada, comportamento antigo)
     float4 SkyFogSunDir;   // xyz = direcao P/ o SOL (o LUT e dobrado no azimute dele)
+    float4 VolFogMatchMediumPhase; // x = extinction scale, w = phase G direcional
+    float4 VolFogMatchSun;         // rgb = radiancia solar*albedo*escala, w = match on
+    float4 VolFogMatchAmbient;     // rgb = ambiente*albedo na borda, w = fade p/ sky LUT
 };
 
 Texture3D<float4> AerialVolume     : register(t1);
 // Sun shafts: inscatter direcional volumétrico meia-res (raymarch CSM + temporal).
-// Quando AerialParams.w > 0.5, substitui o termo analítico DirectionalInscattering
-// (o CPU zera InscatteringLightDirection.w pra desligar o analítico junto).
+// Dentro do range do froxel substitui apenas a parcela solar de alta frequencia;
+// o termo analitico compativel continua depois da fronteira do volume.
 Texture2D<float4> VolumetricShafts : register(t2);
 // Froxel volumetric fog integrado (VolumetricFogIntegrate.cs): rgb = inscatter
 // acumulado ate o slice, a = transmitancia. Cobre 0..VolFogParams2.x; alem disso
@@ -45,6 +48,11 @@ float CalculateLineIntegralShared(float falloff, float rayDirZ, float rayOriginT
     float LineIntegral       = (1.0f - exp2(-Falloff)) / Falloff;
     float LineIntegralTaylor = 0.6931472f - 0.5f * (0.6931472f * 0.6931472f) * Falloff;
     return rayOriginTerms * (abs(Falloff) > 0.01f ? LineIntegral : LineIntegralTaylor);
+}
+
+float FogPhaseHG(float g, float cosTheta) {
+    return (1.0f - g * g) /
+           (12.566371f * pow(abs(1.0f + g * g - 2.0f * g * cosTheta), 1.5f));
 }
 
 // excludeDist: alem do StartDistance do usuario, exclui o trecho coberto pelo froxel
@@ -80,14 +88,31 @@ float4 GetExponentialHeightFog(float3 worldPosRelCam, float excludeDist) {
     float shared2 = CalculateLineIntegralShared(ExponentialFogParameters2.y, rayDirZ, rayOriginTerms2);
     float sharedIntegral = shared1 + shared2;
 
+    const bool matchVolumetricFog = VolFogMatchSun.w > 0.5f;
+    if (matchVolumetricFog)
+        sharedIntegral *= max(VolFogMatchMediumPhase.x, 0.0f);
+
     float lineIntegral = sharedIntegral * rayLength;
     float expFogFactor = max(saturate(exp2(-lineIntegral)), MinFogOpacity);
     
     float3 dirInscatter = float3(0.0f, 0.0f, 0.0f);
-    if (InscatteringLightDirection.w >= 0.0f) {
-        float  d = saturate(dot(dir, InscatteringLightDirection.xyz));
-        float3 dirColor = DirectionalInscatteringColor.rgb * pow(d, DirectionalInscatteringColor.w);
-        float  dirStart = InscatteringLightDirection.w;
+    if (matchVolumetricFog || InscatteringLightDirection.w >= 0.0f) {
+        float3 dirColor;
+        float  dirStart;
+        if (matchVolumetricFog) {
+            // Match the froxel/shaft medium at the handoff: same HG lobe,
+            // albedo and directional radiance. This is the equivalent of
+            // Unreal's SupportExpFogMatchesVolumetricFog path.
+            float cosTheta = dot(dir, InscatteringLightDirection.xyz);
+            dirColor = VolFogMatchSun.rgb *
+                       FogPhaseHG(VolFogMatchMediumPhase.w, cosTheta);
+            dirStart = 0.0f;
+        } else {
+            float d = saturate(dot(dir, InscatteringLightDirection.xyz));
+            dirColor = DirectionalInscatteringColor.rgb *
+                       pow(d, DirectionalInscatteringColor.w);
+            dirStart = InscatteringLightDirection.w;
+        }
         float  dirIntegral = sharedIntegral * max(rayLength - dirStart, 0.0f);
         float  dirFogFactor = saturate(exp2(-dirIntegral));
         dirInscatter = dirColor * (1.0f - dirFogFactor);
@@ -122,6 +147,14 @@ float4 GetExponentialHeightFog(float3 worldPosRelCam, float excludeDist) {
         fogTint = lerp(FogInscatteringColor.rgb, fogSky, SkyFogParams.z);
     }
 
+    if (matchVolumetricFog) {
+        // At the volume boundary the analytical medium starts with exactly the
+        // froxel ambient radiance, then gently returns to the directional sky LUT.
+        float ambientFade = smoothstep(0.0f, max(VolFogMatchAmbient.w, 1.0f),
+                                       max(rayLength, 0.0f));
+        fogTint = lerp(VolFogMatchAmbient.rgb, fogTint, ambientFade);
+    }
+
     float3 fogColor = fogTint * (1.0f - expFogFactor) + dirInscatter;
     return float4(fogColor, expFogFactor);
 }
@@ -145,4 +178,4 @@ float4 SampleAerialPerspective(float2 screenUV, float tDepthKm, float apDepthKm)
     return ap; 
 }
 
-#endif 
+#endif

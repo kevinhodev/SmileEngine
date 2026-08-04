@@ -30,6 +30,10 @@ namespace Smile {
             Vec3  CameraForward{ 0.0f, 0.0f, 1.0f };
             Vec3  DirToSun{ 0.0f, 1.0f, 0.0f };
             Vec3  SunColorTimesIntensity{};  // radiancia real da key light (cor x int)
+            // Quando os shafts meia-res substituem o termo solar do froxel, mantemos
+            // extincao/ambiente/luzes locais no volume e evitamos contar o sol duas vezes.
+            bool  InjectDirectionalLight = true;
+            f32   DirectionalLightStartDistance = 0.0f;
             Vec4  CollapsedFog{};            // FFogPass::CollapsedFogParams (mesmo meio do frame)
             Vec3  SkyAmbient{};              // fallback do ambiente quando DDGI off
             // Largura, em celulas do grid, do fade do DDGI para o SkyAmbient nas bordas do
@@ -93,6 +97,7 @@ namespace Smile {
         f32  GetExtinctionScale() const { return ExtinctionScale; }
         void SetAmbientIntensity(f32 V) { AmbientIntensity = V; }
         f32  GetAmbientIntensity() const{ return AmbientIntensity; }
+        const Vec3& GetAlbedo() const   { return Albedo; }
         void SetLightsIntensity(f32 V)  { LightsIntensity = V; }
         f32  GetLightsIntensity() const { return LightsIntensity; }
         void SetConservativeDepth(bool V) {

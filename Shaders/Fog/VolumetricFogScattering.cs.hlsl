@@ -38,18 +38,10 @@ SamplerState      LinearClamp         : register(s0);
 
 RWTexture3D<float4> LightScattering : register(u0);
 
-// Visibilidade do sol p/ ponto no ar: mesma do SunShaftsVolumetric (sem normal-offset,
-// bias fixo — acne nao existe em volume).
+// Visibilidade do sol p/ ponto no ar: sampler volumetrico comum com crossfade entre
+// cascatas (sem normal-offset; acne de superficie nao existe no meio participante).
 float VolFog_SunVis(float3 worldPos) {
-    if (CSMParams.w < 0.5f) return 1.0f;
-    int numC = (int)CSMParams.x;
-    [loop] for (int i = 0; i < numC; ++i) {
-        float3 uvz = mul(float4(worldPos, 1.0f), WorldToShadow[i]).xyz;
-        if (!CSM_InBounds(uvz)) continue;
-        float refZ = uvz.z - CSMParams.y * CSMBiasScale[i] * 2.0f;
-        return SunShadowMap.SampleCmpLevelZero(ShadowCmp, float3(uvz.xy, (float)i), refZ);
-    }
-    return 1.0f; // fora do range do CSM = iluminado (igual as superficies)
+    return SampleCSMVolumetric(worldPos);
 }
 
 // refZ NDC (LH 0..1) a partir da distancia LINEAR no eixo da face/cone — copia do
@@ -91,7 +83,17 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
     // sunDir)), CloudLighting, UE (ParticipatingMediaCommon+VolumetricFog.usf) e Cry
     // (VolumetricFogcfi dotLE + Schlick) todas maximizam olhando PARA a luz.
     float ph  = VolFog_PhaseHG(SunDirPhase.w, dot(SunDirPhase.xyz, dir));
-    float3 lighting = SunColorInt.rgb * (vis * ph);
+    // O passe meia-res de shafts pode substituir o termo direcional de alta
+    // frequencia no trecho proximo. Depois do alcance dele, o froxel assume o sol;
+    // extincao, ambiente, GI e luzes locais existem no volume inteiro.
+    float sunRangeWeight = 1.0f;
+    if (SunColorInt.w > 0.0f) {
+        float fadeWidth = min(max(SunColorInt.w * 0.15f, 4.0f), 24.0f);
+        float fadeStart = max(SunColorInt.w - fadeWidth, 0.0f);
+        sunRangeWeight = smoothstep(fadeStart, SunColorInt.w,
+                                    length(wp - CameraWorldPos.xyz));
+    }
+    float3 lighting = SunColorInt.rgb * (vis * ph * sunRangeWeight);
 
     // Luzes puntuais: atenuacao identica ao deferred + fase HG + sombra por tap unico
     // (PCF nao e legivel em volume; o temporal integra o resto).

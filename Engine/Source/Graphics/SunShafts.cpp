@@ -80,11 +80,18 @@ namespace Smile {
         Samplers[0].ShaderRegister   = 1;
         Samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        // identico ao s2 do deferred lighting (PipelineState.cpp): LESS_EQUAL + borda branca
+        // identico ao s2 do deferred lighting (PipelineState.cpp): LESS_EQUAL + borda branca.
+        // O endereçamento precisa vir JUNTO: Samplers[0] é CLAMP, e sem as três linhas abaixo
+        // a cor de borda era código morto — um tap que saísse do slice repetia o texel da
+        // borda em vez de devolver "iluminado". O VolumetricFog.cpp já fazia isso certo (e o
+        // comentário de lá aponta para cá); este era o único consumidor do mapa fora de padrão.
         Samplers[1] = Samplers[0];
         Samplers[1].Filter         = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
         Samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         Samplers[1].BorderColor    = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+        Samplers[1].AddressU       = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        Samplers[1].AddressV       = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        Samplers[1].AddressW       = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
         Samplers[1].ShaderRegister = 2;
 
         // linear clamp p/ o shadow map de nuvens (transmitância suave, igual ao deferred)
@@ -315,7 +322,8 @@ namespace Smile {
                                       const Mat44& _ViewProjUnjittered,
                                       const Vec4& _CloudShadowParams,
                                       const Vec4& _CloudShadowParams2,
-                                      f32 _MarchStartDist) {
+                                      const Vec3& _MediumAlbedo, f32 _ExtinctionScale,
+                                      f32 _MarchStartDist, f32 _MarchMaxDist) {
         FrameSlot = _FrameSlot;
         if (!VolMappedBase || !TemporalMappedBase) return;
 
@@ -323,10 +331,12 @@ namespace Smile {
 
         VolConstants v{};
         v.SunDirPhase    = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, VolPhaseG };
-        v.SunColorInt    = { _SunColorTimesIntensity.X, _SunColorTimesIntensity.Y,
-                             _SunColorTimesIntensity.Z, VolIntensity };
+        v.SunColorInt    = { _SunColorTimesIntensity.X * _MediumAlbedo.X,
+                             _SunColorTimesIntensity.Y * _MediumAlbedo.Y,
+                             _SunColorTimesIntensity.Z * _MediumAlbedo.Z, VolIntensity };
         v.FogDensityP    = _CollapsedFogParams;
-        v.MarchParams    = { VolSteps, VolMaxDist, _NoiseFrame, VolDust };
+        v.MarchParams    = { VolSteps, std::max(_MarchMaxDist, 1.0f), _NoiseFrame, VolDust };
+        v.MediumParams   = { std::max(_ExtinctionScale, 0.0f), 0.0f, 0.0f, 0.0f };
         v.ScreenParams   = { W, H, 1.0f / W, 1.0f / H };
         v.CloudShadowParams  = _CloudShadowParams;
         v.CloudShadowParams2 = _CloudShadowParams2;

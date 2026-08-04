@@ -269,7 +269,10 @@ namespace Smile {
         const Vec3 SunN  = _P.DirToSun.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
         c.SunDirPhase    = { SunN.X, SunN.Y, SunN.Z, PhaseG };
         c.SunColorInt    = { _P.SunColorTimesIntensity.X, _P.SunColorTimesIntensity.Y,
-                             _P.SunColorTimesIntensity.Z, 0.0f };
+                             _P.SunColorTimesIntensity.Z,
+                             _P.InjectDirectionalLight
+                                 ? std::max(_P.DirectionalLightStartDistance, 0.0f)
+                                 : MaxDistance + 1.0f };
         c.FogDensityP    = _P.CollapsedFog;
         c.AlbedoAmb      = { Albedo.X, Albedo.Y, Albedo.Z, AmbientIntensity };
         c.DDGIGridMin    = _P.DDGIGridMin;

@@ -18,7 +18,7 @@ cbuffer VolFogCB : register(b0) {
     float4 CameraWorldPos; // xyz = camera, w = extinction scale
     float4 CamForward;     // xyz = frente da camera, w = MaxDistance (m)
     float4 SunDirPhase;    // xyz = dir PARA a key light, w = g da fase HG
-    float4 SunColorInt;    // rgb = cor x intensidade da key light, w unused
+    float4 SunColorInt;    // rgb = cor x intensidade da key light, w = inicio do sol (m)
     float4 FogDensityP;    // x = dens1 colapsada na camera (exp2), y = falloff1,
                            // z = dens2 colapsada, w = falloff2
     float4 AlbedoAmb;      // rgb = albedo do meio, w = intensidade do ambiente

@@ -190,7 +190,8 @@ namespace Smile {
                                   bool _VolFogOn, f32 _VolFogMaxDist,
                                   const Vec4& _VolFogGridZ, const Vec3& _CamForward,
                                   const Vec3& _DirToSunTrue, f32 _SkyViewHeightKm,
-                                  f32 _SkyBottomRKm, f32 _SkyContribution) {
+                                  f32 _SkyBottomRKm, f32 _SkyContribution,
+                                  const FVolumetricMatchParams& _VolumetricMatch) {
         FrameSlot = _FrameSlot;
         if (!MappedBase) return;
 
@@ -206,8 +207,10 @@ namespace Smile {
         c.FogInscatteringColor      = { FogColor.X, FogColor.Y, FogColor.Z, 1.0f - MaxOpacity };
         c.DirectionalInscatteringColor = { DirColor.X, DirColor.Y, DirColor.Z, DirExponent };
 
-        // shafts volumetricos substituem o analitico (manter os dois dobraria a energia)
-        const bool AnalyticDir = DirEnabled && !_VolumetricShafts;
+        // Sem froxel, shafts continuam substituindo o lobo analitico legado. Com froxel,
+        // eles substituem somente o trecho 0..MaxDistance e o analitico MATCHED continua
+        // dali para fora, sem buraco nem energia dupla.
+        const bool AnalyticDir = DirEnabled && (!_VolumetricShafts || _VolFogOn);
         const Vec3 SunN = _DirToSun.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
         c.InscatteringLightDirection = { SunN.X, SunN.Y, SunN.Z, AnalyticDir ? DirStartDistance : -1.0f };
 
@@ -231,6 +234,32 @@ namespace Smile {
         c.SkyFogParams = { _SkyViewHeightKm, _SkyBottomRKm,
                            SkyOk ? std::clamp(_SkyContribution, 0.0f, 1.0f) : 0.0f, 0.0f };
         c.SkyFogSunDir = { SunTrue.X, SunTrue.Y, SunTrue.Z, 0.0f };
+
+        const bool MatchVolFog = _VolFogOn && _VolumetricMatch.Enabled;
+        if (MatchVolFog) {
+            const Vec3 A{
+                std::max(_VolumetricMatch.Albedo.X, 0.0f),
+                std::max(_VolumetricMatch.Albedo.Y, 0.0f),
+                std::max(_VolumetricMatch.Albedo.Z, 0.0f)
+            };
+            const f32 PhaseG = std::clamp(_VolumetricMatch.DirectionalPhaseG, -0.95f, 0.95f);
+            const f32 SunScale = std::max(_VolumetricMatch.DirectionalScatteringScale, 0.0f);
+            c.VolFogMatchMediumPhase = {
+                std::max(_VolumetricMatch.ExtinctionScale, 0.0f), 0.0f, 0.0f, PhaseG
+            };
+            c.VolFogMatchSun = {
+                _VolumetricMatch.SunRadiance.X * A.X * SunScale,
+                _VolumetricMatch.SunRadiance.Y * A.Y * SunScale,
+                _VolumetricMatch.SunRadiance.Z * A.Z * SunScale,
+                1.0f
+            };
+            c.VolFogMatchAmbient = {
+                _VolumetricMatch.AmbientRadiance.X * A.X,
+                _VolumetricMatch.AmbientRadiance.Y * A.Y,
+                _VolumetricMatch.AmbientRadiance.Z * A.Z,
+                std::max(_VolumetricMatch.AmbientTransitionDistance, 1.0f)
+            };
+        }
 
         *Mapped() = c;
     }

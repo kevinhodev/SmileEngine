@@ -30,15 +30,31 @@ namespace Smile {
         Vec4  SkyFogParams;                 // x=view height (km), y=raio do planeta (km),
                                             // z=HeightFogSkyContribution (0 = cor chapada), w=-
         Vec4  SkyFogSunDir;                 // xyz=direcao P/ o SOL (nao a key light), w=-
+        // Equivalente ao r.SupportExpFogMatchesVolumetricFog da UE: o trecho analitico
+        // alem do volume usa a mesma fase, albedo e radiancia do meio froxel.
+        Vec4  VolFogMatchMediumPhase;        // x=extinction scale do meio, w=phase G direcional
+        Vec4  VolFogMatchSun;                // rgb=radiancia solar*albedo*escala, w=match on
+        Vec4  VolFogMatchAmbient;            // rgb=ambiente*albedo na borda, w=fade p/ sky LUT
     };
 
     class FFogPass {
     public:
+        struct FVolumetricMatchParams {
+            bool Enabled = false;
+            Vec3 Albedo{ 1.0f, 1.0f, 1.0f };
+            Vec3 AmbientRadiance{};
+            Vec3 SunRadiance{};
+            f32  ExtinctionScale = 1.0f;
+            f32  DirectionalPhaseG = 0.3f;
+            f32  DirectionalScatteringScale = 1.0f;
+            f32  AmbientTransitionDistance = 50.0f;
+        };
+
         void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat);
 
-        // VolumetricShafts: sun shafts volumétricos ligados — o shader soma o RT
-        // meia-res no inscatter (upsample bilateral) e o termo direcional analítico
-        // é desligado (senão dobra a energia).
+        // VolumetricShafts: sun shafts volumetricos ligados — o shader soma o RT
+        // meia-res no inscatter (upsample bilateral). Com froxel, ele substitui o sol
+        // somente no range proximo; o analitico matched continua depois da fronteira.
         // VolFog*: froxel volumetric fog (FVolumetricFogPass) — o shader amostra o volume
         // integrado em t3 e exclui o height fog analitico no alcance coberto.
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
@@ -55,7 +71,8 @@ namespace Smile {
                             // vira lua de noite) daria uv errado. SkyContribution 0 desliga.
                             const Vec3& DirToSunTrue = Vec3{ 0.0f, 1.0f, 0.0f },
                             f32 SkyViewHeightKm = 0.0f, f32 SkyBottomRKm = 0.0f,
-                            f32 SkyContribution = 0.0f);
+                            f32 SkyContribution = 0.0f,
+                            const FVolumetricMatchParams& VolumetricMatch = {});
 
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      u32 DepthSRVSlot, u32 AerialVolumeSRVSlot, u32 VolShaftsSRVSlot,
