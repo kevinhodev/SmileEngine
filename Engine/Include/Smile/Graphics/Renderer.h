@@ -112,6 +112,18 @@ namespace Smile {
         //     que aqui vem da AABB da cena inteira (8 m medidos no Bistro = 1,20 m de bias).
         // zw = reservados (fallback fora do volume)
         Vec4  DDGIBiasParams;
+
+        // --- Transmitancia do sol/lua POR PIXEL (append no fim: offsets acima intactos) -----
+        // x = raio do planeta (km), y = raio do topo da atmosfera (km),
+        // z = km por unidade de mundo, w = liga o caminho por pixel (0 = usa SunColor/MoonColor
+        //     ja transmitidos pela CPU, comportamento historico bit a bit).
+        Vec4  AtmoLightParams;
+        // Cor do sol/lua SEM transmitancia e SEM HorizonFade. So o deferred e o ForwardBlend
+        // consomem estas variantes; fog volumetrico, nuvens, agua, sun shafts e o readout do
+        // editor seguem lendo SunColor/MoonColor (transmitidos na CPU) sem edicao nenhuma —
+        // e isso que torna o .w um A/B de verdade em vez de um rewrite.
+        Vec4  SunColorRaw;        // rgb = cor base * dim de chuva, w = -
+        Vec4  MoonColorRaw;       // rgb = tint da lua * dim de chuva, w = -
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
@@ -421,6 +433,8 @@ namespace Smile {
 
         void SetUseSunShafts(bool Use)         { UseSunShafts = Use; }
         bool GetUseSunShafts() const           { return UseSunShafts; }
+        void SetPerPixelAtmoTransmittance(bool Use) { UsePerPixelAtmoTransmittance = Use; }
+        bool GetPerPixelAtmoTransmittance() const   { return UsePerPixelAtmoTransmittance; }
         FSunShafts& GetSunShafts()             { return SunShafts; }
         const FSunShafts& GetSunShafts() const { return SunShafts; }
 
@@ -988,6 +1002,9 @@ namespace Smile {
         FSkybox         Skybox;
         FAtmosphere     Atmosphere;
         bool            UseAtmosphereSky = true;
+        // Sol/lua atenuados por pixel na altitude da SUPERFICIE, em vez de uma cor unica por
+        // frame calculada na altitude da camera. Botao do A/B (AtmoLightParams.w).
+        bool            UsePerPixelAtmoTransmittance = true;
 
         FFogPass        Fog;
         FVolumetricFogPass VolumetricFog;

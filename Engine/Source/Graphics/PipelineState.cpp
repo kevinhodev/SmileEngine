@@ -12,7 +12,7 @@
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[13]{};
+        D3D12_ROOT_PARAMETER RootParams[14]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -149,6 +149,23 @@ namespace Smile {
         RootParams[12].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[12].DescriptorTable.pDescriptorRanges   = &DirectLocalRange;
         RootParams[12].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // LUT de transmitancia da atmosfera (t21) — sol/lua atenuados POR PIXEL, na altitude da
+        // superficie. Antes a transmitancia era re-integrada na CPU (40 passos por frame) na
+        // altitude da CAMERA e valia para o frame inteiro: nenhuma variacao por altitude de
+        // superficie. Mesma forma do t16/t20: tabela de 1 SRV, com fallback valido quando a
+        // atmosfera esta off (o AtmoLightParams.w fecha a leitura).
+        D3D12_DESCRIPTOR_RANGE AtmoTransmittanceRange{};
+        AtmoTransmittanceRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        AtmoTransmittanceRange.NumDescriptors                    = 1;
+        AtmoTransmittanceRange.BaseShaderRegister                = 21;
+        AtmoTransmittanceRange.RegisterSpace                     = 0;
+        AtmoTransmittanceRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[13].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[13].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[13].DescriptorTable.pDescriptorRanges   = &AtmoTransmittanceRange;
+        RootParams[13].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;

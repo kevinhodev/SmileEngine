@@ -39,7 +39,13 @@ cbuffer FrameCB : register(b0) {
     float4 LightParams;
     float4 LightParams2;
     float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem teto)
+    float4 AtmoLightParams;    // x = raio do planeta (km), y = raio do topo (km),
+                               // z = km/unidade de mundo, w = transmitancia POR PIXEL (0/1)
+    float4 SunColorRaw;        // rgb = sol SEM transmitancia e SEM HorizonFade
+    float4 MoonColorRaw;       // rgb = lua SEM transmitancia
 };
+
+#include "Atmosphere/AtmosphereMath.hlsli"
 
 #include "MaterialCB.hlsli"
 
@@ -56,8 +62,27 @@ Texture2D<float4> DDGIIrradianceAtlas : register(t12);
 Texture2D<float4> DDGIDistanceAtlas   : register(t13);
 Buffer<float4>    DDGIProbeData       : register(t15);
 
+// Mesmo LUT e mesma conta do DeferredLighting.ps — vidro tambem tem que ver o sol atenuado
+// pela altitude dele. Ver o comentario extenso la (sombra do planeta, HorizonFade fora).
+Texture2D<float4> AtmoTransmittanceLUT : register(t21);
+
 SamplerState MaterialSampler : register(s0);
 SamplerState IBLSampler      : register(s1);
+
+float3 AtmoLightTransmittance(float3 worldPos, float3 dirToLight) {
+    const float bottomR = AtmoLightParams.x;
+    const float topR    = AtmoLightParams.y;
+    const float kmPerWU = AtmoLightParams.z;
+
+    const float h  = bottomR + max(worldPos.y, 0.0f) * kmPerWU;
+    const float3 p = float3(0.0f, clamp(h, bottomR, topR - 1.0f), 0.0f);
+
+    if (AtmoRaySphereNearest(p, dirToLight, bottomR) > 0.0f)
+        return float3(0.0f, 0.0f, 0.0f); // sombra do planeta
+
+    const float2 uv = AtmoTransmittanceParamsToUv(p.y, dirToLight.y, bottomR, topR);
+    return AtmoTransmittanceLUT.SampleLevel(IBLSampler, uv, 0.0f).rgb;
+}
 
 struct PSInput {
     float4 pos         : SV_POSITION;
@@ -157,13 +182,19 @@ ForwardBlendOutput main(PSInput input) {
     float3 DirectSpecular = float3(0.0f, 0.0f, 0.0f);
     {
         float3 Lsun = normalize(SunDirection.xyz);
-        BRDF_DirectSplit(N, V, Lsun, SunColor.rgb * SunDirection.w,
+        float3 SunRadiance = (AtmoLightParams.w > 0.5f)
+            ? SunColorRaw.rgb * AtmoLightTransmittance(input.worldPos, Lsun) * SunDirection.w
+            : SunColor.rgb * SunDirection.w;
+        BRDF_DirectSplit(N, V, Lsun, SunRadiance,
                          DiffuseColor, SpecularColor, Roughness, a2,
                          float3(0.0f, 0.0f, 0.0f), DirectDiffuse, DirectSpecular);
         if (MoonDirection.w > 0.0f) {
             float3 Lmoon = normalize(MoonDirection.xyz);
             float3 MoonDiffuse, MoonSpecular;
-            BRDF_DirectSplit(N, V, Lmoon, MoonColor.rgb * MoonDirection.w,
+            float3 MoonRadiance = (AtmoLightParams.w > 0.5f)
+                ? MoonColorRaw.rgb * AtmoLightTransmittance(input.worldPos, Lmoon) * MoonDirection.w
+                : MoonColor.rgb * MoonDirection.w;
+            BRDF_DirectSplit(N, V, Lmoon, MoonRadiance,
                              DiffuseColor, SpecularColor, Roughness, a2,
                              float3(0.0f, 0.0f, 0.0f), MoonDiffuse, MoonSpecular);
             DirectDiffuse  += MoonDiffuse;

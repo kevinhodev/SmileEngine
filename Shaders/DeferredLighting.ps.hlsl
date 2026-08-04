@@ -28,7 +28,20 @@ cbuffer FrameCB : register(b0) {
     float4 LightParams2;       // x = 1/res do cube shadow (point), y = near das faces, zw = -
     float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem
                                // teto), zw = reservados
+    float4 AtmoLightParams;    // x = raio do planeta (km), y = raio do topo (km),
+                               // z = km/unidade de mundo, w = transmitancia POR PIXEL (0/1)
+    float4 SunColorRaw;        // rgb = sol SEM transmitancia e SEM HorizonFade
+    float4 MoonColorRaw;       // rgb = lua SEM transmitancia
 };
+
+#include "Atmosphere/AtmosphereMath.hlsli"
+
+// LUT de transmitancia da atmosfera. Mesma textura que o sky PS e o bake de aerial perspective
+// leem — nao ha uma segunda implementacao da integral.
+Texture2D<float4> AtmoTransmittanceLUT : register(t21);
+
+// A funcao AtmoLightTransmittance vive mais abaixo, depois do IBLSampler (s1) — e ele o
+// sampler linear-clamp desta root signature.
 
 // Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z e o fade do slot de
 // sombra; .w preserva o pedido CastShadows para o ReSTIR DI, independentemente do orcamento.
@@ -132,7 +145,38 @@ Texture2D<float4> ReSTIRGITex         : register(t16);
 // LightParams.w escolhe entre este alvo e o loop raster abaixo.
 Texture2D<float4> DirectLocalTex      : register(t20);
 
-SamplerState IBLSampler : register(s1); 
+SamplerState IBLSampler : register(s1);
+
+// Transmitancia do sol/lua ATE O TOPO da atmosfera, medida na altitude DESTE pixel.
+//
+// Antes isto era FAtmosphere::SunTransmittance: 40 passos re-integrados na CPU, todo frame, na
+// altitude da CAMERA — uma cor de sol para o frame inteiro. Sem variacao por altitude de
+// superficie, ou seja, sem o "topo do morro dourado, vale azul" do poente. A UE faz por pixel
+// (bUsePerPixelAtmosphereTransmittance -> DeferredLightPixelShaders.usf).
+//
+// A SOMBRA DO PLANETA e obrigatoria: AtmoTransmittanceParamsToUv nao trata intersecao com o
+// solo, entao com a luz abaixo do horizonte ela devolve um valor pequeno mas > 0 ao longo de um
+// raio que ATRAVESSA o planeta. Sem este guard a geometria fica fracamente iluminada depois do
+// por do sol. O bake de aerial perspective ja usa exatamente este teste.
+//
+// Custo: um tap bilinear numa LUT 256x64 (permanentemente em cache) + ~20 ALU.
+float3 AtmoLightTransmittance(float3 worldPos, float3 dirToLight) {
+    const float bottomR = AtmoLightParams.x;
+    const float topR    = AtmoLightParams.y;
+    const float kmPerWU = AtmoLightParams.z;
+
+    // Espaco km centrado no planeta, com XZ zerados: direcoes sao invariantes a translacao e o
+    // meio e esfericamente simetrico, entao so a altitude importa (mesma escolha do bake de AP,
+    // onde manter o XZ absoluto somava uma altitude fantasma de (X²+Z²)/2R).
+    const float h  = bottomR + max(worldPos.y, 0.0f) * kmPerWU;
+    const float3 p = float3(0.0f, clamp(h, bottomR, topR - 1.0f), 0.0f);
+
+    if (AtmoRaySphereNearest(p, dirToLight, bottomR) > 0.0f)
+        return float3(0.0f, 0.0f, 0.0f); // sombra do planeta
+
+    const float2 uv = AtmoTransmittanceParamsToUv(p.y, dirToLight.y, bottomR, topR);
+    return AtmoTransmittanceLUT.SampleLevel(IBLSampler, uv, 0.0f).rgb;
+}
 
 struct VSOutput {
     float4 pos : SV_POSITION;
@@ -275,15 +319,23 @@ float4 main(VSOutput input) : SV_Target {
 
     float3 Lighting = float3(0.0f, 0.0f, 0.0f);
     {
-        float3 Lsun        = normalize(SunDirection.xyz);
-        float3 SunRadiance = SunColor.rgb * SunDirection.w;
+        float3 Lsun = normalize(SunDirection.xyz);
+        // Por pixel: cor CRUA x transmitancia medida na altitude desta superficie. O
+        // HorizonFade da CPU (que apagava o sol nos ultimos 1,7 grau de elevacao) NAO entra
+        // aqui — ele existia em cima de uma transmitancia que ja colapsa sozinha ali, e
+        // empilhar os dois criava um degrau de brilho na varredura do sol.
+        float3 SunRadiance = (AtmoLightParams.w > 0.5f)
+            ? SunColorRaw.rgb * AtmoLightTransmittance(worldPos, Lsun) * SunDirection.w
+            : SunColor.rgb * SunDirection.w;
         float3 SunLit      = BRDF_Direct(N, V, Lsun, SunRadiance,
                                          DiffuseColor, SpecularColor, Roughness, a2, TransColor);
 
         float3 MoonLit = float3(0.0f, 0.0f, 0.0f);
         if (MoonDirection.w > 0.0f) {
             float3 Lmoon        = normalize(MoonDirection.xyz);
-            float3 MoonRadiance = MoonColor.rgb * MoonDirection.w;
+            float3 MoonRadiance = (AtmoLightParams.w > 0.5f)
+                ? MoonColorRaw.rgb * AtmoLightTransmittance(worldPos, Lmoon) * MoonDirection.w
+                : MoonColor.rgb * MoonDirection.w;
             MoonLit = BRDF_Direct(N, V, Lmoon, MoonRadiance,
                                   DiffuseColor, SpecularColor, Roughness, a2, TransColor);
         }

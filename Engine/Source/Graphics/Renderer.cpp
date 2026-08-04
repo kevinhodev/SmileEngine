@@ -1679,6 +1679,11 @@ namespace Smile {
         EffectiveSunColor = { EffectiveSunColor.X * RainKeyDim, EffectiveSunColor.Y * RainKeyDim,
                               EffectiveSunColor.Z * RainKeyDim }; // F4: nublado de chuva
         MappedCB->SunColor       = { EffectiveSunColor.X, EffectiveSunColor.Y, EffectiveSunColor.Z, 0.0f };
+        // Variante CRUA (sem transmitancia, sem HorizonFade) p/ o caminho por pixel do deferred
+        // e do ForwardBlend. O SunColor acima continua intacto: todos os outros consumidores
+        // (fog volumetrico, nuvens, agua, sun shafts, readout do editor) seguem sem mudanca.
+        MappedCB->SunColorRaw    = { SunColorRGB.X * RainKeyDim, SunColorRGB.Y * RainKeyDim,
+                                     SunColorRGB.Z * RainKeyDim, 0.0f };
 
         const Vec3 MoonN = TimeOfDay.MoonDirection();
 
@@ -1698,6 +1703,18 @@ namespace Smile {
         const f32  MoonW        = MoonOn ? (TimeOfDay.MoonIntensity * MoonIllum * NightFactor * MoonUp) : 0.0f;
         MappedCB->MoonDirection = { MoonN.X, MoonN.Y, MoonN.Z, MoonW };
         MappedCB->MoonColor     = { MoonLightCol.X, MoonLightCol.Y, MoonLightCol.Z, 0.0f };
+        MappedCB->MoonColorRaw  = { MoonTint.X * RainKeyDim, MoonTint.Y * RainKeyDim,
+                                    MoonTint.Z * RainKeyDim, 0.0f };
+
+        // Transmitancia por pixel: so com o ceu procedural (o LUT descreve ESTA atmosfera).
+        {
+            const bool AtmoOn = UseAtmosphereSky && Atmosphere.IsInitialized();
+            MappedCB->AtmoLightParams = {
+                AtmoOn ? Atmosphere.BottomRadiusKm() : 0.0f,
+                AtmoOn ? Atmosphere.TopRadiusKm()    : 0.0f,
+                kKmPerWorldUnit,
+                (AtmoOn && UsePerPixelAtmoTransmittance) ? 1.0f : 0.0f };
+        }
 
         // MoonDiskSize e multiplicador do diametro lunar medio (0.518 grau), conforme o "x" do
         // editor. Antes o mesmo 1.5 era tratado como 1.5 grau e o disco ficava ~1.9x maior.
@@ -3057,6 +3074,13 @@ namespace Smile {
                                                         : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(12, SRVHeap.GpuHandle(DirectLocalTable));
             }
+            {
+                // t21. Mesmo padrao: descritor VALIDO sempre; AtmoLightParams.w fecha a leitura
+                // quando a atmosfera esta off ou o caminho por pixel esta desligado.
+                const u32 AtmoTable = Atmosphere.IsInitialized()
+                    ? Atmosphere.TransmittanceSRV() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
+            }
             CommandList->SetGraphicsRootShaderResourceView(
                 10, LightBuffer->GetGPUVirtualAddress() +
                     static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight));
@@ -3354,6 +3378,11 @@ namespace Smile {
                     const u32 GITable = (UseGI && DDGI.IsReady())
                         ? DDGI.SceneGITableStart() : IBLTableStart;
                     CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
+                }
+                {
+                    const u32 AtmoTable = Atmosphere.IsInitialized()
+                        ? Atmosphere.TransmittanceSRV() : IBLTableStart;
+                    CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
                 }
                 CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
                 for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {

@@ -1500,6 +1500,16 @@ namespace SmileEditor {
         emit VolFogSettingsChanged();
     }
 
+    bool ViewportWidget::IsPerPixelAtmoTransmittance() const {
+        return Renderer ? Renderer->GetPerPixelAtmoTransmittance() : true;
+    }
+
+    void ViewportWidget::SetPerPixelAtmoTransmittance(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetPerPixelAtmoTransmittance(_Enabled);
+        emit VolFogSettingsChanged();
+    }
+
     bool ViewportWidget::IsVolFogTemporal() const {
         return Renderer ? Renderer->GetVolumetricFog().GetTemporal() : true;
     }

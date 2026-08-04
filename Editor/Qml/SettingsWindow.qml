@@ -1882,7 +1882,7 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 620
+                height: 672
                 title: "Volumetric fog"
 
                 Text {
@@ -2016,6 +2016,28 @@ Rectangle {
                     value: viewportModel.heightFogSkyContribution
                     valueText: viewportModel.heightFogSkyContribution.toFixed(2).replace(".", ",")
                     onCommitted: (v) => viewportModel.SetHeightFogSkyContribution(v)
+                }
+
+                Text {
+                    x: 20; y: 606
+                    text: "Transmitância do sol por pixel"
+                    color: root.textPrimary
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 625
+                    text: "sol atenuado pela altitude da superfície — topo dourado, vale azul"
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 605
+                    checked: viewportModel.perPixelAtmoTransmittance
+                    onToggled: viewportModel.SetPerPixelAtmoTransmittance(!checked)
                 }
             }
 

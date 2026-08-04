@@ -143,6 +143,7 @@ namespace Smile {
         // origem: coerencia com o bake e o ponto todo.
         f32 ViewHeightKm()     const { return CPUConstants.SkyViewSize.Z; }
         f32 BottomRadiusKm()   const { return CPUConstants.PlanetRadii.X; }
+        f32 TopRadiusKm()      const { return CPUConstants.PlanetRadii.Y; }
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
         bool IsInitialized() const { return Initialized; }
 
