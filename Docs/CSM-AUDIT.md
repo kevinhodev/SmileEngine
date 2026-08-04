@@ -69,7 +69,7 @@ cobre um raio de 1038 m para um alcance de 800 m, com 1,01 m por texel.
 | 7 | Culling de caster contra a caixa ortográfica, não contra a fatia | médio | **corrigido (F4)** |
 | 8 | `SampleCSM` chamado onde não há luz direta | baixo-médio | **corrigido (F1)** |
 | 9 | Sampler de comparação do sun shafts com `CLAMP` | baixo | **corrigido (F1)** |
-| 10 | Sem margem na borda da cascata para o kernel do PCF | baixo | F4 |
+| 10 | Sem margem na borda da cascata para o kernel do PCF | baixo | **aberto** (ver Fila) |
 
 ### 1. PCSS apagava sombras finas
 
@@ -318,29 +318,100 @@ aquele termo, não afeta nada, e o slope bias é imune ao formato. O PSO de somb
 precisou de `DSVFormat` próprio, já que ele também alimenta as sombras locais, que seguem
 em D32.
 
-## Fila
+## O que falta
 
-**F5, opcional.** SDSM na variante barata, com `zMin`/`zMax` saindo do último mip da HZB
-que o occlusion culling já constrói; sombras ray-traced híbridas na banda de penumbra
-classificada por `0 < pcf < 1`, com denoise pelo SIGMA do NRD; registro do array de
-cascatas no visualizador de alvos, onde as LUTs da atmosfera já estão e o shadow map não;
-teste unitário do fitting, que exigiria extrair a matemática para um header puro como o
-`AtmosphereMath.hlsli` fez; knobs ausentes na UI — normal offset, raio do PCF, blend
-band, pullback, expoente — e persistência das configurações, que hoje voltam ao default
-a cada boot.
+Fases 1 a 4 estão aplicadas e commitadas. O que segue é o que sobrou, em ordem de
+prioridade. Nada aqui bloqueia nada — o sistema está funcional e validado.
 
-## Hipóteses a testar
+### 1. Dívida de A/B (bloqueia fechar o ciclo)
 
-Não são defeitos confirmados; ambas dependem de A/B.
+Duas fases mudaram a imagem e ainda não foram validadas visualmente. A F4 foi validada
+com ganho de FPS confirmado.
 
-A primeira é usar a normal geométrica do `NormalBuffer` do z-prepass no normal offset, em
-vez da normal do G-buffer, que carrega normal map. A bibliografia recomenda a geométrica,
-mas a Flax usa a do G-buffer exatamente como a Smile faz hoje.
+| fase | o que olhar |
+|---|---|
+| F2 | Contato com sol alto, onde o normal offset agora zera em `N·L = 1` — é o ganho maior e o risco maior ao mesmo tempo, porque quem segura a acne ali passa a ser só o depth bias. E a faixa do terminador, onde o offset agora cresce e a acne rasante deve sumir. |
+| F3 | Sombra distante, que ficou mais macia: o box 5×5 é mais largo que o texel único que sobrava do piso antigo. Se ficar macia demais, trocar o 5×5 por 3×3 (4 taps) no caminho de raio fixo — é uma linha e sai ainda mais barato. |
 
-A segunda é somar a distância à borda lateral da cascata ao peso do blend, que hoje é
-calculado só por profundidade. Com esfera e snapping a cascata é maior que a fatia, e um
-pixel pode estar dentro da fatia mas perto da borda da caixa; o fallback atual troca de
-cascata sem transição nesse caso.
+### 2. Defeito 10 — margem na borda da cascata
+
+O único defeito do laudo que segue aberto, de severidade baixa. São duas coisas na mesma
+região:
+
+O far do ortho fica exatamente em `radius`, então um receptor na borda da esfera dá
+`z_ndc = 1,0` e o `CSM_InBounds`, que exige `< 1,0`, o rejeita — ele cai no fallback para
+a cascata seguinte sem transição. Basta uma folga pequena no far.
+
+E o kernel do PCF não tem *inset*: taps que saem do slice devolvem "iluminado" pela cor de
+borda branca, o que abre uma franja clara nos cantos extremos da fatia. A Unreal reserva
+`SHADOW_BORDER = 4` texels e renderiza numa região menor que o tile; a documentação da
+Microsoft recomenda reservar metade do kernel. Custo: encolher o viewport do passe de
+profundidade e compensar na matriz.
+
+### 3. Ferramental (barato, ajuda todo o resto)
+
+O array de cascatas não está registrado no visualizador de alvos, embora as três LUTs da
+atmosfera estejam. É a coisa mais barata da lista e a que mais ajuda a diagnosticar
+qualquer item abaixo — hoje não há como olhar o conteúdo do shadow map sem um capture
+externo.
+
+Não existe teste unitário do fitting. Os candidatos naturais são a distribuição de splits
+contra a fórmula da Unreal, o raio da esfera, a invariância do bias em texels entre
+cascatas (que a F2 introduziu e que uma regressão silenciaria) e a estabilidade do
+snapping sob translação da câmera. Exige extrair a matemática de `SunShadows.cpp`, hoje
+acoplada ao D3D12, para um header puro — o mesmo movimento que o `AtmosphereMath.hlsli`
+fez pela atmosfera, e que o `TimeOfDayMoonTests` já usa como padrão de teste.
+
+Faltam knobs na UI: normal offset, blend band, caster pullback, expoente de distribuição e
+teto de penumbra do PCSS não são editáveis. E não há persistência nenhuma das
+configurações de render — não existe `QSettings` no editor, então todo ajuste volta ao
+default a cada boot, o que torna qualquer sessão de tuning descartável.
+
+### 4. Hipóteses a testar
+
+Não são defeitos confirmados; as duas dependem de A/B e as duas são baratas.
+
+Usar a normal geométrica do `NormalBuffer` do z-prepass no normal offset, em vez da normal
+do G-buffer, que carrega normal map. A bibliografia recomenda a geométrica, porque com
+normal map o offset aponta para direções que não correspondem à superfície real e produz
+acne ondulada seguindo o padrão do mapa. Mas a Flax usa a do G-buffer exatamente como a
+Smile faz hoje, então não é consenso.
+
+Somar a distância à borda lateral da cascata ao peso do blend, que hoje é calculado só por
+profundidade. Com esfera e snapping a cascata é maior que a fatia, e um pixel pode estar
+dentro da fatia mas perto da borda da caixa; o fallback atual troca de cascata sem
+transição nesse caso. É o `distToEdge` do sample do MJP.
+
+### 5. Estrutural (maior esforço, ganho maior)
+
+**SDSM na variante barata.** Ajustar os splits ao intervalo de profundidade dos pixels
+realmente visíveis, em vez de `[near, far]` da câmera. O ganho está no `zMin`: com a
+câmera encostada numa parede, a cascata 0 hoje gasta boa parte da resolução em espaço
+vazio. O `zMin`/`zMax` sai quase de graça do último mip da HZB que o occlusion culling v2
+já constrói, e o readback ring já existe. Atenção ao conflito conhecido: splits que mudam
+por frame mudam o raio da esfera, o que muda o tamanho do texel e desloca a grade do
+snapping — ou seja, reintroduzem shimmer. Mitigação usual é quantizar os splits e só
+recalcular quando saem de uma faixa.
+
+**Sombras ray-traced híbridas.** Classificar a banda de penumbra pelo PCF que já é
+calculado (`0 < pcf < 1`, custo marginal zero), traçar um raio só ali, com `TMin`/`TMax`
+derivados do shadow map, e compor com `lerp(csm, rt, banda)`. É o padrão do FidelityFX
+Hybrid Shadows e o que o levantamento apontou como melhor custo-benefício em 2026 — no
+material medido, híbrido ficou em 13,2 ms contra 92,2 ms de full ray tracing. A Smile já
+tem TLAS, NRD e classificação por tile; o denoiser seria o SIGMA, do mesmo pacote do NRD
+que o ReSTIR já usa.
+
+**Hull-silhueta no culling.** A F4 apertou o volume para a AABB da fatia em espaço de luz.
+A Unreal vai além com o convex hull da fatia extrudado na direção da luz
+(`ComputeShadowCullingVolume`), montado a partir dos pares de planos adjacentes com
+produto escalar de sinais opostos. Só vale se o mundo crescer: na Bistro a AABB já não
+corta quase nada, e o hull cortaria ainda menos do que já não corta.
+
+**Reduzir o PCSS à cascata 0.** A F3 mediu que na cascata 1 a penumbra fica no piso a menos
+que o oclusor esteja a mais de 40 m, o que naquele intervalo (18 a 80 m) é o caso raro.
+Ela paga 17 `Load` do blocker search para quase sempre cair no caminho determinístico.
+Restringir o PCSS à cascata 0 economizaria isso — mas muda a imagem em sombras difusas de
+meia distância, então é decisão artística, não técnica.
 
 ## Limites conhecidos e decisões deliberadas
 
