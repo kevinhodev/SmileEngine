@@ -66,7 +66,7 @@ cobre um raio de 1038 m para um alcance de 800 m, com 1,01 m por texel.
 | 4 | Bias dobrado no caminho volumétrico desloca o feixe | médio | **corrigido (F1)** |
 | 5 | Piso de 1 texel anula a penumbra constante em mundo | médio | **corrigido (F3)** |
 | 6 | Nenhum bias depende de N·L | médio | **corrigido (F2)** |
-| 7 | Culling de caster contra a caixa ortográfica, não contra a fatia | médio | F4 |
+| 7 | Culling de caster contra a caixa ortográfica, não contra a fatia | médio | **corrigido (F4)** |
 | 8 | `SampleCSM` chamado onde não há luz direta | baixo-médio | **corrigido (F1)** |
 | 9 | Sampler de comparação do sun shafts com `CLAMP` | baixo | **corrigido (F1)** |
 | 10 | Sem margem na borda da cascata para o kernel do PCF | baixo | F4 |
@@ -274,11 +274,51 @@ disocclusion.
 O knob `PcfRadiusTexels` mudou de significado — era o raio do kernel fixo, agora é o piso
 da penumbra do PCSS — e o padrão foi de 2,5 para 2,0.
 
-## Fila
+## O que a fase 4 aplicou
 
-**F4, custo do passe de profundidade.** Culling por hull-silhueta; ordenação dos casters
-por alpha-test e material uma única vez, fora do laço de cascatas; migração de D32 para
-D16, que corta a VRAM de sombra de 64 MB para 32 MB e é o formato das três referências.
+**Volume de culling.** Os planos laterais deixaram de sair da matriz do ortho — que é a
+caixa da esfera de *fitting* — e passaram a vir da extensão real da fatia do frustum em
+espaço de luz. É exato: um caster só sombreia um receptor se estiver sobre o segmento que
+vai do receptor até o sol, logo precisa compartilhar a coordenada `(right, up)` dele; quem
+está fora da extensão da fatia não pode sombrear ninguém dentro dela, por mais longe que
+esteja na direção da luz. Os planos são montados em espaço de mundo no `UpdatePerFrame` e
+retidos junto da matriz, para que cascata congelada pelo cache continue cullando contra o
+volume que gerou o mapa dela. Margem de 8 texels cobre o normal offset e o kernel do PCF.
+
+Medido na Bistro Exterior, isolando o teste de planos (1542 casters na lista):
+
+| casc | caixa do ortho | fatia | corte |
+|---|---|---|---|
+| 0 | 1106 | 889 | −20% |
+| 1 | 1535 | 1445 | −6% |
+| 2 | 1542 | 1491 | −3% |
+| 3 | 1542 | 1542 | 0% |
+
+**A razão de volume de 24× a 46× registrada acima não se traduz em 24× a 46× menos
+casters.** Numa cena compacta como a Bistro, de ~200 m, quase tudo cai dentro da footprint
+da fatia também, e na cascata 3 o culling não corta nada. O corte útil está na cascata 0,
+que é justamente a que redesenha todo frame enquanto as distantes são cacheadas. O ganho
+escala com o tamanho do mundo, não com o da cascata; a Bistro é o caso pequeno. O hull
+silhueta da Unreal é mais apertado que esta AABB e continua disponível como refinamento.
+
+**Ordenação dos casters.** A lista é ordenada uma vez no `Renderer`, por alpha-test e
+depois por material, em vez de ser varrida em ordem de cena quatro vezes. O PSO passa a
+trocar uma única vez por cascata, na fronteira entre opacos e masked, e o `Bind` do
+material é pulado quando repete — o que só é possível porque itens do mesmo material agora
+são adjacentes. `Cur` e `LastMat` zeram por cascata, porque o `SetGraphicsRootSignature` no
+topo do laço invalida as descriptor tables.
+
+**D32 para D16.** O array de cascatas caiu de 64 MB para 32 MB, e aparece na categoria
+Sombras da janela de Estatísticas. É o formato das três referências: a Unreal define
+`PF_ShadowDepth` como `R16_TYPELESS`, a Flax escolhe `D16_UNorm` como primeiro suportado, a
+Cry usa D16 no cache. Precisão: 65536 níveis sobre o range do ortho dão 1,95 mm na cascata
+0 e 3,3 cm na 3, contra um bias de 24 e 62 níveis — folga de sobra. O `DepthBias` do
+rasterizador é 0, então a mudança da unidade `r` do formato UNORM, que multiplica apenas
+aquele termo, não afeta nada, e o slope bias é imune ao formato. O PSO de sombra do terreno
+precisou de `DSVFormat` próprio, já que ele também alimenta as sombras locais, que seguem
+em D32.
+
+## Fila
 
 **F5, opcional.** SDSM na variante barata, com `zMin`/`zMax` saindo do último mip da HZB
 que o occlusion culling já constrói; sombras ray-traced híbridas na banda de penumbra

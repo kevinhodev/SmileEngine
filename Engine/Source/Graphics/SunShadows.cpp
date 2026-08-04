@@ -21,7 +21,7 @@ namespace Smile {
         BuildPSOs(_Device);
         CreateConstantBuffers(_Device);
         Initialized = true;
-        LogDebug("CSM (sombra do sol) inicializado: 4 cascatas 2048^2");
+        LogDebug("CSM (sombra do sol) inicializado: 4 cascatas 2048^2 D16 (32 MB)");
     }
 
     void FSunShadows::CreateResources(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
@@ -34,13 +34,20 @@ namespace Smile {
         Desc.Height           = kResolution;
         Desc.DepthOrArraySize = static_cast<UINT16>(kNumCascades);
         Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32_TYPELESS;
+        // D16 e o formato das tres referencias (a UE define PF_ShadowDepth como R16_TYPELESS,
+        // a Flax escolhe D16_UNorm no primeiro suportado, a Cry usa D16 no cache). Metade da
+        // VRAM: 4 x 2048^2 cai de 64 MB para 32 MB, e aparece na janela de Estatisticas.
+        // Precisao: 65536 niveis sobre o range do ortho da cascata dao 1,95 mm na cascata 0 e
+        // 3,3 cm na 3 — o bias da F2 vale 24 e 62 niveis respectivamente, folga de sobra. O
+        // DepthBias do rasterizer e 0, entao a mudanca da unidade `r` do formato UNORM (que
+        // multiplica so aquele termo) nao afeta nada; o slope bias e imune ao formato.
+        Desc.Format           = DXGI_FORMAT_R16_TYPELESS;
         Desc.SampleDesc       = { 1, 0 };
         Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
         D3D12_CLEAR_VALUE Clear{};
-        Clear.Format               = DXGI_FORMAT_D32_FLOAT;
+        Clear.Format               = DXGI_FORMAT_D16_UNORM;
         Clear.DepthStencil.Depth   = 1.0f;
         Clear.DepthStencil.Stencil = 0;
 
@@ -53,7 +60,7 @@ namespace Smile {
         DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kNumCascades, false);
         for (u32 c = 0; c < kNumCascades; ++c) {
             D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
-            DSVDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
+            DSVDesc.Format                         = DXGI_FORMAT_D16_UNORM;
             DSVDesc.ViewDimension                  = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
             DSVDesc.Texture2DArray.MipSlice        = 0;
             DSVDesc.Texture2DArray.FirstArraySlice = c;
@@ -63,7 +70,7 @@ namespace Smile {
 
         ShadowSRVSlot_ = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format                          = DXGI_FORMAT_R32_FLOAT;
+        SRVDesc.Format                          = DXGI_FORMAT_R16_UNORM;
         SRVDesc.Shader4ComponentMapping         = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         SRVDesc.ViewDimension                   = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
         SRVDesc.Texture2DArray.MostDetailedMip  = 0;
@@ -185,7 +192,7 @@ namespace Smile {
         PSODesc.InputLayout           = { InputLayout, _countof(InputLayout) };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         PSODesc.NumRenderTargets      = 0; 
-        PSODesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
+        PSODesc.DSVFormat             = DXGI_FORMAT_D16_UNORM;
         PSODesc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&OpaquePSO)));
@@ -376,6 +383,47 @@ namespace Smile {
                 sf[c] = texel;
                 dr[c] = 2.0f * radius + CasterPullback; // range do ortho em mundo (PCSS)
 
+                // VOLUME DE CULLING da cascata, em planos de MUNDO. Antes ele saia da matriz
+                // do ortho, que e a caixa da esfera de FITTING — muito maior que a fatia do
+                // frustum que ela precisa cobrir: de 24x a 46x o volume, com lado de ate
+                // 2076 m na cascata 3. Numa cena do tamanho da Bistro os planos laterais nao
+                // cortavam absolutamente nada, e so o filtro de caster pequeno filtrava.
+                //
+                // Os laterais agora vem da extensao REAL da fatia em espaco de luz, o que e
+                // exato: um caster shadow-eia um receptor apenas se estiver sobre o segmento
+                // que vai do receptor ate o sol, logo precisa compartilhar a coordenada
+                // (right, up) dele. Quem esta fora da extensao da fatia nao pode sombrear
+                // ninguem dentro dela, por mais longe que esteja na direcao da luz. A UE faz
+                // o mesmo em ComputeShadowCullingVolume, com o hull-silhueta, que e ainda
+                // mais apertado que esta AABB. O plano near segue fora (pancaking).
+                {
+                    f32 minR =  3.4e38f, maxR = -3.4e38f;
+                    f32 minU =  3.4e38f, maxU = -3.4e38f;
+                    for (int pl = 0; pl < 2; ++pl)
+                        for (int sx = -1; sx <= 1; sx += 2)
+                            for (int sy = -1; sy <= 1; sy += 2) {
+                                const Vec3 w = TransformPoint(
+                                    InvView, Vec3{ sx * ex[pl], sy * ey[pl], cz[pl] });
+                                const f32 rr = w.Dot(right), uu = w.Dot(up);
+                                minR = std::min(minR, rr); maxR = std::max(maxR, rr);
+                                minU = std::min(minU, uu); maxU = std::max(maxU, uu);
+                            }
+
+                    // Folga: normal-offset (ate 2,5 texels) e kernel do PCF (5x5 = 2 texels)
+                    // deslocam o lookup do receptor alguns texels do ponto geometrico, entao
+                    // um caster logo fora da fatia ainda pode cair nesses taps.
+                    const f32 margin = 8.0f * texel;
+                    minR -= margin; maxR += margin;
+                    minU -= margin; maxU += margin;
+
+                    Vec4* P = CullPlanes[c];
+                    P[0] = {  right.X,  right.Y,  right.Z, -minR };
+                    P[1] = { -right.X, -right.Y, -right.Z,  maxR };
+                    P[2] = {  up.X,     up.Y,     up.Z,    -minU };
+                    P[3] = { -up.X,    -up.Y,    -up.Z,     maxU };
+                    P[4] = { -fwd.X,   -fwd.Y,   -fwd.Z,    cf + radius }; // far do ortho
+                }
+
                 UpdateMask |= (1u << c);
                 CacheValid[c]   = Cacheable;
                 CachedFwd[c]    = fwd;
@@ -455,20 +503,11 @@ namespace Smile {
             _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
             _CommandList->SetGraphicsRootConstantBufferView(0, CascadeCBAddr(c));
 
-            const Mat44& VP = CascadeViewProj[c];
-            const Vec4 c0{ VP.M[0][0], VP.M[1][0], VP.M[2][0], VP.M[3][0] };
-            const Vec4 c1{ VP.M[0][1], VP.M[1][1], VP.M[2][1], VP.M[3][1] };
-            const Vec4 c2{ VP.M[0][2], VP.M[1][2], VP.M[2][2], VP.M[3][2] };
-            const Vec4 c3{ VP.M[0][3], VP.M[1][3], VP.M[2][3], VP.M[3][3] };
-            // Sem o plano near: com pancaking (depth clip off) casters atras do near plane
-            // ainda projetam sombra (achatados nele), entao nao podem ser descartados aqui.
-            const Vec4 Planes[5] = {
-                { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W },
-                { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W },
-                { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W },
-                { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W },
-                { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W },
-            };
+            // Planos da fatia, montados no UpdatePerFrame (ver a nota longa la). Nao saem
+            // mais da matriz do ortho: aquela era a caixa da esfera de fitting e nao cortava
+            // nada nas cascatas distantes. Sem o plano near — com pancaking (depth clip off)
+            // casters atras do near ainda projetam sombra, achatados nele.
+            const Vec4* Planes = CullPlanes[c];
             auto Outside = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
                 for (int i = 0; i < 5; ++i) {
                     const Vec4& p = Planes[i];
@@ -484,7 +523,11 @@ namespace Smile {
             // (corta micro-objetos das cascatas distantes, estilo min caster size da Cry/UE).
             const f32 MinExtent = MinCasterTexels * (&CPUConstants.CascadeTexelWorld.X)[c];
 
-            ID3D12PipelineState* Cur = nullptr;
+            // Cur/LastMat zeram por cascata de propósito: o SetGraphicsRootSignature no topo
+            // do laco invalida as descriptor tables ligadas, entao o primeiro material da
+            // cascata precisa religar mesmo que seja o mesmo do fim da cascata anterior.
+            ID3D12PipelineState* Cur     = nullptr;
+            const FMaterial*     LastMat = nullptr;
             for (size_t k = 0; k < _Count; ++k) {
                 const FShadowDrawItem& It = _Items[k];
                 if (!It.Mesh) continue;
@@ -501,7 +544,12 @@ namespace Smile {
                 ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
                 _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
-                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);
+                // A lista chega ordenada por (alpha-test, material) do Renderer, entao os
+                // itens que compartilham material sao adjacentes e o Bind repetido some.
+                if (AlphaTested && It.Mat != LastMat) {
+                    It.Mat->Bind(_CommandList, _SRVHeap);
+                    LastMat = It.Mat;
+                }
                 It.Mesh->Draw(_CommandList);
             }
 

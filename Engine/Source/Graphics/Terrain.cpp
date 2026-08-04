@@ -227,7 +227,9 @@ namespace Smile {
         PSOGBuffer = NewGBuffer;
 
         // CSM: forward-Z LESS, pancaking (depth clip off) e slope bias — espelha o
-        // OpaquePSO do FSunShadows.
+        // OpaquePSO do FSunShadows. Inclusive o FORMATO: o array de cascatas virou D16 e o
+        // DSVFormat do PSO tem que casar com o DSV, senao o D3D12 recusa o draw. As sombras
+        // LOCAIS seguem em D32, entao o PSO delas restaura o formato mais abaixo.
         D3D12_RASTERIZER_DESC ShadowRaster = Raster;
         ShadowRaster.CullMode             = D3D12_CULL_MODE_NONE;
         ShadowRaster.DepthClipEnable      = FALSE;
@@ -246,6 +248,7 @@ namespace Smile {
         Desc.RasterizerState   = ShadowRaster;
         Desc.DepthStencilState = ShadowDepth;
         Desc.BlendState        = NoColor;
+        Desc.DSVFormat         = DXGI_FORMAT_D16_UNORM; // cascatas do CSM
         Desc.NumRenderTargets  = 0;
         Desc.RTVFormats[0]     = DXGI_FORMAT_UNKNOWN;
         Desc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
@@ -263,6 +266,7 @@ namespace Smile {
         // ignorado no ortho do CSM, onde o caster achatado ainda projeta sombra valida.
         ShadowRaster.DepthClipEnable = TRUE;
         Desc.RasterizerState         = ShadowRaster;
+        Desc.DSVFormat               = DXGI_FORMAT_D32_FLOAT; // atlas/cubemap das locais segue D32
         Microsoft::WRL::ComPtr<ID3D12PipelineState> NewShadowLocal;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&NewShadowLocal)));
         PSOShadowLocal = NewShadowLocal;

@@ -136,6 +136,10 @@ namespace Smile {
         u8*                                         MappedCSM = nullptr;
         CSMConstants                                CPUConstants{};
         Mat44                                       CascadeViewProj[kNumCascades]{};
+        // 5 planos de culling em MUNDO por cascata (4 laterais da fatia + far do ortho; sem
+        // near, por causa do pancaking). Retidos entre updates junto com a matriz, para que
+        // cascata congelada pelo cache continue cullando contra o volume que gerou o mapa.
+        Vec4                                        CullPlanes[kNumCascades][5]{};
 
         u32  FrameSlot = 0;
         f32  ShadowMaxDistance   = 800.0f;

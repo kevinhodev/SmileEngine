@@ -2715,6 +2715,19 @@ namespace Smile {
                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                         A.R->AABBMin, A.R->AABBMax });
                 }
+                // Ordena UMA vez, fora do laco de cascatas: o RecordDepthPass varre esta
+                // lista 4x e, em ordem de cena, alternava PSO opaco/masked a cada item que
+                // trocasse de tipo. Opacos primeiro (PSO trocado uma unica vez, na fronteira)
+                // e alpha-tested agrupados por material, o que tambem deixa o Bind repetido
+                // ser pulado la dentro.
+                std::sort(Casters.begin(), Casters.end(),
+                          [](const FSunShadows::FShadowDrawItem& a,
+                             const FSunShadows::FShadowDrawItem& b) {
+                              const bool am = a.Mat && a.Mat->Constants.AlphaTest != 0;
+                              const bool bm = b.Mat && b.Mat->Constants.AlphaTest != 0;
+                              if (am != bm) return !am;
+                              return a.Mat < b.Mat;
+                          });
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
                     FSunShadows::FExtraCascadeDraw TerrainCasters;
