@@ -140,6 +140,14 @@ namespace Smile {
         // indefinido entrando no historico. Caller ja transicionou p/ UAV (TransitionInputsToWrite).
         void RecordNrdSpecZero(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
+        // Instrumentacao de timer no trace half-res (ver FShaderTimer): kInvalidSlot desliga e o
+        // passe volta p/ a PSO normal. Dono = Renderer, empurra todo frame.
+        void SetTimerSlot(u32 Slot) { TimerSlot = Slot; }
+        bool HasTimerPipeline() const { return TraceTimed; }
+        // O alvo de timer deste passe acompanha o dominio do dispatch, que e HALF-res.
+        u32  TraceWidth() const  { return HalfWidth; }
+        u32  TraceHeight() const { return HalfHeight; }
+
         // Perfil compartilhado de epsilons (dono = Renderer, empurra todo frame).
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
@@ -216,6 +224,9 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
         FVolumetricPipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
+        // Gemea instrumentada do trace (FShaderTimer): mesmas tabelas + slot falso da NVAPI.
+        // PSO separada e nao um if no CB — a instrumentacao custa registrador no passe quente.
+        FVolumetricPipeline TracePSOTimed;
         FVolumetricPipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
         FVolumetricPipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
         FVolumetricPipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
@@ -322,6 +333,8 @@ namespace Smile {
 
         u32  Width = 0, Height = 0;          // full-res (resolve, composite)
         u32  HalfWidth = 0, HalfHeight = 0;  // half-res (trace; Fase 2b)
+        u32  TimerSlot  = kInvalidSlot;      // alvo de timer vigente (kInvalidSlot = captura off)
+        bool TraceTimed = false;             // permutacao instrumentada criada com sucesso
         bool Initialized = false;
         bool Ready       = false;
 

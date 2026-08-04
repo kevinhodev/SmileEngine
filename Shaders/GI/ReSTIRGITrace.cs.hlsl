@@ -43,10 +43,12 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ReGIRGridCountSamples;
     float4 ReGIRResources;
     float4 SkyParams;               // x = view height (km), y = raio do planeta (km) — ShadeSky
+    float4 DebugParams;             // x = slot bindless do alvo de timer (< 0 = captura off)
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
 #include "../RayOffset.hlsli"
+#include "../Debug/ShaderTimer.hlsli"
 
 RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
@@ -91,6 +93,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         CurrResA[px] = 0.0f; CurrResB[px] = 0.0f; CurrResC[px] = 0.0f; CurrResD[px] = 0.0f;
         return;
     }
+
+    // Comeca DEPOIS do descarte de ceu: pixel sem geometria nao traca nada e entraria como
+    // "frio" de qualquer jeito — medir o early-out so somaria ruido ao piso do heatmap.
+    SMILE_TIMER_BEGIN(timerStart)
 
     float4 gb = GBuffer.Load(int3(px, 0));
     float3 N  = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
@@ -459,4 +465,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     CurrResB[px] = float4(r.x2, r.W);
     CurrResC[px] = float4(r.Lo, n1Oct.x);
     CurrResD[px] = float4(r.n2, n1Oct.y);
+
+    // Fecha depois das escritas do reservoir: elas fazem parte do custo do passe.
+    SMILE_TIMER_END(timerStart, px, DebugParams.x)
 }

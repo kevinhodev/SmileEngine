@@ -48,6 +48,8 @@ namespace Smile {
         // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
         // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum.
         Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
+        // Instrumentacao de timer (FShaderTimer). Anexado no FIM pela mesma razao dos anteriores.
+        Vec4  DebugParams;       // x = slot bindless do alvo de timer (< 0 = captura off)
     };
     static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
                   "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
@@ -85,6 +87,12 @@ namespace Smile {
 
         void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
                          FGpuProfiler* Profiler = nullptr);
+
+        // Instrumentacao de timer (ver FShaderTimer): kInvalidSlot desliga e o passe volta p/ a
+        // PSO normal, sem uma instrucao a mais. Dono = Renderer, empurra todo frame.
+        void SetTimerSlot(u32 Slot) { TimerSlot = Slot; }
+        // Se a permutacao instrumentada existe (NVAPI + .cso presentes).
+        bool HasTimerPipeline() const { return TraceTimed; }
 
         // NRD (Fase C): cria o pack pipeline + UAVs das IN textures do NRD + SRV da OUT (no SRVHeap
         // da engine). Chamar apos SetupForResize (depende dos slots cacheados) e do Nrd.SetupForResize.
@@ -163,6 +171,10 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
         FVolumetricPipeline TracePSO;   // 14 SRV, 5 UAV, heap-directly-indexed (Pass A)
+        // Gemea instrumentada do Pass A: mesmas tabelas, mas com o slot falso da NVAPI no root
+        // sig e o timer no shader. PSO separada e nao um if no CB porque a instrumentacao custa
+        // registrador — o passe normal nao pode pagar por um recurso de debug.
+        FVolumetricPipeline TracePSOTimed;
         FVolumetricPipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
         FVolumetricPipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
 
@@ -216,6 +228,8 @@ namespace Smile {
 
         u32  Width = 0, Height = 0;
         u32  FrameParity = 0;
+        u32  TimerSlot   = kInvalidSlot; // alvo de timer vigente (kInvalidSlot = captura off)
+        bool TraceTimed  = false;        // permutacao instrumentada criada com sucesso
         bool NeedsClear  = false;
         bool Initialized = false;
         bool Ready       = false;

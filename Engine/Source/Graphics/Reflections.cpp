@@ -1,6 +1,7 @@
 #include "Smile/Graphics/Reflections.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
+#include "Smile/Graphics/ShaderTimer.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -9,6 +10,7 @@
 #include "Smile/Core/Logger.h"
 #include <cmath>
 #include <cstring>
+#include <exception>
 
 using Microsoft::WRL::ComPtr;
 
@@ -51,6 +53,17 @@ namespace Smile {
         NrdPackPSO.Initialize(_Device, "ReflectionNrdPack.cs_6_0.cso", 3, 1, false);
         WaterTracePSO.Initialize(_Device, "WaterReflectionTrace.cs_6_6.cso", 15, 2, true);
         WaterTemporalPSO.Initialize(_Device, "WaterReflectionTemporal.cs_6_0.cso", 5, 1, false);
+        // Gemea instrumentada do trace half-res (ver FShaderTimer): mesmas tabelas, mais o slot
+        // falso da NVAPI no root sig. Fora de GPU NVIDIA nao existe e o passe segue igual.
+        TraceTimed = false;
+        if (FShaderTimer::IsAvailable()) {
+            try {
+                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_6.cso", 12, 3, true, true);
+                TraceTimed = true;
+            } catch (const std::exception&) {
+                LogWarning("ReflectionTraceTimed.cso ausente — timer das reflexoes indisponivel.");
+            }
+        }
         CreateCompositePipeline(_Device);
         // Hot reload pode mudar o significado dos canais temporais (especialmente hit-distance).
         // Nunca reaproveitar history produzido por uma versao anterior do shader.
@@ -593,8 +606,11 @@ namespace Smile {
                                        WaterSceneColorMaxMip };
         CPU.TemporalParams  = { Temporal ? MaxFrames : 1.0f, NeighborhoodGamma, SpatialRadius,
                                 FullResMaxRough };
+        // w = slot bindless do alvo de timer; -1 e o sentinela de "captura off" (ver FShaderTimer).
         CPU.DebugParams     = { (f32)DebugMode, MaxFrames,
-                                _MotionHistoryValid ? 1.0f : 0.0f, 0.0f };
+                                _MotionHistoryValid ? 1.0f : 0.0f,
+                                (TraceTimed && TimerSlot != kInvalidSlot)
+                                    ? static_cast<f32>(TimerSlot) : -1.0f };
         // w = nº de luzes puntuais no t8 (F5) — o componente era constante 1.0, livre.
         CPU.CameraPos       = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z,
                                 static_cast<f32>(_PunctualLightCount) };
@@ -675,10 +691,15 @@ namespace Smile {
         Transition(_CL, Radiance.Get(), RadianceState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, RayData.Get(),  RayDataState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, RayMotion.Get(), RayMotionState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        TracePSO.Bind(_CL);
+        const bool Timed = TraceTimed && TimerSlot != kInvalidSlot;
+        (Timed ? TracePSOTimed : TracePSO).Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable));
+        // O UAV falso da extensao: o driver troca o acesso, mas a tabela precisa estar setada.
+        if (Timed)
+            _CL->SetComputeRootDescriptorTable(FVolumetricPipeline::kNvApiRootParam,
+                                               FShaderTimer::ExtnTable(_SRVHeap));
         _CL->Dispatch(HGX, HGY, 1);
 
         Transition(_CL, Radiance.Get(), RadianceState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

@@ -332,7 +332,7 @@ Rectangle {
             anchors.rightMargin: 14
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 14
-            height: 132
+            height: 160
 
             Rectangle {
                 anchors.left: parent.left
@@ -342,8 +342,44 @@ Rectangle {
                 color: root.divider
             }
 
+            // Instrumentacao de timer nos traces de RT. Fica aqui e nao nas configuracoes de
+            // renderizacao porque o que ela produz sao DOIS alvos desta mesma lista — ligar o
+            // toggle e escolher o alvo sao o mesmo gesto.
             Text {
                 y: 14
+                text: "Timer de RT"
+                color: viewportModel.rtShaderTimerAvailable ? root.textNormal : root.textMuted
+                font.family: C.Theme.fontFamily
+                font.pixelSize: 11
+            }
+
+            Rectangle {
+                id: timerToggle
+                anchors.right: parent.right
+                y: 10
+                width: 46
+                height: 22
+                radius: 5
+                enabled: viewportModel.rtShaderTimerAvailable
+                opacity: enabled ? 1.0 : 0.42
+                readonly property bool on: viewportModel.rtShaderTimerEnabled
+                color: on ? root.blueBg : (timerHover.hovered ? "#23241d" : "transparent")
+                border.color: on ? root.blueBorder : root.borderColor
+                Text {
+                    anchors.centerIn: parent
+                    text: timerToggle.on ? "ON" : "OFF"
+                    color: timerToggle.on ? root.blue : root.textSecondary
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 10
+                }
+                HoverHandler { id: timerHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    onTapped: if (timerToggle.enabled) viewportModel.ToggleRtShaderTimer()
+                }
+            }
+
+            Text {
+                y: 42
                 text: "Colunas"
                 color: root.textNormal
                 font.family: C.Theme.fontFamily
@@ -352,7 +388,7 @@ Rectangle {
 
             Row {
                 anchors.right: parent.right
-                y: 10
+                y: 38
                 spacing: 4
                 Repeater {
                     model: [
@@ -390,7 +426,7 @@ Rectangle {
             }
 
             Text {
-                y: 51
+                y: 79
                 text: "Exposição"
                 color: root.textNormal
                 font.family: C.Theme.fontFamily
@@ -399,7 +435,7 @@ Rectangle {
 
             Text {
                 anchors.right: parent.right
-                y: 51
+                y: 79
                 text: viewportModel.debugExposure.toFixed(2).replace(".", ",") + "×"
                 color: root.blue
                 font.family: C.Theme.fontMono
@@ -410,7 +446,7 @@ Rectangle {
                 id: exposureSlider
                 anchors.left: parent.left
                 anchors.right: parent.right
-                y: 68
+                y: 96
                 height: 20
                 from: 0.05
                 to: 8.0

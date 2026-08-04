@@ -16,6 +16,7 @@
 #define DECODE_VELOCITY       6u
 #define DECODE_DDGI_IRRADIANCE 7u
 #define DECODE_DDGI_DISTANCE   8u
+#define DECODE_HEATMAP         9u
 
 cbuffer DebugViewCB : register(b0) {
     uint   Decode;
@@ -73,7 +74,8 @@ float4 DebugOutput(float3 color) {
     // encodar de novo lavaria as cores. A irradiancia do DDGI, apesar de tambem ser atlas, sai
     // LINEAR do pow+tonemap como qualquer outro alvo; com a regra antiga ela ficava
     // sistematicamente mais escura que os vizinhos na mesma grade.
-    const bool AlreadyDisplayReferred = (Decode == DECODE_DDGI_DISTANCE);
+    const bool AlreadyDisplayReferred = (Decode == DECODE_DDGI_DISTANCE ||
+                                         Decode == DECODE_HEATMAP);
     if (EncodeForDisplay != 0u && !AlreadyDisplayReferred)
         color = pow(saturate(color), 1.0f / 2.2f);
     return float4(color, 1.0f);
@@ -234,6 +236,18 @@ float4 main(VSOutput input) : SV_Target {
         return DebugOutput(outColor);
     } else if (Decode == DECODE_DDGI_DISTANCE) {
         outColor = HeatForView(s.r * ChannelWeight.r * Exposure);
+        return DebugOutput(outColor);
+    } else if (Decode == DECODE_HEATMAP) {
+        // Mesmo mapeamento, mas p/ escalar de dominio livre: quem registra o alvo escolhe a
+        // Exposure como 1/valor "quente". Sem normalizacao automatica de proposito — normalizar
+        // pelo maximo do frame faria a mesma cena mudar de cor conforme a camera anda, e duas
+        // capturas deixariam de ser comparaveis.
+        const float v = s.r * ChannelWeight.r;
+        // ZERO sai PRETO, nao no azul do piso da rampa. No timer de RT isso separa duas coisas
+        // que a rampa confunde: "nao houve trabalho" (pixel que saiu cedo — ceu, rugosidade acima
+        // do limite) e "houve trabalho e foi barato". Ler o segundo como o primeiro esconde
+        // exatamente o custo residual que se quer enxergar.
+        outColor = (v <= 0.0f) ? float3(0.0f, 0.0f, 0.0f) : HeatForView(v * Exposure);
         return DebugOutput(outColor);
     } else {
         // RAW: o peso soma os canais escolhidos. Isolar o alfa (0,0,0,1) mostra o alfa em

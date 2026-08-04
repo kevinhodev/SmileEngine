@@ -35,6 +35,10 @@ namespace SmileEditor {
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
         Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewStateChanged)
+        // Instrumentacao de timer nos passes de RT (NVAPI). "Available" e false em GPU
+        // nao-NVIDIA: o QML desabilita o controle em vez de escondê-lo.
+        Q_PROPERTY(bool rtShaderTimerAvailable READ IsRtShaderTimerAvailable NOTIFY DebugTargetsChanged)
+        Q_PROPERTY(bool rtShaderTimerEnabled READ IsRtShaderTimerEnabled NOTIFY DebugSettingsChanged)
         // Janela de debug: selecao multipla (indices), colunas da grade e exposicao.
         Q_PROPERTY(QVariantList debugSelection READ GetDebugSelection NOTIFY DebugSettingsChanged)
         Q_PROPERTY(int debugColumns READ GetDebugColumns NOTIFY DebugSettingsChanged)
@@ -207,6 +211,8 @@ namespace SmileEditor {
         int               GetViewMode() const { return CurrentViewMode; }
         QStringList       GetDebugTargetNames() const;
         int               GetDebugTargetIndex() const;
+        bool              IsRtShaderTimerAvailable() const;
+        bool              IsRtShaderTimerEnabled() const;
         QVariantList      GetDebugSelection() const;
         int               GetDebugColumns() const;
         double            GetDebugExposure() const;
@@ -345,6 +351,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SelectDebugTarget(int index);
         Q_INVOKABLE void ToggleDebugSelection(int index);   // liga/desliga um alvo na grade
         Q_INVOKABLE void ClearDebugSelection();
+        Q_INVOKABLE void ToggleRtShaderTimer();             // instrumentacao de timer nos traces
         Q_INVOKABLE void SetDebugColumns(int columns);      // 0 = grade automatica
         Q_INVOKABLE void SetDebugExposure(double exposure); // multiplicador global
         Q_INVOKABLE void InspectDDGIProbe(int targetIndex, double u, double v,

@@ -587,6 +587,14 @@ namespace SmileEditor {
         return I == Smile::Renderer::kNoDebugTarget ? -1 : static_cast<int>(I);
     }
 
+    bool ViewportWidget::IsRtShaderTimerAvailable() const {
+        return Renderer && Renderer->IsRtShaderTimerAvailable();
+    }
+
+    bool ViewportWidget::IsRtShaderTimerEnabled() const {
+        return Renderer && Renderer->GetRtShaderTimer();
+    }
+
     QVariantList ViewportWidget::GetDebugSelection() const {
         QVariantList L;
         if (!Renderer) return L;
@@ -721,6 +729,13 @@ namespace SmileEditor {
         auto RendererAccess = Renderer.Lock();
         if (DebugProbeSessionActive) ClearDebugProbeInspection();
         RendererAccess->SetDebugSelection({});
+        InvalidateDebugPreview();
+        emit DebugSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleRtShaderTimer() {
+        if (!Renderer || !Renderer->IsRtShaderTimerAvailable()) return;
+        Renderer->SetRtShaderTimer(!Renderer->GetRtShaderTimer());
         InvalidateDebugPreview();
         emit DebugSettingsChanged();
     }

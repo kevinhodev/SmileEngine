@@ -1051,7 +1051,7 @@ namespace Smile {
         FVolumetricFogPass VolumetricFog;
         bool            UseVolumetricFog     = true; // froxel fog; exige height fog ON
         bool            UseAerialPerspective = true;
-        bool            UseHeightFog         = false;
+        bool            UseHeightFog         = true;
 
         FSunShafts      SunShafts;
         bool            UseSunShafts = true; // raymarch meia-res + temporal; exige height fog ON

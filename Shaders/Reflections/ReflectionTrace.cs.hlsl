@@ -17,7 +17,7 @@ cbuffer ReflectionCB : register(b0) {
     row_major float4x4 PrevViewProj;
     float4 PrevCameraPos;
     float4 TemporalParams;
-    float4 DebugParams;
+    float4 DebugParams;     // w = slot bindless do alvo de timer (< 0 = captura off)
     row_major float4x4 View;
     float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
@@ -44,6 +44,7 @@ uint ReflectionCullFlags() {
 }
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
+#include "../Debug/ShaderTimer.hlsli"
 
 RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
@@ -78,6 +79,10 @@ SamplerState LinearWrap  : register(s1);
 void main(uint3 DTid : SV_DispatchThreadID) {
     uint2 halfPx = DTid.xy;
     if (halfPx.x >= (uint)HalfScreenParams.x || halfPx.y >= (uint)HalfScreenParams.y) return;
+
+    // O alvo de timer deste passe e HALF-RES (o dominio do dispatch), entao a medida vai em
+    // halfPx. O visualizador ja preserva o aspecto de alvo com resolucao propria.
+    SMILE_TIMER_BEGIN(timerStart)
 
     int2 fullPx = int2(halfPx) * 2 + RefTileJitter(halfPx, (uint)TraceParams.x);
     fullPx = min(fullPx, int2((int)ScreenParams.x - 1, (int)ScreenParams.y - 1));
@@ -183,4 +188,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     RWReflection[halfPx] = float4(outRadiance, outHitDist);
     RWRayData[halfPx]    = outRay;
     RWGlossyMotion[halfPx] = outMotion;
+
+    SMILE_TIMER_END(timerStart, halfPx, DebugParams.w)
 }
