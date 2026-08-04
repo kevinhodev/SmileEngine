@@ -18,7 +18,7 @@ namespace Smile {
         Vec4  CameraPos;
         Vec4  ScreenParams; // W, H, 1/W, 1/H
         Vec4  Params;       // lightCount, frameIndex, shadowMask, rayEndMargin
-        Vec4  Sampling;     // initialCandidates, MCap, spatialCount, spatialRadius
+        Vec4  Sampling;     // initialCandidates, teto ABSOLUTO de M, spatialCount, spatialRadius
         Vec4  Reuse;        // temporal, posRejectScale, normalReject, maxAge
         Vec4  TemporalPolicy; // x = permutation temporal (0/1); yzw reservados
         Vec4  RayEpsA;
@@ -144,7 +144,10 @@ namespace Smile {
         bool NrdReady = false;
 
         u32 InitialCandidates = 8;
-        f32 MCap = 20.0f;
+        // RELATIVO ao M do frame atual, como o paper: o teto efetivo e MCapRatio * candidatas.
+        // Era 20 ABSOLUTO, o que dava ~8x menos historico do que o paper pretende (20*8 = 160).
+        // O ResB em UINT foi o que destravou isso — no formato antigo M saturava em 63.
+        f32 MCapRatio = 20.0f;
         // De volta a 4 agora que a balance heuristic entrou no Pass B. O motivo de ter baixado
         // para 2 era o resolve normalizar por 1/M, cujo vies de escurecimento cresce com o numero
         // de vizinhos; com a correcao no lugar essa razao caiu. Cada vizinho a mais custa uma
@@ -154,11 +157,11 @@ namespace Smile {
         f32 SpatialRadius = 16.0f;
         f32 PosRejectScale = 0.01f;
         f32 NormalReject = 0.9f;
-        // 12, e nao mais: DI_PackMAge satura a idade em 16 e o stagger por pixel chega a 1,25x, entao
-        // acima de 12,8 os pixels do topo da faixa nunca expirariam e a expiracao ficaria incoerente
-        // entre vizinhos. Subiu de 8 porque o MaxAge era curativo para a falta do Alg. 5 passo 2:
-        // com a visibilidade inicial no lugar, a amostra ocluida ja nao trava e o historico pode
-        // viver mais. Ir alem de 12 exige repacotar o ResB (hoje M+idade dividem um canal fp16).
+        // Subiu de 8 para 12 quando a visibilidade inicial (Alg. 5 passo 2) entrou: o MaxAge era
+        // curativo para a falta dela, e com a amostra ocluida sendo descartada o historico pode
+        // viver mais. O teto de 12 vinha do formato antigo do ResB; com a idade agora em 8 bits ela
+        // vai ate 255, entao isto virou knob de tuning PURO, sem restricao de formato. Subir mais
+        // deve ser medido, nao presumido, e por isso fica em 12 ate haver A/B.
         f32 MaxAge = 12.0f;
         bool Temporal = true;
         // Alg. 5 passo 2. Custa 1 raio/pixel a mais (2 no total com o resolve do Pass B); a chave

@@ -70,34 +70,51 @@ void DIResFinalize(inout ReSTIRDIReservoir r, float selectedTarget) {
         ? r.WeightSum / (r.M * selectedTarget) : 0.0f;
 }
 
-// ResB e RGBA16F. Com MCap <= 32 e MaxAge <= 16, M + 64*age fica abaixo de 1088 e todo inteiro e
-// exatamente representavel em fp16. LightIndex <= 255 tambem e exato.
-float DI_PackMAge(float M, float age) {
-    return min(M, 63.0f) + 64.0f * min(floor(age), 16.0f);
+// ResB e R32G32B32A32_UINT. Layout:
+//   .x = LightIndex, 32 bits (0xFFFFFFFF = sem amostra)
+//   .y = RESERVADO p/ a UV da amostra na superficie da luz (16+16), necessaria quando mesh lights
+//        entrarem: um triangulo emissivo nao e identificado so pelo indice. Hoje sempre 0.
+//   .z = M (16 bits) | idade (8 bits) | livre (8)
+//   .w = normal do ponto visivel, octaedrica em unorm 16+16
+//
+// Era RGBA16F, e o formato antigo tinha DOIS tetos que ja doiam: o LightIndex em fp16 e exato so
+// ate 2048 (a cena de teste tem 26 mil triangulos emissivos, entao mesh lights quebravam na hora),
+// e M + idade dividiam um canal, prendendo M em 63 — o que impedia o MCap relativo do paper
+// (20x o M do frame atual = 160 com 8 candidatas). Custa 8 B/pixel a mais por buffer.
+uint DI_PackUnorm16x2(float2 v) {
+    const uint2 q = (uint2)(saturate(v * 0.5f + 0.5f) * 65535.0f + 0.5f);
+    return q.x | (q.y << 16);
 }
 
-void DI_UnpackMAge(float packed, out float M, out float age) {
-    age = floor(packed / 64.0f);
-    M = packed - age * 64.0f;
+float2 DI_UnpackUnorm16x2(uint p) {
+    return float2(p & 0xFFFFu, p >> 16) * (2.0f / 65535.0f) - 1.0f;
 }
 
-ReSTIRDIReservoir DI_LoadReservoir(float4 a, float4 b) {
+uint DI_PackMAge(float M, float age) {
+    return min((uint)(M + 0.5f), 65535u) | (min((uint)max(age, 0.0f), 255u) << 16);
+}
+
+void DI_UnpackMAge(uint packed, out float M, out float age) {
+    M   = (float)(packed & 0xFFFFu);
+    age = (float)((packed >> 16) & 0xFFu);
+}
+
+ReSTIRDIReservoir DI_LoadReservoir(float4 a, uint4 b) {
     ReSTIRDIReservoir r;
     DIResInit(r);
     r.X1 = a.xyz;
     r.W = a.w;
-    if (b.x >= 0.0f) r.LightIndex = (uint)(b.x + 0.5f);
+    r.LightIndex = b.x;
     float age;
-    DI_UnpackMAge(b.y, r.M, age);
-    r.N1Oct = b.zw;
+    DI_UnpackMAge(b.z, r.M, age);
+    r.N1Oct = DI_UnpackUnorm16x2(b.w);
     return r;
 }
 
 void DI_StoreReservoir(ReSTIRDIReservoir r, float age,
-                       out float4 a, out float4 b) {
+                       out float4 a, out uint4 b) {
     a = float4(r.X1, r.W);
-    const float lightIndex = (r.LightIndex == 0xFFFFFFFFu) ? -1.0f : (float)r.LightIndex;
-    b = float4(lightIndex, DI_PackMAge(r.M, age), r.N1Oct);
+    b = uint4(r.LightIndex, 0u, DI_PackMAge(r.M, age), DI_PackUnorm16x2(r.N1Oct));
 }
 
 bool DI_IsShadowCaster(FGPULightFull light) {

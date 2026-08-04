@@ -32,7 +32,7 @@ Texture2D<float>  Depth    : register(t3);
 RaytracingAccelerationStructure Scene : register(t4);
 StructuredBuffer<InstanceGeo> Instances : register(t5);
 Texture2D<float4> ResA : register(t6);
-Texture2D<float4> ResB : register(t7);
+Texture2D<uint4>  ResB : register(t7);
 StructuredBuffer<FGPULightFull> Lights : register(t8);
 #include "../Temporal/TemporalMotionCommon.hlsli"
 StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);

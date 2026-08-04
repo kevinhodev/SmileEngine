@@ -30,7 +30,7 @@ Texture2D<float4> GBufferC : register(t2);
 Texture2D<float>  Depth    : register(t3);
 Texture2D<float2> Velocity : register(t4);
 Texture2D<float4> PrevResA : register(t5); // xyz=x1, w=W
-Texture2D<float4> PrevResB : register(t6); // x=light, y=M+age, zw=n1 oct
+Texture2D<uint4>  PrevResB : register(t6); // x=light, y=uv(reserv), z=M+idade, w=n1 oct
 StructuredBuffer<FGPULightFull> Lights : register(t7);
 RaytracingAccelerationStructure Scene : register(t8);
 StructuredBuffer<InstanceGeo> Instances : register(t9);
@@ -38,7 +38,7 @@ StructuredBuffer<InstanceGeo> Instances : register(t9);
 SamplerState LinearWrap : register(s1);
 
 RWTexture2D<float4> CurrResA : register(u0);
-RWTexture2D<float4> CurrResB : register(u1);
+RWTexture2D<uint4>  CurrResB : register(u1);
 
 #include "../GI/RTAlphaTest.hlsli"
 
@@ -72,7 +72,7 @@ bool DI_SelectedOccluded(FGPULightFull light, float3 x1, float3 n1, float3 L, fl
 
 void StoreInvalid(int2 px) {
     CurrResA[px] = 0.0f;
-    CurrResB[px] = float4(-1.0f, 0.0f, 0.0f, 0.0f);
+    CurrResB[px] = uint4(0xFFFFFFFFu, 0u, 0u, 0u);
 }
 
 [numthreads(8, 8, 1)]
@@ -151,10 +151,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             }
 
             const float4 pa = PrevResA.Load(int3(ppx, 0));
-            const float4 pb = PrevResB.Load(int3(ppx, 0));
+            const uint4  pb = PrevResB.Load(int3(ppx, 0));
             ReSTIRDIReservoir prev = DI_LoadReservoir(pa, pb);
             float prevM, prevAge;
-            DI_UnpackMAge(pb.y, prevM, prevAge);
+            DI_UnpackMAge(pb.z, prevM, prevAge);
             prev.M = min(prevM, Sampling.y);
 
             const float3 prevN = DDGI_OctDecode(prev.N1Oct);
@@ -187,7 +187,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
     DIResFinalize(r, selectedTarget);
 
-    float4 outA, outB;
+    float4 outA; uint4 outB;
     DI_StoreReservoir(r, age, outA, outB);
     CurrResA[px] = outA;
     CurrResB[px] = outB;

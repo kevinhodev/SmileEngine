@@ -4,6 +4,7 @@
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
+#include <algorithm>
 
 using Microsoft::WRL::ComPtr;
 
@@ -11,7 +12,9 @@ namespace Smile {
     namespace {
         constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
         constexpr DXGI_FORMAT kResAFormat   = DXGI_FORMAT_R32G32B32A32_FLOAT;
-        constexpr DXGI_FORMAT kResBFormat   = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        // UINT, e nao mais RGBA16F: o LightIndex em fp16 era exato so ate 2048 e o M dividia canal
+        // com a idade, preso em 63. Ver o layout em ReSTIRDICommon.hlsli.
+        constexpr DXGI_FORMAT kResBFormat   = DXGI_FORMAT_R32G32B32A32_UINT;
         // 10, nao 8: o Pass A passou a tracar o raio de visibilidade do Alg. 5 (TLAS + Instances
         // para o alpha-test da folhagem), entao ele tambem precisa de root signature bindless.
         constexpr u32 kInitialSRVs = 10;
@@ -310,7 +313,12 @@ namespace Smile {
                              1.0f / static_cast<f32>(NewHeight) };
         CPU.Params = { static_cast<f32>(LightCount), static_cast<f32>(FrameIndex),
                        static_cast<f32>(ShadowRayMask), RayEps.VisRayEndMargin };
-        CPU.Sampling = { static_cast<f32>(InitialCandidates), MCap,
+        // MCapRatio e RELATIVO, como o paper ("clamp do M do frame anterior a no maximo 20x o M do
+        // reservoir do frame atual"). O shader continua tratando Sampling.y como teto ABSOLUTO, e
+        // por isso a multiplicacao mora aqui: os dois passes leem o mesmo campo e nao ha como um
+        // capar em 20 e o outro em 160. So passou a caber depois do ResB virar UINT (M em 16 bits).
+        CPU.Sampling = { static_cast<f32>(InitialCandidates),
+                         MCapRatio * static_cast<f32>(std::max(InitialCandidates, 1u)),
                          static_cast<f32>(SpatialCount), SpatialRadius };
         CPU.Reuse = { (Temporal && !NeedsClear) ? 1.0f : 0.0f,
                       PosRejectScale, NormalReject, MaxAge };
