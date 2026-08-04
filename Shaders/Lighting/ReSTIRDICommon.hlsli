@@ -104,6 +104,49 @@ bool DI_IsShadowCaster(FGPULightFull light) {
     return light.SpotParams.w > 0.5f;
 }
 
+// Ponto amostrado na fonte esferica, alvo do raio de sombra. Sem isto o raio vai ao CENTRO, a
+// visibilidade e binaria e a sombra sai DURA — incoerente com o especular, que ja trata a luz como
+// esfera de raio SourceRadius (AreaSphereSpecular). Uma esfera emissora produz penumbra que abre
+// com a distancia ao bloqueador; e o mesmo raio da UI (LightsBridge clampa em 0,01..2,0 m) que
+// controla os tres usos, porque os tres sao a mesma esfera: piso do inverse-square, ponto
+// representativo do especular e agora o alvo da sombra.
+//
+// Amostra o disco da SILHUETA (perpendicular a L, raio SourceRadius): e ele que define a extensao
+// angular do bloqueio, e evita sortear pontos no verso da esfera. Aproximacao boa enquanto
+// SourceRadius << distancia, no mesmo espirito do ponto representativo do especular.
+//
+// O dominio do reservoir NAO muda: continua sendo o indice da luz. O ponto e estratificacao
+// POS-selecao, entao a matematica do resampling fica intacta — o que muda e so o alvo do raio.
+// Seed do ponto na fonte. Depende do pixel, do frame e do INDICE DA LUZ — e a dependencia da luz
+// que faz o Pass A e o Pass B sortearem o MESMO ponto quando testam a mesma luz.
+//
+// Se sorteassem pontos independentes, o descarte do Alg. 5 (sobrevive com probabilidade 1-f) e a
+// visibilidade do resolve (outra 1-f) se multiplicariam e a penumbra sairia com (1-f)^2, escura
+// demais. Concordando o ponto, o descarte e o resolve concordam e nao ha dupla aplicacao — e o
+// mesmo efeito que o RTXDI obtem de graca por guardar a UV da amostra no reservoir. Quando os
+// passes escolhem luzes DIFERENTES nao ha o que casar, e cada um sorteia o seu.
+uint DI_LightPointSeed(uint2 px, uint frame, uint lightIndex) {
+    return GGX_SeedE(px, frame ^ (lightIndex * 0x9E3779B9u), SMILE_RNG_DI_LIGHTPOINT);
+}
+
+float3 DI_SampleLightPoint(FGPULightFull light, float3 L, inout uint rng) {
+    const float radius = light.ColorSourceRadius.w;
+    if (radius <= 0.0f) return light.PosInvRadius.xyz;
+
+    // Base ortonormal em torno de L sem branch (Duff et al. 2017). L ja vem normalizado do
+    // PunctualLightIncoming; o denominador (s + L.z) vale -2 no pior caso, nunca zero.
+    const float  s  = (L.z >= 0.0f) ? 1.0f : -1.0f;
+    const float  a  = -1.0f / (s + L.z);
+    const float  b  = L.x * L.y * a;
+    const float3 t1 = float3(1.0f + s * L.x * L.x * a, s * b, -s * L.x);
+    const float3 t2 = float3(b, s + L.y * L.y * a, -L.y);
+
+    // sqrt no raio = uniforme em AREA do disco (senao concentra no centro e estreita a penumbra).
+    const float rr  = radius * sqrt(DI_RandNext(rng));
+    const float phi = 6.28318530718f * DI_RandNext(rng);
+    return light.PosInvRadius.xyz + (t1 * cos(phi) + t2 * sin(phi)) * rr;
+}
+
 // Avalia a target PDF nao normalizada do ReSTIR: luminancia da contribuicao SEM visibilidade.
 // Devolve os lobos separados para o resolve futuro do NRD; o marco atual compoe a soma crua.
 float DI_Evaluate(FGPULightFull light, GBufferData g, float3 worldPos, float3 cameraPos,

@@ -240,7 +240,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     if (r.W > 0.0f && DI_IsShadowCaster(selected)) {
         const float camDist = length(CameraPos.xyz - x1);
         const float3 origin = OffsetRayGBuffer(x1, n1, L, camDist);
-        const float3 toLight = selected.PosInvRadius.xyz - origin;
+        // Mesmo seed do descarte no Pass A: se a luz escolhida for a mesma, o ponto e o mesmo e
+        // as duas visibilidades concordam em vez de se multiplicarem. Ver DI_LightPointSeed.
+        uint pointRng = DI_LightPointSeed(upx, (uint)Params.y, r.LightIndex);
+        const float3 lightPoint = DI_SampleLightPoint(selected, L, pointRng);
+        const float3 toLight = lightPoint - origin;
         const float len = length(toLight);
         const float tMax = len - max(Params.w, 0.0f);
         if (len > 1e-6f && tMax > RayEpsB.x) {

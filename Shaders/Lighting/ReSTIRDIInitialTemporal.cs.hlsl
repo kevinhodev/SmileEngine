@@ -48,9 +48,13 @@ RWTexture2D<float4> CurrResB : register(u1);
 // porem VISIVEL que deveria iluminar aquela sombra quase nunca ganha o sorteio. Nao e vazamento de
 // luz (o Pass B sempre testa oclusao no destino): e fome de energia na penumbra. Testar aqui, antes
 // do reuso temporal, impede que a amostra ocluida contamine o historico.
-bool DI_SelectedOccluded(FGPULightFull light, float3 x1, float3 n1, float3 L, float camDist) {
+bool DI_SelectedOccluded(FGPULightFull light, float3 x1, float3 n1, float3 L, float camDist,
+                         inout uint rng) {
     const float3 origin = OffsetRayGBuffer(x1, n1, L, camDist);
-    const float3 toLight = light.PosInvRadius.xyz - origin;
+    // Estocastico igual ao resolve do Pass B: manter o centro aqui descartaria a luz inteira
+    // sempre que o CENTRO estivesse ocluido, mesmo com meia esfera visivel — perda de energia
+    // justo na penumbra, que e onde este passo mais importa.
+    const float3 toLight = DI_SampleLightPoint(light, L, rng) - origin;
     const float len = length(toLight);
     const float tMax = len - max(Params.w, 0.0f);
     if (len <= 1e-6f || tMax <= RayEpsB.x) return false;
@@ -119,7 +123,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         if (DI_IsShadowCaster(sel)) {
             float3 diff, spec, L; float dist;
             DI_Evaluate(sel, g, x1, CameraPos.xyz, diff, spec, L, dist);
-            if (DI_SelectedOccluded(sel, x1, n1, L, camDist)) {
+            uint visRng = DI_LightPointSeed(upx, (uint)Params.y, r.LightIndex);
+            if (DI_SelectedOccluded(sel, x1, n1, L, camDist, visRng)) {
                 r.LightIndex = 0xFFFFFFFFu;
                 r.WeightSum = 0.0f;
             }
