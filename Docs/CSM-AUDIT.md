@@ -64,7 +64,7 @@ cobre um raio de 1038 m para um alcance de 800 m, com 1,01 m por texel.
 | 2 | `DepthBiasClamp = 0` deixa o slope bias de hardware ilimitado | médio-alto | **corrigido (F1)** |
 | 3 | Bias constante em NDC varia 2,6× em texels entre cascatas | médio | **corrigido (F2)** |
 | 4 | Bias dobrado no caminho volumétrico desloca o feixe | médio | **corrigido (F1)** |
-| 5 | Piso de 1 texel anula a penumbra constante em mundo | médio | F3 |
+| 5 | Piso de 1 texel anula a penumbra constante em mundo | médio | **corrigido (F3)** |
 | 6 | Nenhum bias depende de N·L | médio | **corrigido (F2)** |
 | 7 | Culling de caster contra a caixa ortográfica, não contra a fatia | médio | F4 |
 | 8 | `SampleCSM` chamado onde não há luz direta | baixo-médio | **corrigido (F1)** |
@@ -235,12 +235,46 @@ escura na transição.
 O slider "Bias de profundidade" mudou de unidade, de NDC para texels; a faixa da UI
 passou a 0–8.
 
-## Fila
+## O que a fase 3 aplicou
 
-**F3, filtro.** Optimized PCF de 5×5 em 9 taps, com pesos bilineares derivados da posição
-fracionária dentro do texel, no lugar dos 16 Poisson rotados — é o que Unreal e Flax
-usam, é determinístico e dispensa o ruído. Piso do kernel em ~2 texels, ou tabela por
-cascata no estilo da Cry.
+O filtro passa a ter duas famílias explícitas, separadas como a Unreal separa em
+`r.Shadow.FilterMethod`, porque optimized PCF e PCSS não compõem: o primeiro tem
+footprint fixo, o segundo precisa de raio arbitrário por pixel.
+
+**Raio fixo — optimized PCF 5×5 em 9 taps.** Cada `SampleCmpLevelZero` já é um PCF
+bilinear 2×2 do TMU; escolhendo offsets e pesos em função da posição fracionária do
+receptor dentro do texel, a soma ponderada de 9 taps reproduz *exatamente* um box 5×5
+uniforme — não é aproximação. É o filtro do The Witness (Castaño), na forma do sample do
+MJP e do `SampleShadowMapOptimizedPCF` da Flax. Cobre as cascatas 2 e 3 sempre, e todas
+as cascatas quando o PCSS está desligado.
+
+**Penumbra variável — o disco de Poisson rotado permanece**, mas só nas cascatas 0 e 1 com
+PCSS ligado e só quando a penumbra estimada passa do piso.
+
+A tentativa de manter a penumbra constante em mundo saiu. Ela era anulada pelo piso de um
+texel a partir da cascata 1 e nenhuma das três referências tenta isso.
+
+| chamada de `CSM_PCF` | antes | depois |
+|---|---|---|
+| cascatas 2-3 | 16 `SampleCmp` | **9** |
+| PCSS no piso (contato) | 16 `SampleCmp` + 17 `Load` | **9** + 17 |
+| PCSS com penumbra larga | 16 `SampleCmp` + 17 `Load` | inalterado |
+
+O piso da penumbra subiu de 1 para 2 texels, casado com a meia-largura do box 5×5 para que
+a troca entre as duas famílias seja contínua: no contato, onde o PCSS colapsa, os dois
+filtros têm o mesmo alcance. Com o sol a 0,53° o oclusor precisa estar a mais de 10 m na
+cascata 0 e a mais de 40 m na cascata 1 para sair do piso — ou seja, na cascata 1, que
+cobre 18 a 80 m, o caso comum cai no caminho determinístico e ela deixa de pagar o disco
+por um resultado que já estava grampeado.
+
+Efeito colateral desejado: o caminho de raio fixo não depende mais do ruído animado, e
+portanto não depende do TAA nem do FSR2 para não virar padrão fixo. Sem boiling em
+disocclusion.
+
+O knob `PcfRadiusTexels` mudou de significado — era o raio do kernel fixo, agora é o piso
+da penumbra do PCSS — e o padrão foi de 2,5 para 2,0.
+
+## Fila
 
 **F4, custo do passe de profundidade.** Culling por hull-silhueta; ordenação dos casters
 por alpha-test e material uma única vez, fora do laço de cascatas; migração de D32 para

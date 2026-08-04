@@ -82,7 +82,7 @@ namespace Smile {
         void SetDepthBias(f32 Texels)   { DepthBiasTexels = Texels; }
         void SetCasterPullback(f32 P)   { CasterPullback = P; InvalidateCache(); }
         void SetNormalOffset(f32 Texels){ NormalOffsetTexels = Texels; }
-        void SetPenumbra(f32 Texels)    { PcfRadiusTexels = Texels; }
+        void SetPenumbra(f32 Texels)    { PcfRadiusTexels = Texels; } // piso da penumbra do PCSS
         void SetBlendBand(f32 Fraction) { BlendBand = Fraction; InvalidateCache(); }
         void SetDebugCascades(bool On)  { DebugCascades = On; }
         f32  GetMaxDistance() const     { return ShadowMaxDistance; }
@@ -147,7 +147,11 @@ namespace Smile {
         f32  DepthBiasTexels     = 2.0f;
         f32  NormalOffsetTexels  = 2.5f;
         f32  CasterPullback      = 80.0f;
-        f32  PcfRadiusTexels     = 2.5f;
+        // PISO da penumbra do PCSS, em texels. O caminho de raio fixo virou o optimized PCF
+        // 5x5 (determinístico, 9 taps), entao este knob so governa o PCSS das cascatas 0-1 —
+        // e o valor casa com a meia-largura do 5x5, para que a troca entre as duas familias
+        // de filtro seja continua no contato, onde o PCSS colapsa.
+        f32  PcfRadiusTexels     = 2.0f;
         // Fracao final de cada intervalo de view-depth usada no crossfade. A cascata
         // seguinte e ajustada com a mesma sobreposicao (contrato Flax/Unreal).
         f32  BlendBand           = 0.1f;

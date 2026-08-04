@@ -37,24 +37,80 @@ float CSM_IGN(float2 p) {
     return frac(52.9829189f * frac(dot(p, float2(0.06711056f, 0.00583715f))));
 }
 
+// Optimized PCF do The Witness (Castano), na forma do sample do MJP e do
+// SampleShadowMapOptimizedPCF da Flax. Cada SampleCmpLevelZero ja e um PCF bilinear 2x2
+// do TMU; escolhendo offsets e pesos em funcao da posicao FRACIONARIA do receptor dentro
+// do texel (s, t), a soma ponderada de 9 taps reproduz EXATAMENTE um box 5x5 uniforme —
+// nao e aproximacao. Custa ((N+1)/2)^2 em vez de N^2.
+//
+// Substitui os 16 taps Poisson rotados no caminho de raio fixo. Ali o raio pedido era
+// sub-texel da cascata 1 em diante (0,63 / 0,18 / 0,06), colidia com o piso e os 16 taps
+// caiam todos dentro de UM texel — 16 SampleCmp para produzir o que 1 produzia. Alem de
+// caro, dependia do ruido animado, e portanto do TAA, para nao virar padrao fixo.
+// Determinístico: sem ruido, sem boiling em disocclusion, sem depender do upscaler.
+float CSM_OptimizedPCF(float3 uvz, int cascade, float refZ) {
+    const float size    = 1.0f / CSMParams.z;   // resolucao do mapa
+    const float invSize = CSMParams.z;
+
+    float2 uv     = uvz.xy * size;
+    float2 baseUV = floor(uv + 0.5f);
+    float  s      = uv.x + 0.5f - baseUV.x;
+    float  t      = uv.y + 0.5f - baseUV.y;
+    baseUV        = (baseUV - 0.5f) * invSize;
+
+    const float uw0 = 4.0f - 3.0f * s, uw1 = 7.0f, uw2 = 1.0f + 3.0f * s;
+    const float u0  = (3.0f - 2.0f * s) / uw0 - 2.0f;
+    const float u1  = (3.0f + s) / uw1;
+    const float u2  = s / uw2 + 2.0f;
+
+    const float vw0 = 4.0f - 3.0f * t, vw1 = 7.0f, vw2 = 1.0f + 3.0f * t;
+    const float v0  = (3.0f - 2.0f * t) / vw0 - 2.0f;
+    const float v1  = (3.0f + t) / vw1;
+    const float v2  = t / vw2 + 2.0f;
+
+    const float3 uu = float3(u0, u1, u2), vv = float3(v0, v1, v2);
+    const float3 uw = float3(uw0, uw1, uw2), vw = float3(vw0, vw1, vw2);
+
+    float sum = 0.0f;
+    [unroll] for (int j = 0; j < 3; ++j) {
+        [unroll] for (int i = 0; i < 3; ++i) {
+            const float2 o = float2(uu[i], vv[j]) * invSize;
+            sum += uw[i] * vw[j] * SunShadowMap.SampleCmpLevelZero(
+                       ShadowCmp, float3(baseUV + o, (float)cascade), refZ);
+        }
+    }
+    return sum * (1.0f / 144.0f);
+}
+
 float CSM_PCF(float3 uvz, int cascade, float2 screenPos) {
     float refZ = uvz.z - CSMBiasNdc[cascade];
+
+    // Duas familias de filtro, separadas como a Unreal separa (r.Shadow.FilterMethod):
+    // raio FIXO -> optimized PCF determinístico; penumbra VARIAVEL do PCSS -> disco de
+    // Poisson rotado, que e o unico que aceita raio arbitrario por pixel. A tentativa de
+    // manter penumbra constante em mundo escalando o raio por texel0/texelI saiu: ela era
+    // anulada pelo piso de 1 texel a partir da cascata 1 (5,9 -> 9,3 -> 33 -> 101 cm) e
+    // nenhuma das tres engines de referencia tenta isso.
+    const bool pcss = (cascade <= 1) && (CSMParams3.y > 0.0f);
+    if (!pcss) return CSM_OptimizedPCF(uvz, cascade, refZ);
+
+    // Piso da penumbra, em texels. Casado com a meia-largura do box 5x5 acima para que a
+    // troca entre as duas familias seja continua: no contato, onde o PCSS colapsa, os dois
+    // filtros tem o mesmo alcance.
+    const float minTexels = max(CSMParams2.y, 1.0f);
+
     float a = CSM_IGN(screenPos + 5.588238f * CSMParams3.x) * 6.2831853f;
     float s, c; sincos(a, s, c);
     float2x2 rot = float2x2(c, -s, s, c);
-
-    // Penumbra ~constante em mundo: o raio em texels da cascata i encolhe pela razao
-    // texel0/texelI (piso 1 texel), senao a penumbra salta ~4x a cada troca de cascata
-    // e a migracao com a camera fica visivel ("sombra respirando").
-    float texels = max(CSMParams2.y * (CSMTexelWorld[0] / CSMTexelWorld[cascade]), 1.0f);
+    float texels = minTexels;
 
     // PCSS (contact hardening) nas cascatas 0-1: blocker search estima a distancia media
     // dos oclusores e a penumbra cresce com ela (penumbra = dist * tan(meio-angulo do
-    // sol)); no contato o kernel colapsa pra 1 texel = sombra firme. Cascatas 2-3 seguem
-    // no raio fixo (penumbra variavel nao e legivel a centenas de metros). O teto do
-    // kernel e em texels da PROPRIA cascata (padrao UE) — na fronteira 0->1 sombras
-    // muito difusas podem abrir um degrau sutil de suavidade, mascarado pelo blend band.
-    if (cascade <= 1 && CSMParams3.y > 0.0f) {
+    // sol)); no contato o kernel colapsa e a sombra fica firme. Cascatas 2-3 seguem no
+    // raio fixo (penumbra variavel nao e legivel a centenas de metros). O teto do kernel
+    // e em texels da PROPRIA cascata (padrao UE) — na fronteira 0->1 sombras muito difusas
+    // podem abrir um degrau sutil de suavidade, mascarado pelo blend band.
+    {
         const int R = (int)(1.0f / CSMParams.z);
         float searchUV = CSMParams3.z * CSMParams.z; // raio de busca = penumbra maxima
         float sum = 0.0f, cnt = 0.0f;
@@ -82,13 +138,21 @@ float CSM_PCF(float3 uvz, int cascade, float2 screenPos) {
         // O certo e cair no PCF de raio minimo, que ainda le o texel do proprio receptor.
         // Mesma politica da Cry (ShadowCommon.cfi): ela reescala o kernel no contact
         // hardening e sempre filtra, nunca devolve lit no miss.
-        texels = 1.0f;
         if (cnt >= 0.5f) {
             float avgBlocker = sum / cnt;
             float distWorld  = (refZ - avgBlocker) * CSMDepthRangeWorld[cascade];
-            texels = clamp(distWorld * CSMParams3.y / CSMTexelWorld[cascade], 1.0f, CSMParams3.z);
+            texels = clamp(distWorld * CSMParams3.y / CSMTexelWorld[cascade],
+                           minTexels, max(CSMParams3.z, minTexels));
         }
     }
+
+    // Penumbra no piso = contato: o disco de 16 taps nao acrescenta nada sobre o box 5x5
+    // determinístico do mesmo alcance, e custa 16 SampleCmp em vez de 9 mais o ruido. Com
+    // o sol a 0,53 graus e piso de 2 texels, o oclusor precisa estar a mais de 10 m na
+    // cascata 0 e a mais de 40 m na cascata 1 para sair do piso — ou seja, na cascata 1
+    // (18-80 m) o caso COMUM cai aqui, e ela quase nunca pagava o disco por um resultado
+    // que ja estava grampeado.
+    if (texels <= minTexels + 1.0e-3f) return CSM_OptimizedPCF(uvz, cascade, refZ);
 
     float radiusUV = texels * CSMParams.z;
     float vis = 0.0f;
