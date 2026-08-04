@@ -22,6 +22,11 @@ namespace Smile {
         Vec4  VolFogParams;                 // froxel fog: B, O, S, GridSizeZ
         Vec4  VolFogParams2;                // x=alcance (m), y=ligado, zw unused
         Vec4  CamForwardVF;                 // xyz=frente da camera, w unused
+        // Ancoragem do height fog na atmosfera (ver GetExponentialHeightFog). O CB e
+        // alignas(256) e ja estava com folga ate o proximo multiplo, entao crescer e de graca.
+        Vec4  SkyFogParams;                 // x=view height (km), y=raio do planeta (km),
+                                            // z=HeightFogSkyContribution (0 = cor chapada), w=-
+        Vec4  SkyFogSunDir;                 // xyz=direcao P/ o SOL (nao a key light), w=-
     };
 
     class FFogPass {
@@ -40,11 +45,17 @@ namespace Smile {
                             f32 AerialDepthKm, bool VolumetricShafts = false,
                             bool VolFogOn = false, f32 VolFogMaxDist = 100.0f,
                             const Vec4& VolFogGridZ = Vec4{},
-                            const Vec3& CamForward = Vec3{ 0.0f, 0.0f, 1.0f });
+                            const Vec3& CamForward = Vec3{ 0.0f, 0.0f, 1.0f },
+                            // Ancoragem na atmosfera. DirToSun aqui e o SOL de verdade: o
+                            // sky-view LUT e dobrado no azimute DELE, entao a key light (que
+                            // vira lua de noite) daria uv errado. SkyContribution 0 desliga.
+                            const Vec3& DirToSunTrue = Vec3{ 0.0f, 1.0f, 0.0f },
+                            f32 SkyViewHeightKm = 0.0f, f32 SkyBottomRKm = 0.0f,
+                            f32 SkyContribution = 0.0f);
 
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                      u32 DepthSRVSlot, u32 AerialVolumeSRVSlot, u32 VolShaftsSRVSlot,
-                     u32 VolFogSRVSlot);
+                     u32 VolFogSRVSlot, u32 SkyViewSRVSlot);
 
         // Densidades 2-exponenciais colapsadas na altura do observador (mesma conta do
         // UpdatePerFrame) — o raymarch dos sun shafts reconstrói a densidade por altura.
@@ -69,6 +80,12 @@ namespace Smile {
         f32  GetFogHeight() const      { return FogHeight; }
         Vec3 GetFogColor() const       { return FogColor; }
         f32  GetMaxOpacity() const     { return MaxOpacity; }
+        // Quanto da cor do inscatter do height fog vem do ceu daquela direcao, em vez da cor
+        // chapada. Equivalente ao HeightFogContribution da UE. 1 = fisico (o fog converge para
+        // a cor do ceu no horizonte, que e o que mata a faixa clara na linha do oceano);
+        // 0 = comportamento historico, bit a bit. E o botao do A/B.
+        void SetHeightFogSkyContribution(f32 V) { HeightFogSkyContribution = V; }
+        f32  GetHeightFogSkyContribution() const { return HeightFogSkyContribution; }
         bool IsInitialized() const     { return Initialized; }
 
     private:
@@ -90,6 +107,7 @@ namespace Smile {
         f32  MaxOpacity     = 0.85f;
         f32  StartDistance  = 0.0f;
         f32  CutoffDistance = 0.0f;
+        f32  HeightFogSkyContribution = 1.0f;
 
         f32  Density2       = 0.0f;
         f32  HeightFalloff2 = 0.0005f;

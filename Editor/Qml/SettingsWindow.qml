@@ -1882,7 +1882,7 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 552
+                height: 620
                 title: "Volumetric fog"
 
                 Text {
@@ -1997,6 +1997,25 @@ Rectangle {
                     y: 447
                     checked: viewportModel.volFogConsDepth
                     onToggled: viewportModel.SetVolFogConsDepth(!checked)
+                }
+
+                Rectangle { x: 20; y: 498; width: parent.width - 40; height: 1; color: root.divider }
+
+                Text {
+                    x: 20; y: 516
+                    text: "Height fog analítico — céu na cor do inscatter"
+                    color: root.textPrimary
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                ShadowSlider {
+                    x: 20; y: 546
+                    width: parent.width - 40
+                    label: "0 = cor chapada (antigo) · 1 = cor do céu naquela direção"
+                    from: 0; to: 1.0; step: 0.05
+                    value: viewportModel.heightFogSkyContribution
+                    valueText: viewportModel.heightFogSkyContribution.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => viewportModel.SetHeightFogSkyContribution(v)
                 }
             }
 

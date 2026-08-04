@@ -113,6 +113,9 @@ namespace SmileEditor {
         Q_PROPERTY(bool volFogTemporal READ IsVolFogTemporal NOTIFY VolFogSettingsChanged)
         Q_PROPERTY(double volFogLights READ GetVolFogLights NOTIFY VolFogSettingsChanged)
         Q_PROPERTY(bool volFogConsDepth READ IsVolFogConsDepth NOTIFY VolFogSettingsChanged)
+        // Height fog analitico: quanto do inscatter vem do ceu daquela direcao (0 = cor chapada)
+        Q_PROPERTY(double heightFogSkyContribution READ GetHeightFogSkyContribution
+                       NOTIFY VolFogSettingsChanged)
         Q_PROPERTY(bool oceanEnabled READ IsOceanEnabled NOTIFY OceanSettingsChanged)
         Q_PROPERTY(double oceanWindDirectionDegrees READ GetOceanWindDirectionDegrees NOTIFY OceanSettingsChanged)
         Q_PROPERTY(double oceanWindSpeed READ GetOceanWindSpeed NOTIFY OceanSettingsChanged)
@@ -269,6 +272,7 @@ namespace SmileEditor {
         double            GetVolFogPhaseG() const;
         double            GetVolFogDensity() const;
         double            GetVolFogAmbient() const;
+        double            GetHeightFogSkyContribution() const;
         bool              IsVolFogTemporal() const;
         double            GetVolFogLights() const;
         bool              IsVolFogConsDepth() const;
@@ -401,6 +405,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SetVolFogPhaseG(double value);
         Q_INVOKABLE void SetVolFogDensity(double value);
         Q_INVOKABLE void SetVolFogAmbient(double value);
+        Q_INVOKABLE void SetHeightFogSkyContribution(double value);
         Q_INVOKABLE void SetVolFogTemporal(bool enabled);
         Q_INVOKABLE void SetVolFogLights(double value);
         Q_INVOKABLE void SetVolFogConsDepth(bool enabled);

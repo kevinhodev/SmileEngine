@@ -1900,11 +1900,19 @@ namespace Smile {
             VolumetricFog.ResetHistory(); // efeito dormiu: historia/PrevVP obsoletos
         }
 
+        // Ancoragem do height fog na atmosfera: so faz sentido com o ceu procedural ligado (com
+        // HDRI/skybox o SkyView LUT nao descreve o ceu que esta na tela). SunN, nao KeyDir: o
+        // LUT e dobrado no azimute do SOL, entao a lua daria uv errado a noite.
+        const bool FogSkyAnchor = UseAtmosphereSky && Atmosphere.IsInitialized();
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm(),
                            VolShaftsActive, VolFogActive, VolumetricFog.GetMaxDistance(),
-                           VolumetricFog.GridZParams(), CamForwardW);
+                           VolumetricFog.GridZParams(), CamForwardW,
+                           SunN,
+                           FogSkyAnchor ? Atmosphere.ViewHeightKm()   : 0.0f,
+                           FogSkyAnchor ? Atmosphere.BottomRadiusKm() : 0.0f,
+                           Fog.GetHeightFogSkyContribution());
         Fog.SetDensity(FogDensityBase);
 
         const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kPlanetRadiusOffsetKm;
@@ -3423,7 +3431,8 @@ namespace Smile {
             Fog.Execute(CommandList, SRVHeap, DepthSRVSlot, Atmosphere.AerialVolumeSRV(),
                         SunShafts.IsInitialized() ? SunShafts.VolumetricSRVSlot()
                                                   : DepthSRVSlot,
-                        VolFogOn ? VolumetricFog.IntegratedSRVSlot() : DepthSRVSlot);
+                        VolFogOn ? VolumetricFog.IntegratedSRVSlot() : DepthSRVSlot,
+                        Atmosphere.IsInitialized() ? Atmosphere.SkyViewSRV() : DepthSRVSlot);
             GpuProfiler.End(CommandList); // Fog
 
             Batch.Transition(DepthBuffer.Get(), FogDepthRead,

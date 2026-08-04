@@ -1,6 +1,11 @@
 #ifndef SMILE_FOG_COMMON_HLSLI
 #define SMILE_FOG_COMMON_HLSLI
 
+// Matematica pura da atmosfera (sem cbuffer) — daqui sai a conversao direcao -> uv do
+// sky-view LUT usada pela ancoragem do height fog. O AtmosphereCommon.hlsli NAO serve: ele
+// declara o proprio b0, que colide com o FogCB.
+#include "../Atmosphere/AtmosphereMath.hlsli"
+
 cbuffer FogCB : register(b0) {
     float4 ExponentialFogParameters;     
     float4 ExponentialFogParameters2;    
@@ -16,6 +21,9 @@ cbuffer FogCB : register(b0) {
     float4 VolFogParams;   // froxel fog: x=B, y=O, z=S (slice = log2(z*B+O)*S), w=GridSizeZ
     float4 VolFogParams2;  // x = alcance (m), y = ligado (>0.5), zw unused
     float4 CamForwardVF;   // xyz = frente da camera (exclusao do analitico + slice por dist)
+    float4 SkyFogParams;   // x = view height (km), y = raio do planeta (km),
+                           // z = HeightFogSkyContribution (0 = cor chapada, comportamento antigo)
+    float4 SkyFogSunDir;   // xyz = direcao P/ o SOL (o LUT e dobrado no azimute dele)
 };
 
 Texture3D<float4> AerialVolume     : register(t1);
@@ -27,6 +35,9 @@ Texture2D<float4> VolumetricShafts : register(t2);
 // acumulado ate o slice, a = transmitancia. Cobre 0..VolFogParams2.x; alem disso
 // o height fog analitico continua (excluido do range coberto, receita da UE).
 Texture3D<float4> VolumetricFogTex : register(t3);
+// Sky-view LUT da atmosfera — a MESMA textura que o sky PS amostra. Ver
+// GetExponentialHeightFog: o inscatter do fog converge p/ a cor do ceu naquela direcao.
+Texture2D<float4> SkyViewLUT       : register(t4);
 SamplerState      LinearClampSampler : register(s0);
 
 float CalculateLineIntegralShared(float falloff, float rayDirZ, float rayOriginTerms) {
@@ -88,7 +99,30 @@ float4 GetExponentialHeightFog(float3 worldPosRelCam, float excludeDist) {
         dirInscatter = float3(0.0f, 0.0f, 0.0f);
     }
 
-    float3 fogColor = FogInscatteringColor.rgb * (1.0f - expFogFactor) + dirInscatter;
+    // ANCORAGEM NA ATMOSFERA (HeightFogContribution da UE, SkyAtmosphereCommon.ush:356-365
+    // consumido em HeightFogCommon.ush:190).
+    //
+    // Com a cor chapada, os dois lados da linha do horizonte convergiam p/ numeros sem relacao
+    // nenhuma: acima, o SkyView LUT na direcao do horizonte (que segue o TOD); abaixo,
+    // FogInscatteringColor.rgb * (1 - MinFogOpacity) — uma CONSTANTE. De dia (0.42,0.55,0.70)
+    // x 0.85 fica perto do ceu e passa despercebido; de noite o ceu no horizonte vale ~0.005 e
+    // a agua distante saturava em ~0.5: 100x mais clara, a faixa clara na linha do oceano.
+    //
+    // Amostrar o MESMO LUT que o sky PS resolve por construcao: no limite de distancia a
+    // geometria converge p/ o mesmo valor do pixel de ceu logo acima, em qualquer hora do dia.
+    // Nao ha fator de escala — o sky PS escreve o valor cru do LUT no HDR, entao as duas
+    // pontas ja vivem na mesma unidade.
+    //
+    // Contribuicao 0 preserva o comportamento historico bit a bit (e o botao do A/B).
+    float3 fogTint = FogInscatteringColor.rgb;
+    if (SkyFogParams.z > 0.0f) {
+        float2 skyUv  = AtmoWorldDirToSkyViewUv(dir, SkyFogSunDir.xyz,
+                                                SkyFogParams.x, SkyFogParams.y);
+        float3 fogSky = SkyViewLUT.SampleLevel(LinearClampSampler, skyUv, 0.0f).rgb;
+        fogTint = lerp(FogInscatteringColor.rgb, fogSky, SkyFogParams.z);
+    }
+
+    float3 fogColor = fogTint * (1.0f - expFogFactor) + dirInscatter;
     return float4(fogColor, expFogFactor);
 }
 

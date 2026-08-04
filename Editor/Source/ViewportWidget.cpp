@@ -1490,6 +1490,16 @@ namespace SmileEditor {
         emit VolFogSettingsChanged();
     }
 
+    double ViewportWidget::GetHeightFogSkyContribution() const {
+        return Renderer ? Renderer->GetFog().GetHeightFogSkyContribution() : 1.0;
+    }
+
+    void ViewportWidget::SetHeightFogSkyContribution(double _Value) {
+        if (!Renderer) return;
+        Renderer->GetFog().SetHeightFogSkyContribution(static_cast<Smile::f32>(_Value));
+        emit VolFogSettingsChanged();
+    }
+
     bool ViewportWidget::IsVolFogTemporal() const {
         return Renderer ? Renderer->GetVolumetricFog().GetTemporal() : true;
     }

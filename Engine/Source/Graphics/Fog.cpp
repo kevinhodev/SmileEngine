@@ -37,7 +37,11 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE VolFogRange = DepthRange;
         VolFogRange.BaseShaderRegister = 3;
 
-        D3D12_ROOT_PARAMETER RootParams[5]{};
+        // Sky-view LUT: o inscatter do height fog converge p/ a cor do ceu naquela direcao.
+        D3D12_DESCRIPTOR_RANGE SkyViewRange = DepthRange;
+        SkyViewRange.BaseShaderRegister = 4;
+
+        D3D12_ROOT_PARAMETER RootParams[6]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -61,6 +65,11 @@ namespace Smile {
         RootParams[4].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[4].DescriptorTable.pDescriptorRanges   = &VolFogRange;
         RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[5].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[5].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[5].DescriptorTable.pDescriptorRanges   = &SkyViewRange;
+        RootParams[5].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -179,7 +188,9 @@ namespace Smile {
                                   u32 _Width, u32 _Height, bool _UseAerial, bool _UseHeightFog,
                                   f32 _AerialDepthKm, bool _VolumetricShafts,
                                   bool _VolFogOn, f32 _VolFogMaxDist,
-                                  const Vec4& _VolFogGridZ, const Vec3& _CamForward) {
+                                  const Vec4& _VolFogGridZ, const Vec3& _CamForward,
+                                  const Vec3& _DirToSunTrue, f32 _SkyViewHeightKm,
+                                  f32 _SkyBottomRKm, f32 _SkyContribution) {
         FrameSlot = _FrameSlot;
         if (!MappedBase) return;
 
@@ -211,12 +222,20 @@ namespace Smile {
         c.VolFogParams2  = { _VolFogMaxDist, _VolFogOn ? 1.0f : 0.0f, 0.0f, 0.0f };
         c.CamForwardVF   = { _CamForward.X, _CamForward.Y, _CamForward.Z, 0.0f };
 
+        // Sem view height valido (atmosfera desligada/nao inicializada) a contribuicao cai a
+        // zero: o LUT bindado nesse caso e um placeholder e nao pode ser amostrado.
+        const bool SkyOk = _SkyViewHeightKm > _SkyBottomRKm && _SkyBottomRKm > 0.0f;
+        const Vec3 SunTrue = _DirToSunTrue.NormalizedSafe(Vec3{ 0.0f, 1.0f, 0.0f });
+        c.SkyFogParams = { _SkyViewHeightKm, _SkyBottomRKm,
+                           SkyOk ? std::clamp(_SkyContribution, 0.0f, 1.0f) : 0.0f, 0.0f };
+        c.SkyFogSunDir = { SunTrue.X, SunTrue.Y, SunTrue.Z, 0.0f };
+
         *Mapped() = c;
     }
 
     void FFogPass::Execute(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
                            u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot, u32 _VolShaftsSRVSlot,
-                           u32 _VolFogSRVSlot) {
+                           u32 _VolFogSRVSlot, u32 _SkyViewSRVSlot) {
         if (!Initialized) return;
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
         _CommandList->SetPipelineState(PSO.Get());
@@ -225,6 +244,7 @@ namespace Smile {
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_AerialVolumeSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_VolShaftsSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_VolFogSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(5, _SRVHeap.GpuHandle(_SkyViewSRVSlot));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CommandList->IASetVertexBuffers(0, 0, nullptr);
         _CommandList->IASetIndexBuffer(nullptr);
