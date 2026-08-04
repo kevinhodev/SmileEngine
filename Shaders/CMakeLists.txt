@@ -263,6 +263,7 @@ add_custom_target(Shaders
         Lighting/ReSTIRDINrdComposite.cs.hlsl
         Lighting/MeshLightCommon.hlsli
         Lighting/MeshLightExtract.cs.hlsl
+        Lighting/DILightSampling.hlsli
         Reflections/GGXSample.hlsli
         Reflections/ReflectionMotion.hlsli
         Reflections/ReflectionTrace.cs.hlsl
