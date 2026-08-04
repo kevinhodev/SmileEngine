@@ -12,7 +12,9 @@ namespace Smile {
         constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
         constexpr DXGI_FORMAT kResAFormat   = DXGI_FORMAT_R32G32B32A32_FLOAT;
         constexpr DXGI_FORMAT kResBFormat   = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        constexpr u32 kInitialSRVs = 8;
+        // 10, nao 8: o Pass A passou a tracar o raio de visibilidade do Alg. 5 (TLAS + Instances
+        // para o alpha-test da folhagem), entao ele tambem precisa de root signature bindless.
+        constexpr u32 kInitialSRVs = 10;
         constexpr u32 kInitialUAVs = 2;
         constexpr u32 kSpatialSRVs = 12;
         constexpr u32 kSpatialUAVs = 4;
@@ -44,7 +46,7 @@ namespace Smile {
 
     void FReSTIRDI::Initialize(ID3D12Device* Device) {
         InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_6.cso",
-                                      kInitialSRVs, kInitialUAVs, false);
+                                      kInitialSRVs, kInitialUAVs, true);
         SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso",
                               kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
@@ -58,7 +60,7 @@ namespace Smile {
     void FReSTIRDI::RecreatePSO(ID3D12Device* Device) {
         if (!Initialized) return;
         InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_6.cso",
-                                      kInitialSRVs, kInitialUAVs, false);
+                                      kInitialSRVs, kInitialUAVs, true);
         SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso",
                               kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
@@ -201,7 +203,7 @@ namespace Smile {
                 InitialTable[p][f] = SRVHeap.Allocate(kInitialSRVs);
                 const u32 InitialSlots[kInitialSRVs] = {
                     GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot, VelocitySlot,
-                    ResASRV[Prev], ResBSRV[Prev], LightSlots[f] };
+                    ResASRV[Prev], ResBSRV[Prev], LightSlots[f], TlasSlot, InstanceSlot };
                 CopyTable(InitialTable[p][f], InitialSlots, kInitialSRVs);
 
                 SpatialTable[p][f] = SRVHeap.Allocate(kSpatialSRVs);
@@ -313,7 +315,8 @@ namespace Smile {
         CPU.Reuse = { (Temporal && !NeedsClear) ? 1.0f : 0.0f,
                       PosRejectScale, NormalReject, MaxAge };
         CPU.TemporalPolicy = { EnableTemporalPermutation ? 1.0f : 0.0f,
-                               MotionHistoryValid ? 1.0f : 0.0f, 0.0f, 0.0f };
+                               MotionHistoryValid ? 1.0f : 0.0f,
+                               InitialVisibility ? 1.0f : 0.0f, 0.0f };
         CPU.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                         RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin,

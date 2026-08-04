@@ -82,7 +82,7 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline InitialTemporalPSO; // 8 SRV, 2 UAV
+        FVolumetricPipeline InitialTemporalPSO; // 10 SRV, 2 UAV, bindless alpha-test
         FVolumetricPipeline SpatialPSO;         // 12 SRV, 4 UAV, bindless alpha-test
         FVolumetricPipeline NrdPackPSO;          // 8 SRV, 5 UAV
         FVolumetricPipeline NrdCompositePSO;     // 6 SRV, 1 UAV
@@ -152,8 +152,16 @@ namespace Smile {
         f32 SpatialRadius = 16.0f;
         f32 PosRejectScale = 0.01f;
         f32 NormalReject = 0.9f;
-        f32 MaxAge = 8.0f;
+        // 12, e nao mais: DI_PackMAge satura a idade em 16 e o stagger por pixel chega a 1,25x, entao
+        // acima de 12,8 os pixels do topo da faixa nunca expirariam e a expiracao ficaria incoerente
+        // entre vizinhos. Subiu de 8 porque o MaxAge era curativo para a falta do Alg. 5 passo 2:
+        // com a visibilidade inicial no lugar, a amostra ocluida ja nao trava e o historico pode
+        // viver mais. Ir alem de 12 exige repacotar o ResB (hoje M+idade dividem um canal fp16).
+        f32 MaxAge = 12.0f;
         bool Temporal = true;
+        // Alg. 5 passo 2. Custa 1 raio/pixel a mais (2 no total com o resolve do Pass B); a chave
+        // existe para dar A/B contra o custo.
+        bool InitialVisibility = true;
         FRayEpsilonProfile RayEps;
     };
 }

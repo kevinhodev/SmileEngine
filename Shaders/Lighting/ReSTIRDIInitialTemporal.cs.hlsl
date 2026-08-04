@@ -16,11 +16,13 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 Params;       // x=lightCount, y=frameIndex, z=shadowMask, w=rayEndMargin
     float4 Sampling;     // x=initialCandidates, y=MCap, z=spatialCount, w=spatialRadius
     float4 Reuse;        // x=temporal(0/1), y=posRejectScale, z=normalReject, w=maxAge
-    float4 TemporalPolicy; // x=permutation temporal (0/1); yzw reservados
+    float4 TemporalPolicy; // x=permutation temporal (0/1), z=visibilidade inicial (0/1); yw reservados
     float4 RayEpsA;      // layout compartilhado com o Pass B
     float4 RayEpsB;
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
 };
+
+#include "../RayOffset.hlsli"
 
 Texture2D<float4> GBufferA : register(t0);
 Texture2D<float4> GBufferB : register(t1);
@@ -30,9 +32,39 @@ Texture2D<float2> Velocity : register(t4);
 Texture2D<float4> PrevResA : register(t5); // xyz=x1, w=W
 Texture2D<float4> PrevResB : register(t6); // x=light, y=M+age, zw=n1 oct
 StructuredBuffer<FGPULightFull> Lights : register(t7);
+RaytracingAccelerationStructure Scene : register(t8);
+StructuredBuffer<InstanceGeo> Instances : register(t9);
+
+SamplerState LinearWrap : register(s1);
 
 RWTexture2D<float4> CurrResA : register(u0);
 RWTexture2D<float4> CurrResB : register(u1);
+
+#include "../GI/RTAlphaTest.hlsli"
+
+// Alg. 5, passo 2 do paper (visibility reuse). A target PDF ignora visibilidade de proposito
+// (Secao 5), entao uma luz forte porem OCLUIDA tem pHat enorme e domina o WRS. Sem este teste ela
+// trava no reservoir, o raio final do Pass B devolve 0 e o pixel emite ZERO — enquanto a luz fraca
+// porem VISIVEL que deveria iluminar aquela sombra quase nunca ganha o sorteio. Nao e vazamento de
+// luz (o Pass B sempre testa oclusao no destino): e fome de energia na penumbra. Testar aqui, antes
+// do reuso temporal, impede que a amostra ocluida contamine o historico.
+bool DI_SelectedOccluded(FGPULightFull light, float3 x1, float3 n1, float3 L, float camDist) {
+    const float3 origin = OffsetRayGBuffer(x1, n1, L, camDist);
+    const float3 toLight = light.PosInvRadius.xyz - origin;
+    const float len = length(toLight);
+    const float tMax = len - max(Params.w, 0.0f);
+    if (len <= 1e-6f || tMax <= RayEpsB.x) return false;
+
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = toLight / len;
+    ray.TMin = RayEpsB.x;
+    ray.TMax = tMax;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+    query.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, (uint)Params.z, ray);
+    SMILE_RT_PROCEED(query)
+    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
 
 void StoreInvalid(int2 px) {
     CurrResA[px] = 0.0f;
@@ -77,6 +109,23 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         DIResUpdate(r, lightIndex, target * (float)lightCount, wrsRng);
     }
 
+    const float camDist = length(CameraPos.xyz - x1);
+
+    // Descarta a AMOSTRA ocluida mas PRESERVA o M: o M conta as candidatas SORTEADAS, e todas
+    // foram de fato sorteadas. Zerar o M junto inflaria o brilho no Finalize, que divide por ele.
+    // Equivale ao `reservoirs[q].W = 0` do Alg. 5, que tambem preserva o M para o Alg. 4.
+    if (TemporalPolicy.z > 0.5f && r.LightIndex < lightCount) {
+        const FGPULightFull sel = Lights[r.LightIndex];
+        if (DI_IsShadowCaster(sel)) {
+            float3 diff, spec, L; float dist;
+            DI_Evaluate(sel, g, x1, CameraPos.xyz, diff, spec, L, dist);
+            if (DI_SelectedOccluded(sel, x1, n1, L, camDist)) {
+                r.LightIndex = 0xFFFFFFFFu;
+                r.WeightSum = 0.0f;
+            }
+        }
+    }
+
     if (Reuse.x > 0.5f) {
         const float2 prevUv = uv - Velocity.Load(int3(px, 0));
         if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
@@ -104,7 +153,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             prev.M = min(prevM, Sampling.y);
 
             const float3 prevN = DDGI_OctDecode(prev.N1Oct);
-            const float camDist = length(CameraPos.xyz - x1);
             const float posReject = Reuse.y * max(camDist, 1.0f);
             bool valid = prev.LightIndex < lightCount && prev.M > 0.0f && prev.W > 0.0f &&
                          dot(prevN, n1) >= Reuse.z &&
