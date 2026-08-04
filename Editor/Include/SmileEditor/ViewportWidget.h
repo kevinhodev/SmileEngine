@@ -119,6 +119,8 @@ namespace SmileEditor {
         // Sol/lua atenuados por pixel na altitude da superficie (vs. uma cor por frame)
         Q_PROPERTY(bool perPixelAtmoTransmittance READ IsPerPixelAtmoTransmittance
                        NOTIFY VolFogSettingsChanged)
+        // Ambiente do ceu em SH-L1 (direcional) vs. as 2 cores chapadas
+        Q_PROPERTY(bool skyAmbientSH READ IsSkyAmbientSH NOTIFY VolFogSettingsChanged)
         Q_PROPERTY(bool oceanEnabled READ IsOceanEnabled NOTIFY OceanSettingsChanged)
         Q_PROPERTY(double oceanWindDirectionDegrees READ GetOceanWindDirectionDegrees NOTIFY OceanSettingsChanged)
         Q_PROPERTY(double oceanWindSpeed READ GetOceanWindSpeed NOTIFY OceanSettingsChanged)
@@ -277,6 +279,7 @@ namespace SmileEditor {
         double            GetVolFogAmbient() const;
         double            GetHeightFogSkyContribution() const;
         bool              IsPerPixelAtmoTransmittance() const;
+        bool              IsSkyAmbientSH() const;
         bool              IsVolFogTemporal() const;
         double            GetVolFogLights() const;
         bool              IsVolFogConsDepth() const;
@@ -411,6 +414,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SetVolFogAmbient(double value);
         Q_INVOKABLE void SetHeightFogSkyContribution(double value);
         Q_INVOKABLE void SetPerPixelAtmoTransmittance(bool enabled);
+        Q_INVOKABLE void SetSkyAmbientSH(bool enabled);
         Q_INVOKABLE void SetVolFogTemporal(bool enabled);
         Q_INVOKABLE void SetVolFogLights(double value);
         Q_INVOKABLE void SetVolFogConsDepth(bool enabled);

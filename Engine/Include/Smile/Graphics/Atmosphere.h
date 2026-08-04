@@ -118,7 +118,11 @@ namespace Smile {
         // 2x float4 copiado p/ readback — a CPU le com kFramesInFlight de latencia e escreve nos
         // slots SkyAmbientColor/GroundAmbientColor do FrameConstants (consumidores intactos).
         void RecordSkyAmbientIntegration(ID3D12GraphicsCommandList* CommandList);
+        // [0] ceu, [1] chao (modelo de 2 cores), [2..4] SH-L1 por canal (R,G,B).
+        static constexpr u32 kAmbientVec4s = 5;
         bool GetSkyAmbient(u32 FrameSlot, Vec3& OutSky, Vec3& OutGround) const;
+        // SH-L1 do mesmo integral: OutSH[0]=R, [1]=G, [2]=B, cada um (c0,c1,c2,c3).
+        bool GetSkyAmbientSH(u32 FrameSlot, Vec4 OutSH[3]) const;
 
         void RenderSky(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 

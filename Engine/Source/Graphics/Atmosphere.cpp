@@ -132,7 +132,7 @@ namespace Smile {
 
         // Buffer do ambient (2x float4) + readback ring p/ a CPU ler com latencia segura.
         {
-            constexpr u64 kAmbientBytes = 2 * sizeof(f32) * 4;
+            constexpr u64 kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
 
             D3D12_HEAP_PROPERTIES DefHeap{};
             DefHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -156,7 +156,7 @@ namespace Smile {
             D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
             UAVDesc.Format                      = DXGI_FORMAT_UNKNOWN;
             UAVDesc.ViewDimension               = D3D12_UAV_DIMENSION_BUFFER;
-            UAVDesc.Buffer.NumElements          = 2;
+            UAVDesc.Buffer.NumElements          = kAmbientVec4s;
             UAVDesc.Buffer.StructureByteStride  = sizeof(f32) * 4;
             _SRVHeap.CreateUAV(_Device, AmbientBuffer.Get(), UAVDesc, AmbientUAVSlot);
 
@@ -812,7 +812,7 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(AmbientUAVSlot));
         _CommandList->Dispatch(1, 1, 1);
 
-        constexpr u64 kAmbientBytes = 2 * sizeof(f32) * 4;
+        constexpr u64 kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
         D3D12_RESOURCE_BARRIER B{};
         B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         B.Transition.pResource   = AmbientBuffer.Get();
@@ -835,10 +835,21 @@ namespace Smile {
         // O slot _FrameSlot foi escrito ha kFramesInFlight frames e a fence dele ja foi esperada
         // (CommandQueue::BeginFrame) — leitura segura, latencia invisivel p/ ambient.
         if (!AmbientMapped || AmbientRecorded < FCommandQueue::kFramesInFlight) return false;
-        constexpr size_t kAmbientBytes = 2 * sizeof(f32) * 4;
+        constexpr size_t kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
         const f32* P = reinterpret_cast<const f32*>(AmbientMapped + _FrameSlot * kAmbientBytes);
         _OutSky    = Vec3{ P[0], P[1], P[2] };
         _OutGround = Vec3{ P[4], P[5], P[6] };
+        return true;
+    }
+
+    bool FAtmosphere::GetSkyAmbientSH(u32 _FrameSlot, Vec4 _OutSH[3]) const {
+        if (!AmbientMapped || AmbientRecorded < FCommandQueue::kFramesInFlight) return false;
+        constexpr size_t kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
+        const f32* P = reinterpret_cast<const f32*>(AmbientMapped + _FrameSlot * kAmbientBytes);
+        for (u32 c = 0; c < 3; ++c) {
+            const f32* V = P + (2 + c) * 4; // [0]/[1] sao as 2 cores; a SH comeca em [2]
+            _OutSH[c] = Vec4{ V[0], V[1], V[2], V[3] };
+        }
         return true;
     }
 

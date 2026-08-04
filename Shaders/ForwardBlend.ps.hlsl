@@ -43,9 +43,22 @@ cbuffer FrameCB : register(b0) {
                                // z = km/unidade de mundo, w = transmitancia POR PIXEL (0/1)
     float4 SunColorRaw;        // rgb = sol SEM transmitancia e SEM HorizonFade
     float4 MoonColorRaw;       // rgb = lua SEM transmitancia
+    float4 SkyAmbientSHR;      // SH-L1 do ceu, canal R: (c0, c1, c2, c3)
+    float4 SkyAmbientSHG;
+    float4 SkyAmbientSHB;
+    float4 SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas)
 };
 
 #include "Atmosphere/AtmosphereMath.hlsli"
+#include "Atmosphere/SkyAmbientSH.hlsli"
+
+// Ver DeferredLighting.ps: com a SH ligada o ambiente ganha termo direcional.
+float3 SkyAmbientForNormal(float3 N) {
+    if (SkyAmbientSHParams.x > 0.5f)
+        return EvalSkyAmbientSH(SkyAmbientSHR, SkyAmbientSHG, SkyAmbientSHB, N);
+    float hemi = saturate(N.y * 0.5f + 0.5f);
+    return lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
+}
 
 #include "MaterialCB.hlsli"
 
@@ -101,8 +114,7 @@ struct PSInput {
 float3 DDGI_FallbackAmbient(float3 N) {
     float3 amb = float3(0.0f, 0.0f, 0.0f);
     if (SkyAmbientColor.w > 0.5f) {
-        float hemi = saturate(N.y * 0.5f + 0.5f);
-        amb = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi) * GroundAmbientColor.w;
+        amb = SkyAmbientForNormal(N) * GroundAmbientColor.w;
     } else if (IBLParams.w > 0.5f) {
         amb = IrradianceMap.SampleLevel(IBLSampler, RotateY(N, IBLParams.y), 0.0f).rgb
             * IBLParams.x;
@@ -214,8 +226,7 @@ ForwardBlendOutput main(PSInput input) {
         // Sem (1 - Metallic): ele ja esta no DiffuseColor (convencao em BRDF.hlsli).
         AmbientDiffuse = DiffuseColor * SampleSceneDDGI(input.worldPos, N) * giIntensity;
     } else if (UseAtmoAmbient) {
-        float  hemi       = saturate(N.y * 0.5f + 0.5f);
-        float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
+        float3 ambientCol = SkyAmbientForNormal(N);
         AmbientDiffuse = DiffuseColor * ambientCol * GroundAmbientColor.w;
     }
 

@@ -32,9 +32,24 @@ cbuffer FrameCB : register(b0) {
                                // z = km/unidade de mundo, w = transmitancia POR PIXEL (0/1)
     float4 SunColorRaw;        // rgb = sol SEM transmitancia e SEM HorizonFade
     float4 MoonColorRaw;       // rgb = lua SEM transmitancia
+    float4 SkyAmbientSHR;      // SH-L1 do ceu, canal R: (c0, c1, c2, c3)
+    float4 SkyAmbientSHG;
+    float4 SkyAmbientSHB;
+    float4 SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas)
 };
 
 #include "Atmosphere/AtmosphereMath.hlsli"
+#include "Atmosphere/SkyAmbientSH.hlsli"
+
+// Ambiente do ceu para esta normal. Com a SH ligada o resultado tem termo DIRECIONAL: no poente
+// a parede virada pro sol fica quente e a oposta fria. As 2 cores chapadas so variavam com N.y,
+// entao as duas paredes recebiam exatamente a mesma coisa.
+float3 SkyAmbientForNormal(float3 N) {
+    if (SkyAmbientSHParams.x > 0.5f)
+        return EvalSkyAmbientSH(SkyAmbientSHR, SkyAmbientSHG, SkyAmbientSHB, N);
+    float hemi = saturate(N.y * 0.5f + 0.5f);
+    return lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
+}
 
 // LUT de transmitancia da atmosfera. Mesma textura que o sky PS e o bake de aerial perspective
 // leem — nao ha uma segunda implementacao da integral.
@@ -217,8 +232,7 @@ float SpecularOcclusionFromAO(float noV, float roughness, float ao) {
 float3 DDGI_FallbackAmbient(float3 N) {
     float3 amb = float3(0.0f, 0.0f, 0.0f);
     if (SkyAmbientColor.w > 0.5f) {
-        float hemi = saturate(N.y * 0.5f + 0.5f);
-        amb = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi) * GroundAmbientColor.w;
+        amb = SkyAmbientForNormal(N) * GroundAmbientColor.w;
     } else if (IBLParams.w > 0.5f) {
         amb = IrradianceMap.SampleLevel(IBLSampler, RotateY(N, IBLParams.y), 0.0f).rgb
             * IBLParams.x;
@@ -450,8 +464,7 @@ float4 main(VSOutput input) : SV_Target {
     bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
 
     if (UseAtmoAmbient && !UseGI) {
-        float  hemi       = saturate(N.y * 0.5f + 0.5f);
-        float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
+        float3 ambientCol = SkyAmbientForNormal(N);
         // Sem (1 - Metallic) aqui: ele ja esta no DiffuseColor (convencao em BRDF.hlsli).
         Ambient += DiffuseColor * ambientCol * AODiffuse * GroundAmbientColor.w;
     }

@@ -1882,7 +1882,7 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 672
+                height: 722
                 title: "Volumetric fog"
 
                 Text {
@@ -2038,6 +2038,28 @@ Rectangle {
                     y: 605
                     checked: viewportModel.perPixelAtmoTransmittance
                     onToggled: viewportModel.SetPerPixelAtmoTransmittance(!checked)
+                }
+
+                Text {
+                    x: 20; y: 656
+                    text: "Ambiente do céu direcional (SH-L1)"
+                    color: root.textPrimary
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 675
+                    text: "desligado = 2 cores chapadas, ambiente só varia com o Y da normal"
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 655
+                    checked: viewportModel.skyAmbientSH
+                    onToggled: viewportModel.SetSkyAmbientSH(!checked)
                 }
             }
 

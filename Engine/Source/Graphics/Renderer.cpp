@@ -1773,6 +1773,23 @@ namespace Smile {
             MappedCB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
                                              UseAtmosphereAmbient ? 1.0f : 0.0f };
             MappedCB->GroundAmbientColor = { Ground.X, Ground.Y, Ground.Z, AtmoAmbientIntensity };
+
+            // SH-L1 do MESMO integral. So vale com o ceu procedural: o fallback analitico acima
+            // nao tem SH, e nesse caso o shader cai nas 2 cores chapadas.
+            Vec4 SH[3]{};
+            const bool HasSH = Physical && Atmosphere.GetSkyAmbientSH(FrameSlot, SH);
+            if (HasSH) {
+                // O dim de chuva escurece IRRADIANCIA, entao escala a SH inteira — mesma
+                // politica que as 2 cores acima recebem.
+                for (u32 c = 0; c < 3; ++c)
+                    SH[c] = { SH[c].X * RainAmbDim, SH[c].Y * RainAmbDim,
+                              SH[c].Z * RainAmbDim, SH[c].W * RainAmbDim };
+            }
+            MappedCB->SkyAmbientSHR = SH[0];
+            MappedCB->SkyAmbientSHG = SH[1];
+            MappedCB->SkyAmbientSHB = SH[2];
+            MappedCB->SkyAmbientSHParams = { (HasSH && UseSkyAmbientSH) ? 1.0f : 0.0f,
+                                             0.0f, 0.0f, 0.0f };
         }
 
         if (UseGI && DDGI.IsReady()) {

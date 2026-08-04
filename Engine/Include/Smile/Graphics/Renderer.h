@@ -124,6 +124,15 @@ namespace Smile {
         // e isso que torna o .w um A/B de verdade em vez de um rewrite.
         Vec4  SunColorRaw;        // rgb = cor base * dim de chuva, w = -
         Vec4  MoonColorRaw;       // rgb = tint da lua * dim de chuva, w = -
+
+        // --- Ambiente do ceu em SH-L1 (append no fim) --------------------------------------
+        // Um float4 por CANAL, cada um com (c0, c1, c2, c3) na base real l=0/l=1. As 2 cores
+        // chapadas (SkyAmbientColor/GroundAmbientColor) continuam preenchidas e sao o fallback
+        // e o botao do A/B — elas so variam com o Y da normal, a SH tem o termo direcional.
+        Vec4  SkyAmbientSHR;
+        Vec4  SkyAmbientSHG;
+        Vec4  SkyAmbientSHB;
+        Vec4  SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas), yzw = -
     };
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
@@ -435,6 +444,8 @@ namespace Smile {
         bool GetUseSunShafts() const           { return UseSunShafts; }
         void SetPerPixelAtmoTransmittance(bool Use) { UsePerPixelAtmoTransmittance = Use; }
         bool GetPerPixelAtmoTransmittance() const   { return UsePerPixelAtmoTransmittance; }
+        void SetSkyAmbientSH(bool Use)         { UseSkyAmbientSH = Use; }
+        bool GetSkyAmbientSH() const           { return UseSkyAmbientSH; }
         FSunShafts& GetSunShafts()             { return SunShafts; }
         const FSunShafts& GetSunShafts() const { return SunShafts; }
 
@@ -1005,6 +1016,8 @@ namespace Smile {
         // Sol/lua atenuados por pixel na altitude da SUPERFICIE, em vez de uma cor unica por
         // frame calculada na altitude da camera. Botao do A/B (AtmoLightParams.w).
         bool            UsePerPixelAtmoTransmittance = true;
+        // Ambiente do ceu em SH-L1 (direcional) no lugar das 2 cores chapadas. Botao do A/B.
+        bool            UseSkyAmbientSH = true;
 
         FFogPass        Fog;
         FVolumetricFogPass VolumetricFog;

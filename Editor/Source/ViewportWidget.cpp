@@ -1510,6 +1510,16 @@ namespace SmileEditor {
         emit VolFogSettingsChanged();
     }
 
+    bool ViewportWidget::IsSkyAmbientSH() const {
+        return Renderer ? Renderer->GetSkyAmbientSH() : true;
+    }
+
+    void ViewportWidget::SetSkyAmbientSH(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->SetSkyAmbientSH(_Enabled);
+        emit VolFogSettingsChanged();
+    }
+
     bool ViewportWidget::IsVolFogTemporal() const {
         return Renderer ? Renderer->GetVolumetricFog().GetTemporal() : true;
     }
