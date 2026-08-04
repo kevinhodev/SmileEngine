@@ -159,10 +159,25 @@ namespace Smile {
             // sem mudar a resposta do GI/reflexos.
             relax.diffuseMaxAccumulatedFrameNum = 20;
             relax.specularMaxAccumulatedFrameNum = 20;
-            relax.diffuseMaxFastAccumulatedFrameNum = 3;
-            relax.specularMaxFastAccumulatedFrameNum = 3;
             relax.diffusePhiLuminance = 1.0f;
             relax.spatialVarianceEstimationHistoryThreshold = 1;
+
+            // Receita do GPU Zen 3 cap. 7, p. 219 (CDPR/NVIDIA, Ray Tracing: Overdrive): como o
+            // ReSTIR DI entrega variancia BAIXA no input, da para deixar a fast history bem curta
+            // (eles usam 1 a 2 frames) e o color clamping agressivo. Isso torna o historico regular
+            // responsivo — o caso motivador la e sombra em movimento (pas de ventilador girando),
+            // que com historico longo o denoiser nao acompanha.
+            relax.diffuseMaxFastAccumulatedFrameNum = 2;
+            relax.specularMaxFastAccumulatedFrameNum = 2;
+
+            // NRDSettings.h exige historyFixFrameNum < maxFastAccumulatedFrameNum. Com o fast em 3
+            // e o default 3 isso ja estava no limite; baixar o fast para 2 obriga a descer aqui.
+            relax.historyFixFrameNum = 1;
+
+            // Clamp do box de cor da historia lenta contra a rapida. Faixa valida [1;3], default 2;
+            // o proprio NRD anota que 1,5 funciona ate para sinal sujo, e o nosso e mais limpo que
+            // isso. 1,0 e o piso se o A/B pedir mais agressividade.
+            relax.fastHistoryClampingSigmaScale = 1.5f;
         }
         nrd::SetDenoiserSettings(*Instance, 0, &relax);
 
