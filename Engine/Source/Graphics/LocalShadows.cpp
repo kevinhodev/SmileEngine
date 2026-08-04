@@ -184,7 +184,9 @@ namespace Smile {
         Raster.DepthClipEnable       = TRUE;
         Raster.DepthBias             = 0;
         Raster.SlopeScaledDepthBias  = 2.0f; // perspectiva concentra precisao no near: um pouco mais que o CSM
-        Raster.DepthBiasClamp        = 0.0f;
+        // Teto do slope bias — 0 seria SEM CLAMP no D3D12 e o termo explodiria em poligono
+        // rasante a luz (ver a nota longa no PSO do CSM, em SunShadows.cpp).
+        Raster.DepthBiasClamp        = 0.001f;
 
         D3D12_BLEND_DESC Blend{};
         Blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;

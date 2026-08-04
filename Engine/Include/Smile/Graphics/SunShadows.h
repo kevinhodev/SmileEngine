@@ -21,6 +21,9 @@ namespace Smile {
         Vec4  Params3;           // x = frame do ruido do PCF, y = tan(meio-angulo do sol; 0 = PCSS off), z = penumbra max (texels)
         Vec4  BiasScale;         // multiplicador do depth bias por cascata (default 1,1,1,1)
         Vec4  DepthRangeWorld;   // extensao em mundo do range de depth do ortho, por cascata (PCSS)
+        Vec4  CascadeSplits;     // profundidade view-space do fim de cada cascata
+        Vec4  CameraPosition;    // xyz = camera em mundo
+        Vec4  CameraForwardNear; // xyz = frente da camera, w = near plane
     };
 
     struct alignas(256) ShadowCascadeConstants {
@@ -74,7 +77,7 @@ namespace Smile {
         void SetCasterPullback(f32 P)   { CasterPullback = P; InvalidateCache(); }
         void SetNormalOffset(f32 Texels){ NormalOffsetTexels = Texels; }
         void SetPenumbra(f32 Texels)    { PcfRadiusTexels = Texels; }
-        void SetBlendBand(f32 UV)       { BlendBand = UV; }
+        void SetBlendBand(f32 Fraction) { BlendBand = Fraction; InvalidateCache(); }
         void SetDebugCascades(bool On)  { DebugCascades = On; }
         f32  GetMaxDistance() const     { return ShadowMaxDistance; }
         f32  GetDepthBias() const       { return DepthBias; }
@@ -135,6 +138,8 @@ namespace Smile {
         f32  NormalOffsetTexels  = 2.5f;
         f32  CasterPullback      = 80.0f;
         f32  PcfRadiusTexels     = 2.5f;
+        // Fracao final de cada intervalo de view-depth usada no crossfade. A cascata
+        // seguinte e ajustada com a mesma sobreposicao (contrato Flax/Unreal).
         f32  BlendBand           = 0.1f;
         bool DebugCascades       = false;
         bool Initialized         = false;

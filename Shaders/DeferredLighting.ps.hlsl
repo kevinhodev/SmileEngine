@@ -369,7 +369,16 @@ float4 main(VSOutput input) : SV_Target {
             }
         }
 
-        Lighting += (SunLit + MoonLit) * SampleCSM(worldPos, N, input.pos.xy) * cloudShadow;
+        // O CSM so e amostrado quando existe luz direta para ele modular. Com N.L <= 0 (e sem
+        // transmissao) o BRDF_DirectSplit ja devolveu zero, e o antigo produto incondicional
+        // gastava 16-32 SampleCmp — mais 17 Load quando o PCSS esta ligado — para multiplicar
+        // zero. Numa cena externa isso e ~metade dos pixels. O resultado e identico pixel a
+        // pixel (0 * x = 0) e folhagem/subsurface seguem cobertas: elas transmitem via
+        // TransColor, entao SunLit continua > 0 mesmo com N.L <= 0 e o gate deixa passar.
+        float3 Direct = SunLit + MoonLit;
+        [branch] if (any(Direct > 0.0f))
+            Direct *= SampleCSM(worldPos, N, input.pos.xy) * cloudShadow;
+        Lighting += Direct;
     }
 
     // Luzes puntuais (point/spot): inverse-square com janela de raio da Unreal

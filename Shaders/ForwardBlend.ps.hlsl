@@ -212,9 +212,14 @@ ForwardBlendOutput main(PSInput input) {
             DirectDiffuse  += MoonDiffuse;
             DirectSpecular += MoonSpecular;
         }
-        float Shadow = SampleCSM(input.worldPos, N, input.pos.xy);
-        DirectDiffuse  *= Shadow;
-        DirectSpecular *= Shadow;
+        // Mesmo gate do deferred: sem luz direta nao ha o que sombrear. Aqui e ainda mais
+        // simples porque o ForwardBlend passa TransColor = 0 nas duas chamadas do BRDF, entao
+        // difuso e especular zerados significam N.L <= 0 no sol E na lua.
+        [branch] if (any(DirectDiffuse > 0.0f) || any(DirectSpecular > 0.0f)) {
+            float Shadow = SampleCSM(input.worldPos, N, input.pos.xy);
+            DirectDiffuse  *= Shadow;
+            DirectSpecular *= Shadow;
+        }
     }
 
     // --- Ambiente difuso: DDGI quando ha grid; senao hemisferio atmosferico. ---

@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <algorithm>
 
 namespace Smile {
     void FSunShadows::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
@@ -154,7 +155,15 @@ namespace Smile {
         Raster.DepthClipEnable       = FALSE;
         Raster.DepthBias             = 0;
         Raster.SlopeScaledDepthBias  = 1.0f;
-        Raster.DepthBiasClamp        = 0.0f;
+        // TETO do slope bias. No D3D12 um DepthBiasClamp de 0 significa SEM CLAMP, e o termo
+        // do slope e SlopeScaledDepthBias * max(|dz/dx|, |dz/dy|): num poligono quase paralelo
+        // a direcao da luz esse maximo explode e o caster e empurrado para longe da superficie,
+        // vazando luz. A doc da MS descreve o caso ("pushes the polygon extremely far away").
+        // Todas as referencias clampam: a UE em r.Shadow.ShadowMaxSlopeScaleDepthBias = 1.0
+        // (ela nem usa slope bias de hardware — faz analitico no VS com tan(theta) clampado),
+        // a Cry em fDepthBiasClamp = 0.001 no raster E fSlopeClamp = 0.001 no PS. O valor
+        // abaixo e o da Cry; e um TETO, nao o bias tipico (o constante do shader e 6e-4).
+        Raster.DepthBiasClamp        = 0.001f;
 
         D3D12_BLEND_DESC Blend{};
         Blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
@@ -218,7 +227,8 @@ namespace Smile {
 
         CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
                                  1.0f / static_cast<f32>(kResolution), 0.0f };
-        CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
+        CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels,
+                                 std::clamp(BlendBand, 0.0f, 0.5f),
                                  DebugCascades ? 1.0f : 0.0f };
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
             std::memcpy(MappedCSM + static_cast<size_t>(i) * sizeof(CSMConstants),
@@ -229,10 +239,10 @@ namespace Smile {
                                      const Vec3& _CamPos, f32 _FovYRadians, f32 _Aspect,
                                      const Vec3& _DirToSun, f32 _NearZ, f32 _NoiseFrame) {
         FrameSlot = _FrameSlot;
-        (void)_CamPos;
         CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBias,
                                  1.0f / static_cast<f32>(kResolution), _Enabled ? 1.0f : 0.0f };
-        CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, BlendBand,
+        const f32 TransitionFraction = std::clamp(BlendBand, 0.0f, 0.5f);
+        CPUConstants.Params2 = { NormalOffsetTexels, PcfRadiusTexels, TransitionFraction,
                                  DebugCascades ? 1.0f : 0.0f };
         const f32 PcssTan = SunAngularSizeDeg > 0.0f
             ? std::tan(0.5f * SunAngularSizeDeg * 3.14159265f / 180.0f) : 0.0f;
@@ -256,9 +266,19 @@ namespace Smile {
             for (int i = 0; i <= numC; ++i)
                 Splits[i] = _NearZ + Accum(DistributionExponent, i, numC) * (maxD - _NearZ);
 
+            CPUConstants.CascadeSplits = { Splits[1], Splits[2], Splits[3], Splits[4] };
+            CPUConstants.CameraPosition = { _CamPos.X, _CamPos.Y, _CamPos.Z, 0.0f };
+
             const f32 tanV = std::tan(_FovYRadians * 0.5f);
             const f32 tanH = tanV * _Aspect;
             const Mat44 InvView = _View.Inverse();
+            const Vec3 CameraForward{
+                InvView.M[2][0], InvView.M[2][1], InvView.M[2][2]
+            };
+            const Vec3 CameraForwardN = CameraForward.NormalizedSafe(Vec3{ 0.0f, 0.0f, 1.0f });
+            CPUConstants.CameraForwardNear = {
+                CameraForwardN.X, CameraForwardN.Y, CameraForwardN.Z, _NearZ
+            };
 
             auto TransformPoint = [](const Mat44& M, const Vec3& p) -> Vec3 {
                 return Vec3{
@@ -281,7 +301,15 @@ namespace Smile {
             f32* sf = &CPUConstants.CascadeTexelWorld.X;
             f32* dr = &CPUConstants.DepthRangeWorld.X;
             for (int c = 0; c < numC; ++c) {
-                const f32 dn = Splits[c], df = Splits[c + 1];
+                const f32 splitNear = Splits[c];
+                const f32 df = Splits[c + 1];
+                // O crossfade ocorre ANTES do split. Portanto a cascata seguinte precisa
+                // conter fisicamente esse trecho da cascata atual; depender apenas da
+                // sobreposicao acidental das esferas reintroduz uma borda em FOVs largos.
+                const f32 previousSpan = c > 0 ? (Splits[c] - Splits[c - 1]) : 0.0f;
+                const f32 dn = c > 0
+                    ? std::max(_NearZ, splitNear - previousSpan * TransitionFraction)
+                    : splitNear;
                 const f32 FarX = tanH*df, FarY = tanV*df, NearX = tanH*dn, NearY = tanV*dn;
                 const f32 diagFar2 = FarX*FarX + FarY*FarY, diagNear2 = NearX*NearX + NearY*NearY;
                 const f32 len = df - dn;

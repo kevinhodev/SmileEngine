@@ -598,3 +598,18 @@ Normal, Sol e reflexão compartilham momentos de slope anisotrópicos, e o hist�
 dedicado escreve hit distance válido para Ray Reconstruction. O contrato matemático,
 a ordem dos passes, a validação e os limites atuais estão documentados em
 [`OCEAN-AUDIT.md`](OCEAN-AUDIT.md).
+
+---
+
+## 15. Sombra do sol (CSM)
+
+Quatro cascatas 2048² num `Texture2DArray` D32, splits pela progressão geométrica da
+Unreal (expoente 3.0), fitting por esfera da fatia do frustum com snapping de texel e
+raio quantizado, pancaking por hardware (`DepthClipEnable = FALSE`), PCF de 16 taps
+Poisson rotados por ruído, PCSS nas cascatas 0 e 1, crossfade por profundidade de view
+com sobreposição geométrica e cache round-robin nas cascatas distantes. O froxel de
+volumetric fog e os sun shafts consomem o mesmo mapa por um caminho de tap único.
+
+A revisão completa — geometria medida por cascata, defeitos encontrados com severidade,
+comparação linha a linha com Unreal, Cry e Flax, o que a fase 1 corrigiu e a fila que
+resta — está em [`CSM-AUDIT.md`](CSM-AUDIT.md).

@@ -232,6 +232,9 @@ namespace Smile {
         ShadowRaster.CullMode             = D3D12_CULL_MODE_NONE;
         ShadowRaster.DepthClipEnable      = FALSE;
         ShadowRaster.SlopeScaledDepthBias = 1.0f;
+        // Teto do slope bias — 0 seria SEM CLAMP no D3D12 (ver SunShadows.cpp). Aqui pesa
+        // ainda mais: encosta de terreno rasante ao sol e o caso comum, nao o excepcional.
+        ShadowRaster.DepthBiasClamp       = 0.001f;
 
         D3D12_DEPTH_STENCIL_DESC ShadowDepth{};
         ShadowDepth.DepthEnable    = TRUE;
