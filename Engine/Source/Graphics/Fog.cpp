@@ -186,7 +186,7 @@ namespace Smile {
                                   const Vec3& _CameraWorldPos, f32 _KmPerWorldUnit,
                                   const Vec3& _DirToSun, f32 _NearZ, f32 _FarZ,
                                   u32 _Width, u32 _Height, bool _UseAerial, bool _UseHeightFog,
-                                  f32 _AerialDepthKm, bool _VolumetricShafts,
+                                  f32 _AerialDepthKm, f32 _AerialSlices, bool _VolumetricShafts,
                                   bool _VolFogOn, f32 _VolFogMaxDist,
                                   const Vec4& _VolFogGridZ, const Vec3& _CamForward,
                                   const Vec3& _DirToSunTrue, f32 _SkyViewHeightKm,
@@ -213,7 +213,9 @@ namespace Smile {
 
         c.InvViewProj    = _InvViewProjFull;
         c.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
-        c.AerialParams   = { _AerialDepthKm, _UseAerial ? 1.0f : 0.0f, _UseHeightFog ? 1.0f : 0.0f,
+        c.AerialParams   = { _AerialDepthKm,
+                             _UseAerial ? std::max(_AerialSlices, 1.0f) : 0.0f,
+                             _UseHeightFog ? 1.0f : 0.0f,
                              _VolumetricShafts ? 1.0f : 0.0f };
         const f32 W = static_cast<f32>(_Width), H = static_cast<f32>(_Height);
         c.ScreenParams   = { W, H, W > 0 ? 1.0f / W : 0.0f, H > 0 ? 1.0f / H : 0.0f };

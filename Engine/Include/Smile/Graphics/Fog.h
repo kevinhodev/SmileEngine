@@ -16,7 +16,10 @@ namespace Smile {
         Vec4  InscatteringLightDirection;   // xyz=dir TO sun, w=start distance (>=0 enables)
         Mat44 InvViewProj;                  // FULL inverse view-proj
         Vec4  CameraWorldPos;               // xyz=camera world pos, w=km per world unit
-        Vec4  AerialParams;                 // x=AP depth (km), y=useAP, z=useHeightFog, w=shafts volumetricos on
+        // y era um bool (useAP). Virou a CONTAGEM DE SLICES do volume, com 0 = desligado —
+        // superset semantico: todo teste `> 0.5` continua valendo, e o shader deixa de ter
+        // `const float Slices = 16.0f` hardcoded contra o kAerialSlices do CB da atmosfera.
+        Vec4  AerialParams;                 // x=AP depth (km), y=slices AP (0=off), z=useHeightFog, w=shafts volumetricos on
         Vec4  ScreenParams;                 // x=w, y=h, z=1/w, w=1/h
         Vec4  DepthParams;                  // x=near, y=far, z/w unused
         Vec4  VolFogParams;                 // froxel fog: B, O, S, GridSizeZ
@@ -42,7 +45,8 @@ namespace Smile {
                             const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
                             const Vec3& DirToSun, f32 NearZ, f32 FarZ,
                             u32 Width, u32 Height, bool UseAerial, bool UseHeightFog,
-                            f32 AerialDepthKm, bool VolumetricShafts = false,
+                            f32 AerialDepthKm, f32 AerialSlices = 16.0f,
+                            bool VolumetricShafts = false,
                             bool VolFogOn = false, f32 VolFogMaxDist = 100.0f,
                             const Vec4& VolFogGridZ = Vec4{},
                             const Vec3& CamForward = Vec3{ 0.0f, 0.0f, 1.0f },

@@ -434,7 +434,7 @@ namespace Smile {
                                            f32 _GroundRadiusKm,
                                            const Vec3& _DirToSun, const Vec3& _SunColor,
                                            const Vec3& _SkyAmbient, const Vec3& _GroundAmbient,
-                                           f32 _Time, u32 _FrameIndex) {
+                                           f32 _Time, u32 _FrameIndex, f32 _SunIntensity) {
         FrameSlot = _FrameSlot;
         Vec3 d = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 0.6f, 0.8f }.Normalized());
         CPUConstants.InvViewProjNoTrans = _InvVP;
@@ -460,7 +460,11 @@ namespace Smile {
                                    _GroundRadiusKm + _CamWorldPos.Y * Km,
                                    _CamWorldPos.Z * Km,
                                    _GroundRadiusKm + _CamWorldPos.Y * Km };
-        CPUConstants.SunDir    = { d.X, d.Y, d.Z, CPUConstants.SunDir.W };
+        // O .w segue a intensidade do sol da CENA, escalada pelo CloudSunScale. Ele era 6.0
+        // fixo (preservado de proposito a cada update) enquanto a cena usava 5.0 — nuvens
+        // ignoravam qualquer mudanca no sol. O 1.2 do default e calibracao historica, nao
+        // fisica: mantem o visual atual bit a bit e passa a ser um knob explicito.
+        CPUConstants.SunDir    = { d.X, d.Y, d.Z, _SunIntensity * CloudSunScale };
         CPUConstants.SunColor         = { _SunColor.X, _SunColor.Y, _SunColor.Z, 0.0f };
         CPUConstants.SkyAmbientCol    = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };
         CPUConstants.GroundAmbientCol = { _GroundAmbient.X, _GroundAmbient.Y, _GroundAmbient.Z, 0.0f };

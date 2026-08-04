@@ -7,9 +7,11 @@ RWTexture3D<float4> OutAerial        : register(u0);
 
 [numthreads(4, 4, 4)]
 void main(uint3 id : SV_DispatchThreadID) {
-    const float2 VolWH = float2(32.0f, 32.0f);
+    // Dimensoes vindas do CB (kAerialW/kAerialH/kAerialSlices do C++). Eram 32x32 literais
+    // aqui: mudar as constantes no C++ nao chegava no shader.
+    const float2 VolWH  = float2(max(kAerialW, 1.0f), max(kAerialH, 1.0f));
     const float  Slices = max(kAerialSlices, 1.0f);
-    if (id.x >= 32u || id.y >= 32u || (float)id.z >= Slices) return;
+    if ((float)id.x >= VolWH.x || (float)id.y >= VolWH.y || (float)id.z >= Slices) return;
 
     float2 uv  = (float2(id.xy) + 0.5f) / VolWH;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);

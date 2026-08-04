@@ -64,13 +64,10 @@ namespace Smile {
         FFTNormalRange.RegisterSpace                     = 0;
         FFTNormalRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_DESCRIPTOR_RANGE AtmoSkyViewRange{};
-        AtmoSkyViewRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        AtmoSkyViewRange.NumDescriptors                    = 1;
-        AtmoSkyViewRange.BaseShaderRegister                = 5; 
-        AtmoSkyViewRange.RegisterSpace                     = 0;
-        AtmoSkyViewRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
+        // NAO existe range de t5 aqui. Havia uma (AtmoSkyViewRange, com root param e bind por
+        // frame), mas NENHUM shader de Shaders/Water declara register(t5): o sky-view LUT chega
+        // na agua pelo cubemap prefiltrado (SkyReflectionSRV), nao pelo LUT cru. Era descritor
+        // e root param pagos todo frame por nada.
         D3D12_DESCRIPTOR_RANGE SceneRange{};
         SceneRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SceneRange.NumDescriptors                    = 2;
@@ -85,7 +82,7 @@ namespace Smile {
         SunShadowRange.RegisterSpace                     = 0;
         SunShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[15]{};
+        D3D12_ROOT_PARAMETER RootParams[14]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].Descriptor.RegisterSpace  = 0;
@@ -111,45 +108,40 @@ namespace Smile {
         RootParams[4].DescriptorTable.pDescriptorRanges   = &FFTNormalRange;
         RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        RootParams[5].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[5].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[5].DescriptorTable.pDescriptorRanges   = &AtmoSkyViewRange;
-        RootParams[5].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[5].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[5].Descriptor.ShaderRegister = 3; // b3 = CSMCB
+        RootParams[5].Descriptor.RegisterSpace  = 0;
+        RootParams[5].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        RootParams[6].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[6].Descriptor.ShaderRegister = 3; // b3 = CSMCB
-        RootParams[6].Descriptor.RegisterSpace  = 0;
-        RootParams[6].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[6].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[6].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[6].DescriptorTable.pDescriptorRanges   = &SunShadowRange;
+        RootParams[6].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[7].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[7].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[7].DescriptorTable.pDescriptorRanges   = &SunShadowRange;
-        RootParams[7].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[7].DescriptorTable.pDescriptorRanges   = &FFTRange1;
+        RootParams[7].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         RootParams[8].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[8].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[8].DescriptorTable.pDescriptorRanges   = &FFTRange1;
+        RootParams[8].DescriptorTable.pDescriptorRanges   = &FFTRange2;
         RootParams[8].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         RootParams[9].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[9].DescriptorTable.pDescriptorRanges   = &FFTRange2;
-        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+        RootParams[9].DescriptorTable.pDescriptorRanges   = &FFTNormalRange1;
+        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[10].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[10].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[10].DescriptorTable.pDescriptorRanges   = &FFTNormalRange1;
+        RootParams[10].DescriptorTable.pDescriptorRanges   = &FFTNormalRange2;
         RootParams[10].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
-
-        RootParams[11].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[11].DescriptorTable.pDescriptorRanges   = &FFTNormalRange2;
-        RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_DESCRIPTOR_RANGE* PreviousRanges[3] = {
             &FFTPreviousRange0, &FFTPreviousRange1, &FFTPreviousRange2 };
         for (u32 i = 0; i < 3; ++i) {
-            D3D12_ROOT_PARAMETER& Param = RootParams[12 + i];
+            D3D12_ROOT_PARAMETER& Param = RootParams[11 + i];
             Param.ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
             Param.DescriptorTable.NumDescriptorRanges = 1;
             Param.DescriptorTable.pDescriptorRanges   = PreviousRanges[i];
@@ -1137,7 +1129,6 @@ namespace Smile {
                                        const u32 (&_FFTPreviousDisplacementSRVSlots)[kFFTCascades],
                                        const u32 (&_FFTNormalSRVSlots)[kFFTCascades],
                                        u32 _SceneCopyTableStart,
-                                       u32 _AtmosphereSkyViewSRVSlot,
                                        D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddress,
                                        u32 _SunShadowSRVSlot,
                                        EOutputMode _OutputMode) {
@@ -1180,16 +1171,15 @@ namespace Smile {
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[0]));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_SceneCopyTableStart));
         _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[0]));
-        _CommandList->SetGraphicsRootDescriptorTable(5, _SRVHeap.GpuHandle(_AtmosphereSkyViewSRVSlot));
-        _CommandList->SetGraphicsRootConstantBufferView(6, _CSMConstantsAddress);
-        _CommandList->SetGraphicsRootDescriptorTable(7, _SRVHeap.GpuHandle(_SunShadowSRVSlot));
-        _CommandList->SetGraphicsRootDescriptorTable(8, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[1]));
-        _CommandList->SetGraphicsRootDescriptorTable(9, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[2]));
-        _CommandList->SetGraphicsRootDescriptorTable(10, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[1]));
-        _CommandList->SetGraphicsRootDescriptorTable(11, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[2]));
-        _CommandList->SetGraphicsRootDescriptorTable(12, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[0]));
-        _CommandList->SetGraphicsRootDescriptorTable(13, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[1]));
-        _CommandList->SetGraphicsRootDescriptorTable(14, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[2]));
+        _CommandList->SetGraphicsRootConstantBufferView(5, _CSMConstantsAddress);
+        _CommandList->SetGraphicsRootDescriptorTable(6, _SRVHeap.GpuHandle(_SunShadowSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(7, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(8, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[2]));
+        _CommandList->SetGraphicsRootDescriptorTable(9, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(10, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[2]));
+        _CommandList->SetGraphicsRootDescriptorTable(11, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[0]));
+        _CommandList->SetGraphicsRootDescriptorTable(12, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(13, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[2]));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         D3D12_VERTEX_BUFFER_VIEW Views[] = { VBView, GpuInstanceVBView };
         _CommandList->IASetVertexBuffers(0, _countof(Views), Views);

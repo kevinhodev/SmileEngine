@@ -42,6 +42,12 @@ namespace Smile {
         Mat44 ViewProjNoTrans;   // view-proj SEM translacao — projeta o quad das estrelas
         Mat44 StarMatrix;        // frame do catalogo (polo=+Y) -> mundo, com rotacao sideral
         Vec4  StarView;          // xy = output W/H, zw = escala render/output X/Y
+
+        // Dimensoes do volume de aerial perspective. Estavam hardcoded como 32x32 dentro do
+        // BakeAerialPerspective.cs.hlsl enquanto o C++ ja tinha kAerialW/kAerialH: mudar as
+        // constantes do lado do C++ nao chegava no shader (o bake escreveria so um canto do
+        // volume, ou pior, sairia fora). A contagem de slices ja vive no AerialParams.y.
+        Vec4  AerialVolumeSize;  // x = W, y = H, zw = livres
     };
 
     struct FLut2D {
@@ -117,6 +123,10 @@ namespace Smile {
         void RenderSky(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         void BakeIfDirty(ID3D12Device* Device, FCommandQueue& CmdQueue);
+        // Versao que grava na command list DO FRAME (o BakeIfDirty acima faz flush de GPU e so
+        // serve fora do frame, na inicializacao). Sem ela o MarkDirty era inerte: nao existia
+        // caminho que consumisse o flag depois do Initialize.
+        void RecordBakeIfDirty(ID3D12GraphicsCommandList* CommandList);
         void MarkDirty() { Dirty = true; }
 
         u32 TransmittanceSRV() const { return Transmittance.SRVSlot; }
@@ -124,6 +134,7 @@ namespace Smile {
         u32 SkyViewSRV()       const { return SkyView.SRVSlot; }
         u32 AerialVolumeSRV()  const { return AerialPerspectiveVolume.SRVSlot(); }
         f32 AerialDepthKm()    const { return CPUConstants.AerialParams.X; }
+        f32 AerialSliceCount() const { return CPUConstants.AerialParams.Y; }
 
         // Fonte UNICA do "raio do observador" e do raio do planeta, em km. Todo consumidor do
         // sky-view LUT fora do AtmosphereCB (hoje: DDGI, ReSTIR GI e reflexoes, via SkyParams no

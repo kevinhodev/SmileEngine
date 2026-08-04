@@ -141,6 +141,10 @@ namespace Smile {
         void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
             SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
         }
+        // Escurecimento do ceu na chuva (dono = Renderer; mesma politica das reflexoes e do
+        // ReSTIR GI). O membro existia fixo em 1.0, sem setter — o DDGI ignorava o temporal.
+        void SetSkyIntensity(f32 V) { SkyIntensity = V; }
+        f32  GetSkyIntensity() const { return SkyIntensity; }
 
         // Reset one-shot do atlas: o proximo update que REALMENTE rodar usa histerese 0, ou seja,
         // substitui o conteudo em vez de misturar. Necessario p/ calibracao: com Hysteresis 0.99

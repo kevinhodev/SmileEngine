@@ -36,6 +36,7 @@ cbuffer AtmosphereCB : register(b0) {
     row_major float4x4 ViewProjNoTrans;
     row_major float4x4 StarMatrix;
     float4 StarView;
+    float4 AerialVolumeSize; // x = W, y = H do volume de aerial perspective
 };
 
 #define kKmPerWorldUnit (CameraWorldPos.w)
@@ -43,6 +44,8 @@ cbuffer AtmosphereCB : register(b0) {
 #define kAerialSlices   (AerialParams.y)
 #define kAerialStartKm  (AerialParams.z)
 #define kAerialSamples  (AerialParams.w)
+#define kAerialW        (AerialVolumeSize.x)
+#define kAerialH        (AerialVolumeSize.y)
 
 #define kRayleighScaleH (RayleighScattering.w)
 #define kMieScaleH      (MieScattering.w)

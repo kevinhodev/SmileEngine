@@ -1655,6 +1655,13 @@ namespace Smile {
         const f32 RainSky    = Weather.DriveSky ? Weather.RainAmount : 0.0f;
         const f32 RainKeyDim = 1.0f - RainSky * 0.75f;
         const f32 RainAmbDim = 1.0f - RainSky * 0.40f;
+        // POLITICA UNICA de escurecimento do CEU na chuva — o ceu procedural nao sabe da chuva,
+        // entao quem consome a radiancia dele precisa atenuar. Era 1.0 no DDGI e no ReSTIR GI e
+        // so as reflexoes atenuavam: dois dos tres consumidores do mesmo ceu ignoravam o
+        // temporal, e o indireto continuava de dia limpo debaixo de tempestade.
+        // Distinto do RainAmbDim, que escurece IRRADIANCIA (ambiente hemisferico), nao a
+        // radiancia do ceu vista por um raio.
+        const f32 RainSkyDim = 1.0f - RainSky * 0.65f;
 
         Vec3 EffectiveSunColor = SunColorRGB;
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
@@ -1907,6 +1914,7 @@ namespace Smile {
         Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
                            NearZ, FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm(),
+                           Atmosphere.AerialSliceCount(),
                            VolShaftsActive, VolFogActive, VolumetricFog.GetMaxDistance(),
                            VolumetricFog.GridZParams(), CamForwardW,
                            SunN,
@@ -1924,7 +1932,8 @@ namespace Smile {
         VolumetricClouds.UpdatePerFrame(FrameSlot, InvVPNoTrans, InvViewProjFull,
                                         ViewProjUnjittered, CameraPosition, kKmPerWorldUnit,
                                         CloudGroundRadius, KeyDir, KeyCloudCol,
-                                        SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex);
+                                        SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex,
+                                        SunIntensity);
         VolumetricClouds.SetCoverage(CloudCovBase);
 
         Vec4 CloudShadowP{ 0.0f, 0.0f, 0.0f, 0.0f };
@@ -2045,6 +2054,9 @@ namespace Smile {
         }
 
         GpuProfiler.Begin(CommandList, "Céu e atmosfera");
+        // Antes do sky-view: se algum parametro fisico mudou (MarkDirty), transmitancia e
+        // multiscatter sao re-bakeadas na command list deste frame. No-op no caso comum.
+        if (Atmosphere.IsInitialized()) Atmosphere.RecordBakeIfDirty(CommandList);
         if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
             Atmosphere.RecordSkyViewBake(CommandList);
             Atmosphere.RecordSkyAmbientIntegration(CommandList);
@@ -2152,6 +2164,7 @@ namespace Smile {
         DDGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
         Reflections.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
         ReSTIRGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
+        DDGI.SetSkyIntensity(RainSkyDim); // reflexoes e ReSTIR recebem no proprio UpdatePerFrame
 
         if (ReliableMotionActive) {
             TemporalMotion.UpdatePerFrame(FrameSlot, Scene, InvViewProjFull,
@@ -2198,7 +2211,7 @@ namespace Smile {
 
         if (ReflectionsActive) {
             Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
-            const f32 ReflSkyIntensity = 1.0f - RainSky * 0.65f;
+            const f32 ReflSkyIntensity = RainSkyDim;
             const bool WaterUsesAtmosphere = UseAtmosphereSky && Atmosphere.IsInitialized();
             const f32 WaterEnvironmentIntensity =
                 WaterUsesAtmosphere ? ReflSkyIntensity : IBLIntensity;
@@ -2215,7 +2228,7 @@ namespace Smile {
             ReSTIRGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
             ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
                                     RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
-                                    FrameIndex, 1.0f, View,
+                                    FrameIndex, RainSkyDim, View,
                                     PrevJitterUv - JitterUv, GILightCount);
         }
 
@@ -3278,7 +3291,7 @@ namespace Smile {
                 Ocean[0].NormalSRVSlot(), Ocean[1].NormalSRVSlot(), Ocean[2].NormalSRVSlot() };
             Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, OceanDispSlots,
                                 OceanPreviousDispSlots, OceanNormalSlots, SceneCopyTableStart,
-                                Atmosphere.SkyViewSRV(), SunShadows.ConstantsAddress(),
+                                SunShadows.ConstantsAddress(),
                                 SunShadows.ShadowSRVSlot(), WaterOutputMode);
 
             if (WaterReflectionsActive) {

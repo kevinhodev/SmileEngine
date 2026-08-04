@@ -96,7 +96,8 @@ namespace Smile {
         CPUConstants.InvViewProjNoTrans = Mat44::Identity();
         CPUConstants.InvViewProj    = Mat44::Identity();
         CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f };
-        CPUConstants.AerialParams   = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
+        CPUConstants.AerialParams     = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
+        CPUConstants.AerialVolumeSize = { (f32)kAerialW, (f32)kAerialH, 0.0f, 0.0f };
         CPUConstants.StarAxis       = { 0.0f, 1.0f, 0.0f, 0.0f };
         CPUConstants.NightSky       = { 0.0f, 0.0f, 0.0f, 0.0f };
         CPUConstants.ViewProjNoTrans = Mat44::Identity();
@@ -676,6 +677,37 @@ namespace Smile {
     void FAtmosphere::BakeIfDirty(ID3D12Device* _Device, FCommandQueue& _CmdQueue) {
         if (!Initialized || !Dirty) return;
         Bake(_Device, _CmdQueue);
+        Dirty = false;
+    }
+
+    // Mesmo bake das duas LUTs invariantes ao frame, mas GRAVADO na command list do frame.
+    //
+    // O Bake() abaixo faz ResetForRecording + ExecuteAndSync — flush completo de GPU, que so
+    // pode acontecer fora do frame (por isso ele so era chamado de dentro do Initialize). O
+    // resultado pratico era que MarkDirty() nao tinha efeito NENHUM: nao havia caminho que
+    // consumisse o flag depois da inicializacao. Um slider de parametro fisico (coeficientes,
+    // raio do planeta, albedo do solo) seria no-op silencioso.
+    void FAtmosphere::RecordBakeIfDirty(ID3D12GraphicsCommandList* _CommandList) {
+        if (!Initialized || !Dirty || !_CommandList) return;
+        if (MappedBase) *Mapped() = CPUConstants;
+        const D3D12_GPU_VIRTUAL_ADDRESS CB = CBAddr();
+
+        Transmittance.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        TransmittancePSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CB);
+        _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(Transmittance.SRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(Transmittance.UAVSlot));
+        _CommandList->Dispatch((kTransmittanceW + 7) / 8, (kTransmittanceH + 7) / 8, 1);
+        Transmittance.Transition(_CommandList, kReadState);
+
+        MultiScatter.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        MultiScatterPSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CB);
+        _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(Transmittance.SRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(MultiScatter.UAVSlot));
+        _CommandList->Dispatch((kMultiScatterW + 7) / 8, (kMultiScatterH + 7) / 8, 1);
+        MultiScatter.Transition(_CommandList, kReadState);
+
         Dirty = false;
     }
 

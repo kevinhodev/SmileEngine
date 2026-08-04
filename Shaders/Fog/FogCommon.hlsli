@@ -130,8 +130,10 @@ float4 SampleAerialPerspective(float2 screenUV, float tDepthKm, float apDepthKm)
     float linW    = saturate(tDepthKm / max(apDepthKm, 1e-4f));
     float nonLinW = sqrt(linW);
 
-    const float Slices = 16.0f;
-    const float HalfSliceDepth = 0.70710678f; 
+    // Contagem de slices do CB (AerialParams.y), nao mais um 16.0 literal que so por acaso
+    // batia com o kAerialSlices do bake.
+    const float Slices = max(AerialParams.y, 1.0f);
+    const float HalfSliceDepth = 0.70710678f;
     float nonLinSlice = nonLinW * Slices;
     float weight = 1.0f;
     if (nonLinSlice < HalfSliceDepth)

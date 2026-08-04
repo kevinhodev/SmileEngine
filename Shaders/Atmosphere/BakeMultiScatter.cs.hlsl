@@ -95,6 +95,13 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     // Serie geometrica infinita em forma fechada (Hillaire eq. 9 / UE SkyAtmosphere.usf):
     // truncar em poucos termos subestima o multiscatter com fms alto (crepusculo).
-    float3 psiMs = lumTotal / max(1.0f - fmsTotal, 1e-4f);
+    //
+    // O piso do denominador e 0.05, nao 1e-4: com 1e-4 o ganho podia chegar a 10000x. A UE
+    // usa a serie TRUNCADA de 5 termos por padrao (MULTI_SCATTERING_POWER_SERIE 0,
+    // SkyAtmosphere.usf:1321-1323) justamente por causa dessa cauda. Com os coeficientes da
+    // Terra fms << 1 e nao ha diferenca nenhuma no resultado — 0.05 e um teto de 20x de ganho
+    // que so morde se os coeficientes de scattering ou o albedo do solo forem para valores
+    // extremos, que e exatamente o dia em que eles virarem editaveis.
+    float3 psiMs = lumTotal / max(1.0f - fmsTotal, 0.05f);
     OutMultiScatter[id.xy] = float4(psiMs, 1.0f);
 }

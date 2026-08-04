@@ -57,7 +57,6 @@ namespace Smile {
                            const u32 (&FFTPreviousDisplacementSRVSlots)[kFFTCascades],
                            const u32 (&FFTNormalSRVSlots)[kFFTCascades],
                            u32 SceneCopyTableStart,
-                           u32 AtmosphereSkyViewSRVSlot,
                            D3D12_GPU_VIRTUAL_ADDRESS CSMConstantsAddress,
                            u32 SunShadowSRVSlot,
                            EOutputMode OutputMode);
