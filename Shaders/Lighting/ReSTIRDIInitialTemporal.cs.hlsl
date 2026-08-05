@@ -109,23 +109,46 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const uint triCount   = (uint)TemporalPolicy.w;
     const uint totalCount = lightCount + triCount;
 
-    [loop]
-    for (uint i = 0u; i < candidateCount; ++i) {
-        // Pool COMBINADO: analiticas e triangulos emissivos num espaco de indice linear. A escolha
-        // continua uniforme (o GPU Zen 3 p. 198 mediu que potencia nao supera uniforme para luz
-        // analitica) — a alias table da fase 4 e que muda isso, e ai vale, porque com triangulo a
-        // disparidade de area x radiancia e de ordens de grandeza.
-        const uint idx = min((uint)(DI_RandNext(proposalRng) * totalCount), totalCount - 1u);
-        const float2 uv = float2(DI_RandNext(proposalRng), DI_RandNext(proposalRng));
+    // ORCAMENTO POR POOL, e nao um sorteio uniforme no pool combinado. Com 2 analiticas e 26.498
+    // triangulos, uniforme dava ~0,06% de chance de uma das 8 candidatas cair numa analitica: o
+    // poste da rua sumia. Cada pool ganha o mesmo numero de candidatas, que e a estrutura do RTXDI
+    // (numLocalLightSamples / numInfiniteLightSamples / numEnvironmentSamples separados).
+    const uint analyticCands = (lightCount > 0u) ? candidateCount : 0u;
+    const uint meshCands     = (triCount   > 0u) ? candidateCount : 0u;
+    const uint totalCands    = max(analyticCands + meshCands, 1u);
 
+    // O fator M/M_pool NAO e opcional. Amostrar de duas fontes e amostrar de uma MISTURA: a pdf
+    // efetiva de uma amostra do pool A e (M_a/M)*p_A, porque os pools sao disjuntos. Usar so p_A
+    // deixaria o estimador enviesado por um fator M_a/M em cada pool.
+    [loop]
+    for (uint i = 0u; i < analyticCands; ++i) {
+        const uint idx = min((uint)(DI_RandNext(proposalRng) * lightCount), lightCount - 1u);
+        const float2 uv = float2(DI_RandNext(proposalRng), DI_RandNext(proposalRng));
         const DILightSample ls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
                                                    idx, uv, x1);
         float3 diff, spec, L; float dist;
         const float target = DI_TargetFromSample(ls, g, x1, CameraPos.xyz, diff, spec, L, dist);
-
-        // Peso RIS = pHat / p, com p = (1/N) * pdf em angulo solido da amostra na luz escolhida.
         const float w = (ls.SolidAnglePdf > 0.0f)
-                      ? (target * (float)totalCount / ls.SolidAnglePdf) : 0.0f;
+                      ? (target * (float)lightCount * (float)totalCands
+                         / ((float)analyticCands * ls.SolidAnglePdf)) : 0.0f;
+        DIResUpdate(r, idx, uv, w, wrsRng);
+    }
+
+    // Dentro do pool de triangulos a escolha ainda e uniforme, e isso continua ruim: 1/26498 por
+    // triangulo. E o que a alias table por potencia resolve. Aqui o ganho e so nao deixar os
+    // emissivos roubarem as propostas das analiticas.
+    [loop]
+    for (uint j = 0u; j < meshCands; ++j) {
+        const uint tri = min((uint)(DI_RandNext(proposalRng) * triCount), triCount - 1u);
+        const uint idx = lightCount + tri;
+        const float2 uv = float2(DI_RandNext(proposalRng), DI_RandNext(proposalRng));
+        const DILightSample ls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                   idx, uv, x1);
+        float3 diff, spec, L; float dist;
+        const float target = DI_TargetFromSample(ls, g, x1, CameraPos.xyz, diff, spec, L, dist);
+        const float w = (ls.SolidAnglePdf > 0.0f)
+                      ? (target * (float)triCount * (float)totalCands
+                         / ((float)meshCands * ls.SolidAnglePdf)) : 0.0f;
         DIResUpdate(r, idx, uv, w, wrsRng);
     }
 
