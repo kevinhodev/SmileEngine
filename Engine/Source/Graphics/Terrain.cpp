@@ -46,17 +46,24 @@ namespace Smile {
             return T * T * (3.0f - 2.0f * T);
         }
 
-        f32 Frac(f32 _X) { return _X - std::floor(_X); }
-
-        // Hash/ruido copiados 1:1 do PS. NAO produzem o MESMO campo do shader: frac(sin(x)*43758)
-        // amplifica em ~4e4 qualquer diferenca entre o sin do hardware e o da libm, entao o padrao
-        // de MANCHAS de terra e de macro variation fica descorrelacionado do que a tela desenha.
-        // A estatistica (escala, cobertura, contraste) e identica, e os termos que realmente
-        // estruturam a cor — rocha por declive e camada alta por altitude — sao funcoes puras da
-        // heightmap e batem EXATAMENTE. Alinhar os dois exigiria trocar o hash por um inteiro
-        // (exato nos dois lados), o que mudaria o desenho do terreno ja validado na tela.
+        // Hash/ruido copiados 1:1 do PS, e desta vez BIT A BIT: o hash e inteiro de 32 bits, cuja
+        // semantica (incluindo o wraparound do produto) e identica em HLSL e C++, e a saida usa so
+        // 24 bits — cabe exato na mantissa do float e a escala e potencia de 2, entao a conversao
+        // nao arredonda. O campo de ruido que a tela desenha e o que o bake gera sao o MESMO, e as
+        // manchas de terra e a macro variation ficam no mesmo lugar no raster e no GI.
+        //
+        // Era frac(sin(x)*43758), que amplificava em ~4e4 a diferenca entre o sin do hardware e o
+        // da libm: o bake produzia um campo com a mesma estatistica, mas descorrelacionado.
+        u32 HashUint2(i32 _X, i32 _Y) {
+            u32 h = static_cast<u32>(_X) * 0x9E3779B1u ^ static_cast<u32>(_Y) * 0x85EBCA77u;
+            h ^= h >> 15; h *= 0x2C1B3C6Du;
+            h ^= h >> 12; h *= 0x297A2D39u;
+            h ^= h >> 15;
+            return h;
+        }
         f32 Hash2(f32 _X, f32 _Y) {
-            return Frac(std::sin(_X * 127.1f + _Y * 311.7f) * 43758.5453f);
+            const u32 H = HashUint2(static_cast<i32>(_X), static_cast<i32>(_Y)) >> 8;
+            return static_cast<f32>(H) * (1.0f / 16777216.0f);
         }
 
         f32 ValueNoise(f32 _X, f32 _Y) {

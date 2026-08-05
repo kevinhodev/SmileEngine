@@ -41,8 +41,26 @@ static const float3 kLodDebugColors[8] = {
 // Value noise 2D barato p/ os patches de terra e a macro variation — sem textura de
 // ruido. 3 oitavas ROTACIONADAS entre si: mata os losangos axis-aligned da
 // interpolacao bilinear (F2 usava 2 oitavas alinhadas — patches poligonais duros).
+//
+// Hash INTEIRO (bit-mix de 32 bits), e nao o classico frac(sin(x)*43758): aquele
+// amplifica em ~4e4 qualquer diferenca entre o sin do hardware e o de outra
+// implementacao, entao era impossivel reproduzi-lo fora do shader. O bake do albedo do
+// proxy de RT (FTerrain::BakeProxyAlbedo) precisa gerar EXATAMENTE este campo, senao as
+// manchas de terra e a macro variation ficam num lugar na tela e noutro no GI. Operacao
+// inteira de 32 bits tem semantica identica em HLSL e C++, incluindo o wraparound.
+//
+// A entrada e sempre inteira (vem do floor() do ValueNoise), entao o cast p/ int e exato.
+// A saida usa so 24 bits: uint de 24 bits cabe exato na mantissa do float e a escala e
+// potencia de 2, entao a conversao nao arredonda — nao sobra nem 1 ULP de divergencia.
+uint HashUint2(int2 v) {
+    uint h = (uint)v.x * 0x9E3779B1u ^ (uint)v.y * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du;
+    h ^= h >> 12; h *= 0x297A2D39u;
+    h ^= h >> 15;
+    return h;
+}
 float Hash2(float2 p) {
-    return frac(sin(dot(p, float2(127.1f, 311.7f))) * 43758.5453f);
+    return (float)(HashUint2((int2)p) >> 8) * (1.0f / 16777216.0f);
 }
 float ValueNoise(float2 p) {
     const float2 i = floor(p);
