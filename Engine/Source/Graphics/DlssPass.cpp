@@ -1,5 +1,6 @@
 #include "Smile/Graphics/DlssPass.h"
 #include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Core/Logger.h"
 
 #if SMILE_SL_ENABLED
@@ -20,17 +21,6 @@ namespace Smile {
         constexpr u32         kInvalidSlot = 0xFFFFFFFFu;
         constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        void Transition(ID3D12GraphicsCommandList* Cmd, ID3D12Resource* Res,
-                        D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
-            if (Before == After) return;
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = Res;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = Before;
-            B.Transition.StateAfter  = After;
-            Cmd->ResourceBarrier(1, &B);
-        }
 
         // Mat44 (row-major, row-vector) -> sl::float4x4 (row-major). Copia direta; se a reprojecao
         // sair errada e a convencao do SL for column-vector, transpor aqui (ver Risks no plano).
@@ -244,7 +234,7 @@ namespace Smile {
     void FDlssPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& _UpscaleParams) {
         if (!P || !P->Created || !Cmd || !_UpscaleParams.Color || !_UpscaleParams.Depth || !_UpscaleParams.Velocity) return;
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
         auto* CmdBuf = reinterpret_cast<sl::CommandBuffer*>(Cmd);
@@ -253,7 +243,7 @@ namespace Smile {
         const uint32_t  FrameIdx = _UpscaleParams.Reset ? 0u : 0u; // token por frame (indice opcional)
         if (slGetNewFrameToken(Frame, nullptr) != sl::Result::eOk || !Frame) {
             LogError("DLSS: slGetNewFrameToken falhou");
-            Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             return;
         }
@@ -319,7 +309,7 @@ namespace Smile {
         // eDisableCLStateTracking e default: o SL pode ter mexido no estado do CL. O Renderer rebinda os
         // descriptor heaps antes do post chain (o post chain seta o proprio root sig/PSO).
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         P->FirstDispatch = false;
     }

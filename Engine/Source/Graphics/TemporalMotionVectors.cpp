@@ -1,4 +1,5 @@
 #include "Smile/Graphics/TemporalMotionVectors.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VramTracker.h"
@@ -13,41 +14,18 @@ namespace Smile {
     namespace {
         ComPtr<ID3D12Resource> CreateTexture2D(ID3D12Device* Device, u32 Width, u32 Height,
                                                DXGI_FORMAT Format) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = Width;
-            Desc.Height           = Height;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = Format;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Result;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Result)));
-            VramTracker::Register(Result.Get(), EVramCategory::GI);
-            return Result;
+            return GpuResources::CreateTex2D(Device, Width, Height, Format,
+                                             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
         }
 
         ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* Device, UINT64 Size, u8** Mapped) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            ComPtr<ID3D12Resource> Result;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Result)));
-            D3D12_RANGE NoRead{ 0, 0 };
-            SMILE_HR(Result->Map(0, &NoRead, reinterpret_cast<void**>(Mapped)));
-            return Result;
+            // Alinhamento de CB desligado: aqui o chamador ja passa o tamanho total e fatia
+            // o mapeado na mao pelo FrameSlot.
+            GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(Device, Size, 1, /*ForConstantBuffer*/ false);
+            *Mapped = Upload.Mapped;
+            return Upload.Resource;
         }
     }
 

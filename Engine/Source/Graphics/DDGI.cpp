@@ -1,4 +1,5 @@
 #include "Smile/Graphics/DDGI.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
@@ -23,22 +24,9 @@ namespace Smile {
 
         ComPtr<ID3D12Resource> CreateTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
                                            DXGI_FORMAT _Fmt) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = _W;
-            Desc.Height           = _H;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = _Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Tex;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::GI);
-            return Tex;
+            return GpuResources::CreateTex2D(_Device, _W, _H, _Fmt,
+                                             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
         }
 
         struct DDGIInstanceGeo {
@@ -62,44 +50,17 @@ namespace Smile {
         ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                    D3D12_RESOURCE_STATES _State,
                                                    D3D12_RESOURCE_FLAGS _Flags = D3D12_RESOURCE_FLAG_NONE) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = _Flags;
-            ComPtr<ID3D12Resource> Buf;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     _State, nullptr, IID_PPV_ARGS(&Buf)));
-            VramTracker::Register(Buf.Get(), EVramCategory::GI);
-            return Buf;
+            return GpuResources::CreateBuffer(_Device, _Size, _Flags, _State, EVramCategory::GI);
         }
 
         ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                   u8** _MappedOut) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            ComPtr<ID3D12Resource> Buf;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Buf)));
-            if (_MappedOut) {
-                D3D12_RANGE NoRead{ 0, 0 };
-                SMILE_HR(Buf->Map(0, &NoRead, reinterpret_cast<void**>(_MappedOut)));
-            }
-            return Buf;
+            // Sem alinhamento de CB: os chamadores passam o tamanho TOTAL ja multiplicado por
+            // kFramesInFlight e fatiam o mapeado na mao pelo FrameSlot.
+            GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, _Size, 1, /*ForConstantBuffer*/ false);
+            if (_MappedOut) *_MappedOut = Upload.Mapped;
+            return Upload.Resource;
         }
     }
 

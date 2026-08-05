@@ -1,5 +1,6 @@
 #include "Smile/Graphics/FsrPass.h"
 #include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Core/Logger.h"
 
 #if SMILE_FSR_ENABLED
@@ -19,17 +20,6 @@ namespace Smile {
         constexpr u32         kInvalidSlot = 0xFFFFFFFFu;
         constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        void Transition(ID3D12GraphicsCommandList* Cmd, ID3D12Resource* Res,
-                        D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
-            if (Before == After) return;
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = Res;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = Before;
-            B.Transition.StateAfter  = After;
-            Cmd->ResourceBarrier(1, &B);
-        }
     }
 
     struct FFsrPass::Impl {
@@ -145,7 +135,7 @@ namespace Smile {
     void FFsrPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
         if (!P || !P->Created || !Cmd || !In.Color || !In.Depth || !In.Velocity) return;
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
         // O estado passado em cada FfxApiResource deve refletir o estado ATUAL do recurso: o chamador
@@ -186,7 +176,7 @@ namespace Smile {
         if (Rc != FFX_API_RETURN_OK)
             LogError("FSR: ffxDispatch falhou (codigo " + std::to_string(Rc) + ")");
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         P->FirstDispatch = false;
     }

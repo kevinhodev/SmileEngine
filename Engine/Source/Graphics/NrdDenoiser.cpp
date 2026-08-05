@@ -1,4 +1,5 @@
 #include "Smile/Graphics/NrdDenoiser.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
@@ -89,18 +90,9 @@ namespace Smile {
 #if SMILE_NRD_ENABLED
     namespace {
         ComPtr<ID3D12Resource> CreateTex(ID3D12Device* Dev, u32 W, u32 H, DXGI_FORMAT Fmt) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC D{};
-            D.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            D.Width = W; D.Height = H; D.DepthOrArraySize = 1; D.MipLevels = 1;
-            D.Format = Fmt; D.SampleDesc = { 1, 0 };
-            D.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            D.Flags  = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> T;
-            SMILE_HR(Dev->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &D,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&T)));
-            VramTracker::Register(T.Get(), EVramCategory::GI);
-            return T;
+            return GpuResources::CreateTex2D(Dev, W, H, Fmt,
+                                             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
         }
     }
 #endif

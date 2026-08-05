@@ -21,6 +21,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/D3D12Device.h
     Include/Smile/Graphics/CommandQueue.h
     Include/Smile/Graphics/DescriptorHeap.h
+    Include/Smile/Graphics/Barriers.h
+    Include/Smile/Graphics/GpuResources.h
     Include/Smile/Graphics/SwapChain.h
     Include/Smile/Graphics/PipelineState.h
     Include/Smile/Graphics/Camera.h
@@ -87,6 +89,7 @@ set(ENGINE_SOURCES
     Source/Graphics/UploadQueue.cpp
     Source/Graphics/ComputeQueue.cpp
     Source/Graphics/DescriptorHeap.cpp
+    Source/Graphics/GpuResources.cpp
     Source/Graphics/SwapChain.cpp
     Source/Graphics/PipelineState.cpp
     Source/Graphics/Camera.cpp

@@ -3,6 +3,7 @@
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -568,15 +569,9 @@ namespace Smile {
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr =
             CB->GetGPUVirtualAddress() + static_cast<UINT64>(_FrameSlot) * sizeof(DDGIDebugConstants);
 
-        auto Transition = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After) {
-            if (State == After) return;
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = R;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = State;
-            B.Transition.StateAfter  = After;
-            _CL->ResourceBarrier(1, &B);
+        auto Transition = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& State,
+                              D3D12_RESOURCE_STATES After) {
+            TransitionResource(_CL, R, State, After);
             State = After;
         };
         // Stability e um retrato do trace ATUAL. ProbeData.w so e atualizado durante a
