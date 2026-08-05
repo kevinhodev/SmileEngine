@@ -13,6 +13,14 @@ if(EXISTS "${SMILE_NVAPI_ROOT}/nvHLSLExtns.h")
     set(SMILE_TIMER_FLAGS -D SMILE_SHADER_TIMER=1 -I "${SMILE_NVAPI_ROOT}")
 endif()
 
+# Os *NrdPack incluem NRD.hlsli (encode que casa com o decode interno do RELAX). Mesma cache var
+# do Engine/CMakeLists.txt — set(... CACHE) nao reescreve entrada existente, entao declarar aqui
+# so torna este arquivo independente da ordem dos add_subdirectory. Era um literal
+# "D:/Engines/NRD/Shaders" repetido 3x: quem sobrescrevesse SMILE_NRD_ROOT linkava contra um SDK
+# e compilava os shaders contra outro.
+set(SMILE_NRD_ROOT "D:/Engines/NRD" CACHE PATH "Raiz do NRD SDK")
+set(SMILE_NRD_SHADER_INCLUDE -I "${SMILE_NRD_ROOT}/Shaders")
+
 smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
@@ -60,7 +68,7 @@ endif()
 smile_compile_shader(GI/ReGIRBuild.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReGIRAverage.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 # Pack dos inputs do NRD (inclui NRD.hlsli p/ o encode R10G10B10A2 que casa com o decode interno)
-smile_compile_shader(GI/ReSTIRNrdPack.cs.hlsl   cs_6_6 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
+smile_compile_shader(GI/ReSTIRNrdPack.cs.hlsl   cs_6_6 main SHADER_OUTPUTS ${SMILE_NRD_SHADER_INCLUDE})
 # Debug do DDGI (passe grafico separado): esferas de probe + wireframe do volume + stats
 smile_compile_shader(GI/DDGIDebugProbes.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugProbes.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
@@ -75,7 +83,7 @@ smile_compile_shader(GI/DDGIDebugPoint.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Lighting/ReSTIRDIInitialTemporal.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(Lighting/ReSTIRDISpatial.cs.hlsl         cs_6_6 main SHADER_OUTPUTS)
 # Instancia RELAX dedicada ao direto: pack demodulado e composite remodulado.
-smile_compile_shader(Lighting/ReSTIRDINrdPack.cs.hlsl          cs_6_6 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
+smile_compile_shader(Lighting/ReSTIRDINrdPack.cs.hlsl          cs_6_6 main SHADER_OUTPUTS ${SMILE_NRD_SHADER_INCLUDE})
 smile_compile_shader(Lighting/ReSTIRDINrdComposite.cs.hlsl     cs_6_6 main SHADER_OUTPUTS)
 # Mesh lights: extrai os triangulos emissivos da cena para o pool de luzes.
 smile_compile_shader(Lighting/MeshLightExtract.cs.hlsl         cs_6_6 main SHADER_OUTPUTS)
@@ -95,7 +103,7 @@ smile_compile_shader(Reflections/ReflectionSpatial.cs.hlsl   cs_6_0 main SHADER_
 smile_compile_shader(Reflections/ReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/WaterReflectionComposite.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 # Pack do sinal especular p/ o NRD (RELAX) — inclui NRD.hlsli p/ o RELAX_FrontEnd_Pack*
-smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS -I "D:/Engines/NRD/Shaders")
+smile_compile_shader(Reflections/ReflectionNrdPack.cs.hlsl   cs_6_0 main SHADER_OUTPUTS ${SMILE_NRD_SHADER_INCLUDE})
 
 # DLSS Ray Reconstruction — guides de material (albedo difuso/especular, normal-roughness) derivados
 # do G-buffer + extracao do hitDist especular do Resolved. Alimentam o slEvaluateFeature(kFeatureDLSS_RR).
@@ -225,155 +233,13 @@ smile_compile_shader(Gizmo/LightIcon.vs.hlsl              vs_6_0 main SHADER_OUT
 smile_compile_shader(Gizmo/LightIcon.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
 
+# Lista do IDE derivada, nao mantida a mao: todos os .hlsl registrados acima + todos os .hlsli
+# da arvore. A lista manual anterior tinha ~150 linhas e ja divergira em 14 shaders e 9 headers.
+smile_shader_target_sources(SHADER_IDE_SOURCES)
+
 add_custom_target(Shaders
     DEPENDS ${SHADER_OUTPUTS}
-    SOURCES
-        Common/DepthConfig.hlsli
-        Debug/ShaderTimer.hlsli
-        GBuffer.hlsli
-        GBuffer.ps.hlsl
-        DebugView.ps.hlsl
-        DeferredLighting.ps.hlsl
-        BRDF.hlsli
-        Triangle.vs.hlsl
-        DepthNormal.ps.hlsl
-        Skybox.vs.hlsl
-        Skybox.ps.hlsl
-        Shadow/CSMCommon.hlsli
-        Shadow/ShadowDepth.vs.hlsl
-        Shadow/ShadowDepth.ps.hlsl
-        GI/DDGICommon.hlsli
-        GI/HitShading.hlsli
-        GI/RTGeometry.hlsli
-        Debug/BvhDebug.cs.hlsl
-        GI/ReGIRCommon.hlsli
-        GI/ReGIRSampling.hlsli
-        GI/ReGIRBuild.cs.hlsl
-        GI/ReGIRAverage.cs.hlsl
-        GI/DDGITrace.cs.hlsl
-        GI/DDGIUpdate.cs.hlsl
-        GI/DDGIUpdateDist.cs.hlsl
-        GI/DDGIRelocate.cs.hlsl
-        GI/DDGIDebugProbes.vs.hlsl
-        GI/DDGIDebugProbes.ps.hlsl
-        GI/DDGIDebugVolume.vs.hlsl
-        GI/DDGIDebugVolume.ps.hlsl
-        GI/DDGIDebugRays.vs.hlsl
-        GI/DDGIDebugRays.ps.hlsl
-        GI/DDGIDebugStats.cs.hlsl
-        GI/DDGIDebugPoint.cs.hlsl
-        Lighting/ReSTIRDICommon.hlsli
-        Lighting/ReSTIRDIInitialTemporal.cs.hlsl
-        Lighting/ReSTIRDISpatial.cs.hlsl
-        Lighting/ReSTIRDINrdPack.cs.hlsl
-        Lighting/ReSTIRDINrdComposite.cs.hlsl
-        Lighting/MeshLightCommon.hlsli
-        Lighting/MeshLightExtract.cs.hlsl
-        Lighting/DILightSampling.hlsli
-        Reflections/GGXSample.hlsli
-        Reflections/ReflectionMotion.hlsli
-        Reflections/ReflectionTrace.cs.hlsl
-        Reflections/ReflectionTraceMirror.cs.hlsl
-        Reflections/WaterReflectionTrace.cs.hlsl
-        Reflections/WaterReflectionTemporal.cs.hlsl
-        Reflections/ReflectionResolve.cs.hlsl
-        Reflections/ReflectionTemporal.cs.hlsl
-        Reflections/ReflectionSpatial.cs.hlsl
-        Reflections/ReflectionComposite.ps.hlsl
-        Reflections/WaterReflectionComposite.ps.hlsl
-        Reflections/ReflectionNrdPack.cs.hlsl
-        Upscale/DlssRRGuides.cs.hlsl
-        Upscale/DlssRRSpecHit.cs.hlsl
-        Upscale/DlssRRWaterSpecHit.cs.hlsl
-        Upscale/BackgroundVelocity.cs.hlsl
-        Temporal/TemporalMotionCommon.hlsli
-        Temporal/TemporalSurface.cs.hlsl
-        Temporal/DualMotion.cs.hlsl
-        HZB/HZBBuild.cs.hlsl
-        HZB/HZBTest.cs.hlsl
-        AO/GTAOCommon.hlsli
-        AO/GTAO.cs.hlsl
-        AO/GTAOBlur.cs.hlsl
-        IBL/Common.hlsli
-        IBL/EquirectToCube.cs.hlsl
-        IBL/MipGen.cs.hlsl
-        IBL/IrradianceConvolution.cs.hlsl
-        IBL/SpecularPrefilter.cs.hlsl
-        IBL/BRDFIntegration.cs.hlsl
-        Atmosphere/AtmosphereMath.hlsli
-        Atmosphere/SkyAmbientSH.hlsli
-        Atmosphere/AtmosphereCommon.hlsli
-        Atmosphere/BakeTransmittance.cs.hlsl
-        Atmosphere/BakeMultiScatter.cs.hlsl
-        Atmosphere/BakeSkyView.cs.hlsl
-        Atmosphere/SkyAtmosphere.vs.hlsl
-        Atmosphere/SkyAtmosphere.ps.hlsl
-        Atmosphere/BakeAerialPerspective.cs.hlsl
-        Atmosphere/IntegrateSkyAmbient.cs.hlsl
-        Atmosphere/BakeSkyReflection.cs.hlsl
-        Atmosphere/StarField.vs.hlsl
-        Atmosphere/StarField.ps.hlsl
-        Fog/FogCommon.hlsli
-        Fog/FogApply.hlsli
-        Fog/FogFullscreen.vs.hlsl
-        Fog/FogFullscreen.ps.hlsl
-        Fog/VolumetricFogCommon.hlsli
-        Fog/VolumetricFogSetup.cs.hlsl
-        Fog/VolumetricFogScattering.cs.hlsl
-        Fog/VolumetricFogIntegrate.cs.hlsl
-        Fog/VolumetricFogConsDepth.cs.hlsl
-        Rain/RainCommon.hlsli
-        Rain/RainWetness.ps.hlsl
-        Rain/RainCurtain.ps.hlsl
-        Rain/RainParticles.vs.hlsl
-        Rain/RainParticles.ps.hlsl
-        Rain/RainSplash.vs.hlsl
-        Rain/RainSplash.ps.hlsl
-        SunShafts/SunShaftsVolumetric.ps.hlsl
-        SunShafts/SunShaftsTemporal.ps.hlsl
-        Clouds/CloudNoiseCommon.hlsli
-        Clouds/CloudDensity.hlsli
-        Clouds/CloudLighting.hlsli
-        Clouds/BakeBaseNoise.cs.hlsl
-        Clouds/BakeDetailNoise.cs.hlsl
-        Clouds/BakeWeather.cs.hlsl
-        Clouds/CloudRaymarch.cs.hlsl
-        Clouds/CloudTemporal.cs.hlsl
-        Clouds/CloudShadowMap.cs.hlsl
-        Clouds/CloudComposite.vs.hlsl
-        Clouds/CloudComposite.ps.hlsl
-        Water/WaterCommon.hlsli
-        Water/WaterSurface.vs.hlsl
-        Water/WaterSurface.ps.hlsl
-        Water/WaterGenerateDraws.cs.hlsl
-        Water/OceanFFTCommon.hlsli
-        Water/OceanUpdateSpectrum.cs.hlsl
-        Water/OceanFFT.cs.hlsl
-        Water/OceanCreateDisplacement.cs.hlsl
-        Water/OceanGradients.cs.hlsl
-        Water/OceanDisplacementMip.cs.hlsl
-        Water/OceanNormalMip.cs.hlsl
-        Water/WaterSceneColorMip.cs.hlsl
-        Tonemap/PostProcess.vs.hlsl
-        Tonemap/BloomExtract.ps.hlsl
-        Tonemap/BloomBlur.ps.hlsl
-        Tonemap/BloomDownsample.ps.hlsl
-        Tonemap/BloomUpsample.ps.hlsl
-        Tonemap/FinalTonemap.ps.hlsl
-        Tonemap/TAAResolve.ps.hlsl
-        Tonemap/FlickerHeatmap.ps.hlsl
-        Selection/SelectionGeom.vs.hlsl
-        Selection/ObjectID.ps.hlsl
-        Selection/SelectionMask.ps.hlsl
-        Selection/SelectionOutline.ps.hlsl
-        Gizmo/DebugDraw.vs.hlsl
-        Gizmo/DebugDraw.ps.hlsl
-        Gizmo/DebugDrawOccluded.ps.hlsl
-        Gizmo/DebugDrawLine.vs.hlsl
-        Gizmo/DebugDrawLine.ps.hlsl
-        Gizmo/DebugDrawLineDepth.ps.hlsl
-        Gizmo/LightIcon.vs.hlsl
-        Gizmo/LightIcon.ps.hlsl
+    SOURCES ${SHADER_IDE_SOURCES}
 )
 
 # Mantem a pasta Shaders visivel no Visual Studio com seus .hlsl
