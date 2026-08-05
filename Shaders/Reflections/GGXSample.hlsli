@@ -80,7 +80,9 @@ uint GGX_XXHash32(uint4 p) {
 #define SMILE_RNG_DI_TEMPORAL   9000u // WRS inicial + temporal do ReSTIR DI
 #define SMILE_RNG_DI_SPATIAL   10000u // WRS espacial do ReSTIR DI
 #define SMILE_RNG_DI_SPATIAL_TAP 11000u // + i: offset do vizinho espacial do ReSTIR DI
-#define SMILE_RNG_DI_LIGHTPOINT 12000u // ponto amostrado na fonte esferica p/ o raio de sombra
+// 12000 foi o stream do ponto na fonte esferica; ficou orfao quando o reservoir passou a guardar
+// a UV da amostra e os dois passes deixaram de precisar concordar por seed. Nao reciclar o id:
+// manter o buraco preserva a decorrelacao dos streams vizinhos entre versoes.
 
 uint GGX_SeedE(uint2 px, uint frame, uint effect) {
     return GGX_XXHash32(uint4(frame, px.x, px.y, effect));

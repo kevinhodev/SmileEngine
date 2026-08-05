@@ -8,6 +8,8 @@
 #include "../Reflections/GGXSample.hlsli"
 #include "../GI/DDGICommon.hlsli"
 #include "ReSTIRDICommon.hlsli"
+#include "MeshLightCommon.hlsli"
+#include "DILightSampling.hlsli"
 
 cbuffer ReSTIRDICB : register(b0) {
     row_major float4x4 InvViewProj;
@@ -16,7 +18,7 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 Params;       // x=lightCount, y=frameIndex, z=shadowMask, w=rayEndMargin
     float4 Sampling;     // x=initialCandidates, y=MCap, z=spatialCount, w=spatialRadius
     float4 Reuse;        // x=temporal(0/1), y=posRejectScale, z=normalReject, w=maxAge
-    float4 TemporalPolicy; // x=permutation temporal (0/1), z=visibilidade inicial (0/1); yw reservados
+    float4 TemporalPolicy; // x=permutation, z=visibilidade inicial, w=contagem de mesh lights; y reserv.
     float4 RayEpsA;      // layout compartilhado com o Pass B
     float4 RayEpsB;
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
@@ -34,6 +36,7 @@ Texture2D<uint4>  PrevResB : register(t6); // x=light, y=uv(reserv), z=M+idade, 
 StructuredBuffer<FGPULightFull> Lights : register(t7);
 RaytracingAccelerationStructure Scene : register(t8);
 StructuredBuffer<InstanceGeo> Instances : register(t9);
+StructuredBuffer<FTriangleLightGPU> TriLights : register(t10);
 
 SamplerState LinearWrap : register(s1);
 
@@ -48,13 +51,12 @@ RWTexture2D<uint4>  CurrResB : register(u1);
 // porem VISIVEL que deveria iluminar aquela sombra quase nunca ganha o sorteio. Nao e vazamento de
 // luz (o Pass B sempre testa oclusao no destino): e fome de energia na penumbra. Testar aqui, antes
 // do reuso temporal, impede que a amostra ocluida contamine o historico.
-bool DI_SelectedOccluded(FGPULightFull light, float3 x1, float3 n1, float3 L, float camDist,
-                         inout uint rng) {
+// O ponto na luz agora vem da amostra (uv guardada no reservoir), entao nao ha mais sorteio aqui:
+// o Pass A e o Pass B miram o MESMO ponto por construcao, sem precisar do seed determinístico que
+// existia antes. Isso tambem elimina a dupla aplicacao de visibilidade que aquele truque evitava.
+bool DI_SelectedOccluded(float3 lightPoint, float3 x1, float3 n1, float3 L, float camDist) {
     const float3 origin = OffsetRayGBuffer(x1, n1, L, camDist);
-    // Estocastico igual ao resolve do Pass B: manter o centro aqui descartaria a luz inteira
-    // sempre que o CENTRO estivesse ocluido, mesmo com meia esfera visivel — perda de energia
-    // justo na penumbra, que e onde este passo mais importa.
-    const float3 toLight = DI_SampleLightPoint(light, L, rng) - origin;
+    const float3 toLight = lightPoint - origin;
     const float len = length(toLight);
     const float tMax = len - max(Params.w, 0.0f);
     if (len <= 1e-6f || tMax <= RayEpsB.x) return false;
@@ -83,7 +85,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     const float deviceZ = Depth.Load(int3(px, 0));
     const uint lightCount = (uint)Params.x;
-    if (deviceZ <= 0.0f || lightCount == 0u) { StoreInvalid(px); return; }
+    // Sem luz analitica E sem triangulo emissivo nao ha o que amostrar.
+    if (deviceZ <= 0.0f || (lightCount + (uint)TemporalPolicy.w) == 0u) { StoreInvalid(px); return; }
 
     const GBufferData g = DecodeGBuffer(GBufferA.Load(int3(px, 0)),
                                         GBufferB.Load(int3(px, 0)),
@@ -103,14 +106,27 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     uint proposalRng = GGX_SeedE(upx, (uint)Params.y, SMILE_RNG_DI_INITIAL);
     uint wrsRng = GGX_SeedE(upx, (uint)Params.y, SMILE_RNG_DI_TEMPORAL);
     const uint candidateCount = max((uint)Sampling.x, 1u);
+    const uint triCount   = (uint)TemporalPolicy.w;
+    const uint totalCount = lightCount + triCount;
+
     [loop]
     for (uint i = 0u; i < candidateCount; ++i) {
-        const uint lightIndex = min((uint)(DI_RandNext(proposalRng) * lightCount), lightCount - 1u);
+        // Pool COMBINADO: analiticas e triangulos emissivos num espaco de indice linear. A escolha
+        // continua uniforme (o GPU Zen 3 p. 198 mediu que potencia nao supera uniforme para luz
+        // analitica) — a alias table da fase 4 e que muda isso, e ai vale, porque com triangulo a
+        // disparidade de area x radiancia e de ordens de grandeza.
+        const uint idx = min((uint)(DI_RandNext(proposalRng) * totalCount), totalCount - 1u);
+        const float2 uv = float2(DI_RandNext(proposalRng), DI_RandNext(proposalRng));
+
+        const DILightSample ls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                   idx, uv, x1);
         float3 diff, spec, L; float dist;
-        const float target = DI_Evaluate(Lights[lightIndex], g, x1, CameraPos.xyz,
-                                         diff, spec, L, dist);
-        // Proposta uniforme p=1/N. A target so entra no segundo estagio, como medido no GPU Zen 3.
-        DIResUpdate(r, lightIndex, target * (float)lightCount, wrsRng);
+        const float target = DI_TargetFromSample(ls, g, x1, CameraPos.xyz, diff, spec, L, dist);
+
+        // Peso RIS = pHat / p, com p = (1/N) * pdf em angulo solido da amostra na luz escolhida.
+        const float w = (ls.SolidAnglePdf > 0.0f)
+                      ? (target * (float)totalCount / ls.SolidAnglePdf) : 0.0f;
+        DIResUpdate(r, idx, uv, w, wrsRng);
     }
 
     const float camDist = length(CameraPos.xyz - x1);
@@ -118,15 +134,19 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // Descarta a AMOSTRA ocluida mas PRESERVA o M: o M conta as candidatas SORTEADAS, e todas
     // foram de fato sorteadas. Zerar o M junto inflaria o brilho no Finalize, que divide por ele.
     // Equivale ao `reservoirs[q].W = 0` do Alg. 5, que tambem preserva o M para o Alg. 4.
-    if (TemporalPolicy.z > 0.5f && r.LightIndex < lightCount) {
-        const FGPULightFull sel = Lights[r.LightIndex];
-        if (DI_IsShadowCaster(sel)) {
-            float3 diff, spec, L; float dist;
-            DI_Evaluate(sel, g, x1, CameraPos.xyz, diff, spec, L, dist);
-            uint visRng = DI_LightPointSeed(upx, (uint)Params.y, r.LightIndex);
-            if (DI_SelectedOccluded(sel, x1, n1, L, camDist, visRng)) {
-                r.LightIndex = 0xFFFFFFFFu;
-                r.WeightSum = 0.0f;
+    if (TemporalPolicy.z > 0.5f && r.LightIndex < totalCount) {
+        // Triangulo emissivo sempre projeta sombra: nao ha flag de artista nele, e a geometria que
+        // emite e a mesma que oclui. A flag CastShadows so faz sentido para a luz analitica.
+        const bool isTri = DI_IsTriangleIndex(r.LightIndex, lightCount);
+        if (isTri || DI_IsShadowCaster(Lights[r.LightIndex])) {
+            const DILightSample ls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                       r.LightIndex, r.UV, x1);
+            if (ls.Valid) {
+                const float3 L = normalize(ls.Position - x1);
+                if (DI_SelectedOccluded(ls.Position, x1, n1, L, camDist)) {
+                    r.LightIndex = 0xFFFFFFFFu;
+                    r.WeightSum = 0.0f;
+                }
             }
         }
     }
@@ -159,7 +179,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
             const float3 prevN = DDGI_OctDecode(prev.N1Oct);
             const float posReject = Reuse.y * max(camDist, 1.0f);
-            bool valid = prev.LightIndex < lightCount && prev.M > 0.0f && prev.W > 0.0f &&
+            bool valid = prev.LightIndex < totalCount && prev.M > 0.0f && prev.W > 0.0f &&
                          dot(prevN, n1) >= Reuse.z &&
                          length(prev.X1 - x1) < posReject &&
                          abs(dot(n1, prev.X1 - x1)) < 0.2f * posReject;
@@ -171,19 +191,24 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             }
 
             if (valid) {
+                // Reamostra com o MESMO uv, mas no dominio DESTE pixel: para triangulo isso
+                // reconstroi o ponto exato; para esfera, o equivalente no cone local.
+                const DILightSample pls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                            prev.LightIndex, prev.UV, x1);
                 float3 diff, spec, L; float dist;
-                const float target = DI_Evaluate(Lights[prev.LightIndex], g, x1, CameraPos.xyz,
-                                                 diff, spec, L, dist);
+                const float target = DI_TargetFromSample(pls, g, x1, CameraPos.xyz,
+                                                         diff, spec, L, dist);
                 if (DIResMerge(r, prev, target, wrsRng)) age = prevAge + 1.0f;
             }
         }
     }
 
     float selectedTarget = 0.0f;
-    if (r.LightIndex < lightCount) {
+    if (r.LightIndex < totalCount) {
+        const DILightSample sls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                    r.LightIndex, r.UV, x1);
         float3 diff, spec, L; float dist;
-        selectedTarget = DI_Evaluate(Lights[r.LightIndex], g, x1, CameraPos.xyz,
-                                     diff, spec, L, dist);
+        selectedTarget = DI_TargetFromSample(sls, g, x1, CameraPos.xyz, diff, spec, L, dist);
     }
     DIResFinalize(r, selectedTarget);
 

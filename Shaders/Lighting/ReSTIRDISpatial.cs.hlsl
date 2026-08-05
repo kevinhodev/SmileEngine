@@ -8,6 +8,8 @@
 #include "../Reflections/GGXSample.hlsli"
 #include "../GI/DDGICommon.hlsli"
 #include "ReSTIRDICommon.hlsli"
+#include "MeshLightCommon.hlsli"
+#include "DILightSampling.hlsli"
 
 cbuffer ReSTIRDICB : register(b0) {
     row_major float4x4 InvViewProj;
@@ -16,7 +18,7 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 Params;       // x=lightCount, y=frameIndex, z=shadowMask, w=rayEndMargin
     float4 Sampling;     // x=initialCandidates, y=MCap, z=spatialCount, w=spatialRadius
     float4 Reuse;        // x=temporal, y=posRejectScale, z=normalReject, w=maxAge
-    float4 TemporalPolicy; // mantem o layout de b0 identico ao Pass A
+    float4 TemporalPolicy; // layout identico ao Pass A; y=shadow motion, w=contagem de mesh lights
     float4 RayEpsA;
     float4 RayEpsB;
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
@@ -38,6 +40,7 @@ StructuredBuffer<FGPULightFull> Lights : register(t8);
 StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);
 Texture2D<float4> CurrentSurface : register(t10);
 Texture2D<float4> PreviousSurface : register(t11);
+StructuredBuffer<FTriangleLightGPU> TriLights : register(t12);
 
 SamplerState LinearWrap : register(s1);
 RWTexture2D<float4> OutDirect : register(u0);
@@ -102,7 +105,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     const float deviceZ = Depth.Load(int3(px, 0));
     const uint lightCount = (uint)Params.x;
-    if (deviceZ <= 0.0f || lightCount == 0u) {
+    const uint triCount   = (uint)TemporalPolicy.w;
+    const uint totalCount = lightCount + triCount;
+    if (deviceZ <= 0.0f || totalCount == 0u) {
         OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
         OutShadowMotion[px] = 0.0f;
         return;
@@ -137,10 +142,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // ele. Com target 0 o peso e 0, a amostra nunca e adotada, e so o M entra.
     if (self.M > 0.0f) {
         float target = 0.0f;
-        if (self.LightIndex < lightCount && self.W > 0.0f) {
+        if (self.LightIndex < totalCount && self.W > 0.0f) {
+            const DILightSample ls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                       self.LightIndex, self.UV, x1);
             float3 diff, spec, L; float dist;
-            target = DI_Evaluate(Lights[self.LightIndex], g, x1, CameraPos.xyz,
-                                 diff, spec, L, dist);
+            target = DI_TargetFromSample(ls, g, x1, CameraPos.xyz, diff, spec, L, dist);
         }
         if (DIResMerge(r, self, target, rng)) selCand = candCount;
         candPx[candCount] = px; candM[candCount] = self.M; ++candCount;
@@ -172,25 +178,28 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         nb.M = min(nb.M, Sampling.y);
 
         float target = 0.0f;
-        if (nb.LightIndex < lightCount && nb.W > 0.0f) {
+        if (nb.LightIndex < totalCount && nb.W > 0.0f) {
+            // Reamostra com o uv do VIZINHO no dominio DESTE pixel — e o que torna o reuso valido.
+            const DILightSample ls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                       nb.LightIndex, nb.UV, x1);
             float3 diff, spec, L; float dist;
-            target = DI_Evaluate(Lights[nb.LightIndex], g, x1, CameraPos.xyz,
-                                 diff, spec, L, dist);
+            target = DI_TargetFromSample(ls, g, x1, CameraPos.xyz, diff, spec, L, dist);
         }
         if (DIResMerge(r, nb, target, rng)) selCand = candCount;
         candPx[candCount] = qpx; candM[candCount] = nb.M; ++candCount;
     }
 
-    if (r.LightIndex >= lightCount) {
+    if (r.LightIndex >= totalCount) {
         OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
         OutShadowMotion[px] = 0.0f;
         return;
     }
 
-    const FGPULightFull selected = Lights[r.LightIndex];
+    const DILightSample selSample = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
+                                                      r.LightIndex, r.UV, x1);
     float3 diffuse, specular, L; float dist;
-    const float selectedTarget = DI_Evaluate(selected, g, x1, CameraPos.xyz,
-                                             diffuse, specular, L, dist);
+    const float selectedTarget = DI_TargetFromSample(selSample, g, x1, CameraPos.xyz,
+                                                     diffuse, specular, L, dist);
 
     // Correcao de vies (Alg. 6 / Secao 4.3), mesma convencao do ReSTIRGISpatial.cs.hlsl:
     // balance heuristic continua no lugar do 1/M. ps_c = pHat da luz VENCEDORA avaliada no
@@ -224,8 +233,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     const float2 cndc = float2(cuv.x * 2.0f - 1.0f, 1.0f - cuv.y * 2.0f);
                     const float4 cwh  = mul(float4(cndc, cz, 1.0f), InvViewProj);
                     const float3 cx1  = cwh.xyz / cwh.w;
+                    // A amostra vencedora vista do dominio do vizinho: reamostra com o MESMO uv
+                    // no ponto DELE, senao a pdf comparada seria a de outra amostra.
+                    const DILightSample cls = DI_SampleAnyLight(Lights, lightCount, TriLights,
+                                                                triCount, r.LightIndex, r.UV, cx1);
                     float3 cdf, csp, cl; float cdst;
-                    ps = DI_Evaluate(selected, cg, cx1, CameraPos.xyz, cdf, csp, cl, cdst);
+                    ps = DI_TargetFromSample(cls, cg, cx1, CameraPos.xyz, cdf, csp, cl, cdst);
                 }
             }
             piSum += ps * candM[cd];
@@ -237,14 +250,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float visibility = 1.0f;
     float4 shadowMotion = 0.0f;
 
-    if (r.W > 0.0f && DI_IsShadowCaster(selected)) {
+    // Triangulo emissivo sempre projeta sombra; a flag do artista so vale p/ a luz analitica.
+    const bool selIsTri = DI_IsTriangleIndex(r.LightIndex, lightCount);
+    if (r.W > 0.0f && selSample.Valid &&
+        (selIsTri || DI_IsShadowCaster(Lights[r.LightIndex]))) {
         const float camDist = length(CameraPos.xyz - x1);
         const float3 origin = OffsetRayGBuffer(x1, n1, L, camDist);
-        // Mesmo seed do descarte no Pass A: se a luz escolhida for a mesma, o ponto e o mesmo e
-        // as duas visibilidades concordam em vez de se multiplicarem. Ver DI_LightPointSeed.
-        uint pointRng = DI_LightPointSeed(upx, (uint)Params.y, r.LightIndex);
-        const float3 lightPoint = DI_SampleLightPoint(selected, L, pointRng);
-        const float3 toLight = lightPoint - origin;
+        // O ponto vem da AMOSTRA guardada no reservoir, entao o Pass A e o Pass B miram o mesmo
+        // lugar por construcao. O seed determinístico que fazia esse papel saiu junto.
+        const float3 toLight = selSample.Position - origin;
         const float len = length(toLight);
         const float tMax = len - max(Params.w, 0.0f);
         if (len > 1e-6f && tMax > RayEpsB.x) {
@@ -260,8 +274,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                 visibility = 0.0f;
                 const float3 blockerPos = ray.Origin + ray.Direction * query.CommittedRayT();
-                shadowMotion = ComputeShadowMotion(px, x1, n1, blockerPos,
-                                                   query.CommittedInstanceID(), selected);
+                // So p/ luz analitica: o plano virtual precisa da posicao ANTERIOR da luz, e
+                // triangulo emissivo nao tem esse par (a malha e estatica, e quando deixar de ser
+                // a correspondencia certa e a transform da instancia, nao um PrevPos).
+                if (!selIsTri)
+                    shadowMotion = ComputeShadowMotion(px, x1, n1, blockerPos,
+                                                       query.CommittedInstanceID(),
+                                                       Lights[r.LightIndex]);
             }
         }
     }

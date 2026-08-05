@@ -156,8 +156,7 @@ namespace Smile {
         Release(_SRVHeap);
         Survey(_Scene);
         LogSummary();
-        if (!Initialized || _InstanceSlot == 0xFFFFFFFFu || SceneStats.EmissiveTriangles == 0)
-            return;
+        if (!Initialized || _InstanceSlot == 0xFFFFFFFFu) return;
 
         // Uma task por malha emissiva, em ordem crescente de LightOffset e sem buracos — a busca
         // binaria do shader depende dessas duas propriedades.
@@ -183,23 +182,29 @@ namespace Smile {
             Offset += T.TriangleCount;
             Tasks.push_back(T);
         }
-        if (Tasks.empty()) return;
-
         NumTasks     = static_cast<u32>(Tasks.size());
         NumTriangles = Offset;
 
+        // Aloca no minimo 1 elemento mesmo sem geometria emissiva. Custa 96 bytes e elimina um caso
+        // de borda inteiro: o ReSTIR DI liga este SRV na tabela dele SEMPRE, e um descritor nulo ali
+        // seria pior que um buffer vazio que ninguem le (a contagem no CB e que gateia o acesso).
+        const u32 TaskElems  = std::max(NumTasks, 1u);
+        const u32 LightElems = std::max(NumTriangles, 1u);
+
         // Upload heap e escrito UMA vez, aqui. SetupForScene roda depois de um Flush da fila
         // (SceneLoader), entao nao ha dispatch em voo lendo este buffer.
-        TaskBuffer = CreateBuffer(_Device, sizeof(FMeshLightTaskGPU) * NumTasks,
+        TaskBuffer = CreateBuffer(_Device, sizeof(FMeshLightTaskGPU) * TaskElems,
                                   D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
                                   D3D12_RESOURCE_FLAG_NONE);
         void* Mapped = nullptr;
         D3D12_RANGE NoRead{ 0, 0 };
         SMILE_HR(TaskBuffer->Map(0, &NoRead, &Mapped));
-        std::memcpy(Mapped, Tasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
+        std::memset(Mapped, 0, sizeof(FMeshLightTaskGPU) * TaskElems);
+        if (NumTasks > 0)
+            std::memcpy(Mapped, Tasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
         TaskBuffer->Unmap(0, nullptr);
 
-        LightBuffer = CreateBuffer(_Device, sizeof(FTriangleLightGPU) * NumTriangles,
+        LightBuffer = CreateBuffer(_Device, sizeof(FTriangleLightGPU) * LightElems,
                                    D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON,
                                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         VramTracker::Register(LightBuffer.Get(), EVramCategory::GI);
@@ -209,12 +214,12 @@ namespace Smile {
         Srv.Format                     = DXGI_FORMAT_UNKNOWN;
         Srv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
         Srv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        Srv.Buffer.NumElements         = NumTasks;
+        Srv.Buffer.NumElements         = TaskElems;
         Srv.Buffer.StructureByteStride = sizeof(FMeshLightTaskGPU);
         TaskSRV = _SRVHeap.Allocate(1);
         _SRVHeap.CreateSRV(_Device, TaskBuffer.Get(), Srv, TaskSRV);
 
-        Srv.Buffer.NumElements         = NumTriangles;
+        Srv.Buffer.NumElements         = LightElems;
         Srv.Buffer.StructureByteStride = sizeof(FTriangleLightGPU);
         LightsSRV = _SRVHeap.Allocate(1);
         _SRVHeap.CreateSRV(_Device, LightBuffer.Get(), Srv, LightsSRV);
@@ -222,7 +227,7 @@ namespace Smile {
         D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
         Uav.Format                     = DXGI_FORMAT_UNKNOWN;
         Uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-        Uav.Buffer.NumElements         = NumTriangles;
+        Uav.Buffer.NumElements         = LightElems;
         Uav.Buffer.StructureByteStride = sizeof(FTriangleLightGPU);
         LightsUAV = _SRVHeap.Allocate(1);
         _SRVHeap.CreateUAV(_Device, LightBuffer.Get(), Uav, LightsUAV);
@@ -243,7 +248,7 @@ namespace Smile {
         std::memcpy(MappedCB, &CPU, sizeof(CPU));
 
         Ready = true;
-        Dirty = true;
+        Dirty = NumTriangles > 0;
     }
 
     void FMeshLights::Record(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {

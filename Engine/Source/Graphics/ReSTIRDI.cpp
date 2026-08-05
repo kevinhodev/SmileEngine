@@ -15,11 +15,12 @@ namespace Smile {
         // UINT, e nao mais RGBA16F: o LightIndex em fp16 era exato so ate 2048 e o M dividia canal
         // com a idade, preso em 63. Ver o layout em ReSTIRDICommon.hlsli.
         constexpr DXGI_FORMAT kResBFormat   = DXGI_FORMAT_R32G32B32A32_UINT;
-        // 10, nao 8: o Pass A passou a tracar o raio de visibilidade do Alg. 5 (TLAS + Instances
-        // para o alpha-test da folhagem), entao ele tambem precisa de root signature bindless.
-        constexpr u32 kInitialSRVs = 10;
+        // 11: o Pass A traca o raio de visibilidade do Alg. 5 (TLAS + Instances para o alpha-test
+        // da folhagem, o que exige root signature bindless) e agora tambem le o pool de mesh
+        // lights, porque as candidatas iniciais saem do pool COMBINADO.
+        constexpr u32 kInitialSRVs = 11;
         constexpr u32 kInitialUAVs = 2;
-        constexpr u32 kSpatialSRVs = 12;
+        constexpr u32 kSpatialSRVs = 13;
         constexpr u32 kSpatialUAVs = 4;
         constexpr u32 kNrdPackSRVs = 8;
         constexpr u32 kNrdPackUAVs = 5;
@@ -131,6 +132,7 @@ namespace Smile {
                                    u32 NewWidth, u32 NewHeight,
                                    u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                                    u32 DepthSlot, u32 VelocitySlot, u32 TlasSlot, u32 InstanceSlot,
+                                   u32 MeshLightSlot,
                                    const u32 LightSlots[FCommandQueue::kFramesInFlight],
                                    const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                                    const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]) {
@@ -140,7 +142,7 @@ namespace Smile {
             GBufferASlot == kInvalidSlot || GBufferBSlot == kInvalidSlot ||
             GBufferCSlot == kInvalidSlot || DepthSlot == kInvalidSlot ||
             VelocitySlot == kInvalidSlot || TlasSlot == kInvalidSlot ||
-            InstanceSlot == kInvalidSlot) return;
+            InstanceSlot == kInvalidSlot || MeshLightSlot == kInvalidSlot) return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
             if (LightSlots[f] == kInvalidSlot || TransformSlots[f] == kInvalidSlot ||
                 SurfaceSlots[f] == kInvalidSlot) return;
@@ -180,8 +182,8 @@ namespace Smile {
 
         auto CopyTable = [&](u32 DstSlot, const u32* Slots, u32 Count) {
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(DstSlot);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src[12]{};
-            UINT SrcCounts[12]{};
+            D3D12_CPU_DESCRIPTOR_HANDLE Src[16]{};
+            UINT SrcCounts[16]{};
             for (u32 i = 0; i < Count; ++i) {
                 Src[i] = SRVHeap.CpuHandleStaging(Slots[i]);
                 SrcCounts[i] = 1;
@@ -206,14 +208,15 @@ namespace Smile {
                 InitialTable[p][f] = SRVHeap.Allocate(kInitialSRVs);
                 const u32 InitialSlots[kInitialSRVs] = {
                     GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot, VelocitySlot,
-                    ResASRV[Prev], ResBSRV[Prev], LightSlots[f], TlasSlot, InstanceSlot };
+                    ResASRV[Prev], ResBSRV[Prev], LightSlots[f], TlasSlot, InstanceSlot,
+                    MeshLightSlot };
                 CopyTable(InitialTable[p][f], InitialSlots, kInitialSRVs);
 
                 SpatialTable[p][f] = SRVHeap.Allocate(kSpatialSRVs);
                 const u32 SpatialSlots[kSpatialSRVs] = {
                     GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot, TlasSlot, InstanceSlot,
                     ResASRV[p], ResBSRV[p], LightSlots[f], TransformSlots[f],
-                    SurfaceSlots[f], SurfaceSlots[1u - f] };
+                    SurfaceSlots[f], SurfaceSlots[1u - f], MeshLightSlot };
                 CopyTable(SpatialTable[p][f], SpatialSlots, kSpatialSRVs);
             }
         }
@@ -302,7 +305,8 @@ namespace Smile {
                                    const Vec3& CameraPos, u32 NewWidth, u32 NewHeight,
                                    u32 FrameIndex, u32 LightCount, u32 ShadowRayMask,
                                    bool EnableTemporalPermutation,
-                                   u32 TemporalInstanceCount, bool MotionHistoryValid) {
+                                   u32 TemporalInstanceCount, bool MotionHistoryValid,
+                                   u32 MeshLightCount) {
         FrameSlot = NewFrameSlot;
         if (!MappedCB || NewWidth == 0 || NewHeight == 0) return;
         CPU.InvViewProj = InvViewProj;
@@ -324,7 +328,8 @@ namespace Smile {
                       PosRejectScale, NormalReject, MaxAge };
         CPU.TemporalPolicy = { EnableTemporalPermutation ? 1.0f : 0.0f,
                                MotionHistoryValid ? 1.0f : 0.0f,
-                               InitialVisibility ? 1.0f : 0.0f, 0.0f };
+                               InitialVisibility ? 1.0f : 0.0f,
+                               static_cast<f32>(MeshLightCount) };
         CPU.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                         RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin,

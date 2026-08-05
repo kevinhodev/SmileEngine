@@ -42,6 +42,7 @@ namespace Smile {
                             u32 Width, u32 Height,
                             u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                             u32 DepthSlot, u32 VelocitySlot, u32 TlasSlot, u32 InstanceSlot,
+                            u32 MeshLightSlot,
                             const u32 LightSlots[FCommandQueue::kFramesInFlight],
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                             const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
@@ -58,7 +59,8 @@ namespace Smile {
                             const Vec3& CameraPos,
                             u32 Width, u32 Height, u32 FrameIndex, u32 LightCount,
                             u32 ShadowRayMask, bool EnableTemporalPermutation,
-                            u32 TemporalInstanceCount, bool MotionHistoryValid);
+                            u32 TemporalInstanceCount, bool MotionHistoryValid,
+                            u32 MeshLightCount);
         void Record(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
                     FGpuProfiler* Profiler = nullptr);
         void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);

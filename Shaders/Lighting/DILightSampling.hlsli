@@ -171,4 +171,52 @@ DILightSample DI_SampleTriangleLight(FTriangleLightGPU tri, float3 shadePos, flo
     return s;
 }
 
+// Pool combinado: indice linear. [0, analyticCount) = analitica; acima disso e triangulo, com
+// indice do triangulo = index - analyticCount. Sem bit de tag — o espaco linear ja separa, e
+// mantem o LightIndex do reservoir um indice simples.
+bool DI_IsTriangleIndex(uint index, uint analyticCount) { return index >= analyticCount; }
+
+DILightSample DI_SampleAnyLight(StructuredBuffer<FGPULightFull> lights, uint analyticCount,
+                                StructuredBuffer<FTriangleLightGPU> tris, uint triCount,
+                                uint index, float2 uv, float3 shadePos) {
+    DILightSample s;
+    DISampleInit(s);
+    if (index >= analyticCount + triCount) return s;
+    if (DI_IsTriangleIndex(index, analyticCount))
+        return DI_SampleTriangleLight(tris[index - analyticCount], shadePos, uv);
+    return DI_SampleSphereLight(lights[index], shadePos, uv);
+}
+
+// pHat em ANGULO SOLIDO: BRDF * radiancia * cos(theta) no ponto sombreado. NAO tem 1/d^2 nem o
+// cosseno da superficie da luz — os dois moram na pdf agora, e repetir aqui contaria duas vezes.
+//
+// Tambem NAO usa AreaSphereSpecular: o alargamento do especular passa a emergir de amostrar a
+// superficie da luz. Aplicar o ponto representativo por cima contaria a area duas vezes, e por
+// isso Ld e Ls recebem a MESMA direcao amostrada e SpecEnergy vai 1.
+float DI_TargetFromSample(DILightSample ls, GBufferData g, float3 worldPos, float3 cameraPos,
+                          out float3 outDiffuse, out float3 outSpecular,
+                          out float3 outL, out float outDist) {
+    outDiffuse = 0.0f; outSpecular = 0.0f; outL = float3(0.0f, 1.0f, 0.0f); outDist = 0.0f;
+    if (!ls.Valid) return 0.0f;
+
+    const float3 toL = ls.Position - worldPos;
+    const float  d2  = dot(toL, toL);
+    if (d2 < 1e-8f) return 0.0f;
+    outDist = sqrt(d2);
+    outL    = toL / outDist;
+
+    const float3 N = g.WorldNormal;
+    const float3 V = normalize(cameraPos - worldPos);
+    const float3 diffuseColor  = g.BaseColor * (1.0f - g.Metallic);
+    const float3 specularColor = lerp(float3(0.04f, 0.04f, 0.04f), g.BaseColor, g.Metallic);
+    const float3 transColor    = g.BaseColor * g.Subsurface;
+    const float  roughness     = max(g.Roughness, 0.04f);
+    const float  a2            = roughness * roughness * roughness * roughness;
+
+    BRDF_DirectAreaSplit(N, V, outL, outL, 1.0f, ls.Radiance,
+                         diffuseColor, specularColor, roughness, a2, transColor,
+                         outDiffuse, outSpecular);
+    return DI_Luminance(outDiffuse + outSpecular);
+}
+
 #endif
