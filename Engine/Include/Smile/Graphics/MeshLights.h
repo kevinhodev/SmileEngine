@@ -34,6 +34,15 @@ namespace Smile {
     };
     static_assert(sizeof(FTriangleLightGPU) == 32);
 
+    // Espelha FMeshLightAlias em MeshLightCommon.hlsli.
+    struct FMeshLightAliasGPU {
+        f32 Threshold;
+        u32 Alias;
+        f32 ProbSelf;
+        f32 ProbAlias;
+    };
+    static_assert(sizeof(FMeshLightAliasGPU) == 16);
+
     struct alignas(256) MeshLightConstants {
         u32 NumTasks     = 0;
         u32 NumTriangles = 0;
@@ -94,7 +103,11 @@ namespace Smile {
 
         bool IsReady()          const { return Ready; }
         u32  LightSRVSlot()     const { return LightsSRV; }
-        u32  LightCount()       const { return NumTriangles; }
+        u32  AliasSRVSlot()     const { return AliasSRV; }
+        // Contagem que o DI deve usar como pool: 0 enquanto a alias table nao estiver pronta.
+        // Sem ela a proposta seria uniforme sobre dezenas de milhares de triangulos, que e pior
+        // que nao ter mesh light nenhuma.
+        u32  LightCount()       const { return AliasReady ? NumTriangles : 0u; }
 
         void Release(FTextureSRVHeap& SRVHeap);
 
@@ -113,14 +126,27 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12Resource> TaskBuffer;   // upload; escrito uma vez por cena
         Microsoft::WRL::ComPtr<ID3D12Resource> LightBuffer;  // default; saida da extracao
+        Microsoft::WRL::ComPtr<ID3D12Resource> ReadbackBuffer; // le o fluxo de volta p/ a CPU
+        Microsoft::WRL::ComPtr<ID3D12Resource> AliasBuffer;    // upload; tabela de Vose
         Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
-        u8* MappedCB = nullptr;
+        u8* MappedCB    = nullptr;
+        u8* MappedAlias = nullptr;
 
         D3D12_RESOURCE_STATES LightState = D3D12_RESOURCE_STATE_COMMON;
+
+        // Readback DIFERIDO: em vez de travar a fila, conta frames ate a copia estar garantida.
+        // So funciona porque a geometria emissiva e estatica — com emissivo dinamico isto vira
+        // lag por frame e o caminho certo passa a ser o mipmap de PDF na GPU (ver a memoria).
+        bool AliasReady      = false;
+        bool ReadbackPending = false;
+        u32  ReadbackAge     = 0;
 
         u32 TaskSRV   = 0xFFFFFFFFu;
         u32 LightsSRV = 0xFFFFFFFFu;
         u32 LightsUAV = 0xFFFFFFFFu;
+        u32 AliasSRV  = 0xFFFFFFFFu;
         u32 ExtractTable = 0xFFFFFFFFu; // t0 = tasks, t1 = instances
+
+        void BuildAliasTable();
     };
 }

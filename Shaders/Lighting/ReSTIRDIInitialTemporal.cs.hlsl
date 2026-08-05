@@ -37,6 +37,7 @@ StructuredBuffer<FGPULightFull> Lights : register(t7);
 RaytracingAccelerationStructure Scene : register(t8);
 StructuredBuffer<InstanceGeo> Instances : register(t9);
 StructuredBuffer<FTriangleLightGPU> TriLights : register(t10);
+StructuredBuffer<FMeshLightAlias>   MeshAlias : register(t11);
 
 SamplerState LinearWrap : register(s1);
 
@@ -134,21 +135,27 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         DIResUpdate(r, idx, uv, w, wrsRng);
     }
 
-    // Dentro do pool de triangulos a escolha ainda e uniforme, e isso continua ruim: 1/26498 por
-    // triangulo. E o que a alias table por potencia resolve. Aqui o ganho e so nao deixar os
-    // emissivos roubarem as propostas das analiticas.
+    // Dentro do pool de triangulos a escolha e por POTENCIA, via alias table (O(1): um sorteio de
+    // entrada e uma decisao contra o alias dela). Uniforme daria 1/26498 por triangulo, e a
+    // disparidade de area x radiancia entre eles e de ordens de grandeza — e o caso em que o
+    // achado do CP2077 sobre potencia nao ajudar NAO se aplica, porque la eram luzes analiticas
+    // de potencia parecida.
     [loop]
     for (uint j = 0u; j < meshCands; ++j) {
-        const uint tri = min((uint)(DI_RandNext(proposalRng) * triCount), triCount - 1u);
+        float triProb;
+        const uint tri = MeshLight_SampleAlias(MeshAlias, triCount,
+                                               DI_RandNext(proposalRng), DI_RandNext(proposalRng),
+                                               triProb);
         const uint idx = lightCount + tri;
         const float2 uv = float2(DI_RandNext(proposalRng), DI_RandNext(proposalRng));
         const DILightSample ls = DI_SampleAnyLight(Lights, lightCount, TriLights, triCount,
                                                    idx, uv, x1);
         float3 diff, spec, L; float dist;
         const float target = DI_TargetFromSample(ls, g, x1, CameraPos.xyz, diff, spec, L, dist);
-        const float w = (ls.SolidAnglePdf > 0.0f)
-                      ? (target * (float)triCount * (float)totalCands
-                         / ((float)meshCands * ls.SolidAnglePdf)) : 0.0f;
+        // p = (M_t/M) * p_alias(tri) * pdf. O p_alias ja vem normalizado da tabela.
+        const float w = (ls.SolidAnglePdf > 0.0f && triProb > 0.0f)
+                      ? (target * (float)totalCands
+                         / ((float)meshCands * triProb * ls.SolidAnglePdf)) : 0.0f;
         DIResUpdate(r, idx, uv, w, wrsRng);
     }
 

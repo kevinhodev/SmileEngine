@@ -29,10 +29,12 @@ namespace Smile {
     static_assert(sizeof(ReSTIRDIConstants) == 512,
                   "ReSTIRDIConstants deve ocupar fatias CBV alinhadas a 256 bytes");
 
-    // ReSTIR DI de superficie primaria para TODAS as luzes locais analiticas. Pass A gera
-    // candidatas uniformes e combina o historico; Pass B combina vizinhos e traca no maximo um
-    // shadow ray. Materiais emissivos ainda nao sao candidatos: isso exige extrair mesh lights e
-    // suas PDFs. O sol fica no caminho dedicado do deferred; desligado, o fallback e o loop raster.
+    // ReSTIR DI de superficie primaria, em medida de ANGULO SOLIDO, sobre um pool combinado de
+    // luzes analiticas locais E triangulos emissivos (FMeshLights). Pass A gera candidatas com
+    // orcamento separado por pool — uniforme nas analiticas, por potencia via alias table nos
+    // triangulos — e combina o historico; Pass B combina vizinhos, corrige o vies e traca no
+    // maximo um shadow ray. O sol fica no caminho dedicado do deferred; desligado, o fallback e
+    // o loop raster.
     class FReSTIRDI {
     public:
         void Initialize(ID3D12Device* Device);
@@ -42,7 +44,7 @@ namespace Smile {
                             u32 Width, u32 Height,
                             u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                             u32 DepthSlot, u32 VelocitySlot, u32 TlasSlot, u32 InstanceSlot,
-                            u32 MeshLightSlot,
+                            u32 MeshLightSlot, u32 MeshAliasSlot,
                             const u32 LightSlots[FCommandQueue::kFramesInFlight],
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                             const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
@@ -94,7 +96,7 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> RawSpecular; // rgb modulado, a = distancia da luz
         Microsoft::WRL::ComPtr<ID3D12Resource> ShadowMotion;// xy=MV, z=confianca, w=valido
         Microsoft::WRL::ComPtr<ID3D12Resource> ResA[2]; // RGBA32F: x1.xyz, W
-        Microsoft::WRL::ComPtr<ID3D12Resource> ResB[2]; // RGBA16F: light, M+age, n1 oct
+        Microsoft::WRL::ComPtr<ID3D12Resource> ResB[2]; // RGBA32_UINT: luz, uv, M+idade, n1 oct
         D3D12_RESOURCE_STATES OutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawDiffuseState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawSpecularState = D3D12_RESOURCE_STATE_COMMON;
@@ -171,17 +173,14 @@ namespace Smile {
         bool InitialVisibility = true;
 
         // Tira os triangulos emissivos do POOL de propostas (o buffer continua sendo extraido).
+        // ON agora que existe orcamento por pool e alias table por potencia — sem os dois, o
+        // recurso deixava a engine PIOR: proposta uniforme sobre 26.500 dava ~0,06% de chance de
+        // uma candidata cair numa analitica, e o poste da rua sumia.
         //
-        // OFF por padrao de proposito, e nao so para debug: com proposta UNIFORME sobre um pool de
-        // 26.500 (2 analiticas + 26.498 triangulos na Bistro), a chance de uma das 8 candidatas
-        // cair numa analitica e ~0,06%. O poste da rua deixa de ser sorteado e a cena escurece —
-        // o estimador continua correto, mas o recurso deixa a engine PIOR. So faz sentido ligar
-        // depois da alias table por potencia (fase 4).
-        //
-        // Serve tambem para separar as duas variaveis que a migracao juntou: com off o pool volta
-        // a ser so analitico e o brilho TEM de bater com o caminho antigo. Se nao bater, o erro
-        // esta na conversao de energia; se bater, o que falta e mesmo a amostragem.
-        bool MeshLightsInPool = false;
+        // Continua servindo de A/B: com off o pool volta a ser so analitico e o brilho tem de
+        // bater com o caminho anterior, o que foi como a conversao de energia da migracao para
+        // angulo solido foi validada.
+        bool MeshLightsInPool = true;
         FRayEpsilonProfile RayEps;
     };
 }

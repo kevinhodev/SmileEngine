@@ -59,4 +59,26 @@ float3 MeshLight_Edge1(FTriangleLightGPU t) {
     return float3(f16tof32(t.Edges0 >> 16), f16tof32(t.Edges1 >> 16), f16tof32(t.Edges2 >> 16));
 }
 
+// Entrada da alias table (Vose). Carrega as PROBABILIDADES junto do indice de propósito: sem
+// isso o shader precisaria do fluxo total num constant buffer so para normalizar, e os quatro
+// shaders do DI teriam de ganhar um campo novo. Aqui a pdf sai pronta da mesma leitura.
+struct FMeshLightAlias {
+    float Threshold;  // prob. de ficar com a PROPRIA entrada
+    uint  Alias;      // entrada alternativa
+    float ProbSelf;   // p(i) normalizado, para o peso RIS
+    float ProbAlias;  // p(alias) normalizado
+};
+
+// Amostra proporcional ao fluxo em O(1): sorteia uma entrada uniformemente e depois decide entre
+// ela e o alias dela. Devolve o indice do triangulo e a probabilidade EXATA com que foi escolhido,
+// que e o que entra no denominador do peso RIS.
+uint MeshLight_SampleAlias(StructuredBuffer<FMeshLightAlias> table, uint count,
+                           float u0, float u1, out float prob) {
+    const uint i = min((uint)(u0 * count), count - 1u);
+    const FMeshLightAlias e = table[i];
+    if (u1 < e.Threshold) { prob = e.ProbSelf;  return i; }
+    prob = e.ProbAlias;
+    return e.Alias;
+}
+
 #endif

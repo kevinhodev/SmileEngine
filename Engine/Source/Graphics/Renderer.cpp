@@ -571,7 +571,7 @@ namespace Smile {
         ReSTIRDI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), DepthSRVSlot,
             ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(),
-            MeshLights.LightSRVSlot(),
+            MeshLights.LightSRVSlot(), MeshLights.AliasSRVSlot(),
             DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots);
         // A direta nao depende do volume DDGI. Mantenha sua instancia RELAX e o pack antes do
         // early-out abaixo para o ReSTIR DI continuar denoisado mesmo numa cena sem probes.

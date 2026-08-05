@@ -18,7 +18,7 @@ namespace Smile {
         // 11: o Pass A traca o raio de visibilidade do Alg. 5 (TLAS + Instances para o alpha-test
         // da folhagem, o que exige root signature bindless) e agora tambem le o pool de mesh
         // lights, porque as candidatas iniciais saem do pool COMBINADO.
-        constexpr u32 kInitialSRVs = 11;
+        constexpr u32 kInitialSRVs = 12;
         constexpr u32 kInitialUAVs = 2;
         constexpr u32 kSpatialSRVs = 13;
         constexpr u32 kSpatialUAVs = 4;
@@ -132,7 +132,7 @@ namespace Smile {
                                    u32 NewWidth, u32 NewHeight,
                                    u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                                    u32 DepthSlot, u32 VelocitySlot, u32 TlasSlot, u32 InstanceSlot,
-                                   u32 MeshLightSlot,
+                                   u32 MeshLightSlot, u32 MeshAliasSlot,
                                    const u32 LightSlots[FCommandQueue::kFramesInFlight],
                                    const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                                    const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]) {
@@ -142,7 +142,8 @@ namespace Smile {
             GBufferASlot == kInvalidSlot || GBufferBSlot == kInvalidSlot ||
             GBufferCSlot == kInvalidSlot || DepthSlot == kInvalidSlot ||
             VelocitySlot == kInvalidSlot || TlasSlot == kInvalidSlot ||
-            InstanceSlot == kInvalidSlot || MeshLightSlot == kInvalidSlot) return;
+            InstanceSlot == kInvalidSlot || MeshLightSlot == kInvalidSlot ||
+            MeshAliasSlot == kInvalidSlot) return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
             if (LightSlots[f] == kInvalidSlot || TransformSlots[f] == kInvalidSlot ||
                 SurfaceSlots[f] == kInvalidSlot) return;
@@ -209,7 +210,7 @@ namespace Smile {
                 const u32 InitialSlots[kInitialSRVs] = {
                     GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot, VelocitySlot,
                     ResASRV[Prev], ResBSRV[Prev], LightSlots[f], TlasSlot, InstanceSlot,
-                    MeshLightSlot };
+                    MeshLightSlot, MeshAliasSlot };
                 CopyTable(InitialTable[p][f], InitialSlots, kInitialSRVs);
 
                 SpatialTable[p][f] = SRVHeap.Allocate(kSpatialSRVs);

@@ -3,6 +3,7 @@
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Core/HResultCheck.h"
@@ -10,6 +11,8 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <cmath>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -141,9 +144,16 @@ namespace Smile {
         FreeSlot(TaskSRV, 1);
         FreeSlot(LightsSRV, 1);
         FreeSlot(LightsUAV, 1);
+        FreeSlot(AliasSRV, 1);
         FreeSlot(ExtractTable, 2);
         TaskBuffer.Reset();
         LightBuffer.Reset();
+        ReadbackBuffer.Reset();
+        if (AliasBuffer && MappedAlias) { AliasBuffer->Unmap(0, nullptr); MappedAlias = nullptr; }
+        AliasBuffer.Reset();
+        AliasReady      = false;
+        ReadbackPending = false;
+        ReadbackAge     = 0;
         LightState   = D3D12_RESOURCE_STATE_COMMON;
         NumTasks     = 0;
         NumTriangles = 0;
@@ -232,6 +242,21 @@ namespace Smile {
         LightsUAV = _SRVHeap.Allocate(1);
         _SRVHeap.CreateUAV(_Device, LightBuffer.Get(), Uav, LightsUAV);
 
+        ReadbackBuffer = CreateBuffer(_Device, sizeof(FTriangleLightGPU) * LightElems,
+                                      D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST,
+                                      D3D12_RESOURCE_FLAG_NONE);
+        AliasBuffer = CreateBuffer(_Device, sizeof(FMeshLightAliasGPU) * LightElems,
+                                   D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                   D3D12_RESOURCE_FLAG_NONE);
+        D3D12_RANGE NoReadAlias{ 0, 0 };
+        SMILE_HR(AliasBuffer->Map(0, &NoReadAlias, reinterpret_cast<void**>(&MappedAlias)));
+        std::memset(MappedAlias, 0, sizeof(FMeshLightAliasGPU) * LightElems);
+
+        Srv.Buffer.NumElements         = LightElems;
+        Srv.Buffer.StructureByteStride = sizeof(FMeshLightAliasGPU);
+        AliasSRV = _SRVHeap.Allocate(1);
+        _SRVHeap.CreateSRV(_Device, AliasBuffer.Get(), Srv, AliasSRV);
+
         ExtractTable = _SRVHeap.Allocate(2);
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(ExtractTable);
         D3D12_CPU_DESCRIPTOR_HANDLE Src[2] = {
@@ -251,8 +276,88 @@ namespace Smile {
         Dirty = NumTriangles > 0;
     }
 
+    // Vose: monta a tabela em O(N). Divide as entradas entre as que ficaram ABAIXO e ACIMA da
+    // media e vai casando uma de cada, ate toda entrada ter no maximo um alias. O resultado
+    // amostra proporcional ao fluxo com dois numeros aleatorios e uma leitura.
+    void FMeshLights::BuildAliasTable() {
+        if (!MappedAlias || NumTriangles == 0 || !ReadbackBuffer) return;
+
+        const FTriangleLightGPU* Src = nullptr;
+        D3D12_RANGE ReadAll{ 0, sizeof(FTriangleLightGPU) * NumTriangles };
+        if (FAILED(ReadbackBuffer->Map(0, &ReadAll, reinterpret_cast<void**>(
+                       const_cast<FTriangleLightGPU**>(&Src)))) || !Src)
+            return;
+
+        const u32 N = NumTriangles;
+        std::vector<f64> P(N);
+        f64 Total = 0.0;
+        for (u32 i = 0; i < N; ++i) {
+            const f32 F = Src[i].Flux;
+            P[i]   = (F > 0.0f && std::isfinite(F)) ? static_cast<f64>(F) : 0.0;
+            Total += P[i];
+        }
+
+        D3D12_RANGE NoWrite{ 0, 0 };
+        ReadbackBuffer->Unmap(0, &NoWrite);
+
+        FMeshLightAliasGPU* Dst = reinterpret_cast<FMeshLightAliasGPU*>(MappedAlias);
+        if (Total <= 0.0) {
+            // Nenhum triangulo com fluxo (tudo com RTEmissiveScale 0, por exemplo): cai para
+            // uniforme em vez de deixar a tabela zerada, que devolveria pdf 0 e mataria a amostra.
+            const f32 Uniform = 1.0f / static_cast<f32>(N);
+            for (u32 i = 0; i < N; ++i) Dst[i] = { 1.0f, i, Uniform, Uniform };
+            AliasReady = true;
+            LogInfo("MeshLights: alias table uniforme (fluxo total zero).");
+            return;
+        }
+
+        std::vector<f32> Prob(N);
+        std::vector<u32> Small, Large;
+        Small.reserve(N); Large.reserve(N);
+        for (u32 i = 0; i < N; ++i) {
+            P[i] /= Total;                       // p(i) normalizado, o que o shader precisa
+            const f64 Scaled = P[i] * N;         // media 1 apos a escala
+            Prob[i] = static_cast<f32>(Scaled);
+            (Scaled < 1.0 ? Small : Large).push_back(i);
+        }
+
+        std::vector<u32> Alias(N);
+        for (u32 i = 0; i < N; ++i) Alias[i] = i;
+        while (!Small.empty() && !Large.empty()) {
+            const u32 s = Small.back(); Small.pop_back();
+            const u32 l = Large.back(); Large.pop_back();
+            Alias[s] = l;
+            Prob[l]  = static_cast<f32>((static_cast<f64>(Prob[l]) + Prob[s]) - 1.0);
+            (Prob[l] < 1.0f ? Small : Large).push_back(l);
+        }
+        // Resto por erro de arredondamento: fica com probabilidade cheia na propria entrada.
+        for (u32 i : Large) Prob[i] = 1.0f;
+        for (u32 i : Small) Prob[i] = 1.0f;
+
+        for (u32 i = 0; i < N; ++i) {
+            Dst[i].Threshold = Prob[i];
+            Dst[i].Alias     = Alias[i];
+            Dst[i].ProbSelf  = static_cast<f32>(P[i]);
+            Dst[i].ProbAlias = static_cast<f32>(P[Alias[i]]);
+        }
+
+        AliasReady = true;
+        LogInfo("MeshLights: alias table pronta para " + std::to_string(N) +
+                " triangulos (fluxo total " + std::to_string(Total) + ").");
+    }
+
     void FMeshLights::Record(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
-        if (!Ready || !Dirty) return;
+        if (!Ready) return;
+
+        // Readback diferido: espera a fila ciclar em vez de travar. Enquanto nao chega, LightCount()
+        // devolve 0 e o DI simplesmente nao ve mesh light — melhor que ver com proposta uniforme.
+        if (ReadbackPending) {
+            if (++ReadbackAge >= FCommandQueue::kFramesInFlight + 1u) {
+                ReadbackPending = false;
+                BuildAliasTable();
+            }
+        }
+        if (!Dirty) return;
 
         if (LightState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
             D3D12_RESOURCE_BARRIER B{};
@@ -271,14 +376,27 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(LightsUAV));
         _CL->Dispatch((NumTriangles + 63u) / 64u, 1, 1);
 
-        D3D12_RESOURCE_BARRIER B{};
-        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        B.Transition.pResource   = LightBuffer.Get();
-        B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        B.Transition.StateBefore = LightState;
-        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        _CL->ResourceBarrier(1, &B);
-        LightState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        auto Transition = [&](D3D12_RESOURCE_STATES After) {
+            if (LightState == After) return;
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = LightBuffer.Get();
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = LightState;
+            B.Transition.StateAfter  = After;
+            _CL->ResourceBarrier(1, &B);
+            LightState = After;
+        };
+
+        // Copia o resultado para o readback: e dele que sai o fluxo por triangulo que alimenta a
+        // alias table. Custa uma copia so quando a cena muda, nao por frame.
+        Transition(D3D12_RESOURCE_STATE_COPY_SOURCE);
+        _CL->CopyResource(ReadbackBuffer.Get(), LightBuffer.Get());
+        Transition(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        ReadbackPending = true;
+        ReadbackAge     = 0;
+        AliasReady      = false;
 
         // Estatico: sem isto a extracao rodaria todo frame reconstruindo o mesmo dado.
         Dirty = false;
