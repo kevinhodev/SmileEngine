@@ -91,6 +91,17 @@ namespace Smile {
         // BLAS da cena — DDGI/ReSTIR/reflexoes passam a ver o chao. So valida apos Load.
         bool BuildProxyMesh(FMesh& Out) const;
 
+        // Albedo BAKEADO do proxy de RT (padrao "multilayer proxy" do Red Engine 4, GPU Zen 3
+        // 7.3.2): o blend procedural de 4 camadas so existe no pixel shader, entao o hit shading
+        // do RT nao tem como avalia-lo e o proxy entrava na TLAS com UMA cor chapada — todo o
+        // color bleed do terreno no GI saia com o tom do vale, mesmo em encosta de rocha.
+        //
+        // O bake sai pronto do Load (aqui e onde a heightmap mip 0 e as CPU data das camadas
+        // ainda estao vivas) e e MOVIDO daqui pelo dono do material, que o sobe como textura e
+        // controla o lifetime — o mesmo dono do FMaterial do proxy. Depois de tomado, o membro
+        // fica vazio (sao ~5 MB de CPU que nao precisam sobreviver ao load).
+        bool TakeProxyAlbedoCPU(FTextureCPUData& Out);
+
         void SetDebugLodColors(bool V) { DebugLodColors = V; }
         bool GetDebugLodColors() const { return DebugLodColors; }
         void SetLod0ScreenSize(f32 V)  { Lod0ScreenSize = V < 0.01f ? 0.01f : V; }
@@ -124,6 +135,11 @@ namespace Smile {
             D3D12_INDEX_BUFFER_VIEW  IBV{};
             u32 IndexCount = 0;
         };
+
+        // Bake do albedo do proxy de RT. Precisa da heightmap mip 0 (declive por diferencas
+        // centrais na resolucao NATIVA — o proxy decimado 8x suavizaria a encosta e perderia a
+        // rocha) e das cores medias das camadas, por isso roda dentro do Load.
+        void BakeProxyAlbedo(const std::vector<u16>& Mip0, u32 Size);
 
         void BuildRootSignature(ID3D12Device* Device);
         void BuildGrids(ID3D12Device* Device);
@@ -171,6 +187,13 @@ namespace Smile {
         static constexpr u32 kProxyStep = 8;
         std::vector<f32> ProxyHeights;         // (ProxyVerts)^2, altura normalizada
         u32              ProxyVerts = 0;
+        // Teto da resolucao do bake de albedo do proxy (clampado ao tamanho da heightmap). 1024
+        // num terreno de 2048 m da 2 m por texel — 4x mais fino que o quad do proxy (8 m) e ja
+        // MUITO abaixo da frequencia do tiling das camadas (4-7 m por tile), que e justamente o
+        // que autoriza usar a cor media de cada camada no lugar de amostrar a textura.
+        static constexpr u32 kProxyAlbedoMaxSize = 1024;
+        Vec3            LayerMeanColor[FTerrainDesc::kLayers]{}; // media LINEAR do albedo da camada
+        FTextureCPUData ProxyAlbedoCPU;                          // movido no TakeProxyAlbedoCPU
         std::vector<u8>  ChunkLods;            // LOD selecionado no frame (por chunk)
         std::vector<u32> Visible;              // indices dos chunks visiveis na vista
 

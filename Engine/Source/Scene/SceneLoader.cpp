@@ -554,8 +554,25 @@ namespace Smile {
                                 Scene.AddMeshesBatch(Device.Native(), UploadQueue, ProxyList);
                             UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
 
+                            // Albedo do proxy: textura bakeada com o blend de 4 camadas quando o
+                            // terreno tem camadas (ver FTerrain::BakeProxyAlbedo); sem elas, o
+                            // raster tambem desenha cor chapada e o fator constante basta.
+                            // A textura entra no ImportedTextures, que e liberado junto com o
+                            // ImportedMaterials — o mesmo lifetime do material que aponta p/ ela.
+                            FTexture* proxyAlbedo = nullptr;
+                            FTextureCPUData proxyAlbedoCPU;
+                            if (Terrain.TakeProxyAlbedoCPU(proxyAlbedoCPU)) {
+                                auto tex = std::make_unique<FTexture>(
+                                    FTexture::CreateFromCPU(Device.Native(), UploadQueue, SRVHeap,
+                                                            proxyAlbedoCPU, EVramCategory::Terrain));
+                                if (tex->IsValid()) {
+                                    proxyAlbedo = tex.get();
+                                    ImportedTextures.push_back(std::move(tex));
+                                }
+                            }
+
                             auto mat = std::make_unique<FMaterial>();
-                            mat->Albedo            = &TexDefaultWhite;
+                            mat->Albedo            = proxyAlbedo ? proxyAlbedo : &TexDefaultWhite;
                             mat->Normal            = &TexDefaultNormal;
                             mat->MetallicRoughness = &TexDefaultWhite;
                             mat->AO                = &TexDefaultWhite;
@@ -563,7 +580,11 @@ namespace Smile {
                             mat->Height            = &TexDefaultWhite;
                             mat->Metalness         = &TexDefaultWhite;
                             mat->Roughness         = &TexDefaultWhite;
-                            mat->Constants.BaseColorFactor = { 0.26f, 0.32f, 0.19f, 1.0f };
+                            // Com a textura bakeada o fator vira NEUTRO: o hit shading faz
+                            // albedo = BaseColor * textura, e a cor ja esta na textura.
+                            mat->Constants.BaseColorFactor = proxyAlbedo
+                                ? Vec4{ 1.0f, 1.0f, 1.0f, 1.0f }
+                                : Vec4{ 0.26f, 0.32f, 0.19f, 1.0f }; // cor media do vale
                             mat->Constants.MetallicFactor  = 0.0f;
                             mat->Constants.RoughnessFactor = 0.95f;
                             mat->Finalize(Device.Native(), SRVHeap);

@@ -395,6 +395,28 @@ namespace Smile {
         return Data;
     }
 
+    void FTexture::GenerateColorMips(FTextureCPUData& _Data, bool _SrgbSpace) {
+        if (_Data.Mips.empty()) return;
+        _Data.Mips.resize(1);
+        _Data.Width  = _Data.Mips[0].Width;
+        _Data.Height = _Data.Mips[0].Height;
+
+        u32 W = _Data.Width, H = _Data.Height;
+        while (W > 1 || H > 1) {
+            const u32 PrevW = W, PrevH = H;
+            W = std::max(1u, W / 2);
+            H = std::max(1u, H / 2);
+
+            FMipData Next;
+            Next.Width  = W;
+            Next.Height = H;
+            Next.Pixels.resize(static_cast<size_t>(W) * H * 4);
+            DownsampleColor2x2(_Data.Mips.back().Pixels.data(), PrevW, PrevH,
+                               Next.Pixels.data(), W, H, _SrgbSpace);
+            _Data.Mips.push_back(std::move(Next));
+        }
+    }
+
     FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                      FTextureSRVHeap& _SRVHeap, const FTextureCPUData& _Data,
                                      EVramCategory _Category) {

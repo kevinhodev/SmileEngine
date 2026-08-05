@@ -51,6 +51,13 @@ namespace Smile {
                                       const FTextureCPUData& Data,
                                       EVramCategory Category = EVramCategory::SceneTextures);
 
+        // Gera a mip chain a partir da mip 0 ja preenchida (RGBA8, 4 bytes por texel), descartando
+        // o que houver depois dela. Mesmo box 2x2 do LoadCPU — com SrgbSpace a media acontece em
+        // LINEAR (media de bytes gama escurece a mip). Para texturas geradas em runtime, que nao
+        // passam pelo decode de arquivo mas precisam de mips (o hit shading de RT amostra num LOD
+        // fixo, ver Reflections::AlbedoLOD).
+        static void GenerateColorMips(FTextureCPUData& Data, bool SrgbSpace);
+
         static FTextureCPUData LoadDDSCPU(const std::wstring& Path, bool sRGB);
         static FTexture        LoadDDS(ID3D12Device* Device, FUploadQueue& UploadQueue,
                                        FTextureSRVHeap& SRVHeap,
