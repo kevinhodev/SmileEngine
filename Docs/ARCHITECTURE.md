@@ -268,13 +268,34 @@ separados — ver §5). RTV heap próprio. `Present()` respeita tearing.
 > par `ReleaseSizedResources(SRVHeap)` + `SetupForResize(...)` (ver `FAmbientOcclusion`,
 > `FHiZOcclusion`).
 
-### `FBarrierBatch`
-Acumulador de transições: empilha e emite tudo num **único** `ResourceBarrier` no `Flush`.
-`TransitionTracked(res, curState, to)` lê e reescreve o estado rastreado pelo chamador.
-Contrato: `Flush` **antes** do primeiro draw/dispatch/copy que depende das transições.
+### Barreiras — `Barriers.h`
+- `TransitionResource(cmd, res, before, after)` — transição **única e imediata**.
+- `FBarrierBatch` — acumula e emite tudo num **único** `ResourceBarrier` no `Flush`; use quando
+  há 2+ transições no mesmo ponto. `TransitionTracked(res, curState, to)` lê e reescreve o
+  estado rastreado pelo chamador. Contrato: `Flush` **antes** do primeiro draw/dispatch/copy
+  que depende das transições. Construir com uma command list liga o **auto-flush** (modelo do
+  `GPUContextDX12` do Flax): ao encher, o lote sai sozinho em vez de estourar assert — emitir
+  barreira antes do previsto é sempre correto, o que não pode é emitir depois do consumidor.
 
-> Hoje só 3 arquivos o usam; outros 5 reimplementaram um `Transition()` local equivalente
-> (item aberto na §13).
+> Nota de arquitetura: aqui o estado do recurso mora no **chamador** (cada passe tem seus
+> `D3D12_RESOURCE_STATES XxxState`). Flax e Cry põem o estado **no recurso**
+> (`SetResourceState(res, after)` consulta e decide sozinho), o que elimina a classe de bug
+> "dois donos discordando sobre o estado atual". É a evolução natural daqui, mas exige um
+> wrapper de recurso que a engine ainda não tem.
+
+### Criação de recursos — `GpuResources.h`
+Fábrica para a forma comum: `Tex2DDesc/Tex3DDesc/BufferDesc` (descritores),
+`CreateTex2D/CreateTex3D/CreateBuffer` (DEFAULT heap), `CreateUploadBuffer` (upload mapeado
+de forma persistente, com `FUploadBuffer::Slice(i)`/`Address(i)` por frame em voo),
+`CreateReadbackBuffer`, e os descritores de view (`SrvTex2D`, `UavTex2D`, `RtvTex2D`,
+`SrvStructuredBuffer`, `UavStructuredBuffer`).
+
+O **registro no `VramTracker` é parte da criação** em DEFAULT heap — o chamador escolhe a
+`EVramCategory` e pronto. Antes era um passo separado que cada autor precisava lembrar, e
+esquecer sumia com o recurso do breakdown de VRAM do editor sem nenhum sintoma.
+
+Não cobre caminhos com necessidade própria (placed/reservados/aliasing): monte o desc na mão
+nesses casos. O objetivo é matar o boilerplate, não virar uma camada sobre o D3D12.
 
 ### Pipelines de compute: dois sabores
 | Classe | Forma do root sig | Usado por |
@@ -774,13 +795,14 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
    - `Record*/Execute(commandList, srvHeap, ...)`.
    - `Recreate*(device, ...)` p/ hot-reload · `IsReady()`/`IsInitialized()` ·
      `InvalidateHistory()` se acumular entre frames.
-2. **Recursos:** aloque SRV/UAV no `FTextureSRVHeap` compartilhado e **libere** no
+2. **Recursos:** crie via `GpuResources` (§4) — nunca `CreateCommittedResource` direto, senão
+   o recurso fica fora do breakdown de VRAM. Aloque SRV/UAV no `FTextureSRVHeap` e **libere** no
    `ReleaseSizedResources`; monte tabelas contíguas com `CopyDescriptors` a partir do staging
-   heap. Registre cada recurso no `VramTracker` com a categoria certa. Use `FVolumetricPipeline`
-   para compute parametrizável.
-3. **Constant buffer:** upload heap mapeado persistente, **um slice por frame em voo**
-   (`FCommandQueue::kFramesInFlight`), indexado pelo `FrameSlot`.
-4. **Barreiras:** use `FBarrierBatch`, não `ResourceBarrier` avulso.
+   heap. Use `FVolumetricPipeline` para compute parametrizável.
+3. **Constant buffer:** `GpuResources::CreateUploadBuffer(dev, sizeof(XxxConstants),
+   FCommandQueue::kFramesInFlight)` — um slice por frame em voo, já alinhado a 256 B.
+4. **Barreiras:** `TransitionResource` para uma, `FBarrierBatch` para 2+. Nunca
+   `ResourceBarrier` avulso montado na mão.
 5. **Shaders:** registre nos **dois** pontos do `Shaders/CMakeLists.txt` (§2) e carregue
    `<nome>.<perfil>.cso`.
 6. **Integração no `Renderer`:**
@@ -837,10 +859,12 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
   divergiu: `IsReady()` vs `IsInitialized()`; `Execute()` vs `Record*()`; `InvalidateHistory()`
   vs `ResetHistory()` vs `ResetHistoryOnce()` vs `InvalidateResults()`; `Resize()` vs
   `SetupForResize()`. É por isso que a orquestração precisa saber o nome exato de cada um.
-- **Boilerplate DX12 duplicado.** 132 `CreateCommittedResource` em 48 arquivos, cada um
-  remontando `HEAP_PROPERTIES` + `RESOURCE_DESC`; 4 cópias do mesmo helper `CreateTex2D`.
-  `FBarrierBatch` é usado em 3 arquivos enquanto 5 outros reimplementaram um `Transition()`
-  local equivalente. ~60 root signatures montadas campo a campo.
+- **Boilerplate DX12 duplicado** — *parcialmente resolvido em 2026-08-04*. As cópias sumiram
+  (5 `Transition()` locais idênticos, 4 clones de `CreateTex2D`, 3 de upload buffer) e existe
+  `GpuResources.h` (§4) como caminho único. **Restam ~125 `CreateCommittedResource`** montando
+  `HEAP_PROPERTIES`+`RESOURCE_DESC` na mão — migração mecânica, mas caso a caso: cada uma pode
+  divergir num flag ou no estado inicial, e não há teste que pegue isso. ~60 root signatures
+  seguem montadas campo a campo (sem helper ainda).
 - **`ViewportWidget` é o espelho do God object no editor:** 2796 linhas + 645 no header e
   **134 `Q_PROPERTY`**, acumulando host do HWND, input, telemetria e a bridge de ~130 knobs de
   render. As bridges por domínio já provam o padrão certo — falta um `RenderSettingsBridge`.
