@@ -169,6 +169,19 @@ namespace Smile {
         // Alg. 5 passo 2. Custa 1 raio/pixel a mais (2 no total com o resolve do Pass B); a chave
         // existe para dar A/B contra o custo.
         bool InitialVisibility = true;
+
+        // Tira os triangulos emissivos do POOL de propostas (o buffer continua sendo extraido).
+        //
+        // OFF por padrao de proposito, e nao so para debug: com proposta UNIFORME sobre um pool de
+        // 26.500 (2 analiticas + 26.498 triangulos na Bistro), a chance de uma das 8 candidatas
+        // cair numa analitica e ~0,06%. O poste da rua deixa de ser sorteado e a cena escurece —
+        // o estimador continua correto, mas o recurso deixa a engine PIOR. So faz sentido ligar
+        // depois da alias table por potencia (fase 4).
+        //
+        // Serve tambem para separar as duas variaveis que a migracao juntou: com off o pool volta
+        // a ser so analitico e o brilho TEM de bater com o caminho antigo. Se nao bater, o erro
+        // esta na conversao de energia; se bater, o que falta e mesmo a amostragem.
+        bool MeshLightsInPool = false;
         FRayEpsilonProfile RayEps;
     };
 }

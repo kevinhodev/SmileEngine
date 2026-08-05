@@ -329,7 +329,7 @@ namespace Smile {
         CPU.TemporalPolicy = { EnableTemporalPermutation ? 1.0f : 0.0f,
                                MotionHistoryValid ? 1.0f : 0.0f,
                                InitialVisibility ? 1.0f : 0.0f,
-                               static_cast<f32>(MeshLightCount) };
+                               MeshLightsInPool ? static_cast<f32>(MeshLightCount) : 0.0f };
         CPU.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                         RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin,
