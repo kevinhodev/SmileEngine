@@ -39,6 +39,11 @@ namespace SmileEditor {
         // nao-NVIDIA: o QML desabilita o controle em vez de escondê-lo.
         Q_PROPERTY(bool rtShaderTimerAvailable READ IsRtShaderTimerAvailable NOTIFY DebugTargetsChanged)
         Q_PROPERTY(bool rtShaderTimerEnabled READ IsRtShaderTimerEnabled NOTIFY DebugSettingsChanged)
+        // Debug da BVH: raio primario na TLAS. "Available" e false sem suporte a RT ou antes da
+        // primeira cena — mesma convencao do timer acima.
+        Q_PROPERTY(bool bvhDebugAvailable READ IsBvhDebugAvailable NOTIFY DebugTargetsChanged)
+        Q_PROPERTY(bool bvhDebugEnabled READ IsBvhDebugEnabled NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(int bvhDebugMode READ GetBvhDebugMode NOTIFY DebugSettingsChanged)
         // Janela de debug: selecao multipla (indices), colunas da grade e exposicao.
         Q_PROPERTY(QVariantList debugSelection READ GetDebugSelection NOTIFY DebugSettingsChanged)
         Q_PROPERTY(int debugColumns READ GetDebugColumns NOTIFY DebugSettingsChanged)
@@ -213,6 +218,9 @@ namespace SmileEditor {
         int               GetDebugTargetIndex() const;
         bool              IsRtShaderTimerAvailable() const;
         bool              IsRtShaderTimerEnabled() const;
+        bool              IsBvhDebugAvailable() const;
+        bool              IsBvhDebugEnabled() const;
+        int               GetBvhDebugMode() const;
         QVariantList      GetDebugSelection() const;
         int               GetDebugColumns() const;
         double            GetDebugExposure() const;
@@ -352,6 +360,8 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleDebugSelection(int index);   // liga/desliga um alvo na grade
         Q_INVOKABLE void ClearDebugSelection();
         Q_INVOKABLE void ToggleRtShaderTimer();             // instrumentacao de timer nos traces
+        Q_INVOKABLE void ToggleBvhDebug();                  // raio primario na TLAS
+        Q_INVOKABLE void SetBvhDebugMode(int mode);         // 0 categoria, 1 instancia, 2 complexidade
         Q_INVOKABLE void SetDebugColumns(int columns);      // 0 = grade automatica
         Q_INVOKABLE void SetDebugExposure(double exposure); // multiplicador global
         Q_INVOKABLE void InspectDDGIProbe(int targetIndex, double u, double v,

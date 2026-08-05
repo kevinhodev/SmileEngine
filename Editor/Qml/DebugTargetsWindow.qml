@@ -332,7 +332,7 @@ Rectangle {
             anchors.rightMargin: 14
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 14
-            height: 160
+            height: 188 // +28 pela linha do debug de BVH
 
             Rectangle {
                 anchors.left: parent.left
@@ -378,8 +378,81 @@ Rectangle {
                 }
             }
 
+            // Debug da BVH: raio primario na TLAS. Mesma logica de estar aqui que o timer — o que
+            // ele produz e um alvo desta lista ("RT · BVH"), entao ligar e escolher sao o mesmo
+            // gesto. O modo fica junto porque trocar de modo reescreve o MESMO alvo.
             Text {
                 y: 42
+                text: "BVH"
+                color: viewportModel.bvhDebugAvailable ? root.textNormal : root.textMuted
+                font.family: C.Theme.fontFamily
+                font.pixelSize: 11
+            }
+
+            Row {
+                anchors.right: parent.right
+                y: 38
+                spacing: 4
+
+                Repeater {
+                    model: [
+                        { label: "Cat", value: 0, tip: "Categoria na TLAS: opaco / alpha-test / translucido" },
+                        { label: "Inst", value: 1, tip: "Cor por instancia: acha duplicata e sobreposicao" },
+                        { label: "Cplx", value: 2, tip: "Triangulos testados por raio" }
+                    ]
+                    Rectangle {
+                        required property var modelData
+                        width: 34
+                        height: 22
+                        radius: 5
+                        enabled: viewportModel.bvhDebugAvailable && viewportModel.bvhDebugEnabled
+                        opacity: enabled ? 1.0 : 0.42
+                        readonly property bool on: viewportModel.bvhDebugMode === modelData.value
+                        color: on ? root.blueBg : (modeHover.hovered ? "#23241d" : "transparent")
+                        border.color: on ? root.blueBorder : root.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: parent.on ? root.blue : root.textSecondary
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 10
+                        }
+                        ToolTip.visible: modeHover.hovered
+                        ToolTip.text: modelData.tip
+                        ToolTip.delay: 400
+                        HoverHandler { id: modeHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler {
+                            onTapped: if (parent.enabled) viewportModel.SetBvhDebugMode(modelData.value)
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: bvhToggle
+                    width: 46
+                    height: 22
+                    radius: 5
+                    enabled: viewportModel.bvhDebugAvailable
+                    opacity: enabled ? 1.0 : 0.42
+                    readonly property bool on: viewportModel.bvhDebugEnabled
+                    color: on ? root.blueBg : (bvhHover.hovered ? "#23241d" : "transparent")
+                    border.color: on ? root.blueBorder : root.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: bvhToggle.on ? "ON" : "OFF"
+                        color: bvhToggle.on ? root.blue : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
+                    }
+                    HoverHandler { id: bvhHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler {
+                        onTapped: if (bvhToggle.enabled) viewportModel.ToggleBvhDebug()
+                    }
+                }
+            }
+
+            Text {
+                y: 70
                 text: "Colunas"
                 color: root.textNormal
                 font.family: C.Theme.fontFamily
@@ -388,7 +461,7 @@ Rectangle {
 
             Row {
                 anchors.right: parent.right
-                y: 38
+                y: 66
                 spacing: 4
                 Repeater {
                     model: [
@@ -426,7 +499,7 @@ Rectangle {
             }
 
             Text {
-                y: 79
+                y: 107
                 text: "Exposição"
                 color: root.textNormal
                 font.family: C.Theme.fontFamily
@@ -435,7 +508,7 @@ Rectangle {
 
             Text {
                 anchors.right: parent.right
-                y: 79
+                y: 107
                 text: viewportModel.debugExposure.toFixed(2).replace(".", ",") + "×"
                 color: root.blue
                 font.family: C.Theme.fontMono
@@ -446,7 +519,7 @@ Rectangle {
                 id: exposureSlider
                 anchors.left: parent.left
                 anchors.right: parent.right
-                y: 96
+                y: 124
                 height: 20
                 from: 0.05
                 to: 8.0

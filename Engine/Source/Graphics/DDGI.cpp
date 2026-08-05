@@ -187,6 +187,11 @@ namespace Smile {
                                       MC.MetallicFactor };
                 if (MC.AlphaTest)        g.Flags |= 1u;
                 if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
+                // Categoria da instancia na TLAS (kRTMaskTranslucent). Espelhada aqui porque a
+                // mask e propriedade do RAIO: um shader nao consegue perguntar a TLAS com que
+                // mask a instancia entrou. Consumida so pelo BvhDebug — os outros passes
+                // distinguem translucido pela mask que eles proprios tracam.
+                if (R.Material->Blend)   g.Flags |= 128u;
                 if (R.Material->IsFinalized()) {
                     // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
                     if (MC.HasEmissiveMap) {

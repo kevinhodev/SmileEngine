@@ -24,6 +24,7 @@
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/DebugView.h"
 #include "Smile/Graphics/ShaderTimer.h"
+#include "Smile/Graphics/BvhDebugView.h"
 #include "Smile/Graphics/HDREnvironment.h"
 #include "Smile/Graphics/Atmosphere.h"
 #include "Smile/Graphics/TimeOfDay.h"
@@ -378,6 +379,19 @@ namespace Smile {
         bool GetRtShaderTimer() const        { return RtShaderTimer; }
         // false em GPU nao-NVIDIA ou build sem o SDK: o editor deve desabilitar o toggle.
         bool IsRtShaderTimerAvailable() const;
+
+        // Debug da BVH (GPU Zen 3, 7.3.3): raio primario por pixel na TLAS, publicado como alvo
+        // em DebugTargets. Complementa o timer acima — aquele mede ciclos nos passes reais e
+        // pede NVAPI; este e portatil e mostra o CONTEUDO e a densidade da estrutura.
+        void SetBvhDebug(bool V)                       { BvhDebugEnabled = V; }
+        bool GetBvhDebug() const                       { return BvhDebugEnabled; }
+        void SetBvhDebugMode(FBvhDebugView::EMode V)   { BvhDebugMode = V; }
+        FBvhDebugView::EMode GetBvhDebugMode() const   { return BvhDebugMode; }
+        // Teto do heatmap do modo Complexidade, em triangulos testados por raio.
+        void SetBvhDebugComplexityMax(f32 V)           { BvhDebugComplexityMax = V < 1.0f ? 1.0f : V; }
+        f32  GetBvhDebugComplexityMax() const          { return BvhDebugComplexityMax; }
+        // false sem suporte a RT ou antes da TLAS existir: o editor desabilita o toggle.
+        bool IsBvhDebugAvailable() const;
 
         // Selecao MULTIPLA da janela de debug. Diferente do alvo unico acima, esta selecao
         // e composta numa textura offscreen e nunca substitui a imagem do viewport principal.
@@ -871,6 +885,11 @@ namespace Smile {
         // dispatch (GI full-res, reflexao half-res).
         FShaderTimer   TimerGI;
         FShaderTimer   TimerReflections;
+        // Debug da BVH: dispatch proprio, so com o toggle ligado.
+        FBvhDebugView        BvhDebug;
+        bool                 BvhDebugEnabled = false; // toggle do editor
+        FBvhDebugView::EMode BvhDebugMode    = FBvhDebugView::EMode::Category;
+        f32                  BvhDebugComplexityMax = FBvhDebugView::kDefaultComplexityMax;
         bool           RtShaderTimer      = false; // toggle do editor
         bool           TimerCaptureActive = false; // resolvido por frame (toggle && disponivel)
         // Escala do heatmap: 1/valor considerado "quente" em ciclos. UMA POR PASSE, porque os

@@ -222,6 +222,7 @@ namespace Smile {
             // padrao do timer e a permutacao nasce invalida. Falhar aqui e normal (GPU nao-NVIDIA):
             // os passes so nao criam a gemea instrumentada.
             FShaderTimer::InitializeApi(Device.Native(), SRVHeap);
+            BvhDebug.Initialize(Device.Native());
             DDGI.Initialize(Device.Native());
             ReGIR.Initialize(Device.Native());
             MeshLights.Initialize(Device.Native());
@@ -250,6 +251,12 @@ namespace Smile {
         LogInfo("Renderer pronto em " + std::to_string(InitMs) + " ms | " +
                 std::to_string(SwapChain.GetWidth()) + "x" +
                 std::to_string(SwapChain.GetHeight()) + " | " + Features);
+    }
+
+    bool Renderer::IsBvhDebugAvailable() const {
+        // Precisa da TLAS E do snapshot de instancias — o passe le os dois. Antes da primeira
+        // cena carregar, o toggle fica desabilitado em vez de ligar e nao produzir imagem.
+        return Device.RaytracingSupported() && RaytracingScene.IsBuilt() && BvhDebug.IsReady();
     }
 
     bool Renderer::IsRtShaderTimerAvailable() const {
@@ -609,6 +616,13 @@ namespace Smile {
         TimerGI.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
         TimerReflections.Initialize(Device.Native(), SRVHeap,
                                     Reflections.TraceWidth(), Reflections.TraceHeight());
+
+        // Debug da BVH: alvo full-res + a tabela t0/t1 (TLAS + snapshot de instancias). Fica aqui
+        // porque este ponto e o unico que roda nos DOIS eventos que invalidam a tabela — resize
+        // da tela e reconstrucao da cena de RT (os slots mudam nos dois).
+        BvhDebug.Resize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        BvhDebug.SetSceneSRVs(Device.Native(), SRVHeap,
+                              RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV());
 
         Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
 
@@ -1306,6 +1320,13 @@ namespace Smile {
             Register("RT · timer · reflexos", TimerReflections.SrvSlot(), EDebugDecode::Heatmap, 0, 1,
                      /*Exposure=*/kShaderTimerScaleReflections, /*AtlasTilePx=*/0,
                      /*LinearFilter=*/false);
+        // Debug da BVH. Decode Raw porque o passe ja resolve a cor final (paleta de categoria,
+        // rampa de falsa-cor) — nao ha canal cru p/ o visualizador interpretar, e um decode
+        // generico so poderia estragar cor autorada. Filtro linear OFF: cada texel e um raio, e
+        // interpolar borraria a fronteira entre duas instancias.
+        if (BvhDebug.SrvSlot() != kNoSlot)
+            Register("RT · BVH", BvhDebug.SrvSlot(), EDebugDecode::Raw, 0, 1,
+                     /*Exposure=*/1.0f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
         if (DDGI.IrradianceAtlasSRV() != kNoSlot) {
             // O atlas guarda irradiancia comprimida por gamma; o decode generico de HDR
             // deixava o sinal artificialmente claro e nao correspondia ao que o lighting usa.
@@ -3046,6 +3067,16 @@ namespace Smile {
             TimerReflections.Clear(CommandList, SRVHeap);
         }
 
+        // Debug da BVH (GPU Zen 3, 7.3.3). Dispatch proprio, independente do resto do frame: ele
+        // traca os raios PRIMARIOS que o pipeline hibrido nunca traca, entao nao le G-buffer nem
+        // depth e nao entra em nenhuma cadeia de dependencia. Sem o toggle, nao custa nada.
+        // Nao precisa de clear: todo pixel do dominio escreve (o miss tem cor propria).
+        if (BvhDebugEnabled && BvhDebug.IsReady()) {
+            BvhDebug.Render(CommandList, SRVHeap, InvViewProjFull, CameraPosition,
+                            BvhDebugMode, DDGI.MaxRayDistance(), BvhDebugComplexityMax,
+                            FrameSlot);
+        }
+
         if (ReSTIRGIActive) {
             FBarrierBatch Batch;
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -3658,6 +3689,7 @@ namespace Smile {
             // ReSTIR GI). Sem captura ativa eles ficam no estado de leitura e isto e no-op.
             TimerGI.ToRead(CommandList);
             TimerReflections.ToRead(CommandList);
+            BvhDebug.ToRead(CommandList); // idem: sai do dispatch em UAV
 
             // Depth e normal podem ser escolhidos tanto no toolbar quanto na janela. Deixa-os
             // legiveis durante os dois draws e restaura exatamente os estados de entrada.
@@ -4111,6 +4143,7 @@ namespace Smile {
         RRGuides.Shutdown();
         BgVelocity.Shutdown();
         FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS/RR
+        BvhDebug.Release(SRVHeap);
         FShaderTimer::ShutdownApi();       // libera o slot falso da extensao + o buffer dummy
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);

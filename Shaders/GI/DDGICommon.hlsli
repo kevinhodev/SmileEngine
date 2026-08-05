@@ -35,6 +35,9 @@
 #define INSTGEO_FLAG_SPECPACK  16u // o mapa MR e "Specular" (R=AO, G=rough, B=metal); senao R=metal
 #define INSTGEO_FLAG_METALMAP  32u // tem mapa Metalness separado (MetalMapIndex valido; R=metal)
 #define INSTGEO_FLAG_ROUGHMAP  64u // tem mapa Roughness separado (RoughMapIndex valido; R=rough)
+#define INSTGEO_FLAG_TRANSLUCENT 128u // material Blend — kRTMaskTranslucent na TLAS. So o BvhDebug
+                                      // usa: a categoria da instancia e a mask do raio, que o
+                                      // shader nao consegue ler de volta da TLAS
 
 // 80 bytes — casa campo-a-campo com DDGIInstanceGeo (DDGI.cpp). Campos alem do BaseColor/geometria
 // alimentam o ReSTIR PT (emissivo, alpha-test, metal/rough); os shaders antigos ignoram os novos.

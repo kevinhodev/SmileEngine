@@ -66,6 +66,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/DebugTargets.h
     Include/Smile/Graphics/DebugView.h
     Include/Smile/Graphics/ShaderTimer.h
+    Include/Smile/Graphics/BvhDebugView.h
     Include/Smile/Graphics/OceanSpectrum.h
     Include/Smile/Graphics/OceanFFT.h
     Include/Smile/Graphics/Water.h
@@ -136,6 +137,7 @@ set(ENGINE_SOURCES
     Source/Graphics/DebugTargets.cpp
     Source/Graphics/DebugView.cpp
     Source/Graphics/ShaderTimer.cpp
+    Source/Graphics/BvhDebugView.cpp
     Source/Graphics/FlickerHeatmap.cpp
     Source/Graphics/OceanSpectrum.cpp
     Source/Graphics/OceanFFT.cpp

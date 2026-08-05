@@ -41,6 +41,10 @@ smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 
 # GI (DDGI) — trace via DXR 1.1 inline ray tracing (RayQuery, SM 6.5) + update dos probes
+# Debug da BVH: raio primario por pixel na TLAS (GPU Zen 3, 7.3.3). cs_6_6 pelo RayQuery + heap
+# diretamente indexado (VB/IB bindless do alpha-test e da normal do hit).
+smile_compile_shader(Debug/BvhDebug.cs.hlsl    cs_6_6 main SHADER_OUTPUTS)
+
 smile_compile_shader(GI/DDGITrace.cs.hlsl      cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIUpdate.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIUpdateDist.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
@@ -240,6 +244,8 @@ add_custom_target(Shaders
         Shadow/ShadowDepth.ps.hlsl
         GI/DDGICommon.hlsli
         GI/HitShading.hlsli
+        GI/RTGeometry.hlsli
+        Debug/BvhDebug.cs.hlsl
         GI/ReGIRCommon.hlsli
         GI/ReGIRSampling.hlsli
         GI/ReGIRBuild.cs.hlsl

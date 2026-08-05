@@ -595,6 +595,18 @@ namespace SmileEditor {
         return Renderer && Renderer->GetRtShaderTimer();
     }
 
+    bool ViewportWidget::IsBvhDebugAvailable() const {
+        return Renderer && Renderer->IsBvhDebugAvailable();
+    }
+
+    bool ViewportWidget::IsBvhDebugEnabled() const {
+        return Renderer && Renderer->GetBvhDebug();
+    }
+
+    int ViewportWidget::GetBvhDebugMode() const {
+        return Renderer ? static_cast<int>(Renderer->GetBvhDebugMode()) : 0;
+    }
+
     QVariantList ViewportWidget::GetDebugSelection() const {
         QVariantList L;
         if (!Renderer) return L;
@@ -736,6 +748,21 @@ namespace SmileEditor {
     void ViewportWidget::ToggleRtShaderTimer() {
         if (!Renderer || !Renderer->IsRtShaderTimerAvailable()) return;
         Renderer->SetRtShaderTimer(!Renderer->GetRtShaderTimer());
+        InvalidateDebugPreview();
+        emit DebugSettingsChanged();
+    }
+
+    void ViewportWidget::ToggleBvhDebug() {
+        if (!Renderer || !Renderer->IsBvhDebugAvailable()) return;
+        Renderer->SetBvhDebug(!Renderer->GetBvhDebug());
+        InvalidateDebugPreview();
+        emit DebugSettingsChanged();
+    }
+
+    void ViewportWidget::SetBvhDebugMode(int _Mode) {
+        if (!Renderer) return;
+        if (_Mode < 0 || _Mode >= static_cast<int>(Smile::FBvhDebugView::EMode::Count)) return;
+        Renderer->SetBvhDebugMode(static_cast<Smile::FBvhDebugView::EMode>(_Mode));
         InvalidateDebugPreview();
         emit DebugSettingsChanged();
     }
