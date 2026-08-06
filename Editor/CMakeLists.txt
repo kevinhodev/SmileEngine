@@ -21,6 +21,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/TimeOfDayBridge.h
     Include/SmileEditor/LightsBridge.h
     Include/SmileEditor/SceneOutlinerBridge.h
+    Include/SmileEditor/SceneDocument.h
     Include/SmileEditor/MaterialsBridge.h
     Include/SmileEditor/RenderSettingsBridge.h
 )
@@ -44,6 +45,7 @@ set(EDITOR_SOURCES
     Source/TimeOfDayBridge.cpp
     Source/LightsBridge.cpp
     Source/SceneOutlinerBridge.cpp
+    Source/SceneDocument.cpp
     Source/MaterialsBridge.cpp
     Source/RenderSettingsBridge.cpp
 )

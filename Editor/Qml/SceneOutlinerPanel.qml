@@ -298,13 +298,17 @@ Rectangle {
                 enabled: lightsModel.hasSceneFile
                 onTapped: {
                     lightsModel.saveLights()
+                    // O .smap carrega a camada de OBJETOS (movidos, ocultos, criados, apagados).
+                    // O saveVisibility continua por compatibilidade com mapas antigos: quem le a
+                    // visibilidade primeiro e o .visibility.json, e o .smap sobrescreve depois.
                     outlinerModel.saveVisibility()
+                    sceneDoc.save()
                 }
             }
             ToolTip.visible: saveHover.hovered
             ToolTip.delay: 600
             ToolTip.text: lightsModel.hasSceneFile
-                          ? "Salvar luzes e visibilidade (<cena>.lights/.visibility.json)"
+                          ? "Salvar cena (<cena>.smap) + luzes"
                           : "Carregue uma cena para salvar"
         }
         Item {

@@ -446,6 +446,9 @@ namespace Smile {
             out.LocalAABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
             out.LocalAABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
             out.RefreshWorldBounds();
+            // Origem no asset: e por aqui que o .smap volta a achar este objeto na proxima
+            // execucao (o indice na lista viva muda a cada remocao).
+            out.CookedIndex = static_cast<i32>(i);
             Scene.AddRenderable(out);
         }
 

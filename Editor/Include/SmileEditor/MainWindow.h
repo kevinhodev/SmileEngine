@@ -24,6 +24,7 @@ namespace SmileEditor {
     class TimeOfDayBridge;
     class LightsBridge;
     class SceneOutlinerBridge;
+    class SceneDocument;
     class MaterialsBridge;
     class RenderSettingsBridge;
 
@@ -89,6 +90,7 @@ namespace SmileEditor {
         QPointer<QDialog>     DebugTargetsDlg;       // janela flutuante do visualizador de RTs
         LightsBridge*         LightsBr    = nullptr; // acoes/propriedades de luz (outliner)
         SceneOutlinerBridge*  OutlinerBr  = nullptr; // ponte C++ -> SceneOutlinerPanel.qml
+        SceneDocument*        SceneDoc    = nullptr; // camada autorada da cena (.smap)
         QDockWidget*          LightsDock  = nullptr; // dock lateral do Scene Outliner ("Cena")
         MaterialsBridge*      MaterialsBr = nullptr; // ponte C++ -> MaterialsWindow.qml
         RenderSettingsBridge* RenderBr   = nullptr; // ponte C++ -> knobs do SettingsWindow.qml

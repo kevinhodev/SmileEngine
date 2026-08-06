@@ -11,6 +11,7 @@
 #include "SmileEditor/RenderSettingsBridge.h"
 #include "SmileEditor/LightsBridge.h"
 #include "SmileEditor/SceneOutlinerBridge.h"
+#include "SmileEditor/SceneDocument.h"
 #include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
@@ -92,12 +93,18 @@ namespace SmileEditor {
         TodBridge  = new TimeOfDayBridge(this); // painel Time of Day (renderer chega depois)
         LightsBr   = new LightsBridge(this);          // acoes/props de luz (renderer depois)
         OutlinerBr = new SceneOutlinerBridge(this);   // Scene Outliner (renderer depois)
+        SceneDoc   = new SceneDocument(this);         // camada autorada (.smap)
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
         RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
         connect(LightsBr, &LightsBridge::LightsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Rebuild);
+
+        // Edicao pelo outliner (esconder/criar/apagar) suja a camada autorada. Move pelo gizmo
+        // ainda nao acende este indicador — mas E salvo, porque o save le a cena viva inteira.
+        connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
+                SceneDoc, &SceneDocument::markDirty);
 
         // Isolar do Editor de Materiais mexe em FRenderable::Visible -> olhos do Outliner
         // refazem. "Selecionar na cena" revela o dock (a arvore segue a selecao sozinha).
@@ -416,6 +423,9 @@ namespace SmileEditor {
                     }
 
                     if (LightsBr)    LightsBr->OnSceneLoaded(Path, Additive);
+                    // ANTES do outliner: o .smap pode criar e apagar objetos, e a arvore tem de
+                    // ser construida sobre a lista ja editada, nao sobre a do asset cru.
+                    if (SceneDoc)    SceneDoc->OnSceneLoaded(Path, Additive);
                     if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
                     if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
                     if (Viewport)    Viewport->NotifyDebugTargetsChanged();
@@ -632,6 +642,7 @@ namespace SmileEditor {
         QQuickWidget* OutlinerPanel = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("SceneOutlinerPanel.qml"),
             { { QStringLiteral("outlinerModel"),  OutlinerBr },
+              { QStringLiteral("sceneDoc"),        SceneDoc },
               { QStringLiteral("lightsModel"),    LightsBr },
               { QStringLiteral("renderModel"),    RenderBr },
               { QStringLiteral("viewportModel"),  Viewport } },
@@ -690,6 +701,7 @@ namespace SmileEditor {
         // toggles de ambiente com a arvore.
         if (OutlinerBr) {
             OutlinerBr->SetRenderer(Viewport->GetRenderer());
+            SceneDoc->SetRenderer(Viewport->GetRenderer());
             connect(Viewport, &ViewportWidget::FrameReady,
                     OutlinerBr, &SceneOutlinerBridge::Refresh, Qt::UniqueConnection);
         }

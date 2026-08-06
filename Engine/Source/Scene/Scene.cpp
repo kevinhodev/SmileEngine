@@ -174,6 +174,9 @@ namespace Smile {
         // para a fonte viraria ponteiro solto no meio da propria copia.
         FRenderable Copy = RenderableList[Index];
         Copy.Name += " (copia)";
+        // Mantem o CookedIndex da fonte (e por onde a persistencia sabe que geometria recriar) e
+        // marca como criada no editor, para nao ser confundida com o objeto original do asset.
+        Copy.Spawned = true;
         // O FGpuMesh e compartilhado de proposito: o BLAS e cacheado por ponteiro de mesh
         // (FRaytracingScene::BlasByMesh), entao a copia entra na TLAS sem construir BLAS novo
         // nem gastar VRAM de geometria.

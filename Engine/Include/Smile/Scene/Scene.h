@@ -77,6 +77,16 @@ namespace Smile {
         FGpuMesh*   Mesh     = nullptr;
         FMaterial*  Material = nullptr;
         bool        Visible  = true;
+
+        // De qual renderavel do .sscene este objeto veio (-1 = nenhum, ex.: proxy do terreno).
+        // Uma COPIA herda o indice da fonte: e o que diz qual geometria recriar ao carregar.
+        // Nao confundir com Id — aquele e identidade de sessao, esta e a origem no ASSET, e e o
+        // unico jeito de a persistencia (.smap) falar de um objeto entre execucoes. O indice na
+        // lista viva nao serve: apagar um objeto desloca todos os seguintes.
+        i32         CookedIndex = -1;
+        // Criado no EDITOR (duplicata), nao carregado do asset. Separa "o objeto 42 do cozido,
+        // movido" de "uma copia do objeto 42", que salvam de formas diferentes.
+        bool        Spawned = false;
         // So existe pro ray tracing (TLAS + tabelas de hit shading): fica FORA do raster,
         // prepass, CSM e picking. Uso: proxy do terreno (F3) — o terreno real rasteriza
         // pelo FTerrain, o proxy da o chao pro DDGI/ReSTIR/reflexoes.
