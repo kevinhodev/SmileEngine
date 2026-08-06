@@ -43,11 +43,18 @@ namespace Smile {
         // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
         // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum.
         Vec4 SkyParams;       // x = view height (km), y = raio do planeta (km), zw = livres
+        // Invalidacao ESPACIAL do atlas (ver FDDGI::InvalidateRegion). Caixa de mundo cujas
+        // sondas trocam a hysteresis por uma mais rapida durante alguns frames. Anexado no FIM,
+        // como o SkyParams, p/ nao deslocar offset nenhum.
+        Vec4 InvalidateMin;      // xyz = min da caixa, w = 1 se ha invalidacao ativa
+        Vec4 InvalidateMaxHyst;  // xyz = max da caixa, w = hysteresis a usar dentro dela
     };
     static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
                   "DDGIConstants divergiu do cbuffer DDGICB");
     static_assert(offsetof(DDGIConstants, SkyParams) == 272,
                   "SkyParams deve permanecer anexado ao fim do DDGICB");
+    static_assert(offsetof(DDGIConstants, InvalidateMin) == 288,
+                  "InvalidateMin/MaxHyst devem permanecer anexados ao fim do DDGICB");
 
     class FDDGI {
     public:
@@ -157,6 +164,22 @@ namespace Smile {
         // por dezenas de frames. O flag e consumido no RecordUpdate, nao aqui — se o passe nao
         // rodar neste frame, o reset continua pendente.
         void ResetHistoryOnce()   { HysteresisResetPending = true; }
+
+        // Invalidacao ESPACIAL: so as sondas dentro da caixa de mundo trocam a hysteresis por
+        // kInvalidateHysteresis durante kInvalidateFrames frames.
+        //
+        // Existe porque criar ou apagar UM objeto deixa 99% das sondas ainda corretas — so as
+        // vizinhas dele mudaram. O ResetHistoryOnce acima e global e zera a hysteresis, ou seja,
+        // troca o atlas inteiro pela estimativa de UM trace de 64 raios: a GI toda pula para um
+        // valor ruidoso e volta a assentar. E o que se via como uma piscada leve ao duplicar ou
+        // remover. Ele continua certo para mudanca GLOBAL de iluminacao (calibracao, cor do sol).
+        //
+        // Modelo da UE: o Lumen invalida por PRIMITIVA (LumenInvalidateSurfaceCacheForPrimitive),
+        // nunca o cache inteiro. A hysteresis de dentro da caixa nao e 0 e sim alta-mas-rapida,
+        // diferente da relocacao (que usa 0 porque o historico dela e de OUTRO lugar): aqui o
+        // historico da sonda continua quase todo valido, entao misturar rapido converge sem o
+        // pop de amostra unica. Chamadas sucessivas UNEM as caixas.
+        void InvalidateRegion(const Vec3& Min, const Vec3& Max);
 
         void SetHysteresis(f32 V) { Hysteresis = V; }
         f32  GetHysteresis() const{ return Hysteresis; }
@@ -289,6 +312,14 @@ namespace Smile {
         f32  Intensity    = 1.0f;
         f32  Hysteresis   = 0.99f;
         bool HysteresisResetPending = false; // ver ResetHistoryOnce
+
+        // Invalidacao espacial (ver InvalidateRegion). 0.75^12 ~ 3% do valor velho: converge em
+        // ~12 frames sem o pop de amostra unica que a hysteresis 0 produz.
+        static constexpr f32 kInvalidateHysteresis = 0.75f;
+        static constexpr u32 kInvalidateFrames     = 12;
+        Vec3 InvalidateMin_{};
+        Vec3 InvalidateMax_{};
+        u32  InvalidateFramesLeft_ = 0;
         f32  SkyIntensity = 1.0f;
         // NormalBias saiu daqui: o bias dos shadow rays do 2o hit e o mesmo p/ ReSTIR, reflexoes e
         // DDGI (o nome era historico), entao vive no perfil compartilhado — sem isso o sweep de

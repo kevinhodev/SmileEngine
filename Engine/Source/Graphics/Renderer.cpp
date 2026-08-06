@@ -332,21 +332,32 @@ namespace Smile {
     }
 
     bool Renderer::RemoveRenderable(u64 _Id) {
+        // AABB capturada ANTES da remocao: depois dela o objeto nao existe mais e nao ha de onde
+        // tirar a regiao que o GI precisa reavaliar.
+        const FRenderable* Doomed = Scene.FindRenderable(_Id);
+        if (!Doomed) return false;
+        const Vec3 Min = Doomed->AABBMin, Max = Doomed->AABBMax;
         if (!Scene.RemoveRenderable(_Id)) return false;
-        OnSceneStructureChanged();
+        OnSceneStructureChanged(&Min, &Max);
         return true;
     }
 
     u64 Renderer::DuplicateRenderable(u64 _Id) {
         const FRenderable* Added = Scene.DuplicateRenderable(_Id);
         if (!Added) return 0;
-        const u64 NewId = Added->Id; // le ANTES: o re-setup abaixo pode realocar a lista
-        OnSceneStructureChanged();
+        // Le ANTES do re-setup, que pode realocar a lista.
+        const u64  NewId = Added->Id;
+        const Vec3 Min = Added->AABBMin, Max = Added->AABBMax;
+        OnSceneStructureChanged(&Min, &Max);
         return NewId;
     }
 
-    void Renderer::OnSceneStructureChanged() {
+    void Renderer::OnSceneStructureChanged(const Vec3* _ChangedMin, const Vec3* _ChangedMax) {
         const u32 Count = static_cast<u32>(Scene.Renderables().size());
+
+        // Regiao que o GI precisa reavaliar. Invalidacao ESPACIAL, no lugar de derrubar o atlas
+        // inteiro: o dominio SceneStructure nao carrega mais DDGIAtlas justamente por isto.
+        if (_ChangedMin && _ChangedMax) DDGI.InvalidateRegion(*_ChangedMin, *_ChangedMax);
 
         // (1) Quem fala em indice e sobrevive ao frame, do lado da CPU.
         // O pick resolve kFramesInFlight depois do pedido: um pick em voo agora devolveria o

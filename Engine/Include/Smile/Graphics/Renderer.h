@@ -515,7 +515,10 @@ namespace Smile {
         void BuildRaytracingScene();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
         // Reancora tudo que enderecava a cena por indice depois de a lista mudar de tamanho.
-        void OnSceneStructureChanged();
+        // A caixa opcional e a AABB de mundo do objeto que nasceu ou morreu: so as sondas do
+        // DDGI ali dentro reavaliam, em vez do atlas inteiro (ver FDDGI::InvalidateRegion).
+        void OnSceneStructureChanged(const Vec3* ChangedMin = nullptr,
+                                     const Vec3* ChangedMax = nullptr);
         void CreateDepthBuffer();
         void CreateConstantBuffer();
         void CreateHDRBuffers();

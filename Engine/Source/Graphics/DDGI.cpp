@@ -190,6 +190,30 @@ namespace Smile {
     // Re-upload do snapshot. O chamador (Renderer::NotifyMaterialRTStateChanged) e responsavel
     // por garantir que a GPU nao esteja lendo o buffer — e um upload heap unico, sem versao por
     // frame em voo, entao escrever com frames em voo corromperia o que eles estao lendo.
+    void FDDGI::InvalidateRegion(const Vec3& _Min, const Vec3& _Max) {
+        // Uniao com o que ja estava pendente: duas edicoes dentro da mesma janela de frames nao
+        // podem fazer a segunda cancelar a primeira. A uniao e conservadora (pega sondas a mais),
+        // que e o lado seguro — o errado seria deixar de fora uma sonda que precisava atualizar.
+        if (InvalidateFramesLeft_ > 0) {
+            InvalidateMin_ = { std::min(InvalidateMin_.X, _Min.X),
+                               std::min(InvalidateMin_.Y, _Min.Y),
+                               std::min(InvalidateMin_.Z, _Min.Z) };
+            InvalidateMax_ = { std::max(InvalidateMax_.X, _Max.X),
+                               std::max(InvalidateMax_.Y, _Max.Y),
+                               std::max(InvalidateMax_.Z, _Max.Z) };
+        } else {
+            InvalidateMin_ = _Min;
+            InvalidateMax_ = _Max;
+        }
+        // Uma sonda ILUMINA o objeto e e iluminada por ele de fora da AABB dele; a caixa cresce
+        // um espacamento de grid em cada lado p/ pegar a camada de sondas em volta, que e onde o
+        // color bleed do objeto aparece.
+        const f32 Pad = SpacingV;
+        InvalidateMin_ = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad, InvalidateMin_.Z - Pad };
+        InvalidateMax_ = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad, InvalidateMax_.Z + Pad };
+        InvalidateFramesLeft_ = kInvalidateFrames;
+    }
+
     void FDDGI::RefreshInstanceGeo(const FScene& _Scene) {
         if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
         const u32 Count = std::min(InstanceGeoCount,
@@ -460,6 +484,14 @@ namespace Smile {
         // passe realmente roda, no RecordUpdate.
         CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 HysteresisResetPending ? 0.0f : Hysteresis };
+        // Caixa de invalidacao espacial. Como o reset global, so e CONSUMIDA quando o passe roda
+        // (o decremento mora no RecordUpdate) — senao um frame em que o DDGI nem atualiza gastaria
+        // a janela. w do Min = "ha invalidacao ativa"; w do Max = a hysteresis de dentro dela.
+        const bool Invalidating = InvalidateFramesLeft_ > 0;
+        CPU.InvalidateMin     = { InvalidateMin_.X, InvalidateMin_.Y, InvalidateMin_.Z,
+                                  Invalidating ? 1.0f : 0.0f };
+        CPU.InvalidateMaxHyst = { InvalidateMax_.X, InvalidateMax_.Y, InvalidateMax_.Z,
+                                  kInvalidateHysteresis };
         CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity,
                                 RayEps.HitShadowRayBias };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
@@ -531,6 +563,10 @@ namespace Smile {
         // Daqui em diante o update roda de fato, entao o reset one-shot foi consumido — o CB
         // deste frame ja foi escrito com histerese 0 pelo UpdatePerFrame.
         HysteresisResetPending = false;
+        // Idem para a janela da invalidacao espacial: conta FRAMES DE UPDATE, nao frames de
+        // aplicacao. Se o DDGI ficar sem atualizar (async, toggle, cena sem TLAS), a janela
+        // espera em vez de escoar sem ter misturado nada.
+        if (InvalidateFramesLeft_ > 0) --InvalidateFramesLeft_;
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);

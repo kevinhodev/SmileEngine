@@ -3,13 +3,30 @@
 #define DDGI_RAYS 64 
 #define DDGI_TILE 6
 
+// Declarado ate o FIM do DDGICB (e nao so o prefixo que este passe usava) porque a invalidacao
+// espacial mora nos dois ultimos campos. Prefixo truncado le por offset e funciona, mas qualquer
+// campo novo depois passa a exigir esta cadeia inteira mesmo assim.
 cbuffer DDGICB : register(b0) {
-    float4 GridMinSpacing; 
-    float4 GridCountRays;  
-    float4 AtlasParams;     
+    float4 GridMinSpacing;
+    float4 GridCountRays;
+    float4 AtlasParams;
     float4 SunDirIntensity;
-    float4 SunColorHyst;    
-    float4 TraceParams;   
+    float4 SunColorHyst;
+    float4 TraceParams;
+    float4 DistAtlasParams;
+    float4 MiscParams;
+    float4 MiscParams2;
+    float4 RayEpsA;
+    float4 RayEpsB;
+    float4 GIDistParams;
+    float4 GIBiasParams;
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
+    float4 SkyParams;
+    float4 InvalidateMin;     // xyz = min da caixa de invalidacao, w = 1 se ativa
+    float4 InvalidateMaxHyst; // xyz = max da caixa, w = hysteresis dentro dela
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
@@ -72,6 +89,17 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // Probe recem-ativado/relocado (marcado pelo Relocate): historia e do lugar antigo (ou
     // preto de dentro da parede) — descarta e toma a estimativa nova inteira.
     float  hyst    = (ProbeData[probeIdx].w >= 1.0f) ? 0.0f : SunColorHyst.w;
+
+    // Invalidacao ESPACIAL (FDDGI::InvalidateRegion): um objeto nasceu ou morreu aqui perto.
+    // Diferente do caso acima, a historia desta sonda continua quase toda valida — so a parcela
+    // vinda daquele objeto mudou. Por isso troca por uma hysteresis RAPIDA em vez de zerar:
+    // converge em ~12 frames sem o pop de amostra unica. Fora da caixa, nada muda — e essa a
+    // diferenca para o reset global, que jogava fora dado bom da cena inteira.
+    if (InvalidateMin.w > 0.5f) {
+        float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, GridMinSpacing.w);
+        if (all(probePos >= InvalidateMin.xyz) && all(probePos <= InvalidateMaxHyst.xyz))
+            hyst = min(hyst, InvalidateMaxHyst.w);
+    }
     float3 blended = lerp(result, prev, hyst);
     IrradAtlas[texel] = float4(blended, 1.0f);
 

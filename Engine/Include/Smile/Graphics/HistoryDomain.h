@@ -145,7 +145,18 @@ namespace Smile {
         //     ser emissiva e estar nos pools de luz.
         //
         // VolumetricClouds fica de fora — as nuvens sao um volume proprio, nao veem a lista.
-        inline constexpr T SceneStructure = T::DDGIAtlas | T::ReGIR | T::ReSTIRGI | T::ReSTIRDI |
+        //
+        // DDGIAtlas tambem fica de fora, e por um motivo mais interessante: derrubar o atlas
+        // inteiro zera a hysteresis de TODAS as sondas, ou seja, troca a irradiancia da cena
+        // inteira pela estimativa de um unico trace de 64 raios por sonda. A GI toda pulava para
+        // um valor ruidoso e voltava a assentar — a "piscada leve" que sobrava depois de os
+        // filtros de tela pararem de resetar. Mas criar ou apagar UM objeto deixa 99% das sondas
+        // corretas. O atlas passa a ser invalidado por REGIAO (FDDGI::InvalidateRegion, chamada
+        // do Renderer::OnSceneStructureChanged com a AABB do objeto), como o Lumen faz por
+        // primitiva. O mesmo vale para o ReGIR, que e grade de MUNDO pela mesma razao — mas ele
+        // fica, porque a geometria removida podia ser emissiva e estar nos pools de luz, e ele
+        // ainda nao tem invalidacao por regiao.
+        inline constexpr T SceneStructure = T::ReGIR | T::ReSTIRGI | T::ReSTIRDI |
                                             T::Reflections | T::NrdDirect | T::TemporalMotion |
                                             T::HiZOcclusion | T::VolumetricFog |
                                             T::ProbeDiagnostic | Resolve;
