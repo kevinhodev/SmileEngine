@@ -5,7 +5,15 @@
 namespace Smile {
     constexpr u32 kSMeshMagic    = 0x48534D53u; 
     constexpr u32 kSSceneMagic   = 0x4E435353u; 
-    constexpr u32 kCookedVersion = 6u; // v6: vidro por nome -> Blend translucido (alpha 0.4, two-sided) p/ o
+    constexpr u32 kCookedVersion = 7u; // v7: o transform do no NAO e mais bakeado no vertice. A geometria
+                                       //     sai em espaco LOCAL (AABB da SMeshEntry idem) e cada renderavel
+                                       //     carrega nome do no, TRS de mundo e indice do pai. Com isso o
+                                       //     cooker passa a DEDUPLICAR mesh por (ufbx_mesh, parte): N nos que
+                                       //     compartilham a mesma malha viram N instancias de UMA geometria
+                                       //     (Emerald Square: 2479 -> 281 partes). Medido antes de escrever:
+                                       //     TRS reproduz geometry_to_world com erro <= 7e-12 nas 3 cenas
+                                       //     (nenhuma tem shear nem determinante negativo).
+                                       // v6: vidro por nome -> Blend translucido (alpha 0.4, two-sided) p/ o
                                        //     passe forward; vidro emissivo segue opaco (glow no deferred)
                                        // v5: normais pela inversa-transposta + winding por no espelhado; tambem
                                        //     invalida cozidos anteriores a "fator neutro com textura" no emissivo
@@ -26,6 +34,8 @@ namespace Smile {
     struct SMeshEntry {
         u32 VertexCount;
         u32 IndexCount;
+        // LOCAL desde a v7 (era de mundo). Quem precisa da caixa de mundo transforma pelo TRS do
+        // renderavel — e o loader faz isso no load, porque o culling e o HiZ leem mundo.
         f32 AABBMin[3];
         f32 AABBMax[3];
         u64 VertexOffset; // offset (bytes, relativo ao inicio do blob) p/ Vertex[VertexCount]
@@ -62,8 +72,24 @@ namespace Smile {
     };
 
     struct SSceneRenderable {
-        u32 MeshIndex;     // indice em SMesh
+        u32 MeshIndex;     // indice em SMesh. VARIOS renderaveis podem apontar para o MESMO: e o
+                           // instancing que a v7 destrava (dedup por (ufbx_mesh, parte) no cooker).
         u32 MaterialIndex; // indice em SSceneMaterial; 0xFFFFFFFF = sem material (usa default)
+
+        // Transform de MUNDO do no, no formato do FTransform da engine (S * Rx*Ry*Rz * T,
+        // row-vector, rotacao em RADIANOS). Mundo e nao local porque na v7 o runtime ainda nao
+        // tem hierarquia — o transform vai direto como matriz de modelo. O ParentIndex abaixo ja
+        // e gravado para a fase da hierarquia converter mundo->local sem re-cozinhar.
+        f32 Position[3];
+        f32 RotationEuler[3];
+        f32 Scale[3];
+
+        // Primeiro renderavel do ANCESTRAL mais proximo que tambem virou renderavel; -1 = raiz.
+        // ⚠️ Nos de GRUPO (sem mesh) colapsam: a arvore aqui e a dos nos que renderizam. Guardar
+        // os grupos exige uma tabela de nos propria, que e trabalho da fase de hierarquia.
+        i32 ParentIndex;
+
+        char Name[kCookedMaxName]; // nome do NO (a v6 nao guardava, e o outliner caia no do material)
     };
 
     constexpr u32 kNoMaterial = 0xFFFFFFFFu;
