@@ -113,18 +113,100 @@ namespace Smile {
 
     FRenderable& FScene::AddRenderable(const FRenderable& _Renderable) {
         RenderableList.push_back(_Renderable);
-        return RenderableList.back();
+        FRenderable& Added = RenderableList.back();
+        Added.Id = AllocObjectId(); // identidade nova mesmo se veio de uma copia
+        RenderableIndexById_.emplace(Added.Id,
+                                     static_cast<u32>(RenderableList.size() - 1));
+        ++StructureVersion_;
+        // Tambem a de transforms: a TLAS ganhou uma instancia, e quem reage a ela e o rebuild
+        // por frame do RenderFrame. Durante o load isto e so um contador subindo 2,5k vezes
+        // antes de existir TLAS — o custo e zero e a alternativa (bumpar so em quem cria com a
+        // cena viva) e a classe de bug que faz o objeto novo nao aparecer no GI.
+        ++TransformsVersion_;
+        return Added;
+    }
+
+    bool FScene::RemoveRenderable(u64 _Id) {
+        const int Index = IndexOfRenderable(_Id);
+        if (Index < 0) return false;
+        // Erase ESTAVEL, nao swap-and-pop: as pastas do Scene Outliner sao ranges [begin,end)
+        // sobre esta lista, e trocar o removido com o ultimo jogaria uma mesh de outro asset
+        // para dentro de uma pasta alheia. O memmove de ~2,5k structs e irrelevante numa acao
+        // de editor.
+        RenderableList.erase(RenderableList.begin() + Index);
+        RebuildRenderableIndex();
+        ++StructureVersion_;
+        ++TransformsVersion_; // a TLAS tem uma instancia a menos
+        return true;
+    }
+
+    FRenderable* FScene::DuplicateRenderable(u64 _Id) {
+        const int Index = IndexOfRenderable(_Id);
+        if (Index < 0) return nullptr;
+        // Copia por VALOR antes do push_back: o push_back pode realocar o vetor e uma referencia
+        // para a fonte viraria ponteiro solto no meio da propria copia.
+        FRenderable Copy = RenderableList[Index];
+        Copy.Name += " (copia)";
+        // O FGpuMesh e compartilhado de proposito: o BLAS e cacheado por ponteiro de mesh
+        // (FRaytracingScene::BlasByMesh), entao a copia entra na TLAS sem construir BLAS novo
+        // nem gastar VRAM de geometria.
+        return &AddRenderable(Copy); // Id novo + as duas versoes, como qualquer criacao
+    }
+
+    void FScene::RebuildRenderableIndex() {
+        RenderableIndexById_.clear();
+        RenderableIndexById_.reserve(RenderableList.size());
+        for (u32 i = 0; i < static_cast<u32>(RenderableList.size()); ++i)
+            RenderableIndexById_.emplace(RenderableList[i].Id, i);
+    }
+
+    int FScene::IndexOfRenderable(u64 _Id) const {
+        if (_Id == 0) return -1;
+        const auto It = RenderableIndexById_.find(_Id);
+        return It == RenderableIndexById_.end() ? -1 : static_cast<int>(It->second);
+    }
+
+    FRenderable* FScene::FindRenderable(u64 _Id) {
+        const int Index = IndexOfRenderable(_Id);
+        return Index < 0 ? nullptr : &RenderableList[Index];
+    }
+
+    const FRenderable* FScene::FindRenderable(u64 _Id) const {
+        const int Index = IndexOfRenderable(_Id);
+        return Index < 0 ? nullptr : &RenderableList[Index];
+    }
+
+    u64 FScene::IdAt(u32 _Index) const {
+        return _Index < RenderableList.size() ? RenderableList[_Index].Id : 0ull;
+    }
+
+    FSceneObjectRef FScene::FindObject(u64 _Id) const {
+        if (_Id == 0) return {};
+        if (const auto It = RenderableIndexById_.find(_Id); It != RenderableIndexById_.end())
+            return { _Id, ESceneObject::Renderable, It->second };
+        // Luz por varredura linear, e nao por mapa: sao dezenas, contra milhares de renderaveis,
+        // e — o que decide — o editor muta LightList com push_back/erase diretos (LightsBridge),
+        // entao um mapa aqui ficaria podre sem que nada avisasse. A varredura nao tem estado para
+        // apodrecer. Nada no caminho de frame chama isto.
+        for (u32 i = 0; i < static_cast<u32>(LightList.size()); ++i)
+            if (LightList[i].Id == _Id) return { _Id, ESceneObject::Light, i };
+        return {};
     }
 
     FLight& FScene::AddLight(const FLight& _Light) {
         LightList.push_back(_Light);
-        LightList.back().Id = AllocLightId(); // identidade nova mesmo se veio de uma copia
+        LightList.back().Id = AllocObjectId(); // identidade nova mesmo se veio de uma copia // identidade nova mesmo se veio de uma copia
         return LightList.back();
     }
 
     void FScene::Clear() {
         RenderableList.clear();
+        RenderableIndexById_.clear();
         MeshLibrary.clear();
         LightList.clear();
+        ++StructureVersion_;
+        // NextObjectId_ NAO volta a zero: um Id nunca pode ser reusado dentro
+        // da sessao, senao uma referencia velha (selecao, undo futuro) passaria a apontar em
+        // silencio para um objeto diferente da cena nova em vez de simplesmente nao resolver.
     }
 }
