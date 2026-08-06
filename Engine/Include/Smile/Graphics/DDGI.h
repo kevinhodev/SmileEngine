@@ -67,6 +67,11 @@ namespace Smile {
         // edicao. O CHAMADOR precisa garantir GPU ociosa — e um upload heap sem versao por frame.
         void RefreshInstanceGeo(const FScene& Scene);
 
+        // Quantas instancias o snapshot acima consegue descrever. Alocado no SetupForScene pelo
+        // tamanho da cena de entao; o RefreshInstanceGeo trunca nele. Quem cria objeto com a cena
+        // ja carregada precisa consultar antes (Renderer::OnSceneStructureChanged).
+        u32 InstanceGeoCapacity() const { return InstanceGeoCount; }
+
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, u32 PunctualLightCount = 0);
 

@@ -79,11 +79,18 @@ namespace Smile {
         const u32 Count = static_cast<u32>(Scene.Renderables().size());
         if (Count == 0 || TlasSlot == kInvalidSlot || InstanceGeoSlot == kInvalidSlot) return;
 
-        InstanceCount_ = Count;
+        // Capacidade com folga (SceneCapacityFor), nao o tamanho exato da cena: assim um objeto
+        // criado no editor cabe sem refazer buffer e SRVs. InstanceCount_ passa a ser a
+        // CAPACIDADE — e ele que o UpdatePerFrame usa como stride do slice por frame e no gate
+        // `PreviousModels.size() == InstanceCount_`, entao o PreviousModels abaixo tem de ser
+        // dimensionado igual, senao o gate falha para sempre e o motion vector nunca reusa
+        // historico (todo frame sairia com movimento zero).
+        const u32 Capacity = SceneCapacityFor(Count);
+        InstanceCount_ = Capacity;
         TlasSRVSlot = TlasSlot;
         InstanceGeoSRVSlot = InstanceGeoSlot;
         TransformBuffer = CreateUploadBuffer(Device,
-            static_cast<UINT64>(kFrames) * Count * sizeof(FTemporalInstanceTransformGPU),
+            static_cast<UINT64>(kFrames) * Capacity * sizeof(FTemporalInstanceTransformGPU),
             &MappedTransforms);
 
         for (u32 f = 0; f < kFrames; ++f) {
@@ -92,13 +99,15 @@ namespace Smile {
             S.Format                     = DXGI_FORMAT_UNKNOWN;
             S.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             S.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
-            S.Buffer.FirstElement        = static_cast<UINT64>(f) * Count;
-            S.Buffer.NumElements         = Count;
+            S.Buffer.FirstElement        = static_cast<UINT64>(f) * Capacity;
+            S.Buffer.NumElements         = Capacity;
             S.Buffer.StructureByteStride = sizeof(FTemporalInstanceTransformGPU);
             SRVHeap.CreateSRV(Device, TransformBuffer.Get(), S, TransformSRVSlot[f]);
         }
 
-        PreviousModels.resize(Count, Mat44::Identity());
+        // Dimensionado pela CAPACIDADE (ver acima); so os [0, Count) existem na cena, o resto
+        // fica identidade ate um objeto novo ocupar o slot.
+        PreviousModels.resize(Capacity, Mat44::Identity());
         for (u32 i = 0; i < Count; ++i)
             PreviousModels[i] = Scene.Renderables()[i].Transform.Matrix();
         SceneReady = true;

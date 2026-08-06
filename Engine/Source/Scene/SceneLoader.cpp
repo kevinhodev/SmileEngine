@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -451,14 +452,20 @@ namespace Smile {
         // Dimensiona o ObjectCB pelo total de renderaveis da cena (cobre carga aditiva,
         // onde os renderaveis do interior se somam aos do exterior ja presentes).
         if (static_cast<u32>(Scene.Renderables().size()) > MaxObjects) {
-            MaxObjects = static_cast<u32>(Scene.Renderables().size());
+            // Com folga (SceneCapacityFor): o MaxObjects dimensiona o ObjectCB E a tabela de
+            // bounds do HiZ (SetupObjects logo acima), e as duas precisam da mesma folga das
+            // outras tres estruturas por cena para que criar objeto no editor nao estoure.
+            MaxObjects = SceneCapacityFor(static_cast<u32>(Scene.Renderables().size()));
             RecreateObjectCB();
         }
 
         // Em carga aditiva mantemos a camera onde o usuario deixou; so reposicionamos
-        // na entrada de uma cena nova (substituicao).
-        if (!_Additive)
+        // na entrada de uma cena nova (substituicao) — e ai e corte de camera (Camera.SetPose
+        // direto nao passa pelo SetCameraPose, entao o aviso sai aqui).
+        if (!_Additive) {
             Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
+            Settings().NotifyCameraCut();
+        }
         const double msObjectSetup = MsSince(ObjectSetupStart);
 
         LogDebug("Assets da cena preparados: " + std::to_string(mh.MeshCount) + " meshes, " +

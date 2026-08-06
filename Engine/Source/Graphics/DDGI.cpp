@@ -10,6 +10,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -274,11 +275,19 @@ namespace Smile {
         ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
+        // Snapshot com folga (SceneCapacityFor): objeto criado no editor cabe sem realocar
+        // descriptor nem refazer o SetupForScene. So os [0, NumRenderables) sao preenchidos —
+        // FillInstanceGeo le a lista da cena, e ir alem dela seria leitura fora do vetor.
+        // A cauda vai a zero: nenhuma instancia da TLAS aponta para la (a TLAS so tem os
+        // reais), mas zero e um estado legivel se algum dia um indice errado chegar ate aqui.
+        const u32 GeoCapacity = SceneCapacityFor(NumRenderables);
         u8* GeoMapped = nullptr;
         InstanceGeoBuf = CreateUploadBuffer(_Device,
-            static_cast<UINT64>(NumRenderables) * sizeof(DDGIInstanceGeo), &GeoMapped);
-        InstanceGeoCount = NumRenderables;
+            static_cast<UINT64>(GeoCapacity) * sizeof(DDGIInstanceGeo), &GeoMapped);
+        InstanceGeoCount = GeoCapacity;
         FillInstanceGeo(_Scene, GeoMapped, NumRenderables);
+        std::memset(GeoMapped + static_cast<size_t>(NumRenderables) * sizeof(DDGIInstanceGeo),
+                    0, static_cast<size_t>(GeoCapacity - NumRenderables) * sizeof(DDGIInstanceGeo));
         InstanceGeoBuf->Unmap(0, nullptr);
 
         AtlasSRVSlot       = _SRVHeap.Allocate(1);
@@ -318,7 +327,7 @@ namespace Smile {
         BufSrv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         BufSrv.Format                     = DXGI_FORMAT_UNKNOWN;
         BufSrv.Buffer.FirstElement        = 0;
-        BufSrv.Buffer.NumElements         = NumRenderables;
+        BufSrv.Buffer.NumElements         = GeoCapacity; // = tamanho do buffer, nao da cena
         BufSrv.Buffer.StructureByteStride = sizeof(DDGIInstanceGeo);
         _SRVHeap.CreateSRV(_Device, InstanceGeoBuf.Get(), BufSrv, InstanceSRVSlot);
 

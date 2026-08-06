@@ -72,6 +72,11 @@ namespace Smile {
     struct FPreparedCookedScene;
     using FPreparedCookedScenePtr = std::shared_ptr<FPreparedCookedScene>;
 
+    // Fachada dos knobs de render (RenderSettings.h). Forward-declarada de proposito: o
+    // Renderer a possui por ponteiro para que quem so mexe em parametro nao precise arrastar
+    // este header e seus 69 includes.
+    class FRenderSettings;
+
     struct alignas(256) FrameConstants {
         Vec4  CameraPosition;  // 16 bytes
         Vec4  IBLParams;       // 16 bytes — x=intensity, y=rotation(rad), z=maxMip, w=enabled
@@ -172,12 +177,22 @@ namespace Smile {
     };
 
     class Renderer {
+        // A fachada roteia os knobs para os subsistemas e carrega a politica de invalidacao de
+        // historico. E friend porque neste passo os corpos foram MOVIDOS bit a bit, sem mudar
+        // a posse do estado — ver a nota de transicao no RenderSettings.h.
+        friend class FRenderSettings;
+
     public:
         Renderer();
         ~Renderer() noexcept;
 
         Renderer(const Renderer&)            = delete;
         Renderer& operator=(const Renderer&) = delete;
+
+        // Caminho UNICO para parametro de render. O que nao esta aqui nao e knob: selecao,
+        // picking, camera, carga de cena, recursos e o visualizador de debug seguem no Renderer.
+        FRenderSettings&       Settings();
+        const FRenderSettings& Settings() const;
 
         // Progresso do boot, para a splash screen do editor. Label = etapa corrente, Detail =
         // texto auxiliar opcional (adaptador, contagens), Fraction = 0..1 monotonica.
@@ -197,9 +212,6 @@ namespace Smile {
         // nem extensao (ex.: "WaterSurface.ps"). Vazio (ou stem nao mapeado / .hlsli
         // incluido por varios shaders) => reload completo.
         bool ReloadShaders(const std::string& ChangedStem = "");
-
-        void SetVSync(bool Enabled) { SwapChain.SetVSync(Enabled); }
-        bool GetVSync() const       { return SwapChain.GetVSync(); }
 
         void UpdateCamera(const CameraInput& Input, f32 DeltaTime);
         // Grava e submete o frame. A apresentacao fica separada para que o owner da render
@@ -246,21 +258,9 @@ namespace Smile {
         FTexture& GetDefaultBlack()  { return TexDefaultBlack; }
 
 
-        void SetFrustumCulling(bool Use) { UseFrustumCulling = Use; }
-        bool GetFrustumCulling() const   { return UseFrustumCulling; }
-
-        // Occlusion culling (HZB): ao religar, descarta resultados velhos do readback
-        // ring — os proximos kFramesInFlight frames desenham tudo ate ter teste fresco.
-        void SetOcclusionCulling(bool Use) {
-            if (Use && !UseOcclusionCulling) HiZ.InvalidateResults();
-            UseOcclusionCulling = Use;
-        }
-        bool GetOcclusionCulling() const { return UseOcclusionCulling; }
+        // Telemetria de culling (os toggles moraram p/ o FRenderSettings).
         u32  GetOccludedCount() const    { return LastOccludedCount; }
-
-        void SetDepthPrepass(bool Use)   { UseDepthPrepass = Use; }
-        bool GetDepthPrepass() const     { return UseDepthPrepass; }
-        u32  GetVisibleCount() const     { return LastVisibleCount; } 
+        u32  GetVisibleCount() const     { return LastVisibleCount; }
         u32  GetDrawCount() const        { return static_cast<u32>(Scene.Renderables().size()); }
 
 
@@ -272,8 +272,6 @@ namespace Smile {
         // qualidade (o RR nao suporta DRS e a feature NGX e criada na res otima do modo), entao uma
         // escala arbitraria faria o render subrect divergir do buffer criado. A UI ja esconde o
         // slider nesse estado (o RR forca upscaler=DLSS); isto blinda a invariante no motor.
-        void SetRenderScale(f32 V); // recria os RTs internos (so a cena; backbuffer fica nativo)
-        f32  GetRenderScale() const { return RenderScale; }
         u32  RenderWidth()  const { return static_cast<u32>(SwapChain.GetWidth()  * RenderScale + 0.5f); }
         u32  RenderHeight() const { return static_cast<u32>(SwapChain.GetHeight() * RenderScale + 0.5f); }
         u32  OutputWidth()  const { return SwapChain.GetWidth(); }
@@ -285,15 +283,34 @@ namespace Smile {
                                      static_cast<u32>(Y * RenderScale + 0.5f));
         }
         bool TryGetPickResult(int& OutIndex) { return ObjectPicker.TryResolve(OutIndex); }
-        void SetSelectedObject(int Index) { SelectedIndex = Index; }
-        int  GetSelectedObject() const    { return SelectedIndex; }
-        void ClearSelection()             { SelectedIndex = -1; }
+        // A selecao viaja por INDICE (e o que o picking devolve e o que o loop de draw compara)
+        // mas e GUARDADA tambem por Id, para o OnSceneStructureChanged reancora-la depois de a
+        // lista andar. Sem isso, apagar um objeto acima do selecionado passava a selecao para o
+        // vizinho em silencio.
+        void SetSelectedObject(int Index);
+        int  GetSelectedObject() const;
+        u64  GetSelectedObjectId() const; // 0 quando o selecionado nao e um renderavel
+        void ClearSelection();
+        // A selecao inteira, sem o chamador precisar saber o tipo. Fonte de verdade dos
+        // acessores acima e dos de luz.
+        FSceneObjectRef GetSelection() const { return Selection; }
 
-        // Selecao de LUZ (independente da selecao de renderavel; o editor mantem as duas
-        // mutuamente exclusivas). Indice em Scene.Lights(); -1 = nenhuma.
-        void SetSelectedLight(int Index)  { SelectedLightIdx = Index; }
-        int  GetSelectedLight() const     { return SelectedLightIdx; }
-        void ClearLightSelection()        { SelectedLightIdx = -1; }
+        // Criar/remover objeto com a cena JA carregada. Fecham o ciclo que a FScene sozinha nao
+        // fecha: la a lista fica consistente, aqui os cinco sistemas dimensionados ou indexados
+        // por indice de cena voltam a concordar com ela. Devolvem false/0 se o Id nao existe.
+        bool RemoveRenderable(u64 Id);
+        u64  DuplicateRenderable(u64 Id);
+
+        // Selecao de LUZ. Indice em Scene.Lights(); -1 = nenhuma.
+        //
+        // A exclusividade com a selecao de renderavel deixou de ser combinada: as duas sao a
+        // MESMA variavel (Selection), entao selecionar luz derruba a mesh e vice-versa por
+        // construcao. Antes eram dois campos e cada call site tinha de lembrar de limpar o
+        // outro — os ClearSelection()/ClearLightSelection() espalhados pelo editor sao os
+        // restos disso, e agora sao no-ops quando o tipo ja nao bate.
+        void SetSelectedLight(int Index);
+        int  GetSelectedLight() const;
+        void ClearLightSelection();
         void SetOutlineColor(const Vec3& C) { SelectionOutline.SetColor(C); }
         void SetOutlineThickness(f32 T)     { SelectionOutline.SetThickness(T); }
         void SetOutlineIntensity(f32 I)     { SelectionOutline.SetIntensity(I); }
@@ -307,54 +324,13 @@ namespace Smile {
 
         bool LoadHDREnvironment(const std::wstring& Path);
 
-        void SetSunDirection(const Vec3& Dir);
-        void SetSunColor(const Vec3& Color)  { SunColorRGB = Color; }
-        Vec3 GetSunColor()     const         { return SunColorRGB; }
-        Vec3 GetSunDirection() const         { return SunDir; }
-
         // Estado do Time-of-Day, exposto p/ o painel TOD do editor (leitura e escrita).
         FTimeOfDay&       GetTimeOfDay()       { return TimeOfDay; }
         const FTimeOfDay& GetTimeOfDay() const { return TimeOfDay; }
 
-        // Estado de clima (chuva), exposto p/ a secao Clima do painel TOD (leitura e escrita).
-        FWeather&       GetWeather()       { return Weather; }
-        const FWeather& GetWeather() const { return Weather; }
-
         void LoadMoonTexture(const std::wstring& Path);
         void LoadStarCatalog(const std::wstring& Path);
 
-        // === Seletor de upscaler (None / FSR / DLSS) — substitui o TAA quando != None ===
-        // Cai automaticamente p/ None se o upscaler pedido nao estiver disponivel (sem reconstrutor nao
-        // da p/ renderizar sub-nativo). A qualidade (0=100%..4=UltraPerf) e compartilhada entre eles.
-        void SetUpscaler(EUpscaler U) {
-            if (U != EUpscaler::None && !UpscalerAvailable(U)) U = EUpscaler::None;
-            // Acoplamento: o RR faz o upscale via DLSS. Trocar o upscaler p/ fora de DLSS desliga o
-            // RR (cai p/ NRD). Vai pelo SetDenoiser em vez de atribuir Denoiser direto: a
-            // atribuicao pulava Nrd.InvalidateHistory(), ReSTIRGI.InvalidateHistory() e o
-            // RRResetPending, entao o NRD reaproveitava acumulacao de outro denoiser e os
-            // reservoirs entravam no NRD ainda com o teto de firefly do modo cru (4 em vez de 8).
-            // Nao recursa: o SetDenoiser so chama SetUpscaler quando o denoiser alvo e DLSS_RR, e
-            // aqui o alvo e sempre NRD.
-            const bool LeavingRR = (Denoiser == EDenoiser::DLSS_RR && U != EUpscaler::DLSS);
-            Upscaler = U; TAARanLastFrame = false;
-            if (LeavingRR) SetDenoiser(EDenoiser::NRD); // ja faz o ApplyUpscalerScale()
-            else           ApplyUpscalerScale();
-        }
-        EUpscaler GetUpscaler() const        { return Upscaler; }
-        bool UpscalerAvailable(EUpscaler U) const {
-            switch (U) {
-                case EUpscaler::FSR:  return Fsr.Available();
-                case EUpscaler::DLSS: return Dlss.Available();
-                default:              return true; // None sempre disponivel
-            }
-        }
-        void SetUpscalerQuality(int Q) {
-            UpscalerQuality = Q < 0 ? 0 : (Q > 4 ? 4 : Q);
-            ApplyUpscalerScale();
-        }
-        int  GetUpscalerQuality() const      { return UpscalerQuality; }
-        void SetUseTAA(bool V)               { UseTAA = V; TAARanLastFrame = false; }
-        bool GetUseTAA() const               { return UseTAA; }
         void SetFlickerMode(u32 Mode)        { if (Mode > 0 && FlickerMode == 0) FlickerResetPending = true; FlickerMode = Mode; }
         u32  GetFlickerMode() const          { return FlickerMode; }
 
@@ -457,59 +433,15 @@ namespace Smile {
 
         u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
 
-        FFogPass& GetFog()                     { return Fog; }
-
-        // Froxel volumetric fog (F1): exige height fog ON (mesma densidade).
-        void SetUseVolumetricFog(bool Use)     { UseVolumetricFog = Use; }
-        bool GetUseVolumetricFog() const       { return UseVolumetricFog; }
-        FVolumetricFogPass& GetVolumetricFog()             { return VolumetricFog; }
-        const FVolumetricFogPass& GetVolumetricFog() const { return VolumetricFog; }
-
-        void SetUseSunShafts(bool Use)         { UseSunShafts = Use; }
-        bool GetUseSunShafts() const           { return UseSunShafts; }
-        void SetPerPixelAtmoTransmittance(bool Use) { UsePerPixelAtmoTransmittance = Use; }
-        bool GetPerPixelAtmoTransmittance() const   { return UsePerPixelAtmoTransmittance; }
-        void SetSkyAmbientSH(bool Use)         { UseSkyAmbientSH = Use; }
-        bool GetSkyAmbientSH() const           { return UseSkyAmbientSH; }
-        FSunShafts& GetSunShafts()             { return SunShafts; }
-        const FSunShafts& GetSunShafts() const { return SunShafts; }
-
-        FSunShadows& GetSunShadows()           { return SunShadows; }
-        void SetUseSunShadows(bool Use)        { UseSunShadows = Use; }
-        bool GetUseSunShadows() const          { return UseSunShadows; }
-
-        void SetUseWater(bool Use);
-        bool GetUseWater() const             { return UseWater; }
-        FWaterRenderer& GetWater()           { return Water; }
-
         // Terreno (F1: renderizacao apenas). Carregado pelo sidecar <cena>.terrain.json no
-        // LoadCookedScene, ou direto via LoadTerrain.
-        FTerrain&       GetTerrain()         { return Terrain; }
+        // LoadCookedScene, ou direto via LoadTerrain. O olho do outliner mora no FRenderSettings.
         const FTerrain& GetTerrain() const   { return Terrain; }
         bool LoadTerrain(const FTerrainDesc& Desc) {
             return Terrain.Load(Device.Native(), UploadQueue, SRVHeap, Desc);
         }
-        void SetUseTerrain(bool Use)         { UseTerrain = Use; }
-        bool GetUseTerrain() const           { return UseTerrain; }
 
-        void SetUseClouds(bool Use)          { if (Use && !UseClouds) VolumetricClouds.InvalidateHistory();
-                                               UseClouds = Use; }
-        bool GetUseClouds() const            { return UseClouds; }
-        FVolumetricClouds& GetVolumetricClouds() { return VolumetricClouds; }
-        const FVolumetricClouds& GetVolumetricClouds() const { return VolumetricClouds; }
-        void SetCloudsHalfRes(bool HalfRes); // recria o RT das nuvens (flush da fila)
-
-        // Weather map das nuvens: parametros do bake procedural + textura autorada.
-        // Setters re-bakeam na hora (flush + dispatch sincrono, ~ms).
-        void SetCloudWeatherSeed(u32 Seed);
-        u32  GetCloudWeatherSeed() const  { return CloudNoise.GetSeed(); }
-        void SetCloudWeatherCells(u32 Mult);
-        u32  GetCloudWeatherCells() const { return CloudNoise.GetCellMult(); }
-        bool LoadCloudWeatherTexture(const std::wstring& Path);
-        void ClearCloudWeatherTexture();
-        bool CloudWeatherAuthored() const { return CloudNoise.HasWeatherOverride(); }
-
-        void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
+        // Telemetria da agua (janela de stats). Os knobs moraram p/ o FRenderSettings.
+        const FWaterRenderer& GetWater() const { return Water; }
 
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
         f32  GetPitch()     const { return Camera.GetPitch(); }
@@ -533,10 +465,9 @@ namespace Smile {
             return Vec3{ V.M[0][1], V.M[1][1], V.M[2][1] };
         }
         // Foco de camera do editor (duplo-clique no Scene Outliner): teleporta mantendo
-        // a orientacao atual.
-        void SetCameraPose(const Vec3& Pos, f32 PitchDeg, f32 YawDeg) {
-            Camera.SetPose(Pos, PitchDeg, YawDeg);
-        }
+        // a orientacao atual. Definido no .cpp porque avisa o corte de camera, e o
+        // FRenderSettings so e completo no RenderSettings.h.
+        void SetCameraPose(const Vec3& Pos, f32 PitchDeg, f32 YawDeg);
 
         const FD3D12Device& GetDevice()  const { return Device; }
         FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
@@ -554,265 +485,27 @@ namespace Smile {
 
         FRaytracingScene&   GetRaytracingScene() { return RaytracingScene; }
 
-        FDDGI& GetDDGI()               { return DDGI; }
-        void SetUseGI(bool V)           { UseGI = V; }
-        bool GetUseGI() const           { return UseGI; }
+        // Telemetria do DDGI (spacing, momentos de distancia, contagem de sondas) p/ o painel
+        // de GI. Os knobs — inclusive os de amostragem — moraram p/ o FRenderSettings.
+        const FDDGI& GetDDGI() const { return DDGI; }
 
-        // ReGIR e um sampler de luzes do MUNDO para hits secundarios. Nao substitui o ReSTIR DI
-        // de tela; troca apenas o loop de luzes dentro de ShadeSurfaceHit.
-        void SetUseReGIR(bool V) {
-            if (V == UseReGIR) return;
-            UseReGIR = V;
-            ReGIR.InvalidateHistory();
-            DDGI.ResetHistoryOnce();
-            ReSTIRGI.InvalidateHistory();
-            Reflections.InvalidateHistory();
-            Nrd.InvalidateHistory();
-            RRResetPending = true;
-            TAARanLastFrame = false;
-        }
-        bool GetUseReGIR() const { return UseReGIR; }
-        bool ReGIRActive() const { return UseReGIR && ReGIR.IsReady(); }
-
-        // F3: DDGI na fila de compute, sobrepondo CSM/prepass/G-buffer (default ON).
-        void SetUseAsyncCompute(bool V) { UseAsyncCompute = V; }
-        bool GetUseAsyncCompute() const { return UseAsyncCompute; }
-
-        FReSTIRGI&       GetReSTIRGI()       { return ReSTIRGI; }
-        const FReSTIRGI& GetReSTIRGI() const { return ReSTIRGI; }
-        FReflections& GetReflections()     { return Reflections; }
-        // Borda de subida invalida o historico do NRD: com reflexoes off o spec acumula sinal
-        // zero — religar sem reset arrastaria esse historico vazio pro especular real.
-        void SetUseReflections(bool V) {
-            if (V && !UseReflections) Nrd.InvalidateHistory();
-            UseReflections = V;
-        }
-        bool GetUseReflections() const     { return UseReflections; }
-
-        bool GetUseReSTIRDI() const { return UseReSTIRDI; }
-        bool ReSTIRDIActive() const { return UseReSTIRDI && ReSTIRDI.IsReady(); }
-        void SetUseReSTIRDI(bool V) {
-            if (V == UseReSTIRDI) return;
-            if (V) ReSTIRDI.InvalidateHistory();
-            UseReSTIRDI = V;
-            NrdDirect.InvalidateHistory();
-            Nrd.InvalidateHistory();
-            RRResetPending = true;
-            TAARanLastFrame = false;
-        }
-
-        // Religar invalida o historico: reservoirs/acumulacao guardam radiancia do frame em que
-        // o toggle desligou (sol/emissivos/DDGI antigos sobreviveriam por tempo indeterminado).
-        void SetUseReSTIRGI(bool V) {
-            if (V && !UseReSTIRGI) { ReSTIRGI.InvalidateHistory(); Nrd.InvalidateHistory(); }
-            UseReSTIRGI = V;
-        }
-        bool GetUseReSTIRGI() const    { return UseReSTIRGI; }
-
-        // Eixo de denoiser {None, NRD, DLSS_RR}. NRD/None e o toggle antigo; DLSS_RR (Ray Reconstruction)
-        // substitui o NRD E o passe de SR num eval so, entao SELECIONAR RR FORCA o upscaler p/ DLSS.
-        // === Perfil de epsilons de raio (knobs de calibracao da pagina "Iluminacao global") ===
-        // Mudar geometria de raio invalida TUDO que acumula: os reservoirs do ReSTIR guardam Lo e
-        // x2 medidos com os epsilons antigos, e o NRD acumula sobre eles. Sem o clear o A/B compara
-        // um estado misturado e nao mede nada.
-        const FRayEpsilonProfile& GetRayEpsilons() const { return RayEps; }
-        void SetRayEpsilons(const FRayEpsilonProfile& P) {
-            RayEps = P;
-            // TUDO que acumula precisa cair junto, senao o knob parece inerte enquanto o valor
-            // antigo vaza pelo historico:
-            ReSTIRGI.InvalidateHistory();   // reservoirs guardam Lo/x2 medidos com o epsilon velho
-            ReSTIRDI.InvalidateHistory();   // shadow ray final usa o mesmo perfil
-            NrdDirect.InvalidateHistory();  // acumula a direta resolvida por esse shadow ray
-            Nrd.InvalidateHistory();        // acumula sobre esses reservoirs
-            RRResetPending    = true;       // historico neural do Ray Reconstruction
-            DDGI.ResetHistoryOnce();        // Hysteresis 0.99 -> 99% do atlas velho sobrevive por update
-            Reflections.InvalidateHistory();// historico temporal proprio (caminho legado, sem NRD)
-            TAARanLastFrame   = false;      // sem upscaler, o TAA acumula por conta propria
-        }
-
-        // Invalidacao dos knobs de amostragem do DDGI. TODOS eles entram hoje no ShadeSurfaceHit
-        // — o bias desde que o 2o bounce passou a usar o gather completo, o fade de borda desde
-        // que ele tambem parou de extrapolar la — e por isso mudam o que fica GRAVADO, nao so o
-        // que aparece na tela: o valor sombreado no hit volta para o atlas do DDGI (hysteresis
-        // 0,99), para os reservoirs do ReSTIR, para o historico das reflexoes, para o inscatter
-        // acumulado do fog e, por cima de tudo isso, para NRD/RR/TAA.
-        //
-        // Houve aqui uma variante LEVE, so com TAA, para quando o knob fosse exclusivo do
-        // consumidor final. Ela ficou sem usuarios e saiu — e a licao vale a nota: os dois knobs
-        // NASCERAM sendo de sampler puro e deixaram de ser DEPOIS, em commits que nao voltaram
-        // no setter. Ao levar um parametro para dentro do hit, reveja a invalidacao dele.
-        //
-        // O preco e o mesmo do SetRayEpsilons: o reset faz a tomada passar de novo pela
-        // realizacao aleatoria de um frame (as direcoes giram com o frameIndex), entao para
-        // medir A/B e preciso esperar convergir. Sem o reset seria pior: estados misturados.
-        void OnGIHitSamplingChanged() {
-            DDGI.ResetHistoryOnce();
-            ReSTIRGI.InvalidateHistory();
-            Reflections.InvalidateHistory();
-            Nrd.InvalidateHistory();
-            VolumetricFog.ResetHistory(); // acumula o proprio inscatter, que le o DDGI
-            RRResetPending = true;
-            TAARanLastFrame = false;
-            // O diagnostico pontual e one-shot por clique: sem reexecutar, o painel exibiria os
-            // numeros do knob ANTERIOR e a ferramenta mentiria justamente durante o A/B.
-            RepeatDebugProbePoint();
-        }
-
-        // Teto do self-shadow bias, em metros (0 = sem teto = comportamento historico). Segue
-        // como knob porque o 0,40 m saiu de raciocinio, nao de varredura — a escala relevante e a
-        // espessura de parede da cena, nao o espacamento do grid. Vira constante depois do sweep.
-        // Invalidacao PESADA: o bias entra no 2o bounce (ver OnGIHitSamplingChanged).
-        f32  GetGISurfaceBiasMax() const { return DDGI.GetSurfaceBiasMax(); }
-        void SetGISurfaceBiasMax(f32 V) {
-            if (V == DDGI.GetSurfaceBiasMax()) return;
-            DDGI.SetSurfaceBiasMax(V);
-            OnGIHitSamplingChanged();
-        }
-        f32  GetGISurfaceBiasScale() const { return DDGI.GetSurfaceBiasScale(); }
-        void SetGISurfaceBiasScale(f32 V) {
-            if (V == DDGI.GetSurfaceBiasScale()) return;
-            DDGI.SetSurfaceBiasScale(V);
-            OnGIHitSamplingChanged();
-        }
-        // Fade para o ambiente hemisferico nas bordas do volume (em celulas; 0 = desligado).
-        // Invalidacao PESADA: o fade tambem entra no 2o bounce (ver OnGIHitSamplingChanged) —
-        // la ele multiplica o indireto do hit, que e parte do valor devolvido as sondas.
-        f32  GetGIVolumeFadeProbes() const { return DDGI.GetVolumeFadeProbes(); }
-        void SetGIVolumeFadeProbes(f32 V) {
-            if (V == DDGI.GetVolumeFadeProbes()) return;
-            DDGI.SetVolumeFadeProbes(V);
-            OnGIHitSamplingChanged();
-        }
-
-        // Culling nos raios de REFLEXAO. Substituiu a antiga chave global da TLAS: aquela mexia em
-        // todos os passes de uma vez, e a TLAS agora descreve so a geometria (two-sided de
-        // verdade), com cada passe escolhendo a ray flag. Nao precisa de rebuild da TLAS — e
-        // parametro de shader. Invalida so o que acumula reflexo: o ReSTIR e o DDGI nao veem
-        // esta chave.
-        bool GetReflectionsCullBackface() const { return Reflections.GetBackfaceCull(); }
-        void SetReflectionsCullBackface(bool V) {
-            if (V == Reflections.GetBackfaceCull()) return;
-            Reflections.SetBackfaceCull(V);
-            Reflections.InvalidateHistory(); // acumulacao temporal propria (caminho sem NRD)
-            Nrd.InvalidateHistory();         // o specular do NRD acumula sobre o mesmo sinal
-            RRResetPending  = true;
-            TAARanLastFrame = false;
-        }
-
-        // Agua "invisivel aos guides" — A/B do SEGUNDO eixo do problema da agua sob Ray
-        // Reconstruction. A agua e o unico passe que escreve depth e velocity SEM escrever
-        // G-buffer: no pixel de agua o RR recebe profundidade e movimento da superficie com
-        // albedo/normal/roughness do fundo, um jogo de guides contraditorio entre si — pior que um
-        // uniformemente errado. Ligando, a agua vira overlay so de cor e os guides voltam a
-        // descrever coerentemente o que esta atras; a cor sai identica, entao o A/B mexe so nisso.
-        // Complementa o eixo do WARP (a refracao amostrando o SceneColor ruidoso em UV deslocada):
-        // sao problemas independentes, e um resultado negativo num nao absolve o outro.
-        // NAO e knob de look — sem escrita de depth a agua deixa de ocluir quem le o depth buffer.
-        bool GetWaterGuideInvisible() const { return Water.GetGuideInvisible(); }
-        void SetWaterGuideInvisible(bool V) {
-            if (V == Water.GetGuideInvisible()) return;
-            Water.SetGuideInvisible(V);
-            RRResetPending  = true;  // muda os guides do RR: historico neural velho mente
-            TAARanLastFrame = false;
-        }
-
-        // Politica de backface do gather do ReSTIR. Passa pelo Renderer, e nao direto no
-        // FReSTIRGI, porque o clear dos reservoirs sozinho nao basta: o NRD e o RR acumulam SOBRE
-        // eles e o TAA sobre o resultado, entao um A/B feito so com o clear compararia um estado
-        // misturado. DDGI e reflexoes ficam de fora de proposito — a politica so toca no gather.
-        bool GetGIBackfacePolicy() const { return ReSTIRGI.GetBackfacePolicy(); }
-        void SetGIBackfacePolicy(bool V) {
-            if (V == ReSTIRGI.GetBackfacePolicy()) return;
-            ReSTIRGI.SetBackfacePolicy(V); // ja marca NeedsClear nos reservoirs
-            Nrd.InvalidateHistory();
-            RRResetPending  = true;
-            TAARanLastFrame = false;
-        }
-
-        // Editar no editor uma propriedade de material que o RAY TRACING enxerga (AlphaTest,
-        // TwoSided, emissivo...) deixava tres estados obsoletos de uma vez, porque o setter do
-        // material so reescrevia o constant buffer dele:
-        //   - a TLAS, que carrega InstanceMask, FORCE_NON_OPAQUE e o culling por instancia;
-        //   - o InstanceGeo, snapshot criado UMA vez no SetupForScene e lido por todo o RT;
-        //   - os historicos acumulados sobre a aparencia antiga.
-        // O Flush e necessario: o InstanceGeo e um upload heap sem versao por frame em voo, entao
-        // reescrever com frames voando corromperia o que eles leem. Custa um stall, mas isto so
-        // dispara em edicao manual de material.
-        // Versao COALESCIDA: use esta nos setters do editor. Arrastar um slider dispara o setter a
-        // cada tick, e cada NotifyMaterialRTStateChanged custa um Flush da fila + reset de todos os
-        // historicos — fazer isso por tick derrubaria o frame rate e manteria o GI em reset
-        // permanente. O RenderFrame consome a flag uma vez, antes do BeginFrame.
-        void MarkMaterialRTStateDirty() { MaterialRTStateDirty = true; }
-
-        // Mesma ideia, para edicao de LUZ que muda a energia do indireto (hoje: FLight::RTWeight).
-        // Precisa de invalidacao mas NAO de refresh: a lista do GI (FGPULightGI) e reempacotada da
-        // FScene a cada frame, entao nao ha Flush da fila nem RefreshInstanceGeo a fazer — so
-        // derrubar quem ACUMULOU energia da luz antiga. Sem isto, o slider parece inerte por muitos
-        // frames: o DDGI tem Hysteresis 0,99, ou seja, 99% do atlas velho sobrevive por update, e a
-        // calibracao seria feita contra energia que o usuario ja mandou remover.
-        void MarkIndirectLightingDirty() { IndirectLightingDirty = true; }
-
-        void NotifyIndirectLightingChanged() {
-            DDGI.ResetHistoryOnce();
-            TemporalMotion.InvalidateHistory();
-            ReSTIRGI.InvalidateHistory();   // reservoirs guardam Lo medido com a luz antiga
-            Reflections.InvalidateHistory();
-            Nrd.InvalidateHistory();
-            VolumetricFog.ResetHistory();   // acumula o proprio inscatter, que le o DDGI
-            RRResetPending  = true;
-            TAARanLastFrame = false;
-        }
-
-        void NotifyMaterialRTStateChanged() {
-            CommandQueue.Flush();
-            DDGI.RefreshInstanceGeo(Scene);
-            TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
-            TemporalMotion.InvalidateHistory();
-            ReSTIRGI.InvalidateHistory();
-            ReSTIRDI.InvalidateHistory();
-            NrdDirect.InvalidateHistory();
-            Nrd.InvalidateHistory();
-            RRResetPending = true;
-            DDGI.ResetHistoryOnce();
-            Reflections.InvalidateHistory();
-            TAARanLastFrame = false;
-        }
-
-        void SetDenoiser(EDenoiser D) {
-            if (D == EDenoiser::DLSS_RR && !DlssRR.Available()) D = EDenoiser::NRD; // fallback: sem NVIDIA/RR
-            if (D == Denoiser) return;
-            Nrd.InvalidateHistory();            // muda a natureza do sinal -> reinicia acumulacao
-            NrdDirect.InvalidateHistory();      // instancia independente da iluminacao direta
-            // O teto de firefly do ReSTIR depende do denoiser (FireflyMax 8 com NRD, FireflyMaxRaw
-            // 4 sem ele) e e aplicado ao Lo NA HORA DO TRACE, ou seja, fica gravado no reservoir.
-            // Sem invalidar, o Lo clampado no teto antigo sobrevive no historico — e com
-            // ValidateInterval = 0 nao ha re-shade que o corrija.
-            ReSTIRGI.InvalidateHistory();
-            // O DI usa permutation temporal somente no RR. Ao trocar de denoiser, nao misture
-            // reservoirs produzidos por politicas de reprojecao diferentes.
-            ReSTIRDI.InvalidateHistory();
-            // NRD/RR param no Resolved cru e deixam History[] das reflexoes sem escrita. Ao voltar
-            // ao caminho legado, esse historico pode ter frames antigos e paridade ja avancada.
-            Reflections.InvalidateHistory();
-            Denoiser = D;
-            RRResetPending = true;              // trocar de/para RR: descarta o historico neural velho
-            if (Denoiser == EDenoiser::DLSS_RR) // RR faz o upscale; trava o upscaler em DLSS
-                SetUpscaler(EUpscaler::DLSS);
-            TAARanLastFrame = false;
-            ApplyUpscalerScale();
-        }
-        EDenoiser GetDenoiser() const  { return Denoiser; }
-        bool RRAvailable() const       { return DlssRR.Available(); }
-
-        // Compat: o toggle NRD antigo (viewport) mapeia p/ o eixo de denoiser {None, NRD}.
-        void SetUseNrdDenoise(bool V) { SetDenoiser(V ? EDenoiser::NRD : EDenoiser::None); }
-        bool GetUseNrdDenoise() const  { return Denoiser == EDenoiser::NRD; }
-
-        FAmbientOcclusion& GetAO()     { return AO; }
-        void SetUseAO(bool V)          { UseAO = V; }
-        bool GetUseAO() const          { return UseAO; }
+        // As flags de edicao de material/luz (Mark*/Notify*) moraram p/ o FRenderSettings; o
+        // RenderFrame consome MaterialRTStateDirty/IndirectLightingDirty uma vez, antes do
+        // BeginFrame, ou seja, fora da gravacao do command list.
 
     private:
+        // Knobs consumidos pelo FRenderSettings (corpos no Renderer.cpp). Ficam privados p/ que
+        // exista UM caminho publico: o editor passa pela fachada, que carrega a invalidacao.
+        void SetRenderScale(f32 V); // recria os RTs internos (so a cena; backbuffer fica nativo)
+        void SetUseWater(bool Use);
+        void SetSunDirection(const Vec3& Dir);
+        void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
+        void SetCloudsHalfRes(bool HalfRes); // recria o RT das nuvens (flush da fila)
+        void SetCloudWeatherSeed(u32 Seed);  // re-bakeia na hora (flush + dispatch sincrono)
+        void SetCloudWeatherCells(u32 Mult);
+        bool LoadCloudWeatherTexture(const std::wstring& Path);
+        void ClearCloudWeatherTexture();
+
         // No-op quando ninguem registrou callback (todo caminho que nao seja o editor).
         void ReportInitProgress(std::string_view Label, std::string_view Detail,
                                 f32 Fraction) const;
@@ -821,6 +514,8 @@ namespace Smile {
         void BuildDefaultScene();
         void BuildRaytracingScene();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
+        // Reancora tudo que enderecava a cena por indice depois de a lista mudar de tamanho.
+        void OnSceneStructureChanged();
         void CreateDepthBuffer();
         void CreateConstantBuffer();
         void CreateHDRBuffers();
@@ -994,8 +689,16 @@ namespace Smile {
 
         FObjectPicker            ObjectPicker;
         FSelectionOutline        SelectionOutline;
-        int                      SelectedIndex = -1;
-        int                      SelectedLightIdx = -1;
+        // Selecao UNICA da cena (mesh ou luz — nunca as duas). O Index dentro dela e o cache
+        // que o loop de draw compara por frame; o Id e o que sobrevive a lista mudar e o que o
+        // OnSceneStructureChanged usa para reancorar.
+        FSceneObjectRef          Selection;
+        // AABB de uniao da cena carregada, como o SceneLoader calculou. Guardado porque um
+        // re-setup de GI fora do load (objeto criado estourando alguma capacidade) precisa do
+        // mesmo volume — recalcular ali daria um grid de DDGI diferente do que a cena vinha
+        // usando, e todo o indireto se deslocaria por causa de uma copia de objeto.
+        Vec3                     SceneBoundsMin{ 0.0f, 0.0f, 0.0f };
+        Vec3                     SceneBoundsMax{ 0.0f, 0.0f, 0.0f };
 
         FDebugDraw               DebugDraw;
         Mat44                    LastViewProj{}; 
@@ -1193,5 +896,10 @@ namespace Smile {
 
         // Vive so durante Initialize: o editor a instala antes e limpa depois de inicializar.
         FInitProgressCallback InitProgressCallback;
+
+        // Por ponteiro porque o FRenderSettings so e completo no RenderSettings.h, que por sua
+        // vez precisa deste header. Construida no ctor; o dtor do Renderer e out-of-line (ja
+        // era) para que o unique_ptr veja o tipo completo.
+        std::unique_ptr<FRenderSettings> SettingsImpl;
     };
 } 

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Graphics/OceanSpectrum.h"
 #include "Smile/Graphics/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
 #include "Smile/Graphics/Barriers.h"
@@ -71,7 +72,11 @@ namespace Smile {
         }
     }
 
-    Renderer::Renderer() = default;
+    Renderer::Renderer() : SettingsImpl(std::make_unique<FRenderSettings>(*this)) {}
+
+    FRenderSettings&       Renderer::Settings()       { return *SettingsImpl; }
+    const FRenderSettings& Renderer::Settings() const { return *SettingsImpl; }
+
     Renderer::~Renderer() noexcept {
         try {
             Shutdown();
@@ -272,7 +277,146 @@ namespace Smile {
         TlasTransformsVersion = Scene.TransformsVersion();
     }
 
+    void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg) {
+        Camera.SetPose(_Pos, _PitchDeg, _YawDeg);
+        // Teleporte e o caso classico de corte: nenhum vetor de movimento liga o frame novo ao
+        // antigo, e reprojetar traria imagem do lugar de onde a camera saiu. Antes daqui isto
+        // nao avisava ninguem — a engine resetava os filtros de tela em todo knob de conteudo e
+        // NAO resetava no unico evento que de fato pedia.
+        Settings().NotifyCameraCut();
+    }
+
+    void Renderer::SetSelectedObject(int _Index) {
+        if (_Index < 0 || _Index >= static_cast<int>(Scene.Renderables().size())) {
+            ClearSelection();
+            return;
+        }
+        Selection = { Scene.IdAt(static_cast<u32>(_Index)), ESceneObject::Renderable,
+                      static_cast<u32>(_Index) };
+    }
+
+    int Renderer::GetSelectedObject() const {
+        return Selection.IsRenderable() ? static_cast<int>(Selection.Index) : -1;
+    }
+
+    u64 Renderer::GetSelectedObjectId() const {
+        return Selection.IsRenderable() ? Selection.Id : 0ull;
+    }
+
+    // Escopadas por tipo: limpar "a selecao de mesh" quando ha uma LUZ selecionada e no-op, nao
+    // limpa a luz. Preserva o significado que os call sites do editor ja tinham quando os dois
+    // campos eram separados.
+    void Renderer::ClearSelection() {
+        if (Selection.IsRenderable()) Selection = {};
+    }
+
+    void Renderer::ClearLightSelection() {
+        if (Selection.IsLight()) Selection = {};
+    }
+
+    void Renderer::SetSelectedLight(int _Index) {
+        if (_Index < 0 || _Index >= static_cast<int>(Scene.Lights().size())) {
+            ClearLightSelection();
+            return;
+        }
+        // A luz pode nao ter identidade ainda: o editor faz push_back direto e quem atribui e o
+        // RenderFrame, no proximo frame. Selecionar e um bom momento para adiantar — sem isso a
+        // selecao ficaria com Id 0, ou seja, invalida, ate um frame passar.
+        FLight& L = Scene.Lights()[static_cast<size_t>(_Index)];
+        if (L.Id == 0) L.Id = Scene.AllocObjectId();
+        Selection = { L.Id, ESceneObject::Light, static_cast<u32>(_Index) };
+    }
+
+    int Renderer::GetSelectedLight() const {
+        return Selection.IsLight() ? static_cast<int>(Selection.Index) : -1;
+    }
+
+    bool Renderer::RemoveRenderable(u64 _Id) {
+        if (!Scene.RemoveRenderable(_Id)) return false;
+        OnSceneStructureChanged();
+        return true;
+    }
+
+    u64 Renderer::DuplicateRenderable(u64 _Id) {
+        const FRenderable* Added = Scene.DuplicateRenderable(_Id);
+        if (!Added) return 0;
+        const u64 NewId = Added->Id; // le ANTES: o re-setup abaixo pode realocar a lista
+        OnSceneStructureChanged();
+        return NewId;
+    }
+
+    void Renderer::OnSceneStructureChanged() {
+        const u32 Count = static_cast<u32>(Scene.Renderables().size());
+
+        // (1) Quem fala em indice e sobrevive ao frame, do lado da CPU.
+        // O pick resolve kFramesInFlight depois do pedido: um pick em voo agora devolveria o
+        // indice de outro objeto, entao ele morre aqui em vez de virar uma selecao errada.
+        ObjectPicker.CancelPending();
+        // Uma linha reancora os dois tipos: o FindObject devolve onde aquela identidade esta
+        // agora, ou um ref invalido se ela deixou de existir.
+        Selection = Scene.FindObject(Selection.Id);
+        // PrevModels e o transform do frame anterior POR INDICE (motion vector do raster). Com a
+        // lista deslocada, cada entrada passou a descrever outro objeto. Limpar faz o proximo
+        // frame usar PrevModel = Model, ou seja, movimento zero — que e exatamente o que um
+        // objeto recem-criado ja recebia. Remapear por Id daria o mesmo resultado visivel: o
+        // TAA cai junto (dominio abaixo), entao nao ha historico para preservar.
+        PrevModels.clear();
+
+        // (2) Estruturas de GPU dimensionadas pelo tamanho da cena. Todas nascem com a MESMA
+        // folga (SceneCapacityFor), entao o caso comum — criar ou apagar alguns objetos — cabe
+        // e cai no caminho barato abaixo. Quando a folga acaba nao ha remendo: o snapshot do
+        // InstanceGeo alocaria descriptors novos, a TLAS precisa de scratch maior e o buffer de
+        // transforms do TemporalMotion e um SRV com NumElements fixo. Ai refaz o setup de cena
+        // inteiro, que e o mesmo caminho do load.
+        //
+        // O teste e por ESTRUTURA e nao pela folga nominal de proposito: quem foi criado antes
+        // de existir TLAS (ou com o RT desligado) tem capacidade 0, e os guardas de > 0 abaixo
+        // deixam essas passarem em vez de forcar um re-setup que nao teria o que reconstruir.
+        const bool NeedsResize = Count > MaxObjects
+                              || Count > HiZ.Capacity()
+                              || (RaytracingScene.IsBuilt() &&
+                                  Count > RaytracingScene.InstanceCapacity())
+                              || (TemporalMotion.InstanceCount() > 0 &&
+                                  Count > TemporalMotion.InstanceCount())
+                              || (DDGI.InstanceGeoCapacity() > 0 &&
+                                  Count > DDGI.InstanceGeoCapacity());
+
+        if (NeedsResize) {
+            if (Count > MaxObjects) {
+                // De novo COM folga, senao cada objeto criado a partir daqui pagaria o
+                // re-setup completo — que e exatamente o que a folga existe para evitar.
+                MaxObjects = SceneCapacityFor(Count);
+                RecreateObjectCB(); // ja da Flush na fila (e recria a tabela do HiZ)
+            }
+            HiZ.SetupObjects(Device.Native(), SRVHeap, MaxObjects);
+            BuildRaytracingScene();
+            SetupGIForScene(SceneBoundsMin, SceneBoundsMax);
+        } else {
+            // Caminho barato (remocao, ou copia que ainda cabe): so o snapshot que o RT le por
+            // InstanceID precisa reacompanhar a lista. Mesmo Flush do NotifyMaterialRTStateChanged
+            // e pela mesma razao — o InstanceGeo e upload heap sem versao por frame em voo.
+            CommandQueue.Flush();
+            DDGI.RefreshInstanceGeo(Scene);
+            // MeshLights precisa do SetupForScene INTEIRO, nao de um MarkDirty: a lista de
+            // tasks (uma por malha emissiva, com o InstanceIndex dentro) e montada so ali, e o
+            // MarkDirty apenas re-dispara o extract sobre a lista VELHA. Numa remocao isso
+            // extrairia radiancia com o transform da instancia errada; numa copia de malha
+            // emissiva, a copia simplesmente nao iluminaria. E ordens de grandeza mais barato
+            // que o caminho caro — varre a cena em CPU e realoca buffers pequenos, sem tocar
+            // nos ~200 MB de pool de BLAS.
+            MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene, DDGI.InstanceSRV());
+            // A TLAS nao precisa de pedido explicito: a FScene ja bumpou TransformsVersion na
+            // mutacao, e o rebuild por frame do RenderFrame reage a isso sozinho — a lista nova
+            // cabe na capacidade, que e o que o NeedsResize acabou de garantir.
+        }
+
+        Settings().NotifySceneStructureChanged();
+    }
+
     void Renderer::SetupGIForScene(const Vec3& _AABBMin, const Vec3& _AABBMax) {
+        SceneBoundsMin = _AABBMin;
+        SceneBoundsMax = _AABBMax;
+
         // Uma probe selecionada pertence ao volume anterior; nunca deixa o marcador apontar
         // para o mesmo indice numerico de uma grade recem-criada.
         SetDebugProbeIndex(-1);
@@ -360,8 +504,12 @@ namespace Smile {
         UseWater = _Use;
         for (u32 Cascade = 0; Cascade < kOceanCascades; ++Cascade)
             Ocean[Cascade].ResetTemporalHistory();
-        RRResetPending = true;
-        TAARanLastFrame = false;
+        // O historico das cascatas acima e do proprio oceano e tem de cair — o espectro FFT
+        // recomeca. Os filtros de TELA nao: ligar a agua e mudanca de CONTEUDO, e uma superficie
+        // grande aparecendo e disoclusao, que e o caso que TAA e FSR2 resolvem por construcao
+        // (acontece a cada passo de camera). O reset explicito que morava aqui era uma lista
+        // escrita a mao num setter — a classe de coisa que o HistoryDomain existe para eliminar —
+        // e era ele que fazia a tela piscar ao alternar o oceano.
     }
 
     void Renderer::BuildDefaultScene() {
@@ -1530,9 +1678,10 @@ namespace Smile {
         if (_Params.Primitive == FMaterialPreview::PrimSceneMesh) {
             const auto& Rnds = Scene.Renderables();
             const FRenderable* Pick = nullptr;
-            if (SelectedIndex >= 0 && SelectedIndex < (int)Rnds.size() &&
-                Rnds[SelectedIndex].Material == _Material && !Rnds[SelectedIndex].RaytracingOnly)
-                Pick = &Rnds[SelectedIndex];
+            const int Sel = GetSelectedObject();
+            if (Sel >= 0 && Sel < (int)Rnds.size() &&
+                Rnds[Sel].Material == _Material && !Rnds[Sel].RaytracingOnly)
+                Pick = &Rnds[Sel];
             if (!Pick) {
                 for (const auto& R : Rnds) {
                     if (R.Material != _Material || R.RaytracingOnly || !R.Mesh) continue;
@@ -1618,14 +1767,14 @@ namespace Smile {
         // BeginFrame, ou seja, fora da gravacao do command list.
         if (MaterialRTStateDirty) {
             MaterialRTStateDirty = false;
-            NotifyMaterialRTStateChanged();
+            Settings().NotifyMaterialRTStateChanged();
         }
         // Idem para energia de luz no indireto. Fica DEPOIS e em if separado de proposito: se os
         // dois cairem no mesmo frame, o de material ja invalidou tudo e este vira no-op barato —
         // mas ele nao pode DEPENDER daquele, porque mexer so no peso da luz nao marca material.
         if (IndirectLightingDirty) {
             IndirectLightingDirty = false;
-            NotifyIndirectLightingChanged();
+            Settings().NotifyIndirectLightingChanged();
         }
 
         CommandQueue.BeginFrame();
@@ -1703,14 +1852,15 @@ namespace Smile {
         MappedCB->SunDirection   = { SunN.X, SunN.Y, SunN.Z, SunIntensity };
 
         {
-            const f32 Target = Weather.RainAmount;
-            const f32 Tau    = (Target > Weather.Wetness) ? 5.0f : 30.0f;
-            Weather.Wetness += (Target - Weather.Wetness) *
-                               (1.0f - std::exp(-std::max(LastDeltaTime, 0.0f) / Tau));
-            if (Target <= 0.001f && Weather.Wetness < 0.005f) Weather.Wetness = 0.0f;
+            const f32 Target = Weather.GetRainAmount();
+            const f32 Tau    = (Target > Weather.GetWetness()) ? 5.0f : 30.0f;
+            Weather.SetWetness(Weather.GetWetness() +
+                               (Target - Weather.GetWetness()) *
+                               (1.0f - std::exp(-std::max(LastDeltaTime, 0.0f) / Tau)));
+            if (Target <= 0.001f && Weather.GetWetness() < 0.005f) Weather.SetWetness(0.0f);
         }
 
-        const f32 RainSky    = Weather.DriveSky ? Weather.RainAmount : 0.0f;
+        const f32 RainSky    = Weather.GetDriveSky() ? Weather.GetRainAmount() : 0.0f;
         const f32 RainKeyDim = 1.0f - RainSky * 0.75f;
         const f32 RainAmbDim = 1.0f - RainSky * 0.40f;
         // POLITICA UNICA de escurecimento do CEU na chuva — o ceu procedural nao sabe da chuva,
@@ -2223,7 +2373,7 @@ namespace Smile {
             for (FLight& L : Scene.Lights()) {
                 // O caminho direto atribui a identidade mais adiante, mas o ReGIR e construido
                 // antes dele. Atribuir aqui garante que o historico nunca use indice como ID.
-                if (L.Id == 0) L.Id = Scene.AllocLightId();
+                if (L.Id == 0) L.Id = Scene.AllocObjectId();
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
                 // Peso de RT: com 0 a luz sai da lista do indireto por completo (nao so escurece —
                 // some do hit, economizando o shadow ray dela). E o caso da luz que so existia p/
@@ -2285,7 +2435,7 @@ namespace Smile {
             MeshLights.Record(CommandList, SRVHeap);
         }
 
-        const bool ReGIROn = ReGIRActive() && HasReGIRConsumer && GILightCount > 0;
+        const bool ReGIROn = Settings().ReGIRActive() && HasReGIRConsumer && GILightCount > 0;
         if (ReGIROn) {
             FGpuScope Scope(GpuProfiler, CommandList, "ReGIR (build)");
             ReGIR.UpdatePerFrame(FrameSlot, FrameIndex, GILightCount, GILightSetSignature);
@@ -2443,7 +2593,7 @@ namespace Smile {
                 FLight& L = SceneLights[li];
                 // Identidade estavel na primeira vez que vemos a luz. O editor faz push_back
                 // direto em Lights(), entao a atribuicao mora aqui e nao no AddLight.
-                if (L.Id == 0) L.Id = Scene.AllocLightId();
+                if (L.Id == 0) L.Id = Scene.AllocObjectId();
                 Vec3 PreviousLightPos = L.Position;
                 if (const auto It = PreviousDirectLightPositions.find(L.Id);
                     It != PreviousDirectLightPositions.end())
@@ -2657,6 +2807,9 @@ namespace Smile {
         u32             SelectedSlot  = kInvalidSlot;
         const FGpuMesh* SelectedMesh  = nullptr;
         Mat44           SelectedModel = Mat44::Identity();
+        // Hasteado do loop: a selecao virou uma consulta (mesh OU luz), e o loop abaixo roda
+        // por renderavel da cena.
+        const int       SelectedRenderable = GetSelectedObject();
         {
             const std::vector<FRenderable>& RList = Scene.Renderables();
             AllItems.reserve(RList.size());
@@ -2680,7 +2833,7 @@ namespace Smile {
                 OC.PrevMVP        = PrevModel * PrevViewProj;
                 std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                             &OC, sizeof(ObjectConstants));
-                if (static_cast<int>(si) == SelectedIndex) {
+                if (static_cast<int>(si) == SelectedRenderable) {
                     SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
@@ -2705,7 +2858,7 @@ namespace Smile {
             // [0, Capacity); indices alem disso (ex.: proxy RT do terreno) ficam visiveis.
             if (OcclusionVis && A.SceneIndex < HiZ.Capacity() &&
                 !OcclusionVis[A.SceneIndex] &&
-                static_cast<int>(A.SceneIndex) != SelectedIndex) {
+                static_cast<int>(A.SceneIndex) != SelectedRenderable) {
                 ++OccludedCount;
                 continue;
             }
@@ -3016,7 +3169,7 @@ namespace Smile {
 
         if (Weather.Active() && RainWetness.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
-            if (Weather.RainOcclusion) {
+            if (Weather.GetRainOcclusion()) {
                 std::vector<FRainWetness::FOccluderItem> RainOccluders;
                 RainOccluders.reserve(AllItems.size());
                 for (const AllItem& A : AllItems)
@@ -3639,7 +3792,7 @@ namespace Smile {
         }
 
         if (Weather.Raining() && RainWetness.IsInitialized() &&
-            (Weather.CurtainAmount > 0.001f || Weather.RainParticles)) {
+            (Weather.GetCurtainAmount() > 0.001f || Weather.GetRainParticles())) {
             FBarrierBatch Batch;
             Batch.Transition(DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -3648,10 +3801,10 @@ namespace Smile {
             GpuProfiler.Begin(CommandList, "Chuva — cortina/gotas");
             auto RainRTV = HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &RainRTV, FALSE, nullptr);
-            if (Weather.CurtainAmount > 0.001f)
+            if (Weather.GetCurtainAmount() > 0.001f)
                 RainWetness.ExecuteCurtain(CommandList, SRVHeap, DepthSRVSlot,
                                            RenderWidth(), RenderHeight());
-            if (Weather.RainParticles)
+            if (Weather.GetRainParticles())
                 RainWetness.ExecuteParticles(CommandList, SRVHeap, DepthSRVSlot,
                                              RenderWidth(), RenderHeight());
             GpuProfiler.End(CommandList); // Chuva — cortina/gotas
@@ -4080,7 +4233,7 @@ namespace Smile {
                                   PostInputSRV, FrameSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
         }
 
-        if (SelectedIndex >= 0 && SelectedSlot != kInvalidSlot && SelectedMesh
+        if (SelectedRenderable >= 0 && SelectedSlot != kInvalidSlot && SelectedMesh
             && SelectionOutline.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Contorno da seleção");
             FSelectionOutline::FDrawItem Item{ SelectedMesh, SelectedModel * ViewProjUnjittered };
