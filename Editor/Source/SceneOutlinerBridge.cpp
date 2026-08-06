@@ -604,10 +604,12 @@ namespace SmileEditor {
             const auto& Renderables = Renderer->GetScene().Renderables();
             if (Row.SceneIdx < 0 || Row.SceneIdx >= (int)Renderables.size()) return;
             const auto& R = Renderables[(size_t)Row.SceneIdx];
-            // AABB ja e world-space nas cenas cozidas (o cooker baka a transform no
-            // vertice); pra renderables com transform propria, soma a posicao.
-            const Smile::Vec3 Local = (R.AABBMin + R.AABBMax) * 0.5f;
-            Center = Local + R.Transform.Position;
+            // FRenderable::AABBMin/Max ja e a caixa de MUNDO (derivada da local pelo Transform
+            // em RefreshWorldBounds), entao o centro sai direto dela. Somar Transform.Position
+            // aqui contava a translacao DUAS vezes: era no-op enquanto o cooker bakeava a
+            // transform no vertice e todo transform era identidade, e passou a jogar a camera
+            // longe do objeto quando a v7 tirou o bake.
+            Center = (R.AABBMin + R.AABBMax) * 0.5f;
             Radius = std::max(((R.AABBMax - R.AABBMin) * 0.5f).Length(), 0.25f);
         } else if (Row.Kind == KLight) {
             const auto& Lights = Renderer->GetScene().Lights();

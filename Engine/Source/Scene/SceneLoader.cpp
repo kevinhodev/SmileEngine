@@ -441,35 +441,11 @@ namespace Smile {
             out.Transform.RotationEuler = Vec3{ r.RotationEuler[0], r.RotationEuler[1],
                                                 r.RotationEuler[2] };
             out.Transform.Scale         = Vec3{ r.Scale[0], r.Scale[1], r.Scale[2] };
-            // A AABB do cozido e LOCAL na v7; o culling, o HiZ, as sombras locais e a chuva leem
-            // MUNDO. Converte aqui, uma vez, pelos 8 cantos — projetar so min/max estaria errado
-            // sob rotacao (a caixa alinhada aos eixos do resultado nao e a imagem dos extremos).
+            // A AABB do cozido e LOCAL na v7; culling, HiZ, sombras locais e chuva leem MUNDO.
             const SMeshEntry& e = entries[r.MeshIndex];
-            const Vec3 LocalMin{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
-            const Vec3 LocalMax{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
-            const Mat44 Model = out.Transform.Matrix();
-            // Ponto x matriz escrito a mao: o Mat44::operator*(Vec4) e da convencao COLUNA
-            // (M*v), e o FTransform monta LINHA (v*M, translacao na linha 3, igual ao
-            // mul(float4(pos,1), MVP) dos shaders). Usar o operator* aqui perderia a translacao.
-            auto ToWorld = [&Model](const Vec3& P) {
-                return Vec3{
-                    P.X*Model.M[0][0] + P.Y*Model.M[1][0] + P.Z*Model.M[2][0] + Model.M[3][0],
-                    P.X*Model.M[0][1] + P.Y*Model.M[1][1] + P.Z*Model.M[2][1] + Model.M[3][1],
-                    P.X*Model.M[0][2] + P.Y*Model.M[1][2] + P.Z*Model.M[2][2] + Model.M[3][2] };
-            };
-            Vec3 WorldMin{  1e30f,  1e30f,  1e30f };
-            Vec3 WorldMax{ -1e30f, -1e30f, -1e30f };
-            for (int Corner = 0; Corner < 8; ++Corner) {
-                const Vec3 P{ (Corner & 1) ? LocalMax.X : LocalMin.X,
-                              (Corner & 2) ? LocalMax.Y : LocalMin.Y,
-                              (Corner & 4) ? LocalMax.Z : LocalMin.Z };
-                const Vec3 W = ToWorld(P);
-                WorldMin.X = std::min(WorldMin.X, W.X); WorldMax.X = std::max(WorldMax.X, W.X);
-                WorldMin.Y = std::min(WorldMin.Y, W.Y); WorldMax.Y = std::max(WorldMax.Y, W.Y);
-                WorldMin.Z = std::min(WorldMin.Z, W.Z); WorldMax.Z = std::max(WorldMax.Z, W.Z);
-            }
-            out.AABBMin = WorldMin;
-            out.AABBMax = WorldMax;
+            out.LocalAABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
+            out.LocalAABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
+            out.RefreshWorldBounds();
             Scene.AddRenderable(out);
         }
 
@@ -635,7 +611,13 @@ namespace Smile {
                             proxy.Mesh           = ProxyMesh.empty() ? nullptr : ProxyMesh[0];
                             proxy.Material       = mat.get();
                             proxy.RaytracingOnly = true;
-                            Terrain.GetBounds(proxy.AABBMin, proxy.AABBMax);
+                            // A malha do proxy ja e world-space com transform identidade, entao
+                            // local e mundo coincidem. Preencher as duas mantem a invariante
+                            // "mundo = local pelo Transform" valida tambem aqui — sem isso um
+                            // RefreshWorldBounds futuro trocaria a caixa pelo default de +-1e9.
+                            Terrain.GetBounds(proxy.LocalAABBMin, proxy.LocalAABBMax);
+                            proxy.AABBMin = proxy.LocalAABBMin;
+                            proxy.AABBMax = proxy.LocalAABBMax;
                             if (proxy.Mesh) {
                                 Scene.AddRenderable(proxy);
                                 ImportedMaterials.push_back(std::move(mat));

@@ -82,8 +82,22 @@ namespace Smile {
         // pelo FTerrain, o proxy da o chao pro DDGI/ReSTIR/reflexoes.
         bool        RaytracingOnly = false;
 
+        // Caixa em espaco do OBJETO, como o cozido v7 a grava. E a fonte: nao muda quando o
+        // objeto se move.
+        Vec3        LocalAABBMin = { -1e9f, -1e9f, -1e9f };
+        Vec3        LocalAABBMax = {  1e9f,  1e9f,  1e9f };
+
+        // Caixa de MUNDO, derivada das duas de cima pelo Transform. E o que frustum culling,
+        // HiZ, sombras locais e chuva leem — por isso vive como cache aqui em vez de ser
+        // recalculada por frame para milhares de objetos.
+        //
+        // ⚠️ Quem muta o Transform TEM de chamar RefreshWorldBounds(). Antes da v7 dava para
+        // remendar (o gizmo so translada, e translacao desloca a caixa exatamente), mas com
+        // rotacao ou escala o remendo silenciosamente descreve outro volume.
         Vec3        AABBMin  = { -1e9f, -1e9f, -1e9f };
         Vec3        AABBMax  = {  1e9f,  1e9f,  1e9f };
+
+        void RefreshWorldBounds();
     };
 
     class FScene {

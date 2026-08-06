@@ -13,6 +13,33 @@ namespace Smile {
         return S * R * T;
     }
 
+    void FRenderable::RefreshWorldBounds() {
+        const Mat44 Model = Transform.Matrix();
+        // Ponto x matriz a mao: o Mat44::operator*(Vec4) e da convencao COLUNA e o FTransform
+        // monta LINHA (translacao em M[3], igual ao mul(float4(pos,1), MVP) dos shaders).
+        auto ToWorld = [&Model](const Vec3& P) {
+            return Vec3{
+                P.X*Model.M[0][0] + P.Y*Model.M[1][0] + P.Z*Model.M[2][0] + Model.M[3][0],
+                P.X*Model.M[0][1] + P.Y*Model.M[1][1] + P.Z*Model.M[2][1] + Model.M[3][1],
+                P.X*Model.M[0][2] + P.Y*Model.M[1][2] + P.Z*Model.M[2][2] + Model.M[3][2] };
+        };
+        // Os 8 CANTOS, nao os dois extremos: sob rotacao a caixa alinhada aos eixos do resultado
+        // nao e a imagem de min/max — projetar so os dois daria um volume menor que o objeto e o
+        // culling comeria pedaco de geometria.
+        Vec3 Min{  1e30f,  1e30f,  1e30f };
+        Vec3 Max{ -1e30f, -1e30f, -1e30f };
+        for (int Corner = 0; Corner < 8; ++Corner) {
+            const Vec3 W = ToWorld(Vec3{ (Corner & 1) ? LocalAABBMax.X : LocalAABBMin.X,
+                                         (Corner & 2) ? LocalAABBMax.Y : LocalAABBMin.Y,
+                                         (Corner & 4) ? LocalAABBMax.Z : LocalAABBMin.Z });
+            Min.X = std::min(Min.X, W.X); Max.X = std::max(Max.X, W.X);
+            Min.Y = std::min(Min.Y, W.Y); Max.Y = std::max(Max.Y, W.Y);
+            Min.Z = std::min(Min.Z, W.Z); Max.Z = std::max(Max.Z, W.Z);
+        }
+        AABBMin = Min;
+        AABBMax = Max;
+    }
+
     FGpuMesh* FScene::AddMesh(ID3D12Device* _Device, const FMesh& _Mesh) {
         auto Gpu = std::make_unique<FGpuMesh>();
         Gpu->Upload(_Device, _Mesh);

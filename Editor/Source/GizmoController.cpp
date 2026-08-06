@@ -238,10 +238,12 @@ namespace SmileEditor {
         auto& List = R.GetScene().Renderables();
         if (DragIdx >= static_cast<int>(List.size())) return;
         Smile::FRenderable& Rn = List[static_cast<size_t>(DragIdx)];
-        const Vec3 Step = NewPos - Rn.Transform.Position; // incremento deste passo
         Rn.Transform.Position = NewPos;
-        Rn.AABBMin += Step; // a AABB de mundo acompanha (frustum culling)
-        Rn.AABBMax += Step;
+        // Recomputa da caixa LOCAL em vez de somar o passo na de mundo. O remendo antigo so
+        // valia porque o gizmo e de translacao pura; no dia em que ele ganhar rotacao ou escala,
+        // somar o incremento descreveria um volume que nao e o do objeto — e o sintoma seria
+        // geometria sumindo no culling, longe daqui.
+        Rn.RefreshWorldBounds();
         R.GetScene().BumpTransformsVersion(); // TLAS segue o objeto (rebuild leve no frame)
     }
 
