@@ -15,6 +15,10 @@ Rectangle {
     required property var lightsModel
     required property var viewportModel
     required property var renderModel
+    // Camada autorada (.smap). As pontes chegam por setInitialProperties, entao TEM de estar
+    // declarada aqui: passar a propriedade so do lado C++ deixa `sceneDoc` undefined e o
+    // sceneDoc.save() vira ReferenceError — que aborta o handler em silencio.
+    required property var sceneDoc
 
     color: "#141511"
     focus: true

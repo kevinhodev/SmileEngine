@@ -39,6 +39,13 @@ namespace SmileEditor {
     void SceneDocument::SetRenderer(RendererHandle _R) { Renderer = _R; }
 
     void SceneDocument::OnSceneLoaded(const QString& _ScenePath, bool _Additive) {
+        // Rastro do caminho da camada autorada em toda carga. Barato (uma linha por cena) e paga
+        // caro: quando o save nao acontecia, a ausencia de "Mapa salvo" nao dizia se o problema
+        // era o arquivo, o renderer ou o botao — e era o botao (a propriedade sceneDoc nao estava
+        // declarada no QML, entao a chamada virava ReferenceError e morria calada).
+        Smile::LogDebug("Mapa: carga de cena '" + _ScenePath.toStdString() +
+                        "' aditiva=" + (_Additive ? "sim" : "nao") +
+                        " renderer=" + (Renderer ? "pronto" : "ausente"));
         if (!Renderer) return;
         // Carga aditiva empilha outro asset na mesma cena; o .smap acompanha a cena PRINCIPAL,
         // igual ao .lights.json e ao .visibility.json.
@@ -181,9 +188,23 @@ namespace SmileEditor {
     }
 
     bool SceneDocument::save() {
-        if (!Renderer || MapPath.isEmpty()) return false;
+        // Nenhum caminho de saida daqui pode ser mudo: isto e uma acao do USUARIO. A primeira
+        // versao retornava false em silencio, e quando o save nao aconteceu (a propriedade
+        // sceneDoc nao estava declarada no QML) o log nao tinha uma linha sequer para mostrar
+        // onde parou — o unico sinal era a ausencia do "Mapa salvo".
+        if (!Renderer) {
+            Smile::LogError("Mapa: sem renderer; nada salvo");
+            return false;
+        }
+        if (MapPath.isEmpty()) {
+            Smile::LogError("Mapa: nenhuma cena carregada; nada salvo");
+            return false;
+        }
         auto Access = Renderer.Lock();
-        if (!Access) return false;
+        if (!Access) {
+            Smile::LogError("Mapa: renderer ocupado; nada salvo");
+            return false;
+        }
         const auto& List = Access->GetScene().Renderables();
 
         QJsonArray Overrides, Spawned;
