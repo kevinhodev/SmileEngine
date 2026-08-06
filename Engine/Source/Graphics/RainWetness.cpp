@@ -318,16 +318,16 @@ namespace Smile {
         c.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _TimeSec };
         // F4: a superficie usa o molhado ACUMULADO (Wetness, com inercia de secagem);
         // o instantaneo vai em RainParams1.z p/ aneis/splashes (param de "chovendo agora").
-        c.RainParams0    = { _Weather.Wetness, _Weather.PuddleAmount,
-                             _Weather.RippleStrength, _Weather.WetDarkening };
+        c.RainParams0    = { _Weather.GetWetness(), _Weather.GetPuddleAmount(),
+                             _Weather.GetRippleStrength(), _Weather.GetWetDarkening() };
         // F2: matriz do ULTIMO render do mapa (cacheado); bias/banda em unidades de depth
         // do ortho (range vertical kOccUp+kOccDown). Sem mapa ainda = desligado (tudo molha).
         const f32 OccRange = kOccUp + kOccDown;
 
-        const f32 Scale  = _Weather.PuddleScale > 1e-3f ? _Weather.PuddleScale : 1.0f;
-        c.RainParams1    = { 1.0f / Scale, 1.0f / OccRange, _Weather.RainAmount, 0.0f };
+        const f32 Scale  = _Weather.GetPuddleScale() > 1e-3f ? _Weather.GetPuddleScale() : 1.0f;
+        c.RainParams1    = { 1.0f / Scale, 1.0f / OccRange, _Weather.GetRainAmount(), 0.0f };
         c.RainOccMatrix = OccWorldToUVZ;
-        c.RainOccParams = { (_Weather.RainOcclusion && OccEverRendered) ? 1.0f : 0.0f,
+        c.RainOccParams = { (_Weather.GetRainOcclusion() && OccEverRendered) ? 1.0f : 0.0f,
                             0.75f / OccRange,            // bias: ~0.75 m acima ja e "coberto"
                             OccRange / 1.5f,             // banda suave de 1.5 m na transicao
                             static_cast<f32>(kOccSize) };
@@ -337,12 +337,12 @@ namespace Smile {
         // hora, mesmo com o chao ainda molhado pela inercia do Wetness).
         // F5: com particulas ON a cortina poupa os 2 cilindros proximos (CurtainParams.z);
         // as particulas so existem com o occlusion map valido (a colisao vem dele).
-        const bool ParticlesOn = _Weather.RainParticles && OccEverRendered &&
-                                 _Weather.RainAmount > 0.001f;
+        const bool ParticlesOn = _Weather.GetRainParticles() && OccEverRendered &&
+                                 _Weather.GetRainAmount() > 0.001f;
         ParticleCount = ParticlesOn
-            ? static_cast<u32>(static_cast<f32>(kMaxRainParticles) * _Weather.RainAmount)
+            ? static_cast<u32>(static_cast<f32>(kMaxRainParticles) * _Weather.GetRainAmount())
             : 0u;
-        c.CurtainParams  = { _Weather.CurtainAmount * _Weather.RainAmount, 12.0f,
+        c.CurtainParams  = { _Weather.GetCurtainAmount() * _Weather.GetRainAmount(), 12.0f,
                              ParticlesOn ? 1.0f : 0.0f, 0.0f };
         c.KeyLightDir    = { _KeyDir.X, _KeyDir.Y, _KeyDir.Z, 0.0f };
         c.KeyLightColor  = { _KeyColorTimesInt.X, _KeyColorTimesInt.Y, _KeyColorTimesInt.Z, 0.0f };

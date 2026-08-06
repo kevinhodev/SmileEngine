@@ -8,6 +8,7 @@
 #include "SmileEditor/SmileLogoImageProvider.h"
 #include "SmileEditor/StatusBridge.h"
 #include "SmileEditor/TimeOfDayBridge.h"
+#include "SmileEditor/RenderSettingsBridge.h"
 #include "SmileEditor/LightsBridge.h"
 #include "SmileEditor/SceneOutlinerBridge.h"
 #include "SmileEditor/MaterialsBridge.h"
@@ -16,6 +17,7 @@
 #include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Graphics/D3D12Device.h"
 
 #include <QAction>
@@ -91,6 +93,7 @@ namespace SmileEditor {
         LightsBr   = new LightsBridge(this);          // acoes/props de luz (renderer depois)
         OutlinerBr = new SceneOutlinerBridge(this);   // Scene Outliner (renderer depois)
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
+        RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
         connect(LightsBr, &LightsBridge::LightsChanged,
@@ -116,8 +119,8 @@ namespace SmileEditor {
         // O oceano pode ser ligado tanto no Outliner quanto na janela de settings.
         // Propaga a invalidação nos dois sentidos para nenhum painel manter cache stale.
         connect(OutlinerBr, &SceneOutlinerBridge::EnvChanged,
-                Viewport, &ViewportWidget::OceanSettingsChanged);
-        connect(Viewport, &ViewportWidget::OceanSettingsChanged,
+                RenderBr, &RenderSettingsBridge::OceanSettingsChanged);
+        connect(RenderBr, &RenderSettingsBridge::OceanSettingsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Refresh);
         // Splash: etapas do boot do renderer e rede de seguranca — se a render thread morrer
         // (falha de init ou parada precoce), a splash sai junto em vez de ficar por cima.
@@ -490,6 +493,18 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
 
+        // Del / Ctrl+D vindos do viewport (ver os sinais no ViewportWidget.h). Repetem o
+        // despacho do SceneOutlinerPanel.qml em vez de generaliza-lo porque as duas selecoes
+        // sao mutuamente exclusivas: no maximo um dos ramos existe em cada momento.
+        connect(Viewport, &ViewportWidget::DeleteSelectionRequested, this, [this] {
+            if (OutlinerBr && OutlinerBr->MeshSelected()) { OutlinerBr->deleteSelectedMesh(); return; }
+            if (LightsBr && LightsBr->SelectedIndex() >= 0) LightsBr->removeLight(LightsBr->SelectedIndex());
+        });
+        connect(Viewport, &ViewportWidget::DuplicateSelectionRequested, this, [this] {
+            if (OutlinerBr && OutlinerBr->MeshSelected()) { OutlinerBr->duplicateSelectedMesh(); return; }
+            if (LightsBr && LightsBr->SelectedIndex() >= 0) LightsBr->duplicateLight(LightsBr->SelectedIndex());
+        });
+
         // ---- Atalhos globais (ApplicationShortcut: valem com o foco no viewport, nao so na barra).
         // Disparam o mesmo caminho dos menus (chamam o MenuBridge -> sinal -> handler acima).
         auto AddShortcut = [this](const QKeySequence& Seq, auto Slot) {
@@ -549,6 +564,9 @@ namespace SmileEditor {
         ToolbarProperties.insert(
             QStringLiteral("viewportModel"),
             QVariant::fromValue(static_cast<QObject*>(Viewport)));
+        ToolbarProperties.insert(
+            QStringLiteral("renderModel"),
+            QVariant::fromValue(static_cast<QObject*>(RenderBr)));
 
         QQuickWidget* Toolbar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ViewportToolbar.qml"),
@@ -615,6 +633,7 @@ namespace SmileEditor {
             QStringLiteral("SceneOutlinerPanel.qml"),
             { { QStringLiteral("outlinerModel"),  OutlinerBr },
               { QStringLiteral("lightsModel"),    LightsBr },
+              { QStringLiteral("renderModel"),    RenderBr },
               { QStringLiteral("viewportModel"),  Viewport } },
             LightsDock);
         OutlinerPanel->setObjectName("SceneOutlinerPanel");
@@ -644,6 +663,13 @@ namespace SmileEditor {
         // renderer segue no hash procedural.
         Viewport->GetRenderer()->LoadStarCatalog(
             QString(SMILE_ASSETS_DIR "/Sky/stars.sstars").toStdWString());
+
+        // Knobs de render: so precisa do handle. Sem Refresh por frame de proposito — knob nao
+        // muda sozinho, so por acao do usuario, e cada setter ja emite o sinal do dominio dele.
+        if (RenderBr) {
+            RenderBr->SetRenderer(Viewport->GetRenderer());
+            RenderBr->SetViewport(Viewport);
+        }
 
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {
@@ -705,7 +731,7 @@ namespace SmileEditor {
 
         // Textos SEM separador inicial — a StatusBar.qml os junta com "  |  ".
         QString OceanText;
-        if (RendererAccess->GetUseWater()) {
+        if (RendererAccess->Settings().GetUseWater()) {
             const auto& WaterStats = RendererAccess->GetWater().GetDebugStats();
             OceanText = QString("Ocean GPU: %1/%2 tiles  |  cull F:%3 C:%4 O:%5  |  draws:%6 L:%7 R:%8")
                 .arg(WaterStats.ValidTileCount)
@@ -744,6 +770,7 @@ namespace SmileEditor {
             QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("SettingsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
+                  { QStringLiteral("renderModel"), RenderBr },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
                 Dialog);
             Panel->setObjectName(QStringLiteral("SettingsPanel"));

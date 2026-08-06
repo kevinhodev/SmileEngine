@@ -14,19 +14,29 @@ Rectangle {
     required property var outlinerModel
     required property var lightsModel
     required property var viewportModel
+    required property var renderModel
 
     color: "#141511"
     focus: true
 
     // Atalhos (valem quando o foco NAO esta num campo de texto do painel):
-    // Del remove a luz, Ctrl+D duplica, setas navegam a arvore, F enquadra a camera.
+    // Del remove, Ctrl+D duplica, setas navegam a arvore, F enquadra a camera.
+    // Luz e mesh sao selecoes mutuamente exclusivas, entao cada tecla so pode cair num
+    // dos dois ramos — quem decide e qual das duas esta ativa.
     Keys.onPressed: (event) => {
         if (event.key === Qt.Key_Delete && root.hasLightSelection) {
             lightsModel.removeLight(lightsModel.selectedIndex)
             event.accepted = true
+        } else if (event.key === Qt.Key_Delete && root.hasMeshSelection) {
+            outlinerModel.deleteSelectedMesh()
+            event.accepted = true
         } else if (event.key === Qt.Key_D && (event.modifiers & Qt.ControlModifier)
                    && root.hasLightSelection) {
             lightsModel.duplicateLight(lightsModel.selectedIndex)
+            event.accepted = true
+        } else if (event.key === Qt.Key_D && (event.modifiers & Qt.ControlModifier)
+                   && root.hasMeshSelection) {
+            outlinerModel.duplicateSelectedMesh()
             event.accepted = true
         } else if (event.key === Qt.Key_Up) {
             outlinerModel.selectStep(-1)
@@ -468,7 +478,7 @@ Rectangle {
                 readonly property bool isBranch: isGroup || isAsset
                 // olho: ambiente liga nos toggles reais (bindings vivos); luz/mesh/pasta
                 // usam o estado da linha (Enabled da luz / Visible do renderable)
-                readonly property bool eyeOn: isEnv ? (sceneIdx === 1 ? viewportModel.cloudsEnabled
+                readonly property bool eyeOn: isEnv ? (sceneIdx === 1 ? renderModel.cloudsEnabled
                                                      : sceneIdx === 2 ? outlinerModel.oceanVisible
                                                      : sceneIdx === 3 ? outlinerModel.terrainVisible
                                                      : true)
@@ -640,6 +650,29 @@ Rectangle {
                         onClicked: lightsModel.removeLight(rowItem.sceneIdx)
                     }
 
+                    // acoes de mesh no hover. Selecionam a linha antes de agir: as duas acoes
+                    // do outliner operam sobre a SELECAO (o Id que o renderer tem ancorado), e
+                    // clicar no botao de uma linha ja significa escolher aquela linha.
+                    IconButton {
+                        visible: rowItem.isMesh && rowHover.hovered
+                        anchors.verticalCenter: parent.verticalCenter
+                        icon: "copy"; tip: "Duplicar"
+                        onClicked: {
+                            outlinerModel.selectRow(rowItem.index)
+                            outlinerModel.duplicateSelectedMesh()
+                        }
+                    }
+                    IconButton {
+                        visible: rowItem.isMesh && rowHover.hovered
+                        anchors.verticalCenter: parent.verticalCenter
+                        icon: "trash-2"; tip: "Remover"
+                        hoverTint: "#e07a6a"
+                        onClicked: {
+                            outlinerModel.selectRow(rowItem.index)
+                            outlinerModel.deleteSelectedMesh()
+                        }
+                    }
+
                     // olho de visibilidade
                     EyeButton {
                         visible: rowItem.hasEye
@@ -657,7 +690,7 @@ Rectangle {
                             else if (rowItem.isMesh || rowItem.isAsset)
                                 outlinerModel.toggleEye(rowItem.index)
                             else if (rowItem.sceneIdx === 1)
-                                viewportModel.SetCloudsEnabled(!viewportModel.cloudsEnabled)
+                                renderModel.SetCloudsEnabled(!renderModel.cloudsEnabled)
                             else if (rowItem.sceneIdx === 2)
                                 outlinerModel.oceanVisible = !outlinerModel.oceanVisible
                             else if (rowItem.sceneIdx === 3)
@@ -1137,7 +1170,8 @@ Rectangle {
 
                 Text {
                     width: parent.width
-                    text: "Duplo-clique na árvore (ou F) enquadra a câmera."
+                    text: "Duplo-clique na árvore (ou F) enquadra a câmera. "
+                        + "Ctrl+D duplica, Del remove."
                     color: root.textMuted
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 9

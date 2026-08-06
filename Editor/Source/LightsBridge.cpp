@@ -1,5 +1,6 @@
 #include "SmileEditor/LightsBridge.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 
@@ -202,7 +203,7 @@ namespace SmileEditor {
         // reflexoes — ACUMULOU energia da luz antiga, e o DDGI com Hysteresis 0,99 seguraria essa
         // energia por muitos frames: o slider pareceria inerte e a calibracao seria contra um
         // estado que o usuario ja mandou embora. Coalescido (uma vez por frame, no Renderer).
-        if (Renderer) Renderer->MarkIndirectLightingDirty();
+        if (Renderer) Renderer->Settings().MarkIndirectLightingDirty();
         Touch(false);
     }
     void LightsBridge::SetInnerConeDeg(double _V) {

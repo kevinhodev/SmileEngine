@@ -122,6 +122,14 @@ namespace SmileEditor {
         Q_INVOKABLE bool saveVisibility();
         Q_INVOKABLE void closePanel() { emit CloseRequested(); }
 
+        // Del / Ctrl+D sobre uma MESH selecionada (o equivalente de luz mora no LightsBridge).
+        // Falam por Id, nao por indice: o Renderer remove/copia e reancora tudo que enderecava
+        // a cena por indice, entao a linha selecionada aqui ja nao vale depois da chamada.
+        // A copia nasce no FIM da lista, ou seja, cai na pasta residual "Outros" — e o que ela
+        // e: um objeto da CENA, nao mais parte do asset importado que a originou.
+        Q_INVOKABLE bool deleteSelectedMesh();
+        Q_INVOKABLE bool duplicateSelectedMesh();
+
     public slots:
         void Rebuild();  // estrutura mudou (cena/luzes) — reconstroi a lista flat
         void Refresh();  // FrameReady: detecta selecao por picking e toggles externos
@@ -157,6 +165,10 @@ namespace SmileEditor {
 
         void RebuildRows(QVector<FRow>& Out) const;
         bool RowSelected(const FRow& Row) const;
+        // Um renderavel saiu da lista no indice dado: as pastas sao ranges [Begin,End) sobre
+        // ela, entao toda fronteira depois do buraco recua um. Sem isto a ultima mesh de cada
+        // asset vazaria para a pasta seguinte.
+        void ShiftAssetRangesAfterRemoval(int RemovedIndex);
         // Troca Rows preservando o scroll: mesma estrutura -> dataChanged; senao reset.
         void ApplyRows(QVector<FRow>&& NewRows);
         bool MatchesSearch(const QString& Name) const;

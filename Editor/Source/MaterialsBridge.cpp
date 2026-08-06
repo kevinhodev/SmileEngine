@@ -1,6 +1,7 @@
 #include "SmileEditor/MaterialsBridge.h"
 
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Core/Logger.h"
 
 #include <algorithm>
@@ -342,7 +343,7 @@ namespace SmileEditor {
             // O sidecar reescreve cor base, emissivo, rough/metal, cutoff e shading model — tudo
             // que o InstanceGeo copia. Sem isto a persistencia so valia p/ o raster: a cena reabria
             // com o material editado na tela e o GI iluminando pelos valores cozidos.
-            if (Renderer) Renderer->MarkMaterialRTStateDirty();
+            if (Renderer) Renderer->Settings().MarkMaterialRTStateDirty();
 
             // Texturas trocadas: recarrega do path e reaplica no slot (falha -> slot segue
             // no mapa cozido, so loga). Cargas aditivas pulam quem ja tem override aplicado.
@@ -550,7 +551,7 @@ namespace SmileEditor {
         TouchSelected(_Domain);
         // Coalescido: o Renderer aplica uma vez no proximo frame. Chamar o Notify direto aqui
         // custaria um Flush da fila + reset de todos os historicos POR TICK de slider.
-        if (Renderer) Renderer->MarkMaterialRTStateDirty();
+        if (Renderer) Renderer->Settings().MarkMaterialRTStateDirty();
     }
 
     void MaterialsBridge::MarkDirty() {
@@ -928,7 +929,7 @@ namespace SmileEditor {
         // HasAlbedo governa o alpha-test dos RAIOS (RTAlphaTest.hlsli desiste quando e 0). Sem
         // re-subir o snapshot: adicionar albedo num material sem textura deixava a folhagem como
         // quad solido so no RT, e limpar o slot mantinha o raio amostrando o descritor antigo.
-        if (Renderer) Renderer->MarkMaterialRTStateDirty();
+        if (Renderer) Renderer->Settings().MarkMaterialRTStateDirty();
     }
 
     Smile::FTexture* MaterialsBridge::LoadTextureCached(const QString& _Path, int _Slot) {

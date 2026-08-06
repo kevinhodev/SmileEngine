@@ -1,5 +1,6 @@
 #include "SmileEditor/SceneOutlinerBridge.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 
@@ -34,10 +35,10 @@ namespace SmileEditor {
         if (Renderer) {
             CachedSelMesh  = Renderer->GetSelectedObject();
             CachedSelLight = Renderer->GetSelectedLight();
-            CachedClouds    = Renderer->GetUseClouds();
-            CachedOcean     = Renderer->GetUseWater();
+            CachedClouds    = Renderer->Settings().GetUseClouds();
+            CachedOcean     = Renderer->Settings().GetUseWater();
             CachedTerrain   = Renderer->GetTerrain().IsLoaded();
-            CachedTerrainOn = Renderer->GetUseTerrain();
+            CachedTerrainOn = Renderer->Settings().GetUseTerrain();
         }
         Rebuild();
         emit AvailableChanged();
@@ -139,9 +140,9 @@ namespace SmileEditor {
                 // Olho: o estado vem por binding direto no QML (viewportModel.cloudsEnabled /
                 // oceanVisible / terrainVisible), REnabled aqui e so fallback.
                 R.HasEye   = (E.Id != EnvSol);
-                R.Enabled  = (E.Id == EnvNuvens)  ? Renderer->GetUseClouds()
-                           : (E.Id == EnvOceano)  ? Renderer->GetUseWater()
-                           : (E.Id == EnvTerreno) ? Renderer->GetUseTerrain() : true;
+                R.Enabled  = (E.Id == EnvNuvens)  ? Renderer->Settings().GetUseClouds()
+                           : (E.Id == EnvOceano)  ? Renderer->Settings().GetUseWater()
+                           : (E.Id == EnvTerreno) ? Renderer->Settings().GetUseTerrain() : true;
                 Children.push_back(R);
             }
             if (!Searching || !Children.isEmpty()) {
@@ -343,25 +344,25 @@ namespace SmileEditor {
     }
 
     bool SceneOutlinerBridge::OceanVisible() const {
-        return Renderer ? Renderer->GetUseWater() : false;
+        return Renderer ? Renderer->Settings().GetUseWater() : false;
     }
 
     void SceneOutlinerBridge::SetOceanVisible(bool _V) {
-        if (!Renderer || Renderer->GetUseWater() == _V) return;
-        Renderer->SetUseWater(_V);
+        if (!Renderer || Renderer->Settings().GetUseWater() == _V) return;
+        Renderer->Settings().SetUseWater(_V);
         CachedOcean = _V;
         Rebuild(); // REnabled da linha do oceano
         emit EnvChanged();
     }
 
     bool SceneOutlinerBridge::TerrainVisible() const {
-        return Renderer ? Renderer->GetUseTerrain() : true;
+        return Renderer ? Renderer->Settings().GetUseTerrain() : true;
     }
 
     void SceneOutlinerBridge::SetTerrainVisible(bool _V) {
-        if (!Renderer || Renderer->GetUseTerrain() == _V) return;
+        if (!Renderer || Renderer->Settings().GetUseTerrain() == _V) return;
         auto RendererAccess = Renderer.Lock();
-        Renderer->SetUseTerrain(_V); // gates de prepass/G-buffer/CSM do FTerrain
+        Renderer->Settings().SetUseTerrain(_V); // gates de prepass/G-buffer/CSM do FTerrain
         // O chao do GI e o proxy RaytracingOnly na TLAS — esconde junto, senao o DDGI
         // continua quicando luz num terreno invisivel.
         bool Bumped = false;
@@ -493,6 +494,63 @@ namespace SmileEditor {
         emit SelectionChanged();
     }
 
+    void SceneOutlinerBridge::ShiftAssetRangesAfterRemoval(int _RemovedIndex) {
+        for (FAssetRange& Range : Assets) {
+            if (Range.Begin > _RemovedIndex) --Range.Begin;
+            if (Range.End   > _RemovedIndex) --Range.End;
+        }
+    }
+
+    bool SceneOutlinerBridge::deleteSelectedMesh() {
+        if (!Renderer) return false;
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess) return false;
+
+        const int              Index = RendererAccess->GetSelectedObject();
+        const Smile::u64       Id    = RendererAccess->GetSelectedObjectId();
+        if (Index < 0 || Id == 0) return false;
+
+        const QString Name = QString::fromStdString(
+            RendererAccess->GetScene().Renderables()[(size_t)Index].Name);
+        if (!RendererAccess->RemoveRenderable(Id)) return false;
+        RendererAccess->ClearSelection();
+
+        ShiftAssetRangesAfterRemoval(Index);
+        CachedSelMesh = -1;
+        // A visibilidade persistida e por indice dentro do asset; com a lista deslocada o json
+        // salvo antes da remocao ja nao descreve esta cena.
+        MarkDirty();
+        Rebuild();
+        emit SelectionChanged();
+        Smile::LogInfo("Objeto removido da cena: " + Name.toStdString());
+        return true;
+    }
+
+    bool SceneOutlinerBridge::duplicateSelectedMesh() {
+        if (!Renderer) return false;
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess) return false;
+
+        const Smile::u64 Id = RendererAccess->GetSelectedObjectId();
+        if (Id == 0) return false;
+
+        const Smile::u64 NewId = RendererAccess->DuplicateRenderable(Id);
+        if (NewId == 0) return false;
+
+        // Seleciona a copia: e o que o usuario vai querer arrastar em seguida, e serve de
+        // confirmacao visual de que ela existe (a copia nasce exatamente sobre o original).
+        const int NewIndex = RendererAccess->GetScene().IndexOfRenderable(NewId);
+        RendererAccess->SetSelectedObject(NewIndex);
+        RendererAccess->ClearLightSelection();
+        CachedSelMesh = NewIndex;
+
+        MarkDirty();
+        Rebuild();
+        RevealSelection();
+        emit SelectionChanged();
+        return true;
+    }
+
     void SceneOutlinerBridge::toggleEye(int _Row) {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
         auto RendererAccess = Renderer.Lock();
@@ -522,7 +580,7 @@ namespace SmileEditor {
                 if (!Renderables[(size_t)I].RaytracingOnly)
                     Renderables[(size_t)I].Visible = !AnyVisible;
         } else if (Row.Kind == KEnv && Row.SceneIdx == EnvTerreno) {
-            SetTerrainVisible(!Renderer->GetUseTerrain());
+            SetTerrainVisible(!Renderer->Settings().GetUseTerrain());
             return;
         } else {
             return;
@@ -659,8 +717,8 @@ namespace SmileEditor {
 
         if (Root.contains(QStringLiteral("terrainVisible"))) {
             const bool V = Root.value(QStringLiteral("terrainVisible")).toBool(true);
-            if (Renderer->GetUseTerrain() != V) {
-                Renderer->SetUseTerrain(V);
+            if (Renderer->Settings().GetUseTerrain() != V) {
+                Renderer->Settings().SetUseTerrain(V);
                 for (auto& R : Renderables)
                     if (R.RaytracingOnly) R.Visible = V;
                 CachedTerrainOn = V;
@@ -722,7 +780,7 @@ namespace SmileEditor {
 
         QJsonObject Root;
         Root[QStringLiteral("version")]        = 1;
-        Root[QStringLiteral("terrainVisible")] = Renderer->GetUseTerrain();
+        Root[QStringLiteral("terrainVisible")] = Renderer->Settings().GetUseTerrain();
         Root[QStringLiteral("assets")]         = AssetsArr;
 
         QFile File(JsonPath);
@@ -764,9 +822,9 @@ namespace SmileEditor {
         }
 
         // Toggles de ambiente mudaram por fora (SettingsWindow etc.).
-        const bool Clouds    = Renderer->GetUseClouds();
-        const bool Ocean     = Renderer->GetUseWater();
-        const bool TerrainOn = Renderer->GetUseTerrain();
+        const bool Clouds    = Renderer->Settings().GetUseClouds();
+        const bool Ocean     = Renderer->Settings().GetUseWater();
+        const bool TerrainOn = Renderer->Settings().GetUseTerrain();
         if (Clouds != CachedClouds || Ocean != CachedOcean || TerrainOn != CachedTerrainOn) {
             CachedClouds    = Clouds;
             CachedOcean     = Ocean;

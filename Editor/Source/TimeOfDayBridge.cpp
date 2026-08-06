@@ -1,5 +1,6 @@
 #include "SmileEditor/TimeOfDayBridge.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -60,12 +61,12 @@ namespace SmileEditor {
 
     double TimeOfDayBridge::SunElevationDeg() const {
         // TOD off: le a direcao manual corrente do renderer (a que de fato ilumina a cena).
-        if (Renderer && !Enabled()) return std::asin(std::clamp((double)Renderer->GetSunDirection().Y, -1.0, 1.0)) * kToDeg;
+        if (Renderer && !Enabled()) return std::asin(std::clamp((double)Renderer->Settings().GetSunDirection().Y, -1.0, 1.0)) * kToDeg;
         return sunElevationAt(TimeHours());
     }
     double TimeOfDayBridge::SunAzimuthDeg() const {
         if (Renderer && !Enabled()) {
-            const auto D = Renderer->GetSunDirection();
+            const auto D = Renderer->Settings().GetSunDirection();
             double Az = std::atan2((double)D.X, (double)D.Z) * kToDeg;
             return Az < 0.0 ? Az + 360.0 : Az;
         }
@@ -171,13 +172,13 @@ namespace SmileEditor {
     }
     void TimeOfDayBridge::SetManualAzimuthDeg(double _V) {
         ManualAz = _V;
-        if (Renderer) Renderer->SetSunAzimuthElevation((float)ManualAz, (float)ManualEl);
+        if (Renderer) Renderer->Settings().SetSunAzimuthElevation((float)ManualAz, (float)ManualEl);
         emit StateChanged();
         emit TimeChanged();
     }
     void TimeOfDayBridge::SetManualElevationDeg(double _V) {
         ManualEl = std::clamp(_V, -20.0, 90.0);
-        if (Renderer) Renderer->SetSunAzimuthElevation((float)ManualAz, (float)ManualEl);
+        if (Renderer) Renderer->Settings().SetSunAzimuthElevation((float)ManualAz, (float)ManualEl);
         emit StateChanged();
         emit TimeChanged();
     }
@@ -199,7 +200,7 @@ namespace SmileEditor {
 
     void TimeOfDayBridge::SyncManualFromRenderer() {
         if (!Renderer) return;
-        const auto D = Renderer->GetSunDirection();
+        const auto D = Renderer->Settings().GetSunDirection();
         ManualEl = std::asin(std::clamp((double)D.Y, -1.0, 1.0)) * kToDeg;
         ManualAz = std::atan2((double)D.X, (double)D.Z) * kToDeg;
         if (ManualAz < 0.0) ManualAz += 360.0;

@@ -1,5 +1,6 @@
 #include "SmileEditor/RenderThread.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Core/Logger.h"
 #include <Windows.h>
 #include <atomic>
@@ -122,7 +123,7 @@ namespace SmileEditor {
                     Renderer->SetInitProgressCallback({});
                     // Reaplica a preferencia que existia antes do contexto e cria os targets
                     // internos uma unica vez ja na thread proprietaria.
-                    Renderer->SetUpscaler(Renderer->GetUpscaler());
+                    Renderer->Settings().SetUpscaler(Renderer->Settings().GetUpscaler());
                 }
                 InitializationSucceeded = true;
             } catch (const std::exception& Error) {

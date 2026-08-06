@@ -22,6 +22,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/LightsBridge.h
     Include/SmileEditor/SceneOutlinerBridge.h
     Include/SmileEditor/MaterialsBridge.h
+    Include/SmileEditor/RenderSettingsBridge.h
 )
 
 set(EDITOR_SOURCES
@@ -44,6 +45,7 @@ set(EDITOR_SOURCES
     Source/LightsBridge.cpp
     Source/SceneOutlinerBridge.cpp
     Source/MaterialsBridge.cpp
+    Source/RenderSettingsBridge.cpp
 )
 
 # Arquivos de interface aparecem no projeto do Visual Studio para edicao e navegacao.

@@ -855,6 +855,10 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 - **O grafo de invalidação da §5.4 é escrito à mão.** São ~8 listas parcialmente sobrepostas de
   "quem cai junto". Já houve caso de knob que passou a entrar no sinal gravado sem o setter
   acompanhar. Candidato natural a virar dado (`enum class EHistoryDomain` + máscara).
+  *Auditado em 2026-08-05 — ver `KNOBS-AUDIT.md`:* são **quatro** padrões de acesso ao mesmo
+  estado (inclusive campo público cru em `FWeather`), 58 knobs chegam por reach-through sem
+  passar pelo grafo, e **4 divergem** do critério que o próprio código aplica em knobs irmãos.
+  O documento traz a taxonomia de 3 tiers, os domínios propostos e a fila de migração.
 - **Não existe `IRenderPass`.** A convenção de subsistema (§1) é real mas não enforçada, e já
   divergiu: `IsReady()` vs `IsInitialized()`; `Execute()` vs `Record*()`; `InvalidateHistory()`
   vs `ResetHistory()` vs `ResetHistoryOnce()` vs `InvalidateResults()`; `Resize()` vs

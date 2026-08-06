@@ -25,6 +25,7 @@ namespace SmileEditor {
     class LightsBridge;
     class SceneOutlinerBridge;
     class MaterialsBridge;
+    class RenderSettingsBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -90,6 +91,7 @@ namespace SmileEditor {
         SceneOutlinerBridge*  OutlinerBr  = nullptr; // ponte C++ -> SceneOutlinerPanel.qml
         QDockWidget*          LightsDock  = nullptr; // dock lateral do Scene Outliner ("Cena")
         MaterialsBridge*      MaterialsBr = nullptr; // ponte C++ -> MaterialsWindow.qml
+        RenderSettingsBridge* RenderBr   = nullptr; // ponte C++ -> knobs do SettingsWindow.qml
         QPointer<QDialog>     MaterialsDlg;          // janela flutuante do Editor de Materiais
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;

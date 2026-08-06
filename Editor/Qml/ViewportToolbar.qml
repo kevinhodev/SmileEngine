@@ -8,6 +8,7 @@ Rectangle {
     id: root
 
     required property var viewportModel
+    required property var renderModel
 
     color: "#131410"
     implicitWidth: 900
@@ -461,45 +462,45 @@ Rectangle {
             ToggleRow {
                 x: 8; y: 150; width: 264; height: 28
                 label: "DDGI"; detail: "radiance cache"
-                checked: root.viewportModel.ddgiEnabled
-                onToggled: root.viewportModel.ToggleDDGI()
+                checked: root.renderModel.ddgiEnabled
+                onToggled: root.renderModel.ToggleDDGI()
             }
             ToggleRow {
                 x: 8; y: 178; width: 264; height: 28
                 label: "ReSTIR GI"
-                checked: root.viewportModel.restirGIEnabled
-                onToggled: root.viewportModel.ToggleReSTIRGI()
+                checked: root.renderModel.restirGIEnabled
+                onToggled: root.renderModel.ToggleReSTIRGI()
             }
             ToggleRow {
                 x: 8; y: 206; width: 264; height: 28
                 label: "ReSTIR visibility"; detail: "raio extra"
-                checked: root.viewportModel.restirGIVisibilityEnabled
-                interactive: root.viewportModel.restirGIEnabled
-                onToggled: root.viewportModel.ToggleReSTIRGIVisibility()
+                checked: root.renderModel.restirGIVisibilityEnabled
+                interactive: root.renderModel.restirGIEnabled
+                onToggled: root.renderModel.ToggleReSTIRGIVisibility()
             }
             ToggleRow {
                 x: 8; y: 234; width: 264; height: 28
                 label: "ReGIR"; detail: "hits secundários"
-                checked: root.viewportModel.reGIREnabled
-                onToggled: root.viewportModel.ToggleReGIR()
+                checked: root.renderModel.reGIREnabled
+                onToggled: root.renderModel.ToggleReGIR()
             }
             ToggleRow {
                 x: 8; y: 262; width: 264; height: 28
                 label: "Folhagem sombreia GI"; detail: "alpha-test"
-                checked: root.viewportModel.giFoliageShadows
-                onToggled: root.viewportModel.ToggleGIFoliageShadows()
+                checked: root.renderModel.giFoliageShadows
+                onToggled: root.renderModel.ToggleGIFoliageShadows()
             }
             ToggleRow {
                 x: 8; y: 290; width: 264; height: 28
                 label: "GTAO"
-                checked: root.viewportModel.gtaoEnabled
-                onToggled: root.viewportModel.ToggleGTAO()
+                checked: root.renderModel.gtaoEnabled
+                onToggled: root.renderModel.ToggleGTAO()
             }
             ToggleRow {
                 x: 8; y: 318; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
-                checked: root.viewportModel.gtaoHalfRes
-                onToggled: root.viewportModel.ToggleGTAOHalfRes()
+                checked: root.renderModel.gtaoHalfRes
+                onToggled: root.renderModel.ToggleGTAOHalfRes()
             }
 
             Rectangle { x: 14; y: 350; width: 252; height: 1; color: "#23241d" }
@@ -513,8 +514,8 @@ Rectangle {
             ToggleRow {
                 x: 8; y: 378; width: 264; height: 28
                 label: "Reflexos RT"
-                checked: root.viewportModel.reflectionsEnabled
-                onToggled: root.viewportModel.ToggleReflections()
+                checked: root.renderModel.reflectionsEnabled
+                onToggled: root.renderModel.ToggleReflections()
             }
             // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
             // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.

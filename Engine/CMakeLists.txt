@@ -75,6 +75,8 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/VramTracker.h
     Include/Smile/Graphics/GpuProfiler.h
     Include/Smile/Graphics/Renderer.h
+    Include/Smile/Graphics/RenderSettings.h
+    Include/Smile/Graphics/HistoryDomain.h
 )
 
 # Header gerado pelo configure_file - listado a parte porque vive em CMAKE_BINARY_DIR
@@ -152,6 +154,7 @@ set(ENGINE_SOURCES
     Source/Graphics/VramTracker.cpp
     Source/Graphics/GpuProfiler.cpp
     Source/Graphics/Renderer.cpp
+    Source/Graphics/RenderSettings.cpp
 )
 
 add_library(SmileEngine STATIC
