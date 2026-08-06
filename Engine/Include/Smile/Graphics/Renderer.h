@@ -22,6 +22,7 @@
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/GBuffer.h"
+#include "Smile/Graphics/SceneTargets.h"
 #include "Smile/Graphics/DebugView.h"
 #include "Smile/Graphics/ShaderTimer.h"
 #include "Smile/Graphics/BvhDebugView.h"
@@ -431,7 +432,7 @@ namespace Smile {
         // ficou pronto desde a ultima chamada.
         bool ConsumeDebugPreview(std::vector<u8>& OutPixels);
 
-        u32  GetDepthSRVSlot() const         { return DepthSRVSlot; }
+        u32  GetDepthSRVSlot() const         { return Targets.DepthSRVSlot; }
 
         // Terreno (F1: renderizacao apenas). Carregado pelo sidecar <cena>.terrain.json no
         // LoadCookedScene, ou direto via LoadTerrain. O olho do outliner mora no FRenderSettings.
@@ -519,13 +520,21 @@ namespace Smile {
         // DDGI ali dentro reavaliam, em vez do atlas inteiro (ver FDDGI::InvalidateRegion).
         void OnSceneStructureChanged(const Vec3* ChangedMin = nullptr,
                                      const Vec3* ChangedMax = nullptr);
-        void CreateDepthBuffer();
         void CreateConstantBuffer();
-        void CreateHDRBuffers();
-        void CreateSceneCopies();
-        void CreateVelocityBuffer();
-        void CreateUpscaleMasks();
         void RecreateInternalTargets(); // recria RTs de cena em RenderWidth/Height (resize + render scale)
+
+        // === Alocacao sob demanda do NRD ==================================================
+        // As duas instancias (indireta e direta) somam ~336 MB de pools + IO na resolucao cheia
+        // — mais da METADE da categoria "GI e reflexos" — e eram alocadas incondicionalmente,
+        // inclusive no estado padrao, onde o denoiser pode ser DLSS-RR/None e os dois ReSTIR
+        // nascem desligados. Aqui cada instancia so existe enquanto tem consumidor.
+        bool WantNrdIndirect() const; // NRD selecionado + ReSTIR GI ligado + volume DDGI pronto
+        bool WantNrdDirect() const;   // NRD selecionado + ReSTIR DI ligado
+        void SetupNrdIndirect();      // (re)aloca a instancia indireta e os packs que a leem
+        void SetupNrdDirect();        // idem p/ a direta
+        // Reconcilia desejado x alocado. Chamada pelos setters de denoiser e dos dois ReSTIR
+        // (ver FRenderSettings); no-op quando nada mudou, entao e barata de chamar a mais.
+        void ReconcileNrdAllocation();
         void CreateDefaultMaterial();
         void CreateIBLDescriptorTable();
         void CreateDebugPreviewTargets();
@@ -557,17 +566,13 @@ namespace Smile {
 
         FScene Scene;
 
-        ComPtr<ID3D12Resource>   DepthBuffer;
-        FDescriptorHeap          DSVHeap;
-
         static constexpr u32     kInvalidSlot = 0xFFFFFFFFu;
-        u32                      DepthSRVSlot = kInvalidSlot;
 
-        ComPtr<ID3D12Resource>   NormalBuffer;
-        FDescriptorHeap          NormalRTVHeap;
-        u32                      NormalSRVSlot = kInvalidSlot;
-        D3D12_RESOURCE_STATES    NormalBufferState = D3D12_RESOURCE_STATE_COMMON;
-        void CreateNormalBuffer();
+        // Alvos da cena: profundidade, normais, velocity, mascaras do upscaler, cor HDR e as
+        // copias p/ refracao/SSR. Vivem em RenderWidth/Height e sao recriados juntos no resize
+        // e na troca de render scale — ver RecreateInternalTargets.
+        FSceneTargets            Targets;
+
 
         void SetupReflectionsForScene();
 
@@ -634,18 +639,6 @@ namespace Smile {
         // Motion vector buffer (RG16F): escrito no geometry pass (SV_Target3), lido pelo TAA.
         // RT proprio (lifecycle desacoplado das transicoes do GBuffer, que fazem ping-pong p/ as
         // reflexoes). Velocidade em UV = curUV(sem jitter) - prevUV.
-        ComPtr<ID3D12Resource>   VelocityBuffer;
-        FDescriptorHeap          VelocityRTVHeap;   // 1 RTV
-        u32                      VelocitySRVSlot = 0xFFFFFFFFu;
-        u32                      VelocityUavSlot = 0xFFFFFFFFu; // UAV p/ o passe de velocity do background
-        D3D12_RESOURCE_STATES    VelocityState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        // FSR 3.1: sinais render-res de conteúdo sem histórico confiável. São MRTs da água e do
-        // forward transparente; permanecem RT durante a cena e viram COMPUTE_READ no dispatch.
-        ComPtr<ID3D12Resource>   UpscaleReactiveMask;
-        ComPtr<ID3D12Resource>   UpscaleCompositionMask;
-        FDescriptorHeap          UpscaleMaskRTVHeap; // [0]=reactive, [1]=composition
-        D3D12_RESOURCE_STATES    UpscaleReactiveState = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        D3D12_RESOURCE_STATES    UpscaleCompositionState = D3D12_RESOURCE_STATE_RENDER_TARGET;
         // Perfil unico de epsilons de raio, empurrado p/ ReSTIR/Reflexoes/DDGI todo frame.
         FRayEpsilonProfile       RayEps;
         // Transform por-objeto do frame anterior, indexado pelo indice da cena (Scene.Renderables()).
@@ -685,9 +678,6 @@ namespace Smile {
         f32  RenderScale       = 1.0f; // SSAA: cena em swapchain*RenderScale; backbuffer nativo
         u32  LastVisibleCount  = 0;
 
-        ComPtr<ID3D12Resource>   HDRColorBuffer;
-        FDescriptorHeap          HDRRTVHeap;
-        u32                      HDRSRVSlot = kInvalidSlot;
         FPostProcessor           PostProcessor;
 
         FObjectPicker            ObjectPicker;
@@ -864,18 +854,6 @@ namespace Smile {
         bool              UseTerrain = true; // olho do Scene Outliner (so raster; proxy RT
                                              // e escondido pelo Visible do renderable proxy)
 
-        ComPtr<ID3D12Resource> SceneColorCopy;
-        ComPtr<ID3D12Resource> SceneDepthCopy;
-        u32                    SceneCopyTableStart = kInvalidSlot;
-        // Mip 0 preserva a cena HDR sem agua; os demais formam a piramide de radiancia usada
-        // pelo SSR de contato para integrar o footprint do lobo especular.
-        static constexpr u32   kSceneColorMipMax = 16;
-        u32                    SceneColorMipCount = 1;
-        u32                    SceneColorMipSRVStart = kInvalidSlot;
-        u32                    SceneColorMipUAVStart = kInvalidSlot;
-        D3D12_RESOURCE_STATES  SceneColorMipStates[kSceneColorMipMax]{};
-        FComputePipeline       SceneColorMipPSO;
-        D3D12_RESOURCE_STATES  SceneDepthCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
 
         bool            ShowSkybox    = true;
         f32             IBLIntensity  = 1.0f;

@@ -849,9 +849,14 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 
 ### Estrutural
 
-- **`Renderer` é um God object.** `Renderer.h` tem 1198 linhas, 69 `#include` de subsistemas e
-  ~90 membros; `Renderer.cpp` tem 4159 linhas, das quais **`RenderFrame()` sozinho ocupa ~2500**
-  (≈40 escopos de GPU numa única função). Toda feature nova toca esse arquivo.
+- **`Renderer` é um God object.** *Em desmembramento desde 2026-08-05 — plano e fila em
+  `KNOBS-AUDIT.md`.* Já saíram os knobs (`FRenderSettings`, com `HistoryDomain.h` no lugar das
+  19 listas de invalidação manuais), o espelho deles no editor (`RenderSettingsBridge`, que
+  tirou 92 dos 134 `Q_PROPERTY` do `ViewportWidget`) e os alvos de cena (`FSceneTargets`: 29
+  membros + as 6 funções de criação). `Renderer.h` foi de 1198 para **873** linhas.
+  **O núcleo continua de pé:** `Renderer.cpp` tem ~4000 linhas e **`RenderFrame()` sozinho
+  ocupa ~2500** (≈40 escopos de GPU numa única função) — é o próximo alvo, via `FFrameContext`
+  (os 115 locais de nível 0 da função) e só então a extração das fases.
 - **O grafo de invalidação da §5.4 é escrito à mão.** São ~8 listas parcialmente sobrepostas de
   "quem cai junto". Já houve caso de knob que passou a entrar no sinal gravado sem o setter
   acompanhar. Candidato natural a virar dado (`enum class EHistoryDomain` + máscara).

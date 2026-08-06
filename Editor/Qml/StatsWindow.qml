@@ -29,6 +29,7 @@ Rectangle {
     readonly property color amber: C.Theme.amber
     readonly property color warn: C.Theme.warn
     property var expandedPasses: ({})
+    property var expandedVram: ({})
     property var gpuTimingSnapshot: []
     property bool passInteractionActive: false
 
@@ -48,6 +49,22 @@ Rectangle {
             next[key] = expandedPasses[key]
         next[name] = expanded
         expandedPasses = next
+    }
+
+    // Mesmo par de funcoes dos passes, para as categorias de VRAM. Persistir por NOME e o que
+    // faz o estado sobreviver ao vramBreakdown ser reconstruido a cada refresh: o delegate e
+    // recriado, a chave nao. Default recolhido — a lista de categorias e a leitura principal,
+    // e abrir tudo empurraria o resto do painel p/ fora da tela.
+    function vramExpanded(name) {
+        return expandedVram[name] === true
+    }
+
+    function setVramExpanded(name, expanded) {
+        var next = {}
+        for (var key in expandedVram)
+            next[key] = expandedVram[key]
+        next[name] = expanded
+        expandedVram = next
     }
 
     function refreshGpuTimingSnapshot() {
@@ -617,24 +634,41 @@ Rectangle {
                             Repeater {
                                 model: viewportModel.vramBreakdown
                                 delegate: Item {
+                                    id: vramRow
                                     required property var modelData
+                                    readonly property bool expandable: vramRow.modelData.hasChildren === true
+                                    property bool expanded: expandable
+                                                            && root.vramExpanded(vramRow.modelData.name)
+                                    readonly property bool untracked: vramRow.modelData.name === "Não rastreado"
+                                    readonly property color accent: untracked ? "#4b4b43" : root.blue
                                     width: categoryRows.width
-                                    height: 29
+                                    height: 29 + (expanded ? vramChildRows.implicitHeight + 6 : 0)
+
+                                    Behavior on height { NumberAnimation { duration: 130; easing.type: Easing.OutCubic } }
 
                                     Text {
                                         x: 0; y: 0
-                                        width: parent.width - 85
-                                        text: modelData.name
+                                        width: 12
+                                        visible: vramRow.expandable
+                                        text: vramRow.expanded ? "−" : "+"
+                                        color: root.textMuted
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+                                    Text {
+                                        x: vramRow.expandable ? 14 : 0
+                                        y: 0
+                                        width: parent.width - x - 85
+                                        text: vramRow.modelData.name
                                         elide: Text.ElideRight
-                                        color: modelData.name === "Não rastreado"
-                                               ? root.textMuted : root.textNormal
+                                        color: vramRow.untracked ? root.textMuted : root.textNormal
                                         font.family: C.Theme.fontFamily
                                         font.pixelSize: 9
                                     }
                                     Text {
                                         anchors.right: parent.right
                                         y: 0
-                                        text: modelData.text
+                                        text: vramRow.modelData.text
                                         color: root.textNormal
                                         font.family: C.Theme.fontMono
                                         font.pixelSize: 9
@@ -644,9 +678,83 @@ Rectangle {
                                         anchors.right: parent.right
                                         y: 20
                                         height: 3
-                                        value: modelData.frac
-                                        fillColor: modelData.name === "Não rastreado"
-                                                   ? "#4b4b43" : root.blue
+                                        value: vramRow.modelData.frac
+                                        fillColor: vramRow.accent
+                                    }
+
+                                    TapHandler {
+                                        enabled: vramRow.expandable
+                                        acceptedButtons: Qt.LeftButton
+                                        cursorShape: Qt.PointingHandCursor
+                                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                                        onTapped: {
+                                            var nextExpanded = !vramRow.expanded
+                                            vramRow.expanded = nextExpanded
+                                            root.setVramExpanded(vramRow.modelData.name, nextExpanded)
+                                        }
+                                    }
+
+                                    Column {
+                                        id: vramChildRows
+                                        x: 13; y: 27
+                                        width: parent.width - x
+                                        visible: vramRow.expanded
+                                        spacing: 1
+
+                                        Repeater {
+                                            model: vramRow.modelData.children
+                                            delegate: Item {
+                                                id: vramChild
+                                                required property var modelData
+                                                readonly property bool active: vramChild.modelData.active !== false
+                                                width: vramChildRows.width
+                                                height: 20
+
+                                                Rectangle {
+                                                    x: 0; y: 0
+                                                    width: 1; height: parent.height
+                                                    color: vramChild.active
+                                                           ? Qt.rgba(vramRow.accent.r, vramRow.accent.g,
+                                                                     vramRow.accent.b, 0.35)
+                                                           : "#34362f"
+                                                }
+                                                Rectangle {
+                                                    x: 0; y: 9
+                                                    width: 8; height: 1
+                                                    color: vramChild.active
+                                                           ? Qt.rgba(vramRow.accent.r, vramRow.accent.g,
+                                                                     vramRow.accent.b, 0.35)
+                                                           : "#34362f"
+                                                }
+                                                Text {
+                                                    x: 14; y: 3
+                                                    width: parent.width - 104
+                                                    text: vramChild.modelData.name
+                                                    elide: Text.ElideRight
+                                                    color: vramChild.active ? root.textSecondary : "#686a61"
+                                                    font.family: C.Theme.fontFamily
+                                                    font.pixelSize: 9
+                                                    font.italic: !vramChild.active
+                                                }
+                                                Text {
+                                                    anchors.right: parent.right
+                                                    anchors.rightMargin: 38
+                                                    y: 3
+                                                    text: vramChild.modelData.text
+                                                    color: vramChild.active ? root.textNormal : root.textMuted
+                                                    font.family: C.Theme.fontMono
+                                                    font.pixelSize: 9
+                                                }
+                                                Text {
+                                                    anchors.right: parent.right
+                                                    y: 3
+                                                    text: vramChild.modelData.shareText
+                                                    color: vramChild.active ? root.textMuted : "#73776b"
+                                                    font.family: C.Theme.fontMono
+                                                    font.pixelSize: 8
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

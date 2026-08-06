@@ -1,6 +1,7 @@
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Graphics/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
 #include "Smile/Scene/CookedFormat.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
@@ -666,6 +667,9 @@ namespace Smile {
                 std::to_string(sh.MaterialCount) + " materiais, " +
                 std::to_string(sh.RenderableCount) + " renderaveis, " +
                 std::to_string(uploaded) + " texturas");
+        // Depois do commit: texturas, meshes, BLAS/TLAS e o setup de GI ja existem, entao este e
+        // o primeiro ponto em que o breakdown descreve a cena inteira.
+        VramTracker::LogBreakdown(Device.QueryVideoMemory().LocalUsage);
         return true;
     }
 }

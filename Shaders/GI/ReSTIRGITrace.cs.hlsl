@@ -44,6 +44,11 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ReGIRResources;
     float4 SkyParams;               // x = view height (km), y = raio do planeta (km) — ShadeSky
     float4 DebugParams;             // x = slot bindless do alvo de timer (< 0 = captura off)
+    float4 HistoryParams;           // x = slot bindless do historico de superficie do frame
+                                    //     ANTERIOR (FTemporalMotionVectors::SurfaceSRV). E de la
+                                    //     que sai o x1 do reservoir temporal, que deixou de ser
+                                    //     gravado. O Renderer zera ReuseParams.w quando o slot nao
+                                    //     existe, entao aqui ele e sempre valido quando lido.
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
@@ -61,19 +66,19 @@ Buffer<float4>                  GIProbeData : register(t5);
 Texture2D<float>                Depth      : register(t6);
 Texture2D<float4>               GBuffer    : register(t7);
 Texture2D<float2>               Velocity   : register(t8);
-Texture2D<float4>               PrevResA   : register(t9);  // x1.xyz, M
-Texture2D<float4>               PrevResB   : register(t10); // x2.xyz, W
-Texture2D<float4>               PrevResC   : register(t11); // Lo.rgb, a = n1.oct.x
-Texture2D<float4>               PrevResD   : register(t12); // n2.xyz, a = n1.oct.y
+// Reservoir do frame anterior em DUAS texturas (era quatro): ver o cabecalho de empacotamento em
+// ReSTIRReservoir.hlsli. t11/t12 continuam existindo como FILLER da tabela — ela tem 14
+// descritores e o SetPunctualLightsSRV escreve as luzes no offset 13 na unha, entao encolher a
+// tabela moveria o registrador das luzes.
+Texture2D<float4>               PrevRes0   : register(t9);  // x2.xyz, W
+Texture2D<uint4>                PrevRes1   : register(t10); // n2 | Lo | M+idade | n1
 
 #include "../LightsCommon.hlsli"
 StructuredBuffer<FPunctualLight> SceneLights : register(t13); // F5: luzes puntuais nos hits
 
 RWTexture2D<float4>             GIOut    : register(u0); // rgb=gi, a=hitDist (NRD)
-RWTexture2D<float4>            CurrResA : register(u1);
-RWTexture2D<float4>            CurrResB : register(u2);
-RWTexture2D<float4>            CurrResC : register(u3);
-RWTexture2D<float4>            CurrResD : register(u4);
+RWTexture2D<float4>             CurrRes0 : register(u1); // x2.xyz, W
+RWTexture2D<uint4>              CurrRes1 : register(u2); // n2 | Lo | M+idade | n1
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
@@ -90,7 +95,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float deviceZ = Depth.Load(int3(px, 0)).r;
     if (deviceZ <= 0.0f) {
         GIOut[px]    = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        CurrResA[px] = 0.0f; CurrResB[px] = 0.0f; CurrResC[px] = 0.0f; CurrResD[px] = 0.0f;
+        CurrRes0[px] = 0.0f; CurrRes1[px] = uint4(0u, 0u, 0u, 0u);
         return;
     }
 
@@ -259,7 +264,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
             // Fetch de UM texel por truncamento — config estavel do bisect 2026-07-12. A busca
             // 2x2 por melhor x1 (fix 6) foi removida: mesmo ancorada em prevPx ela mantinha as
-            // manchas/rastejo; re-introduzir so com A/B dedicado. Unpack do M mantido (ResA.w
+            // manchas/rastejo; re-introduzir so com A/B dedicado. Unpack do M mantido (Res1.z
             // fica no formato M+idade empacotados; expiracao hoje desligada via MaxAge=0).
             int2 ppx = int2(prevUv * ScreenParams.xy);
 
@@ -300,23 +305,38 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 if (permOk) ppx = perm;
             }
 
-            float4 pa = PrevResA.Load(int3(ppx, 0));
-            float4 pc = PrevResC.Load(int3(ppx, 0));
-            float4 pd = PrevResD.Load(int3(ppx, 0));
-            float posReject = ReuseParams.y * max(camDist, 1.0f);
-            float planeDist = abs(dot(N, pa.xyz - x1));
-            float3 prevN1 = DDGI_OctDecode(float2(pc.a, pd.a));
+            uint4 p1 = PrevRes1.Load(int3(ppx, 0));
             float prevM, prevAge;
-            ResUnpackMAge(pa.w, prevM, prevAge);
-            bool accept = permOk && prevM > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
-                          length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject;
+            ResUnpackMAge(p1.z, prevM, prevAge);
+
+            // O x1 do frame anterior vem do HISTORICO DE SUPERFICIE, nao mais do reservoir: o
+            // FTemporalMotionVectors grava `InvViewProj * (ndc, deviceZ)` com a mesma matriz
+            // (InvViewProjFull) e o mesmo depth que este passe usa, entao o valor e identico ao
+            // que era gravado aqui — e sai 12 B/pixel do reservoir.
+            //
+            // A leitura fica DENTRO do gate de prevM: reservoir zerado (clear de historico,
+            // disoclusao, ceu) nunca toca a textura de superficie, que pode estar velha de um
+            // frame em que o passe de motion confiavel nao rodou. Sem esse gate, uma posicao
+            // obsoleta poderia passar nos testes geometricos por coincidencia.
+            float3 prevX1 = 0.0f;
+            bool accept = permOk && prevM > 0.0f;
+            if (accept) {
+                Texture2D<float4> PrevSurface = ResourceDescriptorHeap[(uint)HistoryParams.x];
+                prevX1 = PrevSurface.Load(int3(ppx, 0)).xyz;
+                float3 prevN1   = ResUnpackNormal(p1.w);
+                float  posReject = ReuseParams.y * max(camDist, 1.0f);
+                float  planeDist = abs(dot(N, prevX1 - x1));
+                accept = dot(prevN1, N) >= SpatialParams.w &&
+                         length(prevX1 - x1) < posReject && planeDist < 0.2f * posReject;
+            }
 
             if (accept) {
-                float4 pb = PrevResB.Load(int3(ppx, 0));
+                float4 p0 = PrevRes0.Load(int3(ppx, 0));
                 Reservoir prev;
-                prev.x1 = pa.xyz; prev.x2 = pb.xyz; prev.n2 = pd.xyz; prev.Lo = pc.rgb;
+                prev.x1 = prevX1;                 prev.x2 = p0.xyz;
+                prev.n2 = ResUnpackNormal(p1.x);  prev.Lo = ResUnpackRadiance(p1.y);
                 prev.M  = min(prevM, ReuseParams.x); // MCap
-                prev.W  = pb.w; prev.wSum = 0.0f;
+                prev.W  = p0.w; prev.wSum = 0.0f;
 
                 // Idade maxima da amostra (RTXDI maxReservoirAge): o MCap limita o PESO do
                 // historico, nao a vida da amostra. Expira com stagger por hash do pixel
@@ -459,12 +479,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // hitDist p/ o NRD = distancia da amostra VENCEDORA do WRS (o temporal pode trocar x2; o hitT
     // do raio inicial guiaria o denoiser com um caminho diferente do da radiancia resolvida).
     float selDist = (r.wSum > 0.0f) ? length(r.x2 - x1) : hitDist;
-    float2 n1Oct = DDGI_OctEncode(N); // n1 no historico p/ a rejeicao por normal do temporal
     GIOut[px]    = float4(gi, selDist);
-    CurrResA[px] = float4(r.x1, ResPackMAge(r.M, age));
-    CurrResB[px] = float4(r.x2, r.W);
-    CurrResC[px] = float4(r.Lo, n1Oct.x);
-    CurrResD[px] = float4(r.n2, n1Oct.y);
+    CurrRes0[px] = float4(r.x2, r.W);
+    CurrRes1[px] = ResPack1(r, age, N); // n1 vai junto: o temporal do proximo frame rejeita por ela
 
     // Fecha depois das escritas do reservoir: elas fazem parte do custo do passe.
     SMILE_TIMER_END(timerStart, px, DebugParams.x)

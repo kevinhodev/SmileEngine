@@ -56,10 +56,11 @@ float VisRayMinLength() {
 }
 
 RaytracingAccelerationStructure Scene  : register(t0);
-Texture2D<float4>               ResA   : register(t1); // x1.xyz, M
-Texture2D<float4>               ResB   : register(t2); // x2.xyz, W
-Texture2D<float4>               ResC   : register(t3); // Lo.rgb  (a = n1.oct.x, so o temporal usa)
-Texture2D<float4>               ResD   : register(t4); // n2.xyz  (a = n1.oct.y, so o temporal usa)
+// Reservoir em DUAS texturas (ver o cabecalho de empacotamento em ReSTIRReservoir.hlsli). t3/t4
+// seguem existindo como filler: a tabela deste passe tem 10 descritores e os tres ultimos ja eram
+// filler, entao encolher so moveria registrador sem economizar nada.
+Texture2D<float4>               Res0   : register(t1); // x2.xyz, W
+Texture2D<uint4>                Res1   : register(t2); // n2 | Lo | M+idade | n1
 Texture2D<float4>               GBuffer : register(t5);
 Texture2D<float>                Depth   : register(t6);
 // Alpha-test dos visibility rays (M6): sem eles o pass usava CULL_NON_OPAQUE (folhagem nao
@@ -75,6 +76,16 @@ SamplerState LinearWrap  : register(s1);
 #include "RTAlphaTest.hlsli"
 #include "ReSTIRReservoir.hlsli"
 
+// O ponto visivel deixou de morar no reservoir: aqui ele e reconstruido do depth, que este passe
+// ja carrega de todo jeito (teste de ceu do proprio pixel e dos vizinhos). Mesma conta e mesma
+// matriz do Pass A, entao o valor e identico ao que era gravado.
+float3 WorldFromDepth(int2 p, float deviceZ) {
+    const float2 uv  = (float2(p) + 0.5f) * ScreenParams.zw;
+    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    const float4 wh  = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
+    return wh.xyz / wh.w;
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
     uint2 px = dtid.xy;
@@ -89,11 +100,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float4 gb = GBuffer.Load(int3(px, 0));
     float3 n1 = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
 
-    float4 a = ResA.Load(int3(px, 0));
-    float4 b = ResB.Load(int3(px, 0));
-    float4 c = ResC.Load(int3(px, 0));
-    float4 dd = ResD.Load(int3(px, 0));
-    float3 x1 = a.xyz;
+    float4 s0 = Res0.Load(int3(px, 0));
+    uint4  s1 = Res1.Load(int3(px, 0));
+    float3 x1 = WorldFromDepth(px, deviceZ);
 
     uint rng = RngSeed(px, (uint)TraceParams.x, SMILE_RNG_SPATIAL_WRS);
 
@@ -111,10 +120,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     Reservoir rs; ResInit(rs); rs.x1 = x1;
     {
         Reservoir self;
-        float selfM, selfAge; // ResA.w = M + idade empacotados (so o temporal usa a idade)
-        ResUnpackMAge(a.w, selfM, selfAge);
-        self.x1 = a.xyz; self.x2 = b.xyz; self.n2 = dd.xyz; self.Lo = c.rgb;
-        self.M = selfM; self.W = b.w; self.wSum = 0.0f;
+        float selfM, selfAge; // Res1.z = M + idade empacotados (so o temporal usa a idade)
+        ResUnpackMAge(s1.z, selfM, selfAge);
+        self.x1 = x1;                    self.x2 = s0.xyz;
+        self.n2 = ResUnpackNormal(s1.x); self.Lo = ResUnpackRadiance(s1.y);
+        self.M = selfM; self.W = s0.w; self.wSum = 0.0f;
         float pHatSelf = TargetPHat(x1, n1, self.x2, self.Lo);
         if (ResMerge(rs, self, pHatSelf, 1.0f, rng)) selCand = 0;
         candX1[0] = x1; candN1[0] = n1; candM[0] = self.M; candCount = 1;
@@ -140,21 +150,23 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         float3 qn1 = DDGI_OctDecode(qgb.rg * 2.0f - 1.0f);
         if (dot(qn1, n1) < normalRej) continue; // rejeicao por normal
 
-        float4 qa = ResA.Load(int3(qpx, 0));
+        uint4 q1 = Res1.Load(int3(qpx, 0));
         float qM, qAge;
-        ResUnpackMAge(qa.w, qM, qAge);
+        ResUnpackMAge(q1.z, qM, qAge);
         if (qM <= 0.0f) continue;
+        // x1 do vizinho reconstruido do qz que ja foi carregado acima — era o unico motivo de o
+        // ponto visivel viver no reservoir.
+        float3 qx1 = WorldFromDepth(qpx, qz);
         // So rejeicao RADIAL (config estavel do bisect 2026-07-12; a rejeicao de plano do fix 6
         // saiu junto com o resto do pacote — re-introduzir so com A/B dedicado).
-        if (length(qa.xyz - x1) > posReject) continue; // rejeicao radial por posicao
+        if (length(qx1 - x1) > posReject) continue; // rejeicao radial por posicao
 
-        float4 qb = ResB.Load(int3(qpx, 0));
-        float4 qc = ResC.Load(int3(qpx, 0));
-        float4 qdd = ResD.Load(int3(qpx, 0));
+        float4 q0 = Res0.Load(int3(qpx, 0));
 
         Reservoir nb;
-        nb.x1 = qa.xyz; nb.x2 = qb.xyz; nb.n2 = qdd.xyz; nb.Lo = qc.rgb;
-        nb.M = qM; nb.W = qb.w; nb.wSum = 0.0f;
+        nb.x1 = qx1;                     nb.x2 = q0.xyz;
+        nb.n2 = ResUnpackNormal(q1.x);   nb.Lo = ResUnpackRadiance(q1.y);
+        nb.M = qM; nb.W = q0.w; nb.wSum = 0.0f;
 
         float J = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2); // dst=atual, src=vizinho
         // Rejeita (nao clampa) Jacobiano extremo: clampar mantem o sample com peso errado

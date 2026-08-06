@@ -89,6 +89,9 @@ namespace Smile {
         if (R.Denoiser == EDenoiser::DLSS_RR) // RR faz o upscale; trava o upscaler em DLSS
             SetUpscaler(EUpscaler::DLSS);
         R.ApplyUpscalerScale();
+        // Depois do ApplyUpscalerScale: ele pode disparar RecreateInternalTargets (que ja
+        // reconcilia), e ai isto vira no-op. Sair do NRD devolve os ~336 MB das duas instancias.
+        R.ReconcileNrdAllocation();
     }
 
     EDenoiser FRenderSettings::GetDenoiser() const { return R.Denoiser; }
@@ -143,6 +146,7 @@ namespace Smile {
         // Antes daqui so o NrdIndirect caia — o RR seguia com historico neural de um sinal
         // que deixou de existir.
         Invalidate(Dom::ScreenResolve);
+        R.ReconcileNrdAllocation(); // a instancia indireta do NRD so existe com o ReSTIR GI ligado
     }
     bool FRenderSettings::GetUseReSTIRGI() const { return R.UseReSTIRGI; }
 
@@ -152,6 +156,7 @@ namespace Smile {
         if (_V) Invalidate(EHistoryTarget::ReSTIRDI);
         R.UseReSTIRDI = _V;
         Invalidate(EHistoryTarget::NrdDirect | Dom::Resolve);
+        R.ReconcileNrdAllocation(); // idem p/ a instancia direta
     }
     bool FRenderSettings::GetUseReSTIRDI() const { return R.UseReSTIRDI; }
     bool FRenderSettings::ReSTIRDIActive() const { return R.UseReSTIRDI && R.ReSTIRDI.IsReady(); }

@@ -76,6 +76,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/GpuProfiler.h
     Include/Smile/Graphics/Renderer.h
     Include/Smile/Graphics/RenderSettings.h
+    Include/Smile/Graphics/SceneTargets.h
     Include/Smile/Graphics/HistoryDomain.h
 )
 
@@ -155,6 +156,7 @@ set(ENGINE_SOURCES
     Source/Graphics/GpuProfiler.cpp
     Source/Graphics/Renderer.cpp
     Source/Graphics/RenderSettings.cpp
+    Source/Graphics/SceneTargets.cpp
 )
 
 add_library(SmileEngine STATIC

@@ -95,13 +95,13 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> RawDiffuse;  // rgb modulado, a = distancia da luz
         Microsoft::WRL::ComPtr<ID3D12Resource> RawSpecular; // rgb modulado, a = distancia da luz
         Microsoft::WRL::ComPtr<ID3D12Resource> ShadowMotion;// xy=MV, z=confianca, w=valido
-        Microsoft::WRL::ComPtr<ID3D12Resource> ResA[2]; // RGBA32F: x1.xyz, W
+        Microsoft::WRL::ComPtr<ID3D12Resource> ResW[2]; // R32F: W (o x1 saiu — reconstruido)
         Microsoft::WRL::ComPtr<ID3D12Resource> ResB[2]; // RGBA32_UINT: luz, uv, M+idade, n1 oct
         D3D12_RESOURCE_STATES OutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawDiffuseState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawSpecularState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ShadowMotionState = D3D12_RESOURCE_STATE_COMMON;
-        D3D12_RESOURCE_STATES ResAState[2] = {
+        D3D12_RESOURCE_STATES ResWState[2] = {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
         D3D12_RESOURCE_STATES ResBState[2] = {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
@@ -116,9 +116,9 @@ namespace Smile {
         u32 RawSpecularUAV = kInvalidSlot;
         u32 ShadowMotionSRV = kInvalidSlot;
         u32 ShadowMotionUAV = kInvalidSlot;
-        u32 ResASRV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 ResWSRV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResBSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResAUAV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 ResWUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResBUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 InitialTable[kParityCount][FCommandQueue::kFramesInFlight] = {
             { kInvalidSlot, kInvalidSlot }, { kInvalidSlot, kInvalidSlot } };

@@ -206,12 +206,46 @@ namespace SmileEditor {
         std::sort(Sorted.begin(), Sorted.end(),
                   [](const auto& A, const auto& B) { return A.second > B.second; });
 
+        // Linhas-filhas por recurso, no mesmo contrato dos passes de GPU (name/text/shareText):
+        // a categoria vira expansivel e mostra quem paga a conta. A fracao dos filhos e relativa
+        // a PROPRIA categoria, nao ao total — dentro de "GI e reflexos" o que interessa e quanto
+        // daquele bloco cada recurso ocupa.
+        const auto Labels = Smile::VramTracker::LabelBreakdown();
         for (const auto& [Index, Bytes] : Sorted) {
             QVariantMap Row;
             Row.insert(QStringLiteral("name"), QString::fromUtf8(
                 Smile::VramTracker::CategoryName(static_cast<EVramCategory>(Index))));
             Row.insert(QStringLiteral("text"), FormatBytes(Bytes));
             Row.insert(QStringLiteral("frac"), static_cast<double>(Bytes) / Total);
+
+            QVariantList Children;
+            Smile::u64 Labeled = 0;
+            for (const auto& E : Labels) {
+                if (static_cast<size_t>(E.Category) != Index) continue;
+                QVariantMap Child;
+                Child.insert(QStringLiteral("name"), QString::fromUtf8(E.Label));
+                Child.insert(QStringLiteral("text"), FormatBytes(E.Bytes));
+                Child.insert(QStringLiteral("shareText"),
+                             QString::number(Bytes ? (100.0 * static_cast<double>(E.Bytes) /
+                                                      static_cast<double>(Bytes)) : 0.0, 'f', 0) + "%");
+                Children.push_back(Child);
+                Labeled += E.Bytes;
+            }
+            // "Outros" fecha a soma: sem ele os filhos nao batem com o total da categoria e a
+            // leitura fica errada justamente onde falta instrumentacao.
+            if (!Children.isEmpty() && Bytes > Labeled) {
+                const Smile::u64 Rest = Bytes - Labeled;
+                QVariantMap Child;
+                Child.insert(QStringLiteral("name"), QStringLiteral("Outros (sem rótulo)"));
+                Child.insert(QStringLiteral("text"), FormatBytes(Rest));
+                Child.insert(QStringLiteral("shareText"),
+                             QString::number(100.0 * static_cast<double>(Rest) /
+                                             static_cast<double>(Bytes), 'f', 0) + "%");
+                Child.insert(QStringLiteral("active"), false); // cinza, como pass inativo
+                Children.push_back(Child);
+            }
+            Row.insert(QStringLiteral("hasChildren"), !Children.isEmpty());
+            Row.insert(QStringLiteral("children"), Children);
             Rows.push_back(Row);
         }
 

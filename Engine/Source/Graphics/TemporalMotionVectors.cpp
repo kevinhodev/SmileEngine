@@ -13,10 +13,11 @@ using Microsoft::WRL::ComPtr;
 namespace Smile {
     namespace {
         ComPtr<ID3D12Resource> CreateTexture2D(ID3D12Device* Device, u32 Width, u32 Height,
-                                               DXGI_FORMAT Format) {
+                                               DXGI_FORMAT Format, const char* Label = nullptr) {
             return GpuResources::CreateTex2D(Device, Width, Height, Format,
                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
+                                             nullptr, 1, 1, Label);
         }
 
         ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* Device, UINT64 Size, u8** Mapped) {
@@ -125,8 +126,10 @@ namespace Smile {
         constexpr DXGI_FORMAT SurfaceFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
         constexpr DXGI_FORMAT MotionFormat  = DXGI_FORMAT_R16G16_FLOAT;
         for (u32 i = 0; i < kFrames; ++i)
-            Surface[i] = CreateTexture2D(Device, Width, Height, SurfaceFormat);
-        ReliableMotion = CreateTexture2D(Device, Width, Height, MotionFormat);
+            Surface[i] = CreateTexture2D(Device, Width, Height, SurfaceFormat,
+                                         "Historico de superficie");
+        ReliableMotion = CreateTexture2D(Device, Width, Height, MotionFormat,
+                                         "Motion confiavel");
 
         auto MakeViews = [&](ID3D12Resource* Resource, DXGI_FORMAT Format, u32& SRV, u32& UAV) {
             SRV = SRVHeap.Allocate(1); UAV = SRVHeap.Allocate(1);

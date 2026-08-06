@@ -45,7 +45,9 @@ namespace Smile::GpuResources {
                                        D3D12_RESOURCE_STATES InitialState,
                                        EVramCategory Category,
                                        const D3D12_CLEAR_VALUE* Clear = nullptr,
-                                       u32 MipLevels = 1, u32 ArraySize = 1);
+                                       u32 MipLevels = 1, u32 ArraySize = 1,
+                                       // Rotulo p/ o breakdown por recurso (ver VramTracker.h).
+                                       const char* Label = nullptr);
 
     ComPtr<ID3D12Resource> CreateTex3D(ID3D12Device* Device, u32 Width, u32 Height, u32 Depth,
                                        DXGI_FORMAT Format, D3D12_RESOURCE_FLAGS Flags,
@@ -55,7 +57,7 @@ namespace Smile::GpuResources {
     ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* Device, u64 Bytes,
                                         D3D12_RESOURCE_FLAGS Flags,
                                         D3D12_RESOURCE_STATES InitialState,
-                                        EVramCategory Category);
+                                        EVramCategory Category, const char* Label = nullptr);
 
     // === Upload heap mapeado de forma persistente =================================
     // A forma mais repetida da engine: 48 ocorrencias em 33 arquivos, quase sempre um CB por

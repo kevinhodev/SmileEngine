@@ -50,6 +50,9 @@ namespace Smile {
         Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
         // Instrumentacao de timer (FShaderTimer). Anexado no FIM pela mesma razao dos anteriores.
         Vec4  DebugParams;       // x = slot bindless do alvo de timer (< 0 = captura off)
+        // Historico de superficie do FTemporalMotionVectors: de onde sai o x1 do reservoir
+        // temporal desde que ele deixou de ser gravado (ver ReSTIRReservoir.hlsli).
+        Vec4  HistoryParams;     // x = slot bindless do Surface do frame ANTERIOR
     };
     static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
                   "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
@@ -58,7 +61,8 @@ namespace Smile {
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
     // A3: Pass A (trace + reservoir temporal) -> Pass B (reuso espacial + Jacobiano + resolve).
-    // Reservoir {x1,x2,n2,Lo,M,W} em 4 tex ping-pong. Atras do toggle UseReSTIRGI (default OFF).
+    // Reservoir {x2,n2,Lo,M,W} em 2 tex ping-pong (x1 e reconstruido). Atras do toggle
+    // UseReSTIRGI (default OFF).
     class FReSTIRGI {
     public:
         void Initialize(ID3D12Device* Device);
@@ -74,10 +78,16 @@ namespace Smile {
                             // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
                             u32 DistSlot, u32 ProbeDataSlot);
 
+        // PrevSurfaceSlot = SRV do historico de superficie do frame ANTERIOR
+        // (FTemporalMotionVectors::SurfaceSRV(1 - FrameSlot)). E de la que o reuso temporal tira o
+        // x1, que saiu do reservoir. kInvalidSlot DESLIGA o reuso temporal deste frame: sem
+        // historico de superficie nao ha como reconstruir o ponto visivel anterior, e ler um
+        // descriptor invalido seria pior que perder um frame de acumulo.
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
                             const Mat44& View, const Vec2& JitterDeltaUv,
+                            u32 PrevSurfaceSlot,
                             u32 PunctualLightCount = 0);
 
         // F5: copia o SRV do buffer de luzes puntuais do frame pro t13 da tabela de trace da
@@ -180,31 +190,31 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12Resource> GITexture;
         D3D12_RESOURCE_STATES GITextureState = D3D12_RESOURCE_STATE_COMMON;
-        // Reservoir ping-pong: A=RGBA32F[x1,M], B=RGBA32F[x2,W], C=RGBA16F[Lo], D=RGBA16F[n2].
-        Microsoft::WRL::ComPtr<ID3D12Resource> ResA[2], ResB[2], ResC[2], ResD[2];
-        D3D12_RESOURCE_STATES ResAState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
-        D3D12_RESOURCE_STATES ResBState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
-        D3D12_RESOURCE_STATES ResCState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
-        D3D12_RESOURCE_STATES ResDState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+        // Reservoir ping-pong em DUAS texturas (eram quatro): 32 B/pixel no lugar de 48.
+        //   Res0 = RGBA32F      [x2.xyz, W]
+        //   Res1 = RGBA32_UINT  [n2 oct | Lo RGB9E5 | M+idade | n1 oct]
+        // O x1 saiu: vem do depth (espacial) e do historico de superficie (temporal). Ver o
+        // cabecalho de empacotamento em Shaders/GI/ReSTIRReservoir.hlsli.
+        Microsoft::WRL::ComPtr<ID3D12Resource> Res0[2], Res1[2];
+        D3D12_RESOURCE_STATES Res0State[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+        D3D12_RESOURCE_STATES Res1State[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 GITexSRV   = kInvalidSlot;
         u32 GITexUAV   = kInvalidSlot;
-        u32 ResASRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResBSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResCSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResDSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResAUAV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResBUAV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResCUAV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResDUAV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res0SRV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res1SRV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res0UAV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res1UAV[2] = { kInvalidSlot, kInvalidSlot };
         // Indexadas pela PARIDADE do ping-pong (FrameParity), nao pelo FrameSlot do frame em voo:
         // o conteudo da tabela depende de qual conjunto de reservoirs e prev e qual e curr.
-        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,inst,inst,depth,gbuf,vel,prevA..D,luzes]
-        //                    (prev = Res*[1-p]; o 14o, t13, e reescrito por frame — ver
-        //                     SetPunctualLightsSRV, que DEVE usar a mesma paridade do RecordTrace).
-        // TraceUAVTable[p] = 5 UAVs  [GITex, currA..D] (curr = Res*[p]).
-        // SpatialTable[p]  = 10 SRVs [TLAS, currA..D, gbuf, depth, inst, inst, inst].
+        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,inst,inst,depth,gbuf,vel,prev0,prev1,
+        //                             filler,filler,luzes] (prev = Res*[1-p]). Os dois filler
+        //                    sobraram do reservoir de 4 texturas e ficam de proposito: o t13 das
+        //                    luzes e reescrito por frame num offset FIXO (SetPunctualLightsSRV),
+        //                    entao encolher a tabela mudaria o registrador delas.
+        // TraceUAVTable[p] = 3 UAVs  [GITex, curr0, curr1] (curr = Res*[p]).
+        // SpatialTable[p]  = 10 SRVs [TLAS, curr0, curr1, filler, filler, gbuf, depth, inst×3].
         static constexpr u32 kParityTables = 2;
         u32 TraceTable[kParityTables]    = { kInvalidSlot, kInvalidSlot };
         u32 TraceUAVTable[kParityTables] = { kInvalidSlot, kInvalidSlot };

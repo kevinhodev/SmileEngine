@@ -36,7 +36,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> Buffer;
             SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Buffer)));
-            VramTracker::Register(Buffer.Get(), EVramCategory::GI);
+            VramTracker::Register(Buffer.Get(), EVramCategory::GI, "ReGIR · grade");
             return Buffer;
         }
     }

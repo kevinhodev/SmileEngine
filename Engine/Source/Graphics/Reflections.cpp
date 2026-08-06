@@ -18,7 +18,8 @@ namespace Smile {
     namespace {
         constexpr DXGI_FORMAT kRadianceFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H, DXGI_FORMAT _Fmt) {
+        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
+                                              DXGI_FORMAT _Fmt, const char* _Label) {
             D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
             D3D12_RESOURCE_DESC Desc{};
             Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -33,7 +34,7 @@ namespace Smile {
             ComPtr<ID3D12Resource> Tex;
             SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::GI);
+            VramTracker::Register(Tex.Get(), EVramCategory::GI, _Label);
             return Tex;
         }
     }
@@ -253,18 +254,28 @@ namespace Smile {
             ? _SceneColorMipCount - 1 : 0);
         DepthSlotCached = _DepthSlot; GBufferSlotCached = _GBufferSlot; BRDFLutSlotCached = _BRDFLutSlot;
         GBufferCSlotCached = _GBufferCSlot; GBufferASlotCached = _GBufferASlot;
-        Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
-        RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
-        RayMotion = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
-        Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        ResolvedMotion = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterResolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterMotion   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterHistory[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterHistory[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        // Rotulos separados por ETAPA (meia-res / resolve / historico / agua): e o agrupamento que
+        // responde "onde estao os MB", ja que todos usam o mesmo formato e so mudam de resolucao.
+        Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
+                                  "Reflexoes · meia-res");
+        RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
+                                  "Reflexoes · meia-res");
+        RayMotion = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
+                                   "Reflexoes · meia-res");
+        Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · resolve");
+        ResolvedMotion = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                        "Reflexoes · resolve");
+        History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                    "Reflexoes · historico");
+        History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                    "Reflexoes · historico");
+        Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · denoise");
+        WaterResolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · agua");
+        WaterMotion   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · agua");
+        WaterHistory[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                         "Reflexoes · agua");
+        WaterHistory[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                         "Reflexoes · agua");
         RadianceState = RayDataState = RayMotionState = ResolvedState =
             ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
@@ -539,6 +550,15 @@ namespace Smile {
 
     void FReflections::SetupNrdSpec(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                     ID3D12Resource* _NrdInSpec, ID3D12Resource* _NrdOutSpec) {
+        // Idempotente: o NRD agora e alocado sob demanda (Renderer::ReconcileNrdAllocation) e
+        // isto e re-chamado a cada toggle, nao so depois de um ReleaseResize.
+        {
+            auto FreeIf = [&](u32& Slot) {
+                if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, 1); Slot = kInvalidSlot; }
+            };
+            FreeIf(SpecPackUAVSlot);
+            FreeIf(NrdOutSpecSRV);
+        }
         if (!Ready || !_NrdInSpec || !_NrdOutSpec) return;
 
         // UAV da IN_SPEC do NRD (o pack escreve aqui; o RecordNrdSpecZero limpa via ponteiro).

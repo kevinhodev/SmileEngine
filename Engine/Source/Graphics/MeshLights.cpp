@@ -217,7 +217,7 @@ namespace Smile {
         LightBuffer = CreateBuffer(_Device, sizeof(FTriangleLightGPU) * LightElems,
                                    D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON,
                                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        VramTracker::Register(LightBuffer.Get(), EVramCategory::GI);
+        VramTracker::Register(LightBuffer.Get(), EVramCategory::GI, "Mesh lights · triangulos");
         LightState = D3D12_RESOURCE_STATE_COMMON;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};

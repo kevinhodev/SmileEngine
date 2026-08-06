@@ -28,6 +28,11 @@ namespace Smile {
 
         // (Re)cria pool textures (perm+trans) + IO textures (GI-res) + descritores de staging.
         void SetupForResize(ID3D12Device* Device, u32 Width, u32 Height);
+        // Devolve pools + IO (o grosso da VRAM) sem derrubar pipelines, root signature nem os
+        // descriptor heaps — reallocar depois e so um SetupForResize. Existe para o Renderer
+        // poder manter a instancia viva mas SEM memoria enquanto o denoiser nao e o NRD ou o
+        // consumidor (ReSTIR GI/DI) esta desligado. Chamar so com a GPU ociosa.
+        void ReleaseResources() { ReleaseResize(); }
         bool IsReady() const { return Ready; }
 
         // Per frame: matrizes NAO jitteradas (column-major p/ o NRD = memcpy direto da row-major da
@@ -85,6 +90,12 @@ namespace Smile {
 
         nrd::Instance* Instance = nullptr;
         ESignalProfile SignalProfile = ESignalProfile::Indirect;
+        // Rotulo do breakdown de VRAM. Separa as DUAS instancias (direta e indireta), que sao
+        // alocadas em paralelo e na resolucao cheia — juntas elas dominam a categoria GI.
+        const char* PoolLabel() const {
+            return SignalProfile == ESignalProfile::Direct ? "NRD · pools (direta)"
+                                                           : "NRD · pools (indireta)";
+        }
         bool Available = false;
         bool Ready     = false;
         bool SelfTestLogged = false;

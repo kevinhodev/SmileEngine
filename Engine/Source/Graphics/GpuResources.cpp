@@ -75,12 +75,12 @@ namespace Smile::GpuResources {
                                        D3D12_RESOURCE_STATES _InitialState,
                                        EVramCategory _Category,
                                        const D3D12_CLEAR_VALUE* _Clear,
-                                       u32 _MipLevels, u32 _ArraySize) {
+                                       u32 _MipLevels, u32 _ArraySize, const char* _Label) {
         const D3D12_RESOURCE_DESC Desc =
             Tex2DDesc(_Width, _Height, _Format, _Flags, _MipLevels, _ArraySize);
         ComPtr<ID3D12Resource> Texture =
             CreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, _Clear);
-        VramTracker::Register(Texture.Get(), _Category);
+        VramTracker::Register(Texture.Get(), _Category, _Label);
         return Texture;
     }
 
@@ -99,11 +99,11 @@ namespace Smile::GpuResources {
     ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* _Device, u64 _Bytes,
                                         D3D12_RESOURCE_FLAGS _Flags,
                                         D3D12_RESOURCE_STATES _InitialState,
-                                        EVramCategory _Category) {
+                                        EVramCategory _Category, const char* _Label) {
         const D3D12_RESOURCE_DESC Desc = BufferDesc(_Bytes, _Flags);
         ComPtr<ID3D12Resource> Buffer =
             CreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, nullptr);
-        VramTracker::Register(Buffer.Get(), _Category);
+        VramTracker::Register(Buffer.Get(), _Category, _Label);
         return Buffer;
     }
 

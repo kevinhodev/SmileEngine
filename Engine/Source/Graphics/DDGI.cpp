@@ -24,10 +24,11 @@ namespace Smile {
         constexpr DXGI_FORMAT kAtlasFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
         ComPtr<ID3D12Resource> CreateTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
-                                           DXGI_FORMAT _Fmt) {
+                                           DXGI_FORMAT _Fmt, const char* _Label = nullptr) {
             return GpuResources::CreateTex2D(_Device, _W, _H, _Fmt,
                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
+                                             nullptr, 1, 1, _Label);
         }
 
         struct DDGIInstanceGeo {
@@ -51,7 +52,8 @@ namespace Smile {
         ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                    D3D12_RESOURCE_STATES _State,
                                                    D3D12_RESOURCE_FLAGS _Flags = D3D12_RESOURCE_FLAG_NONE) {
-            return GpuResources::CreateBuffer(_Device, _Size, _Flags, _State, EVramCategory::GI);
+            return GpuResources::CreateBuffer(_Device, _Size, _Flags, _State, EVramCategory::GI,
+                                              "DDGI · buffers");
         }
 
         ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* _Device, UINT64 _Size,
@@ -259,9 +261,12 @@ namespace Smile {
         DistAtlasHeight = static_cast<u32>(CountY) * (kDistTileSize + 2);
         MaxRayDist      = std::sqrt(ext.X * ext.X + ext.Y * ext.Y + ext.Z * ext.Z) * 1.5f;
 
-        IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat);
-        DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT);
-        ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat);
+        IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat,
+                                  "DDGI · atlas irradiancia");
+        DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT,
+                                  "DDGI · atlas distancia");
+        ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat,
+                                  "DDGI · raios por sonda");
 
         MeshGeoSlot.clear(); // membro: sobrevive p/ o RefreshInstanceGeo
         std::vector<const FGpuMesh*> UniqueMeshes;

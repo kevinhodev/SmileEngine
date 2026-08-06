@@ -89,10 +89,12 @@ namespace {
 namespace Smile {
 #if SMILE_NRD_ENABLED
     namespace {
-        ComPtr<ID3D12Resource> CreateTex(ID3D12Device* Dev, u32 W, u32 H, DXGI_FORMAT Fmt) {
+        ComPtr<ID3D12Resource> CreateTex(ID3D12Device* Dev, u32 W, u32 H, DXGI_FORMAT Fmt,
+                                         const char* Label = "NRD · pools") {
             return GpuResources::CreateTex2D(Dev, W, H, Fmt,
                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
+                                             nullptr, 1, 1, Label);
         }
     }
 #endif
@@ -318,7 +320,8 @@ namespace Smile {
             const nrd::TextureDesc& td = d.permanentPool[i];
             DXGI_FORMAT fmt = ToDXGI(td.format);
             ComPtr<ID3D12Resource> res = CreateTex(_Device, DivUp(RtWidth, td.downsampleFactor),
-                                                   DivUp(RtHeight, td.downsampleFactor), fmt);
+                                                   DivUp(RtHeight, td.downsampleFactor), fmt,
+                                                   PoolLabel());
             Init(PermPool[i], res.Get(), fmt); 
         }
         TransPool.resize(d.transientPoolSize);
@@ -326,12 +329,16 @@ namespace Smile {
             const nrd::TextureDesc& td = d.transientPool[i];
             DXGI_FORMAT fmt = ToDXGI(td.format);
             ComPtr<ID3D12Resource> res = CreateTex(_Device, DivUp(RtWidth, td.downsampleFactor),
-                                                   DivUp(RtHeight, td.downsampleFactor), fmt);
+                                                   DivUp(RtHeight, td.downsampleFactor), fmt,
+                                                   PoolLabel());
             Init(TransPool[i], res.Get(), fmt);
         }
         for (u32 i = 0; i < IO_COUNT; ++i) {
             DXGI_FORMAT fmt = IoFormat((EIo)i);
-            ComPtr<ID3D12Resource> res = CreateTex(_Device, RtWidth, RtHeight, fmt);
+            // IN/OUT, todas na resolucao CHEIA — e por isso que somam mais que os pools.
+            ComPtr<ID3D12Resource> res = CreateTex(_Device, RtWidth, RtHeight, fmt,
+                                                   SignalProfile == ESignalProfile::Direct
+                                                       ? "NRD · IO (direta)" : "NRD · IO (indireta)");
             Init(Io[i], res.Get(), fmt);
         }
         assert(staging <= StagingCount && "NRD StagingHeap overflow");
