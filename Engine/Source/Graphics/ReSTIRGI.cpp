@@ -1,10 +1,14 @@
 #include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
+#include "Smile/Graphics/ShaderTimer.h"
 #include "Smile/Graphics/VramTracker.h"
+#include "Smile/Core/Logger.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
+#include <exception>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -38,6 +42,17 @@ namespace Smile {
         TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true);
         SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
+        // A gemea instrumentada so existe com NVAPI ligada (o FShaderTimer ja reservou o slot da
+        // extensao ANTES desta chamada — e o que faz o driver reconhecer o timer na criacao da
+        // PSO). O try aqui cobre o caso de o build ter a NVAPI mas nao o .cso da permutacao.
+        if (FShaderTimer::IsAvailable()) {
+            try {
+                TracePSOTimed.Initialize(_Device, "ReSTIRGITraceTimed.cs_6_6.cso", 14, 5, true, true);
+                TraceTimed = true;
+            } catch (const std::exception&) {
+                LogWarning("ReSTIRGITraceTimed.cso ausente — timer do ReSTIR GI indisponivel.");
+            }
+        }
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
@@ -90,7 +105,8 @@ namespace Smile {
     void FReSTIRGI::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                    u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
                                    u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
-                                   u32 _GBufferSlot, u32 _VelocitySlot) {
+                                   u32 _GBufferSlot, u32 _VelocitySlot,
+                                   u32 _DistSlot, u32 _ProbeDataSlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         // Valida os SETE slots, nao so tres: todos vao direto p/ CpuHandleStaging ao montar as
@@ -154,8 +170,8 @@ namespace Smile {
                 _SRVHeap.CpuHandleStaging(_SkyViewSlot),
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
                 _SRVHeap.CpuHandleStaging(_IrradSlot),
-                _SRVHeap.CpuHandleStaging(_InstanceSlot),
-                _SRVHeap.CpuHandleStaging(_InstanceSlot),
+                _SRVHeap.CpuHandleStaging(_DistSlot),
+                _SRVHeap.CpuHandleStaging(_ProbeDataSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_VelocitySlot),
@@ -255,6 +271,19 @@ namespace Smile {
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
+        CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
+                                GIHit.SkipMode };
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+        CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
+        CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
+        CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
+        CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.SkyParams             = SkyLutParams;
+        // O slot bindless viaja como float; -1 e o sentinela de "captura off" (o shader testa
+        // < 0). Sem a permutacao instrumentada isto nunca e lido, mas fica coerente de todo jeito.
+        CPU.DebugParams           = { (TraceTimed && TimerSlot != kInvalidSlot)
+                                          ? static_cast<f32>(TimerSlot) : -1.0f,
+                                      0.0f, 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }
@@ -277,7 +306,8 @@ namespace Smile {
                static_cast<UINT64>(FrameSlot) * sizeof(ReSTIRGIConstants);
     }
 
-    void FReSTIRGI::RecordTrace(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
+    void FReSTIRGI::RecordTrace(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap,
+                                 FGpuProfiler* _Profiler) {
         if (!Ready) return;
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
         const u32 p = FrameParity, prev = 1u - FrameParity;
@@ -306,13 +336,21 @@ namespace Smile {
         Transition(_CL, ResD[p].Get(), ResDState[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        TracePSO.Bind(_CL);
+        if (_Profiler) _Profiler->Begin(_CL, "Temporal + Trace Secundário");
+        const bool Timed = TraceTimed && TimerSlot != kInvalidSlot;
+        (Timed ? TracePSOTimed : TracePSO).Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[p]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable[p]));
+        // O UAV falso da extensao: o driver troca o acesso, mas a tabela precisa estar setada.
+        if (Timed)
+            _CL->SetComputeRootDescriptorTable(FVolumetricPipeline::kNvApiRootParam,
+                                               FShaderTimer::ExtnTable(_SRVHeap));
         _CL->Dispatch(GX, GY, 1);
+        if (_Profiler) _Profiler->End(_CL);
 
         if (Spatial) {
+            if (_Profiler) _Profiler->Begin(_CL, "Reuso Espacial + Resolve");
             Transition(_CL, ResA[p].Get(), ResAState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Transition(_CL, ResB[p].Get(), ResBState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Transition(_CL, ResC[p].Get(), ResCState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -327,6 +365,7 @@ namespace Smile {
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpatialTable[p]));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(GITexUAV));
             _CL->Dispatch(GX, GY, 1);
+            if (_Profiler) _Profiler->End(_CL);
         }
 
         // Estado combinado em vez de escolher por UseNrd. Sao TRES leitores: o deferred (t16,

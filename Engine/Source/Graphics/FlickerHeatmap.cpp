@@ -1,6 +1,7 @@
 #include "Smile/Graphics/FlickerHeatmap.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/ShaderUtils.h"
 #include <cstring>
 
@@ -8,18 +9,6 @@ namespace Smile {
     namespace {
         constexpr DXGI_FORMAT kOutFormat   = DXGI_FORMAT_R16G16B16A16_FLOAT;
         constexpr DXGI_FORMAT kStatsFormat = DXGI_FORMAT_R32G32_FLOAT;
-
-        void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
-                        D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
-            if (before == after) return;
-            D3D12_RESOURCE_BARRIER b{};
-            b.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            b.Transition.pResource   = res;
-            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            b.Transition.StateBefore = before;
-            b.Transition.StateAfter  = after;
-            cl->ResourceBarrier(1, &b);
-        }
     }
 
     void FFlickerHeatmap::Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 W, u32 H) {
@@ -43,7 +32,7 @@ namespace Smile {
 
         CreateBuffers(Device, SRVHeap, W, H);
         Initialized = true;
-        LogInfo("FlickerHeatmap (debug: variancia temporal por pixel) inicializado");
+        LogDebug("FlickerHeatmap (debug: variancia temporal por pixel) inicializado");
     }
 
     void FFlickerHeatmap::Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 W, u32 H) {
@@ -182,7 +171,7 @@ namespace Smile {
         C.ScrW = Width; C.ScrH = Height;
         std::memcpy(MappedCB, &C, sizeof(C));
 
-        Transition(CommandList, Output.Get(), OutputState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        TransitionResource(CommandList, Output.Get(), OutputState, D3D12_RESOURCE_STATE_RENDER_TARGET);
         OutputState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
         D3D12_VIEWPORT VP{}; VP.Width = (FLOAT)Width; VP.Height = (FLOAT)Height; VP.MinDepth = 0; VP.MaxDepth = 1;
@@ -203,7 +192,7 @@ namespace Smile {
         CommandList->IASetIndexBuffer(nullptr);
         CommandList->DrawInstanced(3, 1, 0, 0);
 
-        Transition(CommandList, Output.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+        TransitionResource(CommandList, Output.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     }

@@ -3,11 +3,15 @@ import QtQuick.Controls
 
 // Barra unificada (titulo + janela) 100% QML. Menus virao na esquerda (Fase 3); por ora:
 // logo da engine centralizado + botoes de janela (min/max/fechar) a direita.
-// `windowBridge` (WindowBridge) vem por context property; `image://smilelogo/<px>` e o logo.
+// `windowBridge` e `menuBridge` sao dependencias explicitas da raiz;
+// `image://smilelogo/<px>` e o logo.
 // A barra reporta ao bridge a sua altura e os retangulos interativos (botoes) -> o
 // NativeWindowFilter usa isso pra decidir HTCAPTION (arrasto) x HTCLIENT (controles).
 Rectangle {
     id: bar
+    required property var windowBridge
+    required property var menuBridge
+
     color: "#141511"
     implicitWidth: 800
     implicitHeight: 36
@@ -30,6 +34,7 @@ Rectangle {
     // ---- Menus (esquerda) ----
     EditorMenuBar {
         id: menuBar
+        menuBridge: bar.menuBridge
         anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter }
     }
 

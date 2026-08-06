@@ -34,17 +34,30 @@ cbuffer ReSTIRCB : register(b0) {
                                     // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
     float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
                                     // w=angularMinRatio
-    float4 PolicyParams;            // x = politica de backface (0/1) — A/B da defesa anti-vazamento
+    float4 PolicyParams;            // x = politica deste passe (backface/culling)
+    // Gather do 2o bounce (contrato do HitShading.hlsli).
+    float4 GIDistParams;            // x=distTile, y=distW, z=distH, w=skipMode
+    float4 GIBiasParams;            // x=escala do bias, y=teto em metros, zw=-
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
+    float4 SkyParams;               // x = view height (km), y = raio do planeta (km) — ShadeSky
+    float4 DebugParams;             // x = slot bindless do alvo de timer (< 0 = captura off)
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
 #include "../RayOffset.hlsli"
+#include "../Debug/ShaderTimer.hlsli"
 
 RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
 StructuredBuffer<InstanceGeo>   Instances  : register(t2);
 Texture2D<float4>               IrradAtlas : register(t3);
-// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
+// t4/t5: atlas de distancia e ProbeData do DDGI — o 2o bounce usa o gather COMPLETO
+// (Chebyshev + bias + skip), igual ao deferred. Antes eram filler do VB/IB bindless.
+Texture2D<float4>               GIDistAtlas : register(t4);
+Buffer<float4>                  GIProbeData : register(t5);
 Texture2D<float>                Depth      : register(t6);
 Texture2D<float4>               GBuffer    : register(t7);
 Texture2D<float2>               Velocity   : register(t8);
@@ -81,6 +94,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         return;
     }
 
+    // Comeca DEPOIS do descarte de ceu: pixel sem geometria nao traca nada e entraria como
+    // "frio" de qualquer jeito — medir o early-out so somaria ruido ao piso do heatmap.
+    SMILE_TIMER_BEGIN(timerStart)
+
     float4 gb = GBuffer.Load(int3(px, 0));
     float3 N  = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
 
@@ -90,12 +107,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float3 x1  = wH.xyz / wH.w;
     float  camDist = length(CameraPos.xyz - x1);
 
-    // Salt no seed: sem ele, RngSeed(px, frame) == s0 do GGX_Rand2(px, frame) usado na direcao do
-    // raio (mesma cadeia PCG) — a selecao do WRS ficaria correlacionada com o sample inicial.
-    uint rng = RngSeed(px, (uint)TraceParams.x ^ 0xA511E9B3u);
+    // Streams por efeito (ver GGXSample.hlsli). Antes isto era um XOR magico no frame, que
+    // decorrelacionava o WRS da direcao do raio AQUI DENTRO mas deixava o GI sorteando a mesma
+    // sequencia das reflexoes — correlacao entre efeitos, que o Ray Reconstruction delata.
+    uint rng = RngSeed(px, (uint)TraceParams.x, SMILE_RNG_GI_WRS);
 
     // --- (1) Sample inicial: raio cosseno-hemisferico (Malley) -------------------------------
-    float2 E    = GGX_Rand2(px, (uint)TraceParams.x);
+    float2 E    = GGX_Rand2E(px, (uint)TraceParams.x, SMILE_RNG_GI_INITIAL);
     float  rr   = sqrt(E.x);
     float  phi  = 2.0f * SMILE_PI * E.y;
     float  cosT = sqrt(saturate(1.0f - E.x));
@@ -135,6 +153,18 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.RealHitShading = ShadeParams.x > 0.5f;
     P.NumLights      = (int)JitterParams.z; // F5
     P.ShadowRayMask  = (uint)SunColor.w;
+    P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
+    P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
+    P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
+    P.ReGIREnabled       = ReGIRInvCellEnabled.w > 0.5f;
+    P.ReGIRGridCount     = (int3)ReGIRGridCountSamples.xyz;
+    P.ReGIRSampleCount   = (int)ReGIRGridCountSamples.w;
+    P.ReGIRSlotsSRV      = (uint)ReGIRResources.x;
+    P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
+    P.FrameIndex         = (uint)TraceParams.x;
+    P.ReGIRPad           = 0u;
+    P.SkyViewHeightKm    = SkyParams.x;
+    P.SkyBottomRKm       = SkyParams.y;
 
     // POLITICA DE BACKFACE (Lumen AvoidSelfIntersections modo Retrace + terminacao preta).
     //
@@ -196,7 +226,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                         ray.Origin, ray.Direction, hitDist, P, sd);
     } else {
         hitDist = TraceParams.y;
-        Lo = ShadeSky(dir, sunDir, P.SkyIntensity);
+        Lo = ShadeSky(dir, sunDir, P.SkyIntensity, P);
         x2 = ray.Origin + ray.Direction * hitDist; // ponto distante na direcao do ceu
         n2 = -dir;                                  // normal "virada" p/ o ponto visivel
     }
@@ -232,6 +262,44 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             // manchas/rastejo; re-introduzir so com A/B dedicado. Unpack do M mantido (ResA.w
             // fica no formato M+idade empacotados; expiracao hoje desligada via MaxAge=0).
             int2 ppx = int2(prevUv * ScreenParams.xy);
+
+            // Permutation sampling (RTXDI_ApplyPermutationSampling, RtxdiHelpers.hlsli). SEMPRE
+            // ligado: o A/B de 2026-07-29 eliminou o sparkle do DLSS-RR e nao houve caso a favor
+            // do caminho antigo, entao o toggle saiu junto.
+            //
+            // O DLSS-RR Integration Guide §3.5 exige amostras independentes e diz explicitamente:
+            // "RR assumes independent samples, which is violated by ReSTIR temporal and spatial
+            // reuse. Permutation sampling helps avoid correlation artifacts."
+            //
+            // POR QUE ISTO NAO E A BUSCA 2x2 QUE REGREDIU NO BISECT: o numero aleatorio e
+            // UNIFORME NA TELA (derivado so do frame), entao o mapa e uma BIJECAO — cada texel do
+            // frame anterior e lido por EXATAMENTE UM pixel atual. A busca "melhor x1" nao era
+            // bijetiva: varios pixels vizinhos podiam convergir no mesmo reservoir e duplicar uma
+            // amostra brilhante pela vizinhanca, que e o mecanismo da mancha/random walk. Esta
+            // troca embaralha QUEM le QUEM sem alterar a contagem de amostras.
+            //
+            // PONTO DE ATENCAO (nao portado): o RTXDI DESLIGA a permutacao em superficie fina/alto
+            // detalhe (`usePermutationSampling = !IsComplexSurface(...)`, TemporalResampling.hlsl),
+            // com o comentario "Permutation sampling makes more noise on thin, high-detail
+            // objects". Folhagem e exatamente esse caso e ja e ponto sensivel na engine. Se
+            // aparecer cintilacao NOVA em vegetacao, suspeitar daqui ANTES de mexer em alpha-test
+            // ou upscaler: o conserto e o gate por complexidade, nao remover a permutacao.
+            bool permOk;
+            {
+                uint  rnd    = GGX_PCG((uint)TraceParams.x);
+                int2  offset = int2(rnd & 3u, (rnd >> 2u) & 3u);
+                int2  perm   = ppx + offset;
+                perm.x ^= 3; perm.y ^= 3;
+                perm -= offset;
+                // Fora da tela nao ha parceiro: ABANDONA o reuso deste pixel em vez de cair no ppx
+                // original. Cair de volta quebraria a bijecao (o texel do ppx ja e lido por outro
+                // pixel) e reintroduziria justamente a duplicacao que a permutacao existe p/
+                // evitar. Afeta so uma borda de 3 px. Nao pode ser `return`: o reservoir do sample
+                // inicial ainda precisa ser gravado no fim do main.
+                permOk = all(perm >= int2(0, 0)) && all(perm < int2(ScreenParams.xy));
+                if (permOk) ppx = perm;
+            }
+
             float4 pa = PrevResA.Load(int3(ppx, 0));
             float4 pc = PrevResC.Load(int3(ppx, 0));
             float4 pd = PrevResD.Load(int3(ppx, 0));
@@ -240,7 +308,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             float3 prevN1 = DDGI_OctDecode(float2(pc.a, pd.a));
             float prevM, prevAge;
             ResUnpackMAge(pa.w, prevM, prevAge);
-            bool accept = prevM > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
+            bool accept = permOk && prevM > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
                           length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject;
 
             if (accept) {
@@ -251,10 +319,14 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 prev.W  = pb.w; prev.wSum = 0.0f;
 
                 // Idade maxima da amostra (RTXDI maxReservoirAge): o MCap limita o PESO do
-                // historico, nao a vida da amostra — uma amostra brilhante rara travada num
-                // bolsao escuro re-valida a si mesma e vira mancha persistente (bisect nas
-                // cortinas do Bistro: Temporal OFF = manchas somem). Expira com stagger por
-                // hash do pixel (0.75x..1.25x) senao as manchas expirariam em onda sincrona.
+                // historico, nao a vida da amostra. Expira com stagger por hash do pixel
+                // (0.75x..1.25x) senao a expiracao viria em onda sincrona.
+                // ATENCAO ao motivo: isto foi escrito supondo que a expiracao matava a mancha
+                // persistente (amostra brilhante travada em bolsao escuro re-validando a si
+                // mesma, bisect nas cortinas do Bistro). A medicao de 2026-07-28 desmentiu:
+                // padrao fixo na media 4,00% com MaxAge=8 vs 4,03% com 0 — empate. O que a
+                // expiracao entrega de verdade e LATENCIA sob luz mudando (~10 frames na saida
+                // do NRD). Ver o bloco de medicao no RayEpsilons.h antes de mexer no default.
                 bool prevValid = true;
                 float maxAge = JitterParams.w;
                 if (maxAge > 0.0f) {
@@ -352,7 +424,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                 prevValid = false;
                             }
                         } else if (len >= kRevalidateSkyFrac * TraceParams.y) {
-                            prev.Lo = ShadeSky(vray.Direction, sunDir, P.SkyIntensity); // era ceu
+                            prev.Lo = ShadeSky(vray.Direction, sunDir, P.SkyIntensity, P); // era ceu
                         } else {
                             prevValid = false; // superficie sumiu (geometria movida)
                         }
@@ -393,4 +465,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     CurrResB[px] = float4(r.x2, r.W);
     CurrResC[px] = float4(r.Lo, n1Oct.x);
     CurrResD[px] = float4(r.n2, n1Oct.y);
+
+    // Fecha depois das escritas do reservoir: elas fazem parte do custo do passe.
+    SMILE_TIMER_END(timerStart, px, DebugParams.x)
 }

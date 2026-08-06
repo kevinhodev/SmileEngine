@@ -15,7 +15,8 @@
 //   - HLSL nao deixa um membro atravessar fronteira de 16B, entao float4 sempre cai em multiplo
 //     de 16. Hoje BaseColorFactor@0, EmissiveFactor@32 e SubsurfaceColor@144 ja caem alinhados
 //     naturalmente — nao ha padding implicito divergindo do C++.
-//   - o total (160B usados) cabe no CBV de 256B que o FMaterial::Bind liga em b1.
+//   - o total (164B usados, RTEmissiveScale em 160) cabe no CBV de 256B que o FMaterial::Bind
+//     liga em b1.
 cbuffer MaterialCB : register(b1) {
     float4 BaseColorFactor;
     float  MetallicFactor;
@@ -52,6 +53,10 @@ cbuffer MaterialCB : register(b1) {
 
     uint   ShadingModel;
     float4 SubsurfaceColor;
+    // Nenhum shader de raster le este campo (o RT o consome ao empacotar o InstanceGeo), mas ele
+    // esta aqui porque a regra acima e espelhar MaterialConstants campo a campo — um buraco no
+    // espelho e exatamente como os offsets divergem em silencio.
+    float  RTEmissiveScale;
 };
 
 // Recorte do cutout. Era a MESMA expressao escrita cinco vezes (GBuffer.ps, ShadowDepth.ps,

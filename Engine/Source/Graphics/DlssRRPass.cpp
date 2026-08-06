@@ -1,5 +1,6 @@
 #include "Smile/Graphics/DlssRRPass.h"
 #include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Core/Logger.h"
 
 #if SMILE_SL_ENABLED
@@ -20,17 +21,6 @@ namespace Smile {
         constexpr u32         kInvalidSlot = 0xFFFFFFFFu;
         constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        void Transition(ID3D12GraphicsCommandList* Cmd, ID3D12Resource* Res,
-                        D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
-            if (Before == After) return;
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = Res;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = Before;
-            B.Transition.StateAfter  = After;
-            Cmd->ResourceBarrier(1, &B);
-        }
 
         // Mat44 (row-major, row-vector) -> sl::float4x4 (row-major). Mesma convencao do FDlssPass; se a
         // reprojecao sair errada e o SL for column-vector, transpor aqui (ver Risks do plano).
@@ -63,6 +53,12 @@ namespace Smile {
                 case sl::Result::eErrorInvalidState:            return "eErrorInvalidState";
                 default:                                        return "(outro)";
             }
+        }
+
+        bool IsExpectedUnsupportedResult(sl::Result R) {
+            return R == sl::Result::eErrorNoSupportedAdapterFound ||
+                   R == sl::Result::eErrorAdapterNotSupported ||
+                   R == sl::Result::eErrorFeatureNotSupported;
         }
 
         // Mapa qualidade (0=Native..4=UltraPerf) -> DLSSMode. RR roda no MESMO perf mode do SR.
@@ -124,9 +120,14 @@ namespace Smile {
         const sl::Result SupportRc = slIsFeatureSupported(sl::kFeatureDLSS_RR, Adapter);
         P->Supported = (SupportRc == sl::Result::eOk);
         if (!P->Supported) {
-            LogWarning(std::string("DLSS-RR: slIsFeatureSupported falhou -> ") + SlResultName(SupportRc) +
-                       " (codigo " + std::to_string(static_cast<int>(SupportRc)) +
-                       ") — denoiser Ray Reconstruction indisponivel");
+            const std::string Message = std::string("DLSS-RR: slIsFeatureSupported falhou -> ") +
+                SlResultName(SupportRc) + " (codigo " +
+                std::to_string(static_cast<int>(SupportRc)) +
+                ") — denoiser Ray Reconstruction indisponivel";
+            if (IsExpectedUnsupportedResult(SupportRc))
+                LogDebug(Message);
+            else
+                LogWarning(Message);
             return false;
         }
 
@@ -163,7 +164,7 @@ namespace Smile {
         P->Created = true;
         P->FirstDispatch = true;
         P->RW = RenderW; P->RH = RenderH; P->SW = DisplayW; P->SH = DisplayH;
-        LogInfo("DLSS-RR (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
+        LogDebug("DLSS-RR (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
                 std::to_string(RenderH) + " -> display " + std::to_string(DisplayW) + "x" +
                 std::to_string(DisplayH) + ")");
         return true;
@@ -183,7 +184,9 @@ namespace Smile {
         if (!P || !P->Created || P->RW == 0) return;
         const f32 Ratio = static_cast<f32>(P->SW) / static_cast<f32>(P->RW);
         u32 Phase = static_cast<u32>(8.0f * Ratio * Ratio + 0.5f);
-        if (Phase == 0) Phase = 1;
+        // DLSS-RR Integration Guide §3.6 recomenda pelo menos 32 posicoes, inclusive em DLAA.
+        // Mantem a formula do SR caso uma razao futura produza uma sequencia ainda maior.
+        if (Phase < 32u) Phase = 32u;
         const u32 Idx = (FrameIndex % Phase) + 1;   // Halton e 1-based
         OutX = Impl::Halton(Idx, 2) - 0.5f;
         OutY = Impl::Halton(Idx, 3) - 0.5f;
@@ -197,7 +200,7 @@ namespace Smile {
             return;
         }
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
         auto* CmdBuf = reinterpret_cast<sl::CommandBuffer*>(Cmd);
@@ -205,7 +208,7 @@ namespace Smile {
         sl::FrameToken* Frame = nullptr;
         if (slGetNewFrameToken(Frame, nullptr) != sl::Result::eOk || !Frame) {
             LogError("DLSS-RR: slGetNewFrameToken falhou");
-            Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             return;
         }
@@ -307,7 +310,7 @@ namespace Smile {
         if (Rc != sl::Result::eOk)
             LogError("DLSS-RR: slEvaluateFeature falhou (codigo " + std::to_string(static_cast<int>(Rc)) + ")");
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         P->FirstDispatch = false;
     }

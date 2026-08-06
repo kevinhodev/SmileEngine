@@ -12,7 +12,7 @@
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[12]{};
+        D3D12_ROOT_PARAMETER RootParams[14]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -135,6 +135,37 @@ namespace Smile {
         RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[11].DescriptorTable.pDescriptorRanges   = &LocalShadowRange;
         RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // Direta local integral do ReSTIR DI (t20), full-res. Mesma forma de t16: tabela de
+        // 1 SRV; os outros PSOs nao referenciam t20.
+        D3D12_DESCRIPTOR_RANGE DirectLocalRange{};
+        DirectLocalRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DirectLocalRange.NumDescriptors                    = 1;
+        DirectLocalRange.BaseShaderRegister                = 20;
+        DirectLocalRange.RegisterSpace                     = 0;
+        DirectLocalRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[12].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[12].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[12].DescriptorTable.pDescriptorRanges   = &DirectLocalRange;
+        RootParams[12].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // LUT de transmitancia da atmosfera (t21) — sol/lua atenuados POR PIXEL, na altitude da
+        // superficie. Antes a transmitancia era re-integrada na CPU (40 passos por frame) na
+        // altitude da CAMERA e valia para o frame inteiro: nenhuma variacao por altitude de
+        // superficie. Mesma forma do t16/t20: tabela de 1 SRV, com fallback valido quando a
+        // atmosfera esta off (o AtmoLightParams.w fecha a leitura).
+        D3D12_DESCRIPTOR_RANGE AtmoTransmittanceRange{};
+        AtmoTransmittanceRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        AtmoTransmittanceRange.NumDescriptors                    = 1;
+        AtmoTransmittanceRange.BaseShaderRegister                = 21;
+        AtmoTransmittanceRange.RegisterSpace                     = 0;
+        AtmoTransmittanceRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        RootParams[13].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[13].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[13].DescriptorTable.pDescriptorRanges   = &AtmoTransmittanceRange;
+        RootParams[13].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC StaticSamplers[3]{};
         StaticSamplers[0].Filter           = D3D12_FILTER_ANISOTROPIC;
@@ -346,11 +377,23 @@ namespace Smile {
         auto ForwardBlendPSBlob = LoadShaderBytecode("ForwardBlend.ps_6_0.cso");
 
         D3D12_BLEND_DESC PremulBlend = BlendDesc;
+        PremulBlend.IndependentBlendEnable = TRUE;
         PremulBlend.RenderTarget[0].BlendEnable    = TRUE;
         PremulBlend.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
         PremulBlend.RenderTarget[0].DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
         PremulBlend.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
         PremulBlend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        for (u32 RT = 1; RT <= 2; ++RT) {
+            PremulBlend.RenderTarget[RT] = BlendDesc.RenderTarget[0];
+            PremulBlend.RenderTarget[RT].BlendEnable = TRUE;
+            PremulBlend.RenderTarget[RT].SrcBlend = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].DestBlend = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].BlendOp = D3D12_BLEND_OP_MAX;
+            PremulBlend.RenderTarget[RT].SrcBlendAlpha = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].DestBlendAlpha = D3D12_BLEND_ONE;
+            PremulBlend.RenderTarget[RT].BlendOpAlpha = D3D12_BLEND_OP_MAX;
+            PremulBlend.RenderTarget[RT].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED;
+        }
 
         D3D12_DEPTH_STENCIL_DESC DepthReadOnly = DepthLess;
         DepthReadOnly.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -358,10 +401,10 @@ namespace Smile {
         PSODesc.PS                = { ForwardBlendPSBlob.data(), ForwardBlendPSBlob.size() };
         PSODesc.BlendState        = PremulBlend;
         PSODesc.DepthStencilState = DepthReadOnly;
-        PSODesc.NumRenderTargets  = 1;
+        PSODesc.NumRenderTargets  = 3;
         PSODesc.RTVFormats[0]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        PSODesc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
-        PSODesc.RTVFormats[2]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[1]     = DXGI_FORMAT_R8_UNORM;
+        PSODesc.RTVFormats[2]     = DXGI_FORMAT_R8_UNORM;
         PSODesc.RTVFormats[3]     = DXGI_FORMAT_UNKNOWN;
         PSODesc.RTVFormats[4]     = DXGI_FORMAT_UNKNOWN;
         ComPtr<ID3D12PipelineState> NewPSOForwardBlend;

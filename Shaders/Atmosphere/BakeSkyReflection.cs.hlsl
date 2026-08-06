@@ -45,5 +45,11 @@ void main(uint3 id : SV_DispatchThreadID) {
     float2 lutUV = SkyViewParamsToUv(viewZenithCos, lightViewCos, kViewHeight);
     float3 L = SkyViewLUT.SampleLevel(LinearClampSampler, lutUV, 0.0f).rgb;
 
+    // O clamp do hemisferio inferior (`if (dir.y < 0) L = 0;`) que existia aqui foi REVERTIDO.
+    // Ele tinha sido posto p/ matar a faixa branca do horizonte rasante do oceano, atribuindo-a
+    // ao prefilter GGX integrando o limbo atmosferico. O diagnostico estava errado: a faixa era
+    // o height fog, cuja cor de inscatter era uma constante que nao tinha relacao com o ceu (ver
+    // GetExponentialHeightFog). Zerar o limbo tirava o termo de solo do cubo por nada — e
+    // impedia usa-lo como IBL especular opaco, onde o hemisferio inferior e necessario.
     OutCube[uint3(id.xy, id.z)] = float4(L, 1.0f);
 }

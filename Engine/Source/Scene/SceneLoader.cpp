@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -12,10 +13,30 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <exception>
+#include <limits>
 
 namespace fs = std::filesystem;
 
 namespace Smile {
+    struct FPreparedCookedScene {
+        fs::path BasePath;
+        fs::path ScenePath;
+        fs::path SceneDir;
+        SSceneHeader SceneHeader{};
+        SMeshHeader  MeshHeader{};
+        std::vector<SSceneMaterial>   Materials;
+        std::vector<SSceneRenderable> Renderables;
+        std::vector<SMeshEntry>       MeshEntries;
+        std::vector<std::string>      TexturePaths;
+        std::vector<FTextureCPUData>  TextureData;
+        std::vector<FMesh>            Meshes;
+        double ReadMs    = 0.0;
+        double DecodeMs  = 0.0;
+        double MeshMs    = 0.0;
+        double PrepareMs = 0.0;
+    };
+
 
     void Renderer::RecreateObjectCB() {
         CommandQueue.Flush(); 
@@ -50,6 +71,12 @@ namespace Smile {
     }
 
     namespace {
+        using Clock = std::chrono::steady_clock;
+
+        double MsSince(Clock::time_point Start) {
+            return std::chrono::duration<double, std::milli>(Clock::now() - Start).count();
+        }
+
         bool ReadFile(const fs::path& Path, std::vector<u8>& Out) {
             std::ifstream f(Path, std::ios::binary);
             if (!f) return false;
@@ -61,50 +88,204 @@ namespace Smile {
             f.read(reinterpret_cast<char*>(Out.data()), sz);
             return static_cast<bool>(f);
         }
+
+        bool ArrayFits(size_t Offset, u64 Count, size_t Stride, size_t Total) {
+            if (Offset > Total || Count > std::numeric_limits<size_t>::max() / Stride) return false;
+            const size_t Bytes = static_cast<size_t>(Count) * Stride;
+            return Bytes <= Total - Offset;
+        }
+    }
+
+    FPreparedCookedScenePtr Renderer::PrepareCookedScene(const std::wstring& _ScenePath) {
+        const Clock::time_point t0 = Clock::now();
+        const fs::path Input(_ScenePath);
+        const fs::path Base = Input.parent_path() / Input.stem();
+        fs::path ScenePath = Base; ScenePath += L".sscene";
+        fs::path MeshPath  = Base; MeshPath  += L".smesh";
+
+        try {
+            std::vector<u8> SceneBytes;
+            std::vector<u8> MeshBytes;
+            if (!ReadFile(ScenePath, SceneBytes)) {
+                LogError("LoadCookedScene: nao abriu " + ScenePath.string());
+                return {};
+            }
+            if (!ReadFile(MeshPath, MeshBytes)) {
+                LogError("LoadCookedScene: nao abriu " + MeshPath.string());
+                return {};
+            }
+            if (SceneBytes.size() < sizeof(SSceneHeader) || MeshBytes.size() < sizeof(SMeshHeader)) {
+                LogError("LoadCookedScene: arquivos truncados");
+                return {};
+            }
+
+            auto Prepared = std::make_shared<FPreparedCookedScene>();
+            Prepared->BasePath  = Base;
+            Prepared->ScenePath = ScenePath;
+            Prepared->SceneDir  = Base.parent_path();
+            std::memcpy(&Prepared->SceneHeader, SceneBytes.data(), sizeof(SSceneHeader));
+            std::memcpy(&Prepared->MeshHeader, MeshBytes.data(), sizeof(SMeshHeader));
+            const SSceneHeader& SceneHeader = Prepared->SceneHeader;
+            const SMeshHeader& MeshHeader = Prepared->MeshHeader;
+            if (SceneHeader.Magic != kSSceneMagic || SceneHeader.Version != kCookedVersion ||
+                MeshHeader.Magic != kSMeshMagic || MeshHeader.Version != kCookedVersion) {
+                LogError("LoadCookedScene: magic/versao invalidos");
+                return {};
+            }
+
+            const size_t MaterialsOffset = sizeof(SSceneHeader);
+            if (!ArrayFits(MaterialsOffset, SceneHeader.MaterialCount,
+                           sizeof(SSceneMaterial), SceneBytes.size())) {
+                LogError("LoadCookedScene: tabela de materiais truncada");
+                return {};
+            }
+            const size_t RenderablesOffset = MaterialsOffset +
+                sizeof(SSceneMaterial) * SceneHeader.MaterialCount;
+            if (!ArrayFits(RenderablesOffset, SceneHeader.RenderableCount,
+                           sizeof(SSceneRenderable), SceneBytes.size())) {
+                LogError("LoadCookedScene: tabela de renderaveis truncada");
+                return {};
+            }
+            const size_t EntriesOffset = sizeof(SMeshHeader);
+            if (!ArrayFits(EntriesOffset, MeshHeader.MeshCount,
+                           sizeof(SMeshEntry), MeshBytes.size())) {
+                LogError("LoadCookedScene: tabela de meshes truncada");
+                return {};
+            }
+            const size_t GeometryOffset = EntriesOffset + sizeof(SMeshEntry) * MeshHeader.MeshCount;
+            const size_t GeometryBytes = MeshBytes.size() - GeometryOffset;
+
+            Prepared->Materials.resize(SceneHeader.MaterialCount);
+            if (SceneHeader.MaterialCount > 0) {
+                std::memcpy(Prepared->Materials.data(), SceneBytes.data() + MaterialsOffset,
+                            sizeof(SSceneMaterial) * SceneHeader.MaterialCount);
+            }
+            Prepared->Renderables.resize(SceneHeader.RenderableCount);
+            if (SceneHeader.RenderableCount > 0) {
+                std::memcpy(Prepared->Renderables.data(), SceneBytes.data() + RenderablesOffset,
+                            sizeof(SSceneRenderable) * SceneHeader.RenderableCount);
+            }
+            Prepared->MeshEntries.resize(MeshHeader.MeshCount);
+            if (MeshHeader.MeshCount > 0) {
+                std::memcpy(Prepared->MeshEntries.data(), MeshBytes.data() + EntriesOffset,
+                            sizeof(SMeshEntry) * MeshHeader.MeshCount);
+            }
+
+            for (const SMeshEntry& Entry : Prepared->MeshEntries) {
+                if (Entry.VertexOffset > std::numeric_limits<size_t>::max() ||
+                    Entry.IndexOffset > std::numeric_limits<size_t>::max() ||
+                    !ArrayFits(static_cast<size_t>(Entry.VertexOffset), Entry.VertexCount,
+                               sizeof(Vertex), GeometryBytes) ||
+                    !ArrayFits(static_cast<size_t>(Entry.IndexOffset), Entry.IndexCount,
+                               sizeof(u32), GeometryBytes)) {
+                    LogError("LoadCookedScene: blob de geometria truncado");
+                    return {};
+                }
+            }
+            Prepared->ReadMs = MsSince(t0);
+
+            struct FTextureFlags { bool SRGB; bool IsNormal; };
+            std::unordered_map<std::string, FTextureFlags> UniquePaths;
+            auto Consider = [&](const char* Relative, bool SRGB, bool IsNormal) {
+                if (!Relative || !Relative[0]) return;
+                UniquePaths.emplace(
+                    std::string(Relative, strnlen(Relative, kCookedMaxPath)),
+                    FTextureFlags{ SRGB, IsNormal });
+            };
+            for (const SSceneMaterial& Material : Prepared->Materials) {
+                Consider(Material.BaseColor, true,  false);
+                Consider(Material.Emissive,  true,  false);
+                Consider(Material.Specular,  false, false);
+                Consider(Material.Normal,    false, true);
+                Consider(Material.Metalness, false, false);
+                Consider(Material.Roughness, false, false);
+            }
+
+            std::vector<FTextureFlags> TextureFlags;
+            Prepared->TexturePaths.reserve(UniquePaths.size());
+            TextureFlags.reserve(UniquePaths.size());
+            for (const auto& [Path, Flags] : UniquePaths) {
+                Prepared->TexturePaths.push_back(Path);
+                TextureFlags.push_back(Flags);
+            }
+            Prepared->TextureData.resize(Prepared->TexturePaths.size());
+
+            const Clock::time_point DecodeStart = Clock::now();
+            const unsigned HardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+            // O caller ja ocupa um worker preparando meshes; deixa mais um core livre para
+            // o event loop/render do Editor enquanto os decoders trabalham.
+            const unsigned WorkerBudget = HardwareThreads > 2 ? HardwareThreads - 2 : 1;
+            const unsigned WorkerCount = std::min<unsigned>(
+                std::min(WorkerBudget, 8u), static_cast<unsigned>(Prepared->TexturePaths.size()));
+            auto DecodeWorker = [&](unsigned WorkerIndex) {
+                for (size_t I = WorkerIndex; I < Prepared->TexturePaths.size(); I += WorkerCount) {
+                    try {
+                        const fs::path Relative(Prepared->TexturePaths[I]);
+                        const std::wstring FullPath = (Prepared->SceneDir / Relative).wstring();
+                        std::string Extension = Relative.extension().string();
+                        for (char& C : Extension) if (C >= 'A' && C <= 'Z') C += 32;
+                        Prepared->TextureData[I] = (Extension == ".dds")
+                            ? FTexture::LoadDDSCPU(FullPath, TextureFlags[I].SRGB)
+                            : FTexture::LoadCPU(
+                                FullPath, TextureFlags[I].IsNormal, TextureFlags[I].SRGB);
+                    } catch (const std::exception& Error) {
+                        LogError("LoadCookedScene: falha ao preparar textura " +
+                                 Prepared->TexturePaths[I] + ": " + Error.what());
+                    }
+                }
+            };
+            std::vector<std::jthread> Workers;
+            for (unsigned I = 0; I < WorkerCount; ++I) Workers.emplace_back(DecodeWorker, I);
+
+            const Clock::time_point MeshStart = Clock::now();
+            Prepared->Meshes.resize(MeshHeader.MeshCount);
+            const u8* GeometryBase = MeshBytes.data() + GeometryOffset;
+            for (u32 I = 0; I < MeshHeader.MeshCount; ++I) {
+                const SMeshEntry& Entry = Prepared->MeshEntries[I];
+                FMesh& Mesh = Prepared->Meshes[I];
+                Mesh.Vertices.resize(Entry.VertexCount);
+                if (Entry.VertexCount > 0) {
+                    std::memcpy(Mesh.Vertices.data(), GeometryBase + Entry.VertexOffset,
+                                Entry.VertexCount * sizeof(Vertex));
+                }
+                Mesh.Indices.resize(Entry.IndexCount);
+                if (Entry.IndexCount > 0) {
+                    std::memcpy(Mesh.Indices.data(), GeometryBase + Entry.IndexOffset,
+                                Entry.IndexCount * sizeof(u32));
+                }
+            }
+            Prepared->MeshMs = MsSince(MeshStart);
+
+            for (std::jthread& Worker : Workers) Worker.join();
+            Prepared->DecodeMs = MsSince(DecodeStart);
+            Prepared->PrepareMs = MsSince(t0);
+            LogDebug("Prepare scene CPU (ms): leitura=" + std::to_string((int)Prepared->ReadMs) +
+                     " decode=" + std::to_string((int)Prepared->DecodeMs) +
+                     " meshes=" + std::to_string((int)Prepared->MeshMs) +
+                     " | total=" + std::to_string((int)Prepared->PrepareMs));
+            return Prepared;
+        } catch (const std::exception& Error) {
+            LogError("LoadCookedScene: falha na preparacao CPU: " + std::string(Error.what()));
+            return {};
+        }
     }
 
     bool Renderer::LoadCookedScene(const std::wstring& _ScenePath, bool _Additive) {
-        fs::path in(_ScenePath);
-        fs::path base = in.parent_path() / in.stem(); 
-        fs::path scenePath = base; scenePath += L".sscene";
-        fs::path meshPath  = base; meshPath  += L".smesh";
-        fs::path sceneDir  = base.parent_path();
+        return CommitCookedScene(PrepareCookedScene(_ScenePath), _Additive);
+    }
 
-        using Clock = std::chrono::steady_clock;
-        auto MsSince = [](Clock::time_point a) {
-            return std::chrono::duration<double, std::milli>(Clock::now() - a).count();
-        };
+    bool Renderer::CommitCookedScene(FPreparedCookedScenePtr _Prepared, bool _Additive) {
+        if (!_Prepared) return false;
         const Clock::time_point t0 = Clock::now();
-
-        std::vector<u8> sceneBytes, meshBytes;
-        if (!ReadFile(scenePath, sceneBytes)) {
-            LogError("LoadCookedScene: nao abriu " + scenePath.string());
-            return false;
-        }
-        if (!ReadFile(meshPath, meshBytes)) {
-            LogError("LoadCookedScene: nao abriu " + meshPath.string());
-            return false;
-        }
-        if (sceneBytes.size() < sizeof(SSceneHeader) || meshBytes.size() < sizeof(SMeshHeader)) {
-            LogError("LoadCookedScene: arquivos truncados");
-            return false;
-        }
-
-        SSceneHeader sh{}; std::memcpy(&sh, sceneBytes.data(), sizeof(sh));
-        SMeshHeader  mh{}; std::memcpy(&mh, meshBytes.data(),  sizeof(mh));
-        if (sh.Magic != kSSceneMagic || sh.Version != kCookedVersion ||
-            mh.Magic != kSMeshMagic  || mh.Version != kCookedVersion) {
-            LogError("LoadCookedScene: magic/versao invalidos");
-            return false;
-        }
-
-        const double msRead = MsSince(t0);
-
-        const auto* mats = reinterpret_cast<const SSceneMaterial*>(sceneBytes.data() + sizeof(SSceneHeader));
-        const auto* rnds = reinterpret_cast<const SSceneRenderable*>(
-            sceneBytes.data() + sizeof(SSceneHeader) + sizeof(SSceneMaterial) * sh.MaterialCount);
-        const auto* entriesRaw = meshBytes.data() + sizeof(SMeshHeader);
-        const u8*   geoBase    = meshBytes.data() + sizeof(SMeshHeader) + sizeof(SMeshEntry) * mh.MeshCount;
+        const FPreparedCookedScene& Prepared = *_Prepared;
+        const fs::path& base = Prepared.BasePath;
+        const fs::path& scenePath = Prepared.ScenePath;
+        const fs::path& sceneDir = Prepared.SceneDir;
+        const SSceneHeader& sh = Prepared.SceneHeader;
+        const SMeshHeader& mh = Prepared.MeshHeader;
+        const auto& mats = Prepared.Materials;
+        const auto& rnds = Prepared.Renderables;
+        const auto& entries = Prepared.MeshEntries;
 
         // Em carga aditiva preservamos meshes/materiais/texturas ja carregados; so
         // limpamos a cena anterior no modo de substituicao (padrao).
@@ -125,50 +306,11 @@ namespace Smile {
             ImportedTextures.clear();
         }
 
-        struct TexLoad { bool srgb; bool isNormal; };
-        std::unordered_map<std::string, TexLoad> uniquePaths;
-        auto consider = [&](const char* rel, bool srgb, bool isNormal) {
-            if (rel && rel[0]) uniquePaths.emplace(std::string(rel), TexLoad{ srgb, isNormal });
-        };
-        for (u32 i = 0; i < sh.MaterialCount; ++i) {
-            consider(mats[i].BaseColor, true,  false);
-            consider(mats[i].Emissive,  true,  false);
-            consider(mats[i].Specular,  false, false);
-            consider(mats[i].Normal,    false, true);
-            consider(mats[i].Metalness, false, false);
-            consider(mats[i].Roughness, false, false);
-        }
-
-        std::vector<std::string> relList;
-        std::vector<TexLoad>     flagList;
-        relList.reserve(uniquePaths.size());
-        for (auto& kv : uniquePaths) { relList.push_back(kv.first); flagList.push_back(kv.second); }
-
-        std::vector<FTextureCPUData> cpuData(relList.size());
-        {
-            unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-            unsigned nthreads = std::min<unsigned>(hw, static_cast<unsigned>(relList.size()));
-            auto worker = [&](unsigned tid) {
-                for (size_t i = tid; i < relList.size(); i += nthreads) {
-                    std::wstring full = (sceneDir / fs::path(relList[i])).wstring();
-                    // DDS = formato BC pre-cozido; qualquer outra extensao (PNG/TGA/...) vai pelo WIC.
-                    std::string ext = fs::path(relList[i]).extension().string();
-                    for (char& c : ext) if (c >= 'A' && c <= 'Z') c += 32;
-                    cpuData[i] = (ext == ".dds")
-                        ? FTexture::LoadDDSCPU(full, flagList[i].srgb)
-                        : FTexture::LoadCPU(full, flagList[i].isNormal, flagList[i].srgb);
-                }
-            };
-            std::vector<std::thread> pool;
-            for (unsigned t = 0; t < nthreads; ++t) pool.emplace_back(worker, t);
-            for (auto& th : pool) th.join();
-        }
-        const Clock::time_point tDecodeEnd = Clock::now();
-        const double msDecode = MsSince(t0) - msRead;
-
-        std::vector<FTexture> texs =
-            FTexture::CreateBatchFromCPU(Device.Native(), UploadQueue, SRVHeap, cpuData);
-        const double msTexUpload = MsSince(tDecodeEnd);
+        const Clock::time_point TextureUploadStart = Clock::now();
+        std::vector<FTexture> texs = FTexture::CreateBatchFromCPU(
+            Device.Native(), UploadQueue, SRVHeap, Prepared.TextureData);
+        const double msTexUpload = MsSince(TextureUploadStart);
+        const std::vector<std::string>& relList = Prepared.TexturePaths;
         std::unordered_map<std::string, FTexture*> texByPath;
         u32 uploaded = 0;
         for (size_t i = 0; i < relList.size(); ++i) {
@@ -269,15 +411,14 @@ namespace Smile {
             ImportedMaterials.push_back(std::move(mat));
         }
 
-        std::vector<SMeshEntry> entries(mh.MeshCount);
-        for (u32 i = 0; i < mh.MeshCount; ++i)
-            std::memcpy(&entries[i], entriesRaw + sizeof(SMeshEntry) * i, sizeof(SMeshEntry));
         auto matOf = [&](u32 mi) -> FMaterial* {
             return (mi != kNoMaterial && mi < sh.MaterialCount) ? matPtrs[mi] : nullptr;
         };
-        // Nome do renderable p/ o Scene Outliner: o cozido v6 nao guarda nome por no (o cooker
-        // baka o transform no vertice), entao o melhor nome disponivel e o do material.
-        auto nameOf = [&](u32 mi, u32 fallbackIdx) -> std::string {
+        // Nome do renderable p/ o Scene Outliner. A v7 guarda o nome do NO; antes dela o cooker
+        // bakeava o transform no vertice e nao gravava nome nenhum, e o melhor disponivel era o
+        // do material — que e por que a arvore mostrava nome de material repetido.
+        auto nameOf = [&](const SSceneRenderable& r, u32 mi, u32 fallbackIdx) -> std::string {
+            if (r.Name[0] != '\0') return std::string(r.Name, strnlen(r.Name, kCookedMaxName));
             if (mi != kNoMaterial && mi < sh.MaterialCount && mats[mi].Name[0] != '\0') {
                 const char* n = mats[mi].Name;
                 return std::string(n, strnlen(n, kCookedMaxName));
@@ -285,30 +426,33 @@ namespace Smile {
             return "Mesh " + std::to_string(fallbackIdx);
         };
 
-        const Clock::time_point tMeshStart = Clock::now();
-        std::vector<FMesh> meshesCPU(mh.MeshCount);
-        for (u32 i = 0; i < mh.MeshCount; ++i) {
-            const SMeshEntry& e = entries[i];
-            meshesCPU[i].Vertices.resize(e.VertexCount);
-            std::memcpy(meshesCPU[i].Vertices.data(), geoBase + e.VertexOffset, e.VertexCount * sizeof(Vertex));
-            meshesCPU[i].Indices.resize(e.IndexCount);
-            std::memcpy(meshesCPU[i].Indices.data(), geoBase + e.IndexOffset, e.IndexCount * sizeof(u32));
-        }
-        std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(Device.Native(), UploadQueue, meshesCPU);
+        const Clock::time_point tMeshUploadStart = Clock::now();
+        std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(
+            Device.Native(), UploadQueue, Prepared.Meshes);
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
             const SSceneRenderable& r = rnds[i];
             if (r.MeshIndex >= mh.MeshCount) continue;
             FRenderable out;
-            out.Name     = nameOf(r.MaterialIndex, i);
+            out.Name     = nameOf(r, r.MaterialIndex, i);
             out.Mesh     = meshPtrs[r.MeshIndex];
             out.Material = matOf(r.MaterialIndex);
+            // v7: o transform sai do cozido em vez de ser identidade com a geometria em mundo.
+            out.Transform.Position      = Vec3{ r.Position[0], r.Position[1], r.Position[2] };
+            out.Transform.RotationEuler = Vec3{ r.RotationEuler[0], r.RotationEuler[1],
+                                                r.RotationEuler[2] };
+            out.Transform.Scale         = Vec3{ r.Scale[0], r.Scale[1], r.Scale[2] };
+            // A AABB do cozido e LOCAL na v7; culling, HiZ, sombras locais e chuva leem MUNDO.
             const SMeshEntry& e = entries[r.MeshIndex];
-            out.AABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
-            out.AABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
+            out.LocalAABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
+            out.LocalAABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
+            out.RefreshWorldBounds();
+            // Origem no asset: e por aqui que o .smap volta a achar este objeto na proxima
+            // execucao (o indice na lista viva muda a cada remocao).
+            out.CookedIndex = static_cast<i32>(i);
             Scene.AddRenderable(out);
         }
 
-        const double msMesh = MsSince(tMeshStart);
+        const double msMeshUpload = MsSince(tMeshUploadStart);
 
         // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
         // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
@@ -316,29 +460,30 @@ namespace Smile {
         UploadQueue.WaitIdle();
         const double msSync = MsSince(tSyncStart);
 
+        const Clock::time_point ObjectSetupStart = Clock::now();
         // Dimensiona o ObjectCB pelo total de renderaveis da cena (cobre carga aditiva,
         // onde os renderaveis do interior se somam aos do exterior ja presentes).
         if (static_cast<u32>(Scene.Renderables().size()) > MaxObjects) {
-            MaxObjects = static_cast<u32>(Scene.Renderables().size());
+            // Com folga (SceneCapacityFor): o MaxObjects dimensiona o ObjectCB E a tabela de
+            // bounds do HiZ (SetupObjects logo acima), e as duas precisam da mesma folga das
+            // outras tres estruturas por cena para que criar objeto no editor nao estoure.
+            MaxObjects = SceneCapacityFor(static_cast<u32>(Scene.Renderables().size()));
             RecreateObjectCB();
         }
 
         // Em carga aditiva mantemos a camera onde o usuario deixou; so reposicionamos
-        // na entrada de uma cena nova (substituicao).
-        if (!_Additive)
+        // na entrada de uma cena nova (substituicao) — e ai e corte de camera (Camera.SetPose
+        // direto nao passa pelo SetCameraPose, entao o aviso sai aqui).
+        if (!_Additive) {
             Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
+            Settings().NotifyCameraCut();
+        }
+        const double msObjectSetup = MsSince(ObjectSetupStart);
 
-        LogInfo("Cena carregada: " + std::to_string(mh.MeshCount) + " meshes, " +
-                std::to_string(sh.MaterialCount) + " materiais, " +
-                std::to_string(sh.RenderableCount) + " renderaveis, " +
-                std::to_string(uploaded) + " texturas DDS.");
-        LogInfo("Load (ms): leitura=" + std::to_string((int)msRead) +
-                " decode=" + std::to_string((int)msDecode) +
-                " uploadTex=" + std::to_string((int)msTexUpload) +
-                " meshes=" + std::to_string((int)msMesh) +
-                " syncUpload=" + std::to_string((int)msSync) +
-                " | total=" + std::to_string((int)MsSince(t0)));
-
+        LogDebug("Assets da cena preparados: " + std::to_string(mh.MeshCount) + " meshes, " +
+                 std::to_string(sh.MaterialCount) + " materiais, " +
+                 std::to_string(sh.RenderableCount) + " renderaveis, " +
+                 std::to_string(uploaded) + " texturas DDS");
         // AABB de uniao sobre TODA a cena (exterior + interior em carga aditiva), para
         // o volume de GI cobrir tudo que esta carregado.
         Vec3 sceneMin{  1e30f,  1e30f,  1e30f };
@@ -356,6 +501,7 @@ namespace Smile {
         // chaves de primeiro nivel ("heightmap" relativo a pasta da cena, "size",
         // "unitsPerTexel", "heightScale", "originX/Y/Z"). Sem sidecar em carga de
         // substituicao, descarrega o terreno anterior.
+        const Clock::time_point TerrainStart = Clock::now();
         {
             fs::path terrainPath = base; terrainPath += L".terrain.json";
             if (fs::exists(terrainPath)) {
@@ -427,8 +573,25 @@ namespace Smile {
                                 Scene.AddMeshesBatch(Device.Native(), UploadQueue, ProxyList);
                             UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
 
+                            // Albedo do proxy: textura bakeada com o blend de 4 camadas quando o
+                            // terreno tem camadas (ver FTerrain::BakeProxyAlbedo); sem elas, o
+                            // raster tambem desenha cor chapada e o fator constante basta.
+                            // A textura entra no ImportedTextures, que e liberado junto com o
+                            // ImportedMaterials — o mesmo lifetime do material que aponta p/ ela.
+                            FTexture* proxyAlbedo = nullptr;
+                            FTextureCPUData proxyAlbedoCPU;
+                            if (Terrain.TakeProxyAlbedoCPU(proxyAlbedoCPU)) {
+                                auto tex = std::make_unique<FTexture>(
+                                    FTexture::CreateFromCPU(Device.Native(), UploadQueue, SRVHeap,
+                                                            proxyAlbedoCPU, EVramCategory::Terrain));
+                                if (tex->IsValid()) {
+                                    proxyAlbedo = tex.get();
+                                    ImportedTextures.push_back(std::move(tex));
+                                }
+                            }
+
                             auto mat = std::make_unique<FMaterial>();
-                            mat->Albedo            = &TexDefaultWhite;
+                            mat->Albedo            = proxyAlbedo ? proxyAlbedo : &TexDefaultWhite;
                             mat->Normal            = &TexDefaultNormal;
                             mat->MetallicRoughness = &TexDefaultWhite;
                             mat->AO                = &TexDefaultWhite;
@@ -436,7 +599,11 @@ namespace Smile {
                             mat->Height            = &TexDefaultWhite;
                             mat->Metalness         = &TexDefaultWhite;
                             mat->Roughness         = &TexDefaultWhite;
-                            mat->Constants.BaseColorFactor = { 0.26f, 0.32f, 0.19f, 1.0f };
+                            // Com a textura bakeada o fator vira NEUTRO: o hit shading faz
+                            // albedo = BaseColor * textura, e a cor ja esta na textura.
+                            mat->Constants.BaseColorFactor = proxyAlbedo
+                                ? Vec4{ 1.0f, 1.0f, 1.0f, 1.0f }
+                                : Vec4{ 0.26f, 0.32f, 0.19f, 1.0f }; // cor media do vale
                             mat->Constants.MetallicFactor  = 0.0f;
                             mat->Constants.RoughnessFactor = 0.95f;
                             mat->Finalize(Device.Native(), SRVHeap);
@@ -447,7 +614,13 @@ namespace Smile {
                             proxy.Mesh           = ProxyMesh.empty() ? nullptr : ProxyMesh[0];
                             proxy.Material       = mat.get();
                             proxy.RaytracingOnly = true;
-                            Terrain.GetBounds(proxy.AABBMin, proxy.AABBMax);
+                            // A malha do proxy ja e world-space com transform identidade, entao
+                            // local e mundo coincidem. Preencher as duas mantem a invariante
+                            // "mundo = local pelo Transform" valida tambem aqui — sem isso um
+                            // RefreshWorldBounds futuro trocaria a caixa pelo default de +-1e9.
+                            Terrain.GetBounds(proxy.LocalAABBMin, proxy.LocalAABBMax);
+                            proxy.AABBMin = proxy.LocalAABBMin;
+                            proxy.AABBMax = proxy.LocalAABBMax;
                             if (proxy.Mesh) {
                                 Scene.AddRenderable(proxy);
                                 ImportedMaterials.push_back(std::move(mat));
@@ -461,16 +634,38 @@ namespace Smile {
                 Terrain.Unload(SRVHeap);
             }
         }
+        const double msTerrain = MsSince(TerrainStart);
 
         // O volume de GI NAO inclui o terreno de proposito: um terreno de km esticaria o
         // grid de probes do DDGI. Fora do volume o shading cai no fallback de ambiente;
         // terreno no GI de verdade vem na F3 (BLAS proxy na TLAS).
+        const Clock::time_point RaytracingStart = Clock::now();
         BuildRaytracingScene();
+        const double msRaytracing = MsSince(RaytracingStart);
+        const Clock::time_point GIStart = Clock::now();
         SetupGIForScene(sceneMin, sceneMax);
+        const double msGI = MsSince(GIStart);
 
         // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
         // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
         if (!_Additive) ClearLightSelection();
+
+        const double CommitMs = MsSince(t0);
+        LogDebug("Commit scene GPU (ms): uploadTex=" + std::to_string((int)msTexUpload) +
+                " uploadMeshes=" + std::to_string((int)msMeshUpload) +
+                " syncUpload=" + std::to_string((int)msSync) +
+                " objects=" + std::to_string((int)msObjectSetup) +
+                " terrain=" + std::to_string((int)msTerrain) +
+                " blasTlas=" + std::to_string((int)msRaytracing) +
+                " setupGI=" + std::to_string((int)msGI) +
+                " | total=" + std::to_string((int)CommitMs));
+        const auto TotalMs = static_cast<long long>(Prepared.PrepareMs + CommitMs);
+        LogInfo(std::string(_Additive ? "Cena adicionada" : "Cena carregada") + " em " +
+                std::to_string(TotalMs) + " ms: " + scenePath.filename().string() + " | " +
+                std::to_string(mh.MeshCount) + " meshes, " +
+                std::to_string(sh.MaterialCount) + " materiais, " +
+                std::to_string(sh.RenderableCount) + " renderaveis, " +
+                std::to_string(uploaded) + " texturas");
         return true;
     }
 }

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/DDGI.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
@@ -9,6 +10,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -23,22 +25,9 @@ namespace Smile {
 
         ComPtr<ID3D12Resource> CreateTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
                                            DXGI_FORMAT _Fmt) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = _W;
-            Desc.Height           = _H;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = _Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Tex;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::GI);
-            return Tex;
+            return GpuResources::CreateTex2D(_Device, _W, _H, _Fmt,
+                                             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
         }
 
         struct DDGIInstanceGeo {
@@ -54,51 +43,25 @@ namespace Smile {
             Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; 
             u32  EmissiveMapIndex = 0;
             u32  MrMapIndex       = 0;
-            u32  GeoPad0 = 0, GeoPad1 = 0;
+            u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
+            u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
         };
         static_assert(sizeof(DDGIInstanceGeo) == 80, "DDGIInstanceGeo deve casar com o HLSL (80B)");
 
         ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                    D3D12_RESOURCE_STATES _State,
                                                    D3D12_RESOURCE_FLAGS _Flags = D3D12_RESOURCE_FLAG_NONE) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = _Flags;
-            ComPtr<ID3D12Resource> Buf;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     _State, nullptr, IID_PPV_ARGS(&Buf)));
-            VramTracker::Register(Buf.Get(), EVramCategory::GI);
-            return Buf;
+            return GpuResources::CreateBuffer(_Device, _Size, _Flags, _State, EVramCategory::GI);
         }
 
         ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                   u8** _MappedOut) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            ComPtr<ID3D12Resource> Buf;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Buf)));
-            if (_MappedOut) {
-                D3D12_RANGE NoRead{ 0, 0 };
-                SMILE_HR(Buf->Map(0, &NoRead, reinterpret_cast<void**>(_MappedOut)));
-            }
-            return Buf;
+            // Sem alinhamento de CB: os chamadores passam o tamanho TOTAL ja multiplicado por
+            // kFramesInFlight e fatiam o mapeado na mao pelo FrameSlot.
+            GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, _Size, 1, /*ForConstantBuffer*/ false);
+            if (_MappedOut) *_MappedOut = Upload.Mapped;
+            return Upload.Resource;
         }
     }
 
@@ -175,12 +138,22 @@ namespace Smile {
 
                 g.AlphaCutoff     = MC.AlphaCutoff;
                 g.RoughnessFactor = MC.RoughnessFactor;
-                g.EmissiveFactor  = { MC.EmissiveFactor.X * MC.EmissiveStrength,
-                                      MC.EmissiveFactor.Y * MC.EmissiveStrength,
-                                      MC.EmissiveFactor.Z * MC.EmissiveStrength,
+                // O RTEmissiveScale entra SO aqui: este InstanceGeo e o que os hits de RT leem
+                // (DDGI, ReSTIR GI e reflexoes). O raster segue com o EmissiveStrength puro, entao
+                // baixar a escala tira a malha de iluminar o ambiente sem apagar o brilho dela na
+                // tela. Ver MaterialConstants::RTEmissiveScale.
+                const f32 EmiRT = MC.EmissiveStrength * MC.RTEmissiveScale;
+                g.EmissiveFactor  = { MC.EmissiveFactor.X * EmiRT,
+                                      MC.EmissiveFactor.Y * EmiRT,
+                                      MC.EmissiveFactor.Z * EmiRT,
                                       MC.MetallicFactor };
                 if (MC.AlphaTest)        g.Flags |= 1u;
                 if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
+                // Categoria da instancia na TLAS (kRTMaskTranslucent). Espelhada aqui porque a
+                // mask e propriedade do RAIO: um shader nao consegue perguntar a TLAS com que
+                // mask a instancia entrou. Consumida so pelo BvhDebug — os outros passes
+                // distinguem translucido pela mask que eles proprios tracam.
+                if (R.Material->Blend)   g.Flags |= 128u;
                 if (R.Material->IsFinalized()) {
                     // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
                     if (MC.HasEmissiveMap) {
@@ -190,6 +163,21 @@ namespace Smile {
                     if (MC.HasMetallicRoughnessMap) {
                         g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
                         g.Flags |= 8u;
+                        // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem
+                        // este bit o RT leria o canal errado e um material viraria metal (ou
+                        // dielétrico) por engano no bounce.
+                        if (MC.SpecularPacking) g.Flags |= 16u;
+                    }
+                    // Mapa Metalness SEPARADO (slot +6). Precisa existir aqui porque o loader
+                    // deixa MetallicFactor = 1 quando ha mapa — sem enxergar o mapa, o RT leria
+                    // "metal puro" e zeraria o difuso de um material que e quase todo dieletrico.
+                    if (MC.HasMetalnessMap) {
+                        g.MetalMapIndex = R.Material->AlbedoDescriptorIndex() + 6;
+                        g.Flags |= 32u;
+                    }
+                    if (MC.HasRoughnessMap) {
+                        g.RoughMapIndex = R.Material->AlbedoDescriptorIndex() + 7;
+                        g.Flags |= 64u;
                     }
                 }
             }
@@ -202,6 +190,30 @@ namespace Smile {
     // Re-upload do snapshot. O chamador (Renderer::NotifyMaterialRTStateChanged) e responsavel
     // por garantir que a GPU nao esteja lendo o buffer — e um upload heap unico, sem versao por
     // frame em voo, entao escrever com frames em voo corromperia o que eles estao lendo.
+    void FDDGI::InvalidateRegion(const Vec3& _Min, const Vec3& _Max) {
+        // Uniao com o que ja estava pendente: duas edicoes dentro da mesma janela de frames nao
+        // podem fazer a segunda cancelar a primeira. A uniao e conservadora (pega sondas a mais),
+        // que e o lado seguro — o errado seria deixar de fora uma sonda que precisava atualizar.
+        if (InvalidateFramesLeft_ > 0) {
+            InvalidateMin_ = { std::min(InvalidateMin_.X, _Min.X),
+                               std::min(InvalidateMin_.Y, _Min.Y),
+                               std::min(InvalidateMin_.Z, _Min.Z) };
+            InvalidateMax_ = { std::max(InvalidateMax_.X, _Max.X),
+                               std::max(InvalidateMax_.Y, _Max.Y),
+                               std::max(InvalidateMax_.Z, _Max.Z) };
+        } else {
+            InvalidateMin_ = _Min;
+            InvalidateMax_ = _Max;
+        }
+        // Uma sonda ILUMINA o objeto e e iluminada por ele de fora da AABB dele; a caixa cresce
+        // um espacamento de grid em cada lado p/ pegar a camada de sondas em volta, que e onde o
+        // color bleed do objeto aparece.
+        const f32 Pad = SpacingV;
+        InvalidateMin_ = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad, InvalidateMin_.Z - Pad };
+        InvalidateMax_ = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad, InvalidateMax_.Z + Pad };
+        InvalidateFramesLeft_ = kInvalidateFrames;
+    }
+
     void FDDGI::RefreshInstanceGeo(const FScene& _Scene) {
         if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
         const u32 Count = std::min(InstanceGeoCount,
@@ -222,7 +234,7 @@ namespace Smile {
 
         const u32 NumRenderables = static_cast<u32>(_Scene.Renderables().size());
         if (NumRenderables == 0 || _TlasSRVSlot == kInvalidSlot) {
-            LogWarning("[GI] - DDGI: Cena sem Geometria/TLAS; Volume nao Criado");
+            LogDebug("[GI] - DDGI: Cena sem Geometria/TLAS; Volume nao Criado");
             return;
         }
 
@@ -287,11 +299,19 @@ namespace Smile {
         ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
+        // Snapshot com folga (SceneCapacityFor): objeto criado no editor cabe sem realocar
+        // descriptor nem refazer o SetupForScene. So os [0, NumRenderables) sao preenchidos —
+        // FillInstanceGeo le a lista da cena, e ir alem dela seria leitura fora do vetor.
+        // A cauda vai a zero: nenhuma instancia da TLAS aponta para la (a TLAS so tem os
+        // reais), mas zero e um estado legivel se algum dia um indice errado chegar ate aqui.
+        const u32 GeoCapacity = SceneCapacityFor(NumRenderables);
         u8* GeoMapped = nullptr;
         InstanceGeoBuf = CreateUploadBuffer(_Device,
-            static_cast<UINT64>(NumRenderables) * sizeof(DDGIInstanceGeo), &GeoMapped);
-        InstanceGeoCount = NumRenderables;
+            static_cast<UINT64>(GeoCapacity) * sizeof(DDGIInstanceGeo), &GeoMapped);
+        InstanceGeoCount = GeoCapacity;
         FillInstanceGeo(_Scene, GeoMapped, NumRenderables);
+        std::memset(GeoMapped + static_cast<size_t>(NumRenderables) * sizeof(DDGIInstanceGeo),
+                    0, static_cast<size_t>(GeoCapacity - NumRenderables) * sizeof(DDGIInstanceGeo));
         InstanceGeoBuf->Unmap(0, nullptr);
 
         AtlasSRVSlot       = _SRVHeap.Allocate(1);
@@ -331,7 +351,7 @@ namespace Smile {
         BufSrv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         BufSrv.Format                     = DXGI_FORMAT_UNKNOWN;
         BufSrv.Buffer.FirstElement        = 0;
-        BufSrv.Buffer.NumElements         = NumRenderables;
+        BufSrv.Buffer.NumElements         = GeoCapacity; // = tamanho do buffer, nao da cena
         BufSrv.Buffer.StructureByteStride = sizeof(DDGIInstanceGeo);
         _SRVHeap.CreateSRV(_Device, InstanceGeoBuf.Get(), BufSrv, InstanceSRVSlot);
 
@@ -359,7 +379,9 @@ namespace Smile {
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
             _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
-            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            // t4 = atlas de distancia (gather completo no 2o bounce). t5 segue filler: aqui o
+            // ProbeData ja esta em t6, usado tambem pela origem do raio.
+            _SRVHeap.CpuHandleStaging(DistSRVSlot),
             _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
@@ -433,7 +455,7 @@ namespace Smile {
 
         Ready = true;
         RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0; 
-        LogInfo("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
+        LogDebug("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
                 "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
                 "), spacing " + std::to_string(SpacingV) + ", atlas " +
                 std::to_string(AtlasWidth) + "x" + std::to_string(AtlasHeight));
@@ -462,12 +484,28 @@ namespace Smile {
         // passe realmente roda, no RecordUpdate.
         CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 HysteresisResetPending ? 0.0f : Hysteresis };
+        // Caixa de invalidacao espacial. Como o reset global, so e CONSUMIDA quando o passe roda
+        // (o decremento mora no RecordUpdate) — senao um frame em que o DDGI nem atualiza gastaria
+        // a janela. w do Min = "ha invalidacao ativa"; w do Max = a hysteresis de dentro dela.
+        const bool Invalidating = InvalidateFramesLeft_ > 0;
+        CPU.InvalidateMin     = { InvalidateMin_.X, InvalidateMin_.Y, InvalidateMin_.Z,
+                                  Invalidating ? 1.0f : 0.0f };
+        CPU.InvalidateMaxHyst = { InvalidateMax_.X, InvalidateMax_.Y, InvalidateMax_.Z,
+                                  kInvalidateHysteresis };
         CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity,
                                 RayEps.HitShadowRayBias };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
+        CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
+                                GIHit.SkipMode };
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+        CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
+        CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
+        CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
+        CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.SkyParams             = SkyLutParams;
         CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
@@ -499,11 +537,18 @@ namespace Smile {
 
     void FDDGI::TransitionForUpdate(ID3D12GraphicsCommandList* _CL) {
         if (!Ready) return;
-        // Sai de kAtlasRead (contem PIXEL) -> UAV: so em fila direta. ProbeData fica de
-        // fora: o trace ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        // Sai de kAtlasRead (contem PIXEL) -> so em fila direta. ProbeData fica de fora: o trace
+        // ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        //
+        // Os ATLASES vao para NON_PIXEL, e NAO para UAV: o proximo passe e o TRACE, que os le
+        // como SRV (t3 = irradiancia e t4 = distancia) no gather do 2o bounce. Estado de escrita
+        // nao se combina com estado de leitura no D3D12, entao le-los em UAV era comportamento
+        // indefinido — e isso ja valia para a irradiancia desde que o bounce existe; o atlas de
+        // distancia so herdou o problema quando o bounce ganhou o Chebyshev. A promocao para UAV
+        // acontece DEPOIS do trace, dentro do RecordUpdate, onde e compute-legal.
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
     void FDDGI::TransitionForRead(ID3D12GraphicsCommandList* _CL) {
@@ -518,6 +563,10 @@ namespace Smile {
         // Daqui em diante o update roda de fato, entao o reset one-shot foi consumido — o CB
         // deste frame ja foi escrito com histerese 0 pelo UpdatePerFrame.
         HysteresisResetPending = false;
+        // Idem para a janela da invalidacao espacial: conta FRAMES DE UPDATE, nao frames de
+        // aplicacao. Se o DDGI ficar sem atualizar (async, toggle, cena sem TLAS), a janela
+        // espera em vez de escoar sem ter misturado nada.
+        if (InvalidateFramesLeft_ > 0) --InvalidateFramesLeft_;
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);

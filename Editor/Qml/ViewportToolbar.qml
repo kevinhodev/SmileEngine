@@ -2,101 +2,61 @@ import QtQuick
 import QtQuick.Controls
 import "components" as C
 
-// Toolbar do viewport e dropdown de view modes. `viewportModel` e o ViewportWidget
-// exposto pelo C++; ele aplica os modos/toggles diretamente no Renderer.
+// Toolbar do viewport e dropdown de view modes. Cada instancia recebe explicitamente o
+// ViewportWidget que controla; os atalhos globais sao roteados pelo MainWindow para a ativa.
 Rectangle {
     id: root
-    color: "#141511"
+
+    required property var viewportModel
+    required property var renderModel
+
+    color: "#131410"
     implicitWidth: 900
-    implicitHeight: 36
+    implicitHeight: 34
 
     readonly property color textPrimary: "#e6e2d8"
     readonly property color textNormal: "#c8c2b4"
     readonly property color textMuted: "#6c6a61"
-    readonly property color blue: "#5b9dff"
-
-    component Chevron: Canvas {
-        id: chevron
-        property color color: root.textMuted
-        implicitWidth: 10
-        implicitHeight: 7
-        onColorChanged: requestPaint()
-        onPaint: {
-            const ctx = getContext("2d")
-            ctx.reset()
-            ctx.strokeStyle = color
-            ctx.lineWidth = 1.35
-            ctx.lineCap = "round"
-            ctx.lineJoin = "round"
-            ctx.beginPath()
-            ctx.moveTo(1.5, 1.5)
-            ctx.lineTo(5, 5)
-            ctx.lineTo(8.5, 1.5)
-            ctx.stroke()
-        }
-    }
-
-    component ToolButton: Rectangle {
-        id: toolButton
-        property string label
-        property bool active: false
-        property bool dropDown: false
-        property string tip: ""
-        signal tapped()
-
-        implicitHeight: 22
-        implicitWidth: labelText.implicitWidth + (dropDown ? 34 : 20)
-        radius: 5
-        color: active ? "#16233f" : (toolHover.hovered ? "#23241d" : "#1b1c17")
-        border.color: active ? "#27406e" : "#2a2b24"
-        border.width: 1
-
-        Text {
-            id: labelText
-            anchors.left: parent.left
-            anchors.leftMargin: 10
-            anchors.verticalCenter: parent.verticalCenter
-            text: toolButton.label
-            color: toolButton.active ? root.blue : root.textNormal
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 11
-        }
-        Chevron {
-            visible: toolButton.dropDown
-            anchors.right: parent.right
-            anchors.rightMargin: 9
-            anchors.verticalCenter: parent.verticalCenter
-            color: toolButton.active ? root.blue : "#9a958a"
-        }
-        HoverHandler { id: toolHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: toolButton.tapped() }
-        ToolTip.visible: toolButton.tip !== "" && toolHover.hovered
-        ToolTip.text: toolButton.tip
-        ToolTip.delay: 500
-    }
+    readonly property color accent: C.Theme.green
+    readonly property bool compact: width < 1040
+    readonly property bool narrow: width < 760
 
     component IconToolButton: Rectangle {
         id: iconButton
-        property string glyph
+        property string iconName
         property string tip: ""
+        property bool active: false
+        property bool enabledVisual: true
+        property bool framed: false
+        property string tipShortcut: ""
         signal tapped()
         implicitWidth: 26
         implicitHeight: 22
         radius: 5
-        color: iconHover.hovered ? "#23241d" : "transparent"
-        border.color: iconHover.hovered ? "#33342c" : "transparent"
-        Text {
+        opacity: enabledVisual ? 1.0 : 0.38
+        color: active ? C.Theme.greenBg
+                      : (iconHover.hovered && enabledVisual ? "#22241e"
+                         : (framed ? "#1a1c17" : "transparent"))
+        border.color: active ? C.Theme.greenBorder
+                             : (iconHover.hovered && enabledVisual ? "#393b32"
+                                : (framed ? "#2d2f28" : "transparent"))
+        border.width: 1
+        C.ToolbarIcon {
             anchors.centerIn: parent
-            text: iconButton.glyph
-            color: "#9a958a"
-            font.family: "Segoe UI Symbol"
-            font.pixelSize: 14
+            width: 14; height: 14
+            name: iconButton.iconName
+            color: iconButton.active ? root.accent : "#a7a397"
         }
-        HoverHandler { id: iconHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: iconButton.tapped() }
-        ToolTip.visible: iconButton.tip !== "" && iconHover.hovered
-        ToolTip.text: iconButton.tip
-        ToolTip.delay: 500
+        HoverHandler {
+            id: iconHover
+            cursorShape: iconButton.enabledVisual ? Qt.PointingHandCursor : Qt.ArrowCursor
+        }
+        TapHandler { enabled: iconButton.enabledVisual; onTapped: iconButton.tapped() }
+        C.ToolTip {
+            active: iconButton.tip !== "" && iconHover.hovered
+            text: iconButton.tip
+            shortcut: iconButton.tipShortcut
+        }
     }
 
     component RadioMark: Item {
@@ -114,13 +74,13 @@ Rectangle {
                 const cy = height / 2
                 ctx.reset()
                 ctx.lineWidth = 1.25
-                ctx.strokeStyle = radioMark.checked ? root.blue : "#4a4b41"
+                ctx.strokeStyle = radioMark.checked ? root.accent : "#4a4b41"
                 ctx.beginPath()
                 ctx.arc(cx, cy, 4.75, 0, Math.PI * 2)
                 ctx.stroke()
 
                 if (radioMark.checked) {
-                    ctx.fillStyle = root.blue
+                    ctx.fillStyle = root.accent
                     ctx.beginPath()
                     ctx.arc(cx, cy, 2.25, 0, Math.PI * 2)
                     ctx.fill()
@@ -140,7 +100,7 @@ Rectangle {
         signal tapped()
 
         radius: 5
-        color: selected ? "#16233f" : (modeHover.hovered ? "#22231c" : "transparent")
+        color: selected ? C.Theme.greenBg : (modeHover.hovered ? "#22231c" : "transparent")
 
         RadioMark {
             anchors.left: parent.left
@@ -193,7 +153,7 @@ Rectangle {
             anchors.rightMargin: 7
             anchors.verticalCenter: modeLabel.verticalCenter
             text: modeRow.shortcutText
-            color: modeRow.selected ? "#8fb4e8" : root.textMuted
+            color: modeRow.selected ? C.Theme.greenText : root.textMuted
             font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
@@ -258,8 +218,8 @@ Rectangle {
             anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
             width: 28; height: 16; radius: 8
-            color: toggleRow.checked ? root.blue : "#383931"
-            border.color: toggleRow.checked ? root.blue : "#4a4b41"
+            color: toggleRow.checked ? root.accent : "#383931"
+            border.color: toggleRow.checked ? root.accent : "#4a4b41"
             Rectangle {
                 width: 11; height: 11; radius: 5.5
                 y: 2.5
@@ -278,36 +238,104 @@ Rectangle {
         }
     }
 
+    // Camada visual apenas. Exceto o seletor Lit, os novos controles serão conectados
+    // progressivamente aos bridges do editor em etapas próprias.
     Row {
         id: leftTools
         anchors.left: parent.left
         anchors.leftMargin: 12
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 8
+        spacing: 3
 
         Row {
+            anchors.verticalCenter: parent.verticalCenter
             spacing: 1
-            IconToolButton { glyph: "＋"; tip: "Adicionar (em breve)" }
-            IconToolButton { glyph: "↻"; tip: "Orbitar câmera (em breve)" }
-            IconToolButton { glyph: "↗"; tip: "Enquadrar seleção (em breve)" }
+            IconToolButton { iconName: "undo"; tip: "Desfazer"; tipShortcut: "Ctrl+Z" }
+            IconToolButton {
+                iconName: "redo"
+                tip: "Nada para refazer"
+                enabledVisual: false
+            }
         }
 
         Rectangle {
             width: 1; height: 18
             anchors.verticalCenter: parent.verticalCenter
-            color: "#2a2b24"
+            color: "#2d2f28"
         }
 
-        ToolButton {
-            width: 104
-            label: "Perspectiva"
-            dropDown: true
-            tip: "Projeção da câmera (em breve)"
+        Item {
+            width: 107; height: 22
+            anchors.verticalCenter: parent.verticalCenter
+            Rectangle {
+                anchors.fill: parent
+                radius: 5
+                color: "#181a15"
+                border.color: "#2d2f28"
+            }
+            Row {
+                anchors.fill: parent
+                spacing: 1
+                IconToolButton { width: 26; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q" }
+                IconToolButton { width: 26; iconName: "move"; active: true; tip: "Mover"; tipShortcut: "W" }
+                IconToolButton { width: 26; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E" }
+                IconToolButton { width: 26; iconName: "scale"; tip: "Escalar"; tipShortcut: "R" }
+            }
         }
-        ToolButton {
+
+        C.ToolbarButton {
+            visible: !root.narrow
+            iconName: "world"
+            label: root.compact ? "" : "Global"
+            dropDown: true
+            tip: "Espaço de transformação: Global"
+        }
+
+        Rectangle {
+            width: 1; height: 18
+            visible: !root.narrow
+            anchors.verticalCenter: parent.verticalCenter
+            color: "#2d2f28"
+        }
+
+        C.ToolbarButton {
+            iconName: "magnet"
+            label: "10 cm"
+            dropDown: true
+            active: true
+            tip: "Snap de movimento: 10 cm"
+        }
+        C.ToolbarButton {
+            visible: !root.compact
+            iconName: "angle"
+            label: "15°"
+            dropDown: true
+            tip: "Snap de rotação: 15°"
+        }
+        C.ToolbarButton {
+            visible: !root.compact
+            iconName: "percent"
+            label: "10%"
+            dropDown: true
+            tip: "Snap de escala: 10%"
+        }
+
+        Rectangle {
+            width: 1; height: 18
+            anchors.verticalCenter: parent.verticalCenter
+            color: "#2d2f28"
+        }
+
+        C.ToolbarButton {
+            iconName: "camera"
+            label: root.compact ? "" : "Perspectiva"
+            dropDown: true
+            tip: "Projeção e vistas da câmera"
+        }
+        C.ToolbarButton {
             id: viewModeButton
-            width: Math.max(60, implicitWidth)
-            label: viewportModel.viewModeLabel
+            iconName: "lit"
+            label: root.compact ? "" : root.viewportModel.viewModeLabel
             dropDown: true
             active: true
             onTapped: {
@@ -315,26 +343,48 @@ Rectangle {
                 else viewModesPopup.open()
             }
         }
-        ToolButton {
-            width: 84
+        C.ToolbarButton {
+            visible: !root.narrow
+            iconName: "eye"
             label: "Mostrar"
             dropDown: true
-            tip: "Filtros de visibilidade (em breve)"
+            tip: "Filtros de visibilidade"
         }
     }
 
     Row {
+        id: rightTools
         anchors.right: parent.right
         anchors.rightMargin: 12
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 6
-        ToolButton {
-            width: 84
-            label: "▣  4,0"
-            tip: "Velocidade da câmera (em breve)"
+        spacing: root.compact ? 2 : 4
+
+        IconToolButton {
+            visible: !root.narrow
+            iconName: "focus"
+            tip: "Enquadrar seleção"
+            tipShortcut: "F"
         }
-        IconToolButton { glyph: "▦"; tip: "Grade (em breve)" }
-        IconToolButton { glyph: "⛶"; tip: "Maximizar viewport (em breve)" }
+        C.ToolbarButton {
+            iconName: "speed"
+            label: root.compact ? "" : "4,0×"
+            dropDown: true
+            tip: "Velocidade da câmera: 4,0×"
+        }
+        C.ToolbarButton {
+            visible: !root.narrow
+            iconName: "stats"
+            label: root.compact ? "" : "Stats"
+            tip: "Estatísticas de desempenho"
+        }
+        IconToolButton {
+            iconName: "grid"
+            active: true
+            framed: true
+            tip: "Grade visível"
+        }
+        IconToolButton { iconName: "maximize"; tip: "Maximizar viewport" }
+        IconToolButton { iconName: "more"; tip: "Mais opções" }
     }
 
     Rectangle {
@@ -342,16 +392,16 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: "#23241d"
+        color: "#292b24"
     }
 
     Popup {
         id: viewModesPopup
         popupType: Popup.Window
-        x: viewModeButton.x + leftTools.x
+        x: leftTools.x + viewModeButton.x
         y: root.height
         width: 280
-        height: 424
+        height: 452
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
@@ -379,14 +429,14 @@ Rectangle {
             ModeRow {
                 x: 8; y: 30; width: 264; height: 26
                 label: "Lit"; shortcutText: "Alt+1"
-                selected: viewportModel.viewMode === 0 && viewportModel.debugTargetIndex < 0
-                onTapped: { viewportModel.SelectLit(); viewModesPopup.close() }
+                selected: root.viewportModel.viewMode === 0 && root.viewportModel.debugTargetIndex < 0
+                onTapped: { root.viewportModel.SelectLit(); viewModesPopup.close() }
             }
             ModeRow {
                 x: 8; y: 60; width: 264; height: 28
                 label: "Heatmap de reflexos"; shortcutText: "Alt+5"
-                selected: viewportModel.viewMode === 3 && viewportModel.debugTargetIndex < 0
-                onTapped: { viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
+                selected: root.viewportModel.viewMode === 3 && root.viewportModel.debugTargetIndex < 0
+                onTapped: { root.viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
             }
             // Visualizador generico: lista TODOS os alvos publicados em DebugTargets, incluindo
             // os campos do G-buffer. A lista vem do bridge (debugTargetNames), entao passe novo
@@ -394,7 +444,7 @@ Rectangle {
             ModeRow {
                 x: 8; y: 90; width: 264; height: 28
                 label: "Render targets"; hasSubmenu: true
-                selected: viewportModel.debugTargetIndex >= 0
+                selected: root.viewportModel.debugTargetIndex >= 0
                 onTapped: {
                     if (debugTargetPopup.opened) debugTargetPopup.close()
                     else debugTargetPopup.open()
@@ -412,61 +462,67 @@ Rectangle {
             ToggleRow {
                 x: 8; y: 150; width: 264; height: 28
                 label: "DDGI"; detail: "radiance cache"
-                checked: viewportModel.ddgiEnabled
-                onToggled: viewportModel.ToggleDDGI()
+                checked: root.renderModel.ddgiEnabled
+                onToggled: root.renderModel.ToggleDDGI()
             }
             ToggleRow {
                 x: 8; y: 178; width: 264; height: 28
                 label: "ReSTIR GI"
-                checked: viewportModel.restirGIEnabled
-                onToggled: viewportModel.ToggleReSTIRGI()
+                checked: root.renderModel.restirGIEnabled
+                onToggled: root.renderModel.ToggleReSTIRGI()
             }
             ToggleRow {
                 x: 8; y: 206; width: 264; height: 28
                 label: "ReSTIR visibility"; detail: "raio extra"
-                checked: viewportModel.restirGIVisibilityEnabled
-                interactive: viewportModel.restirGIEnabled
-                onToggled: viewportModel.ToggleReSTIRGIVisibility()
+                checked: root.renderModel.restirGIVisibilityEnabled
+                interactive: root.renderModel.restirGIEnabled
+                onToggled: root.renderModel.ToggleReSTIRGIVisibility()
             }
             ToggleRow {
                 x: 8; y: 234; width: 264; height: 28
-                label: "Folhagem sombreia GI"; detail: "alpha-test"
-                checked: viewportModel.giFoliageShadows
-                onToggled: viewportModel.ToggleGIFoliageShadows()
+                label: "ReGIR"; detail: "hits secundários"
+                checked: root.renderModel.reGIREnabled
+                onToggled: root.renderModel.ToggleReGIR()
             }
             ToggleRow {
                 x: 8; y: 262; width: 264; height: 28
-                label: "GTAO"
-                checked: viewportModel.gtaoEnabled
-                onToggled: viewportModel.ToggleGTAO()
+                label: "Folhagem sombreia GI"; detail: "alpha-test"
+                checked: root.renderModel.giFoliageShadows
+                onToggled: root.renderModel.ToggleGIFoliageShadows()
             }
             ToggleRow {
                 x: 8; y: 290; width: 264; height: 28
+                label: "GTAO"
+                checked: root.renderModel.gtaoEnabled
+                onToggled: root.renderModel.ToggleGTAO()
+            }
+            ToggleRow {
+                x: 8; y: 318; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
-                checked: viewportModel.gtaoHalfRes
-                onToggled: viewportModel.ToggleGTAOHalfRes()
+                checked: root.renderModel.gtaoHalfRes
+                onToggled: root.renderModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 322; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 350; width: 252; height: 1; color: "#23241d" }
             Text {
-                x: 14; y: 332
+                x: 14; y: 360
                 text: "Reflexos"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 350; width: 264; height: 28
+                x: 8; y: 378; width: 264; height: 28
                 label: "Reflexos RT"
-                checked: viewportModel.reflectionsEnabled
-                onToggled: viewportModel.ToggleReflections()
+                checked: root.renderModel.reflectionsEnabled
+                onToggled: root.renderModel.ToggleReflections()
             }
             // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
             // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.
 
-            Rectangle { x: 14; y: 382; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 410; width: 252; height: 1; color: "#23241d" }
             Rectangle {
-                x: 8; y: 388; width: 264; height: 28; radius: 5
+                x: 8; y: 416; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? "#22231c" : "transparent"
                 Text {
                     x: 8
@@ -497,12 +553,13 @@ Rectangle {
                 TapHandler {
                     onTapped: {
                         viewModesPopup.close()
-                        viewportModel.RequestSettings()
+                        root.viewportModel.RequestSettings()
                     }
                 }
-                ToolTip.visible: settingsHover.hovered
-                ToolTip.text: "Abrir configurações de renderização"
-                ToolTip.delay: 500
+                C.ToolTip {
+                    active: settingsHover.hovered
+                    text: "Abrir configurações de renderização"
+                }
             }
         }
     }
@@ -516,7 +573,7 @@ Rectangle {
         y: root.height + 56
         width: 232
         // Cresce com a lista (+1 pela linha "Desligado"), com teto p/ nao estourar a tela.
-        height: Math.min(12 + (viewportModel.debugTargetNames.length + 1) * 28, 460)
+        height: Math.min(12 + (root.viewportModel.debugTargetNames.length + 1) * 28, 460)
         padding: 6
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
@@ -536,7 +593,7 @@ Rectangle {
                     RadioMark {
                         anchors.left: parent.left; anchors.leftMargin: 7
                         anchors.verticalCenter: parent.verticalCenter
-                        checked: viewportModel.debugTargetIndex < 0
+                        checked: root.viewportModel.debugTargetIndex < 0
                     }
                     Text {
                         anchors.left: parent.left; anchors.leftMargin: 27
@@ -549,14 +606,14 @@ Rectangle {
                     HoverHandler { id: offHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
                         onTapped: {
-                            viewportModel.SelectDebugTarget(-1)
+                            root.viewportModel.SelectDebugTarget(-1)
                             debugTargetPopup.close()
                             viewModesPopup.close()
                         }
                     }
                 }
                 Repeater {
-                    model: viewportModel.debugTargetNames
+                    model: root.viewportModel.debugTargetNames
                     delegate: Rectangle {
                         required property string modelData
                         required property int index
@@ -565,7 +622,7 @@ Rectangle {
                         RadioMark {
                             anchors.left: parent.left; anchors.leftMargin: 7
                             anchors.verticalCenter: parent.verticalCenter
-                            checked: viewportModel.debugTargetIndex === index
+                            checked: root.viewportModel.debugTargetIndex === index
                         }
                         Text {
                             anchors.left: parent.left; anchors.leftMargin: 27
@@ -580,7 +637,7 @@ Rectangle {
                         HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
                             onTapped: {
-                                viewportModel.SelectDebugTarget(index)
+                                root.viewportModel.SelectDebugTarget(index)
                                 debugTargetPopup.close()
                                 viewModesPopup.close()
                             }
@@ -591,14 +648,4 @@ Rectangle {
         }
     }
 
-    Shortcut {
-        sequence: "Alt+1"
-        context: Qt.ApplicationShortcut
-        onActivated: viewportModel.SelectLit()
-    }
-    Shortcut {
-        sequence: "Alt+5"
-        context: Qt.ApplicationShortcut
-        onActivated: viewportModel.SelectReflectionHeatmap()
-    }
 }

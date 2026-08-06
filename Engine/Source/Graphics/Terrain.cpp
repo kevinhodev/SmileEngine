@@ -8,10 +8,12 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <thread>
+#include <vector>
 
 namespace Smile {
     namespace {
@@ -21,6 +23,74 @@ namespace Smile {
             f32 U, V;
             u8  Morph[4];
         };
+
+        // ---- Espelho em CPU do TerrainGBuffer.ps, para o bake do albedo do proxy de RT ----
+        // Manter em sincronia com Shaders/Terrain/TerrainGBuffer.ps.hlsl: se os pesos das camadas
+        // ou a macro variation mudarem la, mudam aqui.
+
+        f32 SrgbToLinear(u8 _B) {
+            const f32 S = _B / 255.0f;
+            return S <= 0.04045f ? S / 12.92f : std::pow((S + 0.055f) / 1.055f, 2.4f);
+        }
+
+        u8 LinearToSrgbByte(f32 _L) {
+            _L = std::clamp(_L, 0.0f, 1.0f);
+            const f32 S = _L <= 0.0031308f ? _L * 12.92f
+                                           : 1.055f * std::pow(_L, 1.0f / 2.4f) - 0.055f;
+            return static_cast<u8>(std::clamp(S * 255.0f + 0.5f, 0.0f, 255.0f));
+        }
+
+        f32 Smoothstep(f32 _A, f32 _B, f32 _X) {
+            const f32 T = std::clamp((_X - _A) / ((_B - _A) != 0.0f ? (_B - _A) : 1e-6f),
+                                     0.0f, 1.0f);
+            return T * T * (3.0f - 2.0f * T);
+        }
+
+        // Hash/ruido copiados 1:1 do PS, e desta vez BIT A BIT: o hash e inteiro de 32 bits, cuja
+        // semantica (incluindo o wraparound do produto) e identica em HLSL e C++, e a saida usa so
+        // 24 bits — cabe exato na mantissa do float e a escala e potencia de 2, entao a conversao
+        // nao arredonda. O campo de ruido que a tela desenha e o que o bake gera sao o MESMO, e as
+        // manchas de terra e a macro variation ficam no mesmo lugar no raster e no GI.
+        //
+        // Era frac(sin(x)*43758), que amplificava em ~4e4 a diferenca entre o sin do hardware e o
+        // da libm: o bake produzia um campo com a mesma estatistica, mas descorrelacionado.
+        u32 HashUint2(i32 _X, i32 _Y) {
+            u32 h = static_cast<u32>(_X) * 0x9E3779B1u ^ static_cast<u32>(_Y) * 0x85EBCA77u;
+            h ^= h >> 15; h *= 0x2C1B3C6Du;
+            h ^= h >> 12; h *= 0x297A2D39u;
+            h ^= h >> 15;
+            return h;
+        }
+        f32 Hash2(f32 _X, f32 _Y) {
+            const u32 H = HashUint2(static_cast<i32>(_X), static_cast<i32>(_Y)) >> 8;
+            return static_cast<f32>(H) * (1.0f / 16777216.0f);
+        }
+
+        f32 ValueNoise(f32 _X, f32 _Y) {
+            const f32 ix = std::floor(_X), iy = std::floor(_Y);
+            const f32 fx = _X - ix,        fy = _Y - iy;
+            const f32 ux = fx * fx * (3.0f - 2.0f * fx);
+            const f32 uy = fy * fy * (3.0f - 2.0f * fy);
+            const f32 a = Hash2(ix,        iy);
+            const f32 b = Hash2(ix + 1.0f, iy);
+            const f32 c = Hash2(ix,        iy + 1.0f);
+            const f32 d = Hash2(ix + 1.0f, iy + 1.0f);
+            const f32 ab = a + (b - a) * ux;
+            const f32 cd = c + (d - c) * ux;
+            return ab + (cd - ab) * uy;
+        }
+
+        f32 Fbm3(f32 _X, f32 _Y) {
+            f32 v = ValueNoise(_X, _Y) * 0.5f;
+            // rotacao ~37 graus por oitava (mul(R, p) com R = float2x2(0.8,-0.6, 0.6,0.8))
+            f32 x = (0.8f * _X - 0.6f * _Y) * 2.03f;
+            f32 y = (0.6f * _X + 0.8f * _Y) * 2.03f;
+            v += ValueNoise(x, y) * 0.3f;
+            const f32 x2 = (0.8f * x - 0.6f * y) * 1.97f;
+            const f32 y2 = (0.6f * x + 0.8f * y) * 1.97f;
+            v += ValueNoise(x2, y2) * 0.2f;
+            return v;
+        }
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(
             ID3D12Device* _Device, const void* _Src, UINT64 _Size) {
@@ -227,11 +297,16 @@ namespace Smile {
         PSOGBuffer = NewGBuffer;
 
         // CSM: forward-Z LESS, pancaking (depth clip off) e slope bias — espelha o
-        // OpaquePSO do FSunShadows.
+        // OpaquePSO do FSunShadows. Inclusive o FORMATO: o array de cascatas virou D16 e o
+        // DSVFormat do PSO tem que casar com o DSV, senao o D3D12 recusa o draw. As sombras
+        // LOCAIS seguem em D32, entao o PSO delas restaura o formato mais abaixo.
         D3D12_RASTERIZER_DESC ShadowRaster = Raster;
         ShadowRaster.CullMode             = D3D12_CULL_MODE_NONE;
         ShadowRaster.DepthClipEnable      = FALSE;
         ShadowRaster.SlopeScaledDepthBias = 1.0f;
+        // Teto do slope bias — 0 seria SEM CLAMP no D3D12 (ver SunShadows.cpp). Aqui pesa
+        // ainda mais: encosta de terreno rasante ao sol e o caso comum, nao o excepcional.
+        ShadowRaster.DepthBiasClamp       = 0.001f;
 
         D3D12_DEPTH_STENCIL_DESC ShadowDepth{};
         ShadowDepth.DepthEnable    = TRUE;
@@ -243,6 +318,7 @@ namespace Smile {
         Desc.RasterizerState   = ShadowRaster;
         Desc.DepthStencilState = ShadowDepth;
         Desc.BlendState        = NoColor;
+        Desc.DSVFormat         = DXGI_FORMAT_D16_UNORM; // cascatas do CSM
         Desc.NumRenderTargets  = 0;
         Desc.RTVFormats[0]     = DXGI_FORMAT_UNKNOWN;
         Desc.RTVFormats[1]     = DXGI_FORMAT_UNKNOWN;
@@ -260,6 +336,7 @@ namespace Smile {
         // ignorado no ortho do CSM, onde o caster achatado ainda projeta sombra valida.
         ShadowRaster.DepthClipEnable = TRUE;
         Desc.RasterizerState         = ShadowRaster;
+        Desc.DSVFormat               = DXGI_FORMAT_D32_FLOAT; // atlas/cubemap das locais segue D32
         Microsoft::WRL::ComPtr<ID3D12PipelineState> NewShadowLocal;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&NewShadowLocal)));
         PSOShadowLocal = NewShadowLocal;
@@ -423,6 +500,17 @@ namespace Smile {
                 LayerCPU[i].Format = IsNormal ? DXGI_FORMAT_R8G8B8A8_UNORM
                                               : DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
             }
+            // Cor media LINEAR de cada camada de albedo, para o bake do proxy de RT. Sai da
+            // ULTIMA mip (1x1): o LoadCPU ja a gerou com a media feita em linear (ver
+            // DownsampleColor2x2), entao ela E a media correta da textura — de graca, sem varrer
+            // a mip 0. O byte volta a linear aqui porque a textura e sRGB.
+            for (u32 l = 0; l < FTerrainDesc::kLayers; ++l) {
+                const FMipData& Top = LayerCPU[l].Mips.back();
+                LayerMeanColor[l] = { SrgbToLinear(Top.Pixels[0]),
+                                      SrgbToLinear(Top.Pixels[1]),
+                                      SrgbToLinear(Top.Pixels[2]) };
+            }
+
             for (u32 i = 0; i < kSlots; ++i)
                 LayerTex[i] = FTexture::CreateFromCPU(_Device, _UploadQueue, _SRVHeap,
                                                       LayerCPU[i], EVramCategory::Terrain);
@@ -484,6 +572,10 @@ namespace Smile {
             }
         }
 
+        // Albedo do proxy de RT: precisa da mip 0 da heightmap (declive nativo) e do Desc_ ja
+        // preenchido, entao roda aqui, no fim do Load.
+        BakeProxyAlbedo(Mip0, Size);
+
         ChunkLods.assign(static_cast<size_t>(ChunksPerSide) * ChunksPerSide, 0);
         Visible.clear();
 
@@ -495,6 +587,167 @@ namespace Smile {
         LogInfo("Terreno carregado: " + std::to_string(Size) + "^2 texels, " +
                 std::to_string(ChunksPerSide) + "x" + std::to_string(ChunksPerSide) +
                 " chunks, maxLod=" + std::to_string(MaxLod));
+        return true;
+    }
+
+    // Bake do albedo do proxy de RT — "multilayer proxy" do Red Engine 4 (GPU Zen 3, 7.3.2):
+    // compoe UMA vez, no load, o que o pixel shader compoe por pixel, e cacheia numa textura que
+    // o hit shading so amostra.
+    //
+    // O que ENTRA: os pesos das 4 camadas (declive, ruido de terra, altitude) e a macro variation
+    // — sao funcoes de escala METRICA (50 m o ruido de terra, 137 m e 23 m a macro) e continuam
+    // resolvidas nos 2 m por texel do bake.
+    //
+    // O que SAI, e por que isso e correto e nao uma perda: a amostragem das texturas de camada e o
+    // anti-tiling por distancia. Um texel do bake cobre ~2 m e o tile das camadas tem 4-7 m, ou
+    // seja, o padrao do tiling esta ABAIXO do Nyquist do bake — o valor filtrado correto de uma
+    // camada, nesta escala, E a media da textura dela. Amostrar a mip 0 aqui so injetaria ruido
+    // que o hit shading depois realimenta no atlas do DDGI (o mesmo argumento da secao
+    // "Simplification and Image Quality" do capitulo, onde a CDPR remove detalhe procedural dos
+    // materiais de RT justamente por ficar abaixo do Nyquist dos raios). O triplanar da rocha cai
+    // no mesmo caso: com cor media, as 3 projecoes dao o mesmo valor.
+    //
+    // Sem camadas texturizadas o raster desenha o cinza chapado da F1 e nao ha o que bakear — o
+    // dono do proxy mantem a cor constante do material.
+    void FTerrain::BakeProxyAlbedo(const std::vector<u16>& _Mip0, u32 _Size) {
+        ProxyAlbedoCPU = FTextureCPUData{};
+        if (!HasLayers || _Size == 0) return;
+
+        const u32 N = std::min(kProxyAlbedoMaxSize, _Size);
+        const f32 WorldSize = _Size * Desc_.UnitsPerTexel;
+        const auto BakeStart = std::chrono::steady_clock::now();
+
+        // Heightmap bilinear com clamp, em [0,1] sobre o mapa inteiro — mesma parameterizacao do
+        // TerrainNormal (uv = (worldXZ - origem) / (texels * unidades)), centros de texel em
+        // (i+0.5)/Size, como o sampler do D3D.
+        auto SampleHeight = [&](f32 _U, f32 _V) {
+            const f32 fx = std::clamp(_U * _Size - 0.5f, 0.0f, static_cast<f32>(_Size) - 1.0f);
+            const f32 fz = std::clamp(_V * _Size - 0.5f, 0.0f, static_cast<f32>(_Size) - 1.0f);
+            const u32 x0 = static_cast<u32>(fx), z0 = static_cast<u32>(fz);
+            const u32 x1 = std::min(x0 + 1u, _Size - 1u), z1 = std::min(z0 + 1u, _Size - 1u);
+            const f32 tx = fx - x0, tz = fz - z0;
+            const f32 h00 = _Mip0[static_cast<size_t>(z0) * _Size + x0] * (1.0f / 65535.0f);
+            const f32 h10 = _Mip0[static_cast<size_t>(z0) * _Size + x1] * (1.0f / 65535.0f);
+            const f32 h01 = _Mip0[static_cast<size_t>(z1) * _Size + x0] * (1.0f / 65535.0f);
+            const f32 h11 = _Mip0[static_cast<size_t>(z1) * _Size + x1] * (1.0f / 65535.0f);
+            const f32 a = h00 + (h10 - h00) * tx;
+            const f32 b = h01 + (h11 - h01) * tx;
+            return a + (b - a) * tz;
+        };
+
+        FMipData M0;
+        M0.Width = M0.Height = N;
+        M0.Pixels.resize(static_cast<size_t>(N) * N * 4);
+
+        const f32 TexelUV = 1.0f / _Size;
+        // Um texel do bake custa ~12 sin (3 oitavas x 4 hashes x 3 chamadas de Fbm3) e ~7 pow;
+        // em 1024^2 isso e segundo de load em Debug. As linhas sao independentes, entao vao em
+        // faixas por thread — mesmo padrao do decode das camadas acima.
+        const auto BakeRows = [&](u32 _Y0, u32 _Y1) {
+        for (u32 py = _Y0; py < _Y1; ++py) {
+            const f32 v = (py + 0.5f) / N;
+            const f32 worldZ = Desc_.Origin.Z + v * WorldSize;
+            for (u32 px = 0; px < N; ++px) {
+                const f32 u = (px + 0.5f) / N;
+                const f32 worldX = Desc_.Origin.X + u * WorldSize;
+                const f32 worldY = Desc_.Origin.Y + SampleHeight(u, v) * Desc_.HeightScale;
+
+                // Normal por diferencas centrais na resolucao NATIVA da heightmap (1 texel), a
+                // mesma do TerrainNormal — o declive tem que ser o que a tela ve, nao o da malha
+                // decimada do proxy, senao a encosta suaviza e a rocha some do bake.
+                const f32 hL = SampleHeight(u - TexelUV, v);
+                const f32 hR = SampleHeight(u + TexelUV, v);
+                const f32 hD = SampleHeight(u, v - TexelUV);
+                const f32 hU = SampleHeight(u, v + TexelUV);
+                const f32 nx = (hL - hR) * Desc_.HeightScale;
+                const f32 ny = 2.0f * Desc_.UnitsPerTexel;
+                const f32 nz = (hD - hU) * Desc_.HeightScale;
+                const f32 nLen = std::sqrt(nx * nx + ny * ny + nz * nz);
+                const f32 normalY = nLen > 0.0f ? ny / nLen : 1.0f;
+
+                // Pesos das camadas — copia do LayerWeights do PS.
+                const f32 slope = 1.0f - std::clamp(normalY, 0.0f, 1.0f);
+                const f32 wRock = Smoothstep(Desc_.RockSlopeStart, Desc_.RockSlopeEnd, slope);
+                const f32 dirtNoise = Fbm3(worldX * Desc_.DirtScale, worldZ * Desc_.DirtScale);
+                const f32 wDirt = Desc_.DirtAmount * Smoothstep(0.42f, 0.66f, dirtNoise)
+                                * (1.0f - wRock);
+                const f32 wHigh = Smoothstep(Desc_.HighStart, Desc_.HighEnd, worldY)
+                                * (1.0f - wRock * 0.5f);
+                const f32 wGrass = std::clamp(1.0f - wRock - wDirt - wHigh, 0.0f, 1.0f);
+
+                f32 W[FTerrainDesc::kLayers] = { wGrass, wDirt, wRock, wHigh };
+                f32 WSum = 0.0f;
+                for (f32& Wi : W) {
+                    Wi = std::pow(std::max(Wi, 1e-4f), Desc_.BlendContrast);
+                    WSum += Wi;
+                }
+                const f32 InvSum = WSum > 0.0f ? 1.0f / WSum : 0.0f;
+
+                f32 R = 0.0f, G = 0.0f, B = 0.0f;
+                for (u32 l = 0; l < FTerrainDesc::kLayers; ++l) {
+                    const f32 Wn = W[l] * InvSum;
+                    R += Wn * LayerMeanColor[l].X;
+                    G += Wn * LayerMeanColor[l].Y;
+                    B += Wn * LayerMeanColor[l].Z;
+                }
+
+                // Macro variation (brilho em ~137 m + matiz da grama em ~23 m), igual ao PS.
+                if (Desc_.MacroAmount > 0.0f) {
+                    const f32 macro = Fbm3(worldX * (1.0f / 137.0f), worldZ * (1.0f / 137.0f));
+                    const f32 Mul = 1.0f + (macro - 0.5f) * 2.0f * Desc_.MacroAmount;
+                    R *= Mul; G *= Mul; B *= Mul;
+
+                    const f32 tintN = Fbm3(worldX * (1.0f / 23.0f), worldZ * (1.0f / 23.0f));
+                    const f32 t = Smoothstep(0.35f, 0.72f, tintN);
+                    const f32 tintR = 0.88f + (1.12f - 0.88f) * t; // lush -> dry
+                    const f32 tintG = 1.00f + (1.04f - 1.00f) * t;
+                    const f32 tintB = 0.90f + (0.74f - 0.90f) * t;
+                    const f32 hueStr = std::clamp(Desc_.MacroAmount * 2.0f, 0.0f, 1.0f);
+                    const f32 k = (W[0] * InvSum) * hueStr; // pesado pela camada de grama
+                    R *= 1.0f + (tintR - 1.0f) * k;
+                    G *= 1.0f + (tintG - 1.0f) * k;
+                    B *= 1.0f + (tintB - 1.0f) * k;
+                }
+
+                u8* D = M0.Pixels.data() + (static_cast<size_t>(py) * N + px) * 4;
+                D[0] = LinearToSrgbByte(R);
+                D[1] = LinearToSrgbByte(G);
+                D[2] = LinearToSrgbByte(B);
+                D[3] = 255;
+            }
+        }
+        };
+
+        {
+            const u32 Threads = std::max(1u, std::min(N, std::thread::hardware_concurrency()));
+            std::vector<std::thread> Pool;
+            Pool.reserve(Threads);
+            const u32 Band = (N + Threads - 1) / Threads;
+            for (u32 t = 0; t < Threads; ++t) {
+                const u32 Y0 = t * Band;
+                const u32 Y1 = std::min(Y0 + Band, N);
+                if (Y0 >= Y1) break;
+                Pool.emplace_back(BakeRows, Y0, Y1);
+            }
+            for (auto& T : Pool) T.join();
+        }
+
+        ProxyAlbedoCPU.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        ProxyAlbedoCPU.Mips.push_back(std::move(M0));
+        // Mips obrigatorias: o hit shading amostra num LOD FIXO (Reflections/ReSTIR AlbedoLOD = 2).
+        FTexture::GenerateColorMips(ProxyAlbedoCPU, true);
+
+        const auto Ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - BakeStart).count();
+        LogDebug("Terreno: albedo do proxy de RT bakeado " + std::to_string(N) + "^2 (" +
+                 std::to_string(WorldSize / N).substr(0, 4) + " m/texel) em " +
+                 std::to_string(Ms) + " ms");
+    }
+
+    bool FTerrain::TakeProxyAlbedoCPU(FTextureCPUData& _Out) {
+        if (!ProxyAlbedoCPU.Valid()) return false;
+        _Out = std::move(ProxyAlbedoCPU);
+        ProxyAlbedoCPU = FTextureCPUData{};
         return true;
     }
 
@@ -562,6 +815,7 @@ namespace Smile {
         Visible.clear();
         ProxyHeights.clear();
         ProxyVerts = 0;
+        ProxyAlbedoCPU = FTextureCPUData{};
     }
 
     void FTerrain::UpdatePerFrame(u32 _FrameSlot, const Mat44& _ViewProj,

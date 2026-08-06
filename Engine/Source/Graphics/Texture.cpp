@@ -18,7 +18,9 @@ using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     static ComPtr<IWICImagingFactory2> GetWICFactory() {
-        static ComPtr<IWICImagingFactory2> Factory;
+        // A preparacao de cena decodifica imagens em paralelo. Cada worker precisa de seu
+        // proprio apartment COM e factory; compartilhar o ComPtr durante o lazy init era race.
+        thread_local ComPtr<IWICImagingFactory2> Factory;
         if (!Factory) {
             CoInitializeEx(nullptr, COINIT_MULTITHREADED);
             SMILE_HR(CoCreateInstance(CLSID_WICImagingFactory2, nullptr,
@@ -379,11 +381,11 @@ namespace Smile {
             Data.Height = Height;
 
             if (_IsNormalMap) {
-                LogInfo("Normal map decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
+                LogDebug("Normal map decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
                         ", " + std::to_string(Mips.size()) + " mips, Toksvig minAvg=" +
                         std::to_string(MinT));
             } else {
-                LogInfo("Texture decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
+                LogDebug("Texture decoded: " + std::to_string(Width) + "x" + std::to_string(Height) +
                         ", " + std::to_string(Mips.size()) + " mips");
             }
         } catch (const std::exception& e) {
@@ -391,6 +393,28 @@ namespace Smile {
             Data.Mips.clear(); 
         }
         return Data;
+    }
+
+    void FTexture::GenerateColorMips(FTextureCPUData& _Data, bool _SrgbSpace) {
+        if (_Data.Mips.empty()) return;
+        _Data.Mips.resize(1);
+        _Data.Width  = _Data.Mips[0].Width;
+        _Data.Height = _Data.Mips[0].Height;
+
+        u32 W = _Data.Width, H = _Data.Height;
+        while (W > 1 || H > 1) {
+            const u32 PrevW = W, PrevH = H;
+            W = std::max(1u, W / 2);
+            H = std::max(1u, H / 2);
+
+            FMipData Next;
+            Next.Width  = W;
+            Next.Height = H;
+            Next.Pixels.resize(static_cast<size_t>(W) * H * 4);
+            DownsampleColor2x2(_Data.Mips.back().Pixels.data(), PrevW, PrevH,
+                               Next.Pixels.data(), W, H, _SrgbSpace);
+            _Data.Mips.push_back(std::move(Next));
+        }
     }
 
     FTexture FTexture::CreateFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
@@ -402,8 +426,9 @@ namespace Smile {
 
     FTexture FTexture::LoadFromFile(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                      FTextureSRVHeap& _SRVHeap,
-                                     const std::wstring& _Path, bool _IsNormalMap) {
-        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap, LoadCPU(_Path, _IsNormalMap));
+                                     const std::wstring& _Path, bool _IsNormalMap, bool _sRGB) {
+        return CreateFromCPU(_Device, _UploadQueue, _SRVHeap,
+                             LoadCPU(_Path, _IsNormalMap, _sRGB));
     }
 
     namespace {

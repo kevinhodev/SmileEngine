@@ -1,15 +1,52 @@
 #include "WaterCommon.hlsli"
 #include "../Shadow/CSMCommon.hlsli"
+#include "../GBuffer.hlsli"
 
 TextureCube SpecularCube : register(t0);
 SamplerState LinearClamp  : register(s1);
 
 struct PSOutput {
-    float4 Color    : SV_Target0;
-    float2 Velocity : SV_Target1; // mesmo contrato do GBuffer.ps: curUV - prevUV
+    float4 Color       : SV_Target0;
+    float2 Velocity    : SV_Target1; // mesmo contrato do GBuffer.ps: curUV - prevUV
+    float4 GBufferA    : SV_Target2;
+    float4 GBufferB    : SV_Target3;
+    float4 GBufferC    : SV_Target4;
+    float  Reactive    : SV_Target5;
+    float  Composition : SV_Target6;
+    float  SpecHitDist : SV_Target7;
 };
 
-float4 ShadeWater(VSOutput IN) {
+struct PSOutputBase {
+    float4 Color    : SV_Target0;
+    float2 Velocity : SV_Target1;
+};
+
+struct PSOutputMasks {
+    float4 Color       : SV_Target0;
+    float2 Velocity    : SV_Target1;
+    float  Reactive    : SV_Target2;
+    float  Composition : SV_Target3;
+};
+
+struct PSOutputReflection {
+    float4 Color       : SV_Target0;
+    float2 Velocity    : SV_Target1;
+    float4 GBufferA    : SV_Target2;
+    float4 GBufferB    : SV_Target3;
+    float4 GBufferC    : SV_Target4;
+    float  Reactive    : SV_Target5;
+    float  Composition : SV_Target6;
+};
+
+float4 ShadeWater(VSOutput IN, out float3 GuideNormal, out float GuideRoughness,
+                    out float2 GuideRoughnessAxes, out float ReactiveMask, out float GuideFoam,
+                    out float GuideReflectionCoverage) {
+    GuideNormal = normalize(IN.normal);
+    GuideRoughness = max(1.0f - ShadeParams.x, 0.04f);
+    GuideRoughnessAxes = GuideRoughness.xx;
+    ReactiveMask = 0.75f;
+    GuideFoam = 0.0f;
+    GuideReflectionCoverage = 1.0f;
     int debugMode = (int)floor(DebugParams.x + 0.5f);
 
     if (debugMode == 1) {
@@ -55,14 +92,14 @@ float4 ShadeWater(VSOutput IN) {
 
     float3 N = normalize(IN.normal);
     float3 V = normalize(IN.vView);
-    float  normalToksvigT = 1.0;
+    float2 unresolvedSlopeVariance = 0.0f;
 
     float camDist  = length(IN.vView);
     float detailFade = WaterDistanceFade(camDist, 0.0, BumpParams2.w);
     float swellFade = WaterDistanceFade(camDist, BumpParams2.w, max(BumpParams2.w * 16.0, 4500.0));
     swellFade = lerp(0.30, 1.0, swellFade);
     // Camadas de normal = cascatas REAIS: hi = cascata 0 (detalhe), lo = cascatas 1/2.
-    float2 uv2  = WaterCascadeUV(2, IN.worldPos.xz);
+    float2 uv2  = WaterCascadeUV(2, IN.parametricXZ);
     float2 hiDx = ddx(IN.baseTC.zw);
     float2 hiDy = ddy(IN.baseTC.zw);
     float2 loDx = ddx(IN.baseTC.xy);
@@ -71,31 +108,49 @@ float4 ShadeWater(VSOutput IN) {
     float2 lo2Dy = ddy(uv2);
     if (BumpParams2.z > 0.5 && (detailFade > 0.0 || swellFade > 0.0)) {
         float2 pofs = BumpParallaxOffset(IN.baseTC, V, BumpParams2.y * max(detailFade, swellFade * 0.35));
-        float4 sHi  = SampleWaterNormalGradCascade(0, IN.baseTC.zw + pofs, hiDx, hiDy);
-        float4 sLo0 = SampleWaterNormalGradCascade(1, IN.baseTC.xy + pofs, loDx, loDy);
-        float4 sLo1 = SampleWaterNormalGradCascade(2, uv2 + pofs, lo2Dx, lo2Dy);
+        float4 mHi  = SampleWaterSlopeMomentsCascade(0, IN.baseTC.zw + pofs, hiDx, hiDy);
+        float4 mLo0 = SampleWaterSlopeMomentsCascade(1, IN.baseTC.xy + pofs, loDx, loDy);
+        float4 mLo1 = SampleWaterSlopeMomentsCascade(2, uv2 + pofs, lo2Dx, lo2Dy);
+        float4 sHi  = WaterDecodeSlopeMoments(mHi);
+        float4 sLo0 = WaterDecodeSlopeMoments(mLo0);
+        float4 sLo1 = WaterDecodeSlopeMoments(mLo1);
         float2 hiSlope = (sHi.xz  / max(sHi.y,  0.05)) * BumpParams.w;
         // Camada de RIPPLE fino (glitter granulado estilo AC4): cascata 0 re-amostrada
         // a 6x com deriva pelo vento — devolve a alta frequência que o tiling fake
         // antigo dava e as UVs físicas perderam. Fade curto (~120 m).
         float ripFade = WaterDistanceFade(camDist, 0.0, 120.0);
         float4 sRip = float4(0.0, 1.0, 0.0, 1.0);
+        float4 mRip = 0.0f;
         if (ripFade > 0.0) {
-            float2 uvRip = IN.baseTC.zw * 6.0 + OceanParams1.yz * (Misc.x * 0.02);
-            sRip = SampleWaterNormalGradCascade(0, uvRip, hiDx * 6.0, hiDy * 6.0);
+            // A FFT positiva com k centrado resolve a crista em +wind. Textura
+            // procedural f(uv-vt) precisa do sinal oposto para viajar junto dela.
+            float2 uvRip = IN.baseTC.zw * 6.0 - OceanParams1.yz * (Misc.x * 0.02);
+            mRip = SampleWaterSlopeMomentsCascade(0, uvRip, hiDx * 6.0, hiDy * 6.0);
+            sRip = WaterDecodeSlopeMoments(mRip);
             hiSlope += (sRip.xz / max(sRip.y, 0.05)) * (BumpParams.w * 0.7 * ripFade);
         }
         float2 loSlope = ((sLo0.xz / max(sLo0.y, 0.05)) + (sLo1.xz / max(sLo1.y, 0.05))) *
                          (0.5 * BumpParams.z);
-        float layerToksvigT = min(lerp(1.0, sHi.w, detailFade),
-                                  lerp(1.0, min(sLo0.w, sLo1.w), swellFade));
         float bumpContribution = saturate(BumpParams2.x * max(detailFade, swellFade * 0.75));
-        normalToksvigT = lerp(1.0, layerToksvigT, bumpContribution);
-        N.xz += (hiSlope * detailFade + loSlope * swellFade) * BumpParams2.x;
-        N = normalize(N);
+        const float hiWeight = BumpParams.w * detailFade;
+        const float rippleWeight = BumpParams.w * 0.7f * ripFade;
+        const float loWeight = 0.5f * BumpParams.z * swellFade;
+        unresolvedSlopeVariance = WaterSlopeVariance(mHi) * (hiWeight * hiWeight) +
+                                  WaterSlopeVariance(mRip) * (rippleWeight * rippleWeight) +
+                                  (WaterSlopeVariance(mLo0) + WaterSlopeVariance(mLo1)) *
+                                      (loWeight * loWeight);
+        unresolvedSlopeVariance *= bumpContribution * bumpContribution;
+        // NormalMip represents the same FFT field already used by the displaced
+        // geometry. Adding its slope to IN.normal double-counted that spectrum
+        // (about 1.5x at the default strength). Blend between the geometric and
+        // filtered per-pixel estimators instead; the advected ripple above remains
+        // an intentional shading-only detail inside the filtered estimator.
+        const float2 filteredSlope = hiSlope * detailFade + loSlope * swellFade;
+        const float3 filteredNormal = normalize(float3(filteredSlope.x, 1.0f, filteredSlope.y));
+        N = normalize(lerp(N, filteredNormal, bumpContribution));
     }
     if (debugMode == 3) {
-        float4 dispDebug = WaterSampleFFT(IN.worldPos.xz);
+        float4 dispDebug = WaterSampleFFT(IN.parametricXZ);
         float h = dispDebug.z * 0.01f;
         float pos = saturate(h);
         float neg = saturate(-h);
@@ -106,32 +161,44 @@ float4 ShadeWater(VSOutput IN) {
         return float4(N * 0.5f + 0.5f, 1.0f);
     }
 
-    float  NoV = saturate(dot(N, V));
-
     float3 dNdx = ddx(N);
     float3 dNdy = ddy(N);
 
     float  karisVariance = min(1.6 * (dot(dNdx, dNdx) + dot(dNdy, dNdy)), 0.55);
-    float  toksvigVar    = 1.0 - normalToksvigT * normalToksvigT;
     float  glossFadeDist = max(BumpParams2.w * 14.0, 3500.0);
     float  distGlossFade = clamp(1.0 - camDist / glossFadeDist, 0.45, 1.0); 
     float  baseRoughness = saturate(1.0 - ShadeParams.x * distGlossFade);
-    float  reflectionRoughness =
-        saturate(sqrt(baseRoughness * baseRoughness + karisVariance + toksvigVar));
+    // Cada eixo recebe apenas a energia de slope que deixou de caber na normal filtrada.
+    // O termo de Karis e isotropico; a energia dos mips permanece wind/cross-wind.
+    const float2 alphaAxes = saturate(baseRoughness * baseRoughness +
+                                      unresolvedSlopeVariance + 0.5f * karisVariance);
+    const float2 reflectionRoughnessAxes = sqrt(max(alphaAxes, 0.0016f.xx));
+    const float alphaEffective = sqrt(reflectionRoughnessAxes.x * reflectionRoughnessAxes.x *
+                                      reflectionRoughnessAxes.y * reflectionRoughnessAxes.y);
+    float reflectionRoughness = sqrt(alphaEffective);
+    GuideRoughness = max(reflectionRoughness, 0.04f);
+    GuideRoughnessAxes = max(reflectionRoughnessAxes, 0.04f.xx);
     float reflBump = saturate(RefractionParams.w);
     float3 Nrefl = normalize(lerp(float3(0.0, 1.0, 0.0), N, reflBump));
+    // Sol, ambiente e o trace dedicado devem descrever a MESMA superficie especular.
+    // Antes o cubemap usava Nrefl, enquanto Fresnel/Sol/guides usavam N integral.
+    GuideNormal = Nrefl;
+    float NoV = saturate(dot(Nrefl, V));
+    const bool dedicatedReflections = DebugParams.y > 0.5f;
     
     float3 R = reflect(-V, Nrefl);
-    float3 reflection;
-    if (Misc.y > 0.5) {
-        float lod = reflectionRoughness * Misc.w;
-        reflection = SpecularCube.SampleLevel(LinearClamp, R, lod).rgb * Misc.z;
-    } else {
-        reflection = AnalyticSky(R);
+    float3 reflection = 0.0f;
+    if (!dedicatedReflections) {
+        if (Misc.y > 0.5) {
+            float lod = reflectionRoughness * Misc.w;
+            reflection = SpecularCube.SampleLevel(LinearClamp, R, lod).rgb * Misc.z;
+        } else {
+            reflection = AnalyticSky(R);
+        }
+        reflection *= ShadeParams.y;
     }
-    reflection *= ShadeParams.y; 
     
-    float F = FresnelSchlick(0.02, NoV, ShadeParams.x);
+    float F = FresnelSchlick(0.02, NoV);
     if (debugMode == 5) {
         return float4(F.xxx, 1.0f);
     }
@@ -161,8 +228,22 @@ float4 ShadeWater(VSOutput IN) {
         softDebug = softIntersect;
 
         float2 refrOfs = N.xz * RefractionParams.x * softIntersect * IN.screenProj.z;
-        float2 refrUV  = screenUV + refrOfs;
-        if (SampleSceneDepthLin(refrUV) < waterDepth) refrUV = screenUV;
+        float2 refrUV  = clamp(screenUV + refrOfs, 0.5f * ScreenParams.zw,
+                               1.0f - 0.5f * ScreenParams.zw);
+        const int2 refrPx = clamp(int2(refrUV * ScreenParams.xy), int2(0, 0),
+                                  int2(ScreenParams.xy) - 1);
+        const float refrDeviceZ = SceneDepth.Load(int3(refrPx, 0));
+        const float refrSceneDepth = LinearizeDepth(refrDeviceZ);
+        bool invalidRefraction = refrDeviceZ <= 0.0f || refrSceneDepth < waterDepth;
+        if (!invalidRefraction) {
+            const float3 refrSceneWorld = WaterSceneWorldFromDepth(refrUV, refrDeviceZ);
+            // Depth sozinho so garante que a amostra esta atras da interface. Um offset que cai
+            // na fachada ACIMA da agua tambem satisfaz isso e duplica o predio como uma falsa
+            // reflexao deslocada. Transmissao valida deve terminar abaixo da superficie local.
+            const float interfaceY = max(IN.worldPos.y, OceanParams1.w) + 0.25f;
+            invalidRefraction = refrSceneWorld.y > interfaceY;
+        }
+        if (invalidRefraction) refrUV = screenUV;
         float3 refrColor = SceneColor.SampleLevel(LinearClamp, refrUV, 0).rgb; 
 
         float cosForward = waterDepth / max(length(IN.vView), 1e-3);
@@ -196,7 +277,12 @@ float4 ShadeWater(VSOutput IN) {
     }
 
     float reflectionWeight = saturate(F * fA);
-    float3 color = lerp(body, reflection, reflectionWeight);
+    GuideReflectionCoverage = saturate(fA);
+    // No caminho dedicado a radiancia refletida chega num passe posterior. O corpo ja sai
+    // atenuado pelo Fresnel para manter a composicao aproximadamente conservativa.
+    float3 color = dedicatedReflections
+        ? body * (1.0f - reflectionWeight)
+        : lerp(body, reflection, reflectionWeight);
     if (debugMode == 6) {
         return float4(body / (body + 1.0f), 1.0f);
     }
@@ -212,19 +298,23 @@ float4 ShadeWater(VSOutput IN) {
     float3 foamLit = float3(0.0, 0.0, 0.0);
     float  JDebug  = 1.0;
     if (FoamParams.z > 0.0 || debugMode == 8) {
-        // J combinado: soma PONDERADA dos desvios (det(I+A+B+C) ≈ 1+trA+trB+trC).
-        // Cascatas grandes pesam menos — sem isso a cobertura triplicava contra o
-        // mesmo threshold e a espuma tomava o mar (A/B 2026-07-16).
+        // First-order combined determinant. Each per-cascade J is now metric and
+        // equally weighted; exact cross terms would require the full derivative tensors.
         uint numFoamC = (uint)CascadeParams.w;
-        JDebug = WaterSampleFFTCascade(0, IN.worldPos.xz).w;
-        if (numFoamC > 1) JDebug += (WaterSampleFFTCascade(1, IN.worldPos.xz).w - 1.0) * 0.6;
-        if (numFoamC > 2) JDebug += (WaterSampleFFTCascade(2, IN.worldPos.xz).w - 1.0) * 0.35;
+        const float2 jUv0 = WaterCascadeUV(0, IN.parametricXZ);
+        const float2 jUv1 = WaterCascadeUV(1, IN.parametricXZ);
+        const float2 jUv2 = WaterCascadeUV(2, IN.parametricXZ);
+        JDebug = WaterSampleFFTCascadeUvGrad(0, jUv0, ddx(jUv0), ddy(jUv0)).w;
+        if (numFoamC > 1)
+            JDebug += WaterSampleFFTCascadeUvGrad(1, jUv1, ddx(jUv1), ddy(jUv1)).w - 1.0;
+        if (numFoamC > 2)
+            JDebug += WaterSampleFFTCascadeUvGrad(2, jUv2, ddx(jUv2), ddy(jUv2)).w - 1.0;
         foam = saturate((FoamParams.x - JDebug) / max(FoamParams.y, 1e-3));
         foam = foam * foam * (3.0 - 2.0 * foam);
         // Breakup procedural (estilo FoamTex da Cry, sem asset): 2 oitavas de value
         // noise advectadas pelo fluxo do vento — quebra o "adesivo chapado".
-        float2 flow   = OceanParams1.yz * Misc.x;
-        float2 foamUV = IN.worldPos.xz * 0.35 + flow * 0.05;
+        float2 flow   = -OceanParams1.yz * Misc.x;
+        float2 foamUV = IN.parametricXZ * 0.35 + flow * 0.05;
         float  pat = WaterValueNoise(foamUV) * 0.65 +
                      WaterValueNoise(foamUV * 3.7 - flow * 0.11) * 0.35;
         foam *= saturate(0.35 + 1.55 * pat * pat);
@@ -238,26 +328,82 @@ float4 ShadeWater(VSOutput IN) {
         return float4(saturate((1.0f - JDebug) * 2.0f), foam, saturate(JDebug), 1.0f);
     }
 
-    float specAA = saturate(1.0 - reflectionRoughness * 1.25);
-    float sunShininess = lerp(24.0, ShadeParams.z, specAA * specAA);
-    float spec = SunSpecularLobes(N, V, normalize(SunDirection.xyz), sunShininess) * specAA;
+    float spec = WaterSunSpecularGGX(Nrefl, V, normalize(SunDirection.xyz),
+                                     GuideRoughnessAxes, WaterWindDirection());
     float3 sunSpecCol = SunColor.rgb * (spec * SunDirection.w * ShadeParams.w) * sunVis;
     sunSpecCol *= (1.0 - foam * FoamColor.w);
     color += sunSpecCol;
 
     color = lerp(color, foamLit, foam);
+    ReactiveMask = saturate(max(ReactiveMask, foam));
+    GuideFoam = foam;
 
     return float4(color, 1.0);
 }
 
-PSOutput main(VSOutput IN) {
+PSOutput EvaluateWaterSurface(VSOutput IN) {
     PSOutput o;
-    o.Color = ShadeWater(IN);
+    float3 GuideNormal;
+    float GuideRoughness;
+    float2 GuideRoughnessAxes;
+    float ReactiveMask;
+    float GuideFoam;
+    float GuideReflectionCoverage;
+    o.Color = ShadeWater(IN, GuideNormal, GuideRoughness, GuideRoughnessAxes,
+                         ReactiveMask, GuideFoam, GuideReflectionCoverage);
 
     float2 curNDC  = IN.curClip.xy  / IN.curClip.w;
     float2 prevNDC = IN.prevClip.xy / IN.prevClip.w;
     float2 curUV   = float2(curNDC.x  * 0.5f + 0.5f, 0.5f - curNDC.y  * 0.5f);
     float2 prevUV  = float2(prevNDC.x * 0.5f + 0.5f, 0.5f - prevNDC.y * 0.5f);
     o.Velocity = curUV - prevUV;
+    // A agua nao volta ao deferred; estes MRTs existem para o pass de guides do RR enxergar o
+    // material que corresponde ao depth/velocity da superficie, em vez do opaco atras dela.
+    o.GBufferA = float4(saturate(InScatterColor.rgb), 1.0f);
+    o.GBufferB = float4(GBuffer_OctEncode(normalize(GuideNormal)),
+                        GuideRoughness, GBuffer_EncodeShadingModel(SMILE_SHADINGMODEL_WATER));
+    // Canal privado: supressao da espuma, cobertura optica e roughness wind/cross-wind.
+    o.GBufferC = float4(GuideFoam * FoamColor.w, GuideReflectionCoverage,
+                        GuideRoughnessAxes);
+    o.Reactive = ReactiveMask;
+    o.Composition = 1.0f;
+    // A reflexao da agua e resolvida no proprio shader (sky/refraction), nao pelo hit da superficie
+    // opaca anterior. Zerar impede o RR de herdar o spec-hit do fundo.
+    o.SpecHitDist = 0.0f;
+    return o;
+}
+
+PSOutput main(VSOutput IN) {
+    return EvaluateWaterSurface(IN);
+}
+
+PSOutputBase mainBase(VSOutput IN) {
+    const PSOutput Full = EvaluateWaterSurface(IN);
+    PSOutputBase o;
+    o.Color = Full.Color;
+    o.Velocity = Full.Velocity;
+    return o;
+}
+
+PSOutputMasks mainMasks(VSOutput IN) {
+    const PSOutput Full = EvaluateWaterSurface(IN);
+    PSOutputMasks o;
+    o.Color = Full.Color;
+    o.Velocity = Full.Velocity;
+    o.Reactive = Full.Reactive;
+    o.Composition = Full.Composition;
+    return o;
+}
+
+PSOutputReflection mainReflection(VSOutput IN) {
+    const PSOutput Full = EvaluateWaterSurface(IN);
+    PSOutputReflection o;
+    o.Color = Full.Color;
+    o.Velocity = Full.Velocity;
+    o.GBufferA = Full.GBufferA;
+    o.GBufferB = Full.GBufferB;
+    o.GBufferC = Full.GBufferC;
+    o.Reactive = Full.Reactive;
+    o.Composition = Full.Composition;
     return o;
 }

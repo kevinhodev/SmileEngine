@@ -3,14 +3,17 @@
 
 #include "DDGICommon.hlsli"
 #include "../LightsCommon.hlsli"
+#include "../BRDF.hlsli"
 #include "../RayEpsilons.hlsli"
 
 // Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, SkyViewLUT,
-// IrradAtlas, LinearClamp/Wrap e — F5 — SceneLights (StructuredBuffer<FPunctualLight> com
-// TODAS as luzes ativas, sem frustum cull). VB/IB vem bindless via InstanceGeo
-// (ResourceDescriptorHeap), nao ha mais Vertices/Indices globais.
+// IrradAtlas, GIDistAtlas, GIProbeData, LinearClamp/Wrap e — F5 — SceneLights
+// (StructuredBuffer<FPunctualLight> com TODAS as luzes ativas, sem frustum cull). VB/IB vem
+// bindless via InstanceGeo (ResourceDescriptorHeap), nao ha mais Vertices/Indices globais.
 // Contrato de CBUFFER: RayEpsA/RayEpsB declarados no b0 (ver RayOffset.hlsli) — daqui saem o
-// piso do ShadowRayBias (RayEpsA.w) e o TMin dos shadow rays (RayEpsB.x).
+// piso do ShadowRayBias (RayEpsA.w) e o TMin dos shadow rays (RayEpsB.x) — mais GIDistParams
+// (x=tile, y=W, z=H do atlas de distancia, w=skipMode) e GIBiasParams (x=escala do bias,
+// y=teto em metros), que alimentam o gather completo do 2o bounce (ver ShadeSurfaceHit).
 struct FHitShadeParams {
     float3 GridMin;       float Spacing;
     int3   Count;         int   AtlasTile;
@@ -25,38 +28,34 @@ struct FHitShadeParams {
     uint   ShadowRayMask; // instance mask dos shadow rays: GATHER = folhagem sombreia (alpha-test
                           // por candidato); OPAQUE = pula folhagem (rapido, traversal pura).
                           // Nenhum dos dois inclui TRANSLUCENT — vidro nao faz sombra dura.
+    float3 ReGIRGridMin;       uint ReGIRSlotsPerCell;
+    float3 ReGIRInvCellSize;   bool ReGIREnabled;
+    int3   ReGIRGridCount;     int  ReGIRSampleCount;
+    uint   ReGIRSlotsSRV;      uint ReGIRAverageSRV;
+    uint   FrameIndex;         uint ReGIRPad;
+    // Parameterizacao do sky-view LUT (ver ShadeSky). Vem do SkyParams do CB de cada dono, que
+    // por sua vez vem do FAtmosphere::ViewHeightKm()/BottomRadiusKm() — a MESMA fonte que o
+    // bake usa. Eram dois literais aqui, e o de view height estava errado.
+    float  SkyViewHeightKm;    float SkyBottomRKm;
 };
 
-static const float kSkyBottomR = 6360.0f;
-static const float kSkyViewH   = 6360.5f;
+// Requer SceneLights e o heap bindless declarados pelo shader hospedeiro.
+#include "ReGIRSampling.hlsli"
 
-float2 DDGI_SkyViewUv(float viewZenithCos, float lightViewCos) {
-    float vHorizon = sqrt(max(0.0f, kSkyViewH * kSkyViewH - kSkyBottomR * kSkyBottomR));
-    float cosBeta  = vHorizon / max(kSkyViewH, 1e-4f);
-    float beta     = acos(clamp(cosBeta, -1.0f, 1.0f));
-    float zenithHorizonAngle = SMILE_PI - beta;
+// A parameterizacao do sky-view LUT era reescrita a mao aqui, com o raio do planeta e o view
+// height como literais — o unico jeito, porque este header nao pode incluir o
+// AtmosphereCommon.hlsli (o `cbuffer AtmosphereCB : register(b0)` de la colide com o b0 proprio
+// de cada shader de trace). A copia divergiu: 6360.5 contra os 6360.001 do bake, 0,49 grau de
+// erro no dip do horizonte = ~3,8 texels dos 104 do eixo V, justo na banda mais brilhante e de
+// maior gradiente do LUT. GI e reflexoes liam o ceu errado no horizonte.
+//
+// Agora a conta vem do AtmosphereMath.hlsli (matematica pura, sem cbuffer) e os dois numeros
+// chegam por FHitShadeParams. Passar floats soltos sem o header comum consertaria o sintoma de
+// hoje e deixaria a formula divergir de novo na proxima edicao da parameterizacao.
+#include "../Atmosphere/AtmosphereMath.hlsli"
 
-    float viewZenithAngle = acos(clamp(viewZenithCos, -1.0f, 1.0f));
-    float u, v;
-    if (viewZenithAngle < zenithHorizonAngle) {
-        float coord = 1.0f - viewZenithAngle / max(zenithHorizonAngle, 1e-4f);
-        coord = 1.0f - sqrt(max(0.0f, coord));
-        v = coord * 0.5f;
-    } else {
-        float coord = (viewZenithAngle - zenithHorizonAngle) / max(beta, 1e-4f);
-        v = sqrt(max(0.0f, coord)) * 0.5f + 0.5f;
-    }
-    u = sqrt(max(0.0f, -lightViewCos * 0.5f + 0.5f));
-    return float2(u, v);
-}
-
-float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity) {
-    const float3 up = float3(0.0f, 1.0f, 0.0f);
-    float viewZenithCos = dot(dir, up);
-    float3 viewHoriz = dir    - up * viewZenithCos;
-    float3 sunHoriz  = sunDir - up * dot(sunDir, up);
-    float  lightViewCos = dot(normalize(viewHoriz + 1e-6f), normalize(sunHoriz + 1e-6f));
-    float2 uv = DDGI_SkyViewUv(viewZenithCos, lightViewCos);
+float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity, FHitShadeParams P) {
+    float2 uv = AtmoWorldDirToSkyViewUv(dir, sunDir, P.SkyViewHeightKm, P.SkyBottomRKm);
     return SkyViewLUT.SampleLevel(LinearClamp, uv, 0.0f).rgb * skyIntensity;
 }
 
@@ -64,68 +63,11 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity) {
 // RTAlphaTest.hlsli p/ passes de visibilidade pura poderem incluir so ele (ReSTIRGISpatial).
 #include "RTAlphaTest.hlsli"
 
-// Normal de FACE (orientada contra o raio) no ponto de hit — usada pelo ReSTIR GI como n2 no
-// Jacobiano de reconexao. Aditivo; nao altera ShadeSurfaceHit (caminho das reflexoes intacto).
-//
-// Era a normal INTERPOLADA de vertice, que e uma normal de SHADING suave: em malha suavizada o
-// fator cosDst/cosSrc do Jacobiano saia sistematicamente errado, porque o Jacobiano e definido
-// sobre a area real do triangulo (Ouyang 2021 Eq. 11 / GRIS Eq. 52 pedem a geometrica). Agora
-// vem do cross das POSICOES; o custo extra e so ler Position dos 3 vertices ja buscados.
-//
-// Transformacao: cross em espaco de objeto e depois mul(n, WorldToObject) com vetor-linha — que
-// e a inversa-transposta de ObjectToWorld, a mesma convencao ja usada pela normal de vertice.
-//
-// Orientacao: dot(faceN, rayDir) em vez de CommittedTriangleFrontFace(). Com a normal de FACE o
-// teste do produto escalar e exato (com a interpolada nao era, e por isso havia o gate TwoSided),
-// e nao depende da convencao de winding nem da flag TRIANGLE_FRONT_COUNTERCLOCKWISE da instancia
-// — o cross ja herda o winding, entao parear os dois arriscaria inverter o sinal duas vezes. O
-// gate `geo.TwoSided == 0` saiu: material two-sided agora tambem tem a normal virada no verso,
-// como o raster ja faz em GBuffer.ps.hlsl. (Hoje isso e inerte para o unico consumidor: o
-// ReconnectionJacobian usa abs() nos dois cossenos. Fica correto para os proximos.)
-// Normal de FACE em espaco de mundo, SEM orientacao — o caller decide o lado. Retorna false em
-// triangulo degenerado ou transform singular (o caller cai na normal de vertice).
-//
-// Teste de degenerado ADIMENSIONAL, feito em espaco de OBJETO e antes da transformacao:
-// |cross|^2 / (|e1|^2 |e2|^2) = sin^2(angulo entre as arestas). Comparar o comprimento absoluto
-// (ainda mais depois de multiplicar por worldToObject, que reescala por ~1/s) faria o limiar
-// depender da escala da instancia e da unidade do asset — instancia muito ampliada cairia no
-// fallback sem ser degenerada. sin <= 1e-6 = arestas colineares de verdade; aresta de comprimento
-// zero da scale2 = 0 e tambem entra aqui.
-bool HitFaceNormal(StructuredBuffer<DDGIVertex> Verts, uint i0, uint i1, uint i2,
-                   float3x4 worldToObject, out float3 outFaceN) {
-    float3 e1 = Verts[i1].Position - Verts[i0].Position;
-    float3 e2 = Verts[i2].Position - Verts[i0].Position;
-    float3 nObj = cross(e1, e2);
-
-    float  nObjLen2 = dot(nObj, nObj);
-    float  scale2   = dot(e1, e1) * dot(e2, e2);
-    float3 nWrld    = mul(nObj, (float3x3)worldToObject);
-    float  nLen     = length(nWrld);
-
-    outFaceN = (nLen > 0.0f) ? (nWrld / nLen) : float3(0.0f, 0.0f, 1.0f);
-    return (nObjLen2 > 1e-12f * scale2) && (nLen > 0.0f);
-}
-
-float3 HitGeomNormal(uint instId, uint tri, float2 bary, float3x4 worldToObject, float3 rayDir) {
-    InstanceGeo geo = Instances[instId];
-    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
-    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
-    uint i0 = Idx[tri * 3 + 0];
-    uint i1 = Idx[tri * 3 + 1];
-    uint i2 = Idx[tri * 3 + 2];
-
-    float3 faceN;
-    if (!HitFaceNormal(Verts, i0, i1, i2, worldToObject, faceN)) {
-        // Degenerado: cai na normal de vertice interpolada.
-        float3 vObj = Verts[i0].Normal * (1.0f - bary.x - bary.y)
-                    + Verts[i1].Normal * bary.x
-                    + Verts[i2].Normal * bary.y;
-        float3 vWrld = mul(vObj, (float3x3)worldToObject);
-        float  vLen  = length(vWrld);
-        faceN = (vLen > 1e-5f) ? (vWrld / vLen) : normalize(-rayDir);
-    }
-    return (dot(faceN, rayDir) > 0.0f) ? -faceN : faceN;
-}
+// Normal de FACE / de shading no ponto de hit (HitFaceNormal, HitGeomNormal). Vivia aqui;
+// mudou-se p/ o RTGeometry.hlsli quando o BvhDebug passou a precisar da geometria do hit sem a
+// iluminacao. Move puro — mesmas funcoes, mesmo contrato de bindings (Instances + heap
+// diretamente indexado), ja satisfeito acima.
+#include "RTGeometry.hlsli"
 
 // CLASSIFICACAO do hit, sem sombrear — a politica de auto-interseccao precisa decidir se
 // re-traca ANTES de pagar o shading, e o caller e quem escolhe o que fazer (o ReSTIR mata o
@@ -222,6 +164,42 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         }
     }
 
+    // Metallic/roughness seguem o mesmo workflow do G-buffer. O MR e amostrado uma vez para os
+    // dois parametros; mapas separados ocupam os slots +6/+7. Sem RealHitShading, metallic
+    // texturizado cai para dieletrico: nesses assets o fator costuma ser 1 e, sem ler o mapa,
+    // aplica-lo sozinho apagaria o difuso da superficie inteira.
+    const bool hasMetalMap =
+        (geo.Flags & (INSTGEO_FLAG_MRMAP | INSTGEO_FLAG_METALMAP)) != 0u;
+    float metallic  = 0.0f;
+    float roughness = geo.RoughnessFactor;
+    if (P.RealHitShading) {
+        metallic = geo.EmissiveFactor.w; // MetallicFactor cabe no .w do snapshot
+        if ((geo.Flags & INSTGEO_FLAG_MRMAP) != 0u) {
+            Texture2D<float4> mrTex = ResourceDescriptorHeap[geo.MrMapIndex];
+            const float4 mr = mrTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD);
+            metallic  *= ((geo.Flags & INSTGEO_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
+            roughness *= mr.g;
+        }
+        if ((geo.Flags & INSTGEO_FLAG_METALMAP) != 0u) {
+            Texture2D<float4> metalTex = ResourceDescriptorHeap[geo.MetalMapIndex];
+            metallic *= metalTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
+        }
+        if ((geo.Flags & INSTGEO_FLAG_ROUGHMAP) != 0u) {
+            Texture2D<float4> roughTex = ResourceDescriptorHeap[geo.RoughMapIndex];
+            roughness *= roughTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
+        }
+    } else if (!hasMetalMap) {
+        metallic = geo.EmissiveFactor.w;
+    }
+    metallic = saturate(metallic);
+    roughness = max(roughness, 0.04f);
+
+    const float3 diffuseColor  = albedo * (1.0f - metallic);
+    const float3 specularColor = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    const float  alpha = roughness * roughness;
+    const float  a2 = alpha * alpha;
+    const float3 hitV = normalize(-rayDir);
+
     float ndl = saturate(dot(hitN, P.SunDir));
     float vis = 1.0f;
     if (ndl > 0.0f) {
@@ -235,15 +213,49 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         SMILE_RT_PROCEED(sq)
         vis = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
     }
-    float3 Edirect = P.SunColor * P.SunIntensity * vis * ndl;
+    float3 directLighting = BRDF_Direct(
+        hitN, hitV, P.SunDir, P.SunColor * P.SunIntensity * vis,
+        diffuseColor, specularColor, roughness, a2, 0.0f);
 
-    // F5: luzes puntuais no hit — mesma atenuacao do deferred (LightsCommon) + shadow ray
-    // inline SO pra luz que contribui de verdade (a janela de raio + cone ja zeram a
-    // maioria por hit). E a visibilidade RT que impede o poste de vazar parede no GI.
-    [loop] for (int li = 0; li < P.NumLights; ++li) {
+    // ReGIR substitui o loop O(N) por 8 propostas do pool da celula + UM shadow ray. O sol fica
+    // dedicado acima. Fora da grade (ou com o toggle off), o loop historico permanece como
+    // referencia exata e fallback funcional.
+    uint regirLight;
+    float3 regirEstimate;
+    bool regirHandled = false;
+    [branch] if (P.ReGIREnabled) {
+        regirHandled = ReGIRSelectPunctual(
+            hitPos, hitN, hitV, diffuseColor, specularColor, roughness, a2,
+            P.ReGIRGridMin, P.ReGIRInvCellSize, P.ReGIRGridCount,
+            P.ReGIRSlotsPerCell, (uint)P.ReGIRSampleCount, P.ReGIRSlotsSRV,
+            P.ReGIRAverageSRV, P.FrameIndex, (uint)P.NumLights,
+            regirLight, regirEstimate);
+    }
+
+    if (regirHandled && regirLight != REGIR_INVALID_LIGHT) {
+        const float3 lorg = hitPos + offsetN * max(P.ShadowRayBias, RayEpsA.w);
+        const float3 toL = SceneLights[regirLight].PosInvRadius.xyz - lorg;
+        const float lenL = max(length(toL), 1e-4f);
+        const float lTMax = lenL - kLightRayEndMargin;
+        if (lTMax <= RayEpsB.x + kLightRayMinTMax) {
+            directLighting += regirEstimate;
+        } else {
+            RayDesc lray;
+            lray.Origin = lorg; lray.Direction = toL / lenL;
+            lray.TMin = RayEpsB.x; lray.TMax = lTMax;
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
+            lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                              P.ShadowRayMask, lray);
+            SMILE_RT_PROCEED(lq)
+            if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+                directLighting += regirEstimate;
+        }
+    } else if (!regirHandled) {
+      [loop] for (int li = 0; li < P.NumLights; ++li) {
         float3 Ll; float distL;
-        float3 contrib = PunctualLightIncoming(SceneLights[li], hitPos, Ll, distL)
-                       * saturate(dot(hitN, Ll));
+        float3 contrib = HitPunctualBRDF(SceneLights[li], hitPos, hitN, hitV,
+                                         diffuseColor, specularColor, roughness, a2,
+                                         Ll, distL);
         if (dot(contrib, float3(0.2126f, 0.7152f, 0.0722f)) < 1e-3f) continue;
 
         // Segmento medido da origem EFETIVA (deslocada pelo ShadowRayBias): com origem em
@@ -260,7 +272,10 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         // Agora o segmento e o real e, se nao sobrar corpo util entre TMin e TMax, a luz conta
         // como VISIVEL (o trecho nao testado e menor que os proprios epsilons).
         float lTMax = lenL - kLightRayEndMargin;
-        if (lTMax <= RayEpsB.x + kLightRayMinTMax) { Edirect += contrib; continue; }
+        if (lTMax <= RayEpsB.x + kLightRayMinTMax) {
+            directLighting += contrib;
+            continue;
+        }
 
         RayDesc lray;
         lray.Origin    = lorg;
@@ -270,12 +285,36 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
         lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)
-        if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) Edirect += contrib;
+        if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) directLighting += contrib;
+      }
     }
 
-    float3 indirect = SampleDDGIIrradiance(IrradAtlas, LinearClamp, hitPos, hitN,
-                                           P.GridMin, P.Spacing, P.Count,
-                                           P.AtlasTile, P.AtlasInvSize);
+    // 2o bounce com o gather COMPLETO — Chebyshev, bias de superficie, offset de relocacao e
+    // skip de sonda inativa —, o mesmo que o deferred usa. Antes aqui era a trilinear pura, e
+    // isso era o pior lugar possivel para vazar: o resultado do hit volta para o atlas do DDGI,
+    // que reamostra com hysteresis 0,99, entao o leak se REALIMENTA frame a frame. O Flax
+    // tambem usa o sampler completo no bounce do surface atlas.
+    //
+    // O papel de "direcao da camera" no bias e do raio: quem observa este ponto e a origem do
+    // raio, entao V = -rayDir. Sem isso o termo de view empurraria o ponto para uma direcao sem
+    // relacao com a visada e o bias perderia o sentido geometrico.
+    float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
+    float3 hitBias = DDGI_SurfaceBias(hitN, -rayDir, P.Spacing,
+                                      GIBiasParams.x, GIBiasParams.y);
+    // Fora do volume o gather clampa e estende a ultima fileira de sondas ao infinito. Na tela
+    // isso e substituido pelo ambiente hemisferico; aqui a radiancia do hit REALIMENTA o atlas,
+    // entao extrapolar seria pior — a borda se reinjetaria. Sem o ambiente colorido do deferred
+    // (nao existe no CB de um passe de RT), o hit desvanece o indireto para ZERO: escurece o
+    // bounce distante em vez de inventar luz. O direto do hit (sol e puntuais) segue inteiro.
+    float volW = DDGI_VolumeWeight(hitPos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
+    float3 indirect = float3(0.0f, 0.0f, 0.0f);
+    if (volW > 0.0f) {
+        indirect = SampleDDGIIrradianceCheb(
+            IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN,
+            P.GridMin, P.Spacing, P.Count, P.AtlasTile, P.AtlasInvSize,
+            (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, (uint)GIDistParams.w);
+        if (volW < 1.0f) indirect *= volW;
+    }
 
     // Emissivo do hit (mesma formula do GBuffer.ps: factor*strength ja bakeado no InstanceGeo,
     // x mapa quando ha) — sem isto, superficies emissivas nao alimentam GI nem aparecem em
@@ -288,7 +327,15 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         emissive *= emissiveTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).rgb;
     }
 
-    return albedo * (Edirect / SMILE_PI + indirect) + emissive;
+    // O atlas fornece irradiancia difusa, nao uma distribuicao direcional que permita integrar
+    // GGX de verdade. O fallback split-sum usa Fresnel roughness-aware e reserva (1-F) para o
+    // difuso: metal devolve energia tingida por F0 sem fingir que o atlas conhece a direcao de
+    // espelho. O direto acima continua sendo a BRDF GGX direcional completa.
+    const float NoV = saturate(dot(hitN, hitV));
+    const float3 ambientF = F_SchlickRoughness(specularColor, NoV, roughness);
+    const float3 indirectLighting = ((1.0f - ambientF) * diffuseColor + ambientF) * indirect;
+
+    return directLighting + indirectLighting + emissive;
 }
 
 #endif

@@ -36,6 +36,10 @@ namespace Smile {
         u32  TlasSRVSlot()    const { return TlasSRVSlot_; }
         u32  InstanceCount()  const { return InstanceCount_; }
         u32  BlasCount()      const { return BlasCount_; }
+        // Teto de instancias que os rebuilds por frame conseguem endereçar: TLAS, scratch e
+        // uploads foram dimensionados para ele no Build. Passar disso exige Build de novo —
+        // quem cria objeto com a cena carregada precisa consultar (Renderer::OnSceneStructureChanged).
+        u32  InstanceCapacity() const { return InstanceCapacity_; }
 
         // A TLAS descreve a GEOMETRIA: TRIANGLE_CULL_DISABLE sai apenas nas instancias que sao
         // mesmo two-sided (FMaterial::IsTwoSidedForRT). Nao ha mais chave global — quem decide se
@@ -62,6 +66,6 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> InstanceUpload[kInstanceSlots];
         u8*                                    InstanceMapped[kInstanceSlots] = {};
         Microsoft::WRL::ComPtr<ID3D12Resource> TlasScratch;
-        u32                                    InstanceCapacity = 0;
+        u32                                    InstanceCapacity_ = 0;
     };
 }

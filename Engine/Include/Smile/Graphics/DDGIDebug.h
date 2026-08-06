@@ -33,6 +33,9 @@ namespace Smile {
         std::array<FDDGIPointProbeDiagnostic, 8> Probes{};
         i32 DominantSlot = -1;
         i32 RiskSlot = -1;
+        // Peso do volume de sondas no ponto: 1 = dentro, <1 = mistura com o ambiente de fora,
+        // 0 = so ambiente. Os pesos por probe nao dependem dele — por isso e reportado a parte.
+        f32 VolumeWeight = 1.0f;
     };
 
     class FDDGIDebug {
@@ -57,6 +60,9 @@ namespace Smile {
         void Render(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                     FDDGI& DDGI, const Mat44& ViewProj, const Vec3& CameraPos, u32 FrameIndex);
         bool RequestPointDiagnostic(u32 X, u32 Y);
+        // Re-executa o ultimo ponto (ver .cpp): knob que muda o peso das probes tem que
+        // reexecutar o diagnostico, senao o painel mostra o snapshot do estado anterior.
+        bool RepeatPointDiagnostic();
         void CancelPointDiagnostic();
         void RecordPointDiagnostic(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList,
                                    FTextureSRVHeap& SRVHeap, const FDDGI& DDGI,
@@ -110,7 +116,8 @@ namespace Smile {
             Vec4  DistAtlasParams;
             Vec4  CameraPositionFlags;
             Vec4  PixelParams;
-            u8    _Tail[256 - 64 - 6 * 16] = {};
+            Vec4  BiasParams; // x = escala do self-shadow bias, y = teto em metros (0 = sem teto)
+            u8    _Tail[256 - 64 - 7 * 16] = {};
         };
         static_assert(sizeof(PointDiagnosticConstants) == 256,
                       "PointDiagnosticConstants must be 256 bytes");
@@ -136,7 +143,9 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCBBase = nullptr;
 
-        static constexpr u32 kPointOutputRows = 2 + kPointProbeCount * 3;
+        // +1 no fim = peso do volume; espelha DDGI_POINT_ROWS no DDGIDebugPoint.cs.hlsl.
+        static constexpr u32 kPointOutputRows    = 3 + kPointProbeCount * 3;
+        static constexpr u32 kPointRowVolumeIdx  = 2 + kPointProbeCount * 3;
         Microsoft::WRL::ComPtr<ID3D12Resource> PointDiagnosticCB;
         u8* PointDiagnosticMappedCB = nullptr;
         Microsoft::WRL::ComPtr<ID3D12Resource> PointDiagnosticOutput;
@@ -148,6 +157,7 @@ namespace Smile {
         u32 PointOutputUAVSlot = kInvalidSlot;
         bool PointInputsReady = false;
         bool PointRequestPending = false;
+        bool PointHasLastRequest = false; // ja houve um clique: habilita o RepeatPointDiagnostic
         u32 PointRequestX = 0;
         u32 PointRequestY = 0;
         u64 PointRequestVersion = 1;

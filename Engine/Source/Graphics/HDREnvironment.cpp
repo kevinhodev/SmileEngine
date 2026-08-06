@@ -103,7 +103,7 @@ namespace Smile {
         u32 EquirectSRV = UploadEquirect2D(_Device, _CmdQueue, _SRVHeap, Black, 1, 1);
         RunIBLChain(_Device, _CmdQueue, _SRVHeap, EquirectSRV);
 
-        LogInfo("HDREnvironment inicializado (default env preto, BRDF LUT pronta)");
+        LogDebug("HDREnvironment inicializado (default env preto, BRDF LUT pronta)");
     }
 
     void FHDREnvironment::GenerateBRDFLut(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
@@ -310,7 +310,7 @@ namespace Smile {
 
         RunIBLChain(_Device, _CmdQueue, _SRVHeap, EquirectSRV);
         HDRLoaded = true;
-        LogInfo("IBL chain generated (env cube 512^2, irradiance 32^2, specular 128^2 x 7 mips)");
+        LogDebug("IBL chain generated (env cube 512^2, irradiance 32^2, specular 128^2 x 7 mips)");
         return true;
     }
 }

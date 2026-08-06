@@ -40,7 +40,7 @@ cbuffer GenerateDrawsCB : register(b0) {
     uint BuildCameraCellX;
     uint BuildCameraCellZ;
     uint DebugBase;
-    uint Pad1;
+    uint CountBase;
     uint Pad2;
     uint Pad3;
     float4 ViewProjRow0;
@@ -58,6 +58,7 @@ RWStructuredBuffer<FDrawIndexedArgs> DrawArgs : register(u1);
 RWStructuredBuffer<uint> BucketScratch : register(u2);
 RWStructuredBuffer<FTileSource> GpuTileSources : register(u3);
 RWStructuredBuffer<uint> DebugCounters : register(u4);
+RWStructuredBuffer<uint> DrawCounts : register(u5);
 
 static const uint kDebugCandidateThreads = 0u;
 static const uint kDebugValidTiles       = 1u;
@@ -75,11 +76,13 @@ static const uint kDebugCameraCellX      = 12u;
 static const uint kDebugCameraCellZ      = 13u;
 static const uint kDebugCounterCount     = 16u;
 
-uint PackTileData0(uint NodeX, uint NodeZ, uint NodeScaleLOD, uint DensityIndex) {
-    return (NodeX & 0x7FFu) |
-           ((NodeZ & 0x7FFu) << 11u) |
-           ((NodeScaleLOD & 0x1Fu) << 22u) |
-           ((DensityIndex & 0x1Fu) << 27u);
+uint PackTileData0(uint NodeX, uint NodeZ, uint NodeScaleLOD) {
+    // 12 bits por eixo cobrem 4096 folhas. DensityIndex nunca era lido pelo VS e agora
+    // permanece somente em Data1/RangeIndex. Isso permite raiz de 65.536 km com folhas
+    // de 16 m: 32.768 km por eixo a partir da camera, alem do far plane de 20 km.
+    return (NodeX & 0xFFFu) |
+           ((NodeZ & 0xFFFu) << 12u) |
+           ((NodeScaleLOD & 0x1Fu) << 24u);
 }
 
 uint PackTileData2(uint MorphUnorm, uint Pattern, uint CoverageUnorm) {
@@ -109,6 +112,22 @@ uint EdgePatternToCoarserLevel(uint Level) {
     const uint CoarserDensity = DensityForLevel(Level + 1u);
     const uint CellScale = 2u << (CoarserDensity - Density);
     return (CellScale >= 4u) ? 2u : 1u;
+}
+
+uint TileGeomorphUnorm(uint Level, int Dx, int Dz) {
+    // A ultima coroa nao tem um nivel mais grosso para o qual convergir. Nos
+    // demais niveis, os tres/quatro tiles externos formam uma faixa de morph
+    // deterministica. O VS combina este peso topologico com o footprint real.
+    if (Level + 1u >= BuildLevelCount || BuildRingRadius == 0u) {
+        return 0u;
+    }
+
+    const float Radius = (float)BuildRingRadius;
+    const float BandTiles = clamp(Radius * 0.375f, 2.0f, 4.0f);
+    const float RingDistance = (float)max(IAbs(Dx), IAbs(Dz));
+    float Morph = saturate((RingDistance - (Radius - BandTiles)) / BandTiles);
+    Morph = Morph * Morph * (3.0f - 2.0f * Morph);
+    return (uint)floor(Morph * 255.0f + 0.5f);
 }
 
 bool IsCoveredByFinerLevels(uint Level, uint NodeX, uint NodeZ, uint ScaleCells) {
@@ -242,6 +261,7 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID) {
                 const bool Visible = !CoveredByFiner && TileIntersectsFrustum(NodeX, NodeZ, ScaleCells);
                 if (Visible) {
                     const uint CoarserPattern = EdgePatternToCoarserLevel(Level);
+                    const uint MorphUnorm = TileGeomorphUnorm(Level, Dx, Dz);
 
                     const uint Left = (CoarserPattern != 0u && Dx == -(int)BuildRingRadius && NodeX > 0u) ? CoarserPattern : 0u;
                     const uint Right = (CoarserPattern != 0u && Dx == (int)BuildRingRadius && NodeX + 1u < NodesPerAxis) ? CoarserPattern : 0u;
@@ -251,9 +271,9 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID) {
                     const uint DensityIndex = DensityForLevel(Level);
                     const uint RangeIndex = DensityIndex * 81u + Pattern;
 
-                    Source.Data0 = PackTileData0(NodeX, NodeZ, Level, DensityIndex);
+                    Source.Data0 = PackTileData0(NodeX, NodeZ, Level);
                     Source.Data1 = RangeIndex;
-                    Source.Data2 = PackTileData2(0u, Pattern, 255u);
+                    Source.Data2 = PackTileData2(MorphUnorm, Pattern, 255u);
                     Source.Pad = 0u;
                     InterlockedAdd(DebugCounters[DebugBase + kDebugValidTiles], 1u);
                 } else if (CoveredByFiner) {
@@ -273,6 +293,9 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID) {
     }
 
     if (PassMode == 0u) {
+        if (I == 0u) {
+            DrawCounts[CountBase] = 0u;
+        }
         if (I < kDebugCounterCount) {
             DebugCounters[DebugBase + I] = 0u;
             if (I == kDebugTileCount) DebugCounters[DebugBase + I] = TileCount;
@@ -290,14 +313,6 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID) {
         BucketScratch[OffsetsBase + I] = 0u;
         BucketScratch[CursorsBase + I] = 0u;
 
-        const FDrawBucketSource Bucket = DrawBuckets[BucketBase + I];
-        FDrawIndexedArgs Args;
-        Args.IndexCountPerInstance = Bucket.IndexCount;
-        Args.InstanceCount = 0u;
-        Args.StartIndexLocation = Bucket.IndexStart;
-        Args.BaseVertexLocation = 0u;
-        Args.StartInstanceLocation = 0u;
-        DrawArgs[BucketBase + I] = Args;
         return;
     }
 
@@ -335,13 +350,14 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID) {
             Args.StartIndexLocation = Bucket.IndexStart;
             Args.BaseVertexLocation = 0u;
             Args.StartInstanceLocation = Prefix;
-            DrawArgs[BucketBase + BucketIndex] = Args;
-
             if (Count > 0u && Bucket.IndexCount > 0u) {
-                DebugCounters[DebugBase + kDebugDrawCommands] += 1u;
+                const uint CommandIndex = DrawCounts[CountBase];
+                DrawArgs[BucketBase + CommandIndex] = Args;
+                DrawCounts[CountBase] = CommandIndex + 1u;
             }
             Prefix += Count;
         }
+        DebugCounters[DebugBase + kDebugDrawCommands] = DrawCounts[CountBase];
         return;
     }
 

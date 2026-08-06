@@ -13,9 +13,53 @@ namespace SmileEditor {
             return A == GizmoController::EAxis::X ? Vec3::UnitX()
                  : A == GizmoController::EAxis::Y ? Vec3::UnitY() : Vec3::UnitZ();
         }
-        constexpr float kFovY      = 60.0f * 3.14159265f / 180.0f; // bate com a Projection da camera
         constexpr float kSizeFrac  = 0.18f;  // tamanho da seta ~18% da meia-altura da tela
         constexpr float kHitRadius = 9.0f;   // pixels
+        constexpr float kIconFrac  = 0.22f;  // icone da luz = 22% da seta (~44px de altura)
+        // Espessura em pixels (constante em tela). A haste da seta era 1px serrilhado; 3px com
+        // AA e o que deixa o gizmo com o peso do da UE e facil de mirar.
+        constexpr float kAxisThickness = 3.0f;
+        constexpr float kSpotThickness = 2.0f;
+    }
+
+    float GizmoController::IconHalfSizeFor(Smile::Renderer& R, const Vec3& Position) const {
+        return ScaleFor(R, Position) * kIconFrac;
+    }
+
+    int GizmoController::PickLightIcon(Smile::Renderer& R, u32 _X, u32 _Y) const {
+        // Gizmo desligado nao desenha icone nenhum (Submit sai cedo); marker invisivel nao pode
+        // interceptar o clique que deveria cair no picking normal de objetos.
+        if (!Enabled) return -1;
+        const auto& Lights = R.GetScene().Lights();
+        if (Lights.empty()) return -1;
+
+        // Raio MEDIDO, nao constante: projeta o centro e a borda do billboard e usa a distancia
+        // entre os dois em pixels. O raio antigo (22px fixo) so batia com o desenho a 1080p — o
+        // icone escala com a altura do viewport (~0,0198*H), entao a 1440p a area clicavel ficava
+        // menor que o glifo e a 720p, maior.
+        const Vec3  CamRight = R.GetCameraRight();
+        const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
+
+        int BestIdx = -1;
+        for (int i = 0; i < static_cast<int>(Lights.size()); ++i) {
+            const Vec3& P = Lights[static_cast<size_t>(i)].Position;
+            float cx, cy, ex, ey;
+            if (!R.WorldToScreen(P, cx, cy)) continue;
+            if (!R.WorldToScreen(P + CamRight * IconHalfSizeFor(R, P), ex, ey)) continue;
+
+            const float RadiusPx2 = (ex - cx) * (ex - cx) + (ey - cy) * (ey - cy);
+            const float dx = fx - cx, dy = fy - cy;
+            if (RadiusPx2 <= 0.0f || dx * dx + dy * dy > RadiusPx2) continue;
+
+            // Icones sobrepostos: ganha o ULTIMO, porque e o que aparece por cima — o
+            // SubmitLightShapes desenha na ordem do vetor, alpha-blend e sem depth. Isso NAO e
+            // oclusao: icone e sempre visivel por decisao de design, entao uma luz atras da
+            // parede continua clicavel (como deve ser). O criterio e "o de cima ganha", e ele
+            // acompanha de graca quando os icones ganharem sort por profundidade — basta a
+            // ordem de submissao mudar, que desenho e picking mudam juntos.
+            BestIdx = i;
+        }
+        return BestIdx;
     }
 
     bool GizmoController::GetPivot(Smile::Renderer& R, Vec3& OutPivot, int& OutIdx,
@@ -41,8 +85,9 @@ namespace SmileEditor {
     }
 
     float GizmoController::ScaleFor(Smile::Renderer& R, const Vec3& Pivot) const {
+        // FOV vem do Renderer (fonte unica de quem monta a Projection), nao de um literal local.
         const float Dist = (Pivot - R.GetCameraPos()).Length();
-        return std::max(0.001f, Dist * std::tan(kFovY * 0.5f) * kSizeFrac);
+        return std::max(0.001f, Dist * std::tan(R.GetFovY() * 0.5f) * kSizeFrac);
     }
 
     GizmoController::EAxis GizmoController::HitTest(Smile::Renderer& _Renderer, u32 _X, u32 _Y) const {
@@ -94,8 +139,9 @@ namespace SmileEditor {
             // tela (ScaleFor ja escala por distancia), ~44px de altura a 1080p (calibrado na
             // referencia dos viewport icons do Flax). E o alvo do clique de selecao.
             // O wireframe do volume (esfera/cone) saiu de cena por ora — decisao do usuario
-            // 2026-07-10; o caminho LineOccluded segue disponivel pra quando ele voltar.
-            const float S = ScaleFor(R, L.Position) * 0.22f;
+            // 2026-07-10; quando voltar, e Line(..., EDebugDepthMode::Scene) pra ele parar no
+            // chao em vez de atravessar.
+            const float S = IconHalfSizeFor(R, L.Position);
             const Vec3 MCol = L.Enabled
                 ? Vec3{ std::max(L.Color.X, 0.15f), std::max(L.Color.Y, 0.15f),
                         std::max(L.Color.Z, 0.15f) }
@@ -108,7 +154,9 @@ namespace SmileEditor {
             // sem o wire do volume; some junto com a selecao).
             if (IsSel && L.Type == Smile::ELightType::Spot) {
                 const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
-                DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f), MCol);
+                DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f),
+                        Smile::Vec4{ MCol, 1.0f },
+                        Smile::EDebugDepthMode::Foreground, kSpotThickness);
             }
         }
     }
@@ -134,7 +182,8 @@ namespace SmileEditor {
         for (int i = 0; i < 3; ++i) {
             const Vec3 d   = Axis[i];
             const Vec3 col = (Highlighted == Ids[i]) ? Hi : BaseCol[i];
-            DebugDraw.Line(Pivot, Pivot + d * ShaftEnd, col);
+            DebugDraw.Line(Pivot, Pivot + d * ShaftEnd, Smile::Vec4{ col, 1.0f },
+                           Smile::EDebugDepthMode::Foreground, kAxisThickness);
             // Ponta (piramide de 4 faces).
             const Vec3 u = (i == 0) ? Vec3::UnitY() : Vec3::UnitX();
             const Vec3 v = (i == 2) ? Vec3::UnitY() : Vec3::UnitZ();
@@ -143,7 +192,7 @@ namespace SmileEditor {
             const Vec3 c[4] = { bc + u*HeadR + v*HeadR, bc - u*HeadR + v*HeadR,
                                 bc - u*HeadR - v*HeadR, bc + u*HeadR - v*HeadR };
             for (int s = 0; s < 4; ++s)
-                DebugDraw.Triangle(tip, c[s], c[(s + 1) & 3], col);
+                DebugDraw.Triangle(tip, c[s], c[(s + 1) & 3], Smile::Vec4{ col, 1.0f });
         }
     }
 
@@ -189,10 +238,12 @@ namespace SmileEditor {
         auto& List = R.GetScene().Renderables();
         if (DragIdx >= static_cast<int>(List.size())) return;
         Smile::FRenderable& Rn = List[static_cast<size_t>(DragIdx)];
-        const Vec3 Step = NewPos - Rn.Transform.Position; // incremento deste passo
         Rn.Transform.Position = NewPos;
-        Rn.AABBMin += Step; // a AABB de mundo acompanha (frustum culling)
-        Rn.AABBMax += Step;
+        // Recomputa da caixa LOCAL em vez de somar o passo na de mundo. O remendo antigo so
+        // valia porque o gizmo e de translacao pura; no dia em que ele ganhar rotacao ou escala,
+        // somar o incremento descreveria um volume que nao e o do objeto — e o sintoma seria
+        // geometria sumindo no culling, longe daqui.
+        Rn.RefreshWorldBounds();
         R.GetScene().BumpTransformsVersion(); // TLAS segue o objeto (rebuild leve no frame)
     }
 

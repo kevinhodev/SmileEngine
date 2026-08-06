@@ -1,11 +1,10 @@
 #include "Smile/Graphics/OceanFFT.h"
+#include "Smile/Graphics/OceanSpectrum.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
-#include "Smile/Core/Logger.h"
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 
 namespace Smile {
     f32 FOceanFFT::FrandGaussian() {
@@ -19,102 +18,147 @@ namespace Smile {
             x1 = dist(Rng);
             x2 = dist(Rng);
             w = x1 * x1 + x2 * x2;
-        } while (w >= 1.0f);
+        } while (w <= 0.0f || w >= 1.0f);
         w = std::sqrt((-2.0f * std::log(w)) / w);
         GaussianLast    = x2 * w;
         GaussianHasLast = true;
         return x1 * w;
     }
 
-    f32 FOceanFFT::ComputePhillips(f32 kx, f32 ky) const {
-        const f32 k2 = kx * kx + ky * ky;
-        if (k2 == 0.0f) return 0.0f;
+    void FOceanFFT::ComputeH0(u32 _StagingSlot) {
+        if (_StagingSlot >= FCommandQueue::kFramesInFlight ||
+            !H0StagingMapped[_StagingSlot]) return;
 
-        const f32 wx = -std::cos(WindAngle);
-        const f32 wy = -std::sin(WindAngle);
-        const f32 w2 = wx * wx + wy * wy;
-        const f32 Wind = std::max(WindSpeed, 0.1f);
-        const f32 L  = (Wind * Wind) / kG;
-        const f32 L2 = L * L;
-        const f32 kDotW = kx * wx + ky * wy;
+        u8* StagingMapped = H0StagingMapped[_StagingSlot];
 
-        f32 P = Amplitude *
-                (std::exp(-1.0f / (k2 * L2)) / (k2 * k2)) *
-                (kDotW * kDotW / std::max(k2 * w2, 1e-6f));
-        if (kDotW < 0.0f) P *= 0.25f;
-        return P;
-    }
+        constexpr f32 kTwoPi = 6.28318530717958647692f;
+        const f32 DeltaK = kTwoPi / std::max(WorldSize, 1.0e-3f);
+        const UINT RowPitch = H0Footprint.Footprint.RowPitch;
 
-    void FOceanFFT::ComputeH0() {
-        if (!H0StagingMapped) return;
-
-        const f32 kTwoPi       = 6.28318530717958647692f;
-        const f32 recipSqrt2   = 1.0f / std::sqrt(2.0f);
-        const f32 pi2OverWorld = kTwoPi / std::max(WorldSize, 1e-3f);
-        const f32 start        = N / 2.0f;
-        const UINT rowPitch    = H0Footprint.Footprint.RowPitch;
+        FOceanSpectrumParameters SpectrumParams{};
+        SpectrumParams.WindSpeed = WindSpeed;
+        SpectrumParams.WindDirection = WindAngle;
+        SpectrumParams.FetchKilometres = FetchKilometres;
+        SpectrumParams.DepthMetres = OceanDepth;
+        SpectrumParams.Swell = Swell;
+        // Amplitude is linear at the UI boundary, while energy is quadratic.
+        SpectrumParams.Gain = Amplitude * Amplitude;
+        const FOceanSpectrum Spectrum(SpectrumParams);
 
         Rng.seed(Seed);
         GaussianHasLast = false;
+        std::uniform_real_distribution<f32> PhaseDistribution(0.0f, kTwoPi);
 
-        const f32 kTwoPiRcp = 1.0f / kTwoPi;
+        for (int Y = 0; Y < N; ++Y) {
+            Vec4* Row = reinterpret_cast<Vec4*>(
+                StagingMapped + H0Footprint.Offset + static_cast<UINT64>(Y) * RowPitch);
+            const int IY = N / 2 - Y;
 
-        for (int m = 0; m < M; ++m) {
-            const f32 ky = (start - static_cast<f32>(m)) * pi2OverWorld;
-            Vec4* row = reinterpret_cast<Vec4*>(
-                H0StagingMapped + H0Footprint.Offset + static_cast<UINT64>(m) * rowPitch);
+            for (int X = 0; X < N; ++X) {
+                const int IX = N / 2 - X;
+                const f32 Kx = static_cast<f32>(IX) * DeltaK;
+                const f32 Ky = static_cast<f32>(IY) * DeltaK;
+                const f32 Cycles = std::sqrt(static_cast<f32>(IX * IX + IY * IY));
 
-            for (int n = 0; n < M; ++n) {
-                const f32 kx = (start - static_cast<f32>(n)) * pi2OverWorld;
-
-                f32 sqrtP = 0.0f;
-                if (kx != 0.0f || ky != 0.0f) {
-                    // Banda por cascata: componente com c ciclos/tile só entra se
-                    // c ∈ [CutoffLow, CutoffHigh) — bandas disjuntas somam sem duplicar.
-                    const f32 cycles = std::sqrt(kx * kx + ky * ky) *
-                                       WorldSize * kTwoPiRcp;
-                    if (cycles >= CutoffLowCycles && cycles < CutoffHighCycles) {
-                        const f32 P = ComputePhillips(kx, ky);
-                        sqrtP = (P > 0.0f) ? std::sqrt(P) : 0.0f;
-                    }
+                // Index zero is the self-conjugate Nyquist axis in this centered
+                // N-point layout. Its row and column, plus centered DC, are zero.
+                const bool IsNyquistAxis = X == 0 || Y == 0;
+                const bool IsDC = IX == 0 && IY == 0;
+                if (IsNyquistAxis || IsDC ||
+                    Cycles < CutoffLowCycles || Cycles >= CutoffHighCycles) {
+                    Row[X] = Vec4(0.0f, 0.0f, 0.0f, 0.0f);
+                    continue;
                 }
 
-                const f32 h0x   = sqrtP * FrandGaussian() * recipSqrt2;
-                const f32 h0y   = sqrtP * FrandGaussian() * recipSqrt2;
-                const f32 klen  = std::sqrt(kx * kx + ky * ky);
-                const f32 omega = std::sqrt(klen * kG);
-
-                row[n] = Vec4(h0x, h0y, omega, 0.0f);
+                FOceanDispersionSample Dispersion{};
+                const f32 Density = Spectrum.WaveVectorDensity(Kx, Ky, &Dispersion);
+                // Horvath eq. 47, converted from cosine amplitude to the complex
+                // Tessendorf coefficient: one Gaussian amplitude plus uniform phase.
+                // E[|h0(k)|^2] = P(k) * DeltaK^2 / 2.
+                const f32 CellEnergy = Density * DeltaK * DeltaK;
+                const f32 AmplitudeScale = CellEnergy > 0.0f
+                    ? std::sqrt(0.5f * CellEnergy) : 0.0f;
+                const f32 A = FrandGaussian() * AmplitudeScale;
+                const f32 Phase = PhaseDistribution(Rng);
+                Row[X] = Vec4(A * std::cos(Phase),
+                             -A * std::sin(Phase),
+                              Dispersion.Omega, 0.0f);
             }
         }
     }
 
+    void FOceanFFT::ConfigureCascade(u32 _SeedValue, f32 _WorldSizeMeters,
+                                     f32 _CyclesLow, f32 _CyclesHigh) {
+        const f32 NewWorldSize = std::isfinite(_WorldSizeMeters)
+            ? std::max(_WorldSizeMeters, 1.0e-3f) : 64.0f;
+        const f32 NewLow = std::isfinite(_CyclesLow) ? std::max(_CyclesLow, 0.0f) : 0.0f;
+        const f32 NewHigh = std::isfinite(_CyclesHigh)
+            ? std::max(_CyclesHigh, NewLow) : NewLow;
+        if (_SeedValue == Seed && NewWorldSize == WorldSize &&
+            NewLow == CutoffLowCycles && NewHigh == CutoffHighCycles) return;
+
+        Seed = _SeedValue;
+        WorldSize = NewWorldSize;
+        CutoffLowCycles = NewLow;
+        CutoffHighCycles = NewHigh;
+        H0Dirty = true;
+        ResetTemporalHistory();
+    }
+
     void FOceanFFT::SetWindDirection(f32 _Rad) {
-        if (_Rad == WindAngle) return;
-        WindAngle = _Rad;
-        if (H0StagingMapped) {
-            ComputeH0();
-            H0Dirty = true;
-        }
+        const f32 Rad = std::isfinite(_Rad) ? _Rad : 0.0f;
+        if (Rad == WindAngle) return;
+        WindAngle = Rad;
+        H0Dirty = true;
+        ResetTemporalHistory();
     }
 
     void FOceanFFT::SetWindSpeed(f32 _V) {
-        const f32 V = std::max(_V, 0.1f);
+        const f32 V = std::isfinite(_V) ? std::max(_V, 0.1f) : 4.0f;
         if (V == WindSpeed) return;
         WindSpeed = V;
-        if (H0StagingMapped) {
-            ComputeH0();
-            H0Dirty = true;
-        }
+        H0Dirty = true;
+        ResetTemporalHistory();
     }
 
     void FOceanFFT::SetAmplitude(f32 _A) {
-        if (_A == Amplitude) return;
-        Amplitude = _A;
-        if (H0StagingMapped) {
-            ComputeH0();
-            H0Dirty = true;
-        }
+        const f32 A = std::isfinite(_A) ? std::max(_A, 0.0f) : 1.0f;
+        if (A == Amplitude) return;
+        Amplitude = A;
+        H0Dirty = true;
+        ResetTemporalHistory();
+    }
+
+    void FOceanFFT::SetSpectrumFetch(f32 _Kilometres) {
+        const f32 Fetch = std::isfinite(_Kilometres)
+            ? std::max(_Kilometres, 0.001f) : 100.0f;
+        if (Fetch == FetchKilometres) return;
+        FetchKilometres = Fetch;
+        H0Dirty = true;
+        ResetTemporalHistory();
+    }
+
+    void FOceanFFT::SetOceanDepth(f32 _Metres) {
+        const f32 Depth = std::isfinite(_Metres) ? std::max(_Metres, 0.01f) : 100.0f;
+        if (Depth == OceanDepth) return;
+        OceanDepth = Depth;
+        H0Dirty = true;
+        ResetTemporalHistory();
+    }
+
+    void FOceanFFT::SetSwell(f32 _Value) {
+        const f32 Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0f, 1.0f) : 0.25f;
+        if (Value == Swell) return;
+        Swell = Value;
+        H0Dirty = true;
+        ResetTemporalHistory();
+    }
+
+    void FOceanFFT::SetGeometryScales(f32 _HeightScale, f32 _ChoppyLambda) {
+        SurfaceHeightScale = std::isfinite(_HeightScale)
+            ? std::max(_HeightScale, 0.0f) : 1.0f;
+        ChoppyLambda = std::isfinite(_ChoppyLambda)
+            ? std::max(_ChoppyLambda, 0.0f) : 1.0f;
     }
 
     Microsoft::WRL::ComPtr<ID3D12Resource> FOceanFFT::Create2D(
@@ -142,7 +186,7 @@ namespace Smile {
     }
 
     void FOceanFFT::CreateTextures(ID3D12Device* _Device) {
-        H0Tex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, M, M, 1, false,
+        H0Tex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, 1, false,
                          D3D12_RESOURCE_STATE_COPY_DEST);
         H0State = D3D12_RESOURCE_STATE_COPY_DEST;
         {
@@ -161,17 +205,29 @@ namespace Smile {
             BufDesc.SampleDesc       = { 1, 0 };
             BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
             D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&H0Staging)));
-            SMILE_HR(H0Staging->Map(0, nullptr, reinterpret_cast<void**>(&H0StagingMapped)));
+            for (u32 Slot = 0; Slot < FCommandQueue::kFramesInFlight; ++Slot) {
+                SMILE_HR(_Device->CreateCommittedResource(
+                    &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
+                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                    IID_PPV_ARGS(&H0Staging[Slot])));
+                SMILE_HR(H0Staging[Slot]->Map(
+                    0, nullptr, reinterpret_cast<void**>(&H0StagingMapped[Slot])));
+            }
         }
 
         SpecH    = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         SpecD    = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         FFTTemp  = Create2D(_Device, DXGI_FORMAT_R32G32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         DispTex  = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        OceanTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N, 1, true, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        OceanTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N,
+                            kDisplacementMipCount, true,
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        PreviousOceanTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N,
+                                    kDisplacementMipCount, false,
+                                    D3D12_RESOURCE_STATE_COPY_DEST);
+        for (auto& S : OceanMipState) S = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        for (auto& S : PreviousOceanMipState) S = D3D12_RESOURCE_STATE_COPY_DEST;
+        DisplacementHistoryValid = false;
         NormalTex = Create2D(_Device, DXGI_FORMAT_R32G32B32A32_FLOAT, N, N,
                              kNormalMipCount, true,
                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -203,11 +259,19 @@ namespace Smile {
         DispUAVSlot        = _SRVHeap.Allocate(1);
         GradUAVPair        = _SRVHeap.Allocate(2);
         OceanSRVSlot       = _SRVHeap.Allocate(1);
+        PreviousOceanSRVSlot = _SRVHeap.Allocate(1);
+        const u32 OceanMipUAVRest = _SRVHeap.Allocate(kDisplacementMipCount - 1);
+        const u32 OceanMipSRVBlock = _SRVHeap.Allocate(kDisplacementMipCount - 1);
         NormalChainSRVSlot = _SRVHeap.Allocate(1);
         const u32 NormalMipUAVRest  = _SRVHeap.Allocate(kNormalMipCount - 1);
         const u32 NormalMipSRVBlock = _SRVHeap.Allocate(kNormalMipCount - 1);
 
         NormalMipUAVSlot[0] = GradUAVPair + 1;
+        OceanMipUAVSlot[0] = GradUAVPair;
+        for (u32 i = 1; i < kDisplacementMipCount; ++i)
+            OceanMipUAVSlot[i] = OceanMipUAVRest + (i - 1);
+        for (u32 i = 0; i + 1 < kDisplacementMipCount; ++i)
+            OceanMipSRVSlot[i] = OceanMipSRVBlock + i;
         for (u32 i = 1; i < kNormalMipCount; ++i)
             NormalMipUAVSlot[i] = NormalMipUAVRest + (i - 1);
         for (u32 i = 0; i + 1 < kNormalMipCount; ++i)
@@ -227,7 +291,16 @@ namespace Smile {
 
         SRV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
         _SRVHeap.CreateSRV(_Device, DispTex.Get(), SRV, DispSRVSlot);
+        SRV.Texture2D.MipLevels = kDisplacementMipCount;
         _SRVHeap.CreateSRV(_Device, OceanTex.Get(), SRV, OceanSRVSlot);
+        _SRVHeap.CreateSRV(_Device, PreviousOceanTex.Get(), SRV, PreviousOceanSRVSlot);
+
+        SRV.Texture2D.MipLevels = 1;
+        for (u32 i = 0; i + 1 < kDisplacementMipCount; ++i) {
+            SRV.Texture2D.MostDetailedMip = i;
+            _SRVHeap.CreateSRV(_Device, OceanTex.Get(), SRV, OceanMipSRVSlot[i]);
+        }
+        SRV.Texture2D.MostDetailedMip = 0;
 
         SRV.Texture2D.MipLevels = kNormalMipCount;
         _SRVHeap.CreateSRV(_Device, NormalTex.Get(), SRV, NormalChainSRVSlot);
@@ -249,7 +322,10 @@ namespace Smile {
 
         UAV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
         _SRVHeap.CreateUAV(_Device, DispTex.Get(), UAV, DispUAVSlot);
-        _SRVHeap.CreateUAV(_Device, OceanTex.Get(), UAV, GradUAVPair);
+        for (u32 i = 0; i < kDisplacementMipCount; ++i) {
+            UAV.Texture2D.MipSlice = i;
+            _SRVHeap.CreateUAV(_Device, OceanTex.Get(), UAV, OceanMipUAVSlot[i]);
+        }
 
         for (u32 i = 0; i < kNormalMipCount; ++i) {
             UAV.Texture2D.MipSlice = i;
@@ -263,6 +339,7 @@ namespace Smile {
         FFTPSO.Initialize(_Device, "OceanFFT.cs_6_0.cso", 1, 1);
         CreateDispPSO.Initialize(_Device, "OceanCreateDisplacement.cs_6_0.cso", 2, 1);
         GradientsPSO.Initialize(_Device, "OceanGradients.cs_6_0.cso", 1, 2);
+        DisplacementMipPSO.Initialize(_Device, "OceanDisplacementMip.cs_6_0.cso", 1, 1);
         NormalMipPSO.Initialize(_Device, "OceanNormalMip.cs_6_0.cso", 1, 1);
     }
 
@@ -270,8 +347,11 @@ namespace Smile {
         CreateTextures(_Device);
         CreateDescriptors(_Device, _SRVHeap);
         CreatePipelines(_Device);
-        ComputeH0();
         H0Dirty = true;
+    }
+
+    void FOceanFFT::RecreatePipelines(ID3D12Device* _Device) {
+        CreatePipelines(_Device);
     }
 
     void FOceanFFT::TransitionTex(ID3D12GraphicsCommandList* _CL, ID3D12Resource* _R,
@@ -300,10 +380,28 @@ namespace Smile {
         const auto READ = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
+        // Conserva o deslocamento do frame anterior antes de sobrescrever OceanTex. A fila e
+        // serial, portanto uma unica textura de historico por cascata basta mesmo com dois frames
+        // de CB em voo: o copy fica ordenado depois do draw anterior e antes do compute atual.
+        const bool HadDisplacementHistory = DisplacementHistoryValid;
+        if (HadDisplacementHistory) {
+            for (u32 Mip = 0; Mip < kDisplacementMipCount; ++Mip) {
+                TransitionTex(_CL, OceanTex.Get(), OceanMipState[Mip],
+                              D3D12_RESOURCE_STATE_COPY_SOURCE, Mip);
+                TransitionTex(_CL, PreviousOceanTex.Get(), PreviousOceanMipState[Mip],
+                              D3D12_RESOURCE_STATE_COPY_DEST, Mip);
+            }
+            _CL->CopyResource(PreviousOceanTex.Get(), OceanTex.Get());
+            for (u32 Mip = 0; Mip < kDisplacementMipCount; ++Mip)
+                TransitionTex(_CL, PreviousOceanTex.Get(), PreviousOceanMipState[Mip], READ, Mip);
+        }
+
         if (H0Dirty) {
+            if (!H0Staging[FrameSlot] || !H0StagingMapped[FrameSlot]) return;
+            ComputeH0(FrameSlot);
             TransitionTex(_CL, H0Tex.Get(), H0State, D3D12_RESOURCE_STATE_COPY_DEST);
             D3D12_TEXTURE_COPY_LOCATION Src{};
-            Src.pResource       = H0Staging.Get();
+            Src.pResource       = H0Staging[FrameSlot].Get();
             Src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
             Src.PlacedFootprint = H0Footprint;
             D3D12_TEXTURE_COPY_LOCATION Dst{};
@@ -318,14 +416,19 @@ namespace Smile {
         const f32 Dt = std::clamp(RealTime - LastRealTime, 0.0f, 0.1f);
         LastRealTime = RealTime;
 
-        MappedCB->Time          = SimTime;
-        MappedCB->ChoppyScale   = ChoppyWaveScale;
-        MappedCB->HeightScale   = MaxWaveSize;
-        MappedCB->NormalUp      = NormalUp;
-        MappedCB->JacobianScale = ChoppyJacobianScale;
-        MappedCB->DeltaTime     = Dt;
-        MappedCB->FoamRecovery  = FoamRecovery;
-        MappedCB->FoamReset     = FoamHistoryValid ? 0.0f : 1.0f;
+        MappedCB->Time             = SimTime;
+        MappedCB->ChoppyScale      = SurfaceHeightScale * ChoppyLambda;
+        MappedCB->HeightScale      = SurfaceHeightScale;
+        MappedCB->InvTwoTexelWorld = 0.5f * static_cast<f32>(N) /
+                                      std::max(WorldSize, 1.0e-3f);
+        MappedCB->DeltaTime        = Dt;
+        MappedCB->FoamRecovery     = FoamRecovery;
+        MappedCB->FoamReset        = FoamHistoryValid ? 0.0f : 1.0f;
+        MappedCB->Padding0         = 0.0f;
+        MappedCB->WindDirectionX   = std::cos(WindAngle);
+        MappedCB->WindDirectionZ   = std::sin(WindAngle);
+        MappedCB->Padding1         = 0.0f;
+        MappedCB->Padding2         = 0.0f;
         FoamHistoryValid = true;
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr = CB->GetGPUVirtualAddress() +
             static_cast<UINT64>(FrameSlot) * sizeof(OceanCB);
@@ -367,13 +470,27 @@ namespace Smile {
         _CL->Dispatch(N / 16, N / 16, 1);
 
         TransitionTex(_CL, DispTex.Get(), DispState, NPS);
-        TransitionTex(_CL, OceanTex.Get(), OceanState, UAV);
+        TransitionTex(_CL, OceanTex.Get(), OceanMipState[0], UAV, 0);
         TransitionTex(_CL, NormalTex.Get(), NormalMipState[0], UAV, 0);
         GradientsPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr);
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(DispSRVSlot));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(GradUAVPair));
         _CL->Dispatch(N / 16, N / 16, 1);
+
+        // Low-pass displacement/J chain used by the vertex shader. This filters
+        // frequencies inside each broad cascade instead of fading the whole band
+        // when its shortest waves become sub-pixel.
+        DisplacementMipPSO.Bind(_CL);
+        _CL->SetComputeRootConstantBufferView(0, CBAddr);
+        for (u32 Mip = 1; Mip < kDisplacementMipCount; ++Mip) {
+            TransitionTex(_CL, OceanTex.Get(), OceanMipState[Mip - 1], NPS, Mip - 1);
+            TransitionTex(_CL, OceanTex.Get(), OceanMipState[Mip], UAV, Mip);
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(OceanMipSRVSlot[Mip - 1]));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(OceanMipUAVSlot[Mip]));
+            const u32 Res = kGridSize >> Mip;
+            _CL->Dispatch((Res + 7) / 8, (Res + 7) / 8, 1);
+        }
 
         NormalMipPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr);
@@ -387,8 +504,26 @@ namespace Smile {
             _CL->Dispatch(Groups, Groups, 1);
         }
 
-        TransitionTex(_CL, OceanTex.Get(), OceanState, READ);
+        for (u32 Mip = 0; Mip < kDisplacementMipCount; ++Mip)
+            TransitionTex(_CL, OceanTex.Get(), OceanMipState[Mip], READ, Mip);
         for (u32 Mip = 0; Mip < kNormalMipCount; ++Mip)
             TransitionTex(_CL, NormalTex.Get(), NormalMipState[Mip], READ, Mip);
+
+        // Primeiro frame (ou reset temporal): inicializa prev=current para produzir velocity zero
+        // em vez de ler VRAM indefinida. Nos frames seguintes o copy do topo preserva a fase N-1.
+        if (!HadDisplacementHistory) {
+            for (u32 Mip = 0; Mip < kDisplacementMipCount; ++Mip) {
+                TransitionTex(_CL, OceanTex.Get(), OceanMipState[Mip],
+                              D3D12_RESOURCE_STATE_COPY_SOURCE, Mip);
+                TransitionTex(_CL, PreviousOceanTex.Get(), PreviousOceanMipState[Mip],
+                              D3D12_RESOURCE_STATE_COPY_DEST, Mip);
+            }
+            _CL->CopyResource(PreviousOceanTex.Get(), OceanTex.Get());
+            for (u32 Mip = 0; Mip < kDisplacementMipCount; ++Mip) {
+                TransitionTex(_CL, OceanTex.Get(), OceanMipState[Mip], READ, Mip);
+                TransitionTex(_CL, PreviousOceanTex.Get(), PreviousOceanMipState[Mip], READ, Mip);
+            }
+            DisplacementHistoryValid = true;
+        }
     }
 }

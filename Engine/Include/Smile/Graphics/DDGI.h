@@ -4,9 +4,12 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
+#include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/ReGIR.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <unordered_map>
+#include <cstddef>
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -29,7 +32,29 @@ namespace Smile {
         // so usa a familia (2) — os raios dele partem de probes, nao do G-buffer.
         Vec4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+        // Gather do 2o bounce no hit (contrato do HitShading.hlsli). Duplica tile/W/H que ja
+        // estao no DistAtlasParams porque o contrato e por NOME e vale para os tres passes.
+        Vec4 GIDistParams;    // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
+        Vec4 GIBiasParams;    // x=escala do bias de superficie, y=teto em metros, zw=-
+        Vec4 ReGIRGridMinSlots;
+        Vec4 ReGIRInvCellEnabled;
+        Vec4 ReGIRGridCountSamples;
+        Vec4 ReGIRResources;
+        // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
+        // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum.
+        Vec4 SkyParams;       // x = view height (km), y = raio do planeta (km), zw = livres
+        // Invalidacao ESPACIAL do atlas (ver FDDGI::InvalidateRegion). Caixa de mundo cujas
+        // sondas trocam a hysteresis por uma mais rapida durante alguns frames. Anexado no FIM,
+        // como o SkyParams, p/ nao deslocar offset nenhum.
+        Vec4 InvalidateMin;      // xyz = min da caixa, w = 1 se ha invalidacao ativa
+        Vec4 InvalidateMaxHyst;  // xyz = max da caixa, w = hysteresis a usar dentro dela
     };
+    static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
+                  "DDGIConstants divergiu do cbuffer DDGICB");
+    static_assert(offsetof(DDGIConstants, SkyParams) == 272,
+                  "SkyParams deve permanecer anexado ao fim do DDGICB");
+    static_assert(offsetof(DDGIConstants, InvalidateMin) == 288,
+                  "InvalidateMin/MaxHyst devem permanecer anexados ao fim do DDGICB");
 
     class FDDGI {
     public:
@@ -48,6 +73,11 @@ namespace Smile {
         // TwoSided, emissivo...): o snapshot e criado uma vez no SetupForScene e nao acompanha a
         // edicao. O CHAMADOR precisa garantir GPU ociosa — e um upload heap sem versao por frame.
         void RefreshInstanceGeo(const FScene& Scene);
+
+        // Quantas instancias o snapshot acima consegue descrever. Alocado no SetupForScene pelo
+        // tamanho da cena de entao; o RefreshInstanceGeo trunca nele. Quem cria objeto com a cena
+        // ja carregada precisa consultar antes (Renderer::OnSceneStructureChanged).
+        u32 InstanceGeoCapacity() const { return InstanceGeoCount; }
 
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, u32 PunctualLightCount = 0);
@@ -115,6 +145,18 @@ namespace Smile {
         f32  GetIntensity() const { return Intensity; }
         // Perfil compartilhado de epsilons (dono = Renderer, empurra todo frame).
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+        // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
+        void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
+        // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
+        void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
+            SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
+        }
+        // Escurecimento do ceu na chuva (dono = Renderer; mesma politica das reflexoes e do
+        // ReSTIR GI). O membro existia fixo em 1.0, sem setter — o DDGI ignorava o temporal.
+        void SetSkyIntensity(f32 V) { SkyIntensity = V; }
+        f32  GetSkyIntensity() const { return SkyIntensity; }
 
         // Reset one-shot do atlas: o proximo update que REALMENTE rodar usa histerese 0, ou seja,
         // substitui o conteudo em vez de misturar. Necessario p/ calibracao: com Hysteresis 0.99
@@ -122,6 +164,22 @@ namespace Smile {
         // por dezenas de frames. O flag e consumido no RecordUpdate, nao aqui — se o passe nao
         // rodar neste frame, o reset continua pendente.
         void ResetHistoryOnce()   { HysteresisResetPending = true; }
+
+        // Invalidacao ESPACIAL: so as sondas dentro da caixa de mundo trocam a hysteresis por
+        // kInvalidateHysteresis durante kInvalidateFrames frames.
+        //
+        // Existe porque criar ou apagar UM objeto deixa 99% das sondas ainda corretas — so as
+        // vizinhas dele mudaram. O ResetHistoryOnce acima e global e zera a hysteresis, ou seja,
+        // troca o atlas inteiro pela estimativa de UM trace de 64 raios: a GI toda pula para um
+        // valor ruidoso e volta a assentar. E o que se via como uma piscada leve ao duplicar ou
+        // remover. Ele continua certo para mudanca GLOBAL de iluminacao (calibracao, cor do sol).
+        //
+        // Modelo da UE: o Lumen invalida por PRIMITIVA (LumenInvalidateSurfaceCacheForPrimitive),
+        // nunca o cache inteiro. A hysteresis de dentro da caixa nao e 0 e sim alta-mas-rapida,
+        // diferente da relocacao (que usa 0 porque o historico dela e de OUTRO lugar): aqui o
+        // historico da sonda continua quase todo valido, entao misturar rapido converge sem o
+        // pop de amostra unica. Chamadas sucessivas UNEM as caixas.
+        void InvalidateRegion(const Vec3& Min, const Vec3& Max);
 
         void SetHysteresis(f32 V) { Hysteresis = V; }
         f32  GetHysteresis() const{ return Hysteresis; }
@@ -145,6 +203,32 @@ namespace Smile {
 
         void SetRelocation(bool V) { Relocation = V; RelocateFramesLeft = V ? kRelocateConvergeFrames : 4; }
         bool GetRelocation() const { return Relocation; }
+
+        // Amostragem (nao afeta o atlas — sao knobs do SAMPLER, lidos pelo deferred/forward e
+        // pelo diagnostico pontual). Ficam aqui, e nao no FRayEpsilonProfile, porque nao sao
+        // epsilons de RAIO: o perfil descreve a geometria dos raios de GI/reflexo/sombra e sua
+        // troca limpa reservoirs e denoiser, o que nao faz sentido para um offset de leitura.
+        //
+        // Teto do bias em METROS. 0 = sem teto = comportamento historico (bias = 0.75*spacing*
+        // scale, formula do Flax). Existe porque o espacamento do grid aqui vem da AABB da cena
+        // inteira: com spacing de 8 m o bias historico vale 1,20 m e o ponto de amostragem
+        // atravessa parede. O RTXGI moderno resolve com normalBias/viewBias absolutos; o teto e
+        // a versao barata, que preserva cena pequena e corta cena grande.
+        void SetSurfaceBiasMax(f32 V)   { SurfaceBiasMax = V < 0.0f ? 0.0f : V; }
+        f32  GetSurfaceBiasMax() const  { return SurfaceBiasMax; }
+        void SetSurfaceBiasScale(f32 V) { SurfaceBiasScale = V; }
+        f32  GetSurfaceBiasScale() const{ return SurfaceBiasScale; }
+
+        // O peso de backface e sempre medido da posicao SEM bias (o que o Flax faz,
+        // DDGI.hlsl:210-215). Teve toggle enquanto era hipotese; virou comportamento fixo depois
+        // do A/B — nao e trade-off, e correcao, e o modo antigo so serviria p/ reintroduzir o bug.
+
+        // Largura, EM CELULAS, do fade para o ambiente hemisferico nas bordas do volume.
+        // 0 = desligado (o gather clampa e estende as probes de borda ao infinito, que e o
+        // comportamento historico). O terreno fica fora do volume de proposito, entao sem isto
+        // ele inteiro herda a irradiancia da ultima fileira de probes.
+        void SetVolumeFadeProbes(f32 V) { VolumeFadeProbes = V < 0.0f ? 0.0f : V; }
+        f32  GetVolumeFadeProbes() const { return VolumeFadeProbes; }
 
     private:
         void CreateConstantBuffer(ID3D12Device* Device);
@@ -228,19 +312,35 @@ namespace Smile {
         f32  Intensity    = 1.0f;
         f32  Hysteresis   = 0.99f;
         bool HysteresisResetPending = false; // ver ResetHistoryOnce
+
+        // Invalidacao espacial (ver InvalidateRegion). 0.75^12 ~ 3% do valor velho: converge em
+        // ~12 frames sem o pop de amostra unica que a hysteresis 0 produz.
+        static constexpr f32 kInvalidateHysteresis = 0.75f;
+        static constexpr u32 kInvalidateFrames     = 12;
+        Vec3 InvalidateMin_{};
+        Vec3 InvalidateMax_{};
+        u32  InvalidateFramesLeft_ = 0;
         f32  SkyIntensity = 1.0f;
         // NormalBias saiu daqui: o bias dos shadow rays do 2o hit e o mesmo p/ ReSTIR, reflexoes e
         // DDGI (o nome era historico), entao vive no perfil compartilhado — sem isso o sweep de
         // calibracao deixaria o DDGI em 20 cm enquanto os outros descem.
         FRayEpsilonProfile RayEps; // perfil compartilhado (dono = Renderer)
+        FGIHitSampling     GIHit;
+        FReGIRShaderParams ReGIRParams{};
+        Vec4               SkyLutParams{};
         f32  MaxRayDist   = 0.0f;
         bool RealHitShading = true;
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)
         bool Relocation     = true; 
         f32  DeactivationThreshold = 0.20f; 
-        bool AdaptiveRays   = false; 
-        int  MaxRays        = 64;    
-        int  MinRays        = 16;    
+        bool AdaptiveRays   = false;
+        int  MaxRays        = 64;
+        int  MinRays        = 16;
+        f32  SurfaceBiasScale = 0.2f;  // o `bias` do GetDDGISurfaceBias do Flax
+        // Defaults LIGADOS (o legado seria 0.0f / false). Com o grid dimensionado pela AABB da
+        // cena, o bias sem teto vale 1,20 m no Bistro — o ponto de amostragem atravessa parede.
+        f32  SurfaceBiasMax   = 0.40f; // metros; 0 = sem teto (comportamento historico)
+        f32  VolumeFadeProbes = 1.0f;  // celulas de fade na borda; 0 = sem fallback (historico)
         static constexpr u32 kRelocateConvergeFrames = 180;
         static constexpr u32 kReclassifyFrames = 6;
         u32  RelocateFramesLeft = 0;

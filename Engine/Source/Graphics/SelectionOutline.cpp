@@ -21,7 +21,7 @@ namespace Smile {
         CreateConstantBuffer(Device);
         CreateTargets(Device, SRVHeap, Width, Height);
         Initialized = true;
-        LogInfo("FSelectionOutline (mascara + edge-detect) inicializado");
+        LogDebug("FSelectionOutline (mascara + edge-detect) inicializado");
     }
 
     void FSelectionOutline::CreateTargets(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,

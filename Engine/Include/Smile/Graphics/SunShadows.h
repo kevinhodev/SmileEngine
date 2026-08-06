@@ -9,17 +9,27 @@
 
 namespace Smile {
     class FTextureSRVHeap;
+    class FGpuProfiler;
     class FGpuMesh;
     class FMaterial;
 
     struct alignas(256) CSMConstants {
         Mat44 WorldToShadow[4];  // 4*64 = 256 bytes
         Vec4  CascadeTexelWorld; // x..w = tamanho de 1 texel em mundo, por cascata (normal-offset)
-        Vec4  Params;            // x = numCascades, y = depthBias (NDC z), z = 1/res, w = enabled
+        Vec4  Params;            // x = numCascades, y = depthBias EM TEXELS (informativo; o shader usa BiasNdc), z = 1/res, w = enabled
         Vec4  Params2;           // x = normal-offset (em texels), yzw reservado
         Vec4  Params3;           // x = frame do ruido do PCF, y = tan(meio-angulo do sol; 0 = PCSS off), z = penumbra max (texels)
-        Vec4  BiasScale;         // multiplicador do depth bias por cascata (default 1,1,1,1)
+        // Depth bias JA EM NDC, resolvido por cascata na CPU: DepthBiasTexels * texel[c] /
+        // range[c] * CascadeBiasScale[c]. E o que torna o bias constante EM TEXELS em todas
+        // as cascatas — a forma da Unreal (ShadowCascadeBiasDistribution = 1) e do
+        // e_ShadowsAutoBias da Cry. Com um escalar unico em NDC o bias valia 3,28 texels na
+        // cascata 0 contra 1,28 na 3, porque o CasterPullback e aditivo (range = 2R + 80).
+        Vec4  BiasNdc;
         Vec4  DepthRangeWorld;   // extensao em mundo do range de depth do ortho, por cascata (PCSS)
+        Vec4  CascadeSplits;     // profundidade view-space do fim de cada cascata
+        Vec4  CameraPosition;    // xyz = camera em mundo
+        Vec4  CameraForwardNear; // xyz = frente da camera, w = near plane
+        Vec4  SunDirection;      // xyz = direcao PARA a key light (normal-offset por N.L)
     };
 
     struct alignas(256) ShadowCascadeConstants {
@@ -54,7 +64,8 @@ namespace Smile {
 
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              const FShadowDrawItem* Items, size_t Count,
-                             const FExtraCascadeDraw& ExtraDraw = {});
+                             const FExtraCascadeDraw& ExtraDraw = {},
+                             FGpuProfiler* Profiler = nullptr);
 
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);
         // Leitura tambem em compute (volumetric fog): PIXEL | NON_PIXEL.
@@ -68,14 +79,14 @@ namespace Smile {
         bool IsInitialized() const { return Initialized; }
 
         void SetMaxDistance(f32 D)      { ShadowMaxDistance = D; InvalidateCache(); }
-        void SetDepthBias(f32 B)        { DepthBias = B; }
+        void SetDepthBias(f32 Texels)   { DepthBiasTexels = Texels; }
         void SetCasterPullback(f32 P)   { CasterPullback = P; InvalidateCache(); }
         void SetNormalOffset(f32 Texels){ NormalOffsetTexels = Texels; }
-        void SetPenumbra(f32 Texels)    { PcfRadiusTexels = Texels; }
-        void SetBlendBand(f32 UV)       { BlendBand = UV; }
+        void SetPenumbra(f32 Texels)    { PcfRadiusTexels = Texels; } // piso da penumbra do PCSS
+        void SetBlendBand(f32 Fraction) { BlendBand = Fraction; InvalidateCache(); }
         void SetDebugCascades(bool On)  { DebugCascades = On; }
         f32  GetMaxDistance() const     { return ShadowMaxDistance; }
-        f32  GetDepthBias() const       { return DepthBias; }
+        f32  GetDepthBias() const       { return DepthBiasTexels; } // em texels da cascata
         f32  GetNormalOffset() const    { return NormalOffsetTexels; }
         f32  GetPenumbra() const        { return PcfRadiusTexels; }
         f32  GetBlendBand() const       { return BlendBand; }
@@ -125,14 +136,28 @@ namespace Smile {
         u8*                                         MappedCSM = nullptr;
         CSMConstants                                CPUConstants{};
         Mat44                                       CascadeViewProj[kNumCascades]{};
+        // 5 planos de culling em MUNDO por cascata (4 laterais da fatia + far do ortho; sem
+        // near, por causa do pancaking). Retidos entre updates junto com a matriz, para que
+        // cascata congelada pelo cache continue cullando contra o volume que gerou o mapa.
+        Vec4                                        CullPlanes[kNumCascades][5]{};
 
         u32  FrameSlot = 0;
         f32  ShadowMaxDistance   = 800.0f;
         f32  DistributionExponent = 3.0f;
-        f32  DepthBias           = 0.0006f;
+        // Bias em TEXELS da propria cascata (nao em NDC): a conversao para NDC e por cascata,
+        // em UpdatePerFrame. 2,0 fica dentro da faixa que ja era usada nas cascatas proximas
+        // (a 0 valia 3,28 e a 1 valia 1,75) e acima da que valia nas distantes (1,37 e 1,28),
+        // entao nao introduz acne em lugar nenhum e corta ~40% do peter-panning de contato.
+        f32  DepthBiasTexels     = 2.0f;
         f32  NormalOffsetTexels  = 2.5f;
         f32  CasterPullback      = 80.0f;
-        f32  PcfRadiusTexels     = 2.5f;
+        // PISO da penumbra do PCSS, em texels. O caminho de raio fixo virou o optimized PCF
+        // 5x5 (determinístico, 9 taps), entao este knob so governa o PCSS das cascatas 0-1 —
+        // e o valor casa com a meia-largura do 5x5, para que a troca entre as duas familias
+        // de filtro seja continua no contato, onde o PCSS colapsa.
+        f32  PcfRadiusTexels     = 2.0f;
+        // Fracao final de cada intervalo de view-depth usada no crossfade. A cascata
+        // seguinte e ajustada com a mesma sobreposicao (contrato Flax/Unreal).
         f32  BlendBand           = 0.1f;
         bool DebugCascades       = false;
         bool Initialized         = false;

@@ -87,20 +87,22 @@ namespace Smile {
         CPUConstants.LutSize            = { (f32)kTransmittanceW, (f32)kTransmittanceH,
                                             (f32)kMultiScatterW,  (f32)kMultiScatterH };
 
-        const f32 ViewHeight = CPUConstants.PlanetRadii.X + kGroundAltitudeKm;
-        CPUConstants.SkyViewSize = { (f32)kSkyViewW, (f32)kSkyViewH, ViewHeight, kGroundAltitudeKm };
+        const f32 ViewHeight = CPUConstants.PlanetRadii.X + kPlanetRadiusOffsetKm;
+        CPUConstants.SkyViewSize = { (f32)kSkyViewW, (f32)kSkyViewH, ViewHeight,
+                                     kPlanetRadiusOffsetKm };
 
         const f32 SunDiskHalfAngleRad = 0.7f * 3.14159265358979f / 180.0f;
         CPUConstants.SunDisk          = { std::cos(SunDiskHalfAngleRad), 30.0f, 22.0f, 0.0f };
         CPUConstants.InvViewProjNoTrans = Mat44::Identity();
         CPUConstants.InvViewProj    = Mat44::Identity();
         CPUConstants.CameraWorldPos = { 0.0f, 0.0f, 0.0f, 0.001f };
-        CPUConstants.AerialParams   = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
+        CPUConstants.AerialParams     = { 20.0f, (f32)kAerialSlices, 0.0f, 2.0f };
+        CPUConstants.AerialVolumeSize = { (f32)kAerialW, (f32)kAerialH, 0.0f, 0.0f };
         CPUConstants.StarAxis       = { 0.0f, 1.0f, 0.0f, 0.0f };
         CPUConstants.NightSky       = { 0.0f, 0.0f, 0.0f, 0.0f };
         CPUConstants.ViewProjNoTrans = Mat44::Identity();
         CPUConstants.StarMatrix      = Mat44::Identity();
-        CPUConstants.StarView        = { 1.0f, 1.0f, 0.0f, 0.0f };
+        CPUConstants.StarView        = { 1.0f, 1.0f, 1.0f, 1.0f };
 
         CreateConstantBuffer(_Device);
 
@@ -130,7 +132,7 @@ namespace Smile {
 
         // Buffer do ambient (2x float4) + readback ring p/ a CPU ler com latencia segura.
         {
-            constexpr u64 kAmbientBytes = 2 * sizeof(f32) * 4;
+            constexpr u64 kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
 
             D3D12_HEAP_PROPERTIES DefHeap{};
             DefHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -154,7 +156,7 @@ namespace Smile {
             D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
             UAVDesc.Format                      = DXGI_FORMAT_UNKNOWN;
             UAVDesc.ViewDimension               = D3D12_UAV_DIMENSION_BUFFER;
-            UAVDesc.Buffer.NumElements          = 2;
+            UAVDesc.Buffer.NumElements          = kAmbientVec4s;
             UAVDesc.Buffer.StructureByteStride  = sizeof(f32) * 4;
             _SRVHeap.CreateUAV(_Device, AmbientBuffer.Get(), UAVDesc, AmbientUAVSlot);
 
@@ -182,7 +184,7 @@ namespace Smile {
         Dirty       = true;
         Initialized = true;
         BakeIfDirty(_Device, _CmdQueue); 
-        LogInfo("Atmosfera (Hillaire) inicializada: Transmittance + MultiScatter + SkyView");
+        LogDebug("Atmosfera (Hillaire) inicializada: Transmittance + MultiScatter + SkyView");
     }
 
     void FAtmosphere::CreateConstantBuffer(ID3D12Device* _Device) {
@@ -244,7 +246,10 @@ namespace Smile {
     void FAtmosphere::LoadMoonTexture(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                       FTextureSRVHeap& _SRVHeap, const std::wstring& _Path) {
         if (!Initialized) return;
-        FTexture Tex = FTexture::LoadFromFile(_Device, _UploadQueue, _SRVHeap, _Path, false);
+        // LROC color e uma imagem de cor sRGB. O flag tambem faz a cadeia de mips ser filtrada
+        // em linear; o SRV sRGB devolve albedo linear ao shader sem pow manual.
+        FTexture Tex = FTexture::LoadFromFile(_Device, _UploadQueue, _SRVHeap,
+                                              _Path, false, true);
         if (!Tex.IsValid()) return;
 
         MoonTexture.Release(_SRVHeap);
@@ -266,7 +271,7 @@ namespace Smile {
         static_assert(sizeof(FStarRec) == 20, "layout do stars.sstars");
 
         std::ifstream File(_Path, std::ios::binary);
-        if (!File) { LogWarning("Catalogo de estrelas nao encontrado; hash procedural segue"); return; }
+        if (!File) { LogDebug("Catalogo de estrelas nao encontrado; hash procedural segue"); return; }
 
         u32 Header[4]{};
         File.read(reinterpret_cast<char*>(Header), sizeof(Header));
@@ -326,8 +331,8 @@ namespace Smile {
         BuildStarPipeline(_Device, SkyRTFormat, SkyDSFormat);
 
         StarCount = Count;
-        CPUConstants.StarView.Z = 1.0f; // desliga o hash procedural do sky pass
-        LogInfo("Catalogo de estrelas: " + std::to_string(Count) + " estrelas (Yale BSC)");
+        CPUConstants.NightSky.Z = 1.0f; // desliga o hash procedural do sky pass
+        LogDebug("Catalogo de estrelas: " + std::to_string(Count) + " estrelas (Yale BSC)");
     }
 
     void FAtmosphere::BuildStarPipeline(ID3D12Device* _Device,
@@ -529,13 +534,17 @@ namespace Smile {
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (!Initialized) return;
         BuildSkyPSO(_Device, _RTFormat, _DSFormat);
+        // O cubemap atmosferico e a fonte ambiental da agua. Mante-lo fora do hot reload
+        // fazia alteracoes no horizonte parecerem inertes ate reiniciar o editor.
+        SkyReflBakePSO.Initialize(_Device, "BakeSkyReflection.cs_6_0.cso", 1, 1);
     }
 
     void FAtmosphere::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun,
                                      const Mat44& _InvViewProjNoTranslation,
                                      const Mat44& _ViewProjNoTranslation,
                                      const Mat44& _InvViewProjFull, const Vec3& _CameraWorldPos,
-                                     f32 _KmPerWorldUnit, f32 _ViewportW, f32 _ViewportH) {
+                                     f32 _KmPerWorldUnit, f32 _RenderW, f32 _RenderH,
+                                     f32 _OutputW, f32 _OutputH) {
         FrameSlot = _FrameSlot;
         Vec3 d = _DirToSun.NormalizedSafe(Vec3{ 0.0f, 0.6f, 0.8f }.Normalized());
         CPUConstants.SunDir = { d.X, d.Y, d.Z, CPUConstants.SunDir.W };
@@ -543,15 +552,29 @@ namespace Smile {
         CPUConstants.ViewProjNoTrans = _ViewProjNoTranslation;
         CPUConstants.InvViewProj    = _InvViewProjFull;
         CPUConstants.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
-        CPUConstants.StarView.X = _ViewportW;
-        CPUConstants.StarView.Y = _ViewportH;
+        const f32 SafeOutputW = std::max(_OutputW, 1.0f);
+        const f32 SafeOutputH = std::max(_OutputH, 1.0f);
+        CPUConstants.StarView = { SafeOutputW, SafeOutputH,
+                                  std::max(_RenderW, 1.0f) / SafeOutputW,
+                                  std::max(_RenderH, 1.0f) / SafeOutputH };
 
         // View height dinamico: sky-view LUT, transmitancia do disco/estrelas e ambient seguem a
-        // altitude da camera (UE recalcula por frame; antes ficava congelado em bottomR+0.5km).
+        // altitude real da camera sobre o offset numerico do planeta (UE recalcula por frame).
+        //
+        // Este e o UNICO view height da engine: o bake do aerial perspective e o caminho de
+        // GI/reflexoes leem daqui (ViewHeightKm()). Ele decide o angulo do horizonte, logo onde
+        // cai a dobra do warp em v=0.5 do sky-view LUT — dois consumidores com valores
+        // diferentes leem texels diferentes para a MESMA direcao, bem na banda de maior
+        // gradiente. Era o caso: o caminho de GI tinha 6360.5 hardcoded (0,72 grau de dip
+        // contra os 0,032 do bake, ~3,8 texels dos 104).
+        //
+        // O piso do clamp e o proprio offset numerico. Ele era 0.05 km, residuo de quando o
+        // offset nominal valia 0.5 km, e sozinho ja recriava 49 m de divergencia contra o bake.
+        // Nao protege de nada: o max(CameraWorldPos.Y, 0) abaixo garante o limite inferior.
         CPUConstants.SkyViewSize.Z = std::clamp(
-            CPUConstants.PlanetRadii.X + kGroundAltitudeKm +
+            CPUConstants.PlanetRadii.X + kPlanetRadiusOffsetKm +
                 std::max(_CameraWorldPos.Y, 0.0f) * _KmPerWorldUnit,
-            CPUConstants.PlanetRadii.X + 0.05f,
+            CPUConstants.PlanetRadii.X + kPlanetRadiusOffsetKm,
             CPUConstants.PlanetRadii.Y - 1.0f);
 
         if (MappedBase) *Mapped() = CPUConstants;
@@ -608,8 +631,8 @@ namespace Smile {
         CPUConstants.StarAxis = { A.X, A.Y, A.Z, _AngleRad };
 
         // Matriz catalogo->mundo p/ o passe de estrelas: +Y do catalogo = polo celeste; X/Z
-        // giram em torno do polo com o relogio (rotacao diurna = -angulo, mesmo sentido do
-        // campo hash: estrelas nascem no leste como o sol).
+        // giram em torno do polo com o tempo sideral (rotacao = -angulo, mesmo sentido do
+        // campo hash: estrelas nascem no leste).
         Vec3 X0 = Vec3{ 0.0f, 1.0f, 0.0f }.Cross(A);
         X0 = X0.NormalizedSafe(Vec3{ 1.0f, 0.0f, 0.0f });
         const Vec3 Z0 = X0.Cross(A);
@@ -654,6 +677,37 @@ namespace Smile {
     void FAtmosphere::BakeIfDirty(ID3D12Device* _Device, FCommandQueue& _CmdQueue) {
         if (!Initialized || !Dirty) return;
         Bake(_Device, _CmdQueue);
+        Dirty = false;
+    }
+
+    // Mesmo bake das duas LUTs invariantes ao frame, mas GRAVADO na command list do frame.
+    //
+    // O Bake() abaixo faz ResetForRecording + ExecuteAndSync — flush completo de GPU, que so
+    // pode acontecer fora do frame (por isso ele so era chamado de dentro do Initialize). O
+    // resultado pratico era que MarkDirty() nao tinha efeito NENHUM: nao havia caminho que
+    // consumisse o flag depois da inicializacao. Um slider de parametro fisico (coeficientes,
+    // raio do planeta, albedo do solo) seria no-op silencioso.
+    void FAtmosphere::RecordBakeIfDirty(ID3D12GraphicsCommandList* _CommandList) {
+        if (!Initialized || !Dirty || !_CommandList) return;
+        if (MappedBase) *Mapped() = CPUConstants;
+        const D3D12_GPU_VIRTUAL_ADDRESS CB = CBAddr();
+
+        Transmittance.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        TransmittancePSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CB);
+        _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(Transmittance.SRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(Transmittance.UAVSlot));
+        _CommandList->Dispatch((kTransmittanceW + 7) / 8, (kTransmittanceH + 7) / 8, 1);
+        Transmittance.Transition(_CommandList, kReadState);
+
+        MultiScatter.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        MultiScatterPSO.Bind(_CommandList);
+        _CommandList->SetComputeRootConstantBufferView(0, CB);
+        _CommandList->SetComputeRootDescriptorTable(1, SRVHeapPtr->GpuHandle(Transmittance.SRVSlot));
+        _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(MultiScatter.UAVSlot));
+        _CommandList->Dispatch((kMultiScatterW + 7) / 8, (kMultiScatterH + 7) / 8, 1);
+        MultiScatter.Transition(_CommandList, kReadState);
+
         Dirty = false;
     }
 
@@ -758,7 +812,7 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(2, SRVHeapPtr->GpuHandle(AmbientUAVSlot));
         _CommandList->Dispatch(1, 1, 1);
 
-        constexpr u64 kAmbientBytes = 2 * sizeof(f32) * 4;
+        constexpr u64 kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
         D3D12_RESOURCE_BARRIER B{};
         B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         B.Transition.pResource   = AmbientBuffer.Get();
@@ -781,10 +835,21 @@ namespace Smile {
         // O slot _FrameSlot foi escrito ha kFramesInFlight frames e a fence dele ja foi esperada
         // (CommandQueue::BeginFrame) — leitura segura, latencia invisivel p/ ambient.
         if (!AmbientMapped || AmbientRecorded < FCommandQueue::kFramesInFlight) return false;
-        constexpr size_t kAmbientBytes = 2 * sizeof(f32) * 4;
+        constexpr size_t kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
         const f32* P = reinterpret_cast<const f32*>(AmbientMapped + _FrameSlot * kAmbientBytes);
         _OutSky    = Vec3{ P[0], P[1], P[2] };
         _OutGround = Vec3{ P[4], P[5], P[6] };
+        return true;
+    }
+
+    bool FAtmosphere::GetSkyAmbientSH(u32 _FrameSlot, Vec4 _OutSH[3]) const {
+        if (!AmbientMapped || AmbientRecorded < FCommandQueue::kFramesInFlight) return false;
+        constexpr size_t kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
+        const f32* P = reinterpret_cast<const f32*>(AmbientMapped + _FrameSlot * kAmbientBytes);
+        for (u32 c = 0; c < 3; ++c) {
+            const f32* V = P + (2 + c) * 4; // [0]/[1] sao as 2 cores; a SH comeca em [2]
+            _OutSH[c] = Vec4{ V[0], V[1], V[2], V[3] };
+        }
         return true;
     }
 

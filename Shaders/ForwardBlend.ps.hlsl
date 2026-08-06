@@ -31,7 +31,34 @@ cbuffer FrameCB : register(b0) {
     float4 MoonDirection;
     float4 MoonColor;
     row_major float4x4 InvViewProj;
+    // Nao usados aqui; mantem os offsets do FrameConstants ate o DDGIBiasParams, que o
+    // SampleSceneDDGI abaixo le. Espelha Renderer.h — acrescentar campo la exige acrescentar aqui.
+    float4 RenderParams;
+    float4 CloudShadowParams;
+    float4 CloudShadowParams2;
+    float4 LightParams;
+    float4 LightParams2;
+    float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem teto)
+    float4 AtmoLightParams;    // x = raio do planeta (km), y = raio do topo (km),
+                               // z = km/unidade de mundo, w = transmitancia POR PIXEL (0/1)
+    float4 SunColorRaw;        // rgb = sol SEM transmitancia e SEM HorizonFade
+    float4 MoonColorRaw;       // rgb = lua SEM transmitancia
+    float4 SkyAmbientSHR;      // SH-L1 do ceu, canal R: (c0, c1, c2, c3)
+    float4 SkyAmbientSHG;
+    float4 SkyAmbientSHB;
+    float4 SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas)
 };
+
+#include "Atmosphere/AtmosphereMath.hlsli"
+#include "Atmosphere/SkyAmbientSH.hlsli"
+
+// Ver DeferredLighting.ps: com a SH ligada o ambiente ganha termo direcional.
+float3 SkyAmbientForNormal(float3 N) {
+    if (SkyAmbientSHParams.x > 0.5f)
+        return EvalSkyAmbientSH(SkyAmbientSHR, SkyAmbientSHG, SkyAmbientSHB, N);
+    float hemi = saturate(N.y * 0.5f + 0.5f);
+    return lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
+}
 
 #include "MaterialCB.hlsli"
 
@@ -48,8 +75,27 @@ Texture2D<float4> DDGIIrradianceAtlas : register(t12);
 Texture2D<float4> DDGIDistanceAtlas   : register(t13);
 Buffer<float4>    DDGIProbeData       : register(t15);
 
+// Mesmo LUT e mesma conta do DeferredLighting.ps — vidro tambem tem que ver o sol atenuado
+// pela altitude dele. Ver o comentario extenso la (sombra do planeta, HorizonFade fora).
+Texture2D<float4> AtmoTransmittanceLUT : register(t21);
+
 SamplerState MaterialSampler : register(s0);
 SamplerState IBLSampler      : register(s1);
+
+float3 AtmoLightTransmittance(float3 worldPos, float3 dirToLight) {
+    const float bottomR = AtmoLightParams.x;
+    const float topR    = AtmoLightParams.y;
+    const float kmPerWU = AtmoLightParams.z;
+
+    const float h  = bottomR + max(worldPos.y, 0.0f) * kmPerWU;
+    const float3 p = float3(0.0f, clamp(h, bottomR, topR - 1.0f), 0.0f);
+
+    if (AtmoRaySphereNearest(p, dirToLight, bottomR) > 0.0f)
+        return float3(0.0f, 0.0f, 0.0f); // sombra do planeta
+
+    const float2 uv = AtmoTransmittanceParamsToUv(p.y, dirToLight.y, bottomR, topR);
+    return AtmoTransmittanceLUT.SampleLevel(IBLSampler, uv, 0.0f).rgb;
+}
 
 struct PSInput {
     float4 pos         : SV_POSITION;
@@ -62,6 +108,21 @@ struct PSInput {
 };
 
 // Mesmo sampling de DDGI do DeferredLighting (flags de Chebyshev/skip do frame).
+// Espelha o DeferredLighting: fora do volume de sondas, o indireto vira o que este shader usaria
+// sem GI — atmosferico hemisferico, senao difuso do IBL, senao nada — ja dividido pelo
+// giIntensity que o caller aplica (o ambiente de fora do volume nao segue o slider do GI).
+float3 DDGI_FallbackAmbient(float3 N) {
+    float3 amb = float3(0.0f, 0.0f, 0.0f);
+    if (SkyAmbientColor.w > 0.5f) {
+        amb = SkyAmbientForNormal(N) * GroundAmbientColor.w;
+    } else if (IBLParams.w > 0.5f) {
+        amb = IrradianceMap.SampleLevel(IBLSampler, RotateY(N, IBLParams.y), 0.0f).rgb
+            * IBLParams.x;
+    }
+    float giI = (DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
+    return amb / giI;
+}
+
 float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
     int  giFlags      = (int)DDGIDistParams.w;
@@ -69,21 +130,36 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     bool skip         = (giFlags & 2) != 0;
     bool fallback     = (giFlags & 4) != 0;
     uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+
+    float volW = DDGI_VolumeWeight(worldPos, DDGIGridMin.xyz, DDGIGridMin.w,
+                                   (int3)DDGIGridCount.xyz, DDGIBiasParams.z);
+    if (volW <= 0.0f) return DDGI_FallbackAmbient(N);
+
+    float3 gi;
     if (useChebyshev) {
         float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
         float3 V = normalize(CameraPosition.xyz - worldPos);
-        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w);
-        return SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
-                   worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                   (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                   DDGIProbeData, skipMode);
+        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w,
+                                          DDGIBiasParams.x, DDGIBiasParams.y);
+        gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
+                 worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
+                 DDGIProbeData, skipMode);
+    } else {
+        gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
+                 DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize);
     }
-    return SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-               DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-               (int)DDGIParams.y, atlasInvSize);
+    return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }
 
-float4 main(PSInput input) : SV_Target {
+struct ForwardBlendOutput {
+    float4 Color       : SV_Target0;
+    float  Reactive    : SV_Target1;
+    float  Composition : SV_Target2;
+};
+
+ForwardBlendOutput main(PSInput input) {
     float3 N = normalize(input.worldNormal);
     if (!input.frontFace) N = -N; // two-sided (cull none no PSO)
 
@@ -118,21 +194,32 @@ float4 main(PSInput input) : SV_Target {
     float3 DirectSpecular = float3(0.0f, 0.0f, 0.0f);
     {
         float3 Lsun = normalize(SunDirection.xyz);
-        BRDF_DirectSplit(N, V, Lsun, SunColor.rgb * SunDirection.w,
-                         DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+        float3 SunRadiance = (AtmoLightParams.w > 0.5f)
+            ? SunColorRaw.rgb * AtmoLightTransmittance(input.worldPos, Lsun) * SunDirection.w
+            : SunColor.rgb * SunDirection.w;
+        BRDF_DirectSplit(N, V, Lsun, SunRadiance,
+                         DiffuseColor, SpecularColor, Roughness, a2,
                          float3(0.0f, 0.0f, 0.0f), DirectDiffuse, DirectSpecular);
         if (MoonDirection.w > 0.0f) {
             float3 Lmoon = normalize(MoonDirection.xyz);
             float3 MoonDiffuse, MoonSpecular;
-            BRDF_DirectSplit(N, V, Lmoon, MoonColor.rgb * MoonDirection.w,
-                             DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+            float3 MoonRadiance = (AtmoLightParams.w > 0.5f)
+                ? MoonColorRaw.rgb * AtmoLightTransmittance(input.worldPos, Lmoon) * MoonDirection.w
+                : MoonColor.rgb * MoonDirection.w;
+            BRDF_DirectSplit(N, V, Lmoon, MoonRadiance,
+                             DiffuseColor, SpecularColor, Roughness, a2,
                              float3(0.0f, 0.0f, 0.0f), MoonDiffuse, MoonSpecular);
             DirectDiffuse  += MoonDiffuse;
             DirectSpecular += MoonSpecular;
         }
-        float Shadow = SampleCSM(input.worldPos, N, input.pos.xy);
-        DirectDiffuse  *= Shadow;
-        DirectSpecular *= Shadow;
+        // Mesmo gate do deferred: sem luz direta nao ha o que sombrear. Aqui e ainda mais
+        // simples porque o ForwardBlend passa TransColor = 0 nas duas chamadas do BRDF, entao
+        // difuso e especular zerados significam N.L <= 0 no sol E na lua.
+        [branch] if (any(DirectDiffuse > 0.0f) || any(DirectSpecular > 0.0f)) {
+            float Shadow = SampleCSM(input.worldPos, N, input.pos.xy);
+            DirectDiffuse  *= Shadow;
+            DirectSpecular *= Shadow;
+        }
     }
 
     // --- Ambiente difuso: DDGI quando ha grid; senao hemisferio atmosferico. ---
@@ -141,12 +228,11 @@ float4 main(PSInput input) : SV_Target {
     bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
     if (UseGI) {
         float giIntensity = (DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
-        AmbientDiffuse = (1.0f - Metallic) * DiffuseColor *
-                         SampleSceneDDGI(input.worldPos, N) * giIntensity;
+        // Sem (1 - Metallic): ele ja esta no DiffuseColor (convencao em BRDF.hlsli).
+        AmbientDiffuse = DiffuseColor * SampleSceneDDGI(input.worldPos, N) * giIntensity;
     } else if (UseAtmoAmbient) {
-        float  hemi       = saturate(N.y * 0.5f + 0.5f);
-        float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
-        AmbientDiffuse = (1.0f - Metallic) * DiffuseColor * ambientCol * GroundAmbientColor.w;
+        float3 ambientCol = SkyAmbientForNormal(N);
+        AmbientDiffuse = DiffuseColor * ambientCol * GroundAmbientColor.w;
     }
 
     // --- Especular ambiente (IBL): e o que faz vidro parecer vidro. Soma SEM peso de alpha. ---
@@ -167,5 +253,11 @@ float4 main(PSInput input) : SV_Target {
     float  Favg     = (F.x + F.y + F.z) * (1.0f / 3.0f);
     float  OutAlpha = saturate(Alpha + Favg * (1.0f - Alpha));
     float3 OutColor = (DirectDiffuse + AmbientDiffuse) * Alpha + DirectSpecular + SpecularIBL;
-    return float4(OutColor, OutAlpha);
+    ForwardBlendOutput Out;
+    Out.Color = float4(OutColor, OutAlpha);
+    // O vidro e composicao forward sem depth proprio. O alpha efetivo (inclui Fresnel) e o peso
+    // conservador que o FSR deve rejeitar/reduzir no historico temporal.
+    Out.Reactive = OutAlpha;
+    Out.Composition = OutAlpha;
+    return Out;
 }

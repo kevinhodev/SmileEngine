@@ -7,9 +7,10 @@
 //
 // Pipeline (espelha Cry RC / Unreal Interchange, versao enxuta):
 //   1. ufbx carrega o FBX, normalizado p/ RH Y-up + metros (MODIFY_GEOMETRY).
-//   2. Por no com mesh, por parte-de-material: triangula, transforma p/ mundo,
-//      converte RH->LH (nega Z + inverte winding), funde vertices (weld).
-//      -> 1 mesh por (no, material). SEM fusao entre nos (Fase 4 mede o ganho).
+//   2. Por no com mesh, por parte-de-material: triangula em espaco LOCAL, converte RH->LH
+//      (nega Z + inverte winding), funde vertices (weld). O transform do no NAO entra no
+//      vertice — vira TRS do renderavel (v7). Com isso (malha, parte) e DEDUPLICADA: N nos
+//      que compartilham a malha viram N instancias de UMA geometria.
 //   3. Resolve as texturas pela convencao Bistro (nome_Sufixo.dds) + fallback ufbx.
 //   4. Escreve .smesh (geometria) e .sscene (materiais + renderaveis).
 
@@ -24,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <map>
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -37,6 +39,61 @@ using Smile::Vertex;
 // Nos ESPELHADOS (det(geometry_to_world) < 0) invertem o winding de novo, por no —
 // mesmo criterio do IsOddNegativeScale da Unreal (FbxMesh.cpp do Interchange).
 static constexpr bool kReverseWinding = true;
+
+// ----------------------------------------------------------------------------
+// v7: geometry_to_world (ufbx, column-vector, RH) -> TRS do FTransform da engine
+// (S * Rx*Ry*Rz * T, row-vector, LH, radianos).
+//
+// O flip RH->LH das posicoes (nega Z) conjuga a matriz: p_engine = F*G*F * p_local_engine com
+// F = diag(1,1,-1). Em row-vector isso vira M[i][j] = sign(i)*sign(j) * G.cols[i][j].
+//
+// A extracao de Euler sai da propria convencao do Mat44 (R = Rx*Ry*Rz):
+//   R02 = sy | R12 = sx*cy | R22 = cx*cy | R00 = cy*cz | R01 = cy*sz
+//
+// Medido em Bistro/Emerald/Sponza antes de escrever isto: o pior erro de reconstrucao da 3x3 e
+// 7e-12, e nenhuma delas tem shear ou determinante negativo — TRS reproduz a cena. Gimbal lock
+// (cy ~ 0) e tratado; ali o par (x,z) e ambiguo mas a MATRIZ resultante continua correta, que e
+// o que importa para renderizar.
+struct NodeTRS { float Pos[3]; float Rot[3]; float Scale[3]; };
+
+static NodeTRS DecomposeToEngineTRS(const ufbx_matrix& G) {
+    double M[3][3];
+    for (int i = 0; i < 3; ++i) {
+        const double si = (i == 2) ? -1.0 : 1.0;
+        const ufbx_vec3 c = G.cols[i];
+        const double v[3] = { c.x, c.y, c.z };
+        for (int j = 0; j < 3; ++j) {
+            const double sj = (j == 2) ? -1.0 : 1.0;
+            M[i][j] = si * sj * v[j];
+        }
+    }
+
+    double sc[3], R[3][3];
+    for (int i = 0; i < 3; ++i) {
+        sc[i] = std::sqrt(M[i][0]*M[i][0] + M[i][1]*M[i][1] + M[i][2]*M[i][2]);
+        const double inv = sc[i] > 1e-12 ? 1.0 / sc[i] : 0.0;
+        for (int j = 0; j < 3; ++j) R[i][j] = M[i][j] * inv;
+    }
+
+    const double clamped = R[0][2] < -1.0 ? -1.0 : (R[0][2] > 1.0 ? 1.0 : R[0][2]);
+    const double ry = std::asin(clamped);
+    double rx, rz;
+    if (std::fabs(std::cos(ry)) > 1e-6) {
+        rx = std::atan2(R[1][2], R[2][2]);
+        rz = std::atan2(R[0][1], R[0][0]);
+    } else {
+        rx = std::atan2(-R[2][1], R[1][1]);
+        rz = 0.0;
+    }
+
+    NodeTRS T{};
+    T.Pos[0] = (float)G.cols[3].x;
+    T.Pos[1] = (float)G.cols[3].y;
+    T.Pos[2] = (float)-G.cols[3].z; // mesmo flip de Z das posicoes
+    T.Rot[0] = (float)rx; T.Rot[1] = (float)ry; T.Rot[2] = (float)rz;
+    T.Scale[0] = (float)sc[0]; T.Scale[1] = (float)sc[1]; T.Scale[2] = (float)sc[2];
+    return T;
+}
 
 // ----------------------------------------------------------------------------
 // Weld de vertices: chave = 8 floats (pos3, normal3, uv2), igualdade por bytes.
@@ -393,13 +450,38 @@ int main(int argc, char** argv) {
         return idx;
     };
 
+    // Nome do renderavel. Um no com N partes de material vira N renderaveis, e todos herdariam o
+    // MESMO nome do no — no Sponza sao 115 nos virando 405 linhas identicas na arvore. Quando ha
+    // mais de uma parte, desambigua pelo material (mesma ideia das sections da Unreal).
+    auto NodeRenderableName = [&](const ufbx_node* node, const ufbx_mesh* mesh,
+                                  uint32_t matIdx) -> std::string {
+        std::string base(node->name.data, node->name.length);
+        if (base.empty()) base = "Mesh";
+        if (mesh->material_parts.count <= 1 || matIdx == Smile::kNoMaterial ||
+            matIdx >= materials.size())
+            return base;
+        const char* mn = materials[matIdx].Name;
+        if (mn[0] == '\0') return base;
+        return base + " [" + std::string(mn, strnlen(mn, Smile::kCookedMaxName)) + "]";
+    };
+
     // --- Geometria ---
     std::vector<Smile::SMeshEntry>     entries;
     std::vector<Smile::SSceneRenderable> renderables;
     std::vector<uint8_t>               geo; // blob unico (verts + indices intercalados por mesh)
 
+    // Dedup (v7): a geometria agora sai em espaco LOCAL, entao dois nos que apontam para o mesmo
+    // ufbx_mesh produzem bytes IDENTICOS — a diferenca entre eles passou a viver so no transform.
+    // Chave = (ufbx_mesh, indice da parte de material). Medido: Emerald Square 2479 -> 281 partes
+    // (uma malha usada por 201 nos); Bistro e Sponza nao tem instancing por ponteiro e nao mudam.
+    std::map<std::pair<const ufbx_mesh*, size_t>, uint32_t> meshCache;
+
+    // no -> indice do PRIMEIRO renderavel que ele emitiu (para resolver ParentIndex).
+    std::unordered_map<const ufbx_node*, int32_t> firstRenderableOfNode;
+
     std::vector<uint32_t> triBuf;
     size_t totalTris = 0;
+    size_t dedupHits = 0;
 
     for (size_t ni = 0; ni < scene->nodes.count; ++ni) {
         const ufbx_node* node = scene->nodes.data[ni];
@@ -407,12 +489,23 @@ int main(int argc, char** argv) {
         const ufbx_mesh* mesh = node->mesh;
         triBuf.resize(std::max<size_t>(mesh->max_face_triangles * 3, 3));
 
-        // Normais em mundo pela inversa-transposta (correta sob escala nao-uniforme; a matriz
-        // direta entortaria a normal). Tambem ja flipa a normal se o no for espelhado.
-        const ufbx_matrix normalMat = ufbx_matrix_for_normals(&node->geometry_to_world);
-        // No espelhado inverte o winding daquele no (XOR com a inversao global RH->LH).
-        const bool mirrored = ufbx_matrix_determinant(&node->geometry_to_world) < 0.0f;
-        const bool reverseWinding = kReverseWinding != mirrored;
+        // v7: geometria em LOCAL. Sobra do mundo apenas a conversao de eixo RH->LH (nega Z), que
+        // e do ESPACO e nao do no — por isso continua aqui e mantem os bytes iguais entre
+        // instancias. A inversa-transposta saiu junto com o bake: sem transform no vertice, a
+        // normal local nao precisa de correcao de escala (quem aplica escala e a matriz de modelo).
+        //
+        // O espelhamento tambem deixa de ser por no: com o transform fora do vertice, o
+        // determinante negativo passa a viver na ESCALA do TRS, e quem inverte o winding
+        // efetivo e a matriz de modelo. Ficaria errado bakear o flip na geometria compartilhada.
+        // (Medido: nenhuma das 3 cenas tem determinante negativo.)
+        const bool reverseWinding = kReverseWinding;
+
+        // Ancestral renderavel mais proximo (o pai direto pode ser um grupo sem mesh).
+        int32_t parentIdx = -1;
+        for (const ufbx_node* a = node->parent; a; a = a->parent) {
+            auto it = firstRenderableOfNode.find(a);
+            if (it != firstRenderableOfNode.end()) { parentIdx = it->second; break; }
+        }
 
         for (size_t pi = 0; pi < mesh->material_parts.count; ++pi) {
             const ufbx_mesh_part& part = mesh->material_parts.data[pi];
@@ -423,6 +516,26 @@ int main(int argc, char** argv) {
             if (pi < node->materials.count)      mat = node->materials.data[pi];
             else if (pi < mesh->materials.count) mat = mesh->materials.data[pi];
             uint32_t matIdx = ResolveMaterial(mat);
+
+            // Ja cozinhamos esta (malha, parte)? Em espaco local os bytes seriam identicos —
+            // so referencia. O MATERIAL nao entra na chave de proposito: ele e por RENDERAVEL
+            // (node->materials tem precedencia sobre mesh->materials), entao duas instancias da
+            // mesma malha podem legitimamente usar materiais diferentes sem duplicar geometria.
+            if (auto hit = meshCache.find({ mesh, pi }); hit != meshCache.end()) {
+                const NodeTRS T = DecomposeToEngineTRS(node->geometry_to_world);
+                Smile::SSceneRenderable r{};
+                r.MeshIndex = hit->second;
+                r.MaterialIndex = matIdx;
+                std::memcpy(r.Position, T.Pos, sizeof(r.Position));
+                std::memcpy(r.RotationEuler, T.Rot, sizeof(r.RotationEuler));
+                std::memcpy(r.Scale, T.Scale, sizeof(r.Scale));
+                r.ParentIndex = parentIdx;
+                SetStr(r.Name, Smile::kCookedMaxName, NodeRenderableName(node, mesh, matIdx));
+                firstRenderableOfNode.emplace(node, (int32_t)renderables.size());
+                renderables.push_back(r);
+                ++dedupHits;
+                continue;
+            }
 
             SubMesh sm;
             for (size_t fi = 0; fi < part.face_indices.count; ++fi) {
@@ -439,9 +552,10 @@ int main(int argc, char** argv) {
                         ufbx_vec2 uv = mesh->vertex_uv.exists
                                     ? ufbx_get_vertex_vec2(&mesh->vertex_uv, corner[c])
                                     : ufbx_vec2{0,0};
-                        p = ufbx_transform_position(&node->geometry_to_world, p);
-                        n = ufbx_transform_direction(&normalMat, n);
-                        // normaliza
+                        // v7: SEM transform aqui. A posicao e a normal ficam em espaco local; o
+                        // geometry_to_world virou o TRS do renderavel. E isto que faz duas
+                        // instancias da mesma malha gerarem bytes identicos e poderem ser
+                        // deduplicadas — com o bake, cada uma era uma copia unica.
                         double nl = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
                         if (nl > 1e-12) { n.x/=nl; n.y/=nl; n.z/=nl; }
                         Vertex v;
@@ -477,7 +591,19 @@ int main(int argc, char** argv) {
 
             uint32_t meshIdx = (uint32_t)entries.size();
             entries.push_back(e);
-            renderables.push_back(Smile::SSceneRenderable{ meshIdx, matIdx });
+            meshCache.emplace(std::make_pair(mesh, pi), meshIdx);
+
+            const NodeTRS T = DecomposeToEngineTRS(node->geometry_to_world);
+            Smile::SSceneRenderable r{};
+            r.MeshIndex = meshIdx;
+            r.MaterialIndex = matIdx;
+            std::memcpy(r.Position, T.Pos, sizeof(r.Position));
+            std::memcpy(r.RotationEuler, T.Rot, sizeof(r.RotationEuler));
+            std::memcpy(r.Scale, T.Scale, sizeof(r.Scale));
+            r.ParentIndex = parentIdx;
+            SetStr(r.Name, Smile::kCookedMaxName, NodeRenderableName(node, mesh, matIdx));
+            firstRenderableOfNode.emplace(node, (int32_t)renderables.size());
+            renderables.push_back(r);
         }
     }
 
@@ -486,6 +612,9 @@ int main(int argc, char** argv) {
     std::printf("[Cooker] Meshes: %zu | Renderaveis: %zu | Materiais: %zu | Triangulos: %zu | Geo: %.1f MB\n",
                 entries.size(), renderables.size(), materials.size(), totalTris,
                 geo.size() / (1024.0*1024.0));
+    std::printf("[Cooker] Instancing: %zu de %zu renderaveis reusam geometria ja cozida (%.1f%%)\n",
+                dedupHits, renderables.size(),
+                renderables.empty() ? 0.0 : 100.0 * (double)dedupHits / (double)renderables.size());
 
     // --- Escreve .smesh ---
     {

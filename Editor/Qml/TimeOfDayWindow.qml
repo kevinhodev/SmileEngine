@@ -9,6 +9,9 @@ import "components" as C
 // gradiente dia/noite e cards em duas colunas no estilo do SettingsWindow.
 Rectangle {
     id: root
+    required property var todModel
+    required property var todWindow
+
     color: "#141511"
     border.color: "#2e2f28"
     border.width: 1
@@ -792,6 +795,29 @@ Rectangle {
                             from: 0; to: 3
                             boundValue: todModel.starIntensity
                             onMoved: v => todModel.starIntensity = v
+                        }
+
+                        Item {
+                            width: parent.width
+                            height: 22
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "Hora sideral local"
+                                color: root.textSecondary
+                                font.family: C.Theme.fontFamily
+                                font.pixelSize: 10
+                            }
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.timeLabel(todModel.siderealTimeHours)
+                                color: root.textNormal
+                                font.family: C.Theme.fontFamily
+                                font.pixelSize: 10
+                                font.weight: Font.Medium
+                            }
                         }
                     }
 

@@ -50,7 +50,12 @@ namespace Smile {
                             const Vec3& CamWorldPos, f32 KmPerWorldUnit, f32 GroundRadiusKm,
                             const Vec3& DirToSun, const Vec3& SunColor,
                             const Vec3& SkyAmbient, const Vec3& GroundAmbient,
-                            f32 Time, u32 FrameIndex);
+                            f32 Time, u32 FrameIndex,
+                            // Intensidade do SOL da cena (nao a da key light: o dimming da lua
+                            // ja vem fatorado no SunColor pelo chamador). Antes o .w do SunDir
+                            // era 6.0 fixo e o update preservava ele explicitamente, entao
+                            // mexer no sol da cena nao chegava nas nuvens. Ver CloudSunScale.
+                            f32 SunIntensity = 5.0f);
 
         // Bake do shadow map das nuvens (grade XZ na base da camada, marcha p/ a key light).
         // Gravar ANTES do deferred lighting — que o consome p/ atenuar o sol no chao.
@@ -93,6 +98,10 @@ namespace Smile {
         f32  ShadowCenterX() const         { return CPUConstants.CloudShadowCB.X; }
         f32  ShadowCenterZ() const         { return CPUConstants.CloudShadowCB.Y; }
         f32  ShadowInvExtent() const       { return 1.0f / kShadowExtentKm; }
+        // Fator entre a intensidade do sol da cena e a que as nuvens usam. O default 6/5 e o
+        // que estava hardcoded no .w do SunDir: calibracao artistica historica, nao fisica.
+        void SetCloudSunScale(f32 V)    { CloudSunScale = V; }
+        f32  GetCloudSunScale() const   { return CloudSunScale; }
         void SetCoverage(f32 V)         { CPUConstants.CloudParams.X  = V; }
         void SetDensityScale(f32 V)     { CPUConstants.CloudParams.Y  = V; }
         void SetWindSpeed(f32 V)        { CPUConstants.WindParams.X = V; CPUConstants.WindParams.Z = V * 0.4f; }
@@ -153,6 +162,9 @@ namespace Smile {
         u32 RTWidth = 0, RTHeight = 0;      // dimensoes do RT (half-res quando HalfRes)
         u32 FullWidth = 0, FullHeight = 0;  // resolucao de render (destino do composite)
         bool HalfRes = true;                // raymarch em meia resolucao + upsample bilinear
+
+        // 6/5: o .w do SunDir era 6.0 fixo enquanto a cena roda com SunIntensity 5.0.
+        f32 CloudSunScale = 6.0f / 5.0f;
 
         // Acumulacao temporal: historico ping-pong na resolucao do RT.
         Microsoft::WRL::ComPtr<ID3D12Resource> HistoryRT[2];

@@ -10,6 +10,9 @@ import "components" as C
 // Mesmo chrome/linguagem do TimeOfDayWindow/StatsWindow.
 Rectangle {
     id: root
+    required property var materialsModel
+    required property var materialsWindow
+
     color: "#141511"
     border.color: "#2e2f28"
     border.width: 1
@@ -775,6 +778,22 @@ Rectangle {
                         boundValue: materialsModel.emissiveStrength
                         valueText: "× " + root.fmt(materialsModel.emissiveStrength, 1)
                         onMoved: (v) => materialsModel.emissiveStrength = v
+                    }
+                    // Separa "brilha na tela" de "ilumina o ambiente": sem ray tracing, marcar
+                    // texel como emissivo era efeito local de destaque, sem consequência. Com RT
+                    // esses texels passam a iluminar de verdade, e material autorado como detalhe
+                    // decorativo começa a lavar a cena. Baixar aqui tira a malha do indireto sem
+                    // apagar o brilho dela. Também é o par do "Peso no indireto" da luz: quando a
+                    // malha e uma luz analítica representam a mesma fonte, uma das duas tem que
+                    // ceder, senão a energia entra duas vezes no indireto.
+                    SliderRow {
+                        label: "Emissivo no indireto"
+                        from: 0; to: 1
+                        boundValue: materialsModel.rtEmissiveScale
+                        valueText: materialsModel.rtEmissiveScale <= 0.001
+                                     ? "não ilumina"
+                                     : "× " + root.fmt(materialsModel.rtEmissiveScale, 2)
+                        onMoved: (v) => materialsModel.rtEmissiveScale = v
                     }
                 }
 

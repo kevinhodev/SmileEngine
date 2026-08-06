@@ -289,6 +289,9 @@ float4 main(PSInput input) : SV_Target {
         float3 RotR = RotateY(R, IBLParams.y);
 
         float3 F     = F_SchlickRoughness(SpecularColor, NoV, Roughness);
+        // O (1 - Metallic) aqui esta CERTO e nao e o mesmo caso do deferred: la o fator ja vinha
+        // no DiffuseColor e o Kd o repetia (= (1-M)^2); aqui a multiplicacao e sobre o BaseColor
+        // cru, entao aplica UMA vez. Este passe tem BRDF proprio, sem BRDF.hlsli.
         float3 KdIBL = (1.0f - F) * (1.0f - Metallic);
 
         float3 Irradiance  = IrradianceMap.SampleLevel(IBLSampler, RotN, 0.0f).rgb;

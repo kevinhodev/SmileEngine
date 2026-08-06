@@ -26,7 +26,7 @@ namespace Smile {
         Vec4 SunDir;             // xyz = direction TO sun, w = sun illuminance
         Vec4 AtmoSteps;          // x = transmittance, y = multiscatter, z = sky-view steps
         Vec4 LutSize;            // x = transW, y = transH, z = multiW, w = multiH
-        Vec4 SkyViewSize;        // x = skyW, y = skyH, z = camera view height (km), w = ground altitude (km)
+        Vec4 SkyViewSize;        // x=skyW, y=skyH, z=camera radius (km), w=planet radius offset (km)
         Vec4 SunDisk;            // x = cos(half angle), y = disk intensity, z = sun illuminance (sky-view)
         Mat44 InvViewProjNoTrans; // sky PS world-ray reconstruction
 
@@ -36,12 +36,18 @@ namespace Smile {
 
         Vec4 MoonDir;            // xyz = direction TO moon (world), w = cos(raio angular do disco)
         Vec4 MoonParams;         // x = brilho do disco, y = intensidade estrelas, z = night factor, w = tempo (cintilacao)
-        Vec4 StarAxis;           // xyz = polo celeste (mundo), w = angulo da rotacao diurna (rad)
-        Vec4 NightSky;           // x = iluminancia da lua no scattering (2a luz), y = corona, zw = livres
+        Vec4 StarAxis;           // xyz = polo celeste (mundo), w = angulo sideral da matriz (rad)
+        Vec4 NightSky;           // x = iluminancia lua, y = corona, z = catalogo ativo, w = livre
 
         Mat44 ViewProjNoTrans;   // view-proj SEM translacao — projeta o quad das estrelas
-        Mat44 StarMatrix;        // frame do catalogo (polo=+Y) -> mundo, com rotacao diurna
-        Vec4  StarView;          // x = viewport W, y = viewport H, z = catalogo ativo, w = livre
+        Mat44 StarMatrix;        // frame do catalogo (polo=+Y) -> mundo, com rotacao sideral
+        Vec4  StarView;          // xy = output W/H, zw = escala render/output X/Y
+
+        // Dimensoes do volume de aerial perspective. Estavam hardcoded como 32x32 dentro do
+        // BakeAerialPerspective.cs.hlsl enquanto o C++ ja tinha kAerialW/kAerialH: mudar as
+        // constantes do lado do C++ nao chegava no shader (o bake escreveria so um canto do
+        // volume, ou pior, sairia fora). A contagem de slices ja vive no AerialParams.y.
+        Vec4  AerialVolumeSize;  // x = W, y = H, zw = livres
     };
 
     struct FLut2D {
@@ -71,7 +77,9 @@ namespace Smile {
         static constexpr u32 kAerialH        = 32;
         static constexpr u32 kAerialSlices   = 16;
 
-        static constexpr f32 kGroundAltitudeKm = 0.5f;
+        // UE/Hillaire-style numerical offset: keep the camera just outside the
+        // planet without pretending sea level is 500 m above the ground sphere.
+        static constexpr f32 kPlanetRadiusOffsetKm = 0.001f;
 
         void Initialize(ID3D12Device* Device, FCommandQueue& CmdQueue,
                         FUploadQueue& UploadQueue, FTextureSRVHeap& SRVHeap,
@@ -83,7 +91,8 @@ namespace Smile {
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, const Mat44& InvViewProjNoTranslation,
                             const Mat44& ViewProjNoTranslation, const Mat44& InvViewProjFull,
                             const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
-                            f32 ViewportW, f32 ViewportH);
+                            f32 RenderW, f32 RenderH,
+                            f32 OutputW, f32 OutputH);
 
         void SetNightParams(const Vec3& DirToMoon, f32 CosDiskRadius, f32 DiskBrightness,
                             f32 StarIntensity, f32 NightFactor, f32 TimeSec);
@@ -109,11 +118,19 @@ namespace Smile {
         // 2x float4 copiado p/ readback — a CPU le com kFramesInFlight de latencia e escreve nos
         // slots SkyAmbientColor/GroundAmbientColor do FrameConstants (consumidores intactos).
         void RecordSkyAmbientIntegration(ID3D12GraphicsCommandList* CommandList);
+        // [0] ceu, [1] chao (modelo de 2 cores), [2..4] SH-L1 por canal (R,G,B).
+        static constexpr u32 kAmbientVec4s = 5;
         bool GetSkyAmbient(u32 FrameSlot, Vec3& OutSky, Vec3& OutGround) const;
+        // SH-L1 do mesmo integral: OutSH[0]=R, [1]=G, [2]=B, cada um (c0,c1,c2,c3).
+        bool GetSkyAmbientSH(u32 FrameSlot, Vec4 OutSH[3]) const;
 
         void RenderSky(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         void BakeIfDirty(ID3D12Device* Device, FCommandQueue& CmdQueue);
+        // Versao que grava na command list DO FRAME (o BakeIfDirty acima faz flush de GPU e so
+        // serve fora do frame, na inicializacao). Sem ela o MarkDirty era inerte: nao existia
+        // caminho que consumisse o flag depois do Initialize.
+        void RecordBakeIfDirty(ID3D12GraphicsCommandList* CommandList);
         void MarkDirty() { Dirty = true; }
 
         u32 TransmittanceSRV() const { return Transmittance.SRVSlot; }
@@ -121,6 +138,16 @@ namespace Smile {
         u32 SkyViewSRV()       const { return SkyView.SRVSlot; }
         u32 AerialVolumeSRV()  const { return AerialPerspectiveVolume.SRVSlot(); }
         f32 AerialDepthKm()    const { return CPUConstants.AerialParams.X; }
+        f32 AerialSliceCount() const { return CPUConstants.AerialParams.Y; }
+
+        // Fonte UNICA do "raio do observador" e do raio do planeta, em km. Todo consumidor do
+        // sky-view LUT fora do AtmosphereCB (hoje: DDGI, ReSTIR GI e reflexoes, via SkyParams no
+        // CB de cada um) tem que ler daqui — a parameterizacao do LUT e ancorada na camera por
+        // construcao (Hillaire e UE idem), entao raio de GI NAO usa a altitude da propria
+        // origem: coerencia com o bake e o ponto todo.
+        f32 ViewHeightKm()     const { return CPUConstants.SkyViewSize.Z; }
+        f32 BottomRadiusKm()   const { return CPUConstants.PlanetRadii.X; }
+        f32 TopRadiusKm()      const { return CPUConstants.PlanetRadii.Y; }
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
         bool IsInitialized() const { return Initialized; }
 
@@ -129,7 +156,7 @@ namespace Smile {
         bool HasMoonTexture() const { return MoonTexLoaded; }
 
         // Catalogo de estrelas real (Assets/Sky/stars.sstars, Yale BSC via HYG). Com ele ativo o
-        // hash procedural do sky pass desliga e RenderStars desenha um quad de ~2px por estrela.
+        // hash procedural desliga e RenderStars desenha quads medidos em pixels da saida.
         void LoadStarCatalog(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                              const std::wstring& Path);
         bool HasStarCatalog() const { return StarCount > 0; }

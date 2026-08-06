@@ -20,6 +20,7 @@ namespace Smile {
         Velocity,      // motion vector escalado pela resolucao
         DDGIIrradiance, // desfaz o gamma do atlas DDGI antes do tonemap
         DDGIDistance,   // primeiro momento do atlas DDGI em heatmap
+        Heatmap,        // escalar generico em falsa-cor; Exposure = 1/valor "quente" (timer de RT)
         Count
     };
 

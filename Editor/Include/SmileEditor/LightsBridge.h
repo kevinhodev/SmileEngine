@@ -4,13 +4,14 @@
 #include <QColor>
 #include <QString>
 #include <QVariantMap>
+#include "SmileEditor/RenderThread.h"
 
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
     // Ponte C++<->QML do painel de Luzes (LightsPanel.qml). Le/escreve Scene.Lights() do
-    // Renderer direto — seguro porque o render roda no timer do ViewportWidget, na mesma
-    // thread da GUI (mesmo racional do TimeOfDayBridge).
+    // Renderer direto por meio de RendererHandle, que serializa o acesso com a thread de
+    // renderizacao (mesmo racional do TimeOfDayBridge).
     //
     // Sinais: LightsChanged = estrutura da lista mudou (add/remove/duplicar/load) — o QML
     // reconstroi as linhas via `revision` + lightAt(); SelectionChanged = outra luz virou a
@@ -37,6 +38,8 @@ namespace SmileEditor {
         Q_PROPERTY(double intensity READ Intensity WRITE SetIntensity NOTIFY LightChanged)
         Q_PROPERTY(double radius READ Radius WRITE SetRadius NOTIFY LightChanged)
         Q_PROPERTY(double sourceRadius READ SourceRadius WRITE SetSourceRadius NOTIFY LightChanged)
+        // Peso da luz so no indireto (GI/reflexoes/DDGI). 0 tira a luz do RT sem tocar no raster.
+        Q_PROPERTY(double rtWeight READ RTWeight WRITE SetRTWeight NOTIFY LightChanged)
         Q_PROPERTY(double innerConeDeg READ InnerConeDeg WRITE SetInnerConeDeg NOTIFY LightChanged)
         Q_PROPERTY(double outerConeDeg READ OuterConeDeg WRITE SetOuterConeDeg NOTIFY LightChanged)
         Q_PROPERTY(double posX READ PosX WRITE SetPosX NOTIFY LightChanged)
@@ -48,10 +51,10 @@ namespace SmileEditor {
     public:
         explicit LightsBridge(QObject* parent = nullptr);
 
-        void SetRenderer(Smile::Renderer* R);          // MainWindow chama no RendererInitialized
+        void SetRenderer(RendererHandle R);            // MainWindow chama no RendererInitialized
         void OnSceneLoaded(const QString& ScenePath, bool Additive); // apos LoadCookedScene OK
 
-        bool    Available() const { return Renderer != nullptr; }
+        bool    Available() const { return static_cast<bool>(Renderer); }
         int     Count() const;
         int     Revision() const { return Rev; }
         int     SelectedIndex() const;
@@ -62,6 +65,7 @@ namespace SmileEditor {
         int     LightType() const;
         bool    LightEnabled() const;
         bool    CastShadows() const;
+        double  RTWeight() const;
         QColor  Color() const;
         double  Intensity() const;
         double  Radius() const;
@@ -77,6 +81,7 @@ namespace SmileEditor {
         void SetName(const QString& V);
         void SetLightEnabled(bool V);
         void SetCastShadows(bool V);
+        void SetRTWeight(double V);
         void SetColor(const QColor& V);
         void SetIntensity(double V);
         void SetRadius(double V);
@@ -116,7 +121,7 @@ namespace SmileEditor {
         void Touch(bool Structure); // rev++/dirty + sinais (Structure = lista mudou de forma)
         bool LoadLights();          // le o JsonPath e ADICIONA na cena
 
-        Smile::Renderer* Renderer = nullptr;
+        RendererHandle Renderer;
         QString JsonPath;           // <cena>.lights.json da cena principal (nao-aditiva)
         bool    DirtyFlag = false;
         int     Rev = 0;

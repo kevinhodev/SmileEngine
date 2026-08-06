@@ -4,10 +4,14 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
+#include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/ReGIR.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <cstddef>
 
 namespace Smile {
+    class FGpuProfiler;
     class FTextureSRVHeap;
 
     // Constantes do ReSTIR GI (b0 dos passes). alignas(256); casa campo-a-campo com o cbuffer de
@@ -32,8 +36,25 @@ namespace Smile {
         // existente — em especial o View, que o ReSTIRNrdPack le em 256.
         Vec4  RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4  RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
-        Vec4  PolicyParams;    // x = politica de backface no gather (0/1); yzw livres
+        Vec4  PolicyParams;      // x = politica de backface no gather (0/1); yzw livres
+        // Gather do 2o bounce no hit (contrato do HitShading.hlsli): o mesmo sampler completo
+        // do deferred, com Chebyshev e skip de sonda inativa.
+        Vec4  GIDistParams;      // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
+        Vec4  GIBiasParams;      // x=escala do bias de superficie, y=teto em metros, zw=-
+        Vec4  ReGIRGridMinSlots;
+        Vec4  ReGIRInvCellEnabled;
+        Vec4  ReGIRGridCountSamples;
+        Vec4  ReGIRResources;
+        // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
+        // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum.
+        Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
+        // Instrumentacao de timer (FShaderTimer). Anexado no FIM pela mesma razao dos anteriores.
+        Vec4  DebugParams;       // x = slot bindless do alvo de timer (< 0 = captura off)
     };
+    static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
+                  "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
+    static_assert(offsetof(ReSTIRGIConstants, SkyParams) == 464,
+                  "SkyParams deve permanecer anexado ao fim do ReSTIRCB");
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
     // A3: Pass A (trace + reservoir temporal) -> Pass B (reuso espacial + Jacobiano + resolve).
@@ -48,7 +69,10 @@ namespace Smile {
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
                             u32 DepthSlot, u32 GBufferSlot,
-                            u32 VelocitySlot);
+                            u32 VelocitySlot,
+                            // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
+                            // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
+                            u32 DistSlot, u32 ProbeDataSlot);
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
@@ -61,7 +85,14 @@ namespace Smile {
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                   u32 StagingSlot);
 
-        void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+        void RecordTrace(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
+                         FGpuProfiler* Profiler = nullptr);
+
+        // Instrumentacao de timer (ver FShaderTimer): kInvalidSlot desliga e o passe volta p/ a
+        // PSO normal, sem uma instrucao a mais. Dono = Renderer, empurra todo frame.
+        void SetTimerSlot(u32 Slot) { TimerSlot = Slot; }
+        // Se a permutacao instrumentada existe (NVAPI + .cso presentes).
+        bool HasTimerPipeline() const { return TraceTimed; }
 
         // NRD (Fase C): cria o pack pipeline + UAVs das IN textures do NRD + SRV da OUT (no SRVHeap
         // da engine). Chamar apos SetupForResize (depende dos slots cacheados) e do Nrd.SetupForResize.
@@ -79,6 +110,14 @@ namespace Smile {
         // Perfil compartilhado de epsilons. O Renderer empurra todo frame (copia barata) e e ele
         // quem invalida na borda de mudanca — aqui invalidar seria NeedsClear todo frame.
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+        // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
+        void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
+        // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
+        void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
+            SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
+        }
 
         bool IsReady() const   { return Ready; }
         // true quando a tabela t16 aponta p/ a OUT do NRD (radiancia em YCoCg) e nao p/ a
@@ -132,6 +171,10 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
         FVolumetricPipeline TracePSO;   // 14 SRV, 5 UAV, heap-directly-indexed (Pass A)
+        // Gemea instrumentada do Pass A: mesmas tabelas, mas com o slot falso da NVAPI no root
+        // sig e o timer no shader. PSO separada e nao um if no CB porque a instrumentacao custa
+        // registrador — o passe normal nao pode pagar por um recurso de debug.
+        FVolumetricPipeline TracePSOTimed;
         FVolumetricPipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
         FVolumetricPipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
 
@@ -185,6 +228,8 @@ namespace Smile {
 
         u32  Width = 0, Height = 0;
         u32  FrameParity = 0;
+        u32  TimerSlot   = kInvalidSlot; // alvo de timer vigente (kInvalidSlot = captura off)
+        bool TraceTimed  = false;        // permutacao instrumentada criada com sucesso
         bool NeedsClear  = false;
         bool Initialized = false;
         bool Ready       = false;
@@ -197,6 +242,8 @@ namespace Smile {
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
         bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
         bool BackfacePolicy = false;  // retrace + terminacao preta no verso one-sided (ver setter)
+        // Permutation sampling (RTXDI) no fetch temporal: SEMPRE ligado, sem knob. Ver o bloco de
+        // comentario no ReSTIRGITrace.cs.hlsl (inclui o ponto de atencao sobre folhagem).
         bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B
@@ -217,5 +264,8 @@ namespace Smile {
 
         // Perfil compartilhado (dono = Renderer). Escrito em RayEpsA/B + TraceParams.w.
         FRayEpsilonProfile RayEps;
+        FGIHitSampling     GIHit;
+        FReGIRShaderParams ReGIRParams{};
+        Vec4               SkyLutParams{};
     };
 }

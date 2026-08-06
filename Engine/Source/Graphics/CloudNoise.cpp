@@ -54,7 +54,7 @@ namespace Smile {
 
         Initialized = true;
         Bake(_CmdQueue, _SRVHeap);
-        LogInfo("Ruido de nuvens bakado: base 128^3 + detalhe 32^3 + weather 512^2");
+        LogDebug("Ruido de nuvens bakado: base 128^3 + detalhe 32^3 + weather 512^2");
     }
 
     void FCloudNoise::Bake(FCommandQueue& _CmdQueue, FTextureSRVHeap& _SRVHeap) {

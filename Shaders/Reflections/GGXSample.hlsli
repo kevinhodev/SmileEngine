@@ -42,13 +42,55 @@ float4 GGX_SampleVNDF(float2 E, float alpha, float3 V) {
     return float4(H, pdf);
 }
 
+// PCG de 1 entrada — usado p/ AVANCAR um stream ja semeado (RngNext), nao p/ semear.
 uint GGX_PCG(uint v) {
     v = v * 747796405u + 2891336453u;
     uint w = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
     return (w >> 22u) ^ w;
 }
-float2 GGX_Rand2(uint2 px, uint frame) {
-    uint s0 = GGX_PCG(px.x + GGX_PCG(px.y + GGX_PCG(frame)));
+
+// Hash 4->1 (xxHash32, Jarzynski & Olano 2020) usado p/ SEMEAR os sorteios: w = ID do efeito,
+// x = frame, yz = pixel. Sem o ID no seed, GI difuso, reflexao glossy e mirror sorteiam a MESMA
+// sequencia no mesmo pixel/frame — e um denoiser que aprende correlacao entre efeitos (DLSS Ray
+// Reconstruction) revela isso na saida. GPU Zen 3 cap. 7, "Correlated Sampling": eles trocaram
+// blue noise por esta funcao exatamente por isso, e a atribuicao dos canais e a deles.
+uint GGX_XXHash32(uint4 p) {
+    const uint PRIME32_2 = 2246822519u, PRIME32_3 = 3266489917u;
+    const uint PRIME32_4 =  668265263u, PRIME32_5 =  374761393u;
+    uint h32 = p.w + PRIME32_5 + p.x * PRIME32_3;
+    h32 = PRIME32_4 * ((h32 << 17) | (h32 >> (32 - 17)));
+    h32 += p.y * PRIME32_3;
+    h32 = PRIME32_4 * ((h32 << 17) | (h32 >> (32 - 17)));
+    h32 += p.z * PRIME32_3;
+    h32 = PRIME32_4 * ((h32 << 17) | (h32 >> (32 - 17)));
+    h32 = PRIME32_2 * (h32 ^ (h32 >> 15));
+    h32 = PRIME32_3 * (h32 ^ (h32 >> 13));
+    return h32 ^ (h32 >> 16);
+}
+
+// IDs de stream. Espacados de 1000 p/ que uma variante possa somar um indice local (tap do
+// espacial, bounce futuro) sem invadir o vizinho.
+#define SMILE_RNG_GI_INITIAL    1000u // direcao do raio do sample inicial do ReSTIR GI
+#define SMILE_RNG_GI_WRS        2000u // selecao estocastica do WRS temporal
+#define SMILE_RNG_SPATIAL_WRS   3000u // selecao estocastica do WRS espacial
+#define SMILE_RNG_SPATIAL_TAP   4000u // + i: offset do i-esimo vizinho do reuso espacial
+#define SMILE_RNG_REFL_GLOSSY   5000u // VNDF da reflexao glossy
+#define SMILE_RNG_REFL_MIRROR   6000u // VNDF do passe mirror
+#define SMILE_RNG_DI_INITIAL    8000u // proposta uniforme das candidatas iniciais do ReSTIR DI
+#define SMILE_RNG_DI_TEMPORAL   9000u // WRS inicial + temporal do ReSTIR DI
+#define SMILE_RNG_DI_SPATIAL   10000u // WRS espacial do ReSTIR DI
+#define SMILE_RNG_DI_SPATIAL_TAP 11000u // + i: offset do vizinho espacial do ReSTIR DI
+// 12000 foi o stream do ponto na fonte esferica; ficou orfao quando o reservoir passou a guardar
+// a UV da amostra e os dois passes deixaram de precisar concordar por seed. Nao reciclar o id:
+// manter o buraco preserva a decorrelacao dos streams vizinhos entre versoes.
+
+uint GGX_SeedE(uint2 px, uint frame, uint effect) {
+    return GGX_XXHash32(uint4(frame, px.x, px.y, effect));
+}
+// NAO existe versao sem `effect`: a de 2 argumentos foi removida de proposito, para que um
+// chamador novo nao volte a compartilhar stream por descuido.
+float2 GGX_Rand2E(uint2 px, uint frame, uint effect) {
+    uint s0 = GGX_SeedE(px, frame, effect);
     uint s1 = GGX_PCG(s0);
     return float2(s0 & 0xffffu, s1 & 0xffffu) * (1.0f / 65535.0f);
 }

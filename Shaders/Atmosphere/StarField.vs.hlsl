@@ -43,10 +43,10 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float3 rgb = float3((S.Color) & 0xFF, (S.Color >> 8) & 0xFF, (S.Color >> 16) & 0xFF) / 255.0f;
     o.col = rgb * (S.Brightness * twinkle);
 
-    // Quad em pixels: base ~2.2px + leve crescimento p/ estrelas brilhantes (estilo Cry).
-    float sizePx = 2.2f + 1.4f * saturate(0.5f * log2(1.0f + S.Brightness));
-    float2 cornerNdc = kCorners[vid] * (sizePx * 2.0f) /
-                       float2(max(kViewportW, 1.0f), max(kViewportH, 1.0f));
+    // Raio em pixels de OUTPUT: a resolucao interna/DLSS/FSR nao altera o tamanho final.
+    float radiusPx = 2.2f + 1.4f * saturate(0.5f * log2(1.0f + S.Brightness));
+    float2 cornerNdc = kCorners[vid] * (radiusPx * 2.0f) /
+                       float2(max(kOutputW, 1.0f), max(kOutputH, 1.0f));
 
     clip.xy += cornerNdc * clip.w;
     o.pos = clip;

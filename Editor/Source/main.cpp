@@ -1,5 +1,6 @@
 #include "SmileEditor/DarkTheme.h"
 #include "SmileEditor/MainWindow.h"
+#include "SmileEditor/SplashScreen.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Core/VersionInfo.h"
 #include <QApplication>
@@ -10,6 +11,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QQuickStyle>
+#include <QQmlEngine>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <cstdlib>
@@ -71,7 +73,7 @@ namespace {
             }
             // Loga a familia REAL que o Qt registrou: em fonte variavel o nome nem sempre e o
             // do arquivo, e o Theme precisa bater exatamente com ela.
-            LogQString(Smile::LogLevel::Info,
+            LogQString(Smile::LogLevel::Debug,
                        QStringLiteral("Fonte registrada: %1 -> %2")
                            .arg(F, QFontDatabase::applicationFontFamilies(Id).join(
                                        QStringLiteral(", "))));
@@ -100,19 +102,19 @@ namespace {
         const QString BuildConfig = QStringLiteral("Release");
 #endif
 
-        LogQString(Smile::LogLevel::Info,
+        LogQString(Smile::LogLevel::Debug,
             QStringLiteral("SmileEditor %1 | build %2 | %3 | Qt %4")
                 .arg(QStringLiteral(SMILE_VERSION_STRING),
                      QStringLiteral(SMILE_BUILD_NUMBER),
                      BuildConfig,
                      QString::fromLatin1(qVersion())));
-        LogQString(Smile::LogLevel::Info,
+        LogQString(Smile::LogLevel::Debug,
             QStringLiteral("Sessao: pid=%1 | OS=%2 | arch=%3 | cwd=%4")
                 .arg(QCoreApplication::applicationPid())
                 .arg(QSysInfo::prettyProductName(),
                      QSysInfo::currentCpuArchitecture(),
                      QDir::currentPath()));
-        LogQString(Smile::LogLevel::Info,
+        LogQString(Smile::LogLevel::Debug,
             QStringLiteral("Arquivo de log: %1").arg(QDir::toNativeSeparators(LogPath)));
     }
 
@@ -130,15 +132,41 @@ namespace {
         SmileEditor::ApplyDarkTheme(App);
 
         int ExitCode = EXIT_FAILURE;
+        // Sobe antes de qualquer janela: o construtor da MainWindow leva centenas de ms e a
+        // render thread, segundos. Declarada fora do escopo da MainWindow para so morrer
+        // depois dela (a splash e destino de sinais da janela).
+        SmileEditor::SplashScreen Splash;
+        Splash.ShowCentered();
+
+        // Declarada fora do escopo da MainWindow: todos os QQuickWidget morrem antes da engine,
+        // como exige o construtor que recebe QQmlEngine externa.
+        QQmlEngine SharedQmlEngine;
         {
-            SmileEditor::MainWindow Window;
+            SmileEditor::MainWindow Window(SharedQmlEngine);
             // Dev/smoke: caminho de .sscene como 1o argumento carrega a cena no boot.
             const QStringList Args = QApplication::arguments();
             if (Args.size() > 1 &&
                 Args.at(1).endsWith(QStringLiteral(".sscene"), Qt::CaseInsensitive)) {
                 Window.SetStartupScene(Args.at(1));
             }
+
+            QObject::connect(&Window, &SmileEditor::MainWindow::BootProgress,
+                             &Splash, &SmileEditor::SplashScreen::SetStage);
+            QObject::connect(&Window, &SmileEditor::MainWindow::BootFinished,
+                             &Splash, [&Splash, &Window]() {
+                // Revela de uma vez: a splash dissolve por cima do editor ja pronto. Voltar
+                // a opacidade 1 tambem tira o WS_EX_LAYERED que o Windows poe enquanto ela
+                // e menor que 1 — nao deixar o viewport D3D12 sob janela em camada.
+                Window.setWindowOpacity(1.0);
+                Splash.FinishWith(&Window);
+            });
+
+            // A janela precisa existir cedo (o viewport so cria o device D3D12 depois de ter
+            // HWND), mas o usuario nao pode ver o editor se montando atras da splash: sobe
+            // invisivel e so aparece no BootFinished.
+            Window.setWindowOpacity(0.0);
             Window.show();
+            Splash.raise();   // show() da MainWindow acabou de levantar a janela dela
 
             ExitCode = App.exec();
 
@@ -146,7 +174,7 @@ namespace {
             Smile::SetLogSink({});
         }
 
-        Smile::LogInfo("Sessao encerrada normalmente");
+        Smile::LogDebug("Sessao encerrada normalmente");
         return ExitCode;
     }
 }

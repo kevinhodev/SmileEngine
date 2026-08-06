@@ -70,7 +70,7 @@ namespace Smile {
         CreateConstantBuffer(_Device);
 
         Initialized = true;
-        LogInfo("Volumetric fog (froxel 160x90x64) inicializado");
+        LogDebug("Volumetric fog (froxel 160x90x64) inicializado");
     }
 
     void FVolumetricFogPass::BuildScatteringRootSignature(ID3D12Device* _Device) {
@@ -269,13 +269,17 @@ namespace Smile {
         const Vec3 SunN  = _P.DirToSun.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
         c.SunDirPhase    = { SunN.X, SunN.Y, SunN.Z, PhaseG };
         c.SunColorInt    = { _P.SunColorTimesIntensity.X, _P.SunColorTimesIntensity.Y,
-                             _P.SunColorTimesIntensity.Z, 0.0f };
+                             _P.SunColorTimesIntensity.Z,
+                             _P.InjectDirectionalLight
+                                 ? std::max(_P.DirectionalLightStartDistance, 0.0f)
+                                 : MaxDistance + 1.0f };
         c.FogDensityP    = _P.CollapsedFog;
         c.AlbedoAmb      = { Albedo.X, Albedo.Y, Albedo.Z, AmbientIntensity };
         c.DDGIGridMin    = _P.DDGIGridMin;
         c.DDGIGridCount  = _P.DDGIGridCount;
         c.DDGIParams     = _P.DDGIParams;
-        c.AmbientFallback= { _P.SkyAmbient.X, _P.SkyAmbient.Y, _P.SkyAmbient.Z, 0.0f };
+        c.AmbientFallback= { _P.SkyAmbient.X, _P.SkyAmbient.Y, _P.SkyAmbient.Z,
+                             _P.DDGIVolumeFadeProbes };
 
         // Temporal: historia valida so com PrevVP guardado E frame anterior ativo.
         const bool UseHistory = Temporal && HistoryValid && HasPrevFrame;

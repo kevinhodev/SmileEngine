@@ -15,13 +15,13 @@ cbuffer SunShaftsVolCB : register(b0) {
     float4 FogDensityP;    // x = densidade1 colapsada na câmera (exp2), y = falloff1,
                            // z = densidade2 colapsada, w = falloff2
     float4 MarchParams;    // x = passos, y = dist máxima (m), z = frame do ruído IGN,
-                           // w = "poeira" = multiplicador da densidade efetiva DESTE passe
+                           // w = "poeira" = multiplicador artistico do espalhamento solar
+    float4 MediumParams;   // x = extinction scale do froxel, yzw unused
     float4 ScreenParams;   // xy = dims do RT meia-res, zw = 1/dims
     float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = força (0 = off)
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     row_major float4x4 InvViewProj;
-    float4 CameraWorldPos; // xyz = câmera em mundo, w = início da marcha (m; froxel
-                           // volumetric fog ativo cobre 0..w — shafts pegam dali pra fora)
+    float4 CameraWorldPos; // xyz = câmera em mundo, w = início da marcha (m)
 };
 
 Texture2D<float> SceneDepth     : register(t0);
@@ -29,18 +29,10 @@ Texture2D<float> CloudShadowMap : register(t1); // transmitância das nuvens p/ 
 SamplerState     LinearClamp    : register(s0);
 SamplerState     PointClamp     : register(s1);
 
-// Visibilidade barata p/ pontos no ar: seleção de cascata + 1 tap comparativo.
-// Sem normal-offset (não há superfície) e bias fixo — acne não existe em volume.
+// Visibilidade barata p/ pontos no ar: 1 tap por cascata e crossfade no band comum.
+// Sem normal-offset (não há superfície); a segunda leitura ocorre só na transição.
 float VisVolumetric(float3 worldPos) {
-    if (CSMParams.w < 0.5f) return 1.0f;
-    int numC = (int)CSMParams.x;
-    [loop] for (int i = 0; i < numC; ++i) {
-        float3 uvz = mul(float4(worldPos, 1.0f), WorldToShadow[i]).xyz;
-        if (!CSM_InBounds(uvz)) continue;
-        float refZ = uvz.z - CSMParams.y * CSMBiasScale[i] * 2.0f;
-        return SunShadowMap.SampleCmpLevelZero(ShadowCmp, float3(uvz.xy, (float)i), refZ);
-    }
-    return 1.0f; // fora do range do CSM = iluminado (igual às superfícies)
+    return SampleCSMVolumetric(worldPos);
 }
 
 float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
@@ -73,8 +65,8 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
     // Distribuicao QUADRATICA dos passos (t = start + f^2 * range): os feixes vivem
     // nos primeiros metros do trecho coberto — denso perto, esparso longe, mesmo
     // espirito do slicing exponencial do froxel fog da UE. dt = largura do segmento.
-    // start > 0 = froxel volumetric fog cobre 0..start (o feixe de perto ja vem do
-    // volume; comecar la evita o inscatter do sol em dobro).
+    // start normalmente e zero: quando o froxel esta ativo, seu termo solar e
+    // desligado e este passe fornece a versao com oclusao fina no mesmo intervalo.
     float  start = min(CameraWorldPos.w, dist);
     float  range = dist - start;
     float  T       = 1.0f;
@@ -82,6 +74,8 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
     float  wSum    = 0.0f;  // contribuicao total (p/ distancia media da reprojecao)
     float  dSum    = 0.0f;
     float  prevEnd = start;
+    float  fadeWidth = min(max(MarchParams.y * 0.15f, 4.0f), 24.0f);
+    float  fadeStart = max(MarchParams.y - fadeWidth, start);
     [loop] for (int i = 0; i < steps; ++i) {
         float  fj = ((float)i + jitter) / (float)steps;
         float  t  = start + fj * fj * range;
@@ -93,14 +87,13 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
 
         // densidade do height fog na altura do passo (mesma distribuição 2-exponencial
         // do FogCommon, colapsada na câmera; x0.6931 converte exp2 -> unidades naturais).
-        // "Poeira" multiplica a densidade EFETIVA do passe (espalhamento E extinção):
-        // o shaft enxerga um ar mais denso que o fog global — o efeito satura física-
-        // mente em vez de estourar (com fog default 0.0002, o raio inteiro espalha só
-        // ~2% da luz; era por isso que intensidade linear não resolvia).
+        // A extincao e EXATAMENTE a do froxel. "Poeira" aumenta apenas o espalhamento
+        // direcional artistico; assim o passe substitui o sol do volume sem alterar duas
+        // vezes a transmitancia do mesmo meio.
         float dh = wp.y - CameraWorldPos.y;
         float sigma = (FogDensityP.x * exp2(-FogDensityP.y * dh) +
                        FogDensityP.z * exp2(-FogDensityP.w * dh)) * 0.6931472f *
-                      MarchParams.w;
+                      MediumParams.x;
 
         float vis = VisVolumetric(wp);
 
@@ -118,7 +111,11 @@ float4 main(float4 svpos : SV_POSITION) : SV_TARGET {
             }
         }
 
-        float contrib = vis * sigma * T * dt;
+        // Crossfade com o termo solar do froxel no fim do alcance. Alem de
+        // preservar os shafts proximos, evita uma casca quando Phase/Dust artisticos
+        // diferem dos parametros fisicos do volume.
+        float shaftRangeWeight = 1.0f - smoothstep(fadeStart, MarchParams.y, t);
+        float contrib = vis * sigma * MarchParams.w * shaftRangeWeight * T * dt;
         accum += contrib;
         wSum  += contrib;
         dSum  += contrib * t;

@@ -25,6 +25,10 @@ namespace Smile {
         ID3D12Resource* Color    = nullptr;   // render-res, ja em COMPUTE_READ (NON_PIXEL_SHADER_RESOURCE)
         ID3D12Resource* Depth    = nullptr;
         ID3D12Resource* Velocity = nullptr;
+        // FSR 3.x: pixels que mudam sem seguir apenas o motion vector (refracao/alpha) e pixels
+        // compostos depois da cena opaca. Outros upscalers ignoram estes recursos.
+        ID3D12Resource* Reactive                    = nullptr;
+        ID3D12Resource* TransparencyAndComposition = nullptr;
         f32  JitterX = 0.0f, JitterY = 0.0f;  // pixels (o MESMO jitter aplicado a projecao)
         f32  NearZ = 0.0f, FarZ = 0.0f, FovYRadians = 0.0f;
         f32  AspectRatio  = 1.0f;

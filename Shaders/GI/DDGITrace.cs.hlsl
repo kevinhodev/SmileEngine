@@ -17,14 +17,24 @@ cbuffer DDGICB : register(b0) {
     // RayEpsB.x nos shadow rays do 2o hit, que sao os mesmos p/ os tres passes.
     float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
+    // Gather do 2o bounce (contrato do HitShading.hlsli): dist atlas + skipMode, bias.
+    float4 GIDistParams;    // x=distTile, y=distW, z=distH, w=skipMode
+    float4 GIBiasParams;    // x=escala do bias, y=teto em metros, zw=-
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
+    float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
 Texture2D<float4>               SkyViewLUT  : register(t1);
 StructuredBuffer<InstanceGeo>   Instances   : register(t2);
-Texture2D<float4>               IrradAtlas  : register(t3); 
-// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
-Buffer<float4>                  ProbeData   : register(t6);
+Texture2D<float4>               IrradAtlas  : register(t3);
+// t4 = atlas de distancia (2o bounce com Chebyshev; ver ShadeSurfaceHit). t5 segue filler.
+Texture2D<float4>               GIDistAtlas : register(t4);
+// Offsets de relocacao: usados aqui na origem do raio E no gather do 2o bounce.
+Buffer<float4>                  GIProbeData : register(t6);
 Buffer<uint>                    ProbeRayCount:register(t7);
 
 #include "../LightsCommon.hlsli"
@@ -57,7 +67,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         return;
     }
 
-    float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, spacing) + ProbeData[probeIdx].xyz;
+    float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, spacing) + GIProbeData[probeIdx].xyz;
 
     float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x, (uint)probeIdx);
 
@@ -88,6 +98,18 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.RealHitShading = DistAtlasParams.w > 0.5f;
     P.NumLights      = (int)MiscParams2.y;
     P.ShadowRayMask  = (uint)MiscParams2.z;
+    P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
+    P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
+    P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
+    P.ReGIREnabled       = ReGIRInvCellEnabled.w > 0.5f;
+    P.ReGIRGridCount     = (int3)ReGIRGridCountSamples.xyz;
+    P.ReGIRSampleCount   = (int)ReGIRGridCountSamples.w;
+    P.ReGIRSlotsSRV      = (uint)ReGIRResources.x;
+    P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
+    P.FrameIndex         = (uint)TraceParams.x;
+    P.ReGIRPad           = 0u;
+    P.SkyViewHeightKm    = SkyParams.x;
+    P.SkyBottomRKm       = SkyParams.y;
 
     float3 radiance;
     float  signedDist;
@@ -101,7 +123,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         // So aqui no DDGI: o HitShading e compartilhado e reflexoes/ReSTIR precisam do hitT real.
         if (signedDist < 0.0f) signedDist *= 0.2f;
     } else {
-        radiance   = ShadeSky(dir, sunDir, P.SkyIntensity);
+        radiance   = ShadeSky(dir, sunDir, P.SkyIntensity, P);
         signedDist = maxT;
     }
 

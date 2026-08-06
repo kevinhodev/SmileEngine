@@ -44,7 +44,7 @@ namespace Smile {
         PendingScopes.resize(FramesInFlight_);
         CurrentScopes.reserve(kMaxScopes);
         OpenStack.reserve(8);
-        LogInfo("[GPU] Profiler de timestamps inicializado (" +
+        LogDebug("[GPU] Profiler de timestamps inicializado (" +
                 std::to_string(kMaxScopes) + " escopos/frame)");
     }
 
@@ -69,7 +69,7 @@ namespace Smile {
 
                 auto [It, Inserted] = Smoothed.try_emplace(S.Name, Ms);
                 if (!Inserted) It->second += (Ms - It->second) * 0.1; // EMA
-                LastResults.push_back({ S.Name, It->second });
+                LastResults.push_back({ S.Name, It->second, S.Depth });
             }
         }
 
@@ -87,6 +87,7 @@ namespace Smile {
         Rec.Name       = _Name;
         Rec.BeginQuery = NextQuery++;
         Rec.EndQuery   = NextQuery++; // reservado ja; o End so grava
+        Rec.Depth      = static_cast<u32>(OpenStack.size());
         _List->EndQuery(QueryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                         FrameSlot_ * QueriesPerFrame + Rec.BeginQuery);
         OpenStack.push_back(static_cast<u32>(CurrentScopes.size()));

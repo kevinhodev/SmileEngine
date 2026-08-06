@@ -14,7 +14,7 @@ namespace Smile {
     // Escopos podem aninhar (pilha); ms suavizado por media movel exponencial.
     class FGpuProfiler {
     public:
-        static constexpr u32 kMaxScopes = 64;
+        static constexpr u32 kMaxScopes = 96;
 
         void Initialize(ID3D12Device* Device, ID3D12CommandQueue* Queue, u32 FramesInFlight);
         bool IsInitialized() const { return QueryHeap != nullptr; }
@@ -29,6 +29,7 @@ namespace Smile {
         struct FScopeResult {
             const char* Name = nullptr;
             f64 Milliseconds = 0.0; // suavizado (EMA 0.1)
+            u32 Depth = 0;          // 0 = raiz; filhos incrementam conforme a pilha Begin/End
         };
         // Snapshot do ultimo frame lido, na ordem de gravacao ("Frame" total incluso).
         const std::vector<FScopeResult>& Results() const { return LastResults; }
@@ -38,6 +39,7 @@ namespace Smile {
             const char* Name = nullptr;
             u32 BeginQuery = 0;
             u32 EndQuery   = 0;
+            u32 Depth      = 0;
         };
 
         ComPtr<ID3D12QueryHeap> QueryHeap;

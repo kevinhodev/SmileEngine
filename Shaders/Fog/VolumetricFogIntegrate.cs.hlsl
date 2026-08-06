@@ -27,7 +27,11 @@ void main(uint3 id : SV_DispatchThreadID) {
     [loop] for (int z = 0; z < kVolFogZ; ++z) {
         float4 scatExt = LightScatteringTex[uint3(id.xy, z)];
 
-        float sliceDepth = VolFog_DepthFromSlice((float)z + 0.5f);
+        // LightScatteringTex stores the medium at the cell center, but the
+        // integrated result represents the END boundary of that cell. Using
+        // z+0.5 left the last half-cell uncovered while the analytical fog only
+        // resumed at MaxDistance (slice kVolFogZ), producing a horizon seam.
+        float sliceDepth = VolFog_DepthFromSlice((float)z + 1.0f);
         float stepLen    = max(sliceDepth - prevDepth, 0.0f) * invCos;
         prevDepth = sliceDepth;
 

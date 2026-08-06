@@ -41,6 +41,10 @@ namespace SmileEditor {
     }
 
     void LogBridge::Append(Smile::LogLevel _Level, std::string_view _Message) {
+        // Diagnostico detalhado permanece no log persistente da sessao, mas nao compete com
+        // eventos acionaveis no console do editor. O arquivo continua sendo a fonte completa.
+        if (_Level == Smile::LogLevel::Debug) return;
+
         // Mesma paleta do antigo console HTML: azul/ambar/vermelho por nivel.
         const char* Color = _Level == Smile::LogLevel::Error   ? "#ff5f57"
                           : _Level == Smile::LogLevel::Warning ? "#f3b43f"

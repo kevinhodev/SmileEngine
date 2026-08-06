@@ -24,8 +24,7 @@ namespace SmileEditor {
         const QString StylesDir = GetStylesDirectoryPath();
         return QStringList {
             StylesDir + "/global.qss",
-            StylesDir + "/MainWindow.qss",
-            StylesDir + "/AboutDialog.qss"
+            StylesDir + "/MainWindow.qss"
         };
     }
 

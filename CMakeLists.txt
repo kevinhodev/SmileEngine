@@ -3,9 +3,12 @@ cmake_minimum_required(VERSION 3.25)
 # Projeto base SmileEngine - Qt 6 + DirectX 12
 project(SmileEngine LANGUAGES C CXX)
 
+# Testes matematicos isolados (sem dependencia do runtime/DirectX).
+include(CTest)
+
 # Versao do projeto - usado pelo VersionInfo.h gerado e pela tela About
-set(SMILE_VERSION_MAJOR 0)
-set(SMILE_VERSION_MINOR 1)
+set(SMILE_VERSION_MAJOR 3)
+set(SMILE_VERSION_MINOR 0)
 set(SMILE_VERSION_PATCH 0)
 string(TIMESTAMP SMILE_BUILD_DATE   "%Y-%m-%d %H:%M" UTC)
 string(TIMESTAMP SMILE_BUILD_NUMBER "%Y%m%d")
@@ -25,9 +28,18 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Diretorio onde os .cso compilados ficam, exposto para o codigo C++
-set(SMILE_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin/Shaders" CACHE PATH "Diretorio de saida dos shaders compilados")
-file(MAKE_DIRECTORY ${SMILE_SHADER_OUTPUT_DIR})
+# Raiz dos .cso compilados, exposta para o codigo C++. Em geradores multi-config
+# (Visual Studio), cada configuracao precisa de seu proprio bytecode: Debug usa
+# -Zi/-Od e Release usa -O3. Compartilhar o mesmo OUTPUT faria o timestamp de uma
+# configuracao impedir a recompilacao da outra.
+set(SMILE_SHADER_OUTPUT_ROOT "${CMAKE_BINARY_DIR}/bin" CACHE PATH
+    "Raiz dos diretorios de shaders compilados")
+if(CMAKE_CONFIGURATION_TYPES)
+    set(SMILE_SHADER_OUTPUT_DIR "${SMILE_SHADER_OUTPUT_ROOT}/$<CONFIG>/Shaders")
+else()
+    set(SMILE_SHADER_OUTPUT_DIR "${SMILE_SHADER_OUTPUT_ROOT}/Shaders")
+endif()
+file(MAKE_DIRECTORY "${SMILE_SHADER_OUTPUT_ROOT}")
 
 # Default Qt prefix path (kit MSVC 2022 64 bits) - pode ser sobrescrito via -D
 if(NOT DEFINED CMAKE_PREFIX_PATH OR CMAKE_PREFIX_PATH STREQUAL "")
@@ -42,7 +54,7 @@ endif()
 
 # Localiza Qt 6
 # Quick/Qml/QuickWidgets: migracao incremental da UI do Editor para QML (ilhas QQuickWidget)
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Svg Widgets Qml Quick QuickWidgets QuickControls2)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Concurrent Gui Svg Widgets Qml Quick QuickWidgets QuickControls2)
 qt_standard_project_setup()
 
 # Modulo cmake interno: utilitario para compilar shaders HLSL
@@ -54,3 +66,7 @@ add_subdirectory(Engine)
 add_subdirectory(Shaders)
 add_subdirectory(Editor)
 add_subdirectory(Tools/Cooker)
+
+if(BUILD_TESTING)
+    add_subdirectory(Tests)
+endif()

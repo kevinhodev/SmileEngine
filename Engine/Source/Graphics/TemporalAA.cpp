@@ -2,23 +2,13 @@
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include <cstring>
 
 namespace Smile {
     namespace {
-        void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
-                        D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
-            if (before == after) return;
-            D3D12_RESOURCE_BARRIER b{};
-            b.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            b.Transition.pResource   = res;
-            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            b.Transition.StateBefore = before;
-            b.Transition.StateAfter  = after;
-            cl->ResourceBarrier(1, &b);
-        }
         constexpr DXGI_FORMAT kHDRFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     }
 
@@ -29,7 +19,7 @@ namespace Smile {
         CreateConstantBuffer(Device);
         CreateTextures(Device, SRVHeap, W, H);
         Initialized = true;
-        LogInfo("TemporalAA (reprojecao so-camera + Karis tonemap-weighted) inicializado");
+        LogDebug("TemporalAA (reprojecao so-camera + Karis tonemap-weighted) inicializado");
     }
 
     void FTemporalAA::Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 W, u32 H) {
@@ -249,10 +239,15 @@ namespace Smile {
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(TAAConstants),
                     &C, sizeof(TAAConstants));
 
-        Transition(CommandList, History[curr].Get(), HistoryState[curr], D3D12_RESOURCE_STATE_RENDER_TARGET);
-        HistoryState[curr] = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        Transition(CommandList, DisplayTex.Get(), DisplayState, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        DisplayState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        {
+            // Os dois viram RT juntos (MRT do resolve): um ResourceBarrier so.
+            FBarrierBatch Batch;
+            Batch.TransitionTracked(History[curr].Get(), HistoryState[curr],
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.TransitionTracked(DisplayTex.Get(), DisplayState,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
+        }
 
         D3D12_VIEWPORT VP{}; VP.Width = static_cast<FLOAT>(Width); VP.Height = static_cast<FLOAT>(Height);
         VP.MinDepth = 0.0f; VP.MaxDepth = 1.0f;
@@ -275,12 +270,15 @@ namespace Smile {
         CommandList->IASetIndexBuffer(nullptr);
         CommandList->DrawInstanced(3, 1, 0, 0);
 
-        Transition(CommandList, History[curr].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
-                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        HistoryState[curr] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        Transition(CommandList, DisplayTex.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
-                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        DisplayState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        {
+            // E voltam a ser lidos juntos: idem.
+            FBarrierBatch Batch;
+            Batch.TransitionTracked(History[curr].Get(), HistoryState[curr],
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(DisplayTex.Get(), DisplayState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+        }
 
         LastOutputIndex = curr;
         HistoryIndex    = 1 - curr;

@@ -1,6 +1,7 @@
 #include "Smile/Graphics/Water.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/UploadQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -49,6 +50,13 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE FFTNormalRange2 = FFTNormalRange1;
         FFTNormalRange2.BaseShaderRegister = 9;
 
+        D3D12_DESCRIPTOR_RANGE FFTPreviousRange0 = FFTRange;
+        FFTPreviousRange0.BaseShaderRegister = 12;
+        D3D12_DESCRIPTOR_RANGE FFTPreviousRange1 = FFTRange;
+        FFTPreviousRange1.BaseShaderRegister = 13;
+        D3D12_DESCRIPTOR_RANGE FFTPreviousRange2 = FFTRange;
+        FFTPreviousRange2.BaseShaderRegister = 14;
+
         D3D12_DESCRIPTOR_RANGE FFTNormalRange{};
         FFTNormalRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         FFTNormalRange.NumDescriptors                    = 1;
@@ -56,13 +64,10 @@ namespace Smile {
         FFTNormalRange.RegisterSpace                     = 0;
         FFTNormalRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_DESCRIPTOR_RANGE AtmoSkyViewRange{};
-        AtmoSkyViewRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        AtmoSkyViewRange.NumDescriptors                    = 1;
-        AtmoSkyViewRange.BaseShaderRegister                = 5; 
-        AtmoSkyViewRange.RegisterSpace                     = 0;
-        AtmoSkyViewRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
+        // NAO existe range de t5 aqui. Havia uma (AtmoSkyViewRange, com root param e bind por
+        // frame), mas NENHUM shader de Shaders/Water declara register(t5): o sky-view LUT chega
+        // na agua pelo cubemap prefiltrado (SkyReflectionSRV), nao pelo LUT cru. Era descritor
+        // e root param pagos todo frame por nada.
         D3D12_DESCRIPTOR_RANGE SceneRange{};
         SceneRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SceneRange.NumDescriptors                    = 2;
@@ -77,7 +82,7 @@ namespace Smile {
         SunShadowRange.RegisterSpace                     = 0;
         SunShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[12]{};
+        D3D12_ROOT_PARAMETER RootParams[14]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].Descriptor.RegisterSpace  = 0;
@@ -103,40 +108,45 @@ namespace Smile {
         RootParams[4].DescriptorTable.pDescriptorRanges   = &FFTNormalRange;
         RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        RootParams[5].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[5].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[5].DescriptorTable.pDescriptorRanges   = &AtmoSkyViewRange;
-        RootParams[5].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[5].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[5].Descriptor.ShaderRegister = 3; // b3 = CSMCB
+        RootParams[5].Descriptor.RegisterSpace  = 0;
+        RootParams[5].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        RootParams[6].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        RootParams[6].Descriptor.ShaderRegister = 3; // b3 = CSMCB
-        RootParams[6].Descriptor.RegisterSpace  = 0;
-        RootParams[6].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[6].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[6].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[6].DescriptorTable.pDescriptorRanges   = &SunShadowRange;
+        RootParams[6].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[7].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[7].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[7].DescriptorTable.pDescriptorRanges   = &SunShadowRange;
-        RootParams[7].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        RootParams[7].DescriptorTable.pDescriptorRanges   = &FFTRange1;
+        RootParams[7].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         RootParams[8].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[8].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[8].DescriptorTable.pDescriptorRanges   = &FFTRange1;
+        RootParams[8].DescriptorTable.pDescriptorRanges   = &FFTRange2;
         RootParams[8].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
         RootParams[9].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[9].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[9].DescriptorTable.pDescriptorRanges   = &FFTRange2;
-        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+        RootParams[9].DescriptorTable.pDescriptorRanges   = &FFTNormalRange1;
+        RootParams[9].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         RootParams[10].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         RootParams[10].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[10].DescriptorTable.pDescriptorRanges   = &FFTNormalRange1;
+        RootParams[10].DescriptorTable.pDescriptorRanges   = &FFTNormalRange2;
         RootParams[10].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        RootParams[11].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[11].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[11].DescriptorTable.pDescriptorRanges   = &FFTNormalRange2;
-        RootParams[11].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        D3D12_DESCRIPTOR_RANGE* PreviousRanges[3] = {
+            &FFTPreviousRange0, &FFTPreviousRange1, &FFTPreviousRange2 };
+        for (u32 i = 0; i < 3; ++i) {
+            D3D12_ROOT_PARAMETER& Param = RootParams[11 + i];
+            Param.ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            Param.DescriptorTable.NumDescriptorRanges = 1;
+            Param.DescriptorTable.pDescriptorRanges   = PreviousRanges[i];
+            Param.ShaderVisibility                    = D3D12_SHADER_VISIBILITY_VERTEX;
+        }
 
         D3D12_STATIC_SAMPLER_DESC Samplers[4]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -195,6 +205,9 @@ namespace Smile {
                                   DXGI_FORMAT _VelocityFormat) {
         auto VS = LoadShaderBytecode("WaterSurface.vs_6_0.cso");
         auto PS = LoadShaderBytecode("WaterSurface.ps_6_0.cso");
+        auto PSBase = LoadShaderBytecode("WaterSurfaceBase.ps_6_0.cso");
+        auto PSMasks = LoadShaderBytecode("WaterSurfaceMasks.ps_6_0.cso");
+        auto PSReflection = LoadShaderBytecode("WaterSurfaceReflection.ps_6_0.cso");
 
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -216,35 +229,75 @@ namespace Smile {
         Depth.DepthFunc      = kDepthFuncLess; 
         Depth.StencilEnable  = FALSE;
 
-        auto CreateWaterPSO = [&](D3D12_FILL_MODE _FillMode,
+        // _WriteGuides = false: variante DIAGNOSTICA. A agua vira overlay so de cor e nao escreve
+        // depth, velocity, masks ou G-buffer. O PSO normal de oito MRTs escreve todos os guides da
+        // propria superficie; esta variante permite comparar o resultado sem participacao temporal
+        // da agua. A cor sai identica nas duas variantes de proposito: o A/B mexe so nos guides.
+        auto CreateWaterPSO = [&](const std::vector<u8>& _PS, D3D12_FILL_MODE _FillMode,
+                                  bool _WriteGuides, u32 _RenderTargetCount,
                                   Microsoft::WRL::ComPtr<ID3D12PipelineState>& _Out) {
             D3D12_RASTERIZER_DESC Raster{};
             Raster.FillMode              = _FillMode;
-            Raster.CullMode              = D3D12_CULL_MODE_NONE; 
+            Raster.CullMode              = D3D12_CULL_MODE_NONE;
             Raster.FrontCounterClockwise = FALSE;
             Raster.DepthClipEnable       = TRUE;
+
+            D3D12_BLEND_DESC         LocalBlend = Blend;
+            D3D12_DEPTH_STENCIL_DESC LocalDepth = Depth;
+            if (!_WriteGuides) {
+                // Continua testando profundidade (fica ocluida certo pelo que esta na frente), so
+                // nao GRAVA. E a velocity precisa do IndependentBlendEnable: com ele em FALSE o
+                // D3D12 aplica o RenderTarget[0] a TODOS os alvos, entao mascarar so o RT1 sem
+                // liga-lo nao teria efeito nenhum.
+                LocalDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+                LocalBlend.IndependentBlendEnable = TRUE;
+                LocalBlend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+                LocalBlend.RenderTarget[1].RenderTargetWriteMask = 0;
+                for (u32 RT = 2; RT < 8; ++RT)
+                    LocalBlend.RenderTarget[RT].RenderTargetWriteMask = 0;
+            }
 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC Desc{};
             Desc.pRootSignature        = RootSignature.Get();
             Desc.VS                    = { VS.data(), VS.size() };
-            Desc.PS                    = { PS.data(), PS.size() };
-            Desc.BlendState            = Blend;
+            Desc.PS                    = { _PS.data(), _PS.size() };
+            Desc.BlendState            = LocalBlend;
             Desc.SampleMask            = UINT_MAX;
             Desc.RasterizerState       = Raster;
-            Desc.DepthStencilState     = Depth;
+            Desc.DepthStencilState     = LocalDepth;
             Desc.InputLayout           = { InputLayout, _countof(InputLayout) };
             Desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-            Desc.NumRenderTargets      = 2;
+            Desc.NumRenderTargets      = _RenderTargetCount;
             Desc.RTVFormats[0]         = _RTFormat;
             Desc.RTVFormats[1]         = _VelocityFormat; // velocity da agua (curUV - prevUV)
+            if (_RenderTargetCount == 4) {
+                Desc.RTVFormats[2] = DXGI_FORMAT_R8_UNORM;
+                Desc.RTVFormats[3] = DXGI_FORMAT_R8_UNORM;
+            } else if (_RenderTargetCount >= 7) {
+                Desc.RTVFormats[2] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+                Desc.RTVFormats[3] = DXGI_FORMAT_R10G10B10A2_UNORM;
+                Desc.RTVFormats[4] = DXGI_FORMAT_R8G8B8A8_UNORM;
+                Desc.RTVFormats[5] = DXGI_FORMAT_R8_UNORM;
+                Desc.RTVFormats[6] = DXGI_FORMAT_R8_UNORM;
+                if (_RenderTargetCount == 8)
+                    Desc.RTVFormats[7] = DXGI_FORMAT_R16_FLOAT;
+            }
             Desc.DSVFormat             = _DSFormat;
             Desc.SampleDesc            = { 1, 0 };
 
             SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&_Out)));
         };
 
-        CreateWaterPSO(D3D12_FILL_MODE_SOLID, PSO);
-        CreateWaterPSO(D3D12_FILL_MODE_WIREFRAME, WireframePSO);
+        CreateWaterPSO(PS,      D3D12_FILL_MODE_SOLID,     true,  8, PSO);
+        CreateWaterPSO(PSBase,  D3D12_FILL_MODE_SOLID,     true,  2, BasePSO);
+        CreateWaterPSO(PSMasks, D3D12_FILL_MODE_SOLID,     true,  4, TemporalMasksPSO);
+        CreateWaterPSO(PSReflection, D3D12_FILL_MODE_SOLID, true, 7, ReflectionGuidesPSO);
+        CreateWaterPSO(PS,      D3D12_FILL_MODE_WIREFRAME, true,  8, WireframePSO);
+        CreateWaterPSO(PSReflection, D3D12_FILL_MODE_WIREFRAME, true, 7,
+                       ReflectionWireframePSO);
+        CreateWaterPSO(PS,      D3D12_FILL_MODE_SOLID,     false, 8, GuideInvisiblePSO);
+        CreateWaterPSO(PSReflection, D3D12_FILL_MODE_SOLID, false, 7,
+                       ReflectionGuideInvisiblePSO);
     }
 
     void FWaterRenderer::BuildGenerateDrawsPipeline(ID3D12Device* _Device) {
@@ -257,7 +310,7 @@ namespace Smile {
 
         D3D12_DESCRIPTOR_RANGE UAVRanges[1]{};
         UAVRanges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-        UAVRanges[0].NumDescriptors                    = 5; 
+        UAVRanges[0].NumDescriptors                    = 6;
         UAVRanges[0].BaseShaderRegister                = 0;
         UAVRanges[0].RegisterSpace                     = 0;
         UAVRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -304,7 +357,7 @@ namespace Smile {
         SMILE_HR(_Device->CreateComputePipelineState(&Desc, IID_PPV_ARGS(&GenerateDrawsPSO)));
     }
 
-    void FWaterRenderer::BuildGrid(ID3D12Device* _Device) {
+    void FWaterRenderer::BuildGrid(ID3D12Device* _Device, FUploadQueue& _UploadQueue) {
         const u32 N = kGridPoints;
         const u32 MeshDim = kGridPoints - 1;
         const f32 Rcp = 1.0f / static_cast<f32>(N - 1);
@@ -468,7 +521,7 @@ namespace Smile {
         const UINT VBSize = static_cast<UINT>(Verts.size() * sizeof(f32));
         const UINT IBSize = static_cast<UINT>(Indices.size() * sizeof(u32));
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_HEAP_PROPERTIES DefaultHeap{}; DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC RDesc{};
         RDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
         RDesc.Height           = 1;
@@ -478,28 +531,46 @@ namespace Smile {
         RDesc.SampleDesc       = { 1, 0 };
         RDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Mapped = nullptr;
-
         RDesc.Width = VBSize;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &RDesc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&VertexBuffer)));
-        SMILE_HR(VertexBuffer->Map(0, &NoRead, &Mapped));
-        std::memcpy(Mapped, Verts.data(), VBSize);
-        VertexBuffer->Unmap(0, nullptr);
+        SMILE_HR(_Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &RDesc,
+                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&VertexBuffer)));
+        VramTracker::Register(VertexBuffer.Get(), EVramCategory::Water);
         VBView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();
         VBView.StrideInBytes  = 3 * sizeof(f32);
         VBView.SizeInBytes    = VBSize;
 
         RDesc.Width = IBSize;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &RDesc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&IndexBuffer)));
-        SMILE_HR(IndexBuffer->Map(0, &NoRead, &Mapped));
-        std::memcpy(Mapped, Indices.data(), IBSize);
-        IndexBuffer->Unmap(0, nullptr);
+        SMILE_HR(_Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &RDesc,
+                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&IndexBuffer)));
+        VramTracker::Register(IndexBuffer.Get(), EVramCategory::Water);
         IBView.BufferLocation = IndexBuffer->GetGPUVirtualAddress();
         IBView.Format         = DXGI_FORMAT_R32_UINT;
         IBView.SizeInBytes    = IBSize;
+
+        // Static clipmap geometry is consumed every frame by the IA. Keep it in
+        // device-local memory and retain the UPLOAD allocation only until the
+        // dedicated copy queue finishes this one-time initialization.
+        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        RDesc.Width = static_cast<UINT64>(VBSize) + IBSize;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Staging;
+        SMILE_HR(_Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &RDesc,
+                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Staging)));
+        D3D12_RANGE NoRead{ 0, 0 };
+        u8* Mapped = nullptr;
+        SMILE_HR(Staging->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)));
+        std::memcpy(Mapped, Verts.data(), VBSize);
+        std::memcpy(Mapped + VBSize, Indices.data(), IBSize);
+        Staging->Unmap(0, nullptr);
+
+        ID3D12GraphicsCommandList* UploadCL = _UploadQueue.Begin();
+        UploadCL->CopyBufferRegion(VertexBuffer.Get(), 0, Staging.Get(), 0, VBSize);
+        UploadCL->CopyBufferRegion(IndexBuffer.Get(), 0, Staging.Get(), VBSize, IBSize);
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> Keep;
+        Keep.push_back(std::move(Staging));
+        _UploadQueue.Submit(std::move(Keep));
+        // Water can be consumed by the first direct-queue frame immediately after
+        // Initialize returns, so establish the cross-queue dependency here once.
+        _UploadQueue.WaitIdle();
     }
 
     void FWaterRenderer::BuildInstanceBuffer(ID3D12Device* _Device) {
@@ -515,6 +586,8 @@ namespace Smile {
         const UINT GpuIndirectFrameSize =
             static_cast<UINT>(sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * kSubsetRangeCount);
         const UINT GpuIndirectBufferSize = GpuIndirectFrameSize * FCommandQueue::kFramesInFlight;
+        const UINT GpuIndirectCountBufferSize =
+            static_cast<UINT>(sizeof(u32) * FCommandQueue::kFramesInFlight);
         const UINT GpuDrawBucketScratchFrameSize =
             static_cast<UINT>(sizeof(u32) * kSubsetRangeCount * 3u);
         const UINT GpuDrawBucketScratchBufferSize =
@@ -576,6 +649,14 @@ namespace Smile {
         VramTracker::Register(GpuIndirectArgsBuffer.Get(), EVramCategory::Water);
         GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_COMMON;
 
+        DefaultDesc.Width = GpuIndirectCountBufferSize;
+        SMILE_HR(_Device->CreateCommittedResource(
+            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&GpuIndirectCountBuffer)));
+        VramTracker::Register(GpuIndirectCountBuffer.Get(), EVramCategory::Water);
+        GpuIndirectCountBufferState = D3D12_RESOURCE_STATE_COMMON;
+
         DefaultDesc.Width = TileSourceBufferSize;
         SMILE_HR(_Device->CreateCommittedResource(
             &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
@@ -613,7 +694,7 @@ namespace Smile {
         SMILE_HR(GpuDebugReadbackBuffer->Map(
             0, &DebugReadRange, reinterpret_cast<void**>(&MappedGpuDebugCountersBase)));
 
-        GenerateDrawsHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 7, true);
+        GenerateDrawsHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 8, true);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                  = DXGI_FORMAT_UNKNOWN;
@@ -658,6 +739,11 @@ namespace Smile {
         UAVDesc.Buffer.StructureByteStride = sizeof(u32);
         _Device->CreateUnorderedAccessView(GpuDebugCounterBuffer.Get(), nullptr, &UAVDesc,
                                            GenerateDrawsHeap.CpuHandle(6));
+
+        UAVDesc.Buffer.NumElements         = FCommandQueue::kFramesInFlight;
+        UAVDesc.Buffer.StructureByteStride = sizeof(u32);
+        _Device->CreateUnorderedAccessView(GpuIndirectCountBuffer.Get(), nullptr, &UAVDesc,
+                                           GenerateDrawsHeap.CpuHandle(7));
     }
 
     void FWaterRenderer::PrepareGpuTileSources(const Mat44& _ViewProj, const Vec3& _CameraPos) {
@@ -669,7 +755,7 @@ namespace Smile {
         GpuTileSourceCandidateCount = 0;
 
         const f32 BaseSize = std::max(TileBaseSize, 1.0f);
-        const u32 Depth = std::min(TileMaxDepth, 10u);
+        const u32 Depth = std::min(TileMaxDepth, 12u);
         const u32 RootCells = 1u << Depth;
         const f32 RootSize = BaseSize * static_cast<f32>(RootCells);
         const f32 SnapX = std::floor(_CameraPos.X / BaseSize) * BaseSize;
@@ -764,13 +850,13 @@ namespace Smile {
         }
     }
 
-    void FWaterRenderer::Initialize(ID3D12Device* _Device,
+    void FWaterRenderer::Initialize(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
                                     DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat,
                                     DXGI_FORMAT _VelocityFormat) {
         BuildRootSignature(_Device);
         BuildPSO(_Device, _RTFormat, _DSFormat, _VelocityFormat);
         BuildGenerateDrawsPipeline(_Device);
-        BuildGrid(_Device);
+        BuildGrid(_Device, _UploadQueue);
         BuildInstanceBuffer(_Device);
 
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -796,6 +882,10 @@ namespace Smile {
         BuildPSO(_Device, _RTFormat, _DSFormat, _VelocityFormat);
     }
 
+    void FWaterRenderer::RecreateGenerateDraws(ID3D12Device* _Device) {
+        BuildGenerateDrawsPipeline(_Device);
+    }
+
     void FWaterRenderer::Resize(ID3D12Device*, u32, u32) {
     }
 
@@ -804,9 +894,10 @@ namespace Smile {
                                         const Mat44& _ViewProjNoJitter, const Mat44& _PrevViewProjNoJitter,
                                         const Vec3& _CameraPos, const Vec3& _SunDir, f32 _SunIntensity,
                                         const Vec3& _SunColor, const Vec3& _SkyAmbient, f32 _ElapsedTime,
-                                        bool _IBLEnabled, f32 _IBLIntensity,
-                                        u32 _ScreenW, u32 _ScreenH, f32 _NearZ, f32 _FarZ,
-                                        bool _HasSceneCopies, bool _UseAtmosphereSky) {
+                                         bool _IBLEnabled, f32 _IBLIntensity,
+                                         u32 _ScreenW, u32 _ScreenH, f32 _NearZ, f32 _FarZ,
+                                         bool _HasSceneCopies, bool _UseAtmosphereSky,
+                                         bool _DedicatedReflections) {
         (void)_Projection;
         if (!MappedCBVBase || !MappedDrawBucketsBase) return;
 
@@ -839,16 +930,14 @@ namespace Smile {
         MappedCBV->WaterFXParams = { SSSStrength, SSSPower, SSSHeightScale, ShoreFoamWidth };
         MappedCBV->ShadeParams  = { FresnelGloss, ReflectionScale, kSunShininess, kSunSpecScale };
         MappedCBV->OceanFFT     = { UseFFT ? 1.0f : 0.0f, FFTDispScale, FFTChoppyScale, FFTNormalUp };
-        // zw = boost de amplitude das cascatas 1/2. A/B 2026-07-16: o valor auto-similar
-        // (razão dos tiles 6/24, e mesmo 5/16) fazia MONTANHA de água — Phillips não tem
-        // o corte de vento em unidades de mundo aqui, então o swell sai gigante. Sub-
-        // similar bem amansado: swell presente sem virar serra.
-        MappedCBV->OceanFade    = { FFTFadeStart, FFTFadeRange, 2.2f, 4.5f };
+        // O bake Horvath já integra a densidade espectral em unidades de mundo. Cascatas
+        // não recebem boosts empíricos: WavesAmount é ganho linear global e não muda
+        // comprimentos de onda nem o peso relativo das bandas.
+        MappedCBV->OceanFade    = { FFTFadeStart, FFTFadeRange, 1.0f, 1.0f };
 
-        // Tiles das cascatas: T0 = 64/wavesAmount (idêntico ao mapeamento single-cascata
-        // validado), T1 = 6·T0, T2 = 24·T0. Bandas de espectro disjuntas no FOceanFFT.
-        const f32 T0 = 64.0f / std::max(WavesAmount, 0.05f);
-        MappedCBV->CascadeParams = { 1.0f / T0, 1.0f / (6.0f * T0), 1.0f / (24.0f * T0),
+        // Domínios fixos em metros. As bandas [2,129), [2,12), [2,8) cobrem de forma
+        // adjacente aproximadamente 0,50-32 m, 32-192 m e 192-768 m.
+        MappedCBV->CascadeParams = { 1.0f / 64.0f, 1.0f / 384.0f, 1.0f / 1536.0f,
                                      static_cast<f32>(kFFTCascades) };
         MappedCBV->WaterAmbient  = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };
         MappedCBV->BumpParams   = { BumpTilling, BumpDetailTilling, BumpNormalsScale, BumpDetailScale };
@@ -859,7 +948,8 @@ namespace Smile {
         MappedCBV->DepthParams      = { _NearZ, _FarZ, _HasSceneCopies ? 1.0f : 0.0f,
                                         _UseAtmosphereSky ? 1.0f : 0.0f };
         MappedCBV->RefractionParams = { RefractionBumpScale, SoftIntersectionFactor, FogDensity, ReflectionBumpScale };
-        MappedCBV->DebugParams      = { static_cast<f32>(static_cast<u32>(DebugMode)), 0.0f, 0.0f, 0.0f };
+        MappedCBV->DebugParams      = { static_cast<f32>(static_cast<u32>(DebugMode)),
+                                        _DedicatedReflections ? 1.0f : 0.0f, 0.0f, 0.0f };
         MappedCBV->DeepColorDensity = { DeepColor.X, DeepColor.Y, DeepColor.Z, FogDensity };
         MappedCBV->InScatterColor  = { InScatterColor.X, InScatterColor.Y, InScatterColor.Z, InScatterDensity };
         MappedCBV->AbsorptionColor = { AbsorptionColor.X, AbsorptionColor.Y, AbsorptionColor.Z, 0.0f };
@@ -869,7 +959,7 @@ namespace Smile {
 
         const bool CanBuildTileSourcesOnGpu =
             GenerateDrawsPSO && GpuTileSourceBuffer && GpuInstanceBuffer &&
-            GpuIndirectArgsBuffer && GpuDrawBucketScratchBuffer &&
+            GpuIndirectArgsBuffer && GpuIndirectCountBuffer && GpuDrawBucketScratchBuffer &&
             GpuDebugCounterBuffer && MappedDrawBuckets;
         if (CanBuildTileSourcesOnGpu) {
             PrepareGpuTileSources(_ViewProj, _CameraPos);
@@ -884,7 +974,8 @@ namespace Smile {
         const u32 SourceCount = GpuTileSourceCandidateCount;
 
         if (!GenerateDrawsPSO || !GenerateDrawsRootSignature ||
-            !GpuInstanceBuffer || !GpuIndirectArgsBuffer || !GpuDrawBucketScratchBuffer ||
+            !GpuInstanceBuffer || !GpuIndirectArgsBuffer || !GpuIndirectCountBuffer ||
+            !GpuDrawBucketScratchBuffer ||
             !GpuTileSourceBuffer ||
             !GpuDebugCounterBuffer ||
             SourceCount == 0) {
@@ -907,7 +998,7 @@ namespace Smile {
             Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         };
 
-        D3D12_RESOURCE_BARRIER ToUAV[5]{};
+        D3D12_RESOURCE_BARRIER ToUAV[6]{};
         UINT ToUAVCount = 0;
         AppendTransition(ToUAV, ToUAVCount, GpuTileSourceBuffer.Get(),
                          GpuTileSourceBufferState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -915,6 +1006,8 @@ namespace Smile {
                          GpuInstanceBufferState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         AppendTransition(ToUAV, ToUAVCount, GpuIndirectArgsBuffer.Get(),
                          GpuIndirectArgsBufferState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        AppendTransition(ToUAV, ToUAVCount, GpuIndirectCountBuffer.Get(),
+                         GpuIndirectCountBufferState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         AppendTransition(ToUAV, ToUAVCount, GpuDrawBucketScratchBuffer.Get(),
                          GpuDrawBucketScratchState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         AppendTransition(ToUAV, ToUAVCount, GpuDebugCounterBuffer.Get(),
@@ -925,6 +1018,7 @@ namespace Smile {
         GpuTileSourceBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         GpuInstanceBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        GpuIndirectCountBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         GpuDrawBucketScratchState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         GpuDebugCounterState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
@@ -938,6 +1032,7 @@ namespace Smile {
         const u32 ScratchBase = FrameSlot * kSubsetRangeCount * 3u;
         const u32 OutputBase = TileBase;
         const u32 DebugBase = FrameSlot * kGpuDebugCounterCount;
+        const u32 CountBase = FrameSlot;
 
         auto DispatchPass = [&](u32 _PassMode, u32 _WorkItems) {
             u32 Constants[40]{};
@@ -954,6 +1049,7 @@ namespace Smile {
             Constants[10] = GpuTileBuildCameraCellX;
             Constants[11] = GpuTileBuildCameraCellZ;
             Constants[12] = DebugBase;
+            Constants[13] = CountBase;
             for (u32 Row = 0; Row < 4; ++Row) {
                 for (u32 Col = 0; Col < 4; ++Col) {
                     Constants[16u + Row * 4u + Col] =
@@ -1011,32 +1107,36 @@ namespace Smile {
                 static_cast<UINT64>(kGpuDebugCounterCount) * sizeof(u32));
         }
 
-        D3D12_RESOURCE_BARRIER ToRead[2]{};
+        D3D12_RESOURCE_BARRIER ToRead[3]{};
         UINT ToReadCount = 0;
         AppendTransition(ToRead, ToReadCount, GpuInstanceBuffer.Get(),
                          GpuInstanceBufferState, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
         AppendTransition(ToRead, ToReadCount, GpuIndirectArgsBuffer.Get(),
                          GpuIndirectArgsBufferState, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        AppendTransition(ToRead, ToReadCount, GpuIndirectCountBuffer.Get(),
+                         GpuIndirectCountBufferState, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         if (ToReadCount > 0) {
             _CommandList->ResourceBarrier(ToReadCount, ToRead);
         }
         GpuInstanceBufferState = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
         GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+        GpuIndirectCountBufferState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
     }
 
     void FWaterRenderer::RenderSurface(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
                                        u32 _SpecularCubeSRVSlot,
                                        const u32 (&_FFTDisplacementSRVSlots)[kFFTCascades],
+                                       const u32 (&_FFTPreviousDisplacementSRVSlots)[kFFTCascades],
                                        const u32 (&_FFTNormalSRVSlots)[kFFTCascades],
                                        u32 _SceneCopyTableStart,
-                                       u32 _AtmosphereSkyViewSRVSlot,
                                        D3D12_GPU_VIRTUAL_ADDRESS _CSMConstantsAddress,
-                                       u32 _SunShadowSRVSlot) {
+                                       u32 _SunShadowSRVSlot,
+                                       EOutputMode _OutputMode) {
         if (!PSO || InstanceCount == 0) return;
 
         const bool CanRenderGpuDraws =
             GenerateDrawsPSO && IndirectCommandSignature && GpuInstanceBuffer &&
-            GpuIndirectArgsBuffer && GpuDrawBucketScratchBuffer &&
+            GpuIndirectArgsBuffer && GpuIndirectCountBuffer && GpuDrawBucketScratchBuffer &&
             GpuDebugCounterBuffer &&
             MappedDrawBuckets && GpuTileSourceCandidateCount > 0;
         if (!CanRenderGpuDraws) {
@@ -1047,8 +1147,23 @@ namespace Smile {
         ID3D12DescriptorHeap* GraphicsHeaps[] = { _SRVHeap.Native() };
         _CommandList->SetDescriptorHeaps(_countof(GraphicsHeaps), GraphicsHeaps);
         _CommandList->SetGraphicsRootSignature(RootSignature.Get());
-        ID3D12PipelineState* ActivePSO =
-            (DebugMode == EDebugMode::Wireframe && WireframePSO) ? WireframePSO.Get() : PSO.Get();
+        // Wireframe tem precedencia: e visualizacao, e quem o liga quer ver a malha acima de tudo.
+        ID3D12PipelineState* ModePSO = PSO.Get();
+        if (_OutputMode == EOutputMode::Base && BasePSO)
+            ModePSO = BasePSO.Get();
+        else if (_OutputMode == EOutputMode::TemporalMasks && TemporalMasksPSO)
+            ModePSO = TemporalMasksPSO.Get();
+        else if (_OutputMode == EOutputMode::ReflectionGuides && ReflectionGuidesPSO)
+            ModePSO = ReflectionGuidesPSO.Get();
+        const bool ReflectionLayout = _OutputMode == EOutputMode::ReflectionGuides;
+        ID3D12PipelineState* ActivePSO = ModePSO;
+        if (DebugMode == EDebugMode::Wireframe) {
+            ActivePSO = ReflectionLayout && ReflectionWireframePSO
+                ? ReflectionWireframePSO.Get() : WireframePSO.Get();
+        } else if (GuideInvisible) {
+            ActivePSO = ReflectionLayout && ReflectionGuideInvisiblePSO
+                ? ReflectionGuideInvisiblePSO.Get() : GuideInvisiblePSO.Get();
+        }
         _CommandList->SetPipelineState(ActivePSO);
         _CommandList->SetGraphicsRootConstantBufferView(
             0, CBV->GetGPUVirtualAddress() + static_cast<UINT64>(FrameSlot) * sizeof(WaterConstants));
@@ -1056,22 +1171,25 @@ namespace Smile {
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[0]));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_SceneCopyTableStart));
         _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[0]));
-        _CommandList->SetGraphicsRootDescriptorTable(5, _SRVHeap.GpuHandle(_AtmosphereSkyViewSRVSlot));
-        _CommandList->SetGraphicsRootConstantBufferView(6, _CSMConstantsAddress);
-        _CommandList->SetGraphicsRootDescriptorTable(7, _SRVHeap.GpuHandle(_SunShadowSRVSlot));
-        _CommandList->SetGraphicsRootDescriptorTable(8, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[1]));
-        _CommandList->SetGraphicsRootDescriptorTable(9, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[2]));
-        _CommandList->SetGraphicsRootDescriptorTable(10, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[1]));
-        _CommandList->SetGraphicsRootDescriptorTable(11, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[2]));
+        _CommandList->SetGraphicsRootConstantBufferView(5, _CSMConstantsAddress);
+        _CommandList->SetGraphicsRootDescriptorTable(6, _SRVHeap.GpuHandle(_SunShadowSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(7, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(8, _SRVHeap.GpuHandle(_FFTDisplacementSRVSlots[2]));
+        _CommandList->SetGraphicsRootDescriptorTable(9, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(10, _SRVHeap.GpuHandle(_FFTNormalSRVSlots[2]));
+        _CommandList->SetGraphicsRootDescriptorTable(11, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[0]));
+        _CommandList->SetGraphicsRootDescriptorTable(12, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[1]));
+        _CommandList->SetGraphicsRootDescriptorTable(13, _SRVHeap.GpuHandle(_FFTPreviousDisplacementSRVSlots[2]));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         D3D12_VERTEX_BUFFER_VIEW Views[] = { VBView, GpuInstanceVBView };
         _CommandList->IASetVertexBuffers(0, _countof(Views), Views);
         _CommandList->IASetIndexBuffer(&IBView);
         const UINT64 ArgsOffset = static_cast<UINT64>(FrameSlot) *
             sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * kSubsetRangeCount;
+        const UINT64 CountOffset = static_cast<UINT64>(FrameSlot) * sizeof(u32);
         _CommandList->ExecuteIndirect(
             IndirectCommandSignature.Get(), kSubsetRangeCount,
             GpuIndirectArgsBuffer.Get(), ArgsOffset,
-            nullptr, 0);
+            GpuIndirectCountBuffer.Get(), CountOffset);
     }
 }

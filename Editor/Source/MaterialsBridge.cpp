@@ -1,11 +1,13 @@
 #include "SmileEditor/MaterialsBridge.h"
 
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Core/Logger.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 #include <QFile>
 #include <QFileDialog>
@@ -83,7 +85,7 @@ namespace SmileEditor {
 
     MaterialsBridge::MaterialsBridge(QObject* _Parent) : QAbstractListModel(_Parent) {}
 
-    void MaterialsBridge::SetRenderer(Smile::Renderer* _R) {
+    void MaterialsBridge::SetRenderer(RendererHandle _R) {
         Renderer = _R;
         emit AvailableChanged();
         Rebuild();
@@ -111,7 +113,10 @@ namespace SmileEditor {
                 ThumbByIdx.clear();
                 ThumbVersion.clear();
                 ThumbPending.clear();
+                ThumbInFlightVersion.clear();
             }
+            ThumbRequests.clear();
+            InvalidatePreview();
             DefaultEnvTried = false; // cena nova pode ter vindo de outro diretorio
 
             QFile File(JsonPath);
@@ -165,7 +170,8 @@ namespace SmileEditor {
         case RSelected:  return R.MatIdx == SelectedMat;
         case RModified: {
             if (!Renderer) return false;
-            const auto& Mats = Renderer->GetMaterials();
+            auto RendererAccess = Renderer.Lock();
+            const auto& Mats = RendererAccess->GetMaterials();
             return R.MatIdx >= 0 && R.MatIdx < (int)Mats.size() && IsModified(Mats[R.MatIdx].get());
         }
         case RThumb: {
@@ -173,7 +179,10 @@ namespace SmileEditor {
             if (ThumbByIdx.contains(R.MatIdx))
                 return QStringLiteral("image://materialthumb/%1_v%2")
                     .arg(R.MatIdx).arg(ThumbVersion.value(R.MatIdx, 0));
-            if (!ThumbPending.contains(R.MatIdx)) ThumbPending.push_back(R.MatIdx);
+            const int Version = ThumbVersion.value(R.MatIdx, 0);
+            if (!ThumbPending.contains(R.MatIdx) &&
+                ThumbInFlightVersion.value(R.MatIdx, -1) != Version)
+                ThumbPending.push_back(R.MatIdx);
             return QString();
         }
         }
@@ -195,6 +204,7 @@ namespace SmileEditor {
 
     int MaterialsBridge::TotalCount() const {
         if (!Renderer) return 0;
+        auto RendererAccess = Renderer.Lock();
         int N = 0;
         for (const auto& M : Renderer->GetMaterials())
             if (!M->Name.empty()) ++N; // proxies internos (terreno) ficam fora
@@ -233,6 +243,7 @@ namespace SmileEditor {
         beginResetModel();
         Rows.clear();
         if (Renderer) {
+            auto RendererAccess = Renderer.Lock();
             const auto& Mats = Renderer->GetMaterials();
             const auto& Rnds = Renderer->GetScene().Renderables();
 
@@ -267,11 +278,12 @@ namespace SmileEditor {
         }
         endResetModel();
         emit StructureChanged();
-        emit SelectionChanged();
+        NotifySelectionChanged();
     }
 
     void MaterialsBridge::Rebuild() {
         if (Renderer) {
+            auto RendererAccess = Renderer.Lock();
             // Snapshot do default cozido de quem ainda nao tem (cargas novas), depois
             // overrides do sidecar por nome — a ordem garante que "Reverter" volta ao cooker.
             // "Fresh" = material que ainda nao tinha snapshot, ou seja, entrou nesta carga. Numa
@@ -291,7 +303,7 @@ namespace SmileEditor {
             ApplyOverrides(Fresh);
             CachedMatCount = int(Renderer->GetMaterials().size());
             if (SelectedMat >= CachedMatCount) SelectedMat = -1;
-            MarkPreviewDirty();
+            InvalidatePreview();
             // Estrutura da cena mudou (carga aditiva): o isolar nao consegue mais mapear indice
             // -> renderable com seguranca, entao desliga. RESTAURANDO o Visible do prefixo comum:
             // limpar SavedVisibility direto deixava toda mesh de outro material invisivel p/
@@ -313,6 +325,7 @@ namespace SmileEditor {
 
     void MaterialsBridge::ApplyOverrides(const QSet<const Smile::FMaterial*>& _Fresh) {
         if (!Renderer || (OverrideCache.isEmpty() && LegacyOverrideCache.isEmpty())) return;
+        auto RendererAccess = Renderer.Lock();
         for (const auto& M : Renderer->GetMaterials()) {
             if (!_Fresh.contains(M.get())) continue; // ja carregado: nao pisa em edicao pendente
             // Id primeiro; nome so como ponte p/ sidecar v1 ainda nao migrado.
@@ -330,7 +343,7 @@ namespace SmileEditor {
             // O sidecar reescreve cor base, emissivo, rough/metal, cutoff e shading model — tudo
             // que o InstanceGeo copia. Sem isto a persistencia so valia p/ o raster: a cena reabria
             // com o material editado na tela e o GI iluminando pelos valores cozidos.
-            if (Renderer) Renderer->MarkMaterialRTStateDirty();
+            if (Renderer) Renderer->Settings().MarkMaterialRTStateDirty();
 
             // Texturas trocadas: recarrega do path e reaplica no slot (falha -> slot segue
             // no mapa cozido, so loga). Cargas aditivas pulam quem ja tem override aplicado.
@@ -361,6 +374,11 @@ namespace SmileEditor {
 
     void MaterialsBridge::Refresh() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+
+        // Poll nao bloqueante antes de qualquer early-return: alem de publicar imagens prontas,
+        // libera allocators/readbacks do ring para novas submissoes neste mesmo frame.
+        CollectPreviewResults();
 
         const int MatCount = int(Renderer->GetMaterials().size());
         if (MatCount != CachedMatCount) {
@@ -375,7 +393,7 @@ namespace SmileEditor {
             CachedSelMesh = SelMesh;
             // "Mesh da cena" segue a selecao mesmo quando o material e o mesmo.
             if (PreviewParams.Primitive == Smile::FMaterialPreview::PrimSceneMesh)
-                MarkPreviewDirty();
+                InvalidatePreview();
             const auto& Rnds = Renderer->GetScene().Renderables();
             if (SelMesh >= 0 && SelMesh < (int)Rnds.size() && Rnds[SelMesh].Material) {
                 const auto& Mats = Renderer->GetMaterials();
@@ -383,8 +401,8 @@ namespace SmileEditor {
                     if (Mats[i].get() != Rnds[SelMesh].Material) continue;
                     if (SelectedMat != i) {
                         SelectedMat = i;
-                        MarkPreviewDirty();
-                        emit SelectionChanged();
+                        InvalidatePreview();
+                        NotifySelectionChanged();
                         if (!Rows.isEmpty())
                             emit dataChanged(index(0), index(Rows.size() - 1), { RSelected });
                         const int Row = selectedRowIndex();
@@ -396,25 +414,27 @@ namespace SmileEditor {
             }
         }
 
-        // Preview: renderiza no maximo uma vez por frame do viewport, e so quando algo
-        // mudou (parametro/selecao/orbita) com a janela aberta. Thumbnails drenam na fila.
-        RenderPreviewIfNeeded();
-        ProcessThumbQueue();
+        // Um unico submit por frame: preview interativo tem prioridade e thumbnails usam a
+        // folga. Ring cheio nunca espera — o pedido permanece dirty/na fila para o proximo frame.
+        if (!SubmitPreviewIfNeeded()) ProcessThumbQueue();
     }
 
     // ---- Selecao ----
-    Smile::FMaterial* MaterialsBridge::SelMat() const {
-        if (!Renderer || SelectedMat < 0) return nullptr;
-        auto& Mats = Renderer->GetMaterials();
-        return SelectedMat < (int)Mats.size() ? Mats[SelectedMat].get() : nullptr;
+    MaterialsBridge::LockedMaterial MaterialsBridge::SelMat() const {
+        if (!Renderer || SelectedMat < 0) return {};
+        auto Access = Renderer.Lock();
+        auto& Mats = Access->GetMaterials();
+        Smile::FMaterial* Material = SelectedMat < static_cast<int>(Mats.size())
+            ? Mats[SelectedMat].get() : nullptr;
+        return LockedMaterial(std::move(Access), Material);
     }
 
     void MaterialsBridge::selectRow(int _Row) {
         if (_Row < 0 || _Row >= Rows.size()) return;
         if (SelectedMat == Rows[_Row].MatIdx) return;
         SelectedMat = Rows[_Row].MatIdx;
-        MarkPreviewDirty();
-        emit SelectionChanged();
+        InvalidatePreview();
+        NotifySelectionChanged();
         emit dataChanged(index(0), index(Rows.size() - 1), { RSelected });
         if (IsolatingOn) ApplyIsolation(); // isolar segue o material selecionado
     }
@@ -425,15 +445,15 @@ namespace SmileEditor {
         return -1;
     }
 
-    bool MaterialsBridge::HasSelection() const { return SelMat() != nullptr; }
+    bool MaterialsBridge::HasSelection() const { return static_cast<bool>(SelMat()); }
 
     QString MaterialsBridge::Name() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? QString::fromStdString(M->Name) : QString();
     }
 
     int MaterialsBridge::MeshCount() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         if (!M || !Renderer) return 0;
         int N = 0;
         for (const auto& R : Renderer->GetScene().Renderables())
@@ -445,7 +465,7 @@ namespace SmileEditor {
         const int Row = selectedRowIndex();
         if (Row < 0) {
             // Selecao filtrada pra fora da lista: recalcula direto.
-            const auto* M = SelMat();
+            const auto M = SelMat();
             if (!M) return {};
             quint64 Bytes = 0;
             const Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {
@@ -462,38 +482,76 @@ namespace SmileEditor {
     // Todos os setters seguem o mesmo esquema: muta Constants (ou flag), UpdateConstants()
     // (memcpy no CBV upload mapeado) e TouchSelected() — o proximo frame ja desenha o novo.
 
-    void MaterialsBridge::TouchSelected() {
+    void MaterialsBridge::NotifySelectionChanged() {
+        emit SelectionChanged();
+        emit SurfaceChanged();
+        emit NormalParallaxChanged();
+        emit MaterialModeChanged();
+        emit TextureSlotsChanged();
+        emit MaterialStateChanged();
+    }
+
+    void MaterialsBridge::TouchSelected(EChangeDomain _Domain) {
         MarkDirty();
+        // Edicao de slider/cor tambem e continua: frames anteriores do MESMO material ainda
+        // sao uteis enquanto o ring alcanca o valor mais novo. FMaterialPreview fotografa o CB
+        // por slot, portanto nao ha disputa com UpdateConstants() durante o voo.
         MarkPreviewDirty();
         InvalidateThumb(SelectedMat); // thumbnail do browser acompanha a edicao
-        emit SelectionChanged();
+        switch (_Domain) {
+        case EChangeDomain::Surface:        emit SurfaceChanged();        break;
+        case EChangeDomain::NormalParallax: emit NormalParallaxChanged(); break;
+        case EChangeDomain::MaterialMode:   emit MaterialModeChanged();   break;
+        case EChangeDomain::Textures:       emit TextureSlotsChanged();   break;
+        case EChangeDomain::All:
+            emit SurfaceChanged();
+            emit NormalParallaxChanged();
+            emit MaterialModeChanged();
+            emit TextureSlotsChanged();
+            break;
+        }
+        emit MaterialStateChanged();
+
         const int Row = selectedRowIndex();
         if (Row >= 0) {
-            // Badges/swatch/VRAM/dot podem mudar com a edicao.
+            const bool UpdateSurface = _Domain == EChangeDomain::Surface ||
+                                       _Domain == EChangeDomain::All;
+            const bool UpdateMode = _Domain == EChangeDomain::MaterialMode ||
+                                    _Domain == EChangeDomain::All;
+            const bool UpdateTextures = _Domain == EChangeDomain::Textures ||
+                                        _Domain == EChangeDomain::All;
             auto& R = Rows[Row];
-            if (const auto* M = SelMat()) {
-                R.Badges = BadgesOf(*M);
-                const auto& B = M->Constants.BaseColorFactor;
-                R.Swatch = QColor::fromRgbF(std::clamp(B.X, 0.0f, 1.0f),
-                                            std::clamp(B.Y, 0.0f, 1.0f),
-                                            std::clamp(B.Z, 0.0f, 1.0f));
-                R.VramBytes = 0;
-                const Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {
-                    M->Albedo, M->Normal, M->MetallicRoughness, M->AO,
-                    M->Emissive, M->Height, M->Metalness, M->Roughness };
-                for (const auto* T : Slots)
-                    if (T) R.VramBytes += TextureBytes(*T);
+            if (const auto M = SelMat()) {
+                if (UpdateSurface || UpdateMode || UpdateTextures)
+                    R.Badges = BadgesOf(*M);
+                if (UpdateSurface) {
+                    const auto& B = M->Constants.BaseColorFactor;
+                    R.Swatch = QColor::fromRgbF(std::clamp(B.X, 0.0f, 1.0f),
+                                                std::clamp(B.Y, 0.0f, 1.0f),
+                                                std::clamp(B.Z, 0.0f, 1.0f));
+                }
+                if (UpdateTextures) {
+                    R.VramBytes = 0;
+                    const Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {
+                        M->Albedo, M->Normal, M->MetallicRoughness, M->AO,
+                        M->Emissive, M->Height, M->Metalness, M->Roughness };
+                    for (const auto* T : Slots)
+                        if (T) R.VramBytes += TextureBytes(*T);
+                }
             }
-            emit dataChanged(index(Row), index(Row),
-                             { RBadges, RSwatch, RVramText, RModified });
+            QList<int> Roles{ RModified };
+            if (UpdateSurface || UpdateMode || UpdateTextures) Roles.push_back(RBadges);
+            if (UpdateSurface) Roles.push_back(RSwatch);
+            if (UpdateTextures) Roles.push_back(RVramText);
+            emit dataChanged(index(Row), index(Row), Roles);
         }
     }
 
-    void MaterialsBridge::TouchSelectedRT() {
-        TouchSelected();
+    void MaterialsBridge::TouchSelectedRT(EChangeDomain _Domain) {
+        TouchSelected(_Domain);
         // Coalescido: o Renderer aplica uma vez no proximo frame. Chamar o Notify direto aqui
         // custaria um Flush da fila + reset de todos os historicos POR TICK de slider.
-        if (Renderer) Renderer->MarkMaterialRTStateDirty();
+        if (Renderer) Renderer->Settings().MarkMaterialRTStateDirty();
     }
 
     void MaterialsBridge::MarkDirty() {
@@ -501,7 +559,7 @@ namespace SmileEditor {
     }
 
     QColor MaterialsBridge::BaseColor() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         if (!M) return QColor(255, 255, 255);
         const auto& B = M->Constants.BaseColorFactor;
         return QColor::fromRgbF(std::clamp(B.X, 0.0f, 1.0f), std::clamp(B.Y, 0.0f, 1.0f),
@@ -509,39 +567,39 @@ namespace SmileEditor {
     }
 
     void MaterialsBridge::SetBaseColor(const QColor& _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         auto& B = M->Constants.BaseColorFactor;
         B.X = float(_V.redF()); B.Y = float(_V.greenF()); B.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.BaseColor = albedo do GI/reflexo
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.BaseColor = albedo do GI/reflexo
     }
 
     qreal MaterialsBridge::Metallic() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? M->Constants.MetallicFactor : 0.0;
     }
 
     void MaterialsBridge::SetMetallic(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.MetallicFactor = float(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.EmissiveFactor.w
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.EmissiveFactor.w
     }
 
     qreal MaterialsBridge::Roughness() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? M->Constants.RoughnessFactor : 0.5;
     }
 
     void MaterialsBridge::SetRoughness(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.RoughnessFactor = float(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.RoughnessFactor
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.RoughnessFactor
     }
 
     QColor MaterialsBridge::EmissiveColor() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         if (!M) return QColor(0, 0, 0);
         const auto& E = M->Constants.EmissiveFactor;
         return QColor::fromRgbF(std::clamp(E.X, 0.0f, 1.0f), std::clamp(E.Y, 0.0f, 1.0f),
@@ -549,201 +607,215 @@ namespace SmileEditor {
     }
 
     void MaterialsBridge::SetEmissiveColor(const QColor& _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         auto& E = M->Constants.EmissiveFactor;
         E.X = float(_V.redF()); E.Y = float(_V.greenF()); E.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.EmissiveFactor.rgb — o emissivo ILUMINA o GI
+        TouchSelectedRT(EChangeDomain::Surface); // InstanceGeo.EmissiveFactor.rgb — o emissivo ILUMINA o GI
     }
 
     qreal MaterialsBridge::EmissiveStrength() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? M->Constants.EmissiveStrength : 1.0;
     }
 
     void MaterialsBridge::SetEmissiveStrength(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.EmissiveStrength = float(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // multiplica o EmissiveFactor no InstanceGeo
+        TouchSelectedRT(EChangeDomain::Surface); // multiplica o EmissiveFactor no InstanceGeo
+    }
+
+    qreal MaterialsBridge::RTEmissiveScale() const {
+        const auto M = SelMat();
+        return M ? M->Constants.RTEmissiveScale : 1.0;
+    }
+
+    void MaterialsBridge::SetRTEmissiveScale(qreal _V) {
+        auto M = SelMat(); if (!M) return;
+        // Teto em 1: o objetivo e devolver o emissivo ao papel decorativo, nao inflar o indireto
+        // acima do que a superficie mostra. Quem quer mais energia sobe o EmissiveStrength.
+        M->Constants.RTEmissiveScale = float(std::clamp(_V, 0.0, 1.0));
+        M->UpdateConstants();
+        TouchSelectedRT(EChangeDomain::Surface); // reempacota o InstanceGeo: e la que a escala entra
     }
 
     qreal MaterialsBridge::NormalStrength() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? M->Constants.NormalStrength : 1.0;
     }
 
     void MaterialsBridge::SetNormalStrength(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.NormalStrength = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::NormalFlipY() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Constants.NormalFlipY != 0;
     }
 
     void MaterialsBridge::SetNormalFlipY(bool _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.NormalFlipY = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::NormalReconstructZ() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Constants.NormalReconstructZ != 0;
     }
 
     void MaterialsBridge::SetNormalReconstructZ(bool _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.NormalReconstructZ = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::HasNormalMap() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Constants.HasNormalMap != 0;
     }
 
     bool MaterialsBridge::HasHeightMap() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Constants.HasHeightMap != 0;
     }
 
     qreal MaterialsBridge::HeightScale() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? M->Constants.HeightScale : 0.05;
     }
 
     void MaterialsBridge::SetHeightScale(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.HeightScale = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     int MaterialsBridge::ParallaxMinSteps() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? int(M->Constants.ParallaxMinSteps) : 8;
     }
 
     void MaterialsBridge::SetParallaxMinSteps(int _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.ParallaxMinSteps = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     int MaterialsBridge::ParallaxMaxSteps() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? int(M->Constants.ParallaxMaxSteps) : 32;
     }
 
     void MaterialsBridge::SetParallaxMaxSteps(int _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.ParallaxMaxSteps = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::ParallaxSelfShadow() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Constants.ParallaxSelfShadow != 0;
     }
 
     void MaterialsBridge::SetParallaxSelfShadow(bool _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.ParallaxSelfShadow = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::ParallaxRefine() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Constants.ParallaxRefine != 0;
     }
 
     void MaterialsBridge::SetParallaxRefine(bool _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.ParallaxRefine = _V ? 1 : 0;
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::NormalParallax);
     }
 
     bool MaterialsBridge::AlphaTest() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Constants.AlphaTest != 0;
     }
 
     void MaterialsBridge::SetAlphaTest(bool _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.AlphaTest = _V ? 1 : 0;
         M->UpdateConstants();
         // AlphaTest nao e so raster: decide a InstanceMask e o FORCE_NON_OPAQUE da TLAS, entra no
         // criterio de culling (IsTwoSidedForRT) e vive no snapshot do InstanceGeo. Sem isto o RT
         // seguia com o estado do load.
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     qreal MaterialsBridge::AlphaCutoff() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? M->Constants.AlphaCutoff : 0.5;
     }
 
     void MaterialsBridge::SetAlphaCutoff(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.AlphaCutoff = float(_V);
         M->UpdateConstants();
         // InstanceGeo.AlphaCutoff: e o cutoff que o alpha-test dos RAIOS usa (RTAlphaTest.hlsli).
         // O toggle AlphaTest ja sincronizava; o VALOR nao — recorte do raster e do raio divergiam.
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     bool MaterialsBridge::BlendFlag() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->Blend;
     }
 
     void MaterialsBridge::SetBlendFlag(bool _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Blend = _V; // por-draw no Renderer: sai do G-buffer e entra no passe forward
         // No RT, Blend escolhe a CATEGORIA da instancia na TLAS (kRTMaskTranslucent): translucido
         // sai do gather do GI. Isso mora na TLAS, nao no constant buffer do material — sem o
         // rebuild, o material vira vidro no raster e continua opaco para a iluminacao indireta.
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     bool MaterialsBridge::TwoSided() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && M->TwoSided;
     }
 
     void MaterialsBridge::SetTwoSided(bool _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->TwoSided = _V; // PSO escolhido por draw, por frame
         // No RT nao e por draw: alimenta o culling da instancia na TLAS e o TwoSidedRT do
         // InstanceGeo (que decide se um hit pelo verso conta como "dentro de solido").
-        TouchSelectedRT();
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     int MaterialsBridge::ShadingModel() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? int(M->Constants.ShadingModel) : 0;
     }
 
     void MaterialsBridge::SetShadingModel(int _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.ShadingModel = Smile::u32(_V);
         M->UpdateConstants();
-        TouchSelectedRT(); // InstanceGeo.Flags bit FOLIAGE (ShadingModel == 1)
+        TouchSelectedRT(EChangeDomain::MaterialMode); // InstanceGeo.Flags bit FOLIAGE (ShadingModel == 1)
     }
 
     QColor MaterialsBridge::SubsurfaceColor() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         if (!M) return QColor(255, 255, 255);
         const auto& S = M->Constants.SubsurfaceColor;
         return QColor::fromRgbF(std::clamp(S.X, 0.0f, 1.0f), std::clamp(S.Y, 0.0f, 1.0f),
@@ -751,28 +823,28 @@ namespace SmileEditor {
     }
 
     void MaterialsBridge::SetSubsurfaceColor(const QColor& _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         auto& S = M->Constants.SubsurfaceColor;
         S.X = float(_V.redF()); S.Y = float(_V.greenF()); S.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::MaterialMode);
     }
 
     qreal MaterialsBridge::SubsurfaceIntensity() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M ? M->Constants.SubsurfaceColor.W : 0.0;
     }
 
     void MaterialsBridge::SetSubsurfaceIntensity(qreal _V) {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         M->Constants.SubsurfaceColor.W = float(_V);
         M->UpdateConstants();
-        TouchSelected();
+        TouchSelected(EChangeDomain::MaterialMode);
     }
 
     QVariantList MaterialsBridge::TextureSlots() const {
         QVariantList Out;
-        const auto* M = SelMat();
+        const auto M = SelMat();
         static const char* Labels[Smile::kMaterialTextureSlots] = {
             "Albedo", "Normal", "MetalRough", "AO", "Emissivo", "Height", "Metal", "Rough" };
         const Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {
@@ -857,7 +929,7 @@ namespace SmileEditor {
         // HasAlbedo governa o alpha-test dos RAIOS (RTAlphaTest.hlsli desiste quando e 0). Sem
         // re-subir o snapshot: adicionar albedo num material sem textura deixava a folhagem como
         // quad solido so no RT, e limpar o slot mantinha o raio amostrando o descritor antigo.
-        if (Renderer) Renderer->MarkMaterialRTStateDirty();
+        if (Renderer) Renderer->Settings().MarkMaterialRTStateDirty();
     }
 
     Smile::FTexture* MaterialsBridge::LoadTextureCached(const QString& _Path, int _Slot) {
@@ -877,7 +949,7 @@ namespace SmileEditor {
     }
 
     void MaterialsBridge::browseSlotTexture(int _Slot) {
-        auto* M = SelMat();
+        auto M = SelMat();
         if (!M || _Slot < 0 || _Slot >= int(Smile::kMaterialTextureSlots)) return;
 
         static const char* Labels[Smile::kMaterialTextureSlots] = {
@@ -901,21 +973,21 @@ namespace SmileEditor {
         }
         ApplySlotTexture(*M, _Slot, T);
         TexOverrides[M][_Slot] = File;
-        TouchSelected();
+        TouchSelected(EChangeDomain::Textures);
     }
 
     void MaterialsBridge::clearSlot(int _Slot) {
-        auto* M = SelMat();
+        auto M = SelMat();
         if (!M || _Slot < 0 || _Slot >= int(Smile::kMaterialTextureSlots)) return;
         ApplySlotTexture(*M, _Slot, nullptr);
         // "" no override = slot explicitamente limpo (sobrevive ao save/load).
         TexOverrides[M][_Slot] = QString();
-        TouchSelected();
+        TouchSelected(EChangeDomain::Textures);
     }
 
     // ---- Selecionar/isolar na cena (F2) ----
     void MaterialsBridge::selectInScene() {
-        auto* M = SelMat();
+        auto M = SelMat();
         if (!M || !Renderer) return;
         const auto& Rnds = Renderer->GetScene().Renderables();
         for (int i = 0; i < (int)Rnds.size(); ++i) {
@@ -928,7 +1000,7 @@ namespace SmileEditor {
     }
 
     void MaterialsBridge::ApplyIsolation() {
-        auto* M = SelMat();
+        auto M = SelMat();
         if (!Renderer || !M) return;
         auto& Rnds = Renderer->GetScene().Renderables();
         if (SavedVisibility.size() != (qsizetype)Rnds.size()) return;
@@ -946,6 +1018,7 @@ namespace SmileEditor {
         if (!IsolatingOn) return;
         IsolatingOn = false;
         if (Renderer) {
+            auto RendererAccess = Renderer.Lock();
             // Prefixo comum: em carga aditiva o vetor cresceu, mas os N primeiros renderables
             // continuam sendo os mesmos objetos — restaurar o que da e melhor que largar tudo
             // escondido. Os novos ja entram com o Visible que o loader definiu.
@@ -968,13 +1041,15 @@ namespace SmileEditor {
     void MaterialsBridge::SetPreviewPrimitive(int _V) {
         if (_V < 0 || _V > 4 || PreviewParams.Primitive == _V) return;
         PreviewParams.Primitive = _V;
-        PreviewDirty = true;
+        InvalidatePreview();
         emit PreviewParamsChanged();
     }
 
     void MaterialsBridge::SetPreviewEnabled(bool _On) {
+        if (PreviewEnabledFlag == _On) return;
         PreviewEnabledFlag = _On;
-        if (_On) PreviewDirty = true;
+        InvalidatePreview();
+        if (!_On) PreviewDirty = false;
     }
 
     QImage MaterialsBridge::PreviewImageCopy() const {
@@ -989,53 +1064,60 @@ namespace SmileEditor {
 
     void MaterialsBridge::InvalidateThumb(int _MatIdx) {
         QMutexLocker Lock(&ThumbMutex);
-        if (!ThumbByIdx.remove(_MatIdx)) return;
+        ThumbByIdx.remove(_MatIdx);
         ++ThumbVersion[_MatIdx];
+        // Pode haver uma versao antiga em voo. A nova fica pendente em paralelo e o resultado
+        // antigo sera descartado pela versao capturada no momento da submissao.
         if (!ThumbPending.contains(_MatIdx)) ThumbPending.push_back(_MatIdx);
     }
 
     void MaterialsBridge::ProcessThumbQueue() {
         if (!PreviewEnabledFlag || !Renderer) return;
+        auto RendererAccess = Renderer.Lock();
 
-        // Ate 2 por frame do viewport: cada thumb e um render sincrono de ~1-2ms; o
-        // browser inteiro (200+ materiais) preenche em poucos segundos sem travar a GUI.
-        for (int Budget = 0; Budget < 2; ++Budget) {
-            int MatIdx = -1;
+        // Reserva uma versao antes do submit: data() roda tambem na render thread do QML e nao
+        // pode re-enfileirar a mesma versao enquanto o readback estiver em voo.
+        FThumbRequest Job;
+        auto& Mats = Renderer->GetMaterials();
+        for (;;) {
             {
                 QMutexLocker Lock(&ThumbMutex);
                 if (ThumbPending.isEmpty()) return;
-                MatIdx = ThumbPending.takeFirst();
-                if (ThumbByIdx.contains(MatIdx)) { --Budget; continue; }
+                Job.MatIdx  = ThumbPending.takeFirst();
+                Job.Version = ThumbVersion.value(Job.MatIdx, 0);
+                if (ThumbByIdx.contains(Job.MatIdx) ||
+                    ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
+                    continue;
+                ThumbInFlightVersion.insert(Job.MatIdx, Job.Version);
             }
-            auto& Mats = Renderer->GetMaterials();
-            if (MatIdx < 0 || MatIdx >= (int)Mats.size()) continue;
+            if (Job.MatIdx >= 0 && Job.MatIdx < (int)Mats.size()) break;
+            QMutexLocker Lock(&ThumbMutex);
+            if (ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
+                ThumbInFlightVersion.remove(Job.MatIdx);
+        }
 
-            EnsureDefaultEnv();
+        EnsureDefaultEnv();
 
-            Smile::FMaterialPreview::FParams P; // esfera, angulo default
-            P.TransparentBackground = true;     // estilo UE: so a esfera, sem o ceu
-            P.Dist = 1.45f;                     // enquadramento apertado pro icone
-            std::vector<Smile::u8> Pixels;
-            if (!Renderer->RenderMaterialPreview(Mats[MatIdx].get(), P, Pixels))
-                return; // infra indisponivel: para a fila (re-enfileira via data())
+        Smile::FMaterialPreview::FParams P; // esfera, angulo default
+        P.TransparentBackground = true;     // estilo UE: so a esfera, sem o ceu
+        P.Dist = 1.45f;                     // enquadramento apertado pro icone
+        P.RenderSize = Smile::FMaterialPreview::kThumbnailSize;
+        const quint64 RequestId = NextPreviewRequestId++;
+        const auto Submit = Renderer->SubmitMaterialPreview(
+            Mats[Job.MatIdx].get(), P, RequestId);
+        if (Submit == Smile::FMaterialPreview::ESubmitResult::Submitted) {
+            ThumbRequests.insert(RequestId, Job);
+            return;
+        }
 
-            // Premultiplied antes do scale: downscale em alpha reto faria franja escura
-            // na borda da esfera contra o fundo transparente. Dois passos (fast 256 ->
-            // smooth 96): smooth direto de 1024 custaria ~10ms por thumb na fila.
-            const int Size = int(Smile::FMaterialPreview::kSize);
-            QImage Thumb = QImage(Pixels.data(), Size, Size, QImage::Format_RGBA8888)
-                               .convertToFormat(QImage::Format_ARGB32_Premultiplied)
-                               .scaled(256, 256, Qt::KeepAspectRatio, Qt::FastTransformation)
-                               .scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            {
-                QMutexLocker Lock(&ThumbMutex);
-                ThumbByIdx.insert(MatIdx, Thumb);
-            }
-            for (int Row = 0; Row < Rows.size(); ++Row) {
-                if (Rows[Row].MatIdx != MatIdx) continue;
-                emit dataChanged(index(Row), index(Row), { RThumb });
-                break;
-            }
+        {
+            QMutexLocker Lock(&ThumbMutex);
+            if (ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
+                ThumbInFlightVersion.remove(Job.MatIdx);
+            if (Submit == Smile::FMaterialPreview::ESubmitResult::Busy &&
+                ThumbVersion.value(Job.MatIdx, 0) == Job.Version &&
+                !ThumbPending.contains(Job.MatIdx))
+                ThumbPending.prepend(Job.MatIdx);
         }
     }
 
@@ -1043,18 +1125,18 @@ namespace SmileEditor {
         PreviewParams.Yaw   += float(_Dx) * 0.01f;
         PreviewParams.Pitch  = std::clamp(PreviewParams.Pitch + float(_Dy) * 0.01f,
                                           -1.45f, 1.45f);
-        PreviewDirty = true;
+        MarkPreviewDirty();
     }
 
     void MaterialsBridge::zoomPreview(qreal _Steps) {
         PreviewParams.Dist = std::clamp(PreviewParams.Dist * std::pow(0.9f, float(_Steps)),
                                         0.7f, 8.0f);
-        PreviewDirty = true;
+        MarkPreviewDirty();
     }
 
     void MaterialsBridge::rotatePreviewEnv(qreal _Dx) {
         PreviewParams.EnvRotation += float(_Dx) * 0.01f;
-        PreviewDirty = true;
+        MarkPreviewDirty();
     }
 
     void MaterialsBridge::browsePreviewHdri() {
@@ -1072,7 +1154,7 @@ namespace SmileEditor {
                             File.toStdString());
             return;
         }
-        PreviewDirty = true;
+        InvalidatePreview();
         emit PreviewUpdated(); // previewReady pode ter mudado
     }
 
@@ -1093,32 +1175,103 @@ namespace SmileEditor {
 #endif
     }
 
-    void MaterialsBridge::RenderPreviewIfNeeded() {
-        if (!PreviewEnabledFlag || !PreviewDirty || !Renderer) return;
-        auto* M = SelMat();
-        if (!M) return;
+    void MaterialsBridge::CollectPreviewResults() {
+        Smile::FMaterialPreview::FResult Result;
+        Smile::FMaterialPreview::FResult NewestPreview;
+        bool HasNewestPreview = false;
+        while (Renderer && Renderer->ConsumeMaterialPreview(Result)) {
+            auto ThumbIt = ThumbRequests.find(Result.RequestId);
+            if (ThumbIt != ThumbRequests.end()) {
+                const FThumbRequest Job = ThumbIt.value();
+                ThumbRequests.erase(ThumbIt);
+
+                QImage Thumb;
+                const size_t Expected = static_cast<size_t>(Result.Size) * Result.Size * 4u;
+                if (Result.Size > 0 && Result.Pixels.size() == Expected) {
+                    // Premultiplied antes do scale: downscale em alpha reto faria franja escura
+                    // na borda da esfera contra o fundo transparente.
+                    Thumb = QImage(Result.Pixels.data(), int(Result.Size), int(Result.Size),
+                                   QImage::Format_RGBA8888)
+                                .convertToFormat(QImage::Format_ARGB32_Premultiplied)
+                                .scaled(96, 96, Qt::KeepAspectRatio,
+                                        Qt::SmoothTransformation);
+                }
+
+                bool Published = false;
+                {
+                    QMutexLocker Lock(&ThumbMutex);
+                    if (ThumbInFlightVersion.value(Job.MatIdx, -1) == Job.Version)
+                        ThumbInFlightVersion.remove(Job.MatIdx);
+                    if (!Thumb.isNull() &&
+                        ThumbVersion.value(Job.MatIdx, 0) == Job.Version) {
+                        ThumbByIdx.insert(Job.MatIdx, Thumb);
+                        Published = true;
+                    } else if (ThumbVersion.value(Job.MatIdx, 0) != Job.Version &&
+                               !ThumbPending.contains(Job.MatIdx)) {
+                        ThumbPending.push_back(Job.MatIdx);
+                    }
+                }
+                if (Published) {
+                    for (int Row = 0; Row < Rows.size(); ++Row) {
+                        if (Rows[Row].MatIdx != Job.MatIdx) continue;
+                        emit dataChanged(index(Row), index(Row), { RThumb });
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            auto PreviewIt = PreviewRequests.find(Result.RequestId);
+            if (PreviewIt == PreviewRequests.end()) continue;
+            const quint64 ResultEpoch = PreviewIt.value();
+            PreviewRequests.erase(PreviewIt);
+
+            // Durante orbit/zoom, um frame concluido continua util mesmo que exista uma camera
+            // mais nova em voo. Invalidation estrutural troca o epoch e continua latest-wins.
+            if (!PreviewEnabledFlag || ResultEpoch != PreviewEpoch) continue;
+            if (!HasNewestPreview || Result.RequestId > NewestPreview.RequestId) {
+                NewestPreview = std::move(Result);
+                HasNewestPreview = true;
+            }
+        }
+
+        if (HasNewestPreview) {
+            const size_t Expected = static_cast<size_t>(NewestPreview.Size) *
+                                    NewestPreview.Size * 4u;
+            if (NewestPreview.Size == 0 || NewestPreview.Pixels.size() != Expected) return;
+            {
+                QMutexLocker Lock(&PreviewMutex);
+                PreviewImg = QImage(NewestPreview.Pixels.data(), int(NewestPreview.Size),
+                                    int(NewestPreview.Size), QImage::Format_RGBA8888).copy();
+            }
+            ++PreviewSeqN;
+            emit PreviewUpdated();
+        }
+    }
+
+    bool MaterialsBridge::SubmitPreviewIfNeeded() {
+        if (!PreviewEnabledFlag || !PreviewDirty || !Renderer) return false;
+        auto M = SelMat();
+        if (!M) return false;
 
         EnsureDefaultEnv();
 
-        std::vector<Smile::u8> Pixels;
-        if (!Renderer->RenderMaterialPreview(M, PreviewParams, Pixels)) {
+        const quint64 RequestId = NextPreviewRequestId++;
+        const auto Submit = Renderer->SubmitMaterialPreview(M, PreviewParams, RequestId);
+        if (Submit == Smile::FMaterialPreview::ESubmitResult::Failed) {
             PreviewDirty = false; // infra indisponivel: nao insistir todo frame
-            return;
+            return false;
         }
-        {
-            QMutexLocker Lock(&PreviewMutex);
-            PreviewImg = QImage(Pixels.data(),
-                                int(Smile::FMaterialPreview::kSize),
-                                int(Smile::FMaterialPreview::kSize),
-                                QImage::Format_RGBA8888).copy();
-        }
+        if (Submit == Smile::FMaterialPreview::ESubmitResult::Busy) return false;
+
         PreviewDirty = false;
-        ++PreviewSeqN;
-        emit PreviewUpdated();
+        PreviewRequests.insert(RequestId, PreviewEpoch);
+        return true;
     }
 
     void MaterialsBridge::setIsolate(bool _On) {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         auto& Rnds = Renderer->GetScene().Renderables();
         if (_On) {
             if (!SelMat()) return;
@@ -1136,12 +1289,12 @@ namespace SmileEditor {
     }
 
     bool MaterialsBridge::SelectedModified() const {
-        const auto* M = SelMat();
+        const auto M = SelMat();
         return M && IsModified(M);
     }
 
     void MaterialsBridge::resetSelected() {
-        auto* M = SelMat(); if (!M) return;
+        auto M = SelMat(); if (!M) return;
         const auto It = Defaults.constFind(M);
         if (It == Defaults.constEnd()) return;
         M->Constants = It.value().C;
@@ -1161,7 +1314,7 @@ namespace SmileEditor {
         // O override salvo (se houver) tambem cai — senao voltaria no proximo load.
         OverrideCache.remove(M->Id);
         LegacyOverrideCache.remove(QString::fromStdString(M->Name));
-        TouchSelectedRT(); // reverte TUDO, inclusive os campos que o RT le
+        TouchSelectedRT(EChangeDomain::All); // reverte TUDO, inclusive os campos que o RT le
     }
 
     // ---- Persistencia (<cena>.materials.json) ----
@@ -1177,6 +1330,7 @@ namespace SmileEditor {
         // usuario nao tem mais como ajustar nem reverter pela UI. JsonToMaterial tambem o ignora.
         O[QStringLiteral("emissive")]           = ColorToJson(C.EmissiveFactor.X, C.EmissiveFactor.Y, C.EmissiveFactor.Z);
         O[QStringLiteral("emissiveStrength")]   = C.EmissiveStrength;
+        O[QStringLiteral("rtEmissiveScale")]    = C.RTEmissiveScale;
         O[QStringLiteral("normalStrength")]     = C.NormalStrength;
         O[QStringLiteral("normalFlipY")]        = C.NormalFlipY != 0;
         O[QStringLiteral("normalReconstructZ")] = C.NormalReconstructZ != 0;
@@ -1223,6 +1377,13 @@ namespace SmileEditor {
         // "aoStrength" de sidecar antigo e ignorado de proposito (ver MaterialToJson).
         Color3("emissive", C.EmissiveFactor.X, C.EmissiveFactor.Y, C.EmissiveFactor.Z);
         Num("emissiveStrength", C.EmissiveStrength);
+        // Ausente em sidecar antigo => fica no default 1.0 do struct: emissivo segue iluminando
+        // cheio no RT, que e o comportamento de hoje. Nada muda sem alguem mexer.
+        Num("rtEmissiveScale", C.RTEmissiveScale);
+        // Clamp na fronteira de entrada, e nao so no setter: sidecar e arquivo editavel a mao.
+        // Negativo chegaria ao InstanceGeo e viraria EMISSAO NEGATIVA no hit shader (o emissivo
+        // entra somando, sem saturate); acima de 1 furaria o teto deliberado do recurso.
+        C.RTEmissiveScale = std::clamp(C.RTEmissiveScale, 0.0f, 1.0f);
         Num("normalStrength", C.NormalStrength);
         Flag("normalFlipY", C.NormalFlipY);
         Flag("normalReconstructZ", C.NormalReconstructZ);
@@ -1250,6 +1411,7 @@ namespace SmileEditor {
 
     bool MaterialsBridge::saveMaterials() {
         if (!Renderer || JsonPath.isEmpty()) return false;
+        auto RendererAccess = Renderer.Lock();
 
         // Overrides = materiais que divergem do default cozido AGORA. O cache tambem e
         // atualizado: um material revertido some do arquivo.

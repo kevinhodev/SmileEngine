@@ -1,5 +1,6 @@
 #include "SmileEditor/LightsBridge.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 
@@ -38,7 +39,7 @@ namespace SmileEditor {
 
     LightsBridge::LightsBridge(QObject* _Parent) : QObject(_Parent) {}
 
-    void LightsBridge::SetRenderer(Smile::Renderer* _Renderer) {
+    void LightsBridge::SetRenderer(RendererHandle _Renderer) {
         Renderer = _Renderer;
         emit AvailableChanged();
         emit LightsChanged();
@@ -47,17 +48,52 @@ namespace SmileEditor {
     }
 
     // ---- Acesso ----
-    static std::vector<Smile::FLight>& LightsOf(Smile::Renderer* _R) {
-        static std::vector<Smile::FLight> Empty;
-        return _R ? _R->GetScene().Lights() : Empty;
-    }
+    class LockedLights {
+    public:
+        explicit LockedLights(const RendererHandle& _Renderer)
+            : Access(_Renderer ? _Renderer.Lock() : RendererHandle::Access{}) {
+            if (Access) Value = &Access->GetScene().Lights();
+        }
 
-    // Luz selecionada ou nullptr (sem renderer / indice invalido).
-    static Smile::FLight* SelOf(Smile::Renderer* _R) {
-        if (!_R) return nullptr;
-        auto& L = _R->GetScene().Lights();
-        const int I = _R->GetSelectedLight();
-        return (I >= 0 && I < (int)L.size()) ? &L[(size_t)I] : nullptr;
+        explicit operator bool() const { return Value != nullptr; }
+        std::vector<Smile::FLight>* operator->() const { return Value; }
+        Smile::FLight& operator[](size_t _Index) const { return (*Value)[_Index]; }
+        size_t size() const { return Value ? Value->size() : 0; }
+        auto begin() const { return Value ? Value->begin() : Empty().begin(); }
+        auto end() const { return Value ? Value->end() : Empty().end(); }
+
+    private:
+        static std::vector<Smile::FLight>& Empty() {
+            static std::vector<Smile::FLight> EmptyLights;
+            return EmptyLights;
+        }
+
+        RendererHandle::Access      Access;
+        std::vector<Smile::FLight>* Value = nullptr;
+    };
+
+    class LockedSelectedLight {
+    public:
+        explicit LockedSelectedLight(const RendererHandle& _Renderer)
+            : Access(_Renderer ? _Renderer.Lock() : RendererHandle::Access{}) {
+            if (!Access) return;
+            auto& Lights = Access->GetScene().Lights();
+            const int Index = Access->GetSelectedLight();
+            if (Index >= 0 && Index < static_cast<int>(Lights.size()))
+                Value = &Lights[static_cast<size_t>(Index)];
+        }
+
+        explicit operator bool() const { return Value != nullptr; }
+        Smile::FLight* operator->() const { return Value; }
+
+    private:
+        RendererHandle::Access Access;
+        Smile::FLight*         Value = nullptr;
+    };
+
+    static LockedLights LightsOf(const RendererHandle& _R) { return LockedLights(_R); }
+    static LockedSelectedLight SelOf(const RendererHandle& _R) {
+        return LockedSelectedLight(_R);
     }
 
     int LightsBridge::Count() const         { return (int)LightsOf(Renderer).size(); }
@@ -68,45 +104,46 @@ namespace SmileEditor {
     }
 
     QString LightsBridge::Name() const {
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         return L ? QString::fromStdString(L->Name) : QString();
     }
     int LightsBridge::LightType() const {
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         return (L && L->Type == Smile::ELightType::Spot) ? 1 : 0;
     }
     bool LightsBridge::LightEnabled() const {
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         return L ? L->Enabled : false;
     }
     bool LightsBridge::CastShadows() const {
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         return L ? L->CastShadows : true;
     }
     QColor LightsBridge::Color() const {
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         if (!L) return QColor(255, 255, 255);
         return QColor::fromRgbF(std::clamp(L->Color.X, 0.0f, 1.0f),
                                 std::clamp(L->Color.Y, 0.0f, 1.0f),
                                 std::clamp(L->Color.Z, 0.0f, 1.0f));
     }
-    double LightsBridge::Intensity() const    { const auto* L = SelOf(Renderer); return L ? L->Intensity : 0.0; }
-    double LightsBridge::Radius() const       { const auto* L = SelOf(Renderer); return L ? L->AttenuationRadius : 0.0; }
-    double LightsBridge::SourceRadius() const { const auto* L = SelOf(Renderer); return L ? L->SourceRadius : 0.05; }
-    double LightsBridge::InnerConeDeg() const { const auto* L = SelOf(Renderer); return L ? L->InnerConeDeg : 25.0; }
-    double LightsBridge::OuterConeDeg() const { const auto* L = SelOf(Renderer); return L ? L->OuterConeDeg : 40.0; }
-    double LightsBridge::PosX() const         { const auto* L = SelOf(Renderer); return L ? L->Position.X : 0.0; }
-    double LightsBridge::PosY() const         { const auto* L = SelOf(Renderer); return L ? L->Position.Y : 0.0; }
-    double LightsBridge::PosZ() const         { const auto* L = SelOf(Renderer); return L ? L->Position.Z : 0.0; }
+    double LightsBridge::Intensity() const    { const auto L = SelOf(Renderer); return L ? L->Intensity : 0.0; }
+    double LightsBridge::Radius() const       { const auto L = SelOf(Renderer); return L ? L->AttenuationRadius : 0.0; }
+    double LightsBridge::SourceRadius() const { const auto L = SelOf(Renderer); return L ? L->SourceRadius : 0.05; }
+    double LightsBridge::RTWeight() const     { const auto L = SelOf(Renderer); return L ? L->RTWeight : 1.0; }
+    double LightsBridge::InnerConeDeg() const { const auto L = SelOf(Renderer); return L ? L->InnerConeDeg : 25.0; }
+    double LightsBridge::OuterConeDeg() const { const auto L = SelOf(Renderer); return L ? L->OuterConeDeg : 40.0; }
+    double LightsBridge::PosX() const         { const auto L = SelOf(Renderer); return L ? L->Position.X : 0.0; }
+    double LightsBridge::PosY() const         { const auto L = SelOf(Renderer); return L ? L->Position.Y : 0.0; }
+    double LightsBridge::PosZ() const         { const auto L = SelOf(Renderer); return L ? L->Position.Z : 0.0; }
 
     double LightsBridge::SpotAzimuthDeg() const {
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         if (!L) return 0.0;
         double Az = std::atan2((double)L->Direction.X, (double)L->Direction.Z) * kToDeg;
         return Az < 0.0 ? Az + 360.0 : Az;
     }
     double LightsBridge::SpotElevationDeg() const {
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         if (!L) return -90.0;
         const auto D = L->Direction.NormalizedSafe(Smile::Vec3{ 0.0f, -1.0f, 0.0f });
         return std::asin(std::clamp((double)D.Y, -1.0, 1.0)) * kToDeg;
@@ -121,73 +158,85 @@ namespace SmileEditor {
     }
 
     void LightsBridge::SetName(const QString& _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         const std::string S = _V.trimmed().toStdString();
         if (S.empty() || L->Name == S) return;
         L->Name = S;
         Touch(true); // nome aparece na lista
     }
     void LightsBridge::SetLightEnabled(bool _V) {
-        auto* L = SelOf(Renderer); if (!L || L->Enabled == _V) return;
+        auto L = SelOf(Renderer); if (!L || L->Enabled == _V) return;
         L->Enabled = _V;
         Touch(true); // estado aparece na lista
     }
     void LightsBridge::SetCastShadows(bool _V) {
-        auto* L = SelOf(Renderer); if (!L || L->CastShadows == _V) return;
+        auto L = SelOf(Renderer); if (!L || L->CastShadows == _V) return;
         L->CastShadows = _V;
         Touch(false);
     }
     void LightsBridge::SetColor(const QColor& _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->Color = { (float)_V.redF(), (float)_V.greenF(), (float)_V.blueF() };
         Touch(true); // dot de cor na lista
     }
     void LightsBridge::SetIntensity(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->Intensity = (float)std::max(_V, 0.0);
         Touch(false);
     }
     void LightsBridge::SetRadius(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->AttenuationRadius = (float)std::clamp(_V, 0.1, 500.0);
         Touch(false);
     }
     void LightsBridge::SetSourceRadius(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->SourceRadius = (float)std::clamp(_V, 0.01, 2.0);
         Touch(false);
     }
+    void LightsBridge::SetRTWeight(double _V) {
+        auto L = SelOf(Renderer); if (!L) return;
+        // Teto em 1: isto e para REMOVER duplicata de emissivo, nao para inflar o indireto acima do
+        // que a luz entrega no direto. Quem quiser mais energia sobe a Intensity, que vale nos dois.
+        L->RTWeight = (float)std::clamp(_V, 0.0, 1.0);
+        // O Touch so mexe em UI e persistencia. Quem consome este peso — DDGI, ReSTIR GI e
+        // reflexoes — ACUMULOU energia da luz antiga, e o DDGI com Hysteresis 0,99 seguraria essa
+        // energia por muitos frames: o slider pareceria inerte e a calibracao seria contra um
+        // estado que o usuario ja mandou embora. Coalescido (uma vez por frame, no Renderer).
+        if (Renderer) Renderer->Settings().MarkIndirectLightingDirty();
+        Touch(false);
+    }
     void LightsBridge::SetInnerConeDeg(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->InnerConeDeg = (float)std::clamp(_V, 0.0, 89.0);
         L->OuterConeDeg = std::max(L->OuterConeDeg, L->InnerConeDeg); // inner <= outer sempre
         Touch(false);
     }
     void LightsBridge::SetOuterConeDeg(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->OuterConeDeg = (float)std::clamp(_V, 1.0, 89.0);
         L->InnerConeDeg = std::min(L->InnerConeDeg, L->OuterConeDeg);
         Touch(false);
     }
     void LightsBridge::SetPosX(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->Position.X = (float)_V; Touch(false);
     }
     void LightsBridge::SetPosY(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->Position.Y = (float)_V; Touch(false);
     }
     void LightsBridge::SetPosZ(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->Position.Z = (float)_V; Touch(false);
     }
     void LightsBridge::SetSpotAzimuthDeg(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->Direction = DirFromAzEl(_V, SpotElevationDeg());
         Touch(false);
     }
     void LightsBridge::SetSpotElevationDeg(double _V) {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         L->Direction = DirFromAzEl(SpotAzimuthDeg(), std::clamp(_V, -90.0, 90.0));
         Touch(false);
     }
@@ -195,7 +244,7 @@ namespace SmileEditor {
     // ---- Lista ----
     QVariantMap LightsBridge::lightAt(int _Index) const {
         QVariantMap M;
-        const auto& L = LightsOf(Renderer);
+        const auto L = LightsOf(Renderer);
         if (_Index < 0 || _Index >= (int)L.size()) return M;
         const Smile::FLight& Light = L[(size_t)_Index];
         M[QStringLiteral("name")]    = QString::fromStdString(Light.Name);
@@ -235,8 +284,8 @@ namespace SmileEditor {
                                   (float)(std::cos(Pitch) * std::cos(Yaw)) };
         L.Position = Renderer->GetCameraPos() + Fwd * 5.0f;
 
-        auto& Lights = Renderer->GetScene().Lights();
-        Lights.push_back(L);
+        auto Lights = LightsOf(Renderer);
+        Lights->push_back(L);
         Renderer->SetSelectedLight((int)Lights.size() - 1);
         Renderer->ClearSelection(); // selecao de luz e de renderavel sao exclusivas
         Touch(true);
@@ -245,9 +294,9 @@ namespace SmileEditor {
 
     void LightsBridge::removeLight(int _Index) {
         if (!Renderer) return;
-        auto& Lights = Renderer->GetScene().Lights();
+        auto Lights = LightsOf(Renderer);
         if (_Index < 0 || _Index >= (int)Lights.size()) return;
-        Lights.erase(Lights.begin() + _Index);
+        Lights->erase(Lights->begin() + _Index);
 
         int Sel = Renderer->GetSelectedLight();
         if (Sel == _Index)     Sel = -1;
@@ -260,7 +309,7 @@ namespace SmileEditor {
 
     void LightsBridge::duplicateLight(int _Index) {
         if (!Renderer) return;
-        auto& Lights = Renderer->GetScene().Lights();
+        auto Lights = LightsOf(Renderer);
         if (_Index < 0 || _Index >= (int)Lights.size()) return;
         Smile::FLight Copy = Lights[(size_t)_Index];
         Copy.Id = 0; // copia nasce SEM identidade: o renderer atribui uma nova no proximo
@@ -268,7 +317,7 @@ namespace SmileEditor {
                      // shadow map (uma piscaria em cima da outra).
         Copy.Name += " (copia)";
         Copy.Position.X += 1.0f; // desloca pro marker nao nascer em cima do original
-        Lights.push_back(Copy);
+        Lights->push_back(Copy);
         Renderer->SetSelectedLight((int)Lights.size() - 1);
         Renderer->ClearSelection();
         Touch(true);
@@ -287,14 +336,14 @@ namespace SmileEditor {
 
     void LightsBridge::toggleLightEnabled(int _Index) {
         if (!Renderer) return;
-        auto& Lights = Renderer->GetScene().Lights();
+        auto Lights = LightsOf(Renderer);
         if (_Index < 0 || _Index >= (int)Lights.size()) return;
         Lights[(size_t)_Index].Enabled = !Lights[(size_t)_Index].Enabled;
         Touch(true);
     }
 
     void LightsBridge::placeAtCamera() {
-        auto* L = SelOf(Renderer); if (!L) return;
+        auto L = SelOf(Renderer); if (!L) return;
         const double Pitch = Renderer->GetPitch() * kToRad;
         const double Yaw   = Renderer->GetYaw()   * kToRad;
         const Smile::Vec3 Fwd = { (float)(std::cos(Pitch) * std::sin(Yaw)),
@@ -347,7 +396,7 @@ namespace SmileEditor {
             return false;
         }
 
-        auto& Lights = Renderer->GetScene().Lights();
+        auto Lights = LightsOf(Renderer);
         const QJsonArray Arr = Doc.object().value(QStringLiteral("lights")).toArray();
         int Loaded = 0;
         for (const QJsonValue& V : Arr) {
@@ -366,7 +415,14 @@ namespace SmileEditor {
             L.OuterConeDeg      = (float)O.value(QStringLiteral("outerConeDeg")).toDouble(L.OuterConeDeg);
             L.Enabled           = O.value(QStringLiteral("enabled")).toBool(true);
             L.CastShadows       = O.value(QStringLiteral("castShadows")).toBool(true);
-            Lights.push_back(L);
+            // Default 1.0: cena salva antes deste campo existir continua com a luz cheia no RT.
+            // Clamp TAMBEM aqui: o setter limita a [0,1], mas o JSON e fronteira de entrada — um
+            // arquivo editado a mao reintroduziria peso > 1 e inflaria o indireto acima do direto,
+            // que e exatamente o contrato que o teto existe p/ garantir. Negativo viraria energia
+            // negativa no hit.
+            L.RTWeight          = std::clamp(
+                (float)O.value(QStringLiteral("rtWeight")).toDouble(1.0), 0.0f, 1.0f);
+            Lights->push_back(L);
             ++Loaded;
             // Mantem os sequenciais de nome a frente dos "Point N"/"Spot N" carregados.
             if (L.Type == Smile::ELightType::Spot) ++SpotSeq; else ++PointSeq;
@@ -396,6 +452,7 @@ namespace SmileEditor {
             O[QStringLiteral("outerConeDeg")] = L.OuterConeDeg;
             O[QStringLiteral("enabled")]      = L.Enabled;
             O[QStringLiteral("castShadows")]  = L.CastShadows;
+            O[QStringLiteral("rtWeight")]     = L.RTWeight;
             Arr.append(O);
         }
         QJsonObject Root;
@@ -422,7 +479,7 @@ namespace SmileEditor {
         const int Sel = SelectedIndex();
         if (Sel != CachedSelected) {
             CachedSelected = Sel;
-            const auto* L = SelOf(Renderer);
+            const auto L = SelOf(Renderer);
             if (L) {
                 CachedPos[0] = L->Position.X;
                 CachedPos[1] = L->Position.Y;
@@ -434,7 +491,7 @@ namespace SmileEditor {
         }
 
         // Gizmo arrastando a luz: reflete a posicao no painel e marca dirty.
-        const auto* L = SelOf(Renderer);
+        const auto L = SelOf(Renderer);
         if (L && (std::abs(L->Position.X - CachedPos[0]) > 1e-5 ||
                   std::abs(L->Position.Y - CachedPos[1]) > 1e-5 ||
                   std::abs(L->Position.Z - CachedPos[2]) > 1e-5)) {

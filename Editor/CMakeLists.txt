@@ -5,8 +5,9 @@
 set(EDITOR_HEADERS
     Include/SmileEditor/MainWindow.h
     Include/SmileEditor/ViewportWidget.h
+    Include/SmileEditor/RenderThread.h
     Include/SmileEditor/DarkTheme.h
-    Include/SmileEditor/AboutDialog.h
+    Include/SmileEditor/SplashScreen.h
     Include/SmileEditor/SmileLogo.h
     Include/SmileEditor/LucideIcon.h
     Include/SmileEditor/GizmoController.h
@@ -20,15 +21,18 @@ set(EDITOR_HEADERS
     Include/SmileEditor/TimeOfDayBridge.h
     Include/SmileEditor/LightsBridge.h
     Include/SmileEditor/SceneOutlinerBridge.h
+    Include/SmileEditor/SceneDocument.h
     Include/SmileEditor/MaterialsBridge.h
+    Include/SmileEditor/RenderSettingsBridge.h
 )
 
 set(EDITOR_SOURCES
     Source/main.cpp
     Source/MainWindow.cpp
     Source/ViewportWidget.cpp
+    Source/RenderThread.cpp
     Source/DarkTheme.cpp
-    Source/AboutDialog.cpp
+    Source/SplashScreen.cpp
     Source/SmileLogo.cpp
     Source/LucideIcon.cpp
     Source/GizmoController.cpp
@@ -41,13 +45,30 @@ set(EDITOR_SOURCES
     Source/TimeOfDayBridge.cpp
     Source/LightsBridge.cpp
     Source/SceneOutlinerBridge.cpp
+    Source/SceneDocument.cpp
     Source/MaterialsBridge.cpp
+    Source/RenderSettingsBridge.cpp
+)
+
+# Arquivos de interface aparecem no projeto do Visual Studio para edicao e navegacao.
+# Continuam carregados do disco pelo QmlHost (hot-reload) e copiados no pos-build.
+file(GLOB_RECURSE EDITOR_QML_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.qml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/qmldir"
+)
+file(GLOB_RECURSE EDITOR_QML_ASSETS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.svg"
+)
+set_source_files_properties(${EDITOR_QML_FILES} ${EDITOR_QML_ASSETS}
+    PROPERTIES HEADER_FILE_ONLY TRUE
 )
 
 # WIN32 = subsistema Windows (sem console preto atras)
 qt_add_executable(SmileEditor WIN32
     ${EDITOR_HEADERS}
     ${EDITOR_SOURCES}
+    ${EDITOR_QML_FILES}
+    ${EDITOR_QML_ASSETS}
 )
 
 target_include_directories(SmileEditor
@@ -59,6 +80,7 @@ target_link_libraries(SmileEditor
     PRIVATE
         SmileEngine
         Qt6::Core
+        Qt6::Concurrent
         Qt6::Gui
         Qt6::Svg
         Qt6::Widgets
@@ -79,6 +101,7 @@ target_compile_definitions(SmileEditor
         SMILE_EDITOR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         SMILE_SHADERS_SOURCE_DIR="${CMAKE_SOURCE_DIR}/Shaders"
         SMILE_CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}"
+        SMILE_BUILD_CONFIG="$<CONFIG>"
         SMILE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
 )
 
@@ -87,6 +110,9 @@ add_dependencies(SmileEditor Shaders)
 
 # Organizacao no Visual Studio
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${EDITOR_HEADERS} ${EDITOR_SOURCES})
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/Qml" PREFIX "QML"
+    FILES ${EDITOR_QML_FILES} ${EDITOR_QML_ASSETS}
+)
 
 # Pos-build: copia DLLs do Qt para o lado do executavel via windeployqt
 # Necessario para o exe rodar standalone (Qt6Core.dll, Qt6Gui.dll, plataformas, estilos, etc.)
@@ -120,6 +146,15 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Qml"
                 "$<TARGET_FILE_DIR:SmileEditor>/Editor/Qml"
         COMMENT "Copiando paineis QML para o diretorio de build"
+    )
+
+    # Arte da splash screen. Em dev o SplashScreen carrega direto do source dir (trocar o PNG
+    # nao precisa de rebuild); esta copia e o caminho de deploy, ao lado do exe.
+    add_custom_command(TARGET SmileEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/Resources"
+                "$<TARGET_FILE_DIR:SmileEditor>/Editor/Resources"
+        COMMENT "Copiando recursos do editor (splash) para o diretorio de build"
     )
 
     # Fontes empacotadas (Inter, SIL OFL) — registradas no boot por RegisterBundledFonts().

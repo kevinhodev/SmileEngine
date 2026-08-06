@@ -13,7 +13,8 @@ namespace Smile {
     // CSM por passo (fase HG, densidade acoplada ao height fog) + ACUMULAÇÃO TEMPORAL
     // ping-pong (o IGN por frame só funciona integrado ao longo dos frames — sem isso
     // vira mancha, lição do A/B anterior). O fog apply consome o resultado via t2 com
-    // upsample bilateral e desliga o DirectionalInscattering analítico.
+    // upsample bilateral. Com froxel ele substitui o sol proximo, preservando o
+    // analitico matched somente depois do alcance volumetrico.
     class FSunShafts {
     public:
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
@@ -25,16 +26,17 @@ namespace Smile {
         // frame); PrevViewProj interno vem do ViewProjUnjittered do frame anterior.
         // CloudShadowParams/2 = MESMOS vetores do deferred lighting (nuvem corta o
         // feixe por passo; w=0 desliga e o shader nem amostra).
-        // MarchStartDist: inicio da marcha em metros — com o froxel volumetric fog ativo,
-        // os shafts cobrem so DALI pra fora (o volume ja produz o feixe de perto; sem
-        // isso o inscatter do sol conta em dobro no alcance coberto).
+        // Com o froxel ativo, este passe pode SUBSTITUIR o termo solar do volume: marcha
+        // 0..MarchMaxDist com o mesmo albedo/extincao, enquanto o froxel conserva ambiente,
+        // GI e luzes locais. Assim mantemos a oclusao fina de folhas/janelas sem energia dupla.
         void UpdateVolumetric(u32 FrameSlot, const Vec3& DirToSun,
                               const Vec3& SunColorTimesIntensity,
                               const Vec4& CollapsedFogParams, f32 NoiseFrame,
                               const Mat44& InvViewProjFull, const Vec3& CameraWorldPos,
                               const Mat44& ViewProjUnjittered,
                               const Vec4& CloudShadowParams, const Vec4& CloudShadowParams2,
-                              f32 MarchStartDist = 0.0f);
+                              const Vec3& MediumAlbedo, f32 ExtinctionScale,
+                              f32 MarchStartDist, f32 MarchMaxDist);
 
         // Raymarch + temporal nos RTs próprios. Depth em PIXEL_SHADER_RESOURCE e CSM
         // legível (EnsureReadable) antes. Muda viewport pra meia-res — o chamador
@@ -77,6 +79,7 @@ namespace Smile {
             Vec4  SunColorInt;    // rgb = cor x intensidade da luz, w = intensidade do efeito
             Vec4  FogDensityP;    // x = dens1 colapsada, y = falloff1, z = dens2, w = falloff2
             Vec4  MarchParams;    // x = passos, y = dist max, z = frame IGN, w = poeira
+            Vec4  MediumParams;   // x = extinction scale do froxel, yzw unused
             Vec4  ScreenParams;   // dims do RT meia-res
             Vec4  CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = força (0 = off)
             Vec4  CloudShadowParams2; // x = km/unidade, y = base da camada (km), zw = keyDir.xz/y
@@ -139,7 +142,7 @@ namespace Smile {
         f32  VolPhaseG    = 0.7f;
         f32  VolSteps     = 32.0f;
         f32  VolMaxDist   = 128.0f; // feixe é efeito de perto; 400m diluía os passos
-        f32  VolDust      = 8.0f;   // multiplicador da densidade efetiva do passe (satura, não estoura)
+        f32  VolDust      = 8.0f;   // ganho artistico do espalhamento solar (nao da extincao)
         bool VolTemporal  = true;
 
         D3D12_GPU_VIRTUAL_ADDRESS VolCBAddr() const {

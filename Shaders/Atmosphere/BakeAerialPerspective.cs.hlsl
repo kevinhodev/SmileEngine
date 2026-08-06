@@ -7,9 +7,11 @@ RWTexture3D<float4> OutAerial        : register(u0);
 
 [numthreads(4, 4, 4)]
 void main(uint3 id : SV_DispatchThreadID) {
-    const float2 VolWH = float2(32.0f, 32.0f);
+    // Dimensoes vindas do CB (kAerialW/kAerialH/kAerialSlices do C++). Eram 32x32 literais
+    // aqui: mudar as constantes no C++ nao chegava no shader.
+    const float2 VolWH  = float2(max(kAerialW, 1.0f), max(kAerialH, 1.0f));
     const float  Slices = max(kAerialSlices, 1.0f);
-    if (id.x >= 32u || id.y >= 32u || (float)id.z >= Slices) return;
+    if ((float)id.x >= VolWH.x || (float)id.y >= VolWH.y || (float)id.z >= Slices) return;
 
     float2 uv  = (float2(id.xy) + 0.5f) / VolWH;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
@@ -19,15 +21,22 @@ void main(uint3 id : SV_DispatchThreadID) {
     
     float sliceN = ((float)id.z + 0.5f) / Slices;
     sliceN *= sliceN;                               
-    float kmPerWU = max(kKmPerWorldUnit, 1e-9f);
     float startKm = kAerialStartKm;
     float tKm     = startKm + sliceN * (kAerialDepthKm - startKm); 
 
-    // SkyViewSize.w = altitude do chao (0.5km): mesmo offset do sky-view LUT, senao fog e ceu
-    // discordam levemente no horizonte.
-    float3 camKm = float3(CameraWorldPos.x * kmPerWU,
-                          kBottomR + SkyViewSize.w + CameraWorldPos.y * kmPerWU,
-                          CameraWorldPos.z * kmPerWU);
+    // MESMA origem do BakeSkyView.cs.hlsl: o view height unico (kViewHeight), sobre o eixo Y,
+    // com XZ ZERADOS. Duas correcoes num gesto so.
+    //
+    // (1) Reproduzir a formula a mao aqui deixava o valor divergir do sky-view — o piso do
+    //     clamp do view height (0,05 km) nao existia nesta conta, entao os dois bakes usavam
+    //     raios diferentes. Agora ha um valor so, calculado na CPU.
+    //
+    // (2) O XZ absoluto de mundo somava uma altitude FANTASMA de (X²+Z²)/2R e inclinava o "up"
+    //     da atmosfera junto: 8 cm a 1 km da origem, mas 786 m a 100 km. O aerial perspective
+    //     mudava de cor conforme a camera se afastava da origem da cena. Direcoes sao
+    //     invariantes a translacao e o meio e esfericamente simetrico, entao zerar XZ nao muda
+    //     mais nada no shader — worldDir ja vem do InvViewProj e continua igual.
+    float3 camKm = float3(0.0f, kViewHeight, 0.0f);
 
     float3 sunDir = normalize(SunDir.xyz);
 

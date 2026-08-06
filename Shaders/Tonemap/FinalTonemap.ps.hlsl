@@ -38,6 +38,21 @@ float3 ACESFilm(float3 color) {
     return saturate(color);
 }
 
+float InterleavedGradientNoise(float2 pixelPosition) {
+    // Jimenez-style screen-space hash: high-frequency, deterministic and free of textures.
+    return frac(52.9829189f *
+                frac(dot(pixelPosition, float2(0.06711056f, 0.00583715f))));
+}
+
+float TriangularQuantizationDither(float2 pixelPosition) {
+    // Inverse CDF of a zero-mean triangular distribution on [-1, 1], matching the
+    // backbuffer-quantization strategy used by UE. A static screen-space pattern avoids
+    // shimmer because this pass runs after the temporal resolve.
+    float uniformNP = InterleavedGradientNoise(pixelPosition) * 2.0f - 1.0f;
+    float grainSign = uniformNP < 0.0f ? -1.0f : 1.0f;
+    return grainSign * (1.0f - sqrt(saturate(1.0f - abs(uniformNP))));
+}
+
 float4 main(PSInput input) : SV_TARGET {
     float3 hdrColor = FullResHDR.Sample(LinearSampler, input.uv).rgb;
     float3 bloomColor = BloomTex.Sample(LinearSampler, input.uv).rgb;
@@ -47,6 +62,12 @@ float4 main(PSInput input) : SV_TARGET {
     float3 tonemapped = ACESFilm(color);
 
     float3 srgb = pow(tonemapped, 1.0f / 2.2f);
+
+    // The swapchain is R8G8B8A8_UNORM: dither in display space immediately before its
+    // 8-bit quantization. One triangular LSB breaks dark-sky contours without changing
+    // the HDR signal, exposure, bloom or tone curve.
+    float dither = TriangularQuantizationDither(floor(input.pos.xy));
+    srgb = saturate(srgb + dither * (1.0f / 255.0f));
 
     return float4(srgb, 1.0f);
 }

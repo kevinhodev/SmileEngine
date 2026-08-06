@@ -47,6 +47,7 @@ namespace Smile {
 
         const char* LevelTag(LogLevel _LogLevel) noexcept {
             switch (_LogLevel) {
+                case LogLevel::Debug:   return "DBG ";
                 case LogLevel::Info:    return "INFO";
                 case LogLevel::Warning: return "WARN";
                 case LogLevel::Error:   return "ERR ";
@@ -215,7 +216,8 @@ namespace Smile {
                 std::lock_guard Lock(GFileMutex);
                 if (GLogFile.is_open()) {
                     GLogFile.write(Formatted.data(), static_cast<std::streamsize>(Formatted.size()));
-                    if (_LogLevel != LogLevel::Info) GLogFile.flush();
+                    if (_LogLevel == LogLevel::Warning || _LogLevel == LogLevel::Error)
+                        GLogFile.flush();
                 }
             }
 

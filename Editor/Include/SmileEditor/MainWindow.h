@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QElapsedTimer>
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
@@ -13,10 +12,10 @@ class QWidget;
 class QEvent;
 class QDockWidget;
 class QDialog;
+class QQmlEngine;
 
 namespace SmileEditor {
     class ViewportWidget;
-    class AboutDialog;
     class LogBridge;
     class WindowBridge;
     class NativeWindowFilter;
@@ -25,18 +24,27 @@ namespace SmileEditor {
     class TimeOfDayBridge;
     class LightsBridge;
     class SceneOutlinerBridge;
+    class SceneDocument;
     class MaterialsBridge;
+    class RenderSettingsBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
 
     public:
-        explicit MainWindow(QWidget* parent = nullptr);
+        explicit MainWindow(QQmlEngine& qmlEngine, QWidget* parent = nullptr);
         ~MainWindow() override;
 
         // Cena .sscene passada na linha de comando (dev/smoke): carregada assim que o
         // renderer inicializar (OnRendererReady), sem passar pelo dialogo de arquivo.
         void SetStartupScene(const QString& Path) { StartupScenePath = Path; }
+
+    signals:
+        // Boot: repassa as etapas do Renderer::Initialize para a splash e avisa quando o editor
+        // fica utilizavel (renderer pronto, cena de boot carregada — ou falha, para a splash
+        // nunca sobreviver a um editor que nao vai renderizar).
+        void BootProgress(const QString& label, const QString& detail, qreal fraction);
+        void BootFinished();
 
     protected:
         void changeEvent(QEvent* event) override; // notifica o WindowBridge em max/restore
@@ -44,7 +52,6 @@ namespace SmileEditor {
         void closeEvent(QCloseEvent* event) override; // prompt de sidecars nao salvos
 
     private slots:
-        void OnHelpAbout();
         void OnRendererReady();
         void UpdateStats();
         void TriggerShaderCompileAndReload(const QString& Path);
@@ -60,10 +67,15 @@ namespace SmileEditor {
         void CreateStatusBar();   // barra de status QML (StatusBar.qml) no slot do QStatusBar
         void CreateDocks();
         QWidget* CreateViewportChrome();
+        void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
+        void BeginSceneLoad(const QString& path, bool additive);
+        void FinishBootStage();   // idempotente: emite BootFinished uma unica vez
+        void ContinueApprovedClose(QCloseEvent* event);
 
         QString               StartupScenePath;
+        QQmlEngine*           SharedQmlEngine = nullptr; // lifetime pertence ao RunEditor
         ViewportWidget*       Viewport    = nullptr;
-        QPointer<AboutDialog> AboutDlg;
+        QPointer<ViewportWidget> ActiveViewport;
         QPointer<QDialog>     SettingsDlg;
 
         StatusBridge*         StatusBr    = nullptr; // ponte C++ -> StatusBar.qml
@@ -78,12 +90,17 @@ namespace SmileEditor {
         QPointer<QDialog>     DebugTargetsDlg;       // janela flutuante do visualizador de RTs
         LightsBridge*         LightsBr    = nullptr; // acoes/propriedades de luz (outliner)
         SceneOutlinerBridge*  OutlinerBr  = nullptr; // ponte C++ -> SceneOutlinerPanel.qml
+        SceneDocument*        SceneDoc    = nullptr; // camada autorada da cena (.smap)
         QDockWidget*          LightsDock  = nullptr; // dock lateral do Scene Outliner ("Cena")
         MaterialsBridge*      MaterialsBr = nullptr; // ponte C++ -> MaterialsWindow.qml
+        RenderSettingsBridge* RenderBr   = nullptr; // ponte C++ -> knobs do SettingsWindow.qml
         QPointer<QDialog>     MaterialsDlg;          // janela flutuante do Editor de Materiais
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
         QFileSystemWatcher*   ShaderWatcher     = nullptr;
-        QElapsedTimer         StatsThrottle;    // status bar atualiza a ~5Hz, nao por frame
+        bool                  BootSplashActive = true;  // splash ainda esperando o BootFinished
+        bool                  SceneLoadInProgress = false;
+        bool                  CloseApproved = false;
+        bool                  RendererShutdownForClose = false;
     };
-} 
+}

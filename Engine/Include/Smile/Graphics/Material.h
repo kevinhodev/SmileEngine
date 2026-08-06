@@ -46,7 +46,18 @@ namespace Smile {
         u32   ShadingModel            = 0;       // 0 = DefaultLit, 1 = Foliage (two-sided + transmissao)
         Vec4  SubsurfaceColor         = { 1.0f, 1.0f, 1.0f, 0.0f };
 
-        u8    _Pad[96] = {};
+        // Escala do emissivo SO no mundo indireto (GI/reflexoes/DDGI); o raster continua usando o
+        // EmissiveStrength puro. Existe pelo motivo inverso do FLight::RTWeight: marcar texel como
+        // emissivo era, sem RT, um efeito LOCAL de "pop" visual, sem consequencia de iluminacao. Com
+        // o RT esses texels passam a iluminar o ambiente de verdade, e material autorado como
+        // detalhe decorativo comeca a lavar a cena. Baixar aqui devolve o emissivo ao papel
+        // decorativo sem apagar o brilho que o artista queria ver na superficie.
+        // Nenhum shader de raster le este campo — ele e consumido ao empacotar o InstanceGeo do RT
+        // (DDGI.cpp). Fica no CB assim mesmo p/ nao abrir uma segunda casa de dado de material, e
+        // esta espelhado no MaterialCB.hlsli conforme a regra daquele arquivo.
+        float RTEmissiveScale         = 1.0f;
+
+        u8    _Pad[92] = {};
     };
     static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants must be 256 bytes");
 

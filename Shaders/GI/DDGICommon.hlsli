@@ -31,7 +31,13 @@
 #define INSTGEO_FLAG_ALPHATEST 1u  // clip por albedo.a vs AlphaCutoff (folhagem; FORCE_NON_OPAQUE na TLAS)
 #define INSTGEO_FLAG_EMISSIVE  2u  // tem mapa emissivo (EmissiveMapIndex valido)
 #define INSTGEO_FLAG_FOLIAGE   4u  // ShadingModel Foliage (two-sided + transmissao no PT)
-#define INSTGEO_FLAG_MRMAP     8u  // tem mapa metallic-roughness (MrMapIndex valido; G=rough, B=metal)
+#define INSTGEO_FLAG_MRMAP     8u  // tem mapa metallic-roughness (MrMapIndex valido)
+#define INSTGEO_FLAG_SPECPACK  16u // o mapa MR e "Specular" (R=AO, G=rough, B=metal); senao R=metal
+#define INSTGEO_FLAG_METALMAP  32u // tem mapa Metalness separado (MetalMapIndex valido; R=metal)
+#define INSTGEO_FLAG_ROUGHMAP  64u // tem mapa Roughness separado (RoughMapIndex valido; R=rough)
+#define INSTGEO_FLAG_TRANSLUCENT 128u // material Blend — kRTMaskTranslucent na TLAS. So o BvhDebug
+                                      // usa: a categoria da instancia e a mask do raio, que o
+                                      // shader nao consegue ler de volta da TLAS
 
 // 80 bytes — casa campo-a-campo com DDGIInstanceGeo (DDGI.cpp). Campos alem do BaseColor/geometria
 // alimentam o ReSTIR PT (emissivo, alpha-test, metal/rough); os shaders antigos ignoram os novos.
@@ -52,7 +58,8 @@ struct InstanceGeo {
     float4 EmissiveFactor; // rgb = EmissiveFactor * EmissiveStrength; w = MetallicFactor
     uint   EmissiveMapIndex;
     uint   MrMapIndex;
-    uint   GeoPad0; uint GeoPad1;
+    uint   MetalMapIndex; // mapa Metalness separado (slot +6); valido sob INSTGEO_FLAG_METALMAP
+    uint   RoughMapIndex; // mapa Roughness separado (slot +7); valido sob INSTGEO_FLAG_ROUGHMAP
 };
 
 struct DDGIVertex {
@@ -178,8 +185,53 @@ float2 DDGI_SampleProbeRG(Texture2D<float4> distAtlas, SamplerState samp, int2 t
 // Self-shadow bias do paper (e do Flax, GetDDGISurfaceBias): desloca o ponto de amostragem na
 // normal E na direcao da camera — o componente de view e o que evita dark banding/shadow leak
 // em parede vista de raspao, onde bias so-normal nao tira o ponto da zona de auto-oclusao.
-float3 DDGI_SurfaceBias(float3 N, float3 V, float spacing) {
-    return (N * 0.2f + V * 0.8f) * (0.75f * spacing * 0.2f);
+//
+// `scale` = o `bias` do Flax (0.2 = legado). `maxMeters` = TETO ABSOLUTO em metros; 0 desliga o
+// teto e reproduz o comportamento historico bit a bit.
+//
+// Por que o teto existe: a formula original escala com o espacamento do grid, e o grid daqui e
+// dimensionado pela AABB da cena inteira (DDGI.cpp: spacing = maxExt/23). No Bistro isso da
+// spacing = 8,02 m medido, ou seja 0.75*8.02*0.2 = 1,20 m de deslocamento — o ponto de
+// amostragem atravessa parede e le a celula do outro lado. O Flax nao sofre disso porque a
+// cascata mais fina tem spacing de ~1 m; o RTXGI resolveu tornando normalBias/viewBias
+// absolutos (metros), independentes do grid. O teto e a versao barata dessa correcao: preserva
+// o comportamento em cena pequena e corta o absurdo em cena grande.
+float3 DDGI_SurfaceBias(float3 N, float3 V, float spacing, float scale, float maxMeters) {
+    float s = 0.75f * spacing * scale;
+    if (maxMeters > 0.0f) s = min(s, maxMeters);
+    return (N * 0.2f + V * 0.8f) * s;
+}
+
+// Peso do volume: 1 em TODO ponto dentro do volume, caindo a 0 ao longo de `fadeProbes` celulas
+// DEPOIS da borda, do lado de fora. `fadeProbes = 0` desliga (1 em todo lugar = historico).
+//
+// Por que existe: o gather CLAMPA as coordenadas do grid, entao um ponto fora do volume nao
+// falha — ele le as probes da borda e as estende ao infinito. O terreno fica fora de proposito
+// (SceneLoader: um terreno de km esticaria o grid), e o deferred desliga o IBL difuso quando o
+// GI esta ligado, entao hoje o terreno inteiro recebe a irradiancia da ultima fileira de probes.
+// O Flax trata isso com FallbackIrradiance e um peso de cascata que cai na borda
+// (DDGI.hlsl:315-345); aqui, com um volume so, o fallback e o ambiente hemisferico da atmosfera,
+// que e exatamente o que o deferred usaria se o GI estivesse desligado.
+//
+// O fade e para FORA, e nao para dentro como no Flax, porque os volumes sao diferentes: la ele e
+// folgado e centrado na camera, entao desvanecer nas bordas internas nao custa nada. Aqui ele e
+// justo (AABB da cena + meia celula), entao TODA a geometria fica perto de alguma face — o chao
+// nasce a meia celula da face inferior. Fade para dentro lavaria o piso inteiro com ambiente
+// hemisferico, que e pior que o problema original.
+float DDGI_VolumeWeight(float3 worldPos, float3 gridMin, float spacing, int3 count,
+                        float fadeProbes) {
+    if (fadeProbes <= 0.0f) return 1.0f;
+    // Meia celula de margem dos DOIS lados. Nao e folga arbitraria: o grid e ancorado em
+    // AABBMin - 0.5*spacing e o numero de probes e ceil(extensao/spacing) + 1, entao a ultima
+    // fileira cai em AABBMax - 0.5*spacing quando a extensao e multipla do espacamento — que e
+    // exatamente o caso do eixo dominante (spacing = maxExt/23, count = 24). Sem a margem, os
+    // ultimos ~4 m da PROPRIA cena entrariam como "fora" e a face AABBMax sairia com peso 0,5.
+    // A mesma margem do lado negativo mantem o teste simetrico; la nao ha cena mesmo.
+    float  margin  = 0.5f * spacing;
+    float3 gridMax = gridMin + (float3)(count - 1) * spacing;
+    float3 inside  = min(worldPos - (gridMin - margin), (gridMax + margin) - worldPos);
+    float  d       = min(inside.x, min(inside.y, inside.z)); // <0 = fora daquela face
+    return saturate(1.0f + min(d, 0.0f) / (fadeProbes * spacing));
 }
 
 // Um tap do gather com Chebyshev: tudo que decide o peso de UMA das 8 probes da celula.
@@ -199,7 +251,7 @@ struct DDGITapCheb {
 };
 
 DDGITapCheb DDGI_EvaluateTapCheb(
-        int i, int3 base, float3 frac, float3 biasPos, float3 N,
+        int i, int3 base, float3 frac, float3 biasPos, float3 rawPos, float3 N,
         float3 gridMin, float spacing, int3 count,
         Texture2D<float4> distAtlas, SamplerState samp, int distTile, float2 distInvSize,
         Buffer<float4> probeData, uint skipMode) {
@@ -242,10 +294,18 @@ DDGITapCheb DDGI_EvaluateTapCheb(
     tap.DistToProbe     = length(probeToPoint);
     float3 dirPP        = probeToPoint / max(tap.DistToProbe, 1e-4f);
 
+    // Direcao do teste de backface: da posicao SEM bias, como o Flax (DDGI.hlsl:210-215). O
+    // teste pergunta de que lado da superficie REAL a probe esta, e o bias e um deslocamento
+    // artificial que, quando grande, muda a resposta — com 1,2 m o ponto viesado ja podia estar
+    // do outro lado da parede, e ai a probe de la parecia "de frente". A distancia/Chebyshev
+    // continuam medidos do ponto viesado, que e a separacao que o Flax faz.
+    float3 rawToProbe  = rawPos - probePos;
+    float3 dirBackface = rawToProbe / max(length(rawToProbe), 1e-4f);
+
     // Pesos DEFENSIVOS com piso (receita do Flax, DDGI.hlsl): backface e Chebyshev se
     // auto-sabotam em geometria densa/fina (miolo de sebe, cantos, frestas) — os pisos
     // garantem que wsum nunca colapsa a zero => nunca retorna preto absoluto, so escurece.
-    float backface = dot(-dirPP, N) * 0.5f + 0.5f;
+    float backface = dot(-dirBackface, N) * 0.5f + 0.5f;
     float w = backface * backface + 0.05f;
 
     int2   distOrigin = DDGI_TileOrigin(c, count, distTile);
@@ -290,9 +350,9 @@ float3 SampleDDGIIrradianceCheb(
 
     [unroll]
     for (int i = 0; i < 8; ++i) {
-        DDGITapCheb tap = DDGI_EvaluateTapCheb(i, base, frac, biasPos, N, gridMin, spacing,
-                                               count, distAtlas, samp, distTile, distInvSize,
-                                               probeData, skipMode);
+        DDGITapCheb tap = DDGI_EvaluateTapCheb(i, base, frac, biasPos, worldPos, N,
+                                               gridMin, spacing, count, distAtlas, samp,
+                                               distTile, distInvSize, probeData, skipMode);
         if (tap.Ignored) continue;
 
         int2   irrOrigin = DDGI_TileOrigin(tap.Coord, count, irrTile);

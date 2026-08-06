@@ -1,5 +1,6 @@
 #include "Smile/Graphics/DlssPass.h"
 #include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Core/Logger.h"
 
 #if SMILE_SL_ENABLED
@@ -20,17 +21,6 @@ namespace Smile {
         constexpr u32         kInvalidSlot = 0xFFFFFFFFu;
         constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        void Transition(ID3D12GraphicsCommandList* Cmd, ID3D12Resource* Res,
-                        D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After) {
-            if (Before == After) return;
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = Res;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = Before;
-            B.Transition.StateAfter  = After;
-            Cmd->ResourceBarrier(1, &B);
-        }
 
         // Mat44 (row-major, row-vector) -> sl::float4x4 (row-major). Copia direta; se a reprojecao
         // sair errada e a convencao do SL for column-vector, transpor aqui (ver Risks no plano).
@@ -65,6 +55,12 @@ namespace Smile {
                 case sl::Result::eErrorInvalidState:          return "eErrorInvalidState";
                 default:                                      return "(outro)";
             }
+        }
+
+        bool IsExpectedUnsupportedResult(sl::Result R) {
+            return R == sl::Result::eErrorNoSupportedAdapterFound ||
+                   R == sl::Result::eErrorAdapterNotSupported ||
+                   R == sl::Result::eErrorFeatureNotSupported;
         }
 
         // Mapa qualidade (0=Native..4=UltraPerf) -> DLSSMode.
@@ -141,7 +137,7 @@ namespace Smile {
                        ") — DLSS indisponivel");
             return false;
         }
-        LogInfo("Streamline inicializado (manual hooking, feature DLSS)");
+        LogDebug("Streamline inicializado (manual hooking, feature DLSS)");
         return true;
     }
     void FDlssPass::SetDevice(ID3D12Device* Device) { if (Device) slSetD3DDevice(Device); }
@@ -164,9 +160,13 @@ namespace Smile {
             // Loga o codigo real: distingue "GPU/driver nao suporta" (eErrorAdapterNotSupported,
             // eErrorDriverOutOfDate) de falha de integracao (eErrorFeatureFailedToLoad = plugin
             // sl.dlss.dll/nvngx_dlss.dll nao carregou; eErrorInitNotCalled = ordem do slInit).
-            LogWarning(std::string("DLSS: slIsFeatureSupported falhou -> ") + SlResultName(SupportRc) +
-                       " (codigo " + std::to_string(static_cast<int>(SupportRc)) +
-                       ") — upscaler DLSS indisponivel");
+            const std::string Message = std::string("DLSS: slIsFeatureSupported falhou -> ") +
+                SlResultName(SupportRc) + " (codigo " +
+                std::to_string(static_cast<int>(SupportRc)) + ") — upscaler DLSS indisponivel";
+            if (IsExpectedUnsupportedResult(SupportRc))
+                LogDebug(Message);
+            else
+                LogWarning(Message);
             return false;
         }
 
@@ -203,7 +203,7 @@ namespace Smile {
         P->Created = true;
         P->FirstDispatch = true;
         P->RW = RenderW; P->RH = RenderH; P->SW = DisplayW; P->SH = DisplayH;
-        LogInfo("DLSS (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
+        LogDebug("DLSS (Streamline) inicializado (render " + std::to_string(RenderW) + "x" +
                 std::to_string(RenderH) + " -> display " + std::to_string(DisplayW) + "x" +
                 std::to_string(DisplayH) + ")");
         return true;
@@ -231,19 +231,19 @@ namespace Smile {
         OutY = Impl::Halton(Idx, 3) - 0.5f;
     }
 
-    void FDlssPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
-        if (!P || !P->Created || !Cmd || !In.Color || !In.Depth || !In.Velocity) return;
+    void FDlssPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& _UpscaleParams) {
+        if (!P || !P->Created || !Cmd || !_UpscaleParams.Color || !_UpscaleParams.Depth || !_UpscaleParams.Velocity) return;
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
         auto* CmdBuf = reinterpret_cast<sl::CommandBuffer*>(Cmd);
 
         sl::FrameToken* Frame = nullptr;
-        const uint32_t  FrameIdx = In.Reset ? 0u : 0u; // token por frame (indice opcional)
+        const uint32_t  FrameIdx = _UpscaleParams.Reset ? 0u : 0u; // token por frame (indice opcional)
         if (slGetNewFrameToken(Frame, nullptr) != sl::Result::eOk || !Frame) {
             LogError("DLSS: slGetNewFrameToken falhou");
-            Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             return;
         }
@@ -251,43 +251,43 @@ namespace Smile {
 
         // --- Constants (matrizes row-major SEM jitter; o Renderer preencheu ViewToClip/ClipToPrevClip) ---
         sl::Constants C{};
-        C.cameraViewToClip = ToSL(In.ViewToClip);
-        C.clipToCameraView = ToSL(In.ViewToClip.Inverse());
-        C.clipToPrevClip   = ToSL(In.ClipToPrevClip);
-        C.prevClipToClip   = ToSL(In.ClipToPrevClip.Inverse());
-        C.jitterOffset        = { In.JitterX, In.JitterY };
+        C.cameraViewToClip = ToSL(_UpscaleParams.ViewToClip);
+        C.clipToCameraView = ToSL(_UpscaleParams.ViewToClip.Inverse());
+        C.clipToPrevClip   = ToSL(_UpscaleParams.ClipToPrevClip);
+        C.prevClipToClip   = ToSL(_UpscaleParams.ClipToPrevClip.Inverse());
+        C.jitterOffset        = { _UpscaleParams.JitterX, _UpscaleParams.JitterY };
         C.cameraPinholeOffset = { 0.0f, 0.0f };   // pinhole convencional (senao fica INVALID_FLOAT)
         // Velocity da engine = curUV-prevUV; o plugin faz NGX MV_Scale = mvecScale*W/H (dlss*Entry.cpp), ou
         // seja o NGX ja converte p/ pixels => mvecScale=-1 casa (prevUV-curUV)*W. Confirmado na fonte do SL.
         C.mvecScale        = { -1.0f, -1.0f };
-        C.cameraPos        = ToSL(In.CamPos);
-        C.cameraUp         = ToSL(In.CamUp);
-        C.cameraRight      = ToSL(In.CamRight);
-        C.cameraFwd        = ToSL(In.CamFwd);
-        C.cameraNear       = In.NearZ;
-        C.cameraFar        = In.FarZ;
-        C.cameraFOV        = In.FovYRadians;
-        C.cameraAspectRatio = In.AspectRatio;
+        C.cameraPos        = ToSL(_UpscaleParams.CamPos);
+        C.cameraUp         = ToSL(_UpscaleParams.CamUp);
+        C.cameraRight      = ToSL(_UpscaleParams.CamRight);
+        C.cameraFwd        = ToSL(_UpscaleParams.CamFwd);
+        C.cameraNear       = _UpscaleParams.NearZ;
+        C.cameraFar        = _UpscaleParams.FarZ;
+        C.cameraFOV        = _UpscaleParams.FovYRadians;
+        C.cameraAspectRatio = _UpscaleParams.AspectRatio;
         C.depthInverted        = sl::Boolean::eTrue;   // engine usa reverse-Z
         C.cameraMotionIncluded = sl::Boolean::eTrue;
         C.motionVectors3D      = sl::Boolean::eFalse;
-        C.reset            = (In.Reset || P->FirstDispatch) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+        C.reset            = (_UpscaleParams.Reset || P->FirstDispatch) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
         slSetConstants(C, *Frame, P->Viewport);
 
         // --- Options (modo por qualidade; HDR; auto-exposure como no FSR) ---
-        sl::DLSSOptions Opt{};
-        Opt.mode            = ModeForQuality(In.Quality);
-        Opt.outputWidth     = P->SW;
-        Opt.outputHeight    = P->SH;
-        Opt.colorBuffersHDR = sl::Boolean::eTrue;
-        Opt.useAutoExposure = sl::Boolean::eTrue;
-        slDLSSSetOptions(P->Viewport, Opt);
+        sl::DLSSOptions DLSSOptions{};
+        DLSSOptions.mode            = ModeForQuality(_UpscaleParams.Quality);
+        DLSSOptions.outputWidth     = P->SW;
+        DLSSOptions.outputHeight    = P->SH;
+        DLSSOptions.colorBuffersHDR = sl::Boolean::eTrue;
+        DLSSOptions.useAutoExposure = sl::Boolean::eTrue;
+        slDLSSSetOptions(P->Viewport, DLSSOptions);
 
         // --- Tags (estado ATUAL de cada recurso; o chamador poe cor/depth/vel em COMPUTE_READ) ---
-        sl::Resource ColorRes (sl::ResourceType::eTex2d, In.Color,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-        sl::Resource DepthRes (sl::ResourceType::eTex2d, In.Depth,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-        sl::Resource MvecRes  (sl::ResourceType::eTex2d, In.Velocity,    static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-        sl::Resource OutputRes(sl::ResourceType::eTex2d, P->Output.Get(),static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+        sl::Resource ColorRes (sl::ResourceType::eTex2d, _UpscaleParams.Color,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+        sl::Resource DepthRes (sl::ResourceType::eTex2d, _UpscaleParams.Depth,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+        sl::Resource MvecRes  (sl::ResourceType::eTex2d, _UpscaleParams.Velocity,    static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+        sl::Resource OutputRes(sl::ResourceType::eTex2d, P->Output.Get(),            static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
 
         const sl::Extent RenderExtent{ 0, 0, P->RW, P->RH };
         const sl::Extent OutputExtent{ 0, 0, P->SW, P->SH };
@@ -309,7 +309,7 @@ namespace Smile {
         // eDisableCLStateTracking e default: o SL pode ter mexido no estado do CL. O Renderer rebinda os
         // descriptor heaps antes do post chain (o post chain seta o proprio root sig/PSO).
 
-        Transition(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         P->FirstDispatch = false;
     }

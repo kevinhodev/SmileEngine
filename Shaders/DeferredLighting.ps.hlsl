@@ -23,19 +23,51 @@ cbuffer FrameCB : register(b0) {
     float4 CloudShadowParams;  // xy = centro XZ (km), z = 1/extent, w = forca (0 = off)
     float4 CloudShadowParams2; // x = km/unidade, y = altura da base (km), zw = keyDir.xz/y
     float4 LightParams;        // x = nº de luzes puntuais no buffer t17,
-                               // y = 1/res do atlas de sombra local, z = bias (NDC z), w = -
+                               // y = 1/res do atlas de sombra local, z = bias (NDC z),
+                               // w = direta local: 0 raster, 1 ReSTIR DI
     float4 LightParams2;       // x = 1/res do cube shadow (point), y = near das faces, zw = -
+    float4 DDGIBiasParams;     // x = escala do bias (0.2 legado), y = teto em metros (0 = sem
+                               // teto), zw = reservados
+    float4 AtmoLightParams;    // x = raio do planeta (km), y = raio do topo (km),
+                               // z = km/unidade de mundo, w = transmitancia POR PIXEL (0/1)
+    float4 SunColorRaw;        // rgb = sol SEM transmitancia e SEM HorizonFade
+    float4 MoonColorRaw;       // rgb = lua SEM transmitancia
+    float4 SkyAmbientSHR;      // SH-L1 do ceu, canal R: (c0, c1, c2, c3)
+    float4 SkyAmbientSHG;
+    float4 SkyAmbientSHB;
+    float4 SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas)
 };
 
-// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z = fade do slot
-// de sombra; .w reservado (source length na F4).
+#include "Atmosphere/AtmosphereMath.hlsli"
+#include "Atmosphere/SkyAmbientSH.hlsli"
+
+// Ambiente do ceu para esta normal. Com a SH ligada o resultado tem termo DIRECIONAL: no poente
+// a parede virada pro sol fica quente e a oposta fria. As 2 cores chapadas so variavam com N.y,
+// entao as duas paredes recebiam exatamente a mesma coisa.
+float3 SkyAmbientForNormal(float3 N) {
+    if (SkyAmbientSHParams.x > 0.5f)
+        return EvalSkyAmbientSH(SkyAmbientSHR, SkyAmbientSHG, SkyAmbientSHB, N);
+    float hemi = saturate(N.y * 0.5f + 0.5f);
+    return lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
+}
+
+// LUT de transmitancia da atmosfera. Mesma textura que o sky PS e o bake de aerial perspective
+// leem — nao ha uma segunda implementacao da integral.
+Texture2D<float4> AtmoTransmittanceLUT : register(t21);
+
+// A funcao AtmoLightTransmittance vive mais abaixo, depois do IBLSampler (s1) — e ele o
+// sampler linear-clamp desta root signature.
+
+// Luz puntual (point/spot) — espelha o FGPULight do Renderer.h. SpotParams.z e o fade do slot de
+// sombra; .w preserva o pedido CastShadows para o ReSTIR DI, independentemente do orcamento.
 struct FGPULight {
     float4 PosInvRadius;      // xyz = posicao, w = 1/raio de atenuacao
     float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulb (distancia minima)
     float4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point (sem cone)
     float4 SpotParams;        // x = 1/(cosInner - cosOuter), y = slice de sombra (-1 = sem),
-                              // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia)
+                              // z = fade do slot [0..1], w = CastShadows (0/1)
     row_major float4x4 ShadowMatrix; // world -> UVZ do slice (dividir por w: perspectiva)
+    float4 PrevPosInvRadius;          // xyz = posicao anterior (consumida pelo ReSTIR DI)
 };
 
 StructuredBuffer<FGPULight> Lights : register(t17);
@@ -70,32 +102,8 @@ float LocalShadowPCF(float2 uv, float refZ, float slice) {
     return vis * (1.0f / 9.0f);
 }
 
-// F4 — representative point na ESFERA da fonte (porte da parte de esfera do
-// AreaLightSpecular do Flax / UE): desloca a direcao do especular pro ponto da esfera mais
-// proximo do raio refletido e devolve a normalizacao de energia do lobo alargado (sem ela o
-// highlight de fonte grande estoura). Difuso/atenuacao/sombra seguem usando o CENTRO.
-float AreaSphereSpecular(float SourceRadius, float Roughness, float3 ToLightCenter,
-                         float3 V, float3 N, out float3 Ls) {
-    float  m = Roughness * Roughness;
-    float3 r = reflect(-V, N);
-    float  invDist = rsqrt(dot(ToLightCenter, ToLightCenter));
-
-    float sphereAngle = saturate(SourceRadius * invDist);
-    float e = m / saturate(m + 0.5f * sphereAngle);
-    float energy = e * e;
-
-    float3 closestPointOnRay = dot(ToLightCenter, r) * r;
-    float3 centerToRay = closestPointOnRay - ToLightCenter;
-    float3 closest = ToLightCenter + centerToRay *
-        saturate(SourceRadius * rsqrt(max(dot(centerToRay, centerToRay), 1e-8f)));
-    // Superficie EXATAMENTE na posicao da luz => closest = 0 e normalize(0) = 0/0 = NaN.
-    // NaN aqui nao custa um pixel: ele sobrevive ao bloom (downsample espalha) e ao
-    // historico do TAA/upscaler, entao vira um bloco corrompido persistente. Cai pra
-    // normal — a essa distancia o especular ja esta no piso do bulbo e nao se ve.
-    float closest2 = dot(closest, closest);
-    Ls = (closest2 > 1e-12f) ? closest * rsqrt(closest2) : N;
-    return energy;
-}
+// AreaSphereSpecular vive no BRDF.hlsli, junto da BRDF_DirectArea que consome a saida dela. O
+// deferred e o ReSTIR DI precisam do mesmo especular de area para preservar a aparencia das luzes.
 
 // Sombra de POINT: o vetor luz->pixel escolhe a face do cubo no hardware; a profundidade de
 // referencia usa o EIXO DOMINANTE (viewZ da face que vai responder — mesma projecao de 90
@@ -148,8 +156,42 @@ Texture2D<float>  SceneAO             : register(t14);
 // ReSTIR GI: irradiancia difusa por pixel (final-gather sobre o DDGI). Ativa via ReflectionParams.w.
 // Quando ligada, substitui o termo difuso do DDGI; o DDGI segue como cache no trace (multi-bounce).
 Texture2D<float4> ReSTIRGITex         : register(t16);
+// Direta local integral resolvida pelo ReSTIR DI. Ja chega com BRDF e visibilidade aplicadas;
+// LightParams.w escolhe entre este alvo e o loop raster abaixo.
+Texture2D<float4> DirectLocalTex      : register(t20);
 
-SamplerState IBLSampler : register(s1); 
+SamplerState IBLSampler : register(s1);
+
+// Transmitancia do sol/lua ATE O TOPO da atmosfera, medida na altitude DESTE pixel.
+//
+// Antes isto era FAtmosphere::SunTransmittance: 40 passos re-integrados na CPU, todo frame, na
+// altitude da CAMERA — uma cor de sol para o frame inteiro. Sem variacao por altitude de
+// superficie, ou seja, sem o "topo do morro dourado, vale azul" do poente. A UE faz por pixel
+// (bUsePerPixelAtmosphereTransmittance -> DeferredLightPixelShaders.usf).
+//
+// A SOMBRA DO PLANETA e obrigatoria: AtmoTransmittanceParamsToUv nao trata intersecao com o
+// solo, entao com a luz abaixo do horizonte ela devolve um valor pequeno mas > 0 ao longo de um
+// raio que ATRAVESSA o planeta. Sem este guard a geometria fica fracamente iluminada depois do
+// por do sol. O bake de aerial perspective ja usa exatamente este teste.
+//
+// Custo: um tap bilinear numa LUT 256x64 (permanentemente em cache) + ~20 ALU.
+float3 AtmoLightTransmittance(float3 worldPos, float3 dirToLight) {
+    const float bottomR = AtmoLightParams.x;
+    const float topR    = AtmoLightParams.y;
+    const float kmPerWU = AtmoLightParams.z;
+
+    // Espaco km centrado no planeta, com XZ zerados: direcoes sao invariantes a translacao e o
+    // meio e esfericamente simetrico, entao so a altitude importa (mesma escolha do bake de AP,
+    // onde manter o XZ absoluto somava uma altitude fantasma de (X²+Z²)/2R).
+    const float h  = bottomR + max(worldPos.y, 0.0f) * kmPerWU;
+    const float3 p = float3(0.0f, clamp(h, bottomR, topR - 1.0f), 0.0f);
+
+    if (AtmoRaySphereNearest(p, dirToLight, bottomR) > 0.0f)
+        return float3(0.0f, 0.0f, 0.0f); // sombra do planeta
+
+    const float2 uv = AtmoTransmittanceParamsToUv(p.y, dirToLight.y, bottomR, topR);
+    return AtmoTransmittanceLUT.SampleLevel(IBLSampler, uv, 0.0f).rgb;
+}
 
 struct VSOutput {
     float4 pos : SV_POSITION;
@@ -179,6 +221,26 @@ float SpecularOcclusionFromAO(float noV, float roughness, float ao) {
 // Amostra o indireto do DDGI respeitando os flags do frame (Chebyshev/skip de probes inativos).
 // Caminho UNICO p/ geometria e folhagem — com os pisos defensivos do Chebyshev (DDGICommon),
 // folhagem densa nao crusha mais a preto e nao precisa de sampling separado.
+// Ambiente indireto para pontos FORA do volume de sondas: reproduz o que este mesmo shader
+// usaria se o GI estivesse desligado, e nessa ordem — ambiente atmosferico hemisferico quando
+// ligado (o ramo UseAtmoAmbient), senao o difuso do IBL (o ramo IBLParams.w), senao nada.
+// Seguir o gate importa: sem ele, desligar o ambiente atmosferico deixaria o fallback usando as
+// cores dele assim mesmo, que nao e o que o resto da cena faz.
+//
+// O caller multiplica por giIntensity, entao dividimos aqui: o ambiente de fora do volume nao
+// deve escalar com o slider de intensidade do GI — a promessa e "o mesmo que existiria sem GI".
+float3 DDGI_FallbackAmbient(float3 N) {
+    float3 amb = float3(0.0f, 0.0f, 0.0f);
+    if (SkyAmbientColor.w > 0.5f) {
+        amb = SkyAmbientForNormal(N) * GroundAmbientColor.w;
+    } else if (IBLParams.w > 0.5f) {
+        amb = IrradianceMap.SampleLevel(IBLSampler, RotateY(N, IBLParams.y), 0.0f).rgb
+            * IBLParams.x;
+    }
+    float giI = (DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f; // espelha o giIntensity do caller
+    return amb / giI;
+}
+
 float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
     int  giFlags      = (int)DDGIDistParams.w;
@@ -186,18 +248,29 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     bool skip         = (giFlags & 2) != 0;
     bool fallback     = (giFlags & 4) != 0;
     uint skipMode     = skip ? (fallback ? 2u : 1u) : 0u;
+
+    // Fora do volume o gather nao falha: ele CLAMPA e estende as probes de borda ao infinito.
+    // Quando o peso cai a zero nem vale pagar os 8 taps.
+    float volW = DDGI_VolumeWeight(worldPos, DDGIGridMin.xyz, DDGIGridMin.w,
+                                   (int3)DDGIGridCount.xyz, DDGIBiasParams.z);
+    if (volW <= 0.0f) return DDGI_FallbackAmbient(N);
+
+    float3 gi;
     if (useChebyshev) {
         float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
         float3 V = normalize(CameraPosition.xyz - worldPos);
-        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w);
-        return SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
-                   worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                   (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                   DDGIProbeData, skipMode);
+        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w,
+                                          DDGIBiasParams.x, DDGIBiasParams.y);
+        gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
+                 worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
+                 DDGIProbeData, skipMode);
+    } else {
+        gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
+                 DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize);
     }
-    return SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-               DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-               (int)DDGIParams.y, atlasInvSize);
+    return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }
 
 float4 main(VSOutput input) : SV_Target {
@@ -260,17 +333,25 @@ float4 main(VSOutput input) : SV_Target {
 
     float3 Lighting = float3(0.0f, 0.0f, 0.0f);
     {
-        float3 Lsun        = normalize(SunDirection.xyz);
-        float3 SunRadiance = SunColor.rgb * SunDirection.w;
+        float3 Lsun = normalize(SunDirection.xyz);
+        // Por pixel: cor CRUA x transmitancia medida na altitude desta superficie. O
+        // HorizonFade da CPU (que apagava o sol nos ultimos 1,7 grau de elevacao) NAO entra
+        // aqui — ele existia em cima de uma transmitancia que ja colapsa sozinha ali, e
+        // empilhar os dois criava um degrau de brilho na varredura do sol.
+        float3 SunRadiance = (AtmoLightParams.w > 0.5f)
+            ? SunColorRaw.rgb * AtmoLightTransmittance(worldPos, Lsun) * SunDirection.w
+            : SunColor.rgb * SunDirection.w;
         float3 SunLit      = BRDF_Direct(N, V, Lsun, SunRadiance,
-                                         DiffuseColor, SpecularColor, Metallic, Roughness, a2, TransColor);
+                                         DiffuseColor, SpecularColor, Roughness, a2, TransColor);
 
         float3 MoonLit = float3(0.0f, 0.0f, 0.0f);
         if (MoonDirection.w > 0.0f) {
             float3 Lmoon        = normalize(MoonDirection.xyz);
-            float3 MoonRadiance = MoonColor.rgb * MoonDirection.w;
+            float3 MoonRadiance = (AtmoLightParams.w > 0.5f)
+                ? MoonColorRaw.rgb * AtmoLightTransmittance(worldPos, Lmoon) * MoonDirection.w
+                : MoonColor.rgb * MoonDirection.w;
             MoonLit = BRDF_Direct(N, V, Lmoon, MoonRadiance,
-                                  DiffuseColor, SpecularColor, Metallic, Roughness, a2, TransColor);
+                                  DiffuseColor, SpecularColor, Roughness, a2, TransColor);
         }
 
         // Sombra das nuvens: projeta o ponto ate a base da camada na direcao da key light
@@ -288,7 +369,16 @@ float4 main(VSOutput input) : SV_Target {
             }
         }
 
-        Lighting += (SunLit + MoonLit) * SampleCSM(worldPos, N, input.pos.xy) * cloudShadow;
+        // O CSM so e amostrado quando existe luz direta para ele modular. Com N.L <= 0 (e sem
+        // transmissao) o BRDF_DirectSplit ja devolveu zero, e o antigo produto incondicional
+        // gastava 16-32 SampleCmp — mais 17 Load quando o PCSS esta ligado — para multiplicar
+        // zero. Numa cena externa isso e ~metade dos pixels. O resultado e identico pixel a
+        // pixel (0 * x = 0) e folhagem/subsurface seguem cobertas: elas transmitem via
+        // TransColor, entao SunLit continua > 0 mesmo com N.L <= 0 e o gate deixa passar.
+        float3 Direct = SunLit + MoonLit;
+        [branch] if (any(Direct > 0.0f))
+            Direct *= SampleCSM(worldPos, N, input.pos.xy) * cloudShadow;
+        Lighting += Direct;
     }
 
     // Luzes puntuais (point/spot): inverse-square com janela de raio da Unreal
@@ -297,7 +387,8 @@ float4 main(VSOutput input) : SV_Target {
     // luz nao estoura a branco) + mascara de cone quadratica no spot (UE/Flax identicas).
     // SEM sombra na F1 (luz vaza parede) — sombras locais chegam na F3.
     {
-        uint NumLights = (uint)LightParams.x;
+        // ReSTIR DI resolve o conjunto local inteiro; o loop raster nao participa.
+        uint NumLights = (LightParams.w < 0.5f) ? (uint)LightParams.x : 0u;
         [loop]
         for (uint li = 0; li < NumLights; ++li) {
             FGPULight Lp = Lights[li];
@@ -326,6 +417,8 @@ float4 main(VSOutput input) : SV_Target {
             // Sombra local: spot projeta pelo ShadowMatrix (slice 2D, F3a); point vai pelo
             // cube array com refZ do eixo dominante (F3b). Normal offset pequeno nos dois
             // contra acne de contato.
+            // Visibilidade BASE: o que o shadow map entrega. Fica 1 quando a luz nao tem slice.
+            float baseVis = 1.0f;
             if (Lp.SpotParams.y >= 0.0f) {
                 float3 offPos = worldPos + N * 0.02f;
                 float  shadow = 1.0f;
@@ -354,8 +447,9 @@ float4 main(VSOutput input) : SV_Target {
                 // Fade do slot: a luz que perde o slice nao vira sem-sombra de um frame pro
                 // outro (a luz passaria a vazar parede num piscar). O slice segue valido
                 // enquanto o fade cai, e o mapa some suave.
-                Atten *= lerp(1.0f, shadow, Lp.SpotParams.z);
+                baseVis = lerp(1.0f, shadow, Lp.SpotParams.z);
             }
+            Atten *= baseVis;
             if (Atten <= 0.0f) continue;
 
             // F4: especular de area — SourceRadius alarga o highlight (representative point);
@@ -365,9 +459,11 @@ float4 main(VSOutput input) : SV_Target {
                                                    ToLight, V, N, Ls);
             Lighting += BRDF_DirectArea(N, V, L, Ls, SpecEnergy,
                                         Lp.ColorSourceRadius.rgb * Atten,
-                                        DiffuseColor, SpecularColor, Metallic, Roughness, a2,
+                                        DiffuseColor, SpecularColor, Roughness, a2,
                                         TransColor);
         }
+        if (LightParams.w > 0.5f)
+            Lighting += DirectLocalTex.Load(int3(px, 0)).rgb;
     }
 
     float3 Ambient = float3(0.0f, 0.0f, 0.0f);
@@ -377,10 +473,9 @@ float4 main(VSOutput input) : SV_Target {
     bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
 
     if (UseAtmoAmbient && !UseGI) {
-        float  hemi       = saturate(N.y * 0.5f + 0.5f);
-        float3 ambientCol = lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
-        float3 KdAmb      = (1.0f - Metallic);
-        Ambient += KdAmb * DiffuseColor * ambientCol * AODiffuse * GroundAmbientColor.w;
+        float3 ambientCol = SkyAmbientForNormal(N);
+        // Sem (1 - Metallic) aqui: ele ja esta no DiffuseColor (convencao em BRDF.hlsli).
+        Ambient += DiffuseColor * ambientCol * AODiffuse * GroundAmbientColor.w;
     }
 
     if (IBLParams.w > 0.5f) {
@@ -389,7 +484,7 @@ float4 main(VSOutput input) : SV_Target {
         float3 RotR = RotateY(R, IBLParams.y);
 
         float3 F     = F_SchlickRoughness(SpecularColor, NoV, Roughness);
-        float3 KdIBL = (1.0f - F) * (1.0f - Metallic);
+        float3 KdIBL = (1.0f - F); // o (1 - Metallic) vive no DiffuseColor
 
         float3 Irradiance  = IrradianceMap.SampleLevel(IBLSampler, RotN, 0.0f).rgb;
         float3 DiffuseIBL  = KdIBL * DiffuseColor * Irradiance;
@@ -447,8 +542,8 @@ float4 main(VSOutput input) : SV_Target {
 
         // Intensidade do GI: usa o slider do DDGI quando ha grid; senao (ReSTIR sem DDGI) cai em 1.
         float giIntensity = (UseGI && DDGIParams.x > 0.0f) ? DDGIParams.x : 1.0f;
-        float3 KdGI = (1.0f - Metallic);
-        Ambient += KdGI * DiffuseColor * gi * giIntensity * AODiffuse;
+        // idem: metallic ja aplicado no DiffuseColor
+        Ambient += DiffuseColor * gi * giIntensity * AODiffuse;
 
         if (IBLParams.w <= 0.5f) {
             float3 Fa = F_SchlickRoughness(SpecularColor, NoV, Roughness);

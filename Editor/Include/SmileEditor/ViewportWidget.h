@@ -11,142 +11,80 @@
 #include <QVariantList>
 #include <QStringList>
 #include <array>
+#include <deque>
+#include <functional>
 #include <memory>
 #include "Smile/Math/Math.h"
 #include "SmileEditor/GizmoController.h"
+#include "SmileEditor/RenderThread.h"
 
 class QTimer;
 class QPaintEngine;
 class QKeyEvent;
 class QMouseEvent;
 
-namespace Smile { class Renderer; }
+namespace Smile {
+    class Renderer;
+    struct FPreparedCookedScene;
+}
 
 namespace SmileEditor {
     class ViewportWidget : public QWidget {
         Q_OBJECT
-        Q_PROPERTY(int viewMode READ GetViewMode NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int viewMode READ GetViewMode NOTIFY ViewStateChanged)
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
-        Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewStateChanged)
+        // Instrumentacao de timer nos passes de RT (NVAPI). "Available" e false em GPU
+        // nao-NVIDIA: o QML desabilita o controle em vez de escondê-lo.
+        Q_PROPERTY(bool rtShaderTimerAvailable READ IsRtShaderTimerAvailable NOTIFY DebugTargetsChanged)
+        Q_PROPERTY(bool rtShaderTimerEnabled READ IsRtShaderTimerEnabled NOTIFY DebugSettingsChanged)
+        // Debug da BVH: raio primario na TLAS. "Available" e false sem suporte a RT ou antes da
+        // primeira cena — mesma convencao do timer acima.
+        Q_PROPERTY(bool bvhDebugAvailable READ IsBvhDebugAvailable NOTIFY DebugTargetsChanged)
+        Q_PROPERTY(bool bvhDebugEnabled READ IsBvhDebugEnabled NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(int bvhDebugMode READ GetBvhDebugMode NOTIFY DebugSettingsChanged)
         // Janela de debug: selecao multipla (indices), colunas da grade e exposicao.
-        Q_PROPERTY(QVariantList debugSelection READ GetDebugSelection NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int debugColumns READ GetDebugColumns NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double debugExposure READ GetDebugExposure NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QVariantList debugSelection READ GetDebugSelection NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(int debugColumns READ GetDebugColumns NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(double debugExposure READ GetDebugExposure NOTIFY DebugSettingsChanged)
         Q_PROPERTY(int debugPreviewSeq READ GetDebugPreviewSeq NOTIFY DebugPreviewUpdated)
         Q_PROPERTY(bool debugPreviewReady READ IsDebugPreviewReady NOTIFY DebugPreviewUpdated)
-        Q_PROPERTY(bool debugProbeInspecting READ IsDebugProbeInspecting NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int debugProbeIndex READ GetDebugProbeIndex NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeCoord READ GetDebugProbeCoord NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeWorld READ GetDebugProbeWorld NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeGrid READ GetDebugProbeGrid NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QString debugProbeDistanceRange READ GetDebugProbeDistanceRange NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(bool debugProbeInspecting READ IsDebugProbeInspecting NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(int debugProbeIndex READ GetDebugProbeIndex NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeCoord READ GetDebugProbeCoord NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeWorld READ GetDebugProbeWorld NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeGrid READ GetDebugProbeGrid NOTIFY DebugSettingsChanged)
+        Q_PROPERTY(QString debugProbeDistanceRange READ GetDebugProbeDistanceRange NOTIFY DebugSettingsChanged)
         Q_PROPERTY(QString debugProbeDirection READ GetDebugProbeDirection NOTIFY DebugProbeDirectionChanged)
         Q_PROPERTY(QString debugProbeSample READ GetDebugProbeSample NOTIFY DebugProbeSampleChanged)
         Q_PROPERTY(bool debugProbePointPickArmed READ IsDebugProbePointPickArmed NOTIFY DebugProbePointChanged)
         Q_PROPERTY(QString debugProbePointSummary READ GetDebugProbePointSummary NOTIFY DebugProbePointChanged)
         Q_PROPERTY(QVariantList debugProbeContributors READ GetDebugProbeContributors NOTIFY DebugProbePointChanged)
-        Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY ViewSettingsChanged)
-        // Back-face culling nos raios de reflexao (politica por passe).
-        Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY ViewSettingsChanged)
-        // Politica de backface do gather do ReSTIR (retrace + terminacao preta).
-        Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool gtaoEnabled READ IsGTAOEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool gtaoHalfRes READ IsGTAOHalfRes NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool reflectionsEnabled READ AreReflectionsEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool nrdEnabled READ IsNrdEnabled NOTIFY ViewSettingsChanged)
+        Q_PROPERTY(QString viewModeLabel READ GetViewModeLabel NOTIFY ViewStateChanged)
         // Eixo de denoiser {0=Nenhum, 1=NRD, 2=DLSS RR}. rrAvailable gateia a opcao RR na UI.
-        Q_PROPERTY(int denoiserMode READ GetDenoiserMode NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool rrAvailable READ IsRRAvailable NOTIFY RendererInitialized)
-        Q_PROPERTY(int upscalerMode READ GetUpscalerMode NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool fsrAvailable READ IsFsrAvailable NOTIFY RendererInitialized)
-        Q_PROPERTY(bool dlssAvailable READ IsDlssAvailable NOTIFY RendererInitialized)
         // Preset compartilhado FSR/DLSS (nao e so do FSR) — ver Renderer::SetUpscalerQuality.
-        Q_PROPERTY(int upscalerQuality READ GetUpscalerQuality NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int recommendedUpscalerMode READ GetRecommendedUpscalerMode NOTIFY RendererInitialized)
-        Q_PROPERTY(QString recommendedUpscalerName READ GetRecommendedUpscalerName NOTIFY RendererInitialized)
-        Q_PROPERTY(double renderScale READ GetRenderScale NOTIFY ViewSettingsChanged)
-        // Knobs de calibracao dos epsilons de raio (pagina "Iluminacao global"). Lista uniforme
-        // em vez de 9 propriedades nomeadas: sao todos do mesmo formato (label/valor/faixa/unidade)
-        // e a UI e um Repeater — acrescentar ou tirar um knob vira uma linha na tabela do .cpp.
-        Q_PROPERTY(QVariantList rayEpsilons READ GetRayEpsilons NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool taaEnabled READ IsTAAEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool occlusionCullingEnabled READ IsOcclusionCullingEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool sunShadowsEnabled READ AreSunShadowsEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool shadowCacheEnabled READ IsShadowCacheEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool shadowDebugCascades READ IsShadowDebugCascades NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowMaxDistance READ GetShadowMaxDistance NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowDepthBias READ GetShadowDepthBias NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double shadowSunAngle READ GetShadowSunAngle NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool sunShaftsEnabled READ AreSunShaftsEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double sunShaftsIntensity READ GetSunShaftsIntensity NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double sunShaftsDust READ GetSunShaftsDust NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double sunShaftsPhaseG READ GetSunShaftsPhaseG NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int sunShaftsSteps READ GetSunShaftsSteps NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double sunShaftsRange READ GetSunShaftsRange NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool sunShaftsTemporal READ AreSunShaftsTemporal NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool volFogEnabled READ IsVolFogEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double volFogDistance READ GetVolFogDistance NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double volFogPhaseG READ GetVolFogPhaseG NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double volFogDensity READ GetVolFogDensity NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double volFogAmbient READ GetVolFogAmbient NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool volFogTemporal READ IsVolFogTemporal NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double volFogLights READ GetVolFogLights NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool volFogConsDepth READ IsVolFogConsDepth NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool cloudsEnabled READ AreCloudsEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool cloudsHalfRes READ AreCloudsHalfRes NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool cloudsTemporal READ AreCloudsTemporal NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudCoverage READ GetCloudCoverage NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudDensity READ GetCloudDensity NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudWindSpeed READ GetCloudWindSpeed NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudErosion READ GetCloudErosion NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudPhaseG READ GetCloudPhaseG NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudPowder READ GetCloudPowder NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudAmbient READ GetCloudAmbient NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudTypeBias READ GetCloudTypeBias NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudPeakVariation READ GetCloudPeakVariation NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int cloudWeatherSeed READ GetCloudWeatherSeed NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int cloudWeatherCells READ GetCloudWeatherCells NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool cloudWeatherAuthored READ IsCloudWeatherAuthored NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool cloudShadows READ AreCloudShadowsEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudShadowStrength READ GetCloudShadowStrength NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudBottomKm READ GetCloudBottomKm NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double cloudThicknessKm READ GetCloudThicknessKm NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(int cloudMarchSteps READ GetCloudMarchSteps NOTIFY ViewSettingsChanged)
-        // Clima (FWeather do Renderer) — pagina Clima do SettingsWindow.
-        Q_PROPERTY(double rainAmount READ GetRainAmount NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double puddleAmount READ GetPuddleAmount NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double puddleScale READ GetPuddleScale NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double rippleStrength READ GetRippleStrength NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double wetDarkening READ GetWetDarkening NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double curtainAmount READ GetCurtainAmount NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool rainOcclusion READ IsRainOcclusion NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool rainParticles READ AreRainParticles NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool weatherDriveSky READ IsWeatherDriveSky NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY ViewSettingsChanged)
-        Q_PROPERTY(double fps READ GetFPS NOTIFY FrameReady)
-        Q_PROPERTY(double frameTimeMs READ GetFrameTimeMs NOTIFY FrameReady)
-        Q_PROPERTY(int visibleDrawCount READ GetVisibleDrawCount NOTIFY FrameReady)
-        Q_PROPERTY(int occludedDrawCount READ GetOccludedDrawCount NOTIFY FrameReady)
-        Q_PROPERTY(int totalDrawCount READ GetTotalDrawCount NOTIFY FrameReady)
-        Q_PROPERTY(QString internalResolution READ GetInternalResolution NOTIFY FrameReady)
-        Q_PROPERTY(QString outputResolution READ GetOutputResolution NOTIFY FrameReady)
+        // Height fog analitico: quanto do inscatter vem do ceu daquela direcao (0 = cor chapada)
+        // Sol/lua atenuados por pixel na altitude da superficie (vs. uma cor por frame)
+        // Ambiente do ceu em SH-L1 (direcional) vs. as 2 cores chapadas
+        // Telemetria de UI e publicada a 5 Hz; FrameReady continua sendo o pulso interno por frame.
+        Q_PROPERTY(double fps READ GetFPS NOTIFY TelemetryUpdated)
+        Q_PROPERTY(double frameTimeMs READ GetFrameTimeMs NOTIFY TelemetryUpdated)
+        Q_PROPERTY(int visibleDrawCount READ GetVisibleDrawCount NOTIFY TelemetryUpdated)
+        Q_PROPERTY(int occludedDrawCount READ GetOccludedDrawCount NOTIFY TelemetryUpdated)
+        Q_PROPERTY(int totalDrawCount READ GetTotalDrawCount NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString internalResolution READ GetInternalResolution NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString outputResolution READ GetOutputResolution NOTIFY TelemetryUpdated)
         Q_PROPERTY(QString gpuName READ GetGPUName NOTIFY RendererInitialized)
         Q_PROPERTY(QString vramText READ GetVRAMText NOTIFY RendererInitialized)
-        Q_PROPERTY(QString vramUsageText READ GetVRAMUsageText NOTIFY FrameReady)
-        Q_PROPERTY(bool vramOverBudget READ IsVRAMOverBudget NOTIFY FrameReady)
-        Q_PROPERTY(double vramBudgetFrac READ GetVRAMBudgetFrac NOTIFY FrameReady)
-        Q_PROPERTY(QString vramNonLocalText READ GetVRAMNonLocalText NOTIFY FrameReady)
-        Q_PROPERTY(QVariantList vramBreakdown READ GetVRAMBreakdown NOTIFY FrameReady)
-        Q_PROPERTY(QString gpuFrameText READ GetGpuFrameText NOTIFY FrameReady)
-        Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY FrameReady)
+        Q_PROPERTY(QString vramUsageText READ GetVRAMUsageText NOTIFY TelemetryUpdated)
+        Q_PROPERTY(bool vramOverBudget READ IsVRAMOverBudget NOTIFY TelemetryUpdated)
+        Q_PROPERTY(double vramBudgetFrac READ GetVRAMBudgetFrac NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString vramNonLocalText READ GetVRAMNonLocalText NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QVariantList vramBreakdown READ GetVRAMBreakdown NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QString gpuFrameText READ GetGpuFrameText NOTIFY TelemetryUpdated)
+        Q_PROPERTY(double gpuFrameMs READ GetGpuFrameMs NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY TelemetryUpdated)
 
     public:
         // Valores explicitos preservados (o QML compara viewMode com inteiros fixos; o 1 era o
@@ -161,11 +99,25 @@ namespace SmileEditor {
         explicit ViewportWidget(QWidget* parent = nullptr);
         ~ViewportWidget() override;
 
-        Smile::Renderer* GetRenderer() const { return Renderer.get(); }
+        // Para o fechamento da janela: solicita a parada sem bloquear a message pump. O
+        // QObject deve permanecer vivo ate RendererStopped ser emitido.
+        void              BeginRendererShutdown();
+        bool              IsRendererStopped() const { return RendererStoppedFlag; }
+        RendererHandle    GetRenderer() const { return Renderer; }
+        using SceneCommitCallback = std::function<void(bool, const QString&)>;
+        bool CommitPreparedSceneAsync(
+            std::shared_ptr<Smile::FPreparedCookedScene> Prepared,
+            bool Additive,
+            SceneCommitCallback Completion);
         float            GetFPS()      const { return LastFPS; }
         int               GetViewMode() const { return CurrentViewMode; }
         QStringList       GetDebugTargetNames() const;
         int               GetDebugTargetIndex() const;
+        bool              IsRtShaderTimerAvailable() const;
+        bool              IsRtShaderTimerEnabled() const;
+        bool              IsBvhDebugAvailable() const;
+        bool              IsBvhDebugEnabled() const;
+        int               GetBvhDebugMode() const;
         QVariantList      GetDebugSelection() const;
         int               GetDebugColumns() const;
         double            GetDebugExposure() const;
@@ -173,6 +125,10 @@ namespace SmileEditor {
         bool              IsDebugPreviewReady() const;
         QImage            DebugPreviewImageCopy() const;
         void              SetDebugPreviewEnabled(bool enabled);
+        // Chamados pelo NativeWindowFilter no WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE. Durante o
+        // arraste o DXGI estica o backbuffer atual; a realocacao pesada acontece so no fim.
+        void              BeginInteractiveResize();
+        void              EndInteractiveResize();
         bool              IsDebugProbeInspecting() const { return DebugProbeSessionActive; }
         int               GetDebugProbeIndex() const;
         QString           GetDebugProbeCoord() const;
@@ -185,82 +141,6 @@ namespace SmileEditor {
         QString           GetDebugProbePointSummary() const { return DebugProbePointSummary; }
         QVariantList      GetDebugProbeContributors() const { return DebugProbeContributors; }
         QString           GetViewModeLabel() const;
-        bool              IsDDGIEnabled() const;
-        bool              IsReSTIRGIEnabled() const;
-        bool              IsReSTIRGIVisibilityEnabled() const;
-        bool              AreGIFoliageShadowsEnabled() const;
-        bool              IsReflectionsCullBackfaceEnabled() const;
-        bool              IsGIBackfacePolicyEnabled() const;
-        bool              IsGTAOEnabled() const;
-        bool              IsGTAOHalfRes() const;
-        bool              AreReflectionsEnabled() const;
-        bool              IsNrdEnabled() const;
-        int               GetDenoiserMode() const;   // 0=Nenhum 1=NRD 2=DLSS Ray Reconstruction
-        bool              IsRRAvailable() const;      // DLSS RR suportado (NVIDIA RTX + SDK)
-        int               GetUpscalerMode() const;
-        bool              IsFsrAvailable() const;
-        bool              IsDlssAvailable() const;
-        int               GetUpscalerQuality() const;
-        int               GetRecommendedUpscalerMode() const;
-        QString           GetRecommendedUpscalerName() const;
-        double            GetRenderScale() const;
-        QVariantList      GetRayEpsilons() const;
-        bool              IsTAAEnabled() const;
-        bool              IsFrustumCullingEnabled() const;
-        bool              IsOcclusionCullingEnabled() const;
-        bool              AreSunShadowsEnabled() const;
-        bool              IsShadowCacheEnabled() const;
-        bool              IsShadowDebugCascades() const;
-        double            GetShadowMaxDistance() const;
-        double            GetShadowDepthBias() const;
-        double            GetShadowMinCasterTexels() const;
-        QVariantList      GetShadowCascadeBias() const;
-        double            GetShadowSunAngle() const;
-        bool              AreSunShaftsEnabled() const;
-        double            GetSunShaftsIntensity() const;
-        double            GetSunShaftsDust() const;
-        double            GetSunShaftsPhaseG() const;
-        int               GetSunShaftsSteps() const;
-        double            GetSunShaftsRange() const;
-        bool              AreSunShaftsTemporal() const;
-        bool              IsVolFogEnabled() const;
-        double            GetVolFogDistance() const;
-        double            GetVolFogPhaseG() const;
-        double            GetVolFogDensity() const;
-        double            GetVolFogAmbient() const;
-        bool              IsVolFogTemporal() const;
-        double            GetVolFogLights() const;
-        bool              IsVolFogConsDepth() const;
-        bool              AreCloudsEnabled() const;
-        bool              AreCloudsHalfRes() const;
-        bool              AreCloudsTemporal() const;
-        double            GetCloudCoverage() const;
-        double            GetCloudDensity() const;
-        double            GetCloudWindSpeed() const;
-        double            GetCloudErosion() const;
-        double            GetCloudPhaseG() const;
-        double            GetCloudPowder() const;
-        double            GetCloudAmbient() const;
-        double            GetCloudTypeBias() const;
-        double            GetCloudPeakVariation() const;
-        int               GetCloudWeatherSeed() const;
-        int               GetCloudWeatherCells() const;
-        bool              IsCloudWeatherAuthored() const;
-        bool              AreCloudShadowsEnabled() const;
-        double            GetCloudShadowStrength() const;
-        double            GetCloudBottomKm() const;
-        double            GetCloudThicknessKm() const;
-        int               GetCloudMarchSteps() const;
-        double            GetRainAmount() const;
-        double            GetPuddleAmount() const;
-        double            GetPuddleScale() const;
-        double            GetRippleStrength() const;
-        double            GetWetDarkening() const;
-        double            GetCurtainAmount() const;
-        bool              IsRainOcclusion() const;
-        bool              AreRainParticles() const;
-        bool              IsWeatherDriveSky() const;
-        bool              IsDepthPrepassEnabled() const;
         double            GetFrameTimeMs() const;
         int               GetVisibleDrawCount() const;
         int               GetTotalDrawCount() const;
@@ -275,6 +155,7 @@ namespace SmileEditor {
         QString           GetVRAMNonLocalText() const;
         QVariantList      GetVRAMBreakdown() const;
         QString           GetGpuFrameText() const;
+        double            GetGpuFrameMs() const;
         QVariantList      GetGpuTimings() const;
 
         Q_INVOKABLE void SelectLit();
@@ -283,6 +164,9 @@ namespace SmileEditor {
         Q_INVOKABLE void SelectDebugTarget(int index);
         Q_INVOKABLE void ToggleDebugSelection(int index);   // liga/desliga um alvo na grade
         Q_INVOKABLE void ClearDebugSelection();
+        Q_INVOKABLE void ToggleRtShaderTimer();             // instrumentacao de timer nos traces
+        Q_INVOKABLE void ToggleBvhDebug();                  // raio primario na TLAS
+        Q_INVOKABLE void SetBvhDebugMode(int mode);         // 0 categoria, 1 instancia, 2 complexidade
         Q_INVOKABLE void SetDebugColumns(int columns);      // 0 = grade automatica
         Q_INVOKABLE void SetDebugExposure(double exposure); // multiplicador global
         Q_INVOKABLE void InspectDDGIProbe(int targetIndex, double u, double v,
@@ -302,83 +186,11 @@ namespace SmileEditor {
             emit DebugTargetsChanged();
             // RegisterDebugTargets remapeia selecoes por nome quando a disponibilidade de
             // DDGI/ReSTIR muda; a QML precisa reler tambem os indices selecionados.
-            emit ViewSettingsChanged();
+            emit ViewStateChanged();
+            emit DebugSettingsChanged();
         }
-        Q_INVOKABLE void ToggleDDGI();
-        Q_INVOKABLE void ToggleReSTIRGI();
-        Q_INVOKABLE void ToggleReSTIRGIVisibility();
-        Q_INVOKABLE void ToggleGIFoliageShadows();
-        Q_INVOKABLE void ToggleReflectionsCullBackface();
-        Q_INVOKABLE void ToggleGIBackfacePolicy();
-        Q_INVOKABLE void ToggleGTAO();
-        Q_INVOKABLE void ToggleGTAOHalfRes();
-        Q_INVOKABLE void ToggleReflections();
-        Q_INVOKABLE void ToggleNrd();
-        Q_INVOKABLE void SetDenoiserMode(int mode);   // 0=Nenhum 1=NRD 2=DLSS RR (RR acopla upscaler=DLSS)
-        Q_INVOKABLE void SetUpscalerMode(int mode);
-        Q_INVOKABLE void SetUpscalerQuality(int quality);
-        Q_INVOKABLE void SetRenderScale(double scale);
         // Valor em UNIDADE DE UI (mm p/ os offsets, frames p/ a idade) — a conversao p/ metros
         // fica na tabela. Cada mudanca invalida reservoirs + historico do denoiser.
-        Q_INVOKABLE void SetRayEpsilon(const QString& key, double uiValue);
-        Q_INVOKABLE void ResetRayEpsilons();
-        Q_INVOKABLE void SetTAAEnabled(bool enabled);
-        Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);
-        Q_INVOKABLE void SetOcclusionCullingEnabled(bool enabled);
-        Q_INVOKABLE void SetSunShadowsEnabled(bool enabled);
-        Q_INVOKABLE void SetShadowCacheEnabled(bool enabled);
-        Q_INVOKABLE void SetShadowDebugCascades(bool enabled);
-        Q_INVOKABLE void SetShadowMaxDistance(double distance);
-        Q_INVOKABLE void SetShadowDepthBias(double bias);
-        Q_INVOKABLE void SetShadowMinCasterTexels(double texels);
-        Q_INVOKABLE void SetShadowCascadeBiasScale(int cascade, double scale);
-        Q_INVOKABLE void SetShadowSunAngle(double degrees);
-        Q_INVOKABLE void SetSunShaftsEnabled(bool enabled);
-        Q_INVOKABLE void SetSunShaftsIntensity(double value);
-        Q_INVOKABLE void SetSunShaftsDust(double value);
-        Q_INVOKABLE void SetSunShaftsPhaseG(double value);
-        Q_INVOKABLE void SetSunShaftsSteps(int value);
-        Q_INVOKABLE void SetSunShaftsRange(double value);
-        Q_INVOKABLE void SetSunShaftsTemporal(bool enabled);
-        Q_INVOKABLE void SetVolFogEnabled(bool enabled);
-        Q_INVOKABLE void SetVolFogDistance(double value);
-        Q_INVOKABLE void SetVolFogPhaseG(double value);
-        Q_INVOKABLE void SetVolFogDensity(double value);
-        Q_INVOKABLE void SetVolFogAmbient(double value);
-        Q_INVOKABLE void SetVolFogTemporal(bool enabled);
-        Q_INVOKABLE void SetVolFogLights(double value);
-        Q_INVOKABLE void SetVolFogConsDepth(bool enabled);
-        Q_INVOKABLE void SetCloudsEnabled(bool enabled);
-        Q_INVOKABLE void SetCloudsHalfRes(bool halfRes);
-        Q_INVOKABLE void SetCloudsTemporal(bool enabled);
-        Q_INVOKABLE void SetCloudCoverage(double value);
-        Q_INVOKABLE void SetCloudDensity(double value);
-        Q_INVOKABLE void SetCloudWindSpeed(double value);
-        Q_INVOKABLE void SetCloudErosion(double value);
-        Q_INVOKABLE void SetCloudPhaseG(double value);
-        Q_INVOKABLE void SetCloudPowder(double value);
-        Q_INVOKABLE void SetCloudAmbient(double value);
-        Q_INVOKABLE void SetCloudTypeBias(double value);
-        Q_INVOKABLE void SetCloudPeakVariation(double value);
-        Q_INVOKABLE void SetCloudWeatherSeed(int seed);
-        Q_INVOKABLE void SetCloudWeatherCells(int mult);
-        Q_INVOKABLE void LoadCloudWeatherTexture();  // abre QFileDialog
-        Q_INVOKABLE void ClearCloudWeatherTexture();
-        Q_INVOKABLE void SetCloudShadowsEnabled(bool enabled);
-        Q_INVOKABLE void SetCloudShadowStrength(double value);
-        Q_INVOKABLE void SetCloudAltitude(double bottomKm, double thicknessKm);
-        Q_INVOKABLE void SetCloudMarchSteps(int steps);
-        Q_INVOKABLE void SetRainAmount(double value);
-        Q_INVOKABLE void SetPuddleAmount(double value);
-        Q_INVOKABLE void SetPuddleScale(double value);
-        Q_INVOKABLE void SetRippleStrength(double value);
-        Q_INVOKABLE void SetWetDarkening(double value);
-        Q_INVOKABLE void SetCurtainAmount(double value);
-        Q_INVOKABLE void SetRainOcclusion(bool enabled);
-        Q_INVOKABLE void SetRainParticles(bool enabled);
-        Q_INVOKABLE void SetWeatherDriveSky(bool enabled);
-        Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
-        Q_INVOKABLE void ResetRenderSettings();
         Q_INVOKABLE void RequestSettings();
 
         QPaintEngine* paintEngine() const override;
@@ -397,45 +209,118 @@ namespace SmileEditor {
 
     signals:
         void FrameReady();
+        void TelemetryUpdated(); // 5 Hz: invalida apenas bindings de FPS/GPU/VRAM/resolucao
         void RendererInitialized(); // emitted once when D3D12 renderer is ready
+        // Etapas do boot do renderer (splash). Detail traz o adaptador quando ele fica conhecido.
+        void InitProgress(const QString& label, const QString& detail, qreal fraction);
         void ObjectSelected(int sceneIndex); // clique no viewport: indice na cena (-1 = vazio)
-        void ViewSettingsChanged();
+        // Del / Ctrl+D com o foco NO VIEWPORT. Existem porque selecionar clicando no viewport
+        // move o foco de teclado para ca (setFocus no mousePress), e ai o Keys.onPressed do
+        // SceneOutlinerPanel.qml nunca ve a tecla — o atalho parecia morto embora o botao da UI
+        // funcionasse. Nao viraram QShortcut de aplicacao de proposito: Delete e tecla unica e
+        // um ApplicationShortcut dispararia tambem dentro da busca do outliner, apagando o
+        // objeto selecionado em vez do caractere. Cada foco resolve o seu.
+        void DeleteSelectionRequested();
+        void DuplicateSelectionRequested();
+        void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
+        void DebugSettingsChanged(); // grade, exposicao e sessao de inspecao de probes
         void SettingsRequested();
         // A lista de alvos so muda quando o Renderer recria os targets (boot/resize/troca de
-        // cena) — separada de ViewSettingsChanged p/ a QML nao reconstruir o combo a cada frame.
+        // cena) — separada dos sinais de settings p/ a QML nao reconstruir o combo sem motivo.
         void DebugTargetsChanged();
         void DebugPreviewUpdated();
         void DebugProbeDirectionChanged();
         void DebugProbeSampleChanged();
         void DebugProbePointChanged();
+        void RendererStopped();
 
     private slots:
         void OnRenderTimer();
 
     private:
         void EnsureRendererIsInitialized();
+        void OnRendererInitialized();
+        void OnFrameCompleted(bool Success, bool Terminal, const QString& Error);
+        void OnFrameRendered();
+        void OnRendererInitializationFailed(const QString& Error);
+        void OnRenderThreadStopped();
+        void FlushPendingGizmoInput(Smile::Renderer& Renderer);
+        void ApplyPendingResize();
+        void CaptureTelemetry(Smile::Renderer& Renderer);
+        QVariantList BuildVRAMBreakdown(Smile::Renderer& Renderer) const;
+        QVariantList BuildGpuTimings(Smile::Renderer& Renderer);
+        // Publico p/ o RenderSettingsBridge: os knobs que recriam recurso precisam da MESMA
+        // fila que serializa com os frames.
+    public:
+        bool EnqueueRendererJob(const QString& CoalesceKey,
+                                RenderThread::RendererJob Job,
+                                SceneCommitCallback Completion);
+    private:
+        void DispatchNextRendererJob();
         void InvalidateDebugPreview();
         void ResetDebugProbePoint(bool CancelRendererRequest = true);
+        // Seleciona a probe da SESSAO — as escolhas EXPLICITAS do usuario: abrir a inspecao,
+        // navegar pelo grid, clicar num contribuinte, fechar. O foco automatico do point-pick
+        // chama o renderer direto e NAO passa por aqui, de proposito (ver DebugProbeBaseIndex).
+        void SelectDebugProbe(int ProbeIndex);
         bool GetDebugProbeCoordValues(int& X, int& Y, int& Z,
                                       int& CountX, int& CountY, int& CountZ) const;
 
-        // Teste 2D em tela do clique contra os markers das luzes (nao estao no ID-buffer do
-        // picking GPU). Retorna o indice em Scene.Lights() ou -1; empate = o mais proximo.
-        int PickLightMarker(unsigned int X, unsigned int Y) const;
-
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
-        std::unique_ptr<Smile::Renderer> Renderer;
+        RenderThread   RendererThread;
+        RendererHandle Renderer;
         GizmoController GizmoCtrl; // logica do gizmo de translacao (editor-side)
         QTimer*       RedrawTimer       = nullptr;
+        QTimer*       InitializationDebounce = nullptr;
+        QTimer*       ResizeDebounce    = nullptr;
         bool          Initialized       = false;
+        bool          RendererShutdownRequested = false;
+        bool          RendererStoppedFlag = false;
+        bool          InteractiveResize = false;
+        QSize         PendingResizeSize;
+        QSize         AppliedResizeSize;
 
         QSet<int>     HeldKeys;
         Smile::Vec2   MouseDelta       = Smile::Vec2::Zero();
         bool          MouseLookActive  = false;
         bool          IgnoreNextMove   = false;
+        bool          RendererOwnsSurface = false;
+        struct FQueuedRendererJob {
+            QString                     CoalesceKey;
+            RenderThread::RendererJob   Execute;
+            SceneCommitCallback         Completion;
+        };
+        std::deque<FQueuedRendererJob> RendererJobs;
+        bool          RendererJobActive = false;
+        bool          GizmoMousePending = false;
+        bool          GizmoReleasePending = false;
+        Smile::u32    PendingGizmoMouseX = 0;
+        Smile::u32    PendingGizmoMouseY = 0;
         float         LastFPS          = 0.0f;
+        float         LastFrameDeltaTime = 0.0f;
         QElapsedTimer FrameTimer;
+        QElapsedTimer TelemetryTimer;
+        struct FTelemetrySnapshot {
+            int          VisibleDrawCount = 0;
+            int          TotalDrawCount = 0;
+            int          OccludedDrawCount = 0;
+            QString      InternalResolution = QStringLiteral("—");
+            QString      OutputResolution = QStringLiteral("—");
+            QString      GPUName = QStringLiteral("Inicializando GPU…");
+            QString      VRAMText = QStringLiteral("—");
+            QString      VRAMUsageText = QStringLiteral("—");
+            bool         VRAMOverBudget = false;
+            double       VRAMBudgetFrac = 0.0;
+            QString      VRAMNonLocalText = QStringLiteral("—");
+            QVariantList VRAMBreakdown;
+            QString      GPUFrameText = QStringLiteral("—");
+            double       GPUFrameMs = 0.0;
+            QVariantList GpuTimings;
+        } Telemetry;
+        // Ranking visual dos passes GPU precisa de histerese entre snapshots para nao ficar
+        // trocando de posicao quando dois passes tem custo praticamente igual.
+        QStringList GpuTimingOrder;
         int           CurrentViewMode  = Lit;
         QImage         DebugPreviewImage;
         mutable QMutex DebugPreviewMutex;
@@ -446,6 +331,13 @@ namespace SmileEditor {
         QString        DebugProbeDirection;
         QString        DebugProbeSample;
         bool           DebugProbePointPickArmed = false;
+        // Probe da SESSAO: a ultima que o USUARIO escolheu (SelectDebugProbe). O point-pick
+        // sobrescreve a probe do renderer pela dominante do ponto, mas isso e foco TEMPORARIO e
+        // nao entra aqui — fora do volume nao existe dominante, e e daqui que sai a probe para
+        // onde voltar. Se o pick atualizasse a base, uma cadeia de cliques faria a dominante de
+        // um pick virar "selecao do usuario" e o proximo clique fora do volume restauraria um
+        // contribuinte no lugar da probe original. -1 = nenhuma (fora de inspecao).
+        int            DebugProbeBaseIndex = -1;
         QString        DebugProbePointSummary;
         QVariantList   DebugProbeContributors;
         std::array<Smile::u32, 8> DebugProbeContributorIndices{};

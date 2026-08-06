@@ -16,7 +16,7 @@ float3 Hash33(float3 p) {
 }
 
 float3 StarField(float3 dir, float time) {
-    // Rotacao diurna em torno do polo celeste (StarAxis.xyz = polo pela latitude do TOD),
+    // Rotacao sideral em torno do polo celeste (StarAxis.xyz = polo pela latitude do TOD),
     // angulo StarAxis.w dirigido pelo relogio do TOD — pausa/acelera junto com sol e lua.
     float3 axis = StarAxis.xyz;
     float  a    = StarAxis.w;
@@ -32,7 +32,15 @@ float3 StarField(float3 dir, float time) {
     float3 starDir = normalize(cell + 0.5f + (rnd - 0.5f) * 0.4f);
 
     float3 delta = starDir - d;
-    float  core  = exp(-dot(delta, delta) * 1.2e6f);  
+    // Derivadas estao em pixels da resolucao INTERNA. Converte para pixels da saida antes
+    // de definir sigma, mantendo o fallback com ~0.65px em qualquer render scale/FOV.
+    float3 dOutDx = ddx(d) * kRenderToOutputX;
+    float3 dOutDy = ddy(d) * kRenderToOutputY;
+    float outputPixelAngle2 = max(0.5f * (dot(dOutDx, dOutDx) + dot(dOutDy, dOutDy)),
+                                      1e-12f);
+    const float sigmaPx = 0.65f;
+    float sigma2 = outputPixelAngle2 * sigmaPx * sigmaPx;
+    float core = exp(-dot(delta, delta) / (2.0f * sigma2));
     float  bright = 0.15f + 0.45f * rnd.y;            
     float  twinkle = 0.65f + 0.35f * sin(time * 3.0f + rnd.z * 6.2831853f);
     float3 tint = lerp(float3(1.0f, 0.82f, 0.65f), float3(0.7f, 0.8f, 1.0f), rnd.z);
@@ -41,10 +49,6 @@ float3 StarField(float3 dir, float time) {
 
 float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, float brightness,
                 out float coverage) {
-    coverage = 0.0f;
-    float cosToMoon = dot(viewDir, moonDir);
-    if (cosToMoon <= cosRadius) return float3(0.0f, 0.0f, 0.0f);
-
     float3 up0   = abs(moonDir.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
     float3 right = normalize(cross(up0, moonDir));
     float3 up    = cross(moonDir, right);
@@ -52,7 +56,13 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
     float  rad = sqrt(max(1.0f - cosRadius * cosRadius, 1e-6f)); 
     float2 uv  = float2(dot(viewDir, right), dot(viewDir, up)) / rad; 
     float  rr  = dot(uv, uv);
-    if (rr > 1.0f) return float3(0.0f, 0.0f, 0.0f);
+
+    // Cobertura analitica de aproximadamente um pixel. Os returns antigos aconteciam na borda
+    // geometrica antes do smoothstep e descartavam a metade externa do filtro; a largura fixa
+    // de 8% do raio tambem deixava luas grandes borradas e luas pequenas serrilhadas.
+    float edgeAA = max(0.5f * fwidth(rr), 1e-6f);
+    float edge   = 1.0f - smoothstep(1.0f - edgeAA, 1.0f + edgeAA, rr);
+    coverage = edge;
 
     float  z      = sqrt(max(1.0f - rr, 0.0f));
     float3 fwd    = -moonDir;                            
@@ -61,17 +71,22 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
     float  nx  = dot(normal, right), ny = dot(normal, up), nz = dot(normal, fwd);
     float2 muv = float2(0.5f + atan2(nx, nz) / (2.0f * PI),
                         0.5f - asin(clamp(ny, -1.0f, 1.0f)) / PI);
-    float3 albedo = MoonTex.SampleLevel(LinearClampSampler, muv, 0.0f).rgb;
-    albedo = pow(max(albedo, 0.0f), 2.2f);
+    float ndl = dot(normal, sunDir);
+
+    // Todas as derivadas sao calculadas antes do early-out para permanecerem validas no quad
+    // da borda. A Lua nao tem atmosfera: o terminador e duro, mas ainda recebe cobertura de
+    // aproximadamente um pixel em qualquer fase/tamanho.
+    // A textura e um SRV sRGB: o hardware lineariza e escolhe a mip pelo footprint do disco.
+    float2 muvDx = ddx(muv);
+    float2 muvDy = ddy(muv);
+    float terminatorAA = max(0.5f * fwidth(ndl), 1e-6f);
+    float lit = smoothstep(-terminatorAA, terminatorAA, ndl);
+
+    if (edge <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
+    float3 albedo = MoonTex.SampleGrad(LinearClampSampler, muv, muvDx, muvDy).rgb;
     // Contraste dos mares reforcado: o color map LROC e raso e o tonemap ainda comprime.
     albedo = max((float3)0.0f, 0.13f + (albedo - 0.13f) * 1.8f);
 
-    float  ndl        = dot(normal, sunDir);
-    // Terminator estreito: a lua real tem transicao dia/noite dura (sem atmosfera); a banda
-    // antiga (-0.05..0.18) borrava as fases. Disco iluminado ~uniforme = Lommel-Seeliger, ok.
-    float  lit        = smoothstep(-0.015f, 0.04f, ndl);
-    float  edge = smoothstep(1.0f, 0.92f, rr);
-    coverage = edge;
     // Sem earthshine: a olho nu a parte escura e invisivel contra o ceu; ela continua tapando
     // as estrelas atras (coverage cobre o disco inteiro), entao vira silhueta como na vida real.
     return lit * edge * brightness * albedo;

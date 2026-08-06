@@ -15,12 +15,25 @@ cbuffer ReflectionCB : register(b0) {
     // Campos abaixo nao sao usados por este shader; declarados p/ os offsets do CB baterem ate o
     // perfil de epsilons, que vem no fim do ReflectionConstants.
     row_major float4x4 PrevViewProj;
+    float4 PrevCameraPos;
     float4 TemporalParams;
-    float4 DebugParams;
+    float4 DebugParams;     // w = slot bindless do alvo de timer (< 0 = captura off)
     row_major float4x4 View;
     float4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
-    float4 PolicyParams;    // x = cullar backface nos raios de reflexao (0/1)
+    float4 PolicyParams;            // x = politica deste passe (backface/culling)
+    // Gather do 2o bounce (contrato do HitShading.hlsli).
+    float4 GIDistParams;            // x=distTile, y=distW, z=distH, w=skipMode
+    float4 GIBiasParams;            // x=escala do bias, y=teto em metros, zw=-
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
+    // Cauda da agua: nao usada aqui, declarada p/ alcancar o offset do SkyParams (mesma
+    // convencao dos campos de preenchimento acima).
+    row_major float4x4 ViewProj;
+    float4 WaterEnvironmentParams;
+    float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
 };
 
 // Politica de culling DESTE passe. O Lumen culla na reflexao e nao culla no gather do ReSTIR; a
@@ -31,31 +44,45 @@ uint ReflectionCullFlags() {
 }
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
+#include "../Debug/ShaderTimer.hlsli"
 
 RaytracingAccelerationStructure Scene      : register(t0);
 Texture2D<float4>               SkyViewLUT : register(t1);
 StructuredBuffer<InstanceGeo>   Instances  : register(t2);
 Texture2D<float4>               IrradAtlas : register(t3);
-// t4/t5 aposentados (VB/IB bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
+// t4/t5: atlas de distancia e ProbeData do DDGI — o 2o bounce usa o gather COMPLETO
+// (Chebyshev + bias + skip), igual ao deferred. Antes eram filler do VB/IB bindless.
+Texture2D<float4>               GIDistAtlas : register(t4);
+Buffer<float4>                  GIProbeData : register(t5);
 
 Texture2D<float>                Depth      : register(t6);
 Texture2D<float4>               GBuffer    : register(t7);
 
 #include "../LightsCommon.hlsli"
 StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais nos hits
+#include "../Temporal/TemporalMotionCommon.hlsli"
+StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);
+Texture2D<float4> TemporalSurface : register(t10);
+Texture2D<float4> PrevTemporalSurface : register(t11);
 
 RWTexture2D<float4>             RWReflection : register(u0);
 RWTexture2D<float4>             RWRayData    : register(u1); 
+RWTexture2D<float4>             RWGlossyMotion : register(u2);
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
 
 #include "../GI/HitShading.hlsli" 
+#include "ReflectionMotion.hlsli"
 
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
     uint2 halfPx = DTid.xy;
     if (halfPx.x >= (uint)HalfScreenParams.x || halfPx.y >= (uint)HalfScreenParams.y) return;
+
+    // O alvo de timer deste passe e HALF-RES (o dominio do dispatch), entao a medida vai em
+    // halfPx. O visualizador ja preserva o aspecto de alvo com resolucao propria.
+    SMILE_TIMER_BEGIN(timerStart)
 
     int2 fullPx = int2(halfPx) * 2 + RefTileJitter(halfPx, (uint)TraceParams.x);
     fullPx = min(fullPx, int2((int)ScreenParams.x - 1, (int)ScreenParams.y - 1));
@@ -63,6 +90,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float3 outRadiance = float3(0.0f, 0.0f, 0.0f);
     float  outHitDist  = TraceParams.y;
     float4 outRay      = float4(0.0f, 0.0f, 0.0f, 0.0f); 
+    float4 outMotion   = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     float4 gb        = GBuffer.Load(int3(fullPx, 0));
     float  roughness = gb.b;
@@ -86,7 +114,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         if (roughness < 0.05f) {
             R = reflect(-V, N);
         } else {
-            float2 E = GGX_Rand2((uint2)fullPx, (uint)TraceParams.x);
+            float2 E = GGX_Rand2E((uint2)fullPx, (uint)TraceParams.x, SMILE_RNG_REFL_GLOSSY);
             E.y *= 1.0f - 0.1f; 
             float3x3 basis = GGX_TangentBasis(N);
             float3   Vt    = mul(basis, V);          
@@ -129,6 +157,18 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.RealHitShading = ReflectParams.z > 0.5f;
         P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
         P.ShadowRayMask  = (uint)SunColor.w;
+        P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
+        P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
+        P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
+        P.ReGIREnabled       = ReGIRInvCellEnabled.w > 0.5f;
+        P.ReGIRGridCount     = (int3)ReGIRGridCountSamples.xyz;
+        P.ReGIRSampleCount   = (int)ReGIRGridCountSamples.w;
+        P.ReGIRSlotsSRV      = (uint)ReGIRResources.x;
+        P.ReGIRAverageSRV    = (uint)ReGIRResources.y;
+        P.FrameIndex         = (uint)TraceParams.x;
+        P.ReGIRPad           = 0u;
+        P.SkyViewHeightKm    = SkyParams.x;
+        P.SkyBottomRKm       = SkyParams.y;
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
             float sd;
@@ -136,11 +176,18 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             outRadiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                           q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
                                           ray.Origin, ray.Direction, outHitDist, P, sd);
+            const float3 secondaryHit = ray.Origin + ray.Direction * outHitDist;
+            outMotion = ComputeGlossyMotion((uint2)fullPx, worldPos, N, secondaryHit,
+                                            q.CommittedInstanceID(), roughness,
+                                            SMILE_RNG_REFL_GLOSSY + 137u);
         } else {
-            outRadiance = ShadeSky(R, sunDir, P.SkyIntensity);
+            outRadiance = ShadeSky(R, sunDir, P.SkyIntensity, P);
         }
     }
 
     RWReflection[halfPx] = float4(outRadiance, outHitDist);
     RWRayData[halfPx]    = outRay;
+    RWGlossyMotion[halfPx] = outMotion;
+
+    SMILE_TIMER_END(timerStart, halfPx, DebugParams.w)
 }

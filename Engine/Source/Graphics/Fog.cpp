@@ -18,7 +18,7 @@ namespace Smile {
         BuildPSOs(_Device, _RTFormat);
         CreateConstantBuffer(_Device);
         Initialized = true;
-        LogInfo("Fog deferido (aerial perspective + height fog) inicializado");
+        LogDebug("Fog deferido (aerial perspective + height fog) inicializado");
     }
 
     void FFogPass::BuildRootSignature(ID3D12Device* _Device) {
@@ -37,7 +37,11 @@ namespace Smile {
         D3D12_DESCRIPTOR_RANGE VolFogRange = DepthRange;
         VolFogRange.BaseShaderRegister = 3;
 
-        D3D12_ROOT_PARAMETER RootParams[5]{};
+        // Sky-view LUT: o inscatter do height fog converge p/ a cor do ceu naquela direcao.
+        D3D12_DESCRIPTOR_RANGE SkyViewRange = DepthRange;
+        SkyViewRange.BaseShaderRegister = 4;
+
+        D3D12_ROOT_PARAMETER RootParams[6]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -61,6 +65,11 @@ namespace Smile {
         RootParams[4].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[4].DescriptorTable.pDescriptorRanges   = &VolFogRange;
         RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[5].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[5].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[5].DescriptorTable.pDescriptorRanges   = &SkyViewRange;
+        RootParams[5].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -177,9 +186,12 @@ namespace Smile {
                                   const Vec3& _CameraWorldPos, f32 _KmPerWorldUnit,
                                   const Vec3& _DirToSun, f32 _NearZ, f32 _FarZ,
                                   u32 _Width, u32 _Height, bool _UseAerial, bool _UseHeightFog,
-                                  f32 _AerialDepthKm, bool _VolumetricShafts,
+                                  f32 _AerialDepthKm, f32 _AerialSlices, bool _VolumetricShafts,
                                   bool _VolFogOn, f32 _VolFogMaxDist,
-                                  const Vec4& _VolFogGridZ, const Vec3& _CamForward) {
+                                  const Vec4& _VolFogGridZ, const Vec3& _CamForward,
+                                  const Vec3& _DirToSunTrue, f32 _SkyViewHeightKm,
+                                  f32 _SkyBottomRKm, f32 _SkyContribution,
+                                  const FVolumetricMatchParams& _VolumetricMatch) {
         FrameSlot = _FrameSlot;
         if (!MappedBase) return;
 
@@ -195,14 +207,18 @@ namespace Smile {
         c.FogInscatteringColor      = { FogColor.X, FogColor.Y, FogColor.Z, 1.0f - MaxOpacity };
         c.DirectionalInscatteringColor = { DirColor.X, DirColor.Y, DirColor.Z, DirExponent };
 
-        // shafts volumetricos substituem o analitico (manter os dois dobraria a energia)
-        const bool AnalyticDir = DirEnabled && !_VolumetricShafts;
+        // Sem froxel, shafts continuam substituindo o lobo analitico legado. Com froxel,
+        // eles substituem somente o trecho 0..MaxDistance e o analitico MATCHED continua
+        // dali para fora, sem buraco nem energia dupla.
+        const bool AnalyticDir = DirEnabled && (!_VolumetricShafts || _VolFogOn);
         const Vec3 SunN = _DirToSun.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
         c.InscatteringLightDirection = { SunN.X, SunN.Y, SunN.Z, AnalyticDir ? DirStartDistance : -1.0f };
 
         c.InvViewProj    = _InvViewProjFull;
         c.CameraWorldPos = { _CameraWorldPos.X, _CameraWorldPos.Y, _CameraWorldPos.Z, _KmPerWorldUnit };
-        c.AerialParams   = { _AerialDepthKm, _UseAerial ? 1.0f : 0.0f, _UseHeightFog ? 1.0f : 0.0f,
+        c.AerialParams   = { _AerialDepthKm,
+                             _UseAerial ? std::max(_AerialSlices, 1.0f) : 0.0f,
+                             _UseHeightFog ? 1.0f : 0.0f,
                              _VolumetricShafts ? 1.0f : 0.0f };
         const f32 W = static_cast<f32>(_Width), H = static_cast<f32>(_Height);
         c.ScreenParams   = { W, H, W > 0 ? 1.0f / W : 0.0f, H > 0 ? 1.0f / H : 0.0f };
@@ -211,12 +227,46 @@ namespace Smile {
         c.VolFogParams2  = { _VolFogMaxDist, _VolFogOn ? 1.0f : 0.0f, 0.0f, 0.0f };
         c.CamForwardVF   = { _CamForward.X, _CamForward.Y, _CamForward.Z, 0.0f };
 
+        // Sem view height valido (atmosfera desligada/nao inicializada) a contribuicao cai a
+        // zero: o LUT bindado nesse caso e um placeholder e nao pode ser amostrado.
+        const bool SkyOk = _SkyViewHeightKm > _SkyBottomRKm && _SkyBottomRKm > 0.0f;
+        const Vec3 SunTrue = _DirToSunTrue.NormalizedSafe(Vec3{ 0.0f, 1.0f, 0.0f });
+        c.SkyFogParams = { _SkyViewHeightKm, _SkyBottomRKm,
+                           SkyOk ? std::clamp(_SkyContribution, 0.0f, 1.0f) : 0.0f, 0.0f };
+        c.SkyFogSunDir = { SunTrue.X, SunTrue.Y, SunTrue.Z, 0.0f };
+
+        const bool MatchVolFog = _VolFogOn && _VolumetricMatch.Enabled;
+        if (MatchVolFog) {
+            const Vec3 A{
+                std::max(_VolumetricMatch.Albedo.X, 0.0f),
+                std::max(_VolumetricMatch.Albedo.Y, 0.0f),
+                std::max(_VolumetricMatch.Albedo.Z, 0.0f)
+            };
+            const f32 PhaseG = std::clamp(_VolumetricMatch.DirectionalPhaseG, -0.95f, 0.95f);
+            const f32 SunScale = std::max(_VolumetricMatch.DirectionalScatteringScale, 0.0f);
+            c.VolFogMatchMediumPhase = {
+                std::max(_VolumetricMatch.ExtinctionScale, 0.0f), 0.0f, 0.0f, PhaseG
+            };
+            c.VolFogMatchSun = {
+                _VolumetricMatch.SunRadiance.X * A.X * SunScale,
+                _VolumetricMatch.SunRadiance.Y * A.Y * SunScale,
+                _VolumetricMatch.SunRadiance.Z * A.Z * SunScale,
+                1.0f
+            };
+            c.VolFogMatchAmbient = {
+                _VolumetricMatch.AmbientRadiance.X * A.X,
+                _VolumetricMatch.AmbientRadiance.Y * A.Y,
+                _VolumetricMatch.AmbientRadiance.Z * A.Z,
+                std::max(_VolumetricMatch.AmbientTransitionDistance, 1.0f)
+            };
+        }
+
         *Mapped() = c;
     }
 
     void FFogPass::Execute(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap,
                            u32 _DepthSRVSlot, u32 _AerialVolumeSRVSlot, u32 _VolShaftsSRVSlot,
-                           u32 _VolFogSRVSlot) {
+                           u32 _VolFogSRVSlot, u32 _SkyViewSRVSlot) {
         if (!Initialized) return;
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
         _CommandList->SetPipelineState(PSO.Get());
@@ -225,6 +275,7 @@ namespace Smile {
         _CommandList->SetGraphicsRootDescriptorTable(2, _SRVHeap.GpuHandle(_AerialVolumeSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(_VolShaftsSRVSlot));
         _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(_VolFogSRVSlot));
+        _CommandList->SetGraphicsRootDescriptorTable(5, _SRVHeap.GpuHandle(_SkyViewSRVSlot));
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CommandList->IASetVertexBuffers(0, 0, nullptr);
         _CommandList->IASetIndexBuffer(nullptr);

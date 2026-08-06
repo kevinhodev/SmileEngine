@@ -73,9 +73,9 @@ namespace Smile {
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&DebugController)))) {
                 DebugController->EnableDebugLayer();
                 FactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
-                LogInfo("[D3D12] - Debug Layer Ativado");
+                LogDebug("[D3D12] - Debug Layer Ativado");
             } else {
-                LogWarning("[D3D12] - Debug Layer Indisponivel (Graphics Tools nao Instalado?)");
+                LogDebug("[D3D12] - Debug Layer Indisponivel (Graphics Tools nao Instalado?)");
             }
         }
 
@@ -97,7 +97,7 @@ namespace Smile {
 
         AdapterDescription          = AdapterDesc.Description;
         AdapterDedicatedVideoMemory = static_cast<u64>(AdapterDesc.DedicatedVideoMemory);
-        LogInfo("[D3D12] - Adapter: " + WideToUtf8(AdapterDescription) +
+        LogDebug("[D3D12] - Adapter: " + WideToUtf8(AdapterDescription) +
                 " | vendor=0x" + Hex4(AdapterDesc.VendorId) +
                 " device=0x" + Hex4(AdapterDesc.DeviceId) +
                 " | VRAM dedicada=" +
@@ -132,14 +132,14 @@ namespace Smile {
                         nullptr, &Cookie))) {
                     DebugCallbackCookie = Cookie;
                     DebugCallbackRegistered = true;
-                    LogInfo("[D3D12] - Debug Messages Roteadas para o Logger");
+                    LogDebug("[D3D12] - Debug Messages Roteadas para o Logger");
                 }
             } else {
-                LogWarning("ID3D12InfoQueue1 indisponivel; erros da debug layer so no OutputDebugString");
+                LogDebug("ID3D12InfoQueue1 indisponivel; erros da debug layer so no OutputDebugString");
             }
         }
 
-        LogInfo("[D3D12] - Device Criado");
+        LogDebug("[D3D12] - Device Criado");
 
         if (SUCCEEDED(Device.As(&DeviceRT))) {
             D3D12_FEATURE_DATA_D3D12_OPTIONS5 Options5{};
@@ -147,12 +147,12 @@ namespace Smile {
                                                       &Options5, sizeof(Options5)))) {
                 IsRaytracingSupported =
                     (Options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
-                LogInfo(std::string("[D3D12] - Raytracing Tier: ") +
+                LogDebug(std::string("[D3D12] - Raytracing Tier: ") +
                         std::to_string(static_cast<int>(Options5.RaytracingTier)));
             }
         }
         if (IsRaytracingSupported)
-            LogInfo("[D3D12] - DXR Tier 1.1+ disponivel (inline ray tracing / GI habilitavel)");
+            LogDebug("[D3D12] - DXR Tier 1.1+ disponivel (inline ray tracing / GI habilitavel)");
         else
             LogWarning("[D3D12] - DXR indisponivel (Tier < 1.1); GI sera desativada");
     }

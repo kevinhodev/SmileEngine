@@ -1,5 +1,4 @@
 #include "SmileEditor/MainWindow.h"
-#include "SmileEditor/AboutDialog.h"
 #include "SmileEditor/LogBridge.h"
 #include "SmileEditor/LucideIcon.h"
 #include "SmileEditor/MenuBridge.h"
@@ -9,14 +8,17 @@
 #include "SmileEditor/SmileLogoImageProvider.h"
 #include "SmileEditor/StatusBridge.h"
 #include "SmileEditor/TimeOfDayBridge.h"
+#include "SmileEditor/RenderSettingsBridge.h"
 #include "SmileEditor/LightsBridge.h"
 #include "SmileEditor/SceneOutlinerBridge.h"
+#include "SmileEditor/SceneDocument.h"
 #include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Graphics/D3D12Device.h"
 
 #include <QAction>
@@ -35,6 +37,7 @@
 #include <QMessageBox>
 #include <QFileSystemWatcher>
 #include <QFrame>
+#include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeySequence>
@@ -48,12 +51,14 @@
 #include <QStatusBar>
 #include <QTime>
 #include <QTimer>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace SmileEditor {
-    MainWindow::MainWindow(QWidget* _Parent)
-        : QMainWindow(_Parent)
+    MainWindow::MainWindow(QQmlEngine& _QmlEngine, QWidget* _Parent)
+        : QMainWindow(_Parent), SharedQmlEngine(&_QmlEngine)
     {
         setWindowTitle(tr("Smile Engine"));
         setWindowIcon(QIcon(MakeSmileLogoPixmap(256)));
@@ -88,11 +93,18 @@ namespace SmileEditor {
         TodBridge  = new TimeOfDayBridge(this); // painel Time of Day (renderer chega depois)
         LightsBr   = new LightsBridge(this);          // acoes/props de luz (renderer depois)
         OutlinerBr = new SceneOutlinerBridge(this);   // Scene Outliner (renderer depois)
+        SceneDoc   = new SceneDocument(this);         // camada autorada (.smap)
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
+        RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
         connect(LightsBr, &LightsBridge::LightsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Rebuild);
+
+        // Edicao pelo outliner (esconder/criar/apagar) suja a camada autorada. Move pelo gizmo
+        // ainda nao acende este indicador — mas E salvo, porque o save le a cena viva inteira.
+        connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
+                SceneDoc, &SceneDocument::markDirty);
 
         // Isolar do Editor de Materiais mexe em FRenderable::Visible -> olhos do Outliner
         // refazem. "Selecionar na cena" revela o dock (a arvore segue a selecao sozinha).
@@ -109,8 +121,23 @@ namespace SmileEditor {
 
         CreateStatusBar();
 
-        connect(Viewport, &ViewportWidget::FrameReady,          this, &MainWindow::UpdateStats);
+        connect(Viewport, &ViewportWidget::TelemetryUpdated,    this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
+        // O oceano pode ser ligado tanto no Outliner quanto na janela de settings.
+        // Propaga a invalidação nos dois sentidos para nenhum painel manter cache stale.
+        connect(OutlinerBr, &SceneOutlinerBridge::EnvChanged,
+                RenderBr, &RenderSettingsBridge::OceanSettingsChanged);
+        connect(RenderBr, &RenderSettingsBridge::OceanSettingsChanged,
+                OutlinerBr, &SceneOutlinerBridge::Refresh);
+        // Splash: etapas do boot do renderer e rede de seguranca — se a render thread morrer
+        // (falha de init ou parada precoce), a splash sai junto em vez de ficar por cima.
+        connect(Viewport, &ViewportWidget::InitProgress, this,
+                [this](const QString& _Label, const QString& _Detail, qreal _Fraction) {
+            // Com cena de boot o renderer vale 90% da barra; os 10% finais sao o .sscene.
+            const qreal Scale = StartupScenePath.isEmpty() ? 1.0 : 0.9;
+            emit BootProgress(_Label, _Detail, _Fraction * Scale);
+        });
+        connect(Viewport, &ViewportWidget::RendererStopped, this, &MainWindow::FinishBootStage);
 
         StylesheetWatcher = new QFileSystemWatcher(this);
         const QStringList QSSFiles = GetStylesheetFiles();
@@ -169,7 +196,7 @@ namespace SmileEditor {
                     if (!Watched.contains(F)) ShaderWatcher->addPath(F);
             });
 
-            Smile::LogInfo("Shader Watcher Ativo: " +
+            Smile::LogDebug("Shader Watcher Ativo: " +
                            std::to_string(ShaderFiles.size()) + " Shaders em " +
                            ShadersSourceDir.toStdString());
         } else {
@@ -201,6 +228,16 @@ namespace SmileEditor {
     }
 
     bool MainWindow::eventFilter(QObject* _Obj, QEvent* _Event) {
+        // Cada viewport e sua toolbar apontam para o mesmo alvo. Foco ou clique em qualquer
+        // superficie torna esse alvo o destinatario dos atalhos globais do viewport.
+        if (_Event->type() == QEvent::FocusIn || _Event->type() == QEvent::MouseButtonPress) {
+            const QVariant TargetProperty = _Obj->property("smileViewportTarget");
+            if (QObject* TargetObject = TargetProperty.value<QObject*>()) {
+                if (auto* TargetViewport = qobject_cast<ViewportWidget*>(TargetObject))
+                    ActiveViewport = TargetViewport;
+            }
+        }
+
         // Reflete mostrar/esconder da janela TOD no check do menu "Janela" (cobre o X da
         // propria janela, que fecha via WindowBridge sem passar pelo toggle do menu).
         if (TodDlg && _Obj == TodDlg &&
@@ -229,13 +266,25 @@ namespace SmileEditor {
     }
 
     void MainWindow::closeEvent(QCloseEvent* _Event) {
+        // Nunca destroi o HWND enquanto o worker ainda pode estar em Initialize/Present.
+        // O primeiro close aprovado solicita a parada; Stopped agenda o segundo close.
+        if (RendererShutdownForClose) {
+            _Event->ignore();
+            return;
+        }
+        if (CloseApproved) {
+            ContinueApprovedClose(_Event);
+            return;
+        }
+
         // Sidecars com dirty flag (lights/visibility/materials) fechavam descartando em
         // silencio. Sao baratos de salvar — pergunta uma vez, com Salvar como default.
         const bool LightsDirty    = LightsBr    && LightsBr->Dirty();
         const bool VisDirty       = OutlinerBr  && OutlinerBr->Dirty();
         const bool MaterialsDirty = MaterialsBr && MaterialsBr->Dirty();
         if (!LightsDirty && !VisDirty && !MaterialsDirty) {
-            QMainWindow::closeEvent(_Event);
+            CloseApproved = true;
+            ContinueApprovedClose(_Event);
             return;
         }
 
@@ -260,13 +309,24 @@ namespace SmileEditor {
             if (VisDirty)       OutlinerBr->saveVisibility();
             if (MaterialsDirty) MaterialsBr->saveMaterials();
         }
+        CloseApproved = true;
+        ContinueApprovedClose(_Event);
+    }
+
+    void MainWindow::ContinueApprovedClose(QCloseEvent* _Event) {
+        if (Viewport && !Viewport->IsRendererStopped()) {
+            RendererShutdownForClose = true;
+            _Event->ignore();
+            Viewport->BeginRendererShutdown();
+            return;
+        }
         QMainWindow::closeEvent(_Event);
     }
 
     void MainWindow::CreateTopBar() {
         // Barra unificada em QML: windowBridge (min/max/fechar + zonas do hit-test), menuBridge
         // (menus) e smilelogo (logo procedural da engine como image provider).
-        QQuickWidget* Bar = CreateQmlPanel(
+        QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("MainBar.qml"),
             { { QStringLiteral("windowBridge"), WindowBr },
               { QStringLiteral("menuBridge"),   Menus } },
@@ -278,13 +338,19 @@ namespace SmileEditor {
         // Frameless nativo (Slate-style): instala o filtro no HWND e recalcula o frame/sombra.
         // winId() realiza a janela nativa; o filtro precisa estar ativo antes do primeiro show.
         WinFilter = new NativeWindowFilter(winId(), WindowBr);
+        connect(WinFilter, &NativeWindowFilter::InteractiveResizeStarted, this, [this]() {
+            if (Viewport) Viewport->BeginInteractiveResize();
+        });
+        connect(WinFilter, &NativeWindowFilter::InteractiveResizeFinished, this, [this]() {
+            if (Viewport) Viewport->EndInteractiveResize();
+        });
         qApp->installNativeEventFilter(WinFilter);
         NativeWindowFilter::EnableFrameless(winId());
     }
 
     void MainWindow::CreateStatusBar() {
         StatusBr = new StatusBridge(this);
-        QQuickWidget* Bar = CreateQmlPanel(
+        QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("StatusBar.qml"),
             { { QStringLiteral("statusModel"), StatusBr } },
             this);
@@ -299,46 +365,115 @@ namespace SmileEditor {
         Sb->addWidget(Bar, 1);
     }
 
+    void MainWindow::BeginSceneLoad(const QString& _Path, bool _Additive) {
+        if (SceneLoadInProgress) {
+            if (StatusBr) StatusBr->ShowMessage(tr("Uma cena já está sendo preparada"), 2500);
+            return;
+        }
+        if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized()) {
+            FinishBootStage();
+            return;
+        }
+
+        SceneLoadInProgress = true;
+        if (StatusBr) {
+            StatusBr->ShowMessage(
+                _Additive ? tr("Preparando cena adicional…") : tr("Preparando cena…"));
+        }
+        if (BootSplashActive) emit BootProgress(tr("Preparando cena…"), {}, 0.93);
+
+        using Result = Smile::FPreparedCookedScenePtr;
+        auto* Watcher = new QFutureWatcher<Result>(this);
+        connect(Watcher, &QFutureWatcher<Result>::finished, this,
+                [this, Watcher, Path = _Path, Additive = _Additive]() {
+            Result Prepared = Watcher->result();
+            Watcher->deleteLater();
+            if (CloseApproved || RendererShutdownForClose) {
+                SceneLoadInProgress = false;
+                FinishBootStage();
+                return;
+            }
+            if (!Prepared) {
+                SceneLoadInProgress = false;
+                FinishBootStage();
+                if (StatusBr) StatusBr->ShowMessage(tr("Falha ao preparar a cena"), 5000);
+                QMessageBox::warning(
+                    this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                    tr("Falha ao carregar a cena. Veja o console."));
+                return;
+            }
+
+            if (StatusBr) StatusBr->ShowMessage(tr("Finalizando recursos da cena…"));
+            if (BootSplashActive)
+                emit BootProgress(tr("Finalizando recursos da cena…"), {}, 0.98);
+            const bool Queued = Viewport && Viewport->CommitPreparedSceneAsync(
+                std::move(Prepared), Additive,
+                [this, Path, Additive](bool _Success, const QString& _Error) {
+                    Q_UNUSED(_Error);
+                    SceneLoadInProgress = false;
+                    FinishBootStage();
+
+                    if (!_Success) {
+                        if (StatusBr)
+                            StatusBr->ShowMessage(tr("Falha ao finalizar a cena"), 5000);
+                        QMessageBox::warning(
+                            this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                            tr("Falha ao carregar a cena. Veja o console."));
+                        return;
+                    }
+
+                    if (LightsBr)    LightsBr->OnSceneLoaded(Path, Additive);
+                    // ANTES do outliner: o .smap pode criar e apagar objetos, e a arvore tem de
+                    // ser construida sobre a lista ja editada, nao sobre a do asset cru.
+                    if (SceneDoc)    SceneDoc->OnSceneLoaded(Path, Additive);
+                    if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
+                    if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
+                    if (Viewport)    Viewport->NotifyDebugTargetsChanged();
+                    if (StatusBr) {
+                        StatusBr->ShowMessage(
+                            Additive ? tr("Cena adicionada") : tr("Cena carregada"), 3000);
+                    }
+                });
+            if (!Queued) {
+                SceneLoadInProgress = false;
+                FinishBootStage();
+                if (StatusBr) StatusBr->ShowMessage(tr("Renderizador indisponível"), 5000);
+                QMessageBox::warning(
+                    this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                    tr("O renderizador foi encerrado antes de finalizar a cena."));
+            }
+        });
+
+        Watcher->setFuture(QtConcurrent::run(
+            [ScenePath = _Path.toStdWString()]() {
+                return Smile::Renderer::PrepareCookedScene(ScenePath);
+            }));
+    }
+
     void MainWindow::WireMenuActions() {
         // Renderer pronto (ou nullptr). As acoes de cena/render so valem com a engine inicializada.
-        auto RendererReady = [this]() -> Smile::Renderer* {
+        auto RendererReady = [this]() -> RendererHandle {
             if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized())
                 return Viewport->GetRenderer();
-            return nullptr;
+            return {};
         };
 
         // ---- Arquivo ----
         connect(Menus, &MenuBridge::LoadSceneRequested, this, [this, RendererReady]() {
-            auto* R = RendererReady(); if (!R) return;
+            if (!RendererReady()) return;
             const QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
             const QString File = QFileDialog::getOpenFileName(
                 this, tr("Carregar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            if (!R->LoadCookedScene(File.toStdWString())) {
-                QMessageBox::warning(this, tr("Carregar Cena"),
-                                     tr("Falha ao carregar a cena. Veja o console."));
-            } else {
-                if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/false);
-                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/false);
-                if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/false);
-                if (Viewport) Viewport->NotifyDebugTargetsChanged();
-            }
+            BeginSceneLoad(File, /*additive=*/false);
         });
         connect(Menus, &MenuBridge::AddSceneRequested, this, [this, RendererReady]() {
-            auto* R = RendererReady(); if (!R) return;
+            if (!RendererReady()) return;
             const QString Start = QStringLiteral(SMILE_ASSETS_DIR) + QStringLiteral("/Scenes");
             const QString File = QFileDialog::getOpenFileName(
                 this, tr("Adicionar Cena Cozida"), Start, tr("Cena SmileEngine (*.sscene)"));
             if (File.isEmpty()) return;
-            if (!R->LoadCookedScene(File.toStdWString(), /*Additive=*/true)) {
-                QMessageBox::warning(this, tr("Adicionar Cena"),
-                                     tr("Falha ao adicionar a cena. Veja o console."));
-            } else {
-                if (LightsBr)    LightsBr->OnSceneLoaded(File, /*Additive=*/true);
-                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(File, /*Additive=*/true);
-                if (MaterialsBr) MaterialsBr->OnSceneLoaded(File, /*Additive=*/true);
-                if (Viewport) Viewport->NotifyDebugTargetsChanged();
-            }
+            BeginSceneLoad(File, /*additive=*/true);
         });
         connect(Menus, &MenuBridge::QuitRequested, this, &QWidget::close);
 
@@ -368,8 +503,17 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
 
-        // ---- Ajuda ----
-        connect(Menus, &MenuBridge::AboutRequested, this, &MainWindow::OnHelpAbout);
+        // Del / Ctrl+D vindos do viewport (ver os sinais no ViewportWidget.h). Repetem o
+        // despacho do SceneOutlinerPanel.qml em vez de generaliza-lo porque as duas selecoes
+        // sao mutuamente exclusivas: no maximo um dos ramos existe em cada momento.
+        connect(Viewport, &ViewportWidget::DeleteSelectionRequested, this, [this] {
+            if (OutlinerBr && OutlinerBr->MeshSelected()) { OutlinerBr->deleteSelectedMesh(); return; }
+            if (LightsBr && LightsBr->SelectedIndex() >= 0) LightsBr->removeLight(LightsBr->SelectedIndex());
+        });
+        connect(Viewport, &ViewportWidget::DuplicateSelectionRequested, this, [this] {
+            if (OutlinerBr && OutlinerBr->MeshSelected()) { OutlinerBr->duplicateSelectedMesh(); return; }
+            if (LightsBr && LightsBr->SelectedIndex() >= 0) LightsBr->duplicateLight(LightsBr->SelectedIndex());
+        });
 
         // ---- Atalhos globais (ApplicationShortcut: valem com o foco no viewport, nao so na barra).
         // Disparam o mesmo caminho dos menus (chamam o MenuBridge -> sinal -> handler acima).
@@ -383,6 +527,34 @@ namespace SmileEditor {
         AddShortcut(QKeySequence(tr("Ctrl+Shift+T")), [this]{ Menus->toggleDebugTargets(); });
         AddShortcut(QKeySequence(tr("Ctrl+,")),       [this]{ ShowSettings(); });
         AddShortcut(QKeySequence::Quit,               [this]{ close(); });
+        AddShortcut(QKeySequence(tr("Alt+1")), [this] {
+            if (ActiveViewport) ActiveViewport->SelectLit();
+        });
+        AddShortcut(QKeySequence(tr("Alt+5")), [this] {
+            if (ActiveViewport) ActiveViewport->SelectReflectionHeatmap();
+        });
+    }
+
+    void MainWindow::RegisterViewport(ViewportWidget* _Viewport, QWidget* _Toolbar) {
+        if (!_Viewport) return;
+
+        connect(_Viewport, &ViewportWidget::RendererStopped, this, [this, _Viewport]() {
+            if (!RendererShutdownForClose || _Viewport != Viewport) return;
+            RendererShutdownForClose = false;
+            // Deixa o callback Stopped retornar antes de destruir a arvore QWidget.
+            QTimer::singleShot(0, this, [this]() { close(); });
+        });
+
+        const QVariant Target = QVariant::fromValue(static_cast<QObject*>(_Viewport));
+        _Viewport->setProperty("smileViewportTarget", Target);
+        _Viewport->installEventFilter(this);
+
+        if (_Toolbar) {
+            _Toolbar->setProperty("smileViewportTarget", Target);
+            _Toolbar->installEventFilter(this);
+        }
+
+        if (!ActiveViewport) ActiveViewport = _Viewport;
     }
 
     QWidget* MainWindow::CreateViewportChrome() {
@@ -398,13 +570,24 @@ namespace SmileEditor {
         Viewport = new ViewportWidget(Shell);
         Viewport->setObjectName("MainViewport");
 
-        QQuickWidget* Toolbar = CreateQmlPanel(
+        QVariantMap ToolbarProperties;
+        ToolbarProperties.insert(
+            QStringLiteral("viewportModel"),
+            QVariant::fromValue(static_cast<QObject*>(Viewport)));
+        ToolbarProperties.insert(
+            QStringLiteral("renderModel"),
+            QVariant::fromValue(static_cast<QObject*>(RenderBr)));
+
+        QQuickWidget* Toolbar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ViewportToolbar.qml"),
-            { { QStringLiteral("viewportModel"), Viewport } },
-            Shell);
+            {},
+            Shell,
+            {},
+            ToolbarProperties);
         Toolbar->setObjectName("ViewportToolbar");
-        Toolbar->setFixedHeight(36);
+        Toolbar->setFixedHeight(34);
         Toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        RegisterViewport(Viewport, Toolbar);
         Layout->addWidget(Toolbar);
         Layout->addWidget(Viewport, 1);
 
@@ -419,8 +602,8 @@ namespace SmileEditor {
                                  QDockWidget::DockWidgetFloatable |
                                  QDockWidget::DockWidgetClosable);
 
-        // Console em QML (ConsolePanel.qml), alimentado pela LogBridge via context property.
-        QQuickWidget* Console = CreateQmlPanel(
+        // Console em QML (ConsolePanel.qml), alimentado pela propriedade raiz logModel.
+        QQuickWidget* Console = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ConsolePanel.qml"),
             { { QStringLiteral("logModel"), ConsoleLog } },
             ConsoleDock);
@@ -437,10 +620,11 @@ namespace SmileEditor {
         connect(ConsoleLog, &LogBridge::CloseRequested, ConsoleDock, &QDockWidget::close);
 
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
-        // Piso pra nunca colapsar a ponto de sumir; o tamanho de abertura vem do resizeDocks.
-        Console->setMinimumHeight(120);
+        // Drawer compacto por padrao, mas ainda redimensionavel pelo usuario. Com 82 px cabem
+        // a faixa de comando e duas linhas; a abertura de 124 px mostra quatro eventos inteiros.
+        Console->setMinimumHeight(82);
         // resizeDocks e a API confiavel pra altura inicial (resize() no dock e ignorado pelo layout).
-        resizeDocks({ ConsoleDock }, { 160 }, Qt::Vertical);
+        resizeDocks({ ConsoleDock }, { 124 }, Qt::Vertical);
 
         // Reflete o estado do dock no check do menu "Janela" (inclui o fechar via menu do console).
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
@@ -455,10 +639,12 @@ namespace SmileEditor {
                                 QDockWidget::DockWidgetFloatable |
                                 QDockWidget::DockWidgetClosable);
 
-        QQuickWidget* OutlinerPanel = CreateQmlPanel(
+        QQuickWidget* OutlinerPanel = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("SceneOutlinerPanel.qml"),
             { { QStringLiteral("outlinerModel"),  OutlinerBr },
+              { QStringLiteral("sceneDoc"),        SceneDoc },
               { QStringLiteral("lightsModel"),    LightsBr },
+              { QStringLiteral("renderModel"),    RenderBr },
               { QStringLiteral("viewportModel"),  Viewport } },
             LightsDock);
         OutlinerPanel->setObjectName("SceneOutlinerPanel");
@@ -489,6 +675,13 @@ namespace SmileEditor {
         Viewport->GetRenderer()->LoadStarCatalog(
             QString(SMILE_ASSETS_DIR "/Sky/stars.sstars").toStdWString());
 
+        // Knobs de render: so precisa do handle. Sem Refresh por frame de proposito — knob nao
+        // muda sozinho, so por acao do usuario, e cada setter ja emite o sinal do dominio dele.
+        if (RenderBr) {
+            RenderBr->SetRenderer(Viewport->GetRenderer());
+            RenderBr->SetViewport(Viewport);
+        }
+
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {
             TodBridge->SetRenderer(Viewport->GetRenderer());
@@ -508,6 +701,7 @@ namespace SmileEditor {
         // toggles de ambiente com a arvore.
         if (OutlinerBr) {
             OutlinerBr->SetRenderer(Viewport->GetRenderer());
+            SceneDoc->SetRenderer(Viewport->GetRenderer());
             connect(Viewport, &ViewportWidget::FrameReady,
                     OutlinerBr, &SceneOutlinerBridge::Refresh, Qt::UniqueConnection);
         }
@@ -521,34 +715,36 @@ namespace SmileEditor {
         }
 
         if (!StartupScenePath.isEmpty()) {
-            if (!Viewport->GetRenderer()->LoadCookedScene(StartupScenePath.toStdWString())) {
-                Smile::LogError("Cena de startup falhou: " + StartupScenePath.toStdString());
-            } else {
-                if (LightsBr)    LightsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
-                if (OutlinerBr)  OutlinerBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
-                if (MaterialsBr) MaterialsBr->OnSceneLoaded(StartupScenePath, /*Additive=*/false);
-                Viewport->NotifyDebugTargetsChanged();
-            }
+            // A splash so sai quando a cena de boot terminar: fechar antes mostraria um
+            // viewport vazio por segundos. BeginSceneLoad chama FinishBootStage em todo
+            // desfecho, inclusive nos de falha.
+            BeginSceneLoad(StartupScenePath, /*additive=*/false);
+        } else {
+            FinishBootStage();
         }
+    }
+
+    void MainWindow::FinishBootStage() {
+        if (!BootSplashActive) return;
+        BootSplashActive = false;
+        emit BootFinished();
     }
 
     void MainWindow::UpdateStats() {
         if (!Viewport || !StatusBr) return;
-        auto* Renderer = Viewport->GetRenderer();
-        if (!Renderer || !Renderer->IsInitialized()) return;
+        auto Renderer = Viewport->GetRenderer();
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess || !RendererAccess->IsInitialized()) return;
 
         // ~5Hz basta: formatar QString + relayout da StatusBar a 100+Hz era so custo —
         // ninguem le FPS piscando por frame.
-        if (StatsThrottle.isValid() && StatsThrottle.elapsed() < 200) return;
-        StatsThrottle.restart();
-
         const float FPS = Viewport->GetFPS();
         const float FrameMs = FPS > 0.0f ? 1000.0f / FPS : 0.0f;
 
         // Textos SEM separador inicial — a StatusBar.qml os junta com "  |  ".
         QString OceanText;
-        if (Renderer->GetUseWater()) {
-            const auto& WaterStats = Renderer->GetWater().GetDebugStats();
+        if (RendererAccess->Settings().GetUseWater()) {
+            const auto& WaterStats = RendererAccess->GetWater().GetDebugStats();
             OceanText = QString("Ocean GPU: %1/%2 tiles  |  cull F:%3 C:%4 O:%5  |  draws:%6 L:%7 R:%8")
                 .arg(WaterStats.ValidTileCount)
                 .arg(WaterStats.CandidateCount)
@@ -561,27 +757,13 @@ namespace SmileEditor {
         }
 
         QString SceneText;
-        if (Renderer->GetDrawCount() > 0) {
+        if (RendererAccess->GetDrawCount() > 0) {
             SceneText = QString("meshes: %1/%2")
-                .arg(Renderer->GetVisibleCount())
-                .arg(Renderer->GetDrawCount());
+                .arg(RendererAccess->GetVisibleCount())
+                .arg(RendererAccess->GetDrawCount());
         }
 
         StatusBr->SetStats(FPS, FrameMs, SceneText, OceanText);
-    }
-
-    void MainWindow::OnHelpAbout() {
-        if (!AboutDlg) {
-            QString GPU;
-            if (Viewport && Viewport->GetRenderer() && Viewport->GetRenderer()->IsInitialized()) {
-                GPU = QString::fromStdWString(Viewport->GetRenderer()->GetDevice().GetAdapterDescription());
-            }
-            AboutDlg = new AboutDialog(GPU, this);
-            AboutDlg->setAttribute(Qt::WA_DeleteOnClose, false);
-        }
-        AboutDlg->show();
-        AboutDlg->raise();
-        AboutDlg->activateWindow();
     }
 
     void MainWindow::ShowSettings() {
@@ -597,12 +779,12 @@ namespace SmileEditor {
             Dialog->setMinimumSize(960, 640);
 
             auto* SettingsWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("SettingsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
+                  { QStringLiteral("renderModel"), RenderBr },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
-                Dialog,
-                { { QStringLiteral("smilelogo"), new SmileLogoImageProvider() } });
+                Dialog);
             Panel->setObjectName(QStringLiteral("SettingsPanel"));
 
             auto* DialogLayout = new QVBoxLayout(Dialog);
@@ -642,7 +824,7 @@ namespace SmileEditor {
             Dialog->setMinimumSize(840, 672);
 
             auto* TodWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("TimeOfDayWindow.qml"),
                 { { QStringLiteral("todModel"), TodBridge },
                   { QStringLiteral("todWindow"), TodWindowBridge } },
@@ -677,16 +859,16 @@ namespace SmileEditor {
             // Mesmo padrao do TimeOfDayWindow: QDialog frameless nao-modal com chrome QML.
             auto* Dialog = new QDialog(this);
             Dialog->setObjectName(QStringLiteral("StatsWindow"));
-            Dialog->setWindowTitle(tr("Estatísticas — SmileEngine"));
+            Dialog->setWindowTitle(tr("Profiler — SmileEngine"));
             Dialog->setWindowIcon(windowIcon());
             Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
                                    Qt::WindowMinimizeButtonHint);
             Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
-            Dialog->resize(420, 680);
-            Dialog->setMinimumSize(420, 560);
+            Dialog->resize(880, 760);
+            Dialog->setMinimumSize(760, 620);
 
             auto* StatsWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("StatsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("statsWindow"), StatsWindowBridge } },
@@ -731,7 +913,7 @@ namespace SmileEditor {
             Dialog->setMinimumSize(900, 560);
 
             auto* DebugWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("DebugTargetsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("debugWindow"), DebugWindowBridge } },
@@ -776,7 +958,7 @@ namespace SmileEditor {
             Dialog->setMinimumSize(1240, 660);
 
             auto* MaterialsWindowBridge = new WindowBridge(Dialog, Dialog);
-            QQuickWidget* Panel = CreateQmlPanel(
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("MaterialsWindow.qml"),
                 { { QStringLiteral("materialsModel"),  MaterialsBr },
                   { QStringLiteral("materialsWindow"), MaterialsWindowBridge } },
@@ -822,14 +1004,22 @@ namespace SmileEditor {
 #endif
 
         QProcess* CompileProcess = new QProcess(this);
-        QStringList Arguments = { "--build", BuildDir, "--target", "Shaders" };
+#ifdef SMILE_BUILD_CONFIG
+        const QString BuildConfig = QStringLiteral(SMILE_BUILD_CONFIG);
+#elif defined(_DEBUG)
+        const QString BuildConfig = QStringLiteral("Debug");
+#else
+        const QString BuildConfig = QStringLiteral("Release");
+#endif
+        QStringList Arguments = {
+            "--build", BuildDir, "--config", BuildConfig, "--target", "Shaders"
+        };
 
-        Smile::LogInfo("Compilando Shader via CMake...");
+        Smile::LogInfo("Compilando Shader via CMake (" + BuildConfig.toStdString() + ")...");
         CompileProcess->start("cmake", Arguments);
 
         connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess, _Path](int _ExitCode, QProcess::ExitStatus _Status) {
-            Q_UNUSED(_Status);
-            if (_ExitCode == 0) {
+            if (_Status == QProcess::NormalExit && _ExitCode == 0) {
                 if (Viewport && Viewport->GetRenderer()) {
                     // .hlsli (include) afeta varios shaders -> stem vazio forca reload completo.
                     // Caso contrario, deriva o stem do .cso: "WaterSurface.ps.hlsl" -> "WaterSurface.ps".

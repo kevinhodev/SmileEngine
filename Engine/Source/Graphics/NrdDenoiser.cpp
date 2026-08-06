@@ -1,4 +1,5 @@
 #include "Smile/Graphics/NrdDenoiser.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
@@ -89,29 +90,22 @@ namespace Smile {
 #if SMILE_NRD_ENABLED
     namespace {
         ComPtr<ID3D12Resource> CreateTex(ID3D12Device* Dev, u32 W, u32 H, DXGI_FORMAT Fmt) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC D{};
-            D.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            D.Width = W; D.Height = H; D.DepthOrArraySize = 1; D.MipLevels = 1;
-            D.Format = Fmt; D.SampleDesc = { 1, 0 };
-            D.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            D.Flags  = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> T;
-            SMILE_HR(Dev->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &D,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&T)));
-            VramTracker::Register(T.Get(), EVramCategory::GI);
-            return T;
+            return GpuResources::CreateTex2D(Dev, W, H, Fmt,
+                                             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
         }
     }
 #endif
 
-    void FNrdDenoiser::Initialize(ID3D12Device* _Device) {
+    void FNrdDenoiser::Initialize(ID3D12Device* _Device, ESignalProfile _Profile) {
 #if SMILE_NRD_ENABLED
         if (Available) return;
         Dev = _Device;
+        SignalProfile = _Profile;
+        const char* ProfileName = SignalProfile == ESignalProfile::Direct ? "direta" : "indireta";
 
         const nrd::LibraryDesc& lib = *nrd::GetLibraryDesc();
-        LogInfo("NRD v" + std::to_string(lib.versionMajor) + "." + std::to_string(lib.versionMinor) +
+        LogDebug("NRD " + std::string(ProfileName) + " v" + std::to_string(lib.versionMajor) + "." + std::to_string(lib.versionMinor) +
                 "." + std::to_string(lib.versionBuild) +
                 " | normalEnc=" + std::to_string((int)lib.normalEncoding) +
                 " roughEnc=" + std::to_string((int)lib.roughnessEncoding));
@@ -138,7 +132,7 @@ namespace Smile {
         CbSpace        = d.constantBufferAndSamplersSpaceIndex;
         CbReg          = d.constantBufferRegisterIndex;
         SamplerBaseReg = d.samplersBaseRegisterIndex;
-        LogInfo("NRD RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
+        LogDebug("NRD " + std::string(ProfileName) + " RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
                 " perm=" + std::to_string(d.permanentPoolSize) +
                 " trans=" + std::to_string(d.transientPoolSize) +
                 " samplers=" + std::to_string(d.samplersNum) +
@@ -150,6 +144,33 @@ namespace Smile {
         // O antilag fica no default; o README recomenda desliga-lo so no bring-up inicial
         // (antilagSettings.accelerationAmount/resetAmount = 0) se aparecer instabilidade.
         relax.enableAntiFirefly = true;
+        if (SignalProfile == ESignalProfile::Direct) {
+            // Preset inicial alinhado ao FullSample do RTXDI: historico mais curto porque o ReSTIR
+            // volta a poucas candidatas nas disoclusoes, luma difusa mais seletiva e estimativa de
+            // variancia espacial ja no primeiro frame. A instancia separada permite calibrar isto
+            // sem mudar a resposta do GI/reflexos.
+            relax.diffuseMaxAccumulatedFrameNum = 20;
+            relax.specularMaxAccumulatedFrameNum = 20;
+            relax.diffusePhiLuminance = 1.0f;
+            relax.spatialVarianceEstimationHistoryThreshold = 1;
+
+            // Receita do GPU Zen 3 cap. 7, p. 219 (CDPR/NVIDIA, Ray Tracing: Overdrive): como o
+            // ReSTIR DI entrega variancia BAIXA no input, da para deixar a fast history bem curta
+            // (eles usam 1 a 2 frames) e o color clamping agressivo. Isso torna o historico regular
+            // responsivo — o caso motivador la e sombra em movimento (pas de ventilador girando),
+            // que com historico longo o denoiser nao acompanha.
+            relax.diffuseMaxFastAccumulatedFrameNum = 2;
+            relax.specularMaxFastAccumulatedFrameNum = 2;
+
+            // NRDSettings.h exige historyFixFrameNum < maxFastAccumulatedFrameNum. Com o fast em 3
+            // e o default 3 isso ja estava no limite; baixar o fast para 2 obriga a descer aqui.
+            relax.historyFixFrameNum = 1;
+
+            // Clamp do box de cor da historia lenta contra a rapida. Faixa valida [1;3], default 2;
+            // o proprio NRD anota que 1,5 funciona ate para sinal sujo, e o nosso e mais limpo que
+            // isso. 1,0 e o piso se o A/B pedir mais agressividade.
+            relax.fastHistoryClampingSigmaScale = 1.5f;
+        }
         nrd::SetDenoiserSettings(*Instance, 0, &relax);
 
         BuildRootSignature(_Device);
@@ -157,8 +178,8 @@ namespace Smile {
         CreateHeapsAndCB(_Device);
         Available = true;
 #else
-        (void)_Device;
-        LogWarning("NRD desabilitado (SMILE_NRD_ENABLED=0)");
+        (void)_Device; (void)_Profile;
+        LogDebug("NRD desabilitado (SMILE_NRD_ENABLED=0)");
 #endif
     }
 
@@ -453,7 +474,7 @@ namespace Smile {
         }
 
         if (!SelfTestLogged) {
-            LogInfo("NRD driver: " + std::to_string(num) + " dispatches executados (bring-up OK)");
+            LogDebug("NRD driver: " + std::to_string(num) + " dispatches executados (bring-up OK)");
             SelfTestLogged = true;
         }
         NeedsClear = false;
@@ -502,15 +523,18 @@ namespace Smile {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
 
+        constexpr D3D12_RESOURCE_STATES ShaderRead =
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         const EIo outs[2] = { IO_OUT_DIFF, IO_OUT_SPEC };
         std::vector<D3D12_RESOURCE_BARRIER> bs;
         for (EIo e : outs) {
             FNrdTexture& t = Io[e];
-            if (!t.Res || t.State == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) continue;
+            if (!t.Res || t.State == ShaderRead) continue;
             D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            b.Transition.StateBefore = t.State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            bs.push_back(b); t.State = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            b.Transition.StateBefore = t.State; b.Transition.StateAfter = ShaderRead;
+            bs.push_back(b); t.State = ShaderRead;
         }
         if (!bs.empty()) _CL->ResourceBarrier((UINT)bs.size(), bs.data());
 #else

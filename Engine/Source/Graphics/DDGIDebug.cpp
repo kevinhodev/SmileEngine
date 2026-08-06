@@ -3,6 +3,7 @@
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
+#include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -308,6 +309,19 @@ namespace Smile {
         if (!PointInputsReady || PointRequestPending) return false;
         PointRequestX = _X;
         PointRequestY = _Y;
+        PointHasLastRequest = true;
+        PointRequestPending = true;
+        PointResultReady = false;
+        ++PointRequestVersion;
+        return true;
+    }
+
+    // Re-executa o ULTIMO ponto pedido. O diagnostico e one-shot por clique, entao mudar um knob
+    // que altera o peso das probes deixava o painel exibindo o snapshot anterior — dois estados
+    // diferentes com numeros identicos, que e o modo de falha mais caro possivel numa ferramenta
+    // de auditoria (parece que o knob nao funciona). Chamado pelos setters de amostragem do GI.
+    bool FDDGIDebug::RepeatPointDiagnostic() {
+        if (!PointInputsReady || !PointHasLastRequest || PointRequestPending) return false;
         PointRequestPending = true;
         PointResultReady = false;
         ++PointRequestVersion;
@@ -316,6 +330,7 @@ namespace Smile {
 
     void FDDGIDebug::CancelPointDiagnostic() {
         PointRequestPending = false;
+        PointHasLastRequest = false;
         PointResultReady = false;
         PointResult = {};
         ++PointRequestVersion;
@@ -360,6 +375,12 @@ namespace Smile {
             static_cast<f32>(std::min(PointRequestX, _Width - 1u)),
             static_cast<f32>(std::min(PointRequestY, _Height - 1u)),
             static_cast<f32>(_Width), static_cast<f32>(_Height)
+        };
+        // Os mesmos knobs que o deferred usa — o diagnostico tem que pesar as probes com o
+        // bias real, senao volta a relatar numeros de outro gather.
+        C->BiasParams = {
+            _DDGI.GetSurfaceBiasScale(), _DDGI.GetSurfaceBiasMax(),
+            _DDGI.GetVolumeFadeProbes(), 0.0f
         };
 
         if (PointOutputState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
@@ -422,6 +443,7 @@ namespace Smile {
             Result.WorldPosition = { Rows[0].X, Rows[0].Y, Rows[0].Z };
             Result.WorldNormal   = { Rows[1].X, Rows[1].Y, Rows[1].Z };
             Result.TotalWeight   = Rows[1].W;
+            Result.VolumeWeight  = Rows[kPointRowVolumeIdx].X;
             f32 BestWeight = -1.0f;
             // Abaixo deste limiar a perda de visibilidade e residual; nao destaque
             // uma probe como "risco" apenas porque ela foi a maior entre oito zeros.
@@ -547,15 +569,9 @@ namespace Smile {
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr =
             CB->GetGPUVirtualAddress() + static_cast<UINT64>(_FrameSlot) * sizeof(DDGIDebugConstants);
 
-        auto Transition = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After) {
-            if (State == After) return;
-            D3D12_RESOURCE_BARRIER B{};
-            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            B.Transition.pResource   = R;
-            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            B.Transition.StateBefore = State;
-            B.Transition.StateAfter  = After;
-            _CL->ResourceBarrier(1, &B);
+        auto Transition = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& State,
+                              D3D12_RESOURCE_STATES After) {
+            TransitionResource(_CL, R, State, After);
             State = After;
         };
         // Stability e um retrato do trace ATUAL. ProbeData.w so e atualizado durante a
@@ -583,8 +599,11 @@ namespace Smile {
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->IASetVertexBuffers(0, 0, nullptr);
         _CL->IASetIndexBuffer(nullptr);
-        const bool SelectedMode = Mode == EMode::Selected &&
-                                  SelectedProbeCount > 0;
+        // O modo Selected manda mesmo com contagem ZERO: "nenhuma probe selecionada" tem que
+        // desenhar NENHUMA, e nao o grid inteiro. Com o `SelectedProbeCount > 0` que existia
+        // aqui, limpar a selecao (ponto fora do volume de sondas, onde nenhuma contribui) caia
+        // no ramo de baixo e despejava as ~4,4 mil esferas do volume na tela.
+        const bool SelectedMode = Mode == EMode::Selected;
         const u32 InstanceCount = SelectedMode ? SelectedProbeCount : NumProbes;
         _CL->DrawInstanced(kSphereVerts, InstanceCount, 0, 0);
 

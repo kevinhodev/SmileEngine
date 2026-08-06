@@ -6,6 +6,12 @@ import "components" as C
 // categorias preservam a estrutura da referencia e recebem conteudo nas proximas iteracoes.
 Rectangle {
     id: root
+    required property var viewportModel
+    // Knobs de render (RenderSettingsBridge). Separado do viewportModel, que segue dono do
+    // view mode, do visualizador de debug e da telemetria.
+    required property var renderModel
+    required property var settingsWindow
+
     color: "#141511"
     border.color: "#2e2f28"
     border.width: 1
@@ -47,6 +53,8 @@ Rectangle {
             return "Upscaling, Anti-Aliasing e Resolução Interna do Viewport"
         if (selectedPage === 1)
             return "Geometria dos raios de GI, reflexo e sombra: origem, intervalo e frescor da amostra"
+        if (selectedPage === 4)
+            return "Espectro físico, ganho das ondas e deslocamento geométrico do oceano FFT"
         if (selectedPage === 6)
             return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
         if (selectedPage === 7)
@@ -74,8 +82,9 @@ Rectangle {
         property real value: 0
         property string valueText: ""
         signal committed(real v)
-        // Emitido so ao SOLTAR o mouse. Quem escreve em estado caro (que invalida historicos ou
-        // reconstroi o model da propria lista) deve usar este, nao o committed continuo.
+        // Emitido ao soltar o mouse ou a cada passo de teclado. Quem escreve em estado caro
+        // (que invalida historicos ou reconstroi o model da propria lista) deve usar este,
+        // nao o committed continuo durante um drag.
         signal released(real v)
         height: 46
 
@@ -108,7 +117,13 @@ Rectangle {
             from: srow.from
             to: srow.to
             stepSize: srow.step
-            onMoved: srow.committed(value)
+            onMoved: {
+                srow.committed(value)
+                // Slider::moved tambem cobre setas/PageUp/PageDown. Nao existe um ciclo
+                // pressed/released nesse caminho, entao faz o commit caro aqui uma vez por passo.
+                if (!pressed)
+                    srow.released(value)
+            }
             onPressedChanged: if (!pressed) srow.released(value)
             background: Rectangle {
                 x: sctl.leftPadding
@@ -774,7 +789,7 @@ Rectangle {
                         // corta (o banner do FSR era 300 KB recortado por sourceClipRect).
                         Text {
                             anchors.centerIn: parent
-                            visible: viewportModel.upscalerMode === 1
+                            visible: renderModel.upscalerMode === 1
                             text: "FSR"
                             color: root.amdRed
                             font.family: C.Theme.fontFamily
@@ -783,7 +798,7 @@ Rectangle {
                         }
                         Text {
                             anchors.centerIn: parent
-                            visible: viewportModel.upscalerMode === 2
+                            visible: renderModel.upscalerMode === 2
                             text: "DLSS"
                             color: root.nvidiaGreen
                             font.family: C.Theme.fontFamily
@@ -792,7 +807,7 @@ Rectangle {
                         }
                         Text {
                             anchors.centerIn: parent
-                            visible: viewportModel.upscalerMode === 0
+                            visible: renderModel.upscalerMode === 0
                             text: "1:1"
                             color: root.textNormal
                             font.family: C.Theme.fontFamily
@@ -802,9 +817,9 @@ Rectangle {
                     }
                     Text {
                         x: 49; y: 7
-                        text: viewportModel.upscalerMode === 2
+                        text: renderModel.upscalerMode === 2
                               ? "NVIDIA DLSS"
-                              : viewportModel.upscalerMode === 1
+                              : renderModel.upscalerMode === 1
                                 ? "AMD FidelityFX Super Resolution"
                                 : "Sem upscaling"
                         color: root.textPrimary
@@ -815,9 +830,9 @@ Rectangle {
                     Text {
                         x: 49; y: 24
                         width: parent.width - 174
-                        text: viewportModel.upscalerMode === 2
+                        text: renderModel.upscalerMode === 2
                               ? "DLSS · Reconstrução por IA (Super Resolution)"
-                              : viewportModel.upscalerMode === 1
+                              : renderModel.upscalerMode === 1
                                 ? "FSR 3.1 · Reconstrução Temporal"
                                 : "TAA · Escala Manual de Renderização"
                         color: root.textMuted
@@ -826,7 +841,7 @@ Rectangle {
                         font.pixelSize: 10
                     }
                     Rectangle {
-                        visible: viewportModel.upscalerMode === viewportModel.recommendedUpscalerMode
+                        visible: renderModel.upscalerMode === renderModel.recommendedUpscalerMode
                         anchors.right: dropdownArrow.left
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
@@ -883,7 +898,7 @@ Rectangle {
                     id: techHelper
                     x: 20
                     y: upscalerField.y + upscalerField.height + upscalingCard.gapLabel
-                    text: viewportModel.fsrAvailable
+                    text: renderModel.fsrAvailable
                           ? "O recomendado é escolhido conforme o hardware e os backends disponíveis."
                           : "FSR 3.1 indisponível; usando o caminho nativo com TAA."
                     color: root.textMuted
@@ -893,7 +908,7 @@ Rectangle {
 
                 Item {
                     id: fsrControls
-                    visible: viewportModel.upscalerMode === 1 || viewportModel.upscalerMode === 2
+                    visible: renderModel.upscalerMode === 1 || renderModel.upscalerMode === 2
                     x: 20
                     y: techHelper.y + techHelper.height + upscalingCard.gapSection
                     width: parent.width - 40
@@ -910,7 +925,7 @@ Rectangle {
                         anchors.right: parent.right
                         y: 1
                         // O backend selecionado e quem dita a escala interna — nao e sempre o FSR.
-                        text: (viewportModel.upscalerMode === 2 ? "DLSS" : "FSR") +
+                        text: (renderModel.upscalerMode === 2 ? "DLSS" : "FSR") +
                               " controla a escala interna"
                         color: root.textMuted
                         font.family: C.Theme.fontFamily
@@ -942,7 +957,7 @@ Rectangle {
                                 delegate: Rectangle {
                                     required property var modelData
                                     required property int index
-                                    readonly property bool isCurrent: viewportModel.upscalerQuality === index
+                                    readonly property bool isCurrent: renderModel.upscalerQuality === index
                                     width: qualitySelector.width / 5
                                     height: qualitySelector.height
                                     radius: 6
@@ -974,7 +989,7 @@ Rectangle {
                                         cursorShape: Qt.PointingHandCursor
                                     }
                                     TapHandler {
-                                        onTapped: viewportModel.SetUpscalerQuality(index)
+                                        onTapped: renderModel.SetUpscalerQuality(index)
                                     }
                                 }
                             }
@@ -1018,9 +1033,9 @@ Rectangle {
                             Text {
                                 id: reductionText
                                 anchors.centerIn: parent
-                                text: viewportModel.renderScale < 0.999
-                                      ? "−" + Math.round((1.0 - viewportModel.renderScale *
-                                                         viewportModel.renderScale) * 100) + "% Pixels"
+                                text: renderModel.renderScale < 0.999
+                                      ? "−" + Math.round((1.0 - renderModel.renderScale *
+                                                         renderModel.renderScale) * 100) + "% Pixels"
                                       : "Resolução Integral"
                                 color: root.green
                                 font.family: C.Theme.fontFamily
@@ -1032,7 +1047,7 @@ Rectangle {
 
                 Item {
                     id: nativeControls
-                    visible: viewportModel.upscalerMode === 0
+                    visible: renderModel.upscalerMode === 0
                     x: 20
                     y: techHelper.y + techHelper.height + upscalingCard.gapSection
                     width: parent.width - 40
@@ -1048,8 +1063,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right
                         y: -3
-                        checked: viewportModel.taaEnabled
-                        onToggled: viewportModel.SetTAAEnabled(!checked)
+                        checked: renderModel.taaEnabled
+                        onToggled: renderModel.SetTAAEnabled(!checked)
                     }
                     Rectangle { x: 0; y: 29; width: parent.width; height: 1; color: root.divider }
                     Text {
@@ -1067,7 +1082,7 @@ Rectangle {
                         border.color: root.borderColor
                         Text {
                             anchors.centerIn: parent
-                            text: viewportModel.renderScale.toFixed(2).replace(".", ",") + "×"
+                            text: renderModel.renderScale.toFixed(2).replace(".", ",") + "×"
                             color: root.textPrimary
                             font.family: C.Theme.fontFamily
                             font.pixelSize: 10
@@ -1081,9 +1096,9 @@ Rectangle {
                         from: 1.0
                         to: 2.0
                         stepSize: 0.05
-                        value: viewportModel.renderScale
+                        value: renderModel.renderScale
                         onPressedChanged: {
-                            if (!pressed) viewportModel.SetRenderScale(value)
+                            if (!pressed) renderModel.SetRenderScale(value)
                         }
                         background: Rectangle {
                             x: renderScaleSlider.leftPadding
@@ -1132,7 +1147,7 @@ Rectangle {
                     x: 20
                     y: fsrControls.y + fsrControls.height + upscalingCard.gapLabel
                     spacing: 5
-                    visible: viewportModel.upscalerMode !== viewportModel.recommendedUpscalerMode
+                    visible: renderModel.upscalerMode !== renderModel.recommendedUpscalerMode
                     Text {
                         text: "Recomendado para esta GPU:"
                         color: root.textMuted
@@ -1141,7 +1156,7 @@ Rectangle {
                     }
                     Text {
                         id: useRecommendedLink
-                        text: "Usar " + viewportModel.recommendedUpscalerName
+                        text: "Usar " + renderModel.recommendedUpscalerName
                         color: root.blue
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 10
@@ -1151,7 +1166,7 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                         }
                         TapHandler {
-                            onTapped: viewportModel.SetUpscalerMode(viewportModel.recommendedUpscalerMode)
+                            onTapped: renderModel.SetUpscalerMode(renderModel.recommendedUpscalerMode)
                         }
                     }
                 }
@@ -1181,10 +1196,10 @@ Rectangle {
                             mode: 0
                             label: "Sem upscaling"
                             detail: "TAA · Escala Manual de 100% a 200% (SSAA)"
-                            selected: viewportModel.upscalerMode === 0
-                            badge: viewportModel.recommendedUpscalerMode === 0 ? "RECOMENDADO" : ""
+                            selected: renderModel.upscalerMode === 0
+                            badge: renderModel.recommendedUpscalerMode === 0 ? "RECOMENDADO" : ""
                             onChosen: {
-                                viewportModel.SetUpscalerMode(0)
+                                renderModel.SetUpscalerMode(0)
                                 upscalerPopup.close()
                             }
                         }
@@ -1195,11 +1210,11 @@ Rectangle {
                             detail: available
                                     ? "FSR 3.1 · Temporal · Compatível com esta GPU"
                                     : "FSR 3.1 não foi Inicializado Neste Dispositivo"
-                            selected: viewportModel.upscalerMode === 1
-                            available: viewportModel.fsrAvailable
-                            badge: viewportModel.recommendedUpscalerMode === 1 ? "RECOMENDADO" : ""
+                            selected: renderModel.upscalerMode === 1
+                            available: renderModel.fsrAvailable
+                            badge: renderModel.recommendedUpscalerMode === 1 ? "RECOMENDADO" : ""
                             onChosen: {
-                                viewportModel.SetUpscalerMode(1)
+                                renderModel.SetUpscalerMode(1)
                                 upscalerPopup.close()
                             }
                         }
@@ -1210,11 +1225,11 @@ Rectangle {
                             detail: available
                                     ? "DLSS · Reconstrução por IA · Requer GPU NVIDIA RTX"
                                     : "DLSS Indisponível (requer GPU NVIDIA RTX)"
-                            selected: viewportModel.upscalerMode === 2
-                            available: viewportModel.dlssAvailable
-                            badge: viewportModel.recommendedUpscalerMode === 2 ? "RECOMENDADO" : ""
+                            selected: renderModel.upscalerMode === 2
+                            available: renderModel.dlssAvailable
+                            badge: renderModel.recommendedUpscalerMode === 2 ? "RECOMENDADO" : ""
                             onChosen: {
-                                viewportModel.SetUpscalerMode(2)
+                                renderModel.SetUpscalerMode(2)
                                 upscalerPopup.close()
                             }
                         }
@@ -1262,19 +1277,19 @@ Rectangle {
                         clip: true
                         Text {
                             anchors.centerIn: parent
-                            text: viewportModel.denoiserMode === 2 ? "RR"
-                                  : (viewportModel.denoiserMode === 1 ? "NRD" : "OFF")
-                            color: viewportModel.denoiserMode === 2 ? root.nvidiaGreen
-                                   : (viewportModel.denoiserMode === 1 ? root.textNormal : root.textMuted)
+                            text: renderModel.denoiserMode === 2 ? "RR"
+                                  : (renderModel.denoiserMode === 1 ? "NRD" : "OFF")
+                            color: renderModel.denoiserMode === 2 ? root.nvidiaGreen
+                                   : (renderModel.denoiserMode === 1 ? root.textNormal : root.textMuted)
                             font.family: C.Theme.fontFamily
-                            font.pixelSize: viewportModel.denoiserMode === 1 ? 8 : 9
+                            font.pixelSize: renderModel.denoiserMode === 1 ? 8 : 9
                             font.weight: Font.Bold
                         }
                     }
                     Text {
                         x: 49; y: 7
-                        text: viewportModel.denoiserMode === 2 ? "DLSS Ray Reconstruction"
-                              : (viewportModel.denoiserMode === 1 ? "NRD RELAX" : "Nenhum")
+                        text: renderModel.denoiserMode === 2 ? "DLSS Ray Reconstruction"
+                              : (renderModel.denoiserMode === 1 ? "NRD RELAX" : "Nenhum")
                         color: root.textPrimary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 12
@@ -1283,9 +1298,9 @@ Rectangle {
                     Text {
                         x: 49; y: 24
                         width: parent.width - 80
-                        text: viewportModel.denoiserMode === 2
+                        text: renderModel.denoiserMode === 2
                               ? "Denoiser neural (NVIDIA) · substitui NRD + upscaler"
-                              : (viewportModel.denoiserMode === 1
+                              : (renderModel.denoiserMode === 1
                                  ? "RELAX · difuso (GI) + especular (reflexão)"
                                  : "GI e reflexão sem denoise (ruidoso)")
                         color: root.textMuted
@@ -1329,7 +1344,7 @@ Rectangle {
                     y: denoiserField.y + denoiserField.height + denoiserCard.gapLabel
                     width: parent.width - 40
                     wrapMode: Text.WordWrap
-                    text: viewportModel.rrAvailable
+                    text: renderModel.rrAvailable
                           ? "Ray Reconstruction faz denoise e upscale num passo só — ao selecioná-lo, o upscaling fica travado em NVIDIA DLSS."
                           : "DLSS Ray Reconstruction requer GPU NVIDIA RTX; nesta máquina só NRD está disponível."
                     color: root.textMuted
@@ -1358,16 +1373,16 @@ Rectangle {
                             mode: 0
                             label: "Nenhum"
                             detail: "GI e reflexão ruidosos (sem denoise)"
-                            selected: viewportModel.denoiserMode === 0
-                            onChosen: { viewportModel.SetDenoiserMode(0); denoiserPopup.close() }
+                            selected: renderModel.denoiserMode === 0
+                            onChosen: { renderModel.SetDenoiserMode(0); denoiserPopup.close() }
                         }
                         DenoiserOption {
                             width: denoiserPopup.availableWidth
                             mode: 1
                             label: "NRD RELAX"
                             detail: "A-trous · difuso (GI) + especular (reflexão)"
-                            selected: viewportModel.denoiserMode === 1
-                            onChosen: { viewportModel.SetDenoiserMode(1); denoiserPopup.close() }
+                            selected: renderModel.denoiserMode === 1
+                            onChosen: { renderModel.SetDenoiserMode(1); denoiserPopup.close() }
                         }
                         DenoiserOption {
                             width: denoiserPopup.availableWidth
@@ -1375,9 +1390,9 @@ Rectangle {
                             label: "DLSS Ray Reconstruction"
                             detail: available ? "IA · substitui NRD + upscaler (trava DLSS)"
                                               : "Indisponível (requer GPU NVIDIA RTX)"
-                            selected: viewportModel.denoiserMode === 2
-                            available: viewportModel.rrAvailable
-                            onChosen: { viewportModel.SetDenoiserMode(2); denoiserPopup.close() }
+                            selected: renderModel.denoiserMode === 2
+                            available: renderModel.rrAvailable
+                            onChosen: { renderModel.SetDenoiserMode(2); denoiserPopup.close() }
                         }
                     }
                 }
@@ -1412,8 +1427,8 @@ Rectangle {
                 Toggle {
                     id: prepassToggle
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 50
-                    checked: viewportModel.depthPrepassEnabled
-                    onToggled: viewportModel.SetDepthPrepassEnabled(!checked)
+                    checked: renderModel.depthPrepassEnabled
+                    onToggled: renderModel.SetDepthPrepassEnabled(!checked)
                 }
             }
 
@@ -1456,8 +1471,8 @@ Rectangle {
                 Toggle {
                     id: frustumToggle
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 86
-                    checked: viewportModel.frustumCullingEnabled
-                    onToggled: viewportModel.SetFrustumCullingEnabled(!checked)
+                    checked: renderModel.frustumCullingEnabled
+                    onToggled: renderModel.SetFrustumCullingEnabled(!checked)
                 }
 
                 Text {
@@ -1480,8 +1495,8 @@ Rectangle {
                 Toggle {
                     id: occlusionToggle
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 114
-                    checked: viewportModel.occlusionCullingEnabled
-                    onToggled: viewportModel.SetOcclusionCullingEnabled(!checked)
+                    checked: renderModel.occlusionCullingEnabled
+                    onToggled: renderModel.SetOcclusionCullingEnabled(!checked)
                 }
             }
 
@@ -1539,6 +1554,139 @@ Rectangle {
         }
 
         Flickable {
+            id: oceanPage
+            visible: root.selectedPage === 4
+            anchors.fill: parent
+            anchors.topMargin: 84
+            contentWidth: width
+            contentHeight: oceanCol.height + 40
+            clip: true
+            ScrollBar.vertical: ThinScrollBar { revealed: oceanPageHover.hovered }
+            HoverHandler { id: oceanPageHover }
+
+            Column {
+                id: oceanCol
+                x: 24
+                width: oceanPage.width - 48
+                spacing: 16
+
+                Card {
+                    width: parent.width
+                    height: 112
+                    title: "Oceano FFT"
+
+                    Text {
+                        x: 20; y: 55
+                        text: "Renderizar superfície do oceano"
+                        color: root.textPrimary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        x: 20; y: 76
+                        text: "mantém o toggle do ambiente e todos os parâmetros configurados"
+                        color: root.textMuted
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 20
+                        y: 54
+                        checked: renderModel.oceanEnabled
+                        onToggled: renderModel.SetOceanEnabled(!checked)
+                    }
+                }
+
+                Card {
+                    width: parent.width
+                    height: 390
+                    title: "Espectro físico"
+
+                    ShadowSlider {
+                        x: 20; y: 55
+                        width: parent.width - 40
+                        label: "Direção do vento"
+                        from: 0; to: 360; step: 1
+                        value: renderModel.oceanWindDirectionDegrees
+                        valueText: Math.round(renderModel.oceanWindDirectionDegrees) + "°"
+                        onReleased: (v) => renderModel.SetOceanWindDirectionDegrees(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 107
+                        width: parent.width - 40
+                        label: "Velocidade do vento"
+                        from: 0.1; to: 40; step: 0.1
+                        value: renderModel.oceanWindSpeed
+                        valueText: renderModel.oceanWindSpeed.toFixed(1).replace(".", ",") + " m/s"
+                        onReleased: (v) => renderModel.SetOceanWindSpeed(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 159
+                        width: parent.width - 40
+                        label: "Fetch"
+                        from: 1; to: 1000; step: 1
+                        value: renderModel.oceanFetchKm
+                        valueText: Math.round(renderModel.oceanFetchKm) + " km"
+                        onReleased: (v) => renderModel.SetOceanFetchKm(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 211
+                        width: parent.width - 40
+                        label: "Profundidade"
+                        from: 1; to: 5000; step: 1
+                        value: renderModel.oceanDepthM
+                        valueText: Math.round(renderModel.oceanDepthM) + " m"
+                        onReleased: (v) => renderModel.SetOceanDepthM(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 263
+                        width: parent.width - 40
+                        label: "Swell"
+                        from: 0; to: 1; step: 0.01
+                        value: renderModel.oceanSwell
+                        valueText: renderModel.oceanSwell.toFixed(2).replace(".", ",")
+                        onReleased: (v) => renderModel.SetOceanSwell(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 315
+                        width: parent.width - 40
+                        label: "Ganho das ondas (linear)"
+                        from: 0; to: 4; step: 0.05
+                        value: renderModel.oceanWavesAmount
+                        valueText: "×" + renderModel.oceanWavesAmount.toFixed(2).replace(".", ",")
+                        onReleased: (v) => renderModel.SetOceanWavesAmount(v)
+                    }
+                }
+
+                Card {
+                    width: parent.width
+                    height: 166
+                    title: "Deslocamento FFT"
+
+                    ShadowSlider {
+                        x: 20; y: 55
+                        width: parent.width - 40
+                        label: "Amplitude do deslocamento"
+                        from: 0; to: 4; step: 0.05
+                        value: renderModel.oceanFFTDisplacement
+                        valueText: "×" + renderModel.oceanFFTDisplacement.toFixed(2).replace(".", ",")
+                        onCommitted: (v) => renderModel.SetOceanFFTDisplacement(v)
+                    }
+                    ShadowSlider {
+                        x: 20; y: 107
+                        width: parent.width - 40
+                        label: "Choppy horizontal"
+                        from: 0; to: 4; step: 0.05
+                        value: renderModel.oceanFFTChoppy
+                        valueText: "×" + renderModel.oceanFFTChoppy.toFixed(2).replace(".", ",")
+                        onCommitted: (v) => renderModel.SetOceanFFTChoppy(v)
+                    }
+                }
+            }
+        }
+
+        Flickable {
             id: shadowsPage
             visible: root.selectedPage === 6
             anchors.fill: parent
@@ -1580,8 +1728,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: viewportModel.sunShadowsEnabled
-                    onToggled: viewportModel.SetSunShadowsEnabled(!checked)
+                    checked: renderModel.sunShadowsEnabled
+                    onToggled: renderModel.SetSunShadowsEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1589,29 +1737,29 @@ Rectangle {
                     width: parent.width - 40
                     label: "Distância máxima"
                     from: 100; to: 3000; step: 50
-                    value: viewportModel.shadowMaxDistance
-                    valueText: Math.round(viewportModel.shadowMaxDistance) + " m"
-                    onCommitted: (v) => viewportModel.SetShadowMaxDistance(v)
+                    value: renderModel.shadowMaxDistance
+                    valueText: Math.round(renderModel.shadowMaxDistance) + " m"
+                    onCommitted: (v) => renderModel.SetShadowMaxDistance(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Bias de profundidade"
-                    from: 0; to: 0.003; step: 0.0001
-                    value: viewportModel.shadowDepthBias
-                    valueText: (viewportModel.shadowDepthBias * 10000).toFixed(1).replace(".", ",") + "e-4"
-                    onCommitted: (v) => viewportModel.SetShadowDepthBias(v)
+                    from: 0; to: 8; step: 0.1
+                    value: renderModel.shadowDepthBias
+                    valueText: renderModel.shadowDepthBias.toFixed(1).replace(".", ",") + " tx"
+                    onCommitted: (v) => renderModel.SetShadowDepthBias(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Tamanho angular do sol (PCSS)"
                     from: 0; to: 2.0; step: 0.01
-                    value: viewportModel.shadowSunAngle
-                    valueText: viewportModel.shadowSunAngle < 0.005
+                    value: renderModel.shadowSunAngle
+                    valueText: renderModel.shadowSunAngle < 0.005
                                ? "off"
-                               : viewportModel.shadowSunAngle.toFixed(2).replace(".", ",") + "°"
-                    onCommitted: (v) => viewportModel.SetShadowSunAngle(v)
+                               : renderModel.shadowSunAngle.toFixed(2).replace(".", ",") + "°"
+                    onCommitted: (v) => renderModel.SetShadowSunAngle(v)
                 }
 
                 Text {
@@ -1632,8 +1780,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 266
-                    checked: viewportModel.shadowDebugCascades
-                    onToggled: viewportModel.SetShadowDebugCascades(!checked)
+                    checked: renderModel.shadowDebugCascades
+                    onToggled: renderModel.SetShadowDebugCascades(!checked)
                 }
             }
 
@@ -1660,8 +1808,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: viewportModel.sunShaftsEnabled
-                    onToggled: viewportModel.SetSunShaftsEnabled(!checked)
+                    checked: renderModel.sunShaftsEnabled
+                    onToggled: renderModel.SetSunShaftsEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1669,45 +1817,45 @@ Rectangle {
                     width: parent.width - 40
                     label: "Intensidade"
                     from: 0; to: 5.0; step: 0.1
-                    value: viewportModel.sunShaftsIntensity
-                    valueText: viewportModel.sunShaftsIntensity.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsIntensity(v)
+                    value: renderModel.sunShaftsIntensity
+                    valueText: renderModel.sunShaftsIntensity.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetSunShaftsIntensity(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Poeira — densidade do feixe"
                     from: 1; to: 64; step: 1
-                    value: viewportModel.sunShaftsDust
-                    valueText: "×" + Math.round(viewportModel.sunShaftsDust)
-                    onCommitted: (v) => viewportModel.SetSunShaftsDust(v)
+                    value: renderModel.sunShaftsDust
+                    valueText: "×" + Math.round(renderModel.sunShaftsDust)
+                    onCommitted: (v) => renderModel.SetSunShaftsDust(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Fase HG (g) — lobo contra a luz"
                     from: 0; to: 0.95; step: 0.01
-                    value: viewportModel.sunShaftsPhaseG
-                    valueText: viewportModel.sunShaftsPhaseG.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetSunShaftsPhaseG(v)
+                    value: renderModel.sunShaftsPhaseG
+                    valueText: renderModel.sunShaftsPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetSunShaftsPhaseG(v)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Passos do raymarch"
                     from: 8; to: 64; step: 4
-                    value: viewportModel.sunShaftsSteps
-                    valueText: viewportModel.sunShaftsSteps + ""
-                    onCommitted: (v) => viewportModel.SetSunShaftsSteps(v)
+                    value: renderModel.sunShaftsSteps
+                    valueText: renderModel.sunShaftsSteps + ""
+                    onCommitted: (v) => renderModel.SetSunShaftsSteps(v)
                 }
                 ShadowSlider {
                     x: 20; y: 316
                     width: parent.width - 40
                     label: "Alcance da marcha (m)"
                     from: 32; to: 400; step: 8
-                    value: viewportModel.sunShaftsRange
-                    valueText: Math.round(viewportModel.sunShaftsRange) + " m"
-                    onCommitted: (v) => viewportModel.SetSunShaftsRange(v)
+                    value: renderModel.sunShaftsRange
+                    valueText: Math.round(renderModel.sunShaftsRange) + " m"
+                    onCommitted: (v) => renderModel.SetSunShaftsRange(v)
                 }
 
                 Rectangle { x: 20; y: 372; width: parent.width - 40; height: 1; color: root.divider }
@@ -1730,14 +1878,14 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 389
-                    checked: viewportModel.sunShaftsTemporal
-                    onToggled: viewportModel.SetSunShaftsTemporal(!checked)
+                    checked: renderModel.sunShaftsTemporal
+                    onToggled: renderModel.SetSunShaftsTemporal(!checked)
                 }
             }
 
             Card {
                 width: parent.width
-                height: 552
+                height: 722
                 title: "Volumetric fog"
 
                 Text {
@@ -1758,8 +1906,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: viewportModel.volFogEnabled
-                    onToggled: viewportModel.SetVolFogEnabled(!checked)
+                    checked: renderModel.volFogEnabled
+                    onToggled: renderModel.SetVolFogEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1767,45 +1915,45 @@ Rectangle {
                     width: parent.width - 40
                     label: "Alcance do volume (m)"
                     from: 30; to: 300; step: 10
-                    value: viewportModel.volFogDistance
-                    valueText: Math.round(viewportModel.volFogDistance) + " m"
-                    onCommitted: (v) => viewportModel.SetVolFogDistance(v)
+                    value: renderModel.volFogDistance
+                    valueText: Math.round(renderModel.volFogDistance) + " m"
+                    onCommitted: (v) => renderModel.SetVolFogDistance(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Densidade do volume"
                     from: 0.25; to: 8.0; step: 0.25
-                    value: viewportModel.volFogDensity
-                    valueText: "×" + viewportModel.volFogDensity.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetVolFogDensity(v)
+                    value: renderModel.volFogDensity
+                    valueText: "×" + renderModel.volFogDensity.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetVolFogDensity(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Fase HG (g) — lobo contra a luz"
                     from: 0; to: 0.9; step: 0.05
-                    value: viewportModel.volFogPhaseG
-                    valueText: viewportModel.volFogPhaseG.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetVolFogPhaseG(v)
+                    value: renderModel.volFogPhaseG
+                    valueText: renderModel.volFogPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetVolFogPhaseG(v)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Ambiente (DDGI/céu)"
                     from: 0; to: 4.0; step: 0.1
-                    value: viewportModel.volFogAmbient
-                    valueText: "×" + viewportModel.volFogAmbient.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetVolFogAmbient(v)
+                    value: renderModel.volFogAmbient
+                    valueText: "×" + renderModel.volFogAmbient.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetVolFogAmbient(v)
                 }
                 ShadowSlider {
                     x: 20; y: 316
                     width: parent.width - 40
                     label: "Luzes no ar (halo de point/spot)"
                     from: 0; to: 4.0; step: 0.1
-                    value: viewportModel.volFogLights
-                    valueText: "×" + viewportModel.volFogLights.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetVolFogLights(v)
+                    value: renderModel.volFogLights
+                    valueText: "×" + renderModel.volFogLights.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetVolFogLights(v)
                 }
 
                 Rectangle { x: 20; y: 380; width: parent.width - 40; height: 1; color: root.divider }
@@ -1828,8 +1976,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 397
-                    checked: viewportModel.volFogTemporal
-                    onToggled: viewportModel.SetVolFogTemporal(!checked)
+                    checked: renderModel.volFogTemporal
+                    onToggled: renderModel.SetVolFogTemporal(!checked)
                 }
 
                 Text {
@@ -1850,8 +1998,71 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 447
-                    checked: viewportModel.volFogConsDepth
-                    onToggled: viewportModel.SetVolFogConsDepth(!checked)
+                    checked: renderModel.volFogConsDepth
+                    onToggled: renderModel.SetVolFogConsDepth(!checked)
+                }
+
+                Rectangle { x: 20; y: 498; width: parent.width - 40; height: 1; color: root.divider }
+
+                Text {
+                    x: 20; y: 516
+                    text: "Height fog analítico — céu na cor do inscatter"
+                    color: root.textPrimary
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                ShadowSlider {
+                    x: 20; y: 546
+                    width: parent.width - 40
+                    label: "0 = cor chapada (antigo) · 1 = cor do céu naquela direção"
+                    from: 0; to: 1.0; step: 0.05
+                    value: renderModel.heightFogSkyContribution
+                    valueText: renderModel.heightFogSkyContribution.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetHeightFogSkyContribution(v)
+                }
+
+                Text {
+                    x: 20; y: 606
+                    text: "Transmitância do sol por pixel"
+                    color: root.textPrimary
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 625
+                    text: "sol atenuado pela altitude da superfície — topo dourado, vale azul"
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 605
+                    checked: renderModel.perPixelAtmoTransmittance
+                    onToggled: renderModel.SetPerPixelAtmoTransmittance(!checked)
+                }
+
+                Text {
+                    x: 20; y: 656
+                    text: "Ambiente do céu direcional (SH-L1)"
+                    color: root.textPrimary
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 20; y: 675
+                    text: "desligado = 2 cores chapadas, ambiente só varia com o Y da normal"
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Toggle {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    y: 655
+                    checked: renderModel.skyAmbientSH
+                    onToggled: renderModel.SetSkyAmbientSH(!checked)
                 }
             }
 
@@ -1878,8 +2089,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: viewportModel.shadowCacheEnabled
-                    onToggled: viewportModel.SetShadowCacheEnabled(!checked)
+                    checked: renderModel.shadowCacheEnabled
+                    onToggled: renderModel.SetShadowCacheEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1887,9 +2098,9 @@ Rectangle {
                     width: parent.width - 40
                     label: "Caster mínimo (texels da cascata)"
                     from: 0; to: 8; step: 0.5
-                    value: viewportModel.shadowMinCasterTexels
-                    valueText: viewportModel.shadowMinCasterTexels.toFixed(1).replace(".", ",") + " tx"
-                    onCommitted: (v) => viewportModel.SetShadowMinCasterTexels(v)
+                    value: renderModel.shadowMinCasterTexels
+                    valueText: renderModel.shadowMinCasterTexels.toFixed(1).replace(".", ",") + " tx"
+                    onCommitted: (v) => renderModel.SetShadowMinCasterTexels(v)
                 }
 
                 Text {
@@ -1911,9 +2122,9 @@ Rectangle {
                             width: parent.width
                             label: modelData
                             from: 0.25; to: 4.0; step: 0.05
-                            value: Number(viewportModel.shadowCascadeBias[index])
-                            valueText: "×" + Number(viewportModel.shadowCascadeBias[index]).toFixed(2).replace(".", ",")
-                            onCommitted: (v) => viewportModel.SetShadowCascadeBiasScale(index, v)
+                            value: Number(renderModel.shadowCascadeBias[index])
+                            valueText: "×" + Number(renderModel.shadowCascadeBias[index]).toFixed(2).replace(".", ",")
+                            onCommitted: (v) => renderModel.SetShadowCascadeBiasScale(index, v)
                         }
                     }
                 }
@@ -1961,8 +2172,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: viewportModel.cloudsEnabled
-                    onToggled: viewportModel.SetCloudsEnabled(!checked)
+                    checked: renderModel.cloudsEnabled
+                    onToggled: renderModel.SetCloudsEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1970,36 +2181,36 @@ Rectangle {
                     width: parent.width - 40
                     label: "Cobertura"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.cloudCoverage
-                    valueText: Math.round(viewportModel.cloudCoverage * 100) + " %"
-                    onCommitted: (v) => viewportModel.SetCloudCoverage(v)
+                    value: renderModel.cloudCoverage
+                    valueText: Math.round(renderModel.cloudCoverage * 100) + " %"
+                    onCommitted: (v) => renderModel.SetCloudCoverage(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Densidade (extinção /km)"
                     from: 0.1; to: 10.0; step: 0.1
-                    value: viewportModel.cloudDensity
-                    valueText: viewportModel.cloudDensity.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetCloudDensity(v)
+                    value: renderModel.cloudDensity
+                    valueText: renderModel.cloudDensity.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetCloudDensity(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Altitude da base"
                     from: 0.5; to: 8.0; step: 0.1
-                    value: viewportModel.cloudBottomKm
-                    valueText: viewportModel.cloudBottomKm.toFixed(1).replace(".", ",") + " km"
-                    onCommitted: (v) => viewportModel.SetCloudAltitude(v, viewportModel.cloudThicknessKm)
+                    value: renderModel.cloudBottomKm
+                    valueText: renderModel.cloudBottomKm.toFixed(1).replace(".", ",") + " km"
+                    onCommitted: (v) => renderModel.SetCloudAltitude(v, renderModel.cloudThicknessKm)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Espessura da camada"
                     from: 0.5; to: 8.0; step: 0.1
-                    value: viewportModel.cloudThicknessKm
-                    valueText: viewportModel.cloudThicknessKm.toFixed(1).replace(".", ",") + " km"
-                    onCommitted: (v) => viewportModel.SetCloudAltitude(viewportModel.cloudBottomKm, v)
+                    value: renderModel.cloudThicknessKm
+                    valueText: renderModel.cloudThicknessKm.toFixed(1).replace(".", ",") + " km"
+                    onCommitted: (v) => renderModel.SetCloudAltitude(renderModel.cloudBottomKm, v)
                 }
             }
 
@@ -2013,37 +2224,37 @@ Rectangle {
                     width: parent.width - 40
                     label: "Células do padrão (re-bakea na hora)"
                     from: 1; to: 8; step: 1
-                    value: viewportModel.cloudWeatherCells
-                    valueText: viewportModel.cloudWeatherCells + "×"
-                    onCommitted: (v) => viewportModel.SetCloudWeatherCells(v)
+                    value: renderModel.cloudWeatherCells
+                    valueText: renderModel.cloudWeatherCells + "×"
+                    onCommitted: (v) => renderModel.SetCloudWeatherCells(v)
                 }
                 ShadowSlider {
                     x: 20; y: 108
                     width: parent.width - 40
                     label: "Semente"
                     from: 0; to: 9999; step: 1
-                    value: viewportModel.cloudWeatherSeed
-                    valueText: viewportModel.cloudWeatherSeed + ""
-                    onCommitted: (v) => viewportModel.SetCloudWeatherSeed(v)
+                    value: renderModel.cloudWeatherSeed
+                    valueText: renderModel.cloudWeatherSeed + ""
+                    onCommitted: (v) => renderModel.SetCloudWeatherSeed(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Viés de tipo (stratus ↔ cumulonimbus)"
                     from: -0.5; to: 0.5; step: 0.01
-                    value: viewportModel.cloudTypeBias
-                    valueText: (viewportModel.cloudTypeBias >= 0 ? "+" : "") +
-                               viewportModel.cloudTypeBias.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetCloudTypeBias(v)
+                    value: renderModel.cloudTypeBias
+                    valueText: (renderModel.cloudTypeBias >= 0 ? "+" : "") +
+                               renderModel.cloudTypeBias.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetCloudTypeBias(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Variação de topo (peak height, canal B)"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.cloudPeakVariation
-                    valueText: Math.round(viewportModel.cloudPeakVariation * 100) + " %"
-                    onCommitted: (v) => viewportModel.SetCloudPeakVariation(v)
+                    value: renderModel.cloudPeakVariation
+                    valueText: Math.round(renderModel.cloudPeakVariation * 100) + " %"
+                    onCommitted: (v) => renderModel.SetCloudPeakVariation(v)
                 }
 
                 Row {
@@ -2051,23 +2262,23 @@ Rectangle {
                     spacing: 10
                     ActionButton {
                         label: "Semente aleatória"
-                        onTapped: viewportModel.SetCloudWeatherSeed(Math.floor(Math.random() * 10000))
+                        onTapped: renderModel.SetCloudWeatherSeed(Math.floor(Math.random() * 10000))
                     }
                     ActionButton {
                         label: "Carregar textura…"
-                        onTapped: viewportModel.LoadCloudWeatherTexture()
+                        onTapped: renderModel.LoadCloudWeatherTexture()
                     }
                     ActionButton {
                         label: "Voltar ao procedural"
-                        visible: viewportModel.cloudWeatherAuthored
-                        onTapped: viewportModel.ClearCloudWeatherTexture()
+                        visible: renderModel.cloudWeatherAuthored
+                        onTapped: renderModel.ClearCloudWeatherTexture()
                     }
                 }
                 Text {
                     x: 20; y: 306
-                    text: viewportModel.cloudWeatherAuthored
+                    text: renderModel.cloudWeatherAuthored
                           ? "fonte: textura autorada — R = cobertura · G = tipo · B = altura de topo"
-                          : "fonte: procedural (seed " + viewportModel.cloudWeatherSeed + ")"
+                          : "fonte: procedural (seed " + renderModel.cloudWeatherSeed + ")"
                     color: root.textMuted
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 10
@@ -2097,17 +2308,17 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 315
-                    checked: viewportModel.cloudShadows
-                    onToggled: viewportModel.SetCloudShadowsEnabled(!checked)
+                    checked: renderModel.cloudShadows
+                    onToggled: renderModel.SetCloudShadowsEnabled(!checked)
                 }
                 ShadowSlider {
                     x: 20; y: 362
                     width: parent.width - 40
                     label: "Intensidade da sombra"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.cloudShadowStrength
-                    valueText: Math.round(viewportModel.cloudShadowStrength * 100) + " %"
-                    onCommitted: (v) => viewportModel.SetCloudShadowStrength(v)
+                    value: renderModel.cloudShadowStrength
+                    valueText: Math.round(renderModel.cloudShadowStrength * 100) + " %"
+                    onCommitted: (v) => renderModel.SetCloudShadowStrength(v)
                 }
 
                 ShadowSlider {
@@ -2115,45 +2326,45 @@ Rectangle {
                     width: parent.width - 40
                     label: "Erosão de detalhe"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.cloudErosion
-                    valueText: Math.round(viewportModel.cloudErosion * 100) + " %"
-                    onCommitted: (v) => viewportModel.SetCloudErosion(v)
+                    value: renderModel.cloudErosion
+                    valueText: Math.round(renderModel.cloudErosion * 100) + " %"
+                    onCommitted: (v) => renderModel.SetCloudErosion(v)
                 }
                 ShadowSlider {
                     x: 20; y: 108
                     width: parent.width - 40
                     label: "Vento"
                     from: 0; to: 0.05; step: 0.001
-                    value: viewportModel.cloudWindSpeed
-                    valueText: Math.round(viewportModel.cloudWindSpeed * 1000) + " m/s"
-                    onCommitted: (v) => viewportModel.SetCloudWindSpeed(v)
+                    value: renderModel.cloudWindSpeed
+                    valueText: Math.round(renderModel.cloudWindSpeed * 1000) + " m/s"
+                    onCommitted: (v) => renderModel.SetCloudWindSpeed(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Anisotropia da fase (g)"
                     from: 0; to: 0.95; step: 0.01
-                    value: viewportModel.cloudPhaseG
-                    valueText: viewportModel.cloudPhaseG.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetCloudPhaseG(v)
+                    value: renderModel.cloudPhaseG
+                    valueText: renderModel.cloudPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetCloudPhaseG(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Powder (auto-sombra de borda)"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.cloudPowder
-                    valueText: Math.round(viewportModel.cloudPowder * 100) + " %"
-                    onCommitted: (v) => viewportModel.SetCloudPowder(v)
+                    value: renderModel.cloudPowder
+                    valueText: Math.round(renderModel.cloudPowder * 100) + " %"
+                    onCommitted: (v) => renderModel.SetCloudPowder(v)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Ambiente do céu"
                     from: 0; to: 3.0; step: 0.05
-                    value: viewportModel.cloudAmbient
-                    valueText: "×" + viewportModel.cloudAmbient.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetCloudAmbient(v)
+                    value: renderModel.cloudAmbient
+                    valueText: "×" + renderModel.cloudAmbient.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetCloudAmbient(v)
                 }
             }
 
@@ -2180,8 +2391,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: viewportModel.cloudsHalfRes
-                    onToggled: viewportModel.SetCloudsHalfRes(!checked)
+                    checked: renderModel.cloudsHalfRes
+                    onToggled: renderModel.SetCloudsHalfRes(!checked)
                 }
 
                 Text {
@@ -2202,8 +2413,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 96
-                    checked: viewportModel.cloudsTemporal
-                    onToggled: viewportModel.SetCloudsTemporal(!checked)
+                    checked: renderModel.cloudsTemporal
+                    onToggled: renderModel.SetCloudsTemporal(!checked)
                 }
 
                 ShadowSlider {
@@ -2211,9 +2422,9 @@ Rectangle {
                     width: parent.width - 40
                     label: "Passos do raymarch"
                     from: 32; to: 256; step: 8
-                    value: viewportModel.cloudMarchSteps
-                    valueText: viewportModel.cloudMarchSteps + ""
-                    onCommitted: (v) => viewportModel.SetCloudMarchSteps(v)
+                    value: renderModel.cloudMarchSteps
+                    valueText: renderModel.cloudMarchSteps + ""
+                    onCommitted: (v) => renderModel.SetCloudMarchSteps(v)
                 }
             }
             } // Column cloudsCol
@@ -2263,18 +2474,18 @@ Rectangle {
                     width: parent.width - 40
                     label: "Chuva"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.rainAmount
-                    valueText: Math.round(viewportModel.rainAmount * 100) + "%"
-                    onCommitted: (v) => viewportModel.SetRainAmount(v)
+                    value: renderModel.rainAmount
+                    valueText: Math.round(renderModel.rainAmount * 100) + "%"
+                    onCommitted: (v) => renderModel.SetRainAmount(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Cortina de gotas"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.curtainAmount
-                    valueText: Math.round(viewportModel.curtainAmount * 100) + "%"
-                    onCommitted: (v) => viewportModel.SetCurtainAmount(v)
+                    value: renderModel.curtainAmount
+                    valueText: Math.round(renderModel.curtainAmount * 100) + "%"
+                    onCommitted: (v) => renderModel.SetCurtainAmount(v)
                 }
 
                 Text {
@@ -2295,8 +2506,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 210
-                    checked: viewportModel.rainOcclusion
-                    onToggled: viewportModel.SetRainOcclusion(!checked)
+                    checked: renderModel.rainOcclusion
+                    onToggled: renderModel.SetRainOcclusion(!checked)
                 }
 
                 Text {
@@ -2317,8 +2528,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 240
-                    checked: viewportModel.rainParticles
-                    onToggled: viewportModel.SetRainParticles(!checked)
+                    checked: renderModel.rainParticles
+                    onToggled: renderModel.SetRainParticles(!checked)
                 }
 
                 Text {
@@ -2339,8 +2550,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 270
-                    checked: viewportModel.weatherDriveSky
-                    onToggled: viewportModel.SetWeatherDriveSky(!checked)
+                    checked: renderModel.weatherDriveSky
+                    onToggled: renderModel.SetWeatherDriveSky(!checked)
                 }
             }
 
@@ -2369,36 +2580,36 @@ Rectangle {
                     width: parent.width - 40
                     label: "Poças"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.puddleAmount
-                    valueText: Math.round(viewportModel.puddleAmount * 100) + "%"
-                    onCommitted: (v) => viewportModel.SetPuddleAmount(v)
+                    value: renderModel.puddleAmount
+                    valueText: Math.round(renderModel.puddleAmount * 100) + "%"
+                    onCommitted: (v) => renderModel.SetPuddleAmount(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Tamanho das poças"
                     from: 2; to: 32; step: 1
-                    value: viewportModel.puddleScale
-                    valueText: Math.round(viewportModel.puddleScale) + " m"
-                    onCommitted: (v) => viewportModel.SetPuddleScale(v)
+                    value: renderModel.puddleScale
+                    valueText: Math.round(renderModel.puddleScale) + " m"
+                    onCommitted: (v) => renderModel.SetPuddleScale(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Ondulação das gotas"
                     from: 0; to: 2; step: 0.01
-                    value: viewportModel.rippleStrength
-                    valueText: viewportModel.rippleStrength.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => viewportModel.SetRippleStrength(v)
+                    value: renderModel.rippleStrength
+                    valueText: renderModel.rippleStrength.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => renderModel.SetRippleStrength(v)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Escurecimento molhado"
                     from: 0; to: 1; step: 0.01
-                    value: viewportModel.wetDarkening
-                    valueText: Math.round(viewportModel.wetDarkening * 100) + "%"
-                    onCommitted: (v) => viewportModel.SetWetDarkening(v)
+                    value: renderModel.wetDarkening
+                    valueText: Math.round(renderModel.wetDarkening * 100) + "%"
+                    onCommitted: (v) => renderModel.SetWetDarkening(v)
                 }
             }
             } // Column weatherCol
@@ -2419,12 +2630,16 @@ Rectangle {
             ScrollBar.vertical: ThinScrollBar { revealed: giPageHover.hovered }
             HoverHandler { id: giPageHover }
 
-            // SNAPSHOT do model, nao binding direto em viewportModel.rayEpsilons. Escrever um
-            // epsilon emite ViewSettingsChanged, o que re-le a propriedade e trocaria a lista do
+            // SNAPSHOT do model, nao binding direto em renderModel.rayEpsilons. Escrever um
+            // epsilon emite GISettingsChanged, o que re-le a propriedade e trocaria a lista do
             // Repeater — reconstruindo os delegates DEBAIXO do mouse durante o arrasto. Recarrega
             // so nos momentos discretos: abrir a pagina e restaurar padroes.
             property var epsModel: []
-            function reloadEps() { epsModel = viewportModel.rayEpsilons }
+            function reloadEps() {
+                epsModel = renderModel.rayEpsilons
+                biasMaxSlider.uiValue = renderModel.giSurfaceBiasMax
+                fadeSlider.uiValue    = renderModel.giVolumeFadeProbes
+            }
             Component.onCompleted: reloadEps()
             onVisibleChanged: if (visible) reloadEps()
 
@@ -2492,7 +2707,7 @@ Rectangle {
                                     onCommitted: (v) => knobRow.uiValue = v
                                     onReleased: (v) => {
                                         knobRow.uiValue = v
-                                        viewportModel.SetRayEpsilon(knobRow.modelData.key, v)
+                                        renderModel.SetRayEpsilon(knobRow.modelData.key, v)
                                     }
                                 }
                                 Text {
@@ -2525,7 +2740,7 @@ Rectangle {
                             HoverHandler { id: epsResetHover }
                             TapHandler {
                                 onTapped: {
-                                    viewportModel.ResetRayEpsilons()
+                                    renderModel.ResetRayEpsilons()
                                     giPage.reloadEps() // o snapshot nao se atualiza sozinho
                                 }
                             }
@@ -2576,8 +2791,8 @@ Rectangle {
                         id: cullToggle
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: cullLabel.y - 6
-                        checked: viewportModel.reflectionsCullBackface
-                        onToggled: viewportModel.ToggleReflectionsCullBackface()
+                        checked: renderModel.reflectionsCullBackface
+                        onToggled: renderModel.ToggleReflectionsCullBackface()
                     }
                 }
 
@@ -2623,15 +2838,220 @@ Rectangle {
                         id: bfToggle
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: bfLabel.y - 6
-                        checked: viewportModel.giBackfacePolicy
-                        onToggled: viewportModel.ToggleGIBackfacePolicy()
+                        checked: renderModel.giBackfacePolicy
+                        onToggled: renderModel.ToggleGIBackfacePolicy()
+                    }
+                }
+
+                Card {
+                    id: regirCard
+                    width: parent.width
+                    title: "ReGIR — luzes nos hits secundários"
+                    height: regirLabel.y + regirLabel.height + contentPadding + 8
+
+                    Text {
+                        id: regirHelper
+                        x: 20
+                        y: regirCard.headerHeight + regirCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Troca o loop de todas as luzes locais dentro dos hits de GI e " +
+                              "reflexão por um pool de reservoirs em grade de mundo: 16×8×16 " +
+                              "células, 64 amostras por célula, 8 propostas no hit e um único " +
+                              "shadow ray para a vencedora. O histórico é limitado a 8 quadros " +
+                              "e luzes dinâmicas são reponderadas a cada construção.\n\n" +
+                              "Não substitui o ReSTIR DI: a superfície primária continua no " +
+                              "caminho de tela, onde a reprojeção é mais precisa. Fora da AABB " +
+                              "do grid, o shader cai no loop completo como referência.\n\n" +
+                              "Default OFF para A/B. Compare principalmente reflexos e a " +
+                              "estabilidade do DDGI com muitas luzes locais."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: regirLabel
+                        x: 20
+                        y: regirHelper.y + regirHelper.height + 18
+                        text: "ReGIR nos hits secundários"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: regirLabel.y - 6
+                        checked: renderModel.reGIREnabled
+                        onToggled: renderModel.ToggleReGIR()
+                    }
+                }
+
+                Card {
+                    id: restirDICard
+                    width: parent.width
+                    title: "ReSTIR DI — direta local"
+                    height: restirDILabel.y + restirDILabel.height + contentPadding + 8
+
+                    Text {
+                        id: restirDIHelper
+                        x: 20
+                        y: restirDICard.headerHeight + restirDICard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Substitui o loop inteiro de luzes locais analíticas por 8 candidatas uniformes " +
+                              "por pixel, reuso temporal e 4 vizinhos espaciais. Apenas a amostra " +
+                              "final dispara shadow ray; sol e lua continuam no caminho dedicado.\n\n" +
+                              "Ligado, substitui integralmente a direta local raster e usa uma " +
+                              "instância ReLAX dedicada sob NRD; sob Ray Reconstruction entrega " +
+                              "o sinal cru. Desligado, o deferred volta ao loop raster com os " +
+                              "shadow maps locais."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: restirDILabel
+                        x: 20
+                        y: restirDIHelper.y + restirDIHelper.height + 18
+                        text: "ReSTIR DI"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: restirDILabel.y - 6
+                        checked: renderModel.reSTIRDI
+                        onToggled: renderModel.ToggleReSTIRDI()
+                    }
+                }
+
+                Card {
+                    id: ddgiSampleCard
+                    width: parent.width
+                    title: "Amostragem do DDGI — bias de auto-sombra"
+                    height: biasMaxSlider.y + biasMaxSlider.height + contentPadding + 8
+
+                    Text {
+                        id: ddgiSampleHelper
+                        x: 20
+                        y: ddgiSampleCard.headerHeight + ddgiSampleCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Antes de ler a irradiância, o ponto sombreado é deslocado na normal " +
+                              "e na direção da câmera para não se auto-ocluir. O deslocamento " +
+                              "escala com o espaçamento do grid, e o grid aqui é dimensionado pela " +
+                              "caixa da cena inteira — no Bistro isso dá 8 m entre sondas, ou seja " +
+                              "1,20 m de deslocamento: o ponto atravessa a parede e lê a célula do " +
+                              "outro lado.\n\n" +
+                              "O teto limita esse deslocamento em metros; 0 volta ao " +
+                              "comportamento histórico, sem teto. Padrão 0,40 m.\n\n" +
+                              "O teste de backface das sondas usa sempre o ponto sem " +
+                              "deslocamento, e só a distância do Chebyshev usa o deslocado — é a " +
+                              "separação que o Flax faz, e não é ajustável.\n\n" +
+                              "O bias também vale no segundo quique, dentro das próprias sondas, " +
+                              "então mexer aqui reinicia o atlas e os históricos que se apoiam " +
+                              "nele — reflexos, ReSTIR, denoiser e névoa. Espere convergir antes " +
+                              "de comparar: logo após a troca a imagem passa pelo ruído de um " +
+                              "único quadro de sondas."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    ShadowSlider {
+                        id: biasMaxSlider
+                        x: 20
+                        y: ddgiSampleHelper.y + ddgiSampleHelper.height + 16
+                        width: parent.width - 40
+                        label: "Teto do bias"
+                        from: 0.0
+                        to: 2.0
+                        step: 0.01
+                        // Igual aos epsilons: o rótulo acompanha o arrasto, a engine só é tocada
+                        // ao soltar — cada pixel de arrasto reiniciaria o atlas do DDGI e todos
+                        // os históricos que se apoiam nele. Sem binding direto em viewportModel
+                        // (escrever emite GISettingsChanged e o valor saltaria de volta no meio
+                        // do arrasto); recarrega em reloadEps().
+                        property real uiValue: 0.0
+                        value: uiValue
+                        valueText: uiValue === 0.0
+                                       ? "sem teto"
+                                       : uiValue.toFixed(2).replace(".", ",") + " m"
+                        onCommitted: (v) => biasMaxSlider.uiValue = v
+                        onReleased: (v) => {
+                            biasMaxSlider.uiValue = v
+                            renderModel.SetGISurfaceBiasMax(v)
+                        }
+                    }
+
+                }
+
+                Card {
+                    id: volumeFadeCard
+                    width: parent.width
+                    title: "Fora do volume de sondas"
+                    height: fadeSlider.y + fadeSlider.height + contentPadding + 8
+
+                    Text {
+                        id: fadeHelper
+                        x: 20
+                        y: volumeFadeCard.headerHeight + volumeFadeCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "O volume cobre a caixa da cena, e o terreno fica de fora de " +
+                              "propósito — um terreno de quilômetros esticaria a grade inteira. " +
+                              "Só que o gather não falha fora do volume: ele grampeia as " +
+                              "coordenadas e estende a última fileira de sondas ao infinito, " +
+                              "enquanto o ambiente difuso comum fica desligado porque o GI está " +
+                              "ligado. Na prática o terreno inteiro herda a irradiância da borda " +
+                              "da grade.\n\n" +
+                              "Este controle desvanece para o ambiente hemisférico da atmosfera " +
+                              "— o mesmo que a cena usaria sem GI — ao longo da largura " +
+                              "escolhida, medida em células da grade e contada para FORA da " +
+                              "borda. Dentro do volume nada muda: o volume é justo, então o chão " +
+                              "nasce a meia célula da face inferior e um desvanecimento para " +
+                              "dentro lavaria o piso inteiro. 0 volta ao comportamento " +
+                              "histórico.\n\n" +
+                              "Vale também nos raios das sondas, onde o indireto desvanece para " +
+                              "o escuro em vez do ambiente — fora do volume a luz da borda seria " +
+                              "reinjetada no próprio atlas. Por isso mexer aqui reinicia o atlas " +
+                              "e os históricos; espere convergir antes de comparar."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    ShadowSlider {
+                        id: fadeSlider
+                        x: 20
+                        y: fadeHelper.y + fadeHelper.height + 16
+                        width: parent.width - 40
+                        label: "Largura do fade"
+                        from: 0.0
+                        to: 3.0
+                        step: 0.25
+                        property real uiValue: 0.0
+                        value: uiValue
+                        valueText: uiValue === 0.0
+                                       ? "desligado"
+                                       : uiValue.toFixed(2).replace(".", ",") + " células"
+                        onCommitted: (v) => fadeSlider.uiValue = v
+                        onReleased: (v) => {
+                            fadeSlider.uiValue = v
+                            renderModel.SetGIVolumeFadeProbes(v)
+                        }
                     }
                 }
             }
         }
 
         Item {
-            visible: root.selectedPage !== 0 && root.selectedPage !== 1 && root.selectedPage !== 6 &&
+            visible: root.selectedPage !== 0 && root.selectedPage !== 1 && root.selectedPage !== 4 && root.selectedPage !== 6 &&
                      root.selectedPage !== 7 && root.selectedPage !== 8
             anchors.fill: parent
             Rectangle {
@@ -2705,7 +3125,7 @@ Rectangle {
                 font.pixelSize: 12
             }
             HoverHandler { id: resetHover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: viewportModel.ResetRenderSettings() }
+            TapHandler { onTapped: renderModel.ResetRenderSettings() }
         }
         Rectangle {
             id: applyButton

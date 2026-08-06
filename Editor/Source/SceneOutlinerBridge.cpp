@@ -1,5 +1,6 @@
 #include "SmileEditor/SceneOutlinerBridge.h"
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 
@@ -29,15 +30,15 @@ namespace SmileEditor {
     SceneOutlinerBridge::SceneOutlinerBridge(QObject* _Parent)
         : QAbstractListModel(_Parent) {}
 
-    void SceneOutlinerBridge::SetRenderer(Smile::Renderer* _Renderer) {
+    void SceneOutlinerBridge::SetRenderer(RendererHandle _Renderer) {
         Renderer = _Renderer;
         if (Renderer) {
             CachedSelMesh  = Renderer->GetSelectedObject();
             CachedSelLight = Renderer->GetSelectedLight();
-            CachedClouds    = Renderer->GetUseClouds();
-            CachedOcean     = Renderer->GetUseWater();
+            CachedClouds    = Renderer->Settings().GetUseClouds();
+            CachedOcean     = Renderer->Settings().GetUseWater();
             CachedTerrain   = Renderer->GetTerrain().IsLoaded();
-            CachedTerrainOn = Renderer->GetUseTerrain();
+            CachedTerrainOn = Renderer->Settings().GetUseTerrain();
         }
         Rebuild();
         emit AvailableChanged();
@@ -116,7 +117,8 @@ namespace SmileEditor {
     // tudo fica "expandido" e so entram folhas que casam (com seus pais).
     void SceneOutlinerBridge::RebuildRows(QVector<FRow>& _Out) const {
         if (!Renderer) return;
-        const auto& Scene = const_cast<Smile::Renderer*>(Renderer)->GetScene();
+        auto RendererAccess = Renderer.Lock();
+        const auto& Scene = RendererAccess->GetScene();
         const bool Searching = !SearchText.isEmpty();
         const auto GroupOn = [this](int G) {
             return FilterGroup == 0 || FilterGroup == G + 1;
@@ -138,9 +140,9 @@ namespace SmileEditor {
                 // Olho: o estado vem por binding direto no QML (viewportModel.cloudsEnabled /
                 // oceanVisible / terrainVisible), REnabled aqui e so fallback.
                 R.HasEye   = (E.Id != EnvSol);
-                R.Enabled  = (E.Id == EnvNuvens)  ? Renderer->GetUseClouds()
-                           : (E.Id == EnvOceano)  ? Renderer->GetUseWater()
-                           : (E.Id == EnvTerreno) ? Renderer->GetUseTerrain() : true;
+                R.Enabled  = (E.Id == EnvNuvens)  ? Renderer->Settings().GetUseClouds()
+                           : (E.Id == EnvOceano)  ? Renderer->Settings().GetUseWater()
+                           : (E.Id == EnvTerreno) ? Renderer->Settings().GetUseTerrain() : true;
                 Children.push_back(R);
             }
             if (!Searching || !Children.isEmpty()) {
@@ -299,7 +301,8 @@ namespace SmileEditor {
     // ---- Propriedades ----
     int SceneOutlinerBridge::TotalCount() const {
         if (!Renderer) return 0;
-        const auto& Scene = const_cast<Smile::Renderer*>(Renderer)->GetScene();
+        auto RendererAccess = Renderer.Lock();
+        const auto& Scene = RendererAccess->GetScene();
         int Meshes = 0;
         for (const auto& R : Scene.Renderables())
             if (!R.RaytracingOnly) ++Meshes;
@@ -315,7 +318,8 @@ namespace SmileEditor {
 
     int SceneOutlinerBridge::HiddenCount() const {
         if (!Renderer) return 0;
-        const auto& Scene = const_cast<Smile::Renderer*>(Renderer)->GetScene();
+        auto RendererAccess = Renderer.Lock();
+        const auto& Scene = RendererAccess->GetScene();
         int N = 0;
         for (const auto& L : Scene.Lights())
             if (!L.Enabled) ++N;
@@ -340,24 +344,25 @@ namespace SmileEditor {
     }
 
     bool SceneOutlinerBridge::OceanVisible() const {
-        return Renderer ? Renderer->GetUseWater() : false;
+        return Renderer ? Renderer->Settings().GetUseWater() : false;
     }
 
     void SceneOutlinerBridge::SetOceanVisible(bool _V) {
-        if (!Renderer || Renderer->GetUseWater() == _V) return;
-        Renderer->SetUseWater(_V);
+        if (!Renderer || Renderer->Settings().GetUseWater() == _V) return;
+        Renderer->Settings().SetUseWater(_V);
         CachedOcean = _V;
         Rebuild(); // REnabled da linha do oceano
         emit EnvChanged();
     }
 
     bool SceneOutlinerBridge::TerrainVisible() const {
-        return Renderer ? Renderer->GetUseTerrain() : true;
+        return Renderer ? Renderer->Settings().GetUseTerrain() : true;
     }
 
     void SceneOutlinerBridge::SetTerrainVisible(bool _V) {
-        if (!Renderer || Renderer->GetUseTerrain() == _V) return;
-        Renderer->SetUseTerrain(_V); // gates de prepass/G-buffer/CSM do FTerrain
+        if (!Renderer || Renderer->Settings().GetUseTerrain() == _V) return;
+        auto RendererAccess = Renderer.Lock();
+        Renderer->Settings().SetUseTerrain(_V); // gates de prepass/G-buffer/CSM do FTerrain
         // O chao do GI e o proxy RaytracingOnly na TLAS — esconde junto, senao o DDGI
         // continua quicando luz num terreno invisivel.
         bool Bumped = false;
@@ -378,37 +383,52 @@ namespace SmileEditor {
         return Renderer && Renderer->GetSelectedObject() >= 0;
     }
 
-    // Renderable selecionado ou nullptr (sem renderer / indice invalido).
-    static const Smile::FRenderable* SelMesh(Smile::Renderer* _R) {
-        if (!_R) return nullptr;
-        const auto& List = _R->GetScene().Renderables();
-        const int I = _R->GetSelectedObject();
-        return (I >= 0 && I < (int)List.size()) ? &List[(size_t)I] : nullptr;
+    class LockedSelectedMesh {
+    public:
+        explicit LockedSelectedMesh(const RendererHandle& _Renderer)
+            : Access(_Renderer ? _Renderer.Lock() : RendererHandle::Access{}) {
+            if (!Access) return;
+            const auto& List = Access->GetScene().Renderables();
+            const int Index = Access->GetSelectedObject();
+            if (Index >= 0 && Index < static_cast<int>(List.size()))
+                Value = &List[static_cast<size_t>(Index)];
+        }
+
+        explicit operator bool() const { return Value != nullptr; }
+        const Smile::FRenderable* operator->() const { return Value; }
+
+    private:
+        RendererHandle::Access    Access;
+        const Smile::FRenderable* Value = nullptr;
+    };
+
+    static LockedSelectedMesh SelMesh(const RendererHandle& _R) {
+        return LockedSelectedMesh(_R);
     }
 
     QString SceneOutlinerBridge::MeshName() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return R ? QString::fromStdString(R->Name) : QString();
     }
 
     QString SceneOutlinerBridge::MeshMaterial() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         if (!R || !R->Material) return {};
         return QString::fromStdString(R->Material->Name);
     }
 
     int SceneOutlinerBridge::MeshTris() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return (R && R->Mesh) ? (int)(R->Mesh->GetIndexCount() / 3) : 0;
     }
 
     int SceneOutlinerBridge::MeshVerts() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return (R && R->Mesh) ? (int)R->Mesh->VertexCount() : 0;
     }
 
     QString SceneOutlinerBridge::MeshVramText() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         if (!R || !R->Mesh) return {};
         const double Bytes = (double)R->Mesh->VertexCount() * R->Mesh->VertexStride() +
                              (double)R->Mesh->GetIndexCount() * sizeof(Smile::u32);
@@ -419,7 +439,7 @@ namespace SmileEditor {
     }
 
     QStringList SceneOutlinerBridge::MeshFlags() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         QStringList Flags;
         if (!R || !R->Material) return Flags;
         const auto* M = R->Material;
@@ -431,7 +451,7 @@ namespace SmileEditor {
     }
 
     bool SceneOutlinerBridge::MeshVisible() const {
-        const auto* R = SelMesh(Renderer);
+        const auto R = SelMesh(Renderer);
         return R ? R->Visible : true;
     }
 
@@ -474,8 +494,66 @@ namespace SmileEditor {
         emit SelectionChanged();
     }
 
+    void SceneOutlinerBridge::ShiftAssetRangesAfterRemoval(int _RemovedIndex) {
+        for (FAssetRange& Range : Assets) {
+            if (Range.Begin > _RemovedIndex) --Range.Begin;
+            if (Range.End   > _RemovedIndex) --Range.End;
+        }
+    }
+
+    bool SceneOutlinerBridge::deleteSelectedMesh() {
+        if (!Renderer) return false;
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess) return false;
+
+        const int              Index = RendererAccess->GetSelectedObject();
+        const Smile::u64       Id    = RendererAccess->GetSelectedObjectId();
+        if (Index < 0 || Id == 0) return false;
+
+        const QString Name = QString::fromStdString(
+            RendererAccess->GetScene().Renderables()[(size_t)Index].Name);
+        if (!RendererAccess->RemoveRenderable(Id)) return false;
+        RendererAccess->ClearSelection();
+
+        ShiftAssetRangesAfterRemoval(Index);
+        CachedSelMesh = -1;
+        // A visibilidade persistida e por indice dentro do asset; com a lista deslocada o json
+        // salvo antes da remocao ja nao descreve esta cena.
+        MarkDirty();
+        Rebuild();
+        emit SelectionChanged();
+        Smile::LogInfo("Objeto removido da cena: " + Name.toStdString());
+        return true;
+    }
+
+    bool SceneOutlinerBridge::duplicateSelectedMesh() {
+        if (!Renderer) return false;
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess) return false;
+
+        const Smile::u64 Id = RendererAccess->GetSelectedObjectId();
+        if (Id == 0) return false;
+
+        const Smile::u64 NewId = RendererAccess->DuplicateRenderable(Id);
+        if (NewId == 0) return false;
+
+        // Seleciona a copia: e o que o usuario vai querer arrastar em seguida, e serve de
+        // confirmacao visual de que ela existe (a copia nasce exatamente sobre o original).
+        const int NewIndex = RendererAccess->GetScene().IndexOfRenderable(NewId);
+        RendererAccess->SetSelectedObject(NewIndex);
+        RendererAccess->ClearLightSelection();
+        CachedSelMesh = NewIndex;
+
+        MarkDirty();
+        Rebuild();
+        RevealSelection();
+        emit SelectionChanged();
+        return true;
+    }
+
     void SceneOutlinerBridge::toggleEye(int _Row) {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
+        auto RendererAccess = Renderer.Lock();
         const FRow& Row = Rows[_Row];
         auto& Renderables = Renderer->GetScene().Renderables();
 
@@ -502,7 +580,7 @@ namespace SmileEditor {
                 if (!Renderables[(size_t)I].RaytracingOnly)
                     Renderables[(size_t)I].Visible = !AnyVisible;
         } else if (Row.Kind == KEnv && Row.SceneIdx == EnvTerreno) {
-            SetTerrainVisible(!Renderer->GetUseTerrain());
+            SetTerrainVisible(!Renderer->Settings().GetUseTerrain());
             return;
         } else {
             return;
@@ -517,6 +595,7 @@ namespace SmileEditor {
 
     void SceneOutlinerBridge::focusRow(int _Row) {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
+        auto RendererAccess = Renderer.Lock();
         const FRow& Row = Rows[_Row];
 
         Smile::Vec3 Center;
@@ -525,10 +604,12 @@ namespace SmileEditor {
             const auto& Renderables = Renderer->GetScene().Renderables();
             if (Row.SceneIdx < 0 || Row.SceneIdx >= (int)Renderables.size()) return;
             const auto& R = Renderables[(size_t)Row.SceneIdx];
-            // AABB ja e world-space nas cenas cozidas (o cooker baka a transform no
-            // vertice); pra renderables com transform propria, soma a posicao.
-            const Smile::Vec3 Local = (R.AABBMin + R.AABBMax) * 0.5f;
-            Center = Local + R.Transform.Position;
+            // FRenderable::AABBMin/Max ja e a caixa de MUNDO (derivada da local pelo Transform
+            // em RefreshWorldBounds), entao o centro sai direto dela. Somar Transform.Position
+            // aqui contava a translacao DUAS vezes: era no-op enquanto o cooker bakeava a
+            // transform no vertice e todo transform era identidade, e passou a jogar a camera
+            // longe do objeto quando a v7 tirou o bake.
+            Center = (R.AABBMin + R.AABBMax) * 0.5f;
             Radius = std::max(((R.AABBMax - R.AABBMin) * 0.5f).Length(), 0.25f);
         } else if (Row.Kind == KLight) {
             const auto& Lights = Renderer->GetScene().Lights();
@@ -631,14 +712,15 @@ namespace SmileEditor {
             return false;
         }
         const QJsonObject Root = Doc.object();
+        auto RendererAccess = Renderer.Lock();
         auto& Renderables = Renderer->GetScene().Renderables();
         const int Total = (int)Renderables.size();
         bool Applied = false;
 
         if (Root.contains(QStringLiteral("terrainVisible"))) {
             const bool V = Root.value(QStringLiteral("terrainVisible")).toBool(true);
-            if (Renderer->GetUseTerrain() != V) {
-                Renderer->SetUseTerrain(V);
+            if (Renderer->Settings().GetUseTerrain() != V) {
+                Renderer->Settings().SetUseTerrain(V);
                 for (auto& R : Renderables)
                     if (R.RaytracingOnly) R.Visible = V;
                 CachedTerrainOn = V;
@@ -679,6 +761,7 @@ namespace SmileEditor {
 
     bool SceneOutlinerBridge::saveVisibility() {
         if (!Renderer || JsonPath.isEmpty()) return false;
+        auto RendererAccess = Renderer.Lock();
         const auto& Renderables = Renderer->GetScene().Renderables();
         const int Total = (int)Renderables.size();
 
@@ -699,7 +782,7 @@ namespace SmileEditor {
 
         QJsonObject Root;
         Root[QStringLiteral("version")]        = 1;
-        Root[QStringLiteral("terrainVisible")] = Renderer->GetUseTerrain();
+        Root[QStringLiteral("terrainVisible")] = Renderer->Settings().GetUseTerrain();
         Root[QStringLiteral("assets")]         = AssetsArr;
 
         QFile File(JsonPath);
@@ -717,6 +800,7 @@ namespace SmileEditor {
     // ---- Sincronizacao por frame ----
     void SceneOutlinerBridge::Refresh() {
         if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
         const auto& Scene = Renderer->GetScene();
 
         // Estrutura mudou por fora (load aditivo sem aviso, remocao de luz pelo painel).
@@ -740,9 +824,9 @@ namespace SmileEditor {
         }
 
         // Toggles de ambiente mudaram por fora (SettingsWindow etc.).
-        const bool Clouds    = Renderer->GetUseClouds();
-        const bool Ocean     = Renderer->GetUseWater();
-        const bool TerrainOn = Renderer->GetUseTerrain();
+        const bool Clouds    = Renderer->Settings().GetUseClouds();
+        const bool Ocean     = Renderer->Settings().GetUseWater();
+        const bool TerrainOn = Renderer->Settings().GetUseTerrain();
         if (Clouds != CachedClouds || Ocean != CachedOcean || TerrainOn != CachedTerrainOn) {
             CachedClouds    = Clouds;
             CachedOcean     = Ocean;

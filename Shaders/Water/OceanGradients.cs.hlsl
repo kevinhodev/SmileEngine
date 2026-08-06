@@ -21,19 +21,34 @@ void main(uint3 id : SV_DispatchThreadID) {
     float4 dD = DispIn.Load(int3(Dn,  0));
     float4 dU = DispIn.Load(int3(Up,  0));
 
-    float3 nrm = normalize(float3(dL.z - dR.z, NormalUp, dD.z - dU.z));
-    NormalMip0[loc] = float4(nrm, 1.0f);
+    // DispIn already contains the final surface in metres. Deriving by the
+    // physical texel size keeps every cascade in the same dimensionless m/m unit.
+    float3 dX = (dR.xyz - dL.xyz) * InvTwoTexelWorld;
+    float3 dZ = (dU.xyz - dD.xyz) * InvTwoTexelWorld;
 
-    float dDxdx = (dR.x - dL.x) * 0.5f;
-    float dDzdz = (dU.y - dD.y) * 0.5f;
-    float dDxdz = (dU.x - dD.x) * 0.5f;
-    float dDzdx = (dR.y - dL.y) * 0.5f;
+    // c.xyz = (Dx, Dz, h), P(x,z) = (x+Dx, water+h, z+Dz).
+    float3 Tx = float3(1.0f + dX.x, dX.z, dX.y);
+    float3 Tz = float3(dZ.x, dZ.z, 1.0f + dZ.y);
+    float3 nrm = cross(Tz, Tx); // flat water -> +Y
 
-    float Jxx = 1.0f + JacobianScale * dDxdx;
-    float Jzz = 1.0f + JacobianScale * dDzdz;
-    float Jxz = JacobianScale * dDxdz;
-    float Jzx = JacobianScale * dDzdx;
+    float Jxx = 1.0f + dX.x;
+    float Jzz = 1.0f + dZ.y;
+    float Jxz = dZ.x;
+    float Jzx = dX.y;
     float J   = Jxx * Jzz - Jxz * Jzx;
+
+    // Keep the raw J for foam. Only orient the shading normal after a fold.
+    if (nrm.y < 0.0f) nrm = -nrm;
+    nrm = normalize(nrm);
+
+    // Momentos de slope no referencial do vento. A media reconstrui a normal filtrada;
+    // E[s^2]-E[s]^2 nos mips mede a energia que deixou de caber na normal resolvida.
+    // Isso implementa a transicao normal -> BRDF de Bruneton et al. sem textura extra.
+    const float2 wind = normalize(OceanWindDirection);
+    const float2 crossWind = float2(-wind.y, wind.x);
+    const float2 slopeWorld = nrm.xz / max(nrm.y, 1.0e-4f);
+    const float2 slopeWind = float2(dot(slopeWorld, wind), dot(slopeWorld, crossWind));
+    NormalMip0[loc] = float4(slopeWind, slopeWind * slopeWind);
 
     // Acumulacao temporal da espuma: .w guarda um MINIMO RELAXADO de J — onde a onda
     // dobrou (J baixo) a espuma persiste e o valor recupera rumo ao J do frame a

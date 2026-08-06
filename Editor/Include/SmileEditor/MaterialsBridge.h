@@ -11,8 +11,10 @@
 #include <QQuickImageProvider>
 #include <QSet>
 #include <QString>
+#include <utility>
 #include <QVariantList>
 #include <QVector>
+#include "SmileEditor/RenderThread.h"
 
 namespace Smile { class Renderer; class FTexture; }
 
@@ -39,35 +41,37 @@ namespace SmileEditor {
         Q_PROPERTY(bool hasSelection READ HasSelection NOTIFY SelectionChanged)
         Q_PROPERTY(QString name READ Name NOTIFY SelectionChanged)
         Q_PROPERTY(int meshCount READ MeshCount NOTIFY SelectionChanged)
-        Q_PROPERTY(QString vramText READ VramText NOTIFY SelectionChanged)
-        Q_PROPERTY(QColor baseColor READ BaseColor WRITE SetBaseColor NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal metallic READ Metallic WRITE SetMetallic NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal roughness READ Roughness WRITE SetRoughness NOTIFY SelectionChanged)
+        Q_PROPERTY(QString vramText READ VramText NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(QColor baseColor READ BaseColor WRITE SetBaseColor NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal metallic READ Metallic WRITE SetMetallic NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal roughness READ Roughness WRITE SetRoughness NOTIFY SurfaceChanged)
         // Sem aoStrength: o SceneLoader zera AOStrength em todo material cozido (GTAO + DDGI +
         // oclusao por raio ja cobrem, e somar o mapa por cima escurece a cena toda). O campo
         // continua em MaterialConstants e o shader continua lendo — so nao e mais editavel.
-        Q_PROPERTY(QColor emissiveColor READ EmissiveColor WRITE SetEmissiveColor NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal emissiveStrength READ EmissiveStrength WRITE SetEmissiveStrength NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal normalStrength READ NormalStrength WRITE SetNormalStrength NOTIFY SelectionChanged)
-        Q_PROPERTY(bool normalFlipY READ NormalFlipY WRITE SetNormalFlipY NOTIFY SelectionChanged)
-        Q_PROPERTY(bool normalReconstructZ READ NormalReconstructZ WRITE SetNormalReconstructZ NOTIFY SelectionChanged)
-        Q_PROPERTY(bool hasNormalMap READ HasNormalMap NOTIFY SelectionChanged)
-        Q_PROPERTY(bool hasHeightMap READ HasHeightMap NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal heightScale READ HeightScale WRITE SetHeightScale NOTIFY SelectionChanged)
-        Q_PROPERTY(int parallaxMinSteps READ ParallaxMinSteps WRITE SetParallaxMinSteps NOTIFY SelectionChanged)
-        Q_PROPERTY(int parallaxMaxSteps READ ParallaxMaxSteps WRITE SetParallaxMaxSteps NOTIFY SelectionChanged)
-        Q_PROPERTY(bool parallaxSelfShadow READ ParallaxSelfShadow WRITE SetParallaxSelfShadow NOTIFY SelectionChanged)
-        Q_PROPERTY(bool parallaxRefine READ ParallaxRefine WRITE SetParallaxRefine NOTIFY SelectionChanged)
-        Q_PROPERTY(bool alphaTest READ AlphaTest WRITE SetAlphaTest NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal alphaCutoff READ AlphaCutoff WRITE SetAlphaCutoff NOTIFY SelectionChanged)
-        Q_PROPERTY(bool blend READ BlendFlag WRITE SetBlendFlag NOTIFY SelectionChanged)
-        Q_PROPERTY(bool twoSided READ TwoSided WRITE SetTwoSided NOTIFY SelectionChanged)
-        Q_PROPERTY(int shadingModel READ ShadingModel WRITE SetShadingModel NOTIFY SelectionChanged)
-        Q_PROPERTY(QColor subsurfaceColor READ SubsurfaceColor WRITE SetSubsurfaceColor NOTIFY SelectionChanged)
-        Q_PROPERTY(qreal subsurfaceIntensity READ SubsurfaceIntensity WRITE SetSubsurfaceIntensity NOTIFY SelectionChanged)
+        Q_PROPERTY(QColor emissiveColor READ EmissiveColor WRITE SetEmissiveColor NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal emissiveStrength READ EmissiveStrength WRITE SetEmissiveStrength NOTIFY SurfaceChanged)
+        // Escala do emissivo SO no indireto: separa "brilha na tela" de "ilumina o ambiente".
+        Q_PROPERTY(qreal rtEmissiveScale READ RTEmissiveScale WRITE SetRTEmissiveScale NOTIFY SurfaceChanged)
+        Q_PROPERTY(qreal normalStrength READ NormalStrength WRITE SetNormalStrength NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool normalFlipY READ NormalFlipY WRITE SetNormalFlipY NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool normalReconstructZ READ NormalReconstructZ WRITE SetNormalReconstructZ NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool hasNormalMap READ HasNormalMap NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(bool hasHeightMap READ HasHeightMap NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(qreal heightScale READ HeightScale WRITE SetHeightScale NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(int parallaxMinSteps READ ParallaxMinSteps WRITE SetParallaxMinSteps NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(int parallaxMaxSteps READ ParallaxMaxSteps WRITE SetParallaxMaxSteps NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool parallaxSelfShadow READ ParallaxSelfShadow WRITE SetParallaxSelfShadow NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool parallaxRefine READ ParallaxRefine WRITE SetParallaxRefine NOTIFY NormalParallaxChanged)
+        Q_PROPERTY(bool alphaTest READ AlphaTest WRITE SetAlphaTest NOTIFY MaterialModeChanged)
+        Q_PROPERTY(qreal alphaCutoff READ AlphaCutoff WRITE SetAlphaCutoff NOTIFY MaterialModeChanged)
+        Q_PROPERTY(bool blend READ BlendFlag WRITE SetBlendFlag NOTIFY MaterialModeChanged)
+        Q_PROPERTY(bool twoSided READ TwoSided WRITE SetTwoSided NOTIFY MaterialModeChanged)
+        Q_PROPERTY(int shadingModel READ ShadingModel WRITE SetShadingModel NOTIFY MaterialModeChanged)
+        Q_PROPERTY(QColor subsurfaceColor READ SubsurfaceColor WRITE SetSubsurfaceColor NOTIFY MaterialModeChanged)
+        Q_PROPERTY(qreal subsurfaceIntensity READ SubsurfaceIntensity WRITE SetSubsurfaceIntensity NOTIFY MaterialModeChanged)
         // Slots de textura: [{ label, has, info, overridden }] × 8 (F2: clique troca o mapa).
-        Q_PROPERTY(QVariantList textureSlots READ TextureSlots NOTIFY SelectionChanged)
-        Q_PROPERTY(bool selectedModified READ SelectedModified NOTIFY SelectionChanged)
+        Q_PROPERTY(QVariantList textureSlots READ TextureSlots NOTIFY TextureSlotsChanged)
+        Q_PROPERTY(bool selectedModified READ SelectedModified NOTIFY MaterialStateChanged)
         // Isolar na cena: só as meshes do material selecionado ficam visíveis (TLAS segue).
         Q_PROPERTY(bool isolating READ Isolating NOTIFY IsolatingChanged)
         // ---- Preview offscreen (F3): imagem via image://materialpreview/p<seq> ----
@@ -93,7 +97,7 @@ namespace SmileEditor {
 
         explicit MaterialsBridge(QObject* parent = nullptr);
 
-        void SetRenderer(Smile::Renderer* R);            // MainWindow, no RendererInitialized
+        void SetRenderer(RendererHandle R);              // MainWindow, no RendererInitialized
         void OnSceneLoaded(const QString& ScenePath, bool Additive);
 
         // QAbstractListModel
@@ -101,7 +105,7 @@ namespace SmileEditor {
         QVariant data(const QModelIndex& Index, int Role) const override;
         QHash<int, QByteArray> roleNames() const override;
 
-        bool    Available() const { return Renderer != nullptr; }
+        bool    Available() const { return static_cast<bool>(Renderer); }
         int     TotalCount() const;
         QString Search() const { return SearchText; }
         void    SetSearch(const QString& V);
@@ -123,6 +127,8 @@ namespace SmileEditor {
         void    SetEmissiveColor(const QColor& V);
         qreal   EmissiveStrength() const;
         void    SetEmissiveStrength(qreal V);
+        qreal   RTEmissiveScale() const;
+        void    SetRTEmissiveScale(qreal V);
         qreal   NormalStrength() const;
         void    SetNormalStrength(qreal V);
         bool    NormalFlipY() const;
@@ -196,6 +202,11 @@ namespace SmileEditor {
         void AvailableChanged();
         void StructureChanged();
         void SelectionChanged();
+        void SurfaceChanged();
+        void NormalParallaxChanged();
+        void MaterialModeChanged();
+        void TextureSlotsChanged();
+        void MaterialStateChanged();
         void FiltersChanged();
         void DirtyChanged();
         void CloseRequested();
@@ -221,8 +232,28 @@ namespace SmileEditor {
             bool Blend    = false;
             Smile::FTexture* Slots[Smile::kMaterialTextureSlots] = {}; // ponteiros cozidos
         };
+        struct FThumbRequest {
+            int MatIdx  = -1;
+            int Version = 0;
+        };
 
-        Smile::FMaterial* SelMat() const;
+        class LockedMaterial {
+        public:
+            LockedMaterial() = default;
+            LockedMaterial(RendererHandle::Access Guard, Smile::FMaterial* Material)
+                : Access(std::move(Guard)), Value(Material) {}
+
+            explicit operator bool() const { return Value != nullptr; }
+            operator Smile::FMaterial*() const { return Value; }
+            Smile::FMaterial* operator->() const { return Value; }
+            Smile::FMaterial& operator*() const { return *Value; }
+
+        private:
+            RendererHandle::Access Access;
+            Smile::FMaterial*      Value = nullptr;
+        };
+
+        LockedMaterial SelMat() const;
         void   RebuildRows();
         // Slot helpers (0..7 na ordem Albedo/Normal/MR/AO/Emissivo/Height/Metal/Rough).
         Smile::FTexture** SlotPointer(Smile::FMaterial& M, int Slot) const;
@@ -234,22 +265,33 @@ namespace SmileEditor {
         // aditiva ter crescido o vetor de renderables). Usar sempre que a cena continuar viva —
         // largar SavedVisibility sem restaurar deixa a cena escondida sem volta pela UI.
         void   StopIsolation();
-        void   RenderPreviewIfNeeded();  // Refresh: renderiza quando dirty + janela aberta
+        void   CollectPreviewResults();  // Refresh: consome apenas slots cuja fence terminou
+        bool   SubmitPreviewIfNeeded();  // true se ocupou o budget de submissao deste frame
+        // Camera/env rotation podem mudar mais rapido que o readback. Mantem os resultados da
+        // mesma geracao validos para a UI acompanhar o drag com a latencia natural do ring.
         void   MarkPreviewDirty() { PreviewDirty = true; }
+        // Material, primitiva ou HDRI mudaram: nenhum resultado da geracao anterior e valido.
+        void   InvalidatePreview() {
+            PreviewDirty = true;
+            ++PreviewEpoch;
+            PreviewRequests.clear();
+        }
         void   EnsureDefaultEnv();       // HDRI padrao (uma tentativa por sessao/cena)
-        void   ProcessThumbQueue();      // Refresh: ate 2 thumbnails por frame
+        void   ProcessThumbQueue();      // Refresh: no maximo 1 thumbnail por frame
         void   InvalidateThumb(int MatIdx);
         bool   MatchesFilter(const Smile::FMaterial& M) const;
         void   MarkDirty();
-        // Notifica edicao do selecionado: SelectionChanged + dataChanged da linha
-        // (badges/swatch/dot de modificado podem mudar).
-        void   TouchSelected();
+        enum class EChangeDomain : quint8 { Surface, NormalParallax, MaterialMode, Textures, All };
+        // Troca de material invalida todos os grupos; edicao continua invalida so o dominio
+        // tocado, mais o estado "modificado" e os papeis afetados da linha no browser.
+        void   NotifySelectionChanged();
+        void   TouchSelected(EChangeDomain Domain);
         // Igual ao TouchSelected, mais o pedido de refresh do snapshot InstanceGeo. Use nos
         // setters cujo campo o RAY TRACING le (ver FDDGI::FillInstanceGeo): cor base, metallic,
         // roughness, emissivo, cutoff, shading model, alpha-test/blend/two-sided e troca de
         // textura. Campos so-raster (parallax, NormalStrength, AOStrength, subsurface) devem usar
         // o TouchSelected puro — marcar a toa reseta o historico do GI/denoiser sem motivo.
-        void   TouchSelectedRT();
+        void   TouchSelectedRT(EChangeDomain Domain);
         bool   IsModified(const Smile::FMaterial* M) const;
         // Aplica OverrideCache por nome, SO nos materiais recem-vistos (_Fresh). Reaplicar em
         // material ja carregado descartaria a edicao nao salva dele — o Rebuild dispara tambem
@@ -258,7 +300,7 @@ namespace SmileEditor {
         QJsonObject MaterialToJson(const Smile::FMaterial& M) const;
         void   JsonToMaterial(const QJsonObject& O, Smile::FMaterial& M) const;
 
-        Smile::Renderer* Renderer = nullptr;
+        RendererHandle Renderer;
         QVector<FRow>    Rows;
         int              SelectedMat = -1;             // indice em GetMaterials()
         QString          SearchText;
@@ -288,14 +330,19 @@ namespace SmileEditor {
         bool           PreviewDirty   = true;
         bool           PreviewEnabledFlag = false;     // janela Materiais visivel
         bool           DefaultEnvTried   = false;      // HDRI padrao ja tentado
+        quint64        NextPreviewRequestId = 1;
+        quint64        PreviewEpoch = 1;               // muda em invalidacao estrutural
+        QHash<quint64, quint64> PreviewRequests;       // request id -> epoch da submissao
 
-        // Thumbnails do browser: esfera renderizada por material, 96x96, sob demanda
-        // (data() enfileira, Refresh drena 2/frame). Chaves por INDICE de material — o
+        // Thumbnails do browser: esfera renderizada a 256 e armazenada em 96x96, sob demanda
+        // (data() enfileira, Refresh drena 1/frame). Chaves por INDICE de material — o
         // provider roda na render thread do QML e nao pode tocar no Renderer.
         mutable QMutex        ThumbMutex;
         mutable QHash<int, QImage> ThumbByIdx;
         mutable QHash<int, int>    ThumbVersion;
         mutable QVector<int>       ThumbPending;
+        mutable QHash<int, int>    ThumbInFlightVersion;
+        QHash<quint64, FThumbRequest> ThumbRequests;
 
         // Espelhos p/ o Refresh detectar mudanca externa (load de cena, picking).
         int CachedMatCount = -1;

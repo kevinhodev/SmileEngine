@@ -82,7 +82,7 @@ namespace Smile {
             InstanceUpload[s].Reset();
             InstanceMapped[s] = nullptr;
         }
-        InstanceCapacity = 0;
+        InstanceCapacity_ = 0;
         Built          = false;
         InstanceCount_ = 0;
         BlasCount_     = 0;
@@ -151,7 +151,7 @@ namespace Smile {
 
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> Instances;
         CollectInstances(_Scene, Instances);
-        if (Instances.empty() || Instances.size() > InstanceCapacity) return false;
+        if (Instances.empty() || Instances.size() > InstanceCapacity_) return false;
 
         const u32 Slot = _FrameSlot % kInstanceSlots;
         std::memcpy(InstanceMapped[Slot], Instances.data(),
@@ -198,7 +198,7 @@ namespace Smile {
             UniqueMeshes.push_back(R.Mesh);
         }
         if (UniqueMeshes.empty()) {
-            LogWarning("[GI] - Cena sem geometria; AS nao construida");
+            LogDebug("[GI] - Cena sem geometria; AS nao construida");
             return;
         }
         const u32 NumBlas = static_cast<u32>(UniqueMeshes.size());
@@ -342,9 +342,12 @@ namespace Smile {
             // Infra persistente (rebuild de TLAS por frame no editor): uploads versionados
             // por frame em voo + TLAS/scratch dimensionados p/ a capacidade maxima — TODOS
             // os renderables, pois Visible pode ligar depois do load.
-            InstanceCapacity = static_cast<u32>(_Scene.Renderables().size());
+            // Capacidade COM folga (SceneCapacityFor): sem ela, o primeiro objeto criado no
+            // editor ja nao cabia e o RecordTlasRebuild recusava, forcando um Build inteiro.
+            InstanceCapacity_ =
+                SceneCapacityFor(static_cast<u32>(_Scene.Renderables().size()));
             const UINT64 UploadSize =
-                static_cast<UINT64>(InstanceCapacity) * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
+                static_cast<UINT64>(InstanceCapacity_) * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
             for (u32 s = 0; s < kInstanceSlots; ++s) {
                 InstanceUpload[s] = CreateBuffer(Dev5, UploadSize, D3D12_HEAP_TYPE_UPLOAD,
                     D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
@@ -359,7 +362,7 @@ namespace Smile {
             TInputs.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
             TInputs.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
             TInputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-            TInputs.NumDescs      = InstanceCapacity; // prebuild no pior caso (rebuilds reusam)
+            TInputs.NumDescs      = InstanceCapacity_; // prebuild no pior caso (rebuilds reusam)
             TInputs.InstanceDescs = InstanceUpload[0]->GetGPUVirtualAddress();
 
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO TInfo{};
@@ -383,7 +386,7 @@ namespace Smile {
         // Pool de build, scratch e buffers de postbuild/readback morrem aqui (GPU ja sincronizada).
 
         if (Instances.empty()) {
-            LogWarning("[GI] - Nenhuma instancia visivel; TLAS nao construida");
+            LogDebug("[GI] - Nenhuma instancia visivel; TLAS nao construida");
             return;
         }
 
@@ -397,7 +400,7 @@ namespace Smile {
         Built = true;
         const double BuildMB   = static_cast<double>(TotalBuild)   / (1024.0 * 1024.0);
         const double FinalMB   = static_cast<double>(Compact ? TotalCompact : TotalBuild) / (1024.0 * 1024.0);
-        LogInfo("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +
+        LogDebug("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +
                 " instancias / " + std::to_string(NumBlas) + " BLAS (pool " +
                 std::to_string(FinalMB).substr(0, 6) + " MB, build " +
                 std::to_string(BuildMB).substr(0, 6) + " MB, compaction " +

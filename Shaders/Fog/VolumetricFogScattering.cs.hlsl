@@ -20,8 +20,9 @@ struct FGPULight {
     float4 ColorSourceRadius; // rgb = cor*intensidade, w = bulbo (distancia minima)
     float4 DirCosOuter;       // xyz = eixo do spot, w = cos(outer); -2 = point
     float4 SpotParams;        // x = 1/(cosInner-cosOuter), y = slice de sombra (-1 = sem),
-                              // z = fade do slot [0..1] (0 = sombra apagada, 1 = cheia)
+                              // z = fade do slot [0..1], w = CastShadows (0/1)
     row_major float4x4 ShadowMatrix; // world -> UVZ do slice (dividir por w)
+    float4 PrevPosInvRadius;          // mantem o stride do FGPULight do Renderer
 };
 
 Texture3D<float4> VBufferA            : register(t0);
@@ -37,18 +38,10 @@ SamplerState      LinearClamp         : register(s0);
 
 RWTexture3D<float4> LightScattering : register(u0);
 
-// Visibilidade do sol p/ ponto no ar: mesma do SunShaftsVolumetric (sem normal-offset,
-// bias fixo — acne nao existe em volume).
+// Visibilidade do sol p/ ponto no ar: sampler volumetrico comum com crossfade entre
+// cascatas (sem normal-offset; acne de superficie nao existe no meio participante).
 float VolFog_SunVis(float3 worldPos) {
-    if (CSMParams.w < 0.5f) return 1.0f;
-    int numC = (int)CSMParams.x;
-    [loop] for (int i = 0; i < numC; ++i) {
-        float3 uvz = mul(float4(worldPos, 1.0f), WorldToShadow[i]).xyz;
-        if (!CSM_InBounds(uvz)) continue;
-        float refZ = uvz.z - CSMParams.y * CSMBiasScale[i] * 2.0f;
-        return SunShadowMap.SampleCmpLevelZero(ShadowCmp, float3(uvz.xy, (float)i), refZ);
-    }
-    return 1.0f; // fora do range do CSM = iluminado (igual as superficies)
+    return SampleCSMVolumetric(worldPos);
 }
 
 // refZ NDC (LH 0..1) a partir da distancia LINEAR no eixo da face/cone — copia do
@@ -82,8 +75,25 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
         }
     }
 
-    float ph  = VolFog_PhaseHG(SunDirPhase.w, dot(SunDirPhase.xyz, -dir));
-    float3 lighting = SunColorInt.rgb * (vis * ph);
+    // cosTheta = dot(dir p/ a luz, dir camera->ponto): o VolFog_PhaseHG usa a forma
+    // 1+g^2-2g*cos, que maximiza em +1, entao o argumento tem que ser +dot(L, dir).
+    // Estava com -dir aqui (convencao PBRT, que exige a forma com +2g*cos) e o g>0
+    // virava BACK-scattering: fog forte de costas pro sol e fraco olhando pra ele.
+    // Convencao unica da engine: SunShaftsVolumetric, AtmosphereCommon (dot(viewDir,
+    // sunDir)), CloudLighting, UE (ParticipatingMediaCommon+VolumetricFog.usf) e Cry
+    // (VolumetricFogcfi dotLE + Schlick) todas maximizam olhando PARA a luz.
+    float ph  = VolFog_PhaseHG(SunDirPhase.w, dot(SunDirPhase.xyz, dir));
+    // O passe meia-res de shafts pode substituir o termo direcional de alta
+    // frequencia no trecho proximo. Depois do alcance dele, o froxel assume o sol;
+    // extincao, ambiente, GI e luzes locais existem no volume inteiro.
+    float sunRangeWeight = 1.0f;
+    if (SunColorInt.w > 0.0f) {
+        float fadeWidth = min(max(SunColorInt.w * 0.15f, 4.0f), 24.0f);
+        float fadeStart = max(SunColorInt.w - fadeWidth, 0.0f);
+        sunRangeWeight = smoothstep(fadeStart, SunColorInt.w,
+                                    length(wp - CameraWorldPos.xyz));
+    }
+    float3 lighting = SunColorInt.rgb * (vis * ph * sunRangeWeight);
 
     // Luzes puntuais: atenuacao identica ao deferred + fase HG + sombra por tap unico
     // (PCF nao e legivel em volume; o temporal integra o resto).
@@ -151,18 +161,33 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
         }
         if (atten <= 0.0f) continue;
 
-        float phL = VolFog_PhaseHG(SunDirPhase.w, dot(L, -dir));
+        // mesmo sinal do sol acima: L = ponto->luz, dir = camera->ponto, pico olhando
+        // PARA a luz (halo do poste brilha de frente, nao de costas)
+        float phL = VolFog_PhaseHG(SunDirPhase.w, dot(L, dir));
         lighting += Lp.ColorSourceRadius.rgb * (atten * phL * LightParamsVF.w);
     }
 
     // Ambiente: DDGI amostrado "olhando" pra camera (direcao dominante do inscatter
     // forward) / pi — mesma escala do difuso em superficie. Fora do DDGI, SkyAmbient.
+    //
+    // O fade de borda vale AQUI TAMBEM, e aqui ele importa mais que em superficie: o volume de
+    // fog cobre o frustum inteiro, entao a maior parte dele fica FORA do grid de sondas em cena
+    // com terreno, e sem o fade cada voxel distante herdava a irradiancia da ultima fileira de
+    // sondas estendida ao infinito. O alvo do lerp e o mesmo AmbientFallback que ja servia ao
+    // caso "DDGI desligado" — sem termo novo no CB, so a largura em AmbientFallback.w.
     float3 amb;
     if (DDGIGridCount.w > 0.5f) {
         float2 invSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
-        amb = SampleDDGIIrradiance(DDGIIrradianceAtlas, LinearClamp, wp, -dir,
-                  DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                  (int)DDGIParams.y, invSize) * (DDGIParams.x / SMILE_PI);
+        float  volW = DDGI_VolumeWeight(wp, DDGIGridMin.xyz, DDGIGridMin.w,
+                                        (int3)DDGIGridCount.xyz, AmbientFallback.w);
+        if (volW <= 0.0f) {
+            amb = AmbientFallback.rgb;
+        } else {
+            float3 gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, LinearClamp, wp, -dir,
+                            DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
+                            (int)DDGIParams.y, invSize) * (DDGIParams.x / SMILE_PI);
+            amb = (volW >= 1.0f) ? gi : lerp(AmbientFallback.rgb, gi, volW);
+        }
     } else {
         amb = AmbientFallback.rgb;
     }

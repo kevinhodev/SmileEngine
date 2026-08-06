@@ -10,11 +10,13 @@ cbuffer OceanFFTCB : register(b0) {
     float Time;
     float ChoppyScale;
     float HeightScale;
-    float NormalUp;
-    float JacobianScale;
+    float InvTwoTexelWorld;
     float DeltaTime;    // dt real do frame (s) — acumulacao temporal da espuma
     float FoamRecovery; // taxa de recuperacao do J acumulado rumo ao J do frame (1/s)
     float FoamReset;    // 1 = sem historico valido (primeiro frame): usa J direto
+    float OceanPadding0;
+    float2 OceanWindDirection;
+    float2 OceanPadding1;
 };
 
 float2 OceanComplexMul(float2 z, float2 w) {

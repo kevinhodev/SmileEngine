@@ -2,60 +2,57 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Vec4.h"
+#include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include <d3d12.h>
 #include <wrl/client.h>
-#include <complex>
 #include <random>
-#include <vector>
 
 namespace Smile {
     class FOceanFFT {
     public:
         static constexpr u32 kGridSize       = 256;
         static constexpr u32 kLogGridSize    = 8;
+        static constexpr u32 kDisplacementMipCount = 9;
         static constexpr u32 kNormalMipCount = 9;
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
+        void RecreatePipelines(ID3D12Device* Device);
 
-        void SetTime(f32 ElapsedTime) { SimTime = 0.125f * TimeFactor * ElapsedTime; RealTime = ElapsedTime; }
+        void SetTime(f32 ElapsedTime) { SimTime = ElapsedTime; RealTime = ElapsedTime; }
         void SetWindDirection(f32 Rad);
         void SetWindSpeed(f32 V);
         void SetAmplitude(f32 A);
+        void SetSpectrumFetch(f32 Kilometres);
+        void SetOceanDepth(f32 Metres);
+        void SetSwell(f32 Value);
 
-        // Config por cascata (multi-cascata): seed própria (padrões descorrelacionados),
-        // fator de tempo (dispersão física: cascata maior evolui ~1/sqrt(T_i/T_0) mais
-        // devagar) e banda do espectro em CICLOS por tile [Low, High) — bandas disjuntas
-        // entre cascatas evitam energia duplicada na soma. Chamar ANTES do Initialize
-        // (ou seguido de re-bake via setters de vento/amplitude).
-        void ConfigureCascade(u32 SeedValue, f32 TimeScale, f32 CyclesLow, f32 CyclesHigh) {
-            Seed = SeedValue; TimeFactor = TimeScale;
-            CutoffLowCycles = CyclesLow; CutoffHighCycles = CyclesHigh;
-        }
+        // Config por cascata: domínio periódico real em metros e banda em ciclos/tile
+        // [Low, High). A dispersão usa k=2*pi*ciclos/WorldSize, sem escala temporal.
+        void ConfigureCascade(u32 SeedValue, f32 WorldSizeMeters,
+                              f32 CyclesLow, f32 CyclesHigh);
 
-        // Acopla o Jacobiano (espuma) ao choppy EFETIVO da superfície: recebe o produto
-        // dos sliders (choppy × dispScale × wavesSize × wavesAmount); a calibração
-        // preserva o look validado nos defaults (0.15 em 1.5×1.0×0.75×1.5).
-        void SetChoppyFactors(f32 SliderProduct) {
-            ChoppyJacobianScale = kChoppyJacobianCalib * (SliderProduct < 0.0f ? 0.0f : SliderProduct);
-        }
+        // Applied exactly once to the final displacement field. Normals and the
+        // Jacobian are then derived from that same scaled surface.
+        void SetGeometryScales(f32 HeightScale, f32 ChoppyLambda);
         void SetFoamRecovery(f32 PerSecond) { FoamRecovery = PerSecond; }
 
         void RecordCompute(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
         u32  SRVSlot() const       { return OceanSRVSlot; }
+        u32  PreviousSRVSlot() const { return PreviousOceanSRVSlot; }
         u32  NormalSRVSlot() const { return NormalChainSRVSlot; }
         bool IsInitialized() const { return OceanTex != nullptr && NormalTex != nullptr; }
+        void ResetTemporalHistory() {
+            DisplacementHistoryValid = false;
+            FoamHistoryValid = false;
+        }
 
     private:
-        using complexF = std::complex<f32>;
         static constexpr int N = static_cast<int>(kGridSize);
-        static constexpr int M = N + 1; 
-
-        f32  ComputePhillips(f32 kx, f32 ky) const;
         f32  FrandGaussian();
-        void ComputeH0();
+        void ComputeH0(u32 StagingSlot);
 
         void CreateTextures(ID3D12Device* Device);
         void CreateDescriptors(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
@@ -71,13 +68,12 @@ namespace Smile {
         f32 Amplitude       = 1.0f;
         f32 WindSpeed       = 4.0f;
         f32 WindAngle       = 0.0f;
-        f32 WorldSize       = 1.0f;
-        static constexpr f32 kG = 9.81f;
-        f32 MaxWaveSize     = 200.0f;
-        f32 ChoppyWaveScale = 400.0f;
-        f32 NormalUp        = 8.0f;
-        static constexpr f32 kChoppyJacobianCalib = 0.15f / (1.5f * 1.0f * 0.75f * 1.5f);
-        f32 ChoppyJacobianScale = 0.15f;
+        f32 FetchKilometres = 100.0f;
+        f32 OceanDepth      = 100.0f;
+        f32 Swell           = 0.25f;
+        f32 WorldSize       = 64.0f;
+        f32 SurfaceHeightScale = 1.0f;
+        f32 ChoppyLambda       = 1.0f;
         f32 SimTime         = 0.0f;
         f32 RealTime        = 0.0f;
         f32 LastRealTime    = 0.0f;
@@ -86,7 +82,6 @@ namespace Smile {
 
         std::mt19937 Rng{ 1337u };
         u32  Seed             = 1337u;
-        f32  TimeFactor       = 1.0f;
         f32  CutoffLowCycles  = 0.0f;    // banda do espectro em ciclos/tile [Low, High)
         f32  CutoffHighCycles = 1.0e9f;
         bool GaussianHasLast = false;
@@ -96,20 +91,27 @@ namespace Smile {
             f32 Time;
             f32 ChoppyScale;
             f32 HeightScale;
-            f32 NormalUp;
-            f32 JacobianScale;
+            f32 InvTwoTexelWorld;
             f32 DeltaTime;
             f32 FoamRecovery;
             f32 FoamReset;
+            f32 Padding0;
+            f32 WindDirectionX;
+            f32 WindDirectionZ;
+            f32 Padding1;
+            f32 Padding2;
         };
+        static_assert(sizeof(OceanCB) == 256, "OceanCB must keep the D3D12 CBV stride");
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8*      MappedCBBase = nullptr;
         OceanCB* MappedCB     = nullptr;
         u32      FrameSlot    = 0;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> H0Tex;
-        Microsoft::WRL::ComPtr<ID3D12Resource> H0Staging;
-        u8* H0StagingMapped = nullptr;
+        // Um upload por frame: BeginFrame espera a fence do slot antes de RecordCompute
+        // escreve nele, portanto o CopyTextureRegion nunca le memoria sendo sobrescrita.
+        Microsoft::WRL::ComPtr<ID3D12Resource> H0Staging[FCommandQueue::kFramesInFlight];
+        u8* H0StagingMapped[FCommandQueue::kFramesInFlight]{};
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT H0Footprint{};
         bool H0Dirty = true;
 
@@ -118,6 +120,7 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> FFTTemp;
         Microsoft::WRL::ComPtr<ID3D12Resource> DispTex;
         Microsoft::WRL::ComPtr<ID3D12Resource> OceanTex;
+        Microsoft::WRL::ComPtr<ID3D12Resource> PreviousOceanTex;
         Microsoft::WRL::ComPtr<ID3D12Resource> NormalTex;
 
         D3D12_RESOURCE_STATES H0State      = D3D12_RESOURCE_STATE_COPY_DEST;
@@ -125,8 +128,10 @@ namespace Smile {
         D3D12_RESOURCE_STATES SpecDState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES FFTTempState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES DispState    = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        D3D12_RESOURCE_STATES OceanState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        D3D12_RESOURCE_STATES OceanMipState[kDisplacementMipCount]{};
+        D3D12_RESOURCE_STATES PreviousOceanMipState[kDisplacementMipCount]{};
         D3D12_RESOURCE_STATES NormalMipState[kNormalMipCount]{};
+        bool DisplacementHistoryValid = false;
 
         u32 H0SRVSlot          = 0;
         u32 SpecSRVPair        = 0;
@@ -137,6 +142,9 @@ namespace Smile {
         u32 DispUAVSlot        = 0;
         u32 GradUAVPair        = 0;
         u32 OceanSRVSlot       = 0;
+        u32 PreviousOceanSRVSlot = 0;
+        u32 OceanMipUAVSlot[kDisplacementMipCount]{};
+        u32 OceanMipSRVSlot[kDisplacementMipCount - 1]{};
         u32 NormalChainSRVSlot = 0;
         u32 NormalMipUAVSlot[kNormalMipCount]{};
         u32 NormalMipSRVSlot[kNormalMipCount]{};
@@ -145,6 +153,7 @@ namespace Smile {
         FVolumetricPipeline FFTPSO;
         FVolumetricPipeline CreateDispPSO;
         FVolumetricPipeline GradientsPSO;
+        FVolumetricPipeline DisplacementMipPSO;
         FVolumetricPipeline NormalMipPSO;
     };
 }

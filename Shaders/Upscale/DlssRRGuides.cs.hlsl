@@ -9,10 +9,10 @@
 // DESVIO CONHECIDO (auditoria 2026-07-25), de proposito: o RR assume
 //   cor = diffuseAlbedo*Ldifuso + specularAlbedo*Lespecular
 // e demodula por estes guides. Na engine o GI ruidoso chega multiplicado por mais fatores que o
-// albedo — DeferredLighting.ps.hlsl:436 aplica KdGI*(DiffuseColor)*giIntensity*AODiffuse, e o
-// AODiffuse ainda e AO tingido pelo albedo (AOMultiBounce), alem do (1-Metallic) que entra duas
-// vezes (KdGI e dentro do DiffuseColor). Nenhum guide expressa isso: o mesmo pixel tem luz DIRETA
-// sem AO, entao nao existe um albedo unico que sirva pros dois termos.
+// albedo — o deferred aplica DiffuseColor*giIntensity*AODiffuse, e o AODiffuse ainda e AO tingido
+// pelo albedo (AOMultiBounce). Nenhum guide expressa isso: o mesmo pixel tem luz DIRETA sem AO,
+// entao nao existe um albedo unico que sirva pros dois termos. (O (1-Metallic) que este texto
+// citava como duplicado deixou de existir: agora ele mora so no DiffuseColor.)
 // NAO tirar o AO do GI pra "casar" a premissa: o RR nao reaplica AO, e o resultado seria indireto
 // mais chapado — exatamente o que o GTAO foi introduzido pra resolver (A/B aprovado 2026-06-11).
 // O conserto de verdade e o mesmo do guide de transparencia: levar o GI num alvo separado pelo RR
@@ -71,9 +71,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     float deviceZ = Depth.Load(int3(px, 0)).r;
     if (deviceZ <= 0.0f) {
-        // Ceu/background: sem material. Albedo 0 avisa o RR que a cor ja e final (nao demodula/denoisa).
+        // Ceu/background: o Integration Guide §3.4.2 recomenda specular albedo neutro 0.5.
         OutDiffuseAlbedo[px]   = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        OutSpecularAlbedo[px]  = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        OutSpecularAlbedo[px]  = float4(0.5f, 0.5f, 0.5f, 1.0f);
         OutNormalRoughness[px] = float4(0.0f, 0.0f, 1.0f, 1.0f);
         return;
     }
@@ -91,6 +91,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     float3 F0    = lerp(float3(0.04f, 0.04f, 0.04f), g.BaseColor, g.Metallic);
     float  rough = max(g.Roughness, 0.04f);
+
+    if (g.ShadingModel == SMILE_SHADINGMODEL_WATER) {
+        // A agua entra depois do deferred: o G-buffer aqui e exclusivamente um guide. BaseColor
+        // carrega o in-scatter aproximado; F0 fisico de agua fica em ~2% e spec-hit e zerado no
+        // proprio draw da superficie (nao herda o hit da geometria que estava atras dela).
+        OutDiffuseAlbedo[px]   = float4(g.BaseColor, 1.0f);
+        OutSpecularAlbedo[px]  = float4(EnvBRDFApprox2(float3(0.02f, 0.02f, 0.02f),
+                                                       rough * rough, NoV), 1.0f);
+        OutNormalRoughness[px] = float4(g.WorldNormal, rough);
+        return;
+    }
 
     OutDiffuseAlbedo[px]   = float4(g.BaseColor * (1.0f - g.Metallic), 1.0f);
     OutSpecularAlbedo[px]  = float4(EnvBRDFApprox2(F0, rough * rough, NoV), 1.0f);
