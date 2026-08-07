@@ -77,6 +77,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Renderer.h
     Include/Smile/Graphics/RenderSettings.h
     Include/Smile/Graphics/SceneTargets.h
+    Include/Smile/Graphics/FrameContext.h
     Include/Smile/Graphics/HistoryDomain.h
 )
 

@@ -855,8 +855,14 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
   tirou 92 dos 134 `Q_PROPERTY` do `ViewportWidget`) e os alvos de cena (`FSceneTargets`: 29
   membros + as 6 funções de criação). `Renderer.h` foi de 1198 para **873** linhas.
   **O núcleo continua de pé:** `Renderer.cpp` tem ~4000 linhas e **`RenderFrame()` sozinho
-  ocupa ~2500** (≈40 escopos de GPU numa única função) — é o próximo alvo, via `FFrameContext`
-  (os 115 locais de nível 0 da função) e só então a extração das fases.
+  ocupa ~2500** (≈40 escopos de GPU numa única função). O desmembramento dele começou pelo
+  `FrameContext.h`: `FFrameModes` (16 flags de "que passes rodam neste frame", resolvidas por
+  `ResolveFrameModes()` no topo em vez de espalhadas por 1200 linhas), `FFrameView`
+  (câmera/matrizes/jitter) e `FFrameLighting` (sol/lua/chuva/luz-chave). Os **locais de nível 0
+  do `RenderFrame` caíram de 115 para 54**, que era o bloqueio real: enquanto o estado
+  compartilhado for local, não há o que passar para um método, e nenhuma fase pode ser extraída.
+  Falta só o ambiente hemisférico (`SkyAmbient`/`GroundAmbient`), soldado ao bloco que publica a
+  SH no constant buffer. Depois disso, a extração das fases.
 - **O grafo de invalidação da §5.4 é escrito à mão.** São ~8 listas parcialmente sobrepostas de
   "quem cai junto". Já houve caso de knob que passou a entrar no sinal gravado sem o setter
   acompanhar. Candidato natural a virar dado (`enum class EHistoryDomain` + máscara).

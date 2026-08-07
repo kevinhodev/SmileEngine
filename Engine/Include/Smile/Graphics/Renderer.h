@@ -23,6 +23,7 @@
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/SceneTargets.h"
+#include "Smile/Graphics/FrameContext.h"
 #include "Smile/Graphics/DebugView.h"
 #include "Smile/Graphics/ShaderTimer.h"
 #include "Smile/Graphics/BvhDebugView.h"
@@ -510,6 +511,14 @@ namespace Smile {
         // No-op quando ninguem registrou callback (todo caminho que nao seja o editor).
         void ReportInitProgress(std::string_view Label, std::string_view Detail,
                                 f32 Fraction) const;
+
+        // Resolve "que passes rodam neste frame" (FrameContext.h). Chamado uma vez no topo do
+        // RenderFrame; todos os insumos sao membros estaveis durante a gravacao.
+        FFrameModes ResolveFrameModes();
+        // Camera/matrizes/jitter do frame (FrameContext.h). Precisa do upscaler ativo p/ o jitter.
+        FFrameView  ResolveFrameView(const FFrameModes& Modes, IUpscaler* ActiveUp);
+        // Sol, lua, chuva e a luz-chave. So calculo; as publicacoes ficam no RenderFrame.
+        FFrameLighting ResolveFrameLighting();
 
         void RecreateAllPSOs();
         void BuildDefaultScene();

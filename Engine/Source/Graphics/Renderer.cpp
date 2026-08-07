@@ -1462,6 +1462,168 @@ namespace Smile {
         return true;
     }
 
+    // Resolve num lugar so "que passes rodam neste frame". Todos os insumos sao membros que
+    // nao mudam durante a gravacao (verificado: nenhum deles e reescrito dentro do RenderFrame),
+    // entao resolver de antemao e equivalente a resolver espalhado — e passavel a uma fase.
+    FFrameModes Renderer::ResolveFrameModes() {
+        FFrameModes M;
+        M.UpscaleActive = (ActiveUpscaler() != nullptr);
+        M.TAAActive     = UseTAA && !M.UpscaleActive && TemporalAA.IsInitialized();
+        // DLSS Ray Reconstruction: precisa do RR inicializado e dos guides prontos; o eval
+        // acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
+        M.RRMode = (Denoiser == EDenoiser::DLSS_RR) && DlssRR.IsInitialized() && RRGuides.IsReady();
+
+        M.ReflectionsActive   = UseReflections && Reflections.IsReady();
+        M.ReSTIRGIActive      = UseReSTIRGI && ReSTIRGI.IsReady();
+        M.ReSTIRDIActiveFrame = UseReSTIRDI && ReSTIRDI.IsReady();
+        M.NrdIndirectMode     = M.ReSTIRGIActive && Nrd.IsReady() &&
+                                Denoiser == EDenoiser::NRD;
+        M.NrdDirectMode       = M.ReSTIRDIActiveFrame && ReSTIRDI.IsNrdReady() &&
+                                NrdDirect.IsReady() && Denoiser == EDenoiser::NRD;
+        M.AOWillRun           = UseAO && AO.IsReady();
+
+        M.WaterReflectionDebug =
+            Water.GetDebugMode() == FWaterRenderer::EDebugMode::Reflection;
+        M.DedicatedWaterReflections = M.ReflectionsActive &&
+            (Water.GetDebugMode() == FWaterRenderer::EDebugMode::Off || M.WaterReflectionDebug);
+
+        M.ReliableMotionActive = TemporalMotion.IsReady() &&
+            (M.ReflectionsActive || M.ReSTIRGIActive || M.ReSTIRDIActiveFrame);
+        M.MotionHistoryValidThisFrame = TemporalMotion.HasHistory();
+
+        M.VolShaftsActive = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
+        M.VolFogActive    = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
+        M.FogSkyAnchor    = UseAtmosphereSky && Atmosphere.IsInitialized();
+        return M;
+    }
+
+    // Camera e matrizes do frame. Hoistado do meio do RenderFrame: o segundo grupo (as
+    // variantes sem translacao) morava ~280 linhas abaixo do primeiro, mas depende so do
+    // mesmo View/Projection. O PrevVPNoTrans que ele le so e reescrito no FIM do frame,
+    // entao juntar os dois aqui e equivalente (verificado).
+    FFrameView Renderer::ResolveFrameView(const FFrameModes& _Modes, IUpscaler* _ActiveUp) {
+        FFrameView V;
+        V.Aspect = SwapChain.GetWidth() > 0 && SwapChain.GetHeight() > 0
+                   ? static_cast<f32>(SwapChain.GetWidth()) / static_cast<f32>(SwapChain.GetHeight())
+                   : 1.0f;
+        V.View  = Camera.GetViewMatrix();
+        V.NearZ = 0.1f;
+        V.FarZ  = UseWater ? 20000.0f : 4000.0f;
+        V.FovY  = GetFovY();
+        V.ProjUnjittered = kReverseZ
+            ? Mat44::PerspectiveFovReverseZLH(V.FovY, V.Aspect, V.NearZ, V.FarZ)
+            : Mat44::PerspectiveFovLH(V.FovY, V.Aspect, V.NearZ, V.FarZ);
+
+        V.Projection = V.ProjUnjittered;
+        if (_Modes.UpscaleActive) {
+            _ActiveUp->GetJitter(FrameIndex, V.JitterPxX, V.JitterPxY); // FSR: sequencia do SDK; DLSS: Halton
+            V.ProjJitterYSign = -1.0f;
+        } else if (_Modes.TAAActive) {
+            const u32 kJitterPhases = 8;
+            const u32 Idx = (FrameIndex % kJitterPhases) + 1;
+            V.JitterPxX = Halton(Idx, 2) - 0.5f;
+            V.JitterPxY = Halton(Idx, 3) - 0.5f;
+        }
+        if (_Modes.UpscaleActive || _Modes.TAAActive) {
+            V.Projection.M[2][0] += V.JitterPxX * 2.0f / static_cast<f32>(RenderWidth());
+            V.Projection.M[2][1] += V.ProjJitterYSign * V.JitterPxY * 2.0f / static_cast<f32>(RenderHeight());
+        }
+        V.JitterUv = Vec2{ V.JitterPxX / static_cast<f32>(RenderWidth()),
+                           -V.ProjJitterYSign * V.JitterPxY / static_cast<f32>(RenderHeight()) };
+        V.JitterPx = Vec2{ V.JitterPxX, -V.ProjJitterYSign * V.JitterPxY };
+
+        V.ViewProjection     = V.View * V.Projection;
+        V.ViewProjUnjittered = V.View * V.ProjUnjittered;
+        V.CameraPosition     = Camera.GetPosition();
+
+        V.ViewNoTrans = V.View;
+        V.ViewNoTrans.M[3][0] = 0.0f;
+        V.ViewNoTrans.M[3][1] = 0.0f;
+        V.ViewNoTrans.M[3][2] = 0.0f;
+        V.VPNoTrans    = V.ViewNoTrans * V.Projection;
+        V.InvVPNoTrans = V.VPNoTrans.Inverse();
+        V.VPNoTransUnjit    = V.ViewNoTrans * V.ProjUnjittered;
+        V.SkyClipToPrevClip = V.VPNoTransUnjit.Inverse() * PrevVPNoTrans;
+        V.InvViewProjFull  = V.ViewProjection.Inverse();
+        V.InvViewProjUnjit = V.ViewProjUnjittered.Inverse();
+
+        V.MipBias = (_Modes.UpscaleActive && RenderWidth() < OutputWidth())
+            ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
+            : 0.0f;
+        return V;
+    }
+
+    // Sol, lua, chuva e a luz-chave. So calculo — as publicacoes (constant buffer, parametros
+    // de noite/estrelas da atmosfera) continuam no RenderFrame, lendo daqui. O MoonTint fica
+    // local: e constante e so alimenta MoonLightCol e o MoonColorRaw publicado la.
+    FFrameLighting Renderer::ResolveFrameLighting() {
+        FFrameLighting L;
+        L.SunN = SunDir.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
+
+        L.RainSky    = Weather.GetDriveSky() ? Weather.GetRainAmount() : 0.0f;
+        L.RainKeyDim = 1.0f - L.RainSky * 0.75f;
+        L.RainAmbDim = 1.0f - L.RainSky * 0.40f;
+        // POLITICA UNICA de escurecimento do CEU na chuva — o ceu procedural nao sabe da chuva,
+        // entao quem consome a radiancia dele precisa atenuar. Era 1.0 no DDGI e no ReSTIR GI e
+        // so as reflexoes atenuavam: dois dos tres consumidores do mesmo ceu ignoravam o
+        // temporal, e o indireto continuava de dia limpo debaixo de tempestade.
+        // Distinto do RainAmbDim, que escurece IRRADIANCIA (ambiente hemisferico), nao a
+        // radiancia do ceu vista por um raio.
+        L.RainSkyDim = 1.0f - L.RainSky * 0.65f;
+
+        L.EffectiveSunColor = SunColorRGB;
+        if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
+            const Vec3 T = Atmosphere.SunTransmittance(L.SunN);
+            L.EffectiveSunColor = { SunColorRGB.X * T.X, SunColorRGB.Y * T.Y, SunColorRGB.Z * T.Z };
+        }
+        {
+            const f32 hf = std::clamp(L.SunN.Y / 0.03f, 0.0f, 1.0f);
+            const f32 HorizonFade = hf * hf * (3.0f - 2.0f * hf);
+            L.EffectiveSunColor = { L.EffectiveSunColor.X * HorizonFade,
+                                    L.EffectiveSunColor.Y * HorizonFade,
+                                    L.EffectiveSunColor.Z * HorizonFade };
+        }
+        L.EffectiveSunColor = { L.EffectiveSunColor.X * L.RainKeyDim,
+                                L.EffectiveSunColor.Y * L.RainKeyDim,
+                                L.EffectiveSunColor.Z * L.RainKeyDim }; // F4: nublado de chuva
+
+        L.MoonN = TimeOfDay.MoonDirection();
+
+        const f32 nf     = std::clamp((0.0f - L.SunN.Y) / 0.15f, 0.0f, 1.0f);
+        L.NightFactor    = nf * nf * (3.0f - 2.0f * nf);
+        const f32 MoonSunCos = L.MoonN.X * L.SunN.X + L.MoonN.Y * L.SunN.Y + L.MoonN.Z * L.SunN.Z;
+        L.MoonIllum      = (1.0f - MoonSunCos) * 0.5f;
+        const f32 MoonUp = std::clamp(L.MoonN.Y * 8.0f, 0.0f, 1.0f);
+        L.MoonOn         = TimeOfDay.MoonEnabled;
+
+        L.MoonTrans = (UseAtmosphereSky && Atmosphere.IsInitialized())
+                    ? Atmosphere.SunTransmittance(L.MoonN) : Vec3{ 1.0f, 1.0f, 1.0f };
+        const Vec3 MoonTint = { 0.6f, 0.7f, 1.0f };
+        L.MoonLightCol = { MoonTint.X * L.MoonTrans.X * L.RainKeyDim,
+                           MoonTint.Y * L.MoonTrans.Y * L.RainKeyDim,
+                           MoonTint.Z * L.MoonTrans.Z * L.RainKeyDim }; // F4: nublado
+        L.MoonW = L.MoonOn ? (TimeOfDay.MoonIntensity * L.MoonIllum * L.NightFactor * MoonUp) : 0.0f;
+
+        // MoonDiskSize e multiplicador do diametro lunar medio (0.518 grau), conforme o "x" do
+        // editor. Antes o mesmo 1.5 era tratado como 1.5 grau e o disco ficava ~1.9x maior.
+        const f32 MoonHalfAngleRad = 0.5f * ToRad * TimeOfDay.MoonDiskAngularDiameterDeg();
+        L.CosMoonRadius = std::cos(MoonHalfAngleRad);
+        // x2 sem textura: o disco procedural branco depende do brilho pra ter presenca.
+        L.MoonDiskBright = L.MoonOn
+            ? TimeOfDay.MoonDiskBrightness * (Atmosphere.HasMoonTexture() ? 1.0f : 2.0f)
+            : 0.0f;
+        L.MoonSkyScale = L.MoonOn ? (0.05f * TimeOfDay.MoonIntensity * L.MoonIllum) : 0.0f;
+
+        L.KeyIsMoon = (L.SunN.Y <= 0.0f);
+        L.KeyDir    = L.KeyIsMoon ? L.MoonN : L.SunN;
+        L.KeyColor  = L.KeyIsMoon ? L.MoonLightCol : L.EffectiveSunColor;
+        L.KeyInt    = L.KeyIsMoon ? L.MoonW : SunIntensity;
+        L.CloudDim  = L.KeyIsMoon ? (L.MoonW / std::max(SunIntensity, 1e-3f)) : 1.0f;
+        L.KeyCloudCol = { L.KeyColor.X * L.CloudDim, L.KeyColor.Y * L.CloudDim,
+                          L.KeyColor.Z * L.CloudDim };
+        return L;
+    }
+
     void Renderer::RenderFrame() {
         // O DebugDraw e preenchido pelo EDITOR antes do frame e consumido aqui. Se o frame morrer
         // no meio (excecao — a render thread captura e tenta o proximo) ou sair pelo early return
@@ -1498,46 +1660,10 @@ namespace Smile {
 
         ObjectPicker.Tick();
 
-        f32 Aspect = SwapChain.GetWidth() > 0 && SwapChain.GetHeight() > 0
-                     ? static_cast<f32>(SwapChain.GetWidth()) / static_cast<f32>(SwapChain.GetHeight())
-                     : 1.0f;
-
-        Mat44 View       = Camera.GetViewMatrix();
-
-        const f32 NearZ = 0.1f;
-        const f32 FarZ  = UseWater ? 20000.0f : 4000.0f;
-
-        const f32 FovY  = GetFovY();
-        const Mat44 ProjUnjittered = kReverseZ
-            ? Mat44::PerspectiveFovReverseZLH(FovY, Aspect, NearZ, FarZ)
-            : Mat44::PerspectiveFovLH(FovY, Aspect, NearZ, FarZ);
-
-        Mat44 Projection = ProjUnjittered;
         IUpscaler* ActiveUp = ActiveUpscaler();          // FSR ou DLSS-SR ativo (nullptr = None/indisponivel)
-        const bool UpscaleActive = (ActiveUp != nullptr);
-        const bool TAAActive  = UseTAA && !UpscaleActive && TemporalAA.IsInitialized();
-        f32 JitterPxX = 0.0f, JitterPxY = 0.0f;
-        f32 ProjJitterYSign = 1.0f;
-        if (UpscaleActive) {
-            ActiveUp->GetJitter(FrameIndex, JitterPxX, JitterPxY); // FSR: sequencia do SDK; DLSS: Halton
-            ProjJitterYSign = -1.0f;
-        } else if (TAAActive) {
-            const u32 kJitterPhases = 8;
-            const u32 Idx = (FrameIndex % kJitterPhases) + 1;
-            JitterPxX = Halton(Idx, 2) - 0.5f;
-            JitterPxY = Halton(Idx, 3) - 0.5f;
-        }
-        if (UpscaleActive || TAAActive) {
-            Projection.M[2][0] += JitterPxX * 2.0f / static_cast<f32>(RenderWidth());
-            Projection.M[2][1] += ProjJitterYSign * JitterPxY * 2.0f / static_cast<f32>(RenderHeight());
-        }
-
-        const Vec2 JitterUv{ JitterPxX / static_cast<f32>(RenderWidth()),
-                             -ProjJitterYSign * JitterPxY / static_cast<f32>(RenderHeight()) };
-        const Vec2 JitterPx{ JitterPxX, -ProjJitterYSign * JitterPxY };
-        const Mat44 ViewProjection = View * Projection;
-        const Mat44 ViewProjUnjittered = View * ProjUnjittered;
-        LastViewProj = ViewProjUnjittered; 
+        const FFrameModes Modes = ResolveFrameModes();
+        const FFrameView  Vw    = ResolveFrameView(Modes, ActiveUp);
+        LastViewProj = Vw.ViewProjUnjittered;
 
         const u32 FrameSlot = CommandQueue.FrameIndex();
         // BeginFrame acabou de esperar a fence deste slot, portanto o readback gravado na
@@ -1547,8 +1673,8 @@ namespace Smile {
         FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
             MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));
 
-        Vec3 CameraPosition      = Camera.GetPosition();
-        MappedCB->CameraPosition = { CameraPosition.X, CameraPosition.Y, CameraPosition.Z, 1.0f };
+
+        MappedCB->CameraPosition = { Vw.CameraPosition.X, Vw.CameraPosition.Y, Vw.CameraPosition.Z, 1.0f };
 
         const f32 IBLEnabled = HDREnv.HasHDRLoaded() ? 1.0f : 0.0f;
         MappedCB->IBLParams      = { IBLIntensity, IBLRotation,
@@ -1562,9 +1688,6 @@ namespace Smile {
             TimeOfDay.Tick(LastDeltaTime);
             SetSunDirection(TimeOfDay.SunDirection());
         }
-        const Vec3 SunN          = SunDir.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
-        MappedCB->SunDirection   = { SunN.X, SunN.Y, SunN.Z, SunIntensity };
-
         {
             const f32 Target = Weather.GetRainAmount();
             const f32 Tau    = (Target > Weather.GetWetness()) ? 5.0f : 30.0f;
@@ -1574,59 +1697,21 @@ namespace Smile {
             if (Target <= 0.001f && Weather.GetWetness() < 0.005f) Weather.SetWetness(0.0f);
         }
 
-        const f32 RainSky    = Weather.GetDriveSky() ? Weather.GetRainAmount() : 0.0f;
-        const f32 RainKeyDim = 1.0f - RainSky * 0.75f;
-        const f32 RainAmbDim = 1.0f - RainSky * 0.40f;
-        // POLITICA UNICA de escurecimento do CEU na chuva — o ceu procedural nao sabe da chuva,
-        // entao quem consome a radiancia dele precisa atenuar. Era 1.0 no DDGI e no ReSTIR GI e
-        // so as reflexoes atenuavam: dois dos tres consumidores do mesmo ceu ignoravam o
-        // temporal, e o indireto continuava de dia limpo debaixo de tempestade.
-        // Distinto do RainAmbDim, que escurece IRRADIANCIA (ambiente hemisferico), nao a
-        // radiancia do ceu vista por um raio.
-        const f32 RainSkyDim = 1.0f - RainSky * 0.65f;
-
-        Vec3 EffectiveSunColor = SunColorRGB;
-        if (UseAtmosphereSky && Atmosphere.IsInitialized()) {
-            const Vec3 T = Atmosphere.SunTransmittance(SunN);
-            EffectiveSunColor = { SunColorRGB.X * T.X, SunColorRGB.Y * T.Y, SunColorRGB.Z * T.Z };
-        }
-
-        {
-            const f32 hf = std::clamp(SunN.Y / 0.03f, 0.0f, 1.0f);
-            const f32 HorizonFade = hf * hf * (3.0f - 2.0f * hf);
-            EffectiveSunColor = { EffectiveSunColor.X * HorizonFade,
-                                  EffectiveSunColor.Y * HorizonFade,
-                                  EffectiveSunColor.Z * HorizonFade };
-        }
-        EffectiveSunColor = { EffectiveSunColor.X * RainKeyDim, EffectiveSunColor.Y * RainKeyDim,
-                              EffectiveSunColor.Z * RainKeyDim }; // F4: nublado de chuva
-        MappedCB->SunColor       = { EffectiveSunColor.X, EffectiveSunColor.Y, EffectiveSunColor.Z, 0.0f };
+        const FFrameLighting Lt  = ResolveFrameLighting();
+        MappedCB->SunDirection   = { Lt.SunN.X, Lt.SunN.Y, Lt.SunN.Z, SunIntensity };
+        MappedCB->SunColor       = { Lt.EffectiveSunColor.X, Lt.EffectiveSunColor.Y,
+                                     Lt.EffectiveSunColor.Z, 0.0f };
         // Variante CRUA (sem transmitancia, sem HorizonFade) p/ o caminho por pixel do deferred
         // e do ForwardBlend. O SunColor acima continua intacto: todos os outros consumidores
         // (fog volumetrico, nuvens, agua, sun shafts, readout do editor) seguem sem mudanca.
-        MappedCB->SunColorRaw    = { SunColorRGB.X * RainKeyDim, SunColorRGB.Y * RainKeyDim,
-                                     SunColorRGB.Z * RainKeyDim, 0.0f };
+        MappedCB->SunColorRaw    = { SunColorRGB.X * Lt.RainKeyDim, SunColorRGB.Y * Lt.RainKeyDim,
+                                     SunColorRGB.Z * Lt.RainKeyDim, 0.0f };
 
-        const Vec3 MoonN = TimeOfDay.MoonDirection();
-
-        const f32 nf          = std::clamp((0.0f - SunN.Y) / 0.15f, 0.0f, 1.0f);
-        const f32 NightFactor = nf * nf * (3.0f - 2.0f * nf);
-        const f32 MoonSunCos = MoonN.X * SunN.X + MoonN.Y * SunN.Y + MoonN.Z * SunN.Z;
-        const f32 MoonIllum  = (1.0f - MoonSunCos) * 0.5f;
-        const f32 MoonUp     = std::clamp(MoonN.Y * 8.0f, 0.0f, 1.0f); 
-        const bool MoonOn    = TimeOfDay.MoonEnabled;
-
-        const Vec3 MoonTrans = (UseAtmosphereSky && Atmosphere.IsInitialized())
-                             ? Atmosphere.SunTransmittance(MoonN) : Vec3{ 1.0f, 1.0f, 1.0f };
-        const Vec3 MoonTint     = { 0.6f, 0.7f, 1.0f };
-        const Vec3 MoonLightCol = { MoonTint.X * MoonTrans.X * RainKeyDim,
-                                    MoonTint.Y * MoonTrans.Y * RainKeyDim,
-                                    MoonTint.Z * MoonTrans.Z * RainKeyDim }; // F4: nublado
-        const f32  MoonW        = MoonOn ? (TimeOfDay.MoonIntensity * MoonIllum * NightFactor * MoonUp) : 0.0f;
-        MappedCB->MoonDirection = { MoonN.X, MoonN.Y, MoonN.Z, MoonW };
-        MappedCB->MoonColor     = { MoonLightCol.X, MoonLightCol.Y, MoonLightCol.Z, 0.0f };
-        MappedCB->MoonColorRaw  = { MoonTint.X * RainKeyDim, MoonTint.Y * RainKeyDim,
-                                    MoonTint.Z * RainKeyDim, 0.0f };
+        MappedCB->MoonDirection = { Lt.MoonN.X, Lt.MoonN.Y, Lt.MoonN.Z, Lt.MoonW };
+        MappedCB->MoonColor     = { Lt.MoonLightCol.X, Lt.MoonLightCol.Y, Lt.MoonLightCol.Z, 0.0f };
+        // MoonTint cru (sem transmitancia), so com o dim de chuva — mesma logica do SunColorRaw.
+        MappedCB->MoonColorRaw  = { 0.6f * Lt.RainKeyDim, 0.7f * Lt.RainKeyDim,
+                                    1.0f * Lt.RainKeyDim, 0.0f };
 
         // Transmitancia por pixel: so com o ceu procedural (o LUT descreve ESTA atmosfera).
         {
@@ -1638,20 +1723,9 @@ namespace Smile {
                 (AtmoOn && UsePerPixelAtmoTransmittance) ? 1.0f : 0.0f };
         }
 
-        // MoonDiskSize e multiplicador do diametro lunar medio (0.518 grau), conforme o "x" do
-        // editor. Antes o mesmo 1.5 era tratado como 1.5 grau e o disco ficava ~1.9x maior.
-        const f32 MoonHalfAngleRad = 0.5f * ToRad *
-                                     TimeOfDay.MoonDiskAngularDiameterDeg();
-        const f32 CosMoonRadius    = std::cos(MoonHalfAngleRad);
-        // x2 sem textura: o disco procedural branco depende do brilho pra ter presenca.
-        const f32 MoonDiskBright = MoonOn
-            ? TimeOfDay.MoonDiskBrightness * (Atmosphere.HasMoonTexture() ? 1.0f : 2.0f)
-            : 0.0f;
-        Atmosphere.SetNightParams(MoonN, CosMoonRadius, MoonDiskBright,
-                                  TimeOfDay.StarIntensity, NightFactor, ElapsedTime);
-
-        const f32 MoonSkyScale = MoonOn ? (0.05f * TimeOfDay.MoonIntensity * MoonIllum) : 0.0f;
-        Atmosphere.SetMoonSkyLight(MoonSkyScale, MoonOn ? MoonIllum : 0.0f);
+        Atmosphere.SetNightParams(Lt.MoonN, Lt.CosMoonRadius, Lt.MoonDiskBright,
+                                  TimeOfDay.StarIntensity, Lt.NightFactor, ElapsedTime);
+        Atmosphere.SetMoonSkyLight(Lt.MoonSkyScale, Lt.MoonOn ? Lt.MoonIllum : 0.0f);
 
         {
             const f32  LatR  = TimeOfDay.LatitudeDeg    * ToRad;
@@ -1665,14 +1739,6 @@ namespace Smile {
             Atmosphere.SetStarRotation(Pole, Angle);
         }
 
-        const bool KeyIsMoon  = (SunN.Y <= 0.0f);
-        const Vec3 KeyDir     = KeyIsMoon ? MoonN : SunN;
-        const Vec3 KeyColor   = KeyIsMoon ? MoonLightCol : EffectiveSunColor; 
-        const f32  KeyInt     = KeyIsMoon ? MoonW : SunIntensity;
-  
-        const f32  CloudDim   = KeyIsMoon ? (MoonW / std::max(SunIntensity, 1e-3f)) : 1.0f;
-        const Vec3 KeyCloudCol = { KeyColor.X * CloudDim, KeyColor.Y * CloudDim, KeyColor.Z * CloudDim };
-
         Vec3 SkyAmbient, GroundAmbient; // tambem alimentam o ambient das nuvens volumetricas
         {
             Vec3& Sky    = SkyAmbient;
@@ -1681,7 +1747,7 @@ namespace Smile {
                                   Atmosphere.GetSkyAmbient(FrameSlot, Sky, Ground);
             if (!Physical) {
                 auto Sat = [](f32 X) { return X < 0.0f ? 0.0f : (X > 1.0f ? 1.0f : X); };
-                const f32 SunY   = SunN.Y;
+                const f32 SunY   = Lt.SunN.Y;
                 const f32 Day    = Sat(SunY * 4.0f + 0.2f);
                 const f32 LowSun = Sat(1.0f - SunY * 2.5f);
                 const Vec3 Zenith  = { 0.18f, 0.30f, 0.55f };
@@ -1690,8 +1756,8 @@ namespace Smile {
                 Ground = Sky * 0.35f;
             }
 
-            Sky    = { Sky.X * RainAmbDim, Sky.Y * RainAmbDim, Sky.Z * RainAmbDim };
-            Ground = { Ground.X * RainAmbDim, Ground.Y * RainAmbDim, Ground.Z * RainAmbDim };
+            Sky    = { Sky.X * Lt.RainAmbDim, Sky.Y * Lt.RainAmbDim, Sky.Z * Lt.RainAmbDim };
+            Ground = { Ground.X * Lt.RainAmbDim, Ground.Y * Lt.RainAmbDim, Ground.Z * Lt.RainAmbDim };
             MappedCB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
                                              UseAtmosphereAmbient ? 1.0f : 0.0f };
             MappedCB->GroundAmbientColor = { Ground.X, Ground.Y, Ground.Z, AtmoAmbientIntensity };
@@ -1704,8 +1770,8 @@ namespace Smile {
                 // O dim de chuva escurece IRRADIANCIA, entao escala a SH inteira — mesma
                 // politica que as 2 cores acima recebem.
                 for (u32 c = 0; c < 3; ++c)
-                    SH[c] = { SH[c].X * RainAmbDim, SH[c].Y * RainAmbDim,
-                              SH[c].Z * RainAmbDim, SH[c].W * RainAmbDim };
+                    SH[c] = { SH[c].X * Lt.RainAmbDim, SH[c].Y * Lt.RainAmbDim,
+                              SH[c].Z * Lt.RainAmbDim, SH[c].W * Lt.RainAmbDim };
             }
             MappedCB->SkyAmbientSHR = SH[0];
             MappedCB->SkyAmbientSHG = SH[1];
@@ -1737,23 +1803,8 @@ namespace Smile {
             MappedCB->DDGIBiasParams = { 0.2f, 0.0f, 0.0f, 0.0f };
         }
 
-        const bool ReflectionsActive = UseReflections && Reflections.IsReady();
-        const bool WaterReflectionDebug =
-            Water.GetDebugMode() == FWaterRenderer::EDebugMode::Reflection;
-        const bool DedicatedWaterReflections = ReflectionsActive &&
-            (Water.GetDebugMode() == FWaterRenderer::EDebugMode::Off || WaterReflectionDebug);
-        const bool ReSTIRGIActive    = UseReSTIRGI && ReSTIRGI.IsReady();
         // DLSS Ray Reconstruction: denoiser neural que substitui NRD + SR. Precisa do RR inicializado
         // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
-        const bool RRMode  = (Denoiser == EDenoiser::DLSS_RR) && DlssRR.IsInitialized() && RRGuides.IsReady();
-        const bool ReSTIRDIActiveFrame = UseReSTIRDI && ReSTIRDI.IsReady();
-        const bool ReliableMotionActive = TemporalMotion.IsReady() &&
-            (ReflectionsActive || ReSTIRGIActive || ReSTIRDIActiveFrame);
-        const bool MotionHistoryValidThisFrame = TemporalMotion.HasHistory();
-        const bool NrdIndirectMode = ReSTIRGIActive && Nrd.IsReady() &&
-                                     Denoiser == EDenoiser::NRD;
-        const bool NrdDirectMode = ReSTIRDIActiveFrame && ReSTIRDI.IsNrdReady() &&
-                                   NrdDirect.IsReady() && Denoiser == EDenoiser::NRD;
         // Instrumentacao de timer: um gate so, empurrado todo frame. kInvalidSlot manda o passe
         // de volta p/ a PSO normal — desligado nao custa uma instrucao (ver FShaderTimer).
         TimerCaptureActive = RtShaderTimer && FShaderTimer::IsAvailable() &&
@@ -1789,83 +1840,64 @@ namespace Smile {
             ReSTIRGI.SetGIHitSampling(GIHit);
         }
 
-        ReSTIRGI.SetUseNrd(NrdIndirectMode); // RRMode => false => ReSTIR entrega GI cru (ruidoso)
-        Reflections.SetUseNrd(NrdIndirectMode);
-        Reflections.SetRawSpec(RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
+        ReSTIRGI.SetUseNrd(Modes.NrdIndirectMode); // Modes.RRMode => false => ReSTIR entrega GI cru (ruidoso)
+        Reflections.SetUseNrd(Modes.NrdIndirectMode);
+        Reflections.SetRawSpec(Modes.RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
 
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
-                                       ReflectionsActive ? 1.0f : 0.0f,
-                                       ReSTIRGIActive ? (NrdIndirectMode ? 2.0f : 1.0f) : 0.0f };
+                                       Modes.ReflectionsActive ? 1.0f : 0.0f,
+                                       Modes.ReSTIRGIActive ? (Modes.NrdIndirectMode ? 2.0f : 1.0f) : 0.0f };
         ++FrameIndex;
 
-        Mat44 ViewNoTrans = View;
-        ViewNoTrans.M[3][0] = 0.0f;
-        ViewNoTrans.M[3][1] = 0.0f;
-        ViewNoTrans.M[3][2] = 0.0f;
-        const Mat44 VPNoTrans    = ViewNoTrans * Projection;
-        const Mat44 InvVPNoTrans = VPNoTrans.Inverse();
-        // Reprojecao do BACKGROUND (ceu no infinito): clip atual -> clip anterior SEM translacao e SEM
-        // jitter. Espelha o ClipToPrevClip do DLSS (ViewProjUnjittered.Inverse()*PrevViewProj), mas com a
-        // translacao removida (skybox nao tem parallax). Alimenta o passe de velocity do background.
-        const Mat44 VPNoTransUnjit    = ViewNoTrans * ProjUnjittered;
-        const Mat44 SkyClipToPrevClip = VPNoTransUnjit.Inverse() * PrevVPNoTrans;
-        const Mat44 InvViewProjFull = ViewProjection.Inverse();
-        const Mat44 InvViewProjUnjit = ViewProjUnjittered.Inverse();
-        MappedCB->InvViewProj = InvViewProjFull;
+        MappedCB->InvViewProj  = Vw.InvViewProjFull;
+        MappedCB->RenderParams = { Vw.MipBias, 0.0f, 0.0f, 0.0f };
 
-        const f32 MipBias = (UpscaleActive && RenderWidth() < OutputWidth())
-            ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
-            : 0.0f;
-        MappedCB->RenderParams = { MipBias, 0.0f, 0.0f, 0.0f };
-
-        Atmosphere.UpdatePerFrame(FrameSlot, SunN, InvVPNoTrans, VPNoTrans,
-                                  InvViewProjFull, CameraPosition, kKmPerWorldUnit,
+        Atmosphere.UpdatePerFrame(FrameSlot, Lt.SunN, Vw.InvVPNoTrans, Vw.VPNoTrans,
+                                  Vw.InvViewProjFull, Vw.CameraPosition, kKmPerWorldUnit,
                                   static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()),
                                   static_cast<f32>(OutputWidth()), static_cast<f32>(OutputHeight()));
 
-        const bool VolShaftsActive = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
         const f32 FogDensityBase = Fog.GetDensity();
-        if (RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + RainSky * 1.5f));
+        if (Lt.RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + Lt.RainSky * 1.5f));
 
-        const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(CameraPosition.Y);
+        const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(Vw.CameraPosition.Y);
 
         Vec3 CamForwardW{ 0.0f, 0.0f, 1.0f };
         {
-            const Mat44& IM = InvViewProjUnjit;
+            const Mat44& IM = Vw.InvViewProjUnjit;
             const f32 v[4] = { 0.0f, 0.0f, 0.5f, 1.0f };
             f32 w[4];
             for (int j = 0; j < 4; ++j)
                 w[j] = v[2] * IM.M[2][j] + v[3] * IM.M[3][j];
             if (std::fabs(w[3]) > 1e-9f) {
                 const Vec3 P{ w[0] / w[3], w[1] / w[3], w[2] / w[3] };
-                CamForwardW = (P - CameraPosition).NormalizedSafe(Vec3{ 0.0f, 0.0f, 1.0f });
+                CamForwardW = (P - Vw.CameraPosition).NormalizedSafe(Vec3{ 0.0f, 0.0f, 1.0f });
             }
         }
 
-        const bool VolFogActive = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
-        const f32 ShaftMarchMax = VolShaftsActive
-            ? (VolFogActive
+        const f32 ShaftMarchMax = Modes.VolShaftsActive
+            ? (Modes.VolFogActive
                 ? std::min(SunShafts.GetVolMaxDist(), VolumetricFog.GetMaxDistance())
                 : SunShafts.GetVolMaxDist())
             : 0.0f;
-        if (VolFogActive) {
+        if (Modes.VolFogActive) {
             FVolumetricFogPass::FFrameParams VF{};
-            VF.InvViewProjUnjit = InvViewProjUnjit;
-            VF.ViewProjUnjit    = ViewProjUnjittered;
+            VF.InvViewProjUnjit = Vw.InvViewProjUnjit;
+            VF.ViewProjUnjit    = Vw.ViewProjUnjittered;
             VF.FrameIndex       = FrameIndex;
-            VF.CameraPos        = CameraPosition;
+            VF.CameraPos        = Vw.CameraPosition;
             VF.CameraForward    = CamForwardW;
-            VF.DirToSun         = KeyDir;
-            VF.SunColorTimesIntensity = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
-                                          KeyColor.Z * KeyInt };
+            VF.DirToSun         = Lt.KeyDir;
+            VF.SunColorTimesIntensity = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
+                                          Lt.KeyColor.Z * Lt.KeyInt };
             // Shafts own the high-frequency solar term only over their configured
             // near range. The froxel resumes the sun afterwards, while extinction,
             // ambient, GI and local lights remain present over the full volume.
             VF.InjectDirectionalLight = true;
-            VF.DirectionalLightStartDistance = VolShaftsActive ? ShaftMarchMax : 0.0f;
+            VF.DirectionalLightStartDistance = Modes.VolShaftsActive ? ShaftMarchMax : 0.0f;
             VF.CollapsedFog     = ShaftsFogCollapsed;
             VF.SkyAmbient       = SkyAmbient;
-            VF.NearZ            = NearZ;
+            VF.NearZ            = Vw.NearZ;
             VF.RenderW          = RenderWidth();
             VF.RenderH          = RenderHeight();
             if (UseGI && DDGI.IsReady()) {
@@ -1883,20 +1915,19 @@ namespace Smile {
         }
 
         // Ancoragem do height fog na atmosfera: so faz sentido com o ceu procedural ligado (com
-        // HDRI/skybox o SkyView LUT nao descreve o ceu que esta na tela). SunN, nao KeyDir: o
+        // HDRI/skybox o SkyView LUT nao descreve o ceu que esta na tela). Lt.SunN, nao Lt.KeyDir: o
         // LUT e dobrado no azimute do SOL, entao a lua daria uv errado a noite.
-        const bool FogSkyAnchor = UseAtmosphereSky && Atmosphere.IsInitialized();
         FFogPass::FVolumetricMatchParams FogMatch{};
-        FogMatch.Enabled = VolFogActive;
-        if (VolFogActive) {
+        FogMatch.Enabled = Modes.VolFogActive;
+        if (Modes.VolFogActive) {
             const Vec3 MediumAlbedo = VolumetricFog.GetAlbedo();
             const f32 AmbientIntensity = VolumetricFog.GetAmbientIntensity();
             FogMatch.Albedo = MediumAlbedo;
             FogMatch.AmbientRadiance = { SkyAmbient.X * AmbientIntensity,
                                          SkyAmbient.Y * AmbientIntensity,
                                          SkyAmbient.Z * AmbientIntensity };
-            FogMatch.SunRadiance = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
-                                     KeyColor.Z * KeyInt };
+            FogMatch.SunRadiance = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
+                                     Lt.KeyColor.Z * Lt.KeyInt };
             FogMatch.ExtinctionScale = VolumetricFog.GetExtinctionScale();
             // The froxel smoothly regains the solar term before its boundary,
             // so the far analytical continuation always matches the base volume.
@@ -1905,27 +1936,27 @@ namespace Smile {
             FogMatch.AmbientTransitionDistance =
                 std::max(25.0f, VolumetricFog.GetMaxDistance() * 0.5f);
         }
-        Fog.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition, kKmPerWorldUnit, KeyDir,
-                           NearZ, FarZ, RenderWidth(), RenderHeight(),
+        Fog.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition, kKmPerWorldUnit, Lt.KeyDir,
+                           Vw.NearZ, Vw.FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm(),
                            Atmosphere.AerialSliceCount(),
-                           VolShaftsActive, VolFogActive, VolumetricFog.GetMaxDistance(),
+                           Modes.VolShaftsActive, Modes.VolFogActive, VolumetricFog.GetMaxDistance(),
                            VolumetricFog.GridZParams(), CamForwardW,
-                           SunN,
-                           FogSkyAnchor ? Atmosphere.ViewHeightKm()   : 0.0f,
-                           FogSkyAnchor ? Atmosphere.BottomRadiusKm() : 0.0f,
+                           Lt.SunN,
+                           Modes.FogSkyAnchor ? Atmosphere.ViewHeightKm()   : 0.0f,
+                           Modes.FogSkyAnchor ? Atmosphere.BottomRadiusKm() : 0.0f,
                            Fog.GetHeightFogSkyContribution(), FogMatch);
         Fog.SetDensity(FogDensityBase);
 
         const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kPlanetRadiusOffsetKm;
         const f32 CloudCovBase = VolumetricClouds.GetCoverage();
-        if (RainSky > 0.0f) {
-            const f32 RainCov = std::min(RainSky * 1.4f, 1.0f) * 0.92f;
+        if (Lt.RainSky > 0.0f) {
+            const f32 RainCov = std::min(Lt.RainSky * 1.4f, 1.0f) * 0.92f;
             VolumetricClouds.SetCoverage(std::max(CloudCovBase, RainCov));
         }
-        VolumetricClouds.UpdatePerFrame(FrameSlot, InvVPNoTrans, InvViewProjFull,
-                                        ViewProjUnjittered, CameraPosition, kKmPerWorldUnit,
-                                        CloudGroundRadius, KeyDir, KeyCloudCol,
+        VolumetricClouds.UpdatePerFrame(FrameSlot, Vw.InvVPNoTrans, Vw.InvViewProjFull,
+                                        Vw.ViewProjUnjittered, Vw.CameraPosition, kKmPerWorldUnit,
+                                        CloudGroundRadius, Lt.KeyDir, Lt.KeyCloudCol,
                                         SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex,
                                         SunIntensity);
         VolumetricClouds.SetCoverage(CloudCovBase);
@@ -1933,16 +1964,16 @@ namespace Smile {
         Vec4 CloudShadowP{ 0.0f, 0.0f, 0.0f, 0.0f };
         Vec4 CloudShadowP2{ 0.0f, 0.0f, 0.0f, 0.0f };
         {
-            const f32 KeyY = KeyDir.Y > 0.05f ? KeyDir.Y : 0.05f;
+            const f32 KeyY = Lt.KeyDir.Y > 0.05f ? Lt.KeyDir.Y : 0.05f;
             const bool CloudShadowOn = UseClouds && VolumetricClouds.IsInitialized() &&
-                                       VolumetricClouds.GetShadowsEnabled() && KeyDir.Y > 0.02f;
+                                       VolumetricClouds.GetShadowsEnabled() && Lt.KeyDir.Y > 0.02f;
             CloudShadowP  = { VolumetricClouds.ShadowCenterX(),
                               VolumetricClouds.ShadowCenterZ(),
                               VolumetricClouds.ShadowInvExtent(),
                               CloudShadowOn ? VolumetricClouds.GetShadowStrength() : 0.0f };
             CloudShadowP2 = { kKmPerWorldUnit,
                               VolumetricClouds.GetBottomAltitude(),
-                              KeyDir.X / KeyY, KeyDir.Z / KeyY };
+                              Lt.KeyDir.X / KeyY, Lt.KeyDir.Z / KeyY };
             MappedCB->CloudShadowParams  = CloudShadowP;
             MappedCB->CloudShadowParams2 = CloudShadowP2;
             if (VolumetricClouds.IsInitialized()) {
@@ -1955,40 +1986,40 @@ namespace Smile {
             }
         }
 
-        if (VolShaftsActive) {
-            const Vec3 KeyColInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
-                                     KeyColor.Z * KeyInt };
+        if (Modes.VolShaftsActive) {
+            const Vec3 KeyColInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
+                                     Lt.KeyColor.Z * Lt.KeyInt };
             const f32 ShaftNoiseFrame =
-                (TAAActive || UpscaleActive || SunShafts.GetVolTemporal())
+                (Modes.TAAActive || Modes.UpscaleActive || SunShafts.GetVolTemporal())
                     ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-            const Vec3 ShaftMediumAlbedo = VolFogActive
+            const Vec3 ShaftMediumAlbedo = Modes.VolFogActive
                 ? VolumetricFog.GetAlbedo() : Vec3{ 1.0f, 1.0f, 1.0f };
-            const f32 ShaftExtinctionScale = VolFogActive
+            const f32 ShaftExtinctionScale = Modes.VolFogActive
                 ? VolumetricFog.GetExtinctionScale() : 1.0f;
-            SunShafts.UpdateVolumetric(FrameSlot, KeyDir, KeyColInt, ShaftsFogCollapsed,
-                                       ShaftNoiseFrame, InvViewProjFull, CameraPosition,
-                                       ViewProjUnjittered, CloudShadowP, CloudShadowP2,
+            SunShafts.UpdateVolumetric(FrameSlot, Lt.KeyDir, KeyColInt, ShaftsFogCollapsed,
+                                       ShaftNoiseFrame, Vw.InvViewProjFull, Vw.CameraPosition,
+                                       Vw.ViewProjUnjittered, CloudShadowP, CloudShadowP2,
                                        ShaftMediumAlbedo, ShaftExtinctionScale,
                                        0.0f, ShaftMarchMax);
         } else if (SunShafts.IsInitialized()) {
             SunShafts.ResetHistory();
         }
 
-        if (VolFogActive) VolumetricFog.PatchCloudShadow(CloudShadowP, CloudShadowP2);
+        if (Modes.VolFogActive) VolumetricFog.PatchCloudShadow(CloudShadowP, CloudShadowP2);
 
-        const Mat44 WaterViewProj    = ViewProjection;
+        const Mat44 WaterViewProj    = Vw.ViewProjection;
         const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
         const bool WaterHasDepth = Targets.SceneColorCopy && Targets.SceneDepthCopy;
         if (UseWater && Water.IsInitialized()) {
             const bool WaterAtmoRefl = UseAtmosphereSky && Atmosphere.IsInitialized();
             const f32 WaterReflIntensity =
-                WaterAtmoRefl ? (1.0f - RainSky * 0.65f) : IBLIntensity;
-            Water.UpdatePerFrame(FrameSlot, WaterViewProj, Projection, WaterInvViewProj,
-                                 ViewProjUnjittered, PrevViewProj, CameraPosition, KeyDir,
-                                 KeyInt, KeyColor, SkyAmbient, ElapsedTime,
+                WaterAtmoRefl ? (1.0f - Lt.RainSky * 0.65f) : IBLIntensity;
+            Water.UpdatePerFrame(FrameSlot, WaterViewProj, Vw.Projection, WaterInvViewProj,
+                                 Vw.ViewProjUnjittered, PrevViewProj, Vw.CameraPosition, Lt.KeyDir,
+                                 Lt.KeyInt, Lt.KeyColor, SkyAmbient, ElapsedTime,
                                  WaterAtmoRefl || HDREnv.HasHDRLoaded(), WaterReflIntensity,
-                                  RenderWidth(), RenderHeight(), NearZ, FarZ,
-                                  WaterHasDepth, UseAtmosphereSky, DedicatedWaterReflections);
+                                  RenderWidth(), RenderHeight(), Vw.NearZ, Vw.FarZ,
+                                  WaterHasDepth, UseAtmosphereSky, Modes.DedicatedWaterReflections);
             for (u32 c = 0; c < kOceanCascades; ++c) {
                 if (!Ocean[c].IsInitialized()) continue;
                 Ocean[c].SetTime(ElapsedTime);
@@ -2062,11 +2093,11 @@ namespace Smile {
             if (UseWater && Water.IsInitialized())
                 Atmosphere.RecordSkyReflectionBake(CommandList);
             Atmosphere.RenderSky(CommandList, SRVHeap);
-            if (NightFactor > 0.001f && TimeOfDay.StarIntensity > 0.0f)
+            if (Lt.NightFactor > 0.001f && TimeOfDay.StarIntensity > 0.0f)
                 Atmosphere.RenderStars(CommandList, SRVHeap);
         } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
             Skybox.Render(FrameSlot, CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
-                          InvVPNoTrans, IBLIntensity, IBLRotation);
+                          Vw.InvVPNoTrans, IBLIntensity, IBLRotation);
         }
 
         if (Atmosphere.IsInitialized()) {
@@ -2141,7 +2172,7 @@ namespace Smile {
         // Nao reconstrua os 2048 pools se nenhum passe vai consultar hits secundarios neste
         // frame. O toggle sozinho nao basta: DDGI, reflexoes e ReSTIR GI podem estar todos off.
         const bool HasReGIRConsumer = (UseGI && DDGI.IsReady()) ||
-                                      ReflectionsActive || ReSTIRGIActive;
+                                      Modes.ReflectionsActive || Modes.ReSTIRGIActive;
         // Extracao dos triangulos emissivos. Sai de graca no caso comum: a geometria emissiva e
         // estatica, entao o Record so faz trabalho no primeiro frame apos carregar a cena.
         if (MeshLights.IsReady()) {
@@ -2170,12 +2201,12 @@ namespace Smile {
         DDGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
         Reflections.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
         ReSTIRGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
-        DDGI.SetSkyIntensity(RainSkyDim); // reflexoes e ReSTIR recebem no proprio UpdatePerFrame
+        DDGI.SetSkyIntensity(Lt.RainSkyDim); // reflexoes e ReSTIR recebem no proprio UpdatePerFrame
 
-        if (ReliableMotionActive) {
-            TemporalMotion.UpdatePerFrame(FrameSlot, Scene, InvViewProjFull,
-                                          ViewProjUnjittered, PrevViewProj,
-                                          CameraPosition);
+        if (Modes.ReliableMotionActive) {
+            TemporalMotion.UpdatePerFrame(FrameSlot, Scene, Vw.InvViewProjFull,
+                                          Vw.ViewProjUnjittered, PrevViewProj,
+                                          Vw.CameraPosition);
         } else {
             // O historico de superficie nao e atualizado enquanto nenhum consumidor existe;
             // ao religar, o primeiro frame deve cair no velocity raster em vez de ler pose velha.
@@ -2185,7 +2216,7 @@ namespace Smile {
         u64 GIComputeFence = 0;
         if (UseGI && DDGI.IsReady()) {
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
-            DDGI.UpdatePerFrame(FrameSlot, KeyDir, KeyInt, KeyColor, FrameIndex, GILightCount);
+            DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, FrameIndex, GILightCount);
             if (UseAsyncCompute && DDGI.CanRunAsync()) {
                 DDGI.TransitionForUpdate(CommandList);
                 const u64 S1 = CommandQueue.SubmitSegmentAndContinue();
@@ -2215,33 +2246,33 @@ namespace Smile {
             }
         }
 
-        if (ReflectionsActive) {
+        if (Modes.ReflectionsActive) {
             Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
-            const f32 ReflSkyIntensity = RainSkyDim;
+            const f32 ReflSkyIntensity = Lt.RainSkyDim;
             const bool WaterUsesAtmosphere = UseAtmosphereSky && Atmosphere.IsInitialized();
             const f32 WaterEnvironmentIntensity =
                 WaterUsesAtmosphere ? ReflSkyIntensity : IBLIntensity;
-            Reflections.UpdatePerFrame(FrameSlot, InvViewProjFull, ViewProjection, PrevViewProj,
-                                       CameraPosition, PrevCameraPosition,
-                                       RenderWidth(), RenderHeight(), KeyDir, KeyInt,
-                                       KeyColor, FrameIndex, ReflSkyIntensity,
-                                       Reflections.GetRealHitShading(), View,
+            Reflections.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection, PrevViewProj,
+                                       Vw.CameraPosition, PrevCameraPosition,
+                                       RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt,
+                                       Lt.KeyColor, FrameIndex, ReflSkyIntensity,
+                                       Reflections.GetRealHitShading(), Vw.View,
                                        WaterUsesAtmosphere, WaterEnvironmentIntensity, GILightCount,
-                                       TemporalMotion.InstanceCount(), MotionHistoryValidThisFrame);
+                                       TemporalMotion.InstanceCount(), Modes.MotionHistoryValidThisFrame);
         }
 
-        if (ReSTIRGIActive) {
+        if (Modes.ReSTIRGIActive) {
             ReSTIRGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
             // O x1 do reuso temporal vem do historico de superficie do frame ANTERIOR (o reservoir
             // deixou de guardar o ponto visivel). Mesma convencao do ReSTIR DI e das reflexoes:
             // FrameSlot e o corrente, 1 - FrameSlot e o anterior. Sem motion confiavel neste frame
             // o slot vai invalido e o FReSTIRGI derruba so o reuso temporal.
-            const u32 PrevSurfaceSlot = (ReliableMotionActive && MotionHistoryValidThisFrame)
+            const u32 PrevSurfaceSlot = (Modes.ReliableMotionActive && Modes.MotionHistoryValidThisFrame)
                                       ? TemporalMotion.SurfaceSRV(1u - FrameSlot) : 0xFFFFFFFFu;
-            ReSTIRGI.UpdatePerFrame(FrameSlot, InvViewProjFull, CameraPosition,
-                                    RenderWidth(), RenderHeight(), KeyDir, KeyInt, KeyColor,
-                                    FrameIndex, RainSkyDim, View,
-                                    PrevJitterUv - JitterUv, PrevSurfaceSlot, GILightCount);
+            ReSTIRGI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition,
+                                    RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
+                                    FrameIndex, Lt.RainSkyDim, Vw.View,
+                                    PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
         }
 
         CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
@@ -2252,7 +2283,7 @@ namespace Smile {
 
         Vec4 Planes[6];
         {
-            const Mat44& V = ViewProjection;
+            const Mat44& V = Vw.ViewProjection;
             auto Col = [&](int j) { return Vec4{ V.M[0][j], V.M[1][j], V.M[2][j], V.M[3][j] }; };
             Vec4 c0 = Col(0), c1 = Col(1), c2 = Col(2), c3 = Col(3);
             Planes[0] = { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W }; 
@@ -2303,7 +2334,7 @@ namespace Smile {
             auto ShadowScore = [&](const FLight& L) -> f32 {
                 const f32 Energy = L.Intensity * (L.Color.X * 0.2126f + L.Color.Y * 0.7152f +
                                                   L.Color.Z * 0.0722f);
-                const Vec3 ToCam = L.Position - CameraPosition;
+                const Vec3 ToCam = L.Position - Vw.CameraPosition;
                 const f32 R2 = L.AttenuationRadius * L.AttenuationRadius;
                 return Energy * R2 / (ToCam.LengthSq() + R2);
             };
@@ -2501,7 +2532,7 @@ namespace Smile {
             ReSTIRDI.SetLightSetSignature(FrameLightSetSignature);
             // Um bit escolhe o produtor da direta local: raster ou ReSTIR DI. O mesmo predicado
             // manda no dispatch e no deferred; divergir aqui apagaria ou dobraria luz.
-            const f32 DirectLocalMode = ReSTIRDIActiveFrame ? 1.0f : 0.0f;
+            const f32 DirectLocalMode = Modes.ReSTIRDIActiveFrame ? 1.0f : 0.0f;
             MappedCB->LightParams  = { static_cast<f32>(NumLights),
                                        1.0f / static_cast<f32>(FLocalShadows::kResolution),
                                        LocalShadows.GetDepthBias(),
@@ -2509,7 +2540,7 @@ namespace Smile {
             MappedCB->LightParams2 = { 1.0f / static_cast<f32>(FLocalShadows::kCubeResolution),
                                        FLocalShadows::kPointNear, 0.0f, 0.0f };
 
-            if (VolFogActive)
+            if (Modes.VolFogActive)
                 VolumetricFog.PatchLights(NumLights,
                                           1.0f / static_cast<f32>(FLocalShadows::kResolution),
                                           LocalShadows.GetDepthBias(),
@@ -2547,9 +2578,9 @@ namespace Smile {
                 const Mat44 Model = R.Transform.Matrix();
                 const Mat44 PrevModel = (si < PrevCount) ? PrevModels[si] : Model;
                 ObjectConstants OC;
-                OC.MVP            = Model * ViewProjection;
+                OC.MVP            = Model * Vw.ViewProjection;
                 OC.ModelMatrix    = Model;
-                OC.CurMVPNoJitter = Model * ViewProjUnjittered;
+                OC.CurMVPNoJitter = Model * Vw.ViewProjUnjittered;
                 OC.PrevMVP        = PrevModel * PrevViewProj;
                 std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                             &OC, sizeof(ObjectConstants));
@@ -2593,13 +2624,13 @@ namespace Smile {
         LastOccludedCount = OccludedCount;
 
         if (UseTerrain && Terrain.IsLoaded())
-            Terrain.UpdatePerFrame(FrameSlot, ViewProjection, ViewProjUnjittered, PrevViewProj,
-                                   CameraPosition, FovY, MipBias);
+            Terrain.UpdatePerFrame(FrameSlot, Vw.ViewProjection, Vw.ViewProjUnjittered, PrevViewProj,
+                                   Vw.CameraPosition, Vw.FovY, Vw.MipBias);
 
         {
-            const f32 ShadowNoiseFrame = (TAAActive || UpscaleActive)
+            const f32 ShadowNoiseFrame = (Modes.TAAActive || Modes.UpscaleActive)
                 ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, View, CameraPosition, FovY, Aspect, KeyDir, NearZ, ShadowNoiseFrame);
+            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, Vw.View, Vw.CameraPosition, Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame);
             if (UseSunShadows) {
                 std::vector<FSunShadows::FShadowDrawItem> Casters;
                 Casters.reserve(AllItems.size());
@@ -2702,11 +2733,10 @@ namespace Smile {
             LocalShadows.EnsureReadable(CommandList);
         }
 
-        const bool AOWillRun = UseAO && AO.IsReady();
         const bool DoPrepass = true;
         if (DoPrepass) {
             GpuProfiler.Begin(CommandList, "Z-prepass");
-            if (AOWillRun) {
+            if (Modes.AOWillRun) {
                 FBarrierBatch Batch;
                 Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -2729,7 +2759,7 @@ namespace Smile {
                 }
             }
 
-            CommandList->SetPipelineState(AOWillRun ? PipelineState.PSODepthNormalMasked()
+            CommandList->SetPipelineState(Modes.AOWillRun ? PipelineState.PSODepthNormalMasked()
                                                     : PipelineState.PSODepthOnlyMasked());
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Z - mascarados");
@@ -2745,7 +2775,7 @@ namespace Smile {
 
             if (UseTerrain && Terrain.IsLoaded()) {
                 FGpuScope Scope(GpuProfiler, CommandList, "Z - terreno");
-                Terrain.RenderDepthPrepass(CommandList, SRVHeap, AOWillRun);
+                Terrain.RenderDepthPrepass(CommandList, SRVHeap, Modes.AOWillRun);
             }
             GpuProfiler.End(CommandList); // Z-prepass
         }
@@ -2763,7 +2793,7 @@ namespace Smile {
                 HiZ.RecordBuild(CommandList, SRVHeap, Targets.DepthSRVSlot);
                 HiZ.RecordTest(CommandList, SRVHeap, FrameSlot,
                                static_cast<u32>(Scene.Renderables().size()),
-                               ViewProjUnjittered);
+                               Vw.ViewProjUnjittered);
             }
             Batch.Transition(Targets.DepthBuffer.Get(),
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -2772,15 +2802,15 @@ namespace Smile {
         }
 
         if (AO.IsReady()) {
-            if (AOWillRun) {
+            if (Modes.AOWillRun) {
                 CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
 
-                const f32 TanHalf = std::tan(0.5f * FovY);
+                const f32 TanHalf = std::tan(0.5f * Vw.FovY);
                 const f32 M11 = 1.0f / TanHalf;
-                const f32 M00 = M11 / Aspect;
-                const f32 M22 = Projection.M[2][2];
-                const f32 M32 = Projection.M[3][2];
-                AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, View,
+                const f32 M00 = M11 / Vw.Aspect;
+                const f32 M22 = Vw.Projection.M[2][2];
+                const f32 M32 = Vw.Projection.M[3][2];
+                AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, Vw.View,
                                   RenderWidth(), RenderHeight(), FrameIndex);
 
                 FBarrierBatch Batch;
@@ -2866,7 +2896,7 @@ namespace Smile {
         // Motion vector do BACKGROUND: o G-buffer so escreveu velocity p/ geometria+terreno; ceu/nuvens/fog
         // ficaram ZERO (clear acima). Preenche o velocity do ceu (reproj rotacao-only, sem parallax) p/ o
         // DLSS/RR/TAA nao arrastar o historico do ceu ao girar a camera. So roda com consumidor temporal.
-        if ((UpscaleActive || TAAActive) && BgVelocity.IsReady()) {
+        if ((Modes.UpscaleActive || Modes.TAAActive) && BgVelocity.IsReady()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Velocity do background");
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -2876,7 +2906,7 @@ namespace Smile {
             Batch.Flush(CommandList);
 
             BgVelocity.Record(CommandList, FrameSlot, SRVHeap.GpuHandle(Targets.DepthSRVSlot),
-                              SRVHeap.GpuHandle(Targets.VelocityUavSlot), SkyClipToPrevClip,
+                              SRVHeap.GpuHandle(Targets.VelocityUavSlot), Vw.SkyClipToPrevClip,
                               RenderWidth(), RenderHeight());
 
             FBarrierBatch Restore;
@@ -2896,19 +2926,19 @@ namespace Smile {
                     RainOccluders.push_back({ A.R->Mesh, A.Mat,
                                               ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                               A.R->AABBMin, A.R->AABBMax });
-                RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, CameraPosition,
+                RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, Vw.CameraPosition,
                                                RainOccluders.data(), RainOccluders.size());
             }
-            const Vec3 KeyColorInt = { KeyColor.X * KeyInt, KeyColor.Y * KeyInt,
-                                       KeyColor.Z * KeyInt };
-            RainWetness.UpdatePerFrame(FrameSlot, InvViewProjFull, ViewProjection,
-                                       CameraPosition, ElapsedTime, Weather, KeyDir,
+            const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
+                                       Lt.KeyColor.Z * Lt.KeyInt };
+            RainWetness.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
+                                       Vw.CameraPosition, ElapsedTime, Weather, Lt.KeyDir,
                                        KeyColorInt, SkyAmbient);
             RainWetness.Execute(CommandList, SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
                                 RenderWidth(), RenderHeight());
         }
 
-        if (ReliableMotionActive) {
+        if (Modes.ReliableMotionActive) {
             FGpuScope Scope(GpuProfiler, CommandList, "Motion temporal confiavel");
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -2946,12 +2976,12 @@ namespace Smile {
         // depth e nao entra em nenhuma cadeia de dependencia. Sem o toggle, nao custa nada.
         // Nao precisa de clear: todo pixel do dominio escreve (o miss tem cor propria).
         if (BvhDebugEnabled && BvhDebug.IsReady()) {
-            BvhDebug.Render(CommandList, SRVHeap, InvViewProjFull, CameraPosition,
+            BvhDebug.Render(CommandList, SRVHeap, Vw.InvViewProjFull, Vw.CameraPosition,
                             BvhDebugMode, DDGI.MaxRayDistance(), BvhDebugComplexityMax,
                             FrameSlot);
         }
 
-        if (ReSTIRGIActive) {
+        if (Modes.ReSTIRGIActive) {
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -2965,8 +2995,8 @@ namespace Smile {
                 ReSTIRGI.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
             }
 
-            if (NrdIndirectMode) {
-                if (ReflectionsActive) {
+            if (Modes.NrdIndirectMode) {
+                if (Modes.ReflectionsActive) {
                     FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (trace)");
                     Reflections.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
                 }
@@ -2975,13 +3005,13 @@ namespace Smile {
                     FGpuScope Scope(GpuProfiler, CommandList, "Pack GI + reflexos");
                     Nrd.TransitionInputsToWrite(CommandList);
                     ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
-                    if (ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
+                    if (Modes.ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
                     else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
                 }
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "RELAX indireto");
-                    Nrd.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
-                                 JitterPx, PrevJitterPx, FrameIndex);
+                    Nrd.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
+                                 Vw.JitterPx, PrevJitterPx, FrameIndex);
                     Nrd.Denoise(CommandList);
                 }
                 {
@@ -3007,12 +3037,12 @@ namespace Smile {
             constexpr D3D12_RESOURCE_STATES DeferredReadState =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            const bool ReSTIRDIOn = ReSTIRDIActiveFrame;
+            const bool ReSTIRDIOn = Modes.ReSTIRDIActiveFrame;
             // O G-buffer rastreia o proprio estado (AppendTransitions so recebe o alvo); o depth
             // nao, entao o estado de origem depende de o bloco do ReSTIR ter rodado — ele deixa o
             // depth em NON_PIXEL de proposito, em vez de devolver p/ DEPTH_WRITE.
             const D3D12_RESOURCE_STATES DepthBefore =
-                ReSTIRGIActive ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+                Modes.ReSTIRGIActive ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
                                : D3D12_RESOURCE_STATE_DEPTH_WRITE;
             FBarrierBatch Batch;
             GBuffer.AppendTransitions(Batch, DeferredReadState);
@@ -3030,18 +3060,18 @@ namespace Smile {
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
                     ReSTIRDI.SetRayEpsilons(RayEps);
-                    ReSTIRDI.UpdatePerFrame(FrameSlot, InvViewProjFull, View, PrevViewProj,
-                                            CameraPosition,
+                    ReSTIRDI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.View, PrevViewProj,
+                                            Vw.CameraPosition,
                                             RenderWidth(), RenderHeight(), FrameIndex,
                                             FrameLightCount, kRTMaskShadowFull,
-                                            /*EnableTemporalPermutation=*/RRMode,
+                                            /*EnableTemporalPermutation=*/Modes.RRMode,
                                             TemporalMotion.InstanceCount(),
-                                            MotionHistoryValidThisFrame,
+                                            Modes.MotionHistoryValidThisFrame,
                                             MeshLights.LightCount());
                     ReSTIRDI.Record(CommandList, SRVHeap, &GpuProfiler);
                 }
 
-                if (NrdDirectMode) {
+                if (Modes.NrdDirectMode) {
                     FGpuScope Scope(GpuProfiler, CommandList, "NRD direta");
                     {
                         FGpuScope ChildScope(GpuProfiler, CommandList, "Pack direto");
@@ -3050,8 +3080,8 @@ namespace Smile {
                     }
                     {
                         FGpuScope ChildScope(GpuProfiler, CommandList, "RELAX direto");
-                        NrdDirect.SetFrame(ProjUnjittered, NrdPrevProj, View, NrdPrevView,
-                                           JitterPx, PrevJitterPx, FrameIndex);
+                        NrdDirect.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
+                                           Vw.JitterPx, PrevJitterPx, FrameIndex);
                         NrdDirect.Denoise(CommandList);
                     }
                     {
@@ -3092,7 +3122,7 @@ namespace Smile {
                 CommandList->SetGraphicsRootDescriptorTable(8, SRVHeap.GpuHandle(AOTable));
             }
             {
-                const u32 ReSTIRTable = ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
+                const u32 ReSTIRTable = Modes.ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
             }
             {
@@ -3137,7 +3167,7 @@ namespace Smile {
                 (GISkipInactiveFallback ? 4u : 0u);
             DDGIDebugPass.RecordPointDiagnostic(
                 FrameSlot, CommandList, SRVHeap, DDGI,
-                InvViewProjFull, CameraPosition,
+                Vw.InvViewProjFull, Vw.CameraPosition,
                 RenderWidth(), RenderHeight(), PointGIFlags);
 
             Batch.Transition(Targets.DepthBuffer.Get(), DeferredReadState,
@@ -3170,7 +3200,7 @@ namespace Smile {
             }
         }
 
-        if (ReflectionsActive) {
+        if (Modes.ReflectionsActive) {
             CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
 
             const D3D12_RESOURCE_STATES ReadState =
@@ -3182,10 +3212,10 @@ namespace Smile {
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
-                if (!NrdIndirectMode) Reflections.RecordTrace(CommandList, SRVHeap);
+                if (!Modes.NrdIndirectMode) Reflections.RecordTrace(CommandList, SRVHeap);
                 // RR: extrai o hitDist especular do Resolved ENQUANTO ele esta NON_PIXEL (o composite
                 // cru abaixo o transiciona p/ PIXEL). O RecordTrace acima parou no Resolved (RawSpec).
-                if (RRMode)
+                if (Modes.RRMode)
                     RRGuides.RecordSpecHitDist(CommandList, SRVHeap,
                                                SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()),
                                                ConstantBuffer->GetGPUVirtualAddress() +
@@ -3291,18 +3321,18 @@ namespace Smile {
             WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
                                          D3D12_RESOURCE_STATE_RENDER_TARGET);
             WaterBatch.Flush(CommandList);
-            const bool WaterReflectionsActive = DedicatedWaterReflections;
-            const bool ForceFullWaterOutputs = RRMode || Water.GetGuideInvisible() ||
+            const bool WaterReflectionsActive = Modes.DedicatedWaterReflections;
+            const bool ForceFullWaterOutputs = Modes.RRMode || Water.GetGuideInvisible() ||
                 Water.GetDebugMode() == FWaterRenderer::EDebugMode::Wireframe;
             FWaterRenderer::EOutputMode WaterOutputMode;
-            if (RRMode) {
+            if (Modes.RRMode) {
                 WaterOutputMode = FWaterRenderer::EOutputMode::RayReconstruction;
             } else if (WaterReflectionsActive) {
                 WaterOutputMode = FWaterRenderer::EOutputMode::ReflectionGuides;
             } else {
                 WaterOutputMode = ForceFullWaterOutputs
                     ? FWaterRenderer::EOutputMode::RayReconstruction
-                    : (UpscaleActive ? FWaterRenderer::EOutputMode::TemporalMasks
+                    : (Modes.UpscaleActive ? FWaterRenderer::EOutputMode::TemporalMasks
                                      : FWaterRenderer::EOutputMode::Base);
             }
             D3D12_CPU_DESCRIPTOR_HANDLE WaterRTVs[8] = {
@@ -3356,7 +3386,7 @@ namespace Smile {
                 WaterBatch.Flush(CommandList);
 
                 Reflections.RecordWaterTrace(CommandList, SRVHeap, &GpuProfiler);
-                if (RRMode) {
+                if (Modes.RRMode) {
                     RRGuides.RecordWaterSpecHitDist(
                         CommandList, SRVHeap,
                         SRVHeap.GpuHandle(Reflections.GetWaterSpecHitTable()),
@@ -3452,7 +3482,7 @@ namespace Smile {
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
-            DDGIDebugPass.Render(FrameSlot, CommandList, SRVHeap, DDGI, ViewProjection, CameraPosition,
+            DDGIDebugPass.Render(FrameSlot, CommandList, SRVHeap, DDGI, Vw.ViewProjection, Vw.CameraPosition,
                                  FrameIndex);
             DDGIDebugDrew = true;
         }
@@ -3554,7 +3584,7 @@ namespace Smile {
         // upscale. Pulando, o debug continua no caminho de cor de sempre (HDR -> tonemap); a unica
         // diferenca e que sai em resolucao de render, o que p/ um visualizador e irrelevante.
         // Espirito do GPU Zen 3 cap. 7 §7.13.3: nao entregar ao denoiser o que ele nao sabe ler.
-        const bool RRPoisoned = RRMode && (MainDebugActive || DDGIDebugDrew);
+        const bool RRPoisoned = Modes.RRMode && (MainDebugActive || DDGIDebugDrew);
 
         if ((MainDebugActive || CapturePreview) &&
             GBuffer.IsInitialized() && DebugViewPass.IsInitialized()) {
@@ -3599,8 +3629,8 @@ namespace Smile {
                     Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
                     Tile.ChannelWeight = DebugChannelWeight;
                     Tile.Exposure      = T.Exposure * DebugExposure;
-                    Tile.NearZ         = NearZ;
-                    Tile.FarZ          = FarZ;
+                    Tile.NearZ         = Vw.NearZ;
+                    Tile.FarZ          = Vw.FarZ;
                     Tile.LinearFilter  = T.LinearFilter;
                 }
 
@@ -3618,7 +3648,7 @@ namespace Smile {
                 DebugPreviewPass.Execute(
                     CommandList, SRVHeap, PreviewTiles, PreviewTileCount, DebugColumns,
                     GBuffer.SRVTableStart(), Targets.VelocitySRVSlot, PreviewViewport,
-                    JitterUv, /*EncodeForDisplay=*/true);
+                    Vw.JitterUv, /*EncodeForDisplay=*/true);
 
                 D3D12_RESOURCE_BARRIER ToCopy{};
                 ToCopy.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -3745,8 +3775,8 @@ namespace Smile {
                     Tile.AtlasTilePx   = T.AtlasTilePx;
                     Tile.ChannelWeight = DebugChannelWeight;
                     Tile.Exposure      = T.Exposure * DebugExposure;
-                    Tile.NearZ         = NearZ;
-                    Tile.FarZ          = FarZ;
+                    Tile.NearZ         = Vw.NearZ;
+                    Tile.FarZ          = Vw.FarZ;
                     Tile.LinearFilter  = T.LinearFilter;
                 } else if (GBufferDebugMode == 8) {
                     Tile.SrvSlot = Targets.VelocitySRVSlot;
@@ -3782,7 +3812,7 @@ namespace Smile {
 
         ID3D12Resource* PostInput    = Targets.HDRColorBuffer.Get();
         u32             PostInputSRV = Targets.HDRSRVSlot;
-        if (TAAActive) {
+        if (Modes.TAAActive) {
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -3790,10 +3820,10 @@ namespace Smile {
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "TAA");
-                TemporalAA.Execute(CommandList, SRVHeap, FrameSlot, InvViewProjUnjit, PrevViewProj,
+                TemporalAA.Execute(CommandList, SRVHeap, FrameSlot, Vw.InvViewProjUnjit, PrevViewProj,
                                    TAAHistoryBlend, TAARanLastFrame, TAAVarianceGamma, TAASharpness,
-                                   TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, CameraPosition,
-                                   NearZ, FarZ, TAADebugMode);
+                                   TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, Vw.CameraPosition,
+                                   Vw.NearZ, Vw.FarZ, TAADebugMode);
             }
 
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -3803,13 +3833,13 @@ namespace Smile {
             PostInput    = TemporalAA.DisplayOutputResource();
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             TAARanLastFrame = true;
-        } else if (UpscaleActive && !RRPoisoned) {
-            // RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
+        } else if (Modes.UpscaleActive && !RRPoisoned) {
+            // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
             // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
-            // MESMO predicado do bloco de sinal (RRMode, ja em escopo): recalcular so pelo Denoiser
+            // MESMO predicado do bloco de sinal (Modes.RRMode, ja em escopo): recalcular so pelo Denoiser
             // divergia dele — os guides podiam nao estar prontos e este bloco tentava o eval do RR
             // enquanto o GI/reflexao ja tinham sido configurados como crus.
-            const bool IsRR = RRMode;
+            const bool IsRR = Modes.RRMode;
 
             FBarrierBatch Batch;
             Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -3833,7 +3863,7 @@ namespace Smile {
                 RRGuides.RecordGuides(CommandList, SRVHeap, SRVHeap.GpuHandle(GBuffer.SRVTableStart()),
                                       ConstantBuffer->GetGPUVirtualAddress() +
                                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                if (!ReflectionsActive) RRGuides.ClearSpecHitDist(CommandList, SRVHeap);
+                if (!Modes.ReflectionsActive) RRGuides.ClearSpecHitDist(CommandList, SRVHeap);
                 RRGuides.TransitionForRR(CommandList);
             }
 
@@ -3843,12 +3873,12 @@ namespace Smile {
             UpParams.Velocity     = Targets.VelocityBuffer.Get();
             UpParams.Reactive     = Targets.UpscaleReactiveMask.Get();
             UpParams.TransparencyAndComposition = Targets.UpscaleCompositionMask.Get();
-            UpParams.JitterX      = JitterPxX;
-            UpParams.JitterY      = JitterPxY;
-            UpParams.NearZ        = NearZ;
-            UpParams.FarZ         = FarZ;
-            UpParams.FovYRadians  = FovY;
-            UpParams.AspectRatio  = Aspect;
+            UpParams.JitterX      = Vw.JitterPxX;
+            UpParams.JitterY      = Vw.JitterPxY;
+            UpParams.NearZ        = Vw.NearZ;
+            UpParams.FarZ         = Vw.FarZ;
+            UpParams.FovYRadians  = Vw.FovY;
+            UpParams.AspectRatio  = Vw.Aspect;
             UpParams.DeltaTimeSec = LastDeltaTime;
             UpParams.Quality      = UpscalerQuality;
             // Reset one-shot: descarta o historico temporal em troca de modo/denoiser/scene/resize (senao o
@@ -3856,10 +3886,10 @@ namespace Smile {
             UpParams.Reset        = RRResetPending;
             // Matrizes p/ o DLSS (o FSR ignora): projecao unjittered + reprojecao (clip atual -> anterior).
             // PrevViewProj ainda guarda o frame anterior aqui (so e atualizado logo abaixo).
-            UpParams.ViewToClip     = ProjUnjittered;
-            UpParams.ClipToPrevClip = ViewProjUnjittered.Inverse() * PrevViewProj;
+            UpParams.ViewToClip     = Vw.ProjUnjittered;
+            UpParams.ClipToPrevClip = Vw.ViewProjUnjittered.Inverse() * PrevViewProj;
             {
-                const Mat44 InvView = View.Inverse();   // view->world: linhas = base da camera em mundo
+                const Mat44 InvView = Vw.View.Inverse();   // view->world: linhas = base da camera em mundo
                 UpParams.CamRight = { InvView.M[0][0], InvView.M[0][1], InvView.M[0][2] };
                 UpParams.CamUp    = { InvView.M[1][0], InvView.M[1][1], InvView.M[1][2] };
                 UpParams.CamFwd   = { InvView.M[2][0], InvView.M[2][1], InvView.M[2][2] };
@@ -3867,12 +3897,12 @@ namespace Smile {
             }
             if (IsRR) {
                 // Guides que so o RR consome (o FSR/DLSS-SR ignoram). WorldToView (row-major, sem jitter)
-                // = View: o RR deriva os specular motion vectors do specHitDist + matrizes world<->view.
+                // = Vw.View: o RR deriva os specular motion vectors do specHitDist + matrizes world<->view.
                 UpParams.DiffuseAlbedo   = RRGuides.DiffuseAlbedo();
                 UpParams.SpecularAlbedo  = RRGuides.SpecularAlbedo();
                 UpParams.NormalRoughness = RRGuides.NormalRoughness();
                 UpParams.SpecHitDist     = RRGuides.SpecHitDist();
-                UpParams.WorldToView     = View;
+                UpParams.WorldToView     = Vw.View;
             }
 
             {
@@ -3925,13 +3955,13 @@ namespace Smile {
             TAARanLastFrame = false;
         }
 
-        PrevViewProj  = ViewProjUnjittered;
-        PrevCameraPosition = CameraPosition;
-        PrevVPNoTrans = VPNoTransUnjit;   // frame anterior p/ a reprojecao do background (velocity do ceu)
-        NrdPrevProj   = ProjUnjittered;
-        NrdPrevView   = View;
-        PrevJitterUv  = JitterUv;
-        PrevJitterPx = JitterPx;
+        PrevViewProj  = Vw.ViewProjUnjittered;
+        PrevCameraPosition = Vw.CameraPosition;
+        PrevVPNoTrans = Vw.VPNoTransUnjit;   // frame anterior p/ a reprojecao do background (velocity do ceu)
+        NrdPrevProj   = Vw.ProjUnjittered;
+        NrdPrevView   = Vw.View;
+        PrevJitterUv  = Vw.JitterUv;
+        PrevJitterPx = Vw.JitterPx;
 
         if (FlickerMode > 0 && Flicker.IsInitialized()) {
             Flicker.Execute(CommandList, SRVHeap, PostInputSRV, static_cast<f32>(FlickerMode),
@@ -3956,7 +3986,7 @@ namespace Smile {
         if (SelectedRenderable >= 0 && SelectedSlot != kInvalidSlot && SelectedMesh
             && SelectionOutline.IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Contorno da seleção");
-            FSelectionOutline::FDrawItem Item{ SelectedMesh, SelectedModel * ViewProjUnjittered };
+            FSelectionOutline::FDrawItem Item{ SelectedMesh, SelectedModel * Vw.ViewProjUnjittered };
             SelectionOutline.RecordMask(CommandList, &Item, 1, FrameSlot);
             auto BackRTV = SwapChain.CurrentRTV();
             SelectionOutline.RecordOutline(CommandList, SRVHeap, BackRTV,
@@ -3973,9 +4003,9 @@ namespace Smile {
                 Batch.Flush(CommandList);
             }
             // Eixos da camera em mundo (colunas da view row-vector) p/ os billboards de icone.
-            const Vec3 CamRight{ View.M[0][0], View.M[1][0], View.M[2][0] };
-            const Vec3 CamUp   { View.M[0][1], View.M[1][1], View.M[2][1] };
-            DebugDraw.Render(CommandList, FrameSlot, ViewProjUnjittered, SwapChain.CurrentRTV(),
+            const Vec3 CamRight{ Vw.View.M[0][0], Vw.View.M[1][0], Vw.View.M[2][0] };
+            const Vec3 CamUp   { Vw.View.M[0][1], Vw.View.M[1][1], Vw.View.M[2][1] };
+            DebugDraw.Render(CommandList, FrameSlot, Vw.ViewProjUnjittered, SwapChain.CurrentRTV(),
                              SwapChain.GetWidth(), SwapChain.GetHeight(), CamRight, CamUp,
                              WantDepth ? SRVHeap.GpuHandle(Targets.DepthSRVSlot)
                                        : D3D12_GPU_DESCRIPTOR_HANDLE{});
