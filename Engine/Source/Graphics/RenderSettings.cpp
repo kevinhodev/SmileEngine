@@ -288,6 +288,8 @@ namespace Smile {
     f32  FRenderSettings::GetShadowMaxDistance() const { return R.SunShadows.GetMaxDistance(); }
     void FRenderSettings::SetShadowDepthBias(f32 _T)   { R.SunShadows.SetDepthBias(_T); }
     f32  FRenderSettings::GetShadowDepthBias() const   { return R.SunShadows.GetDepthBias(); }
+    void FRenderSettings::SetShadowNormalOffset(f32 _T) { R.SunShadows.SetNormalOffset(_T); }
+    f32  FRenderSettings::GetShadowNormalOffset() const { return R.SunShadows.GetNormalOffset(); }
     void FRenderSettings::SetShadowMinCasterTexels(f32 _V) {
         R.SunShadows.SetMinCasterTexels(_V);
     }

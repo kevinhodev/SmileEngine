@@ -771,6 +771,11 @@ namespace SmileEditor {
         return Renderer ? Renderer->Settings().GetShadowDepthBias() : 2.0; // texels da cascata
     }
 
+    double RenderSettingsBridge::GetShadowNormalOffset() const {
+        return Renderer ? Renderer->Settings().GetShadowNormalOffset() : 2.5;
+    }
+
+
     double RenderSettingsBridge::GetShadowMinCasterTexels() const {
         return Renderer ? Renderer->Settings().GetShadowMinCasterTexels() : 2.0;
     }
@@ -813,6 +818,13 @@ namespace SmileEditor {
     void RenderSettingsBridge::SetShadowDepthBias(double _Bias) {
         if (!Renderer) return;
         Renderer->Settings().SetShadowDepthBias(static_cast<Smile::f32>(_Bias));
+        emit ShadowSettingsChanged();
+        emit GISettingsChanged();
+    }
+
+    void RenderSettingsBridge::SetShadowNormalOffset(double _Texels) {
+        if (!Renderer) return;
+        Renderer->Settings().SetShadowNormalOffset(static_cast<Smile::f32>(_Texels));
         emit ShadowSettingsChanged();
         emit GISettingsChanged();
     }

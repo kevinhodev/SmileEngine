@@ -47,13 +47,69 @@ namespace Smile {
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCB;
             Vec3                      AABBMin;
             Vec3                      AABBMax;
+            // Ver EMobility. A lista chega ordenada com os estaticos PRIMEIRO, entao este
+            // campo tambem marca uma fronteira: [0, N) estatico, [N, Count) dinamico. E a
+            // divisao que o cache vai usar para rasterizar as duas metades em alvos
+            // diferentes; por ora ela so e medida.
+            bool                      Dynamic;
         };
+
+        // Contadores por cascata. Existem para MEDIR: a decisao de separar casters em
+        // estatico/dinamico so se paga se as cascatas caras forem tambem as frequentes, e
+        // isso depende do tamanho do mundo — na Bistro (~200 m) o culling da fatia ja nao
+        // corta quase nada na cascata 3, num mundo grande corta muito. Sem numero por
+        // cascata a escolha vira chute.
+        //
+        // Os campos de contagem descrevem o ULTIMO UPDATE desta cascata, nao o frame atual:
+        // cascata congelada pelo cache nao desenha nada, e zerar aqui perderia justamente a
+        // informacao que interessa (o que ela custa QUANDO dispara). A frequencia sai do
+        // historico, e o custo medio por frame e Submitted * popcount(UpdateHistory) / 64.
+        struct FCascadeStats {
+            u32  Submitted        = 0; // total desenhado (estatico + dinamico), pos-culling
+            // Estatico RETIDO entre frames: so e reescrito quando o mapa estatico e refeito, e
+            // por isso e a base a partir da qual o total e recomposto todo frame. Somar o
+            // dinamico direto em Submitted faria o numero crescer sem limite nas cascatas que
+            // nao refazem o estatico.
+            u32  SubmittedStatic  = 0;
+            u32  SubmittedDynamic = 0; // redesenhado todo frame, seja qual for a taxa do cache
+            u32  CulledPlanes     = 0; // fora do volume da fatia em espaco de luz
+            u32  CulledSize       = 0; // menores que MinCasterTexels
+            // Bit 0 = frame mais recente. Deslocado uma vez por frame no UpdatePerFrame,
+            // para TODA cascata — inclusive a congelada, que grava 0.
+            u64  UpdateHistory    = 0;
+            bool UpdatedThisFrame = false;
+            // Historico de RE-RASTERIZACAO do mapa estatico, mesma janela de 64 frames. E o
+            // numero que a F2 move: o UpdateHistory acima passa a ser quase sempre 64/64
+            // (copia + dinamicos e barato), e o que encolhe e este.
+            u64  StaticHistory    = 0;
+            // Quanto o centro SNAPADO andou desde o ultimo fit desta cascata, em texels dela
+            // (o maior dos eixos right/up). Como o snap e floor(centro/texel)*texel, o valor e
+            // inteiro enquanto o raio nao muda.
+            //
+            // E a medida que decide se vale reaproveitar o mapa da cascata proxima em vez de
+            // redesenha-la: um delta pequeno significa que quase todo o conteudo continua
+            // valido, deslocado, e so uma faixa na borda e conteudo novo — a faixa custa
+            // (delta/resolucao) do passe. Delta da ordem da resolucao significa que nao ha o
+            // que reaproveitar. Nas cascatas 2/3 o cache ja congela o fit, entao o numero so
+            // muda quando elas refazem.
+            f32  SnapDeltaTexels  = 0.0f;
+        };
+
+        const FCascadeStats& CascadeStats(u32 Cascade) const {
+            return Stats[Cascade < kNumCascades ? Cascade : 0];
+        }
+        // Tamanho da lista que o Renderer submeteu (igual para as 4 cascatas): o teto contra
+        // o qual os cortes de cada cascata sao lidos.
+        u32 GetSubmittedCasterCount() const { return LastCasterCount; }
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
+        // StaticCastersVersion vem do FScene: muda quando o CONTEUDO do mapa estatico muda
+        // (estatico se move, aparece, some, e ocultado, ou troca de mobilidade). E o sinal que
+        // dispensa o redesenho periodico "por garantia" — ver o cache abaixo.
         void UpdatePerFrame(u32 FrameSlot, bool Enabled, const Mat44& View, const Vec3& CamPos,
                             f32 FovYRadians, f32 Aspect, const Vec3& DirToSun, f32 NearZ,
-                            f32 NoiseFrame);
+                            f32 NoiseFrame, u64 StaticCastersVersion);
 
         // Caster extra por cascata (terreno): chamado depois dos itens, com o CB e a matriz
         // da cascata. Pode trocar root signature/PSO — o loop re-liga os do CSM na proxima
@@ -106,8 +162,26 @@ namespace Smile {
         void SetMaxPenumbraTexels(f32 T)  { MaxPenumbraTexels = T; }
         f32  GetMaxPenumbraTexels() const { return MaxPenumbraTexels; }
 
+        // Bypass ativo: o sol esta rapido demais e o cache foi abandonado neste frame.
+        bool IsCacheBypassed() const { return CacheBypass; }
+        void SetSunToleranceTexels(f32 T) { SunToleranceTexels = T; InvalidateCache(); }
+        f32  GetSunToleranceTexels() const { return SunToleranceTexels; }
+
     private:
         void InvalidateCache() { for (u32 c = 0; c < kNumCascades; ++c) CacheValid[c] = false; }
+
+        // Os dois filtros do passe de profundidade, no lugar unico onde as tres fases (mapa
+        // estatico, copia, dinamicos) precisam concordar. Ordem: tamanho e depois planos —
+        // e a ordem em que os contadores atribuem o corte.
+        bool CasterVisible(const FShadowDrawItem& It, u32 Cascade, f32 MinExtent,
+                           FCascadeStats* St) const;
+        // Desenha [Begin, End) da lista na cascata; devolve quantos passaram. O DSV, o
+        // viewport e a root signature ja tem de estar ligados pelo chamador.
+        u32  DrawCasters(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
+                         const FShadowDrawItem* Items, size_t Begin, size_t End,
+                         u32 Cascade, FCascadeStats* St);
+        void TransitionStatic(ID3D12GraphicsCommandList* CommandList,
+                              D3D12_RESOURCE_STATES After);
 
         void CreateResources(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         void BuildRootSignature(ID3D12Device* Device);
@@ -122,9 +196,15 @@ namespace Smile {
         }
 
         Microsoft::WRL::ComPtr<ID3D12Resource>      DepthArray;
-        FDescriptorHeap                             DSVHeap; 
+        FDescriptorHeap                             DSVHeap;
         u32                                         ShadowSRVSlot_ = 0xFFFFFFFFu;
         D3D12_RESOURCE_STATES                       ArrayState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        // Gemeo do DepthArray com SO os casters estaticos. Mesmo formato e mesmas dimensoes de
+        // proposito: a transferencia para o alvo de runtime vira um CopyTextureRegion exato,
+        // sem shader e sem reamostragem.
+        Microsoft::WRL::ComPtr<ID3D12Resource>      StaticArray;
+        FDescriptorHeap                             StaticDSVHeap;
+        D3D12_RESOURCE_STATES                       StaticState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OpaquePSO; 
@@ -162,16 +242,58 @@ namespace Smile {
         bool DebugCascades       = false;
         bool Initialized         = false;
 
-        // Cache round-robin: cascatas 2/3 re-renderizam a cada 2/4 frames (defasadas),
-        // com a matriz congelada no CB entre updates. Invalidacao: sol girou alem do
-        // limiar, esfera ideal escapou da congelada, ou parametros de fitting mudaram.
+        // CACHE ESTATICO. O shadow map e uma foto da cena tirada do ponto de vista do sol.
+        // Camera andando nao muda essa foto (muda o recorte); objeto andando muda so um
+        // pedaco dela; sol andando produz OUTRA foto. Dai a estrutura: o que nao se move vive
+        // num alvo proprio (StaticArray), rasterizado so quando invalida, e o array que todo
+        // mundo amostra recebe uma copia dele mais os dinamicos por cima, todo frame.
+        //
+        // Antes daqui existia um round-robin que redesenhava as cascatas 2/3 a cada 2 e 4
+        // frames INCONDICIONALMENTE. Aquilo era um timer cobrindo a falta de um sinal: nao
+        // havia como saber se o conteudo tinha mudado, entao redesenhava de tempos em tempos
+        // por garantia. Com o StaticCastersVersion o sinal existe, e a mesma aritmetica de
+        // fase passa a servir ao contrario — nao para FORCAR redesenho, mas para ESPALHAR os
+        // que ficaram pendentes (ver StaticRefreshMask), que e o eFullUpdateTimesliced da Cry
+        // em miniatura.
+        // Esteve em false durante o baseline de 2026-08-07 (investigacao de firefly), e o teste
+        // INOCENTOU o cache: o artefato apareceu igual com ele desligado. Restaurado.
+        // ⚠️ Nota de contexto: o cache so passou a rodar de fato em 2026-08-07 — antes disso o
+        // call site do UpdatePerFrame nao compilava (faltava o StaticCastersVersion) e a frente
+        // inteira estava inerte. Ou seja, ele nunca teve A/B proprio; se aparecer sombra estatica
+        // grudada ou pop ao mover objeto, suspeitar daqui. `SetCascadeCache(false)` desliga.
         bool CacheEnabled  = true;
-        u32  UpdateMask    = 0xFu;              // cascatas re-renderizadas neste frame
+        u32  UpdateMask    = 0xFu;              // cascatas com trabalho no alvo de runtime
+        u32  StaticRefreshMask = 0xFu;          // cascatas que re-rasterizam o mapa estatico
         u64  UpdateCounter = 0;
         bool CacheValid[kNumCascades]  = {};
         Vec3 CachedFwd[kNumCascades]{};         // dir da luz no ultimo update
         Vec3 CachedCenter[kNumCascades]{};      // centro (snapped) da esfera congelada
         f32  CachedRadius[kNumCascades] = {};   // raio (com folga) da esfera congelada
+        // Versao do conjunto estatico com que cada mapa foi rasterizado.
+        u64  CachedContentVersion[kNumCascades] = {};
+        // Dinamicos desenhados no alvo de runtime desta cascata no frame ANTERIOR. Se agora
+        // sao 0 e antes tambem eram, e o estatico nao mudou, o alvo de runtime ja esta certo e
+        // a cascata nao custa NADA — nem a copia. E o caso da cena 100% estatica.
+        u32  LastDynamicCount[kNumCascades] = {};
+        // Sol girando rapido demais para qualquer cache sobreviver a um frame: manter o mapa
+        // estatico so paga custo sem colher nada, entao ele e abandonado e o passe volta a
+        // rasterizar tudo direto no alvo de runtime — exatamente o caminho de antes do cache.
+        // Nao e um switch de "TOD ligado": um ciclo dia/noite lento mantem o cache inteiro, e
+        // e o caso comum. O que decide e a velocidade medida, nao a existencia do TOD.
+        bool CacheBypass   = false;
+        Vec3 LastFrameSunFwd{};
+        bool HasLastSunFwd = false;
+        // Tolerancia do sol EM TEXELS de deslocamento da sombra, nao em graus. Um limiar
+        // angular unico erra por um fator de 2,6 entre as cascatas: o deslocamento vale
+        // range * delta, e range/texel e 5470 na cascata 0 contra 2127 na 3 — a proxima e a
+        // mais sensivel, ao contrario da intuicao. Convertido por cascata em UpdatePerFrame.
+        f32  SunToleranceTexels = 1.0f;
+        FCascadeStats Stats[kNumCascades]{};
+        // Centro snapado do fit anterior, em coordenadas de luz (right, up), p/ o delta acima.
+        f32  PrevSnapR[kNumCascades] = {};
+        f32  PrevSnapU[kNumCascades] = {};
+        bool HasPrevSnap[kNumCascades] = {};
+        u32  LastCasterCount = 0;               // itens que o Renderer submeteu no ultimo passe
         f32  MinCasterTexels = 2.0f;            // caster menor que N texels da cascata nao desenha (0 = off)
         f32  CascadeBiasScale[kNumCascades] = { 1.0f, 1.0f, 1.0f, 1.0f };
         f32  SunAngularSizeDeg = 0.53f;         // diametro angular do sol (PCSS); 0 = penumbra fixa

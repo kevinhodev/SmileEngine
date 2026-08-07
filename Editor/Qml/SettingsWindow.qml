@@ -1707,7 +1707,7 @@ Rectangle {
 
             Card {
                 width: parent.width
-                height: 312
+                height: 364
                 title: "Sombras do sol (CSM)"
 
                 Text {
@@ -1750,8 +1750,20 @@ Rectangle {
                     valueText: renderModel.shadowDepthBias.toFixed(1).replace(".", ",") + " tx"
                     onCommitted: (v) => renderModel.SetShadowDepthBias(v)
                 }
+                // Em texels, como o bias — e portanto também 4× maior em metros a cada
+                // cascata. Junto com o bias é o que apaga sombra de contato nas cascatas
+                // distantes: 2,5 tx valem 5,9 cm na cascata 0 e 23,2 cm na 1.
                 ShadowSlider {
                     x: 20; y: 212
+                    width: parent.width - 40
+                    label: "Normal offset"
+                    from: 0; to: 6; step: 0.1
+                    value: renderModel.shadowNormalOffset
+                    valueText: renderModel.shadowNormalOffset.toFixed(1).replace(".", ",") + " tx"
+                    onCommitted: (v) => renderModel.SetShadowNormalOffset(v)
+                }
+                ShadowSlider {
+                    x: 20; y: 264
                     width: parent.width - 40
                     label: "Tamanho angular do sol (PCSS)"
                     from: 0; to: 2.0; step: 0.01
@@ -1763,14 +1775,14 @@ Rectangle {
                 }
 
                 Text {
-                    x: 20; y: 272
+                    x: 20; y: 324
                     text: "Debug de cascatas"
                     color: root.textNormal
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
                 Text {
-                    x: 158; y: 272
+                    x: 158; y: 324
                     text: "tinge a cena pela cascata usada"
                     color: root.textMuted
                     font.family: C.Theme.fontFamily
@@ -1779,7 +1791,7 @@ Rectangle {
                 Toggle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
-                    y: 266
+                    y: 318
                     checked: renderModel.shadowDebugCascades
                     onToggled: renderModel.SetShadowDebugCascades(!checked)
                 }

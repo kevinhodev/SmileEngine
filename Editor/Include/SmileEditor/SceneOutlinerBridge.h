@@ -42,6 +42,9 @@ namespace SmileEditor {
         Q_PROPERTY(QString meshVramText READ MeshVramText NOTIFY SelectionChanged)
         Q_PROPERTY(QStringList meshFlags READ MeshFlags NOTIFY SelectionChanged)
         Q_PROPERTY(bool meshVisible READ MeshVisible NOTIFY SelectionChanged)
+        // Mobilidade (ver Smile::EMobility). Gravavel: e a unica propriedade de mesh que o
+        // painel edita, e ela vai para o .smap junto com transform e visibilidade.
+        Q_PROPERTY(bool meshDynamic READ MeshDynamic WRITE SetMeshDynamic NOTIFY SelectionChanged)
         // Visibilidade tem persistencia propria (<cena>.visibility.json, botao salvar).
         Q_PROPERTY(bool dirty READ Dirty NOTIFY DirtyChanged)
 
@@ -103,6 +106,8 @@ namespace SmileEditor {
         QString MeshVramText() const;
         QStringList MeshFlags() const;
         bool    MeshVisible() const;
+        bool    MeshDynamic() const;
+        void    SetMeshDynamic(bool V);
         bool    Dirty() const { return VisDirty; }
 
         Q_INVOKABLE void toggleExpand(int row);

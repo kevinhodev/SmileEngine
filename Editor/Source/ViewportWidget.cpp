@@ -276,6 +276,97 @@ namespace SmileEditor {
         return Telemetry.GpuTimings;
     }
 
+    QVariantList ViewportWidget::GetShadowCascades() const {
+        return Telemetry.ShadowCascades;
+    }
+
+    // Tabela "Sombra do sol (CSM)": o que cada cascata desenha e com que frequencia ela
+    // dispara. As duas colunas juntas sao a medida que interessa — uma cascata cara que roda
+    // 16 frames em 64 custa menos por frame que uma barata que roda nos 64 —, e e sobre elas
+    // que a separacao static/dynamic vai ser avaliada.
+    //
+    // `casters` e do ULTIMO update daquela cascata, nao do frame corrente (ver FCascadeStats):
+    // cascata congelada continua mostrando o que ela desenha quando acorda.
+    QVariantList ViewportWidget::BuildShadowCascades(Smile::Renderer& _Renderer) const {
+        QVariantList Rows;
+        const Smile::FSunShadows& Csm = _Renderer.GetSunShadows();
+        if (!Csm.IsInitialized()) return Rows;
+
+        const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
+        const int Submitted = static_cast<int>(Csm.GetSubmittedCasterCount());
+        double MeanPerFrame = 0.0, MeanDynamic = 0.0;
+
+        for (Smile::u32 C = 0; C < Smile::FSunShadows::kNumCascades; ++C) {
+            const auto& S = Csm.CascadeStats(C);
+            // popcount da janela de 64 frames. Sem <bit> para nao exigir C++20 aqui.
+            // A taxa que interessa é a de RE-RASTERIZAÇÃO DO ESTÁTICO: é ela que a F2 move.
+            // A de runtime (UpdateHistory) fica em 64/64 sempre que houver dinâmico, porque
+            // cópia mais dinâmico acontece todo frame — e é barata, que é o ponto.
+            int Updates = 0;
+            for (Smile::u64 B = S.StaticHistory; B; B &= B - 1) ++Updates;
+            const double Rate = Updates / 64.0;
+            // Estático leva a taxa; dinâmico não. Essa assimetria É o cache: o primeiro só é
+            // pago quando o mapa invalida, o segundo é redesenhado todo frame de qualquer
+            // forma. O piso é o que nenhum cache remove.
+            MeanPerFrame += S.SubmittedStatic * Rate + S.SubmittedDynamic;
+            MeanDynamic  += S.SubmittedDynamic;
+
+            QVariantMap Row;
+            Row.insert(QStringLiteral("name"), QStringLiteral("Cascata %1").arg(C));
+            // Estático · dinâmico é a leitura central: o primeiro número é o que o cache pode
+            // reter, o segundo é o que sobra para redesenhar todo frame.
+            Row.insert(QStringLiteral("text"),
+                       QStringLiteral("%1 · %2")
+                           .arg(Loc.toString(static_cast<int>(S.SubmittedStatic)))
+                           .arg(Loc.toString(static_cast<int>(S.SubmittedDynamic))));
+            Row.insert(QStringLiteral("shareText"),
+                       QStringLiteral("%1/64 fr").arg(Updates));
+            // Quanto cada filtro cortou, na ordem em que o passe aplica (tamanho e depois
+            // planos): um objeto pequeno E fora da fatia conta no primeiro. O Δ fecha a linha
+            // com o quanto o fit andou — é o que diz se o mapa anterior era reaproveitável.
+            Row.insert(QStringLiteral("cullText"),
+                       QStringLiteral("−%1 tam · −%2 fatia · Δ%3 tx")
+                           .arg(S.CulledSize).arg(S.CulledPlanes)
+                           .arg(Loc.toString(S.SnapDeltaTexels, 'f', 0)));
+            Row.insert(QStringLiteral("frac"),
+                       Submitted > 0 ? static_cast<double>(S.Submitted) / Submitted : 0.0);
+            Row.insert(QStringLiteral("frozen"), !S.UpdatedThisFrame);
+            Rows.push_back(Row);
+        }
+
+        // Soma das 4 cascatas: o MESMO objeto é desenhado uma vez por cascata que o aceita,
+        // então isto passa de 1.542 sem contradição — a lista é de objetos, isto é de draws.
+        // O teto é 4 × lista (nada cullado, nada cacheado), e é contra ele que o número tem de
+        // ser lido: é o que culling e cache já cortam hoje, e a base do A/B da F2/F3.
+        QVariantMap Total;
+        Total.insert(QStringLiteral("name"), QStringLiteral("Draws de sombra/frame"));
+        Total.insert(QStringLiteral("text"), Loc.toString(MeanPerFrame, 'f', 0));
+        Total.insert(QStringLiteral("shareText"),
+                     QStringLiteral("de %1").arg(
+                         Loc.toString(Submitted * static_cast<int>(
+                             Smile::FSunShadows::kNumCascades))));
+        // O que sobraria com o cache perfeito: só o dinâmico, todo frame, em toda cascata.
+        QVariantMap Floor;
+        Floor.insert(QStringLiteral("name"), QStringLiteral("Piso com cache"));
+        Floor.insert(QStringLiteral("text"), Loc.toString(MeanDynamic, 'f', 0));
+        Floor.insert(QStringLiteral("shareText"),
+                     MeanPerFrame > 0.0
+                         ? QStringLiteral("%1%").arg(Loc.toString(
+                               100.0 * MeanDynamic / MeanPerFrame, 'f', 0))
+                         : QStringLiteral("—"));
+        Floor.insert(QStringLiteral("cullText"), QString());
+        Floor.insert(QStringLiteral("frac"), 0.0);
+        Floor.insert(QStringLiteral("frozen"), false);
+        Floor.insert(QStringLiteral("summary"), true);
+        Total.insert(QStringLiteral("cullText"), QString());
+        Total.insert(QStringLiteral("frac"), 0.0);
+        Total.insert(QStringLiteral("frozen"), false);
+        Total.insert(QStringLiteral("summary"), true);
+        Rows.push_back(Total);
+        Rows.push_back(Floor);
+        return Rows;
+    }
+
     // Tabela "GPU por passe": escopos do FGpuProfiler (sem o total, que vira o header),
     // em ordem de custo com histerese; frac relativo ao frame total de GPU. A margem conserva
     // a leitura por consumo sem deixar passes quase empatados trocarem de lugar a cada snapshot.
@@ -470,6 +561,7 @@ namespace SmileEditor {
                                 QStringLiteral(" ms");
         }
         Next.GpuTimings = BuildGpuTimings(_Renderer);
+        Next.ShadowCascades = BuildShadowCascades(_Renderer);
         Telemetry = std::move(Next);
     }
 
@@ -1554,7 +1646,7 @@ namespace SmileEditor {
             GizmoMousePending = false;
         }
         if (GizmoReleasePending) {
-            GizmoCtrl.OnMouseRelease();
+            GizmoCtrl.OnMouseRelease(_Renderer);
             GizmoReleasePending = false;
         }
     }
@@ -1650,7 +1742,14 @@ namespace SmileEditor {
                 if (RendererAccess && RendererAccess->IsInitialized())
                     FlushPendingGizmoInput(*RendererAccess);
             } else {
-                GizmoCtrl.OnMouseRelease();
+                // Sem arraste em curso o release e so reset de estado, mas passou a precisar
+                // do Renderer (limpa o dragging do CSM), entao segue o mesmo caminho diferido:
+                // se o frame nao liberou o Renderer agora, o FlushPendingGizmoInput pega no
+                // proximo. Adiar um frame um reset de estado ja neutro nao tem efeito visivel.
+                GizmoReleasePending = true;
+                auto RendererAccess = Renderer ? Renderer.TryLock() : decltype(Renderer.TryLock()){};
+                if (RendererAccess && RendererAccess->IsInitialized())
+                    FlushPendingGizmoInput(*RendererAccess);
             }
         }
         QWidget::mouseReleaseEvent(_Event);

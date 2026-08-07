@@ -215,6 +215,20 @@ namespace SmileEditor {
             ? R.GetScene().Lights()[static_cast<size_t>(Idx)].Position
             : R.GetScene().Renderables()[static_cast<size_t>(Idx)].Transform.Position;
         DragStartT     = AxisParam(O, Dir, AxisDir(Axis), Pivot);
+
+        // Enquanto arrasta, o renderavel entra no conjunto DINAMICO do CSM (ver
+        // Renderer::SetDraggingRenderable). O bump aqui e o que o tira do mapa estatico uma
+        // vez; sem ele o objeto continuaria estampado na posicao antiga do mapa cacheado
+        // enquanto a copia dinamica se move — sombra dupla.
+        if (!IsLight && Idx >= 0) {
+            const auto& List = R.GetScene().Renderables();
+            if (Idx < static_cast<int>(List.size())) {
+                const Smile::FRenderable& Rn = List[static_cast<size_t>(Idx)];
+                R.SetDraggingRenderable(Rn.Id);
+                if (Rn.Mobility == Smile::EMobility::Static)
+                    R.GetScene().BumpStaticCastersVersion();
+            }
+        }
         return true;
     }
 
@@ -247,7 +261,18 @@ namespace SmileEditor {
         R.GetScene().BumpTransformsVersion(); // TLAS segue o objeto (rebuild leve no frame)
     }
 
-    void GizmoController::OnMouseRelease() {
+    void GizmoController::OnMouseRelease(Smile::Renderer& R) {
+        // O objeto volta ao conjunto estatico no lugar NOVO, entao o mapa cacheado precisa ser
+        // refeito uma vez. Bumpa mesmo que o arraste nao tenha movido nada (clique sem
+        // deslocamento): o custo e um redesenho, e a alternativa e comparar transforms para
+        // economizar um caso que nao acontece em sessao real.
+        if (Dragging && !DragIsLight && R.GetDraggingRenderable() != 0) {
+            const Smile::FRenderable* Rn = R.GetScene().FindRenderable(R.GetDraggingRenderable());
+            if (Rn && Rn->Mobility == Smile::EMobility::Static)
+                R.GetScene().BumpStaticCastersVersion();
+        }
+        R.SetDraggingRenderable(0);
+
         Dragging    = false;
         Active      = EAxis::None;
         DragIdx     = -1;

@@ -1149,6 +1149,24 @@ namespace Smile {
         // (RTV em Targets.HDRRTVHeap.CpuHandle(0)), entao le-lo como SRV no mesmo draw seria
         // ler e escrever o mesmo recurso. Precisaria de copia; fica p/ quando houver captura.
 
+        // --- Sombras ---------------------------------------------------------------------
+        // Uma entrada por cascata sobre o MESMO SRV (o array inteiro), com a fatia no
+        // SubIndex — e o unico jeito de enderecar slice, ja que nao existe SRV de dimensao
+        // TEXTURE2D que selecione um. Com as quatro selecionadas de uma vez a grade mostra o
+        // conjunto lado a lado, que e como se ve o encaixe entre cascatas e o efeito do cache.
+        //
+        // Exposure 1.0 mostra a profundidade CRUA do ortho. Ela e linear em mundo ao longo da
+        // luz (projecao ortografica), entao a rampa ja e legivel sem linearizar: limpo = 1.0
+        // (far, sem caster), escuro = caster perto do sol.
+        if (SunShadows.IsInitialized() && SunShadows.ShadowSRVSlot() != kNoSlot) {
+            static constexpr const char* kCascadeNames[FSunShadows::kNumCascades] = {
+                "Sombra do sol · cascata 0", "Sombra do sol · cascata 1",
+                "Sombra do sol · cascata 2", "Sombra do sol · cascata 3" };
+            for (u32 c = 0; c < FSunShadows::kNumCascades; ++c)
+                Register(kCascadeNames[c], SunShadows.ShadowSRVSlot(),
+                         EDebugDecode::ArraySlice, /*SubIndex=*/c);
+        }
+
         // --- Iluminacao indireta ---------------------------------------------------------
         if (AO.AOSRVSlot() != kNoSlot)
             Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Grayscale);
@@ -2667,25 +2685,40 @@ namespace Smile {
         {
             const f32 ShadowNoiseFrame = (Modes.TAAActive || Modes.UpscaleActive)
                 ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, Vw.View, Vw.CameraPosition, Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame);
+            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, Vw.View, Vw.CameraPosition,
+                                      Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame,
+                                      Scene.StaticCastersVersion());
             if (UseSunShadows) {
                 std::vector<FSunShadows::FShadowDrawItem> Casters;
                 Casters.reserve(AllItems.size());
                 for (const AllItem& A : AllItems) {
                     // Translucido nao projeta sombra opaca (vidro deixa o sol entrar).
                     if (A.Mat && A.Mat->Blend) continue;
+                    // Objeto sob arraste do gizmo conta como DINAMICO enquanto o arraste dura,
+                    // qualquer que seja a mobilidade dele. Sem isto cada frame de mouse
+                    // invalidaria o mapa estatico e o editor ficaria pior do que sem cache
+                    // nenhum — a mesma razao pela qual a UE trata primitiva movida como
+                    // movable e so re-cacheia quando ela para.
+                    const bool Dyn = A.R->Mobility == EMobility::Dynamic ||
+                                     (DraggingRenderableId != 0 && A.R->Id == DraggingRenderableId);
                     Casters.push_back({ A.R->Mesh, A.Mat,
                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
-                                        A.R->AABBMin, A.R->AABBMax });
+                                        A.R->AABBMin, A.R->AABBMax, Dyn });
                 }
                 // Ordena UMA vez, fora do laco de cascatas: o RecordDepthPass varre esta
                 // lista 4x e, em ordem de cena, alternava PSO opaco/masked a cada item que
                 // trocasse de tipo. Opacos primeiro (PSO trocado uma unica vez, na fronteira)
                 // e alpha-tested agrupados por material, o que tambem deixa o Bind repetido
                 // ser pulado la dentro.
+                //
+                // Mobilidade entra como chave PRIMARIA: os estaticos ficam contiguos em
+                // [0, N) e os dinamicos em [N, Count), que e a fronteira de onde o cache vai
+                // rasterizar cada metade em um alvo diferente. Agrupar por material continua
+                // valendo DENTRO de cada metade, que e onde o batching importa.
                 std::sort(Casters.begin(), Casters.end(),
                           [](const FSunShadows::FShadowDrawItem& a,
                              const FSunShadows::FShadowDrawItem& b) {
+                              if (a.Dynamic != b.Dynamic) return !a.Dynamic;
                               const bool am = a.Mat && a.Mat->Constants.AlphaTest != 0;
                               const bool bm = b.Mat && b.Mat->Constants.AlphaTest != 0;
                               if (am != bm) return !am;

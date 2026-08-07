@@ -72,6 +72,7 @@ Rectangle {
 
     // ---- Componentes locais (mesma linguagem do TimeOfDayPanel/SettingsWindow) ----
     component Toggle: C.Toggle {}
+    component ToggleRow: C.ToggleRow {}
     component Card: C.Card { contentSpacing: 10 }
     component SliderRow: C.SliderRow {}
 
@@ -1146,6 +1147,17 @@ Rectangle {
                 PropRow {
                     label: "Geometria"
                     value: outlinerModel.meshVramText
+                }
+
+                // Mobilidade: estático deixa o CSM reaproveitar o shadow map entre frames.
+                // O hint diz o que a marcação CUSTA, não o que ela é — quem abre este painel
+                // já sabe o que "dinâmico" significa, e o que não é óbvio é que marcar tudo
+                // como dinâmico devolve a engine ao custo de antes do cache.
+                ToggleRow {
+                    label: "Dinâmico"
+                    hint: outlinerModel.meshDynamic ? "sombra redesenhada" : "sombra cacheada"
+                    checked: outlinerModel.meshDynamic
+                    onToggled: outlinerModel.meshDynamic = !outlinerModel.meshDynamic
                 }
 
                 // flags do material (folhagem/two-sided/masked/translucido)

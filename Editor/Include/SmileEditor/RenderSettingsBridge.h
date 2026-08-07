@@ -96,6 +96,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool shadowDebugCascades READ IsShadowDebugCascades NOTIFY ShadowSettingsChanged)
         Q_PROPERTY(double shadowMaxDistance READ GetShadowMaxDistance NOTIFY ShadowSettingsChanged)
         Q_PROPERTY(double shadowDepthBias READ GetShadowDepthBias NOTIFY ShadowSettingsChanged)
+        Q_PROPERTY(double shadowNormalOffset READ GetShadowNormalOffset NOTIFY ShadowSettingsChanged)
         Q_PROPERTY(double shadowMinCasterTexels READ GetShadowMinCasterTexels NOTIFY ShadowSettingsChanged)
         Q_PROPERTY(QVariantList shadowCascadeBias READ GetShadowCascadeBias NOTIFY ShadowSettingsChanged)
         Q_PROPERTY(double shadowSunAngle READ GetShadowSunAngle NOTIFY ShadowSettingsChanged)
@@ -259,6 +260,7 @@ namespace SmileEditor {
         bool              IsShadowDebugCascades() const;
         double            GetShadowMaxDistance() const;
         double            GetShadowDepthBias() const;
+        double            GetShadowNormalOffset() const;
         double            GetShadowMinCasterTexels() const;
         QVariantList      GetShadowCascadeBias() const;
         double            GetShadowSunAngle() const;
@@ -268,6 +270,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SetShadowDebugCascades(bool enabled);
         Q_INVOKABLE void SetShadowMaxDistance(double distance);
         Q_INVOKABLE void SetShadowDepthBias(double bias);
+        Q_INVOKABLE void SetShadowNormalOffset(double texels);
         Q_INVOKABLE void SetShadowMinCasterTexels(double texels);
         Q_INVOKABLE void SetShadowCascadeBiasScale(int cascade, double scale);
         Q_INVOKABLE void SetShadowSunAngle(double degrees);

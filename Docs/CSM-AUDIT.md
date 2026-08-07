@@ -350,10 +350,8 @@ profundidade e compensar na matriz.
 
 ### 3. Ferramental (barato, ajuda todo o resto)
 
-O array de cascatas não está registrado no visualizador de alvos, embora as três LUTs da
-atmosfera estejam. É a coisa mais barata da lista e a que mais ajuda a diagnosticar
-qualquer item abaixo — hoje não há como olhar o conteúdo do shadow map sem um capture
-externo.
+~~O array de cascatas não está registrado no visualizador de alvos.~~ **Feito na F0 da frente
+de casters estáticos/dinâmicos**, junto com contadores por cascata na janela de estatísticas.
 
 Não existe teste unitário do fitting. Os candidatos naturais são a distribuição de splits
 contra a fórmula da Unreal, o raio da esfera, a invariância do bias em texels entre
@@ -412,6 +410,229 @@ que o oclusor esteja a mais de 40 m, o que naquele intervalo (18 a 80 m) é o ca
 Ela paga 17 `Load` do blocker search para quase sempre cair no caminho determinístico.
 Restringir o PCSS à cascata 0 economizaria isso — mas muda a imagem em sombras difusas de
 meia distância, então é decisão artística, não técnica.
+
+## Frente nova: casters estáticos e dinâmicos
+
+Rodada aberta em 6 de agosto de 2026, separada das fases 1 a 4 porque não corrige defeito do
+laudo: ataca o custo do passe de profundidade classificando os casters em estáticos e
+dinâmicos, para que o mapa de um caster que não se move seja reaproveitado entre frames.
+
+O motivo não é só custo. O cache round-robin atual redesenha **tudo** quando uma cascata
+distante refresca, o que significa que um objeto em movimento a 100 m tem a sombra atualizada
+a cada 2 frames e a 300 m a cada 4 — 33 ms e 66 ms de defasagem a 60 fps. Hoje isso é
+invisível porque nada na cena se move fora do gizmo, mas é defeito latente. Separar as duas
+classes permite dinâmico todo frame **e** estático congelado, que é mais rápido e mais correto
+ao mesmo tempo.
+
+### Como as referências fazem
+
+| | mecanismo | granularidade | ancoragem do cache |
+|---|---|---|---|
+| Unreal 5.8 | dois mapas por cascata, `SDCM_StaticPrimitivesOnly` (cacheado) + `SDCM_MovablePrimitivesOnly`; o segundo **copia a profundidade** do primeiro (`CopyCachedShadowMap`, PS escrevendo `SV_Depth` com `CF_Always`) e desenha os móveis por cima | por primitiva (`IsMeshShapeOftenMoving`) | câmera, com `SDCM_CSMScrolling`: centro andou mas sobreposição > 0,75 → rola o mapa e redesenha só a faixa exposta; desiste acima de 5 casters extras |
+| CryEngine | cascatas a partir de `nFirstStaticLod` viram frustums `e_GsmCached` só com estático (exclui `ERF_DYNAMIC_DISTANCESHADOWS`); `eFullUpdate`, `eFullUpdateTimesliced` e `eIncrementalUpdate` (≤ 50 nós/frame, com generation id por nó para não redesenhar o que já entrou) | por render node | **mundo**: só refaz quando a câmera sai dos bounds cacheados |
+| Flax | `StaticFlags::Shadow` com `StaticFlagsMask`/`StaticFlagsCompare` filtrando a draw list da shadow view; `ShadowsUpdateRate` por luz e por distância | por ator | por luz |
+
+Duas leituras. A primeira: `r.Shadow.CSMCaching` vem **0 por padrão** na Unreal 5.8 — só o
+`CacheWholeSceneShadows`, que é de point/spot, vem 1. Nem a Epic liga cache de CSM direcional
+por default, e o caso difícil é exatamente o das cascatas próximas. A segunda: a Cry ancora o
+cache no **mundo** e não na câmera, o que evita o problema do fit que muda todo frame em vez
+de resolvê-lo.
+
+### Fases
+
+- **F0 — instrumentação e baseline.** Aplicada (ver abaixo).
+- **F1 — classificação.** `EMobility` no `FRenderable`, default estático, persistido no
+  `.smap`, UI no editor, grafo de invalidação (mover, ocultar, adicionar, remover ou trocar
+  material de um estático invalida a cascata cuja `CullPlanes` a AABB toca). Objeto sendo
+  arrastado no gizmo conta como dinâmico enquanto arrasta, senão cada frame de mouse invalida
+  o cache. Brinde de CPU: a lista de casters é montada e ordenada por frame no `Renderer`
+  (~1542 itens); a parte estática passa a ser montada uma vez por mudança de estrutura.
+- **F2 — cache estático nas cascatas 2 e 3.** Substitui o round-robin. Risco baixo: o fit
+  dessas cascatas já é congelado com 10% de folga, então a cópia estático→runtime é exata sem
+  offset de profundidade. O terreno entra no mapa estático — hoje ele redesenha em toda
+  cascata que atualiza.
+- **F3 — estender às cascatas 0 e 1 com scrolling.** É onde está o ganho (são as que
+  redesenham tudo todo frame) e o risco. Exige quantizar o `cf`, que hoje **não é snapado**:
+  quando a câmera anda, a profundidade cacheada passa a estar num referencial diferente. A
+  alternativa é copiar com offset de profundidade, que é o `DepthOffsetScale` do
+  `FScrollingShadowMaps2DPS` da Unreal.
+- **F4 — time-slicing incremental estilo Cry.** Só se o mundo crescer.
+
+Custo de VRAM: +16 MB se o gêmeo estático cobrir só as cascatas 2 e 3, +32 MB para as quatro.
+
+A favor da Smile aqui: o snapping é `floor(centro/texel)*texel`, então o deslocamento entre
+dois fits é um número **inteiro** de texels e o scroll é exato, sem reamostragem.
+
+### O que a fase 0 aplicou
+
+Instrumentação. Nenhuma mudança de imagem, nenhuma mudança de custo além de 2 timestamps por
+cascata congelada.
+
+`FSunShadows::FCascadeStats` guarda, por cascata, quantos casters foram desenhados e quantos
+cada filtro cortou (tamanho e depois planos da fatia, na ordem em que o passe aplica). Os
+contadores descrevem o **último update daquela cascata**, não o frame corrente: cascata
+congelada não desenha nada, e zerar perderia justamente o que interessa, que é o custo dela
+quando dispara. A frequência sai de `UpdateHistory`, uma janela de 64 frames deslocada uma vez
+por frame para toda cascata, inclusive a congelada. O custo médio por frame é o produto dos
+dois, e é o número a comparar num A/B.
+
+`SnapDeltaTexels` mede quanto o centro snapado andou desde o último fit, em texels da própria
+cascata. É a medida que decide a F3: delta pequeno significa que quase todo o conteúdo do mapa
+anterior continua válido, só deslocado, e a faixa nova custa `delta/2048` do passe.
+
+O escopo do profiler passou a abrir sempre, inclusive na cascata congelada. Antes ele ficava
+depois do `continue` e a linha sumia da janela nos frames em que o cache pegava, reaparecendo
+no seguinte — um ranking que pisca não dá para ler, e `0,00 ms` é precisamente o que se quer
+enxergar.
+
+O array de cascatas entrou no visualizador de alvos, que era o item 3 da fila de ferramental.
+Exigiu um caminho de `Texture2DArray` no `FDebugView`, que só sabia ler `Texture2D`: não
+existe SRV de dimensão `TEXTURE2D` que enderece array slice, então alvo de array precisa de
+declaração própria no HLSL. `t5` recebe o mesmo descritor de `t0` e o `Decode` escolhe qual
+das duas o shader lê. As quatro cascatas são registradas sobre o mesmo SRV, com a fatia no
+`SubIndex`; selecionando as quatro de uma vez a grade mostra o encaixe entre elas. O atlas das
+sombras locais é o próximo candidato ao mesmo caminho.
+
+Fica de fora da contagem o terreno, que é desenhado pelo `ExtraCascadeDraw` e não passa pela
+lista de itens. Ele é caster estático por definição e a F2 o tira de todas as cascatas
+cacheadas — o ganho dele não aparece nestes números.
+
+### Baseline medido
+
+Bistro Exterior, RTX 3060 Ti, 1542 renderáveis na lista de casters, **câmera parada**.
+
+| casc | casters | −tamanho | −fatia | taxa | draws/frame | GPU (EMA) | por disparo |
+|---|---|---|---|---|---|---|---|
+| 0 | 896 | 0 | 646 (42%) | 64/64 | 896 | 0,56 ms | 0,56 |
+| 1 | 1329 | 129 | 84 (5%) | 64/64 | 1329 | 0,79 ms | 0,79 |
+| 2 | 1216 | 284 | 42 | 32/64 | 608 | 0,59 ms | ~1,18 |
+| 3 | 873 | 669 (43%) | 0 | 16/64 | 218 | 0,35 ms | ~1,40 |
+
+Total: **3051 draws de sombra por frame** de um teto de 6168, e **2,29 ms de um frame de
+9,04 ms — 25,4%**. O CSM é o passe serial mais caro da engine; o DDGI aparece maior (2,43 ms)
+mas roda async.
+
+Quatro leituras.
+
+**Os dois filtros de culling trocam de papel exatamente como projetados.** Na cascata 0 o
+volume da fatia corta 646 e o filtro de tamanho corta zero — texel de 2,3 cm, nada é pequeno
+demais. Na cascata 3 é o inverso perfeito: tamanho corta 669, fatia corta 0. Cada um cobre a
+ponta onde o outro é inútil, o que justifica os dois coexistirem.
+
+**A cascata 1 é a mais cara e a menos cullável.** 1329 draws todo frame com só 14% cortado:
+ela é grande o bastante para conter a Bistro inteira e o texel dela (9,3 cm) é pequeno demais
+para o filtro de tamanho morder. Nenhum culling geométrico melhora esse caso — só cache.
+
+**As cascatas 0 e 1 somam 2225 draws por frame incondicionais**, 73% do custo, pagos com a
+cena inteiramente parada.
+
+**Com a câmera parada, `SnapDeltaTexels` é 0 nas quatro cascatas.** O fit é idêntico entre
+frames — mesmo centro snapado, mesmo raio, mesma direção de luz — e mesmo assim as cascatas 0
+e 1 redesenham tudo. O desperdício não é estimado, é observado, e a condição que o detecta já
+está calculada no `UpdatePerFrame`.
+
+Consequência para o plano: a F2 não deve se limitar às cascatas 2 e 3. O recorte certo é
+**todas as cascatas, com o redesenho do estático condicionado a o fit não ter mudado**, que é
+o caso dominante no editor. A F3 passa a cobrir só o caso da câmera em movimento.
+
+Para a cascata 1 a âncora de mundo da Cry (`m_CachedShadowsBounds`) é mais promissora que o
+scrolling da Unreal: raio de 95 m com texel de 9,3 cm significa que um mapa 2048² cobre 190 m
+naquela resolução, ou seja, a Bistro inteira. Ancorada no mundo ela não re-renderiza enquanto
+a câmera não sair dos bounds — sem scrolling, sem `cf` quantizado, sem faixa exposta. Não
+escala para mundo grande, e é por isso que a Cry expõe os bounds em vez de derivá-los; a
+Emerald Square serve de contraprova.
+
+### O que a fase 2 aplicou
+
+Um segundo array D16 de 4 fatias (`StaticArray`, +32 MB, categoria Sombras) guarda **só os
+casters estáticos**. Por cascata e por frame o passe decide entre três coisas:
+
+- **nada** — mapa estático válido e nenhum dinâmico agora nem no frame anterior. O alvo de
+  runtime já está correto. É o caso da cena inteiramente estática, e ele custa zero;
+- **copiar e desenhar o dinâmico** — `CopyTextureRegion` da fatia estática para a de runtime
+  (mesmo formato e mesmas dimensões, então é exata: sem shader, sem reamostragem) e os
+  dinâmicos por cima, sem clear, contra o depth que veio da cópia;
+- **re-rasterizar o estático** e então as duas coisas acima.
+
+O terreno entrou no mapa estático. Ele é caster estático por definição e antes redesenhava em
+toda cascata que acordava — nas cascatas 2 e 3 da Bistro ele é praticamente o único conteúdo.
+
+**Invalidação.** Três testes: o fit congelado ainda cobre a fatia, o sol não girou além da
+tolerância, e o `StaticCastersVersion` da cena não mudou. As duas políticas de fit são
+deliberadamente diferentes — com folga (cascatas 2 e 3) vale enquanto a esfera ideal couber na
+congelada; sem folga (0 e 1) vale enquanto o fit recalculado der os mesmos números, isto é,
+enquanto a matriz for a mesma. A folga não foi estendida às cascatas próximas de propósito:
+custaria 10% de texel, e a medida da F0 mostrou que com a câmera parada o fit já é idêntico.
+
+**A tolerância do sol é por cascata, em texels de deslocamento da sombra.** O deslocamento vale
+`range × δ`, e `range/texel` é 5470 na cascata 0 contra 2127 na 3 — o mesmo ângulo custa 4,8
+texels na próxima e 1,9 na distante. Um limiar único em graus, que era o que existia, protege a
+distante demais e a próxima de menos.
+
+**O round-robin trocou de função.** Antes ele redesenhava as cascatas 2 e 3 a cada 2 e 4 frames
+*incondicionalmente* — um timer cobrindo a falta de um sinal de conteúdo. Com o
+`StaticCastersVersion` o sinal existe, e a mesma aritmética de fase passa a **espalhar**
+refreshes pendentes em vez de forçá-los. Só invalidação por sol entra na fila: fit e conteúdo
+são atendidos no mesmo frame. Adiar conteúdo tem sintoma concreto — ao soltar o gizmo o objeto
+sai do conjunto dinâmico e passa a depender do mapa estático, do qual foi retirado no início do
+arraste, então a sombra dele sumiria pelos frames de espera.
+
+**Defeito encontrado no primeiro A/B, e a lição dele.** Marcar um objeto como dinâmico e mexer
+na câmera fazia regiões enormes da cena escurecerem e piscarem. A causa: o constant buffer da
+matriz de cascata é indexado por frame-in-flight, mas só era escrito no caminho que refaz o
+fit — o slot alternado ficava com a matriz de um fit antigo. Enquanto a cascata congelada
+simplesmente não era desenhada isso era **inofensivo, porque ninguém lia aquele endereço**. A
+fase 2 passou a rasterizar os dinâmicos sobre a cascata que reusa o mapa estático, o endereço
+voltou a ser lido, e um único caster projetado por um fit alheio cobre uma área enorme do
+shadow map com profundidade próxima — tudo atrás dele lê como sombreado. Como o slot alterna a
+cada frame, piscava. A matriz retida passa a ser escrita no slot atual para toda cascata, todo
+frame, refazendo o fit ou não.
+
+Vale como categoria, não como episódio: **um cache latente vira defeito no dia em que alguém
+começa a ler o que ele guardava sem que ninguém lesse.** Vale reler com essa lente qualquer
+outro estado da engine que seja indexado por frame-in-flight e escrito condicionalmente.
+
+**Resultado medido.** Na Bistro, ~20 FPS de ganho com o ReSTIR GI desligado e ~10 FPS com ele
+ligado mais o denoiser, passando a bater perto de 60 FPS com NRD. O ganho menor no segundo caso
+é o esperado: com o RTGI ativo o frame deixa de ser dominado pelo CSM, então a mesma economia
+em milissegundos vale menos em FPS.
+
+**Bypass por velocidade do sol.** Se o sol anda mais em um frame do que a tolerância mais
+frouxa, nenhum mapa estático chega inteiro ao frame seguinte e mantê-lo é pagar rasterização e
+cópia para jogar fora. Nesse caso o gêmeo é abandonado e o passe rasteriza tudo direto no alvo
+de runtime, que é exatamente o caminho de antes do cache: a degradação é para **igual**, não
+para pior. O limiar dá ~4 minutos por dia — um ciclo normal nem chega perto. Não é um switch de
+"TOD ligado": o que decide é a velocidade medida, então sol fixo e ciclo lento ficam com o
+cache inteiro, que é o caso da maioria dos jogos.
+
+## Sombra de contato em screen-space: tentada e revertida
+
+Implementada e revertida em 7 de agosto de 2026. Fica registrada porque o motivo da falha é
+específico e determina o desenho da próxima tentativa.
+
+**O que foi feito.** Port do `CastScreenSpaceShadowRay` da Unreal: raio curto do pixel em
+direção à luz, marchado em NDC contra o depth buffer, 8 passos, janela de espessura de
+`2 × tolerância`, fora-da-tela contando como miss, dither no offset inicial. Multiplicava no
+termo do CSM, como o `ApplyContactShadowWithShadowTerms` faz. A única divergência deliberada
+era o comprimento do raio, derivado do buraco do bias
+(`(depthBiasTexels + normalOffsetTexels·sin α) × texel[c]`) em vez de autorado por luz.
+
+**O veredito foi "parece que tem dois sistemas de sombras competindo"**, e é literalmente o
+que estava acontecendo. O CSM com PCSS produz um termo **macio e largo**; o contact shadow em
+screen-space produz uma oclusão **binária e dura**. Multiplicar um pelo outro coloca um núcleo
+duro dentro de uma penumbra macia — duas famílias de sombra diferentes no mesmo pixel.
+
+E a derivação "principiada" do comprimento **piorou** isso em vez de melhorar. O buraco do
+bias é exatamente a região onde a penumbra do PCSS está em rampa; amarrar o raio a ele
+garantiu que o termo duro caísse precisamente onde o termo macio vive. Um comprimento fixo e
+curto, como a Unreal usa, teria sobreposto menos — a escolha mais defensável no papel foi a
+pior na tela.
+
+**A lição que vale para a fase de RT:** não multiplicar um segundo termo de visibilidade.
+Traçar **dentro da banda de penumbra** que o PCF já identifica (`0 < pcf < 1`) e **substituir**
+o termo ali, `lerp(csm, rt, banda)`, produzindo um resultado da mesma família — macio,
+governado pelo tamanho angular da luz — em vez de um segundo termo por cima. É o que o
+FidelityFX Hybrid Shadows faz, e agora há uma razão medida para seguir esse contrato à risca.
 
 ## Limites conhecidos e decisões deliberadas
 

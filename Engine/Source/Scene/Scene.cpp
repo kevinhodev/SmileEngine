@@ -145,6 +145,9 @@ namespace Smile {
         RenderableIndexById_.emplace(Added.Id,
                                      static_cast<u32>(RenderableList.size() - 1));
         ++StructureVersion_;
+        // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
+        // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
+        ++StaticCastersVersion_;
         // Tambem a de transforms: a TLAS ganhou uma instancia, e quem reage a ela e o rebuild
         // por frame do RenderFrame. Durante o load isto e so um contador subindo 2,5k vezes
         // antes de existir TLAS — o custo e zero e a alternativa (bumpar so em quem cria com a
@@ -163,6 +166,9 @@ namespace Smile {
         RenderableList.erase(RenderableList.begin() + Index);
         RebuildRenderableIndex();
         ++StructureVersion_;
+        // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
+        // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
+        ++StaticCastersVersion_;
         ++TransformsVersion_; // a TLAS tem uma instancia a menos
         return true;
     }
@@ -235,6 +241,9 @@ namespace Smile {
         MeshLibrary.clear();
         LightList.clear();
         ++StructureVersion_;
+        // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
+        // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
+        ++StaticCastersVersion_;
         // NextObjectId_ NAO volta a zero: um Id nunca pode ser reusado dentro
         // da sessao, senao uma referencia velha (selecao, undo futuro) passaria a apontar em
         // silencio para um objeto diferente da cena nova em vez de simplesmente nao resolver.

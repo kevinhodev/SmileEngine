@@ -455,6 +455,29 @@ namespace SmileEditor {
         return R ? R->Visible : true;
     }
 
+    bool SceneOutlinerBridge::MeshDynamic() const {
+        const auto R = SelMesh(Renderer);
+        return R && R->Mobility == Smile::EMobility::Dynamic;
+    }
+
+    void SceneOutlinerBridge::SetMeshDynamic(bool _V) {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        const int Sel = Renderer->GetSelectedObject();
+        auto& List = Renderer->GetScene().Renderables();
+        if (Sel < 0 || Sel >= static_cast<int>(List.size())) return;
+
+        const auto Want = _V ? Smile::EMobility::Dynamic : Smile::EMobility::Static;
+        Smile::FRenderable& R = List[static_cast<size_t>(Sel)];
+        if (R.Mobility == Want) return;
+        R.Mobility = Want;
+        // Nos DOIS sentidos: virar dinamico tira o objeto do mapa estatico, virar estatico o
+        // coloca la. Qualquer um dos dois muda o conteudo cacheado.
+        Renderer->GetScene().BumpStaticCastersVersion();
+        MarkDirty();
+        emit SelectionChanged();
+    }
+
     // ---- Acoes ----
     void SceneOutlinerBridge::toggleExpand(int _Row) {
         if (_Row < 0 || _Row >= Rows.size()) return;
@@ -589,6 +612,8 @@ namespace SmileEditor {
         // TLAS re-coleta as instancias no rebuild leve do proximo frame (pula !Visible),
         // entao GI/reflexos/ReSTIR respeitam o olho, nao so o raster.
         Renderer->GetScene().BumpTransformsVersion();
+        // Ocultar/mostrar muda o que o mapa estatico contem, tanto quanto criar ou remover.
+        Renderer->GetScene().BumpStaticCastersVersion();
         MarkDirty();
         Rebuild();
     }
@@ -751,6 +776,7 @@ namespace SmileEditor {
 
         if (Applied) {
             Renderer->GetScene().BumpTransformsVersion(); // TLAS acompanha as ocultas
+            Renderer->GetScene().BumpStaticCastersVersion();
             if (HiddenApplied > 0)
                 Smile::LogInfo("Outliner: " + std::to_string(HiddenApplied) +
                                " mesh(es) ocultas de " +

@@ -265,6 +265,18 @@ namespace Smile {
         u32  GetVisibleCount() const     { return LastVisibleCount; }
         u32  GetDrawCount() const        { return static_cast<u32>(Scene.Renderables().size()); }
 
+        // Telemetria do CSM por cascata (contagem + frequencia de atualizacao). Const, so
+        // leitura: e a base de medida da separacao static/dynamic dos casters.
+        const FSunShadows& GetSunShadows() const { return SunShadows; }
+
+        // Objeto sob arraste do gizmo (0 = nenhum). Enquanto dura, ele e tratado como caster
+        // DINAMICO qualquer que seja a mobilidade dele: um estatico sendo arrastado invalidaria
+        // o mapa cacheado a cada frame de mouse. O editor liga no begin do arraste e desliga no
+        // release, e e no release que a invalidacao do conjunto estatico acontece — uma vez, no
+        // lugar final, em vez de uma por frame ao longo do caminho.
+        void SetDraggingRenderable(u64 Id) { DraggingRenderableId = Id; }
+        u64  GetDraggingRenderable() const { return DraggingRenderableId; }
+
 
         bool IsInitialized() const { return Initialized; }
 
@@ -784,6 +796,7 @@ namespace Smile {
         FRainWetness    RainWetness; // F1: wetness deferred no G-buffer (pos-geometry pass)
 
         FSunShadows     SunShadows;
+        u64             DraggingRenderableId = 0; // ver SetDraggingRenderable
         bool            UseSunShadows = true;
 
         FLocalShadows   LocalShadows; // sombras de spot (F3a); budget kMaxShadows/frame

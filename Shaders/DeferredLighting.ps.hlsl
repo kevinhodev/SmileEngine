@@ -1,6 +1,6 @@
 #include "GBuffer.hlsli"
 #include "BRDF.hlsli"
-#include "Shadow/CSMCommon.hlsli"   
+#include "Shadow/CSMCommon.hlsli"
 #include "GI/DDGICommon.hlsli"     
 
 cbuffer FrameCB : register(b0) {

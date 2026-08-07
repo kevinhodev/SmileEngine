@@ -827,6 +827,107 @@ Rectangle {
                             }
                         }
                     }
+
+                    // Sombra do sol: quanto cada cascata desenha e com que frequência ela
+                    // dispara. A taxa (X/64) é o que o cache de cascata muda; a média por
+                    // frame é o produto das duas colunas e é o número a comparar num A/B.
+                    Card {
+                        width: parent.width
+                        height: 270
+                        visible: viewportModel.shadowCascades.length > 0
+
+                        Text {
+                            x: 16; y: 15
+                            text: "SOMBRA DO SOL (CSM)"
+                            color: root.textPrimary
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 16
+                            y: 17
+                            text: "ESTÁT · DIN     RE-RASTERIZA"
+                            color: root.textMuted
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 8
+                        }
+
+                        Column {
+                            x: 16; y: 46
+                            width: parent.width - 32
+                            spacing: 0
+
+                            Repeater {
+                                model: viewportModel.shadowCascades
+                                // Duas linhas por cascata: a de cima é a medida (quanto desenha,
+                                // com que frequência), a de baixo é o diagnóstico (o que cada
+                                // filtro cortou e quanto o fit andou). Numa linha só o
+                                // diagnóstico passava por baixo do valor — o card é estreito e
+                                // texto monoespaçado de 3 campos não cabe ao lado do número.
+                                delegate: Item {
+                                    id: csmRow
+                                    required property var modelData
+                                    readonly property bool summary: csmRow.modelData.summary === true
+                                    width: parent.width
+                                    height: csmRow.summary ? 30 : 38
+
+                                    Text {
+                                        id: csmName
+                                        anchors.left: parent.left
+                                        y: csmRow.summary ? (csmRow.height - height) / 2 : 5
+                                        text: csmRow.modelData.name
+                                        color: csmRow.summary ? root.textNormal : root.textMuted
+                                        font.family: C.Theme.fontFamily
+                                        font.pixelSize: 9
+                                        font.weight: csmRow.summary ? Font.DemiBold : Font.Normal
+                                    }
+                                    Text {
+                                        id: csmRate
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: csmName.verticalCenter
+                                        text: csmRow.modelData.shareText
+                                        color: root.textMuted
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 9
+                                        horizontalAlignment: Text.AlignRight
+                                        width: 52
+                                    }
+                                    Text {
+                                        anchors.right: csmRate.left
+                                        anchors.rightMargin: 10
+                                        anchors.verticalCenter: csmName.verticalCenter
+                                        text: csmRow.modelData.text
+                                        color: root.textNormal
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+                                    // Diagnóstico: cortes de cada filtro e deslocamento do fit.
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: csmName.bottom
+                                        anchors.topMargin: 2
+                                        text: csmRow.modelData.cullText
+                                        color: root.textMuted
+                                        opacity: 0.6
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 8
+                                        elide: Text.ElideRight
+                                        visible: !csmRow.summary
+                                    }
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        height: 1
+                                        color: root.divider
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

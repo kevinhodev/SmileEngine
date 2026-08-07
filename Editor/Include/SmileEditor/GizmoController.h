@@ -38,7 +38,9 @@ namespace SmileEditor {
         // press tenta pegar um handle -> retorna true se comecou um arraste (editor NAO faz picking).
         bool OnMousePress(Smile::Renderer& R, Smile::u32 X, Smile::u32 Y);
         void OnMouseMove(Smile::Renderer& R, Smile::u32 X, Smile::u32 Y);   // drag ou hover
-        void OnMouseRelease();
+        // Precisa do Renderer: e aqui que o objeto sai do conjunto dinamico do CSM e o mapa
+        // estatico e invalidado, uma vez, com ele ja no lugar final.
+        void OnMouseRelease(Smile::Renderer& R);
 
     private:
         // Pivo (posicao da luz selecionada, senao centro da AABB do renderavel selecionado) +

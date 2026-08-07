@@ -139,6 +139,9 @@ namespace Smile {
         f32  GetShadowMaxDistance() const;
         void SetShadowDepthBias(f32 Texels);
         f32  GetShadowDepthBias() const;
+        // Em TEXELS da cascata, como o bias — logo 4x maior em metros a cada cascata.
+        void SetShadowNormalOffset(f32 Texels);
+        f32  GetShadowNormalOffset() const;
         void SetShadowMinCasterTexels(f32 V);
         f32  GetShadowMinCasterTexels() const;
         void SetShadowCascadeCache(bool V);
