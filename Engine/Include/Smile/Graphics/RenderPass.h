@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <string_view>
 #include <vector>
+#include <type_traits>
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/HistoryDomain.h"
 
@@ -84,9 +85,10 @@ namespace Smile {
     // FSceneRenderer. (O Flax junta, mas la todo passe E passe: o estado compartilhado nao existe
     // como objeto.)
     //
-    // Aqui a separacao e por TIPO, nao por flag: as duas sobrecargas de FPassRegistry::Register
-    // classificam na resolucao de sobrecarga, entao nao da para registrar na lista errada sem o
-    // compilador reclamar, e ninguem precisa lembrar de marcar um bool.
+    // Aqui a separacao e por TIPO, nao por flag, e VISIVEL no call site: RegisterPass e
+    // RegisterPipelineOwner sao funcoes distintas, cada uma recusando o tipo errado em tempo de
+    // compilacao. Ninguem precisa lembrar de marcar um bool, e quem le a lista de registro sabe
+    // em qual lado cada linha cai sem ir conferir a base da classe.
 
     // Possui shader e PSO. E o que o hot reload precisa saber, e o teto do que um baker ou um
     // saco de estado compartilhado tem a oferecer.
@@ -169,16 +171,29 @@ namespace Smile {
     class FPassRegistry {
     public:
         // Passe de frame: entra nas duas listas.
-        void Register(FRenderPass* Pass) {
+        void RegisterPass(FRenderPass* Pass) {
             if (!Pass) return;
             Passes.push_back(Pass);
             Owners.push_back(Pass);
         }
 
-        // Baker ou estado compartilhado: participa do reload e nada mais. A sobrecarga acima
-        // ganha para qualquer FRenderPass* (conversao mais derivada), entao passar um passe aqui
-        // por engano nao compila silenciosamente errado — ele simplesmente vai pra sobrecarga certa.
-        void Register(FPipelineOwner* Owner) {
+        // Baker ou estado compartilhado: participa do reload e NADA MAIS.
+        //
+        // Duas funcoes com nomes distintos, e nao uma sobrecarga so. A sobrecarga funcionava (o
+        // tipo escolhia sozinho) mas era INVISIVEL no call site: `Register(&PipelineState)` e
+        // `Register(&Skybox)` liam igual e faziam coisas diferentes, e quem lia a lista tinha de ir
+        // conferir a base de cada classe. Isso e exatamente a convencao-nao-enforcada que este
+        // contrato existe para eliminar.
+        //
+        // O static_assert fecha o outro sentido: passar um passe de frame aqui nao compila. Sem
+        // ele, `RegisterPipelineOwner(&Skybox)` passaria (Skybox E um FPipelineOwner) e o ceu
+        // sumiria de FramePasses() em silencio — sem resize e sem invalidacao de historico.
+        template <class T>
+        void RegisterPipelineOwner(T* Owner) {
+            static_assert(!std::is_base_of_v<FRenderPass, T>,
+                "este grava frame: use RegisterPass, senao ele fica fora de FramePasses() e perde "
+                "resize e invalidacao de historico");
+            static_assert(std::is_base_of_v<FPipelineOwner, T>, "nao e dono de pipeline");
             if (Owner) Owners.push_back(Owner);
         }
 

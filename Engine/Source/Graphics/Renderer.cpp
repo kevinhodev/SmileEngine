@@ -284,48 +284,51 @@ namespace Smile {
         static_assert(std::is_base_of_v<FRenderPass, FAmbientOcclusion>, "a GTAO grava frame");
 
         Passes.Clear();
-        Passes.Register(&PipelineState);
-        Passes.Register(&HDREnv);
-        Passes.Register(&Skybox);
-        Passes.Register(&Atmosphere);
-        Passes.Register(&CloudNoise);
-        Passes.Register(&VolumetricClouds);
-        Passes.Register(&Water);
-        for (u32 c = 0; c < kOceanCascades; ++c) Passes.Register(&Ocean[c]);
-        Passes.Register(&Terrain);
-        Passes.Register(&Fog);
-        Passes.Register(&VolumetricFog);
-        Passes.Register(&RainWetness);
-        Passes.Register(&AO);
-        Passes.Register(&HiZ);
-        Passes.Register(&SunShadows);
-        Passes.Register(&SunShafts);
-        Passes.Register(&BgVelocity);
-        Passes.Register(&TemporalAA);
-        Passes.Register(&TemporalMotion);
-        Passes.Register(&Flicker);
-        Passes.Register(&PostProcessor);
-        Passes.Register(&ObjectPicker);
-        Passes.Register(&SelectionOutline);
-        Passes.Register(&DebugDraw);
+
+        // --- Donos de pipeline que NAO gravam frame ------------------------------------
+        // Participam do hot reload e de nada mais. Ficam agrupados e com a funcao de nome
+        // proprio justamente para nao se confundirem com a lista de baixo.
+        Passes.RegisterPipelineOwner(&PipelineState);  // root sig + PSOs que as fases bindam
+        Passes.RegisterPipelineOwner(&HDREnv);         // bake do IBL ao carregar um HDRI
+        Passes.RegisterPipelineOwner(&CloudNoise);     // bake do ruido 3D / mapa de clima
+        Passes.RegisterPipelineOwner(&MaterialPreview);// preview offscreen do editor
+
+        // --- Passes de frame, em ordem de gravacao -------------------------------------
+        Passes.RegisterPass(&Skybox);
+        Passes.RegisterPass(&Atmosphere);
+        Passes.RegisterPass(&VolumetricClouds);
+        Passes.RegisterPass(&Water);
+        for (u32 c = 0; c < kOceanCascades; ++c) Passes.RegisterPass(&Ocean[c]);
+        Passes.RegisterPass(&Terrain);
+        Passes.RegisterPass(&MeshLights);
+        Passes.RegisterPass(&ReGIR);
+        Passes.RegisterPass(&DDGI);
+        Passes.RegisterPass(&SunShadows);
+        Passes.RegisterPass(&HiZ);
+        Passes.RegisterPass(&AO);
+        Passes.RegisterPass(&BgVelocity);
+        Passes.RegisterPass(&RainWetness);
+        Passes.RegisterPass(&TemporalMotion);
+        Passes.RegisterPass(&ReSTIRGI);
+        Passes.RegisterPass(&ReSTIRDI);
+        Passes.RegisterPass(&Reflections);
+        Passes.RegisterPass(&VolumetricFog);
+        Passes.RegisterPass(&SunShafts);
+        Passes.RegisterPass(&Fog);
+        Passes.RegisterPass(&RRGuides);
+        Passes.RegisterPass(&TemporalAA);
+        Passes.RegisterPass(&PostProcessor);
+        Passes.RegisterPass(&ObjectPicker);
+        Passes.RegisterPass(&SelectionOutline);
+        Passes.RegisterPass(&DebugDraw);
+        Passes.RegisterPass(&Flicker);
+        Passes.RegisterPass(&BvhDebug);
+        Passes.RegisterPass(&DDGIDebugPass);
         // Duas instancias do MESMO passe, com formatos de alvo diferentes (viewport e a grade
         // offscreen da janela de debug). Ambas precisam recompilar: e o caso que motivou o
         // RecreatePipelinesForStem casar TODOS os donos em vez de parar no primeiro.
-        Passes.Register(&DebugViewPass);
-        Passes.Register(&DebugPreviewPass);
-        // Baker: renderiza preview offscreen sob demanda do editor, nao grava frame.
-        Passes.Register(&MaterialPreview);
-        // RT: registrar e incondicional (ver a nota acima) — sem DXR eles nascem nao
-        // inicializados e cada OnRecreatePipelines vira no-op pelo proprio guarda.
-        Passes.Register(&MeshLights);
-        Passes.Register(&DDGI);
-        Passes.Register(&ReSTIRGI);
-        Passes.Register(&BvhDebug);
-        Passes.Register(&ReGIR);
-        Passes.Register(&ReSTIRDI);
-        Passes.Register(&Reflections);
-        Passes.Register(&RRGuides);
-        Passes.Register(&DDGIDebugPass);
+        Passes.RegisterPass(&DebugViewPass);
+        Passes.RegisterPass(&DebugPreviewPass);
     }
 
     FPassInitContext Renderer::MakePassInitContext() {
