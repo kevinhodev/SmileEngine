@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/DescriptorHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -17,8 +18,14 @@ namespace Smile {
     // a classe so precisa dos UAVs de escrita: nao aloca SRVs. Os estados sao rastreados aqui; o
     // Renderer chama RecordGuides (+ RecordSpecHitDist/ClearSpecHitDist) e depois TransitionForRR
     // antes do slEvaluateFeature(kFeatureDLSS_RR); o RR nao muda o estado dos guides.
-    class FDlssRRGuides {
+    class FDlssRRGuides : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "DLSS-RR guides"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device);   // 2 PSOs compute
         void RecreatePSOs(ID3D12Device* Device);
         void Shutdown();

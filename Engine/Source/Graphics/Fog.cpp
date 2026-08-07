@@ -9,11 +9,13 @@
 #include <fstream>
 #include <stdexcept>
 #include <vector>
+#include <iterator>
 
 namespace Smile {
 
     void FFogPass::Initialize(ID3D12Device* _Device, DXGI_FORMAT _RTFormat) {
         if (Initialized) return;
+        RTFormat = _RTFormat; // cacheado p/ o OnRecreatePipelines rebuildar com o mesmo alvo
         BuildRootSignature(_Device);
         BuildPSOs(_Device, _RTFormat);
         CreateConstantBuffer(_Device);
@@ -281,4 +283,14 @@ namespace Smile {
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FFogPass::ShaderStems() const {
+        static const char* const kStems[] = { "FogFullscreen.vs", "FogFullscreen.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FFogPass::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device, RTFormat);
+    }
+
 }

@@ -6,6 +6,7 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <unordered_map>
@@ -56,8 +57,14 @@ namespace Smile {
     static_assert(offsetof(DDGIConstants, InvalidateMin) == 288,
                   "InvalidateMin/MaxHyst devem permanecer anexados ao fim do DDGICB");
 
-    class FDDGI {
+    class FDDGI : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "DDGI"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr int kRaysPerProbe = 64; 
         static constexpr int kTileSize     = 6;  
         static constexpr int kDistTileSize = 14; 
@@ -231,6 +238,7 @@ namespace Smile {
         f32  GetVolumeFadeProbes() const { return VolumeFadeProbes; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void CreateConstantBuffer(ID3D12Device* Device);
         void ReleaseSceneResources(FTextureSRVHeap& SRVHeap);
 

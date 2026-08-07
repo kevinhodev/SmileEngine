@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -548,4 +549,14 @@ namespace Smile {
         Ready->RowPitch   = 0;
         return true;
     }
+
+    FPassShaderStems FMaterialPreview::ShaderStems() const {
+        static const char* const kStems[] = { "MaterialPreview.vs", "MaterialPreview.ps", "PreviewSky.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FMaterialPreview::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (MeshPSO) BuildPSOs(_Ctx.Device);
+    }
+
 }

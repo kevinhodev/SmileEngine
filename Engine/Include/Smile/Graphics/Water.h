@@ -4,14 +4,20 @@
 #include "Smile/Math/Mat44.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
 namespace Smile {
     class FUploadQueue;
 
-    class FWaterRenderer {
+    class FWaterRenderer : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Água — superfície"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         enum class EDebugMode : u32 {
             Off          = 0,
             Wireframe    = 1,
@@ -61,7 +67,7 @@ namespace Smile {
                            u32 SunShadowSRVSlot,
                            EOutputMode OutputMode);
 
-        bool IsInitialized() const { return PSO != nullptr; }
+        bool IsInitialized() const override { return PSO != nullptr; }
         void SetDebugMode(EDebugMode Mode) { DebugMode = Mode; }
         EDebugMode GetDebugMode() const    { return DebugMode; }
         void SetGpuFrustumCull(bool V)     { UseGpuFrustumCull = V; }

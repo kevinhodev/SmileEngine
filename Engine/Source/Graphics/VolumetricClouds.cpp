@@ -11,6 +11,7 @@
 #include <fstream>
 #include <vector>
 #include <stdexcept>
+#include <iterator>
 
 namespace Smile {
 
@@ -40,9 +41,7 @@ namespace Smile {
         CreateConstantBuffer(_Device);
         CreateRT(_Device, _SRVHeap, _Width, _Height);
 
-        BuildRaymarchPipeline(_Device);
-        TemporalPSO.Initialize(_Device, "CloudTemporal.cs_6_0.cso", 2, 1);
-        ShadowPSO.Initialize(_Device, "CloudShadowMap.cs_6_0.cso", 5, 1);
+        CreateComputePipelines(_Device);
 
         // Shadow map das nuvens: resolucao fixa (independe da tela), criado uma vez.
         {
@@ -227,6 +226,14 @@ namespace Smile {
         UINT DstCount = 5; UINT SrcCounts[5] = { 1, 1, 1, 1, 1 };
         _Device->CopyDescriptors(1, &Dst, &DstCount, 5, Srcs, SrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    // Raymarch, temporal e shadow map. Separado porque o RecreateComposite so cobria a PSO
+    // grafica do composite — editar CloudRaymarch.cs nao recarregava nada.
+    void FVolumetricClouds::CreateComputePipelines(ID3D12Device* _Device) {
+        BuildRaymarchPipeline(_Device);
+        TemporalPSO.Initialize(_Device, "CloudTemporal.cs_6_0.cso", 2, 1);
+        ShadowPSO.Initialize(_Device, "CloudShadowMap.cs_6_0.cso", 5, 1);
     }
 
     void FVolumetricClouds::BuildRaymarchPipeline(ID3D12Device* _Device) {
@@ -581,4 +588,18 @@ namespace Smile {
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FVolumetricClouds::ShaderStems() const {
+        static const char* const kStems[] = { "CloudComposite.vs", "CloudComposite.ps",
+                                              "CloudRaymarch.cs", "CloudTemporal.cs",
+                                              "CloudShadowMap.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FVolumetricClouds::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (!Initialized) return;
+        CreateComputePipelines(_Ctx.Device);
+        RecreateComposite(_Ctx.Device, _Ctx.SceneColorFormat, _Ctx.SceneDepthFormat);
+    }
+
 }

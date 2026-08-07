@@ -5,6 +5,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/DebugTargets.h"
+#include "Smile/Graphics/RenderPass.h"
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -33,10 +34,15 @@ namespace Smile {
     // A API ja aceita N tiles e um numero de colunas mesmo que a fase 1 use um tile so em tela
     // cheia. E de proposito: a janela de debug com varios alvos simultaneos nao vai exigir
     // refatorar este passe — so passar mais tiles.
-    class FDebugView {
+    class FDebugView : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Visualizador de alvos"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat);
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         // Desenha os tiles no render target JA setado pelo chamador. Columns == 1 (ou Count == 1)
         // ocupa a tela toda; Columns > 1 monta grade, um triangulo fullscreen por tile com o
@@ -50,6 +56,7 @@ namespace Smile {
                      const Vec2& ScreenUvOffset, bool EncodeForDisplay);
 
     private:
+        DXGI_FORMAT RTFormat = DXGI_FORMAT_UNKNOWN; // idem: duas instancias, formatos distintos
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSO(ID3D12Device* Device, DXGI_FORMAT RTFormat);
 

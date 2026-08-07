@@ -3,6 +3,7 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -12,7 +13,7 @@ namespace Smile {
 
     void FBackgroundVelocity::Initialize(ID3D12Device* Device) {
         // Mesma layout de root sig do RRGuides: CBV b0 + tabela SRV (1) + tabela UAV (1).
-        PSO.Initialize(Device, "BackgroundVelocity.cs_6_0.cso", 1, 1, false);
+        CreatePipelines(Device);
 
         D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC Desc{};
@@ -57,4 +58,19 @@ namespace Smile {
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
         CL->Dispatch(GX, GY, 1);
     }
+
+    void FBackgroundVelocity::CreatePipelines(ID3D12Device* _Device) {
+        PSO.Initialize(_Device, "BackgroundVelocity.cs_6_0.cso", 1, 1, false);
+    }
+
+
+    FPassShaderStems FBackgroundVelocity::ShaderStems() const {
+        static const char* const kStems[] = { "BackgroundVelocity.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FBackgroundVelocity::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

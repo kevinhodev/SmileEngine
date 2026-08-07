@@ -2,6 +2,7 @@
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -200,4 +201,14 @@ namespace Smile {
         Transition(CL, NrmRough.Get(), NrmRoughState, kRead);
         Transition(CL, SpecHit.Get(),  SpecHitState,  kRead);
     }
+
+    FPassShaderStems FDlssRRGuides::ShaderStems() const {
+        static const char* const kStems[] = { "DlssRRGuides.cs", "DlssRRSpecHit.cs", "DlssRRWaterSpecHit.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDlssRRGuides::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Ready) RecreatePSOs(_Ctx.Device);
+    }
+
 }

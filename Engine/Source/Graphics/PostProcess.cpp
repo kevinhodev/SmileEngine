@@ -8,6 +8,7 @@
 #include <vector>
 #include <stdexcept>
 #include <algorithm>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -402,4 +403,14 @@ namespace Smile {
 
         CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FPostProcessor::ShaderStems() const {
+        static const char* const kStems[] = { "BloomExtract.ps", "BloomDownsample.ps", "BloomUpsample.ps", "BloomBlur.ps", "FinalTonemap.ps", "PostProcess.vs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FPostProcessor::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device);
+    }
+
 }

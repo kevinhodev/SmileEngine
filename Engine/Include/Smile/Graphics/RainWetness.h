@@ -5,6 +5,7 @@
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/Weather.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -40,8 +41,13 @@ namespace Smile {
     // baixado, pocas up-facing com normal achatada + aneis de gota analiticos. Roda logo apos
     // o geometry pass, entao TODOS os consumidores do G-buffer (lighting, reflexoes RT, ReSTIR)
     // veem a cena ja molhada — rua espelhada nas reflexoes vem de graca.
-    class FRainWetness {
+    class FRainWetness : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Chuva"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // F2: occluder da chuva (mesmos campos do FShadowDrawItem do CSM — o Renderer monta
         // a lista do mesmo AllItems; vidro ENTRA: telhado de vidro bloqueia chuva).
         struct FOccluderItem {
@@ -56,7 +62,7 @@ namespace Smile {
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Recreate(ID3D12Device* Device); // reload de shader (PSO apenas)
 
-        bool IsInitialized() const { return PSO != nullptr; }
+        bool IsInitialized() const override { return PSO != nullptr; }
 
         // F2: renderiza o mapa de oclusao top-down se preciso (centro snapado mudou ou cache
         // invalido). Retorna true se re-renderizou (o caller restaura o estado de cena).

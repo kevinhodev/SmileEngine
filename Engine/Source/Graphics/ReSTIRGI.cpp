@@ -10,6 +10,7 @@
 #include <cstring>
 #include <exception>
 #include <vector>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -43,20 +44,7 @@ namespace Smile {
     }
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 3, true);
-        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
-        NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
-        // A gemea instrumentada so existe com NVAPI ligada (o FShaderTimer ja reservou o slot da
-        // extensao ANTES desta chamada — e o que faz o driver reconhecer o timer na criacao da
-        // PSO). O try aqui cobre o caso de o build ter a NVAPI mas nao o .cso da permutacao.
-        if (FShaderTimer::IsAvailable()) {
-            try {
-                TracePSOTimed.Initialize(_Device, "ReSTIRGITraceTimed.cs_6_6.cso", 14, 3, true, true);
-                TraceTimed = true;
-            } catch (const std::exception&) {
-                LogWarning("ReSTIRGITraceTimed.cso ausente — timer do ReSTIR GI indisponivel.");
-            }
-        }
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
@@ -451,4 +439,35 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(PackUavTable));
         _CL->Dispatch(GX, GY, 1);
     }
+
+    void FReSTIRGI::CreatePipelines(ID3D12Device* _Device) {
+        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 3, true);
+        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
+        NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
+        // A gemea instrumentada so existe com NVAPI ligada (o FShaderTimer ja reservou o slot da
+        // extensao ANTES desta chamada — e o que faz o driver reconhecer o timer na criacao da
+        // PSO). O try aqui cobre o caso de o build ter a NVAPI mas nao o .cso da permutacao.
+        if (FShaderTimer::IsAvailable()) {
+            try {
+                TracePSOTimed.Initialize(_Device, "ReSTIRGITraceTimed.cs_6_6.cso", 14, 3, true, true);
+                TraceTimed = true;
+            } catch (const std::exception&) {
+                LogWarning("ReSTIRGITraceTimed.cso ausente — timer do ReSTIR GI indisponivel.");
+            }
+        }
+    }
+
+
+    FPassShaderStems FReSTIRGI::ShaderStems() const {
+        // A gemea instrumentada e uma PERMUTACAO (OUTPUT_NAME no CMake dos shaders), nao um .hlsl
+        // proprio — e o CreatePipelines a reconstroi junto, entao ela e stem legitimo.
+        static const char* const kStems[] = { "ReSTIRGITrace.cs", "ReSTIRGITraceTimed.cs",
+                                              "ReSTIRGISpatial.cs", "ReSTIRNrdPack.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FReSTIRGI::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

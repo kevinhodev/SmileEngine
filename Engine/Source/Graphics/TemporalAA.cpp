@@ -6,6 +6,7 @@
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -283,4 +284,14 @@ namespace Smile {
         LastOutputIndex = curr;
         HistoryIndex    = 1 - curr;
     }
+
+    FPassShaderStems FTemporalAA::ShaderStems() const {
+        static const char* const kStems[] = { "TAAResolve.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FTemporalAA::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSO(_Ctx.Device);
+    }
+
 }

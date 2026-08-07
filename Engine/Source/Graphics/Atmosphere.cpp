@@ -11,6 +11,7 @@
 #include <fstream>
 #include <vector>
 #include <stdexcept>
+#include <iterator>
 
 namespace Smile {
     void FLut2D::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -115,11 +116,7 @@ namespace Smile {
         AerialPerspectiveVolume.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
                                        kAerialW, kAerialH, kAerialSlices, 1, true);
 
-        TransmittancePSO.Initialize(_Device, "BakeTransmittance.cs_6_0.cso", 1, 1);
-        MultiScatterPSO.Initialize(_Device, "BakeMultiScatter.cs_6_0.cso", 1, 1);
-        SkyViewPSO.Initialize(_Device, "BakeSkyView.cs_6_0.cso", 2, 1);
-        AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
-        IntegrateAmbientPSO.Initialize(_Device, "IntegrateSkyAmbient.cs_6_0.cso", 1, 1);
+        CreateBakePipelines(_Device);
 
         // Cube de reflexo da atmosfera (consumido pela água): raw + prefiltrado GGX.
         SkyReflRaw.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -530,6 +527,17 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&SkyPSO)));
     }
 
+    // Os LUTs. Separado do BuildSkyPSO porque o RecreateSky historicamente so cuidava da PSO
+    // grafica do ceu — e era por isso que editar BakeSkyView.cs ou BakeTransmittance.cs nao
+    // recarregava nada: os cinco nao estavam em caminho de reload nenhum.
+    void FAtmosphere::CreateBakePipelines(ID3D12Device* _Device) {
+        TransmittancePSO.Initialize(_Device, "BakeTransmittance.cs_6_0.cso", 1, 1);
+        MultiScatterPSO.Initialize(_Device, "BakeMultiScatter.cs_6_0.cso", 1, 1);
+        SkyViewPSO.Initialize(_Device, "BakeSkyView.cs_6_0.cso", 2, 1);
+        AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
+        IntegrateAmbientPSO.Initialize(_Device, "IntegrateSkyAmbient.cs_6_0.cso", 1, 1);
+    }
+
     void FAtmosphere::RecreateSky(ID3D12Device* _Device,
                                   DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         if (!Initialized) return;
@@ -876,4 +884,25 @@ namespace Smile {
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FAtmosphere::ShaderStems() const {
+        static const char* const kStems[] = {
+            "SkyAtmosphere.vs", "SkyAtmosphere.ps", "BakeSkyReflection.cs",
+            // Os LUTs e o campo de estrelas: cobertos pelo CreateBakePipelines e pelo
+            // BuildStarPipeline abaixo, que o OnRecreatePipelines passou a chamar.
+            "BakeTransmittance.cs", "BakeMultiScatter.cs", "BakeSkyView.cs",
+            "BakeAerialPerspective.cs", "IntegrateSkyAmbient.cs",
+            "StarField.vs", "StarField.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FAtmosphere::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (!Initialized) return;
+        CreateBakePipelines(_Ctx.Device);
+        RecreateSky(_Ctx.Device, _Ctx.SceneColorFormat, _Ctx.SceneDepthFormat);
+        // Formatos do proprio passe, nao os do contexto: o campo de estrelas nasce com os do sky
+        // pass, que a classe cacheia justamente para PSOs tardios como esta.
+        BuildStarPipeline(_Ctx.Device, SkyRTFormat, SkyDSFormat);
+    }
+
 }

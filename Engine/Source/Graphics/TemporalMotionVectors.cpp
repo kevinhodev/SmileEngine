@@ -7,6 +7,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -31,8 +32,7 @@ namespace Smile {
     }
 
     void FTemporalMotionVectors::Initialize(ID3D12Device* Device) {
-        SurfacePSO.Initialize(Device, "TemporalSurface.cs_6_6.cso", 3, 1, true);
-        DualPSO.Initialize(Device, "DualMotion.cs_6_0.cso", 4, 1, false);
+        CreatePipelines(Device);
         CB = CreateUploadBuffer(Device,
             static_cast<UINT64>(kFrames) * sizeof(FTemporalMotionConstants), &MappedCB);
         Initialized = true;
@@ -263,4 +263,20 @@ namespace Smile {
         if (Profiler) Profiler->End(CL);
         HistoryValid = true;
     }
+
+    void FTemporalMotionVectors::CreatePipelines(ID3D12Device* _Device) {
+        SurfacePSO.Initialize(_Device, "TemporalSurface.cs_6_6.cso", 3, 1, true);
+        DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 4, 1, false);
+    }
+
+
+    FPassShaderStems FTemporalMotionVectors::ShaderStems() const {
+        static const char* const kStems[] = { "TemporalSurface.cs", "DualMotion.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FTemporalMotionVectors::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

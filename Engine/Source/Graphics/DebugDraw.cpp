@@ -8,6 +8,7 @@
 #include <cstring>
 #include <algorithm>
 #include <string>
+#include <iterator>
 
 namespace Smile {
     static constexpr u32 kFIF = FCommandQueue::kFramesInFlight;
@@ -510,4 +511,14 @@ namespace Smile {
             CmdList->DrawInstanced(numIcon, 1, 0, 0);
         }
     }
+
+    FPassShaderStems FDebugDraw::ShaderStems() const {
+        static const char* const kStems[] = { "DebugDraw.vs", "DebugDraw.ps", "DebugDrawOccluded.ps", "DebugDrawLine.vs", "DebugDrawLine.ps", "DebugDrawLineDepth.ps", "LightIcon.vs", "LightIcon.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDebugDraw::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) RecreatePSOs(_Ctx.Device);
+    }
+
 }

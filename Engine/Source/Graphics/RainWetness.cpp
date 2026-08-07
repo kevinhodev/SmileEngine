@@ -9,6 +9,7 @@
 #include "Smile/Core/Logger.h"
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
 
@@ -737,4 +738,14 @@ namespace Smile {
             _Cmd->DrawInstanced(6, ParticleCount, 0, 0);
         }
     }
+
+    FPassShaderStems FRainWetness::ShaderStems() const {
+        static const char* const kStems[] = { "RainWetness.ps", "RainCurtain.ps", "RainParticles.vs", "RainParticles.ps", "RainSplash.vs", "RainSplash.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FRainWetness::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (PSO) Recreate(_Ctx.Device);
+    }
+
 }

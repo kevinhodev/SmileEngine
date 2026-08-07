@@ -6,6 +6,7 @@
 #include "Smile/Core/Logger.h"
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
 
@@ -20,10 +21,6 @@ namespace Smile {
                                     kGridW, kGridH, kGridZ, 1, true);
         Integrated.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
                           kGridW, kGridH, kGridZ, 1, true);
-
-        SetupPSO.Initialize(_Device, "VolumetricFogSetup.cs_6_0.cso", 1, 1);
-        IntegratePSO.Initialize(_Device, "VolumetricFogIntegrate.cs_6_0.cso", 1, 1);
-        ConsDepthPSO.Initialize(_Device, "VolumetricFogConsDepth.cs_6_0.cso", 1, 1);
 
         // Conservative depth 160x90 R16F ping-pong (cur = min-Z deste frame; prev
         // alimenta o fixup da historia contra desoclusao com fog fantasma).
@@ -60,17 +57,26 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, ConsDepthTex[i].Get(), UAVDesc, ConsDepthUAV[i]);
         }
         BuildScatteringRootSignature(_Device);
-        {
-            auto CSO = LoadShaderBytecode("VolumetricFogScattering.cs_6_0.cso");
-            D3D12_COMPUTE_PIPELINE_STATE_DESC Desc{};
-            Desc.pRootSignature = ScatterRootSig.Get();
-            Desc.CS             = { CSO.data(), CSO.size() };
-            SMILE_HR(_Device->CreateComputePipelineState(&Desc, IID_PPV_ARGS(&ScatterPSO)));
-        }
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
 
         Initialized = true;
         LogDebug("Volumetric fog (froxel 160x90x64) inicializado");
+    }
+
+    // Os quatro PSOs do froxel. Os tres primeiros nasciam ~35 linhas acima, no meio da criacao
+    // dos volumes; desceram para ca porque o ScatterPSO precisa da ScatterRootSig, e ter os
+    // quatro num lugar so e o que permite recria-los todos no hot reload. Mover foi inerte:
+    // nada entre as duas posicoes toca esses tres.
+    void FVolumetricFogPass::CreatePipelines(ID3D12Device* _Device) {
+        SetupPSO.Initialize(_Device, "VolumetricFogSetup.cs_6_0.cso", 1, 1);
+        IntegratePSO.Initialize(_Device, "VolumetricFogIntegrate.cs_6_0.cso", 1, 1);
+        ConsDepthPSO.Initialize(_Device, "VolumetricFogConsDepth.cs_6_0.cso", 1, 1);
+        auto CSO = LoadShaderBytecode("VolumetricFogScattering.cs_6_0.cso");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC Desc{};
+        Desc.pRootSignature = ScatterRootSig.Get();
+        Desc.CS             = { CSO.data(), CSO.size() };
+        SMILE_HR(_Device->CreateComputePipelineState(&Desc, IID_PPV_ARGS(&ScatterPSO)));
     }
 
     void FVolumetricFogPass::BuildScatteringRootSignature(ID3D12Device* _Device) {
@@ -417,4 +423,14 @@ namespace Smile {
         CurrentScatter = 1u - CurrentScatter;
         HistoryValid   = true;
     }
+
+    FPassShaderStems FVolumetricFogPass::ShaderStems() const {
+        static const char* const kStems[] = { "VolumetricFogSetup.cs", "VolumetricFogScattering.cs", "VolumetricFogIntegrate.cs", "VolumetricFogConsDepth.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FVolumetricFogPass::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) CreatePipelines(_Ctx.Device);
+    }
+
 }

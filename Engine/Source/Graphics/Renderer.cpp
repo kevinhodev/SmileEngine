@@ -16,6 +16,7 @@
 #include <functional>
 #include <cmath>
 #include <chrono>
+#include <type_traits>
 
 namespace Smile {
     namespace {
@@ -244,6 +245,8 @@ namespace Smile {
         ReportInitProgress("Construindo estruturas de aceleração", {}, 0.96f);
         BuildRaytracingScene();
 
+        RegisterPasses();
+
         Initialized = true;
         ReportInitProgress("Renderizador pronto", {}, 1.0f);
 
@@ -256,6 +259,83 @@ namespace Smile {
         LogInfo("Renderer pronto em " + std::to_string(InitMs) + " ms | " +
                 std::to_string(SwapChain.GetWidth()) + "x" +
                 std::to_string(SwapChain.GetHeight()) + " | " + Features);
+    }
+
+    // Fila de adocao do FRenderPass. Registrar e INCONDICIONAL de proposito, inclusive para os
+    // passes de RT: cada override ja se protege com o proprio Initialized, e uma segunda lista
+    // condicional para manter em sincronia com a de cima seria reintroduzir exatamente o defeito
+    // que este registro existe para eliminar.
+    void Renderer::RegisterPasses() {
+        // --- Invariante deste registro, verificada pelo compilador -----------------------
+        // Estes tres tem shader e PSO mas NAO gravam frame: o FPipelineState e um saco de PSOs que
+        // os outros bindam, e os dois bakers rodam ao carregar HDRI / trocar a seed do clima. Se
+        // algum deles voltar a herdar FRenderPass, ele reentra na lista de passes de frame em
+        // silencio e aparece na UI de custo com 0 ms e nada para desligar. Entao o erro e aqui.
+        static_assert(!std::is_base_of_v<FRenderPass, FPipelineState>,
+            "FPipelineState e estado compartilhado, nao passe de frame — ver as duas bases no RenderPass.h");
+        static_assert(!std::is_base_of_v<FRenderPass, FHDREnvironment>, "baker, nao passe de frame");
+        static_assert(!std::is_base_of_v<FRenderPass, FCloudNoise>,     "baker, nao passe de frame");
+        // Preview offscreen do Editor de Materiais: sai por Submit/LoadEnvironment, nunca pelo
+        // RenderFrame. Se virar passe de frame, entra no resize e na invalidacao de historico
+        // de graca — e nenhum dos dois faz sentido para um alvo que ele mesmo dimensiona.
+        static_assert(!std::is_base_of_v<FRenderPass, FMaterialPreview>, "baker sob demanda");
+        // E a contraparte: quem grava frame tem de estar do lado certo.
+        static_assert(std::is_base_of_v<FRenderPass, FWaterRenderer>,   "a agua grava frame");
+        static_assert(std::is_base_of_v<FRenderPass, FAmbientOcclusion>, "a GTAO grava frame");
+
+        Passes.Clear();
+        Passes.Register(&PipelineState);
+        Passes.Register(&HDREnv);
+        Passes.Register(&Skybox);
+        Passes.Register(&Atmosphere);
+        Passes.Register(&CloudNoise);
+        Passes.Register(&VolumetricClouds);
+        Passes.Register(&Water);
+        for (u32 c = 0; c < kOceanCascades; ++c) Passes.Register(&Ocean[c]);
+        Passes.Register(&Terrain);
+        Passes.Register(&Fog);
+        Passes.Register(&VolumetricFog);
+        Passes.Register(&RainWetness);
+        Passes.Register(&AO);
+        Passes.Register(&HiZ);
+        Passes.Register(&SunShadows);
+        Passes.Register(&SunShafts);
+        Passes.Register(&BgVelocity);
+        Passes.Register(&TemporalAA);
+        Passes.Register(&TemporalMotion);
+        Passes.Register(&Flicker);
+        Passes.Register(&PostProcessor);
+        Passes.Register(&ObjectPicker);
+        Passes.Register(&SelectionOutline);
+        Passes.Register(&DebugDraw);
+        // Duas instancias do MESMO passe, com formatos de alvo diferentes (viewport e a grade
+        // offscreen da janela de debug). Ambas precisam recompilar: e o caso que motivou o
+        // RecreatePipelinesForStem casar TODOS os donos em vez de parar no primeiro.
+        Passes.Register(&DebugViewPass);
+        Passes.Register(&DebugPreviewPass);
+        // Baker: renderiza preview offscreen sob demanda do editor, nao grava frame.
+        Passes.Register(&MaterialPreview);
+        // RT: registrar e incondicional (ver a nota acima) — sem DXR eles nascem nao
+        // inicializados e cada OnRecreatePipelines vira no-op pelo proprio guarda.
+        Passes.Register(&MeshLights);
+        Passes.Register(&DDGI);
+        Passes.Register(&ReSTIRGI);
+        Passes.Register(&BvhDebug);
+        Passes.Register(&ReGIR);
+        Passes.Register(&ReSTIRDI);
+        Passes.Register(&Reflections);
+        Passes.Register(&RRGuides);
+        Passes.Register(&DDGIDebugPass);
+    }
+
+    FPassInitContext Renderer::MakePassInitContext() {
+        FPassInitContext Ctx;
+        Ctx.Device       = Device.Native();
+        Ctx.SRVHeap      = &SRVHeap;
+        Ctx.Targets      = &Targets;
+        Ctx.RenderWidth  = RenderWidth();
+        Ctx.RenderHeight = RenderHeight();
+        return Ctx;
     }
 
     bool Renderer::IsBvhDebugAvailable() const {
@@ -875,28 +955,12 @@ namespace Smile {
 
 
 
+    // Reload COMPLETO: todo passe registrado recria os proprios pipelines. Era uma lista escrita
+    // a mao, irma da tabela do ReloadShaders — e as duas divergiram nos dois sentidos (o
+    // MeshLights so estava aqui, o RainWetness so estava la, e a GTAO em nenhuma). Agora as duas
+    // leem o MESMO ShaderStems()/OnRecreatePipelines de cada passe, entao nao ha o que divergir.
     void Renderer::RecreateAllPSOs() {
-        constexpr DXGI_FORMAT RT = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        constexpr DXGI_FORMAT DS = DXGI_FORMAT_D32_FLOAT;
-        PipelineState.RecreatePSO(Device.Native());
-        Skybox.Recreate(Device.Native(), RT, DS);
-        Atmosphere.RecreateSky(Device.Native(), RT, DS);
-        VolumetricClouds.RecreateComposite(Device.Native(), RT, DS);
-        Water.Recreate(Device.Native(), RT, DS, DXGI_FORMAT_R16G16_FLOAT);
-        Water.RecreateGenerateDraws(Device.Native());
-        Targets.SceneColorMipPSO.Initialize(Device.Native(), "WaterSceneColorMip.cs_6_0.cso", false);
-        for (u32 c = 0; c < kOceanCascades; ++c)
-            Ocean[c].RecreatePipelines(Device.Native());
-        Terrain.RecreatePSOs(Device.Native());
-        DebugDraw.RecreatePSOs(Device.Native()); // formato proprio: desenha no backbuffer
-        if (Device.RaytracingSupported()) {
-            Reflections.RecreatePipelines(Device.Native());
-            RRGuides.RecreatePSOs(Device.Native());
-            DDGIDebugPass.Recreate(Device.Native(), RT, DS);
-            ReSTIRDI.RecreatePSO(Device.Native());
-            ReGIR.RecreatePSO(Device.Native());
-            MeshLights.RecreatePSO(Device.Native());
-        }
+        Passes.RecreateAllPipelines(MakePassInitContext());
     }
 
     bool Renderer::ReloadShaders(const std::string& _ChangedStem) {
@@ -904,80 +968,19 @@ namespace Smile {
         try {
             CommandQueue.Flush();
 
-            constexpr DXGI_FORMAT RT = DXGI_FORMAT_R16G16B16A16_FLOAT;
-            constexpr DXGI_FORMAT DS = DXGI_FORMAT_D32_FLOAT;
-            ID3D12Device* Dev = Device.Native();
-
-            struct ShaderReloadEntry {
-                std::vector<std::string> Stems;
-                std::function<void()>    Recreate;
-            };
-            const std::vector<ShaderReloadEntry> Table = {
-                { { "Triangle.vs", "GBuffer.ps", "DeferredLighting.ps", "DepthNormal.ps",
-                    "ForwardBlend.ps" },
-                  [&] { PipelineState.RecreatePSO(Dev); } },
-                { { "Skybox.vs", "Skybox.ps" },
-                  [&] { Skybox.Recreate(Dev, RT, DS); } },
-                { { "SkyAtmosphere.vs", "SkyAtmosphere.ps", "BakeSkyReflection.cs" },
-                  [&] { Atmosphere.RecreateSky(Dev, RT, DS); } },
-                { { "CloudComposite.vs", "CloudComposite.ps" },
-                  [&] { VolumetricClouds.RecreateComposite(Dev, RT, DS); } },
-                { { "WaterSurface.vs", "WaterSurface.ps", "WaterSurfaceBase.ps",
-                    "WaterSurfaceMasks.ps", "WaterSurfaceReflection.ps" },
-                  [&] { Water.Recreate(Dev, RT, DS, DXGI_FORMAT_R16G16_FLOAT); } },
-                { { "WaterGenerateDraws.cs" },
-                  [&] { Water.RecreateGenerateDraws(Dev); } },
-                { { "WaterSceneColorMip.cs" },
-                  [&] { Targets.SceneColorMipPSO.Initialize(Dev, "WaterSceneColorMip.cs_6_0.cso", false); } },
-                { { "OceanUpdateSpectrum.cs", "OceanFFT.cs", "OceanCreateDisplacement.cs",
-                    "OceanGradients.cs", "OceanDisplacementMip.cs", "OceanNormalMip.cs" },
-                  [&] {
-                      for (u32 c = 0; c < kOceanCascades; ++c)
-                          Ocean[c].RecreatePipelines(Dev);
-                  } },
-                { { "Terrain.vs", "TerrainShadow.vs", "TerrainGBuffer.ps",
-                    "TerrainDepthNormal.ps" },
-                  [&] { Terrain.RecreatePSOs(Dev); } },
-                { { "RainWetness.ps", "RainCurtain.ps", "RainParticles.vs", "RainParticles.ps",
-                    "RainSplash.vs", "RainSplash.ps" },
-                  [&] { RainWetness.Recreate(Dev); } },
-                { { "DDGIDebugProbes.vs", "DDGIDebugProbes.ps", "DDGIDebugVolume.vs",
-                    "DDGIDebugVolume.ps", "DDGIDebugRays.vs", "DDGIDebugRays.ps",
-                    "DDGIDebugStats.cs", "DDGIDebugPoint.cs" },
-                  [&] { if (Device.RaytracingSupported())
-                            DDGIDebugPass.Recreate(Dev, RT, DS); } },
-                { { "ReSTIRDIInitialTemporal.cs", "ReSTIRDISpatial.cs",
-                    "ReSTIRDINrdPack.cs", "ReSTIRDINrdComposite.cs" },
-                  [&] { if (Device.RaytracingSupported()) ReSTIRDI.RecreatePSO(Dev); } },
-                { { "ReGIRBuild.cs", "ReGIRAverage.cs" },
-                  [&] { if (Device.RaytracingSupported()) ReGIR.RecreatePSO(Dev); } },
-                { { "ReflectionTrace.cs", "ReflectionTraceMirror.cs", "ReflectionResolve.cs",
-                    "ReflectionTemporal.cs", "ReflectionSpatial.cs", "ReflectionNrdPack.cs",
-                    "ReflectionComposite.ps", "WaterReflectionTrace.cs",
-                    "WaterReflectionTemporal.cs", "WaterReflectionComposite.ps" },
-                  [&] { if (Device.RaytracingSupported()) Reflections.RecreatePipelines(Dev); } },
-                { { "DlssRRGuides.cs", "DlssRRSpecHit.cs", "DlssRRWaterSpecHit.cs" },
-                  [&] { if (Device.RaytracingSupported()) RRGuides.RecreatePSOs(Dev); } },
-                // Gizmo/icones: um BuildPSOs so cobre os 5 PSOs, entao os stems de linha,
-                // triangulo e icone caem todos na mesma entrada.
-                { { "DebugDraw.vs", "DebugDraw.ps", "DebugDrawOccluded.ps", "DebugDrawLine.vs",
-                    "DebugDrawLine.ps", "DebugDrawLineDepth.ps", "LightIcon.vs", "LightIcon.ps" },
-                  [&] { DebugDraw.RecreatePSOs(Dev); } },
-            };
-
             if (_ChangedStem.empty()) {
                 RecreateAllPSOs();
                 LogInfo("Shaders recarregados (reload completo)");
                 return true;
             }
 
-            for (const auto& Entry : Table) {
-                if (std::find(Entry.Stems.begin(), Entry.Stems.end(), _ChangedStem)
-                        != Entry.Stems.end()) {
-                    Entry.Recreate();
-                    LogInfo("Shader recarregado: " + _ChangedStem);
-                    return true;
-                }
+            const FPassInitContext Ctx = MakePassInitContext();
+            const char* Owner = Passes.OwnerOfShaderStem(_ChangedStem);
+            const u32   Hits  = Passes.RecreatePipelinesForStem(_ChangedStem, Ctx);
+            if (Hits > 0) {
+                LogInfo("Shader recarregado: " + _ChangedStem + " (passe: " + Owner +
+                        (Hits > 1 ? ", " + std::to_string(Hits) + " instancias)" : ")"));
+                return true;
             }
 
             LogWarning("Shader '" + _ChangedStem +
@@ -1093,7 +1096,9 @@ namespace Smile {
         Flicker.Resize(Device.Native(), SRVHeap, RW, RH);
         FlickerResetPending = true;
 
-        AO.SetupForResize(Device.Native(), SRVHeap, Targets.DepthSRVSlot, Targets.NormalSRVSlot, RW, RH);
+        // Passes que ja adotaram o contrato. Fica NESTE ponto (e nao no topo) porque o
+        // OnResize deles le Targets.*SRVSlot, que as criacoes acima acabaram de reatribuir.
+        Passes.ResizeAll(MakePassInitContext());
 
         HiZ.SetupForResize(Device.Native(), SRVHeap, RW, RH);
 
@@ -1541,6 +1546,7 @@ namespace Smile {
             Water.GetDebugMode() == FWaterRenderer::EDebugMode::Reflection;
         M.DedicatedWaterReflections = M.ReflectionsActive &&
             (Water.GetDebugMode() == FWaterRenderer::EDebugMode::Off || M.WaterReflectionDebug);
+        M.WaterSceneCopiesReady = Targets.SceneColorCopy && Targets.SceneDepthCopy;
 
         M.ReliableMotionActive = TemporalMotion.IsReady() &&
             (M.ReflectionsActive || M.ReSTIRGIActive || M.ReSTIRDIActiveFrame);
@@ -1605,6 +1611,18 @@ namespace Smile {
         V.MipBias = (_Modes.UpscaleActive && RenderWidth() < OutputWidth())
             ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
             : 0.0f;
+
+        {
+            const Mat44& VP = V.ViewProjection;
+            auto Col = [&](int j) { return Vec4{ VP.M[0][j], VP.M[1][j], VP.M[2][j], VP.M[3][j] }; };
+            Vec4 c0 = Col(0), c1 = Col(1), c2 = Col(2), c3 = Col(3);
+            V.FrustumPlanes[0] = { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W };
+            V.FrustumPlanes[1] = { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W };
+            V.FrustumPlanes[2] = { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W };
+            V.FrustumPlanes[3] = { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W };
+            V.FrustumPlanes[4] = { c2.X, c2.Y, c2.Z, c2.W };
+            V.FrustumPlanes[5] = { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W };
+        }
         return V;
     }
 
@@ -1679,66 +1697,7 @@ namespace Smile {
         return L;
     }
 
-    void Renderer::RenderFrame() {
-        // O DebugDraw e preenchido pelo EDITOR antes do frame e consumido aqui. Se o frame morrer
-        // no meio (excecao — a render thread captura e tenta o proximo) ou sair pelo early return
-        // abaixo, o buffer nao pode sobreviver: o editor submete de novo no tick seguinte e a
-        // geometria duplicaria ate estourar o orcamento. A guarda faz do "limpa em toda saida"
-        // uma invariante do tipo, em vez de uma linha no fim do metodo.
-        struct FDebugDrawClearGuard {
-            FDebugDraw& Target;
-            ~FDebugDrawClearGuard() { Target.Clear(); }
-        } DebugDrawGuard{ DebugDraw };
-
-        if (!Initialized) return;
-
-        // Edicoes de material chegam da UI ENTRE frames e varias caem no mesmo frame (um arraste
-        // de slider dispara o setter a cada tick). Os setters so marcam; o refresh — que custa um
-        // Flush da fila + reset de historicos — acontece uma vez aqui, coalescido e ANTES do
-        // BeginFrame, ou seja, fora da gravacao do command list.
-        if (MaterialRTStateDirty) {
-            MaterialRTStateDirty = false;
-            Settings().NotifyMaterialRTStateChanged();
-        }
-        // Idem para energia de luz no indireto. Fica DEPOIS e em if separado de proposito: se os
-        // dois cairem no mesmo frame, o de material ja invalidou tudo e este vira no-op barato —
-        // mas ele nao pode DEPENDER daquele, porque mexer so no peso da luz nao marca material.
-        if (IndirectLightingDirty) {
-            IndirectLightingDirty = false;
-            Settings().NotifyIndirectLightingChanged();
-        }
-
-        CommandQueue.BeginFrame();
-
-        GpuProfiler.BeginFrame(CommandQueue.FrameIndex());
-        GpuProfiler.Begin(CommandQueue.List(), "Frame (GPU)");
-
-        ObjectPicker.Tick();
-
-        IUpscaler* ActiveUp = ActiveUpscaler();          // FSR ou DLSS-SR ativo (nullptr = None/indisponivel)
-        const FFrameModes Modes = ResolveFrameModes();
-        const FFrameView  Vw    = ResolveFrameView(Modes, ActiveUp);
-        LastViewProj = Vw.ViewProjUnjittered;
-
-        const u32 FrameSlot = CommandQueue.FrameIndex();
-        // BeginFrame acabou de esperar a fence deste slot, portanto o readback gravado na
-        // utilizacao anterior do slot ja pode ser mapeado sem stall.
-        CollectDebugPreviewReadback(FrameSlot);
-        DDGIDebugPass.CollectPointDiagnostic(FrameSlot);
-        FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
-            MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));
-
-
-        MappedCB->CameraPosition = { Vw.CameraPosition.X, Vw.CameraPosition.Y, Vw.CameraPosition.Z, 1.0f };
-
-        const f32 IBLEnabled = HDREnv.HasHDRLoaded() ? 1.0f : 0.0f;
-        MappedCB->IBLParams      = { IBLIntensity, IBLRotation,
-                                     static_cast<f32>(FHDREnvironment::kSpecularMips - 1),
-                                     IBLEnabled };
-        MappedCB->Time           = { ElapsedTime, LastDeltaTime,
-                                     static_cast<f32>(FrameIndex),
-                                     AODebug ? 1.0f : 0.0f }; 
-
+    void Renderer::TickWorldClock() {
         if (TimeOfDay.Enabled) {
             TimeOfDay.Tick(LastDeltaTime);
             SetSunDirection(TimeOfDay.SunDirection());
@@ -1751,36 +1710,53 @@ namespace Smile {
                                (1.0f - std::exp(-std::max(LastDeltaTime, 0.0f) / Tau)));
             if (Target <= 0.001f && Weather.GetWetness() < 0.005f) Weather.SetWetness(0.0f);
         }
+    }
 
-        const FFrameLighting Lt  = ResolveFrameLighting();
-        MappedCB->SunDirection   = { Lt.SunN.X, Lt.SunN.Y, Lt.SunN.Z, SunIntensity };
-        MappedCB->SunColor       = { Lt.EffectiveSunColor.X, Lt.EffectiveSunColor.Y,
-                                     Lt.EffectiveSunColor.Z, 0.0f };
+    FFrameAmbient Renderer::PublishFrameConstants(const FFrameView& _Vw,
+                                                  const FFrameLighting& _Lt, u32 _FrameSlot,
+                                                  FrameConstants* _CB) {
+        // NOTA DE ORDEM (a unica reordenacao desta extracao): estas tres escritas corriam ANTES
+        // do TickWorldClock. Descer para ca e inerte — o relogio so escreve SunDir e a molhadura,
+        // e nenhum dos insumos abaixo (posicao da camera, HDRI, tempo decorrido, FrameIndex) e
+        // tocado por ele. Em troca, TODA a publicacao no constant buffer passa a viver num lugar.
+        _CB->CameraPosition = { _Vw.CameraPosition.X, _Vw.CameraPosition.Y, _Vw.CameraPosition.Z, 1.0f };
+
+        const f32 IBLEnabled = HDREnv.HasHDRLoaded() ? 1.0f : 0.0f;
+        _CB->IBLParams      = { IBLIntensity, IBLRotation,
+                                static_cast<f32>(FHDREnvironment::kSpecularMips - 1),
+                                IBLEnabled };
+        _CB->Time           = { ElapsedTime, LastDeltaTime,
+                                static_cast<f32>(FrameIndex),
+                                AODebug ? 1.0f : 0.0f };
+
+        _CB->SunDirection   = { _Lt.SunN.X, _Lt.SunN.Y, _Lt.SunN.Z, SunIntensity };
+        _CB->SunColor       = { _Lt.EffectiveSunColor.X, _Lt.EffectiveSunColor.Y,
+                                _Lt.EffectiveSunColor.Z, 0.0f };
         // Variante CRUA (sem transmitancia, sem HorizonFade) p/ o caminho por pixel do deferred
         // e do ForwardBlend. O SunColor acima continua intacto: todos os outros consumidores
         // (fog volumetrico, nuvens, agua, sun shafts, readout do editor) seguem sem mudanca.
-        MappedCB->SunColorRaw    = { SunColorRGB.X * Lt.RainKeyDim, SunColorRGB.Y * Lt.RainKeyDim,
-                                     SunColorRGB.Z * Lt.RainKeyDim, 0.0f };
+        _CB->SunColorRaw    = { SunColorRGB.X * _Lt.RainKeyDim, SunColorRGB.Y * _Lt.RainKeyDim,
+                                SunColorRGB.Z * _Lt.RainKeyDim, 0.0f };
 
-        MappedCB->MoonDirection = { Lt.MoonN.X, Lt.MoonN.Y, Lt.MoonN.Z, Lt.MoonW };
-        MappedCB->MoonColor     = { Lt.MoonLightCol.X, Lt.MoonLightCol.Y, Lt.MoonLightCol.Z, 0.0f };
+        _CB->MoonDirection = { _Lt.MoonN.X, _Lt.MoonN.Y, _Lt.MoonN.Z, _Lt.MoonW };
+        _CB->MoonColor     = { _Lt.MoonLightCol.X, _Lt.MoonLightCol.Y, _Lt.MoonLightCol.Z, 0.0f };
         // MoonTint cru (sem transmitancia), so com o dim de chuva — mesma logica do SunColorRaw.
-        MappedCB->MoonColorRaw  = { 0.6f * Lt.RainKeyDim, 0.7f * Lt.RainKeyDim,
-                                    1.0f * Lt.RainKeyDim, 0.0f };
+        _CB->MoonColorRaw  = { 0.6f * _Lt.RainKeyDim, 0.7f * _Lt.RainKeyDim,
+                               1.0f * _Lt.RainKeyDim, 0.0f };
 
         // Transmitancia por pixel: so com o ceu procedural (o LUT descreve ESTA atmosfera).
         {
             const bool AtmoOn = UseAtmosphereSky && Atmosphere.IsInitialized();
-            MappedCB->AtmoLightParams = {
+            _CB->AtmoLightParams = {
                 AtmoOn ? Atmosphere.BottomRadiusKm() : 0.0f,
                 AtmoOn ? Atmosphere.TopRadiusKm()    : 0.0f,
                 kKmPerWorldUnit,
                 (AtmoOn && UsePerPixelAtmoTransmittance) ? 1.0f : 0.0f };
         }
 
-        Atmosphere.SetNightParams(Lt.MoonN, Lt.CosMoonRadius, Lt.MoonDiskBright,
-                                  TimeOfDay.StarIntensity, Lt.NightFactor, ElapsedTime);
-        Atmosphere.SetMoonSkyLight(Lt.MoonSkyScale, Lt.MoonOn ? Lt.MoonIllum : 0.0f);
+        Atmosphere.SetNightParams(_Lt.MoonN, _Lt.CosMoonRadius, _Lt.MoonDiskBright,
+                                  TimeOfDay.StarIntensity, _Lt.NightFactor, ElapsedTime);
+        Atmosphere.SetMoonSkyLight(_Lt.MoonSkyScale, _Lt.MoonOn ? _Lt.MoonIllum : 0.0f);
 
         {
             const f32  LatR  = TimeOfDay.LatitudeDeg    * ToRad;
@@ -1794,15 +1770,15 @@ namespace Smile {
             Atmosphere.SetStarRotation(Pole, Angle);
         }
 
-        Vec3 SkyAmbient, GroundAmbient; // tambem alimentam o ambient das nuvens volumetricas
+        FFrameAmbient Amb;
         {
-            Vec3& Sky    = SkyAmbient;
-            Vec3& Ground = GroundAmbient;
+            Vec3& Sky    = Amb.Sky;
+            Vec3& Ground = Amb.Ground;
             const bool Physical = UseAtmosphereSky && Atmosphere.IsInitialized() &&
-                                  Atmosphere.GetSkyAmbient(FrameSlot, Sky, Ground);
+                                  Atmosphere.GetSkyAmbient(_FrameSlot, Sky, Ground);
             if (!Physical) {
                 auto Sat = [](f32 X) { return X < 0.0f ? 0.0f : (X > 1.0f ? 1.0f : X); };
-                const f32 SunY   = Lt.SunN.Y;
+                const f32 SunY   = _Lt.SunN.Y;
                 const f32 Day    = Sat(SunY * 4.0f + 0.2f);
                 const f32 LowSun = Sat(1.0f - SunY * 2.5f);
                 const Vec3 Zenith  = { 0.18f, 0.30f, 0.55f };
@@ -1811,53 +1787,57 @@ namespace Smile {
                 Ground = Sky * 0.35f;
             }
 
-            Sky    = { Sky.X * Lt.RainAmbDim, Sky.Y * Lt.RainAmbDim, Sky.Z * Lt.RainAmbDim };
-            Ground = { Ground.X * Lt.RainAmbDim, Ground.Y * Lt.RainAmbDim, Ground.Z * Lt.RainAmbDim };
-            MappedCB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
-                                             UseAtmosphereAmbient ? 1.0f : 0.0f };
-            MappedCB->GroundAmbientColor = { Ground.X, Ground.Y, Ground.Z, AtmoAmbientIntensity };
+            Sky    = { Sky.X * _Lt.RainAmbDim, Sky.Y * _Lt.RainAmbDim, Sky.Z * _Lt.RainAmbDim };
+            Ground = { Ground.X * _Lt.RainAmbDim, Ground.Y * _Lt.RainAmbDim, Ground.Z * _Lt.RainAmbDim };
+            _CB->SkyAmbientColor    = { Sky.X, Sky.Y, Sky.Z,
+                                        UseAtmosphereAmbient ? 1.0f : 0.0f };
+            _CB->GroundAmbientColor = { Ground.X, Ground.Y, Ground.Z, AtmoAmbientIntensity };
 
             // SH-L1 do MESMO integral. So vale com o ceu procedural: o fallback analitico acima
             // nao tem SH, e nesse caso o shader cai nas 2 cores chapadas.
             Vec4 SH[3]{};
-            const bool HasSH = Physical && Atmosphere.GetSkyAmbientSH(FrameSlot, SH);
+            const bool HasSH = Physical && Atmosphere.GetSkyAmbientSH(_FrameSlot, SH);
             if (HasSH) {
                 // O dim de chuva escurece IRRADIANCIA, entao escala a SH inteira — mesma
                 // politica que as 2 cores acima recebem.
                 for (u32 c = 0; c < 3; ++c)
-                    SH[c] = { SH[c].X * Lt.RainAmbDim, SH[c].Y * Lt.RainAmbDim,
-                              SH[c].Z * Lt.RainAmbDim, SH[c].W * Lt.RainAmbDim };
+                    SH[c] = { SH[c].X * _Lt.RainAmbDim, SH[c].Y * _Lt.RainAmbDim,
+                              SH[c].Z * _Lt.RainAmbDim, SH[c].W * _Lt.RainAmbDim };
             }
-            MappedCB->SkyAmbientSHR = SH[0];
-            MappedCB->SkyAmbientSHG = SH[1];
-            MappedCB->SkyAmbientSHB = SH[2];
-            MappedCB->SkyAmbientSHParams = { (HasSH && UseSkyAmbientSH) ? 1.0f : 0.0f,
-                                             0.0f, 0.0f, 0.0f };
+            _CB->SkyAmbientSHR = SH[0];
+            _CB->SkyAmbientSHG = SH[1];
+            _CB->SkyAmbientSHB = SH[2];
+            _CB->SkyAmbientSHParams = { (HasSH && UseSkyAmbientSH) ? 1.0f : 0.0f,
+                                        0.0f, 0.0f, 0.0f };
         }
 
         if (UseGI && DDGI.IsReady()) {
             const Vec3 GMin = DDGI.GridMin();
             const Vec3 GCnt = DDGI.GridCount();
-            MappedCB->DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
+            _CB->DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
 
-            MappedCB->DDGIGridCount = { GCnt.X, GCnt.Y, GCnt.Z, GIDebug ? 2.0f : 1.0f };
-            MappedCB->DDGIParams    = { DDGI.GetIntensity(), DDGI.TileSizeF(),
-                                        DDGI.AtlasW(), DDGI.AtlasH() };
+            _CB->DDGIGridCount = { GCnt.X, GCnt.Y, GCnt.Z, GIDebug ? 2.0f : 1.0f };
+            _CB->DDGIParams    = { DDGI.GetIntensity(), DDGI.TileSizeF(),
+                                   DDGI.AtlasW(), DDGI.AtlasH() };
 
             const f32 GIFlags = (GIChebyshev ? 1.0f : 0.0f) + (GISkipInactiveProbes ? 2.0f : 0.0f)
                               + (GISkipInactiveFallback ? 4.0f : 0.0f);
-            MappedCB->DDGIDistParams = { DDGI.DistTileSizeF(), DDGI.DistAtlasW(),
-                                         DDGI.DistAtlasH(), GIFlags };
-            MappedCB->DDGIBiasParams = { DDGI.GetSurfaceBiasScale(), DDGI.GetSurfaceBiasMax(),
-                                         DDGI.GetVolumeFadeProbes(), 0.0f };
+            _CB->DDGIDistParams = { DDGI.DistTileSizeF(), DDGI.DistAtlasW(),
+                                    DDGI.DistAtlasH(), GIFlags };
+            _CB->DDGIBiasParams = { DDGI.GetSurfaceBiasScale(), DDGI.GetSurfaceBiasMax(),
+                                    DDGI.GetVolumeFadeProbes(), 0.0f };
         } else {
-            MappedCB->DDGIGridMin    = { 0.0f, 0.0f, 0.0f, 1.0f };
-            MappedCB->DDGIGridCount  = { 0.0f, 0.0f, 0.0f, 0.0f };
-            MappedCB->DDGIParams     = { 0.0f, 6.0f, 1.0f, 1.0f };
-            MappedCB->DDGIDistParams = { 14.0f, 1.0f, 1.0f, 0.0f };
-            MappedCB->DDGIBiasParams = { 0.2f, 0.0f, 0.0f, 0.0f };
+            _CB->DDGIGridMin    = { 0.0f, 0.0f, 0.0f, 1.0f };
+            _CB->DDGIGridCount  = { 0.0f, 0.0f, 0.0f, 0.0f };
+            _CB->DDGIParams     = { 0.0f, 6.0f, 1.0f, 1.0f };
+            _CB->DDGIDistParams = { 14.0f, 1.0f, 1.0f, 0.0f };
+            _CB->DDGIBiasParams = { 0.2f, 0.0f, 0.0f, 0.0f };
         }
 
+        return Amb;
+    }
+
+    void Renderer::PushRayTracingFrameState(const FFrameModes& _Modes) {
         // DLSS Ray Reconstruction: denoiser neural que substitui NRD + SR. Precisa do RR inicializado
         // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
         // Instrumentacao de timer: um gate so, empurrado todo frame. kInvalidSlot manda o passe
@@ -1895,64 +1875,61 @@ namespace Smile {
             ReSTIRGI.SetGIHitSampling(GIHit);
         }
 
-        ReSTIRGI.SetUseNrd(Modes.NrdIndirectMode); // Modes.RRMode => false => ReSTIR entrega GI cru (ruidoso)
-        Reflections.SetUseNrd(Modes.NrdIndirectMode);
-        Reflections.SetRawSpec(Modes.RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
+        ReSTIRGI.SetUseNrd(_Modes.NrdIndirectMode); // Modes.RRMode => false => ReSTIR entrega GI cru (ruidoso)
+        Reflections.SetUseNrd(_Modes.NrdIndirectMode);
+        Reflections.SetRawSpec(_Modes.RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
+    }
 
-        MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
-                                       Modes.ReflectionsActive ? 1.0f : 0.0f,
-                                       Modes.ReSTIRGIActive ? (Modes.NrdIndirectMode ? 2.0f : 1.0f) : 0.0f };
-        ++FrameIndex;
-
-        MappedCB->InvViewProj  = Vw.InvViewProjFull;
-        MappedCB->RenderParams = { Vw.MipBias, 0.0f, 0.0f, 0.0f };
-
-        Atmosphere.UpdatePerFrame(FrameSlot, Lt.SunN, Vw.InvVPNoTrans, Vw.VPNoTrans,
-                                  Vw.InvViewProjFull, Vw.CameraPosition, kKmPerWorldUnit,
+    void Renderer::UpdateAtmosphereAndVolumetrics(const FFrameModes& _Modes, const FFrameView& _Vw,
+                                                  const FFrameLighting& _Lt,
+                                                  const FFrameAmbient& _Amb, u32 _FrameSlot,
+                                                  FrameConstants* _CB) {
+        Atmosphere.UpdatePerFrame(_FrameSlot, _Lt.SunN, _Vw.InvVPNoTrans, _Vw.VPNoTrans,
+                                  _Vw.InvViewProjFull, _Vw.CameraPosition, kKmPerWorldUnit,
                                   static_cast<f32>(RenderWidth()), static_cast<f32>(RenderHeight()),
                                   static_cast<f32>(OutputWidth()), static_cast<f32>(OutputHeight()));
 
         const f32 FogDensityBase = Fog.GetDensity();
-        if (Lt.RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + Lt.RainSky * 1.5f));
+        if (_Lt.RainSky > 0.0f) Fog.SetDensity(FogDensityBase * (1.0f + _Lt.RainSky * 1.5f));
 
-        const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(Vw.CameraPosition.Y);
+        const Vec4 ShaftsFogCollapsed = Fog.CollapsedFogParams(_Vw.CameraPosition.Y);
 
         Vec3 CamForwardW{ 0.0f, 0.0f, 1.0f };
         {
-            const Mat44& IM = Vw.InvViewProjUnjit;
+            const Mat44& IM = _Vw.InvViewProjUnjit;
             const f32 v[4] = { 0.0f, 0.0f, 0.5f, 1.0f };
             f32 w[4];
             for (int j = 0; j < 4; ++j)
                 w[j] = v[2] * IM.M[2][j] + v[3] * IM.M[3][j];
             if (std::fabs(w[3]) > 1e-9f) {
                 const Vec3 P{ w[0] / w[3], w[1] / w[3], w[2] / w[3] };
-                CamForwardW = (P - Vw.CameraPosition).NormalizedSafe(Vec3{ 0.0f, 0.0f, 1.0f });
+                CamForwardW = (P - _Vw.CameraPosition).NormalizedSafe(Vec3{ 0.0f, 0.0f, 1.0f });
             }
         }
 
-        const f32 ShaftMarchMax = Modes.VolShaftsActive
-            ? (Modes.VolFogActive
+        const f32 ShaftMarchMax = _Modes.VolShaftsActive
+            ? (_Modes.VolFogActive
                 ? std::min(SunShafts.GetVolMaxDist(), VolumetricFog.GetMaxDistance())
                 : SunShafts.GetVolMaxDist())
             : 0.0f;
-        if (Modes.VolFogActive) {
+        if (_Modes.VolFogActive) {
             FVolumetricFogPass::FFrameParams VF{};
-            VF.InvViewProjUnjit = Vw.InvViewProjUnjit;
-            VF.ViewProjUnjit    = Vw.ViewProjUnjittered;
+            VF.InvViewProjUnjit = _Vw.InvViewProjUnjit;
+            VF.ViewProjUnjit    = _Vw.ViewProjUnjittered;
             VF.FrameIndex       = FrameIndex;
-            VF.CameraPos        = Vw.CameraPosition;
+            VF.CameraPos        = _Vw.CameraPosition;
             VF.CameraForward    = CamForwardW;
-            VF.DirToSun         = Lt.KeyDir;
-            VF.SunColorTimesIntensity = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
-                                          Lt.KeyColor.Z * Lt.KeyInt };
+            VF.DirToSun         = _Lt.KeyDir;
+            VF.SunColorTimesIntensity = { _Lt.KeyColor.X * _Lt.KeyInt, _Lt.KeyColor.Y * _Lt.KeyInt,
+                                          _Lt.KeyColor.Z * _Lt.KeyInt };
             // Shafts own the high-frequency solar term only over their configured
             // near range. The froxel resumes the sun afterwards, while extinction,
             // ambient, GI and local lights remain present over the full volume.
             VF.InjectDirectionalLight = true;
-            VF.DirectionalLightStartDistance = Modes.VolShaftsActive ? ShaftMarchMax : 0.0f;
+            VF.DirectionalLightStartDistance = _Modes.VolShaftsActive ? ShaftMarchMax : 0.0f;
             VF.CollapsedFog     = ShaftsFogCollapsed;
-            VF.SkyAmbient       = SkyAmbient;
-            VF.NearZ            = Vw.NearZ;
+            VF.SkyAmbient       = _Amb.Sky;
+            VF.NearZ            = _Vw.NearZ;
             VF.RenderW          = RenderWidth();
             VF.RenderH          = RenderHeight();
             if (UseGI && DDGI.IsReady()) {
@@ -1964,7 +1941,7 @@ namespace Smile {
                                      DDGI.AtlasW(), DDGI.AtlasH() };
                 VF.DDGIVolumeFadeProbes = DDGI.GetVolumeFadeProbes();
             }
-            VolumetricFog.UpdatePerFrame(FrameSlot, VF);
+            VolumetricFog.UpdatePerFrame(_FrameSlot, VF);
         } else if (VolumetricFog.IsInitialized()) {
             VolumetricFog.ResetHistory(); // efeito dormiu: historia/PrevVP obsoletos
         }
@@ -1973,16 +1950,16 @@ namespace Smile {
         // HDRI/skybox o SkyView LUT nao descreve o ceu que esta na tela). Lt.SunN, nao Lt.KeyDir: o
         // LUT e dobrado no azimute do SOL, entao a lua daria uv errado a noite.
         FFogPass::FVolumetricMatchParams FogMatch{};
-        FogMatch.Enabled = Modes.VolFogActive;
-        if (Modes.VolFogActive) {
+        FogMatch.Enabled = _Modes.VolFogActive;
+        if (_Modes.VolFogActive) {
             const Vec3 MediumAlbedo = VolumetricFog.GetAlbedo();
             const f32 AmbientIntensity = VolumetricFog.GetAmbientIntensity();
             FogMatch.Albedo = MediumAlbedo;
-            FogMatch.AmbientRadiance = { SkyAmbient.X * AmbientIntensity,
-                                         SkyAmbient.Y * AmbientIntensity,
-                                         SkyAmbient.Z * AmbientIntensity };
-            FogMatch.SunRadiance = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
-                                     Lt.KeyColor.Z * Lt.KeyInt };
+            FogMatch.AmbientRadiance = { _Amb.Sky.X * AmbientIntensity,
+                                         _Amb.Sky.Y * AmbientIntensity,
+                                         _Amb.Sky.Z * AmbientIntensity };
+            FogMatch.SunRadiance = { _Lt.KeyColor.X * _Lt.KeyInt, _Lt.KeyColor.Y * _Lt.KeyInt,
+                                     _Lt.KeyColor.Z * _Lt.KeyInt };
             FogMatch.ExtinctionScale = VolumetricFog.GetExtinctionScale();
             // The froxel smoothly regains the solar term before its boundary,
             // so the far analytical continuation always matches the base volume.
@@ -1991,46 +1968,46 @@ namespace Smile {
             FogMatch.AmbientTransitionDistance =
                 std::max(25.0f, VolumetricFog.GetMaxDistance() * 0.5f);
         }
-        Fog.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition, kKmPerWorldUnit, Lt.KeyDir,
-                           Vw.NearZ, Vw.FarZ, RenderWidth(), RenderHeight(),
+        Fog.UpdatePerFrame(_FrameSlot, _Vw.InvViewProjFull, _Vw.CameraPosition, kKmPerWorldUnit, _Lt.KeyDir,
+                           _Vw.NearZ, _Vw.FarZ, RenderWidth(), RenderHeight(),
                            UseAerialPerspective, UseHeightFog, Atmosphere.AerialDepthKm(),
                            Atmosphere.AerialSliceCount(),
-                           Modes.VolShaftsActive, Modes.VolFogActive, VolumetricFog.GetMaxDistance(),
+                           _Modes.VolShaftsActive, _Modes.VolFogActive, VolumetricFog.GetMaxDistance(),
                            VolumetricFog.GridZParams(), CamForwardW,
-                           Lt.SunN,
-                           Modes.FogSkyAnchor ? Atmosphere.ViewHeightKm()   : 0.0f,
-                           Modes.FogSkyAnchor ? Atmosphere.BottomRadiusKm() : 0.0f,
+                           _Lt.SunN,
+                           _Modes.FogSkyAnchor ? Atmosphere.ViewHeightKm()   : 0.0f,
+                           _Modes.FogSkyAnchor ? Atmosphere.BottomRadiusKm() : 0.0f,
                            Fog.GetHeightFogSkyContribution(), FogMatch);
         Fog.SetDensity(FogDensityBase);
 
         const f32 CloudGroundRadius = 6360.0f + FAtmosphere::kPlanetRadiusOffsetKm;
         const f32 CloudCovBase = VolumetricClouds.GetCoverage();
-        if (Lt.RainSky > 0.0f) {
-            const f32 RainCov = std::min(Lt.RainSky * 1.4f, 1.0f) * 0.92f;
+        if (_Lt.RainSky > 0.0f) {
+            const f32 RainCov = std::min(_Lt.RainSky * 1.4f, 1.0f) * 0.92f;
             VolumetricClouds.SetCoverage(std::max(CloudCovBase, RainCov));
         }
-        VolumetricClouds.UpdatePerFrame(FrameSlot, Vw.InvVPNoTrans, Vw.InvViewProjFull,
-                                        Vw.ViewProjUnjittered, Vw.CameraPosition, kKmPerWorldUnit,
-                                        CloudGroundRadius, Lt.KeyDir, Lt.KeyCloudCol,
-                                        SkyAmbient, GroundAmbient, ElapsedTime, FrameIndex,
+        VolumetricClouds.UpdatePerFrame(_FrameSlot, _Vw.InvVPNoTrans, _Vw.InvViewProjFull,
+                                        _Vw.ViewProjUnjittered, _Vw.CameraPosition, kKmPerWorldUnit,
+                                        CloudGroundRadius, _Lt.KeyDir, _Lt.KeyCloudCol,
+                                        _Amb.Sky, _Amb.Ground, ElapsedTime, FrameIndex,
                                         SunIntensity);
         VolumetricClouds.SetCoverage(CloudCovBase);
 
         Vec4 CloudShadowP{ 0.0f, 0.0f, 0.0f, 0.0f };
         Vec4 CloudShadowP2{ 0.0f, 0.0f, 0.0f, 0.0f };
         {
-            const f32 KeyY = Lt.KeyDir.Y > 0.05f ? Lt.KeyDir.Y : 0.05f;
+            const f32 KeyY = _Lt.KeyDir.Y > 0.05f ? _Lt.KeyDir.Y : 0.05f;
             const bool CloudShadowOn = UseClouds && VolumetricClouds.IsInitialized() &&
-                                       VolumetricClouds.GetShadowsEnabled() && Lt.KeyDir.Y > 0.02f;
+                                       VolumetricClouds.GetShadowsEnabled() && _Lt.KeyDir.Y > 0.02f;
             CloudShadowP  = { VolumetricClouds.ShadowCenterX(),
                               VolumetricClouds.ShadowCenterZ(),
                               VolumetricClouds.ShadowInvExtent(),
                               CloudShadowOn ? VolumetricClouds.GetShadowStrength() : 0.0f };
             CloudShadowP2 = { kKmPerWorldUnit,
                               VolumetricClouds.GetBottomAltitude(),
-                              Lt.KeyDir.X / KeyY, Lt.KeyDir.Z / KeyY };
-            MappedCB->CloudShadowParams  = CloudShadowP;
-            MappedCB->CloudShadowParams2 = CloudShadowP2;
+                              _Lt.KeyDir.X / KeyY, _Lt.KeyDir.Z / KeyY };
+            _CB->CloudShadowParams  = CloudShadowP;
+            _CB->CloudShadowParams2 = CloudShadowP2;
             if (VolumetricClouds.IsInitialized()) {
                 D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(GBuffer.SRVTableStart() + 4);
                 D3D12_CPU_DESCRIPTOR_HANDLE Src =
@@ -2041,60 +2018,104 @@ namespace Smile {
             }
         }
 
-        if (Modes.VolShaftsActive) {
-            const Vec3 KeyColInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
-                                     Lt.KeyColor.Z * Lt.KeyInt };
+        if (_Modes.VolShaftsActive) {
+            const Vec3 KeyColInt = { _Lt.KeyColor.X * _Lt.KeyInt, _Lt.KeyColor.Y * _Lt.KeyInt,
+                                     _Lt.KeyColor.Z * _Lt.KeyInt };
             const f32 ShaftNoiseFrame =
-                (Modes.TAAActive || Modes.UpscaleActive || SunShafts.GetVolTemporal())
+                (_Modes.TAAActive || _Modes.UpscaleActive || SunShafts.GetVolTemporal())
                     ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-            const Vec3 ShaftMediumAlbedo = Modes.VolFogActive
+            const Vec3 ShaftMediumAlbedo = _Modes.VolFogActive
                 ? VolumetricFog.GetAlbedo() : Vec3{ 1.0f, 1.0f, 1.0f };
-            const f32 ShaftExtinctionScale = Modes.VolFogActive
+            const f32 ShaftExtinctionScale = _Modes.VolFogActive
                 ? VolumetricFog.GetExtinctionScale() : 1.0f;
-            SunShafts.UpdateVolumetric(FrameSlot, Lt.KeyDir, KeyColInt, ShaftsFogCollapsed,
-                                       ShaftNoiseFrame, Vw.InvViewProjFull, Vw.CameraPosition,
-                                       Vw.ViewProjUnjittered, CloudShadowP, CloudShadowP2,
+            SunShafts.UpdateVolumetric(_FrameSlot, _Lt.KeyDir, KeyColInt, ShaftsFogCollapsed,
+                                       ShaftNoiseFrame, _Vw.InvViewProjFull, _Vw.CameraPosition,
+                                       _Vw.ViewProjUnjittered, CloudShadowP, CloudShadowP2,
                                        ShaftMediumAlbedo, ShaftExtinctionScale,
                                        0.0f, ShaftMarchMax);
         } else if (SunShafts.IsInitialized()) {
             SunShafts.ResetHistory();
         }
 
-        if (Modes.VolFogActive) VolumetricFog.PatchCloudShadow(CloudShadowP, CloudShadowP2);
+        if (_Modes.VolFogActive) VolumetricFog.PatchCloudShadow(CloudShadowP, CloudShadowP2);
+    }
 
-        const Mat44 WaterViewProj    = Vw.ViewProjection;
-        const Mat44 WaterInvViewProj = WaterViewProj.Inverse();
-        const bool WaterHasDepth = Targets.SceneColorCopy && Targets.SceneDepthCopy;
-        if (UseWater && Water.IsInitialized()) {
-            const bool WaterAtmoRefl = UseAtmosphereSky && Atmosphere.IsInitialized();
-            const f32 WaterReflIntensity =
-                WaterAtmoRefl ? (1.0f - Lt.RainSky * 0.65f) : IBLIntensity;
-            Water.UpdatePerFrame(FrameSlot, WaterViewProj, Vw.Projection, WaterInvViewProj,
-                                 Vw.ViewProjUnjittered, PrevViewProj, Vw.CameraPosition, Lt.KeyDir,
-                                 Lt.KeyInt, Lt.KeyColor, SkyAmbient, ElapsedTime,
-                                 WaterAtmoRefl || HDREnv.HasHDRLoaded(), WaterReflIntensity,
-                                  RenderWidth(), RenderHeight(), Vw.NearZ, Vw.FarZ,
-                                  WaterHasDepth, UseAtmosphereSky, Modes.DedicatedWaterReflections);
-            for (u32 c = 0; c < kOceanCascades; ++c) {
-                if (!Ocean[c].IsInitialized()) continue;
-                Ocean[c].SetTime(ElapsedTime);
-                Ocean[c].SetWindDirection(Water.GetWindDirection());
-                Ocean[c].SetWindSpeed(Water.GetWindSpeed());
-                Ocean[c].SetSpectrumFetch(Water.GetSpectrumFetch());
-                Ocean[c].SetOceanDepth(Water.GetOceanDepth());
-                Ocean[c].SetSwell(Water.GetSwell());
-                Ocean[c].SetAmplitude(Water.GetWavesAmount());
-                Ocean[c].SetGeometryScales(Water.GetFFTDisplacementScale() *
-                                           Water.GetWavesSize(),
-                                           Water.GetFFTChoppyScale());
-            }
+    void Renderer::UpdateWaterAndOcean(const FFrameModes& _Modes, const FFrameView& _Vw,
+                                       const FFrameLighting& _Lt, const FFrameAmbient& _Amb,
+                                       u32 _FrameSlot) {
+        if (!(UseWater && Water.IsInitialized())) return;
+
+        const bool WaterAtmoRefl = UseAtmosphereSky && Atmosphere.IsInitialized();
+        const f32 WaterReflIntensity =
+            WaterAtmoRefl ? (1.0f - _Lt.RainSky * 0.65f) : IBLIntensity;
+        // ViewProjection e a sua inversa vem do FFrameView: o `WaterInvViewProj` local era
+        // `Vw.ViewProjection.Inverse()`, EXATAMENTE a expressao que produz o InvViewProjFull
+        // (ver ResolveFrameView) — mesma entrada, mesma chamada. Era um inverse 4x4 por frame
+        // recalculado a toa.
+        Water.UpdatePerFrame(_FrameSlot, _Vw.ViewProjection, _Vw.Projection, _Vw.InvViewProjFull,
+                             _Vw.ViewProjUnjittered, PrevViewProj, _Vw.CameraPosition, _Lt.KeyDir,
+                             _Lt.KeyInt, _Lt.KeyColor, _Amb.Sky, ElapsedTime,
+                             WaterAtmoRefl || HDREnv.HasHDRLoaded(), WaterReflIntensity,
+                             RenderWidth(), RenderHeight(), _Vw.NearZ, _Vw.FarZ,
+                             _Modes.WaterSceneCopiesReady, UseAtmosphereSky,
+                             _Modes.DedicatedWaterReflections);
+        for (u32 c = 0; c < kOceanCascades; ++c) {
+            if (!Ocean[c].IsInitialized()) continue;
+            Ocean[c].SetTime(ElapsedTime);
+            Ocean[c].SetWindDirection(Water.GetWindDirection());
+            Ocean[c].SetWindSpeed(Water.GetWindSpeed());
+            Ocean[c].SetSpectrumFetch(Water.GetSpectrumFetch());
+            Ocean[c].SetOceanDepth(Water.GetOceanDepth());
+            Ocean[c].SetSwell(Water.GetSwell());
+            Ocean[c].SetAmplitude(Water.GetWavesAmount());
+            Ocean[c].SetGeometryScales(Water.GetFFTDisplacementScale() *
+                                       Water.GetWavesSize(),
+                                       Water.GetFFTChoppyScale());
         }
+    }
 
-        auto* CommandList = CommandQueue.List();
+    FPassContext Renderer::MakePassContext(const FFrameModes& _Modes, const FFrameView& _Vw,
+                                           const FFrameLighting& _Lt, const FFrameAmbient& _Amb,
+                                           u32 _FrameSlot) {
+        FPassContext C;
+        C.Cmd      = CommandQueue.List();
+        C.Device   = Device.Native();
+        C.SRVHeap  = &SRVHeap;
+        C.Profiler = &GpuProfiler;
+
+        C.FrameSlot    = _FrameSlot;
+        C.RenderWidth  = RenderWidth();
+        C.RenderHeight = RenderHeight();
+        C.OutputWidth  = OutputWidth();
+        C.OutputHeight = OutputHeight();
+
+        C.Modes   = &_Modes;
+        C.View    = &_Vw;
+        C.Light   = &_Lt;
+        C.Ambient = &_Amb;
+
+        C.Targets      = &Targets;
+        C.FrameCB      = ConstantBuffer->GetGPUVirtualAddress() +
+                         static_cast<u64>(_FrameSlot) * sizeof(FrameConstants);
+        C.ObjectCBBase = ObjectCB->GetGPUVirtualAddress();
+        C.DSV          = Targets.DSVHeap.CpuHandle(0);
+
+        C.Viewport.Width    = static_cast<FLOAT>(C.RenderWidth);
+        C.Viewport.Height   = static_cast<FLOAT>(C.RenderHeight);
+        C.Viewport.MinDepth = 0.0f;
+        C.Viewport.MaxDepth = 1.0f;
+        C.Scissor.right     = static_cast<LONG>(C.RenderWidth);
+        C.Scissor.bottom    = static_cast<LONG>(C.RenderHeight);
+        return C;
+    }
+
+    // Abre a gravacao da cena: limpa cor/mascaras/profundidade e amarra viewport, scissor e o
+    // heap de descriptors que valem pelo frame inteiro.
+    void Renderer::BeginSceneRecording(FPassContext& _Ctx) {
+        auto* CommandList = _Ctx.Cmd;
+        const auto& DSV   = _Ctx.DSV;
 
         const FLOAT ClearColor[] = { 0.094f, 0.094f, 0.117f, 1.0f };
-        auto DSV = Targets.DSVHeap.CpuHandle(0);
-
         {
             FBarrierBatch Batch;
             Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -2116,21 +2137,21 @@ namespace Smile {
             CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, kClearDepth, 0, 0, nullptr);
         }
 
-        D3D12_VIEWPORT Viewport{};
-        Viewport.Width    = static_cast<FLOAT>(RenderWidth());
-        Viewport.Height   = static_cast<FLOAT>(RenderHeight());
-        Viewport.MinDepth = 0.0f;
-        Viewport.MaxDepth = 1.0f;
-
-        D3D12_RECT ScissorRect{};
-        ScissorRect.right  = static_cast<LONG>(RenderWidth());
-        ScissorRect.bottom = static_cast<LONG>(RenderHeight());
-
-        CommandList->RSSetViewports(1, &Viewport);
-        CommandList->RSSetScissorRects(1, &ScissorRect);
+        CommandList->RSSetViewports(1, &_Ctx.Viewport);
+        CommandList->RSSetScissorRects(1, &_Ctx.Scissor);
 
         ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
+    }
+
+    // Simulacao da agua na GPU, ceu/atmosfera e o shadow map das nuvens. Tudo isto escreve em
+    // alvos PROPRIOS dos subsistemas (LUTs, cascatas de FFT, mapa de sombra) e no HDR ainda
+    // vazio — nao depende de geometria nenhuma, por isso abre o frame.
+    void Renderer::RecordSkyAndClouds(FPassContext& _Ctx) {
+        auto* CommandList        = _Ctx.Cmd;
+        const FFrameView& Vw     = *_Ctx.View;
+        const FFrameLighting& Lt = *_Ctx.Light;
+        const u32 FrameSlot      = _Ctx.FrameSlot;
 
         if (UseWater && Ocean[0].IsInitialized()) {
             FGpuScope Scope(GpuProfiler, CommandList, "Água — FFT");
@@ -2164,6 +2185,22 @@ namespace Smile {
             FGpuScope Scope(GpuProfiler, CommandList, "Sombra das nuvens");
             VolumetricClouds.RecordShadowMap(CommandList, SRVHeap);
         }
+    }
+
+    // Empacota as luzes puntuais para o MUNDO INDIRETO e grava os caches que os raios leem:
+    // extracao de mesh lights, build do ReGIR e o passe do DDGI (fila assincrona quando da).
+    // Termina empurrando o estado por-frame para reflexoes e ReSTIR GI, que e onde a contagem
+    // de luzes empacotada acima e consumida — por isso os tres andam juntos.
+    void Renderer::PrepareIndirectLighting(FPassContext& _Ctx) {
+        auto* CommandList             = _Ctx.Cmd;
+        const FFrameModes& Modes      = *_Ctx.Modes;
+        const FFrameView& Vw          = *_Ctx.View;
+        const FFrameLighting& Lt      = *_Ctx.Light;
+        const u32 FrameSlot           = _Ctx.FrameSlot;
+        const auto& DSV               = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
+        u64& GIComputeFence           = _Ctx.AsyncGIFence; // sai daqui e e esperado la na frente
 
         u32 GILightCount = 0;
         u64 GILightSetSignature = 1469598103934665603ull; // FNV-1a dos IDs na ordem compacta
@@ -2268,7 +2305,7 @@ namespace Smile {
             TemporalMotion.InvalidateHistory();
         }
 
-        u64 GIComputeFence = 0;
+        GIComputeFence = 0;
         if (UseGI && DDGI.IsReady()) {
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, FrameIndex, GILightCount);
@@ -2329,1233 +2366,250 @@ namespace Smile {
                                     FrameIndex, Lt.RainSkyDim, Vw.View,
                                     PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
         }
+    }
 
-        CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+    // Reconstrucao temporal: TAA proprio, ou o dispatch do upscaler (FSR / DLSS-SR / DLSS-RR).
+    // Sao exclusivos entre si. Devolve a imagem que o pos-processamento deve consumir — sem
+    // upscale ela e o proprio HDR da cena, com upscale e o alvo em resolucao de display.
+    //
+    // RRPoisoned vem de fora porque quem sabe se o HDR foi contaminado e a fase de debug: o
+    // visualizador sobrescreve o buffer e o overlay de sondas desenha por cima, e o eval do RR
+    // tem de ser pulado nesse caso (ver a nota longa la).
+    FPostInput Renderer::RecordResolve(FPassContext& _Ctx, IUpscaler* _ActiveUp, bool _RRPoisoned) {
+        auto* CommandList        = _Ctx.Cmd;
+        const FFrameModes& Modes = *_Ctx.Modes;
+        const FFrameView& Vw     = *_Ctx.View;
+        const u32 FrameSlot      = _Ctx.FrameSlot;
+        IUpscaler* ActiveUp      = _ActiveUp;
+        const bool RRPoisoned    = _RRPoisoned;
 
-        CommandList->SetGraphicsRootConstantBufferView(
-            0, ConstantBuffer->GetGPUVirtualAddress() +
-               static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-
-        Vec4 Planes[6];
-        {
-            const Mat44& V = Vw.ViewProjection;
-            auto Col = [&](int j) { return Vec4{ V.M[0][j], V.M[1][j], V.M[2][j], V.M[3][j] }; };
-            Vec4 c0 = Col(0), c1 = Col(1), c2 = Col(2), c3 = Col(3);
-            Planes[0] = { c3.X+c0.X, c3.Y+c0.Y, c3.Z+c0.Z, c3.W+c0.W }; 
-            Planes[1] = { c3.X-c0.X, c3.Y-c0.Y, c3.Z-c0.Z, c3.W-c0.W }; 
-            Planes[2] = { c3.X+c1.X, c3.Y+c1.Y, c3.Z+c1.Z, c3.W+c1.W }; 
-            Planes[3] = { c3.X-c1.X, c3.Y-c1.Y, c3.Z-c1.Z, c3.W-c1.W }; 
-            Planes[4] = { c2.X, c2.Y, c2.Z, c2.W };                     
-            Planes[5] = { c3.X-c2.X, c3.Y-c2.Y, c3.Z-c2.Z, c3.W-c2.W }; 
-        }
-        auto AABBOutsideFrustum = [&](const Vec3& Mn, const Vec3& Mx) -> bool {
-            for (int i = 0; i < 6; ++i) {
-                const Vec4& p = Planes[i];
-                f32 px = (p.X >= 0.0f) ? Mx.X : Mn.X;
-                f32 py = (p.Y >= 0.0f) ? Mx.Y : Mn.Y;
-                f32 pz = (p.Z >= 0.0f) ? Mx.Z : Mn.Z;
-                if (p.X*px + p.Y*py + p.Z*pz + p.W < 0.0f) return true;
-            }
-            return false;
-        };
-
-        std::vector<FLocalShadows::FShadowJob>     LocalShadowJobs;
-        std::vector<FLocalShadows::FCubeShadowJob> LocalCubeJobs;
-        {
-            Vec4 NPlanes[6];
-            for (int i = 0; i < 6; ++i) {
-                const Vec4& p   = Planes[i];
-                const f32   len = std::sqrt(p.X*p.X + p.Y*p.Y + p.Z*p.Z);
-                const f32   inv = len > 1e-6f ? 1.0f / len : 0.0f;
-                NPlanes[i] = { p.X*inv, p.Y*inv, p.Z*inv, p.W*inv };
-            }
-
-            FGPULight* DstLights = reinterpret_cast<FGPULight*>(
-                MappedLightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULight));
-            u32 NumLights = 0;
-            u64 LightSetSignature = 1469598103934665603ull; // FNV-1a sobre IDs na ordem do buffer
-
-            struct ShadowCand { u32 Gpu; u32 LightIdx; u64 Id; f32 Key; };
-            std::vector<ShadowCand> ShadowCands;
-            std::vector<ShadowCand> CubeCands;
-
-            // Importancia da luz p/ a camera: energia x fracao angular que ela ocupa. O termo
-            // R^2/(d^2+R^2) satura em 1 quando a camera entra no raio (sem singularidade em
-            // d=0) e vira inverse-square quando ela se afasta. So distancia da camera (o
-            // criterio antigo) fazia uma vela a 2 m ganhar de um refletor a 8 m.
-            // Nao e a formula do Flax: la o sort e por ScreenSize, com soma da cor de desempate
-            // e hash do ID como criterio final (LightPass.cpp, SortLights). Aqui a area angular
-            // faz o papel do ScreenSize e a luminancia entra multiplicando em vez de desempatar.
-            auto ShadowScore = [&](const FLight& L) -> f32 {
-                const f32 Energy = L.Intensity * (L.Color.X * 0.2126f + L.Color.Y * 0.7152f +
-                                                  L.Color.Z * 0.0722f);
-                const Vec3 ToCam = L.Position - Vw.CameraPosition;
-                const f32 R2 = L.AttenuationRadius * L.AttenuationRadius;
-                return Energy * R2 / (ToCam.LengthSq() + R2);
-            };
-
-            auto& SceneLights = Scene.Lights();
-            for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
-                FLight& L = SceneLights[li];
-                // Identidade estavel na primeira vez que vemos a luz. O editor faz push_back
-                // direto em Lights(), entao a atribuicao mora aqui e nao no AddLight.
-                if (L.Id == 0) L.Id = Scene.AllocObjectId();
-                Vec3 PreviousLightPos = L.Position;
-                if (const auto It = PreviousDirectLightPositions.find(L.Id);
-                    It != PreviousDirectLightPositions.end())
-                    PreviousLightPos = It->second;
-                PreviousDirectLightPositions[L.Id] = L.Position;
-                if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
-                if (NumLights >= kMaxLights) break;
-
-                bool Outside = false;
-                for (int i = 0; i < 6 && !Outside; ++i) {
-                    const Vec4& p = NPlanes[i];
-                    Outside = (p.X*L.Position.X + p.Y*L.Position.Y + p.Z*L.Position.Z + p.W)
-                              < -L.AttenuationRadius;
-                }
-                if (Outside) continue;
-
-                FGPULight G;
-                G.PosInvRadius      = { L.Position.X, L.Position.Y, L.Position.Z,
-                                        1.0f / L.AttenuationRadius };
-                G.ColorSourceRadius = { L.Color.X * L.Intensity, L.Color.Y * L.Intensity,
-                                        L.Color.Z * L.Intensity,
-                                        std::max(L.SourceRadius, 0.01f) };
-                G.ShadowMatrix      = Mat44::Identity();
-                G.PrevPosInvRadius  = { PreviousLightPos.X, PreviousLightPos.Y,
-                                        PreviousLightPos.Z, 1.0f / L.AttenuationRadius };
-                if (L.Type == ELightType::Spot) {
-                    const Vec3 D = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
-                    const f32 OuterDeg  = std::clamp(L.OuterConeDeg, 1.0f, 89.0f);
-                    const f32 InnerDeg  = std::clamp(L.InnerConeDeg, 0.0f, OuterDeg);
-                    const f32 CosOuter  = std::cos(OuterDeg * ToRad);
-                    const f32 CosInner  = std::cos(InnerDeg * ToRad);
-                    G.DirCosOuter = { D.X, D.Y, D.Z, CosOuter };
-                    // w preserva a intencao do artista independentemente do orcamento de slices.
-                    // O raster usa y/z; o ReSTIR DI usa w para decidir se traca shadow ray.
-                    G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
-                                      -1.0f, 0.0f, L.CastShadows ? 1.0f : 0.0f };
-                    if (L.CastShadows && LocalShadows.IsInitialized()) {
-                        // Histerese: quem ja tem o slot vale mais no ranking, entao o novato
-                        // precisa ser sensivelmente melhor pra tomar. Sem isso duas luzes de
-                        // importancia parecida trocam de slice todo frame.
-                        const f32 Bias = LocalShadows.SpotOwns(L.Id)
-                                       ? FLocalShadows::kHysteresis : 1.0f;
-                        ShadowCands.push_back({ NumLights, li, L.Id, ShadowScore(L) * Bias });
-                    }
-                } else {
-                    G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f }; // -2 = sem mascara de cone
-                    G.SpotParams  = { 0.0f, -1.0f, 0.0f, L.CastShadows ? 1.0f : 0.0f };
-                    if (L.CastShadows && LocalShadows.IsInitialized()) {
-                        const f32 Bias = LocalShadows.CubeOwns(L.Id)
-                                       ? FLocalShadows::kHysteresis : 1.0f;
-                        CubeCands.push_back({ NumLights, li, L.Id, ShadowScore(L) * Bias });
-                    }
-                }
-                DstLights[NumLights++] = G;
-                LightSetSignature ^= L.Id;
-                LightSetSignature *= 1099511628211ull;
-            }
-
-            // Matrizes do slice de spot. Usadas por todo mundo que emite job — inclusive quem
-            // esta em fade-out, que segue sendo redesenhado da pose atual.
-            auto SpotShadowVP = [&](const FLight& L, Mat44& OutLVP, f32& OutFar) {
-                const Vec3 D  = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
-                const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
-                                                       : Vec3{ 0.0f, 1.0f, 0.0f };
-                const f32 OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * ToRad;
-                const f32 NearP    = FLocalShadows::kPointNear;
-                OutFar = std::max(L.AttenuationRadius, NearP * 2.0f);
-                OutLVP = Mat44::LookAtLH(L.Position, L.Position + D, Up) *
-                         Mat44::PerspectiveFovLH(2.0f * OuterRad, 1.0f, NearP, OutFar);
-            };
-            auto ToShadowUV = [](const Mat44& LVP) {
-                Mat44 BiasUV = Mat44::Identity();
-                BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
-                BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
-                return LVP * BiasUV;
-            };
-
-            // Id como desempate (mesma ideia do hash do ID no SortLights do Flax): std::sort nao
-            // e estavel, entao scores empatados poderiam trocar de ordem entre frames e mudar
-            // quem fica com o slot livre.
-            auto ByScore = [](const ShadowCand& a, const ShadowCand& b) {
-                return a.Key != b.Key ? a.Key > b.Key : a.Id < b.Id;
-            };
-            std::sort(ShadowCands.begin(), ShadowCands.end(), ByScore);
-            const u32 NumShadowed = std::min<u32>(static_cast<u32>(ShadowCands.size()),
-                                                  FLocalShadows::kActiveShadows);
-            // Slice pela IDENTIDADE da luz, nao por 's' (a posicao no ranking). Com 's' a mesma
-            // luz trocava de slice sempre que a camera reordenava o sort — nenhum cache de
-            // depth entre frames era possivel e nao havia como saber se a luz ja tinha sombra
-            // no frame anterior (pre-requisito de histerese/fade). Resolve a selecao INTEIRA de
-            // uma vez: um a um, o novato evicta um selecionado e dispara remapeamento em
-            // cascata (ver TShadowSlotCache::AcquireBatch).
-            u64 SpotIds[FLocalShadows::kActiveShadows];
-            u32 SpotSlot[FLocalShadows::kActiveShadows];
-            for (u32 s = 0; s < NumShadowed; ++s)
-                SpotIds[s] = SceneLights[ShadowCands[s].LightIdx].Id;
-            LocalShadows.AcquireSpotSlots(SpotIds, NumShadowed, SpotSlot);
-            LocalShadows.UpdateSpotFades(SpotIds, NumShadowed, LastDeltaTime);
-
-            for (u32 s = 0; s < NumShadowed; ++s) {
-                const u32 Slice = SpotSlot[s];
-                if (Slice == FLocalShadows::kNoSlot) continue;
-
-                const FLight& L = SceneLights[ShadowCands[s].LightIdx];
-                Mat44 LVP; f32 FarP;
-                SpotShadowVP(L, LVP, FarP);
-
-                FGPULight& G   = DstLights[ShadowCands[s].Gpu];
-                G.ShadowMatrix = ToShadowUV(LVP);
-                G.SpotParams.Y = static_cast<f32>(Slice);
-                G.SpotParams.Z = LocalShadows.SpotFadeAt(Slice);
-                LocalShadowJobs.push_back({ LVP, L.Position, FarP, Slice });
-            }
-
-            // Slices em FADE-OUT: a luz saiu da selecao mas o slot ainda nao zerou. Ela continua
-            // sendo tratada como caster normal — matriz recalculada e JOB emitido — so que com o
-            // fade caindo. Redesenhar (em vez de congelar o mapa do frame anterior) e o que
-            // mantem a sombra correta se a luz ou os casters se moverem durante a transicao.
-            // E o slice extra de kMaxShadows que paga por isso.
-            for (u32 i = 0; i < FLocalShadows::kMaxShadows; ++i) {
-                const u64 Owner = LocalShadows.SpotOwnerAt(i);
-                if (Owner == 0 || LocalShadows.SpotFadeAt(i) <= 0.0f) continue;
-                bool Active = false;
-                for (u32 s = 0; s < NumShadowed && !Active; ++s) Active = (SpotIds[s] == Owner);
-                if (Active) continue;
-                // Precisa seguir visivel (ter entrada em DstLights) p/ valer o redesenho.
-                for (const ShadowCand& C : ShadowCands) {
-                    if (C.Id != Owner) continue;
-                    const FLight& Lr = SceneLights[C.LightIdx];
-                    Mat44 LVP; f32 FarP;
-                    SpotShadowVP(Lr, LVP, FarP);
-                    FGPULight& G   = DstLights[C.Gpu];
-                    G.ShadowMatrix = ToShadowUV(LVP);
-                    G.SpotParams.Y = static_cast<f32>(i);
-                    G.SpotParams.Z = LocalShadows.SpotFadeAt(i);
-                    LocalShadowJobs.push_back({ LVP, Lr.Position, FarP, i });
-                    break;
-                }
-            }
-
-            std::sort(CubeCands.begin(), CubeCands.end(), ByScore);
-            const u32 NumCubes = std::min<u32>(static_cast<u32>(CubeCands.size()),
-                                               FLocalShadows::kActiveCubes);
-            u64 CubeIds[FLocalShadows::kActiveCubes];
-            u32 CubeSlot[FLocalShadows::kActiveCubes];
-            for (u32 c = 0; c < NumCubes; ++c)
-                CubeIds[c] = SceneLights[CubeCands[c].LightIdx].Id;
-            LocalShadows.AcquireCubeSlots(CubeIds, NumCubes, CubeSlot);
-            LocalShadows.UpdateCubeFades(CubeIds, NumCubes, LastDeltaTime);
-
-            for (u32 c = 0; c < NumCubes; ++c) {
-                const u32 Cube = CubeSlot[c];
-                if (Cube == FLocalShadows::kNoSlot) continue;
-
-                const FLight& L = SceneLights[CubeCands[c].LightIdx];
-                FGPULight& G   = DstLights[CubeCands[c].Gpu];
-                G.SpotParams.Y = static_cast<f32>(Cube);
-                G.SpotParams.Z = LocalShadows.CubeFadeAt(Cube);
-                LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, Cube });
-            }
-
-            // Cubos em fade-out (mesma logica dos spots; o point nem matriz precisa).
-            for (u32 i = 0; i < FLocalShadows::kMaxCubeShadows; ++i) {
-                const u64 Owner = LocalShadows.CubeOwnerAt(i);
-                if (Owner == 0 || LocalShadows.CubeFadeAt(i) <= 0.0f) continue;
-                bool Active = false;
-                for (u32 c = 0; c < NumCubes && !Active; ++c) Active = (CubeIds[c] == Owner);
-                if (Active) continue;
-                for (const ShadowCand& C : CubeCands) {
-                    if (C.Id != Owner) continue;
-                    const FLight& Lr = SceneLights[C.LightIdx];
-                    FGPULight& G   = DstLights[C.Gpu];
-                    G.SpotParams.Y = static_cast<f32>(i);
-                    G.SpotParams.Z = LocalShadows.CubeFadeAt(i);
-                    LocalCubeJobs.push_back({ Lr.Position, Lr.AttenuationRadius, i });
-                    break;
-                }
-            }
-
-            FrameLightCount = NumLights; // consumido pelos dispatches de direta local, mais adiante
-            const u64 NewLightSetSignature = LightSetSignature ^ static_cast<u64>(NumLights);
-            if (NewLightSetSignature != FrameLightSetSignature)
-                NrdDirect.InvalidateHistory();
-            FrameLightSetSignature = NewLightSetSignature;
-            ReSTIRDI.SetLightSetSignature(FrameLightSetSignature);
-            // Um bit escolhe o produtor da direta local: raster ou ReSTIR DI. O mesmo predicado
-            // manda no dispatch e no deferred; divergir aqui apagaria ou dobraria luz.
-            const f32 DirectLocalMode = Modes.ReSTIRDIActiveFrame ? 1.0f : 0.0f;
-            MappedCB->LightParams  = { static_cast<f32>(NumLights),
-                                       1.0f / static_cast<f32>(FLocalShadows::kResolution),
-                                       LocalShadows.GetDepthBias(),
-                                       DirectLocalMode };
-            MappedCB->LightParams2 = { 1.0f / static_cast<f32>(FLocalShadows::kCubeResolution),
-                                       FLocalShadows::kPointNear, 0.0f, 0.0f };
-
-            if (Modes.VolFogActive)
-                VolumetricFog.PatchLights(NumLights,
-                                          1.0f / static_cast<f32>(FLocalShadows::kResolution),
-                                          LocalShadows.GetDepthBias(),
-                                          FLocalShadows::kPointNear);
-        }
-
-
-        const Vec3 CamPos = Camera.GetPosition();
-        const D3D12_GPU_VIRTUAL_ADDRESS ObjectCBBase = ObjectCB->GetGPUVirtualAddress();
-        const u32 FrameObjectBase = FrameSlot * MaxObjects;
-
-        struct AllItem { const FRenderable* R; FMaterial* Mat; u32 Slot; u32 SceneIndex; };
-        std::vector<AllItem> AllItems;
-
-        u32             SelectedSlot  = kInvalidSlot;
-        const FGpuMesh* SelectedMesh  = nullptr;
-        Mat44           SelectedModel = Mat44::Identity();
-        // Hasteado do loop: a selecao virou uma consulta (mesh OU luz), e o loop abaixo roda
-        // por renderavel da cena.
-        const int       SelectedRenderable = GetSelectedObject();
-        {
-            const std::vector<FRenderable>& RList = Scene.Renderables();
-            AllItems.reserve(RList.size());
-            const size_t PrevCount = PrevModels.size();
-            PrevModels.resize(RList.size(), Mat44::Identity());
-            const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
-            for (size_t si = 0; si < RList.size(); ++si) {
-                const FRenderable& R = RList[si];
-                if (WriteOcclusionBounds)
-                    HiZ.WriteBounds(FrameSlot, static_cast<u32>(si), R.AABBMin, R.AABBMax);
-                if (!R.Visible || R.RaytracingOnly || !R.Mesh || !R.Mesh->IsValid()) continue;
-                if (AllItems.size() >= MaxObjects) break;
-                FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
-                const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
-                const Mat44 Model = R.Transform.Matrix();
-                const Mat44 PrevModel = (si < PrevCount) ? PrevModels[si] : Model;
-                ObjectConstants OC;
-                OC.MVP            = Model * Vw.ViewProjection;
-                OC.ModelMatrix    = Model;
-                OC.CurMVPNoJitter = Model * Vw.ViewProjUnjittered;
-                OC.PrevMVP        = PrevModel * PrevViewProj;
-                std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
-                            &OC, sizeof(ObjectConstants));
-                if (static_cast<int>(si) == SelectedRenderable) {
-                    SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedModel = Model;
-                }
-                AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
-                PrevModels[si] = Model; 
-            }
-        }
-
-        // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
-        // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.
-        const u32* OcclusionVis = UseOcclusionCulling
-            ? HiZ.ResolveResults(FrameSlot, static_cast<u32>(Scene.Renderables().size()))
-            : nullptr;
-        u32 OccludedCount = 0;
-
-        struct VisItem { const FRenderable* R; FMaterial* Mat; f32 Dist; u32 Slot; u32 SceneIndex; };
-        std::vector<VisItem> VisibleScratch;
-        VisibleScratch.reserve(AllItems.size());
-        for (const AllItem& A : AllItems) {
-            if (UseFrustumCulling && AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
-            // Objeto selecionado nunca e cullado (gizmo/drag move mais rapido que a
-            // latencia do readback e o pop incomodaria bem aqui). O resultado so cobre
-            // [0, Capacity); indices alem disso (ex.: proxy RT do terreno) ficam visiveis.
-            if (OcclusionVis && A.SceneIndex < HiZ.Capacity() &&
-                !OcclusionVis[A.SceneIndex] &&
-                static_cast<int>(A.SceneIndex) != SelectedRenderable) {
-                ++OccludedCount;
-                continue;
-            }
-            const f32 cx = (A.R->AABBMin.X + A.R->AABBMax.X) * 0.5f - CamPos.X;
-            const f32 cy = (A.R->AABBMin.Y + A.R->AABBMax.Y) * 0.5f - CamPos.Y;
-            const f32 cz = (A.R->AABBMin.Z + A.R->AABBMax.Z) * 0.5f - CamPos.Z;
-            VisibleScratch.push_back({ A.R, A.Mat, cx*cx + cy*cy + cz*cz, A.Slot, A.SceneIndex });
-        }
-        std::sort(VisibleScratch.begin(), VisibleScratch.end(),
-                  [](const VisItem& a, const VisItem& b) { return a.Dist < b.Dist; });
-        LastVisibleCount  = static_cast<u32>(VisibleScratch.size());
-        LastOccludedCount = OccludedCount;
-
-        if (UseTerrain && Terrain.IsLoaded())
-            Terrain.UpdatePerFrame(FrameSlot, Vw.ViewProjection, Vw.ViewProjUnjittered, PrevViewProj,
-                                   Vw.CameraPosition, Vw.FovY, Vw.MipBias);
-
-        {
-            const f32 ShadowNoiseFrame = (Modes.TAAActive || Modes.UpscaleActive)
-                ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
-            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, Vw.View, Vw.CameraPosition,
-                                      Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame,
-                                      Scene.StaticCastersVersion());
-            if (UseSunShadows) {
-                std::vector<FSunShadows::FShadowDrawItem> Casters;
-                Casters.reserve(AllItems.size());
-                for (const AllItem& A : AllItems) {
-                    // Translucido nao projeta sombra opaca (vidro deixa o sol entrar).
-                    if (A.Mat && A.Mat->Blend) continue;
-                    // Objeto sob arraste do gizmo conta como DINAMICO enquanto o arraste dura,
-                    // qualquer que seja a mobilidade dele. Sem isto cada frame de mouse
-                    // invalidaria o mapa estatico e o editor ficaria pior do que sem cache
-                    // nenhum — a mesma razao pela qual a UE trata primitiva movida como
-                    // movable e so re-cacheia quando ela para.
-                    const bool Dyn = A.R->Mobility == EMobility::Dynamic ||
-                                     (DraggingRenderableId != 0 && A.R->Id == DraggingRenderableId);
-                    Casters.push_back({ A.R->Mesh, A.Mat,
-                                        ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
-                                        A.R->AABBMin, A.R->AABBMax, Dyn });
-                }
-                // Ordena UMA vez, fora do laco de cascatas: o RecordDepthPass varre esta
-                // lista 4x e, em ordem de cena, alternava PSO opaco/masked a cada item que
-                // trocasse de tipo. Opacos primeiro (PSO trocado uma unica vez, na fronteira)
-                // e alpha-tested agrupados por material, o que tambem deixa o Bind repetido
-                // ser pulado la dentro.
-                //
-                // Mobilidade entra como chave PRIMARIA: os estaticos ficam contiguos em
-                // [0, N) e os dinamicos em [N, Count), que e a fronteira de onde o cache vai
-                // rasterizar cada metade em um alvo diferente. Agrupar por material continua
-                // valendo DENTRO de cada metade, que e onde o batching importa.
-                std::sort(Casters.begin(), Casters.end(),
-                          [](const FSunShadows::FShadowDrawItem& a,
-                             const FSunShadows::FShadowDrawItem& b) {
-                              if (a.Dynamic != b.Dynamic) return !a.Dynamic;
-                              const bool am = a.Mat && a.Mat->Constants.AlphaTest != 0;
-                              const bool bm = b.Mat && b.Mat->Constants.AlphaTest != 0;
-                              if (am != bm) return !am;
-                              return a.Mat < b.Mat;
-                          });
-                {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
-                    FSunShadows::FExtraCascadeDraw TerrainCasters;
-                    if (UseTerrain && Terrain.IsLoaded())
-                        TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd, u32,
-                                                D3D12_GPU_VIRTUAL_ADDRESS CascadeCB,
-                                                const Mat44& CascadeVP) {
-                            Terrain.RenderShadowCascade(Cmd, SRVHeap, CascadeCB, CascadeVP);
-                        };
-                    SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size(),
-                                               TerrainCasters, &GpuProfiler);
-                }
-
-                auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
-                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-                CommandList->RSSetViewports(1, &Viewport);
-                CommandList->RSSetScissorRects(1, &ScissorRect);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-                CommandList->SetGraphicsRootConstantBufferView(
-                    0, ConstantBuffer->GetGPUVirtualAddress() +
-                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-            } else {
-                SunShadows.EnsureReadable(CommandList);
-            }
-
-            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-        }
-
-        if (!LocalShadowJobs.empty() || !LocalCubeJobs.empty()) {
-            std::vector<FLocalShadows::FShadowDrawItem> LocalCasters;
-            LocalCasters.reserve(AllItems.size());
-            for (const AllItem& A : AllItems) {
-                if (A.Mat && A.Mat->Blend) continue; // vidro nao projeta sombra opaca
-                LocalCasters.push_back({ A.R->Mesh, A.Mat,
-                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
-                                         A.R->AABBMin, A.R->AABBMax });
-            }
-            {
-                FGpuScope Scope(GpuProfiler, CommandList, "Sombras — locais");
-                // Terreno tambem projeta nas luzes locais. Sem isto o terreno era iluminado
-                // por point/spot (escreve G-buffer) mas nao aparecia nos shadow maps delas:
-                // poste atravessava a colina, e a volumetrica — que le os MESMOS t18/t19 —
-                // mostrava o god ray passando pelo terreno.
-                FLocalShadows::FExtraLocalDraw TerrainCasters;
-                if (UseTerrain && Terrain.IsLoaded())
-                    TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd,
-                                            D3D12_GPU_VIRTUAL_ADDRESS SliceCB,
-                                            const Mat44& SliceVP,
-                                            const Vec3& LightPos, f32 Radius) {
-                        // Perspectiva com depth clip (o near corta de verdade, ao contrario da
-                        // cascata ortho do sol) + a esfera da luz, o mesmo filtro que os meshes
-                        // recebem na broad phase.
-                        Terrain.RenderShadowCascade(Cmd, SRVHeap, SliceCB, SliceVP, true,
-                                                    LightPos, Radius);
-                    };
-                LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
-                                             LocalCasters.data(), LocalCasters.size(),
-                                             LocalShadowJobs.data(),
-                                             static_cast<u32>(LocalShadowJobs.size()),
-                                             LocalCubeJobs.data(),
-                                             static_cast<u32>(LocalCubeJobs.size()),
-                                             TerrainCasters);
-            }
-
-            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-            CommandList->RSSetViewports(1, &Viewport);
-            CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-            CommandList->SetGraphicsRootConstantBufferView(
-                0, ConstantBuffer->GetGPUVirtualAddress() +
-                   static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-        } else if (LocalShadows.IsInitialized()) {
-            LocalShadows.EnsureReadable(CommandList);
-        }
-
-        const bool DoPrepass = true;
-        if (DoPrepass) {
-            GpuProfiler.Begin(CommandList, "Z-prepass");
-            if (Modes.AOWillRun) {
-                FBarrierBatch Batch;
-                Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
-                                        D3D12_RESOURCE_STATE_RENDER_TARGET);
-                Batch.Flush(CommandList);
-                auto NormalRTV = Targets.NormalRTVHeap.CpuHandle(0);
-                CommandList->OMSetRenderTargets(1, &NormalRTV, FALSE, &DSV);
-                const FLOAT NeutralN[4] = { 0.5f, 0.5f, 0.5f, 0.0f }; 
-                CommandList->ClearRenderTargetView(NormalRTV, NeutralN, 0, nullptr);
-                CommandList->SetPipelineState(PipelineState.PSODepthNormal());
-            } else {
-                CommandList->SetPipelineState(PipelineState.PSODepthOnly());
-            }
-            {
-                FGpuScope Scope(GpuProfiler, CommandList, "Z - opacos");
-                for (const VisItem& V : VisibleScratch) {
-                    if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    V.R->Mesh->Draw(CommandList);
-                }
-            }
-
-            CommandList->SetPipelineState(Modes.AOWillRun ? PipelineState.PSODepthNormalMasked()
-                                                    : PipelineState.PSODepthOnlyMasked());
-            {
-                FGpuScope Scope(GpuProfiler, CommandList, "Z - mascarados");
-                for (const VisItem& V : VisibleScratch) {
-                    if (V.Mat->Blend) continue;
-                    if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    V.Mat->Bind(CommandList, SRVHeap);
-                    V.R->Mesh->Draw(CommandList);
-                }
-            }
-
-            if (UseTerrain && Terrain.IsLoaded()) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Z - terreno");
-                Terrain.RenderDepthPrepass(CommandList, SRVHeap, Modes.AOWillRun);
-            }
-            GpuProfiler.End(CommandList); // Z-prepass
-        }
-
-        // HZB do depth do prepass (min-reduce reverse-Z) + teste dos AABBs com a VP
-        // sem jitter DESTE frame; o resultado volta pela readback ring e e consumido
-        // kFramesInFlight frames depois no filtro do VisibleScratch (acima).
-        if (HiZ.IsReady() && UseOcclusionCulling) {
+        ID3D12Resource* PostInput    = Targets.HDRColorBuffer.Get();
+        u32             PostInputSRV = Targets.HDRSRVSlot;
+        if (Modes.TAAActive) {
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
+
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "HZB");
-                HiZ.RecordBuild(CommandList, SRVHeap, Targets.DepthSRVSlot);
-                HiZ.RecordTest(CommandList, SRVHeap, FrameSlot,
-                               static_cast<u32>(Scene.Renderables().size()),
-                               Vw.ViewProjUnjittered);
+                FGpuScope Scope(GpuProfiler, CommandList, "TAA");
+                TemporalAA.Execute(CommandList, SRVHeap, FrameSlot, Vw.InvViewProjUnjit, PrevViewProj,
+                                   TAAHistoryBlend, TAARanLastFrame, TAAVarianceGamma, TAASharpness,
+                                   TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, Vw.CameraPosition,
+                                   Vw.NearZ, Vw.FarZ, TAADebugMode);
             }
-            Batch.Transition(Targets.DepthBuffer.Get(),
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
             Batch.Flush(CommandList);
-        }
 
-        if (AO.IsReady()) {
-            if (Modes.AOWillRun) {
-                CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+            PostInput    = TemporalAA.DisplayOutputResource();
+            PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
+            TAARanLastFrame = true;
+        } else if (Modes.UpscaleActive && !RRPoisoned) {
+            // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
+            // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
+            // MESMO predicado do bloco de sinal (Modes.RRMode, ja em escopo): recalcular so pelo Denoiser
+            // divergia dele — os guides podiam nao estar prontos e este bloco tentava o eval do RR
+            // enquanto o GI/reflexao ja tinham sido configurados como crus.
+            const bool IsRR = Modes.RRMode;
 
-                const f32 TanHalf = std::tan(0.5f * Vw.FovY);
-                const f32 M11 = 1.0f / TanHalf;
-                const f32 M00 = M11 / Vw.Aspect;
-                const f32 M22 = Vw.Projection.M[2][2];
-                const f32 M32 = Vw.Projection.M[3][2];
-                AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, Vw.View,
-                                  RenderWidth(), RenderHeight(), FrameIndex);
-
-                FBarrierBatch Batch;
-                Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
-                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                Batch.Flush(CommandList);
-                {
-                    FGpuScope Scope(GpuProfiler, CommandList, "GTAO");
-                    AO.Execute(CommandList, SRVHeap, Targets.DepthSRVSlot);
-                }
-
-                Batch.Transition(Targets.DepthBuffer.Get(),
-                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                 D3D12_RESOURCE_STATE_DEPTH_WRITE);
-                Batch.Flush(CommandList);
-
-                auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
-                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-                CommandList->SetGraphicsRootConstantBufferView(
-                    0, ConstantBuffer->GetGPUVirtualAddress() +
-                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-            } else {
-                AO.ClearToWhite(CommandList, SRVHeap);
-            }
-        }
-
-        {
-            GpuProfiler.Begin(CommandList, "G-buffer (geometria)");
             FBarrierBatch Batch;
-            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(Targets.VelocityBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(Targets.UpscaleReactiveMask.Get(), Targets.UpscaleReactiveState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(Targets.UpscaleCompositionMask.Get(), Targets.UpscaleCompositionState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
-            // 5o MRT = SceneColor HDR: o emissivo e escrito direto nele (dieta do G-buffer).
-            // O ceu ja esta la (desenhado antes do prepass); a geometria opaca sobrescreve so
-            // os proprios pixels e o deferred lighting depois SOMA a luz (blend aditivo).
-            D3D12_CPU_DESCRIPTOR_HANDLE GBufRTVs[FGBuffer::kTargetCount + 2] = {
-                GBuffer.RTVHandle(0), GBuffer.RTVHandle(1), GBuffer.RTVHandle(2),
-                Targets.VelocityRTVHeap.CpuHandle(0), Targets.HDRRTVHeap.CpuHandle(0) };
-            CommandList->OMSetRenderTargets(FGBuffer::kTargetCount + 2, GBufRTVs, FALSE, &DSV);
-            GBuffer.Clear(CommandList);
-            const FLOAT VelClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-            CommandList->ClearRenderTargetView(Targets.VelocityRTVHeap.CpuHandle(0), VelClear, 0, nullptr);
-            CommandList->RSSetViewports(1, &Viewport);
-            CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-            CommandList->SetGraphicsRootConstantBufferView(
-                0, ConstantBuffer->GetGPUVirtualAddress() +
-                   static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
+
+            if (IsRR) {
+                // Guides de material do RR (albedo difuso/especular, normal-roughness) do G-buffer
+                // [A,B,C,Depth] (mesma tabela contigua do deferred) + FrameCB. O specHitDist ja foi
+                // extraido no bloco da reflexao (ou fica zerado sem reflexoes). Deixa tudo em NON_PIXEL.
+                FGpuScope Scope(GpuProfiler, CommandList, "DLSS-RR guides");
+                RRGuides.RecordGuides(CommandList, SRVHeap, SRVHeap.GpuHandle(GBuffer.SRVTableStart()),
+                                      _Ctx.FrameCB);
+                if (!Modes.ReflectionsActive) RRGuides.ClearSpecHitDist(CommandList, SRVHeap);
+                RRGuides.TransitionForRR(CommandList);
+            }
+
+            FUpscaleParams UpParams{};
+            UpParams.Color        = Targets.HDRColorBuffer.Get();
+            UpParams.Depth        = Targets.DepthBuffer.Get();
+            UpParams.Velocity     = Targets.VelocityBuffer.Get();
+            UpParams.Reactive     = Targets.UpscaleReactiveMask.Get();
+            UpParams.TransparencyAndComposition = Targets.UpscaleCompositionMask.Get();
+            UpParams.JitterX      = Vw.JitterPxX;
+            UpParams.JitterY      = Vw.JitterPxY;
+            UpParams.NearZ        = Vw.NearZ;
+            UpParams.FarZ         = Vw.FarZ;
+            UpParams.FovYRadians  = Vw.FovY;
+            UpParams.AspectRatio  = Vw.Aspect;
+            UpParams.DeltaTimeSec = LastDeltaTime;
+            UpParams.Quality      = UpscalerQuality;
+            // Reset one-shot: descarta o historico temporal em troca de modo/denoiser/scene/resize (senao o
+            // RR/DLSS reusa acumulacao velha => ghosting). Limpo logo apos o Dispatch.
+            UpParams.Reset        = RRResetPending;
+            // Matrizes p/ o DLSS (o FSR ignora): projecao unjittered + reprojecao (clip atual -> anterior).
+            // PrevViewProj ainda guarda o frame anterior aqui (so e atualizado logo abaixo).
+            UpParams.ViewToClip     = Vw.ProjUnjittered;
+            UpParams.ClipToPrevClip = Vw.ViewProjUnjittered.Inverse() * PrevViewProj;
+            {
+                const Mat44 InvView = Vw.View.Inverse();   // view->world: linhas = base da camera em mundo
+                UpParams.CamRight = { InvView.M[0][0], InvView.M[0][1], InvView.M[0][2] };
+                UpParams.CamUp    = { InvView.M[1][0], InvView.M[1][1], InvView.M[1][2] };
+                UpParams.CamFwd   = { InvView.M[2][0], InvView.M[2][1], InvView.M[2][2] };
+                UpParams.CamPos   = { InvView.M[3][0], InvView.M[3][1], InvView.M[3][2] };
+            }
+            if (IsRR) {
+                // Guides que so o RR consome (o FSR/DLSS-SR ignoram). WorldToView (row-major, sem jitter)
+                // = Vw.View: o RR deriva os specular motion vectors do specHitDist + matrizes world<->view.
+                UpParams.DiffuseAlbedo   = RRGuides.DiffuseAlbedo();
+                UpParams.SpecularAlbedo  = RRGuides.SpecularAlbedo();
+                UpParams.NormalRoughness = RRGuides.NormalRoughness();
+                UpParams.SpecHitDist     = RRGuides.SpecHitDist();
+                UpParams.WorldToView     = Vw.View;
+            }
 
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - meshes");
-                ID3D12PipelineState* CurGeomPSO = nullptr;
-                for (const VisItem& V : VisibleScratch) {
-                    FMaterial* Mat = V.Mat;
-                    if (Mat->Blend) continue;
-                    const bool TwoSided = Mat->IsTwoSidedForRT();
-                    ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
-                                                         : PipelineState.PSOGBuffer();
-                    if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    Mat->Bind(CommandList, SRVHeap);
-                    V.R->Mesh->Draw(CommandList);
-                }
+                FGpuScope Scope(GpuProfiler, CommandList,
+                                IsRR ? "DLSS-RR" : (Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR"));
+                ActiveUp->Dispatch(CommandList, UpParams);
+            }
+            RRResetPending = false;   // reset consumido
+
+            // Manual hooking (eDisableCLStateTracking): o SL pode ter mexido no estado do CL e nao tem
+            // proxy p/ restaurar. O ProgrammingGuideManualHooking.md §7.1 lista o que o SL restauraria:
+            // descriptor heaps, compute root signature + TODAS as bindings de compute (tabelas/CBV/SRV/
+            // UAV/constants), PSO e state object. Aqui rebindamos SO os heaps de proposito: auditado, todo
+            // consumidor a jusante seta root signature E PSO proprios antes de usar o CL — Flicker
+            // (FlickerHeatmap.cpp:195), PostProcessor (PostProcess.cpp:284), SelectionOutline (:272/:322)
+            // e DebugDraw (:241) —, e o CL e resetado por frame, entao nada herda estado do eval.
+            // Os heaps ficam porque sao o unico estado que o SL troca e ninguem reestabelece.
+            // ATENCAO: um passe futuro que dependa de estado herdado aqui exige revisitar isto.
+            // (o FSR/ffx-api tolera o rebind redundante).
+            {
+                ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+                CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
             }
 
-            if (UseTerrain && Terrain.IsLoaded()) {
-                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - terreno");
-                Terrain.RenderGBuffer(CommandList, SRVHeap);
-            }
-            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Batch.Flush(CommandList);
-            GpuProfiler.End(CommandList); // G-buffer (geometria)
-        }
-
-        // Motion vector do BACKGROUND: o G-buffer so escreveu velocity p/ geometria+terreno; ceu/nuvens/fog
-        // ficaram ZERO (clear acima). Preenche o velocity do ceu (reproj rotacao-only, sem parallax) p/ o
-        // DLSS/RR/TAA nao arrastar o historico do ceu ao girar a camera. So roda com consumidor temporal.
-        if ((Modes.UpscaleActive || Modes.TAAActive) && BgVelocity.IsReady()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Velocity do background");
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            Batch.Flush(CommandList);
-
-            BgVelocity.Record(CommandList, FrameSlot, SRVHeap.GpuHandle(Targets.DepthSRVSlot),
-                              SRVHeap.GpuHandle(Targets.VelocityUavSlot), Vw.SkyClipToPrevClip,
-                              RenderWidth(), RenderHeight());
-
-            FBarrierBatch Restore;
-            Restore.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                               D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            Restore.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Restore.Flush(CommandList);
-        }
-
-        if (Weather.Active() && RainWetness.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
-            if (Weather.GetRainOcclusion()) {
-                std::vector<FRainWetness::FOccluderItem> RainOccluders;
-                RainOccluders.reserve(AllItems.size());
-                for (const AllItem& A : AllItems)
-                    RainOccluders.push_back({ A.R->Mesh, A.Mat,
-                                              ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
-                                              A.R->AABBMin, A.R->AABBMax });
-                RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, Vw.CameraPosition,
-                                               RainOccluders.data(), RainOccluders.size());
-            }
-            const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
-                                       Lt.KeyColor.Z * Lt.KeyInt };
-            RainWetness.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
-                                       Vw.CameraPosition, ElapsedTime, Weather, Lt.KeyDir,
-                                       KeyColorInt, SkyAmbient);
-            RainWetness.Execute(CommandList, SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
-                                RenderWidth(), RenderHeight());
-        }
-
-        if (Modes.ReliableMotionActive) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Motion temporal confiavel");
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.Flush(CommandList);
-            TemporalMotion.Record(CommandList, SRVHeap, &GpuProfiler);
+            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Batch.Flush(CommandList);
-        }
-
-        if (GIComputeFence != 0) {
-            CommandQueue.SubmitSegmentAndContinue();
-            CommandQueue.GpuWait(ComputeQueue.NativeFence(), GIComputeFence);
-            ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
-            CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
-            CommandList->RSSetViewports(1, &Viewport);
-            CommandList->RSSetScissorRects(1, &ScissorRect);
-            DDGI.TransitionForRead(CommandList);
-        }
-
-        // Antes dos dois traces instrumentados: pixel que sai cedo nao escreve, e sem zerar o
-        // alvo ele mostraria a medida de um frame antigo — quente onde nao houve trabalho nenhum.
-        if (TimerCaptureActive) {
-            TimerGI.Clear(CommandList, SRVHeap);
-            TimerReflections.Clear(CommandList, SRVHeap);
-        }
-
-        // Debug da BVH (GPU Zen 3, 7.3.3). Dispatch proprio, independente do resto do frame: ele
-        // traca os raios PRIMARIOS que o pipeline hibrido nunca traca, entao nao le G-buffer nem
-        // depth e nao entra em nenhuma cadeia de dependencia. Sem o toggle, nao custa nada.
-        // Nao precisa de clear: todo pixel do dominio escreve (o miss tem cor propria).
-        if (BvhDebugEnabled && BvhDebug.IsReady()) {
-            BvhDebug.Render(CommandList, SRVHeap, Vw.InvViewProjFull, Vw.CameraPosition,
-                            BvhDebugMode, DDGI.MaxRayDistance(), BvhDebugComplexityMax,
-                            FrameSlot);
-        }
-
-        if (Modes.ReSTIRGIActive) {
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Transition(Targets.VelocityBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
 
-            {
-                FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR GI");
-                ReSTIRGI.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
-            }
-
-            if (Modes.NrdIndirectMode) {
-                if (Modes.ReflectionsActive) {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (trace)");
-                    Reflections.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
+            PostInput    = ActiveUp->OutputResource();
+            PostInputSRV = ActiveUp->OutputSRVSlot();
+            TAARanLastFrame = false;
+            RRSkipLogged    = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
+        } else {
+            // Eval pulado por debug na cena: arma o reset p/ o proximo eval real nao reprojetar de
+            // um historico interrompido (o RR ficou N frames sem ver a cena).
+            if (RRPoisoned) {
+                RRResetPending = true;
+                if (!RRSkipLogged) {
+                    LogWarning("Ray Reconstruction pausado: ha debug desenhado na cena "
+                               "(visualizador de alvo ou sondas do DDGI). A imagem sai em resolucao "
+                               "de render ate o debug sair — desligue-o p/ voltar a avaliar o RR");
+                    RRSkipLogged = true;
                 }
-                GpuProfiler.Begin(CommandList, "NRD denoise");
-                {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Pack GI + reflexos");
-                    Nrd.TransitionInputsToWrite(CommandList);
-                    ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
-                    if (Modes.ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
-                    else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
-                }
-                {
-                    FGpuScope Scope(GpuProfiler, CommandList, "RELAX indireto");
-                    Nrd.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
-                                 Vw.JitterPx, PrevJitterPx, FrameIndex);
-                    Nrd.Denoise(CommandList);
-                }
-                {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Saida NRD indireta");
-                    Nrd.TransitionOutputToRead(CommandList);
-                }
-                GpuProfiler.End(CommandList); // NRD denoise
-                ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
-                CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
             }
+            TAARanLastFrame = false;
+        }
+        return { PostInput, PostInputSRV };
+    }
 
-            // Velocity volta p/ PIXEL porque o TAA a le num passe grafico. Depth e G-buffer NAO
-            // voltam p/ DEPTH_WRITE / RENDER_TARGET: ninguem escreve neles daqui ate o deferred
-            // logo abaixo, que os quer em leitura combinada. O round-trip custava 2 barreiras por
-            // MRT + 2 no depth por frame sem nenhum escritor no meio, e o DEPTH_WRITE ainda podia
-            // disparar decompress/resummarize em alguns drivers.
-            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Batch.Flush(CommandList);
+    // Heatmap de flicker (opcional, troca a imagem), tonemap para o backbuffer, contorno da
+    // selecao e a geometria de ferramenta do editor. Fecha o frame no backbuffer.
+    void Renderer::RecordPost(FPassContext& _Ctx, FPostInput _In) {
+        auto* CommandList     = _Ctx.Cmd;
+        const FFrameView& Vw  = *_Ctx.View;
+        const u32 FrameSlot   = _Ctx.FrameSlot;
+        ID3D12Resource* PostInput = _In.Texture;
+        u32 PostInputSRV          = _In.SRVSlot;
+        const FSelectionDraw& Sel = _Ctx.Selection;
+
+        if (FlickerMode > 0 && Flicker.IsInitialized()) {
+            Flicker.Execute(CommandList, SRVHeap, PostInputSRV, static_cast<f32>(FlickerMode),
+                            FlickerScale, FlickerAlpha, FlickerResetPending,
+                            RenderWidth(), RenderHeight());
+            FlickerResetPending = false;
+            PostInput    = Flicker.OutputResource();
+            PostInputSRV = Flicker.OutputSRVSlot();
         }
 
-        {
-            constexpr D3D12_RESOURCE_STATES DeferredReadState =
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            const bool ReSTIRDIOn = Modes.ReSTIRDIActiveFrame;
-            // O G-buffer rastreia o proprio estado (AppendTransitions so recebe o alvo); o depth
-            // nao, entao o estado de origem depende de o bloco do ReSTIR ter rodado — ele deixa o
-            // depth em NON_PIXEL de proposito, em vez de devolver p/ DEPTH_WRITE.
-            const D3D12_RESOURCE_STATES DepthBefore =
-                Modes.ReSTIRGIActive ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
-                               : D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            FBarrierBatch Batch;
-            GBuffer.AppendTransitions(Batch, DeferredReadState);
-            Batch.Transition(Targets.DepthBuffer.Get(), DepthBefore, DeferredReadState);
-            // O PS deferred nao usa velocity, mas o Pass A do ReSTIR DI usa em compute. So amplie
-            // o estado quando esse consumidor existir, evitando uma barreira no caminho legado.
-            if (ReSTIRDIOn)
-                Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState, DeferredReadState);
-            Batch.Flush(CommandList);
-
-            // ReSTIR DI roda ANTES do deferred. DeferredReadState inclui NON_PIXEL, exigido para
-            // G-buffer/depth, e o alvo precisa estar pronto quando o PS o somar. Um unico modo
-            // manda no dispatch e no gate do shader: divergir dobra ou apaga a luz.
-            if (ReSTIRDIOn) {
-                {
-                    FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
-                    ReSTIRDI.SetRayEpsilons(RayEps);
-                    ReSTIRDI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.View, PrevViewProj,
-                                            Vw.CameraPosition,
-                                            RenderWidth(), RenderHeight(), FrameIndex,
-                                            FrameLightCount, kRTMaskShadowFull,
-                                            /*EnableTemporalPermutation=*/Modes.RRMode,
-                                            TemporalMotion.InstanceCount(),
-                                            Modes.MotionHistoryValidThisFrame,
-                                            MeshLights.LightCount());
-                    ReSTIRDI.Record(CommandList, SRVHeap, &GpuProfiler);
-                }
-
-                if (Modes.NrdDirectMode) {
-                    FGpuScope Scope(GpuProfiler, CommandList, "NRD direta");
-                    {
-                        FGpuScope ChildScope(GpuProfiler, CommandList, "Pack direto");
-                        NrdDirect.TransitionInputsToWrite(CommandList);
-                        ReSTIRDI.RecordNrdPack(CommandList, SRVHeap);
-                    }
-                    {
-                        FGpuScope ChildScope(GpuProfiler, CommandList, "RELAX direto");
-                        NrdDirect.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
-                                           Vw.JitterPx, PrevJitterPx, FrameIndex);
-                        NrdDirect.Denoise(CommandList);
-                    }
-                    {
-                        FGpuScope ChildScope(GpuProfiler, CommandList, "Composite direto");
-                        NrdDirect.TransitionOutputToRead(CommandList);
-                        // O NRD liga seu heap privado; o composite pertence ao heap da engine.
-                        ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
-                        CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
-                        ReSTIRDI.RecordNrdComposite(CommandList, SRVHeap);
-                    }
-                }
-
-                // Os consumidores posteriores historicamente partem de PIXEL (inclusive o bloco
-                // de upscale, que usa barreira explicita). Nao deixe o estado combinado vazar.
-                FBarrierBatch RestoreVelocity;
-                RestoreVelocity.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-                RestoreVelocity.Flush(CommandList);
-            }
-            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr); 
-            CommandList->RSSetViewports(1, &Viewport);
-            CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-            CommandList->SetGraphicsRootConstantBufferView(
-                0, ConstantBuffer->GetGPUVirtualAddress() +
-                   static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-            CommandList->SetGraphicsRootDescriptorTable(2, SRVHeap.GpuHandle(GBuffer.SRVTableStart()));
-            CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
-            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-            {
-                const u32 GITable = (UseGI && DDGI.IsReady()) ? DDGI.SceneGITableStart() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
-            }
-            {
-                const u32 AOTable = AO.IsReady() ? AO.AOSRVSlot() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(8, SRVHeap.GpuHandle(AOTable));
-            }
-            {
-                const u32 ReSTIRTable = Modes.ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
-            }
-            {
-                // t20. Fallback no IBLTableStart quando inativo — descritor VALIDO, exatamente como
-                // o t16 do ReSTIR e o t14 do AO fazem: a root sig exige a tabela ligada mesmo que o
-                // shader nao a leia (LightParams.w = 0 fecha a leitura).
-                const u32 DirectLocalTable = ReSTIRDIOn ? ReSTIRDI.OutputSRVSlot()
-                                                        : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(12, SRVHeap.GpuHandle(DirectLocalTable));
-            }
-            {
-                // t21. Mesmo padrao: descritor VALIDO sempre; AtmoLightParams.w fecha a leitura
-                // quando a atmosfera esta off ou o caminho por pixel esta desligado.
-                const u32 AtmoTable = Atmosphere.IsInitialized()
-                    ? Atmosphere.TransmittanceSRV() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
-            }
-            CommandList->SetGraphicsRootShaderResourceView(
-                10, LightBuffer->GetGPUVirtualAddress() +
-                    static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight));
-            {
-                const u32 LocalShadowTable = LocalShadows.IsInitialized()
-                    ? LocalShadows.ShadowSRVSlot() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(11, SRVHeap.GpuHandle(LocalShadowTable));
-            }
-            GpuProfiler.Begin(CommandList, "Deferred lighting");
-            // Aditivo (soma sobre o emissivo do geometry pass); nas views de debug SSAO/GI o
-            // shader retorna a visualizacao inteira -> PSO opaco p/ substituir a tela.
-            const bool DeferredDebugView = AODebug || (UseGI && DDGI.IsReady() && GIDebug);
-            CommandList->SetPipelineState(DeferredDebugView
-                ? PipelineState.PSODeferredLightingDebug()
-                : PipelineState.PSODeferredLighting());
-            CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            CommandList->IASetVertexBuffers(0, 0, nullptr);
-            CommandList->IASetIndexBuffer(nullptr);
-            CommandList->DrawInstanced(3, 1, 0, 0);
-            GpuProfiler.End(CommandList); 
-
-            const u32 PointGIFlags =
-                (GIChebyshev ? 1u : 0u) |
-                (GISkipInactiveProbes ? 2u : 0u) |
-                (GISkipInactiveFallback ? 4u : 0u);
-            DDGIDebugPass.RecordPointDiagnostic(
-                FrameSlot, CommandList, SRVHeap, DDGI,
-                Vw.InvViewProjFull, Vw.CameraPosition,
-                RenderWidth(), RenderHeight(), PointGIFlags);
-
-            Batch.Transition(Targets.DepthBuffer.Get(), DeferredReadState,
-                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            Batch.Flush(CommandList);
-        }
-
-        if (ObjectPicker.HasPendingRequest()) {
-            {
-                std::vector<FObjectPicker::FDrawItem> PickItems;
-                PickItems.reserve(VisibleScratch.size());
-                for (const VisItem& V : VisibleScratch)
-                    PickItems.push_back({ V.R->Mesh,
-                                          ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants),
-                                          V.SceneIndex + 1 });
-                ObjectPicker.RecordIDPass(CommandList, DSV, PickItems.data(), PickItems.size(),
-                                          RenderWidth(), RenderHeight());
-
-                auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
-                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-                CommandList->RSSetViewports(1, &Viewport);
-                CommandList->RSSetScissorRects(1, &ScissorRect);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-                CommandList->SetGraphicsRootConstantBufferView(
-                    0, ConstantBuffer->GetGPUVirtualAddress() +
-                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-            }
-        }
-
-        if (Modes.ReflectionsActive) {
-            CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
-
-            const D3D12_RESOURCE_STATES ReadState =
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, ReadState);
-            GBuffer.AppendTransitions(Batch, ReadState);
-            Batch.Flush(CommandList);
-
-            {
-                FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
-                if (!Modes.NrdIndirectMode) Reflections.RecordTrace(CommandList, SRVHeap);
-                // RR: extrai o hitDist especular do Resolved ENQUANTO ele esta NON_PIXEL (o composite
-                // cru abaixo o transiciona p/ PIXEL). O RecordTrace acima parou no Resolved (RawSpec).
-                if (Modes.RRMode)
-                    RRGuides.RecordSpecHitDist(CommandList, SRVHeap,
-                                               SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()),
-                                               ConstantBuffer->GetGPUVirtualAddress() +
-                                               static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                Reflections.RecordComposite(CommandList, SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
-                                            RenderWidth(), RenderHeight());
-            }
-
-            Batch.Transition(Targets.DepthBuffer.Get(), ReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            Batch.Flush(CommandList);
-
-            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-            CommandList->RSSetViewports(1, &Viewport);
-            CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-            CommandList->SetGraphicsRootConstantBufferView(
-                0, ConstantBuffer->GetGPUVirtualAddress() +
-                   static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-        }
-
-        if (UseWater && Water.IsInitialized() && WaterHasDepth) {
-            CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
-
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
-                             D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[0],
-                                    D3D12_RESOURCE_STATE_COPY_DEST, 0);
-            Batch.TransitionTracked(Targets.SceneDepthCopy.Get(), Targets.SceneDepthCopyState,
-                                    D3D12_RESOURCE_STATE_COPY_DEST);
-            Batch.Flush(CommandList);
-
-            D3D12_TEXTURE_COPY_LOCATION ColorDst{};
-            ColorDst.pResource        = Targets.SceneColorCopy.Get();
-            ColorDst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            ColorDst.SubresourceIndex = 0;
-            D3D12_TEXTURE_COPY_LOCATION ColorSrc{};
-            ColorSrc.pResource        = Targets.HDRColorBuffer.Get();
-            ColorSrc.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            ColorSrc.SubresourceIndex = 0;
-            CommandList->CopyTextureRegion(&ColorDst, 0, 0, 0, &ColorSrc, nullptr);
-            CommandList->CopyResource(Targets.SceneDepthCopy.Get(), Targets.DepthBuffer.Get());
-
-            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+        FBarrierBatch BackBatch;
+        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_PRESENT,
                              D3D12_RESOURCE_STATE_RENDER_TARGET);
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
-                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            constexpr D3D12_RESOURCE_STATES SceneCopyRead =
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[0],
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, 0);
-            Batch.TransitionTracked(Targets.SceneDepthCopy.Get(), Targets.SceneDepthCopyState, SceneCopyRead);
-            Batch.Flush(CommandList);
+        BackBatch.Flush(CommandList);
 
-            if (Targets.SceneColorMipCount > 1) {
-                Targets.SceneColorMipPSO.Bind(CommandList);
-                const u32 Constants[8] = {
-                    RenderWidth(), RenderHeight(), 0u, 0u, 0u, 0u, 0u, 0u };
-                CommandList->SetComputeRoot32BitConstants(0, _countof(Constants), Constants, 0);
-
-                for (u32 Mip = 1; Mip < Targets.SceneColorMipCount; ++Mip) {
-                    Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[Mip],
-                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, Mip);
-                    Batch.Flush(CommandList);
-
-                    CommandList->SetComputeRootDescriptorTable(
-                        1, SRVHeap.GpuHandle(Targets.SceneColorMipSRVStart + Mip - 1));
-                    CommandList->SetComputeRootDescriptorTable(
-                        2, SRVHeap.GpuHandle(Targets.SceneColorMipUAVStart + Mip));
-                    const u32 MipWidth  = std::max(1u, RenderWidth() >> Mip);
-                    const u32 MipHeight = std::max(1u, RenderHeight() >> Mip);
-                    CommandList->Dispatch((MipWidth + 7u) / 8u, (MipHeight + 7u) / 8u, 1);
-
-                    Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[Mip],
-                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, Mip);
-                    Batch.Flush(CommandList);
-                }
-            }
-
-            // O water base usa a mesma copia para refracao no PS, enquanto o trace de reflexo
-            // usa a piramide no compute. Encerrar todos os subrecursos no estado combinado evita
-            // uma transicao do recurso inteiro sobre estados divergentes.
-            for (u32 Mip = 0; Mip < Targets.SceneColorMipCount; ++Mip)
-                Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[Mip],
-                                        SceneCopyRead, Mip);
-            Batch.Flush(CommandList);
-
-            auto HDR_RTV_Rebind = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &HDR_RTV_Rebind, FALSE, &DSV);
-        }
-
-        if (UseWater && Water.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Água — superfície");
-
-            FBarrierBatch WaterBatch;
-            WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
-            WaterBatch.Flush(CommandList);
-            const bool WaterReflectionsActive = Modes.DedicatedWaterReflections;
-            const bool ForceFullWaterOutputs = Modes.RRMode || Water.GetGuideInvisible() ||
-                Water.GetDebugMode() == FWaterRenderer::EDebugMode::Wireframe;
-            FWaterRenderer::EOutputMode WaterOutputMode;
-            if (Modes.RRMode) {
-                WaterOutputMode = FWaterRenderer::EOutputMode::RayReconstruction;
-            } else if (WaterReflectionsActive) {
-                WaterOutputMode = FWaterRenderer::EOutputMode::ReflectionGuides;
-            } else {
-                WaterOutputMode = ForceFullWaterOutputs
-                    ? FWaterRenderer::EOutputMode::RayReconstruction
-                    : (Modes.UpscaleActive ? FWaterRenderer::EOutputMode::TemporalMasks
-                                     : FWaterRenderer::EOutputMode::Base);
-            }
-            D3D12_CPU_DESCRIPTOR_HANDLE WaterRTVs[8] = {
-                Targets.HDRRTVHeap.CpuHandle(0), Targets.VelocityRTVHeap.CpuHandle(0) };
-            u32 WaterRTVCount = 2;
-            if (WaterOutputMode == FWaterRenderer::EOutputMode::TemporalMasks) {
-                WaterRTVs[2] = Targets.UpscaleMaskRTVHeap.CpuHandle(0);
-                WaterRTVs[3] = Targets.UpscaleMaskRTVHeap.CpuHandle(1);
-                WaterRTVCount = 4;
-            } else if (WaterOutputMode == FWaterRenderer::EOutputMode::RayReconstruction) {
-                RRGuides.PrepareSpecHitForWater(CommandList);
-                WaterRTVs[2] = GBuffer.RTVHandle(0);
-                WaterRTVs[3] = GBuffer.RTVHandle(1);
-                WaterRTVs[4] = GBuffer.RTVHandle(2);
-                WaterRTVs[5] = Targets.UpscaleMaskRTVHeap.CpuHandle(0);
-                WaterRTVs[6] = Targets.UpscaleMaskRTVHeap.CpuHandle(1);
-                WaterRTVs[7] = RRGuides.SpecHitRTV();
-                WaterRTVCount = 8;
-            } else if (WaterOutputMode == FWaterRenderer::EOutputMode::ReflectionGuides) {
-                WaterRTVs[2] = GBuffer.RTVHandle(0);
-                WaterRTVs[3] = GBuffer.RTVHandle(1);
-                WaterRTVs[4] = GBuffer.RTVHandle(2);
-                WaterRTVs[5] = Targets.UpscaleMaskRTVHeap.CpuHandle(0);
-                WaterRTVs[6] = Targets.UpscaleMaskRTVHeap.CpuHandle(1);
-                WaterRTVCount = 7;
-            }
-            CommandList->OMSetRenderTargets(WaterRTVCount, WaterRTVs, FALSE, &DSV);
-
-            const u32 WaterReflCube =
-                (UseAtmosphereSky && Atmosphere.IsInitialized())
-                    ? Atmosphere.SkyReflectionSRV()
-                    : HDREnv.SpecularSRV();
-            const u32 OceanDispSlots[kOceanCascades] = {
-                Ocean[0].SRVSlot(), Ocean[1].SRVSlot(), Ocean[2].SRVSlot() };
-            const u32 OceanPreviousDispSlots[kOceanCascades] = {
-                Ocean[0].PreviousSRVSlot(), Ocean[1].PreviousSRVSlot(),
-                Ocean[2].PreviousSRVSlot() };
-            const u32 OceanNormalSlots[kOceanCascades] = {
-                Ocean[0].NormalSRVSlot(), Ocean[1].NormalSRVSlot(), Ocean[2].NormalSRVSlot() };
-            Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, OceanDispSlots,
-                                OceanPreviousDispSlots, OceanNormalSlots, Targets.SceneCopyTableStart,
-                                SunShadows.ConstantsAddress(),
-                                SunShadows.ShadowSRVSlot(), WaterOutputMode);
-
-            if (WaterReflectionsActive) {
-                WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                WaterBatch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                GBuffer.AppendTransitions(WaterBatch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                WaterBatch.Flush(CommandList);
-
-                Reflections.RecordWaterTrace(CommandList, SRVHeap, &GpuProfiler);
-                if (Modes.RRMode) {
-                    RRGuides.RecordWaterSpecHitDist(
-                        CommandList, SRVHeap,
-                        SRVHeap.GpuHandle(Reflections.GetWaterSpecHitTable()),
-                        ConstantBuffer->GetGPUVirtualAddress() +
-                            static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                }
-                Reflections.RecordWaterComposite(CommandList, SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
-                                                 RenderWidth(), RenderHeight());
-
-                WaterBatch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                      D3D12_RESOURCE_STATE_DEPTH_WRITE);
-                GBuffer.AppendTransitions(WaterBatch, D3D12_RESOURCE_STATE_RENDER_TARGET);
-                WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-                WaterBatch.Flush(CommandList);
-            } else {
-                WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
-                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-                WaterBatch.Flush(CommandList);
-            }
-            auto PostWaterRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &PostWaterRTV, FALSE, &DSV);
-        }
-
-        // Transparencias foreground sao compostas depois da agua: nao contaminam a copia usada
-        // pela refracao e passam a testar contra a profundidade real da superficie.
         {
-            bool AnyBlend = false;
-            for (const VisItem& V : VisibleScratch)
-                if (V.Mat->Blend) { AnyBlend = true; break; }
-            if (AnyBlend) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Translúcidos");
-                D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[3] = {
-                    Targets.HDRRTVHeap.CpuHandle(0), Targets.UpscaleMaskRTVHeap.CpuHandle(0),
-                    Targets.UpscaleMaskRTVHeap.CpuHandle(1) };
-                CommandList->OMSetRenderTargets(_countof(BlendRTVs), BlendRTVs, FALSE, &DSV);
-                CommandList->RSSetViewports(1, &Viewport);
-                CommandList->RSSetScissorRects(1, &ScissorRect);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
-                CommandList->SetGraphicsRootConstantBufferView(
-                    0, ConstantBuffer->GetGPUVirtualAddress() +
-                       static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
-                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-                CommandList->SetGraphicsRootDescriptorTable(
-                    6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
-                {
-                    const u32 GITable = (UseGI && DDGI.IsReady())
-                        ? DDGI.SceneGITableStart() : IBLTableStart;
-                    CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
-                }
-                {
-                    const u32 AtmoTable = Atmosphere.IsInitialized()
-                        ? Atmosphere.TransmittanceSRV() : IBLTableStart;
-                    CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
-                }
-                CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
-                for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
-                    if (!It->Mat->Blend) continue;
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
-                    It->Mat->Bind(CommandList, SRVHeap);
-                    It->R->Mesh->Draw(CommandList);
-                }
+            FGpuScope Scope(GpuProfiler, CommandList, "Pós (bloom+tonemap)");
+            PostProcessor.Execute(CommandList, SRVHeap, PostInput, SwapChain.CurrentRTV(),
+                                  PostInputSRV, FrameSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
+        }
+
+        if (Sel.Renderable >= 0 && Sel.Slot != FSelectionDraw::kNoSlot && Sel.Mesh
+            && SelectionOutline.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Contorno da seleção");
+            FSelectionOutline::FDrawItem Item{ Sel.Mesh, Sel.Model * Vw.ViewProjUnjittered };
+            SelectionOutline.RecordMask(CommandList, &Item, 1, FrameSlot);
+            auto BackRTV = SwapChain.CurrentRTV();
+            SelectionOutline.RecordOutline(CommandList, SRVHeap, BackRTV,
+                                           SwapChain.GetWidth(), SwapChain.GetHeight(), FrameSlot);
+        }
+
+        if (DebugDraw.IsInitialized() && !DebugDraw.Empty()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Debug draw (gizmo/ícones)");
+            const bool WantDepth = DebugDraw.NeedsSceneDepth() && Targets.DepthSRVSlot != kInvalidSlot;
+            FBarrierBatch Batch;
+            if (WantDepth) {
+                Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                Batch.Flush(CommandList);
+            }
+            // Eixos da camera em mundo (colunas da view row-vector) p/ os billboards de icone.
+            const Vec3 CamRight{ Vw.View.M[0][0], Vw.View.M[1][0], Vw.View.M[2][0] };
+            const Vec3 CamUp   { Vw.View.M[0][1], Vw.View.M[1][1], Vw.View.M[2][1] };
+            DebugDraw.Render(CommandList, FrameSlot, Vw.ViewProjUnjittered, SwapChain.CurrentRTV(),
+                             SwapChain.GetWidth(), SwapChain.GetHeight(), CamRight, CamUp,
+                             WantDepth ? SRVHeap.GpuHandle(Targets.DepthSRVSlot)
+                                       : D3D12_GPU_DESCRIPTOR_HANDLE{});
+            if (WantDepth) {
+                Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                 D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                Batch.Flush(CommandList);
             }
         }
+        // (o Clear e da FDebugDrawClearGuard no topo do metodo)
 
-        if (UseClouds && VolumetricClouds.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Nuvens");
+        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                             D3D12_RESOURCE_STATE_PRESENT);
+        BackBatch.Flush(CommandList);
+    }
 
-            const D3D12_RESOURCE_STATES CloudReadState =
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, CloudReadState);
-            Batch.Flush(CommandList);
-
-            VolumetricClouds.RecordRaymarch(CommandList, SRVHeap, Targets.DepthSRVSlot);
-
-            auto CloudRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &CloudRTV, FALSE, nullptr); // sem DSV: depth e SRV
-            VolumetricClouds.Composite(CommandList, SRVHeap, Targets.DepthSRVSlot);
-
-            Batch.Transition(Targets.DepthBuffer.Get(), CloudReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            Batch.Flush(CommandList);
-        }
-
-        // Registrado no proprio sitio (e nao reavaliando a condicao la embaixo) porque o que importa
-        // p/ o RR e se a geometria de debug FOI desenhada no HDR, nao se ela estava habilitada.
-        bool DDGIDebugDrew = false;
-        if (Device.RaytracingSupported() && DDGIDebugPass.GetEnabled() && DDGI.IsReady()) {
-            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-            CommandList->RSSetViewports(1, &Viewport);
-            CommandList->RSSetScissorRects(1, &ScissorRect);
-            DDGIDebugPass.Render(FrameSlot, CommandList, SRVHeap, DDGI, Vw.ViewProjection, Vw.CameraPosition,
-                                 FrameIndex);
-            DDGIDebugDrew = true;
-        }
+    // Fog de altura + perspectiva aerea, sun shafts e a cortina/gotas de chuva. Tudo isto
+    // compoe SOBRE o HDR ja iluminado, lendo o depth da cena — por isso vem depois do forward
+    // e antes de qualquer resolve temporal.
+    void Renderer::RecordVolumetricsAndRain(FPassContext& _Ctx) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const FFrameLighting& Lt       = *_Ctx.Light;
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+        const auto& DSV                = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
 
         if ((UseHeightFog || UseAerialPerspective) && Fog.IsInitialized()) {
             const D3D12_RESOURCE_STATES FogDepthRead =
@@ -3634,7 +2688,21 @@ namespace Smile {
             Batch.Flush(CommandList);
         }
 
-        // O dropdown do toolbar continua fullscreen no viewport. A selecao da janela e
+    }
+
+    // Visualizadores: alvo unico em fullscreen, a grade offscreen da janela de debug, o debug da
+    // BVH e o heatmap de flicker. Devolve se o HDR foi ENVENENADO para o Ray Reconstruction —
+    // conteudo que nao e a cena entrando no buffer que a rede consome (ver a nota interna).
+    bool Renderer::RecordDebugViews(FPassContext& _Ctx, bool _DDGIDebugDrew) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+        const auto& DSV                = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
+        const bool DDGIDebugDrew       = _DDGIDebugDrew;
+
         // independente: ela e composta num target offscreen e copiada para o QML.
         const auto& DbgAll = DebugTargets::All();
         const bool MainDebugActive = GBufferDebugMode > 0 || DebugTargetIndex < DbgAll.size();
@@ -3876,6 +2944,1417 @@ namespace Smile {
             }
             GBuffer.TransitionToWrite(CommandList);
         }
+        return RRPoisoned;
+    }
+
+    // Iluminacao da cena: ReSTIR GI e o trace de reflexao, o denoise do indireto, ReSTIR DI com
+    // o denoiser dedicado da direta, e o deferred lighting fullscreen que soma tudo sobre o
+    // emissivo que o G-buffer ja deixou no HDR.
+    void Renderer::RecordSceneLighting(FPassContext& _Ctx) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const FFrameLighting& Lt       = *_Ctx.Light;
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+        const auto& DSV                = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
+        const auto& Ctx                = _Ctx; // sites que ja liam Ctx.FrameCB
+        const auto& VisibleScratch     = _Ctx.Visible;
+        const auto ObjectCBBase        = _Ctx.ObjectCBBase;
+
+        if (Modes.ReSTIRGIActive) {
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR GI");
+                ReSTIRGI.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
+            }
+
+            if (Modes.NrdIndirectMode) {
+                if (Modes.ReflectionsActive) {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (trace)");
+                    Reflections.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
+                }
+                GpuProfiler.Begin(CommandList, "NRD denoise");
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Pack GI + reflexos");
+                    Nrd.TransitionInputsToWrite(CommandList);
+                    ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
+                    if (Modes.ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
+                    else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
+                }
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "RELAX indireto");
+                    Nrd.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
+                                 Vw.JitterPx, PrevJitterPx, FrameIndex);
+                    Nrd.Denoise(CommandList);
+                }
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Saida NRD indireta");
+                    Nrd.TransitionOutputToRead(CommandList);
+                }
+                GpuProfiler.End(CommandList); // NRD denoise
+                ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
+            }
+
+            // Velocity volta p/ PIXEL porque o TAA a le num passe grafico. Depth e G-buffer NAO
+            // voltam p/ DEPTH_WRITE / RENDER_TARGET: ninguem escreve neles daqui ate o deferred
+            // logo abaixo, que os quer em leitura combinada. O round-trip custava 2 barreiras por
+            // MRT + 2 no depth por frame sem nenhum escritor no meio, e o DEPTH_WRITE ainda podia
+            // disparar decompress/resummarize em alguns drivers.
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+        }
+
+        {
+            constexpr D3D12_RESOURCE_STATES DeferredReadState =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            const bool ReSTIRDIOn = Modes.ReSTIRDIActiveFrame;
+            // O G-buffer rastreia o proprio estado (AppendTransitions so recebe o alvo); o depth
+            // nao, entao o estado de origem depende de o bloco do ReSTIR ter rodado — ele deixa o
+            // depth em NON_PIXEL de proposito, em vez de devolver p/ DEPTH_WRITE.
+            const D3D12_RESOURCE_STATES DepthBefore =
+                Modes.ReSTIRGIActive ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+                               : D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            FBarrierBatch Batch;
+            GBuffer.AppendTransitions(Batch, DeferredReadState);
+            Batch.Transition(Targets.DepthBuffer.Get(), DepthBefore, DeferredReadState);
+            // O PS deferred nao usa velocity, mas o Pass A do ReSTIR DI usa em compute. So amplie
+            // o estado quando esse consumidor existir, evitando uma barreira no caminho legado.
+            if (ReSTIRDIOn)
+                Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState, DeferredReadState);
+            Batch.Flush(CommandList);
+
+            // ReSTIR DI roda ANTES do deferred. DeferredReadState inclui NON_PIXEL, exigido para
+            // G-buffer/depth, e o alvo precisa estar pronto quando o PS o somar. Um unico modo
+            // manda no dispatch e no gate do shader: divergir dobra ou apaga a luz.
+            if (ReSTIRDIOn) {
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
+                    ReSTIRDI.SetRayEpsilons(RayEps);
+                    ReSTIRDI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.View, PrevViewProj,
+                                            Vw.CameraPosition,
+                                            RenderWidth(), RenderHeight(), FrameIndex,
+                                            FrameLightCount, kRTMaskShadowFull,
+                                            /*EnableTemporalPermutation=*/Modes.RRMode,
+                                            TemporalMotion.InstanceCount(),
+                                            Modes.MotionHistoryValidThisFrame,
+                                            MeshLights.LightCount());
+                    ReSTIRDI.Record(CommandList, SRVHeap, &GpuProfiler);
+                }
+
+                if (Modes.NrdDirectMode) {
+                    FGpuScope Scope(GpuProfiler, CommandList, "NRD direta");
+                    {
+                        FGpuScope ChildScope(GpuProfiler, CommandList, "Pack direto");
+                        NrdDirect.TransitionInputsToWrite(CommandList);
+                        ReSTIRDI.RecordNrdPack(CommandList, SRVHeap);
+                    }
+                    {
+                        FGpuScope ChildScope(GpuProfiler, CommandList, "RELAX direto");
+                        NrdDirect.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
+                                           Vw.JitterPx, PrevJitterPx, FrameIndex);
+                        NrdDirect.Denoise(CommandList);
+                    }
+                    {
+                        FGpuScope ChildScope(GpuProfiler, CommandList, "Composite direto");
+                        NrdDirect.TransitionOutputToRead(CommandList);
+                        // O NRD liga seu heap privado; o composite pertence ao heap da engine.
+                        ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                        CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
+                        ReSTIRDI.RecordNrdComposite(CommandList, SRVHeap);
+                    }
+                }
+
+                // Os consumidores posteriores historicamente partem de PIXEL (inclusive o bloco
+                // de upscale, que usa barreira explicita). Nao deixe o estado combinado vazar.
+                FBarrierBatch RestoreVelocity;
+                RestoreVelocity.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                RestoreVelocity.Flush(CommandList);
+            }
+            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr); 
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            CommandList->SetGraphicsRootConstantBufferView(
+                0, Ctx.FrameCB);
+            CommandList->SetGraphicsRootDescriptorTable(2, SRVHeap.GpuHandle(GBuffer.SRVTableStart()));
+            CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
+            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+            {
+                const u32 GITable = (UseGI && DDGI.IsReady()) ? DDGI.SceneGITableStart() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
+            }
+            {
+                const u32 AOTable = AO.IsReady() ? AO.AOSRVSlot() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(8, SRVHeap.GpuHandle(AOTable));
+            }
+            {
+                const u32 ReSTIRTable = Modes.ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
+            }
+            {
+                // t20. Fallback no IBLTableStart quando inativo — descritor VALIDO, exatamente como
+                // o t16 do ReSTIR e o t14 do AO fazem: a root sig exige a tabela ligada mesmo que o
+                // shader nao a leia (LightParams.w = 0 fecha a leitura).
+                const u32 DirectLocalTable = ReSTIRDIOn ? ReSTIRDI.OutputSRVSlot()
+                                                        : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(12, SRVHeap.GpuHandle(DirectLocalTable));
+            }
+            {
+                // t21. Mesmo padrao: descritor VALIDO sempre; AtmoLightParams.w fecha a leitura
+                // quando a atmosfera esta off ou o caminho por pixel esta desligado.
+                const u32 AtmoTable = Atmosphere.IsInitialized()
+                    ? Atmosphere.TransmittanceSRV() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
+            }
+            CommandList->SetGraphicsRootShaderResourceView(
+                10, LightBuffer->GetGPUVirtualAddress() +
+                    static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight));
+            {
+                const u32 LocalShadowTable = LocalShadows.IsInitialized()
+                    ? LocalShadows.ShadowSRVSlot() : IBLTableStart;
+                CommandList->SetGraphicsRootDescriptorTable(11, SRVHeap.GpuHandle(LocalShadowTable));
+            }
+            GpuProfiler.Begin(CommandList, "Deferred lighting");
+            // Aditivo (soma sobre o emissivo do geometry pass); nas views de debug SSAO/GI o
+            // shader retorna a visualizacao inteira -> PSO opaco p/ substituir a tela.
+            const bool DeferredDebugView = AODebug || (UseGI && DDGI.IsReady() && GIDebug);
+            CommandList->SetPipelineState(DeferredDebugView
+                ? PipelineState.PSODeferredLightingDebug()
+                : PipelineState.PSODeferredLighting());
+            CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            CommandList->IASetVertexBuffers(0, 0, nullptr);
+            CommandList->IASetIndexBuffer(nullptr);
+            CommandList->DrawInstanced(3, 1, 0, 0);
+            GpuProfiler.End(CommandList); 
+
+            const u32 PointGIFlags =
+                (GIChebyshev ? 1u : 0u) |
+                (GISkipInactiveProbes ? 2u : 0u) |
+                (GISkipInactiveFallback ? 4u : 0u);
+            DDGIDebugPass.RecordPointDiagnostic(
+                FrameSlot, CommandList, SRVHeap, DDGI,
+                Vw.InvViewProjFull, Vw.CameraPosition,
+                RenderWidth(), RenderHeight(), PointGIFlags);
+
+            Batch.Transition(Targets.DepthBuffer.Get(), DeferredReadState,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
+        }
+
+        if (ObjectPicker.HasPendingRequest()) {
+            {
+                std::vector<FObjectPicker::FDrawItem> PickItems;
+                PickItems.reserve(VisibleScratch.size());
+                for (const FVisibleItem& V : VisibleScratch)
+                    PickItems.push_back({ V.R->Mesh,
+                                          ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants),
+                                          V.SceneIndex + 1 });
+                ObjectPicker.RecordIDPass(CommandList, DSV, PickItems.data(), PickItems.size(),
+                                          RenderWidth(), RenderHeight());
+
+                auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                CommandList->SetGraphicsRootConstantBufferView(
+                    0, Ctx.FrameCB);
+                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+            }
+        }
+    }
+
+    // Tudo que compoe SOBRE a cena ja iluminada e ainda le/escreve o HDR em resolucao de render:
+    // composite das reflexoes, superficie da agua (com as copias de cor/depth e a cadeia de mips
+    // antes), translucidos em forward blend e as nuvens volumetricas.
+    void Renderer::RecordForwardAndClouds(FPassContext& _Ctx) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const FFrameLighting& Lt       = *_Ctx.Light;
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+        const auto& DSV                = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
+        const auto& Ctx                = _Ctx;
+        const auto& VisibleScratch     = _Ctx.Visible;
+        const auto ObjectCBBase        = _Ctx.ObjectCBBase;
+
+        if (Modes.ReflectionsActive) {
+            CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
+
+            const D3D12_RESOURCE_STATES ReadState =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, ReadState);
+            GBuffer.AppendTransitions(Batch, ReadState);
+            Batch.Flush(CommandList);
+
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
+                if (!Modes.NrdIndirectMode) Reflections.RecordTrace(CommandList, SRVHeap);
+                // RR: extrai o hitDist especular do Resolved ENQUANTO ele esta NON_PIXEL (o composite
+                // cru abaixo o transiciona p/ PIXEL). O RecordTrace acima parou no Resolved (RawSpec).
+                if (Modes.RRMode)
+                    RRGuides.RecordSpecHitDist(CommandList, SRVHeap,
+                                               SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()),
+                                               Ctx.FrameCB);
+                Reflections.RecordComposite(CommandList, SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
+                                            RenderWidth(), RenderHeight());
+            }
+
+            Batch.Transition(Targets.DepthBuffer.Get(), ReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
+
+            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            CommandList->SetGraphicsRootConstantBufferView(
+                0, Ctx.FrameCB);
+            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+        }
+
+        if (UseWater && Water.IsInitialized() && Modes.WaterSceneCopiesReady) {
+            CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr); 
+
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[0],
+                                    D3D12_RESOURCE_STATE_COPY_DEST, 0);
+            Batch.TransitionTracked(Targets.SceneDepthCopy.Get(), Targets.SceneDepthCopyState,
+                                    D3D12_RESOURCE_STATE_COPY_DEST);
+            Batch.Flush(CommandList);
+
+            D3D12_TEXTURE_COPY_LOCATION ColorDst{};
+            ColorDst.pResource        = Targets.SceneColorCopy.Get();
+            ColorDst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            ColorDst.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION ColorSrc{};
+            ColorSrc.pResource        = Targets.HDRColorBuffer.Get();
+            ColorSrc.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            ColorSrc.SubresourceIndex = 0;
+            CommandList->CopyTextureRegion(&ColorDst, 0, 0, 0, &ColorSrc, nullptr);
+            CommandList->CopyResource(Targets.SceneDepthCopy.Get(), Targets.DepthBuffer.Get());
+
+            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                             D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            constexpr D3D12_RESOURCE_STATES SceneCopyRead =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[0],
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, 0);
+            Batch.TransitionTracked(Targets.SceneDepthCopy.Get(), Targets.SceneDepthCopyState, SceneCopyRead);
+            Batch.Flush(CommandList);
+
+            if (Targets.SceneColorMipCount > 1) {
+                Targets.SceneColorMipPSO.Bind(CommandList);
+                const u32 Constants[8] = {
+                    RenderWidth(), RenderHeight(), 0u, 0u, 0u, 0u, 0u, 0u };
+                CommandList->SetComputeRoot32BitConstants(0, _countof(Constants), Constants, 0);
+
+                for (u32 Mip = 1; Mip < Targets.SceneColorMipCount; ++Mip) {
+                    Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[Mip],
+                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, Mip);
+                    Batch.Flush(CommandList);
+
+                    CommandList->SetComputeRootDescriptorTable(
+                        1, SRVHeap.GpuHandle(Targets.SceneColorMipSRVStart + Mip - 1));
+                    CommandList->SetComputeRootDescriptorTable(
+                        2, SRVHeap.GpuHandle(Targets.SceneColorMipUAVStart + Mip));
+                    const u32 MipWidth  = std::max(1u, RenderWidth() >> Mip);
+                    const u32 MipHeight = std::max(1u, RenderHeight() >> Mip);
+                    CommandList->Dispatch((MipWidth + 7u) / 8u, (MipHeight + 7u) / 8u, 1);
+
+                    Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[Mip],
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, Mip);
+                    Batch.Flush(CommandList);
+                }
+            }
+
+            // O water base usa a mesma copia para refracao no PS, enquanto o trace de reflexo
+            // usa a piramide no compute. Encerrar todos os subrecursos no estado combinado evita
+            // uma transicao do recurso inteiro sobre estados divergentes.
+            for (u32 Mip = 0; Mip < Targets.SceneColorMipCount; ++Mip)
+                Batch.TransitionTracked(Targets.SceneColorCopy.Get(), Targets.SceneColorMipStates[Mip],
+                                        SceneCopyRead, Mip);
+            Batch.Flush(CommandList);
+
+            auto HDR_RTV_Rebind = Targets.HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &HDR_RTV_Rebind, FALSE, &DSV);
+        }
+
+        if (UseWater && Water.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Água — superfície");
+
+            FBarrierBatch WaterBatch;
+            WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+            WaterBatch.Flush(CommandList);
+            const bool WaterReflectionsActive = Modes.DedicatedWaterReflections;
+            const bool ForceFullWaterOutputs = Modes.RRMode || Water.GetGuideInvisible() ||
+                Water.GetDebugMode() == FWaterRenderer::EDebugMode::Wireframe;
+            FWaterRenderer::EOutputMode WaterOutputMode;
+            if (Modes.RRMode) {
+                WaterOutputMode = FWaterRenderer::EOutputMode::RayReconstruction;
+            } else if (WaterReflectionsActive) {
+                WaterOutputMode = FWaterRenderer::EOutputMode::ReflectionGuides;
+            } else {
+                WaterOutputMode = ForceFullWaterOutputs
+                    ? FWaterRenderer::EOutputMode::RayReconstruction
+                    : (Modes.UpscaleActive ? FWaterRenderer::EOutputMode::TemporalMasks
+                                     : FWaterRenderer::EOutputMode::Base);
+            }
+            D3D12_CPU_DESCRIPTOR_HANDLE WaterRTVs[8] = {
+                Targets.HDRRTVHeap.CpuHandle(0), Targets.VelocityRTVHeap.CpuHandle(0) };
+            u32 WaterRTVCount = 2;
+            if (WaterOutputMode == FWaterRenderer::EOutputMode::TemporalMasks) {
+                WaterRTVs[2] = Targets.UpscaleMaskRTVHeap.CpuHandle(0);
+                WaterRTVs[3] = Targets.UpscaleMaskRTVHeap.CpuHandle(1);
+                WaterRTVCount = 4;
+            } else if (WaterOutputMode == FWaterRenderer::EOutputMode::RayReconstruction) {
+                RRGuides.PrepareSpecHitForWater(CommandList);
+                WaterRTVs[2] = GBuffer.RTVHandle(0);
+                WaterRTVs[3] = GBuffer.RTVHandle(1);
+                WaterRTVs[4] = GBuffer.RTVHandle(2);
+                WaterRTVs[5] = Targets.UpscaleMaskRTVHeap.CpuHandle(0);
+                WaterRTVs[6] = Targets.UpscaleMaskRTVHeap.CpuHandle(1);
+                WaterRTVs[7] = RRGuides.SpecHitRTV();
+                WaterRTVCount = 8;
+            } else if (WaterOutputMode == FWaterRenderer::EOutputMode::ReflectionGuides) {
+                WaterRTVs[2] = GBuffer.RTVHandle(0);
+                WaterRTVs[3] = GBuffer.RTVHandle(1);
+                WaterRTVs[4] = GBuffer.RTVHandle(2);
+                WaterRTVs[5] = Targets.UpscaleMaskRTVHeap.CpuHandle(0);
+                WaterRTVs[6] = Targets.UpscaleMaskRTVHeap.CpuHandle(1);
+                WaterRTVCount = 7;
+            }
+            CommandList->OMSetRenderTargets(WaterRTVCount, WaterRTVs, FALSE, &DSV);
+
+            const u32 WaterReflCube =
+                (UseAtmosphereSky && Atmosphere.IsInitialized())
+                    ? Atmosphere.SkyReflectionSRV()
+                    : HDREnv.SpecularSRV();
+            const u32 OceanDispSlots[kOceanCascades] = {
+                Ocean[0].SRVSlot(), Ocean[1].SRVSlot(), Ocean[2].SRVSlot() };
+            const u32 OceanPreviousDispSlots[kOceanCascades] = {
+                Ocean[0].PreviousSRVSlot(), Ocean[1].PreviousSRVSlot(),
+                Ocean[2].PreviousSRVSlot() };
+            const u32 OceanNormalSlots[kOceanCascades] = {
+                Ocean[0].NormalSRVSlot(), Ocean[1].NormalSRVSlot(), Ocean[2].NormalSRVSlot() };
+            Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, OceanDispSlots,
+                                OceanPreviousDispSlots, OceanNormalSlots, Targets.SceneCopyTableStart,
+                                SunShadows.ConstantsAddress(),
+                                SunShadows.ShadowSRVSlot(), WaterOutputMode);
+
+            if (WaterReflectionsActive) {
+                WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                GBuffer.AppendTransitions(WaterBatch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Flush(CommandList);
+
+                Reflections.RecordWaterTrace(CommandList, SRVHeap, &GpuProfiler);
+                if (Modes.RRMode) {
+                    RRGuides.RecordWaterSpecHitDist(
+                        CommandList, SRVHeap,
+                        SRVHeap.GpuHandle(Reflections.GetWaterSpecHitTable()),
+                        Ctx.FrameCB);
+                }
+                Reflections.RecordWaterComposite(CommandList, SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
+                                                 RenderWidth(), RenderHeight());
+
+                WaterBatch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                      D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                GBuffer.AppendTransitions(WaterBatch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Flush(CommandList);
+            } else {
+                WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                WaterBatch.Flush(CommandList);
+            }
+            auto PostWaterRTV = Targets.HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &PostWaterRTV, FALSE, &DSV);
+        }
+
+        // Transparencias foreground sao compostas depois da agua: nao contaminam a copia usada
+        // pela refracao e passam a testar contra a profundidade real da superficie.
+        {
+            bool AnyBlend = false;
+            for (const FVisibleItem& V : VisibleScratch)
+                if (V.Mat->Blend) { AnyBlend = true; break; }
+            if (AnyBlend) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Translúcidos");
+                D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[3] = {
+                    Targets.HDRRTVHeap.CpuHandle(0), Targets.UpscaleMaskRTVHeap.CpuHandle(0),
+                    Targets.UpscaleMaskRTVHeap.CpuHandle(1) };
+                CommandList->OMSetRenderTargets(_countof(BlendRTVs), BlendRTVs, FALSE, &DSV);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                CommandList->SetGraphicsRootConstantBufferView(
+                    0, Ctx.FrameCB);
+                CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
+                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+                CommandList->SetGraphicsRootDescriptorTable(
+                    6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+                {
+                    const u32 GITable = (UseGI && DDGI.IsReady())
+                        ? DDGI.SceneGITableStart() : IBLTableStart;
+                    CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
+                }
+                {
+                    const u32 AtmoTable = Atmosphere.IsInitialized()
+                        ? Atmosphere.TransmittanceSRV() : IBLTableStart;
+                    CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
+                }
+                CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
+                for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
+                    if (!It->Mat->Blend) continue;
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
+                    It->Mat->Bind(CommandList, SRVHeap);
+                    It->R->Mesh->Draw(CommandList);
+                }
+            }
+        }
+
+        if (UseClouds && VolumetricClouds.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Nuvens");
+
+            const D3D12_RESOURCE_STATES CloudReadState =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, CloudReadState);
+            Batch.Flush(CommandList);
+
+            VolumetricClouds.RecordRaymarch(CommandList, SRVHeap, Targets.DepthSRVSlot);
+
+            auto CloudRTV = Targets.HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &CloudRTV, FALSE, nullptr); // sem DSV: depth e SRV
+            VolumetricClouds.Composite(CommandList, SRVHeap, Targets.DepthSRVSlot);
+
+            Batch.Transition(Targets.DepthBuffer.Get(), CloudReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Flush(CommandList);
+        }
+    }
+
+    // CSM do sol (com o cache de casters estaticos) e as sombras locais de spot/point.
+    void Renderer::RecordShadows(FPassContext& _Ctx, const FLocalShadowJobs& _Jobs) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const FFrameLighting& Lt       = *_Ctx.Light;
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+        const auto& DSV                = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
+        const auto& Ctx                = _Ctx;
+        const auto& AllItems           = _Ctx.All;
+        const auto& VisibleScratch     = _Ctx.Visible;
+        const auto ObjectCBBase        = _Ctx.ObjectCBBase;
+        const auto& LocalShadowJobs    = _Jobs.Spot;
+        const auto& LocalCubeJobs      = _Jobs.Cube;
+
+        {
+            const f32 ShadowNoiseFrame = (Modes.TAAActive || Modes.UpscaleActive)
+                ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
+            SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, Vw.View, Vw.CameraPosition,
+                                      Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame,
+                                      Scene.StaticCastersVersion());
+            if (UseSunShadows) {
+                std::vector<FSunShadows::FShadowDrawItem> Casters;
+                Casters.reserve(AllItems.size());
+                for (const FDrawItem& A : AllItems) {
+                    // Translucido nao projeta sombra opaca (vidro deixa o sol entrar).
+                    if (A.Mat && A.Mat->Blend) continue;
+                    // Objeto sob arraste do gizmo conta como DINAMICO enquanto o arraste dura,
+                    // qualquer que seja a mobilidade dele. Sem isto cada frame de mouse
+                    // invalidaria o mapa estatico e o editor ficaria pior do que sem cache
+                    // nenhum — a mesma razao pela qual a UE trata primitiva movida como
+                    // movable e so re-cacheia quando ela para.
+                    const bool Dyn = A.R->Mobility == EMobility::Dynamic ||
+                                     (DraggingRenderableId != 0 && A.R->Id == DraggingRenderableId);
+                    Casters.push_back({ A.R->Mesh, A.Mat,
+                                        ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                        A.R->AABBMin, A.R->AABBMax, Dyn });
+                }
+                // Ordena UMA vez, fora do laco de cascatas: o RecordDepthPass varre esta
+                // lista 4x e, em ordem de cena, alternava PSO opaco/masked a cada item que
+                // trocasse de tipo. Opacos primeiro (PSO trocado uma unica vez, na fronteira)
+                // e alpha-tested agrupados por material, o que tambem deixa o Bind repetido
+                // ser pulado la dentro.
+                //
+                // Mobilidade entra como chave PRIMARIA: os estaticos ficam contiguos em
+                // [0, N) e os dinamicos em [N, Count), que e a fronteira de onde o cache vai
+                // rasterizar cada metade em um alvo diferente. Agrupar por material continua
+                // valendo DENTRO de cada metade, que e onde o batching importa.
+                std::sort(Casters.begin(), Casters.end(),
+                          [](const FSunShadows::FShadowDrawItem& a,
+                             const FSunShadows::FShadowDrawItem& b) {
+                              if (a.Dynamic != b.Dynamic) return !a.Dynamic;
+                              const bool am = a.Mat && a.Mat->Constants.AlphaTest != 0;
+                              const bool bm = b.Mat && b.Mat->Constants.AlphaTest != 0;
+                              if (am != bm) return !am;
+                              return a.Mat < b.Mat;
+                          });
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
+                    FSunShadows::FExtraCascadeDraw TerrainCasters;
+                    if (UseTerrain && Terrain.IsLoaded())
+                        TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd, u32,
+                                                D3D12_GPU_VIRTUAL_ADDRESS CascadeCB,
+                                                const Mat44& CascadeVP) {
+                            Terrain.RenderShadowCascade(Cmd, SRVHeap, CascadeCB, CascadeVP);
+                        };
+                    SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size(),
+                                               TerrainCasters, &GpuProfiler);
+                }
+
+                auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+                CommandList->RSSetViewports(1, &Viewport);
+                CommandList->RSSetScissorRects(1, &ScissorRect);
+                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                CommandList->SetGraphicsRootConstantBufferView(
+                    0, Ctx.FrameCB);
+            } else {
+                SunShadows.EnsureReadable(CommandList);
+            }
+
+            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+        }
+
+        if (!LocalShadowJobs.empty() || !LocalCubeJobs.empty()) {
+            std::vector<FLocalShadows::FShadowDrawItem> LocalCasters;
+            LocalCasters.reserve(AllItems.size());
+            for (const FDrawItem& A : AllItems) {
+                if (A.Mat && A.Mat->Blend) continue; // vidro nao projeta sombra opaca
+                LocalCasters.push_back({ A.R->Mesh, A.Mat,
+                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                         A.R->AABBMin, A.R->AABBMax });
+            }
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Sombras — locais");
+                // Terreno tambem projeta nas luzes locais. Sem isto o terreno era iluminado
+                // por point/spot (escreve G-buffer) mas nao aparecia nos shadow maps delas:
+                // poste atravessava a colina, e a volumetrica — que le os MESMOS t18/t19 —
+                // mostrava o god ray passando pelo terreno.
+                FLocalShadows::FExtraLocalDraw TerrainCasters;
+                if (UseTerrain && Terrain.IsLoaded())
+                    TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd,
+                                            D3D12_GPU_VIRTUAL_ADDRESS SliceCB,
+                                            const Mat44& SliceVP,
+                                            const Vec3& LightPos, f32 Radius) {
+                        // Perspectiva com depth clip (o near corta de verdade, ao contrario da
+                        // cascata ortho do sol) + a esfera da luz, o mesmo filtro que os meshes
+                        // recebem na broad phase.
+                        Terrain.RenderShadowCascade(Cmd, SRVHeap, SliceCB, SliceVP, true,
+                                                    LightPos, Radius);
+                    };
+                LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
+                                             LocalCasters.data(), LocalCasters.size(),
+                                             LocalShadowJobs.data(),
+                                             static_cast<u32>(LocalShadowJobs.size()),
+                                             LocalCubeJobs.data(),
+                                             static_cast<u32>(LocalCubeJobs.size()),
+                                             TerrainCasters);
+            }
+
+            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            CommandList->SetGraphicsRootConstantBufferView(
+                0, Ctx.FrameCB);
+            CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+        } else if (LocalShadows.IsInitialized()) {
+            LocalShadows.EnsureReadable(CommandList);
+        }
+    }
+
+    // Z-prepass (opacos, mascarados, terreno), build+teste do HZB e o GTAO. Tudo consome so
+    // profundidade e a normal geometrica — o G-buffer ainda nem foi escrito.
+    void Renderer::RecordDepthPrepass(FPassContext& _Ctx) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const FFrameLighting& Lt       = *_Ctx.Light;
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+        const auto& DSV                = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
+        const auto& Ctx                = _Ctx;
+        const auto& AllItems           = _Ctx.All;
+        const auto& VisibleScratch     = _Ctx.Visible;
+        const auto ObjectCBBase        = _Ctx.ObjectCBBase;
+
+        const bool DoPrepass = true;
+        if (DoPrepass) {
+            GpuProfiler.Begin(CommandList, "Z-prepass");
+            if (Modes.AOWillRun) {
+                FBarrierBatch Batch;
+                Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
+                                        D3D12_RESOURCE_STATE_RENDER_TARGET);
+                Batch.Flush(CommandList);
+                auto NormalRTV = Targets.NormalRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &NormalRTV, FALSE, &DSV);
+                const FLOAT NeutralN[4] = { 0.5f, 0.5f, 0.5f, 0.0f }; 
+                CommandList->ClearRenderTargetView(NormalRTV, NeutralN, 0, nullptr);
+                CommandList->SetPipelineState(PipelineState.PSODepthNormal());
+            } else {
+                CommandList->SetPipelineState(PipelineState.PSODepthOnly());
+            }
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Z - opacos");
+                for (const FVisibleItem& V : VisibleScratch) {
+                    if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    V.R->Mesh->Draw(CommandList);
+                }
+            }
+
+            CommandList->SetPipelineState(Modes.AOWillRun ? PipelineState.PSODepthNormalMasked()
+                                                    : PipelineState.PSODepthOnlyMasked());
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "Z - mascarados");
+                for (const FVisibleItem& V : VisibleScratch) {
+                    if (V.Mat->Blend) continue;
+                    if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    V.Mat->Bind(CommandList, SRVHeap);
+                    V.R->Mesh->Draw(CommandList);
+                }
+            }
+
+            if (UseTerrain && Terrain.IsLoaded()) {
+                FGpuScope Scope(GpuProfiler, CommandList, "Z - terreno");
+                Terrain.RenderDepthPrepass(CommandList, SRVHeap, Modes.AOWillRun);
+            }
+            GpuProfiler.End(CommandList); // Z-prepass
+        }
+
+        // HZB do depth do prepass (min-reduce reverse-Z) + teste dos AABBs com a VP
+        // sem jitter DESTE frame; o resultado volta pela readback ring e e consumido
+        // kFramesInFlight frames depois no filtro do VisibleScratch (acima).
+        if (HiZ.IsReady() && UseOcclusionCulling) {
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "HZB");
+                HiZ.RecordBuild(CommandList, SRVHeap, Targets.DepthSRVSlot);
+                HiZ.RecordTest(CommandList, SRVHeap, FrameSlot,
+                               static_cast<u32>(Scene.Renderables().size()),
+                               Vw.ViewProjUnjittered);
+            }
+            Batch.Transition(Targets.DepthBuffer.Get(),
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.Flush(CommandList);
+        }
+
+        if (AO.IsReady()) {
+            if (Modes.AOWillRun) {
+                CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+
+                const f32 TanHalf = std::tan(0.5f * Vw.FovY);
+                const f32 M11 = 1.0f / TanHalf;
+                const f32 M00 = M11 / Vw.Aspect;
+                const f32 M22 = Vw.Projection.M[2][2];
+                const f32 M32 = Vw.Projection.M[3][2];
+                AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, Vw.View,
+                                  RenderWidth(), RenderHeight(), FrameIndex);
+
+                FBarrierBatch Batch;
+                Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                Batch.Flush(CommandList);
+                {
+                    FGpuScope Scope(GpuProfiler, CommandList, "GTAO");
+                    AO.Execute(CommandList, SRVHeap, Targets.DepthSRVSlot);
+                }
+
+                Batch.Transition(Targets.DepthBuffer.Get(),
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                 D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                Batch.Flush(CommandList);
+
+                auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
+                CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                CommandList->SetGraphicsRootConstantBufferView(
+                    0, Ctx.FrameCB);
+                CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
+                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+            } else {
+                AO.ClearToWhite(CommandList, SRVHeap);
+            }
+        }
+    }
+
+    // Geometry pass (G-buffer + velocity + emissivo no HDR), velocity do background,
+    // wetness da chuva sobre o G-buffer e o vetor de movimento temporal confiavel.
+    void Renderer::RecordGBuffer(FPassContext& _Ctx) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const FFrameLighting& Lt       = *_Ctx.Light;
+        const FFrameAmbient& Amb       = *_Ctx.Ambient; // wetness da chuva integra o ambiente
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+        const auto& DSV                = _Ctx.DSV;
+        const D3D12_VIEWPORT& Viewport = _Ctx.Viewport;
+        const D3D12_RECT& ScissorRect  = _Ctx.Scissor;
+        const auto& Ctx                = _Ctx;
+        const auto& AllItems           = _Ctx.All;
+        const auto& VisibleScratch     = _Ctx.Visible;
+        const auto ObjectCBBase        = _Ctx.ObjectCBBase;
+
+        {
+            GpuProfiler.Begin(CommandList, "G-buffer (geometria)");
+            FBarrierBatch Batch;
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Batch.Flush(CommandList);
+            // 5o MRT = SceneColor HDR: o emissivo e escrito direto nele (dieta do G-buffer).
+            // O ceu ja esta la (desenhado antes do prepass); a geometria opaca sobrescreve so
+            // os proprios pixels e o deferred lighting depois SOMA a luz (blend aditivo).
+            D3D12_CPU_DESCRIPTOR_HANDLE GBufRTVs[FGBuffer::kTargetCount + 2] = {
+                GBuffer.RTVHandle(0), GBuffer.RTVHandle(1), GBuffer.RTVHandle(2),
+                Targets.VelocityRTVHeap.CpuHandle(0), Targets.HDRRTVHeap.CpuHandle(0) };
+            CommandList->OMSetRenderTargets(FGBuffer::kTargetCount + 2, GBufRTVs, FALSE, &DSV);
+            GBuffer.Clear(CommandList);
+            const FLOAT VelClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            CommandList->ClearRenderTargetView(Targets.VelocityRTVHeap.CpuHandle(0), VelClear, 0, nullptr);
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            CommandList->SetGraphicsRootConstantBufferView(
+                0, Ctx.FrameCB);
+
+            {
+                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - meshes");
+                ID3D12PipelineState* CurGeomPSO = nullptr;
+                for (const FVisibleItem& V : VisibleScratch) {
+                    FMaterial* Mat = V.Mat;
+                    if (Mat->Blend) continue;
+                    const bool TwoSided = Mat->IsTwoSidedForRT();
+                    ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
+                                                         : PipelineState.PSOGBuffer();
+                    if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
+                    CommandList->SetGraphicsRootConstantBufferView(
+                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    Mat->Bind(CommandList, SRVHeap);
+                    V.R->Mesh->Draw(CommandList);
+                }
+            }
+
+            if (UseTerrain && Terrain.IsLoaded()) {
+                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - terreno");
+                Terrain.RenderGBuffer(CommandList, SRVHeap);
+            }
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+            GpuProfiler.End(CommandList); // G-buffer (geometria)
+        }
+
+        // Motion vector do BACKGROUND: o G-buffer so escreveu velocity p/ geometria+terreno; ceu/nuvens/fog
+        // ficaram ZERO (clear acima). Preenche o velocity do ceu (reproj rotacao-only, sem parallax) p/ o
+        // DLSS/RR/TAA nao arrastar o historico do ceu ao girar a camera. So roda com consumidor temporal.
+        if ((Modes.UpscaleActive || Modes.TAAActive) && BgVelocity.IsReady()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Velocity do background");
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Batch.Flush(CommandList);
+
+            BgVelocity.Record(CommandList, FrameSlot, SRVHeap.GpuHandle(Targets.DepthSRVSlot),
+                              SRVHeap.GpuHandle(Targets.VelocityUavSlot), Vw.SkyClipToPrevClip,
+                              RenderWidth(), RenderHeight());
+
+            FBarrierBatch Restore;
+            Restore.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Restore.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Restore.Flush(CommandList);
+        }
+
+        if (Weather.Active() && RainWetness.IsInitialized()) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
+            if (Weather.GetRainOcclusion()) {
+                std::vector<FRainWetness::FOccluderItem> RainOccluders;
+                RainOccluders.reserve(AllItems.size());
+                for (const FDrawItem& A : AllItems)
+                    RainOccluders.push_back({ A.R->Mesh, A.Mat,
+                                              ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                              A.R->AABBMin, A.R->AABBMax });
+                RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, Vw.CameraPosition,
+                                               RainOccluders.data(), RainOccluders.size());
+            }
+            const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
+                                       Lt.KeyColor.Z * Lt.KeyInt };
+            RainWetness.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
+                                       Vw.CameraPosition, ElapsedTime, Weather, Lt.KeyDir,
+                                       KeyColorInt, Amb.Sky);
+            RainWetness.Execute(CommandList, SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
+                                RenderWidth(), RenderHeight());
+        }
+
+        if (Modes.ReliableMotionActive) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Motion temporal confiavel");
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+            TemporalMotion.Record(CommandList, SRVHeap, &GpuProfiler);
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+        }
+    }
+
+    // Empacota as luzes puntuais da DIRETA (FGPULight, root SRV t17 do deferred): cull pelo
+    // frustum, prioriza quem ganha slot de sombra e monta as matrizes. Devolve os jobs de sombra
+    // local para o passe de sombras — eles saem daqui porque e aqui que o cull ja aconteceu.
+    FLocalShadowJobs Renderer::PackDirectLights(FPassContext& _Ctx, FrameConstants* MappedCB) {
+        auto* CommandList              = _Ctx.Cmd;
+        const FFrameModes& Modes       = *_Ctx.Modes;
+        const FFrameView& Vw           = *_Ctx.View;
+        const FFrameLighting& Lt       = *_Ctx.Light;
+        const u32 FrameSlot            = _Ctx.FrameSlot;
+
+        const Vec4* Planes = Vw.FrustumPlanes; // resolvido no ResolveFrameView
+
+        FLocalShadowJobs ShadowJobs;
+        auto& LocalShadowJobs = ShadowJobs.Spot;
+        auto& LocalCubeJobs   = ShadowJobs.Cube;
+        {
+            Vec4 NPlanes[6];
+            for (int i = 0; i < 6; ++i) {
+                const Vec4& p   = Planes[i];
+                const f32   len = std::sqrt(p.X*p.X + p.Y*p.Y + p.Z*p.Z);
+                const f32   inv = len > 1e-6f ? 1.0f / len : 0.0f;
+                NPlanes[i] = { p.X*inv, p.Y*inv, p.Z*inv, p.W*inv };
+            }
+
+            FGPULight* DstLights = reinterpret_cast<FGPULight*>(
+                MappedLightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULight));
+            u32 NumLights = 0;
+            u64 LightSetSignature = 1469598103934665603ull; // FNV-1a sobre IDs na ordem do buffer
+
+            struct ShadowCand { u32 Gpu; u32 LightIdx; u64 Id; f32 Key; };
+            std::vector<ShadowCand> ShadowCands;
+            std::vector<ShadowCand> CubeCands;
+
+            // Importancia da luz p/ a camera: energia x fracao angular que ela ocupa. O termo
+            // R^2/(d^2+R^2) satura em 1 quando a camera entra no raio (sem singularidade em
+            // d=0) e vira inverse-square quando ela se afasta. So distancia da camera (o
+            // criterio antigo) fazia uma vela a 2 m ganhar de um refletor a 8 m.
+            // Nao e a formula do Flax: la o sort e por ScreenSize, com soma da cor de desempate
+            // e hash do ID como criterio final (LightPass.cpp, SortLights). Aqui a area angular
+            // faz o papel do ScreenSize e a luminancia entra multiplicando em vez de desempatar.
+            auto ShadowScore = [&](const FLight& L) -> f32 {
+                const f32 Energy = L.Intensity * (L.Color.X * 0.2126f + L.Color.Y * 0.7152f +
+                                                  L.Color.Z * 0.0722f);
+                const Vec3 ToCam = L.Position - Vw.CameraPosition;
+                const f32 R2 = L.AttenuationRadius * L.AttenuationRadius;
+                return Energy * R2 / (ToCam.LengthSq() + R2);
+            };
+
+            auto& SceneLights = Scene.Lights();
+            for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
+                FLight& L = SceneLights[li];
+                // Identidade estavel na primeira vez que vemos a luz. O editor faz push_back
+                // direto em Lights(), entao a atribuicao mora aqui e nao no AddLight.
+                if (L.Id == 0) L.Id = Scene.AllocObjectId();
+                Vec3 PreviousLightPos = L.Position;
+                if (const auto It = PreviousDirectLightPositions.find(L.Id);
+                    It != PreviousDirectLightPositions.end())
+                    PreviousLightPos = It->second;
+                PreviousDirectLightPositions[L.Id] = L.Position;
+                if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
+                if (NumLights >= kMaxLights) break;
+
+                bool Outside = false;
+                for (int i = 0; i < 6 && !Outside; ++i) {
+                    const Vec4& p = NPlanes[i];
+                    Outside = (p.X*L.Position.X + p.Y*L.Position.Y + p.Z*L.Position.Z + p.W)
+                              < -L.AttenuationRadius;
+                }
+                if (Outside) continue;
+
+                FGPULight G;
+                G.PosInvRadius      = { L.Position.X, L.Position.Y, L.Position.Z,
+                                        1.0f / L.AttenuationRadius };
+                G.ColorSourceRadius = { L.Color.X * L.Intensity, L.Color.Y * L.Intensity,
+                                        L.Color.Z * L.Intensity,
+                                        std::max(L.SourceRadius, 0.01f) };
+                G.ShadowMatrix      = Mat44::Identity();
+                G.PrevPosInvRadius  = { PreviousLightPos.X, PreviousLightPos.Y,
+                                        PreviousLightPos.Z, 1.0f / L.AttenuationRadius };
+                if (L.Type == ELightType::Spot) {
+                    const Vec3 D = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                    const f32 OuterDeg  = std::clamp(L.OuterConeDeg, 1.0f, 89.0f);
+                    const f32 InnerDeg  = std::clamp(L.InnerConeDeg, 0.0f, OuterDeg);
+                    const f32 CosOuter  = std::cos(OuterDeg * ToRad);
+                    const f32 CosInner  = std::cos(InnerDeg * ToRad);
+                    G.DirCosOuter = { D.X, D.Y, D.Z, CosOuter };
+                    // w preserva a intencao do artista independentemente do orcamento de slices.
+                    // O raster usa y/z; o ReSTIR DI usa w para decidir se traca shadow ray.
+                    G.SpotParams  = { 1.0f / std::max(CosInner - CosOuter, 1e-4f),
+                                      -1.0f, 0.0f, L.CastShadows ? 1.0f : 0.0f };
+                    if (L.CastShadows && LocalShadows.IsInitialized()) {
+                        // Histerese: quem ja tem o slot vale mais no ranking, entao o novato
+                        // precisa ser sensivelmente melhor pra tomar. Sem isso duas luzes de
+                        // importancia parecida trocam de slice todo frame.
+                        const f32 Bias = LocalShadows.SpotOwns(L.Id)
+                                       ? FLocalShadows::kHysteresis : 1.0f;
+                        ShadowCands.push_back({ NumLights, li, L.Id, ShadowScore(L) * Bias });
+                    }
+                } else {
+                    G.DirCosOuter = { 0.0f, -1.0f, 0.0f, -2.0f }; // -2 = sem mascara de cone
+                    G.SpotParams  = { 0.0f, -1.0f, 0.0f, L.CastShadows ? 1.0f : 0.0f };
+                    if (L.CastShadows && LocalShadows.IsInitialized()) {
+                        const f32 Bias = LocalShadows.CubeOwns(L.Id)
+                                       ? FLocalShadows::kHysteresis : 1.0f;
+                        CubeCands.push_back({ NumLights, li, L.Id, ShadowScore(L) * Bias });
+                    }
+                }
+                DstLights[NumLights++] = G;
+                LightSetSignature ^= L.Id;
+                LightSetSignature *= 1099511628211ull;
+            }
+
+            // Matrizes do slice de spot. Usadas por todo mundo que emite job — inclusive quem
+            // esta em fade-out, que segue sendo redesenhado da pose atual.
+            auto SpotShadowVP = [&](const FLight& L, Mat44& OutLVP, f32& OutFar) {
+                const Vec3 D  = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
+                const Vec3 Up = std::fabs(D.Y) > 0.99f ? Vec3{ 0.0f, 0.0f, 1.0f }
+                                                       : Vec3{ 0.0f, 1.0f, 0.0f };
+                const f32 OuterRad = std::clamp(L.OuterConeDeg, 1.0f, 89.0f) * ToRad;
+                const f32 NearP    = FLocalShadows::kPointNear;
+                OutFar = std::max(L.AttenuationRadius, NearP * 2.0f);
+                OutLVP = Mat44::LookAtLH(L.Position, L.Position + D, Up) *
+                         Mat44::PerspectiveFovLH(2.0f * OuterRad, 1.0f, NearP, OutFar);
+            };
+            auto ToShadowUV = [](const Mat44& LVP) {
+                Mat44 BiasUV = Mat44::Identity();
+                BiasUV.M[0][0] = 0.5f;  BiasUV.M[1][1] = -0.5f;
+                BiasUV.M[3][0] = 0.5f;  BiasUV.M[3][1] = 0.5f;
+                return LVP * BiasUV;
+            };
+
+            // Id como desempate (mesma ideia do hash do ID no SortLights do Flax): std::sort nao
+            // e estavel, entao scores empatados poderiam trocar de ordem entre frames e mudar
+            // quem fica com o slot livre.
+            auto ByScore = [](const ShadowCand& a, const ShadowCand& b) {
+                return a.Key != b.Key ? a.Key > b.Key : a.Id < b.Id;
+            };
+            std::sort(ShadowCands.begin(), ShadowCands.end(), ByScore);
+            const u32 NumShadowed = std::min<u32>(static_cast<u32>(ShadowCands.size()),
+                                                  FLocalShadows::kActiveShadows);
+            // Slice pela IDENTIDADE da luz, nao por 's' (a posicao no ranking). Com 's' a mesma
+            // luz trocava de slice sempre que a camera reordenava o sort — nenhum cache de
+            // depth entre frames era possivel e nao havia como saber se a luz ja tinha sombra
+            // no frame anterior (pre-requisito de histerese/fade). Resolve a selecao INTEIRA de
+            // uma vez: um a um, o novato evicta um selecionado e dispara remapeamento em
+            // cascata (ver TShadowSlotCache::AcquireBatch).
+            u64 SpotIds[FLocalShadows::kActiveShadows];
+            u32 SpotSlot[FLocalShadows::kActiveShadows];
+            for (u32 s = 0; s < NumShadowed; ++s)
+                SpotIds[s] = SceneLights[ShadowCands[s].LightIdx].Id;
+            LocalShadows.AcquireSpotSlots(SpotIds, NumShadowed, SpotSlot);
+            LocalShadows.UpdateSpotFades(SpotIds, NumShadowed, LastDeltaTime);
+
+            for (u32 s = 0; s < NumShadowed; ++s) {
+                const u32 Slice = SpotSlot[s];
+                if (Slice == FLocalShadows::kNoSlot) continue;
+
+                const FLight& L = SceneLights[ShadowCands[s].LightIdx];
+                Mat44 LVP; f32 FarP;
+                SpotShadowVP(L, LVP, FarP);
+
+                FGPULight& G   = DstLights[ShadowCands[s].Gpu];
+                G.ShadowMatrix = ToShadowUV(LVP);
+                G.SpotParams.Y = static_cast<f32>(Slice);
+                G.SpotParams.Z = LocalShadows.SpotFadeAt(Slice);
+                LocalShadowJobs.push_back({ LVP, L.Position, FarP, Slice });
+            }
+
+            // Slices em FADE-OUT: a luz saiu da selecao mas o slot ainda nao zerou. Ela continua
+            // sendo tratada como caster normal — matriz recalculada e JOB emitido — so que com o
+            // fade caindo. Redesenhar (em vez de congelar o mapa do frame anterior) e o que
+            // mantem a sombra correta se a luz ou os casters se moverem durante a transicao.
+            // E o slice extra de kMaxShadows que paga por isso.
+            for (u32 i = 0; i < FLocalShadows::kMaxShadows; ++i) {
+                const u64 Owner = LocalShadows.SpotOwnerAt(i);
+                if (Owner == 0 || LocalShadows.SpotFadeAt(i) <= 0.0f) continue;
+                bool Active = false;
+                for (u32 s = 0; s < NumShadowed && !Active; ++s) Active = (SpotIds[s] == Owner);
+                if (Active) continue;
+                // Precisa seguir visivel (ter entrada em DstLights) p/ valer o redesenho.
+                for (const ShadowCand& C : ShadowCands) {
+                    if (C.Id != Owner) continue;
+                    const FLight& Lr = SceneLights[C.LightIdx];
+                    Mat44 LVP; f32 FarP;
+                    SpotShadowVP(Lr, LVP, FarP);
+                    FGPULight& G   = DstLights[C.Gpu];
+                    G.ShadowMatrix = ToShadowUV(LVP);
+                    G.SpotParams.Y = static_cast<f32>(i);
+                    G.SpotParams.Z = LocalShadows.SpotFadeAt(i);
+                    LocalShadowJobs.push_back({ LVP, Lr.Position, FarP, i });
+                    break;
+                }
+            }
+
+            std::sort(CubeCands.begin(), CubeCands.end(), ByScore);
+            const u32 NumCubes = std::min<u32>(static_cast<u32>(CubeCands.size()),
+                                               FLocalShadows::kActiveCubes);
+            u64 CubeIds[FLocalShadows::kActiveCubes];
+            u32 CubeSlot[FLocalShadows::kActiveCubes];
+            for (u32 c = 0; c < NumCubes; ++c)
+                CubeIds[c] = SceneLights[CubeCands[c].LightIdx].Id;
+            LocalShadows.AcquireCubeSlots(CubeIds, NumCubes, CubeSlot);
+            LocalShadows.UpdateCubeFades(CubeIds, NumCubes, LastDeltaTime);
+
+            for (u32 c = 0; c < NumCubes; ++c) {
+                const u32 Cube = CubeSlot[c];
+                if (Cube == FLocalShadows::kNoSlot) continue;
+
+                const FLight& L = SceneLights[CubeCands[c].LightIdx];
+                FGPULight& G   = DstLights[CubeCands[c].Gpu];
+                G.SpotParams.Y = static_cast<f32>(Cube);
+                G.SpotParams.Z = LocalShadows.CubeFadeAt(Cube);
+                LocalCubeJobs.push_back({ L.Position, L.AttenuationRadius, Cube });
+            }
+
+            // Cubos em fade-out (mesma logica dos spots; o point nem matriz precisa).
+            for (u32 i = 0; i < FLocalShadows::kMaxCubeShadows; ++i) {
+                const u64 Owner = LocalShadows.CubeOwnerAt(i);
+                if (Owner == 0 || LocalShadows.CubeFadeAt(i) <= 0.0f) continue;
+                bool Active = false;
+                for (u32 c = 0; c < NumCubes && !Active; ++c) Active = (CubeIds[c] == Owner);
+                if (Active) continue;
+                for (const ShadowCand& C : CubeCands) {
+                    if (C.Id != Owner) continue;
+                    const FLight& Lr = SceneLights[C.LightIdx];
+                    FGPULight& G   = DstLights[C.Gpu];
+                    G.SpotParams.Y = static_cast<f32>(i);
+                    G.SpotParams.Z = LocalShadows.CubeFadeAt(i);
+                    LocalCubeJobs.push_back({ Lr.Position, Lr.AttenuationRadius, i });
+                    break;
+                }
+            }
+
+            FrameLightCount = NumLights; // consumido pelos dispatches de direta local, mais adiante
+            const u64 NewLightSetSignature = LightSetSignature ^ static_cast<u64>(NumLights);
+            if (NewLightSetSignature != FrameLightSetSignature)
+                NrdDirect.InvalidateHistory();
+            FrameLightSetSignature = NewLightSetSignature;
+            ReSTIRDI.SetLightSetSignature(FrameLightSetSignature);
+            // Um bit escolhe o produtor da direta local: raster ou ReSTIR DI. O mesmo predicado
+            // manda no dispatch e no deferred; divergir aqui apagaria ou dobraria luz.
+            const f32 DirectLocalMode = Modes.ReSTIRDIActiveFrame ? 1.0f : 0.0f;
+            MappedCB->LightParams  = { static_cast<f32>(NumLights),
+                                       1.0f / static_cast<f32>(FLocalShadows::kResolution),
+                                       LocalShadows.GetDepthBias(),
+                                       DirectLocalMode };
+            MappedCB->LightParams2 = { 1.0f / static_cast<f32>(FLocalShadows::kCubeResolution),
+                                       FLocalShadows::kPointNear, 0.0f, 0.0f };
+
+            if (Modes.VolFogActive)
+                VolumetricFog.PatchLights(NumLights,
+                                          1.0f / static_cast<f32>(FLocalShadows::kResolution),
+                                          LocalShadows.GetDepthBias(),
+                                          FLocalShadows::kPointNear);
+        }
+        return ShadowJobs;
+    }
+
+    // Monta as listas de draw do frame: escreve o ObjectConstants de cada renderavel, resolve a
+    // selecao, aplica frustum + oclusao HZB e ordena front-to-back. E a 2a etapa de preenchimento
+    // do FPassContext — daqui em diante Ctx.All / Ctx.Visible / Ctx.Selection sao validos.
+    void Renderer::BuildDrawLists(FPassContext& _Ctx) {
+        const FFrameModes& Modes = *_Ctx.Modes;
+        const FFrameView& Vw     = *_Ctx.View;
+        const FFrameLighting& Lt = *_Ctx.Light;
+        const u32 FrameSlot      = _Ctx.FrameSlot;
+        // Era um `Camera.GetPosition()` proprio; e a MESMA chamada que produziu o
+        // Vw.CameraPosition no ResolveFrameView, e nada move a camera dentro do frame.
+        const Vec3& CamPos       = _Ctx.View->CameraPosition;
+
+        const u32 FrameObjectBase = FrameSlot * MaxObjects;
+
+        auto& AllItems = _Ctx.All;
+
+        u32             SelectedSlot  = kInvalidSlot;
+        const FGpuMesh* SelectedMesh  = nullptr;
+        Mat44           SelectedModel = Mat44::Identity();
+        // Hasteado do loop: a selecao virou uma consulta (mesh OU luz), e o loop abaixo roda
+        // por renderavel da cena.
+        const int       SelectedRenderable = GetSelectedObject();
+        {
+            const std::vector<FRenderable>& RList = Scene.Renderables();
+            AllItems.reserve(RList.size());
+            const size_t PrevCount = PrevModels.size();
+            PrevModels.resize(RList.size(), Mat44::Identity());
+            const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
+            for (size_t si = 0; si < RList.size(); ++si) {
+                const FRenderable& R = RList[si];
+                if (WriteOcclusionBounds)
+                    HiZ.WriteBounds(FrameSlot, static_cast<u32>(si), R.AABBMin, R.AABBMax);
+                if (!R.Visible || R.RaytracingOnly || !R.Mesh || !R.Mesh->IsValid()) continue;
+                if (AllItems.size() >= MaxObjects) break;
+                FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
+                const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
+                const Mat44 Model = R.Transform.Matrix();
+                const Mat44 PrevModel = (si < PrevCount) ? PrevModels[si] : Model;
+                ObjectConstants OC;
+                OC.MVP            = Model * Vw.ViewProjection;
+                OC.ModelMatrix    = Model;
+                OC.CurMVPNoJitter = Model * Vw.ViewProjUnjittered;
+                OC.PrevMVP        = PrevModel * PrevViewProj;
+                std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
+                            &OC, sizeof(ObjectConstants));
+                if (static_cast<int>(si) == SelectedRenderable) {
+                    SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedModel = Model;
+                }
+                AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
+                PrevModels[si] = Model;
+            }
+        }
+        // A selecao entra no contexto AQUI, no unico laco que ja varre a cena: o contorno a
+        // consome ~1400 linhas abaixo, e recompor la exigiria varrer tudo de novo.
+        _Ctx.Selection = { SelectedSlot, SelectedMesh, SelectedModel, SelectedRenderable };
+
+        // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
+        // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.
+        const u32* OcclusionVis = UseOcclusionCulling
+            ? HiZ.ResolveResults(FrameSlot, static_cast<u32>(Scene.Renderables().size()))
+            : nullptr;
+        u32 OccludedCount = 0;
+
+        auto& VisibleScratch = _Ctx.Visible;
+        VisibleScratch.reserve(AllItems.size());
+        for (const FDrawItem& A : AllItems) {
+            if (UseFrustumCulling && Vw.AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
+            // Objeto selecionado nunca e cullado (gizmo/drag move mais rapido que a
+            // latencia do readback e o pop incomodaria bem aqui). O resultado so cobre
+            // [0, Capacity); indices alem disso (ex.: proxy RT do terreno) ficam visiveis.
+            if (OcclusionVis && A.SceneIndex < HiZ.Capacity() &&
+                !OcclusionVis[A.SceneIndex] &&
+                static_cast<int>(A.SceneIndex) != SelectedRenderable) {
+                ++OccludedCount;
+                continue;
+            }
+            const f32 cx = (A.R->AABBMin.X + A.R->AABBMax.X) * 0.5f - CamPos.X;
+            const f32 cy = (A.R->AABBMin.Y + A.R->AABBMax.Y) * 0.5f - CamPos.Y;
+            const f32 cz = (A.R->AABBMin.Z + A.R->AABBMax.Z) * 0.5f - CamPos.Z;
+            VisibleScratch.push_back({ A.R, A.Mat, cx*cx + cy*cy + cz*cz, A.Slot, A.SceneIndex });
+        }
+        std::sort(VisibleScratch.begin(), VisibleScratch.end(),
+                  [](const FVisibleItem& a, const FVisibleItem& b) { return a.Dist < b.Dist; });
+        LastVisibleCount  = static_cast<u32>(VisibleScratch.size());
+        LastOccludedCount = OccludedCount;
+
+        if (UseTerrain && Terrain.IsLoaded())
+            Terrain.UpdatePerFrame(FrameSlot, Vw.ViewProjection, Vw.ViewProjUnjittered, PrevViewProj,
+                                   Vw.CameraPosition, Vw.FovY, Vw.MipBias);
+    }
+
+    void Renderer::RenderFrame() {
+        // O DebugDraw e preenchido pelo EDITOR antes do frame e consumido aqui. Se o frame morrer
+        // no meio (excecao — a render thread captura e tenta o proximo) ou sair pelo early return
+        // abaixo, o buffer nao pode sobreviver: o editor submete de novo no tick seguinte e a
+        // geometria duplicaria ate estourar o orcamento. A guarda faz do "limpa em toda saida"
+        // uma invariante do tipo, em vez de uma linha no fim do metodo.
+        struct FDebugDrawClearGuard {
+            FDebugDraw& Target;
+            ~FDebugDrawClearGuard() { Target.Clear(); }
+        } DebugDrawGuard{ DebugDraw };
+
+        if (!Initialized) return;
+
+        // Edicoes de material chegam da UI ENTRE frames e varias caem no mesmo frame (um arraste
+        // de slider dispara o setter a cada tick). Os setters so marcam; o refresh — que custa um
+        // Flush da fila + reset de historicos — acontece uma vez aqui, coalescido e ANTES do
+        // BeginFrame, ou seja, fora da gravacao do command list.
+        if (MaterialRTStateDirty) {
+            MaterialRTStateDirty = false;
+            Settings().NotifyMaterialRTStateChanged();
+        }
+        // Idem para energia de luz no indireto. Fica DEPOIS e em if separado de proposito: se os
+        // dois cairem no mesmo frame, o de material ja invalidou tudo e este vira no-op barato —
+        // mas ele nao pode DEPENDER daquele, porque mexer so no peso da luz nao marca material.
+        if (IndirectLightingDirty) {
+            IndirectLightingDirty = false;
+            Settings().NotifyIndirectLightingChanged();
+        }
+
+        CommandQueue.BeginFrame();
+
+        GpuProfiler.BeginFrame(CommandQueue.FrameIndex());
+        GpuProfiler.Begin(CommandQueue.List(), "Frame (GPU)");
+
+        ObjectPicker.Tick();
+
+        IUpscaler* ActiveUp = ActiveUpscaler();          // FSR ou DLSS-SR ativo (nullptr = None/indisponivel)
+        const FFrameModes Modes = ResolveFrameModes();
+        const FFrameView  Vw    = ResolveFrameView(Modes, ActiveUp);
+        LastViewProj = Vw.ViewProjUnjittered;
+
+        const u32 FrameSlot = CommandQueue.FrameIndex();
+        // BeginFrame acabou de esperar a fence deste slot, portanto o readback gravado na
+        // utilizacao anterior do slot ja pode ser mapeado sem stall.
+        CollectDebugPreviewReadback(FrameSlot);
+        DDGIDebugPass.CollectPointDiagnostic(FrameSlot);
+        FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
+            MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));
+
+
+        // O relogio do mundo vem ANTES da luz: o ResolveFrameLighting abaixo le a direcao de sol
+        // que o Time-of-Day acabou de mover e a molhadura que a chuva acabou de integrar.
+        TickWorldClock();
+        const FFrameLighting Lt  = ResolveFrameLighting();
+        const FFrameAmbient  Amb = PublishFrameConstants(Vw, Lt, FrameSlot, MappedCB);
+        PushRayTracingFrameState(Modes);
+
+        MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
+                                       Modes.ReflectionsActive ? 1.0f : 0.0f,
+                                       Modes.ReSTIRGIActive ? (Modes.NrdIndirectMode ? 2.0f : 1.0f) : 0.0f };
+        ++FrameIndex;
+
+        MappedCB->InvViewProj  = Vw.InvViewProjFull;
+        MappedCB->RenderParams = { Vw.MipBias, 0.0f, 0.0f, 0.0f };
+
+        UpdateAtmosphereAndVolumetrics(Modes, Vw, Lt, Amb, FrameSlot, MappedCB);
+        UpdateWaterAndOcean(Modes, Vw, Lt, Amb, FrameSlot);
+
+        FPassContext Ctx = MakePassContext(Modes, Vw, Lt, Amb, FrameSlot);
+        // Aliases sobre o contexto — NAO copias. Sobrevivem a migracao porque os poucos blocos que
+        // continuam inline aqui embaixo sao estrutura de FRAME, nao passe: a espera do fence da
+        // fila assincrona, o clear dos alvos de instrumentacao e os dois ganchos de debug. Nenhum
+        // deles compoe imagem da cena, entao promove-los a fase so aumentaria a lista sem
+        // aumentar a clareza.
+        auto* CommandList         = Ctx.Cmd;
+        const auto& DSV           = Ctx.DSV;
+        D3D12_VIEWPORT& Viewport  = Ctx.Viewport;
+        D3D12_RECT& ScissorRect   = Ctx.Scissor;
+        const u64& GIComputeFence = Ctx.AsyncGIFence;
+
+        BeginSceneRecording(Ctx);
+        RecordSkyAndClouds(Ctx);
+
+        PrepareIndirectLighting(Ctx);
+
+        // Root signature + constantes do frame: os passes de compute acima trocaram o estado,
+        // e tudo que grava raster daqui pra frente conta com estes dois amarrados.
+        CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+        CommandList->SetGraphicsRootConstantBufferView(0, Ctx.FrameCB);
+
+        const FLocalShadowJobs ShadowJobs = PackDirectLights(Ctx, MappedCB);
+
+        BuildDrawLists(Ctx);
+
+        RecordShadows(Ctx, ShadowJobs);
+
+        RecordDepthPrepass(Ctx);
+
+        RecordGBuffer(Ctx);
+
+        if (GIComputeFence != 0) {
+            CommandQueue.SubmitSegmentAndContinue();
+            CommandQueue.GpuWait(ComputeQueue.NativeFence(), GIComputeFence);
+            ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+            CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            DDGI.TransitionForRead(CommandList);
+        }
+
+        // Antes dos dois traces instrumentados: pixel que sai cedo nao escreve, e sem zerar o
+        // alvo ele mostraria a medida de um frame antigo — quente onde nao houve trabalho nenhum.
+        if (TimerCaptureActive) {
+            TimerGI.Clear(CommandList, SRVHeap);
+            TimerReflections.Clear(CommandList, SRVHeap);
+        }
+
+        // Debug da BVH (GPU Zen 3, 7.3.3). Dispatch proprio, independente do resto do frame: ele
+        // traca os raios PRIMARIOS que o pipeline hibrido nunca traca, entao nao le G-buffer nem
+        // depth e nao entra em nenhuma cadeia de dependencia. Sem o toggle, nao custa nada.
+        // Nao precisa de clear: todo pixel do dominio escreve (o miss tem cor propria).
+        if (BvhDebugEnabled && BvhDebug.IsReady()) {
+            BvhDebug.Render(CommandList, SRVHeap, Vw.InvViewProjFull, Vw.CameraPosition,
+                            BvhDebugMode, DDGI.MaxRayDistance(), BvhDebugComplexityMax,
+                            FrameSlot);
+        }
+
+        RecordSceneLighting(Ctx);
+
+        RecordForwardAndClouds(Ctx);
+
+        // Registrado no proprio sitio (e nao reavaliando a condicao la embaixo) porque o que importa
+        // p/ o RR e se a geometria de debug FOI desenhada no HDR, nao se ela estava habilitada.
+        bool DDGIDebugDrew = false;
+        if (Device.RaytracingSupported() && DDGIDebugPass.GetEnabled() && DDGI.IsReady()) {
+            auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
+            CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
+            CommandList->RSSetViewports(1, &Viewport);
+            CommandList->RSSetScissorRects(1, &ScissorRect);
+            DDGIDebugPass.Render(FrameSlot, CommandList, SRVHeap, DDGI, Vw.ViewProjection, Vw.CameraPosition,
+                                 FrameIndex);
+            DDGIDebugDrew = true;
+        }
+
+        RecordVolumetricsAndRain(Ctx);
+
+        const bool RRPoisoned = RecordDebugViews(Ctx, DDGIDebugDrew);
 
         {
             FBarrierBatch Batch;
@@ -3884,150 +4363,7 @@ namespace Smile {
             Batch.Flush(CommandList);
         }
 
-        ID3D12Resource* PostInput    = Targets.HDRColorBuffer.Get();
-        u32             PostInputSRV = Targets.HDRSRVSlot;
-        if (Modes.TAAActive) {
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Batch.Flush(CommandList);
-
-            {
-                FGpuScope Scope(GpuProfiler, CommandList, "TAA");
-                TemporalAA.Execute(CommandList, SRVHeap, FrameSlot, Vw.InvViewProjUnjit, PrevViewProj,
-                                   TAAHistoryBlend, TAARanLastFrame, TAAVarianceGamma, TAASharpness,
-                                   TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, Vw.CameraPosition,
-                                   Vw.NearZ, Vw.FarZ, TAADebugMode);
-            }
-
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            Batch.Flush(CommandList);
-
-            PostInput    = TemporalAA.DisplayOutputResource();
-            PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
-            TAARanLastFrame = true;
-        } else if (Modes.UpscaleActive && !RRPoisoned) {
-            // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
-            // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
-            // MESMO predicado do bloco de sinal (Modes.RRMode, ja em escopo): recalcular so pelo Denoiser
-            // divergia dele — os guides podiam nao estar prontos e este bloco tentava o eval do RR
-            // enquanto o GI/reflexao ja tinham sido configurados como crus.
-            const bool IsRR = Modes.RRMode;
-
-            FBarrierBatch Batch;
-            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.Transition(Targets.VelocityBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.TransitionTracked(Targets.UpscaleReactiveMask.Get(), Targets.UpscaleReactiveState,
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.TransitionTracked(Targets.UpscaleCompositionMask.Get(), Targets.UpscaleCompositionState,
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Batch.Flush(CommandList);
-
-            if (IsRR) {
-                // Guides de material do RR (albedo difuso/especular, normal-roughness) do G-buffer
-                // [A,B,C,Depth] (mesma tabela contigua do deferred) + FrameCB. O specHitDist ja foi
-                // extraido no bloco da reflexao (ou fica zerado sem reflexoes). Deixa tudo em NON_PIXEL.
-                FGpuScope Scope(GpuProfiler, CommandList, "DLSS-RR guides");
-                RRGuides.RecordGuides(CommandList, SRVHeap, SRVHeap.GpuHandle(GBuffer.SRVTableStart()),
-                                      ConstantBuffer->GetGPUVirtualAddress() +
-                                      static_cast<u64>(FrameSlot) * sizeof(FrameConstants));
-                if (!Modes.ReflectionsActive) RRGuides.ClearSpecHitDist(CommandList, SRVHeap);
-                RRGuides.TransitionForRR(CommandList);
-            }
-
-            FUpscaleParams UpParams{};
-            UpParams.Color        = Targets.HDRColorBuffer.Get();
-            UpParams.Depth        = Targets.DepthBuffer.Get();
-            UpParams.Velocity     = Targets.VelocityBuffer.Get();
-            UpParams.Reactive     = Targets.UpscaleReactiveMask.Get();
-            UpParams.TransparencyAndComposition = Targets.UpscaleCompositionMask.Get();
-            UpParams.JitterX      = Vw.JitterPxX;
-            UpParams.JitterY      = Vw.JitterPxY;
-            UpParams.NearZ        = Vw.NearZ;
-            UpParams.FarZ         = Vw.FarZ;
-            UpParams.FovYRadians  = Vw.FovY;
-            UpParams.AspectRatio  = Vw.Aspect;
-            UpParams.DeltaTimeSec = LastDeltaTime;
-            UpParams.Quality      = UpscalerQuality;
-            // Reset one-shot: descarta o historico temporal em troca de modo/denoiser/scene/resize (senao o
-            // RR/DLSS reusa acumulacao velha => ghosting). Limpo logo apos o Dispatch.
-            UpParams.Reset        = RRResetPending;
-            // Matrizes p/ o DLSS (o FSR ignora): projecao unjittered + reprojecao (clip atual -> anterior).
-            // PrevViewProj ainda guarda o frame anterior aqui (so e atualizado logo abaixo).
-            UpParams.ViewToClip     = Vw.ProjUnjittered;
-            UpParams.ClipToPrevClip = Vw.ViewProjUnjittered.Inverse() * PrevViewProj;
-            {
-                const Mat44 InvView = Vw.View.Inverse();   // view->world: linhas = base da camera em mundo
-                UpParams.CamRight = { InvView.M[0][0], InvView.M[0][1], InvView.M[0][2] };
-                UpParams.CamUp    = { InvView.M[1][0], InvView.M[1][1], InvView.M[1][2] };
-                UpParams.CamFwd   = { InvView.M[2][0], InvView.M[2][1], InvView.M[2][2] };
-                UpParams.CamPos   = { InvView.M[3][0], InvView.M[3][1], InvView.M[3][2] };
-            }
-            if (IsRR) {
-                // Guides que so o RR consome (o FSR/DLSS-SR ignoram). WorldToView (row-major, sem jitter)
-                // = Vw.View: o RR deriva os specular motion vectors do specHitDist + matrizes world<->view.
-                UpParams.DiffuseAlbedo   = RRGuides.DiffuseAlbedo();
-                UpParams.SpecularAlbedo  = RRGuides.SpecularAlbedo();
-                UpParams.NormalRoughness = RRGuides.NormalRoughness();
-                UpParams.SpecHitDist     = RRGuides.SpecHitDist();
-                UpParams.WorldToView     = Vw.View;
-            }
-
-            {
-                FGpuScope Scope(GpuProfiler, CommandList,
-                                IsRR ? "DLSS-RR" : (Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR"));
-                ActiveUp->Dispatch(CommandList, UpParams);
-            }
-            RRResetPending = false;   // reset consumido
-
-            // Manual hooking (eDisableCLStateTracking): o SL pode ter mexido no estado do CL e nao tem
-            // proxy p/ restaurar. O ProgrammingGuideManualHooking.md §7.1 lista o que o SL restauraria:
-            // descriptor heaps, compute root signature + TODAS as bindings de compute (tabelas/CBV/SRV/
-            // UAV/constants), PSO e state object. Aqui rebindamos SO os heaps de proposito: auditado, todo
-            // consumidor a jusante seta root signature E PSO proprios antes de usar o CL — Flicker
-            // (FlickerHeatmap.cpp:195), PostProcessor (PostProcess.cpp:284), SelectionOutline (:272/:322)
-            // e DebugDraw (:241) —, e o CL e resetado por frame, entao nada herda estado do eval.
-            // Os heaps ficam porque sao o unico estado que o SL troca e ninguem reestabelece.
-            // ATENCAO: um passe futuro que dependa de estado herdado aqui exige revisitar isto.
-            // (o FSR/ffx-api tolera o rebind redundante).
-            {
-                ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
-                CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
-            }
-
-            Batch.Transition(Targets.HDRColorBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            Batch.Transition(Targets.VelocityBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            Batch.Flush(CommandList);
-
-            PostInput    = ActiveUp->OutputResource();
-            PostInputSRV = ActiveUp->OutputSRVSlot();
-            TAARanLastFrame = false;
-            RRSkipLogged    = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
-        } else {
-            // Eval pulado por debug na cena: arma o reset p/ o proximo eval real nao reprojetar de
-            // um historico interrompido (o RR ficou N frames sem ver a cena).
-            if (RRPoisoned) {
-                RRResetPending = true;
-                if (!RRSkipLogged) {
-                    LogWarning("Ray Reconstruction pausado: ha debug desenhado na cena "
-                               "(visualizador de alvo ou sondas do DDGI). A imagem sai em resolucao "
-                               "de render ate o debug sair — desligue-o p/ voltar a avaliar o RR");
-                    RRSkipLogged = true;
-                }
-            }
-            TAARanLastFrame = false;
-        }
+        const FPostInput PostSrc = RecordResolve(Ctx, ActiveUp, RRPoisoned);
 
         PrevViewProj  = Vw.ViewProjUnjittered;
         PrevCameraPosition = Vw.CameraPosition;
@@ -4037,63 +4373,7 @@ namespace Smile {
         PrevJitterUv  = Vw.JitterUv;
         PrevJitterPx = Vw.JitterPx;
 
-        if (FlickerMode > 0 && Flicker.IsInitialized()) {
-            Flicker.Execute(CommandList, SRVHeap, PostInputSRV, static_cast<f32>(FlickerMode),
-                            FlickerScale, FlickerAlpha, FlickerResetPending,
-                            RenderWidth(), RenderHeight());
-            FlickerResetPending = false;
-            PostInput    = Flicker.OutputResource();
-            PostInputSRV = Flicker.OutputSRVSlot();
-        }
-
-        FBarrierBatch BackBatch;
-        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_PRESENT,
-                             D3D12_RESOURCE_STATE_RENDER_TARGET);
-        BackBatch.Flush(CommandList);
-
-        {
-            FGpuScope Scope(GpuProfiler, CommandList, "Pós (bloom+tonemap)");
-            PostProcessor.Execute(CommandList, SRVHeap, PostInput, SwapChain.CurrentRTV(),
-                                  PostInputSRV, FrameSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
-        }
-
-        if (SelectedRenderable >= 0 && SelectedSlot != kInvalidSlot && SelectedMesh
-            && SelectionOutline.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Contorno da seleção");
-            FSelectionOutline::FDrawItem Item{ SelectedMesh, SelectedModel * Vw.ViewProjUnjittered };
-            SelectionOutline.RecordMask(CommandList, &Item, 1, FrameSlot);
-            auto BackRTV = SwapChain.CurrentRTV();
-            SelectionOutline.RecordOutline(CommandList, SRVHeap, BackRTV,
-                                           SwapChain.GetWidth(), SwapChain.GetHeight(), FrameSlot);
-        }
-
-        if (DebugDraw.IsInitialized() && !DebugDraw.Empty()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Debug draw (gizmo/ícones)");
-            const bool WantDepth = DebugDraw.NeedsSceneDepth() && Targets.DepthSRVSlot != kInvalidSlot;
-            FBarrierBatch Batch;
-            if (WantDepth) {
-                Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-                Batch.Flush(CommandList);
-            }
-            // Eixos da camera em mundo (colunas da view row-vector) p/ os billboards de icone.
-            const Vec3 CamRight{ Vw.View.M[0][0], Vw.View.M[1][0], Vw.View.M[2][0] };
-            const Vec3 CamUp   { Vw.View.M[0][1], Vw.View.M[1][1], Vw.View.M[2][1] };
-            DebugDraw.Render(CommandList, FrameSlot, Vw.ViewProjUnjittered, SwapChain.CurrentRTV(),
-                             SwapChain.GetWidth(), SwapChain.GetHeight(), CamRight, CamUp,
-                             WantDepth ? SRVHeap.GpuHandle(Targets.DepthSRVSlot)
-                                       : D3D12_GPU_DESCRIPTOR_HANDLE{});
-            if (WantDepth) {
-                Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                                 D3D12_RESOURCE_STATE_DEPTH_WRITE);
-                Batch.Flush(CommandList);
-            }
-        }
-        // (o Clear e da FDebugDrawClearGuard no topo do metodo)
-
-        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET,
-                             D3D12_RESOURCE_STATE_PRESENT);
-        BackBatch.Flush(CommandList);
+        RecordPost(Ctx, PostSrc);
 
         GpuProfiler.End(CommandList); 
         GpuProfiler.Resolve(CommandList);

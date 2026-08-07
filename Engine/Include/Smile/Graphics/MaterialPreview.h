@@ -5,6 +5,7 @@
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/HDREnvironment.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <string>
@@ -23,8 +24,14 @@ namespace Smile {
     // Render assincrono na fila DIRECT + ring de readback RGBA8. Cada slot tem allocator/list
     // proprios e uma fence compartilhada; Submit nunca espera a GPU e ConsumeCompleted so mapeia
     // slots cuja fence ja terminou. Tudo lazy: nada e criado ate o primeiro Submit/LoadEnvironment.
-    class FMaterialPreview {
+    class FMaterialPreview : public FPipelineOwner {
     public:
+        // --- Dono de pipeline (nao grava frame) (RenderPass.h) ---
+        const char* Name() const override { return "Preview de material"; }
+        bool IsInitialized() const override { return MeshPSO != nullptr; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // 1024: o painel do preview passa de 512 na janela default — 512 upscalado ficava
         // borrado/serrilhado vs o viewport. A 1024 o QML downscala (efeito SSAA de graca).
         static constexpr u32 kSize          = 1024;

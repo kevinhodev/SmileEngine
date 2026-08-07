@@ -4,6 +4,7 @@
 #include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/ShaderUtils.h"
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -196,4 +197,14 @@ namespace Smile {
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     }
+
+    FPassShaderStems FFlickerHeatmap::ShaderStems() const {
+        static const char* const kStems[] = { "FlickerHeatmap.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FFlickerHeatmap::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSO(_Ctx.Device);
+    }
+
 }

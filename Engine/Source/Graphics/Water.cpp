@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Water.h"
+#include "Smile/Graphics/SceneTargets.h" // cadeia de mips do scene color, ver OnRecreatePipelines
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/UploadQueue.h"
@@ -12,6 +13,7 @@
 #include <vector>
 #include <cmath>
 #include <stdexcept>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -1192,4 +1194,24 @@ namespace Smile {
             GpuIndirectArgsBuffer.Get(), ArgsOffset,
             GpuIndirectCountBuffer.Get(), CountOffset);
     }
+
+    FPassShaderStems FWaterRenderer::ShaderStems() const {
+        // Inclui o WaterSceneColorMip: o PSO dele mora no FSceneTargets (que e saco de recursos,
+        // nao passe — ver a nota no SceneTargets.h), mas o unico consumidor da cadeia de mips e a
+        // refracao da agua. Sem isso ele ficaria orfao de dono e voltaria para uma tabela a parte.
+        static const char* const kStems[] = {
+            "WaterSurface.vs", "WaterSurface.ps", "WaterSurfaceBase.ps",
+            "WaterSurfaceMasks.ps", "WaterSurfaceReflection.ps",
+            "WaterGenerateDraws.cs", "WaterSceneColorMip.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FWaterRenderer::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (!PSO) return;
+        Recreate(_Ctx.Device, _Ctx.SceneColorFormat, _Ctx.SceneDepthFormat, _Ctx.VelocityFormat);
+        RecreateGenerateDraws(_Ctx.Device);
+        if (_Ctx.Targets)
+            _Ctx.Targets->SceneColorMipPSO.Initialize(_Ctx.Device, "WaterSceneColorMip.cs_6_0.cso", false);
+    }
+
 }

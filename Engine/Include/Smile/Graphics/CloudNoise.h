@@ -5,6 +5,7 @@
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Texture.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <string>
 
@@ -12,8 +13,13 @@ namespace Smile {
     class FCommandQueue;
     class FUploadQueue;
 
-    class FCloudNoise {
+    class FCloudNoise : public FPipelineOwner {
     public:
+        // --- Dono de pipeline (RenderPass.h): tem shader, mas NAO grava frame ---
+        const char* Name() const override { return "Ruido das nuvens (bake)"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kBaseRes    = 128;
         static constexpr u32 kDetailRes  = 32;
         static constexpr u32 kWeatherRes = 512;
@@ -41,9 +47,10 @@ namespace Smile {
         u32  DetailNoiseSRV() const { return DetailNoise.SRVSlot(); }
         u32  WeatherSRV()     const { return OverrideActive ? WeatherOverride.SRVSlot()
                                                             : WeatherSRVSlot; }
-        bool IsInitialized()  const { return Initialized; }
+        bool IsInitialized()  const override { return Initialized; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void Bake(FCommandQueue& CmdQueue, FTextureSRVHeap& SRVHeap);
         void RecordWeatherBake(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 

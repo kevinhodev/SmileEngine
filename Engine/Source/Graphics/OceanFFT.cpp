@@ -5,6 +5,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace Smile {
     f32 FOceanFFT::FrandGaussian() {
@@ -526,4 +527,14 @@ namespace Smile {
             DisplacementHistoryValid = true;
         }
     }
+
+    FPassShaderStems FOceanFFT::ShaderStems() const {
+        static const char* const kStems[] = { "OceanUpdateSpectrum.cs", "OceanFFT.cs", "OceanCreateDisplacement.cs", "OceanGradients.cs", "OceanDisplacementMip.cs", "OceanNormalMip.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FOceanFFT::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (IsInitialized()) RecreatePipelines(_Ctx.Device);
+    }
+
 }

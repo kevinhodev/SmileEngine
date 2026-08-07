@@ -5,13 +5,19 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <random>
 
 namespace Smile {
-    class FOceanFFT {
+    class FOceanFFT : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Água — FFT"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kGridSize       = 256;
         static constexpr u32 kLogGridSize    = 8;
         static constexpr u32 kDisplacementMipCount = 9;
@@ -43,7 +49,7 @@ namespace Smile {
         u32  SRVSlot() const       { return OceanSRVSlot; }
         u32  PreviousSRVSlot() const { return PreviousOceanSRVSlot; }
         u32  NormalSRVSlot() const { return NormalChainSRVSlot; }
-        bool IsInitialized() const { return OceanTex != nullptr && NormalTex != nullptr; }
+        bool IsInitialized() const override { return OceanTex != nullptr && NormalTex != nullptr; }
         void ResetTemporalHistory() {
             DisplacementHistoryValid = false;
             FoamHistoryValid = false;

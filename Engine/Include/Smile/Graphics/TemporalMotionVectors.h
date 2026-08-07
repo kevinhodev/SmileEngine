@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <vector>
@@ -38,8 +39,14 @@ namespace Smile {
     // O velocity raster continua sendo a fonte do TAA/DLSS. Reutilizar cor com o vetor dual gera
     // o padrao repetitivo discutido na Fig. 25-5b; ReSTIR/NRD, por outro lado, reutilizam amostras
     // ou radiancia e sao os consumidores corretos.
-    class FTemporalMotionVectors {
+    class FTemporalMotionVectors : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Motion temporal confiavel"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device);
 
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
@@ -67,6 +74,7 @@ namespace Smile {
         u32 InstanceCount() const { return InstanceCount_; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
         void ReleaseScene(FTextureSRVHeap& SRVHeap);
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Resource,

@@ -5,6 +5,7 @@
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -35,8 +36,14 @@ namespace Smile {
     // triangulos — e combina o historico; Pass B combina vizinhos, corrige o vies e traca no
     // maximo um shadow ray. O sol fica no caminho dedicado do deferred; desligado, o fallback e
     // o loop raster.
-    class FReSTIRDI {
+    class FReSTIRDI : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "ReSTIR DI"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device);
         void RecreatePSO(ID3D12Device* Device);
 

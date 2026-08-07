@@ -5,6 +5,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
+#include <iterator>
 
 namespace Smile {
     static constexpr u32 kReadbackRowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT; 
@@ -234,4 +235,14 @@ namespace Smile {
         OutIndex       = (Value == 0) ? -1 : static_cast<int>(Value) - 1; 
         return true;
     }
+
+    FPassShaderStems FObjectPicker::ShaderStems() const {
+        static const char* const kStems[] = { "ObjectID.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FObjectPicker::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSO(_Ctx.Device);
+    }
+
 }

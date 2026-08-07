@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <iterator>
 
 namespace Smile {
 
@@ -14,6 +15,7 @@ namespace Smile {
     }
 
     void FDebugView::Initialize(ID3D12Device* _Device, DXGI_FORMAT _RTFormat) {
+        RTFormat = _RTFormat; // cacheado: ha DUAS instancias (viewport e preview), formatos distintos
         if (Initialized) return;
         BuildRootSignature(_Device);
         BuildPSO(_Device, _RTFormat);
@@ -239,4 +241,14 @@ namespace Smile {
         _CommandList->RSSetViewports(1, &_FullViewport);
         _CommandList->RSSetScissorRects(1, &FullScissor);
     }
+
+    FPassShaderStems FDebugView::ShaderStems() const {
+        static const char* const kStems[] = { "DebugView.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDebugView::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (PSO) BuildPSO(_Ctx.Device, RTFormat);
+    }
+
 }

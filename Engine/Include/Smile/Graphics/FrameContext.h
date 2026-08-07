@@ -14,7 +14,21 @@
 //   FFrameModes    — quais passes rodam neste frame              (FEITO)
 //   FFrameView     — camera, matrizes, jitter                    (FEITO)
 //   FFrameLighting — sol, lua, chuva e a luz-chave                (FEITO)
+//   FFrameAmbient  — ambiente hemisferico do ceu                  (FEITO)
 namespace Smile {
+
+    // Ambiente hemisferico do ceu, ja com o dim de chuva aplicado. Sai do mesmo integral que
+    // publica a SH-L1 no constant buffer.
+    //
+    // Era o ultimo pedaco do estado compartilhado que continuava LOCAL do RenderFrame — a §13
+    // do Docs/ARCHITECTURE.md o nomeava como o bloqueio restante ("soldado ao bloco que publica
+    // a SH"). Enquanto fosse local, o bloco de publicacao nao podia virar metodo: as nuvens
+    // volumetricas, o froxel, a chuva e a agua leem estes dois vetores DEPOIS, e nao havia o
+    // que devolver.
+    struct FFrameAmbient {
+        Vec3 Sky{};    // hemisferio superior (zenite)
+        Vec3 Ground{}; // hemisferio inferior (nadir)
+    };
 
     // Sol, lua, chuva e a resolucao da LUZ-CHAVE do frame. Puramente calculo: as publicacoes
     // (MappedCB->..., Atmosphere.SetNightParams/SetMoonSkyLight/SetStarRotation) ficam no
@@ -97,6 +111,29 @@ namespace Smile {
 
         // Mip bias global de textura no upscale (log2(render/display) - 1); 0 quando nativo.
         f32   MipBias = 0.0f;
+
+        // Frustum da camera, derivado da ViewProjection (planos NAO normalizados — para o teste
+        // de lado o sinal basta, e normalizar seria trabalho jogado fora). Ordem: esq, dir,
+        // baixo, cima, perto, longe.
+        //
+        // Morava como `Vec4 Planes[6]` local do RenderFrame, com o teste ao lado numa lambda. Sai
+        // de la porque e a MESMA matriz que o resto do FFrameView ja carrega, e porque o teste
+        // atravessa fases: quem monta a lista de visiveis e quem culla luz local sao blocos
+        // diferentes e distantes.
+        Vec4  FrustumPlanes[6]{};
+
+        // true quando a AABB esta INTEIRAMENTE fora de algum plano. Conservador na direcao certa:
+        // uma caixa que atravessa a fronteira conta como dentro.
+        bool AABBOutsideFrustum(const Vec3& Mn, const Vec3& Mx) const {
+            for (int i = 0; i < 6; ++i) {
+                const Vec4& p = FrustumPlanes[i];
+                const f32 px = (p.X >= 0.0f) ? Mx.X : Mn.X;
+                const f32 py = (p.Y >= 0.0f) ? Mx.Y : Mn.Y;
+                const f32 pz = (p.Z >= 0.0f) ? Mx.Z : Mn.Z;
+                if (p.X * px + p.Y * py + p.Z * pz + p.W < 0.0f) return true;
+            }
+            return false;
+        }
     };
 
     // Resolucao de "que passes rodam neste frame". Cada campo e a conjuncao do TOGGLE do
@@ -127,6 +164,10 @@ namespace Smile {
         // --- Agua -----------------------------------------------------------------------
         bool WaterReflectionDebug       = false;
         bool DedicatedWaterReflections  = false;
+        // As copias de scene color/depth existem. A superficie da agua refrata lendo a cor da
+        // cena e por isso nao pode rodar sem elas. Era um `const bool WaterHasDepth` local,
+        // decidido no bloco de update e lido ~1200 linhas abaixo, na hora de gravar a agua.
+        bool WaterSceneCopiesReady      = false;
 
         // --- Vetores de movimento -------------------------------------------------------
         bool ReliableMotionActive        = false; // vetor dual (RT Gems II cap. 25)

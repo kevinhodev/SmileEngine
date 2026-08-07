@@ -5,6 +5,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 #include <algorithm>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -447,4 +448,14 @@ namespace Smile {
         CL->Dispatch((Width + 7) / 8, (Height + 7) / 8, 1);
         Transition(CL, Output.Get(), OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
+
+    FPassShaderStems FReSTIRDI::ShaderStems() const {
+        static const char* const kStems[] = { "ReSTIRDIInitialTemporal.cs", "ReSTIRDISpatial.cs", "ReSTIRDINrdPack.cs", "ReSTIRDINrdComposite.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FReSTIRDI::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Ready) RecreatePSO(_Ctx.Device);
+    }
+
 }

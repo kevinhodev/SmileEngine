@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/DescriptorHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <functional>
 #include <wrl/client.h>
@@ -36,8 +37,13 @@ namespace Smile {
         Mat44 LightViewProj;
     };
 
-    class FSunShadows {
+    class FSunShadows : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Sombras — sol (CSM)"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kNumCascades = 4;
         static constexpr u32 kResolution  = 2048;
 
@@ -132,7 +138,7 @@ namespace Smile {
             return CSMCB->GetGPUVirtualAddress() +
                    static_cast<UINT64>(FrameSlot) * sizeof(CSMConstants);
         }
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         void SetMaxDistance(f32 D)      { ShadowMaxDistance = D; InvalidateCache(); }
         void SetDepthBias(f32 Texels)   { DepthBiasTexels = Texels; }

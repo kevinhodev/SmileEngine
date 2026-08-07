@@ -6,6 +6,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Math/Math.h"
+#include "Smile/Graphics/RenderPass.h"
 
 namespace Smile {
     // Relacao da primitiva com o depth da CENA. Modos EXCLUSIVOS — por isso enum e nao bitmask:
@@ -18,10 +19,15 @@ namespace Smile {
         XRay,           // solido na frente, TRANSLUCIDO atras (a parte oculta continua legivel)
     };
 
-    class FDebugDraw {
+    class FDebugDraw : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Debug draw (gizmo/ícones)"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat);
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
         // Hot reload de shader. Reusa o FORMATO GUARDADO no Initialize de proposito: o debug
         // desenha no BACKBUFFER, nao no RT HDR da cena, entao o formato que o RecreateAllPSOs
         // passa pros outros passes (R16G16B16A16) criaria estes PSOs errados.

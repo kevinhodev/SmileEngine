@@ -8,6 +8,7 @@
 #include "Smile/Graphics/VolumeTexture.h"
 #include "Smile/Graphics/CubeTexture.h"
 #include "Smile/Graphics/ComputePipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -64,8 +65,13 @@ namespace Smile {
         D3D12_RESOURCE_STATES State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     };
 
-    class FAtmosphere {
+    class FAtmosphere : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Céu e atmosfera"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kTransmittanceW = 256;
         static constexpr u32 kTransmittanceH = 64;
         static constexpr u32 kMultiScatterW  = 32;
@@ -149,7 +155,7 @@ namespace Smile {
         f32 BottomRadiusKm()   const { return CPUConstants.PlanetRadii.X; }
         f32 TopRadiusKm()      const { return CPUConstants.PlanetRadii.Y; }
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         void LoadMoonTexture(ID3D12Device* Device, FUploadQueue& UploadQueue,
                              FTextureSRVHeap& SRVHeap, const std::wstring& Path);
@@ -173,6 +179,7 @@ namespace Smile {
         void BuildInputTables(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         void BuildSkyRootSignature(ID3D12Device* Device);
         void BuildStarPipeline(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
+        void CreateBakePipelines(ID3D12Device* Device); // LUTs: Initialize e OnRecreatePipelines
         void BuildSkyPSO(ID3D12Device* Device,
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Bake(ID3D12Device* Device, FCommandQueue& CmdQueue);

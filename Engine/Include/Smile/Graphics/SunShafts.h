@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -15,8 +16,13 @@ namespace Smile {
     // vira mancha, lição do A/B anterior). O fog apply consome o resultado via t2 com
     // upsample bilateral. Com froxel ele substitui o sol proximo, preservando o
     // analitico matched somente depois do alcance volumetrico.
-    class FSunShafts {
+    class FSunShafts : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Sun shafts"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         // Recria os RTs meia-res quando a resolução de render muda (história invalida junto).
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
@@ -55,7 +61,7 @@ namespace Smile {
         // história e PrevVP ficam obsoletos, o próximo frame ativo recomeça do zero.
         void ResetHistory() { HistoryValid = false; HasPrevVP = false; }
 
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         void SetVolIntensity(f32 V)  { VolIntensity = V; }
         f32  GetVolIntensity() const { return VolIntensity; }

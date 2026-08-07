@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -33,8 +34,13 @@ namespace Smile {
         Vec4  CloudShadowCB;   // xy = centro XZ do shadow map (km), z = extent (km), w = resolucao
     };
 
-    class FVolumetricClouds {
+    class FVolumetricClouds : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Nuvens"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                         FCloudNoise& Noise, u32 AtmoTransmittanceSRV, u32 AtmoMultiScatterSRV,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat,
@@ -68,7 +74,7 @@ namespace Smile {
         void Composite(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                        u32 DepthSRVSlot);
 
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         // Half-res: pede recriacao do RT — o Renderer deve dar Flush na fila e chamar Resize.
         void SetHalfRes(bool V)         { HalfRes = V; }
@@ -124,6 +130,7 @@ namespace Smile {
     private:
         void CreateRT(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void BuildRaymarchPipeline(ID3D12Device* Device);
+        void CreateComputePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void TransitionRT(ID3D12GraphicsCommandList* CommandList, D3D12_RESOURCE_STATES After);
         void TransitionHist(ID3D12GraphicsCommandList* CommandList, u32 Index,
                             D3D12_RESOURCE_STATES After);

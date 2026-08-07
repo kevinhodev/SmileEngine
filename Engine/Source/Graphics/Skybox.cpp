@@ -6,6 +6,7 @@
 #include "Smile/Graphics/ShaderUtils.h"
 #include <vector>
 #include <stdexcept>
+#include <iterator>
 
 namespace Smile {
     void FSkybox::BuildRootSignature(ID3D12Device* _Device) {
@@ -148,4 +149,14 @@ namespace Smile {
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FSkybox::ShaderStems() const {
+        static const char* const kStems[] = { "Skybox.vs", "Skybox.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FSkybox::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        Recreate(_Ctx.Device, _Ctx.SceneColorFormat, _Ctx.SceneDepthFormat);
+    }
+
 }

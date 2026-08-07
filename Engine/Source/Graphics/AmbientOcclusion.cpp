@@ -2,6 +2,7 @@
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/SceneTargets.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -24,11 +25,37 @@ namespace Smile {
     }
 
     void FAmbientOcclusion::Initialize(ID3D12Device* _Device) {
+        CreatePipelines(_Device);
+        CreateConstantBuffer(_Device);
+        Initialized = true;
+    }
+
+    void FAmbientOcclusion::CreatePipelines(ID3D12Device* _Device) {
         MainPSO.Initialize(_Device, "GTAO.cs_6_0.cso", 2, 1);
         BlurPSO.Initialize(_Device, "GTAOBlur.cs_6_0.cso", 2, 1);
         UpsamplePSO.Initialize(_Device, "GTAOUpsample.cs_6_0.cso", 2, 1);
-        CreateConstantBuffer(_Device);
-        Initialized = true;
+    }
+
+    // --- Contrato de passe -------------------------------------------------------------
+    // Antes deste bloco a GTAO nao aparecia NEM na tabela do ReloadShaders NEM no
+    // RecreateAllPSOs, e nao tinha funcao de recriar: os 3 shaders dela nao recarregavam a
+    // quente de jeito nenhum. Agora o stem mora junto do Initialize que o carrega.
+    FPassShaderStems FAmbientOcclusion::ShaderStems() const {
+        static const char* const kStems[] = { "GTAO.cs", "GTAOBlur.cs", "GTAOUpsample.cs" };
+        return { kStems, 3 };
+    }
+
+    void FAmbientOcclusion::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (!Initialized || !_Ctx.Device) return;
+        CreatePipelines(_Ctx.Device);
+    }
+
+    void FAmbientOcclusion::OnResize(const FPassInitContext& _Ctx) {
+        if (!_Ctx.Device || !_Ctx.SRVHeap || !_Ctx.Targets) return;
+        // Quem sabe que a GTAO consome depth + normal geometrica e a GTAO. O orquestrador so
+        // entrega os alvos da cena — era ele que carregava esses dois slots na assinatura.
+        SetupForResize(_Ctx.Device, *_Ctx.SRVHeap, _Ctx.Targets->DepthSRVSlot,
+                       _Ctx.Targets->NormalSRVSlot, _Ctx.RenderWidth, _Ctx.RenderHeight);
     }
 
     void FAmbientOcclusion::CreateConstantBuffer(ID3D12Device* _Device) {

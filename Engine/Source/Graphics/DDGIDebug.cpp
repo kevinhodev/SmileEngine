@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -620,4 +621,14 @@ namespace Smile {
             _CL->DrawInstanced(6, SelectedMode ? 0u : NumProbes, 0, 0);
         }
     }
+
+    FPassShaderStems FDDGIDebug::ShaderStems() const {
+        static const char* const kStems[] = { "DDGIDebugProbes.vs", "DDGIDebugProbes.ps", "DDGIDebugVolume.vs", "DDGIDebugVolume.ps", "DDGIDebugRays.vs", "DDGIDebugRays.ps", "DDGIDebugStats.cs", "DDGIDebugPoint.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDDGIDebug::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (ProbePSO) Recreate(_Ctx.Device, _Ctx.SceneColorFormat, _Ctx.SceneDepthFormat);
+    }
+
 }

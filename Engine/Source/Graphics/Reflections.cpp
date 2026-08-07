@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -947,4 +948,19 @@ namespace Smile {
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FReflections::ShaderStems() const {
+        static const char* const kStems[] = { "ReflectionTrace.cs", "ReflectionTraceTimed.cs",
+                                              "ReflectionTraceMirror.cs", "ReflectionResolve.cs",
+                                              "ReflectionTemporal.cs", "ReflectionSpatial.cs",
+                                              "ReflectionNrdPack.cs", "ReflectionComposite.ps",
+                                              "WaterReflectionTrace.cs", "WaterReflectionTemporal.cs",
+                                              "WaterReflectionComposite.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FReflections::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Ready) RecreatePipelines(_Ctx.Device);
+    }
+
 }

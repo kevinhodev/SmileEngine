@@ -5,6 +5,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h" // Vec3 + Mat44
 #include "Smile/Graphics/DescriptorHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 
 namespace Smile {
     class FGpuMesh;
@@ -13,8 +14,13 @@ namespace Smile {
     // Outline de selecao no editor (estilo Flax/Cry): renderiza o(s) objeto(s) selecionado(s)
     // numa mascara R8 (silhueta) e faz um edge-detect fullscreen que pinta a borda direto no
     // backbuffer LDR (depois do tonemap, p/ a cor nao passar por bloom/exposicao). So sem MSAA.
-    class FSelectionOutline {
+    class FSelectionOutline : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Contorno da seleção"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // MVP SEM jitter (o outline e desenhado pos-TAA; usar o MVP jittered do forward faria a
         // borda tremer ~1px/frame com o Halton do TAA). O subsistema grava esse MVP no seu CB.
         struct FDrawItem {
@@ -25,7 +31,7 @@ namespace Smile {
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         void SetColor(const Vec3& C)  { Color = C; }
         void SetThickness(f32 T)      { Thickness = T; }

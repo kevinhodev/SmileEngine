@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <array>
@@ -38,8 +39,14 @@ namespace Smile {
         f32 VolumeWeight = 1.0f;
     };
 
-    class FDDGIDebug {
+    class FDDGIDebug : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "DDGI (debug de sondas)"; }
+        bool IsInitialized() const override { return ProbePSO != nullptr; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kPointProbeCount = 8;
 
         enum class EMode : u32 {

@@ -4,6 +4,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <string>
+#include <iterator>
 
 namespace Smile {
     void FCloudNoise::Initialize(ID3D12Device* _Device, FCommandQueue& _CmdQueue,
@@ -48,9 +49,7 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, WeatherTex.Get(), UAVDesc, WeatherUAVSlot);
         }
 
-        BaseNoisePSO.Initialize(_Device, "BakeBaseNoise.cs_6_0.cso", false);
-        DetailNoisePSO.Initialize(_Device, "BakeDetailNoise.cs_6_0.cso", false);
-        WeatherPSO.Initialize(_Device, "BakeWeather.cs_6_0.cso", false);
+        CreatePipelines(_Device);
 
         Initialized = true;
         Bake(_CmdQueue, _SRVHeap);
@@ -155,4 +154,21 @@ namespace Smile {
         OverrideActive = false;
         LogInfo("Weather map voltou ao procedural bakeado");
     }
+
+    void FCloudNoise::CreatePipelines(ID3D12Device* _Device) {
+        BaseNoisePSO.Initialize(_Device, "BakeBaseNoise.cs_6_0.cso", false);
+        DetailNoisePSO.Initialize(_Device, "BakeDetailNoise.cs_6_0.cso", false);
+        WeatherPSO.Initialize(_Device, "BakeWeather.cs_6_0.cso", false);
+    }
+
+
+    FPassShaderStems FCloudNoise::ShaderStems() const {
+        static const char* const kStems[] = { "BakeBaseNoise.cs", "BakeDetailNoise.cs", "BakeWeather.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FCloudNoise::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

@@ -5,6 +5,7 @@
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VolumeTexture.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -18,8 +19,13 @@ namespace Smile {
     // dele o analitico continua. F2: jitter Halton + reprojecao temporal no scattering
     // (historia ping-pong, blend 0.9, supersampling em history-miss — receita da UE).
     // F3 adiciona luzes puntuais.
-    class FVolumetricFogPass {
+    class FVolumetricFogPass : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Volumetric fog"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kGridW = 160, kGridH = 90, kGridZ = 64;
 
         struct FFrameParams {
@@ -75,7 +81,7 @@ namespace Smile {
         u32  IntegratedSRVSlot() const { return Integrated.SRVSlot(); }
         // (B, O, S, kGridZ) do ultimo UpdatePerFrame — o fog fullscreen fatia igual.
         Vec4 GridZParams() const   { return GridZ; }
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         // Historia obsoleta quando o efeito dorme um frame ou os params do grid mudam.
         void ResetHistory() { HistoryValid = false; }
@@ -107,6 +113,7 @@ namespace Smile {
         bool GetConservativeDepth() const { return ConservativeDepth; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         // Espelho exato do VolFogCB (VolumetricFogCommon.hlsli).
         struct alignas(256) VolFogConstants {
             Vec4  GridZParams;

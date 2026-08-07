@@ -6,6 +6,7 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstddef>
@@ -66,8 +67,14 @@ namespace Smile {
     // A3: Pass A (trace + reservoir temporal) -> Pass B (reuso espacial + Jacobiano + resolve).
     // Reservoir {x2,n2,Lo,M,W} em 2 tex ping-pong (x1 e reconstruido). Atras do toggle
     // UseReSTIRGI (default OFF).
-    class FReSTIRGI {
+    class FReSTIRGI : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "ReSTIR GI"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device);
 
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
@@ -196,6 +203,7 @@ namespace Smile {
         bool GetJacobianKillBackface() const { return JacobianKillBackface; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
         void CreateConstantBuffer(ID3D12Device* Device);
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,

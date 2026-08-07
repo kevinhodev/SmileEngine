@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -18,8 +19,17 @@ namespace Smile {
         Mat44 ViewMatrix;  // world->view: transforma a normal do G-buffer p/ view (GTAO main)
     };
 
-    class FAmbientOcclusion {
+    class FAmbientOcclusion : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) -------------------------------------------
+        const char* Name() const override { return "GTAO"; }
+        // "Recursos existem" e o criterio do contrato, e para a GTAO isso e o Ready (alvos
+        // dimensionados), nao o Initialized (PSOs+CB). Sem os alvos ela nao tem onde escrever.
+        bool IsInitialized() const override { return Ready; }
+        void OnResize(const FPassInitContext& Ctx) override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+        FPassShaderStems ShaderStems() const override;
+
         void Initialize(ID3D12Device* Device);
 
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
@@ -52,6 +62,7 @@ namespace Smile {
         bool GetHalfRes() const  { return HalfRes; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void CreateConstantBuffer(ID3D12Device* Device);
         void ReleaseSizedResources(FTextureSRVHeap& SRVHeap);
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,

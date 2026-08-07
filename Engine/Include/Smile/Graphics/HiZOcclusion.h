@@ -5,6 +5,7 @@
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -23,8 +24,14 @@ namespace Smile {
     // Mip 0 = metade da resolucao de render arredondada PRA CIMA em potencia de 2
     // (igual UE): mips halvam exato ate 1x1, sem o problema de borda impar. A area
     // de padding alem da tela fica em far (0) — conservadora por construcao.
-    class FHiZOcclusion {
+    class FHiZOcclusion : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "HZB (occlusion culling)"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // SetupObjects pode rodar ANTES do Initialize (RecreateObjectCB no boot do
         // Renderer) — os arrays de slots ja nascem invalidos aqui no construtor.
         FHiZOcclusion() {
@@ -77,6 +84,7 @@ namespace Smile {
         u32  Mip0Height() const { return HZBHeight; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void ReleaseSizedResources(FTextureSRVHeap& SRVHeap);
         void ReleaseObjectResources(FTextureSRVHeap& SRVHeap);
         void RefreshTestTables(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);

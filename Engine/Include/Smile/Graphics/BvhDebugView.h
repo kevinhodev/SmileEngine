@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -19,8 +20,14 @@ namespace Smile {
     //
     // Passe de DEBUG: so roda com o toggle ligado (Renderer::SetBvhDebug), e desligado nao aloca
     // nem dispara nada.
-    class FBvhDebugView {
+    class FBvhDebugView : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Debug da BVH"; }
+        bool IsInitialized() const override { return Target != nullptr && SceneTableReady; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // Espelha o modo lido de BvhDebugParams.x em Shaders/Debug/BvhDebug.cs.hlsl.
         enum class EMode : u32 {
             Category = 0,  // cor por categoria da instancia na TLAS (opaco/alpha-test/translucido)
@@ -54,6 +61,7 @@ namespace Smile {
         void ToRead(ID3D12GraphicsCommandList* CL);
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         struct alignas(256) BvhDebugConstants {
             Mat44 InvViewProj;
             Vec4  CameraPos;

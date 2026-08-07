@@ -5,6 +5,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -17,7 +18,7 @@ namespace Smile {
     }
 
     void FBvhDebugView::Initialize(ID3D12Device* _Device) {
-        PSO.Initialize(_Device, "BvhDebug.cs_6_6.cso", 2, 1, /*HeapDirectlyIndexed=*/true);
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
@@ -163,4 +164,19 @@ namespace Smile {
         Transition(_CL, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
+
+    void FBvhDebugView::CreatePipelines(ID3D12Device* _Device) {
+        PSO.Initialize(_Device, "BvhDebug.cs_6_6.cso", 2, 1, /*HeapDirectlyIndexed=*/true);
+    }
+
+
+    FPassShaderStems FBvhDebugView::ShaderStems() const {
+        static const char* const kStems[] = { "BvhDebug.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FBvhDebugView::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

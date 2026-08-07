@@ -7,6 +7,7 @@
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstddef>
@@ -70,8 +71,14 @@ namespace Smile {
     // Fase 1: mirror, full-res, sem denoise. Passe de compute (trace, sombreado pelo MESMO
     // HitShading.hlsli do DDGI) -> composite aditivo no HDR. Reusa a geometria/atlas do DDGI.
     // No-op sem DXR/DDGI pronto. So roda sem MSAA (G-buffer single-sample).
-    class FReflections {
+    class FReflections : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Reflexos"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // Cria a pipeline de trace (compute) + a pipeline de composite (grafica) + o CB. 1x.
         void Initialize(ID3D12Device* Device);
         void RecreatePipelines(ID3D12Device* Device);

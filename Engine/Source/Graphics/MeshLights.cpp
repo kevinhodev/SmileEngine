@@ -133,6 +133,15 @@ namespace Smile {
         ExtractPSO.Initialize(_Device, "MeshLightExtract.cs_6_6.cso", 2, 1, true);
     }
 
+    FPassShaderStems FMeshLights::ShaderStems() const {
+        static const char* const kStems[] = { "MeshLightExtract.cs" };
+        return { kStems, 1 };
+    }
+
+    void FMeshLights::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (_Ctx.Device) RecreatePSO(_Ctx.Device);
+    }
+
     D3D12_GPU_VIRTUAL_ADDRESS FMeshLights::CBAddr() const {
         return ConstantBuffer ? ConstantBuffer->GetGPUVirtualAddress() : 0;
     }

@@ -24,6 +24,8 @@
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/SceneTargets.h"
 #include "Smile/Graphics/FrameContext.h"
+#include "Smile/Graphics/PassContext.h"
+#include "Smile/Graphics/RenderPass.h"
 #include "Smile/Graphics/DebugView.h"
 #include "Smile/Graphics/ShaderTimer.h"
 #include "Smile/Graphics/BvhDebugView.h"
@@ -176,6 +178,14 @@ namespace Smile {
         Mat44 ModelMatrix;    // 64 bytes — world (para worldPos/worldNormal)
         Mat44 CurMVPNoJitter; // 64 bytes — Model * ViewProjUnjittered (atual) — motion vector
         Mat44 PrevMVP;        // 64 bytes — PrevModel * PrevViewProjUnjittered — motion vector
+    };
+
+    // Sombras locais a rasterizar neste frame, resolvidas no empacotamento das luzes (que ja faz
+    // o cull e a priorizacao por slot) e consumidas pelo passe de sombras. Fora do FPassContext
+    // pelo mesmo criterio do resto: nascem e morrem entre duas fases vizinhas.
+    struct FLocalShadowJobs {
+        std::vector<FLocalShadows::FShadowJob>     Spot;
+        std::vector<FLocalShadows::FCubeShadowJob> Cube;
     };
 
     class Renderer {
@@ -532,6 +542,62 @@ namespace Smile {
         // Sol, lua, chuva e a luz-chave. So calculo; as publicacoes ficam no RenderFrame.
         FFrameLighting ResolveFrameLighting();
 
+        // === Fase de UPDATE do frame — tudo que corre ANTES de existir command list =======
+        // Estas quatro sao a primeira fase extraida do RenderFrame. O criterio do corte nao foi
+        // estetico: e que ate a linha do `CommandQueue.List()` nao ha gravacao nenhuma, so CPU
+        // mexendo em estado e em constant buffer. Isso torna a fase inteira testavel e movivel
+        // sem tocar em barreira, RTV ou root signature — que e o que faz dela a primeira.
+
+        // Avanca o relogio do mundo. Roda ANTES do ResolveFrameLighting porque a direcao do sol
+        // e a molhadura que ele le saem daqui.
+        void TickWorldClock();
+
+        // Publica no constant buffer do frame tudo que ja esta resolvido, e nos parametros de
+        // noite/estrelas da atmosfera. Devolve o ambiente hemisferico porque ele e calculado no
+        // mesmo integral que produz a SH publicada aqui — e cinco subsistemas o consomem depois.
+        FFrameAmbient PublishFrameConstants(const FFrameView& View, const FFrameLighting& Light,
+                                            u32 FrameSlot, FrameConstants* MappedCB);
+
+        // Empurra o estado do frame para os passes de RT (slot do timer, perfil de epsilons,
+        // amostragem do 2o bounce, quem denoisa). Um lugar so: sem isto cada passe teria a
+        // propria copia e um sweep de calibracao mexeria em metade deles.
+        void PushRayTracingFrameState(const FFrameModes& Modes);
+
+        // Atmosfera, height fog, froxel, sun shafts, nuvens e a projecao da sombra de nuvem.
+        // Recebe o ambiente porque o froxel e as nuvens integram sobre ele.
+        void UpdateAtmosphereAndVolumetrics(const FFrameModes& Modes, const FFrameView& View,
+                                            const FFrameLighting& Light,
+                                            const FFrameAmbient& Ambient, u32 FrameSlot,
+                                            FrameConstants* MappedCB);
+
+        // Agua e as tres cascatas de FFT do oceano.
+        void UpdateWaterAndOcean(const FFrameModes& Modes, const FFrameView& View,
+                                 const FFrameLighting& Light, const FFrameAmbient& Ambient,
+                                 u32 FrameSlot);
+
+        // === Fases de GRAVACAO (PassContext.h) ===========================================
+        // Daqui em diante existe command list. Cada fase recebe o mesmo FPassContext e abre com
+        // o mesmo prologo de desempacotar o que usa — o idioma e o `CRenderView* pRenderView =
+        // RenderView()` que cada stage da Cry faz no topo do Execute.
+        FPassContext MakePassContext(const FFrameModes& Modes, const FFrameView& View,
+                                     const FFrameLighting& Light, const FFrameAmbient& Ambient,
+                                     u32 FrameSlot);
+
+        void BeginSceneRecording(FPassContext& Ctx);
+        void RecordSkyAndClouds(FPassContext& Ctx);
+        void PrepareIndirectLighting(FPassContext& Ctx);
+        FLocalShadowJobs PackDirectLights(FPassContext& Ctx, FrameConstants* MappedCB);
+        void       BuildDrawLists(FPassContext& Ctx);
+        void       RecordShadows(FPassContext& Ctx, const FLocalShadowJobs& Jobs);
+        void       RecordDepthPrepass(FPassContext& Ctx);
+        void       RecordGBuffer(FPassContext& Ctx);
+        void       RecordSceneLighting(FPassContext& Ctx);
+        void       RecordForwardAndClouds(FPassContext& Ctx);
+        void       RecordVolumetricsAndRain(FPassContext& Ctx);
+        bool       RecordDebugViews(FPassContext& Ctx, bool DDGIDebugDrew);
+        FPostInput RecordResolve(FPassContext& Ctx, IUpscaler* ActiveUp, bool RRPoisoned);
+        void       RecordPost(FPassContext& Ctx, FPostInput In);
+
         void RecreateAllPSOs();
         void BuildDefaultScene();
         void BuildRaytracingScene();
@@ -543,6 +609,15 @@ namespace Smile {
                                      const Vec3* ChangedMax = nullptr);
         void CreateConstantBuffer();
         void RecreateInternalTargets(); // recria RTs de cena em RenderWidth/Height (resize + render scale)
+
+        // === Registro de passes (RenderPass.h) ===========================================
+        // Indice sobre os subsistemas que ja adotaram o FRenderPass. Eles continuam sendo
+        // membros por VALOR abaixo, com a mesma ordem de construcao/destruicao: isto aqui nao
+        // muda posse, so permite recriar pipeline / redimensionar / invalidar historico sem
+        // saber o nome de cada um. A adocao e um passe por vez, com a engine verde no meio.
+        FPassRegistry     Passes;
+        void              RegisterPasses();          // chamado uma vez no Initialize
+        FPassInitContext  MakePassInitContext();     // device + heap + alvos + render-res
 
         // === Alocacao sob demanda do NRD ==================================================
         // As duas instancias (indireta e direta) somam ~336 MB de pools + IO na resolucao cheia

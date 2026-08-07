@@ -3,6 +3,7 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <iterator>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_HDR
@@ -91,11 +92,7 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, BRDFLutResource.Get(), UAVDesc, BRDFLutUAVSlot);
         }
 
-        EquirectToCubePSO.Initialize(_Device, "EquirectToCube.cs_6_0.cso",        false);
-        MipGenPSO        .Initialize(_Device, "MipGen.cs_6_0.cso",                true);
-        IrradiancePSO    .Initialize(_Device, "IrradianceConvolution.cs_6_0.cso", true);
-        SpecularPSO      .Initialize(_Device, "SpecularPrefilter.cs_6_0.cso",     true);
-        BRDFLutPSO       .Initialize(_Device, "BRDFIntegration.cs_6_0.cso",       false);
+        CreatePipelines(_Device);
 
         GenerateBRDFLut(_Device, _CmdQueue, _SRVHeap);
 
@@ -313,4 +310,23 @@ namespace Smile {
         LogDebug("IBL chain generated (env cube 512^2, irradiance 32^2, specular 128^2 x 7 mips)");
         return true;
     }
+
+    void FHDREnvironment::CreatePipelines(ID3D12Device* _Device) {
+        EquirectToCubePSO.Initialize(_Device, "EquirectToCube.cs_6_0.cso",        false);
+        MipGenPSO        .Initialize(_Device, "MipGen.cs_6_0.cso",                true);
+        IrradiancePSO    .Initialize(_Device, "IrradianceConvolution.cs_6_0.cso", true);
+        SpecularPSO      .Initialize(_Device, "SpecularPrefilter.cs_6_0.cso",     true);
+        BRDFLutPSO       .Initialize(_Device, "BRDFIntegration.cs_6_0.cso",       false);
+    }
+
+
+    FPassShaderStems FHDREnvironment::ShaderStems() const {
+        static const char* const kStems[] = { "EquirectToCube.cs", "MipGen.cs", "IrradianceConvolution.cs", "SpecularPrefilter.cs", "BRDFIntegration.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FHDREnvironment::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

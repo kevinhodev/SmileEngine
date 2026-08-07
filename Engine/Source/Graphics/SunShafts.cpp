@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
 
@@ -428,4 +429,14 @@ namespace Smile {
         NextHistory  = Prev;
         HistoryValid = true;
     }
+
+    FPassShaderStems FSunShafts::ShaderStems() const {
+        static const char* const kStems[] = { "SunShaftsVolumetric.ps", "SunShaftsTemporal.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FSunShafts::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device);
+    }
+
 }

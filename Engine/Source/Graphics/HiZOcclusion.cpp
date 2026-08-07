@@ -5,6 +5,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -40,8 +41,7 @@ namespace Smile {
     }
 
     void FHiZOcclusion::Initialize(ID3D12Device* _Device) {
-        BuildPSO.Initialize(_Device, "HZBBuild.cs_6_0.cso", false);
-        TestPSO.Initialize(_Device, "HZBTest.cs_6_0.cso", 2, 1);
+        CreatePipelines(_Device);
         Initialized = true;
     }
 
@@ -326,4 +326,20 @@ namespace Smile {
     void FHiZOcclusion::InvalidateResults() {
         for (u32 s = 0; s < kSlots; ++s) SlotMeta[s].Valid = false;
     }
+
+    void FHiZOcclusion::CreatePipelines(ID3D12Device* _Device) {
+        BuildPSO.Initialize(_Device, "HZBBuild.cs_6_0.cso", false);
+        TestPSO.Initialize(_Device, "HZBTest.cs_6_0.cso", 2, 1);
+    }
+
+
+    FPassShaderStems FHiZOcclusion::ShaderStems() const {
+        static const char* const kStems[] = { "HZBBuild.cs", "HZBTest.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FHiZOcclusion::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

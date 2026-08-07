@@ -8,6 +8,7 @@
 #include "Smile/Core/Logger.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     static constexpr DXGI_FORMAT kMaskFormat = DXGI_FORMAT_R8_UNORM;
@@ -326,4 +327,14 @@ namespace Smile {
         CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         CmdList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FSelectionOutline::ShaderStems() const {
+        static const char* const kStems[] = { "SelectionGeom.vs", "SelectionMask.ps", "SelectionOutline.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FSelectionOutline::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device);
+    }
+
 }

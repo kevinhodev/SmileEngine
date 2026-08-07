@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -39,8 +40,14 @@ namespace Smile {
     // ReGIR (Ray Tracing Gems II, cap. 23): pools de reservoirs em uma grade de mundo para
     // selecionar luz local em pontos arbitrarios. A superficie primaria continua no ReSTIR DI;
     // este grid existe para os hits secundarios compartilhados por DDGI, reflexoes e ReSTIR GI.
-    class FReGIR {
+    class FReGIR : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "ReGIR (build)"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kGridX = 16;
         static constexpr u32 kGridY = 8;
         static constexpr u32 kGridZ = 16;

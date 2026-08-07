@@ -4,6 +4,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -241,4 +242,14 @@ namespace Smile {
                                  static_cast<f32>(On ? AverageSRV[CurrentParity] : 0u), 0.0f, 0.0f };
         return P;
     }
+
+    FPassShaderStems FReGIR::ShaderStems() const {
+        static const char* const kStems[] = { "ReGIRBuild.cs", "ReGIRAverage.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FReGIR::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Ready) RecreatePSO(_Ctx.Device);
+    }
+
 }

@@ -3,12 +3,18 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Mat44.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
 namespace Smile {
-    class FSkybox {
+    class FSkybox : public FRenderPass {
     public:
+        const char* Name() const override { return "Céu (skybox HDRI)"; }
+        bool IsInitialized() const override { return PSO != nullptr; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device,
                         DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Recreate(ID3D12Device* Device,

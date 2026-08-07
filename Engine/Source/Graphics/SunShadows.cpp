@@ -12,6 +12,7 @@
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <iterator>
 
 namespace Smile {
     void FSunShadows::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
@@ -841,4 +842,14 @@ namespace Smile {
         TransitionArray(_CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
+
+    FPassShaderStems FSunShadows::ShaderStems() const {
+        static const char* const kStems[] = { "ShadowDepth.vs", "ShadowDepth.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FSunShadows::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device);
+    }
+
 }

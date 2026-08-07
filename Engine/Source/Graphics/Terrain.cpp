@@ -14,6 +14,7 @@
 #include <fstream>
 #include <thread>
 #include <vector>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -1102,4 +1103,14 @@ namespace Smile {
                    _PerspectiveView ? PSOShadowLocal.Get() : PSOShadow.Get(),
                    ShadowCullScratch, _CascadeCB);
     }
+
+    FPassShaderStems FTerrain::ShaderStems() const {
+        static const char* const kStems[] = { "Terrain.vs", "TerrainShadow.vs", "TerrainGBuffer.ps", "TerrainDepthNormal.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FTerrain::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        RecreatePSOs(_Ctx.Device);
+    }
+
 }

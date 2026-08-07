@@ -2,10 +2,17 @@
 
 #include <d3d12.h>
 #include "Smile/Core/Types.h"
+#include "Smile/Graphics/RenderPass.h"
 
 namespace Smile {
-    class FPipelineState {
+    class FPipelineState : public FPipelineOwner {
     public:
+        // --- Dono de pipeline (RenderPass.h): tem shader, mas NAO grava frame ---
+        const char* Name() const override { return "Pipeline principal (raster)"; }
+        bool IsInitialized() const override { return RootSignature != nullptr; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device);
         void RecreatePSO(ID3D12Device* Device);
 

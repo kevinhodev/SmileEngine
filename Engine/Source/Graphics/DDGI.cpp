@@ -16,6 +16,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -68,10 +69,7 @@ namespace Smile {
     }
 
     void FDDGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); 
-        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
-        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
-        RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
@@ -614,4 +612,22 @@ namespace Smile {
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
     }
+
+    void FDDGI::CreatePipelines(ID3D12Device* _Device) {
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); 
+        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
+        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
+        RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
+    }
+
+
+    FPassShaderStems FDDGI::ShaderStems() const {
+        static const char* const kStems[] = { "DDGITrace.cs", "DDGIUpdate.cs", "DDGIUpdateDist.cs", "DDGIRelocate.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDDGI::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }
