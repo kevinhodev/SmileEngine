@@ -1172,6 +1172,43 @@ namespace Smile {
         if (ReSTIRDI.OutputSRVSlot() != kNoSlot)
             Register("ReSTIR DI", ReSTIRDI.OutputSRVSlot(), EDebugDecode::HDR, 0, 1,
                      /*Exposure=*/1.0f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
+        // O especular resolvido faltava na lista, e e o unico sinal grande que NAO dava p/
+        // inspecionar — o que atrapalhou o diagnostico do campo de firefly de 2026-08-07. E o
+        // alvo que o composite le direto quando RawSpec esta ligado (modo Ray Reconstruction),
+        // isto e, exatamente o que chega ao RR sem passar por denoiser nenhum. Exposure 1.0 e
+        // filtro OFF pelo mesmo motivo do ReSTIR: aqui interessa ver o outlier por pixel.
+        if (Reflections.GetResolvedSRVSlot() != kNoSlot)
+            Register("Reflexos · resolvido", Reflections.GetResolvedSRVSlot(), EDebugDecode::HDR,
+                     0, 1, /*Exposure=*/1.0f, /*AtlasTilePx=*/0, /*LinearFilter=*/false);
+        // Guides do DLSS Ray Reconstruction. Sao os buffers que a NGX consome (DlssRRPass.cpp taga
+        // os recursos direto), e ate 2026-08-07 eram os UNICOS sinais grandes sem visualizador —
+        // o que deixou uma investigacao de firefly cega justo no lado suspeito. Filtro linear OFF
+        // nos quatro: aqui interessa o valor exato do texel, nao a aparencia.
+        // ATENCAO ao ler: com um visualizador ativo o eval do RR e PULADO (ver RRPoisoned), entao
+        // o que aparece aqui e o guide do frame ANTERIOR — que e exatamente o que se quer, mas
+        // significa que nenhum alvo de debug pode mostrar um artefato criado PELO RR.
+        if (RRGuides.DiffuseAlbedoSRV() != kNoSlot) {
+            Register("DLSS-RR · albedo difuso", RRGuides.DiffuseAlbedoSRV(), EDebugDecode::Raw,
+                     0, 1, 1.0f, 0, /*LinearFilter=*/false);
+            Register("DLSS-RR · albedo especular", RRGuides.SpecularAlbedoSRV(), EDebugDecode::Raw,
+                     0, 1, 1.0f, 0, /*LinearFilter=*/false);
+            // Raw, NAO OctNormal: o guide grava `float4(g.WorldNormal, rough)` cru
+            // (DlssRRGuides.cs.hlsl:102), nao octaedrico — o decode oct leria rg como oct e
+            // inventaria uma normal. Em Raw o hemisferio negativo corta em preto, o que basta
+            // p/ o que se procura aqui: normal zerada, NaN ou descontinuidade. A roughness vive
+            // no .a (o visualizador nao mostra alpha); ela sai do mesmo G-buffer, entao use
+            // "GBuffer · roughness" p/ inspecionar o valor.
+            Register("DLSS-RR · normal+rough", RRGuides.NormalRoughnessSRV(), EDebugDecode::Raw,
+                     0, 1, 1.0f, 0, /*LinearFilter=*/false);
+            // HEATMAP, nao Grayscale. A primeira tentativa foi Grayscale com escala 1/50 e a tela
+            // saiu "toda preta" — mas numa rua a reflexao acerta parede a poucos metros, e 2 m
+            // viravam 0,04 de cinza, indistinguivel de zero num print. O heatmap resolve
+            // exatamente esta pergunta: ele pinta o zero EXATO de preto e qualquer valor pequeno
+            // de azul (ver o bloco DECODE_HEATMAP no DebugView.ps), separando "sem hit" de "hit
+            // perto". Exposure = 1/"valor quente" -> 20 m satura o topo da rampa.
+            Register("DLSS-RR · spec hitDist", RRGuides.SpecHitDistSRV(), EDebugDecode::Heatmap,
+                     0, 1, /*Exposure=*/1.0f / 20.0f, 0, /*LinearFilter=*/false);
+        }
         // Instrumentacao de timer (NVAPI). A Exposure e o 1/valor "quente" do artigo da NVIDIA:
         // escala FIXA de proposito — normalizar pelo maximo do frame faria a mesma cena mudar de
         // cor conforme a camera anda, e duas capturas deixariam de ser comparaveis.
@@ -3595,6 +3632,10 @@ namespace Smile {
             TimerGI.ToRead(CommandList);
             TimerReflections.ToRead(CommandList);
             BvhDebug.ToRead(CommandList); // idem: sai do dispatch em UAV
+            // Guides do RR: saem do frame anterior em NON_PIXEL (TransitionForRR) e aqui vao ser
+            // lidos por um passe GRAFICO. Sem restore: o TransitionForRR, mais abaixo no mesmo
+            // frame, devolve todos a NON_PIXEL — os estados sao rastreados dentro da classe.
+            if (RRGuides.IsReady()) RRGuides.TransitionForDebug(CommandList);
 
             // Depth e normal podem ser escolhidos tanto no toolbar quanto na janela. Deixa-os
             // legiveis durante os dois draws e restaura exatamente os estados de entrada.

@@ -19,7 +19,8 @@ cbuffer DDGICB : register(b0) {
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
     // Gather do 2o bounce (contrato do HitShading.hlsli): dist atlas + skipMode, bias.
     float4 GIDistParams;    // x=distTile, y=distW, z=distH, w=skipMode
-    float4 GIBiasParams;    // x=escala do bias, y=teto em metros, zw=-
+    float4 GIBiasParams;    // x=escala do bias, y=teto em metros, z=fade de sondas,
+                            // w=piso de roughness do hit (cache nao-direcional)
     float4 ReGIRGridMinSlots;
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;
@@ -110,6 +111,10 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    // A sonda integra o hit num cosseno e serve a hemisferio inteiro: cache nao-direcional pelo
+    // mesmo motivo do reservoir do ReSTIR — ver o bloco no ShadeSurfaceHit.
+    P.RoughnessMin       = GIBiasParams.w;
+    P.RoughnessPad       = 0.0f;
 
     float3 radiance;
     float  signedDist;

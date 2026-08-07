@@ -655,6 +655,11 @@ namespace Smile {
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipMode };
+        // .w fica em ZERO de proposito: e o piso de roughness do hit secundario, e ele so vale
+        // p/ quem guarda a radiancia num cache nao-direcional (DDGI e ReSTIR GI). Aqui o hit e
+        // sombreado p/ uma visada conhecida e consumido uma vez so — clampar borraria
+        // espelho-no-espelho. Os shaders de reflexao tambem passam 0 na unha; esta linha existe
+        // p/ o `.w` nao ser preenchido por engano num refactor do GIBiasParams.
         CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;

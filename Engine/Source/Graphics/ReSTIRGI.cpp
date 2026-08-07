@@ -274,14 +274,19 @@ namespace Smile {
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
         CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y,
                                 static_cast<f32>(_PunctualLightCount), RayEps.MaxAge }; // z = luzes (F5)
-        CPU.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        CPU.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, BoilingStrength,
+                                TemporalBiasCorr ? 1.0f : 0.0f,
+                                JacobianKillBackface ? 1.0f : 0.0f };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipMode };
-        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+        // .w = piso de roughness do hit secundario: o reservoir e cache NAO-direcional (ver
+        // FGIHitSampling::SecondaryRoughnessMin e o bloco no ShadeSurfaceHit).
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,
+                                GIHit.SecondaryRoughnessMin };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;

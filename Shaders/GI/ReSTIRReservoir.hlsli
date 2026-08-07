@@ -132,21 +132,48 @@ bool ResMerge(inout Reservoir r, Reservoir other, float pHatOther, float J, inou
 
 // Jacobiano de reconexao (Ouyang 2021): reusar a amostra x2 (normal n2) de um pixel visivel x1Src
 // no pixel x1Dst. J = (cosPhiDst/cosPhiSrc) * (|x2-x1Src|^2 / |x2-x1Dst|^2). Clampado pelo caller.
-float ReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 x2, float3 n2) {
+//
+// Os dois cossenos usam SATURATE, nao abs. Com abs, uma amostra vista pelo VERSO de n2 pelo pixel
+// de destino ainda rendia um J finito e plausivel — e como o TargetPHat so olha o cosseno no
+// RECEPTOR, nada mais barrava o reuso: luz atravessando geometria fina (folha, ripa, tabique) de
+// um lado da superficie da amostra para o outro. Com saturate o cosseno morto zera o J e o caller
+// descarta o vizinho, que e o que a RTXDI (RTXDI_CalculatePartialJacobian, Utils/Math.hlsli) e o
+// Lumen (LumenReSTIRGather.usf: CalculateJacobian) fazem.
+//
+// Nao regride o ceu: la n2 = -dir aponta de volta p/ o ponto visivel, entao cos ~ 1 nos dois
+// lados. Nem folhagem two-sided: o HitGeomNormal ja orienta n2 CONTRA o raio, entao o dominio de
+// origem sempre tem cosseno positivo — so o destino do outro lado da folha e que cai, que e
+// exatamente o caso que se quer matar.
+// `killBackface` alterna entre saturate (RTXDI/Lumen) e o abs() historico — knob de A/B, ver
+// PolicyParams.w. Nao virou duas funcoes porque o resto da conta e identico e duplicar convida
+// a divergirem.
+float ReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 x2, float3 n2, bool killBackface) {
     float3 dDst = x2 - x1Dst; float lDst2 = dot(dDst, dDst);
     float3 dSrc = x2 - x1Src; float lSrc2 = dot(dSrc, dSrc);
     if (lDst2 < 1e-8f || lSrc2 < 1e-8f) return 0.0f;
     float lDst = sqrt(lDst2), lSrc = sqrt(lSrc2);
-    float cosDst = abs(dot(n2, -dDst / lDst));
-    float cosSrc = abs(dot(n2, -dSrc / lSrc));
+    float rawDst = dot(n2, -dDst / lDst);
+    float rawSrc = dot(n2, -dSrc / lSrc);
+    float cosDst = killBackface ? saturate(rawDst) : abs(rawDst);
+    float cosSrc = killBackface ? saturate(rawSrc) : abs(rawSrc);
     if (cosSrc < 1e-4f) return 0.0f;
     return (cosDst / cosSrc) * (lSrc2 / lDst2);
 }
 
-// Finaliza W = wSum / (M * pHat(selecionado)).
-void ResFinalizeW(inout Reservoir r, float3 x1, float3 n1) {
-    float pHatSel = TargetPHat(x1, n1, r.x2, r.Lo);
-    r.W = (pHatSel > 0.0f && r.M > 0.0f) ? (r.wSum / (r.M * pHatSel)) : 0.0f;
+// Normalizacao "MIS-like" da RTXDI (RTXDI_FinalizeGIResampling): W = wSum*pi / (piSum*pHatSel),
+// com pi = pHat do sample VENCEDOR no dominio que o gerou e piSum = Σ pHat(vencedor)*M sobre TODOS
+// os dominios que entraram no WRS. Substitui o 1/M, que so e exato quando todos os dominios sao o
+// mesmo ponto visivel; fora disso o 1/M enviesa (escurecimento em descontinuidade geometrica).
+//
+// Vive aqui, e nao inline em cada passe, porque OS DOIS usam a mesma conta desde a correcao do
+// temporal: o Pass A passa {self, reservoir reprojetado} e o Pass B passa {self, K vizinhos}. Se
+// divergirem, o vies volta por um dos lados sem aviso.
+//
+// Propriedade util p/ A/B: quando todos os dominios avaliam o vencedor com o MESMO pHat (superficie
+// plana, reprojecao perfeita), piSum = pHatSel*ΣM e a formula reduz EXATAMENTE ao 1/M antigo — ou
+// seja, area aberta tem que ficar identica, so quina/borda muda.
+void ResFinalizeMIS(inout Reservoir r, float pHatSel, float pi, float piSum) {
+    r.W = (pHatSel > 0.0f && pi > 0.0f && piSum > 0.0f) ? (r.wSum * pi / (piSum * pHatSel)) : 0.0f;
 }
 
 // Resolve a irradiancia: gi = Lo * cosTheta1 * W / pi (= (1/pi) * E). maxLuma > 0 aplica firefly

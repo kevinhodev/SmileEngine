@@ -21,5 +21,21 @@ namespace Smile {
         f32 BiasScale  = 0.2f;  // o `bias` do GetDDGISurfaceBias do Flax
         f32 BiasMax    = 0.0f;  // teto do bias em metros; 0 = sem teto (comportamento historico)
         f32 FadeProbes = 0.0f;  // celulas de fade na borda do volume; 0 = desligado
+        // Piso de roughness do hit secundario (`minSecondaryRoughness` da RTXDI, 0.5 no sample
+        // app dela; Doc/RestirGI.md manda clampar "to higher values"). 0 desliga = comportamento
+        // anterior. Motivo no ShadeSurfaceHit: DDGI e ReSTIR GI guardam a radiancia do hit num
+        // cache NAO-direcional e a reusam de outras direcoes, entao lobo GGX estreito no hit vira
+        // firefly no reuso — e quem paga e o firefly clamp, tirando energia.
+        //
+        // UNICO campo desta struct que NAO vale para os tres passes: as reflexoes passam 0 na
+        // unha (Shaders/Reflections/*Trace.cs.hlsl). O hit delas e sombreado p/ uma visada
+        // conhecida e consumido uma vez so — clampar borraria espelho-no-espelho. A regra da
+        // struct ("um knob nao pode mexer em metade dos passes") continua valendo para o resto:
+        // a excecao esta escrita nos dois lados, aqui e no shader.
+        // 0.5 = valor da RTXDI (`minSecondaryRoughness` do sample app dela). Esteve em 0.0
+        // durante o run de baseline de 2026-08-07, que inocentou tudo desta sessao; restaurado
+        // depois disso. ⚠️ AINDA SEM A/B PROPRIO — e a unica mudanca da sessao com impacto visual
+        // garantido, e nunca foi olhada isolada. 0.0 devolve o comportamento anterior.
+        f32 SecondaryRoughnessMin = 0.5f;
     };
 }

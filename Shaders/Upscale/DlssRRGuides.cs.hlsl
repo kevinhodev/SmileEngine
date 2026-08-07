@@ -47,6 +47,22 @@ RWTexture2D<float4> OutDiffuseAlbedo   : register(u0);
 RWTexture2D<float4> OutSpecularAlbedo  : register(u1);
 RWTexture2D<float4> OutNormalRoughness : register(u2);
 
+// PISO dos guides de albedo. O RR DEMODULA a cor por eles (L = cor/albedo), denoisa, e REMODULA
+// (cor = L*albedo). Com albedo exatamente ZERO a primeira divisao e uma singularidade — e esse e
+// o unico lugar do pipeline onde nasce sparkle que NENHUM sinal de entrada mostra, porque o
+// artefato e criado dentro do denoiser. Caem nesse caso metal puro (difuso = 0 por definicao),
+// vidro e material muito escuro: no print dos guides de 2026-08-07 as janelas e o ferro saem
+// PRETOS no albedo difuso. O Integration Guide do DLSS-RR pede exatamente isto.
+//
+// Quase de graca em imagem: como o RR usa o MESMO guide nos dois sentidos, o piso CANCELA na
+// remodulacao. Ele muda o condicionamento da conta, nao a cor final.
+//
+// Constante de compilacao, nao knob de cbuffer, de proposito: este shader le um PREFIXO do
+// FrameConstants (ate o InvViewProj) e acrescentar campo la desloca offset de todo mundo que
+// declara o mesmo prefixo — risco desproporcional para um numero de calibracao. O A/B e trocar
+// por 0.0f e rebuildar o target Shaders, que leva segundos e nao precisa relink do editor.
+static const float kAlbedoGuideFloor = 0.01f;
+
 // EnvBRDFApprox2 do ProgrammingGuideDLSS_RR.md §4.2.1 (Ray Tracing Gems, cap. 32). alpha = rough^2.
 float3 EnvBRDFApprox2(float3 SpecularColor, float alpha, float NoV) {
     NoV = abs(NoV);
@@ -72,6 +88,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float deviceZ = Depth.Load(int3(px, 0)).r;
     if (deviceZ <= 0.0f) {
         // Ceu/background: o Integration Guide §3.4.2 recomenda specular albedo neutro 0.5.
+        // SEM o piso aqui: o difuso zero deste caminho e recomendacao EXPLICITA do guide para
+        // background (o RR trata o caso pelo depth), diferente do zero acidental de um material.
         OutDiffuseAlbedo[px]   = float4(0.0f, 0.0f, 0.0f, 0.0f);
         OutSpecularAlbedo[px]  = float4(0.5f, 0.5f, 0.5f, 1.0f);
         OutNormalRoughness[px] = float4(0.0f, 0.0f, 1.0f, 1.0f);
@@ -96,14 +114,19 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // A agua entra depois do deferred: o G-buffer aqui e exclusivamente um guide. BaseColor
         // carrega o in-scatter aproximado; F0 fisico de agua fica em ~2% e spec-hit e zerado no
         // proprio draw da superficie (nao herda o hit da geometria que estava atras dela).
-        OutDiffuseAlbedo[px]   = float4(g.BaseColor, 1.0f);
-        OutSpecularAlbedo[px]  = float4(EnvBRDFApprox2(float3(0.02f, 0.02f, 0.02f),
-                                                       rough * rough, NoV), 1.0f);
+        OutDiffuseAlbedo[px]   = float4(max(g.BaseColor, kAlbedoGuideFloor), 1.0f);
+        OutSpecularAlbedo[px]  = float4(max(EnvBRDFApprox2(float3(0.02f, 0.02f, 0.02f),
+                                                           rough * rough, NoV),
+                                            kAlbedoGuideFloor), 1.0f);
         OutNormalRoughness[px] = float4(g.WorldNormal, rough);
         return;
     }
 
-    OutDiffuseAlbedo[px]   = float4(g.BaseColor * (1.0f - g.Metallic), 1.0f);
-    OutSpecularAlbedo[px]  = float4(EnvBRDFApprox2(F0, rough * rough, NoV), 1.0f);
+    // O max e por canal (o escalar difunde): material tingido nao perde a cor, so o canal que
+    // chegaria a zero e levantado. Em metal o difuso inteiro sobe do zero p/ o piso, que e o caso
+    // que interessa.
+    OutDiffuseAlbedo[px]   = float4(max(g.BaseColor * (1.0f - g.Metallic), kAlbedoGuideFloor), 1.0f);
+    OutSpecularAlbedo[px]  = float4(max(EnvBRDFApprox2(F0, rough * rough, NoV),
+                                        kAlbedoGuideFloor), 1.0f);
     OutNormalRoughness[px] = float4(g.WorldNormal, rough); // ePacked: normal.xyz + rough linear no .a
 }

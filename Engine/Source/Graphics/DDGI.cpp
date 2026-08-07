@@ -505,7 +505,11 @@ namespace Smile {
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipMode };
-        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+        // .w = piso de roughness do hit: a sonda integra o hit num cosseno e serve o hemisferio
+        // inteiro — cache NAO-direcional, mesmo caso do reservoir do ReSTIR GI (ver
+        // FGIHitSampling::SecondaryRoughnessMin).
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,
+                                GIHit.SecondaryRoughnessMin };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;

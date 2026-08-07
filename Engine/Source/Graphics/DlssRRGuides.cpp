@@ -58,6 +58,7 @@ namespace Smile {
         };
         Free(MainUavTable, 3);
         Free(SpecHitUav, 1);
+        Free(GuideSrvBase, 4);
         DiffAlb.Reset(); SpecAlb.Reset(); NrmRough.Reset(); SpecHit.Reset();
         DiffAlbState = SpecAlbState = NrmRoughState = SpecHitState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
@@ -88,6 +89,19 @@ namespace Smile {
         SpecHitUav = SRVHeap.Allocate(1);
         Uav.Format = kHitFormat;
         SRVHeap.CreateUAV(Device, SpecHit.Get(), Uav, SpecHitUav);
+
+        // SRVs de inspecao (visualizador). Contiguos p/ os getters serem base + indice.
+        GuideSrvBase = SRVHeap.Allocate(4);
+        D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
+        Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        Srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        Srv.Texture2D.MipLevels     = 1;
+        Srv.Format = kGuideFormat;
+        SRVHeap.CreateSRV(Device, DiffAlb.Get(),  Srv, GuideSrvBase + 0);
+        SRVHeap.CreateSRV(Device, SpecAlb.Get(),  Srv, GuideSrvBase + 1);
+        SRVHeap.CreateSRV(Device, NrmRough.Get(), Srv, GuideSrvBase + 2);
+        Srv.Format = kHitFormat;
+        SRVHeap.CreateSRV(Device, SpecHit.Get(),  Srv, GuideSrvBase + 3);
 
         if (!SpecHitRTVHeap.Native())
             SpecHitRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
@@ -176,5 +190,14 @@ namespace Smile {
         Transition(CL, SpecAlb.Get(),  SpecAlbState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(CL, NrmRough.Get(), NrmRoughState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(CL, SpecHit.Get(),  SpecHitState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    void FDlssRRGuides::TransitionForDebug(ID3D12GraphicsCommandList* CL) {
+        constexpr D3D12_RESOURCE_STATES kRead = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        Transition(CL, DiffAlb.Get(),  DiffAlbState,  kRead);
+        Transition(CL, SpecAlb.Get(),  SpecAlbState,  kRead);
+        Transition(CL, NrmRough.Get(), NrmRoughState, kRead);
+        Transition(CL, SpecHit.Get(),  SpecHitState,  kRead);
     }
 }

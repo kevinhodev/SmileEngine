@@ -34,10 +34,14 @@ cbuffer ReSTIRCB : register(b0) {
                                     // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
     float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
                                     // w=angularMinRatio
-    float4 PolicyParams;            // x = politica deste passe (backface/culling)
+    float4 PolicyParams;            // x = politica deste passe (backface/culling),
+                                    // y = strength do boiling filter (0 = desligado),
+                                    // z = correcao de vies do temporal (0 = 1/M historico),
+                                    // w = kill de backface no Jacobiano (0 = abs() historico)
     // Gather do 2o bounce (contrato do HitShading.hlsli).
     float4 GIDistParams;            // x=distTile, y=distW, z=distH, w=skipMode
-    float4 GIBiasParams;            // x=escala do bias, y=teto em metros, zw=-
+    float4 GIBiasParams;            // x=escala do bias, y=teto em metros, z=fade de sondas,
+                                    // w=piso de roughness do hit (cache nao-direcional)
     float4 ReGIRGridMinSlots;
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;
@@ -170,6 +174,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    // Cache NAO-direcional (o reservoir entrega o mesmo Lo a vizinhos com outra visada), entao
+    // o piso de roughness vale aqui — ver o bloco no ShadeSurfaceHit.
+    P.RoughnessMin       = GIBiasParams.w;
+    P.RoughnessPad       = 0.0f;
 
     // POLITICA DE BACKFACE (Lumen AvoidSelfIntersections modo Retrace + terminacao preta).
     //
@@ -254,6 +262,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         ResUpdate(r, x2, n2, Lo, wInit, rng); // adotada -> age 0 (ja e o default)
     }
 
+    // Dominio do reservoir reprojetado, guardado p/ a correcao de vies do passo (3). Sao os
+    // MESMOS dados que o teste de aceitacao ja carrega (ponto visivel, normal e M do frame
+    // anterior) — a correcao nao custa leitura nova, so os dois TargetPHat do fim.
+    bool   tempMerged = false; // o reservoir anterior entrou no WRS
+    bool   tempPicked = false; // ... e a amostra dele venceu a selecao
+    float3 tempX1     = 0.0f;
+    float3 tempN1     = 0.0f;
+    float  tempM      = 0.0f;  // M ja limitado pelo MCap (e o mesmo que pesou o merge)
+
     // --- (2) Reuso temporal ------------------------------------------------------------------
     if (ReuseParams.w > 0.5f) {
         float2 vel    = Velocity.Load(int3(px, 0)).rg;
@@ -319,11 +336,14 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             // frame em que o passe de motion confiavel nao rodou. Sem esse gate, uma posicao
             // obsoleta poderia passar nos testes geometricos por coincidencia.
             float3 prevX1 = 0.0f;
+            // prevN1 subiu de escopo: alem do teste de aceitacao, ela e a normal do DOMINIO
+            // anterior na correcao de vies do passo (3).
+            float3 prevN1 = 0.0f;
             bool accept = permOk && prevM > 0.0f;
             if (accept) {
                 Texture2D<float4> PrevSurface = ResourceDescriptorHeap[(uint)HistoryParams.x];
                 prevX1 = PrevSurface.Load(int3(ppx, 0)).xyz;
-                float3 prevN1   = ResUnpackNormal(p1.w);
+                prevN1 = ResUnpackNormal(p1.w);
                 float  posReject = ReuseParams.y * max(camDist, 1.0f);
                 float  planeDist = abs(dot(N, prevX1 - x1));
                 accept = dot(prevN1, N) >= SpatialParams.w &&
@@ -461,19 +481,115 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     // camDist — com segmento indireto curto (contatos) isso muda a medida de
                     // verdade (J=1 era aproximacao enviesada). Mesma politica do espacial:
                     // J extremo REJEITA (clampar mantem o sample com peso errado).
-                    float J = ReconnectionJacobian(x1, prev.x1, prev.x2, prev.n2);
+                    float J = ReconnectionJacobian(x1, prev.x1, prev.x2, prev.n2,
+                                                   PolicyParams.w > 0.5f);
                     if (J >= 0.1f && J <= 10.0f) {
                         float pHatPrev = TargetPHat(x1, N, prev.x2, prev.Lo);
+                        // Registra o dominio ANTES do merge: a correcao de vies precisa dele
+                        // tenha a amostra vencido ou nao (quem perde ainda vota no denominador).
+                        tempMerged = true;
+                        tempX1 = prev.x1; tempN1 = prevN1; tempM = prev.M;
                         // Amostra do historico sobreviveu a selecao -> envelhece 1 frame.
-                        if (ResMerge(r, prev, pHatPrev, J, rng)) age = prevAge + 1.0f;
+                        if (ResMerge(r, prev, pHatPrev, J, rng)) {
+                            age = prevAge + 1.0f;
+                            tempPicked = true;
+                        }
                     }
                 }
             }
         }
     }
 
-    // --- (3) Resolve (sobrescrito pelo Pass B quando o spatial esta ON) ----------------------
-    ResFinalizeW(r, x1, N);
+    // --- (3) Correcao de vies do temporal + resolve (sobrescrito pelo Pass B c/ spatial ON) ---
+    //
+    // Era 1/M (W = wSum / (M * pHat)). O argumento que sustentava isso era "a reprojecao cai no
+    // MESMO ponto visivel, entao os dois dominios sao o mesmo e a correcao vira no-op" — e ele
+    // MORREU quando a permutation sampling entrou (ver o bloco no passo 2): a permutacao desloca
+    // a leitura em ate 3 texels, o x1 anterior deixa de ser o atual e os dominios passam a ser
+    // diferentes de verdade. A RTXDI, que tambem embaralha, corrige por default
+    // (RTXDI_GITemporalResampling, biasCorrectionMode = Basic); era a Smile que estava fazendo o
+    // oposto nos dois eixos (permutacao sempre ligada + 1/M).
+    //
+    // Mesma conta do Pass B, agora no helper compartilhado. Dominios: o proprio pixel (M = 1, o
+    // sample inicial) e o reservoir reprojetado (M = tempM). O `pi` e o pHat do vencedor NO
+    // DOMINIO QUE O GEROU; o `piSum` soma os dois dominios ponderados pelo M de cada um.
+    // pHatSel serve de pi quando o vencedor veio do sample inicial porque o dominio dele E o
+    // pixel atual — igual ao `selectedTargetPdf` da RTXDI.
+    // DEFAULT OFF (PolicyParams.z) apos o A/B de 2026-08-07 — ver o porque no bloco abaixo.
+    {
+        float pHatSel = TargetPHat(x1, N, r.x2, r.Lo);
+        float pi, piSum;
+        if (PolicyParams.z > 0.5f) {
+            float temporalP = tempMerged ? TargetPHat(tempX1, tempN1, r.x2, r.Lo) : 0.0f;
+            pi    = tempPicked ? temporalP : pHatSel;
+            piSum = pHatSel + temporalP * tempM;   // M do sample inicial e 1
+        } else {
+            // 1/M historico, escrito como CASO PARTICULAR do mesmo helper: com pi = pHatSel e
+            // piSum = pHatSel*(1 + tempM), a conta vira wSum / (M_total * pHatSel), que e
+            // exatamente o ResFinalizeW de antes (r.M == 1 + tempM por construcao). Uma via de
+            // codigo so p/ os dois modos — o A/B nao compara caminhos diferentes.
+            pi    = pHatSel;
+            piSum = pHatSel * (1.0f + tempM);
+        }
+        ResFinalizeMIS(r, pHatSel, pi, piSum);
+    }
+    //
+    // POR QUE A CORRECAO NASCEU LIGADA E VOLTOU P/ OFF (A/B do usuario, 2026-08-07):
+    //
+    // Ela e fiel a RTXDI (RTXDI_GITemporalResampling, modo Basic) e o 1/M e de fato enviesado com
+    // a permutation sampling ligada — nada disso mudou. O que mudou foi a medida: com ela ligada o
+    // caminho do Ray Reconstruction encheu de firefly TRAVADO no mundo, e o boiling filter nao
+    // conteve.
+    //
+    // O mecanismo e um LOOP, nao um pico isolado. `W_novo/W_velho = M_total*pi/piSum` chega a
+    // M_total = 1 + MCap = 21 quando o dominio anterior nao consegue gerar a amostra vencedora
+    // (temporalP -> 0, tipico de canto concavo com normal-map). Ate aqui e o que a RTXDI aceita.
+    // A diferenca e que AQUI o W inflado e GRAVADO no reservoir e volta como `prev.W` no frame
+    // seguinte, sem nada que o amorteca: a RTXDI realimenta o temporal com a saida do ESPACIAL
+    // (temporalResamplingInputBufferIndex = spatialResamplingOutputBufferIndex no modo
+    // TemporalAndSpatial), e o espacial dilui o outlier entre K vizinhos. Nesta engine o espacial
+    // NAO realimenta — o temporal e um laco fechado, e o pico se acumula em vez de decair.
+    //
+    // O Lumen roda sem realimentacao igual a nós, mas com o temporal 1/M e Jacobiano DESLIGADO,
+    // isto e, um temporal fortemente amortecido. A combinacao "sem realimentacao espacial +
+    // temporal corrigido por MIS + MCap 20" nao existe em nenhuma das duas referencias.
+    //
+    // P/ religar isto, o pre-requisito NAO e parametro, e estrutura — uma destas:
+    //   (a) realimentar o temporal com a saida do Pass B (vira o desenho da RTXDI), ou
+    //   (b) MCap 8 (teto da RTXDI) junto de boiling filter validado, aceitando o loop com ganho
+    //       menor.
+    // Religar so pelo knob, sem (a) ou (b), reproduz o artefato — foi exatamente isso que o A/B
+    // mostrou.
+
+    // Boiling filter (RTXDI_GIBoilingFilter + Utils/BoilingFilter.hlsli, ligado por DEFAULT la com
+    // strength 0.2). O firefly clamp da engine NAO cobre este caso: ele limita o Lo da amostra e o
+    // gi resolvido, mas o outlier nasce do W — um pixel parado no teto do clamp ainda fica ordens
+    // de grandeza acima do vizinho num muro escuro, que e o ponto branco fixo que aparece no RR (o
+    // NRD borra, o Ray Reconstruction reconstroi e preserva). O teste do boiling e RELATIVO a
+    // vizinhanca, e e isso que separa "amostra rara porem legitima" de "reservoir travado".
+    //
+    // Esvaziar o reservoir, e nao so zerar o gi do frame: com M = 0 o proximo frame nao le mais a
+    // amostra presa (o gate `prevM > 0` do reuso temporal falha) e o pixel recomeca do sample
+    // inicial. E o que mata o ponto FIXO; zerar so a saida deixaria ele voltar no frame seguinte.
+    //
+    // Diferenca deliberada p/ a RTXDI: a media e por WAVE, nao pelo grupo 8x8 inteiro. A versao
+    // dela usa groupshared + GroupMemoryBarrierWithGroupSync, e este passe tem dois early-out
+    // (fora da tela e ceu) ANTES daqui — barreira sob divergencia e comportamento indefinido.
+    // WaveActiveSum opera nas lanes ATIVAS, entao a variante de wave e correta sem reestruturar o
+    // main; a vizinhanca cai de 8x8 p/ 8x4 (wave de 32) ou continua 8x8 (wave de 64).
+    if (PolicyParams.y > 0.0f) {
+        const float bw    = ReSTIR_Luminance(r.Lo) * r.W;
+        const float bSum  = WaveActiveSum(bw);
+        const uint  bCnt  = WaveActiveCountBits(bw > 0.0f);
+        const float bAvg  = (bCnt > 0u) ? (bSum / (float)bCnt) : 0.0f;
+        // Multiplicador da RTXDI: 10/strength - 9 (0.2 -> corta acima de 41x a media da vizinhanca).
+        const float bMult = 10.0f / clamp(PolicyParams.y, 1e-6f, 1.0f) - 9.0f;
+        if (bAvg > 0.0f && bw > bAvg * bMult) {
+            ResInit(r);
+            age = 0.0f;
+        }
+    }
+
     float3 gi = ResResolve(r, x1, N, ShadeParams.z);
 
     // hitDist p/ o NRD = distancia da amostra VENCEDORA do WRS (o temporal pode trocar x2; o hitT

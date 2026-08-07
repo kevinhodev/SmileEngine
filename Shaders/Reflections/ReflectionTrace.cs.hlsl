@@ -169,6 +169,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.ReGIRPad           = 0u;
         P.SkyViewHeightKm    = SkyParams.x;
         P.SkyBottomRKm       = SkyParams.y;
+        // ZERO de proposito: a reflexao sombreia o hit p/ uma visada conhecida e consome uma vez
+        // so, sem reuso — o piso que o DDGI/ReSTIR precisam borraria espelho-no-espelho aqui.
+        P.RoughnessMin       = 0.0f;
+        P.RoughnessPad       = 0.0f;
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
             float sd;

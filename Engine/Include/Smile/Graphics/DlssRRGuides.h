@@ -55,10 +55,27 @@ namespace Smile {
         // Transiciona os 4 guides p/ NON_PIXEL_SHADER_RESOURCE (estado declarado nas tags do RR).
         void TransitionForRR(ID3D12GraphicsCommandList* CL);
 
+        // Deixa os 4 legiveis por um passe GRAFICO (o visualizador de debug). Existe separado do
+        // TransitionForRR porque as tags do RR declaram NON_PIXEL puro (DlssRRPass.cpp) e o
+        // estado combinado nao pode vazar para elas. Nao precisa de "restore": o proprio
+        // TransitionForRR, que roda depois no mesmo frame, devolve tudo a NON_PIXEL — os estados
+        // sao rastreados aqui dentro. O FDebugView nao emite barreira por conta propria, entao
+        // sem isto o alvo seria lido em estado errado (mesma armadilha do ReSTIR GI).
+        void TransitionForDebug(ID3D12GraphicsCommandList* CL);
+
         ID3D12Resource* DiffuseAlbedo()   const { return DiffAlb.Get(); }
         ID3D12Resource* SpecularAlbedo()  const { return SpecAlb.Get(); }
         ID3D12Resource* NormalRoughness() const { return NrmRough.Get(); }
         ID3D12Resource* SpecHitDist()     const { return SpecHit.Get(); }
+
+        // SRVs SO para o visualizador. O RR taga os ID3D12Resource* direto (a NGX cria os
+        // descritores dela), entao estes quatro nao participam do caminho de render — existem
+        // porque os guides eram os unicos sinais grandes da engine sem inspecao, e isso custou
+        // uma noite de bisect as cegas em 2026-08-07.
+        u32 DiffuseAlbedoSRV()   const { return GuideSrvBase == kInvalidSlot ? kInvalidSlot : GuideSrvBase + 0; }
+        u32 SpecularAlbedoSRV()  const { return GuideSrvBase == kInvalidSlot ? kInvalidSlot : GuideSrvBase + 1; }
+        u32 NormalRoughnessSRV() const { return GuideSrvBase == kInvalidSlot ? kInvalidSlot : GuideSrvBase + 2; }
+        u32 SpecHitDistSRV()     const { return GuideSrvBase == kInvalidSlot ? kInvalidSlot : GuideSrvBase + 3; }
 
     private:
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,
@@ -79,6 +96,7 @@ namespace Smile {
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 MainUavTable = kInvalidSlot; // 3 UAVs contiguos [diffAlb, specAlb, normalRough]
         u32 SpecHitUav   = kInvalidSlot; // UAV do specHitDist (tabela 1-wide + clear)
+        u32 GuideSrvBase = kInvalidSlot; // 4 SRVs contiguos [diffAlb, specAlb, nrmRough, specHit]
         u32 Width = 0, Height = 0;
         bool Initialized = false;
         bool Ready       = false;

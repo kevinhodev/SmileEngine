@@ -36,7 +36,10 @@ namespace Smile {
         // existente — em especial o View, que o ReSTIRNrdPack le em 256.
         Vec4  RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4  RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
-        Vec4  PolicyParams;      // x = politica de backface no gather (0/1); yzw livres
+        Vec4  PolicyParams;      // x = politica de backface no gather (0/1),
+                                 // y = strength do boiling filter (0 = off),
+                                 // z = correcao de vies do temporal (0/1),
+                                 // w = kill de backface no Jacobiano (0 = abs() historico)
         // Gather do 2o bounce no hit (contrato do HitShading.hlsli): o mesmo sampler completo
         // do deferred, com Chebyshev e skip de sonda inativa.
         Vec4  GIDistParams;      // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
@@ -172,6 +175,25 @@ namespace Smile {
         bool GetSpatial() const    { return Spatial; }
         void SetVisibility(bool V) { Visibility = V; }
         bool GetVisibility() const { return Visibility; }
+        // Boiling filter: NAO invalida historico (so muda o corte de outlier deste frame em
+        // diante), entao serve de A/B direto — 0 desliga e devolve o comportamento anterior.
+        void SetBoilingStrength(f32 V) { BoilingStrength = V; }
+        f32  GetBoilingStrength() const { return BoilingStrength; }
+        // Correcao de vies do reuso temporal (estilo RTXDI Basic). INVALIDA nas DUAS bordas: o W
+        // gravado no reservoir depende do modo, e um W inflado do modo anterior sobreviveria
+        // varios frames realimentando o wSum — o A/B compararia historico contaminado.
+        void SetTemporalBiasCorrection(bool V) {
+            if (V != TemporalBiasCorr) NeedsClear = true;
+            TemporalBiasCorr = V;
+        }
+        bool GetTemporalBiasCorrection() const { return TemporalBiasCorr; }
+        // Muda quais amostras sao ACEITAS no reuso, entao o que ja esta gravado foi montado sob
+        // a outra regra: invalida nas duas bordas, igual a correcao de vies.
+        void SetJacobianKillBackface(bool V) {
+            if (V != JacobianKillBackface) NeedsClear = true;
+            JacobianKillBackface = V;
+        }
+        bool GetJacobianKillBackface() const { return JacobianKillBackface; }
 
     private:
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
@@ -258,6 +280,20 @@ namespace Smile {
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B
         f32  MCap           = 20.0f;
+        // Corte de outlier RELATIVO a vizinhanca, no fim do Pass A (ver o bloco no shader). A
+        // RTXDI liga por default no GI com 0.2 (RTXDI_BoilingFilterParameters), mas aqui nasce
+        // DESLIGADO: entrou junto com a correcao de vies do temporal e o A/B de 2026-08-07 nao
+        // conseguiu separar os dois (o firefly que ele deveria cortar era alimentado por ela).
+        // Fica pronto p/ ser medido sozinho, contra o temporal ja no 1/M.
+        f32  BoilingStrength = 0.0f;
+        // Correcao de vies do reuso temporal (RTXDI Basic). OFF: fiel a RTXDI, mas instavel sem a
+        // realimentacao espacial que amortece o pico la — ver o bloco longo no ReSTIRGITrace.
+        bool TemporalBiasCorr = false;
+        // saturate() nos cossenos do Jacobiano (RTXDI/Lumen) vs o abs() historico. De volta a ON:
+        // o run de baseline de 2026-08-07 saiu com o firefly INTACTO, entao nada desta sessao o
+        // causa, e esta correcao (que so REJEITA amostra, nunca acrescenta energia) nao tem por
+        // que continuar desligada.
+        bool JacobianKillBackface = true;
         // MaxAge saiu daqui p/ o FRayEpsilonProfile: virou knob de calibracao junto com os
         // epsilons de raio, e o perfil e compartilhado com reflexoes/DDGI.
         f32  PosRejectScale = 0.01f;

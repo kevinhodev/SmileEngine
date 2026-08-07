@@ -37,6 +37,9 @@ struct FHitShadeParams {
     // por sua vez vem do FAtmosphere::ViewHeightKm()/BottomRadiusKm() — a MESMA fonte que o
     // bake usa. Eram dois literais aqui, e o de view height estava errado.
     float  SkyViewHeightKm;    float SkyBottomRKm;
+    // Piso de roughness do hit — SO para quem guarda a radiancia num cache NAO-DIRECIONAL
+    // (DDGI e ReSTIR GI). 0 = desligado, que e o que as reflexoes usam. Ver o uso abaixo.
+    float  RoughnessMin;       float RoughnessPad;
 };
 
 // Requer SceneLights e o heap bindless declarados pelo shader hospedeiro.
@@ -192,7 +195,22 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         metallic = geo.EmissiveFactor.w;
     }
     metallic = saturate(metallic);
-    roughness = max(roughness, 0.04f);
+    // Piso de roughness do SECUNDARIO (RTXDI `minSecondaryRoughness`, default 0.5 no sample
+    // app; Doc/RestirGI.md: "the BRDF of secondary surfaces should be limited [...] such as by
+    // clamping the roughness to higher values").
+    //
+    // O motivo e de armazenamento, nao de aparencia: DDGI e ReSTIR GI guardam UM float3 de
+    // radiancia por hit e o reusam de outras direcoes — a sonda integra o hit num cosseno e o
+    // reservoir entrega o mesmo Lo a vizinhos que olham o ponto de outro angulo. Um lobo GGX
+    // estreito no hit e, por definicao, radiancia que so existe naquela direcao: sem o piso ele
+    // vira firefly no reuso, e ai quem "conserta" e o FireflyMax (4/8), que tira energia.
+    // Com o piso o mesmo brilho vira um lobo largo — perde o highlight nitido do 2o bounce
+    // (que nenhum dos dois caches sabe representar) e devolve a energia distribuida.
+    //
+    // As REFLEXOES passam 0 aqui de proposito: la o hit e sombreado p/ uma direcao de visada
+    // conhecida e consumido uma vez so, sem reuso — clampar borraria espelho-no-espelho.
+    // O 0.04 continua embaixo como piso numerico do GGX, valha o que valer o knob.
+    roughness = max(roughness, max(P.RoughnessMin, 0.04f));
 
     const float3 diffuseColor  = albedo * (1.0f - metallic);
     const float3 specularColor = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);

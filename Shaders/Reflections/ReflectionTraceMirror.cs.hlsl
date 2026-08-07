@@ -147,6 +147,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    // ZERO: hit direcional e consumido uma vez (ver ReflectionTrace.cs.hlsl).
+    P.RoughnessMin       = 0.0f;
+    P.RoughnessPad       = 0.0f;
 
     float3 radiance;
     float  hitDist = TraceParams.y;

@@ -36,7 +36,8 @@ cbuffer ReSTIRCB : register(b0) {
                                     // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
     float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
                                     // w=angularMinRatio
-    float4 PolicyParams;            // so o Pass A usa (politica de backface); layout comum
+    float4 PolicyParams;            // x/y/z so o Pass A usa (backface, boiling, vies temporal);
+                                    // w = kill de backface no Jacobiano, usado pelos DOIS
 };
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
@@ -168,7 +169,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         nb.n2 = ResUnpackNormal(q1.x);   nb.Lo = ResUnpackRadiance(q1.y);
         nb.M = qM; nb.W = q0.w; nb.wSum = 0.0f;
 
-        float J = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2); // dst=atual, src=vizinho
+        // dst=atual, src=vizinho; PolicyParams.w = saturate (RTXDI) vs abs() historico
+        float J = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2, PolicyParams.w > 0.5f);
         // Rejeita (nao clampa) Jacobiano extremo: clampar mantem o sample com peso errado
         // (firefly/escurecimento em quinas). RTXDI/kajiya descartam o vizinho nesse caso.
         if (J < 0.1f || J > 10.0f) continue;
@@ -217,8 +219,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             piSum += ps * candM[cd];
             if (cd == selCand) pi = ps;
         }
-        rs.W = (pHatSel > 0.0f && pi > 0.0f && piSum > 0.0f)
-             ? (rs.wSum * pi / (piSum * pHatSel)) : 0.0f;
+        // Helper compartilhado com o Pass A (o temporal passou a usar a mesma normalizacao):
+        // conta identica a que estava inline aqui, incluindo as tres guardas.
+        ResFinalizeMIS(rs, pHatSel, pi, piSum);
     }
 
     // Shading visibility (opcional): testa a conexao x1->x2 da amostra SELECIONADA. Se ocluida, o
