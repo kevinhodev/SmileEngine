@@ -112,6 +112,30 @@ namespace Smile::GpuResources {
     // Readback (GPU -> CPU). Nao entra no VramTracker (system memory).
     ComPtr<ID3D12Resource> CreateReadbackBuffer(ID3D12Device* Device, u64 Bytes);
 
+    // === Custo de CRIACAO =========================================================
+    // Eixo diferente do VramTracker, que mede RESIDENCIA (quanto esta alocado). Aqui e
+    // quanto CUSTA alocar: e a medida que faltava para decidir, com numero em vez de
+    // argumento, entre pool de reciclagem, alocar no tamanho maximo, e D3D12MA.
+    //
+    // Existe porque o funil esta fechado: com 132 call sites isto seria instrumentacao
+    // espalhada; com um, e um contador. Custo por criacao = dois steady_clock::now(), e
+    // criacao de recurso nunca esta no caminho quente de frame.
+
+    enum class EHeapClass : u8 { Default, Upload, Readback, Count };
+
+    struct FCreationStats {
+        u32 Count [static_cast<size_t>(EHeapClass::Count)]{};
+        u64 Bytes [static_cast<size_t>(EHeapClass::Count)]{};
+        u64 Nanos [static_cast<size_t>(EHeapClass::Count)]{}; // tempo DENTRO do D3D12
+    };
+
+    FCreationStats CreationStats();
+    void           ResetCreationStats();
+
+    // Loga o delta desde o ultimo ResetCreationStats. Label diz de que janela se trata
+    // ("load da cena", "render scale"), porque o mesmo contador serve as duas.
+    void LogCreationStats(const char* Label);
+
     // === Descritores de view ======================================================
     // Os campos que nao aparecem aqui sao os que ficam no default em 100% dos usos atuais
     // (PlaneSlice, ResourceMinLODClamp). Se um caso precisar deles, monte o desc na mao —

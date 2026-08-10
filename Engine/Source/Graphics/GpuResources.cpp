@@ -1,5 +1,9 @@
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
+#include "Smile/Core/Logger.h"
+#include <atomic>
+#include <chrono>
+#include <string>
 #include <utility>
 
 namespace Smile::GpuResources {
@@ -13,6 +17,23 @@ namespace Smile::GpuResources {
             return Heap;
         }
 
+        // Contadores atomicos e nao um mutex: sao tres somas independentes, e o caminho de
+        // criacao ja e serial na pratica (o load decodifica textura em paralelo mas cria na
+        // thread que grava o batch). relaxed basta — ninguem le isto para sincronizar nada,
+        // so para imprimir no fim de uma fase.
+        constexpr size_t kHeapClasses = static_cast<size_t>(EHeapClass::Count);
+        std::atomic<u32> GCount[kHeapClasses];
+        std::atomic<u64> GBytes[kHeapClasses];
+        std::atomic<u64> GNanos[kHeapClasses];
+
+        EHeapClass ClassOf(D3D12_HEAP_TYPE Type) {
+            switch (Type) {
+                case D3D12_HEAP_TYPE_UPLOAD:   return EHeapClass::Upload;
+                case D3D12_HEAP_TYPE_READBACK: return EHeapClass::Readback;
+                default:                       return EHeapClass::Default;
+            }
+        }
+
         // Nucleo unico das duas familias. Cria num LOCAL e so entrega em sucesso — e o que
         // sustenta a promessa de "Out intacto em falha" das variantes Try.
         HRESULT TryCreateCommitted(ID3D12Device* Device, D3D12_HEAP_TYPE HeapType,
@@ -22,10 +43,30 @@ namespace Smile::GpuResources {
                                    ComPtr<ID3D12Resource>& Out) {
             const D3D12_HEAP_PROPERTIES Heap = HeapProps(HeapType);
             ComPtr<ID3D12Resource> Resource;
+
+            // O cronometro cobre SO a chamada ao D3D12. Montar desc e registrar no tracker
+            // ficam de fora de proposito: o que se quer medir e o custo do driver criar o
+            // heap, que e o que um pool ou o D3D12MA eliminariam.
+            const auto Start = std::chrono::steady_clock::now();
             const HRESULT Hr = Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
                                                                InitialState, Clear,
                                                                IID_PPV_ARGS(&Resource));
-            if (SUCCEEDED(Hr)) Out = std::move(Resource);
+            const auto Elapsed = std::chrono::steady_clock::now() - Start;
+
+            const size_t Klass = static_cast<size_t>(ClassOf(HeapType));
+            GCount[Klass].fetch_add(1, std::memory_order_relaxed);
+            GNanos[Klass].fetch_add(
+                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(Elapsed)
+                                     .count()),
+                std::memory_order_relaxed);
+            if (SUCCEEDED(Hr)) {
+                // Tamanho REAL cobrado (alinhamento incluso), mesma medida do VramTracker —
+                // senao os dois numeros nao se comparam.
+                GBytes[Klass].fetch_add(
+                    Device->GetResourceAllocationInfo(0, 1, &Desc).SizeInBytes,
+                    std::memory_order_relaxed);
+                Out = std::move(Resource);
+            }
             return Hr;
         }
 
@@ -170,6 +211,57 @@ namespace Smile::GpuResources {
         const D3D12_RESOURCE_DESC Desc = BufferDesc(_Bytes);
         return CreateCommitted(_Device, D3D12_HEAP_TYPE_READBACK, Desc,
                                D3D12_RESOURCE_STATE_COPY_DEST, nullptr);
+    }
+
+    FCreationStats CreationStats() {
+        FCreationStats Out{};
+        for (size_t i = 0; i < kHeapClasses; ++i) {
+            Out.Count[i] = GCount[i].load(std::memory_order_relaxed);
+            Out.Bytes[i] = GBytes[i].load(std::memory_order_relaxed);
+            Out.Nanos[i] = GNanos[i].load(std::memory_order_relaxed);
+        }
+        return Out;
+    }
+
+    void ResetCreationStats() {
+        for (size_t i = 0; i < kHeapClasses; ++i) {
+            GCount[i].store(0, std::memory_order_relaxed);
+            GBytes[i].store(0, std::memory_order_relaxed);
+            GNanos[i].store(0, std::memory_order_relaxed);
+        }
+    }
+
+    void LogCreationStats(const char* _Label) {
+        const FCreationStats S = CreationStats();
+
+        u32 TotalCount = 0;
+        u64 TotalNanos = 0;
+        for (size_t i = 0; i < kHeapClasses; ++i) {
+            TotalCount += S.Count[i];
+            TotalNanos += S.Nanos[i];
+        }
+        if (TotalCount == 0) return;
+
+        // Mesma casa decimal do breakdown de VRAM, para os dois logs se lerem juntos.
+        auto Ms = [](u64 Nanos) {
+            const u64 Tenths = (Nanos + 50'000ull) / 100'000ull; // ns -> 0,1 ms
+            return std::to_string(Tenths / 10u) + "," + std::to_string(Tenths % 10u) + " ms";
+        };
+        auto Mb = [](u64 Bytes) {
+            const u64 Tenths = (Bytes * 10u + (1u << 19)) >> 20;
+            return std::to_string(Tenths / 10u) + "," + std::to_string(Tenths % 10u) + " MB";
+        };
+
+        static const char* const kNames[kHeapClasses] = { "DEFAULT", "UPLOAD", "READBACK" };
+
+        std::string Line = std::string("[Criacao] ") + _Label + ": " +
+                           std::to_string(TotalCount) + " recursos em " + Ms(TotalNanos);
+        for (size_t i = 0; i < kHeapClasses; ++i) {
+            if (S.Count[i] == 0) continue;
+            Line += "\n         " + std::string(kNames[i]) + ": " +
+                    std::to_string(S.Count[i]) + " x " + Mb(S.Bytes[i]) + " em " + Ms(S.Nanos[i]);
+        }
+        LogInfo(Line);
     }
 
     D3D12_SHADER_RESOURCE_VIEW_DESC SrvTex2D(DXGI_FORMAT _Format, u32 _MipLevels,

@@ -94,6 +94,7 @@ namespace Smile::VramTracker {
         std::lock_guard Lock(S.Mutex);
         Snap.Bytes = S.Totals;
         for (const u64 B : Snap.Bytes) Snap.TotalTracked += B;
+        Snap.LiveResources = static_cast<u32>(S.Entries.size());
         return Snap;
     }
 
@@ -153,7 +154,8 @@ namespace Smile::VramTracker {
         // Mesma fonte que a janela de Estatisticas consome (ver LabelBreakdown), ja ordenada.
         const std::vector<FVramLabelEntry> Labels = LabelBreakdown();
 
-        std::string Line = "[VRAM] rastreado " + Mb(Snap.TotalTracked);
+        std::string Line = "[VRAM] rastreado " + Mb(Snap.TotalTracked) + " em " +
+                           std::to_string(Snap.LiveResources) + " recursos";
         if (_LocalUsageBytes > 0) {
             Line += " | DXGI " + Mb(_LocalUsageBytes);
             // So faz sentido quando o DXGI ja contabilizou tudo que registramos; se vier menor

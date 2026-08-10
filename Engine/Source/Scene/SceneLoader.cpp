@@ -266,6 +266,9 @@ namespace Smile {
     bool Renderer::CommitCookedScene(FPreparedCookedScenePtr _Prepared, bool _Additive) {
         if (!_Prepared) return false;
         const Clock::time_point t0 = Clock::now();
+        // Zera aqui e nao no Prepare: o Prepare so decodifica em CPU, quem cria recurso e o
+        // commit. A janela do contador tem que casar com a fase que o log ao lado mede.
+        GpuResources::ResetCreationStats();
         const FPreparedCookedScene& Prepared = *_Prepared;
         const fs::path& base = Prepared.BasePath;
         const fs::path& scenePath = Prepared.ScenePath;
@@ -658,6 +661,8 @@ namespace Smile {
         // Depois do commit: texturas, meshes, BLAS/TLAS e o setup de GI ja existem, entao este e
         // o primeiro ponto em que o breakdown descreve a cena inteira.
         VramTracker::LogBreakdown(Device.QueryVideoMemory().LocalUsage);
+        // O par do breakdown: aquele diz QUANTO esta alocado, este diz quanto CUSTOU alocar.
+        GpuResources::LogCreationStats("load da cena");
         return true;
     }
 }

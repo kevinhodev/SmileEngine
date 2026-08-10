@@ -1038,6 +1038,14 @@ namespace Smile {
     }
 
     void Renderer::RecreateInternalTargets() {
+        // Instrumentacao do churn de resize: os chamadores (Resize e ApplyRenderScale) ja
+        // deram Flush na fila, entao TUDO daqui e destruir e recriar alvo. Medir os dois
+        // numeros — parede e tempo dentro do D3D12 — separa "o driver e lento criando" de
+        // "temos coisa demais a recriar", que apontam para solucoes opostas (pool/D3D12MA
+        // de um lado, alocar no tamanho maximo e usar sub-rect do outro).
+        const auto RecreateStart = std::chrono::steady_clock::now();
+        GpuResources::ResetCreationStats();
+
         const u32 RW = RenderWidth(),        RH = RenderHeight();
         const u32 SW = SwapChain.GetWidth(), SH = SwapChain.GetHeight();
 
@@ -1083,6 +1091,14 @@ namespace Smile {
         }
 
         RegisterDebugTargets();
+
+        const auto RecreateMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - RecreateStart).count();
+        LogDebug("[Resize] alvos internos recriados em " +
+                 std::to_string(static_cast<int>(RecreateMs)) + " ms (" +
+                 std::to_string(RW) + "x" + std::to_string(RH) + " render, " +
+                 std::to_string(SW) + "x" + std::to_string(SH) + " display)");
+        GpuResources::LogCreationStats("resize");
     }
 
     // Publica no registro os alvos que ja possuem SRV. Nomes sao a chave (o filtro do

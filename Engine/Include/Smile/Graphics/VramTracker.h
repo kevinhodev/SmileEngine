@@ -26,6 +26,11 @@ namespace Smile {
     struct FVramSnapshot {
         std::array<u64, static_cast<size_t>(EVramCategory::Count)> Bytes{};
         u64 TotalTracked = 0;
+        // Recursos rastreados vivos. Enquanto a engine so cria COMMITTED, este numero e
+        // tambem a contagem de HEAPS do driver — um committed resource e um heap. E a
+        // medida de fragmentacao que decide se D3D12MA ou um pool tem cliente; no dia em
+        // que existir placed resource ele deixa de valer como contagem de heap.
+        u32 LiveResources = 0;
     };
 
     // Uma linha do breakdown POR RECURSO: a soma de todos os recursos que compartilham o mesmo
