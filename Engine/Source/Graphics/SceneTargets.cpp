@@ -1,12 +1,11 @@
 #include "Smile/Graphics/SceneTargets.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include <cstring>
-#include "Smile/Core/HResultCheck.h"
 
-// Corpos movidos do Renderer.cpp sem reescrita. A unica mudanca e de PARAMETRO: o que era
-// membro do Renderer (Device, SRVHeap) ou chamada dele (RenderWidth/RenderHeight) agora entra
+// Render targets centrais da cena. GpuResources centraliza a criacao comum; heaps, slots e
+// estados permanecem no agregado. Device, SRVHeap e as dimensoes entram
 // por argumento — que e exatamente o que torna esta classe extraivel.
 namespace Smile {
 
@@ -21,30 +20,15 @@ namespace Smile {
 
         DepthBuffer.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        ResourceDesc.Width            = Width;
-        ResourceDesc.Height           = Height;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format               = DXGI_FORMAT_D32_FLOAT;
         ClearValue.DepthStencil.Depth   = kClearDepth; 
         ClearValue.DepthStencil.Stencil = 0;
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE, &ClearValue,
-            IID_PPV_ARGS(&DepthBuffer)));
-        VramTracker::Register(DepthBuffer.Get(), EVramCategory::RenderTargets);
+        DepthBuffer = GpuResources::CreateTex2D(
+            _Device, Width, Height, DXGI_FORMAT_R32_TYPELESS,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            EVramCategory::RenderTargets, &ClearValue);
 
         D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
         DSVDesc.Format        = DXGI_FORMAT_D32_FLOAT;
@@ -55,12 +39,8 @@ namespace Smile {
         if (DepthSRVSlot == kInvalidSlot)
             DepthSRVSlot = _SRVHeap.Allocate(1);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format                  = DXGI_FORMAT_R32_FLOAT;
-        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        SRVDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
-        SRVDesc.Texture2D.MipLevels       = 1;
-        SRVDesc.Texture2D.MostDetailedMip = 0;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc =
+            GpuResources::SrvTex2D(DXGI_FORMAT_R32_FLOAT);
         _SRVHeap.CreateSRV(_Device, DepthBuffer.Get(), SRVDesc, DepthSRVSlot);
     }
 
@@ -77,46 +57,25 @@ namespace Smile {
 
         const DXGI_FORMAT NormalFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
 
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        ResourceDesc.Width            = Width;
-        ResourceDesc.Height           = Height;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = NormalFormat;
-        ResourceDesc.SampleDesc       = { 1, 0 }; 
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format   = NormalFormat;
         ClearValue.Color[0] = 0.5f; ClearValue.Color[1] = 0.5f; 
         ClearValue.Color[2] = 0.5f; ClearValue.Color[3] = 0.0f;
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
-            D3D12_RESOURCE_STATE_RENDER_TARGET, &ClearValue,
-            IID_PPV_ARGS(&NormalBuffer)));
-        VramTracker::Register(NormalBuffer.Get(), EVramCategory::RenderTargets);
+        NormalBuffer = GpuResources::CreateTex2D(
+            _Device, Width, Height, NormalFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            EVramCategory::RenderTargets, &ClearValue);
         NormalBufferState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
-        D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
-        RTVDesc.Format        = NormalFormat;
-        RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        const D3D12_RENDER_TARGET_VIEW_DESC RTVDesc = GpuResources::RtvTex2D(NormalFormat);
         _Device->CreateRenderTargetView(NormalBuffer.Get(), &RTVDesc,
                                                 NormalRTVHeap.CpuHandle(0));
 
         if (NormalSRVSlot == kInvalidSlot)
             NormalSRVSlot = _SRVHeap.Allocate(1);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format                  = NormalFormat;
-        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        SRVDesc.Texture2D.MipLevels     = 1;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc = GpuResources::SrvTex2D(NormalFormat);
         _SRVHeap.CreateSRV(_Device, NormalBuffer.Get(), SRVDesc, NormalSRVSlot);
     }
 
@@ -128,47 +87,29 @@ namespace Smile {
 
         HDRColorBuffer.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        ResourceDesc.Width            = Width;
-        ResourceDesc.Height           = Height;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         const FLOAT ClearColor[] = { 0.094f, 0.094f, 0.117f, 1.0f };
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&HDRColorBuffer)));
-        VramTracker::Register(HDRColorBuffer.Get(), EVramCategory::RenderTargets);
+        HDRColorBuffer = GpuResources::CreateTex2D(
+            _Device, Width, Height, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            EVramCategory::RenderTargets, &ClearValue);
 
         if (!HDRRTVHeap.Native())
             HDRRTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
 
-        D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
-        RTVDesc.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        const D3D12_RENDER_TARGET_VIEW_DESC RTVDesc =
+            GpuResources::RtvTex2D(DXGI_FORMAT_R16G16B16A16_FLOAT);
         _Device->CreateRenderTargetView(HDRColorBuffer.Get(), &RTVDesc, HDRRTVHeap.CpuHandle(0));
 
         if (HDRSRVSlot == kInvalidSlot)
             HDRSRVSlot = _SRVHeap.Allocate(1);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        SRVDesc.Texture2D.MipLevels     = 1;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc =
+            GpuResources::SrvTex2D(DXGI_FORMAT_R16G16B16A16_FLOAT);
         _SRVHeap.CreateSRV(_Device, HDRColorBuffer.Get(), SRVDesc, HDRSRVSlot);
     }
 
@@ -179,56 +120,38 @@ namespace Smile {
 
         VelocityBuffer.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        ResourceDesc.Width            = Width;
-        ResourceDesc.Height           = Height;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_R16G16_FLOAT;
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        // RT (G-buffer escreve velocity) + UAV (passe de velocity do background preenche o ceu/nuvens/fog).
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
-                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
         const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = DXGI_FORMAT_R16G16_FLOAT;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&VelocityBuffer)));
-        VramTracker::Register(VelocityBuffer.Get(), EVramCategory::RenderTargets);
+        // RT (G-buffer escreve velocity) + UAV (passe de velocity do background preenche o ceu/nuvens/fog).
+        VelocityBuffer = GpuResources::CreateTex2D(
+            _Device, Width, Height, DXGI_FORMAT_R16G16_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            EVramCategory::RenderTargets, &ClearValue);
         VelocityState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!VelocityRTVHeap.Native())
             VelocityRTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
 
-        D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};
-        RTVDesc.Format        = DXGI_FORMAT_R16G16_FLOAT;
-        RTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        const D3D12_RENDER_TARGET_VIEW_DESC RTVDesc =
+            GpuResources::RtvTex2D(DXGI_FORMAT_R16G16_FLOAT);
         _Device->CreateRenderTargetView(VelocityBuffer.Get(), &RTVDesc, VelocityRTVHeap.CpuHandle(0));
 
         if (VelocitySRVSlot == kInvalidSlot)
             VelocitySRVSlot = _SRVHeap.Allocate(1);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format                  = DXGI_FORMAT_R16G16_FLOAT;
-        SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        SRVDesc.Texture2D.MipLevels     = 1;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc =
+            GpuResources::SrvTex2D(DXGI_FORMAT_R16G16_FLOAT);
         _SRVHeap.CreateSRV(_Device, VelocityBuffer.Get(), SRVDesc, VelocitySRVSlot);
 
         if (VelocityUavSlot == kInvalidSlot)
             VelocityUavSlot = _SRVHeap.Allocate(1);
-        D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
-        UAVDesc.Format        = DXGI_FORMAT_R16G16_FLOAT;
-        UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        const D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc =
+            GpuResources::UavTex2D(DXGI_FORMAT_R16G16_FLOAT);
         _SRVHeap.CreateUAV(_Device, VelocityBuffer.Get(), UAVDesc, VelocityUavSlot);
     }
 
@@ -243,34 +166,21 @@ namespace Smile {
         if (!UpscaleMaskRTVHeap.Native())
             UpscaleMaskRTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
 
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = Width;
-        Desc.Height           = Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R8_UNORM;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         D3D12_CLEAR_VALUE Clear{};
-        Clear.Format = Desc.Format;
+        Clear.Format = DXGI_FORMAT_R8_UNORM;
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_RENDER_TARGET,
-            &Clear, IID_PPV_ARGS(&UpscaleReactiveMask)));
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_RENDER_TARGET,
-            &Clear, IID_PPV_ARGS(&UpscaleCompositionMask)));
-        VramTracker::Register(UpscaleReactiveMask.Get(), EVramCategory::RenderTargets);
-        VramTracker::Register(UpscaleCompositionMask.Get(), EVramCategory::RenderTargets);
+        UpscaleReactiveMask = GpuResources::CreateTex2D(
+            _Device, Width, Height, DXGI_FORMAT_R8_UNORM,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            EVramCategory::RenderTargets, &Clear);
+        UpscaleCompositionMask = GpuResources::CreateTex2D(
+            _Device, Width, Height, DXGI_FORMAT_R8_UNORM,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            EVramCategory::RenderTargets, &Clear);
         UpscaleReactiveState = UpscaleCompositionState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
-        D3D12_RENDER_TARGET_VIEW_DESC RTV{};
-        RTV.Format = Desc.Format;
-        RTV.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        const D3D12_RENDER_TARGET_VIEW_DESC RTV =
+            GpuResources::RtvTex2D(DXGI_FORMAT_R8_UNORM);
         _Device->CreateRenderTargetView(
             UpscaleReactiveMask.Get(), &RTV, UpscaleMaskRTVHeap.CpuHandle(0));
         _Device->CreateRenderTargetView(
@@ -290,31 +200,17 @@ namespace Smile {
              Size > 1 && SceneColorMipCount < kSceneColorMipMax; Size >>= 1)
             ++SceneColorMipCount;
 
-        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        ResourceDesc.Width            = Width;
-        ResourceDesc.Height           = Height;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = static_cast<UINT16>(SceneColorMipCount);
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-        ResourceDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
-                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneColorCopy)));
-        VramTracker::Register(SceneColorCopy.Get(), EVramCategory::RenderTargets);
+        SceneColorCopy = GpuResources::CreateTex2D(
+            _Device, Width, Height, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST,
+            EVramCategory::RenderTargets, nullptr, SceneColorMipCount);
         for (u32 Mip = 0; Mip < SceneColorMipCount; ++Mip)
             SceneColorMipStates[Mip] = D3D12_RESOURCE_STATE_COPY_DEST;
 
-        ResourceDesc.MipLevels = 1;
-        ResourceDesc.Flags     = D3D12_RESOURCE_FLAG_NONE;
-        ResourceDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-        SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
-                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&SceneDepthCopy)));
-        VramTracker::Register(SceneDepthCopy.Get(), EVramCategory::RenderTargets);
+        SceneDepthCopy = GpuResources::CreateTex2D(
+            _Device, Width, Height, DXGI_FORMAT_R32_TYPELESS,
+            D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST,
+            EVramCategory::RenderTargets);
         SceneDepthCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
 
         if (SceneCopyTableStart == kInvalidSlot)
@@ -324,31 +220,23 @@ namespace Smile {
         if (SceneColorMipUAVStart == kInvalidSlot)
             SceneColorMipUAVStart = _SRVHeap.Allocate(kSceneColorMipMax);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        SRVDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        SRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        SRVDesc.Texture2D.MipLevels     = SceneColorMipCount;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc =
+            GpuResources::SrvTex2D(DXGI_FORMAT_R16G16B16A16_FLOAT, SceneColorMipCount);
         _SRVHeap.CreateSRV(_Device, SceneColorCopy.Get(), SRVDesc, SceneCopyTableStart);
 
-        SRVDesc.Texture2D.MipLevels = 1;
-        D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
-        UAVDesc.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         for (u32 Mip = 0; Mip < SceneColorMipCount; ++Mip) {
-            SRVDesc.Texture2D.MostDetailedMip = Mip;
-            _SRVHeap.CreateSRV(_Device, SceneColorCopy.Get(), SRVDesc,
+            const D3D12_SHADER_RESOURCE_VIEW_DESC MipSRV =
+                GpuResources::SrvTex2D(DXGI_FORMAT_R16G16B16A16_FLOAT, 1, Mip);
+            _SRVHeap.CreateSRV(_Device, SceneColorCopy.Get(), MipSRV,
                               SceneColorMipSRVStart + Mip);
-            UAVDesc.Texture2D.MipSlice = Mip;
-            _SRVHeap.CreateUAV(_Device, SceneColorCopy.Get(), UAVDesc,
+            const D3D12_UNORDERED_ACCESS_VIEW_DESC MipUAV =
+                GpuResources::UavTex2D(DXGI_FORMAT_R16G16B16A16_FLOAT, Mip);
+            _SRVHeap.CreateUAV(_Device, SceneColorCopy.Get(), MipUAV,
                               SceneColorMipUAVStart + Mip);
         }
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC DSRV{};
-        DSRV.Format                  = DXGI_FORMAT_R32_FLOAT;
-        DSRV.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        DSRV.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        DSRV.Texture2D.MipLevels     = 1;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC DSRV =
+            GpuResources::SrvTex2D(DXGI_FORMAT_R32_FLOAT);
         _SRVHeap.CreateSRV(_Device, SceneDepthCopy.Get(), DSRV, SceneCopyTableStart + 1);
     }
 
