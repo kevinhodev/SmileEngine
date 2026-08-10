@@ -301,12 +301,17 @@ namespace Smile {
         // Cada fase abaixo guarda um snapshot e loga o DELTA. Sem isso o contador so dava o
         // total do commit, e comparar esse total contra o tempo de uma fase leva a conclusao
         // errada — foi o que aconteceu na primeira leitura desta instrumentacao.
+        //
+        // PhaseSum acumula os deltas para a linha "nao atribuido" no fim fechar a conta: as
+        // fases somavam 487 dos 492 recursos, e os cinco que faltavam (paginas de CB de
+        // material, ObjectCB/HiZ) nao apareciam em lugar nenhum.
+        GpuResources::FCreationStats PhaseSum{};
         const Clock::time_point TextureUploadStart = Clock::now();
         const auto TexCreationBase = GpuResources::CreationStats();
         std::vector<FTexture> texs = FTexture::CreateBatchFromCPU(
             Device.Native(), UploadQueue, SRVHeap, Prepared.TextureData);
         const double msTexUpload = MsSince(TextureUploadStart);
-        GpuResources::LogCreationDelta("commit/texturas", TexCreationBase);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/texturas", TexCreationBase);
         const std::vector<std::string>& relList = Prepared.TexturePaths;
         std::unordered_map<std::string, FTexture*> texByPath;
         u32 uploaded = 0;
@@ -451,7 +456,7 @@ namespace Smile {
         }
 
         const double msMeshUpload = MsSince(tMeshUploadStart);
-        GpuResources::LogCreationDelta("commit/meshes", MeshCreationBase);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/meshes", MeshCreationBase);
 
         // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
         // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
@@ -635,7 +640,7 @@ namespace Smile {
             }
         }
         const double msTerrain = MsSince(TerrainStart);
-        GpuResources::LogCreationDelta("commit/terreno", TerrainCreationBase);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/terreno", TerrainCreationBase);
 
         // O volume de GI NAO inclui o terreno de proposito: um terreno de km esticaria o
         // grid de probes do DDGI. Fora do volume o shading cai no fallback de ambiente;
@@ -644,13 +649,13 @@ namespace Smile {
         const auto RtCreationBase = GpuResources::CreationStats();
         BuildRaytracingScene();
         const double msRaytracing = MsSince(RaytracingStart);
-        GpuResources::LogCreationDelta("commit/blasTlas", RtCreationBase);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/blasTlas", RtCreationBase);
 
         const Clock::time_point GIStart = Clock::now();
         const auto GiCreationBase = GpuResources::CreationStats();
         SetupGIForScene(sceneMin, sceneMax);
         const double msGI = MsSince(GIStart);
-        GpuResources::LogCreationDelta("commit/setupGI", GiCreationBase);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/setupGI", GiCreationBase);
 
         // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
         // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
@@ -676,6 +681,7 @@ namespace Smile {
         // o primeiro ponto em que o breakdown descreve a cena inteira.
         VramTracker::LogBreakdown(Device.QueryVideoMemory().LocalUsage);
         // O par do breakdown: aquele diz QUANTO esta alocado, este diz quanto CUSTOU alocar.
+        GpuResources::LogCreationUnattributed("commit/nao-atribuido", PhaseSum);
         GpuResources::LogCreationStats("load da cena");
         return true;
     }

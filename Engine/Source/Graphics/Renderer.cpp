@@ -16,6 +16,7 @@
 #include <functional>
 #include <cmath>
 #include <chrono>
+#include <cstdlib>
 #include <type_traits>
 
 namespace Smile {
@@ -1046,6 +1047,12 @@ namespace Smile {
         const auto RecreateStart = std::chrono::steady_clock::now();
         GpuResources::ResetCreationStats();
 
+        // SMILE_CAPTURE_DESCS=<arquivo> grava os descritores REAIS deste resize para o
+        // Tools/AllocBench reproduzi-los. Por variavel de ambiente e nao por UI porque e
+        // ferramenta de medicao pontual: quem mede sabe ligar, e ninguem paga por isso.
+        const char* CapturePath = std::getenv("SMILE_CAPTURE_DESCS");
+        if (CapturePath) GpuResources::SetDescCapture(true);
+
         const u32 RW = RenderWidth(),        RH = RenderHeight();
         const u32 SW = SwapChain.GetWidth(), SH = SwapChain.GetHeight();
 
@@ -1099,6 +1106,10 @@ namespace Smile {
                  std::to_string(RW) + "x" + std::to_string(RH) + " render, " +
                  std::to_string(SW) + "x" + std::to_string(SH) + " display)");
         GpuResources::LogCreationStats("resize");
+        if (CapturePath) {
+            GpuResources::SetDescCapture(false);
+            GpuResources::DumpCapturedDescs(CapturePath);
+        }
     }
 
     // Publica no registro os alvos que ja possuem SRV. Nomes sao a chave (o filtro do

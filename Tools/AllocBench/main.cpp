@@ -28,6 +28,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -63,10 +66,49 @@ namespace {
         return D;
     }
 
-    // Espelha a forma do conjunto que o RecreateInternalTargets da engine recria: 79 alvos
-    // dependentes de resolucao, somando ~600 MB em 1573x804. Nao sao os descritores
-    // capturados da engine — sao representativos. O que importa para a pergunta e o formato
-    // e o tamanho, nao qual passe pediu.
+    // Le o arquivo que a engine escreve com SMILE_CAPTURE_DESCS. Este e o caminho PREFERIDO:
+    // sao os descritores reais do RecreateInternalTargets, e nao uma aproximacao. So os do
+    // heap DEFAULT entram — o benchmark compara committed contra placed, e UPLOAD/READBACK
+    // tem custo por MB bem diferente, entao misturar as duas populacoes envenenaria
+    // qualquer coeficiente extraido daqui.
+    std::vector<D3D12_RESOURCE_DESC> LoadCapturedSet(const char* Path, size_t& OutSkipped) {
+        std::vector<D3D12_RESOURCE_DESC> Out;
+        OutSkipped = 0;
+
+        std::ifstream File(Path);
+        if (!File) return Out;
+
+        std::string Line;
+        while (std::getline(File, Line)) {
+            if (Line.empty() || Line[0] == '#') continue;
+            std::istringstream S(Line);
+            int Dim = 0, Fmt = 0, Flags = 0, HeapType = 0;
+            unsigned long long W = 0;
+            unsigned Ht = 0, Arr = 0, Mips = 0;
+            if (!(S >> Dim >> W >> Ht >> Arr >> Mips >> Fmt >> Flags >> HeapType)) continue;
+            if (HeapType != D3D12_HEAP_TYPE_DEFAULT) { ++OutSkipped; continue; }
+
+            D3D12_RESOURCE_DESC D{};
+            D.Dimension        = static_cast<D3D12_RESOURCE_DIMENSION>(Dim);
+            D.Width            = W;
+            D.Height           = Ht;
+            D.DepthOrArraySize = static_cast<UINT16>(Arr);
+            D.MipLevels        = static_cast<UINT16>(Mips);
+            D.Format           = static_cast<DXGI_FORMAT>(Fmt);
+            D.SampleDesc       = { 1, 0 };
+            D.Layout           = (D.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                               ? D3D12_TEXTURE_LAYOUT_ROW_MAJOR
+                               : D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            D.Flags            = static_cast<D3D12_RESOURCE_FLAGS>(Flags);
+            Out.push_back(D);
+        }
+        return Out;
+    }
+
+    // Fallback quando nao ha captura. APROXIMA a forma do conjunto do resize — e so isso.
+    // A primeira versao deste benchmark dizia "~600 MB" e somava 787 MB (30% acima do real),
+    // o que preservava o sinal mas invalidava coeficiente por MB. Por isso o main avisa em
+    // alto e bom som quando esta neste caminho.
     std::vector<D3D12_RESOURCE_DESC> BuildResizeSet(UINT W, UINT H) {
         constexpr auto kUav = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         constexpr auto kRt  = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -162,21 +204,38 @@ namespace {
         return R;
     }
 
-    void Report(const char* Name, const FRun& R, size_t N, double BaselineMs) {
-        if (!R.Ok) { std::printf("  %-22s FALHOU\n", Name); return; }
-        std::printf("  %-22s %7.2f ms   %6.3f ms/recurso   %7.1f MB",
-                    Name, R.Ms, R.Ms / static_cast<double>(N),
-                    static_cast<double>(R.Bytes) / (1024.0 * 1024.0));
+    double Median(std::vector<double> V) {
+        if (V.empty()) return 0.0;
+        std::sort(V.begin(), V.end());
+        return V[V.size() / 2];
+    }
+
+    void Report(const char* Name, const std::vector<double>& Samples, size_t N, UINT64 Bytes,
+                double BaselineMs) {
+        if (Samples.empty()) { std::printf("  %-22s FALHOU\n", Name); return; }
+        const double Med = Median(Samples);
+        std::printf("  %-22s %7.2f ms   %6.3f ms/rec   %7.1f MB   [%.1f-%.1f]",
+                    Name, Med, Med / static_cast<double>(N),
+                    static_cast<double>(Bytes) / (1024.0 * 1024.0),
+                    *std::min_element(Samples.begin(), Samples.end()),
+                    *std::max_element(Samples.begin(), Samples.end()));
         if (BaselineMs > 0.0)
-            std::printf("   %+6.1f%%", (R.Ms / BaselineMs - 1.0) * 100.0);
+            std::printf("   %+6.1f%%", (Med / BaselineMs - 1.0) * 100.0);
         std::printf("\n");
     }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    UINT W = 1573, H = 804;               // mesma resolucao do resize medido na engine
-    if (argc >= 3) { W = std::atoi(argv[1]); H = std::atoi(argv[2]); }
+    // Uso:
+    //   SmileAllocBench <captura.txt>     <- preferido; descritores reais da engine
+    //   SmileAllocBench <largura> <altura> <- fallback aproximado
+    const char* CapturePath = nullptr;
+    UINT W = 1573, H = 804;
+    if (argc == 2)      CapturePath = argv[1];
+    else if (argc >= 3) { W = std::atoi(argv[1]); H = std::atoi(argv[2]); }
+
+    constexpr int kIterations = 5;
 
     ComPtr<IDXGIFactory6> Factory;
     if (!Check(CreateDXGIFactory2(0, IID_PPV_ARGS(&Factory)), "CreateDXGIFactory2")) return 1;
@@ -200,31 +259,73 @@ int main(int argc, char** argv) {
     Device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &Options, sizeof(Options));
     std::printf("Resource Heap Tier: %d\n", static_cast<int>(Options.ResourceHeapTier));
 
-    const auto Descs = BuildResizeSet(W, H);
-    std::printf("\nConjunto: %zu recursos em %ux%u\n", Descs.size(), W, H);
+    // Gate DE VERDADE. O caminho placed usa UM heap com ALLOW_ALL_BUFFERS_AND_TEXTURES, que
+    // Tier 1 nao aceita: la seria preciso um heap por classe de recurso. Antes isto era so um
+    // comentario prometendo uma checagem que nao existia, e em Tier 1 o benchmark falharia
+    // com um HRESULT solto em vez de dizer o que houve.
+    if (Options.ResourceHeapTier < D3D12_RESOURCE_HEAP_TIER_2) {
+        std::printf("\nEste benchmark exige Resource Heap Tier 2 (heap unico misturando\n"
+                    "buffer, textura e RT/DS). Em Tier 1 seria preciso um heap por classe,\n"
+                    "e o numero deixaria de ser comparavel. Abortando.\n");
+        return 2;
+    }
 
-    // Uma passada descartada antes de medir: a primeira alocacao de VRAM do processo paga
-    // inicializacao do driver que nao se repete, e ela cairia toda no primeiro caminho.
+    size_t Skipped = 0;
+    std::vector<D3D12_RESOURCE_DESC> Descs;
+    if (CapturePath) {
+        Descs = LoadCapturedSet(CapturePath, Skipped);
+        if (Descs.empty()) {
+            std::printf("\nNao consegui ler descritores de '%s'.\n", CapturePath);
+            return 1;
+        }
+        std::printf("\nConjunto CAPTURADO de '%s': %zu recursos DEFAULT"
+                    " (%zu UPLOAD/READBACK ignorados)\n", CapturePath, Descs.size(), Skipped);
+    } else {
+        Descs = BuildResizeSet(W, H);
+        std::printf("\nConjunto APROXIMADO (%ux%u): %zu recursos.\n"
+                    "  AVISO: nao sao os descritores da engine. Serve para a comparacao entre\n"
+                    "  caminhos, NAO para extrair coeficiente por MB. Rode a engine com\n"
+                    "  SMILE_CAPTURE_DESCS=<arquivo>, faca um resize, e passe o arquivo aqui.\n",
+                    W, H, Descs.size());
+    }
+
+    // Uma passada descartada: a primeira alocacao de VRAM do processo paga inicializacao do
+    // driver que nao se repete, e ela cairia inteira no primeiro caminho medido.
     (void)RunCommitted(Device.Get(), Descs);
 
-    std::printf("\n%-24s %10s %20s %12s %10s\n", "", "total", "por recurso", "bytes", "vs committed");
-    const FRun Committed = RunCommitted(Device.Get(), Descs);
-    Report("committed", Committed, Descs.size(), 0.0);
+    // Ordem ALTERNADA entre iteracoes. Com ordem fixa, o caminho medido primeiro paga o
+    // estado de pagina deixado pelo anterior sempre do mesmo jeito, e a razao entre eles
+    // herda esse vies — foi o que fez as faixas relatadas (-97/-98%) nao baterem com uma
+    // execucao independente (-99,1%).
+    std::vector<double> Committed, PlacedReady, PlacedFull;
+    UINT64 Bytes = 0;
+    for (int It = 0; It < kIterations; ++It) {
+        auto DoCommitted = [&] { const FRun R = RunCommitted(Device.Get(), Descs);
+                                 if (R.Ok) { Committed.push_back(R.Ms); Bytes = R.Bytes; } };
+        auto DoReady     = [&] { const FRun R = RunPlaced(Device.Get(), Descs, false);
+                                 if (R.Ok) PlacedReady.push_back(R.Ms); };
+        auto DoFull      = [&] { const FRun R = RunPlaced(Device.Get(), Descs, true);
+                                 if (R.Ok) PlacedFull.push_back(R.Ms); };
+        if (It % 3 == 0)      { DoCommitted(); DoReady(); DoFull(); }
+        else if (It % 3 == 1) { DoFull(); DoCommitted(); DoReady(); }
+        else                  { DoReady(); DoFull(); DoCommitted(); }
+    }
 
-    const FRun PlacedReady = RunPlaced(Device.Get(), Descs, /*HeapInside*/ false);
-    Report("placed (heap pronto)", PlacedReady, Descs.size(), Committed.Ms);
+    std::printf("\n%-24s %10s %14s %11s %14s %8s\n",
+                "", "mediana", "por recurso", "bytes", "[min-max]", "vs comm");
+    const double Base = Median(Committed);
+    Report("committed", Committed, Descs.size(), Bytes, 0.0);
+    Report("placed (heap pronto)", PlacedReady, Descs.size(), Bytes, Base);
+    Report("placed (heap dentro)", PlacedFull, Descs.size(), Bytes, Base);
 
-    const FRun PlacedFull = RunPlaced(Device.Get(), Descs, /*HeapInside*/ true);
-    Report("placed (heap dentro)", PlacedFull, Descs.size(), Committed.Ms);
-
-    if (Committed.Ok && PlacedReady.Ok) {
-        const double SavedPerResource =
-            (Committed.Ms - PlacedReady.Ms) / static_cast<double>(Descs.size());
+    if (!Committed.empty() && !PlacedReady.empty()) {
+        const double Ready = Median(PlacedReady);
         std::printf(
-            "\nTETO de economia de um sub-alocador: %.3f ms/recurso (%.1f%% do custo atual).\n"
-            "O piso restante (%.3f ms/recurso) e o objeto de recurso, que placed NAO remove.\n",
-            SavedPerResource, (Committed.Ms - PlacedReady.Ms) / Committed.Ms * 100.0,
-            PlacedReady.Ms / static_cast<double>(Descs.size()));
+            "\nMedianas de %d iteracoes em ordem alternada.\n"
+            "TETO de economia de um sub-alocador: %.3f ms/recurso (%.1f%% do custo atual).\n"
+            "Piso restante (%.3f ms/recurso) e o objeto de recurso, que placed NAO remove.\n",
+            kIterations, (Base - Ready) / static_cast<double>(Descs.size()),
+            (Base - Ready) / Base * 100.0, Ready / static_cast<double>(Descs.size()));
     }
     return 0;
 }

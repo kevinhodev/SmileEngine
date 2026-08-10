@@ -3,8 +3,11 @@
 #include "Smile/Core/Logger.h"
 #include <atomic>
 #include <chrono>
+#include <fstream>
+#include <mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Smile::GpuResources {
     namespace {
@@ -25,6 +28,14 @@ namespace Smile::GpuResources {
         std::atomic<u32> GCount[kHeapClasses];
         std::atomic<u64> GBytes[kHeapClasses];
         std::atomic<u64> GNanos[kHeapClasses];
+
+        struct FCapturedDesc {
+            D3D12_RESOURCE_DESC Desc;
+            D3D12_HEAP_TYPE     HeapType;
+        };
+        std::mutex                 GCaptureMutex;
+        std::vector<FCapturedDesc> GCaptured;
+        std::atomic<bool>          GCaptureOn{ false };
 
         EHeapClass ClassOf(D3D12_HEAP_TYPE Type) {
             switch (Type) {
@@ -52,6 +63,11 @@ namespace Smile::GpuResources {
                                                                InitialState, Clear,
                                                                IID_PPV_ARGS(&Resource));
             const auto Elapsed = std::chrono::steady_clock::now() - Start;
+
+            if (GCaptureOn.load(std::memory_order_relaxed)) {
+                std::lock_guard Lock(GCaptureMutex);
+                GCaptured.push_back({ Desc, HeapType });
+            }
 
             const size_t Klass = static_cast<size_t>(ClassOf(HeapType));
             GCount[Klass].fetch_add(1, std::memory_order_relaxed);
@@ -235,7 +251,38 @@ namespace Smile::GpuResources {
         void LogStatsBlock(const char* _Label, const FCreationStats& _S, bool _Verbose);
     }
 
-    void LogCreationDelta(const char* _Label, const FCreationStats& _Since) {
+    void SetDescCapture(bool _Enabled) {
+        if (_Enabled) {
+            std::lock_guard Lock(GCaptureMutex);
+            GCaptured.clear();
+        }
+        GCaptureOn.store(_Enabled, std::memory_order_relaxed);
+    }
+
+    bool DumpCapturedDescs(const char* _Path) {
+        std::lock_guard Lock(GCaptureMutex);
+        if (GCaptured.empty()) return false;
+
+        std::ofstream File(_Path, std::ios::trunc);
+        if (!File) return false;
+
+        // Texto e nao binario: o arquivo e lido pelo AllocBench mas tambem por um humano
+        // conferindo se o conjunto bate com o que o log disse.
+        File << "# smile desc capture v1\n"
+             << "# dim width height deptharray mips format flags heaptype\n";
+        for (const FCapturedDesc& C : GCaptured) {
+            File << static_cast<int>(C.Desc.Dimension) << ' ' << C.Desc.Width << ' '
+                 << C.Desc.Height << ' ' << C.Desc.DepthOrArraySize << ' '
+                 << C.Desc.MipLevels << ' ' << static_cast<int>(C.Desc.Format) << ' '
+                 << static_cast<int>(C.Desc.Flags) << ' '
+                 << static_cast<int>(C.HeapType) << '\n';
+        }
+        LogInfo("[Criacao] " + std::to_string(GCaptured.size()) +
+                " descritores capturados em " + _Path);
+        return true;
+    }
+
+    FCreationStats CreationDelta(const FCreationStats& _Since) {
         const FCreationStats Now = CreationStats();
         FCreationStats Delta{};
         for (size_t i = 0; i < kHeapClasses; ++i) {
@@ -243,9 +290,40 @@ namespace Smile::GpuResources {
             Delta.Bytes[i] = Now.Bytes[i] - _Since.Bytes[i];
             Delta.Nanos[i] = Now.Nanos[i] - _Since.Nanos[i];
         }
+        return Delta;
+    }
+
+    void LogCreationDelta(const char* _Label, const FCreationStats& _Since) {
         // Fase e ruido para quem nao esta medindo: vai em DEBUG, e o total da janela
         // continua em INFO pelo LogCreationStats.
+        LogStatsBlock(_Label, CreationDelta(_Since), false);
+    }
+
+    void AccumulatePhase(FCreationStats& _InOutSum, const char* _Label,
+                         const FCreationStats& _Since) {
+        const FCreationStats Delta = CreationDelta(_Since);
+        for (size_t i = 0; i < kHeapClasses; ++i) {
+            _InOutSum.Count[i] += Delta.Count[i];
+            _InOutSum.Bytes[i] += Delta.Bytes[i];
+            _InOutSum.Nanos[i] += Delta.Nanos[i];
+        }
         LogStatsBlock(_Label, Delta, false);
+    }
+
+    void LogCreationUnattributed(const char* _Label, const FCreationStats& _SumOfPhases) {
+        const FCreationStats Total = CreationStats();
+        FCreationStats Rest{};
+        for (size_t i = 0; i < kHeapClasses; ++i) {
+            // Subtracao saturada: se alguem somar fases sobrepostas, a linha some em vez de
+            // estourar por baixo num u64 e imprimir um numero absurdo.
+            Rest.Count[i] = Total.Count[i] > _SumOfPhases.Count[i]
+                          ? Total.Count[i] - _SumOfPhases.Count[i] : 0;
+            Rest.Bytes[i] = Total.Bytes[i] > _SumOfPhases.Bytes[i]
+                          ? Total.Bytes[i] - _SumOfPhases.Bytes[i] : 0;
+            Rest.Nanos[i] = Total.Nanos[i] > _SumOfPhases.Nanos[i]
+                          ? Total.Nanos[i] - _SumOfPhases.Nanos[i] : 0;
+        }
+        LogStatsBlock(_Label, Rest, false);
     }
 
     namespace {
@@ -272,21 +350,21 @@ namespace Smile::GpuResources {
 
             std::string Line = std::string("[Criacao] ") + _Label + ": " +
                                std::to_string(TotalCount) + " recursos em " + Ms(TotalNanos);
-            // Quebra por classe de heap so no total da janela; por fase ela triplicaria as
-            // linhas sem responder nada que o total da fase ja nao responda.
-            if (_Verbose) {
-                for (size_t i = 0; i < kHeapClasses; ++i) {
-                    if (_S.Count[i] == 0) continue;
-                    Line += "\n         " + std::string(kNames[i]) + ": " +
-                            std::to_string(_S.Count[i]) + " x " + Mb(_S.Bytes[i]) +
-                            " em " + Ms(_S.Nanos[i]);
-                }
-                LogInfo(Line);
-            } else {
-                u64 TotalBytes = 0;
-                for (size_t i = 0; i < kHeapClasses; ++i) TotalBytes += _S.Bytes[i];
-                LogDebug(Line + " (" + Mb(TotalBytes) + ")");
+
+            // A quebra por classe vai nos DOIS, e nao so no total da janela. Sem ela a fase
+            // de textura agrega os 406 recursos DEFAULT com os chunks UPLOAD que o ring cria
+            // no meio — e aplicar a esse agregado uma constante medida so em DEFAULT (que foi
+            // o que aconteceu na primeira leitura) mistura duas populacoes de custo bem
+            // diferentes: UPLOAD custa ~2x por MB e vem em blocos de 64 MB.
+            for (size_t i = 0; i < kHeapClasses; ++i) {
+                if (_S.Count[i] == 0) continue;
+                Line += _Verbose ? "\n         " : "  |  ";
+                Line += std::string(kNames[i]) + ": " + std::to_string(_S.Count[i]) + " x " +
+                        Mb(_S.Bytes[i]) + " em " + Ms(_S.Nanos[i]);
             }
+
+            if (_Verbose) LogInfo(Line);
+            else          LogDebug(Line);
         }
     }
 

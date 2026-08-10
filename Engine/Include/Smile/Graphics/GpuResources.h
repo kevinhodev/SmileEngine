@@ -141,7 +141,33 @@ namespace Smile::GpuResources {
     // comparou o total do commit inteiro contra o tempo de UMA fase (uploadTex) e concluiu
     // errado: o contador tambem cobria mesh, terreno, BLAS/TLAS e GI. Com fase aninhada, o
     // numero de cada uma sai direto e a conta errada deixa de ser possivel.
+    // Devolve o delta desde um snapshot, sem logar. As fases somam neste para o chamador
+    // fechar a conta contra o total.
+    FCreationStats CreationDelta(const FCreationStats& Since);
+
     void LogCreationDelta(const char* Label, const FCreationStats& Since);
+
+    // Loga a fase E soma o delta dela em InOutSum, para o chamador fechar a conta com o
+    // LogCreationUnattributed abaixo sem manter duas listas em paralelo.
+    void AccumulatePhase(FCreationStats& InOutSum, const char* Label,
+                         const FCreationStats& Since);
+
+    // Loga o que a soma das fases NAO explica (total da janela menos o que elas somaram).
+    // Existe porque a primeira versao das fases somou 487 de 492 recursos: paginas de CB de
+    // material e o RecreateObjectCB/HiZ nascem entre os snapshots. Uma fase nova esquecida
+    // no futuro aparece aqui em vez de sumir — e o que uma lista de fases a dedo nao garante.
+    void LogCreationUnattributed(const char* Label, const FCreationStats& SumOfPhases);
+
+    // === Captura de descritores (diagnostico) =====================================
+    // Grava os descritores criados enquanto ligada, para o Tools/AllocBench REPRODUZIR o
+    // conjunto real em vez de um representativo. A primeira versao do benchmark inventou um
+    // conjunto de "~600 MB" que na verdade somava 787 MB — 30% acima do resize real —, o que
+    // manteve valido o sinal (placed e muito mais barato) mas envenenou qualquer coeficiente
+    // por MB extraido dele.
+    //
+    // Desligada por padrao e sem custo quando desligada (um bool checado por criacao).
+    void SetDescCapture(bool Enabled);
+    bool DumpCapturedDescs(const char* Path); // texto; false se nao abriu ou nada capturado
 
     // === Descritores de view ======================================================
     // Os campos que nao aparecem aqui sao os que ficam no default em 100% dos usos atuais
