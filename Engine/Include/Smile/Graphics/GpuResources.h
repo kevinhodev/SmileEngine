@@ -136,6 +136,13 @@ namespace Smile::GpuResources {
     // ("load da cena", "render scale"), porque o mesmo contador serve as duas.
     void LogCreationStats(const char* Label);
 
+    // Loga o delta desde um snapshot, SEM zerar o contador global — e o que permite medir
+    // uma fase de dentro de outra. Existe porque a primeira leitura desta instrumentacao
+    // comparou o total do commit inteiro contra o tempo de UMA fase (uploadTex) e concluiu
+    // errado: o contador tambem cobria mesh, terreno, BLAS/TLAS e GI. Com fase aninhada, o
+    // numero de cada uma sai direto e a conta errada deixa de ser possivel.
+    void LogCreationDelta(const char* Label, const FCreationStats& Since);
+
     // === Descritores de view ======================================================
     // Os campos que nao aparecem aqui sao os que ficam no default em 100% dos usos atuais
     // (PlaneSlice, ResourceMinLODClamp). Se um caso precisar deles, monte o desc na mao —

@@ -231,37 +231,67 @@ namespace Smile::GpuResources {
         }
     }
 
+    namespace {
+        void LogStatsBlock(const char* _Label, const FCreationStats& _S, bool _Verbose);
+    }
+
+    void LogCreationDelta(const char* _Label, const FCreationStats& _Since) {
+        const FCreationStats Now = CreationStats();
+        FCreationStats Delta{};
+        for (size_t i = 0; i < kHeapClasses; ++i) {
+            Delta.Count[i] = Now.Count[i] - _Since.Count[i];
+            Delta.Bytes[i] = Now.Bytes[i] - _Since.Bytes[i];
+            Delta.Nanos[i] = Now.Nanos[i] - _Since.Nanos[i];
+        }
+        // Fase e ruido para quem nao esta medindo: vai em DEBUG, e o total da janela
+        // continua em INFO pelo LogCreationStats.
+        LogStatsBlock(_Label, Delta, false);
+    }
+
+    namespace {
+        void LogStatsBlock(const char* _Label, const FCreationStats& _S, bool _Verbose) {
+            u32 TotalCount = 0;
+            u64 TotalNanos = 0;
+            for (size_t i = 0; i < kHeapClasses; ++i) {
+                TotalCount += _S.Count[i];
+                TotalNanos += _S.Nanos[i];
+            }
+            if (TotalCount == 0) return;
+
+            // Mesma casa decimal do breakdown de VRAM, para os dois logs se lerem juntos.
+            auto Ms = [](u64 Nanos) {
+                const u64 Tenths = (Nanos + 50'000ull) / 100'000ull; // ns -> 0,1 ms
+                return std::to_string(Tenths / 10u) + "," + std::to_string(Tenths % 10u) + " ms";
+            };
+            auto Mb = [](u64 Bytes) {
+                const u64 Tenths = (Bytes * 10u + (1u << 19)) >> 20;
+                return std::to_string(Tenths / 10u) + "," + std::to_string(Tenths % 10u) + " MB";
+            };
+
+            static const char* const kNames[kHeapClasses] = { "DEFAULT", "UPLOAD", "READBACK" };
+
+            std::string Line = std::string("[Criacao] ") + _Label + ": " +
+                               std::to_string(TotalCount) + " recursos em " + Ms(TotalNanos);
+            // Quebra por classe de heap so no total da janela; por fase ela triplicaria as
+            // linhas sem responder nada que o total da fase ja nao responda.
+            if (_Verbose) {
+                for (size_t i = 0; i < kHeapClasses; ++i) {
+                    if (_S.Count[i] == 0) continue;
+                    Line += "\n         " + std::string(kNames[i]) + ": " +
+                            std::to_string(_S.Count[i]) + " x " + Mb(_S.Bytes[i]) +
+                            " em " + Ms(_S.Nanos[i]);
+                }
+                LogInfo(Line);
+            } else {
+                u64 TotalBytes = 0;
+                for (size_t i = 0; i < kHeapClasses; ++i) TotalBytes += _S.Bytes[i];
+                LogDebug(Line + " (" + Mb(TotalBytes) + ")");
+            }
+        }
+    }
+
     void LogCreationStats(const char* _Label) {
-        const FCreationStats S = CreationStats();
-
-        u32 TotalCount = 0;
-        u64 TotalNanos = 0;
-        for (size_t i = 0; i < kHeapClasses; ++i) {
-            TotalCount += S.Count[i];
-            TotalNanos += S.Nanos[i];
-        }
-        if (TotalCount == 0) return;
-
-        // Mesma casa decimal do breakdown de VRAM, para os dois logs se lerem juntos.
-        auto Ms = [](u64 Nanos) {
-            const u64 Tenths = (Nanos + 50'000ull) / 100'000ull; // ns -> 0,1 ms
-            return std::to_string(Tenths / 10u) + "," + std::to_string(Tenths % 10u) + " ms";
-        };
-        auto Mb = [](u64 Bytes) {
-            const u64 Tenths = (Bytes * 10u + (1u << 19)) >> 20;
-            return std::to_string(Tenths / 10u) + "," + std::to_string(Tenths % 10u) + " MB";
-        };
-
-        static const char* const kNames[kHeapClasses] = { "DEFAULT", "UPLOAD", "READBACK" };
-
-        std::string Line = std::string("[Criacao] ") + _Label + ": " +
-                           std::to_string(TotalCount) + " recursos em " + Ms(TotalNanos);
-        for (size_t i = 0; i < kHeapClasses; ++i) {
-            if (S.Count[i] == 0) continue;
-            Line += "\n         " + std::string(kNames[i]) + ": " +
-                    std::to_string(S.Count[i]) + " x " + Mb(S.Bytes[i]) + " em " + Ms(S.Nanos[i]);
-        }
-        LogInfo(Line);
+        LogStatsBlock(_Label, CreationStats(), true);
     }
 
     D3D12_SHADER_RESOURCE_VIEW_DESC SrvTex2D(DXGI_FORMAT _Format, u32 _MipLevels,

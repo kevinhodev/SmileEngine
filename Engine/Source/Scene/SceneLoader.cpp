@@ -298,10 +298,15 @@ namespace Smile {
             ImportedTextures.clear();
         }
 
+        // Cada fase abaixo guarda um snapshot e loga o DELTA. Sem isso o contador so dava o
+        // total do commit, e comparar esse total contra o tempo de uma fase leva a conclusao
+        // errada — foi o que aconteceu na primeira leitura desta instrumentacao.
         const Clock::time_point TextureUploadStart = Clock::now();
+        const auto TexCreationBase = GpuResources::CreationStats();
         std::vector<FTexture> texs = FTexture::CreateBatchFromCPU(
             Device.Native(), UploadQueue, SRVHeap, Prepared.TextureData);
         const double msTexUpload = MsSince(TextureUploadStart);
+        GpuResources::LogCreationDelta("commit/texturas", TexCreationBase);
         const std::vector<std::string>& relList = Prepared.TexturePaths;
         std::unordered_map<std::string, FTexture*> texByPath;
         u32 uploaded = 0;
@@ -419,6 +424,7 @@ namespace Smile {
         };
 
         const Clock::time_point tMeshUploadStart = Clock::now();
+        const auto MeshCreationBase = GpuResources::CreationStats();
         std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(
             Device.Native(), UploadQueue, Prepared.Meshes);
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
@@ -445,6 +451,7 @@ namespace Smile {
         }
 
         const double msMeshUpload = MsSince(tMeshUploadStart);
+        GpuResources::LogCreationDelta("commit/meshes", MeshCreationBase);
 
         // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
         // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
@@ -494,6 +501,7 @@ namespace Smile {
         // "unitsPerTexel", "heightScale", "originX/Y/Z"). Sem sidecar em carga de
         // substituicao, descarrega o terreno anterior.
         const Clock::time_point TerrainStart = Clock::now();
+        const auto TerrainCreationBase = GpuResources::CreationStats();
         {
             fs::path terrainPath = base; terrainPath += L".terrain.json";
             if (fs::exists(terrainPath)) {
@@ -627,16 +635,22 @@ namespace Smile {
             }
         }
         const double msTerrain = MsSince(TerrainStart);
+        GpuResources::LogCreationDelta("commit/terreno", TerrainCreationBase);
 
         // O volume de GI NAO inclui o terreno de proposito: um terreno de km esticaria o
         // grid de probes do DDGI. Fora do volume o shading cai no fallback de ambiente;
         // terreno no GI de verdade vem na F3 (BLAS proxy na TLAS).
         const Clock::time_point RaytracingStart = Clock::now();
+        const auto RtCreationBase = GpuResources::CreationStats();
         BuildRaytracingScene();
         const double msRaytracing = MsSince(RaytracingStart);
+        GpuResources::LogCreationDelta("commit/blasTlas", RtCreationBase);
+
         const Clock::time_point GIStart = Clock::now();
+        const auto GiCreationBase = GpuResources::CreationStats();
         SetupGIForScene(sceneMin, sceneMax);
         const double msGI = MsSince(GIStart);
+        GpuResources::LogCreationDelta("commit/setupGI", GiCreationBase);
 
         // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
         // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
