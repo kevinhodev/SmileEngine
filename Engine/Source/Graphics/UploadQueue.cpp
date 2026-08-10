@@ -3,6 +3,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
+#include <cassert>
 #include <string>
 
 namespace Smile {
@@ -83,6 +84,12 @@ namespace Smile {
     FStagingSlice FUploadQueue::AllocateStaging(u64 _Bytes, u64 _Alignment) {
         if (_Bytes == 0 || !Device_) return {};
         if (_Alignment == 0) _Alignment = 1;
+        // O arredondamento abaixo e o truque de mascara, que SO vale para potencia de dois.
+        // Todo alinhamento do D3D12 que chega aqui e (512 do footprint de textura, 256 do CBV,
+        // 4 de buffer), mas a assinatura aceita um u64 qualquer — sem isto, um 768 passaria e
+        // devolveria offset desalinhado em silencio.
+        assert((_Alignment & (_Alignment - 1)) == 0 &&
+               "AllocateStaging: alinhamento tem que ser potencia de dois");
 
         if (Current) {
             const u64 Aligned = (Current->Cursor + _Alignment - 1) & ~(_Alignment - 1);
@@ -140,15 +147,24 @@ namespace Smile {
         // So roda no WaitIdle, que e onde a GPU esta comprovadamente parada — e onde o load
         // termina (o SceneLoader espera antes do primeiro consumo). Durante o laco de batches
         // do CreateBatchFromCPU nao ha WaitIdle, entao a poda nao interfere no overlap.
-        if (Chunks.size() <= kRingRetainChunks) return;
-
         const u64 BytesBefore = RingBytes();
-        for (size_t i = Chunks.size(); i-- > kRingRetainChunks; ) {
+
+        // So chunk do TAMANHO PADRAO vale como reserva. Um chunk sob medida — nascido maior
+        // que kRingChunkBytes para caber uma textura que nao coube (um 4K RGBA8 com mips passa
+        // de 80 MB) — e um evento unico, e mante-lo residente guardaria dezenas de MB para
+        // sempre, que e justamente o que esta poda existe para evitar. Se nenhum padrao
+        // sobreviver, o proximo AllocateStaging cria um: o custo e uma alocacao.
+        size_t Retained = 0;
+        for (size_t i = Chunks.size(); i-- > 0; ) {
+            const bool Standard = Chunks[i]->Capacity == kRingChunkBytes;
+            if (Standard && Retained < kRingRetainChunks) { ++Retained; continue; }
             if (Chunks[i]->Mapped) Chunks[i]->Resource->Unmap(0, nullptr);
             Chunks.erase(Chunks.begin() + static_cast<ptrdiff_t>(i));
         }
-        // O Current quase certamente foi podado (era o ultimo em uso). Reapontar aqui e nao
-        // deixar pendurado e o que impede um ponteiro morto na proxima alocacao.
+        if (RingBytes() == BytesBefore) return;
+
+        // O Current provavelmente foi podado (era o ultimo em uso). Reapontar aqui, e nao
+        // deixar pendurado, e o que impede um ponteiro morto na proxima alocacao.
         Current = Chunks.empty() ? nullptr : Chunks.front().get();
         if (Current) Current->Cursor = 0;
 

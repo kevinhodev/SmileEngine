@@ -830,7 +830,6 @@ namespace Smile {
         Device.Native()->CreateRenderTargetView(
             DebugPreviewTarget.Get(), nullptr, DebugPreviewRTVHeap.CpuHandle(0));
 
-        D3D12_HEAP_PROPERTIES ReadbackHeap{};
         // Os dois readbacks tem tamanhos muito diferentes (5,76 MB do preview x 1 KB do probe).
         // Antes eles dividiam um Desc, com o Width alternando duas vezes por iteracao — correto,
         // mas so enquanto ninguem mexesse na ordem: tirar a reatribuicao do fim do laco daria a
