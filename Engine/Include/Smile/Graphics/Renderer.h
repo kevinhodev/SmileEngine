@@ -47,6 +47,7 @@
 #include "Smile/Graphics/DDGIDebug.h"
 #include "Smile/Graphics/ReSTIRGI.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/MeshLights.h"
 #include "Smile/Graphics/ReSTIRDI.h"
 #include "Smile/Graphics/NrdDenoiser.h"
@@ -883,6 +884,9 @@ namespace Smile {
         bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
         FDDGI            DDGI;
         FReGIR           ReGIR;
+        // Cache de radiancia de saida em hash de mundo. Terminador dos raios secundarios, lido e
+        // escrito de dentro do ShadeSurfaceHit — nao substitui o atlas do DDGI acima.
+        FRadianceCache   RadianceCache;
         // Fase 1 do projeto de mesh lights: so levanta a contagem de triangulos emissivos por
         // cena. Ainda nao produz luz — existe para medir antes de escolher a amostragem.
         FMeshLights      MeshLights;

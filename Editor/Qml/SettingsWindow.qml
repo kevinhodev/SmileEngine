@@ -2900,6 +2900,149 @@ Rectangle {
                 }
 
                 Card {
+                    id: radianceCacheCard
+                    width: parent.width
+                    title: "World radiance cache — terminador dos raios secundários"
+                    height: rcStatsText.y + rcStatsText.height + contentPadding + 8
+
+                    Text {
+                        id: rcHelper
+                        x: 20
+                        y: radianceCacheCard.headerHeight + radianceCacheCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Guarda a radiância de saída que o ShadeSurfaceHit já calculou, num " +
+                              "hash de mundo com célula de 50 cm perto da câmera dobrando com a " +
+                              "distância. Um raio secundário que caia numa célula já preenchida " +
+                              "retorna dali e pula albedo, shadow rays e o gather do DDGI.\n\n" +
+                              "Não substitui o DDGI: o atlas de irradiância continua alimentando " +
+                              "o deferred por pixel. O que muda é o 2º bounce, que passa a ler " +
+                              "radiância de verdade em vez de irradiância tratada como tal.\n\n" +
+                              "Ligue a ESCRITA primeiro, espere a ocupação subir, e só então a " +
+                              "LEITURA. Ligando as duas juntas os primeiros quadros consultam uma " +
+                              "tabela vazia e o resultado parece bug."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    Text {
+                        id: rcEnabledLabel
+                        x: 20
+                        y: rcHelper.y + rcHelper.height + 18
+                        text: "Escrita (alimenta o cache)"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcEnabledLabel.y - 6
+                        checked: renderModel.radianceCacheEnabled
+                        onToggled: renderModel.ToggleRadianceCache()
+                    }
+
+                    Text {
+                        id: rcQueryLabel
+                        x: 20
+                        y: rcEnabledLabel.y + 30
+                        text: "Leitura (consulta no hit)"
+                        color: renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcQueryLabel.y - 6
+                        enabled: renderModel.radianceCacheEnabled
+                        checked: renderModel.radianceCacheQuery
+                        onToggled: renderModel.ToggleRadianceCacheQuery()
+                    }
+
+                    Text {
+                        id: rcStatsLabel
+                        x: 20
+                        y: rcQueryLabel.y + 30
+                        text: "Instrumentar acerto/erro"
+                        color: renderModel.radianceCacheQuery ? root.textNormal : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcStatsLabel.y - 6
+                        enabled: renderModel.radianceCacheQuery
+                        checked: renderModel.radianceCacheStats
+                        onToggled: renderModel.ToggleRadianceCacheStats()
+                    }
+
+                    ShadowSlider {
+                        id: rcCellSlider
+                        x: 20
+                        y: rcStatsLabel.y + 26
+                        width: parent.width - 40
+                        label: "Aresta da célula (nível 0)"
+                        from: 0.05; to: 2.0; step: 0.05
+                        value: renderModel.radianceCacheCellSize
+                        valueText: renderModel.radianceCacheCellSize.toFixed(2).replace(".", ",") + " m"
+                        // released, e nao committed: trocar a aresta muda a CHAVE do hash e
+                        // invalida a tabela inteira. Fazer isso a cada passo de um arraste
+                        // limparia o cache dezenas de vezes por segundo.
+                        onReleased: (v) => renderModel.SetRadianceCacheCellSize(v)
+                    }
+
+                    ShadowSlider {
+                        id: rcLodSlider
+                        x: 20
+                        y: rcCellSlider.y + 50
+                        width: parent.width - 40
+                        label: "Distância do primeiro nível"
+                        from: 2.0; to: 60.0; step: 1.0
+                        value: renderModel.radianceCacheLodDistance
+                        valueText: renderModel.radianceCacheLodDistance.toFixed(0) + " m"
+                        onReleased: (v) => renderModel.SetRadianceCacheLodDistance(v)
+                    }
+
+                    ShadowSlider {
+                        id: rcModeSlider
+                        x: 20
+                        y: rcLodSlider.y + 50
+                        width: parent.width - 40
+                        label: "Visualizador (janela de debug: \"radiance\")"
+                        from: 0; to: 3; step: 1
+                        value: renderModel.radianceCacheDebugMode
+                        valueText: ["células", "cobertura", "nível", "convergência"][renderModel.radianceCacheDebugMode]
+                        // Só troca o modo do visualizador: não invalida nada, então commit contínuo.
+                        onCommitted: (v) => renderModel.SetRadianceCacheDebugMode(v)
+                    }
+
+                    Text {
+                        id: rcStatsText
+                        x: 20
+                        y: rcModeSlider.y + 52
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: renderModel.radianceCacheSummary + "  ·  " +
+                              renderModel.radianceCacheOccupancy.toFixed(1).replace(".", ",") +
+                              "% de " + renderModel.radianceCacheMemoryMB.toFixed(0) + " MB"
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    // Só enquanto o card está visível: o readback já existe de qualquer forma, mas
+                    // formatar QString e relayout a 60 Hz sem ninguém olhando é custo puro.
+                    Timer {
+                        interval: 200
+                        repeat: true
+                        running: radianceCacheCard.visible && renderModel.radianceCacheEnabled
+                        onTriggered: renderModel.RefreshRadianceCacheStats()
+                    }
+                }
+
+                Card {
                     id: restirDICard
                     width: parent.width
                     title: "ReSTIR DI — direta local"

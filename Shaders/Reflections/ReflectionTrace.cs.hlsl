@@ -34,6 +34,11 @@ cbuffer ReflectionCB : register(b0) {
     row_major float4x4 ViewProj;
     float4 WaterEnvironmentParams;
     float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
+    // O Renderer publica estas linhas SEM o bit de update para as reflexoes: a radiancia daqui e
+    // direcional e o cache nao guarda direcao. Consultar continua valido. Ver ShaderParams().
+    float4 RadianceCacheCamCell;
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
 };
 
 // Politica de culling DESTE passe. O Lumen culla na reflexao e nao culla no gather do ReSTIR; a
@@ -154,7 +159,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.SunColor       = SunColor.rgb;        P.ShadowRayBias = TraceParams.w;
         P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
         P.AlbedoLOD      = ReflectParams.w;
-        P.RealHitShading = ReflectParams.z > 0.5f;
         P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
         P.ShadowRayMask  = (uint)SunColor.w;
         P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
@@ -172,7 +176,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         // ZERO de proposito: a reflexao sombreia o hit p/ uma visada conhecida e consome uma vez
         // so, sem reuso — o piso que o DDGI/ReSTIR precisam borraria espelho-no-espelho aqui.
         P.RoughnessMin       = 0.0f;
-        P.RoughnessPad       = 0.0f;
+        P.CacheRayRoughness  = roughness;
+        RC_UNPACK_PARAMS(P);
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
             float sd;

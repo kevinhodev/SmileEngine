@@ -150,6 +150,19 @@ namespace Smile {
         // Unifica Resize e SetupForResize.
         virtual void OnResize(const FPassInitContext& Ctx) { (void)Ctx; }
 
+        // Publica no visualizador (DebugTargets.h) os alvos que este passe possui.
+        //
+        // Existe porque Renderer::RegisterDebugTargets() abre com um Clear() e reconstroi a lista
+        // inteira. Um passe que registrasse do proprio OnResize teria a entrada APAGADA no mesmo
+        // setup, alguns passos depois — que foi exatamente o que aconteceu com o radiance cache:
+        // registrava certo, sumia da UI, e nada no caminho acusava. O registro varre por aqui
+        // DEPOIS do Clear, entao publicar de dentro do passe volta a ser seguro.
+        //
+        // Sem gate por IsInitialized de proposito: quais dos seus alvos ja tem SRV valido e o
+        // passe quem sabe (um pode ter o do visualizador pronto e o resto nao), e o Renderer
+        // guarda entrada por entrada pelo mesmo motivo. Registrar com o mesmo nome sobrescreve.
+        virtual void OnRegisterDebugTargets() { }
+
         // Historicos temporais que este passe possui. O registro so o notifica quando o
         // dominio invalidado intersecta esta mascara — o grafo em si ja e dado (HistoryDomain.h).
         virtual EHistoryTarget HistoryTargets() const { return EHistoryTarget::None; }
@@ -240,6 +253,14 @@ namespace Smile {
         // Resize e invalidacao de historico so fazem sentido para quem grava frame.
         void ResizeAll(const FPassInitContext& Ctx) const {
             for (FRenderPass* P : Passes) P->OnResize(Ctx);
+        }
+
+        // Varredura que substitui a lista a dedo do Renderer para os passes ja migrados. O
+        // chamador tem DUAS obrigacoes de ordem: rodar isto depois do Clear() (senao apaga o que
+        // acabou de publicar) e antes do remapeamento da selecao (que e por NOME — alvo publicado
+        // depois dele nao consegue restaurar a escolha do usuario apos um resize).
+        void RegisterDebugTargetsAll() const {
+            for (FRenderPass* P : Passes) P->OnRegisterDebugTargets();
         }
 
         void InvalidateHistory(EHistoryTarget Domain) const {

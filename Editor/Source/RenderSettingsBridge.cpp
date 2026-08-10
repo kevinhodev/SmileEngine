@@ -919,6 +919,108 @@ namespace SmileEditor {
         emit GISettingsChanged();
     }
 
+    // --- World radiance cache -----------------------------------------------------------
+    bool RenderSettingsBridge::IsRadianceCacheEnabled() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheEnabled();
+    }
+    bool RenderSettingsBridge::IsRadianceCacheQuery() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheQuery();
+    }
+    bool RenderSettingsBridge::IsRadianceCacheStats() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheStatsEnabled();
+    }
+    double RenderSettingsBridge::GetRadianceCacheCellSize() const {
+        return Renderer ? Renderer->Settings().GetRadianceCacheCellSize() : 0.50;
+    }
+    double RenderSettingsBridge::GetRadianceCacheLodDistance() const {
+        return Renderer ? Renderer->Settings().GetRadianceCacheLodDistance() : 6.0;
+    }
+    int RenderSettingsBridge::GetRadianceCacheDebugMode() const {
+        return Renderer ? static_cast<int>(Renderer->Settings().GetRadianceCacheDebugMode()) : 0;
+    }
+    double RenderSettingsBridge::GetRadianceCacheOccupancy() const {
+        if (!Renderer) return 0.0;
+        const Smile::u32 Cap = Renderer->Settings().RadianceCacheCapacity();
+        if (Cap == 0) return 0.0;
+        return 100.0 * static_cast<double>(Renderer->Settings().RadianceCacheStats().Occupied) /
+               static_cast<double>(Cap);
+    }
+    double RenderSettingsBridge::GetRadianceCacheHitRate() const {
+        if (!Renderer) return 0.0;
+        const auto& S = Renderer->Settings().RadianceCacheStats();
+        if (S.Queries == 0) return 0.0;
+        return 100.0 * static_cast<double>(S.Hits) / static_cast<double>(S.Queries);
+    }
+    double RenderSettingsBridge::GetRadianceCacheConvergence() const {
+        if (!Renderer) return 0.0;
+        const auto& S = Renderer->Settings().RadianceCacheStats();
+        if (S.Valid == 0) return 0.0;
+        return static_cast<double>(S.Samples) / static_cast<double>(S.Valid);
+    }
+    double RenderSettingsBridge::GetRadianceCacheMemoryMB() const {
+        if (!Renderer) return 0.0;
+        return static_cast<double>(Renderer->Settings().RadianceCacheBytes()) / (1024.0 * 1024.0);
+    }
+    QString RenderSettingsBridge::GetRadianceCacheSummary() const {
+        if (!Renderer) return QString();
+        const auto& S = Renderer->Settings().RadianceCacheStats();
+        const Smile::u32 Cap = Renderer->Settings().RadianceCacheCapacity();
+        if (Cap == 0) return QStringLiteral("cache não montado");
+        // Queries = 0 nao e o mesmo que taxa de acerto 0: sem a instrumentacao ligada o
+        // contador nem roda, e mostrar "0%" ali seria mentira.
+        const QString Hit = Renderer->Settings().GetRadianceCacheStatsEnabled()
+            ? QString::number(GetRadianceCacheHitRate(), 'f', 1) + QStringLiteral("%")
+            : QStringLiteral("— (instrumentação off)");
+        return QStringLiteral("%1 / %2 células · acerto %3 · %4 amostras/célula · despejadas %5")
+            .arg(S.Occupied).arg(Cap).arg(Hit)
+            .arg(QString::number(GetRadianceCacheConvergence(), 'f', 1))
+            .arg(S.Evicted);
+    }
+
+    void RenderSettingsBridge::ToggleRadianceCache() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheEnabled(!A->Settings().GetRadianceCacheEnabled());
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ToggleRadianceCacheQuery() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheQuery(!A->Settings().GetRadianceCacheQuery());
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ToggleRadianceCacheStats() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheStatsEnabled(!A->Settings().GetRadianceCacheStatsEnabled());
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::SetRadianceCacheCellSize(double V) {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheCellSize(static_cast<float>(V));
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::SetRadianceCacheLodDistance(double V) {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheLodDistance(static_cast<float>(V));
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::SetRadianceCacheDebugMode(int V) {
+        if (!Renderer || V < 0) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheDebugMode(static_cast<Smile::u32>(V));
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ResetRadianceCache() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().ResetRadianceCache();
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::RefreshRadianceCacheStats() { emit StatsChanged(); }
+
     void RenderSettingsBridge::ToggleReSTIRGIVisibility() {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();

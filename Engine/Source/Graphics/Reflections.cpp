@@ -610,7 +610,7 @@ namespace Smile {
                                       const Vec3& _CameraPos, const Vec3& _PrevCameraPos,
                                       u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
-                                      f32 _SkyIntensity, bool _RealHitShading,
+                                      f32 _SkyIntensity,
                                       const Mat44& _View, bool _UseAtmosphereSky,
                                       f32 _WaterEnvironmentIntensity, u32 _PunctualLightCount,
                                       u32 _TemporalInstanceCount, bool _MotionHistoryValid) {
@@ -637,7 +637,7 @@ namespace Smile {
                                 static_cast<f32>(_PunctualLightCount) };
         CPU.ScreenParams    = { (f32)_Width, (f32)_Height, 1.0f / (f32)_Width, 1.0f / (f32)_Height };
         CPU.ReflectParams   = { MaxRoughnessToTrace, RoughnessFadeLength,
-                                _RealHitShading ? 1.0f : 0.0f, AlbedoLOD };
+                                0.0f, AlbedoLOD }; // .z livre
         CPU.GridMinSpacing  = GIGridMinSpacing;
         CPU.GridCount       = GIGridCount;
         CPU.AtlasParams     = GIAtlasParams;
@@ -666,6 +666,9 @@ namespace Smile {
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.RadianceCacheCamCell     = RadianceCacheParams.CameraPosCell;
+        CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
+        CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.SkyParams             = SkyLutParams;
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };

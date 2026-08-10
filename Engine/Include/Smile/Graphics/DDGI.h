@@ -6,6 +6,7 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -26,7 +27,7 @@ namespace Smile {
         Vec4 SunColorHyst;    // rgb = cor do sol, w = hysteresis (blend temporal)
         Vec4 TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
                               // (raios do DDGI partem de probes; o bias so desloca sombras no hit)
-        Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH, w = realHitShading
+        Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH, w = livre
         Vec4 MiscParams;      // x = relocationEnabled (Fase 2), y = deactivThresh, z = maxRays, w = minRays
         Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), y = nº luzes (F5), z = ShadowRayMask, w = -
         // Perfil de epsilons (FRayEpsilonProfile), anexado no FIM p/ nao deslocar offsets. O DDGI
@@ -49,6 +50,11 @@ namespace Smile {
         // como o SkyParams, p/ nao deslocar offset nenhum.
         Vec4 InvalidateMin;      // xyz = min da caixa, w = 1 se ha invalidacao ativa
         Vec4 InvalidateMaxHyst;  // xyz = max da caixa, w = hysteresis a usar dentro dela
+        // World radiance cache (FRadianceCacheShaderParams). Contrato por NOME com o
+        // RC_UNPACK_PARAMS do RadianceCache.hlsli; anexado no FIM como o SkyParams.
+        Vec4 RadianceCacheCamCell;
+        Vec4 RadianceCacheLodCapFlags;
+        Vec4 RadianceCacheResources;
     };
     static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
                   "DDGIConstants divergiu do cbuffer DDGICB");
@@ -155,6 +161,10 @@ namespace Smile {
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // Cache de radiancia de mundo (dono = Renderer, empurra todo frame). O DDGI recebe COM o
+        // bit de update: a sonda integra o hit num cosseno, entao a radiancia dela e nao-direcional
+        // e pode alimentar o cache. Ver FRadianceCache::ShaderParams.
+        void SetRadianceCacheParams(const FRadianceCacheShaderParams& P) { RadianceCacheParams = P; }
         // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
         // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
         void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
@@ -200,9 +210,6 @@ namespace Smile {
         int  GetMaxRays() const { return MaxRays; }
         void SetMinRays(int V) { MinRays = V; TriggerReclassify(); }   
         int  GetMinRays() const { return MinRays; }
-
-        void SetRealHitShading(bool V) { RealHitShading = V; }
-        bool GetRealHitShading() const { return RealHitShading; }
 
         // Folhagem nos shadow rays do hit (ON = alpha-test por candidato; OFF = mask so-opaco).
         void SetFoliageShadows(bool V) { FoliageShadows = V; }
@@ -335,9 +342,9 @@ namespace Smile {
         FRayEpsilonProfile RayEps; // perfil compartilhado (dono = Renderer)
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        FRadianceCacheShaderParams RadianceCacheParams{};
         Vec4               SkyLutParams{};
         f32  MaxRayDist   = 0.0f;
-        bool RealHitShading = true;
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)
         bool Relocation     = true; 
         f32  DeactivationThreshold = 0.20f; 

@@ -23,7 +23,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity,
                                     // w=shadowRayBias (SO sombras no hit; a origem dos raios
                                     // que saem do G-buffer usa OffsetRayGBuffer)
-    float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
+    float4 ShadeParams;             // x=livre, y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
     float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao temporal),
@@ -53,6 +53,9 @@ cbuffer ReSTIRCB : register(b0) {
                                     //     que sai o x1 do reservoir temporal, que deixou de ser
                                     //     gravado. O Renderer zera ReuseParams.w quando o slot nao
                                     //     existe, entao aqui ele e sempre valido quando lido.
+    float4 RadianceCacheCamCell;
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
@@ -71,9 +74,8 @@ Texture2D<float>                Depth      : register(t6);
 Texture2D<float4>               GBuffer    : register(t7);
 Texture2D<float2>               Velocity   : register(t8);
 // Reservoir do frame anterior em DUAS texturas (era quatro): ver o cabecalho de empacotamento em
-// ReSTIRReservoir.hlsli. t11/t12 continuam existindo como FILLER da tabela — ela tem 14
-// descritores e o SetPunctualLightsSRV escreve as luzes no offset 13 na unha, entao encolher a
-// tabela moveria o registrador das luzes.
+// ReSTIRReservoir.hlsli. t11/t12 continuam filler porque a tabela tem 14 descritores e
+// SetPunctualLightsSRV escreve as luzes no offset 13 na unha.
 Texture2D<float4>               PrevRes0   : register(t9);  // x2.xyz, W
 Texture2D<uint4>                PrevRes1   : register(t10); // n2 | Lo | M+idade | n1
 
@@ -159,7 +161,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.SunColor       = SunColor.rgb;        P.ShadowRayBias = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
     P.AlbedoLOD      = ShadeParams.y;
-    P.RealHitShading = ShadeParams.x > 0.5f;
     P.NumLights      = (int)JitterParams.z; // F5
     P.ShadowRayMask  = (uint)SunColor.w;
     P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
@@ -177,7 +178,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // Cache NAO-direcional (o reservoir entrega o mesmo Lo a vizinhos com outra visada), entao
     // o piso de roughness vale aqui — ver o bloco no ShadeSurfaceHit.
     P.RoughnessMin       = GIBiasParams.w;
-    P.RoughnessPad       = 0.0f;
+    P.CacheRayRoughness  = -1.0f;
+    RC_UNPACK_PARAMS(P);
 
     // POLITICA DE BACKFACE (Lumen AvoidSelfIntersections modo Retrace + terminacao preta).
     //

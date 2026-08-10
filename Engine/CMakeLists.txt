@@ -126,6 +126,7 @@ set(ENGINE_SOURCES
     Source/Graphics/DDGIDebug.cpp
     Source/Graphics/ReSTIRGI.cpp
     Source/Graphics/ReGIR.cpp
+    Source/Graphics/RadianceCache.cpp
     Source/Graphics/ReSTIRDI.cpp
     Source/Graphics/MeshLights.cpp
     Source/Graphics/NrdDenoiser.cpp

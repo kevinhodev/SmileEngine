@@ -31,6 +31,10 @@ cbuffer ReflectionCB : register(b0) {
     row_major float4x4 ViewProj;
     float4 WaterEnvironmentParams; // x=atmosphere, y=intensity, z=env max mip, w=scene max mip
     float4 SkyParams;              // x = view height (km), y = raio do planeta (km) — ShadeSky
+    // Sem bit de update (radiancia direcional) — ver ReflectionTrace.cs.hlsl.
+    float4 RadianceCacheCamCell;
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
 };
 
 uint ReflectionCullFlags() {
@@ -266,7 +270,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.SunDir = sunDir; P.SunIntensity = SunDirIntensity.w;
         P.SunColor = SunColor.rgb; P.ShadowRayBias = TraceParams.w;
         P.SkyIntensity = TraceParams.z; P.MaxRayDist = TraceParams.y;
-        P.AlbedoLOD = ReflectParams.w; P.RealHitShading = ReflectParams.z > 0.5f;
+        P.AlbedoLOD = ReflectParams.w;
         P.NumLights = (int)CameraPos.w; P.ShadowRayMask = (uint)SunColor.w;
         P.ReGIRGridMin = ReGIRGridMinSlots.xyz;
         P.ReGIRSlotsPerCell = (uint)ReGIRGridMinSlots.w;
@@ -279,7 +283,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.FrameIndex = (uint)TraceParams.x; P.ReGIRPad = 0u;
         P.SkyViewHeightKm = SkyParams.x;    P.SkyBottomRKm = SkyParams.y;
         // ZERO: hit direcional e consumido uma vez (ver ReflectionTrace.cs.hlsl).
-        P.RoughnessMin = 0.0f;              P.RoughnessPad = 0.0f;
+        P.RoughnessMin = 0.0f;              P.CacheRayRoughness = roughness;
+        RC_UNPACK_PARAMS(P);
 
         float ssrConfidence;
         float3 ssrRadiance;

@@ -6,6 +6,7 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
@@ -24,7 +25,7 @@ namespace Smile {
         Mat44 InvViewProj;       // FULL inverse view-proj (row-major)
         Vec4  CameraPos;         // xyz = camera world
         Vec4  ScreenParams;      // W, H, 1/W, 1/H
-        Vec4  ReflectParams;     // x=maxRoughnessToTrace, y=roughnessFadeLength, z=realHitShading, w=albedoLOD
+        Vec4  ReflectParams;     // x=maxRoughnessToTrace, y=roughnessFadeLength, z=livre, w=albedoLOD
         Vec4  GridMinSpacing;    // DDGI grid origin + spacing
         Vec4  GridCount;         // DDGI probe counts
         Vec4  AtlasParams;       // DDGI irradiance atlas (tile, W, H)
@@ -57,6 +58,11 @@ namespace Smile {
         // de trace que nao usam a cauda da agua declaram ViewProj/WaterEnvironmentParams como
         // preenchimento p/ alcancar este offset (convencao ja existente nesses arquivos).
         Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
+        // World radiance cache (FRadianceCacheShaderParams). Contrato por NOME com o
+        // RC_UNPACK_PARAMS do RadianceCache.hlsli; anexado no FIM como o SkyParams.
+        Vec4  RadianceCacheCamCell;
+        Vec4  RadianceCacheLodCapFlags;
+        Vec4  RadianceCacheResources;
     };
     static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 480,
                   "ReflectionConstants divergiu do cbuffer ReflectionCB");
@@ -108,7 +114,7 @@ namespace Smile {
                             const Vec3& CameraPos, const Vec3& PrevCameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
-                            bool RealHitShading, const Mat44& View, bool UseAtmosphereSky,
+                            const Mat44& View, bool UseAtmosphereSky,
                             f32 WaterEnvironmentIntensity,
                             u32 PunctualLightCount, u32 TemporalInstanceCount,
                             bool MotionHistoryValid);
@@ -160,6 +166,10 @@ namespace Smile {
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // SEM o bit de update — o Renderer publica ShaderParams(false) aqui. A radiancia que este
+        // passe produz vale para UMA direcao de espelho e o cache nao guarda direcao; grava-la
+        // envenenaria as celulas para o DDGI e o ReSTIR GI. Consultar continua valido.
+        void SetRadianceCacheParams(const FRadianceCacheShaderParams& P) { RadianceCacheParams = P; }
         // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
         // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
         void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
@@ -195,8 +205,6 @@ namespace Smile {
         f32  GetMaxRoughness() const  { return MaxRoughnessToTrace; }
         void SetRoughnessFade(f32 V)  { RoughnessFadeLength = V; }
         f32  GetRoughnessFade() const { return RoughnessFadeLength; }
-        void SetRealHitShading(bool V){ RealHit = V; }
-        bool GetRealHitShading() const{ return RealHit; }
         // Back-face culling NOS RAIOS DE REFLEXAO. Politica por passe, no lugar da chave global
         // que existia na TLAS: o Lumen culla no passe de reflexao
         // (LumenReflectionHardwareRayTracing.usf:181) e NAO culla no gather do ReSTIR
@@ -350,11 +358,11 @@ namespace Smile {
         FRayEpsilonProfile RayEps;        // perfil compartilhado (dono = Renderer)
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        FRadianceCacheShaderParams RadianceCacheParams{};
         Vec4               SkyLutParams{};
         f32  MaxRoughnessToTrace = 0.6f;  // acima -> so DDGI (combine do Lumen)
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)
-        bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
         bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (GATHER vs OPAQUE)
         bool BackfaceCull        = false; // culling nos raios de reflexao (ver setter)
         bool UseNrd              = false; // denoise via NRD RELAX especular (unificado c/ o GI)

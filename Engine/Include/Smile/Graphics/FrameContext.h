@@ -160,6 +160,10 @@ namespace Smile {
         bool NrdIndirectMode     = false; // NRD denoisando o ReSTIR GI
         bool NrdDirectMode       = false; // instancia dedicada do NRD p/ a direta
         bool AOWillRun           = false;
+        // O visualizador do cache tambem consome a normal geometrica do prepass. Separado de AO
+        // para nao executar GTAO apenas porque uma ferramenta de debug esta aberta.
+        bool RadianceCacheDebugActive = false;
+        bool GeometricNormalWillRun   = false;
 
         // --- Agua -----------------------------------------------------------------------
         bool WaterReflectionDebug       = false;

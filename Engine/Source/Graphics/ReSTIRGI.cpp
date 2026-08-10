@@ -41,6 +41,7 @@ namespace Smile {
             VramTracker::Register(Tex.Get(), EVramCategory::GI, _Label);
             return Tex;
         }
+
     }
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
@@ -167,8 +168,8 @@ namespace Smile {
                 _SRVHeap.CpuHandleStaging(_VelocitySlot),
                 _SRVHeap.CpuHandleStaging(Res0SRV[prev]),
                 _SRVHeap.CpuHandleStaging(Res1SRV[prev]),
-                // t11/t12: filler. O reservoir encolheu de 4 p/ 2 texturas, mas a tabela segue com
-                // 14 descritores porque o SetPunctualLightsSRV escreve as luzes no offset 13 fixo.
+                // t11/t12 continuam filler porque SetPunctualLightsSRV escreve as luzes no
+                // offset 13 fixo.
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
             };
@@ -250,7 +251,7 @@ namespace Smile {
                                 RayEps.HitShadowRayBias };
         // GI cru (RR/None) usa teto de firefly mais apertado: sem o NRD pra limpar o residuo, os
         // outliers viram sparkles que o RR nao remove bem. O caminho NRD mantem o teto original.
-        CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD,
+        CPU.ShadeParams     = { 0.0f, AlbedoLOD, // .x livre
                                 UseNrd ? FireflyMax : FireflyMaxRaw, ValidateInterval };
         // Sem historico de superficie nao ha x1 anterior p/ reconstruir, entao o reuso temporal
         // deste frame cai — o passe volta a valer so pela amostra inicial, que e exatamente o que
@@ -279,6 +280,9 @@ namespace Smile {
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.RadianceCacheCamCell     = RadianceCacheParams.CameraPosCell;
+        CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
+        CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.SkyParams             = SkyLutParams;
         // O slot bindless viaja como float; -1 e o sentinela de "captura off" (o shader testa
         // < 0). Sem a permutacao instrumentada isto nunca e lido, mas fica coerente de todo jeito.
@@ -351,6 +355,7 @@ namespace Smile {
                                                FShaderTimer::ExtnTable(_SRVHeap));
         _CL->Dispatch(GX, GY, 1);
         if (_Profiler) _Profiler->End(_CL);
+
 
         if (Spatial) {
             if (_Profiler) _Profiler->Begin(_CL, "Reuso Espacial + Resolve");

@@ -215,8 +215,8 @@ namespace Smile {
         Flicker.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
 
         AO.Initialize(Device.Native());
-        AO.SetupForResize(Device.Native(), SRVHeap, Targets.DepthSRVSlot, Targets.NormalSRVSlot,
-                          SwapChain.GetWidth(), SwapChain.GetHeight());
+        // O dimensionamento dela sai daqui: e um passe migrado, entao quem o faz e o
+        // Passes.ResizeAll logo apos o RegisterPasses (abaixo).
 
         HiZ.Initialize(Device.Native());
         HiZ.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
@@ -231,6 +231,7 @@ namespace Smile {
             BvhDebug.Initialize(Device.Native());
             DDGI.Initialize(Device.Native());
             ReGIR.Initialize(Device.Native());
+            RadianceCache.Initialize(Device.Native());
             MeshLights.Initialize(Device.Native());
             ReSTIRGI.Initialize(Device.Native());
             Nrd.Initialize(Device.Native());
@@ -246,6 +247,17 @@ namespace Smile {
         BuildRaytracingScene();
 
         RegisterPasses();
+
+        // Dimensionamento INICIAL dos passes migrados. Sem isto o OnResize deles so acontecia no
+        // primeiro Resize()/ApplyRenderScale() da viewport — que pode nunca vir, porque a
+        // SwapChain ja nasce no tamanho certo e o Resize e disparado por MUDANCA de tamanho.
+        // Os passes nao-migrados recebem o SetupForResize a dedo la em cima; este e o equivalente
+        // para quem ja adotou o contrato, e e por isso que a linha da GTAO saiu de la.
+        //
+        // Aqui e o ponto mais cedo possivel: depois do RegisterPasses (a lista tem de existir) e
+        // depois do bloco de RT (o OnResize de um passe de RT desiste se o Initialize dele nao
+        // rodou, e o do radiance cache faz exatamente isso).
+        Passes.ResizeAll(MakePassInitContext());
 
         Initialized = true;
         ReportInitProgress("Renderizador pronto", {}, 1.0f);
@@ -302,6 +314,7 @@ namespace Smile {
         Passes.RegisterPass(&Terrain);
         Passes.RegisterPass(&MeshLights);
         Passes.RegisterPass(&ReGIR);
+        Passes.RegisterPass(&RadianceCache);
         Passes.RegisterPass(&DDGI);
         Passes.RegisterPass(&SunShadows);
         Passes.RegisterPass(&HiZ);
@@ -523,6 +536,10 @@ namespace Smile {
         TemporalMotion.SetupForScene(Device.Native(), SRVHeap, Scene,
                                      RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV());
         ReGIR.SetupForScene(Device.Native(), SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
+        // Nao recebe AABB: o hash e de MUNDO e o tamanho da celula vem da distancia a camera, nao
+        // da extensao da cena. E justamente o que ele resolve em relacao ao grid do DDGI, cujo
+        // espacamento sai de maxExt/23 e vira ~8 m no Bistro.
+        RadianceCache.SetupForScene(Device.Native(), SRVHeap);
         // Depois do DDGI: a extracao le VB/IB bindless e o material emissivo pelo InstanceGeo,
         // que e o snapshot que o DDGI monta. Faz o levantamento e monta as tasks; a extracao em
         // si so dispara no Record, e so quando sujo.
@@ -1180,8 +1197,9 @@ namespace Smile {
             Register("GTAO", AO.AOSRVSlot(), EDebugDecode::Grayscale);
         // Entrada do GTAO, nao a normal do G-buffer: sai do Z-prepass (DepthNormal.ps) com a
         // normal INTERPOLADA do vertice, sem normal map — oclusao e sobre a forma da geometria.
-        // Fica no grupo do GTAO porque so e escrita quando ele roda (ver AOWillRun no Render);
-        // com o GTAO desligado o alvo congela no ultimo frame valido ou no clear neutro cinza.
+        // Fica no grupo do GTAO porque nasceu como entrada dele. Hoje tambem e escrita quando o
+        // visualizador do radiance cache esta selecionado (ver GeometricNormalWillRun no Render).
+        // Fora desses dois casos o alvo congela no ultimo frame valido ou no clear neutro cinza.
         if (Targets.NormalSRVSlot != kNoSlot)
             Register("GTAO · normal geometrica", Targets.NormalSRVSlot, EDebugDecode::Raw);
         // As duas pontas do ReSTIR entram como alvos SEPARADOS, cada uma com slot fixo. Seguir
@@ -1287,6 +1305,12 @@ namespace Smile {
         }
         if (SunShafts.IsInitialized())
             Register("Sun shafts", SunShafts.VolumetricSRVSlot(), EDebugDecode::HDR, 0, 1, /*Exposure=*/2.0f);
+
+        // --- passes que publicam os proprios alvos ---------------------------------------
+        // As entradas acima sao a dedo porque leem estado do Renderer (Targets, GBuffer). Um
+        // passe migrado para o contrato publica sozinho, e AQUI: depois do Clear, senao a
+        // entrada nasce apagada; antes do remapeamento, senao a selecao nao o encontra.
+        Passes.RegisterDebugTargetsAll();
 
         std::vector<u32> RemappedSelection;
         RemappedSelection.reserve(SelectedNames.size());
@@ -1544,6 +1568,13 @@ namespace Smile {
         M.NrdDirectMode       = M.ReSTIRDIActiveFrame && ReSTIRDI.IsNrdReady() &&
                                 NrdDirect.IsReady() && Denoiser == EDenoiser::NRD;
         M.AOWillRun           = UseAO && AO.IsReady();
+        const u32 CacheDebugIndex = DebugTargets::IndexOf(FRadianceCache::kDebugTargetName);
+        M.RadianceCacheDebugActive = RadianceCache.CanVisualize() &&
+            CacheDebugIndex != DebugTargets::kInvalid &&
+            (DebugTargetIndex == CacheDebugIndex ||
+             std::find(DebugSelection.begin(), DebugSelection.end(), CacheDebugIndex) !=
+                 DebugSelection.end());
+        M.GeometricNormalWillRun = M.AOWillRun || M.RadianceCacheDebugActive;
 
         M.WaterReflectionDebug =
             Water.GetDebugMode() == FWaterRenderer::EDebugMode::Reflection;
@@ -2286,6 +2317,17 @@ namespace Smile {
         Reflections.SetReGIRParams(ReGIRCB);
         ReSTIRGI.SetReGIRParams(ReGIRCB);
 
+        // World radiance cache — mesmo padrao do ReGIR acima. A diferenca esta no argumento: DDGI
+        // e ReSTIR GI podem ESCREVER (radiancia nao-direcional), as reflexoes so consultam. A
+        // camera entra porque o nivel do hash sai da distancia ate ela.
+        RadianceCache.UpdatePerFrame(FrameSlot, Vw.CameraPosition);
+        DDGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true));
+        ReSTIRGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true));
+        Reflections.SetRadianceCacheParams(RadianceCache.ShaderParams(false));
+        // Os tres buffers precisam estar em UAV antes de QUALQUER trace: a escrita e a leitura
+        // acontecem dentro do ShadeSurfaceHit, que os cinco shaders de trace compartilham.
+        RadianceCache.TransitionForTrace(CommandList);
+
         // Sky-view LUT: os tres passes de trace sombreiam raio que escapa lendo o MESMO LUT que
         // o raster, entao precisam da mesma parameterizacao. O view height e o raio do planeta
         // saem do FAtmosphere (fonte unica) — antes eram literais no HitShading.hlsli, e o de
@@ -2350,8 +2392,7 @@ namespace Smile {
             Reflections.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection, PrevViewProj,
                                        Vw.CameraPosition, PrevCameraPosition,
                                        RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt,
-                                       Lt.KeyColor, FrameIndex, ReflSkyIntensity,
-                                       Reflections.GetRealHitShading(), Vw.View,
+                                       Lt.KeyColor, FrameIndex, ReflSkyIntensity, Vw.View,
                                        WaterUsesAtmosphere, WaterEnvironmentIntensity, GILightCount,
                                        TemporalMotion.InstanceCount(), Modes.MotionHistoryValidThisFrame);
         }
@@ -3182,6 +3223,43 @@ namespace Smile {
                 CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
             }
         }
+
+        // Visualizador ANTES do resolve: ele le a tabela como os traces a deixaram neste frame.
+        // Depois do resolve mostraria o estado ja envelhecido/despejado, que nao e o que as
+        // consultas do frame enxergaram.
+        if (Modes.RadianceCacheDebugActive) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Radiance cache (debug)");
+
+            // O deferred devolve depth para DEPTH_WRITE e a normal pode estar em RENDER_TARGET
+            // quando GTAO esta off. O compute precisa dos dois em NON_PIXEL; restaure exatamente
+            // os estados de entrada porque os passes seguintes partem desse contrato.
+            const D3D12_RESOURCE_STATES NormalBefore = Targets.NormalBufferState;
+            FBarrierBatch Inputs;
+            Inputs.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Inputs.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
+                                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Inputs.Flush(CommandList);
+
+            RadianceCache.RecordDebug(CommandList, SRVHeap, Vw.InvViewProjFull,
+                                      Vw.CameraPosition, FrameSlot);
+
+            FBarrierBatch Restore;
+            Restore.Transition(Targets.DepthBuffer.Get(),
+                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Restore.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
+                                      NormalBefore);
+            Restore.Flush(CommandList);
+        }
+
+        // Resolve do world radiance cache: DEPOIS de todos os traces do frame, porque e aqui que
+        // a acumulacao vira o valor que o proximo frame vai consultar. Rodar antes leria um
+        // acumulador vazio e, pior, zeraria o que os traces acabaram de escrever.
+        if (RadianceCache.IsActive(Modes)) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Radiance cache (resolve)");
+            RadianceCache.RecordResolve(CommandList, SRVHeap);
+        }
     }
 
     // Tudo que compoe SOBRE a cena ja iluminada e ainda le/escreve o HDR em resolucao de render:
@@ -3627,7 +3705,7 @@ namespace Smile {
         const bool DoPrepass = true;
         if (DoPrepass) {
             GpuProfiler.Begin(CommandList, "Z-prepass");
-            if (Modes.AOWillRun) {
+            if (Modes.GeometricNormalWillRun) {
                 FBarrierBatch Batch;
                 Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -3650,8 +3728,9 @@ namespace Smile {
                 }
             }
 
-            CommandList->SetPipelineState(Modes.AOWillRun ? PipelineState.PSODepthNormalMasked()
-                                                    : PipelineState.PSODepthOnlyMasked());
+            CommandList->SetPipelineState(Modes.GeometricNormalWillRun
+                                              ? PipelineState.PSODepthNormalMasked()
+                                              : PipelineState.PSODepthOnlyMasked());
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Z - mascarados");
                 for (const FVisibleItem& V : VisibleScratch) {
@@ -3666,7 +3745,7 @@ namespace Smile {
 
             if (UseTerrain && Terrain.IsLoaded()) {
                 FGpuScope Scope(GpuProfiler, CommandList, "Z - terreno");
-                Terrain.RenderDepthPrepass(CommandList, SRVHeap, Modes.AOWillRun);
+                Terrain.RenderDepthPrepass(CommandList, SRVHeap, Modes.GeometricNormalWillRun);
             }
             GpuProfiler.End(CommandList); // Z-prepass
         }
@@ -4256,6 +4335,7 @@ namespace Smile {
         // BeginFrame acabou de esperar a fence deste slot, portanto o readback gravado na
         // utilizacao anterior do slot ja pode ser mapeado sem stall.
         CollectDebugPreviewReadback(FrameSlot);
+        RadianceCache.CollectStats(FrameSlot);
         DDGIDebugPass.CollectPointDiagnostic(FrameSlot);
         FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
             MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));

@@ -5,6 +5,7 @@
 #include "../LightsCommon.hlsli"
 #include "../BRDF.hlsli"
 #include "../RayEpsilons.hlsli"
+#include "RadianceCache.hlsli"
 
 // Contrato de bindings (declarados pelo shader que inclui): Scene, Instances, SkyViewLUT,
 // IrradAtlas, GIDistAtlas, GIProbeData, LinearClamp/Wrap e — F5 — SceneLights
@@ -23,7 +24,6 @@ struct FHitShadeParams {
                                                // 0.2 historico — calibrar vs offset robusto)
     float  SkyIntensity;  float MaxRayDist;
     float  AlbedoLOD;
-    bool   RealHitShading;
     int    NumLights;     // luzes puntuais no SceneLights (F5)
     uint   ShadowRayMask; // instance mask dos shadow rays: GATHER = folhagem sombreia (alpha-test
                           // por candidato); OPAQUE = pula folhagem (rapido, traversal pura).
@@ -39,7 +39,10 @@ struct FHitShadeParams {
     float  SkyViewHeightKm;    float SkyBottomRKm;
     // Piso de roughness do hit — SO para quem guarda a radiancia num cache NAO-DIRECIONAL
     // (DDGI e ReSTIR GI). 0 = desligado, que e o que as reflexoes usam. Ver o uso abaixo.
-    float  RoughnessMin;       float RoughnessPad;
+    float  RoughnessMin;       float CacheRayRoughness;
+    // World radiance cache. CacheRayRoughness e a roughness do lobo que GEROU este raio, nao a
+    // do material atingido. Negativo = transporte difuso; reflexoes usam o gate de cone SHaRC.
+    FRadianceCacheParams Cache;
 };
 
 // Requer SceneLights e o heap bindless declarados pelo shader hospedeiro.
@@ -158,41 +161,44 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
               + Verts[i1].TexCoord * bary.x
               + Verts[i2].TexCoord * bary.y;
 
-    float3 hitN = normalize(-rayDir);
-    if (P.RealHitShading) {
-        hitN = hitFromBehind ? -geomN : geomN; // facing (1): sem gate, igual ao raster
-        if (geo.HasAlbedo != 0) {
-            Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
-            albedo *= albedoTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).rgb;
-        }
+    // === WORLD RADIANCE CACHE — consulta ====================================================
+    // O ponto mais cedo em que da para sair: a normal geometrica ja esta resolvida (e a chave do
+    // hash precisa dela) e nada caro aconteceu ainda. Sair aqui pula a amostragem de albedo/MR,
+    // o loop de luzes com shadow ray, o gather do DDGI e o emissivo — que e todo o custo.
+    //
+    // A normal da CHAVE e a geometrica com facing aplicado: a chave tem de ser uma propriedade da
+    // SUPERFICIE. Com a direcao do raio na chave, cada raio cairia numa celula diferente e o
+    // cache nunca acertaria.
+    const float3 cacheN = hitFromBehind ? -geomN : geomN;
+    {
+        float3 cachedRadiance;
+        if (RC_Query(P.Cache, hitPos, cacheN, hitDist, P.CacheRayRoughness, cachedRadiance))
+            return cachedRadiance; // outSignedDist ja foi escrito acima
+    }
+
+    float3 hitN = hitFromBehind ? -geomN : geomN; // facing (1): sem gate, igual ao raster
+    if (geo.HasAlbedo != 0) {
+        Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
+        albedo *= albedoTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).rgb;
     }
 
     // Metallic/roughness seguem o mesmo workflow do G-buffer. O MR e amostrado uma vez para os
-    // dois parametros; mapas separados ocupam os slots +6/+7. Sem RealHitShading, metallic
-    // texturizado cai para dieletrico: nesses assets o fator costuma ser 1 e, sem ler o mapa,
-    // aplica-lo sozinho apagaria o difuso da superficie inteira.
-    const bool hasMetalMap =
-        (geo.Flags & (INSTGEO_FLAG_MRMAP | INSTGEO_FLAG_METALMAP)) != 0u;
-    float metallic  = 0.0f;
+    // dois parametros; mapas separados ocupam os slots +6/+7.
+    float metallic  = geo.EmissiveFactor.w; // MetallicFactor cabe no .w do snapshot
     float roughness = geo.RoughnessFactor;
-    if (P.RealHitShading) {
-        metallic = geo.EmissiveFactor.w; // MetallicFactor cabe no .w do snapshot
-        if ((geo.Flags & INSTGEO_FLAG_MRMAP) != 0u) {
-            Texture2D<float4> mrTex = ResourceDescriptorHeap[geo.MrMapIndex];
-            const float4 mr = mrTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD);
-            metallic  *= ((geo.Flags & INSTGEO_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
-            roughness *= mr.g;
-        }
-        if ((geo.Flags & INSTGEO_FLAG_METALMAP) != 0u) {
-            Texture2D<float4> metalTex = ResourceDescriptorHeap[geo.MetalMapIndex];
-            metallic *= metalTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
-        }
-        if ((geo.Flags & INSTGEO_FLAG_ROUGHMAP) != 0u) {
-            Texture2D<float4> roughTex = ResourceDescriptorHeap[geo.RoughMapIndex];
-            roughness *= roughTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
-        }
-    } else if (!hasMetalMap) {
-        metallic = geo.EmissiveFactor.w;
+    if ((geo.Flags & INSTGEO_FLAG_MRMAP) != 0u) {
+        Texture2D<float4> mrTex = ResourceDescriptorHeap[geo.MrMapIndex];
+        const float4 mr = mrTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD);
+        metallic  *= ((geo.Flags & INSTGEO_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
+        roughness *= mr.g;
+    }
+    if ((geo.Flags & INSTGEO_FLAG_METALMAP) != 0u) {
+        Texture2D<float4> metalTex = ResourceDescriptorHeap[geo.MetalMapIndex];
+        metallic *= metalTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
+    }
+    if ((geo.Flags & INSTGEO_FLAG_ROUGHMAP) != 0u) {
+        Texture2D<float4> roughTex = ResourceDescriptorHeap[geo.RoughMapIndex];
+        roughness *= roughTex.SampleLevel(LinearWrap, uv, P.AlbedoLOD).r;
     }
     metallic = saturate(metallic);
     // Piso de roughness do SECUNDARIO (RTXDI `minSecondaryRoughness`, default 0.5 no sample
@@ -337,8 +343,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     // Emissivo do hit (mesma formula do GBuffer.ps: factor*strength ja bakeado no InstanceGeo,
     // x mapa quando ha) — sem isto, superficies emissivas nao alimentam GI nem aparecem em
     // reflexoes/ReSTIR. O mapa e obrigatorio quando existe (factor costuma ser 1 e o mapa e
-    // quase todo preto — so o factor estouraria a superficie inteira). Sem gate no
-    // RealHitShading: o branch e coerente por instancia e a maioria tem flag 0.
+    // quase todo preto — so o factor estouraria a superficie inteira).
     float3 emissive = geo.EmissiveFactor.rgb;
     if ((geo.Flags & INSTGEO_FLAG_EMISSIVE) != 0u) {
         Texture2D<float4> emissiveTex = ResourceDescriptorHeap[geo.EmissiveMapIndex];
@@ -353,7 +358,14 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     const float3 ambientF = F_SchlickRoughness(specularColor, NoV, roughness);
     const float3 indirectLighting = ((1.0f - ambientF) * diffuseColor + ambientF) * indirect;
 
-    return directLighting + indirectLighting + emissive;
+    const float3 outRadiance = directLighting + indirectLighting + emissive;
+
+    // === WORLD RADIANCE CACHE — atualizacao =================================================
+    // Quem escreve e decidido no CPU, pelo bit de update do Flags: DDGI e ReSTIR GI recebem, as
+    // reflexoes nao (radiancia direcional). Ver FRadianceCache::ShaderParams.
+    RC_Update(P.Cache, hitPos, cacheN, outRadiance);
+
+    return outRadiance;
 }
 
 #endif

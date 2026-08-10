@@ -26,6 +26,14 @@ cbuffer DDGICB : register(b0) {
     float4 ReGIRGridCountSamples;
     float4 ReGIRResources;
     float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
+    // Invalidacao espacial: consumida pelo DDGIUpdate, nao por este passe. Declarada aqui como
+    // preenchimento p/ alcancar o offset do cache (mesma convencao da cauda da agua nos shaders
+    // de reflexao).
+    float4 InvalidateMin;
+    float4 InvalidateMaxHyst;
+    float4 RadianceCacheCamCell;
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -96,7 +104,6 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.SunColor       = SunColorHyst.rgb;    P.ShadowRayBias = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = maxT;
     P.AlbedoLOD      = 4.0f;
-    P.RealHitShading = DistAtlasParams.w > 0.5f;
     P.NumLights      = (int)MiscParams2.y;
     P.ShadowRayMask  = (uint)MiscParams2.z;
     P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
@@ -114,7 +121,8 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // A sonda integra o hit num cosseno e serve a hemisferio inteiro: cache nao-direcional pelo
     // mesmo motivo do reservoir do ReSTIR — ver o bloco no ShadeSurfaceHit.
     P.RoughnessMin       = GIBiasParams.w;
-    P.RoughnessPad       = 0.0f;
+    P.CacheRayRoughness  = -1.0f;
+    RC_UNPACK_PARAMS(P);
 
     float3 radiance;
     float  signedDist;

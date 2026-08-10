@@ -6,6 +6,7 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -28,7 +29,7 @@ namespace Smile {
         Vec4  SunColor;        // rgb = cor do sol, w = ShadowRayMask (mask dos shadow rays no hit)
         Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
                                // (so sombras no hit; origem de raio do G-buffer usa offset robusto)
-        Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD, z = fireflyMax, w = validateInterval
+        Vec4  ShadeParams;     // x = livre, y = albedoLOD, z = fireflyMax, w = validateInterval
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
@@ -57,6 +58,11 @@ namespace Smile {
         // Historico de superficie do FTemporalMotionVectors: de onde sai o x1 do reservoir
         // temporal desde que ele deixou de ser gravado (ver ReSTIRReservoir.hlsli).
         Vec4  HistoryParams;     // x = slot bindless do Surface do frame ANTERIOR
+        // World radiance cache (FRadianceCacheShaderParams). Contrato por NOME com o
+        // RC_UNPACK_PARAMS do RadianceCache.hlsli; anexado no FIM como os anteriores.
+        Vec4  RadianceCacheCamCell;
+        Vec4  RadianceCacheLodCapFlags;
+        Vec4  RadianceCacheResources;
     };
     static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
                   "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
@@ -82,8 +88,7 @@ namespace Smile {
 
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 DepthSlot, u32 GBufferSlot,
-                            u32 VelocitySlot,
+                            u32 DepthSlot, u32 GBufferSlot, u32 VelocitySlot,
                             // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
                             // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
                             u32 DistSlot, u32 ProbeDataSlot);
@@ -133,6 +138,9 @@ namespace Smile {
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // COM o bit de update: o reservoir do ReSTIR GI ja guarda radiancia nao-direcional (e por
+        // isso que o RoughnessMin existe aqui). Ver FRadianceCache::ShaderParams.
+        void SetRadianceCacheParams(const FRadianceCacheShaderParams& P) { RadianceCacheParams = P; }
         // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
         // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
         void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
@@ -158,8 +166,6 @@ namespace Smile {
         // Invalidam o historico: mudam o Lo JA GRAVADO nos reservoirs, e com ValidateInterval = 0
         // (config estavel atual) nao ha re-shade periodico — sem o clear, a radiancia do modo
         // anterior sobrevive ate a reprojecao rejeitar por posicao, e o toggle fica meio aplicado.
-        void SetRealHitShading(bool V) { if (V != RealHit) NeedsClear = true; RealHit = V; }
-        bool GetRealHitShading() const { return RealHit; }
         void SetTemporal(bool V)   { if (V && !Temporal) NeedsClear = true; Temporal = V; }
         bool GetTemporal() const   { return Temporal; }
         void SetFoliageShadows(bool V) { if (V != FoliageShadows) NeedsClear = true;
@@ -210,7 +216,7 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;   // 14 SRV, 5 UAV, heap-directly-indexed (Pass A)
+        FVolumetricPipeline TracePSO;   // 14 SRV, 3 UAV, heap-directly-indexed (Pass A)
         // Gemea instrumentada do Pass A: mesmas tabelas, mas com o slot falso da NVAPI no root
         // sig e o timer no shader. PSO separada e nao um if no CB porque a instrumentacao custa
         // registrador — o passe normal nao pode pagar por um recurso de debug.
@@ -238,17 +244,18 @@ namespace Smile {
         u32 Res1UAV[2] = { kInvalidSlot, kInvalidSlot };
         // Indexadas pela PARIDADE do ping-pong (FrameParity), nao pelo FrameSlot do frame em voo:
         // o conteudo da tabela depende de qual conjunto de reservoirs e prev e qual e curr.
-        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,inst,inst,depth,gbuf,vel,prev0,prev1,
-        //                             filler,filler,luzes] (prev = Res*[1-p]). Os dois filler
-        //                    sobraram do reservoir de 4 texturas e ficam de proposito: o t13 das
+        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,dist,probe,depth,gbuf,vel,prev0,prev1,
+        //                             filler,filler,luzes] (prev = Res*[1-p]). Os fillers
+        //                    sobrou do reservoir de 4 texturas e fica de proposito: o t13 das
         //                    luzes e reescrito por frame num offset FIXO (SetPunctualLightsSRV),
         //                    entao encolher a tabela mudaria o registrador delas.
-        // TraceUAVTable[p] = 3 UAVs  [GITex, curr0, curr1] (curr = Res*[p]).
+        // TraceUAVTable[p] = 3 UAVs  [GITex, curr0, curr1].
         // SpatialTable[p]  = 10 SRVs [TLAS, curr0, curr1, filler, filler, gbuf, depth, inst×3].
         static constexpr u32 kParityTables = 2;
         u32 TraceTable[kParityTables]    = { kInvalidSlot, kInvalidSlot };
         u32 TraceUAVTable[kParityTables] = { kInvalidSlot, kInvalidSlot };
         u32 SpatialTable[kParityTables]  = { kInvalidSlot, kInvalidSlot };
+
         // NRD pack (Fase C). PackSrvTable = [GITex,gbuf,depth,vel]; PackUavTable = [viewZ,nr,mv,radHit].
         u32 PackSrvTable = kInvalidSlot;
         u32 PackUavTable = kInvalidSlot;
@@ -275,7 +282,6 @@ namespace Smile {
         bool Ready       = false;
 
         // Tunaveis.
-        bool RealHit        = true;
         f32  AlbedoLOD      = 2.0f;
         bool Temporal       = true;
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
@@ -320,6 +326,7 @@ namespace Smile {
         FRayEpsilonProfile RayEps;
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        FRadianceCacheShaderParams RadianceCacheParams{};
         Vec4               SkyLutParams{};
     };
 }

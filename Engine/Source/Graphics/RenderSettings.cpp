@@ -28,6 +28,7 @@ namespace Smile {
         if (HasTarget(_Targets, T::TemporalMotion))   R.TemporalMotion.InvalidateHistory();
         if (HasTarget(_Targets, T::HiZOcclusion))     R.HiZ.InvalidateResults();
         if (HasTarget(_Targets, T::ProbeDiagnostic))  R.RepeatDebugProbePoint();
+        if (HasTarget(_Targets, T::RadianceCache))    R.RadianceCache.ResetOnce();
     }
 
     // === Apresentacao e escala ==========================================================
@@ -133,6 +134,73 @@ namespace Smile {
     }
     bool FRenderSettings::GetUseReGIR() const { return R.UseReGIR; }
     bool FRenderSettings::ReGIRActive() const { return R.UseReGIR && R.ReGIR.IsReady(); }
+
+    void FRenderSettings::SetRadianceCacheEnabled(bool _V) {
+        if (_V == R.RadianceCache.GetEnabled()) return;
+        R.RadianceCache.SetEnabled(_V);
+        // O que o raio secundario DEVOLVE muda — e esse valor realimenta o atlas do DDGI e os
+        // reservoirs do ReSTIR, que precisam esquecer o regime anterior.
+        Invalidate(Dom::RayVisibility);
+    }
+    bool FRenderSettings::GetRadianceCacheEnabled() const { return R.RadianceCache.GetEnabled(); }
+
+    void FRenderSettings::SetRadianceCacheQuery(bool _V) {
+        if (_V == R.RadianceCache.GetQueryEnabled()) return;
+        R.RadianceCache.SetQueryEnabled(_V);
+        // Trocar o terminador invalida quem ACUMULOU a resposta, mas nao a tabela que acabamos de
+        // aquecer em write-only. Passar RayVisibility inteiro apagaria o cache exatamente quando
+        // o usuario liga a leitura para o A/B.
+        const auto ConsumersOnly = static_cast<EHistoryTarget>(
+            static_cast<u32>(Dom::RayVisibility) &
+            ~static_cast<u32>(EHistoryTarget::RadianceCache));
+        Invalidate(ConsumersOnly);
+    }
+    bool FRenderSettings::GetRadianceCacheQuery() const {
+        return R.RadianceCache.GetQueryEnabled();
+    }
+
+    void FRenderSettings::SetRadianceCacheStatsEnabled(bool _V) {
+        R.RadianceCache.SetStatsEnabled(_V); // so mede; nao invalida nada
+    }
+    bool FRenderSettings::GetRadianceCacheStatsEnabled() const {
+        return R.RadianceCache.GetStatsEnabled();
+    }
+
+    void FRenderSettings::SetRadianceCacheCellSize(f32 _V) {
+        if (_V == R.RadianceCache.GetBaseCellSize()) return;
+        R.RadianceCache.SetBaseCellSize(_V);
+        // A chave muda: o conteudo guardado passa a estar enderecado errado. O executor acima
+        // transforma o bit RadianceCache do dominio em ResetOnce.
+        Invalidate(Dom::RayVisibility);
+    }
+    f32 FRenderSettings::GetRadianceCacheCellSize() const {
+        return R.RadianceCache.GetBaseCellSize();
+    }
+
+    void FRenderSettings::SetRadianceCacheLodDistance(f32 _V) {
+        if (_V == R.RadianceCache.GetLodDistance()) return;
+        R.RadianceCache.SetLodDistance(_V);
+        Invalidate(Dom::RayVisibility);
+    }
+    f32 FRenderSettings::GetRadianceCacheLodDistance() const {
+        return R.RadianceCache.GetLodDistance();
+    }
+
+    void FRenderSettings::SetRadianceCacheDebugMode(u32 _V) {
+        if (_V >= static_cast<u32>(ERadianceCacheDebugMode::Count)) return;
+        R.RadianceCache.SetDebugMode(static_cast<ERadianceCacheDebugMode>(_V));
+    }
+    u32 FRenderSettings::GetRadianceCacheDebugMode() const {
+        return static_cast<u32>(R.RadianceCache.GetDebugMode());
+    }
+
+    void FRenderSettings::ResetRadianceCache() { R.RadianceCache.ResetOnce(); }
+
+    const FRadianceCacheStats& FRenderSettings::RadianceCacheStats() const {
+        return R.RadianceCache.Stats();
+    }
+    u64 FRenderSettings::RadianceCacheBytes() const { return R.RadianceCache.MemoryBytes(); }
+    u32 FRenderSettings::RadianceCacheCapacity() const { return R.RadianceCache.Capacity(); }
 
     void FRenderSettings::SetUseReSTIRGI(bool _V) {
         if (_V == R.UseReSTIRGI) return;

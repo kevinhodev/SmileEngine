@@ -41,6 +41,7 @@ namespace Smile {
         TemporalMotion   = 1u << 11,
         HiZOcclusion     = 1u << 12, // readback ring do occlusion culling
         ProbeDiagnostic  = 1u << 13, // one-shot por clique: reexecuta, senao o painel mente
+        RadianceCache    = 1u << 14, // hash de MUNDO; media movel com teto de 64 amostras
     };
 
     constexpr EHistoryTarget operator|(EHistoryTarget A, EHistoryTarget B) {
@@ -97,12 +98,14 @@ namespace Smile {
         // Mudou o que o RAIO ENXERGA no hit (mascara, backface, alpha-test, fade de borda,
         // bias de amostragem). Muda o Lo gravado no reservoir E o valor devolvido as sondas.
         inline constexpr T RayVisibility = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
-                                           T::VolumetricFog | T::ProbeDiagnostic | Resolve;
+                                           T::VolumetricFog | T::ProbeDiagnostic |
+                                           T::RadianceCache | Resolve;
 
         // Mudou a GEOMETRIA do raio (epsilons, offsets, TMin). Alcanca tambem o shadow ray da
         // direta, por isso inclui o eixo do DI.
         inline constexpr T RayGeometry = T::DDGIAtlas | T::ReSTIRGI | T::ReSTIRDI |
-                                         T::Reflections | T::NrdDirect | Resolve;
+                                         T::Reflections | T::NrdDirect |
+                                         T::RadianceCache | Resolve;
 
         // Mudou a ENERGIA que alimenta o indireto: radiancia do ceu, cor da luz-chave,
         // peso de luz no RT. Distinto do RayVisibility — la muda o que o raio VE, aqui muda
@@ -114,24 +117,25 @@ namespace Smile {
         // nao move superficie nem troca InstanceID. Ele continua no MaterialRTState, onde e
         // legitimo: la as flags de instancia da TLAS mudam, e o buffer e indexado pelo InstanceID.
         inline constexpr T SkyRadiance = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
-                                         T::VolumetricFog | Resolve;
+                                         T::VolumetricFog | T::RadianceCache | Resolve;
 
         // Trocou de denoiser. O teto de firefly do ReSTIR depende do denoiser e e aplicado ao
         // Lo NA HORA DO TRACE, ou seja, fica gravado no reservoir. Inclui o RayReconstruct
         // explicitamente (o Resolve nao o carrega mais): trocar PARA ou DE DLSS-RR troca o
         // proprio acumulador, entao ele tem de comecar limpo — mesmo caso do TemporalOnly.
         inline constexpr T DenoiserSwap = T::ReSTIRGI | T::ReSTIRDI | T::Reflections |
-                                          T::NrdDirect | T::RayReconstruct | Resolve;
+                                          T::NrdDirect | T::RayReconstruct |
+                                          T::RadianceCache | Resolve;
 
         // Trocou o SAMPLER de luzes do mundo para hits secundarios (ReGIR).
         inline constexpr T IndirectSampler = T::ReGIR | T::DDGIAtlas | T::ReSTIRGI |
-                                            T::Reflections | Resolve;
+                                            T::Reflections | T::RadianceCache | Resolve;
 
         // Propriedade de material que o RT enxerga mudou. O mais largo: alem de tudo que
         // acumula, o chamador ainda tem refresh a fazer (Flush + InstanceGeo + flags da TLAS).
         inline constexpr T MaterialRTState = T::DDGIAtlas | T::TemporalMotion | T::ReSTIRGI |
                                              T::ReSTIRDI | T::NrdDirect | T::Reflections |
-                                             Resolve;
+                                             T::RadianceCache | Resolve;
 
         // A LISTA de renderaveis mudou: um objeto nasceu ou morreu, e o indice de todos os que
         // vinham depois andou. Mais largo que o MaterialRTState, por dois motivos que se somam:
@@ -156,10 +160,18 @@ namespace Smile {
         // primitiva. O mesmo vale para o ReGIR, que e grade de MUNDO pela mesma razao — mas ele
         // fica, porque a geometria removida podia ser emissiva e estar nos pools de luz, e ele
         // ainda nao tem invalidacao por regiao.
+        //
+        // O RadianceCache tambem e cache de MUNDO e tambem fica, mas o argumento e outro: um
+        // reset dele nao produz o pop do atlas. Zerar o hash so faz o ShadeSurfaceHit voltar a
+        // sombrear de verdade por alguns frames — o caminho que existia antes do cache — em vez
+        // de trocar a irradiancia da cena inteira pela estimativa de um trace so. Custa alguns
+        // ms de trace e nao custa piscada, entao nao ha por que arriscar radiancia de um objeto
+        // que nao existe mais. (Invalidacao por regiao aqui e barata de fazer depois: a chave ja
+        // carrega a posicao quantizada.)
         inline constexpr T SceneStructure = T::ReGIR | T::ReSTIRGI | T::ReSTIRDI |
                                             T::Reflections | T::NrdDirect | T::TemporalMotion |
                                             T::HiZOcclusion | T::VolumetricFog |
-                                            T::ProbeDiagnostic | Resolve;
+                                            T::ProbeDiagnostic | T::RadianceCache | Resolve;
 
         // A CAMERA SALTOU: teleporte do foco do editor, carga de cena, buffers recriados. E o
         // unico caso em que resetar os filtros de tela e a resposta certa — nao existe vetor de

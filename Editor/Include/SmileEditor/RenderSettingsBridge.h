@@ -105,6 +105,19 @@ namespace SmileEditor {
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reGIREnabled READ IsReGIREnabled NOTIFY GISettingsChanged)
+        // World radiance cache. As tres primeiras sao knobs; as cinco ultimas, telemetria do
+        // readback (ver FRadianceCacheStats) — por isso so tem READ.
+        Q_PROPERTY(bool radianceCacheEnabled READ IsRadianceCacheEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool radianceCacheQuery READ IsRadianceCacheQuery NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool radianceCacheStats READ IsRadianceCacheStats NOTIFY GISettingsChanged)
+        Q_PROPERTY(double radianceCacheCellSize READ GetRadianceCacheCellSize NOTIFY GISettingsChanged)
+        Q_PROPERTY(double radianceCacheLodDistance READ GetRadianceCacheLodDistance NOTIFY GISettingsChanged)
+        Q_PROPERTY(int radianceCacheDebugMode READ GetRadianceCacheDebugMode NOTIFY GISettingsChanged)
+        Q_PROPERTY(double radianceCacheOccupancy READ GetRadianceCacheOccupancy NOTIFY StatsChanged)
+        Q_PROPERTY(double radianceCacheHitRate READ GetRadianceCacheHitRate NOTIFY StatsChanged)
+        Q_PROPERTY(double radianceCacheConvergence READ GetRadianceCacheConvergence NOTIFY StatsChanged)
+        Q_PROPERTY(double radianceCacheMemoryMB READ GetRadianceCacheMemoryMB NOTIFY GISettingsChanged)
+        Q_PROPERTY(QString radianceCacheSummary READ GetRadianceCacheSummary NOTIFY StatsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY GISettingsChanged)
@@ -278,6 +291,17 @@ namespace SmileEditor {
         bool              IsDDGIEnabled() const;
         bool              IsReSTIRGIEnabled() const;
         bool              IsReGIREnabled() const;
+        bool              IsRadianceCacheEnabled() const;
+        bool              IsRadianceCacheQuery() const;
+        bool              IsRadianceCacheStats() const;
+        double            GetRadianceCacheCellSize() const;
+        double            GetRadianceCacheLodDistance() const;
+        int               GetRadianceCacheDebugMode() const;
+        double            GetRadianceCacheOccupancy() const;    // % da capacidade
+        double            GetRadianceCacheHitRate() const;      // % de acerto das consultas
+        double            GetRadianceCacheConvergence() const;  // amostras/celula, 0..kMaxAccum
+        double            GetRadianceCacheMemoryMB() const;
+        QString           GetRadianceCacheSummary() const;
         bool              IsReSTIRGIVisibilityEnabled() const;
         bool              AreGIFoliageShadowsEnabled() const;
         bool              IsReflectionsCullBackfaceEnabled() const;
@@ -290,6 +314,15 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
         Q_INVOKABLE void ToggleReGIR();
+        Q_INVOKABLE void ToggleRadianceCache();
+        Q_INVOKABLE void ToggleRadianceCacheQuery();
+        Q_INVOKABLE void ToggleRadianceCacheStats();
+        Q_INVOKABLE void SetRadianceCacheCellSize(double V);
+        Q_INVOKABLE void SetRadianceCacheLodDistance(double V);
+        Q_INVOKABLE void SetRadianceCacheDebugMode(int V);
+        Q_INVOKABLE void ResetRadianceCache();
+        // Puxada pelo Timer do card enquanto ele esta visivel — ver o sinal StatsChanged.
+        Q_INVOKABLE void RefreshRadianceCacheStats();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
         Q_INVOKABLE void ToggleGIFoliageShadows();
         Q_INVOKABLE void ToggleReflectionsCullBackface();
@@ -348,6 +381,10 @@ namespace SmileEditor {
         void VolFogSettingsChanged();
         void ShadowSettingsChanged();
         void GISettingsChanged();
+        // Telemetria que muda TODO frame (readback do radiance cache). Nao e emitido pelo
+        // renderer: o card do painel puxa com um Timer proprio enquanto esta visivel, entao
+        // formatar QString a 5 Hz so acontece com alguem olhando.
+        void StatsChanged();
         void RenderSettingsChanged();
         // Capacidades de upscaler/denoiser: so mudam quando o renderer nasce.
         void RendererInitialized();

@@ -34,6 +34,8 @@
 namespace Smile {
 
     class Renderer;
+    // So a referencia de retorno precisa do tipo aqui; a definicao chega pelo Renderer.h no .cpp.
+    struct FRadianceCacheStats;
 
     class FRenderSettings {
     public:
@@ -84,6 +86,32 @@ namespace Smile {
         void SetUseReGIR(bool V);
         bool GetUseReGIR() const;
         bool ReGIRActive() const;
+
+        // --- World radiance cache -------------------------------------------------------
+        // Enabled e Query sao knobs separados de proposito: o A/B util e ligar so a ESCRITA,
+        // deixar a tabela encher alguns segundos, e so entao ligar a LEITURA. Ligando os dois
+        // juntos, os primeiros frames consultam uma tabela vazia e o resultado parece bug.
+        void SetRadianceCacheEnabled(bool V);
+        bool GetRadianceCacheEnabled() const;
+        void SetRadianceCacheQuery(bool V);
+        bool GetRadianceCacheQuery() const;
+        // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
+        // historico — so mede.
+        void SetRadianceCacheStatsEnabled(bool V);
+        bool GetRadianceCacheStatsEnabled() const;
+        // Mudam a CHAVE do hash: todo valor guardado passa a viver noutra celula, entao o
+        // conteudo antigo vira lixo enderecado errado. Invalidam.
+        void SetRadianceCacheCellSize(f32 V);
+        f32  GetRadianceCacheCellSize() const;
+        void SetRadianceCacheLodDistance(f32 V);
+        f32  GetRadianceCacheLodDistance() const;
+        // So visualizacao: nao toca no que os traces leem.
+        void SetRadianceCacheDebugMode(u32 V);
+        u32  GetRadianceCacheDebugMode() const;
+        void ResetRadianceCache();
+        const FRadianceCacheStats& RadianceCacheStats() const;
+        u64  RadianceCacheBytes() const;
+        u32  RadianceCacheCapacity() const;
         void SetUseReSTIRGI(bool V);
         bool GetUseReSTIRGI() const;
         void SetUseReSTIRDI(bool V);
