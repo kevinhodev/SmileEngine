@@ -28,6 +28,9 @@ namespace Smile {
         ID3D12PipelineState* GetPSO()           const { return PSO.Get(); }
 
     private:
+        void CreatePipeline(ID3D12Device* Device, const std::string& CSOName,
+                            const D3D12_ROOT_SIGNATURE_DESC& RootSignatureDesc);
+
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSignature;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
     };

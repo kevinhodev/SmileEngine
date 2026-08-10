@@ -37,6 +37,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Material.h
     Include/Smile/Graphics/GBuffer.h
     Include/Smile/Graphics/ComputePipeline.h
+    Include/Smile/Graphics/PipelineUtils.h
     Include/Smile/Graphics/HDREnvironment.h
     Include/Smile/Graphics/Atmosphere.h
     Include/Smile/Graphics/CloudNoise.h
@@ -108,6 +109,7 @@ set(ENGINE_SOURCES
     Source/Graphics/GBuffer.cpp
     Source/Graphics/Terrain.cpp
     Source/Graphics/ComputePipeline.cpp
+    Source/Graphics/PipelineUtils.cpp
     Source/Graphics/HDREnvironment.cpp
     Source/Graphics/Atmosphere.cpp
     Source/Graphics/CloudNoise.cpp

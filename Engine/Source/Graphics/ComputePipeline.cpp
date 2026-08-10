@@ -1,10 +1,6 @@
 #include "Smile/Graphics/ComputePipeline.h"
-#include "Smile/Core/HResultCheck.h"
-#include "Smile/Core/Logger.h"
+#include "Smile/Graphics/PipelineUtils.h"
 #include "Smile/Graphics/ShaderTimer.h"
-#include "Smile/Graphics/ShaderUtils.h"
-#include <vector>
-#include <stdexcept>
 
 namespace Smile {
     void FComputePipeline::Initialize(ID3D12Device* _Device, const std::string& _CSOName, bool) {
@@ -60,28 +56,7 @@ namespace Smile {
         RootSigDesc.pStaticSamplers   = &StaticSampler;
         RootSigDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-        Microsoft::WRL::ComPtr<ID3DBlob> RootBlob;
-        Microsoft::WRL::ComPtr<ID3DBlob> ErrorBlob;
-        HRESULT Hr = D3D12SerializeRootSignature(&RootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
-                                                  &RootBlob, &ErrorBlob);
-        if (FAILED(Hr)) {
-            if (ErrorBlob)
-                LogError(std::string("Compute root sig error: ") +
-                         static_cast<const char*>(ErrorBlob->GetBufferPointer()));
-            SMILE_HR(Hr);
-        }
-        SMILE_HR(_Device->CreateRootSignature(0, RootBlob->GetBufferPointer(),
-                                              RootBlob->GetBufferSize(),
-                                              IID_PPV_ARGS(&RootSignature)));
-
-        auto CSOBlob = LoadShaderBytecode(_CSOName);
-
-        D3D12_COMPUTE_PIPELINE_STATE_DESC PSODesc{};
-        PSODesc.pRootSignature = RootSignature.Get();
-        PSODesc.CS             = { CSOBlob.data(), CSOBlob.size() };
-        PSODesc.NodeMask       = 0;
-        PSODesc.Flags          = D3D12_PIPELINE_STATE_FLAG_NONE;
-        SMILE_HR(_Device->CreateComputePipelineState(&PSODesc, IID_PPV_ARGS(&PSO)));
+        CreatePipeline(_Device, _CSOName, RootSigDesc);
     }
 
     void FComputePipeline::Initialize(ID3D12Device* _Device, const std::string& _CSOName,
@@ -158,28 +133,15 @@ namespace Smile {
             ? D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
             : D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-        Microsoft::WRL::ComPtr<ID3DBlob> RootBlob;
-        Microsoft::WRL::ComPtr<ID3DBlob> ErrorBlob;
-        HRESULT Hr = D3D12SerializeRootSignature(&RootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
-                                                  &RootBlob, &ErrorBlob);
-        if (FAILED(Hr)) {
-            if (ErrorBlob)
-                LogError(std::string("Compute root sig error: ") +
-                         static_cast<const char*>(ErrorBlob->GetBufferPointer()));
-            SMILE_HR(Hr);
-        }
-        SMILE_HR(_Device->CreateRootSignature(0, RootBlob->GetBufferPointer(),
-                                              RootBlob->GetBufferSize(),
-                                              IID_PPV_ARGS(&RootSignature)));
+        CreatePipeline(_Device, _CSOName, RootSigDesc);
+    }
 
-        auto CSOBlob = LoadShaderBytecode(_CSOName);
-
-        D3D12_COMPUTE_PIPELINE_STATE_DESC PSODesc{};
-        PSODesc.pRootSignature = RootSignature.Get();
-        PSODesc.CS             = { CSOBlob.data(), CSOBlob.size() };
-        PSODesc.NodeMask       = 0;
-        PSODesc.Flags          = D3D12_PIPELINE_STATE_FLAG_NONE;
-        SMILE_HR(_Device->CreateComputePipelineState(&PSODesc, IID_PPV_ARGS(&PSO)));
+    void FComputePipeline::CreatePipeline(
+        ID3D12Device* _Device, const std::string& _CSOName,
+        const D3D12_ROOT_SIGNATURE_DESC& _RootSignatureDesc) {
+        RootSignature = PipelineUtils::CreateRootSignature(
+            _Device, _RootSignatureDesc, "ComputePipeline");
+        PSO = PipelineUtils::CreateComputePSO(_Device, RootSignature.Get(), _CSOName);
     }
 
     void FComputePipeline::Bind(ID3D12GraphicsCommandList* _CommandList) const {

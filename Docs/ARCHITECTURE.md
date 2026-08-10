@@ -192,6 +192,7 @@ Engine/Include/Smile/
     │   ├── Barriers.h        FBarrierBatch — acumula transições, 1 ResourceBarrier no Flush
     │   ├── PipelineState     root signature principal + 10 PSOs (prepass/G-buffer/lighting/blend)
     │   ├── ComputePipeline   PSO de compute com layouts fixo e parametrizável
+    │   ├── PipelineUtils     criação comum de root signatures e compute PSOs
     │   ├── DepthConfig.h     kReverseZ (true) + funções de comparação derivadas
     │   └── GpuProfiler       timestamps por escopo (FGpuScope), por fila
     ├── ── recursos / cena ──
