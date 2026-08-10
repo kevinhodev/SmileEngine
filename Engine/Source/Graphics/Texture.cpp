@@ -153,7 +153,7 @@ namespace Smile {
     FTexture FTexture::RecordUpload(ID3D12Device* _Device, ID3D12GraphicsCommandList* _CommandList,
                                     FTextureSRVHeap& _SRVHeap,
                                     const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
-                                    std::vector<ComPtr<ID3D12Resource>>& _StagingOut,
+                                    FUploadQueue& _UploadQueue,
                                     EVramCategory _Category) {
         const u32 MipCount = static_cast<u32>(_Mips.size());
         const u32 Width    = _Mips[0].Width;
@@ -178,43 +178,32 @@ namespace Smile {
                                        Layouts.data(), NumRows.data(),
                                        RowSize.data(), &TotalSize);
 
-        D3D12_HEAP_PROPERTIES UploadHeap{};
-        UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC BufferDesc{};
-        BufferDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        BufferDesc.Width            = TotalSize;
-        BufferDesc.Height           = 1;
-        BufferDesc.DepthOrArraySize = 1;
-        BufferDesc.MipLevels        = 1;
-        BufferDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        BufferDesc.SampleDesc       = { 1, 0 };
-        BufferDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        BufferDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+        // Fatia do ring, nao um committed UPLOAD por textura. O GetCopyableFootprints devolve
+        // offsets relativos ao inicio do staging, entao cada footprint recebe o offset da
+        // fatia somado antes de virar origem da copia — que e a unica adaptacao que a
+        // sub-alocacao exige aqui.
+        const FStagingSlice Slice = _UploadQueue.AllocateStaging(TotalSize);
 
-        ComPtr<ID3D12Resource> Staging;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufferDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Staging)));
-
-        u8* Mapped = nullptr;
-        SMILE_HR(Staging->Map(0, nullptr, reinterpret_cast<void**>(&Mapped)));
         for (u32 i = 0; i < MipCount; ++i) {
             const u32 SrcRowPitch = static_cast<u32>(RowSize[i]);
             const u8* SrcBase = _Mips[i].Pixels.data();
-            u8*       DstBase = Mapped + Layouts[i].Offset;
+            u8*       DstBase = Slice.Mapped + Layouts[i].Offset;
             const u32 Rows    = NumRows[i];
             for (u32 Row = 0; Row < Rows; ++Row) {
                 memcpy(DstBase + static_cast<UINT64>(Row) * Layouts[i].Footprint.RowPitch,
                        SrcBase + static_cast<UINT64>(Row) * SrcRowPitch, SrcRowPitch);
             }
         }
-        Staging->Unmap(0, nullptr);
+        // Sem Unmap: o mapeamento do ring e persistente (ver UploadQueue.h).
 
         for (u32 i = 0; i < MipCount; ++i) {
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT Placed = Layouts[i];
+            Placed.Offset += Slice.Offset;
+
             D3D12_TEXTURE_COPY_LOCATION Src{};
-            Src.pResource       = Staging.Get();
+            Src.pResource       = Slice.Resource;
             Src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-            Src.PlacedFootprint = Layouts[i];
+            Src.PlacedFootprint = Placed;
             D3D12_TEXTURE_COPY_LOCATION Dst{};
             Dst.pResource        = GPUTexture.Get();
             Dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -243,7 +232,6 @@ namespace Smile {
         Result.TexHeight   = Height;
         Result.TexMipCount = MipCount;
         Result.TexFormat   = _Format;
-        _StagingOut.push_back(std::move(Staging));
         return Result;
     }
 
@@ -259,18 +247,17 @@ namespace Smile {
         size_t i = 0;
         while (i < _Data.size()) {
             ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
-            std::vector<ComPtr<ID3D12Resource>> Staging;
             size_t BatchBytes = 0;
 
             for (; i < _Data.size(); ++i) {
                 if (!_Data[i].Valid()) continue;
                 Out[i] = RecordUpload(_Device, CommandList, _SRVHeap,
-                                      _Data[i].Mips, _Data[i].Format, Staging);
+                                      _Data[i].Mips, _Data[i].Format, _UploadQueue);
                 for (const auto& m : _Data[i].Mips) BatchBytes += m.Pixels.size();
                 if (BatchBytes >= kStagingBudget) { ++i; break; }
             }
 
-            _UploadQueue.Submit(std::move(Staging));
+            _UploadQueue.Submit();
         }
         return Out;
     }
@@ -280,10 +267,9 @@ namespace Smile {
                                const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
                                EVramCategory _Category) {
         ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
-        std::vector<ComPtr<ID3D12Resource>> Staging;
-        FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format, Staging,
-                                       _Category);
-        _UploadQueue.Submit(std::move(Staging));
+        FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format,
+                                       _UploadQueue, _Category);
+        _UploadQueue.Submit();
         // Carga avulsa (default/lua/weather map): o chamador usa a textura em seguida,
         // entao espera aqui mesmo — o ganho de overlap e do caminho em batch.
         _UploadQueue.WaitIdle();
