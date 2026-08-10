@@ -3,7 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -150,8 +150,8 @@ namespace Smile {
         // sem copia de descriptor que envelhece no resize). Temporal usa o pipeline comum.
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RaymarchRootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> RaymarchPSOState;
-        FVolumetricPipeline TemporalPSO;
-        FVolumetricPipeline ShadowPSO;
+        FComputePipeline TemporalPSO;
+        FComputePipeline ShadowPSO;
         u32 NoiseTableStart = 0;
 
         // Shadow map das nuvens (transmitancia p/ a key light numa grade XZ em mundo).

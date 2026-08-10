@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/RenderPass.h"
@@ -93,10 +93,10 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline InitialTemporalPSO; // 10 SRV, 2 UAV, bindless alpha-test
-        FVolumetricPipeline SpatialPSO;         // 12 SRV, 4 UAV, bindless alpha-test
-        FVolumetricPipeline NrdPackPSO;          // 8 SRV, 5 UAV
-        FVolumetricPipeline NrdCompositePSO;     // 6 SRV, 1 UAV
+        FComputePipeline InitialTemporalPSO; // 10 SRV, 2 UAV, bindless alpha-test
+        FComputePipeline SpatialPSO;         // 12 SRV, 4 UAV, bindless alpha-test
+        FComputePipeline NrdPackPSO;          // 8 SRV, 5 UAV
+        FComputePipeline NrdCompositePSO;     // 6 SRV, 1 UAV
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Output;
         Microsoft::WRL::ComPtr<ID3D12Resource> RawDiffuse;  // rgb modulado, a = distancia da luz

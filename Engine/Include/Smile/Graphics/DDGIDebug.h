@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -137,8 +137,8 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> ProbePSO;  
         Microsoft::WRL::ComPtr<ID3D12PipelineState> VolumePSO; 
         Microsoft::WRL::ComPtr<ID3D12PipelineState> RaysPSO;   
-        FVolumetricPipeline StatsPSO; 
-        FVolumetricPipeline PointDiagnosticPSO;
+        FComputePipeline StatsPSO;
+        FComputePipeline PointDiagnosticPSO;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeStatsBuf;

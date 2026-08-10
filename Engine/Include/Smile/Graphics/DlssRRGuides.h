@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
@@ -41,7 +41,7 @@ namespace Smile {
 
         // Extrai o specHitDist do Resolved da reflexao. ResolvedSrv = SRVHeap.GpuHandle(slot do
         // Resolved). Caller garante o Resolved legivel por shader (NON_PIXEL). Deixa SpecHitDist em UAV.
-        // FrameCB so existe p/ preencher o b0 que o root sig do FVolumetricPipeline declara — o shader
+        // FrameCB so existe p/ preencher o b0 que o root sig do FComputePipeline declara — o shader
         // nao le nada dele (root param nao referenciado e legal em D3D12, mas o GBV reclama).
         void RecordSpecHitDist(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
                                D3D12_GPU_DESCRIPTOR_HANDLE ResolvedSrv,
@@ -89,9 +89,9 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
 
-        FVolumetricPipeline GuidesPSO;   // 4 SRV [A,B,C,Depth], 3 UAV [diffAlb, specAlb, normalRough]
-        FVolumetricPipeline SpecHitPSO;  // 1 SRV [Resolved],     1 UAV [specHitDist]
-        FVolumetricPipeline WaterSpecHitPSO; // 2 SRV [waterResolved, GBufferB], 1 UAV
+        FComputePipeline GuidesPSO;   // 4 SRV [A,B,C,Depth], 3 UAV [diffAlb, specAlb, normalRough]
+        FComputePipeline SpecHitPSO;  // 1 SRV [Resolved],     1 UAV [specHitDist]
+        FComputePipeline WaterSpecHitPSO; // 2 SRV [waterResolved, GBufferB], 1 UAV
 
         Microsoft::WRL::ComPtr<ID3D12Resource> DiffAlb, SpecAlb, NrmRough, SpecHit;
         FDescriptorHeap SpecHitRTVHeap;

@@ -162,8 +162,8 @@ namespace Smile {
     void FDDGIDebug::Recreate(ID3D12Device* _Device,
                               DXGI_FORMAT _RTFormat, DXGI_FORMAT _DSFormat) {
         BuildPSOs(_Device, _RTFormat, _DSFormat);
-        StatsPSO = FVolumetricPipeline{};
-        PointDiagnosticPSO = FVolumetricPipeline{};
+        StatsPSO = FComputePipeline{};
+        PointDiagnosticPSO = FComputePipeline{};
         StatsPSO.Initialize(_Device, "DDGIDebugStats.cs_6_0.cso", 1, 1);
         PointDiagnosticPSO.Initialize(
             _Device, "DDGIDebugPoint.cs_6_0.cso", 5, 1);

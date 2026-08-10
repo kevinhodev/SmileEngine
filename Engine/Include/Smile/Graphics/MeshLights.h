@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -127,7 +127,7 @@ namespace Smile {
 
         FStats SceneStats{};
 
-        FVolumetricPipeline ExtractPSO;   // 2 SRV, 1 UAV, bindless
+        FComputePipeline ExtractPSO;   // 2 SRV, 1 UAV, bindless
         bool Initialized = false;
         bool Ready       = false;
         bool Dirty       = false;

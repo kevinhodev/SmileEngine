@@ -191,7 +191,7 @@ Engine/Include/Smile/
     │   ├── TextureSRVHeap    heap CBV/SRV/UAV compartilhado (16384, shader-visible, free-list)
     │   ├── Barriers.h        FBarrierBatch — acumula transições, 1 ResourceBarrier no Flush
     │   ├── PipelineState     root signature principal + 10 PSOs (prepass/G-buffer/lighting/blend)
-    │   ├── ComputePipeline   PSO de compute fixo · VolumetricPipeline  PSO parametrizável
+    │   ├── ComputePipeline   PSO de compute com layouts fixo e parametrizável
     │   ├── DepthConfig.h     kReverseZ (true) + funções de comparação derivadas
     │   └── GpuProfiler       timestamps por escopo (FGpuScope), por fila
     ├── ── recursos / cena ──
@@ -297,14 +297,17 @@ esquecer sumia com o recurso do breakdown de VRAM do editor sem nenhum sintoma.
 Não cobre caminhos com necessidade própria (placed/reservados/aliasing): monte o desc na mão
 nesses casos. O objetivo é matar o boilerplate, não virar uma camada sobre o D3D12.
 
-### Pipelines de compute: dois sabores
-| Classe | Forma do root sig | Usado por |
-|--------|-------------------|-----------|
-| `FComputePipeline` | fixa (`Initialize(device, cso, sourceIsCube)`) | passes de IBL, mip de scene color |
-| `FVolumetricPipeline` | parametrizável: `b0` CBV + tabela SRV `t0..t(N-1)` + tabela UAV `u0..u(M-1)` + `s0` linear-clamp + `s1` linear-wrap | atmosfera, nuvens, AO, HZB, … |
+### Pipeline de compute: dois layouts
+
+`FComputePipeline` oferece dois overloads de `Initialize`:
+
+| Overload | Forma do root sig | Usado por |
+|----------|-------------------|-----------|
+| `Initialize(device, cso, sourceIsCube)` | 8 root constants em `b0` + `t0` + `u0` + `s0` linear-clamp | passes de IBL, mip de scene color |
+| `Initialize(device, cso, numSRVs, numUAVs, heapDirectlyIndexed, nvApiExtnSlot)` | `b0` CBV + tabela SRV `t0..t(N-1)` + tabela UAV `u0..u(M-1)` + `s0` linear-clamp + `s1` linear-wrap | atmosfera, nuvens, AO, HZB, ReSTIR, reflexões, … |
 
 As *dimensões* das views (2D/3D/cube) ficam no shader, então a mesma root sig serve a tudo.
-Subsistemas com necessidade própria (ReSTIR, reflexões, água) montam a root signature na mão.
+Subsistemas que não cabem nesses layouts (como NRD e partes da água) montam a root signature na mão.
 
 ---
 
@@ -798,7 +801,7 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 2. **Recursos:** crie via `GpuResources` (§4) — nunca `CreateCommittedResource` direto, senão
    o recurso fica fora do breakdown de VRAM. Aloque SRV/UAV no `FTextureSRVHeap` e **libere** no
    `ReleaseSizedResources`; monte tabelas contíguas com `CopyDescriptors` a partir do staging
-   heap. Use `FVolumetricPipeline` para compute parametrizável.
+   heap. Use o overload parametrizável de `FComputePipeline`.
 3. **Constant buffer:** `GpuResources::CreateUploadBuffer(dev, sizeof(XxxConstants),
    FCommandQueue::kFramesInFlight)` — um slice por frame em voo, já alinhado a 256 B.
 4. **Barreiras:** `TransitionResource` para uma, `FBarrierBatch` para 2+. Nunca

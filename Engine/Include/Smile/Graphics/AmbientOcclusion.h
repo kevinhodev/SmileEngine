@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -73,9 +73,9 @@ namespace Smile {
                    static_cast<UINT64>(FrameSlot * 2 + Variant) * sizeof(GTAOConstants);
         }
 
-        FVolumetricPipeline MainPSO;
-        FVolumetricPipeline BlurPSO;
-        FVolumetricPipeline UpsamplePSO;
+        FComputePipeline MainPSO;
+        FComputePipeline BlurPSO;
+        FComputePipeline UpsamplePSO;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         Microsoft::WRL::ComPtr<ID3D12Resource> AO0; // full-res, SEMPRE o final (t14 do lighting)

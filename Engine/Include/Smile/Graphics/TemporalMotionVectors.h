@@ -3,7 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/CommandQueue.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -85,8 +85,8 @@ namespace Smile {
         static constexpr u32 kFrames = FCommandQueue::kFramesInFlight;
         static_assert(kFrames == 2, "surface history assume ping-pong de dois frames");
 
-        FVolumetricPipeline SurfacePSO; // depth + TLAS + InstanceGeo -> surface history
-        FVolumetricPipeline DualPSO;    // raster MV + surface histories + transforms -> reliable MV
+        FComputePipeline SurfacePSO; // depth + TLAS + InstanceGeo -> surface history
+        FComputePipeline DualPSO;    // raster MV + surface histories + transforms -> reliable MV
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB = nullptr;

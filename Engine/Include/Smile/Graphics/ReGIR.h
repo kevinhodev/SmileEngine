@@ -3,7 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/CommandQueue.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -80,8 +80,8 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline BuildPSO;   // t0 prev slots, t1 luzes; u0 curr slots
-        FVolumetricPipeline AveragePSO; // t0 curr slots; u0 media por celula
+        FComputePipeline BuildPSO;   // t0 prev slots, t1 luzes; u0 curr slots
+        FComputePipeline AveragePSO; // t0 curr slots; u0 media por celula
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Slots[2];
         Microsoft::WRL::ComPtr<ID3D12Resource> CellAverage[2];

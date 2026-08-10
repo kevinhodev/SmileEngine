@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include <d3d12.h>
@@ -171,8 +171,8 @@ namespace Smile {
 
         void ReleaseDebug(FTextureSRVHeap& SRVHeap);
 
-        FVolumetricPipeline ResolvePSO;
-        FVolumetricPipeline DebugPSO;
+        FComputePipeline ResolvePSO;
+        FComputePipeline DebugPSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Entries;  // checksum por celula (0 = vazia)
         Microsoft::WRL::ComPtr<ID3D12Resource> Accum;    // 4 uints/celula: rgb ponto fixo + N

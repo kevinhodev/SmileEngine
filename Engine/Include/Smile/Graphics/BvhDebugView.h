@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -72,7 +72,7 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
         void Transition(ID3D12GraphicsCommandList* CL, D3D12_RESOURCE_STATES After);
 
-        FVolumetricPipeline PSO; // 2 SRV [TLAS, InstanceGeo], 1 UAV; heap diretamente indexado
+        FComputePipeline PSO; // 2 SRV [TLAS, InstanceGeo], 1 UAV; heap diretamente indexado
                                  // (VB/IB do alpha-test e da normal vem bindless pelo InstanceGeo)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Target;

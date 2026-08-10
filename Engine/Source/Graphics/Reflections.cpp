@@ -727,7 +727,7 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable));
         // O UAV falso da extensao: o driver troca o acesso, mas a tabela precisa estar setada.
         if (Timed)
-            _CL->SetComputeRootDescriptorTable(FVolumetricPipeline::kNvApiRootParam,
+            _CL->SetComputeRootDescriptorTable(FComputePipeline::kNvApiRootParam,
                                                FShaderTimer::ExtnTable(_SRVHeap));
         _CL->Dispatch(HGX, HGY, 1);
 

@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
@@ -261,10 +261,10 @@ namespace Smile {
                    static_cast<UINT64>(FrameSlot) * sizeof(DDGIConstants);
         }
 
-        FVolumetricPipeline TracePSO;      
-        FVolumetricPipeline UpdatePSO;     
-        FVolumetricPipeline UpdateDistPSO; 
-        FVolumetricPipeline RelocatePSO;   
+        FComputePipeline TracePSO;
+        FComputePipeline UpdatePSO;
+        FComputePipeline UpdateDistPSO;
+        FComputePipeline RelocatePSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> IrradAtlas;       
         Microsoft::WRL::ComPtr<ID3D12Resource> DistAtlas;        

@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -37,7 +37,7 @@ namespace Smile {
 
     private:
         void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
-        FVolumetricPipeline PSO;                           // 1 SRV [Depth], 1 UAV [Velocity]
+        FComputePipeline PSO;                           // 1 SRV [Depth], 1 UAV [Velocity]
         Microsoft::WRL::ComPtr<ID3D12Resource> Constants;  // ring kFramesInFlight * 256B (SkyClipToPrevClip)
         u8*  MappedConstants = nullptr;
         bool Initialized     = false;

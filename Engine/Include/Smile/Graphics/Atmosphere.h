@@ -4,7 +4,6 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Texture.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/VolumeTexture.h"
 #include "Smile/Graphics/CubeTexture.h"
 #include "Smile/Graphics/ComputePipeline.h"
@@ -191,23 +190,23 @@ namespace Smile {
 
         FTexture            MoonTexture;
         bool                MoonTexLoaded = false;
-        FVolumetricPipeline TransmittancePSO;
-        FVolumetricPipeline MultiScatterPSO;
-        FVolumetricPipeline SkyViewPSO;
+        FComputePipeline TransmittancePSO;
+        FComputePipeline MultiScatterPSO;
+        FComputePipeline SkyViewPSO;
 
         FVolumeTexture      AerialPerspectiveVolume;
-        FVolumetricPipeline AerialPerspectivePSO;
+        FComputePipeline AerialPerspectivePSO;
 
         static constexpr u32 kSkyReflSize    = 64;
         static constexpr u32 kSkyReflMips    = 7;  // 64..1 — casa com kSpecularMaxMip=6 da água
         static constexpr u32 kSkyReflSamples = 64; // céu é liso; 64 taps GGX bastam por frame
         FCubeTexture        SkyReflRaw;   // fonte (SkyView→cube + mip chain)
         FCubeTexture        SkyReflSpec;  // prefiltrado GGX (consumido pela água)
-        FVolumetricPipeline SkyReflBakePSO;
+        FComputePipeline SkyReflBakePSO;
         FComputePipeline    SkyReflMipGenPSO;
         FComputePipeline    SkyReflPrefilterPSO;
 
-        FVolumetricPipeline IntegrateAmbientPSO;
+        FComputePipeline IntegrateAmbientPSO;
         Microsoft::WRL::ComPtr<ID3D12Resource> AmbientBuffer;   // DEFAULT, 2x float4, UAV
         Microsoft::WRL::ComPtr<ID3D12Resource> AmbientReadback; // READBACK ring (kFramesInFlight)
         u8* AmbientMapped   = nullptr;

@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
@@ -216,13 +216,13 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;   // 14 SRV, 3 UAV, heap-directly-indexed (Pass A)
+        FComputePipeline TracePSO;   // 14 SRV, 3 UAV, heap-directly-indexed (Pass A)
         // Gemea instrumentada do Pass A: mesmas tabelas, mas com o slot falso da NVAPI no root
         // sig e o timer no shader. PSO separada e nao um if no CB porque a instrumentacao custa
         // registrador — o passe normal nao pode pagar por um recurso de debug.
-        FVolumetricPipeline TracePSOTimed;
-        FVolumetricPipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
-        FVolumetricPipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
+        FComputePipeline TracePSOTimed;
+        FComputePipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
+        FComputePipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> GITexture;
         D3D12_RESOURCE_STATES GITextureState = D3D12_RESOURCE_STATE_COMMON;

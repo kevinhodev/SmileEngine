@@ -3,7 +3,6 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/ComputePipeline.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
@@ -94,7 +93,7 @@ namespace Smile {
         static constexpr u32 kSlots       = FCommandQueue::kFramesInFlight;
 
         FComputePipeline    BuildPSO;
-        FVolumetricPipeline TestPSO; // b0 CB + t0 bounds/t1 HZB + u0 visibilidade
+        FComputePipeline TestPSO; // b0 CB + t0 bounds/t1 HZB + u0 visibilidade
         Microsoft::WRL::ComPtr<ID3D12Resource> HZB;
 
         u32 HZBWidth  = 0;   // dimensoes do mip 0 (po2)

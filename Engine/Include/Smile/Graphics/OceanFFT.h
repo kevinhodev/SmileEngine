@@ -4,7 +4,7 @@
 #include "Smile/Math/Vec4.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -155,11 +155,11 @@ namespace Smile {
         u32 NormalMipUAVSlot[kNormalMipCount]{};
         u32 NormalMipSRVSlot[kNormalMipCount]{};
 
-        FVolumetricPipeline UpdateSpectrumPSO;
-        FVolumetricPipeline FFTPSO;
-        FVolumetricPipeline CreateDispPSO;
-        FVolumetricPipeline GradientsPSO;
-        FVolumetricPipeline DisplacementMipPSO;
-        FVolumetricPipeline NormalMipPSO;
+        FComputePipeline UpdateSpectrumPSO;
+        FComputePipeline FFTPSO;
+        FComputePipeline CreateDispPSO;
+        FComputePipeline GradientsPSO;
+        FComputePipeline DisplacementMipPSO;
+        FComputePipeline NormalMipPSO;
     };
 }

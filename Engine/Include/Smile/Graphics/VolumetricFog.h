@@ -4,7 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VolumeTexture.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -152,9 +152,9 @@ namespace Smile {
         FVolumeTexture Integrated;           // (inscatter acumulado, transmitancia)
         u32  CurrentScatter = 0;             // indice escrito NESTE frame
 
-        FVolumetricPipeline SetupPSO;     // b0 + t0 (unused) + u0
-        FVolumetricPipeline IntegratePSO; // b0 + t0 (scattering) + u0
-        FVolumetricPipeline ConsDepthPSO; // b0 + t0 (depth da cena) + u0
+        FComputePipeline SetupPSO;     // b0 + t0 (unused) + u0
+        FComputePipeline IntegratePSO; // b0 + t0 (scattering) + u0
+        FComputePipeline ConsDepthPSO; // b0 + t0 (depth da cena) + u0
 
         // Conservative depth 160x90 R16F, ping-pong (prev alimenta o fixup da historia).
         Microsoft::WRL::ComPtr<ID3D12Resource> ConsDepthTex[2];

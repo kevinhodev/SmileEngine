@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/ReGIR.h"
@@ -238,17 +238,17 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
+        FComputePipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
         // Gemea instrumentada do trace (FShaderTimer): mesmas tabelas + slot falso da NVAPI.
         // PSO separada e nao um if no CB — a instrumentacao custa registrador no passe quente.
-        FVolumetricPipeline TracePSOTimed;
-        FVolumetricPipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
-        FVolumetricPipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
-        FVolumetricPipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
-        FVolumetricPipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
-        FVolumetricPipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
-        FVolumetricPipeline WaterTracePSO;    // 15 SRV [cena + water + copies + env], 2 UAV
-        FVolumetricPipeline WaterTemporalPSO; // 5 SRV, 1 UAV; historico exclusivo da agua
+        FComputePipeline TracePSOTimed;
+        FComputePipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
+        FComputePipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
+        FComputePipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
+        FComputePipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
+        FComputePipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
+        FComputePipeline WaterTracePSO;    // 15 SRV [cena + water + copies + env], 2 UAV
+        FComputePipeline WaterTemporalPSO; // 5 SRV, 1 UAV; historico exclusivo da agua
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRS;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> WaterCompositePSO;
