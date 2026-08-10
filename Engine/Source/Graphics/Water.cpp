@@ -1,6 +1,6 @@
 #include "Smile/Graphics/Water.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/SceneTargets.h" // cadeia de mips do scene color, ver OnRecreatePipelines
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/UploadQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
@@ -523,28 +523,16 @@ namespace Smile {
         const UINT VBSize = static_cast<UINT>(Verts.size() * sizeof(f32));
         const UINT IBSize = static_cast<UINT>(Indices.size() * sizeof(u32));
 
-        D3D12_HEAP_PROPERTIES DefaultHeap{}; DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC RDesc{};
-        RDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        RDesc.Height           = 1;
-        RDesc.DepthOrArraySize = 1;
-        RDesc.MipLevels        = 1;
-        RDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        RDesc.SampleDesc       = { 1, 0 };
-        RDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        RDesc.Width = VBSize;
-        SMILE_HR(_Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &RDesc,
-                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&VertexBuffer)));
-        VramTracker::Register(VertexBuffer.Get(), EVramCategory::Water);
+        VertexBuffer = GpuResources::CreateBuffer(
+            _Device, VBSize, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON,
+            EVramCategory::Water, "Grade da superficie");
         VBView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();
         VBView.StrideInBytes  = 3 * sizeof(f32);
         VBView.SizeInBytes    = VBSize;
 
-        RDesc.Width = IBSize;
-        SMILE_HR(_Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &RDesc,
-                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&IndexBuffer)));
-        VramTracker::Register(IndexBuffer.Get(), EVramCategory::Water);
+        IndexBuffer = GpuResources::CreateBuffer(
+            _Device, IBSize, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON,
+            EVramCategory::Water, "Grade da superficie");
         IBView.BufferLocation = IndexBuffer->GetGPUVirtualAddress();
         IBView.Format         = DXGI_FORMAT_R32_UINT;
         IBView.SizeInBytes    = IBSize;
@@ -553,7 +541,8 @@ namespace Smile {
         // device-local memory and retain the UPLOAD allocation only until the
         // dedicated copy queue finishes this one-time initialization.
         D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        RDesc.Width = static_cast<UINT64>(VBSize) + IBSize;
+        const D3D12_RESOURCE_DESC RDesc =
+            GpuResources::BufferDesc(static_cast<u64>(VBSize) + IBSize);
         Microsoft::WRL::ComPtr<ID3D12Resource> Staging;
         SMILE_HR(_Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &RDesc,
                  D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Staging)));
@@ -626,62 +615,39 @@ namespace Smile {
         SMILE_HR(_Device->CreateCommandSignature(
             &SignatureDesc, nullptr, IID_PPV_ARGS(&IndirectCommandSignature)));
 
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC DefaultDesc = Desc;
-        DefaultDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-        DefaultDesc.Width = GpuInstanceBufferSize;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&GpuInstanceBuffer)));
-        VramTracker::Register(GpuInstanceBuffer.Get(), EVramCategory::Water);
+        GpuInstanceBuffer = GpuResources::CreateBuffer(
+            _Device, GpuInstanceBufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COMMON, EVramCategory::Water, "Instancias de tile");
         GpuInstanceBufferState = D3D12_RESOURCE_STATE_COMMON;
         GpuInstanceVBView.BufferLocation = GpuInstanceBuffer->GetGPUVirtualAddress();
         GpuInstanceVBView.StrideInBytes  = sizeof(TileInstance);
         GpuInstanceVBView.SizeInBytes    = GpuInstanceFrameSize;
 
-        DefaultDesc.Width = GpuIndirectBufferSize;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&GpuIndirectArgsBuffer)));
-        VramTracker::Register(GpuIndirectArgsBuffer.Get(), EVramCategory::Water);
+        GpuIndirectArgsBuffer = GpuResources::CreateBuffer(
+            _Device, GpuIndirectBufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COMMON, EVramCategory::Water, "Args indiretos");
         GpuIndirectArgsBufferState = D3D12_RESOURCE_STATE_COMMON;
 
-        DefaultDesc.Width = GpuIndirectCountBufferSize;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&GpuIndirectCountBuffer)));
-        VramTracker::Register(GpuIndirectCountBuffer.Get(), EVramCategory::Water);
+        auto CreateUAVBuffer = [&](u64 _Bytes, const char* _Label) {
+            return GpuResources::CreateBuffer(
+                _Device, _Bytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_COMMON, EVramCategory::Water, _Label);
+        };
+
+        GpuIndirectCountBuffer      = CreateUAVBuffer(GpuIndirectCountBufferSize,
+                                                      "Contador indireto");
         GpuIndirectCountBufferState = D3D12_RESOURCE_STATE_COMMON;
 
-        DefaultDesc.Width = TileSourceBufferSize;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&GpuTileSourceBuffer)));
-        VramTracker::Register(GpuTileSourceBuffer.Get(), EVramCategory::Water);
+        GpuTileSourceBuffer      = CreateUAVBuffer(TileSourceBufferSize, "Fonte de tiles");
         GpuTileSourceBufferState = D3D12_RESOURCE_STATE_COMMON;
 
-        DefaultDesc.Width = GpuDrawBucketScratchBufferSize;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&GpuDrawBucketScratchBuffer)));
-        VramTracker::Register(GpuDrawBucketScratchBuffer.Get(), EVramCategory::Water);
-        GpuDrawBucketScratchState = D3D12_RESOURCE_STATE_COMMON;
+        GpuDrawBucketScratchBuffer = CreateUAVBuffer(GpuDrawBucketScratchBufferSize,
+                                                     "Scratch dos buckets");
+        GpuDrawBucketScratchState  = D3D12_RESOURCE_STATE_COMMON;
 
-        DefaultDesc.Width = GpuDebugCounterBufferSize;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &DefaultDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&GpuDebugCounterBuffer)));
-        VramTracker::Register(GpuDebugCounterBuffer.Get(), EVramCategory::Water);
-        GpuDebugCounterState = D3D12_RESOURCE_STATE_COMMON;
+        GpuDebugCounterBuffer = CreateUAVBuffer(GpuDebugCounterBufferSize,
+                                                "Contadores de debug");
+        GpuDebugCounterState  = D3D12_RESOURCE_STATE_COMMON;
 
         D3D12_HEAP_PROPERTIES ReadbackHeap{};
         ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;

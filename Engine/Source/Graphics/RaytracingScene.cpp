@@ -1,4 +1,5 @@
 #include "Smile/Graphics/RaytracingScene.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/D3D12Device.h"
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -46,8 +47,9 @@ namespace Smile {
 
         ComPtr<ID3D12Resource> CreateUAVBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                D3D12_RESOURCE_STATES _State) {
-            return CreateBuffer(_Device, _Size, D3D12_HEAP_TYPE_DEFAULT, _State,
-                                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            return GpuResources::CreateBuffer(_Device, _Size,
+                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                              _State, EVramCategory::RaytracingAS);
         }
 
         void PushTransition(std::vector<D3D12_RESOURCE_BARRIER>& _Out, ID3D12Resource* _Res,

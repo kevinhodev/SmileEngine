@@ -1,7 +1,7 @@
 #include "Smile/Graphics/ReSTIRDI.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 #include <algorithm>
@@ -32,23 +32,10 @@ namespace Smile {
 
         ComPtr<ID3D12Resource> CreateUAVTexture(ID3D12Device* Device, u32 Width, u32 Height,
                                                 DXGI_FORMAT Format) {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width = Width;
-            Desc.Height = Height;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels = 1;
-            Desc.Format = Format;
-            Desc.SampleDesc = { 1, 0 };
-            Desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Result;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Result)));
-            VramTracker::Register(Result.Get(), EVramCategory::RenderTargets);
-            return Result;
+            return GpuResources::CreateTex2D(
+                Device, Width, Height, Format, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_COMMON, EVramCategory::RenderTargets, nullptr,
+                1, 1, "ReSTIR DI");
         }
     }
 

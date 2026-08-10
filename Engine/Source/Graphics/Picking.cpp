@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Picking.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/CommandQueue.h"   
 #include "Smile/Graphics/ShaderUtils.h"
@@ -39,24 +40,13 @@ namespace Smile {
         TargetHeight = std::max(1u, Height);
         IDTarget.Reset();
 
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = TargetWidth;
-        Desc.Height           = TargetHeight;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32_UINT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         D3D12_CLEAR_VALUE Clear{};
-        Clear.Format = DXGI_FORMAT_R32_UINT; 
+        Clear.Format = DXGI_FORMAT_R32_UINT;
 
-        SMILE_HR(Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&IDTarget)));
+        IDTarget = GpuResources::CreateTex2D(
+            Device, TargetWidth, TargetHeight, DXGI_FORMAT_R32_UINT,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            EVramCategory::Misc, &Clear, 1, 1, "Alvo de picking");
 
         if (IDRTVHeap.GetCapacity() == 0)
             IDRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);

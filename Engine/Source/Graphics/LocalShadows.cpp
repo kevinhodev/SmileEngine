@@ -1,6 +1,6 @@
 #include "Smile/Graphics/LocalShadows.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
@@ -23,29 +23,15 @@ namespace Smile {
     }
 
     void FLocalShadows::CreateResources(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = kResolution;
-        Desc.Height           = kResolution;
-        Desc.DepthOrArraySize = static_cast<UINT16>(kMaxShadows);
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32_TYPELESS;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
         D3D12_CLEAR_VALUE Clear{};
         Clear.Format             = DXGI_FORMAT_D32_FLOAT;
         Clear.DepthStencil.Depth = 1.0f;
 
         ArrayState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            ArrayState, &Clear, IID_PPV_ARGS(&DepthArray)));
-        VramTracker::Register(DepthArray.Get(), EVramCategory::Shadows);
+        DepthArray = GpuResources::CreateTex2D(
+            _Device, kResolution, kResolution, DXGI_FORMAT_R32_TYPELESS,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, ArrayState, EVramCategory::Shadows,
+            &Clear, 1, kMaxShadows, "Atlas de spot");
 
         DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kMaxShadows, false);
         for (u32 s = 0; s < kMaxShadows; ++s) {
@@ -60,14 +46,11 @@ namespace Smile {
 
         // Cube array dos points (F3b): mesma textura D32, 6 faces por luz, vista como
         // TextureCubeArray no SRV (cube e um conceito de view, o recurso e um array 2D).
-        Desc.Width            = kCubeResolution;
-        Desc.Height           = kCubeResolution;
-        Desc.DepthOrArraySize = static_cast<UINT16>(kMaxCubeShadows * 6);
         CubeState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            CubeState, &Clear, IID_PPV_ARGS(&CubeArray)));
-        VramTracker::Register(CubeArray.Get(), EVramCategory::Shadows);
+        CubeArray = GpuResources::CreateTex2D(
+            _Device, kCubeResolution, kCubeResolution, DXGI_FORMAT_R32_TYPELESS,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, CubeState, EVramCategory::Shadows,
+            &Clear, 1, kMaxCubeShadows * 6, "Cube array de point");
 
         CubeDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kMaxCubeShadows * 6, false);
         for (u32 s = 0; s < kMaxCubeShadows * 6; ++s) {

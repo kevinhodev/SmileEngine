@@ -1,6 +1,6 @@
 #include "Smile/Graphics/OceanFFT.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/OceanSpectrum.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
@@ -166,24 +166,11 @@ namespace Smile {
         ID3D12Device* _Device, DXGI_FORMAT _Format, u32 _Width, u32 _Height, u32 _Mips,
         bool _AllowUAV, D3D12_RESOURCE_STATES _InitialState) {
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = _Width;
-        Desc.Height           = _Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = static_cast<UINT16>(_Mips);
-        Desc.Format           = _Format;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = _AllowUAV ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
-                                          : D3D12_RESOURCE_FLAG_NONE;
-
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        Microsoft::WRL::ComPtr<ID3D12Resource> Res;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, _InitialState, nullptr, IID_PPV_ARGS(&Res)));
-        VramTracker::Register(Res.Get(), EVramCategory::Water);
-        return Res;
+        return GpuResources::CreateTex2D(
+            _Device, _Width, _Height, _Format,
+            _AllowUAV ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+                      : D3D12_RESOURCE_FLAG_NONE,
+            _InitialState, EVramCategory::Water, nullptr, _Mips, 1, "FFT do oceano");
     }
 
     void FOceanFFT::CreateTextures(ID3D12Device* _Device) {

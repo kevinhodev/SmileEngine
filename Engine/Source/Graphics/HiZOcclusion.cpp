@@ -1,7 +1,7 @@
 #include "Smile/Graphics/HiZOcclusion.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Barriers.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
@@ -72,23 +72,11 @@ namespace Smile {
         while (((HZBWidth >> NumMips) > 0 || (HZBHeight >> NumMips) > 0) && NumMips < kMaxMips)
             ++NumMips;
 
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = HZBWidth;
-        Desc.Height           = HZBHeight;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = static_cast<UINT16>(NumMips);
-        Desc.Format           = DXGI_FORMAT_R32_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
-                 IID_PPV_ARGS(&HZB)));
-        VramTracker::Register(HZB.Get(), EVramCategory::RenderTargets);
+        HZB = GpuResources::CreateTex2D(
+            _Device, HZBWidth, HZBHeight, DXGI_FORMAT_R32_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, EVramCategory::RenderTargets,
+            nullptr, NumMips, 1, "HZB de oclusao");
 
         for (u32 m = 0; m < NumMips; ++m) {
             MipSRVSlot[m] = _SRVHeap.Allocate(1);
@@ -154,10 +142,11 @@ namespace Smile {
         MappedBounds = reinterpret_cast<u8*>(P);
         std::memset(MappedBounds, 0, BoundsSize); // Extent 0 = sempre visivel
 
-        ResultBuffer = CreateBuffer(_Device, static_cast<u64>(ObjectCapacity) * sizeof(u32),
-                                    D3D12_HEAP_TYPE_DEFAULT,
-                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ResultBuffer = GpuResources::CreateBuffer(
+            _Device, static_cast<u64>(ObjectCapacity) * sizeof(u32),
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Misc,
+            "Resultado do culling");
         ResultState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
         ReadbackBuffer = CreateBuffer(_Device,

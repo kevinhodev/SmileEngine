@@ -1,5 +1,5 @@
 #include "Smile/Graphics/SunShafts.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -260,36 +260,22 @@ namespace Smile {
         VolRT.Reset();
         for (u32 i = 0; i < 2; ++i) HistoryRT[i].Reset();
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = RTWidth;
-        Desc.Height           = RTHeight;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&VolRT)));
-        VramTracker::Register(VolRT.Get(), EVramCategory::Sky);
+        auto CreateShaftTarget = [&](const char* Label) {
+            return GpuResources::CreateTex2D(
+                _Device, RTWidth, RTHeight, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, EVramCategory::Sky,
+                &ClearValue, 1, 1, Label);
+        };
+
+        VolRT    = CreateShaftTarget("Sun shafts");
         VolState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         for (u32 i = 0; i < 2; ++i) {
-            SMILE_HR(_Device->CreateCommittedResource(
-                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-                IID_PPV_ARGS(&HistoryRT[i])));
-            VramTracker::Register(HistoryRT[i].Get(), EVramCategory::Sky);
+            HistoryRT[i] = CreateShaftTarget("Sun shafts · historico");
             HistState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 

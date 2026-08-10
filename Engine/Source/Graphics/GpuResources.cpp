@@ -1,5 +1,6 @@
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
+#include <utility>
 
 namespace Smile::GpuResources {
     namespace {
@@ -12,15 +13,28 @@ namespace Smile::GpuResources {
             return Heap;
         }
 
+        // Nucleo unico das duas familias. Cria num LOCAL e so entrega em sucesso — e o que
+        // sustenta a promessa de "Out intacto em falha" das variantes Try.
+        HRESULT TryCreateCommitted(ID3D12Device* Device, D3D12_HEAP_TYPE HeapType,
+                                   const D3D12_RESOURCE_DESC& Desc,
+                                   D3D12_RESOURCE_STATES InitialState,
+                                   const D3D12_CLEAR_VALUE* Clear,
+                                   ComPtr<ID3D12Resource>& Out) {
+            const D3D12_HEAP_PROPERTIES Heap = HeapProps(HeapType);
+            ComPtr<ID3D12Resource> Resource;
+            const HRESULT Hr = Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
+                                                               InitialState, Clear,
+                                                               IID_PPV_ARGS(&Resource));
+            if (SUCCEEDED(Hr)) Out = std::move(Resource);
+            return Hr;
+        }
+
         ComPtr<ID3D12Resource> CreateCommitted(ID3D12Device* Device, D3D12_HEAP_TYPE HeapType,
                                                const D3D12_RESOURCE_DESC& Desc,
                                                D3D12_RESOURCE_STATES InitialState,
                                                const D3D12_CLEAR_VALUE* Clear) {
-            const D3D12_HEAP_PROPERTIES Heap = HeapProps(HeapType);
             ComPtr<ID3D12Resource> Resource;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                                                     InitialState, Clear,
-                                                     IID_PPV_ARGS(&Resource)));
+            SMILE_HR(TryCreateCommitted(Device, HeapType, Desc, InitialState, Clear, Resource));
             return Resource;
         }
     }
@@ -105,6 +119,29 @@ namespace Smile::GpuResources {
             CreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, nullptr);
         VramTracker::Register(Buffer.Get(), _Category, _Label);
         return Buffer;
+    }
+
+    HRESULT TryCreateTex2D(ID3D12Device* _Device, ComPtr<ID3D12Resource>& _Out,
+                           u32 _Width, u32 _Height, DXGI_FORMAT _Format,
+                           D3D12_RESOURCE_FLAGS _Flags, D3D12_RESOURCE_STATES _InitialState,
+                           EVramCategory _Category, const D3D12_CLEAR_VALUE* _Clear,
+                           u32 _MipLevels, u32 _ArraySize, const char* _Label) {
+        const D3D12_RESOURCE_DESC Desc =
+            Tex2DDesc(_Width, _Height, _Format, _Flags, _MipLevels, _ArraySize);
+        const HRESULT Hr = TryCreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc,
+                                              _InitialState, _Clear, _Out);
+        if (SUCCEEDED(Hr)) VramTracker::Register(_Out.Get(), _Category, _Label);
+        return Hr;
+    }
+
+    HRESULT TryCreateBuffer(ID3D12Device* _Device, ComPtr<ID3D12Resource>& _Out, u64 _Bytes,
+                            D3D12_RESOURCE_FLAGS _Flags, D3D12_RESOURCE_STATES _InitialState,
+                            EVramCategory _Category, const char* _Label) {
+        const D3D12_RESOURCE_DESC Desc = BufferDesc(_Bytes, _Flags);
+        const HRESULT Hr = TryCreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc,
+                                              _InitialState, nullptr, _Out);
+        if (SUCCEEDED(Hr)) VramTracker::Register(_Out.Get(), _Category, _Label);
+        return Hr;
     }
 
     FUploadBuffer CreateUploadBuffer(ID3D12Device* _Device, u64 _SliceBytes, u32 _SliceCount,

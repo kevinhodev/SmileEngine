@@ -1,8 +1,8 @@
 #include "Smile/Graphics/MeshLights.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
@@ -223,10 +223,10 @@ namespace Smile {
             std::memcpy(Mapped, Tasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
         TaskBuffer->Unmap(0, nullptr);
 
-        LightBuffer = CreateBuffer(_Device, sizeof(FTriangleLightGPU) * LightElems,
-                                   D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON,
-                                   D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        VramTracker::Register(LightBuffer.Get(), EVramCategory::GI, "Mesh lights · triangulos");
+        LightBuffer = GpuResources::CreateBuffer(
+            _Device, sizeof(FTriangleLightGPU) * LightElems,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON,
+            EVramCategory::GI, "Mesh lights · triangulos");
         LightState = D3D12_RESOURCE_STATE_COMMON;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};

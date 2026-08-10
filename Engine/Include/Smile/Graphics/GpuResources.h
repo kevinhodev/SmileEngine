@@ -59,6 +59,25 @@ namespace Smile::GpuResources {
                                         D3D12_RESOURCE_STATES InitialState,
                                         EVramCategory Category, const char* Label = nullptr);
 
+    // === Criacao que pode falhar sem derrubar a engine ============================
+    // Devolvem HRESULT em vez de lancar, e deixam Out INTACTO em falha. Nao sao um "por via
+    // das duvidas": existem para o recurso de FEATURE OPCIONAL, onde falhar significa
+    // desligar a feature e seguir em resolucao nativa — o que os upscalers (FSR/DLSS/DLSS-RR)
+    // e o timer da NVAPI ja faziam a mao antes da fachada existir. Usar a versao que lanca
+    // nesses quatro pontos trocaria "upscaler indisponivel" por um crash.
+    //
+    // Para todo o resto prefira as versoes acima: falha de alocacao em recurso obrigatorio e
+    // OOM, e engolir o HRESULT so adia o crash para um lugar pior de diagnosticar.
+    HRESULT TryCreateTex2D(ID3D12Device* Device, ComPtr<ID3D12Resource>& Out,
+                           u32 Width, u32 Height, DXGI_FORMAT Format,
+                           D3D12_RESOURCE_FLAGS Flags, D3D12_RESOURCE_STATES InitialState,
+                           EVramCategory Category, const D3D12_CLEAR_VALUE* Clear = nullptr,
+                           u32 MipLevels = 1, u32 ArraySize = 1, const char* Label = nullptr);
+
+    HRESULT TryCreateBuffer(ID3D12Device* Device, ComPtr<ID3D12Resource>& Out, u64 Bytes,
+                            D3D12_RESOURCE_FLAGS Flags, D3D12_RESOURCE_STATES InitialState,
+                            EVramCategory Category, const char* Label = nullptr);
+
     // === Upload heap mapeado de forma persistente =================================
     // A forma mais repetida da engine: 48 ocorrencias em 33 arquivos, quase sempre um CB por
     // frame em voo. O Map e feito UMA vez, com range de leitura vazio (a CPU so escreve).

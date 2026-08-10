@@ -2,9 +2,7 @@
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Scene/Scene.h"
-#include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
 #include <iterator>

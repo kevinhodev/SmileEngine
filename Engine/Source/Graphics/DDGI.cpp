@@ -1,7 +1,6 @@
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/RTMasks.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Scene/Scene.h"

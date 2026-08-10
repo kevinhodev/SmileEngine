@@ -1,7 +1,7 @@
 #include "Smile/Graphics/VolumetricFog.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/ShaderUtils.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cmath>
@@ -25,22 +25,11 @@ namespace Smile {
         // Conservative depth 160x90 R16F ping-pong (cur = min-Z deste frame; prev
         // alimenta o fixup da historia contra desoclusao com fog fantasma).
         for (u32 i = 0; i < 2; ++i) {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = kGridW;
-            Desc.Height           = kGridH;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_R16_FLOAT;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                nullptr, IID_PPV_ARGS(&ConsDepthTex[i])));
-            VramTracker::Register(ConsDepthTex[i].Get(), EVramCategory::Sky);
+            ConsDepthTex[i] = GpuResources::CreateTex2D(
+                _Device, kGridW, kGridH, DXGI_FORMAT_R16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Sky, nullptr,
+                1, 1, "Fog · depth conservador");
 
             ConsDepthSRV[i] = _SRVHeap.Allocate(1);
             D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};

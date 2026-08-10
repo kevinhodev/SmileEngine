@@ -1,6 +1,6 @@
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
@@ -22,23 +22,10 @@ namespace Smile {
                       "SharedWeight[] e o stride da reducao (ou faca o load em passos de 64).");
 
         ComPtr<ID3D12Resource> CreateStructuredUAV(ID3D12Device* Device, u32 Count, u32 Stride) {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = static_cast<UINT64>(Count) * Stride;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Buffer)));
-            VramTracker::Register(Buffer.Get(), EVramCategory::GI, "ReGIR · grade");
-            return Buffer;
+            return GpuResources::CreateBuffer(
+                Device, static_cast<u64>(Count) * Stride,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON,
+                EVramCategory::GI, "ReGIR · grade");
         }
     }
 

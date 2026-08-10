@@ -1,7 +1,7 @@
 #include "Smile/Graphics/SunShadows.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/Material.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -27,15 +27,7 @@ namespace Smile {
     }
 
     void FSunShadows::CreateResources(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = kResolution;
-        Desc.Height           = kResolution;
-        Desc.DepthOrArraySize = static_cast<UINT16>(kNumCascades);
-        Desc.MipLevels        = 1;
+        // O comentario do formato mora aqui porque a escolha e do PASSE, nao da fabrica:
         // D16 e o formato das tres referencias (a UE define PF_ShadowDepth como R16_TYPELESS,
         // a Flax escolhe D16_UNorm no primeiro suportado, a Cry usa D16 no cache). Metade da
         // VRAM: 4 x 2048^2 cai de 64 MB para 32 MB, e aparece na janela de Estatisticas.
@@ -43,21 +35,16 @@ namespace Smile {
         // 3,3 cm na 3 — o bias da F2 vale 24 e 62 niveis respectivamente, folga de sobra. O
         // DepthBias do rasterizer e 0, entao a mudanca da unidade `r` do formato UNORM (que
         // multiplica so aquele termo) nao afeta nada; o slope bias e imune ao formato.
-        Desc.Format           = DXGI_FORMAT_R16_TYPELESS;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
         D3D12_CLEAR_VALUE Clear{};
         Clear.Format               = DXGI_FORMAT_D16_UNORM;
         Clear.DepthStencil.Depth   = 1.0f;
         Clear.DepthStencil.Stencil = 0;
 
         ArrayState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            ArrayState, &Clear, IID_PPV_ARGS(&DepthArray)));
-        VramTracker::Register(DepthArray.Get(), EVramCategory::Shadows);
+        DepthArray = GpuResources::CreateTex2D(
+            _Device, kResolution, kResolution, DXGI_FORMAT_R16_TYPELESS,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, ArrayState, EVramCategory::Shadows,
+            &Clear, 1, kNumCascades, "CSM · runtime");
 
         DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kNumCascades, false);
         for (u32 c = 0; c < kNumCascades; ++c) {
@@ -73,10 +60,10 @@ namespace Smile {
         // Gemeo estatico: mesma desc, mesmo clear, DSV por fatia. Nao ganha SRV — nada o
         // amostra, ele so alimenta o array de runtime por copia.
         StaticState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            StaticState, &Clear, IID_PPV_ARGS(&StaticArray)));
-        VramTracker::Register(StaticArray.Get(), EVramCategory::Shadows);
+        StaticArray = GpuResources::CreateTex2D(
+            _Device, kResolution, kResolution, DXGI_FORMAT_R16_TYPELESS,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, StaticState, EVramCategory::Shadows,
+            &Clear, 1, kNumCascades, "CSM · cache estatico");
 
         StaticDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kNumCascades, false);
         for (u32 c = 0; c < kNumCascades; ++c) {

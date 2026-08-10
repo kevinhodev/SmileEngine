@@ -1,5 +1,5 @@
 #include "Smile/Graphics/CloudNoise.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -17,22 +17,11 @@ namespace Smile {
                            kDetailRes, kDetailRes, kDetailRes, 1, true);
 
         {
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = kWeatherRes;
-            Desc.Height           = kWeatherRes;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
             WeatherState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, WeatherState, nullptr,
-                IID_PPV_ARGS(&WeatherTex)));
-            VramTracker::Register(WeatherTex.Get(), EVramCategory::Sky);
+            WeatherTex = GpuResources::CreateTex2D(
+                _Device, kWeatherRes, kWeatherRes, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, WeatherState,
+                EVramCategory::Sky, nullptr, 1, 1, "Weather map");
 
             WeatherSRVSlot = _SRVHeap.Allocate(1);
             D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};

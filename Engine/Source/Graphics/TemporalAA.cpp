@@ -1,5 +1,5 @@
 #include "Smile/Graphics/TemporalAA.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Barriers.h"
@@ -36,38 +36,24 @@ namespace Smile {
         History[1].Reset();
         DisplayTex.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = W;
-        Desc.Height           = H;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kHDRFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = kHDRFormat;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
 
+        auto CreateTarget = [&](const char* Label) {
+            return GpuResources::CreateTex2D(
+                Device, W, H, kHDRFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, EVramCategory::RenderTargets,
+                &ClearValue, 1, 1, Label);
+        };
+
         for (int i = 0; i < 2; ++i) {
-            SMILE_HR(Device->CreateCommittedResource(
-                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-                IID_PPV_ARGS(&History[i])));
-            VramTracker::Register(History[i].Get(), EVramCategory::RenderTargets);
+            History[i]      = CreateTarget("TAA · historico");
             HistoryState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
-        SMILE_HR(Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&DisplayTex)));
-        VramTracker::Register(DisplayTex.Get(), EVramCategory::RenderTargets);
+        DisplayTex   = CreateTarget("TAA · display");
         DisplayState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!HistoryRTVHeap.Native())

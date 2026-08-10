@@ -1,5 +1,5 @@
 #include "Smile/Graphics/RainWetness.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
@@ -272,27 +272,14 @@ namespace Smile {
         if (ScratchSRVBase == 0xFFFFFFFFu)
             ScratchSRVBase = _SRVHeap.Allocate(2); // [A,B] contiguos = uma tabela
 
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         auto Make = [&](Microsoft::WRL::ComPtr<ID3D12Resource>& _Out, DXGI_FORMAT _Fmt, u32 _Slot) {
             _Out.Reset();
 
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = _Width;
-            Desc.Height           = _Height;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = _Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
             // Ciclo de estados deterministico por Execute: COPY_DEST -> PSR -> COPY_DEST.
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr, IID_PPV_ARGS(&_Out)));
-            VramTracker::Register(_Out.Get(), EVramCategory::Misc);
+            _Out = GpuResources::CreateTex2D(
+                _Device, _Width, _Height, _Fmt, D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_COPY_DEST, EVramCategory::Misc, nullptr,
+                1, 1, "Chuva · scratch");
 
             D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
             SRVDesc.Format                  = _Fmt;
@@ -554,32 +541,17 @@ namespace Smile {
         // Depth 512^2 D32 + SRV R32. Criado em PSR: so vira DEPTH_WRITE dentro do Record;
         // ate o 1o render o shader nem amostra (RainOccParams.x = 0 sem OccEverRendered).
         {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = kOccSize;
-            Desc.Height           = kOccSize;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_R32_TYPELESS;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
             D3D12_CLEAR_VALUE Clear{};
             Clear.Format             = DXGI_FORMAT_D32_FLOAT;
             Clear.DepthStencil.Depth = 1.0f;
 
             // PSR|NPSR: o PS da wetness/cortina e o VS das particulas (F5) leem o mapa
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &Clear, IID_PPV_ARGS(&OccDepth)));
-            VramTracker::Register(OccDepth.Get(), EVramCategory::Misc);
             OccState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            OccDepth = GpuResources::CreateTex2D(
+                _Device, kOccSize, kOccSize, DXGI_FORMAT_R32_TYPELESS,
+                D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, OccState, EVramCategory::Misc,
+                &Clear, 1, 1, "Chuva · oclusao");
 
             OccDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
             D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};

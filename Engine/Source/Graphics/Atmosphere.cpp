@@ -1,5 +1,5 @@
 #include "Smile/Graphics/Atmosphere.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
@@ -19,24 +19,9 @@ namespace Smile {
         W = _Width; H = _Height; Fmt = _Format;
         State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = _Width;
-        Desc.Height           = _Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = _Format;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, State, nullptr,
-            IID_PPV_ARGS(&Resource)));
-        VramTracker::Register(Resource.Get(), EVramCategory::Sky);
+        Resource = GpuResources::CreateTex2D(
+            _Device, _Width, _Height, _Format, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            State, EVramCategory::Sky, nullptr, 1, 1, "LUTs da atmosfera");
 
         SRVSlot = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -131,23 +116,10 @@ namespace Smile {
         {
             constexpr u64 kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
 
-            D3D12_HEAP_PROPERTIES DefHeap{};
-            DefHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC BufDesc{};
-            BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            BufDesc.Width            = kAmbientBytes;
-            BufDesc.Height           = 1;
-            BufDesc.DepthOrArraySize = 1;
-            BufDesc.MipLevels        = 1;
-            BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            BufDesc.SampleDesc       = { 1, 0 };
-            BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            BufDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &DefHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-                IID_PPV_ARGS(&AmbientBuffer)));
-            VramTracker::Register(AmbientBuffer.Get(), EVramCategory::Sky);
+            AmbientBuffer = GpuResources::CreateBuffer(
+                _Device, kAmbientBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Sky,
+                "Ambiente do ceu");
 
             AmbientUAVSlot = _SRVHeap.Allocate(1);
             D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
@@ -159,8 +131,8 @@ namespace Smile {
 
             D3D12_HEAP_PROPERTIES RbHeap{};
             RbHeap.Type = D3D12_HEAP_TYPE_READBACK;
-            BufDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * kAmbientBytes;
-            BufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+            const D3D12_RESOURCE_DESC BufDesc = GpuResources::BufferDesc(
+                static_cast<u64>(FCommandQueue::kFramesInFlight) * kAmbientBytes);
             SMILE_HR(_Device->CreateCommittedResource(
                 &RbHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr,

@@ -1,7 +1,6 @@
 #include "Smile/Graphics/GBuffer.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
-#include "Smile/Core/HResultCheck.h"
 
 namespace Smile {
 
@@ -36,24 +35,10 @@ namespace Smile {
         Width  = _Width;
         Height = _Height;
 
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         for (u32 i = 0; i < kTargetCount; ++i) {
             const DXGI_FORMAT Fmt = Format(i);
 
             Targets[i].Reset();
-
-            D3D12_RESOURCE_DESC ResourceDesc{};
-            ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            ResourceDesc.Width            = Width;
-            ResourceDesc.Height           = Height;
-            ResourceDesc.DepthOrArraySize = 1;
-            ResourceDesc.MipLevels        = 1;
-            ResourceDesc.Format           = Fmt;
-            ResourceDesc.SampleDesc       = { 1, 0 };
-            ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
             D3D12_CLEAR_VALUE Clear{};
             Clear.Format = Fmt;
@@ -61,10 +46,10 @@ namespace Smile {
             Clear.Color[0] = C[0]; Clear.Color[1] = C[1];
             Clear.Color[2] = C[2]; Clear.Color[3] = C[3];
 
-            SMILE_HR(_Device->CreateCommittedResource(
-                &HeapProps, D3D12_HEAP_FLAG_NONE, &ResourceDesc,
-                D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&Targets[i])));
-            VramTracker::Register(Targets[i].Get(), EVramCategory::RenderTargets);
+            Targets[i] = GpuResources::CreateTex2D(
+                _Device, Width, Height, Fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, EVramCategory::RenderTargets, &Clear,
+                1, 1, "G-buffer");
             States[i] = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
             D3D12_RENDER_TARGET_VIEW_DESC RTVDesc{};

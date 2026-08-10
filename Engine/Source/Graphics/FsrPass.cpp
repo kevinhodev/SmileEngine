@@ -1,5 +1,5 @@
 #include "Smile/Graphics/FsrPass.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/Barriers.h"
 #include "Smile/Core/Logger.h"
 
@@ -70,27 +70,15 @@ namespace Smile {
         }
         P->Created = true;
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC TexDesc{};
-        TexDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        TexDesc.Width            = DisplayW;
-        TexDesc.Height           = DisplayH;
-        TexDesc.DepthOrArraySize = 1;
-        TexDesc.MipLevels        = 1;
-        TexDesc.Format           = kOutputFormat;
-        TexDesc.SampleDesc       = { 1, 0 };
-        TexDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        TexDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
         P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        HRESULT Hr = Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &TexDesc, P->OutputState, nullptr,
-            IID_PPV_ARGS(&P->Output));
+        const HRESULT Hr = GpuResources::TryCreateTex2D(
+            Device, P->Output, DisplayW, DisplayH, kOutputFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, P->OutputState,
+            EVramCategory::RenderTargets, nullptr, 1, 1, "Output do FSR");
         if (FAILED(Hr)) {
-            LogError("FSR: CreateCommittedResource (output) falhou");
+            LogError("FSR: criacao da textura de output falhou");
             P->DestroyContext(); return false;
         }
-        VramTracker::Register(P->Output.Get(), EVramCategory::RenderTargets);
 
         if (P->OutputSRV == kInvalidSlot) P->OutputSRV = SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};

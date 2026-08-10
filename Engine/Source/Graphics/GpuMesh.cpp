@@ -1,5 +1,5 @@
 #include "Smile/Graphics/GpuMesh.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 
@@ -53,24 +53,9 @@ namespace Smile {
 
     Microsoft::WRL::ComPtr<ID3D12Resource> FGpuMesh::CreatePoolBuffer(ID3D12Device* _Device,
                                                                       u64 _Size) {
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        ResourceDesc.Width            = _Size;
-        ResourceDesc.Height           = 1;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-        Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
-        SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                 IID_PPV_ARGS(&Buffer)));
-        VramTracker::Register(Buffer.Get(), EVramCategory::Geometry);
-        return Buffer;
+        return GpuResources::CreateBuffer(_Device, _Size, D3D12_RESOURCE_FLAG_NONE,
+                                          D3D12_RESOURCE_STATE_COMMON,
+                                          EVramCategory::Geometry, "Pool de VB/IB");
     }
 
     void FGpuMesh::InitFromPool(const Microsoft::WRL::ComPtr<ID3D12Resource>& _Pool,

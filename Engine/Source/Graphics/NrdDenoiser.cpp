@@ -1,6 +1,5 @@
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/GpuResources.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/SelectionOutline.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/SwapChain.h"   
@@ -33,24 +34,13 @@ namespace Smile {
         Height = MaskH;
         MaskTarget.Reset();
 
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = Width;
-        Desc.Height           = Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kMaskFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         D3D12_CLEAR_VALUE Clear{};
-        Clear.Format = kMaskFormat; 
+        Clear.Format = kMaskFormat;
 
-        SMILE_HR(Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&MaskTarget)));
+        MaskTarget = GpuResources::CreateTex2D(
+            Device, Width, Height, kMaskFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, EVramCategory::Misc, &Clear,
+            1, 1, "Mascara de outline");
         MaskState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
         if (MaskRTVHeap.GetCapacity() == 0)

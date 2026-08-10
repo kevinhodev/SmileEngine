@@ -1,10 +1,8 @@
 #include "Smile/Graphics/AmbientOcclusion.h"
 #include "Smile/Graphics/GpuResources.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/SceneTargets.h"
 #include "Smile/Graphics/CommandQueue.h"
-#include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
 #include <cstring>
@@ -70,22 +68,19 @@ namespace Smile {
     }
 
     void FAmbientOcclusion::ReleaseSizedResources(FTextureSRVHeap& _SRVHeap) {
-        auto FreeSlot = [&](u32& Slot, u32 Count) {
-            if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
-        };
-        FreeSlot(AO0SRVSlot, 1);
-        FreeSlot(AO0UAVSlot, 1);
-        FreeSlot(AO1SRVSlot, 1);
-        FreeSlot(AO1UAVSlot, 1);
-        FreeSlot(AOH0SRVSlot, 1);
-        FreeSlot(AOH0UAVSlot, 1);
-        FreeSlot(AOH1SRVSlot, 1);
-        FreeSlot(AOH1UAVSlot, 1);
-        FreeSlot(MainTable, 2);
-        FreeSlot(BlurTable0, 2);
-        FreeSlot(BlurTable1, 2);
-        FreeSlot(BlurTableH0, 2);
-        FreeSlot(BlurTableH1, 2);
+        _SRVHeap.Release(AO0SRVSlot);
+        _SRVHeap.Release(AO0UAVSlot);
+        _SRVHeap.Release(AO1SRVSlot);
+        _SRVHeap.Release(AO1UAVSlot);
+        _SRVHeap.Release(AOH0SRVSlot);
+        _SRVHeap.Release(AOH0UAVSlot);
+        _SRVHeap.Release(AOH1SRVSlot);
+        _SRVHeap.Release(AOH1UAVSlot);
+        _SRVHeap.Release(MainTable, 2);
+        _SRVHeap.Release(BlurTable0, 2);
+        _SRVHeap.Release(BlurTable1, 2);
+        _SRVHeap.Release(BlurTableH0, 2);
+        _SRVHeap.Release(BlurTableH1, 2);
         AO0.Reset();
         AO1.Reset();
         AOH0.Reset();
@@ -140,59 +135,18 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, AOH1.Get(), Uav, AOH1UAVSlot);
 
         MainTable = _SRVHeap.Allocate(2);
-        {
-            D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(MainTable);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src[2] = {
-                _SRVHeap.CpuHandleStaging(_DepthSRVSlot),
-                _SRVHeap.CpuHandleStaging(_NormalSRVSlot),
-            };
-            UINT DstCount = 2; UINT SrcCounts[2] = { 1, 1 };
-            _Device->CopyDescriptors(1, &Dst, &DstCount, 2, Src, SrcCounts,
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        }
+        _SRVHeap.CopyTable(_Device, MainTable, { _DepthSRVSlot, _NormalSRVSlot });
 
         BlurTable0 = _SRVHeap.Allocate(2);
         BlurTable1 = _SRVHeap.Allocate(2);
-        {
-            D3D12_CPU_DESCRIPTOR_HANDLE Dst0 = _SRVHeap.CpuHandle(BlurTable0);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src0[2] = {
-                _SRVHeap.CpuHandleStaging(_DepthSRVSlot),
-                _SRVHeap.CpuHandleStaging(AO0SRVSlot),
-            };
-            UINT DstCount = 2; UINT SrcCounts[2] = { 1, 1 };
-            _Device->CopyDescriptors(1, &Dst0, &DstCount, 2, Src0, SrcCounts,
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-            D3D12_CPU_DESCRIPTOR_HANDLE Dst1 = _SRVHeap.CpuHandle(BlurTable1);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src1[2] = {
-                _SRVHeap.CpuHandleStaging(_DepthSRVSlot),
-                _SRVHeap.CpuHandleStaging(AO1SRVSlot),
-            };
-            _Device->CopyDescriptors(1, &Dst1, &DstCount, 2, Src1, SrcCounts,
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        }
+        _SRVHeap.CopyTable(_Device, BlurTable0, { _DepthSRVSlot, AO0SRVSlot });
+        _SRVHeap.CopyTable(_Device, BlurTable1, { _DepthSRVSlot, AO1SRVSlot });
 
         // Cadeia meia-res: depth + AOH0 (blur H e input do upsample) / depth + AOH1 (blur V)
         BlurTableH0 = _SRVHeap.Allocate(2);
         BlurTableH1 = _SRVHeap.Allocate(2);
-        {
-            UINT DstCount = 2; UINT SrcCounts[2] = { 1, 1 };
-            D3D12_CPU_DESCRIPTOR_HANDLE DstH0 = _SRVHeap.CpuHandle(BlurTableH0);
-            D3D12_CPU_DESCRIPTOR_HANDLE SrcH0[2] = {
-                _SRVHeap.CpuHandleStaging(_DepthSRVSlot),
-                _SRVHeap.CpuHandleStaging(AOH0SRVSlot),
-            };
-            _Device->CopyDescriptors(1, &DstH0, &DstCount, 2, SrcH0, SrcCounts,
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-            D3D12_CPU_DESCRIPTOR_HANDLE DstH1 = _SRVHeap.CpuHandle(BlurTableH1);
-            D3D12_CPU_DESCRIPTOR_HANDLE SrcH1[2] = {
-                _SRVHeap.CpuHandleStaging(_DepthSRVSlot),
-                _SRVHeap.CpuHandleStaging(AOH1SRVSlot),
-            };
-            _Device->CopyDescriptors(1, &DstH1, &DstCount, 2, SrcH1, SrcCounts,
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        }
+        _SRVHeap.CopyTable(_Device, BlurTableH0, { _DepthSRVSlot, AOH0SRVSlot });
+        _SRVHeap.CopyTable(_Device, BlurTableH1, { _DepthSRVSlot, AOH1SRVSlot });
 
         Ready = true;
     }

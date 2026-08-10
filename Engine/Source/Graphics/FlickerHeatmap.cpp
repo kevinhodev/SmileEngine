@@ -1,4 +1,5 @@
 #include "Smile/Graphics/FlickerHeatmap.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Barriers.h"
@@ -46,28 +47,18 @@ namespace Smile {
         Output.Reset();
         Stats.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = W;
-        Desc.Height           = H;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
-        Desc.Format = kOutFormat;
-        Desc.Flags  = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         const FLOAT Clear[4] = { 0, 0, 0, 1 };
         D3D12_CLEAR_VALUE CV{}; CV.Format = kOutFormat; std::memcpy(CV.Color, Clear, sizeof(Clear));
-        SMILE_HR(Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &CV, IID_PPV_ARGS(&Output)));
+        Output = GpuResources::CreateTex2D(
+            Device, W, H, kOutFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, EVramCategory::Misc, &CV,
+            1, 1, "Heatmap de flicker");
         OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
-        Desc.Format = kStatsFormat;
-        Desc.Flags  = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        SMILE_HR(Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&Stats)));
+        Stats = GpuResources::CreateTex2D(
+            Device, W, H, kStatsFormat, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Misc, nullptr,
+            1, 1, "Heatmap de flicker");
 
         if (!OutputRTVHeap.Native())
             OutputRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);

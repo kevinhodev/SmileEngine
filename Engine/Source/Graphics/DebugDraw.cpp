@@ -1,8 +1,8 @@
 #include "Smile/Graphics/DebugDraw.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Graphics/ShaderUtils.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
@@ -47,19 +47,6 @@ namespace Smile {
         if (OverlayDSVHeap.Native() == nullptr)
             OverlayDSVHeap.Initialize(Device_, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
 
-        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = Width;
-        Desc.Height           = Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kOverlayDepthFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL |
-                                D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
-
         D3D12_CLEAR_VALUE Clear{};
         Clear.Format               = kOverlayDepthFormat;
         Clear.DepthStencil.Depth   = kClearDepth;
@@ -68,9 +55,11 @@ namespace Smile {
         // Sai do escopo antes de criar o novo: o Renderer da Flush na fila antes do resize, entao
         // ninguem esta lendo o antigo.
         OverlayDepth.Reset();
-        SMILE_HR(Device_->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &Clear, IID_PPV_ARGS(&OverlayDepth)));
-        VramTracker::Register(OverlayDepth.Get(), EVramCategory::Misc);
+        OverlayDepth = GpuResources::CreateTex2D(
+            Device_, Width, Height, kOverlayDepthFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE, EVramCategory::Misc, &Clear,
+            1, 1, "Depth do overlay");
 
         D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
         DSVDesc.Format        = kOverlayDepthFormat;

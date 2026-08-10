@@ -1,6 +1,6 @@
 #include "Smile/Graphics/Texture.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/UploadQueue.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <wincodec.h>
@@ -159,28 +159,16 @@ namespace Smile {
         const u32 Width    = _Mips[0].Width;
         const u32 Height   = _Mips[0].Height;
 
-        D3D12_RESOURCE_DESC TextureDesc{};
-        TextureDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        TextureDesc.Width            = Width;
-        TextureDesc.Height           = Height;
-        TextureDesc.DepthOrArraySize = 1;
-        TextureDesc.MipLevels        = static_cast<UINT16>(MipCount);
-        TextureDesc.Format           = _Format;
-        TextureDesc.SampleDesc       = { 1, 0 };
-        TextureDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        TextureDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        // Desc guardado: o GetCopyableFootprints logo abaixo dimensiona o staging do upload.
+        const D3D12_RESOURCE_DESC TextureDesc = GpuResources::Tex2DDesc(
+            Width, Height, _Format, D3D12_RESOURCE_FLAG_NONE, MipCount);
 
         // COMMON, nao COPY_DEST: recurso acessado em fila COPY tem que ENTRAR nela em
         // COMMON (a promotion COMMON->COPY_DEST acontece la; iniciar em COPY_DEST viola
         // o layout esperado e o debug layer reclama por subresource).
-        ComPtr<ID3D12Resource> GPUTexture;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&GPUTexture)));
-        VramTracker::Register(GPUTexture.Get(), _Category);
+        ComPtr<ID3D12Resource> GPUTexture = GpuResources::CreateTex2D(
+            _Device, Width, Height, _Format, D3D12_RESOURCE_FLAG_NONE,
+            D3D12_RESOURCE_STATE_COMMON, _Category, nullptr, MipCount);
 
         std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> Layouts(MipCount);
         std::vector<UINT>   NumRows(MipCount);

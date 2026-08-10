@@ -1,4 +1,5 @@
 #include "Smile/Graphics/DDGIDebug.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -182,19 +183,10 @@ namespace Smile {
         NumProbes = _NumProbes;
         if (_NumProbes == 0) return;
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(_NumProbes) * sizeof(Vec4);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&ProbeStatsBuf)));
+        ProbeStatsBuf = GpuResources::CreateBuffer(
+            _Device, static_cast<u64>(_NumProbes) * sizeof(Vec4),
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON,
+            EVramCategory::GI, "DDGI · stats de probe");
 
         ProbeStatsSRVSlot = _SRVHeap.Allocate(1);
         ProbeStatsUAVSlot = _SRVHeap.Allocate(1);
@@ -242,16 +234,11 @@ namespace Smile {
             0, &NoRead, reinterpret_cast<void**>(&PointDiagnosticMappedCB)));
 
         Desc.Width = static_cast<UINT64>(kPointOutputRows) * sizeof(Vec4);
-        Desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&PointDiagnosticOutput)));
+        PointDiagnosticOutput = GpuResources::CreateBuffer(
+            _Device, Desc.Width, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
+            "DDGI · diagnostico de ponto");
         PointOutputState = D3D12_RESOURCE_STATE_COMMON;
-
-        Desc.Flags = D3D12_RESOURCE_FLAG_NONE;
         D3D12_HEAP_PROPERTIES ReadbackHeap{};
         ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
         for (u32 I = 0; I < FCommandQueue::kFramesInFlight; ++I) {

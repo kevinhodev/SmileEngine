@@ -1,7 +1,6 @@
 #include "Smile/Graphics/DlssRRGuides.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
-#include "Smile/Core/HResultCheck.h"
 #include <iterator>
 
 using Microsoft::WRL::ComPtr;
@@ -13,27 +12,17 @@ namespace Smile {
 
         ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* Device, u32 W, u32 H, DXGI_FORMAT Fmt,
                                               bool AllowRenderTarget = false) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = W;
-            Desc.Height           = H;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
-                                    (AllowRenderTarget ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
-                                                       : D3D12_RESOURCE_FLAG_NONE);
-            ComPtr<ID3D12Resource> Tex;
+            // O clear value so pode acompanhar um recurso que permite RT/DS — passa-lo num
+            // recurso UAV-only faz a criacao falhar.
             D3D12_CLEAR_VALUE Clear{};
             Clear.Format = Fmt;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, AllowRenderTarget ? &Clear : nullptr,
-                     IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::RenderTargets);
-            return Tex;
+            return GpuResources::CreateTex2D(
+                Device, W, H, Fmt,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
+                    (AllowRenderTarget ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+                                       : D3D12_RESOURCE_FLAG_NONE),
+                D3D12_RESOURCE_STATE_COMMON, EVramCategory::RenderTargets,
+                AllowRenderTarget ? &Clear : nullptr, 1, 1, "Guides do DLSS-RR");
         }
     }
 

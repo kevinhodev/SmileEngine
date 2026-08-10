@@ -1,5 +1,5 @@
 #include "Smile/Graphics/HDREnvironment.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -55,22 +55,11 @@ namespace Smile {
                             kSpecularSize, kSpecularMips, true);
 
         {
-            D3D12_RESOURCE_DESC LutDesc{};
-            LutDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            LutDesc.Width            = kBRDFLutSize;
-            LutDesc.Height           = kBRDFLutSize;
-            LutDesc.DepthOrArraySize = 1;
-            LutDesc.MipLevels        = 1;
-            LutDesc.Format           = DXGI_FORMAT_R16G16_FLOAT;
-            LutDesc.SampleDesc       = { 1, 0 };
-            LutDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            LutDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &LutDesc,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-                IID_PPV_ARGS(&BRDFLutResource)));
-            VramTracker::Register(BRDFLutResource.Get(), EVramCategory::SceneTextures);
+            BRDFLutResource = GpuResources::CreateTex2D(
+                _Device, kBRDFLutSize, kBRDFLutSize, DXGI_FORMAT_R16G16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::SceneTextures,
+                nullptr, 1, 1, "LUT do BRDF");
 
             BRDFLutSRVSlot = _SRVHeap.Allocate(1);
             BRDFLutUAVSlot = _SRVHeap.Allocate(1);
@@ -134,22 +123,14 @@ namespace Smile {
                                           const float* _Pixels, u32 _Width, u32 _Height) {
         Equirect2DResource.Reset();
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = _Width;
-        Desc.Height           = _Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32G32B32A32_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-        D3D12_HEAP_PROPERTIES DefaultHeap{}; DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-            IID_PPV_ARGS(&Equirect2DResource)));
-        VramTracker::Register(Equirect2DResource.Get(), EVramCategory::SceneTextures);
+        // Desc guardado: o GetCopyableFootprints logo abaixo precisa dele p/ dimensionar o
+        // staging do upload.
+        const D3D12_RESOURCE_DESC Desc =
+            GpuResources::Tex2DDesc(_Width, _Height, DXGI_FORMAT_R32G32B32A32_FLOAT);
+        Equirect2DResource = GpuResources::CreateTex2D(
+            _Device, _Width, _Height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+            D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST,
+            EVramCategory::SceneTextures, nullptr, 1, 1, "HDRI equirretangular");
 
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT Layout{};
         UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;

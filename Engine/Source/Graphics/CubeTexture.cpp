@@ -1,6 +1,5 @@
 #include "Smile/Graphics/CubeTexture.h"
-#include "Smile/Graphics/VramTracker.h"
-#include "Smile/Core/HResultCheck.h"
+#include "Smile/Graphics/GpuResources.h"
 
 namespace Smile {
     void FCubeTexture::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -9,31 +8,17 @@ namespace Smile {
         TexSize   = _Size;
         MipLevels = _MipLevels;
 
-        D3D12_RESOURCE_DESC TextureDesc{};
-        TextureDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        TextureDesc.Width            = _Size;
-        TextureDesc.Height           = _Size;
-        TextureDesc.DepthOrArraySize = 6;
-        TextureDesc.MipLevels        = static_cast<UINT16>(_MipLevels);
-        TextureDesc.Format           = _Format;
-        TextureDesc.SampleDesc       = { 1, 0 };
-        TextureDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        TextureDesc.Flags            = _AllowUAV
-                                     ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
-                                     : D3D12_RESOURCE_FLAG_NONE;
-
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         const D3D12_RESOURCE_STATES InitialState = _AllowUAV
             ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
             : D3D12_RESOURCE_STATE_COPY_DEST;
         MipStates.assign(static_cast<size_t>(_MipLevels) * 6, InitialState);
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
-            InitialState, nullptr, IID_PPV_ARGS(&GpuResource)));
-        VramTracker::Register(GpuResource.Get(), EVramCategory::SceneTextures);
+        // Cubo = Texture2D com ArraySize 6; a face vira slice de array na view.
+        GpuResource = GpuResources::CreateTex2D(
+            _Device, _Size, _Size, _Format,
+            _AllowUAV ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+                      : D3D12_RESOURCE_FLAG_NONE,
+            InitialState, EVramCategory::SceneTextures, nullptr, _MipLevels, 6);
 
         FaceSRVSlot = _SRVHeap.Allocate(1);
 

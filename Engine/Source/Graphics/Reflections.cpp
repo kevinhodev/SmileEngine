@@ -1,8 +1,8 @@
 #include "Smile/Graphics/Reflections.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/ShaderTimer.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -21,22 +21,9 @@ namespace Smile {
 
         ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
                                               DXGI_FORMAT _Fmt, const char* _Label) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = _W;
-            Desc.Height           = _H;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = _Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Tex;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::GI, _Label);
-            return Tex;
+            return GpuResources::CreateTex2D(
+                _Device, _W, _H, _Fmt, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI, nullptr, 1, 1, _Label);
         }
     }
 

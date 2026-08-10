@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Graphics/OceanSpectrum.h"
 #include "Smile/Graphics/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
@@ -6,7 +7,6 @@
 #include "Smile/Graphics/Mesh.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Graphics/RayEpsilons.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
@@ -832,31 +832,16 @@ namespace Smile {
 
 
     void Renderer::CreateDebugPreviewTargets() {
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC TargetDesc{};
-        TargetDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        TargetDesc.Width            = kDebugPreviewWidth;
-        TargetDesc.Height           = kDebugPreviewHeight;
-        TargetDesc.DepthOrArraySize = 1;
-        TargetDesc.MipLevels        = 1;
-        TargetDesc.Format           = kDebugPreviewFormat;
-        TargetDesc.SampleDesc       = { 1, 0 };
-        TargetDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        TargetDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         D3D12_CLEAR_VALUE Clear{};
         Clear.Format   = kDebugPreviewFormat;
         Clear.Color[0] = 0.035f;
         Clear.Color[1] = 0.037f;
         Clear.Color[2] = 0.031f;
         Clear.Color[3] = 1.0f;
-        SMILE_HR(Device.Native()->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TargetDesc,
-            D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear,
-            IID_PPV_ARGS(&DebugPreviewTarget)));
-        VramTracker::Register(DebugPreviewTarget.Get(), EVramCategory::RenderTargets);
+        DebugPreviewTarget = GpuResources::CreateTex2D(
+            Device.Native(), kDebugPreviewWidth, kDebugPreviewHeight, kDebugPreviewFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            EVramCategory::RenderTargets, &Clear, 1, 1, "Preview de debug");
 
         DebugPreviewRTVHeap.Initialize(
             Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);

@@ -46,12 +46,13 @@ set_tests_properties(Smile.TimeOfDayMoon PROPERTIES
 )
 
 # Identidade estavel da FScene. Nao usa GPU, mas linka o Scene.cpp, e ele arrasta os dois
-# caminhos de upload de malha (que o teste nao chama) — dai GpuMesh/UploadQueue/VramTracker e
-# o d3d12.lib apenas para resolver simbolos.
+# caminhos de upload de malha (que o teste nao chama) — dai GpuMesh/UploadQueue/VramTracker/
+# GpuResources e o d3d12.lib apenas para resolver simbolos.
 add_executable(SmileSceneIdentityTests
     SceneIdentityTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuMesh.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuResources.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/UploadQueue.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/VramTracker.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Logger.cpp
