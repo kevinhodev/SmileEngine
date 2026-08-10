@@ -23,28 +23,6 @@ namespace Smile {
             return (_Value + A - 1) & ~(A - 1);
         }
 
-        ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* _Device, UINT64 _Size,
-                                            D3D12_HEAP_TYPE _Heap, D3D12_RESOURCE_STATES _State,
-                                            D3D12_RESOURCE_FLAGS _Flags) {
-            D3D12_HEAP_PROPERTIES HeapProps{};
-            HeapProps.Type = _Heap;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = _Flags;
-            ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                     _State, nullptr, IID_PPV_ARGS(&Buffer)));
-            VramTracker::Register(Buffer.Get(), EVramCategory::RaytracingAS);
-            return Buffer;
-        }
-
         ComPtr<ID3D12Resource> CreateUAVBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                D3D12_RESOURCE_STATES _State) {
             return GpuResources::CreateBuffer(_Device, _Size,
@@ -256,9 +234,8 @@ namespace Smile {
         // Tamanhos compactados emitidos pelo build (postbuild info) + readback p/ CPU.
         ComPtr<ID3D12Resource> PostbuildBuf = CreateUAVBuffer(Dev5,
             static_cast<UINT64>(NumBlas) * sizeof(UINT64), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        ComPtr<ID3D12Resource> ReadbackBuf = CreateBuffer(Dev5,
-            static_cast<UINT64>(NumBlas) * sizeof(UINT64), D3D12_HEAP_TYPE_READBACK,
-            D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_NONE);
+        ComPtr<ID3D12Resource> ReadbackBuf = GpuResources::CreateReadbackBuffer(
+            Dev5, static_cast<u64>(NumBlas) * sizeof(UINT64));
 
         // Passo 2: builds no pool + emissao do tamanho compactado de cada BLAS.
         for (u32 i = 0; i < NumBlas; ++i) {
@@ -351,11 +328,10 @@ namespace Smile {
             const UINT64 UploadSize =
                 static_cast<UINT64>(InstanceCapacity_) * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
             for (u32 s = 0; s < kInstanceSlots; ++s) {
-                InstanceUpload[s] = CreateBuffer(Dev5, UploadSize, D3D12_HEAP_TYPE_UPLOAD,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
-                D3D12_RANGE NoRead{ 0, 0 };
-                SMILE_HR(InstanceUpload[s]->Map(0, &NoRead,
-                         reinterpret_cast<void**>(&InstanceMapped[s])));
+                const GpuResources::FUploadBuffer Upload =
+                    GpuResources::CreateUploadBuffer(Dev5, UploadSize, 1, false);
+                InstanceUpload[s] = Upload.Resource;
+                InstanceMapped[s] = Upload.Mapped;
             }
             std::memcpy(InstanceMapped[0], Instances.data(),
                         Instances.size() * sizeof(D3D12_RAYTRACING_INSTANCE_DESC));

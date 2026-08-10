@@ -225,24 +225,14 @@ namespace Smile {
     }
 
     void FPostProcessor::CreateConstantBuffers(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES UploadHeap{};
-        UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        // Bloco unico de 4 KB com layout proprio (params + downsample/upsample por nivel, em
+        // passos de 256 escritos a mao no CreateBloomTextures), nao um slice por frame — dai
+        // SliceCount 1 e o alinhamento de CBV desligado.
+        const GpuResources::FUploadBuffer Upload =
+            GpuResources::CreateUploadBuffer(Device, 4096, 1, false);
+        CBParams         = Upload.Resource;
+        MappedParamsBase = Upload.Mapped;
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = 4096; 
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBParams)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CBParams->Map(0, &NoRead, reinterpret_cast<void**>(&MappedParamsBase)));
-        
         MappedParams = reinterpret_cast<PostParams*>(MappedParamsBase);
 
         MappedParams->BloomIntensity = 0.04f;

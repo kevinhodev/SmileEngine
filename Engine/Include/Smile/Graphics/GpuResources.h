@@ -4,14 +4,19 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/VramTracker.h"
 
-// Fabrica de recursos D3D12.
+// Fabrica de recursos D3D12. FUNIL FECHADO: nao existe mais nenhum CreateCommittedResource
+// nem D3D12_HEAP_TYPE_* fora deste arquivo (a unica excecao e o VramTracker, que INSPECIONA
+// o heap de um recurso pronto para decidir se o rastreia — leitura, nao criacao).
 //
 // Havia 132 CreateCommittedResource espalhados por 48 arquivos, cada um remontando
-// D3D12_HEAP_PROPERTIES + D3D12_RESOURCE_DESC campo a campo — e 5 copias locais do mesmo
-// helper de textura (AmbientOcclusion, DDGI, NrdDenoiser, TemporalMotionVectors, mais o
-// upload buffer do TemporalMotionVectors). Alem do ruido, o boilerplate abria duas classes
-// de bug silencioso: campo do desc esquecido (Layout/SampleDesc zerados tem significado) e
-// VramTracker::Register esquecido, que some com o recurso do breakdown de VRAM do editor.
+// D3D12_HEAP_PROPERTIES + D3D12_RESOURCE_DESC campo a campo, mais uma duzia de copias locais
+// do mesmo helper. Alem do ruido, o boilerplate abria tres classes de bug silencioso: campo
+// do desc esquecido (Layout/SampleDesc zerados tem significado), VramTracker::Register
+// esquecido (o recurso some do breakdown de VRAM do editor), e desc COMPARTILHADO entre duas
+// criacoes com um `Desc.Width =` no meio — correto enquanto ninguem mexesse na ordem.
+//
+// Fechar o funil e o que torna qualquer politica futura (pool de reciclagem por hash do desc,
+// D3D12MA, placed resource) uma mudanca em UM lugar em vez de cinquenta.
 //
 // Aqui o registro no VramTracker e parte da criacao, nao um passo que cada autor precisa
 // lembrar: quem cria em DEFAULT heap escolhe a categoria e pronto. Uploads e readbacks nao

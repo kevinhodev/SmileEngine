@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Terrain.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Graphics/GBuffer.h"
@@ -95,31 +96,10 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(
             ID3D12Device* _Device, const void* _Src, UINT64 _Size) {
-            D3D12_HEAP_PROPERTIES HeapProps{};
-            HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                     &Desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                     IID_PPV_ARGS(&Buffer)));
-            if (_Src) {
-                D3D12_RANGE NoRead{ 0, 0 };
-                void* Mapped = nullptr;
-                SMILE_HR(Buffer->Map(0, &NoRead, &Mapped));
-                std::memcpy(Mapped, _Src, _Size);
-                Buffer->Unmap(0, nullptr);
-            }
-            return Buffer;
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, _Size, 1, false);
+            if (_Src) std::memcpy(Upload.Mapped, _Src, _Size);
+            return Upload.Resource;
         }
     }
 

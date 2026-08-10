@@ -136,24 +136,12 @@ namespace Smile {
         UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;
         _Device->GetCopyableFootprints(&Desc, 0, 1, 0, &Layout, &NumRows, &RowSize, &TotalSize);
 
-        D3D12_RESOURCE_DESC BufDesc{};
-        BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        BufDesc.Width            = TotalSize;
-        BufDesc.Height           = 1;
-        BufDesc.DepthOrArraySize = 1;
-        BufDesc.MipLevels        = 1;
-        BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        BufDesc.SampleDesc       = { 1, 0 };
-        BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        BufDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        ComPtr<ID3D12Resource> Staging;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Staging)));
-
-        u8* Mapped = nullptr;
-        SMILE_HR(Staging->Map(0, nullptr, reinterpret_cast<void**>(&Mapped)));
+        // Staging do HDRI inteiro (um 4K equirect em RGBA32F passa de 100 MB). Fora do ring
+        // pelo mesmo motivo do chunk de mesh: alocacao unica e grande, nao churn.
+        const GpuResources::FUploadBuffer StagingBuffer =
+            GpuResources::CreateUploadBuffer(_Device, TotalSize, 1, false);
+        ComPtr<ID3D12Resource> Staging = StagingBuffer.Resource;
+        u8* Mapped = StagingBuffer.Mapped;
         const u32 SrcRowPitchBytes = _Width * 4 * sizeof(float);
         for (u32 Row = 0; Row < _Height; ++Row) {
             const u8* Src = reinterpret_cast<const u8*>(_Pixels) + Row * SrcRowPitchBytes;

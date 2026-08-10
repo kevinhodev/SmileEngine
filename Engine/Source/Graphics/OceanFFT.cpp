@@ -183,23 +183,13 @@ namespace Smile {
             _Device->GetCopyableFootprints(&Desc, 0, 1, 0,
                                            &H0Footprint, &NumRows, &RowSize, &TotalSize);
 
-            D3D12_RESOURCE_DESC BufDesc{};
-            BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            BufDesc.Width            = TotalSize;
-            BufDesc.Height           = 1;
-            BufDesc.DepthOrArraySize = 1;
-            BufDesc.MipLevels        = 1;
-            BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            BufDesc.SampleDesc       = { 1, 0 };
-            BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+            // Um staging POR SLOT (nao um sliced): cada um e escrito pela CPU e copiado numa
+            // fence propria, entao eles precisam de recursos distintos.
             for (u32 Slot = 0; Slot < FCommandQueue::kFramesInFlight; ++Slot) {
-                SMILE_HR(_Device->CreateCommittedResource(
-                    &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                    IID_PPV_ARGS(&H0Staging[Slot])));
-                SMILE_HR(H0Staging[Slot]->Map(
-                    0, nullptr, reinterpret_cast<void**>(&H0StagingMapped[Slot])));
+                const GpuResources::FUploadBuffer Upload =
+                    GpuResources::CreateUploadBuffer(_Device, TotalSize, 1, false);
+                H0Staging[Slot]       = Upload.Resource;
+                H0StagingMapped[Slot] = Upload.Mapped;
             }
         }
 
@@ -221,20 +211,13 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         for (auto& S : NormalMipState) S = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-        D3D12_RESOURCE_DESC CBDesc{};
-        CBDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        CBDesc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(OceanCB);
-        CBDesc.Height           = 1;
-        CBDesc.DepthOrArraySize = 1;
-        CBDesc.MipLevels        = 1;
-        CBDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        CBDesc.SampleDesc       = { 1, 0 };
-        CBDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &CBDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        SMILE_HR(CB->Map(0, nullptr, reinterpret_cast<void**>(&MappedCBBase)));
+        static_assert(sizeof(OceanCB) % 256 == 0,
+                      "o CB e indexado por sizeof(); root CBV exige 256-alinhado");
+
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(OceanCB), FCommandQueue::kFramesInFlight);
+        CB            = Upload.Resource;
+        MappedCBBase  = Upload.Mapped;
     }
 
     void FOceanFFT::CreateDescriptors(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {

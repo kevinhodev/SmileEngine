@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Material.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include <vector>
 
@@ -23,25 +24,12 @@ namespace Smile {
         u32                          GUsedCount = 0;
 
         void AddPage(ID3D12Device* _Device) {
-            D3D12_HEAP_PROPERTIES UploadHeap{};
-            UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-            D3D12_RESOURCE_DESC BufferDesc{};
-            BufferDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            BufferDesc.Width            = static_cast<u64>(kSlotsPerPage) * sizeof(MaterialConstants);
-            BufferDesc.Height           = 1;
-            BufferDesc.DepthOrArraySize = 1;
-            BufferDesc.MipLevels        = 1;
-            BufferDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            BufferDesc.SampleDesc       = { 1, 0 };
-            BufferDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            BufferDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+            const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+                _Device, sizeof(MaterialConstants), kSlotsPerPage);
 
             FMaterialCBPage Page;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufferDesc,
-                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Page.Buffer)));
-            SMILE_HR(Page.Buffer->Map(0, nullptr, reinterpret_cast<void**>(&Page.Mapped)));
+            Page.Buffer = Upload.Resource;
+            Page.Mapped = Upload.Mapped;
 
             const u32 PageIndex = static_cast<u32>(GPages.size());
             GPages.push_back(std::move(Page));

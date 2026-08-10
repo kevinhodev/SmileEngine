@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Skybox.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
@@ -104,21 +105,10 @@ namespace Smile {
         BuildRootSignature(_Device);
         BuildPSO(_Device, _RTFormat, _DSFormat);
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(SkyboxConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBV)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CBV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBVBase)));
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(SkyboxConstants), FCommandQueue::kFramesInFlight);
+        CBV           = Upload.Resource;
+        MappedCBVBase = Upload.Mapped;
     }
 
     void FSkybox::Recreate(ID3D12Device* _Device,

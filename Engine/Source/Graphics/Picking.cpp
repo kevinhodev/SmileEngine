@@ -17,19 +17,7 @@ namespace Smile {
         BuildPSO(Device);
         CreateTargets(Device, Width, Height);
 
-        D3D12_HEAP_PROPERTIES ReadbackHeap{};
-        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-        D3D12_RESOURCE_DESC BufDesc{};
-        BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        BufDesc.Width            = kReadbackRowPitch;
-        BufDesc.Height           = 1;
-        BufDesc.DepthOrArraySize = 1;
-        BufDesc.MipLevels        = 1;
-        BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        BufDesc.SampleDesc       = { 1, 0 };
-        BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&ReadbackHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Readback)));
+        Readback = GpuResources::CreateReadbackBuffer(Device, kReadbackRowPitch);
 
         Initialized = true;
         LogDebug("FObjectPicker (GPU ID-buffer picking) inicializado");

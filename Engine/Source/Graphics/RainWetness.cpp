@@ -234,28 +234,13 @@ namespace Smile {
     }
 
     void FRainWetness::CreateConstantBuffer(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(RainWetnessConstants) % 256 == 0,
+                      "o CB e indexado por sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                sizeof(RainWetnessConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedBase = reinterpret_cast<u8*>(Ptr);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(RainWetnessConstants), FCommandQueue::kFramesInFlight);
+        ConstantBuffer = Upload.Resource;
+        MappedBase     = Upload.Mapped;
         RainWetnessConstants Zero{};
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
             std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(RainWetnessConstants),
@@ -570,26 +555,10 @@ namespace Smile {
 
         // CB do ortho (uma matriz por frame em voo; so escrito no frame que re-renderiza).
         {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * 256;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr, IID_PPV_ARGS(&OccCB)));
-            D3D12_RANGE NoRead{ 0, 0 };
-            void* Ptr = nullptr;
-            SMILE_HR(OccCB->Map(0, &NoRead, &Ptr));
-            MappedOccCB = reinterpret_cast<u8*>(Ptr);
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, 256, FCommandQueue::kFramesInFlight);
+            OccCB       = Upload.Resource;
+            MappedOccCB = Upload.Mapped;
         }
     }
 

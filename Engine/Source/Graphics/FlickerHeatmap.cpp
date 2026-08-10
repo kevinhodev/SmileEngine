@@ -18,19 +18,10 @@ namespace Smile {
         BuildRootSignature(Device);
         BuildPSO(Device);
 
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC CBDesc{};
-        CBDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        CBDesc.Width            = sizeof(FlickerConstants);
-        CBDesc.Height           = 1;
-        CBDesc.DepthOrArraySize = 1;
-        CBDesc.MipLevels        = 1;
-        CBDesc.SampleDesc       = { 1, 0 };
-        CBDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &CBDesc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        const GpuResources::FUploadBuffer Upload =
+            GpuResources::CreateUploadBuffer(Device, sizeof(FlickerConstants));
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
 
         CreateBuffers(Device, SRVHeap, W, H);
         Initialized = true;

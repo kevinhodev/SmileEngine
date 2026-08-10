@@ -253,17 +253,12 @@ namespace Smile {
 
         ConstantBufferStride    = ((d.constantBufferMaxDataSize + 255u) / 256u) * 256u;
         ConstantBufferRingCount = SetsMax * frames;
-        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC cd{};
-        cd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        cd.Width = (UINT64)ConstantBufferStride * ConstantBufferRingCount;
-        cd.Height = 1; cd.DepthOrArraySize = 1; cd.MipLevels = 1;
-        cd.Format = DXGI_FORMAT_UNKNOWN; cd.SampleDesc = { 1, 0 };
-        cd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &cd,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ConstantBufferRing)));
-        D3D12_RANGE nr{ 0, 0 };
-        SMILE_HR(ConstantBufferRing->Map(0, &nr, reinterpret_cast<void**>(&ConstantBufferRingMapped)));
+        // O stride ja vem arredondado para 256 na linha acima (exigencia do NRD e do CBV),
+        // entao o slice da fabrica coincide com ele.
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, ConstantBufferStride, ConstantBufferRingCount);
+        ConstantBufferRing       = Upload.Resource;
+        ConstantBufferRingMapped = Upload.Mapped;
         ConstantBufferRingOffset = 0;
     }
 

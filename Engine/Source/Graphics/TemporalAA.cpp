@@ -189,21 +189,15 @@ namespace Smile {
     }
 
     void FTemporalAA::CreateConstantBuffer(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        // O indexador do CB usa sizeof() como passo, e root CBV exige endereco 256-alinhado:
+        // se o struct deixar de ser multiplo de 256, o slot 1 em diante cai fora do
+        // alinhamento e a falha aparece como "so o primeiro frame esta certo".
+        static_assert(sizeof(TAAConstants) % 256 == 0, "passo do CB tem que ser 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = sizeof(TAAConstants) * FCommandQueue::kFramesInFlight;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            Device, sizeof(TAAConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     void FTemporalAA::Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,

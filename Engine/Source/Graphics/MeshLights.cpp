@@ -93,38 +93,13 @@ namespace Smile {
         }
     }
 
-    namespace {
-        ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* _Device, u64 _Size,
-                                            D3D12_HEAP_TYPE _HeapType,
-                                            D3D12_RESOURCE_STATES _State,
-                                            D3D12_RESOURCE_FLAGS _Flags) {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = _HeapType;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = _Flags;
-            ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     _State, nullptr, IID_PPV_ARGS(&Buffer)));
-            return Buffer;
-        }
-    }
-
     void FMeshLights::Initialize(ID3D12Device* _Device) {
         // Bindless ligado: a extracao le VB/IB e a textura emissiva por ResourceDescriptorHeap.
         ExtractPSO.Initialize(_Device, "MeshLightExtract.cs_6_6.cso", 2, 1, true);
-        ConstantBuffer = CreateBuffer(_Device, sizeof(MeshLightConstants),
-                                      D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
-                                      D3D12_RESOURCE_FLAG_NONE);
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(ConstantBuffer->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        const GpuResources::FUploadBuffer Upload =
+            GpuResources::CreateUploadBuffer(_Device, sizeof(MeshLightConstants));
+        ConstantBuffer = Upload.Resource;
+        MappedCB       = Upload.Mapped;
         Initialized = true;
     }
 
@@ -212,16 +187,14 @@ namespace Smile {
 
         // Upload heap e escrito UMA vez, aqui. SetupForScene roda depois de um Flush da fila
         // (SceneLoader), entao nao ha dispatch em voo lendo este buffer.
-        TaskBuffer = CreateBuffer(_Device, sizeof(FMeshLightTaskGPU) * TaskElems,
-                                  D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
-                                  D3D12_RESOURCE_FLAG_NONE);
-        void* Mapped = nullptr;
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(TaskBuffer->Map(0, &NoRead, &Mapped));
-        std::memset(Mapped, 0, sizeof(FMeshLightTaskGPU) * TaskElems);
+        // O par Map/Unmap explicito sumiu junto com a criacao a mao: o buffer da fabrica ja
+        // vem mapeado de forma persistente, que e o normal para upload heap.
+        const GpuResources::FUploadBuffer TaskUpload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(FMeshLightTaskGPU) * TaskElems, 1, false);
+        TaskBuffer = TaskUpload.Resource;
+        std::memset(TaskUpload.Mapped, 0, sizeof(FMeshLightTaskGPU) * TaskElems);
         if (NumTasks > 0)
-            std::memcpy(Mapped, Tasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
-        TaskBuffer->Unmap(0, nullptr);
+            std::memcpy(TaskUpload.Mapped, Tasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
 
         LightBuffer = GpuResources::CreateBuffer(
             _Device, sizeof(FTriangleLightGPU) * LightElems,
@@ -251,14 +224,13 @@ namespace Smile {
         LightsUAV = _SRVHeap.Allocate(1);
         _SRVHeap.CreateUAV(_Device, LightBuffer.Get(), Uav, LightsUAV);
 
-        ReadbackBuffer = CreateBuffer(_Device, sizeof(FTriangleLightGPU) * LightElems,
-                                      D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST,
-                                      D3D12_RESOURCE_FLAG_NONE);
-        AliasBuffer = CreateBuffer(_Device, sizeof(FMeshLightAliasGPU) * LightElems,
-                                   D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
-                                   D3D12_RESOURCE_FLAG_NONE);
-        D3D12_RANGE NoReadAlias{ 0, 0 };
-        SMILE_HR(AliasBuffer->Map(0, &NoReadAlias, reinterpret_cast<void**>(&MappedAlias)));
+        ReadbackBuffer = GpuResources::CreateReadbackBuffer(
+            _Device, sizeof(FTriangleLightGPU) * LightElems);
+
+        const GpuResources::FUploadBuffer Alias = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(FMeshLightAliasGPU) * LightElems, 1, false);
+        AliasBuffer = Alias.Resource;
+        MappedAlias = Alias.Mapped;
         std::memset(MappedAlias, 0, sizeof(FMeshLightAliasGPU) * LightElems);
 
         Srv.Buffer.NumElements         = LightElems;

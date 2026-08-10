@@ -540,18 +540,14 @@ namespace Smile {
         // Static clipmap geometry is consumed every frame by the IA. Keep it in
         // device-local memory and retain the UPLOAD allocation only until the
         // dedicated copy queue finishes this one-time initialization.
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        const D3D12_RESOURCE_DESC RDesc =
-            GpuResources::BufferDesc(static_cast<u64>(VBSize) + IBSize);
-        Microsoft::WRL::ComPtr<ID3D12Resource> Staging;
-        SMILE_HR(_Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &RDesc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Staging)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        u8* Mapped = nullptr;
-        SMILE_HR(Staging->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)));
+        const GpuResources::FUploadBuffer StagingBuffer = GpuResources::CreateUploadBuffer(
+            _Device, static_cast<u64>(VBSize) + IBSize, 1, false);
+        Microsoft::WRL::ComPtr<ID3D12Resource> Staging = StagingBuffer.Resource;
+        u8* Mapped = StagingBuffer.Mapped;
         std::memcpy(Mapped, Verts.data(), VBSize);
         std::memcpy(Mapped + VBSize, Indices.data(), IBSize);
-        Staging->Unmap(0, nullptr);
+        // Sem Unmap: o buffer da fabrica e mapeado de forma persistente e morre com o Keep
+        // abaixo, quando a fence do upload passar.
 
         ID3D12GraphicsCommandList* UploadCL = _UploadQueue.Begin();
         UploadCL->CopyBufferRegion(VertexBuffer.Get(), 0, Staging.Get(), 0, VBSize);
@@ -588,22 +584,10 @@ namespace Smile {
         const UINT GpuDebugCounterBufferSize =
             GpuDebugCounterFrameSize * FCommandQueue::kFramesInFlight;
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = DrawBucketBufferSize;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&DrawBucketSourceBuffer)));
-        SMILE_HR(DrawBucketSourceBuffer->Map(0, &NoRead, reinterpret_cast<void**>(&MappedDrawBucketsBase)));
+        const GpuResources::FUploadBuffer Buckets =
+            GpuResources::CreateUploadBuffer(_Device, DrawBucketBufferSize, 1, false);
+        DrawBucketSourceBuffer = Buckets.Resource;
+        MappedDrawBucketsBase  = Buckets.Mapped;
 
         D3D12_INDIRECT_ARGUMENT_DESC DrawArg{};
         DrawArg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
@@ -649,16 +633,9 @@ namespace Smile {
                                                 "Contadores de debug");
         GpuDebugCounterState  = D3D12_RESOURCE_STATE_COMMON;
 
-        D3D12_HEAP_PROPERTIES ReadbackHeap{};
-        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-        D3D12_RESOURCE_DESC ReadbackDesc = Desc;
-        ReadbackDesc.Width = GpuDebugCounterBufferSize;
-        ReadbackDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &ReadbackDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-            IID_PPV_ARGS(&GpuDebugReadbackBuffer)));
-        D3D12_RANGE DebugReadRange{ 0, GpuDebugCounterBufferSize };
+        GpuDebugReadbackBuffer =
+            GpuResources::CreateReadbackBuffer(_Device, GpuDebugCounterBufferSize);
+        const D3D12_RANGE DebugReadRange{ 0, GpuDebugCounterBufferSize };
         SMILE_HR(GpuDebugReadbackBuffer->Map(
             0, &DebugReadRange, reinterpret_cast<void**>(&MappedGpuDebugCountersBase)));
 
@@ -827,21 +804,11 @@ namespace Smile {
         BuildGrid(_Device, _UploadQueue);
         BuildInstanceBuffer(_Device);
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(WaterConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBV)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CBV->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBVBase)));
+        // O sizeof ja e travado como multiplo de 256 no header (static_assert la).
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(WaterConstants), FCommandQueue::kFramesInFlight);
+        CBV           = Upload.Resource;
+        MappedCBVBase = Upload.Mapped;
     }
 
     void FWaterRenderer::Recreate(ID3D12Device* _Device,

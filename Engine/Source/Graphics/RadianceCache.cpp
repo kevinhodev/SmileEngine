@@ -75,28 +75,20 @@ namespace Smile {
     }
 
     void FRadianceCache::CreateConstantBuffer(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * 2ull *
-                                sizeof(RadianceCacheConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        static_assert(sizeof(RadianceCacheConstants) % 256 == 0 &&
+                      sizeof(RadianceCacheDebugConstants) % 256 == 0,
+                      "os CBAddr indexam por sizeof(); root CBV exige 256-alinhado");
 
-        Desc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                     sizeof(RadianceCacheDebugConstants);
-        SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&DebugCB)));
-        SMILE_HR(DebugCB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedDebugCB)));
+        // 2 variantes por frame em voo (resolve e clear-stats; ver CBAddr).
+        const GpuResources::FUploadBuffer Main = GpuResources::CreateUploadBuffer(
+            Device, sizeof(RadianceCacheConstants), FCommandQueue::kFramesInFlight * 2);
+        CB       = Main.Resource;
+        MappedCB = Main.Mapped;
+
+        const GpuResources::FUploadBuffer Debug = GpuResources::CreateUploadBuffer(
+            Device, sizeof(RadianceCacheDebugConstants), FCommandQueue::kFramesInFlight);
+        DebugCB       = Debug.Resource;
+        MappedDebugCB = Debug.Mapped;
     }
 
     D3D12_GPU_VIRTUAL_ADDRESS FRadianceCache::CBAddr(u32 Variant) const {
@@ -163,21 +155,8 @@ namespace Smile {
 
         // Anel de readback dos contadores (ver o membro StatsReadback).
         {
-            D3D12_HEAP_PROPERTIES RbHeap{};
-            RbHeap.Type = D3D12_HEAP_TYPE_READBACK;
-            D3D12_RESOURCE_DESC RbDesc{};
-            RbDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            RbDesc.Width            = kStatBytes;
-            RbDesc.Height           = 1;
-            RbDesc.DepthOrArraySize = 1;
-            RbDesc.MipLevels        = 1;
-            RbDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            RbDesc.SampleDesc       = { 1, 0 };
-            RbDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
             for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f) {
-                SMILE_HR(Device->CreateCommittedResource(&RbHeap, D3D12_HEAP_FLAG_NONE, &RbDesc,
-                         D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                         IID_PPV_ARGS(&StatsReadback[f])));
+                StatsReadback[f] = GpuResources::CreateReadbackBuffer(Device, kStatBytes);
                 StatsReadbackPending[f] = false;
             }
         }

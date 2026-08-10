@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Graphics/VramTracker.h"
@@ -44,27 +45,14 @@ namespace Smile {
         if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
         ObjectCB.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(ObjectConstants) % 256 == 0,
+                      "o CB de objeto e indexado por sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC d{};
-        d.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        d.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                             MaxObjects * sizeof(ObjectConstants);
-        d.Height           = 1;
-        d.DepthOrArraySize = 1;
-        d.MipLevels        = 1;
-        d.Format           = DXGI_FORMAT_UNKNOWN;
-        d.SampleDesc       = { 1, 0 };
-        d.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        d.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &d, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ObjectCB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* p = nullptr;
-        SMILE_HR(ObjectCB->Map(0, &NoRead, &p));
-        MappedObjectCB = reinterpret_cast<u8*>(p);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            Device.Native(), sizeof(ObjectConstants),
+            FCommandQueue::kFramesInFlight * MaxObjects);
+        ObjectCB       = Upload.Resource;
+        MappedObjectCB = Upload.Mapped;
 
         // Buffers de bounds/visibilidade do occlusion culling acompanham a capacidade
         // (a fila ja foi flushada acima; recriar aqui e seguro).

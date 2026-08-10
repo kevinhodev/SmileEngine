@@ -38,21 +38,13 @@ namespace Smile {
     }
 
     void FReSTIRGI::CreateConstantBuffer(ID3D12Device* _Device) {
-        const UINT64 Size = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(ReSTIRGIConstants);
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = Size;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        static_assert(sizeof(ReSTIRGIConstants) % 256 == 0,
+                      "o CBAddr indexa por sizeof(); root CBV exige 256-alinhado");
+
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(ReSTIRGIConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     void FReSTIRGI::SetGIParams(const Vec3& _GridMin, f32 _Spacing, const Vec3& _GridCount,

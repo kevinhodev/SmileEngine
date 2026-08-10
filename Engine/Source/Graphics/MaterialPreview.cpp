@@ -280,17 +280,7 @@ namespace Smile {
         }
 
         {
-            D3D12_HEAP_PROPERTIES ReadbackHeap{};
-            ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = u64(kMaxRowPitch) * kSize;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            const u64 ReadbackBytes = u64(kMaxRowPitch) * kSize;
 
             for (FReadbackSlot& Slot : ReadbackSlots) {
                 SMILE_HR(_Device->CreateCommandAllocator(
@@ -299,31 +289,21 @@ namespace Smile {
                     0, D3D12_COMMAND_LIST_TYPE_DIRECT, Slot.Allocator.Get(), nullptr,
                     IID_PPV_ARGS(&Slot.CommandList)));
                 SMILE_HR(Slot.CommandList->Close());
-                SMILE_HR(_Device->CreateCommittedResource(
-                    &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Slot.Readback)));
+                Slot.Readback = GpuResources::CreateReadbackBuffer(_Device, ReadbackBytes);
             }
             SMILE_HR(_Device->CreateFence(
                 0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&ReadbackFence)));
         }
 
         {
-            D3D12_HEAP_PROPERTIES UploadHeap{};
-            UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = static_cast<u64>(kReadbackSlots) *
-                                    (sizeof(FMeshCB) + sizeof(FSkyCB) +
-                                     sizeof(MaterialConstants));
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            SMILE_HR(_Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-            SMILE_HR(ConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&MappedCB)));
+            // Bloco unico com os tres CBs por slot em sequencia (layout proprio, escrito a
+            // mao no Submit), nao um slice por frame — dai SliceCount 1.
+            const u64 Bytes = static_cast<u64>(kReadbackSlots) *
+                              (sizeof(FMeshCB) + sizeof(FSkyCB) + sizeof(MaterialConstants));
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, Bytes, 1, false);
+            ConstantBuffer = Upload.Resource;
+            MappedCB       = Upload.Mapped;
         }
     }
 

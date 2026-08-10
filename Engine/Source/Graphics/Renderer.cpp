@@ -634,45 +634,27 @@ namespace Smile {
     }
 
     void Renderer::CreateConstantBuffer() {
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(FrameConstants) % 256 == 0,
+                      "o CB do frame e indexado por sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        ResourceDesc.Width            = sizeof(FrameConstants);
-        ResourceDesc.Height           = 1;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+        const GpuResources::FUploadBuffer Frame = GpuResources::CreateUploadBuffer(
+            Device.Native(), sizeof(FrameConstants), FCommandQueue::kFramesInFlight);
+        ConstantBuffer  = Frame.Resource;
+        MappedFrameBase = Frame.Mapped;
 
-        D3D12_RANGE NoReadRange{ 0, 0 };
-        void* Ptr = nullptr;
+        // As duas listas de luz sao lidas como StructuredBuffer (root SRV), nao como CB: o
+        // passo e kMaxLights * sizeof(), e arredondar para 256 mudaria o offset por frame.
+        const GpuResources::FUploadBuffer Lights = GpuResources::CreateUploadBuffer(
+            Device.Native(), static_cast<u64>(kMaxLights) * sizeof(FGPULight),
+            FCommandQueue::kFramesInFlight, false);
+        LightBuffer     = Lights.Resource;
+        MappedLightBase = Lights.Mapped;
 
-        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(FrameConstants);
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                 IID_PPV_ARGS(&ConstantBuffer)));
-        SMILE_HR(ConstantBuffer->Map(0, &NoReadRange, &Ptr));
-        MappedFrameBase = reinterpret_cast<u8*>(Ptr);
-
-        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                             kMaxLights * sizeof(FGPULight);
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                 IID_PPV_ARGS(&LightBuffer)));
-        SMILE_HR(LightBuffer->Map(0, &NoReadRange, &Ptr));
-        MappedLightBase = reinterpret_cast<u8*>(Ptr);
-
-        ResourceDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                             kMaxLights * sizeof(FGPULightGI);
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                 IID_PPV_ARGS(&GILightBuffer)));
-        SMILE_HR(GILightBuffer->Map(0, &NoReadRange, &Ptr));
-        MappedGILightBase = reinterpret_cast<u8*>(Ptr);
+        const GpuResources::FUploadBuffer GILights = GpuResources::CreateUploadBuffer(
+            Device.Native(), static_cast<u64>(kMaxLights) * sizeof(FGPULightGI),
+            FCommandQueue::kFramesInFlight, false);
+        GILightBuffer     = GILights.Resource;
+        MappedGILightBase = GILights.Mapped;
 
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i) {
             GILightSRVSlot[i] = SRVHeap.Allocate(1);
@@ -849,36 +831,24 @@ namespace Smile {
             DebugPreviewTarget.Get(), nullptr, DebugPreviewRTVHeap.CpuHandle(0));
 
         D3D12_HEAP_PROPERTIES ReadbackHeap{};
-        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-        D3D12_RESOURCE_DESC ReadbackDesc{};
-        ReadbackDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        ReadbackDesc.Width            = static_cast<u64>(kDebugPreviewRowPitch) *
-                                        kDebugPreviewHeight;
-        ReadbackDesc.Height           = 1;
-        ReadbackDesc.DepthOrArraySize = 1;
-        ReadbackDesc.MipLevels        = 1;
-        ReadbackDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        ReadbackDesc.SampleDesc       = { 1, 0 };
-        ReadbackDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        // Os dois readbacks tem tamanhos muito diferentes (5,76 MB do preview x 1 KB do probe).
+        // Antes eles dividiam um Desc, com o Width alternando duas vezes por iteracao — correto,
+        // mas so enquanto ninguem mexesse na ordem: tirar a reatribuicao do fim do laco daria a
+        // segunda copia do preview um buffer de 1 KB, silenciosamente. Cada criacao carrega o
+        // proprio tamanho agora.
+        const u64 PreviewBytes = static_cast<u64>(kDebugPreviewRowPitch) * kDebugPreviewHeight;
 
         for (u32 I = 0; I < FCommandQueue::kFramesInFlight; ++I) {
-            SMILE_HR(Device.Native()->CreateCommittedResource(
-                &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &ReadbackDesc,
-                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                IID_PPV_ARGS(&DebugPreviewReadback[I])));
+            DebugPreviewReadback[I] =
+                GpuResources::CreateReadbackBuffer(Device.Native(), PreviewBytes);
             DebugPreviewReadbackPending[I] = false;
             DebugPreviewReadbackVersion[I] = 0;
 
-            ReadbackDesc.Width = kDebugProbeReadbackSize;
-            SMILE_HR(Device.Native()->CreateCommittedResource(
-                &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &ReadbackDesc,
-                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                IID_PPV_ARGS(&DebugProbeSampleReadback[I])));
+            DebugProbeSampleReadback[I] =
+                GpuResources::CreateReadbackBuffer(Device.Native(), kDebugProbeReadbackSize);
             DebugProbeSamplePending[I] = false;
             DebugProbeSampleVersion[I] = 0;
             DebugProbeSampleIndex[I]   = kNoDebugProbe;
-            ReadbackDesc.Width = static_cast<u64>(kDebugPreviewRowPitch) *
-                                 kDebugPreviewHeight;
         }
     }
 

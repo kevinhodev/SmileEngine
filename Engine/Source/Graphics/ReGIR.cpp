@@ -43,22 +43,13 @@ namespace Smile {
     }
 
     void FReGIR::CreateConstantBuffer(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                sizeof(ReGIRConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        static_assert(sizeof(ReGIRConstants) % 256 == 0,
+                      "o CBAddr indexa por sizeof(); root CBV exige 256-alinhado");
+
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            Device, sizeof(ReGIRConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     D3D12_GPU_VIRTUAL_ADDRESS FReGIR::CBAddr() const {

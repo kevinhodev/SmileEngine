@@ -212,33 +212,25 @@ namespace Smile {
     }
 
     void FSunShadows::CreateConstantBuffers(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-        auto MakeBuffer = [&](UINT64 Width, Microsoft::WRL::ComPtr<ID3D12Resource>& Out, u8*& Mapped) {
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = Width;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr, IID_PPV_ARGS(&Out)));
-            D3D12_RANGE NoRead{ 0, 0 };
-            void* Ptr = nullptr;
-            SMILE_HR(Out->Map(0, &NoRead, &Ptr));
-            Mapped = reinterpret_cast<u8*>(Ptr);
+        auto MakeBuffer = [&](u64 SliceBytes, u32 SliceCount,
+                              Microsoft::WRL::ComPtr<ID3D12Resource>& Out, u8*& Mapped) {
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, SliceBytes, SliceCount);
+            Out    = Upload.Resource;
+            Mapped = Upload.Mapped;
         };
 
-        MakeBuffer(static_cast<UINT64>(FCommandQueue::kFramesInFlight) * kNumCascades *
-                       sizeof(ShadowCascadeConstants), CascadeCB, MappedCascade);
-        MakeBuffer(static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(CSMConstants),
-                   CSMCB, MappedCSM);
+        // Os dois indexadores usam sizeof() como passo (ver o memcpy do CSM logo abaixo e o
+        // CascadeCBAddr), entao o passo tem que ser 256-alinhado — que e o que o root CBV
+        // exige do endereco de cada slot.
+        static_assert(sizeof(ShadowCascadeConstants) % 256 == 0 &&
+                      sizeof(CSMConstants) % 256 == 0,
+                      "passo do CB do CSM tem que ser 256-alinhado");
+
+        MakeBuffer(sizeof(ShadowCascadeConstants),
+                   FCommandQueue::kFramesInFlight * kNumCascades, CascadeCB, MappedCascade);
+        MakeBuffer(sizeof(CSMConstants),
+                   FCommandQueue::kFramesInFlight, CSMCB, MappedCSM);
 
         CPUConstants.Params  = { static_cast<f32>(kNumCascades), DepthBiasTexels,
                                  1.0f / static_cast<f32>(kResolution), 0.0f };

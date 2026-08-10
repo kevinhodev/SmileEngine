@@ -5,33 +5,15 @@
 
 namespace Smile {
     namespace {
+        // Caminho avulso do FGpuMesh::Upload (primitivas do editor e do preview de material):
+        // o VB/IB fica no proprio upload heap, sem copia para DEFAULT. A cena usa o pool do
+        // AddMeshesBatch, nao isto.
         Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(
             ID3D12Device* _Device, const void* _Src, UINT _Size) {
-            D3D12_HEAP_PROPERTIES HeapProps{};
-            HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-            D3D12_RESOURCE_DESC ResourceDesc{};
-            ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            ResourceDesc.Width            = _Size;
-            ResourceDesc.Height           = 1;
-            ResourceDesc.DepthOrArraySize = 1;
-            ResourceDesc.MipLevels        = 1;
-            ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            ResourceDesc.SampleDesc       = { 1, 0 };
-            ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-            Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                     &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                     IID_PPV_ARGS(&Buffer)));
-
-            D3D12_RANGE NoReadRange{ 0, 0 };
-            void* Mapped = nullptr;
-            SMILE_HR(Buffer->Map(0, &NoReadRange, &Mapped));
-            std::memcpy(Mapped, _Src, _Size);
-            Buffer->Unmap(0, nullptr);
-            return Buffer;
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, _Size, 1, false);
+            std::memcpy(Upload.Mapped, _Src, _Size);
+            return Upload.Resource;
         }
     }
 

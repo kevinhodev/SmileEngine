@@ -143,20 +143,10 @@ namespace Smile {
         StatsPSO.Initialize(_Device, "DDGIDebugStats.cs_6_0.cso", 1, 1);
         PointDiagnosticPSO.Initialize(_Device, "DDGIDebugPoint.cs_6_0.cso", 5, 1);
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(DDGIDebugConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCBBase)));
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(DDGIDebugConstants), FCommandQueue::kFramesInFlight);
+        CB            = Upload.Resource;
+        MappedCBBase  = Upload.Mapped;
         CreatePointDiagnosticResources(_Device);
     }
 
@@ -212,40 +202,22 @@ namespace Smile {
         static_assert(FCommandQueue::kFramesInFlight == 2,
                       "Atualize os arrays de readback do diagnostico DDGI");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                sizeof(PointDiagnosticConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(PointDiagnosticConstants), FCommandQueue::kFramesInFlight);
+        PointDiagnosticCB       = Upload.Resource;
+        PointDiagnosticMappedCB = Upload.Mapped;
 
-        D3D12_HEAP_PROPERTIES UploadHeap{};
-        UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&PointDiagnosticCB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(PointDiagnosticCB->Map(
-            0, &NoRead, reinterpret_cast<void**>(&PointDiagnosticMappedCB)));
-
-        Desc.Width = static_cast<UINT64>(kPointOutputRows) * sizeof(Vec4);
+        // O readback tem o tamanho da SAIDA (kPointOutputRows x Vec4), nao o do CB — antes os
+        // dois compartilhavam o mesmo Desc e a distincao vinha de um `Desc.Width =` no meio.
+        const u64 OutputBytes = static_cast<u64>(kPointOutputRows) * sizeof(Vec4);
         PointDiagnosticOutput = GpuResources::CreateBuffer(
-            _Device, Desc.Width, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            _Device, OutputBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
             "DDGI · diagnostico de ponto");
         PointOutputState = D3D12_RESOURCE_STATE_COMMON;
-        D3D12_HEAP_PROPERTIES ReadbackHeap{};
-        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+
         for (u32 I = 0; I < FCommandQueue::kFramesInFlight; ++I) {
-            SMILE_HR(_Device->CreateCommittedResource(
-                &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                IID_PPV_ARGS(&PointDiagnosticReadback[I])));
+            PointDiagnosticReadback[I] = GpuResources::CreateReadbackBuffer(_Device, OutputBytes);
             PointReadbackPending[I] = false;
             PointReadbackVersion[I] = 0;
         }

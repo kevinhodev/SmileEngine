@@ -201,27 +201,12 @@ namespace Smile {
     }
 
     void FLocalShadows::CreateConstantBuffers(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                (kMaxShadows + kMaxCubeShadows * 6) * 256; // 1 Mat44/slice+face
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&SliceCB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(SliceCB->Map(0, &NoRead, &Ptr));
-        MappedSlice = reinterpret_cast<u8*>(Ptr);
+        // 1 Mat44 por slice+face, num passo de 256 (alinhamento de CBV).
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, 256,
+            FCommandQueue::kFramesInFlight * (kMaxShadows + kMaxCubeShadows * 6));
+        SliceCB     = Upload.Resource;
+        MappedSlice = Upload.Mapped;
     }
 
     void FLocalShadows::TransitionArray(ID3D12GraphicsCommandList* _CommandList,
