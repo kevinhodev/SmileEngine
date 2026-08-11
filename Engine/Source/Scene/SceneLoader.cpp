@@ -5,6 +5,7 @@
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <cstdlib> // getenv: override do caminho da captura de descritores
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -269,6 +270,20 @@ namespace Smile {
         // Zera aqui e nao no Prepare: o Prepare so decodifica em CPU, quem cria recurso e o
         // commit. A janela do contador tem que casar com a fase que o log ao lado mede.
         GpuResources::ResetCreationStats();
+
+        // Captura os descritores REAIS do LOAD, do mesmo jeito que o RecreateInternalTargets
+        // faz com os do resize. Os dois conjuntos sao populacoes DIFERENTES e a distincao
+        // decide a frente de alocacao: o resize sao ~79 recursos GRANDES (o commit de pagina
+        // domina, e so um pool que RETEM memoria ajuda), o load sao ~471 recursos pequenos (o
+        // overhead por heap domina, que e o que sub-alocar remove). Medir um e concluir sobre
+        // o outro seria repetir o erro que ja custou tres conclusoes nesta frente.
+#if SMILE_DIAGNOSTICS
+        const char* CaptureOverride = std::getenv("SMILE_CAPTURE_DESCS_LOAD");
+        // Variavel propria e nao a do resize: com a mesma, um dump sobrescreveria o outro e
+        // sobraria um arquivo so, sem dizer de qual janela veio.
+        GpuResources::FDescCaptureSession DescCapture(
+            CaptureOverride ? CaptureOverride : "smile-load-descs.txt");
+#endif
         const FPreparedCookedScene& Prepared = *_Prepared;
         const fs::path& base = Prepared.BasePath;
         const fs::path& scenePath = Prepared.ScenePath;
@@ -683,6 +698,9 @@ namespace Smile {
         // O par do breakdown: aquele diz QUANTO esta alocado, este diz quanto CUSTOU alocar.
         GpuResources::LogCreationUnattributed("commit/nao-atribuido", PhaseSum);
         GpuResources::LogCreationStats("load da cena");
+#if SMILE_DIAGNOSTICS
+        DescCapture.Complete();
+#endif
         return true;
     }
 }

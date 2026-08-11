@@ -1058,7 +1058,8 @@ namespace Smile {
         // CAMINHO.
 #if SMILE_DIAGNOSTICS
         const char* CaptureOverride = std::getenv("SMILE_CAPTURE_DESCS");
-        GpuResources::SetDescCapture(true);
+        GpuResources::FDescCaptureSession DescCapture(
+            CaptureOverride ? CaptureOverride : "smile-resize-descs.txt");
 #endif
 
         const u32 RW = RenderWidth(),        RH = RenderHeight();
@@ -1115,12 +1116,9 @@ namespace Smile {
                  std::to_string(SW) + "x" + std::to_string(SH) + " display)");
         GpuResources::LogCreationStats("resize");
 #if SMILE_DIAGNOSTICS
-        GpuResources::SetDescCapture(false);
         // Sobrescreve a cada resize: o ultimo vence, e e o que o usuario acabou de ver no
-        // log. O Dump loga o caminho ABSOLUTO — sem isso, "onde foi parar o arquivo?" vira a
-        // proxima pergunta, porque o cwd de um app lancado por atalho nao e obvio.
-        GpuResources::DumpCapturedDescs(CaptureOverride ? CaptureOverride
-                                                        : "smile-resize-descs.txt");
+        // log. O Dump loga o caminho absoluto; o guard desliga a captura tambem em excecao.
+        DescCapture.Complete();
 #endif
     }
 

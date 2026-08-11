@@ -295,8 +295,17 @@ O **registro no `VramTracker` é parte da criação** em DEFAULT heap — o cham
 `EVramCategory` e pronto. Antes era um passo separado que cada autor precisava lembrar, e
 esquecer sumia com o recurso do breakdown de VRAM do editor sem nenhum sintoma.
 
-Não cobre caminhos com necessidade própria (placed/reservados/aliasing): monte o desc na mão
-nesses casos. O objetivo é matar o boilerplate, não virar uma camada sobre o D3D12.
+Em **Resource Heap Tier 2**, o funil subaloca DEFAULT heap com D3D12MA 3.2.0 e cria placed
+resources; a `Allocation` é liberada pelo `ID3DDestructionNotifier` do recurso. Tier 1,
+RT/DS ainda sem inicialização explícita, falha do allocator e `SMILE_DISABLE_D3D12MA=1` usam
+`CreateCommittedResource` como fallback. UPLOAD e READBACK continuam committed. Os logs de
+criação separam `DEFAULT/D3D12MA` de
+`DEFAULT/committed` e incluem bytes reservados/ocupados pelo allocator para o A/B de custo e
+residência não depender de estimativa.
+
+Não cobre caminhos com política própria (recursos reservados ou aliasing explícito entre
+recursos): monte o desc e gerencie o lifetime nesses casos. O objetivo é centralizar a forma
+comum, não virar uma camada completa sobre o D3D12.
 
 ### Pipeline de compute: dois layouts
 
@@ -878,12 +887,9 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
   divergiu: `IsReady()` vs `IsInitialized()`; `Execute()` vs `Record*()`; `InvalidateHistory()`
   vs `ResetHistory()` vs `ResetHistoryOnce()` vs `InvalidateResults()`; `Resize()` vs
   `SetupForResize()`. É por isso que a orquestração precisa saber o nome exato de cada um.
-- **Boilerplate DX12 duplicado** — *parcialmente resolvido em 2026-08-04*. As cópias sumiram
-  (5 `Transition()` locais idênticos, 4 clones de `CreateTex2D`, 3 de upload buffer) e existe
-  `GpuResources.h` (§4) como caminho único. **Restam ~125 `CreateCommittedResource`** montando
-  `HEAP_PROPERTIES`+`RESOURCE_DESC` na mão — migração mecânica, mas caso a caso: cada uma pode
-  divergir num flag ou no estado inicial, e não há teste que pegue isso. ~60 root signatures
-  seguem montadas campo a campo (sem helper ainda).
+- **Boilerplate DX12 duplicado** — *funil de recursos resolvido*. `GpuResources.h` (§4) é o
+  caminho único da engine para DEFAULT/UPLOAD/READBACK e aplica tracking, instrumentação e a
+  política D3D12MA num só ponto. ~60 root signatures ainda seguem montadas campo a campo.
 - **`ViewportWidget` é o espelho do God object no editor:** 2796 linhas + 645 no header e
   **134 `Q_PROPERTY`**, acumulando host do HWND, input, telemetria e a bridge de ~130 knobs de
   render. As bridges por domínio já provam o padrão certo — falta um `RenderSettingsBridge`.

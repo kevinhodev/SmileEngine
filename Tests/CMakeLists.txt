@@ -56,11 +56,17 @@ add_executable(SmileSceneIdentityTests
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/UploadQueue.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/VramTracker.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/ThirdParty/D3D12MA/D3D12MemAlloc.cpp
 )
 
 target_compile_features(SmileSceneIdentityTests PRIVATE cxx_std_20)
 target_include_directories(SmileSceneIdentityTests PRIVATE
     ${PROJECT_SOURCE_DIR}/Engine/Include
+    ${PROJECT_SOURCE_DIR}/Engine/ThirdParty
+)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/Engine/ThirdParty/D3D12MA/D3D12MemAlloc.cpp
+    PROPERTIES COMPILE_OPTIONS "/W0"
 )
 target_link_libraries(SmileSceneIdentityTests PRIVATE d3d12 dxgi)
 set_target_properties(SmileSceneIdentityTests PROPERTIES

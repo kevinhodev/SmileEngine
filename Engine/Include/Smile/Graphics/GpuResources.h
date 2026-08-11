@@ -1,12 +1,14 @@
 #pragma once
 
 #include <d3d12.h>
+#include <dxgi1_6.h>
+#include <string>
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/VramTracker.h"
 
-// Fabrica de recursos D3D12. FUNIL FECHADO: nao existe mais nenhum CreateCommittedResource
-// nem D3D12_HEAP_TYPE_* fora deste arquivo (a unica excecao e o VramTracker, que INSPECIONA
-// o heap de um recurso pronto para decidir se o rastreia — leitura, nao criacao).
+// Fabrica de recursos D3D12. FUNIL FECHADO: o codigo da engine nao cria committed resources
+// A implementacao vendorada naturalmente usa a API nativa; o VramTracker apenas INSPECIONA
+// o heap de um recurso pronto para decidir se o rastreia (leitura, nao criacao).
 //
 // Havia 132 CreateCommittedResource espalhados por 48 arquivos, cada um remontando
 // D3D12_HEAP_PROPERTIES + D3D12_RESOURCE_DESC campo a campo, mais uma duzia de copias locais
@@ -25,6 +27,23 @@
 // Nao substitui caminhos com necessidade propria (reservados, placed, aliasing): o objetivo
 // e cobrir a forma comum, nao virar uma camada de abstracao sobre o D3D12.
 namespace Smile::GpuResources {
+
+    // Inicializado pelo FD3D12Device depois de descobrir o Resource Heap Tier. A primeira
+    // versao usa os pools DEFAULT do D3D12MA somente em Tier 2. Tier 1 e recursos RT/DS
+    // continuam committed: os passes antigos ainda nao garantem Clear/Discard/Copy antes do
+    // primeiro uso de todo alvo placed.
+    bool InitializeDefaultAllocator(ID3D12Device* Device, IDXGIAdapter* Adapter,
+                                    D3D12_RESOURCE_HEAP_TIER HeapTier);
+    void ShutdownDefaultAllocator(ID3D12Device* Device);
+
+    struct FMemoryAllocatorStats {
+        bool Enabled          = false;
+        u32  ActiveResources  = 0;
+        u64  BlockBytes       = 0; // heaps reservados pelo D3D12MA
+        u64  AllocationBytes  = 0; // ranges ocupados por recursos vivos
+    };
+
+    FMemoryAllocatorStats MemoryAllocatorStats();
 
     // === Descritores ==============================================================
     // Uteis quando o chamador precisa do desc antes de criar (footprints de copia, ou
@@ -122,11 +141,19 @@ namespace Smile::GpuResources {
     // criacao de recurso nunca esta no caminho quente de frame.
 
     enum class EHeapClass : u8 { Default, Upload, Readback, Count };
+    enum class EDefaultCreationPath : u8 { Committed, D3D12MA, Count };
 
     struct FCreationStats {
         u32 Count [static_cast<size_t>(EHeapClass::Count)]{};
         u64 Bytes [static_cast<size_t>(EHeapClass::Count)]{};
         u64 Nanos [static_cast<size_t>(EHeapClass::Count)]{}; // tempo DENTRO do D3D12
+
+        // Subdivisao do DEFAULT. Count/Bytes/Nanos acima continuam sendo o total e preservam
+        // os consumidores existentes; estes campos tornam o A/B do allocator visivel no
+        // mesmo log de fase sem misturar fallback committed com placed.
+        u32 DefaultPathCount [static_cast<size_t>(EDefaultCreationPath::Count)]{};
+        u64 DefaultPathBytes [static_cast<size_t>(EDefaultCreationPath::Count)]{};
+        u64 DefaultPathNanos [static_cast<size_t>(EDefaultCreationPath::Count)]{};
     };
 
     FCreationStats CreationStats();
@@ -166,8 +193,37 @@ namespace Smile::GpuResources {
     // por MB extraido dele.
     //
     // Desligada por padrao e sem custo quando desligada (um bool checado por criacao).
-    void SetDescCapture(bool Enabled);
+    //
+    // Ha DUAS janelas de captura na engine (o load da cena e o resize), e elas compartilham
+    // um vetor so. Por isso ligar devolve se FOI ESTA CHAMADA que ligou: se outra janela ja
+    // estava aberta, esta nao mexe em nada e devolve false — sem isso, uma captura aninhada
+    // limparia o vetor da externa e a desligaria no meio, produzindo um conjunto que parece
+    // legitimo e nao e. Quem recebeu false nao deve desligar nem dumpar.
+    //
+    // Hoje as duas janelas nao se aninham (RecreateInternalTargets so entra por Resize e por
+    // ApplyRenderScale, nenhum deles chamado de dentro do commit da cena). O guard existe
+    // para o dia em que isso mudar, porque o modo de falha e silencioso.
+    bool SetDescCapture(bool Enabled);
     bool DumpCapturedDescs(const char* Path); // texto; false se nao abriu ou nada capturado
+
+    // Fecha a captura mesmo se SMILE_HR lancar no meio de um load/resize. Complete() grava o
+    // conjunto apenas no caminho de sucesso; o destrutor so desliga e descarta a janela
+    // parcial, impedindo uma falha de deixar a captura global ligada para sempre.
+    class FDescCaptureSession {
+    public:
+        explicit FDescCaptureSession(const char* Path);
+        ~FDescCaptureSession() noexcept;
+
+        FDescCaptureSession(const FDescCaptureSession&) = delete;
+        FDescCaptureSession& operator=(const FDescCaptureSession&) = delete;
+
+        bool OwnsCapture() const { return Owns; }
+        bool Complete();
+
+    private:
+        std::string Path;
+        bool        Owns = false;
+    };
 
     // === Descritores de view ======================================================
     // Os campos que nao aparecem aqui sao os que ficam no default em 100% dos usos atuais

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/D3D12Device.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <d3d12sdklayers.h>
@@ -50,6 +51,8 @@ namespace Smile {
     }
 
     FD3D12Device::~FD3D12Device() noexcept {
+        if (Device) GpuResources::ShutdownDefaultAllocator(Device.Get());
+
         if (DebugInfoQueue && DebugCallbackRegistered) {
             const HRESULT Hr = DebugInfoQueue->UnregisterMessageCallback(DebugCallbackCookie);
             if (FAILED(Hr)) {
@@ -168,6 +171,9 @@ namespace Smile {
             LogDebug("[D3D12] - Resource Heap Tier: " +
                      std::to_string(static_cast<int>(Options.ResourceHeapTier)));
         }
+
+        GpuResources::InitializeDefaultAllocator(
+            Device.Get(), Adapter.Get(), ResourceHeapTier);
     }
 
     const FVideoMemoryInfo& FD3D12Device::QueryVideoMemory() const {

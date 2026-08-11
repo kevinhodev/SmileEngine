@@ -1,11 +1,13 @@
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <D3D12MA/D3D12MemAlloc.h>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,6 +32,28 @@ namespace Smile::GpuResources {
         std::atomic<u64> GBytes[kHeapClasses];
         std::atomic<u64> GNanos[kHeapClasses];
 
+        constexpr size_t kDefaultPaths = static_cast<size_t>(EDefaultCreationPath::Count);
+        std::atomic<u32> GDefaultPathCount[kDefaultPaths];
+        std::atomic<u64> GDefaultPathBytes[kDefaultPaths];
+        std::atomic<u64> GDefaultPathNanos[kDefaultPaths];
+
+        struct FDefaultAllocatorState {
+            std::mutex                 Mutex;
+            ComPtr<D3D12MA::Allocator> Allocator;
+            ID3D12Device*              Device = nullptr; // identidade; Allocator segura a ref
+            std::atomic<u32>           ActiveResources{ 0 };
+            bool                       Accepting = false;
+            bool                       ShutdownRequested = false;
+            bool                       FallbackWarningLogged = false;
+            bool                       NotifierSupported = true;
+        };
+
+        FDefaultAllocatorState GDefaultAllocator;
+
+        struct FAllocationReleaseContext {
+            D3D12MA::Allocation* Allocation = nullptr;
+        };
+
         struct FCapturedDesc {
             D3D12_RESOURCE_DESC Desc;
             D3D12_HEAP_TYPE     HeapType;
@@ -46,55 +70,273 @@ namespace Smile::GpuResources {
             }
         }
 
+        void FinalizeAllocatorIfIdle() {
+            if (GDefaultAllocator.ActiveResources.load(std::memory_order_acquire) != 0) return;
+
+            std::lock_guard Lock(GDefaultAllocator.Mutex);
+            if (!GDefaultAllocator.ShutdownRequested ||
+                GDefaultAllocator.ActiveResources.load(std::memory_order_relaxed) != 0)
+                return;
+
+            GDefaultAllocator.Allocator.Reset();
+            GDefaultAllocator.Device = nullptr;
+            GDefaultAllocator.ShutdownRequested = false;
+        }
+
+        void CALLBACK ReleaseD3D12MAAllocation(void* _Data) {
+            auto* Context = static_cast<FAllocationReleaseContext*>(_Data);
+            D3D12MA::Allocation* Allocation = Context->Allocation;
+            delete Context;
+            Allocation->Release();
+
+            const u32 Previous =
+                GDefaultAllocator.ActiveResources.fetch_sub(1, std::memory_order_acq_rel);
+            if (Previous == 1) FinalizeAllocatorIfIdle();
+        }
+
+        void DisablePlacedPath() {
+            std::lock_guard Lock(GDefaultAllocator.Mutex);
+            GDefaultAllocator.Accepting = false;
+            GDefaultAllocator.NotifierSupported = false;
+        }
+
+        HRESULT TryCreatePlaced(ID3D12Device* _Device, const D3D12_RESOURCE_DESC& _Desc,
+                                D3D12_RESOURCE_STATES _InitialState,
+                                const D3D12_CLEAR_VALUE* _Clear,
+                                ComPtr<ID3D12Resource>& _Out, bool& _Attempted) {
+            ComPtr<D3D12MA::Allocator> Allocator;
+            {
+                std::lock_guard Lock(GDefaultAllocator.Mutex);
+                if (!GDefaultAllocator.Accepting || !GDefaultAllocator.NotifierSupported ||
+                    GDefaultAllocator.Device != _Device || !GDefaultAllocator.Allocator) {
+                    _Attempted = false;
+                    return E_NOINTERFACE;
+                }
+                Allocator = GDefaultAllocator.Allocator;
+            }
+            _Attempted = true;
+
+            D3D12_RESOURCE_ALLOCATION_INFO Info =
+                _Device->GetResourceAllocationInfo(0, 1, &_Desc);
+            constexpr u64 kGranularity = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+            Info.SizeInBytes = (Info.SizeInBytes + kGranularity - 1) & ~(kGranularity - 1);
+
+            D3D12MA::ALLOCATION_DESC AllocationDesc{};
+            AllocationDesc.Flags    = D3D12MA::ALLOCATION_FLAG_CAN_ALIAS;
+            AllocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+            D3D12MA::Allocation* Allocation = nullptr;
+            HRESULT Hr = Allocator->AllocateMemory(&AllocationDesc, &Info, &Allocation);
+            if (FAILED(Hr)) return Hr;
+
+            ComPtr<ID3D12Resource> Resource;
+            Hr = Allocator->CreateAliasingResource(
+                Allocation, 0, &_Desc, _InitialState, _Clear, IID_PPV_ARGS(&Resource));
+            if (FAILED(Hr)) {
+                Allocation->Release();
+                return Hr;
+            }
+
+            auto* Context = new (std::nothrow) FAllocationReleaseContext{ Allocation };
+            if (!Context) {
+                Resource.Reset();
+                Allocation->Release();
+                return E_OUTOFMEMORY;
+            }
+
+            ComPtr<ID3DDestructionNotifier> Notifier;
+            Hr = Resource.As(&Notifier);
+            if (FAILED(Hr)) {
+                delete Context;
+                Resource.Reset();
+                Allocation->Release();
+                DisablePlacedPath();
+                return Hr;
+            }
+
+            UINT Cookie = 0;
+            Hr = Notifier->RegisterDestructionCallback(
+                &ReleaseD3D12MAAllocation, Context, &Cookie);
+            if (FAILED(Hr)) {
+                delete Context;
+                Notifier.Reset();
+                Resource.Reset();
+                Allocation->Release();
+                DisablePlacedPath();
+                return Hr;
+            }
+
+            GDefaultAllocator.ActiveResources.fetch_add(1, std::memory_order_release);
+            _Out = std::move(Resource);
+            return S_OK;
+        }
+
         // Nucleo unico das duas familias. Cria num LOCAL e so entrega em sucesso — e o que
         // sustenta a promessa de "Out intacto em falha" das variantes Try.
-        HRESULT TryCreateCommitted(ID3D12Device* Device, D3D12_HEAP_TYPE HeapType,
+        HRESULT TryCreateResource(ID3D12Device* Device, D3D12_HEAP_TYPE HeapType,
                                    const D3D12_RESOURCE_DESC& Desc,
                                    D3D12_RESOURCE_STATES InitialState,
                                    const D3D12_CLEAR_VALUE* Clear,
                                    ComPtr<ID3D12Resource>& Out) {
-            const D3D12_HEAP_PROPERTIES Heap = HeapProps(HeapType);
             ComPtr<ID3D12Resource> Resource;
 
-            // O cronometro cobre SO a chamada ao D3D12. Montar desc e registrar no tracker
-            // ficam de fora de proposito: o que se quer medir e o custo do driver criar o
-            // heap, que e o que um pool ou o D3D12MA eliminariam.
+            // O cronometro cobre o caminho de alocacao inteiro: D3D12MA + criacao placed +
+            // notifier, ou CreateCommittedResource no fallback. Montar o desc e registrar no
+            // VramTracker ficam de fora; assim o A/B mede exatamente o que a politica troca.
             const auto Start = std::chrono::steady_clock::now();
-            const HRESULT Hr = Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                                                               InitialState, Clear,
-                                                               IID_PPV_ARGS(&Resource));
+            bool AttemptedD3D12MA = false;
+            bool UsedD3D12MA = false;
+            HRESULT Hr = E_NOINTERFACE;
+            // Placed RT/DS exige Clear, Discard ou Copy antes do primeiro uso. Nem todos os
+            // passes antigos explicitam essa inicializacao porque committed preservava esse
+            // detalhe. Mantemos esses recursos no caminho compatível nesta primeira versao;
+            // buffers e texturas comuns, que concentram o load, seguem pelo pool.
+            const bool ForceCommitted =
+                (Desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) != 0 ||
+                (Desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) != 0;
+            if (HeapType == D3D12_HEAP_TYPE_DEFAULT && !ForceCommitted) {
+                Hr = TryCreatePlaced(Device, Desc, InitialState, Clear, Resource,
+                                     AttemptedD3D12MA);
+                UsedD3D12MA = SUCCEEDED(Hr);
+            }
+            if (!UsedD3D12MA) {
+                if (AttemptedD3D12MA) {
+                    bool ShouldLog = false;
+                    {
+                        std::lock_guard Lock(GDefaultAllocator.Mutex);
+                        ShouldLog = !GDefaultAllocator.FallbackWarningLogged;
+                        GDefaultAllocator.FallbackWarningLogged = true;
+                    }
+                    if (ShouldLog)
+                        LogWarning("[D3D12MA] alocacao placed falhou; usando committed como fallback");
+                }
+
+                const D3D12_HEAP_PROPERTIES Heap = HeapProps(HeapType);
+                Hr = Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
+                                                     InitialState, Clear,
+                                                     IID_PPV_ARGS(&Resource));
+            }
             const auto Elapsed = std::chrono::steady_clock::now() - Start;
+            const u64 ElapsedNanos = static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(Elapsed).count());
 
             if (GCaptureOn.load(std::memory_order_relaxed)) {
                 std::lock_guard Lock(GCaptureMutex);
-                GCaptured.push_back({ Desc, HeapType });
+                if (GCaptureOn.load(std::memory_order_relaxed))
+                    GCaptured.push_back({ Desc, HeapType });
             }
 
             const size_t Klass = static_cast<size_t>(ClassOf(HeapType));
             GCount[Klass].fetch_add(1, std::memory_order_relaxed);
-            GNanos[Klass].fetch_add(
-                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(Elapsed)
-                                     .count()),
-                std::memory_order_relaxed);
+            GNanos[Klass].fetch_add(ElapsedNanos, std::memory_order_relaxed);
+            const size_t Path = static_cast<size_t>(UsedD3D12MA
+                ? EDefaultCreationPath::D3D12MA
+                : EDefaultCreationPath::Committed);
+            if (HeapType == D3D12_HEAP_TYPE_DEFAULT) {
+                GDefaultPathCount[Path].fetch_add(1, std::memory_order_relaxed);
+                GDefaultPathNanos[Path].fetch_add(ElapsedNanos, std::memory_order_relaxed);
+            }
             if (SUCCEEDED(Hr)) {
                 // Tamanho REAL cobrado (alinhamento incluso), mesma medida do VramTracker —
                 // senao os dois numeros nao se comparam.
-                GBytes[Klass].fetch_add(
-                    Device->GetResourceAllocationInfo(0, 1, &Desc).SizeInBytes,
-                    std::memory_order_relaxed);
+                const u64 Bytes = Device->GetResourceAllocationInfo(0, 1, &Desc).SizeInBytes;
+                GBytes[Klass].fetch_add(Bytes, std::memory_order_relaxed);
+                if (HeapType == D3D12_HEAP_TYPE_DEFAULT)
+                    GDefaultPathBytes[Path].fetch_add(Bytes, std::memory_order_relaxed);
                 Out = std::move(Resource);
             }
             return Hr;
         }
 
-        ComPtr<ID3D12Resource> CreateCommitted(ID3D12Device* Device, D3D12_HEAP_TYPE HeapType,
+        ComPtr<ID3D12Resource> CreateResource(ID3D12Device* Device, D3D12_HEAP_TYPE HeapType,
                                                const D3D12_RESOURCE_DESC& Desc,
                                                D3D12_RESOURCE_STATES InitialState,
                                                const D3D12_CLEAR_VALUE* Clear) {
             ComPtr<ID3D12Resource> Resource;
-            SMILE_HR(TryCreateCommitted(Device, HeapType, Desc, InitialState, Clear, Resource));
+            SMILE_HR(TryCreateResource(Device, HeapType, Desc, InitialState, Clear, Resource));
             return Resource;
         }
+    }
+
+    bool InitializeDefaultAllocator(ID3D12Device* _Device, IDXGIAdapter* _Adapter,
+                                    D3D12_RESOURCE_HEAP_TIER _HeapTier) {
+        char Disabled[8]{};
+        const DWORD DisabledLength = GetEnvironmentVariableA(
+            "SMILE_DISABLE_D3D12MA", Disabled, _countof(Disabled));
+        if (DisabledLength != 0 && !(DisabledLength == 1 && Disabled[0] == '0')) {
+            LogInfo("[D3D12MA] desabilitado por SMILE_DISABLE_D3D12MA; usando committed");
+            return false;
+        }
+        if (!_Device || !_Adapter || _HeapTier < D3D12_RESOURCE_HEAP_TIER_2) {
+            LogWarning("[D3D12MA] Heap Tier 2 indisponivel; usando committed");
+            return false;
+        }
+
+        std::lock_guard Lock(GDefaultAllocator.Mutex);
+        if (GDefaultAllocator.Allocator && GDefaultAllocator.Device == _Device) {
+            GDefaultAllocator.Accepting = true;
+            GDefaultAllocator.ShutdownRequested = false;
+            return true;
+        }
+        if (GDefaultAllocator.ActiveResources.load(std::memory_order_acquire) != 0) {
+            LogWarning("[D3D12MA] troca de device recusada com recursos placed ativos");
+            return false;
+        }
+
+        D3D12MA::ALLOCATOR_DESC Desc{};
+        Desc.Flags = D3D12MA_RECOMMENDED_ALLOCATOR_FLAGS;
+        Desc.pDevice = _Device;
+        Desc.pAdapter = _Adapter;
+
+        ComPtr<D3D12MA::Allocator> Allocator;
+        const HRESULT Hr = D3D12MA::CreateAllocator(&Desc, &Allocator);
+        if (FAILED(Hr)) {
+            LogWarning("[D3D12MA] CreateAllocator falhou; usando committed");
+            return false;
+        }
+
+        GDefaultAllocator.Allocator = std::move(Allocator);
+        GDefaultAllocator.Device = _Device;
+        GDefaultAllocator.Accepting = true;
+        GDefaultAllocator.ShutdownRequested = false;
+        GDefaultAllocator.FallbackWarningLogged = false;
+        GDefaultAllocator.NotifierSupported = true;
+        LogInfo("[D3D12MA] pool DEFAULT ativo (Heap Tier 2)");
+        return true;
+    }
+
+    void ShutdownDefaultAllocator(ID3D12Device* _Device) {
+        std::lock_guard Lock(GDefaultAllocator.Mutex);
+        if (!GDefaultAllocator.Allocator || GDefaultAllocator.Device != _Device) return;
+
+        GDefaultAllocator.Accepting = false;
+        GDefaultAllocator.ShutdownRequested = true;
+        if (GDefaultAllocator.ActiveResources.load(std::memory_order_acquire) == 0) {
+            GDefaultAllocator.Allocator.Reset();
+            GDefaultAllocator.Device = nullptr;
+            GDefaultAllocator.ShutdownRequested = false;
+        } else {
+            LogWarning("[D3D12MA] shutdown adiado ate os recursos placed ativos serem liberados");
+        }
+    }
+
+    FMemoryAllocatorStats MemoryAllocatorStats() {
+        ComPtr<D3D12MA::Allocator> Allocator;
+        FMemoryAllocatorStats Out{};
+        {
+            std::lock_guard Lock(GDefaultAllocator.Mutex);
+            Allocator = GDefaultAllocator.Allocator;
+            Out.Enabled = GDefaultAllocator.Accepting;
+            Out.ActiveResources =
+                GDefaultAllocator.ActiveResources.load(std::memory_order_relaxed);
+        }
+        if (Allocator) {
+            D3D12MA::Budget Local{};
+            Allocator->GetBudget(&Local, nullptr);
+            Out.BlockBytes = Local.Stats.BlockBytes;
+            Out.AllocationBytes = Local.Stats.AllocationBytes;
+        }
+        return Out;
     }
 
     D3D12_RESOURCE_DESC Tex2DDesc(u32 _Width, u32 _Height, DXGI_FORMAT _Format,
@@ -151,7 +393,7 @@ namespace Smile::GpuResources {
         const D3D12_RESOURCE_DESC Desc =
             Tex2DDesc(_Width, _Height, _Format, _Flags, _MipLevels, _ArraySize);
         ComPtr<ID3D12Resource> Texture =
-            CreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, _Clear);
+            CreateResource(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, _Clear);
         VramTracker::Register(Texture.Get(), _Category, _Label);
         return Texture;
     }
@@ -163,7 +405,7 @@ namespace Smile::GpuResources {
         const D3D12_RESOURCE_DESC Desc =
             Tex3DDesc(_Width, _Height, _Depth, _Format, _Flags, _MipLevels);
         ComPtr<ID3D12Resource> Texture =
-            CreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, nullptr);
+            CreateResource(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, nullptr);
         VramTracker::Register(Texture.Get(), _Category);
         return Texture;
     }
@@ -174,7 +416,7 @@ namespace Smile::GpuResources {
                                         EVramCategory _Category, const char* _Label) {
         const D3D12_RESOURCE_DESC Desc = BufferDesc(_Bytes, _Flags);
         ComPtr<ID3D12Resource> Buffer =
-            CreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, nullptr);
+            CreateResource(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc, _InitialState, nullptr);
         VramTracker::Register(Buffer.Get(), _Category, _Label);
         return Buffer;
     }
@@ -186,7 +428,7 @@ namespace Smile::GpuResources {
                            u32 _MipLevels, u32 _ArraySize, const char* _Label) {
         const D3D12_RESOURCE_DESC Desc =
             Tex2DDesc(_Width, _Height, _Format, _Flags, _MipLevels, _ArraySize);
-        const HRESULT Hr = TryCreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc,
+        const HRESULT Hr = TryCreateResource(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc,
                                               _InitialState, _Clear, _Out);
         if (SUCCEEDED(Hr)) VramTracker::Register(_Out.Get(), _Category, _Label);
         return Hr;
@@ -196,7 +438,7 @@ namespace Smile::GpuResources {
                             D3D12_RESOURCE_FLAGS _Flags, D3D12_RESOURCE_STATES _InitialState,
                             EVramCategory _Category, const char* _Label) {
         const D3D12_RESOURCE_DESC Desc = BufferDesc(_Bytes, _Flags);
-        const HRESULT Hr = TryCreateCommitted(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc,
+        const HRESULT Hr = TryCreateResource(_Device, D3D12_HEAP_TYPE_DEFAULT, Desc,
                                               _InitialState, nullptr, _Out);
         if (SUCCEEDED(Hr)) VramTracker::Register(_Out.Get(), _Category, _Label);
         return Hr;
@@ -214,7 +456,7 @@ namespace Smile::GpuResources {
         Out.SliceCount = _SliceCount;
 
         const D3D12_RESOURCE_DESC Desc = BufferDesc(Out.SliceBytes * _SliceCount);
-        Out.Resource = CreateCommitted(_Device, D3D12_HEAP_TYPE_UPLOAD, Desc,
+        Out.Resource = CreateResource(_Device, D3D12_HEAP_TYPE_UPLOAD, Desc,
                                        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr);
 
         // Range de leitura vazio: a CPU so escreve aqui. Sem Unmap — o mapeamento vive o
@@ -226,7 +468,7 @@ namespace Smile::GpuResources {
 
     ComPtr<ID3D12Resource> CreateReadbackBuffer(ID3D12Device* _Device, u64 _Bytes) {
         const D3D12_RESOURCE_DESC Desc = BufferDesc(_Bytes);
-        return CreateCommitted(_Device, D3D12_HEAP_TYPE_READBACK, Desc,
+        return CreateResource(_Device, D3D12_HEAP_TYPE_READBACK, Desc,
                                D3D12_RESOURCE_STATE_COPY_DEST, nullptr);
     }
 
@@ -237,6 +479,11 @@ namespace Smile::GpuResources {
             Out.Bytes[i] = GBytes[i].load(std::memory_order_relaxed);
             Out.Nanos[i] = GNanos[i].load(std::memory_order_relaxed);
         }
+        for (size_t i = 0; i < kDefaultPaths; ++i) {
+            Out.DefaultPathCount[i] = GDefaultPathCount[i].load(std::memory_order_relaxed);
+            Out.DefaultPathBytes[i] = GDefaultPathBytes[i].load(std::memory_order_relaxed);
+            Out.DefaultPathNanos[i] = GDefaultPathNanos[i].load(std::memory_order_relaxed);
+        }
         return Out;
     }
 
@@ -246,18 +493,31 @@ namespace Smile::GpuResources {
             GBytes[i].store(0, std::memory_order_relaxed);
             GNanos[i].store(0, std::memory_order_relaxed);
         }
+        for (size_t i = 0; i < kDefaultPaths; ++i) {
+            GDefaultPathCount[i].store(0, std::memory_order_relaxed);
+            GDefaultPathBytes[i].store(0, std::memory_order_relaxed);
+            GDefaultPathNanos[i].store(0, std::memory_order_relaxed);
+        }
     }
 
     namespace {
         void LogStatsBlock(const char* _Label, const FCreationStats& _S, bool _Verbose);
     }
 
-    void SetDescCapture(bool _Enabled) {
+    bool SetDescCapture(bool _Enabled) {
+        std::lock_guard Lock(GCaptureMutex);
         if (_Enabled) {
-            std::lock_guard Lock(GCaptureMutex);
+            if (GCaptureOn.load(std::memory_order_relaxed)) {
+                LogWarning("[Criacao] captura de descritores ja estava ligada; a janela "
+                           "interna foi ignorada para nao corromper a externa");
+                return false;
+            }
             GCaptured.clear();
+            GCaptureOn.store(true, std::memory_order_relaxed);
+            return true;
         }
-        GCaptureOn.store(_Enabled, std::memory_order_relaxed);
+        GCaptureOn.store(false, std::memory_order_relaxed);
+        return true;
     }
 
     bool DumpCapturedDescs(const char* _Path) {
@@ -296,6 +556,20 @@ namespace Smile::GpuResources {
         return true;
     }
 
+    FDescCaptureSession::FDescCaptureSession(const char* _Path)
+        : Path(_Path ? _Path : ""), Owns(SetDescCapture(true)) {}
+
+    FDescCaptureSession::~FDescCaptureSession() noexcept {
+        if (Owns) SetDescCapture(false);
+    }
+
+    bool FDescCaptureSession::Complete() {
+        if (!Owns) return false;
+        SetDescCapture(false);
+        Owns = false;
+        return !Path.empty() && DumpCapturedDescs(Path.c_str());
+    }
+
     FCreationStats CreationDelta(const FCreationStats& _Since) {
         const FCreationStats Now = CreationStats();
         FCreationStats Delta{};
@@ -303,6 +577,14 @@ namespace Smile::GpuResources {
             Delta.Count[i] = Now.Count[i] - _Since.Count[i];
             Delta.Bytes[i] = Now.Bytes[i] - _Since.Bytes[i];
             Delta.Nanos[i] = Now.Nanos[i] - _Since.Nanos[i];
+        }
+        for (size_t i = 0; i < kDefaultPaths; ++i) {
+            Delta.DefaultPathCount[i] =
+                Now.DefaultPathCount[i] - _Since.DefaultPathCount[i];
+            Delta.DefaultPathBytes[i] =
+                Now.DefaultPathBytes[i] - _Since.DefaultPathBytes[i];
+            Delta.DefaultPathNanos[i] =
+                Now.DefaultPathNanos[i] - _Since.DefaultPathNanos[i];
         }
         return Delta;
     }
@@ -321,6 +603,11 @@ namespace Smile::GpuResources {
             _InOutSum.Bytes[i] += Delta.Bytes[i];
             _InOutSum.Nanos[i] += Delta.Nanos[i];
         }
+        for (size_t i = 0; i < kDefaultPaths; ++i) {
+            _InOutSum.DefaultPathCount[i] += Delta.DefaultPathCount[i];
+            _InOutSum.DefaultPathBytes[i] += Delta.DefaultPathBytes[i];
+            _InOutSum.DefaultPathNanos[i] += Delta.DefaultPathNanos[i];
+        }
         LogStatsBlock(_Label, Delta, false);
     }
 
@@ -336,6 +623,17 @@ namespace Smile::GpuResources {
                           ? Total.Bytes[i] - _SumOfPhases.Bytes[i] : 0;
             Rest.Nanos[i] = Total.Nanos[i] > _SumOfPhases.Nanos[i]
                           ? Total.Nanos[i] - _SumOfPhases.Nanos[i] : 0;
+        }
+        for (size_t i = 0; i < kDefaultPaths; ++i) {
+            Rest.DefaultPathCount[i] =
+                Total.DefaultPathCount[i] > _SumOfPhases.DefaultPathCount[i]
+                ? Total.DefaultPathCount[i] - _SumOfPhases.DefaultPathCount[i] : 0;
+            Rest.DefaultPathBytes[i] =
+                Total.DefaultPathBytes[i] > _SumOfPhases.DefaultPathBytes[i]
+                ? Total.DefaultPathBytes[i] - _SumOfPhases.DefaultPathBytes[i] : 0;
+            Rest.DefaultPathNanos[i] =
+                Total.DefaultPathNanos[i] > _SumOfPhases.DefaultPathNanos[i]
+                ? Total.DefaultPathNanos[i] - _SumOfPhases.DefaultPathNanos[i] : 0;
         }
         LogStatsBlock(_Label, Rest, false);
     }
@@ -375,6 +673,26 @@ namespace Smile::GpuResources {
                 Line += _Verbose ? "\n         " : "  |  ";
                 Line += std::string(kNames[i]) + ": " + std::to_string(_S.Count[i]) + " x " +
                         Mb(_S.Bytes[i]) + " em " + Ms(_S.Nanos[i]);
+            }
+
+            static const char* const kPathNames[kDefaultPaths] = {
+                "committed", "D3D12MA"
+            };
+            for (size_t i = 0; i < kDefaultPaths; ++i) {
+                if (_S.DefaultPathCount[i] == 0) continue;
+                Line += _Verbose ? "\n         " : "  |  ";
+                Line += std::string("DEFAULT/") + kPathNames[i] + ": " +
+                        std::to_string(_S.DefaultPathCount[i]) + " x " +
+                        Mb(_S.DefaultPathBytes[i]) + " em " + Ms(_S.DefaultPathNanos[i]);
+            }
+
+            if (_Verbose) {
+                const FMemoryAllocatorStats Allocator = MemoryAllocatorStats();
+                if (Allocator.Enabled || Allocator.ActiveResources != 0) {
+                    Line += "\n         allocator: " + Mb(Allocator.BlockBytes) +
+                            " em heaps, " + Mb(Allocator.AllocationBytes) + " ocupados, " +
+                            std::to_string(Allocator.ActiveResources) + " recursos ativos";
+                }
             }
 
             if (_Verbose) LogInfo(Line);

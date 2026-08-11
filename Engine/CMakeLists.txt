@@ -87,6 +87,7 @@ set(ENGINE_GENERATED_HEADERS
 )
 
 set(ENGINE_SOURCES
+    ThirdParty/D3D12MA/D3D12MemAlloc.cpp
     Source/Core/Logger.cpp
     Source/Graphics/D3D12Device.cpp
     Source/Graphics/CommandQueue.cpp
@@ -165,6 +166,12 @@ add_library(SmileEngine STATIC
     ${ENGINE_HEADERS}
     ${ENGINE_GENERATED_HEADERS}
     ${ENGINE_SOURCES}
+)
+
+# Fonte vendorado: mantem os avisos da engine acionaveis sem editar a biblioteca externa.
+set_source_files_properties(
+    ThirdParty/D3D12MA/D3D12MemAlloc.cpp
+    PROPERTIES COMPILE_OPTIONS "/W0"
 )
 
 target_include_directories(SmileEngine
