@@ -56,16 +56,40 @@ namespace Smile {
         }
     }
 
-    void FTextureSRVHeap::CreateSRV(ID3D12Device* Device, ID3D12Resource* _Resource,
-                                     const D3D12_SHADER_RESOURCE_VIEW_DESC& _SRVDesc, u32 _Slot) {
-        Device->CreateShaderResourceView(_Resource, &_SRVDesc, CpuHandle(_Slot));
-        Device->CreateShaderResourceView(_Resource, &_SRVDesc, CpuHandleStaging(_Slot));
+    void FTextureSRVHeap::Release(u32& _Slot, u32 _Count) {
+        if (_Slot == kInvalidSlot || _Count == 0) return;
+        Free(_Slot, _Count);
+        _Slot = kInvalidSlot;
     }
 
-    void FTextureSRVHeap::CreateUAV(ID3D12Device* Device, ID3D12Resource* _Resource,
+    void FTextureSRVHeap::CopyTable(ID3D12Device* _Device, u32 _DestinationSlot,
+                                    std::span<const u32> _SourceSlots) const {
+        if (_SourceSlots.empty()) return;
+
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> SourceHandles;
+        SourceHandles.reserve(_SourceSlots.size());
+        for (const u32 Slot : _SourceSlots)
+            SourceHandles.push_back(CpuHandleStaging(Slot));
+
+        std::vector<UINT> SourceCounts(_SourceSlots.size(), 1u);
+        D3D12_CPU_DESCRIPTOR_HANDLE Destination = CpuHandle(_DestinationSlot);
+        UINT DestinationCount = static_cast<UINT>(_SourceSlots.size());
+        _Device->CopyDescriptors(
+            1, &Destination, &DestinationCount,
+            static_cast<UINT>(SourceHandles.size()), SourceHandles.data(), SourceCounts.data(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    void FTextureSRVHeap::CreateSRV(ID3D12Device* _Device, ID3D12Resource* _Resource,
+                                     const D3D12_SHADER_RESOURCE_VIEW_DESC& _SRVDesc, u32 _Slot) {
+        _Device->CreateShaderResourceView(_Resource, &_SRVDesc, CpuHandle(_Slot));
+        _Device->CreateShaderResourceView(_Resource, &_SRVDesc, CpuHandleStaging(_Slot));
+    }
+
+    void FTextureSRVHeap::CreateUAV(ID3D12Device* _Device, ID3D12Resource* _Resource,
                                      const D3D12_UNORDERED_ACCESS_VIEW_DESC& _UAVDesc, u32 _Slot) {
-        Device->CreateUnorderedAccessView(_Resource, nullptr, &_UAVDesc, CpuHandle(_Slot));
-        Device->CreateUnorderedAccessView(_Resource, nullptr, &_UAVDesc, CpuHandleStaging(_Slot));
+        _Device->CreateUnorderedAccessView(_Resource, nullptr, &_UAVDesc, CpuHandle(_Slot));
+        _Device->CreateUnorderedAccessView(_Resource, nullptr, &_UAVDesc, CpuHandleStaging(_Slot));
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE FTextureSRVHeap::CpuHandle(u32 _Slot) const {

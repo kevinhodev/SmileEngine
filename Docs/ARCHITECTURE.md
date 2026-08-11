@@ -261,9 +261,9 @@ separados — ver §5). RTV heap próprio. `Present()` respeita tearing.
 ### `FDescriptorHeap` vs `FTextureSRVHeap`
 - `FDescriptorHeap` — wrapper genérico para heaps **não shader-visible** (RTV, DSV), pequenos.
 - `FTextureSRVHeap` — **o** heap CBV/SRV/UAV global, shader-visible, **`kCapacity = 16384`**,
-  com heap de *staging* espelhado (`CpuHandleStaging`) para servir de origem em `CopyDescriptors`.
-  `Allocate(count)` / `Free(slot, count)` sobre uma **free-list** de ranges. Tabelas contíguas
-  são montadas copiando SRVs dispersos para um bloco (ex.: a tabela IBL t8..t10).
+  com heap de *staging* espelhado. `Allocate(count)` / `Free(slot, count)` operam sobre uma
+  **free-list** de ranges; `Release(slot, count)` também invalida o slot do chamador.
+  `CopyTable` monta tabelas contíguas a partir de slots dispersos do staging heap.
 
 > Quem aloca é responsável por liberar no caminho de resize/shutdown. O padrão canônico é o
 > par `ReleaseSizedResources(SRVHeap)` + `SetupForResize(...)` (ver `FAmbientOcclusion`,
@@ -492,10 +492,10 @@ incluído pelos shaders que consomem material (G-buffer, forward blend, os dois 
 shadow depth e o preview). Campo novo no struct C++ = editar esse header, e só ele.
 
 ### Convenção de descriptors
-Tabelas contíguas são montadas copiando SRVs dispersos para um bloco contíguo via
-`ID3D12Device::CopyDescriptors`, tendo o **staging heap** do `FTextureSRVHeap` como origem
-(`CpuHandleStaging`). O G-buffer já nasce contíguo: A, B, C e o depth ocupam 4 slots
-sequenciais, ligados como uma única tabela t0..t3 no deferred lighting.
+Tabelas contíguas são montadas com `FTextureSRVHeap::CopyTable`, que copia slots dispersos do
+**staging heap** para um bloco contíguo via `ID3D12Device::CopyDescriptors`. O G-buffer já nasce
+contíguo: A, B, C e o depth ocupam 4 slots sequenciais, ligados como uma única tabela t0..t3
+no deferred lighting.
 
 ---
 
@@ -801,8 +801,8 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
      `InvalidateHistory()` se acumular entre frames.
 2. **Recursos:** crie via `GpuResources` (§4) — nunca `CreateCommittedResource` direto, senão
    o recurso fica fora do breakdown de VRAM. Aloque SRV/UAV no `FTextureSRVHeap` e **libere** no
-   `ReleaseSizedResources`; monte tabelas contíguas com `CopyDescriptors` a partir do staging
-   heap. Use o overload parametrizável de `FComputePipeline`.
+   `ReleaseSizedResources`; monte tabelas contíguas com `FTextureSRVHeap::CopyTable`. Use o
+   overload parametrizável de `FComputePipeline`.
 3. **Constant buffer:** `GpuResources::CreateUploadBuffer(dev, sizeof(XxxConstants),
    FCommandQueue::kFramesInFlight)` — um slice por frame em voo, já alinhado a 256 B.
 4. **Barreiras:** `TransitionResource` para uma, `FBarrierBatch` para 2+. Nunca
