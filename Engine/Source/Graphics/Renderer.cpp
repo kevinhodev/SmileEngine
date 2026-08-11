@@ -1047,11 +1047,17 @@ namespace Smile {
         const auto RecreateStart = std::chrono::steady_clock::now();
         GpuResources::ResetCreationStats();
 
-        // SMILE_CAPTURE_DESCS=<arquivo> grava os descritores REAIS deste resize para o
-        // Tools/AllocBench reproduzi-los. Por variavel de ambiente e nao por UI porque e
-        // ferramenta de medicao pontual: quem mede sabe ligar, e ninguem paga por isso.
-        const char* CapturePath = std::getenv("SMILE_CAPTURE_DESCS");
-        if (CapturePath) GpuResources::SetDescCapture(true);
+        // Captura os descritores REAIS deste resize para o Tools/AllocBench reproduzi-los.
+        //
+        // SEMPRE, e nao atras de variavel de ambiente. A primeira versao exigia
+        // SMILE_CAPTURE_DESCS e nao produziu nada: o editor e lancado por atalho/IDE, entao
+        // um `set` num terminal qualquer nao alcanca o processo, e o unico sinal disso era a
+        // AUSENCIA de uma linha no log — diagnostico ruim. O custo real e ~79 push_back e um
+        // arquivo de ~5 KB dentro de uma operacao que ja custa 90 ms.
+        //
+        // A variavel sobrevive so como override do CAMINHO.
+        const char* CaptureOverride = std::getenv("SMILE_CAPTURE_DESCS");
+        GpuResources::SetDescCapture(true);
 
         const u32 RW = RenderWidth(),        RH = RenderHeight();
         const u32 SW = SwapChain.GetWidth(), SH = SwapChain.GetHeight();
@@ -1106,10 +1112,12 @@ namespace Smile {
                  std::to_string(RW) + "x" + std::to_string(RH) + " render, " +
                  std::to_string(SW) + "x" + std::to_string(SH) + " display)");
         GpuResources::LogCreationStats("resize");
-        if (CapturePath) {
-            GpuResources::SetDescCapture(false);
-            GpuResources::DumpCapturedDescs(CapturePath);
-        }
+        GpuResources::SetDescCapture(false);
+        // Sobrescreve a cada resize: o ultimo vence, e e o que o usuario acabou de ver no
+        // log. O Dump loga o caminho ABSOLUTO — sem isso, "onde foi parar o arquivo?" vira a
+        // proxima pergunta, porque o cwd de um app lancado por atalho nao e obvio.
+        GpuResources::DumpCapturedDescs(CaptureOverride ? CaptureOverride
+                                                        : "smile-resize-descs.txt");
     }
 
     // Publica no registro os alvos que ja possuem SRV. Nomes sao a chave (o filtro do

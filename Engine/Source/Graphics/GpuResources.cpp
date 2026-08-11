@@ -3,6 +3,7 @@
 #include "Smile/Core/Logger.h"
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -277,8 +278,12 @@ namespace Smile::GpuResources {
                  << static_cast<int>(C.Desc.Flags) << ' '
                  << static_cast<int>(C.HeapType) << '\n';
         }
-        LogInfo("[Criacao] " + std::to_string(GCaptured.size()) +
-                " descritores capturados em " + _Path);
+        // Caminho ABSOLUTO no log: o editor e lancado por atalho ou pela IDE, e o cwd dele
+        // nao e adivinhavel de fora. Sem isto sobra "o arquivo foi escrito onde?".
+        std::error_code Ec;
+        const std::filesystem::path Abs = std::filesystem::absolute(_Path, Ec);
+        LogInfo("[Criacao] " + std::to_string(GCaptured.size()) + " descritores capturados em " +
+                (Ec ? std::string(_Path) : Abs.string()));
         return true;
     }
 
