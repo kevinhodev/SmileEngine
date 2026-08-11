@@ -269,12 +269,21 @@ namespace Smile::GpuResources {
 
         // Texto e nao binario: o arquivo e lido pelo AllocBench mas tambem por um humano
         // conferindo se o conjunto bate com o que o log disse.
-        File << "# smile desc capture v1\n"
-             << "# dim width height deptharray mips format flags heaptype\n";
+        // v2 grava o D3D12_RESOURCE_DESC INTEIRO. A v1 omitia Alignment, SampleDesc e
+        // Layout porque hoje os tres estao no default em todo recurso da engine — mas o dia
+        // em que entrar MSAA (SampleDesc.Count > 1) ou um layout especial, o benchmark
+        // reproduziria descritores DIFERENTES dos reais sem nada acusar. Um campo omitido
+        // por ser constante hoje e uma armadilha para amanha.
+        File << "# smile desc capture v2\n"
+             << "# dim alignment width height deptharray mips format "
+                "samplecount samplequality layout flags heaptype\n";
         for (const FCapturedDesc& C : GCaptured) {
-            File << static_cast<int>(C.Desc.Dimension) << ' ' << C.Desc.Width << ' '
-                 << C.Desc.Height << ' ' << C.Desc.DepthOrArraySize << ' '
-                 << C.Desc.MipLevels << ' ' << static_cast<int>(C.Desc.Format) << ' '
+            File << static_cast<int>(C.Desc.Dimension) << ' ' << C.Desc.Alignment << ' '
+                 << C.Desc.Width << ' ' << C.Desc.Height << ' '
+                 << C.Desc.DepthOrArraySize << ' ' << C.Desc.MipLevels << ' '
+                 << static_cast<int>(C.Desc.Format) << ' '
+                 << C.Desc.SampleDesc.Count << ' ' << C.Desc.SampleDesc.Quality << ' '
+                 << static_cast<int>(C.Desc.Layout) << ' '
                  << static_cast<int>(C.Desc.Flags) << ' '
                  << static_cast<int>(C.HeapType) << '\n';
         }

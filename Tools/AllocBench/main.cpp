@@ -79,26 +79,35 @@ namespace {
         if (!File) return Out;
 
         std::string Line;
+        bool SawV2 = false;
         while (std::getline(File, Line)) {
+            if (Line.rfind("# smile desc capture v2", 0) == 0) { SawV2 = true; continue; }
             if (Line.empty() || Line[0] == '#') continue;
+
+            // Recusa formato antigo em vez de interpretar campos na posicao errada: um
+            // arquivo v1 lido como v2 daria descritores silenciosamente errados, que e
+            // exatamente a classe de erro que este benchmark existe para nao cometer.
+            if (!SawV2) { Out.clear(); return Out; }
+
             std::istringstream S(Line);
-            int Dim = 0, Fmt = 0, Flags = 0, HeapType = 0;
-            unsigned long long W = 0;
-            unsigned Ht = 0, Arr = 0, Mips = 0;
-            if (!(S >> Dim >> W >> Ht >> Arr >> Mips >> Fmt >> Flags >> HeapType)) continue;
+            int Dim = 0, Fmt = 0, Layout = 0, Flags = 0, HeapType = 0;
+            unsigned long long W = 0, Alignment = 0;
+            unsigned Ht = 0, Arr = 0, Mips = 0, SampleCount = 0, SampleQuality = 0;
+            if (!(S >> Dim >> Alignment >> W >> Ht >> Arr >> Mips >> Fmt
+                    >> SampleCount >> SampleQuality >> Layout >> Flags >> HeapType))
+                continue;
             if (HeapType != D3D12_HEAP_TYPE_DEFAULT) { ++OutSkipped; continue; }
 
             D3D12_RESOURCE_DESC D{};
             D.Dimension        = static_cast<D3D12_RESOURCE_DIMENSION>(Dim);
+            D.Alignment        = Alignment;
             D.Width            = W;
             D.Height           = Ht;
             D.DepthOrArraySize = static_cast<UINT16>(Arr);
             D.MipLevels        = static_cast<UINT16>(Mips);
             D.Format           = static_cast<DXGI_FORMAT>(Fmt);
-            D.SampleDesc       = { 1, 0 };
-            D.Layout           = (D.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
-                               ? D3D12_TEXTURE_LAYOUT_ROW_MAJOR
-                               : D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            D.SampleDesc       = { SampleCount, SampleQuality };
+            D.Layout           = static_cast<D3D12_TEXTURE_LAYOUT>(Layout);
             D.Flags            = static_cast<D3D12_RESOURCE_FLAGS>(Flags);
             Out.push_back(D);
         }

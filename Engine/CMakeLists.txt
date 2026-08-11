@@ -179,6 +179,11 @@ target_include_directories(SmileEngine
 target_compile_definitions(SmileEngine
     PUBLIC
         SMILE_SHADER_DIR="${SMILE_SHADER_OUTPUT_DIR}"
+        # Ferramenta de diagnostico (captura de descritores para o AllocBench) so em build de
+        # desenvolvimento: em Release ela escreveria um arquivo a cada resize dentro do jogo
+        # do usuario final, que e efeito colateral que ninguem pediu.
+        $<$<CONFIG:Debug,RelWithDebInfo>:SMILE_DIAGNOSTICS=1>
+        $<$<NOT:$<CONFIG:Debug,RelWithDebInfo>>:SMILE_DIAGNOSTICS=0>
 )
 
 # Bibliotecas necessarias para DirectX 12 + DXGI

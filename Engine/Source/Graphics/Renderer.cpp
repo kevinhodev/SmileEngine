@@ -1049,15 +1049,17 @@ namespace Smile {
 
         // Captura os descritores REAIS deste resize para o Tools/AllocBench reproduzi-los.
         //
-        // SEMPRE, e nao atras de variavel de ambiente. A primeira versao exigia
-        // SMILE_CAPTURE_DESCS e nao produziu nada: o editor e lancado por atalho/IDE, entao
-        // um `set` num terminal qualquer nao alcanca o processo, e o unico sinal disso era a
-        // AUSENCIA de uma linha no log — diagnostico ruim. O custo real e ~79 push_back e um
-        // arquivo de ~5 KB dentro de uma operacao que ja custa 90 ms.
-        //
-        // A variavel sobrevive so como override do CAMINHO.
+        // Automatica, mas SO em build de diagnostico. A primeira versao exigia
+        // SMILE_CAPTURE_DESCS e nao produziu nada — o editor e lancado por atalho/IDE, entao
+        // um `set` num terminal qualquer nao alcanca o processo, e o unico sinal da falha era
+        // a AUSENCIA de uma linha no log. Automatizar consertou isso mas criou outro
+        // problema: em Release o jogo do usuario final escreveria um arquivo a cada resize.
+        // O gate de configuracao resolve os dois. A variavel sobrevive como override do
+        // CAMINHO.
+#if SMILE_DIAGNOSTICS
         const char* CaptureOverride = std::getenv("SMILE_CAPTURE_DESCS");
         GpuResources::SetDescCapture(true);
+#endif
 
         const u32 RW = RenderWidth(),        RH = RenderHeight();
         const u32 SW = SwapChain.GetWidth(), SH = SwapChain.GetHeight();
@@ -1112,12 +1114,14 @@ namespace Smile {
                  std::to_string(RW) + "x" + std::to_string(RH) + " render, " +
                  std::to_string(SW) + "x" + std::to_string(SH) + " display)");
         GpuResources::LogCreationStats("resize");
+#if SMILE_DIAGNOSTICS
         GpuResources::SetDescCapture(false);
         // Sobrescreve a cada resize: o ultimo vence, e e o que o usuario acabou de ver no
         // log. O Dump loga o caminho ABSOLUTO — sem isso, "onde foi parar o arquivo?" vira a
         // proxima pergunta, porque o cwd de um app lancado por atalho nao e obvio.
         GpuResources::DumpCapturedDescs(CaptureOverride ? CaptureOverride
                                                         : "smile-resize-descs.txt");
+#endif
     }
 
     // Publica no registro os alvos que ja possuem SRV. Nomes sao a chave (o filtro do
