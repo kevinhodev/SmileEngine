@@ -32,19 +32,18 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     int numProbes = (int)AtlasParams.w;
     if (probeIdx >= numProbes) return;
 
-    int maxRays = (int)MiscParams.z;
-    int minRays = (int)MiscParams.w;
-
-    if (MiscParams.x < 0.5f) {
-        ProbeData[probeIdx]     = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        ProbeRayCount[probeIdx] = (uint)max(maxRays, 1);
-        return;
-    }
+    int  maxRays  = (int)MiscParams.z;
+    int  minRays  = (int)MiscParams.w;
+    // Duas responsabilidades moram neste passe por CONVENIENCIA (os dois querem a mesma varredura
+    // dos 64 hits), nao por dependencia: relocar a sonda e classificar quantos raios ela merece.
+    // Enquanto o `relocate` desligado saia por aqui, a classificacao ia junto e o ProbeRayCount
+    // congelava no ultimo valor escrito — era o que deixava o toggle AdaptiveRays inerte.
+    bool relocate = MiscParams.x >= 0.5f;
 
     float  spacing = GridMinSpacing.w;
     uint   frame   = (uint)TraceParams.x;
     float4 prev    = ProbeData[probeIdx];
-    float3 offset  = prev.xyz;
+    float3 offset  = relocate ? prev.xyz : float3(0.0f, 0.0f, 0.0f);
 
     int    backfaceCount   = 0;
     int    realCount       = 0;
@@ -54,7 +53,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     [loop]
     for (int r = 0; r < DDGI_RAYS; ++r) {
-        float  d   = ProbesTrace[int2(r, probeIdx)].a;
+        float  d   = ProbesTrace[DDGI_TraceTexel(probeIdx, r, numProbes, DDGI_RAYS)].a;
         if (d < -1e8f) continue; 
         ++realCount;
         float3 dir = DDGI_RayDirection(r, DDGI_RAYS, frame, (uint)probeIdx);
@@ -67,8 +66,19 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     }
 
     float backRatio = (realCount > 0) ? (float)backfaceCount / (float)realCount : 0.0f;
-    float minFront  = spacing * 0.30f; 
-    float maxOff    = spacing * 0.45f; 
+
+    // Contagem de raios: sai da mesma varredura e vale com ou sem relocacao — a sonda parada no
+    // vertice do grid tem uma proximidade tao mensuravel quanto a relocada.
+    float prox = (realCount > 0) ? closestFront : (spacing * 8.0f);
+    ProbeRayCount[probeIdx] = DDGI_DesiredRays(prox, spacing, minRays, maxRays);
+
+    if (!relocate) {
+        ProbeData[probeIdx] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        return;
+    }
+
+    float minFront  = spacing * 0.30f;
+    float maxOff    = spacing * 0.45f;
 
     float3 target;
     if (backRatio > 0.25f) {
@@ -101,7 +111,4 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     float w = inactive ? -1.0f : (activated ? 1.0f + backRatio : backRatio);
     ProbeData[probeIdx] = float4(newOffset, w);
-
-    float prox = (realCount > 0) ? closestFront : (spacing * 8.0f); 
-    ProbeRayCount[probeIdx] = DDGI_DesiredRays(prox, spacing, minRays, maxRays);
 }

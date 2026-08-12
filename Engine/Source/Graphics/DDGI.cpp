@@ -189,11 +189,15 @@ namespace Smile {
     // Re-upload do snapshot. O chamador (Renderer::NotifyMaterialRTStateChanged) e responsavel
     // por garantir que a GPU nao esteja lendo o buffer — e um upload heap unico, sem versao por
     // frame em voo, entao escrever com frames em voo corromperia o que eles estao lendo.
-    void FDDGI::InvalidateRegion(const Vec3& _Min, const Vec3& _Max) {
+    void FDDGI::InvalidateRegion(const Vec3& _Min, const Vec3& _Max, EGIRegionChange _Change) {
         // Uniao com o que ja estava pendente: duas edicoes dentro da mesma janela de frames nao
         // podem fazer a segunda cancelar a primeira. A uniao e conservadora (pega sondas a mais),
         // que e o lado seguro — o errado seria deixar de fora uma sonda que precisava atualizar.
-        if (InvalidateFramesLeft_ > 0) {
+        // Une enquanto QUALQUER uma das duas janelas estiver aberta: a caixa e compartilhada, e
+        // a do atlas de distancia e a mais longa. Zerar a caixa por causa da janela curta ter
+        // fechado deixaria o dist atlas com uma caixa que ja nao descreve o que ele ainda vai
+        // misturar.
+        if (InvalidateFramesLeft_ > 0 || InvalidateDistFramesLeft_ > 0) {
             InvalidateMin_ = { std::min(InvalidateMin_.X, _Min.X),
                                std::min(InvalidateMin_.Y, _Min.Y),
                                std::min(InvalidateMin_.Z, _Min.Z) };
@@ -204,13 +208,18 @@ namespace Smile {
             InvalidateMin_ = _Min;
             InvalidateMax_ = _Max;
         }
-        // Uma sonda ILUMINA o objeto e e iluminada por ele de fora da AABB dele; a caixa cresce
-        // um espacamento de grid em cada lado p/ pegar a camada de sondas em volta, que e onde o
-        // color bleed do objeto aparece.
-        const f32 Pad = SpacingV;
-        InvalidateMin_ = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad, InvalidateMin_.Z - Pad };
-        InvalidateMax_ = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad, InvalidateMax_.Z + Pad };
-        InvalidateFramesLeft_ = kInvalidateFrames;
+        // A caixa guardada aqui e CRUA: o espacamento de folga entra so na hora de mandar para o
+        // shader (UpdatePerFrame). Padding aqui dentro se ACUMULA — a caixa pendente ja vinha
+        // padded, a chamada seguinte unia com ela e padava de novo, entao a regiao crescia um
+        // spacing por lado A CADA CHAMADA. Com uma edicao isolada isso passava despercebido; com
+        // arraste de gizmo, que invalida por FRAME, a caixa engoliria o volume em ~1 segundo.
+        InvalidateFramesLeft_     = kInvalidateFrames;
+        InvalidateDistFramesLeft_ = kInvalidateDistFrames;
+        // So GEOMETRIA envelhece a classificacao: ela mede onde a sonda esta em relacao as
+        // superficies, e luz nenhuma mexe nisso (ver EGIRegionChange). O flag e OU-acumulado
+        // porque a janela e compartilhada — uma edicao de geometria seguida de tres de luz dentro
+        // da mesma janela ainda precisa da reclassificacao no fim.
+        if (_Change == EGIRegionChange::Geometry) ReclassifyPending_ = true;
     }
 
     void FDDGI::RefreshInstanceGeo(const FScene& _Scene) {
@@ -241,29 +250,114 @@ namespace Smile {
                      std::max(_AABBMax.Y - _AABBMin.Y, 0.1f),
                      std::max(_AABBMax.Z - _AABBMin.Z, 0.1f) };
         f32 maxExt = std::max(ext.X, std::max(ext.Y, ext.Z));
-        const int kTargetMax = 24, kMaxPerAxis = 32;
+        // kTargetMax = densidade do grid. E o unico parafuso do espacamento: spacing sai de
+        // maxExt/(kTargetMax-1), e dele saem as tres contagens. No Bistro, 24 da 8,018 m.
+        //
+        // O teto sao limites de DIMENSAO de Texture2D (16384) nos tres recursos que escalam com o
+        // grid. Com o empacotamento 2D (ver DDGI_TileOrigin e DDGI_TraceTexel) nenhum deles depende
+        // mais de um PAR de eixos: os atlas viraram uma grade de tilesPerRow x tileRows e o
+        // ProbesTrace uma grade de kTraceProbesPerRow sondas por linha. O que limita agora e o
+        // NUMERO DE SONDAS, e o teto e ~1 milhao — antes eram 1024 colunas de sonda no atlas de
+        // distancia (o Bistro ja usava 552, e uma segunda cascata nao caberia).
+        //
+        // A checagem continua em RUNTIME e sobre os valores REAIS: em tempo de compilacao so daria
+        // para supor cena cubica, e o pior caso reprovaria grid que cabe folgado. A resposta a nao
+        // caber e abrir o espacamento ate caber — perder resolucao de sonda e ruim, criar textura
+        // invalida e pior, e era isso que acontecia em silencio.
+        constexpr int kTargetMax  = 24;
+        constexpr int kMaxPerAxis = 128; // rede secundaria; quem decide e o gridFits abaixo
+        constexpr u64 kTexMax     = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+
         SpacingV = std::max(maxExt / (kTargetMax - 1), 0.5f);
         auto axisCount = [&](f32 e) {
             int n = static_cast<int>(std::ceil(e / SpacingV)) + 1;
             return std::clamp(n, 2, kMaxPerAxis);
         };
+        // Layout dos atlas: o plano (x,z) nas colunas e o y nas linhas — a vizinhanca do layout
+        // historico —, com o plano enrolado em BANDAS quando nao cabe numa linha. Ver
+        // DDGI_TileOrigin: e a forma que preserva o bloco 2x2 de tiles adjacentes que o gather
+        // de 8 sondas percorre.
+        //
+        // A largura alvo e a raiz do numero de sondas (atlas quase quadrado, as duas dimensoes
+        // crescendo juntas). Sobre ela, uma preferencia: se houver um DIVISOR de Cols perto do
+        // alvo, ele e melhor — banda exata nao deixa coluna sobrando, e o desperdicio cai a zero.
+        // No Bistro o alvo e 67 e o divisor e 69 (552 = 69*8), entao a grade fica exata.
+        //
+        // O shader nao reproduz nada disto: ele le tilesPerRow da LARGURA do atlas. Por isso a
+        // heuristica pode ser o que for sem risco de divergir — e por isso ela pode melhorar
+        // depois sem tocar em shader nenhum.
+        auto tilesPerRowFor = [](u32 Probes, u32 Cols) {
+            u32 Target = 1;
+            while (Target * Target < Probes) ++Target;
+            Target = std::min(Target, std::max(Cols, 1u));
+            const u32 Limit = std::min(Cols, Target * 2u);
+            for (u32 C = Target; C <= Limit; ++C)
+                if (Cols % C == 0) return C;
+            return Target;
+        };
+        auto gridFits = [&] {
+            const u64 Probes = static_cast<u64>(CountX) * CountY * CountZ;
+            const u64 Cols   = static_cast<u64>(CountX) * CountZ;
+            const u64 PerRow = tilesPerRowFor(static_cast<u32>(Probes), static_cast<u32>(Cols));
+            const u64 Bands  = (Cols + PerRow - 1) / PerRow;
+            const u64 Rows   = Bands * CountY;
+            // Maior dimensao de cada recurso. O atlas de distancia (stride 16) e o mais apertado
+            // dos dois; o ProbesTrace paga a largura em raios.
+            const u64 TraceRow = std::min<u64>(Probes, kTraceProbesPerRow);
+            // E o DISPATCH, que nao e recurso e por isso quase ficou de fora: os tres passes
+            // pesados sao uma sonda por grupo, e o D3D12 para em 65535 grupos por dimensao. Sem
+            // esta linha o gridFits aprovaria, as texturas seriam criadas, e so o Dispatch
+            // falharia — em runtime, longe daqui.
+            constexpr u64 kMaxGroups = 65535;
+            return PerRow * (kDistTileSize + 2) <= kTexMax &&
+                   Rows   * (kDistTileSize + 2) <= kTexMax &&
+                   TraceRow * kRaysPerProbe <= kTexMax &&
+                   (Probes + TraceRow - 1) / TraceRow <= kTexMax &&
+                   DispatchGroupsX(static_cast<u32>(Probes)) <= kMaxGroups &&
+                   DispatchGroupsY(static_cast<u32>(Probes)) <= kMaxGroups;
+        };
         CountX = axisCount(ext.X); CountY = axisCount(ext.Y); CountZ = axisCount(ext.Z);
+        if (!gridFits()) {
+            const f32 Requested = SpacingV;
+            // Converge sempre: o espacamento so cresce, e com ele as contagens caem ate o piso
+            // de 2 por eixo (8 sondas), que cabe em qualquer um dos limites.
+            while (!gridFits()) {
+                SpacingV *= 1.05f;
+                CountX = axisCount(ext.X); CountY = axisCount(ext.Y); CountZ = axisCount(ext.Z);
+            }
+            LogWarning("[GI] - DDGI: espacamento de " + std::to_string(Requested) +
+                       " m nao cabe nos atlas (limite de dimensao de textura); aberto para " +
+                       std::to_string(SpacingV) + " m");
+        }
         GridMinV = { _AABBMin.X - 0.5f * SpacingV, _AABBMin.Y - 0.5f * SpacingV,
                      _AABBMin.Z - 0.5f * SpacingV };
         NumProbes       = static_cast<u32>(CountX) * CountY * CountZ;
 
-        AtlasWidth      = static_cast<u32>(CountX) * CountZ * (kTileSize + 2);
-        AtlasHeight     = static_cast<u32>(CountY) * (kTileSize + 2);
-        DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * (kDistTileSize + 2);
-        DistAtlasHeight = static_cast<u32>(CountY) * (kDistTileSize + 2);
+        // Grade 2D de tiles. O shader NAO recebe tilesPerRow por cbuffer: ele o recupera da
+        // LARGURA (DDGI_TilesPerRow), e as duas contas so batem porque a largura e construida aqui
+        // como tilesPerRow*stride. Mexer numa sem a outra desalinha o atlas inteiro em silencio —
+        // por isso as quatro dimensoes saem das MESMAS duas variaveis, aqui, e nao em quatro
+        // expressoes independentes como antes.
+        const u32 Cols  = static_cast<u32>(CountX) * CountZ;
+        TilesPerRow     = tilesPerRowFor(NumProbes, Cols);
+        TileBands       = (Cols + TilesPerRow - 1) / TilesPerRow;
+        const u32 Rows  = TileBands * static_cast<u32>(CountY);
+        AtlasWidth      = TilesPerRow * (kTileSize + 2);
+        AtlasHeight     = Rows        * (kTileSize + 2);
+        DistAtlasWidth  = TilesPerRow * (kDistTileSize + 2);
+        DistAtlasHeight = Rows        * (kDistTileSize + 2);
+        // Idem para o ProbesTrace: kTraceProbesPerRow sondas por linha, cada uma ocupando
+        // kRaysPerProbe texels. O espelho em HLSL e DDGI_TRACE_PROBES_PER_ROW.
+        const u32 TraceProbesPerRow = std::min<u32>(NumProbes, kTraceProbesPerRow);
+        const u32 TraceRows         = (NumProbes + TraceProbesPerRow - 1) / TraceProbesPerRow;
         MaxRayDist      = std::sqrt(ext.X * ext.X + ext.Y * ext.Y + ext.Z * ext.Z) * 1.5f;
 
         IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat,
                                   "DDGI · atlas irradiancia");
         DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT,
                                   "DDGI · atlas distancia");
-        ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat,
-                                  "DDGI · raios por sonda");
+        ProbesTrace = CreateTex2D(_Device, TraceProbesPerRow * kRaysPerProbe, TraceRows,
+                                  kAtlasFormat, "DDGI · raios por sonda");
 
         MeshGeoSlot.clear(); // membro: sobrevive p/ o RefreshInstanceGeo
         std::vector<const FGpuMesh*> UniqueMeshes;
@@ -456,7 +550,17 @@ namespace Smile {
         _Queue.ExecuteAndSync(Lists, 1);
 
         Ready = true;
-        RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0; 
+        // Os tres recursos acabaram de ser ZERADOS ali em cima, entao o primeiro update tem que
+        // SUBSTITUIR, nao misturar. Sem isto ele mistura 1% da estimativa nova com 99% de preto
+        // e o volume inteiro converge a 0.99^n: ~300 updates, 5 s a 60 fps, com a cena nascendo
+        // sem indireto e clareando sozinha.
+        //
+        // A relocacao NAO cobre este caso, apesar de marcar sondas com hysteresis 0: ela so
+        // marca `wasInactive || bigJump` (DDGIRelocate.cs.hlsl), e pos-setup o ProbeData esta
+        // zerado (w = 0, nao e "inativo") e a sonda em ar livre nao se move — logo nao e
+        // marcada. So as encostadas em parede escapavam.
+        HysteresisResetPending = true;
+        RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0;
         LogDebug("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
                 "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
                 "), spacing " + std::to_string(SpacingV) + ", atlas " +
@@ -486,14 +590,31 @@ namespace Smile {
         // passe realmente roda, no RecordUpdate.
         CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 HysteresisResetPending ? 0.0f : Hysteresis };
+        // O atlas de DISTANCIA tem histerese propria (ver kDistHysteresis) — x/y/z do
+        // DistAtlasParams vem do SetupForScene e nao mudam por frame, entao so o w e reescrito.
+        // O reset one-shot vale para os dois: apos o SetupForScene os momentos sao ZERO, e com
+        // media/2o momento em zero o Chebyshev prende todo tap no piso de 0,05.
+        CPU.DistAtlasParams.W = HysteresisResetPending ? 0.0f : kDistHysteresis;
         // Caixa de invalidacao espacial. Como o reset global, so e CONSUMIDA quando o passe roda
         // (o decremento mora no RecordUpdate) — senao um frame em que o DDGI nem atualiza gastaria
         // a janela. w do Min = "ha invalidacao ativa"; w do Max = a hysteresis de dentro dela.
         const bool Invalidating = InvalidateFramesLeft_ > 0;
-        CPU.InvalidateMin     = { InvalidateMin_.X, InvalidateMin_.Y, InvalidateMin_.Z,
-                                  Invalidating ? 1.0f : 0.0f };
-        CPU.InvalidateMaxHyst = { InvalidateMax_.X, InvalidateMax_.Y, InvalidateMax_.Z,
-                                  kInvalidateHysteresis };
+        // A folga entra AQUI, uma vez, sobre a uniao crua (ver InvalidateRegion): uma sonda
+        // ILUMINA o objeto e e iluminada por ele de fora da AABB dele, entao a caixa cresce um
+        // espacamento de grid por lado p/ pegar a camada de sondas em volta, que e onde o color
+        // bleed aparece. Como e derivada e nao acumulada, N chamadas custam o mesmo pad que uma.
+        const f32 Pad = SpacingV;
+        CPU.InvalidateMin     = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad,
+                                  InvalidateMin_.Z - Pad, Invalidating ? 1.0f : 0.0f };
+        CPU.InvalidateMaxHyst = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad,
+                                  InvalidateMax_.Z + Pad, kInvalidateHysteresis };
+        // Mesma caixa, janela e histerese proprias (ver kInvalidateDistHysteresis).
+        // z: o RecordUpdate so decrementa RelocateFramesLeft na hora de despachar, entao aqui
+        // "> 0" ja significa "o passe de classificacao roda neste frame" — o trace usa isso para
+        // mandar os 64 raios e nao alimentar o classificador com a propria decimacao.
+        CPU.MiscParams3       = { kInvalidateDistHysteresis,
+                                  InvalidateDistFramesLeft_ > 0 ? 1.0f : 0.0f,
+                                  RelocateFramesLeft > 0 ? 1.0f : 0.0f, 0.0f };
         CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity,
                                 RayEps.HitShadowRayBias };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
@@ -501,7 +622,7 @@ namespace Smile {
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
-                                GIHit.SkipMode };
+                                GIHit.SkipModePacked() };
         // .w = piso de roughness do hit: a sonda integra o hit num cosseno e serve o hemisferio
         // inteiro — cache NAO-direcional, mesmo caso do reservoir do ReSTIR GI (ver
         // FGIHitSampling::SecondaryRoughnessMin).
@@ -516,16 +637,25 @@ namespace Smile {
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.SkyParams             = SkyLutParams;
 
-        const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
-        const f32 EffMin = AdaptiveRays ? (f32)MinRays : 64.0f;
+        // Detector desligado = piso e teto no MESMO kRaysPerProbe, ou seja o DDGI_DesiredRays
+        // clampa em 64 e a classificacao vira identidade. Era 64.0f literal nos dois — o vinculo
+        // com a largura do grupo do trace so existia no comentario.
+        const f32 EffMax = AdaptiveRays ? (f32)MaxRays : (f32)kRaysPerProbe;
+        // min(Min, Max): os dois setters sao independentes de proposito (baixar o teto nao deve
+        // mexer no piso pelas costas de quem esta ajustando), entao a ordem so pode ser garantida
+        // aqui. Invertidos, o `clamp(desired, min, max)` do HLSL devolve o MAX em silencio.
+        const f32 EffMin = AdaptiveRays ? (f32)std::min(MinRays, MaxRays) : (f32)kRaysPerProbe;
         CPU.MiscParams      = { Relocation ? 1.0f : 0.0f, DeactivationThreshold, EffMax, EffMin };
         // Marca de "recem-ativado" so quando o Relocate ainda tem >=1 frame agendado DEPOIS
         // deste (a marca precisa do proximo Relocate p/ o auto-demote; orfa = hyst 0 eterno).
         // z = ShadowRayMask (ver ReSTIRGI.cpp: translucido fora dos dois casos).
+        // w = detector de mudanca por sonda (rede da invalidacao por evento; so a irradiancia
+        // o consome — ver SetAdaptiveHysteresis).
         CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f,
                                 static_cast<f32>(_PunctualLightCount),
                                 static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
-                                                                : kRTMaskShadowFast), 0.0f };
+                                                                : kRTMaskShadowFast),
+                                AdaptiveHysteresis ? 1.0f : 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }
@@ -574,14 +704,22 @@ namespace Smile {
         // Idem para a janela da invalidacao espacial: conta FRAMES DE UPDATE, nao frames de
         // aplicacao. Se o DDGI ficar sem atualizar (async, toggle, cena sem TLAS), a janela
         // espera em vez de escoar sem ter misturado nada.
-        if (InvalidateFramesLeft_ > 0) --InvalidateFramesLeft_;
+        if (InvalidateFramesLeft_ > 0)     --InvalidateFramesLeft_;
+        if (InvalidateDistFramesLeft_ > 0) --InvalidateDistFramesLeft_;
+
+        // Grade 2D de grupos, uma sonda por grupo. Os tres passes abaixo compartilham a MESMA
+        // grade, e o shader recalcula X pela mesma formula em vez de recebe-la (ver
+        // DDGI_ProbeFromGroup). Com 1D o teto era 65535 sondas — abaixo do que os atlas
+        // comportam, e sem sintoma ate o Dispatch falhar.
+        const u32 GroupsX = DispatchGroupsX(NumProbes);
+        const u32 GroupsY = DispatchGroupsY(NumProbes);
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbesTraceUAVSlot));
-        _CL->Dispatch(NumProbes, 1, 1);
+        _CL->Dispatch(GroupsX, GroupsY, 1);
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -590,14 +728,14 @@ namespace Smile {
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(AtlasUAVSlot));
-        _CL->Dispatch(NumProbes, 1, 1);
+        _CL->Dispatch(GroupsX, GroupsY, 1);
 
         Transition(_CL, DistAtlas.Get(), DistState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         UpdateDistPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DistUAVSlot));
-        _CL->Dispatch(NumProbes, 1, 1);
+        _CL->Dispatch(GroupsX, GroupsY, 1);
 
         if (RelocateFramesLeft > 0) {
             --RelocateFramesLeft;
@@ -611,6 +749,19 @@ namespace Smile {
             // ProbeData -> kAtlasRead fica no TransitionForRead (estado com PIXEL; e o
             // relocate so roda no caminho sincrono — ver CanRunAsync).
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+
+        // Reclassificacao pos-edicao, agendada quando a janela de invalidacao FECHA (ver
+        // ReclassifyPending_). Fica no fim da funcao de proposito: agendar antes do bloco acima
+        // faria o relocate despachar JA, e este RecordUpdate pode estar sendo gravado na fila de
+        // compute — onde a transicao do ProbeData a partir de um estado com PIXEL e ilegal. Aqui,
+        // o agendamento so vale a partir do proximo frame, que ja e avaliado pelo CanRunAsync.
+        //
+        // A guarda de trabalho util: sem relocacao e sem raios adaptativos o passe so reescreve
+        // zeros e 64, e custaria 6 frames de caminho sincrono para nada.
+        if (ReclassifyPending_ && InvalidateFramesLeft_ == 0 && InvalidateDistFramesLeft_ == 0) {
+            ReclassifyPending_ = false;
+            if (Relocation || AdaptiveRays) TriggerReclassify();
         }
     }
 

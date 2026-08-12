@@ -141,10 +141,12 @@ float4 main(VSOutput input) : SV_Target {
     // scale ~= 1 e nada muda: da p/ aplicar sempre, sem flag.
     float2 uv = input.uv;
     if (AtlasTilePx > 0u) {
-        // Atlas de probe (DDGI): a largura e CountX*CountZ*tile e a altura so CountY*tile —
-        // num grid comum isso da algo como 8192x64, proporcao ~128:1. Esticar vira listra e
-        // o letterbox vira um fio de 1 pixel. O util e REEMPACOTAR: os tiles viram uma grade
-        // aproximadamente quadrada, cada probe legivel.
+        // Atlas de probe (DDGI): reempacota os tiles numa grade aproximadamente quadrada, cada
+        // probe legivel, com a proporcao do painel. Nasceu porque o atlas era uma FILEIRA (largura
+        // CountX*CountZ*tile, altura CountY*tile — algo como 8192x64, ~128:1) e esticar isso virava
+        // listra. O atlas em si ja e quase quadrado desde o empacotamento 2D, entao hoje o reempa-
+        // cotamento e quase identidade — continua aqui porque "quase" nao e "sempre", e porque e
+        // ele que ajusta a grade a proporcao do painel, que varia.
         uint tilesX = max(tw / AtlasTilePx, 1u);
         uint tilesY = max(th / AtlasTilePx, 1u);
         uint total  = tilesX * tilesY;

@@ -47,6 +47,17 @@ namespace Smile {
         // em MaterialConstants::RTEmissiveScale.
         f32  RTWeight = 1.0f;
 
+        // Caixa de MUNDO onde esta luz ainda contribui. Exata para point: o AttenuationRadius e
+        // um corte DURO — a janela (1-(d/r)^4)^2 zera exatamente no raio. Para spot e
+        // conservadora (o cone cabe na esfera), e conservador e o lado certo aqui: quem consome
+        // isto e a invalidacao de GI por regiao, onde sobrar sonda custa alguns frames de
+        // reconvergencia e faltar sonda deixa luz fantasma presa no atlas.
+        void InfluenceBounds(Vec3& OutMin, Vec3& OutMax) const {
+            const f32 R = AttenuationRadius > 0.0f ? AttenuationRadius : 0.0f;
+            OutMin = { Position.X - R, Position.Y - R, Position.Z - R };
+            OutMax = { Position.X + R, Position.Y + R, Position.Z + R };
+        }
+
         bool Enabled = true;
         // Projeta sombras. Spot vai pro atlas 2D (budget FLocalShadows::kActiveShadows) e point
         // pro cube array (kActiveCubes) — ganham slot as de maior influencia na camera (energia

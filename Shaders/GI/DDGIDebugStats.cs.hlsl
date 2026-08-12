@@ -1,5 +1,9 @@
 #define DDGI_RAYS 64
 
+// So pelo DDGI_TraceTexel: o ProbesTrace deixou de ser uma linha por sonda (ver DDGICommon), e
+// este passe le exatamente os mesmos texels que o update le.
+#include "DDGICommon.hlsli"
+
 cbuffer DDGIDebugCB : register(b0) {
     row_major float4x4 ViewProj;
     float4 GridMinSpacing;
@@ -27,7 +31,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     [loop]
     for (int r = 0; r < DDGI_RAYS; ++r) {
-        float d = ProbesTrace[int2(r, probeIdx)].a;
+        float d = ProbesTrace[DDGI_TraceTexel(probeIdx, r, numProbes, DDGI_RAYS)].a;
         // Raios nao escolhidos pelo adaptive tracing usam este sentinel e nao podem entrar
         // nem no denominador nem como backface.
         if (d < -1e8f) continue;

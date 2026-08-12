@@ -101,6 +101,19 @@ namespace Smile {
                                            T::VolumetricFog | T::ProbeDiagnostic |
                                            T::RadianceCache | Resolve;
 
+        // Mudou COMO o atlas do DDGI acumula, e nao o que o raio ve nem quanta luz existe:
+        // histerese, detector de mudanca por sonda. O valor gravado nas sondas passa a ser
+        // produzido por outra regra, entao comparar antes/depois sem limpar seria medir um
+        // estado misturado — e tudo que se apoia no atlas herdou o estado velho.
+        //
+        // Mascara igual a do RayVisibility hoje, e separado de proposito: a politica deste
+        // arquivo e nomear pelo MOTIVO, porque e o motivo que decide para onde um alvo NOVO
+        // vai. Um denoiser que dependa da geometria do hit entraria no RayVisibility sem
+        // entrar aqui.
+        inline constexpr T GIAccumulation = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
+                                            T::VolumetricFog | T::ProbeDiagnostic |
+                                            T::RadianceCache | Resolve;
+
         // Mudou a GEOMETRIA do raio (epsilons, offsets, TMin). Alcanca tambem o shadow ray da
         // direta, por isso inclui o eixo do DI.
         inline constexpr T RayGeometry = T::DDGIAtlas | T::ReSTIRGI | T::ReSTIRDI |
@@ -173,6 +186,26 @@ namespace Smile {
                                             T::HiZOcclusion | T::VolumetricFog |
                                             T::ProbeDiagnostic | T::RadianceCache | Resolve;
 
+        // Mudou o CONTEUDO da cena sem a LISTA de renderaveis mudar de tamanho: o olho do
+        // outliner (a instancia sai da TLAS, RaytracingScene.cpp pula !Visible) e as
+        // propriedades de uma luz puntual (cor, intensidade, raio, cone, on/off).
+        //
+        // Duas ausencias, cada uma por um motivo diferente:
+        //
+        //  - DDGIAtlas, pelo mesmo argumento do SceneStructure: derrubar o atlas inteiro troca a
+        //    irradiancia da cena toda pela estimativa de UM trace, e editar uma luz deixa 99%
+        //    das sondas corretas. Quem chama invalida por REGIAO (FDDGI::InvalidateRegion) com a
+        //    caixa de influencia da luz ou a AABB do objeto.
+        //  - TemporalMotion e HiZOcclusion, porque sao indexados por INDICE e aqui a lista nao
+        //    andou: nenhuma entrada passou a descrever outro objeto.
+        //
+        // O resto entra inteiro, e ReSTIRDI/NrdDirect entram AQUI e nao no SkyRadiance porque
+        // ali a mudanca e do sol/ceu, que seguem no caminho dedicado — luz puntual e exatamente
+        // o que os reservoirs de DI amostram.
+        inline constexpr T SceneContent = T::ReGIR | T::ReSTIRGI | T::ReSTIRDI |
+                                          T::Reflections | T::NrdDirect | T::VolumetricFog |
+                                          T::ProbeDiagnostic | T::RadianceCache | Resolve;
+
         // A CAMERA SALTOU: teleporte do foco do editor, carga de cena, buffers recriados. E o
         // unico caso em que resetar os filtros de tela e a resposta certa — nao existe vetor de
         // movimento ligando o frame novo ao antigo, entao reprojetar so traria imagem de outro
@@ -207,11 +240,13 @@ namespace Smile {
         static_assert(!ResetsScreenFilters(ScreenResolve), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(Specular),      "dominio de conteudo");
         static_assert(!ResetsScreenFilters(RayVisibility), "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(GIAccumulation), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(RayGeometry),   "dominio de conteudo");
         static_assert(!ResetsScreenFilters(SkyRadiance),   "dominio de conteudo");
         static_assert(!ResetsScreenFilters(IndirectSampler), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(MaterialRTState), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(SceneStructure),  "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(SceneContent),    "dominio de conteudo");
         // E os quatro onde resetar E a resposta certa — em todos, o que quebrou foi a propria
         // referencia de reprojecao, nao o conteudo da cena.
         static_assert(ResetsScreenFilters(CameraCut),

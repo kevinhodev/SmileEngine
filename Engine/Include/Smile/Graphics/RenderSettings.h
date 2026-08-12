@@ -134,6 +134,22 @@ namespace Smile {
         void SetGIVolumeFadeProbes(f32 V);
         void OnGIHitSamplingChanged();
 
+        // Detector de mudanca por sonda: o update do atlas mede o quanto a sonda mudou e
+        // derruba a histerese dela sozinho, sem depender de alguem chamar invalidacao.
+        bool GetGIAdaptiveHysteresis() const;
+        void SetGIAdaptiveHysteresis(bool V);
+
+        // Raios por sonda variaveis com a proximidade de geometria: sonda em espaco aberto
+        // decima para MinRays, sonda encostada em geometria fica no teto. E a alavanca de CUSTO
+        // do DDGI — o orcamento hoje e 64 raios fixos vezes NumProbes.
+        bool GetGIAdaptiveRays() const;
+        void SetGIAdaptiveRays(bool V);
+
+        // Gate de MEDICAO (nao e knob de qualidade): corta o DDGI como terminador dos hits de RT
+        // sem desmontar nada, para medir o que ele entrega. Ver Renderer::GIMeasureTerminatorOff.
+        bool GetGIMeasureTerminatorOff() const;
+        void SetGIMeasureTerminatorOff(bool V);
+
         bool GetGIBackfacePolicy() const;
         void SetGIBackfacePolicy(bool V);
 
@@ -333,9 +349,15 @@ namespace Smile {
         // todos os historicos.
         void MarkMaterialRTStateDirty();
         void MarkIndirectLightingDirty();
+        // Conteudo da cena mudou sem a lista mudar de tamanho: visibilidade de objeto, edicao de
+        // luz puntual. NAO derruba o atlas do DDGI — quem chama isto tambem chama
+        // Renderer::NotifyGIRegionChanged com a caixa afetada, que e a versao por REGIAO. Ver
+        // HistoryDomain::SceneContent.
+        void MarkSceneContentDirty();
         // Imediatas. Chame so fora do caminho de arraste.
         void NotifyIndirectLightingChanged();
         void NotifyMaterialRTStateChanged();
+        void NotifySceneContentChanged();
         // A lista de renderaveis mudou de tamanho. So a parte de HISTORICO: o refresh (capacidades
         // de GPU, snapshot do InstanceGeo, TLAS, reancoragem da selecao) e lifecycle de cena e mora
         // no Renderer::OnSceneStructureChanged, que e quem chama isto no fim.

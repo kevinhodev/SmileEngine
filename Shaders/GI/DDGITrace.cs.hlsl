@@ -34,6 +34,7 @@ cbuffer DDGICB : register(b0) {
     float4 RadianceCacheCamCell;
     float4 RadianceCacheLodCapFlags;
     float4 RadianceCacheResources;
+    float4 MiscParams3;     // z = 1 se o passe de classificacao de raios roda neste frame
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -60,19 +61,29 @@ SamplerState LinearWrap  : register(s1);
 
 [numthreads(DDGI_RAYS, 1, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
-    int   probeIdx = (int)Gid.x;
-    int   rayIdx   = (int)GTid.x;
     int   numProbes = (int)AtlasParams.w;
+    // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
+    int   probeIdx  = DDGI_ProbeFromGroup(Gid.xy, numProbes);
+    int   rayIdx    = (int)GTid.x;
     if (probeIdx >= numProbes) return;
 
     int3  count   = (int3)GridCountRays.xyz;
     float spacing = GridMinSpacing.w;
     int3  pc      = DDGI_ProbeCoord(probeIdx, count);
 
-    int rayCount = (int)ProbeRayCount[probeIdx];
+    // Frame de CLASSIFICACAO: o passe de relocacao le ESTE trace para decidir quantos raios cada
+    // sonda merece, e ele mede a proximidade pelo hit mais proximo. Uma sonda ja decimada daria
+    // esse minimo sobre uma amostragem angular mais grossa — viesado PARA LONGE, o que a faz cair
+    // mais um degrau, e outro. Com relocacao ligada a classificacao roda 180 frames SEGUIDOS no
+    // comeco da cena: tempo de sobra para o grid inteiro escorregar ate o piso, e o A/B mediria
+    // esse escorregamento em vez do que o knob faz. Nestes frames o trace ignora a contagem e
+    // manda os 64, entao o classificador sempre decide sobre o conjunto cheio.
+    const bool classifyFrame = MiscParams3.z > 0.5f;
+    int rayCount = classifyFrame ? DDGI_RAYS : (int)ProbeRayCount[probeIdx];
     int stride   = DDGI_RAYS / max(rayCount, 1);
     if ((rayIdx % max(stride, 1)) != 0) {
-        ProbesTrace[int2(rayIdx, probeIdx)] = float4(0.0f, 0.0f, 0.0f, DDGI_RAY_UNUSED);
+        ProbesTrace[DDGI_TraceTexel(probeIdx, rayIdx, numProbes, DDGI_RAYS)] =
+            float4(0.0f, 0.0f, 0.0f, DDGI_RAY_UNUSED);
         return;
     }
 
@@ -140,5 +151,6 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         signedDist = maxT;
     }
 
-    ProbesTrace[int2(rayIdx, probeIdx)] = float4(radiance, signedDist);
+    ProbesTrace[DDGI_TraceTexel(probeIdx, rayIdx, numProbes, DDGI_RAYS)] =
+        float4(radiance, signedDist);
 }

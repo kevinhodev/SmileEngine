@@ -819,8 +819,14 @@ namespace SmileEditor {
         const int CountZ = static_cast<int>(Count.Z);
         if (CountX <= 0 || CountY <= 0 || CountZ <= 0) return;
 
-        const int TilesX = CountX * CountZ;
-        const int Total  = TilesX * CountY;
+        // Grade FISICA de tiles do atlas. Tem de bater com o `total = tilesX*tilesY` do
+        // DebugView.ps, que e quem reempacota para a tela — daqui sai o indice que o clique
+        // seleciona. Sai do DDGI e nao de CountX*CountZ: o empacotamento virou 2D e a largura
+        // deixou de ser um par de eixos do grid (ver DDGI_TileOrigin).
+        const int TilesX = static_cast<int>(DDGI.AtlasTilesPerRow());
+        const int TileRows = static_cast<int>(DDGI.AtlasTileRows());
+        if (TilesX <= 0 || TileRows <= 0) return;
+        const int Total  = TilesX * TileRows;
         const double Aspect = std::max(_TileAspect, 1e-4);
         const int Cols = std::max(1, static_cast<int>(
             std::ceil(std::sqrt(static_cast<double>(Total) * Aspect))));
@@ -832,11 +838,13 @@ namespace SmileEditor {
         const int AtlasIndex = DisplayY * Cols + DisplayX;
         if (AtlasIndex < 0 || AtlasIndex >= Total) return; // celula vazia da ultima linha
 
-        const int TileCol = AtlasIndex % TilesX;
-        const int Y = AtlasIndex / TilesX;
-        const int X = TileCol % CountX;
-        const int Z = TileCol / CountX;
-        const int ProbeIndex = X + Y * CountX + Z * CountX * CountY;
+        // Inversa do AtlasTileFromProbe, e mora no FDDGI junto com ela: o atlas tem ordem propria
+        // (plano (x,z) nas colunas, y nas linhas, enrolado em bandas) e duplicar essa conta aqui
+        // era o que fazia o clique apontar para outra sonda quando o layout mudava. Devolve false
+        // na celula de SOBRA — a ultima banda pode ter colunas que nao sao sonda nenhuma.
+        Smile::u32 Probe = 0;
+        if (!DDGI.ProbeFromAtlasTile(static_cast<Smile::u32>(AtlasIndex), Probe)) return;
+        const int ProbeIndex = static_cast<int>(Probe);
 
         DebugProbePreviousTargets.clear();
         for (Smile::u32 Index : Renderer->GetDebugSelection()) {

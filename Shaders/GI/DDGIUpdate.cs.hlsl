@@ -3,9 +3,9 @@
 #define DDGI_RAYS 64 
 #define DDGI_TILE 6
 
-// Declarado ate o FIM do DDGICB (e nao so o prefixo que este passe usava) porque a invalidacao
-// espacial mora nos dois ultimos campos. Prefixo truncado le por offset e funciona, mas qualquer
-// campo novo depois passa a exigir esta cadeia inteira mesmo assim.
+// Declarado ate o InvalidateMaxHyst (e nao so o prefixo que este passe usava) porque a
+// invalidacao espacial mora la. Prefixo truncado le por offset e funciona — o MiscParams3, que
+// vem depois, e so do atlas de distancia e por isso nao aparece aqui.
 cbuffer DDGICB : register(b0) {
     float4 GridMinSpacing;
     float4 GridCountRays;
@@ -44,16 +44,24 @@ static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
     uint4(1,1, 7,7), uint4(6,1, 0,7), uint4(1,6, 7,0), uint4(6,6, 0,0)
 };
 
+// Acumulador do detector de mudanca, em ponto fixo de 1/1024. Ponto fixo e nao float porque
+// `InterlockedAdd` so existe para inteiro em groupshared; a quantizacao fica tres ordens de
+// grandeza abaixo do menor limiar da curva de resposta. Teto: 36 texels x 1024 = 36864, e a
+// medida e <= 1 por construcao (DDGI_RelChange3), entao nao ha como estourar.
+groupshared uint gChangeAccum;
+
 [numthreads(DDGI_TILE, DDGI_TILE, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
-    int probeIdx  = (int)Gid.x;
     int numProbes = (int)AtlasParams.w;
+    // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
+    int probeIdx  = DDGI_ProbeFromGroup(Gid.xy, numProbes);
     if (probeIdx >= numProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;
     int3 pc    = DDGI_ProbeCoord(probeIdx, count);
-    int  tile  = (int)AtlasParams.x; 
-    int2 tileOrigin = DDGI_TileOrigin(pc, count, tile);
+    int  tile  = (int)AtlasParams.x;
+    int2 tileOrigin = DDGI_TileOrigin(pc, count, tile,
+                                      DDGI_TilesPerRow(AtlasParams.y, tile));
     int2 local      = int2(GTid.xy);
 
     float2 octUV = ((float2)local + 0.5f) / (float)tile; 
@@ -68,7 +76,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
 
     [loop]
     for (int r = 0; r < DDGI_RAYS; ++r) {
-        float4 tr = ProbesTrace[int2(r, probeIdx)];
+        float4 tr = ProbesTrace[DDGI_TraceTexel(probeIdx, r, numProbes, DDGI_RAYS)];
         if (tr.a < -1e8f) continue; 
         ++realCount;
         if (tr.a < 0.0f) { ++backfaceCount; continue; } 
@@ -95,11 +103,44 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // vinda daquele objeto mudou. Por isso troca por uma hysteresis RAPIDA em vez de zerar:
     // converge em ~12 frames sem o pop de amostra unica. Fora da caixa, nada muda — e essa a
     // diferenca para o reset global, que jogava fora dado bom da cena inteira.
-    if (InvalidateMin.w > 0.5f) {
-        float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, GridMinSpacing.w);
-        if (all(probePos >= InvalidateMin.xyz) && all(probePos <= InvalidateMaxHyst.xyz))
-            hyst = min(hyst, InvalidateMaxHyst.w);
-    }
+    // Posicao RELOCADA (o .xyz do ProbeData e offset de mundo): a sonda que a relocacao moveu
+    // para fora de uma parede pode estar meio espacamento longe do vertice do grid, e e ela quem
+    // mais precisa reavaliar. Mesmo teste, mesma origem, no atlas de distancia.
+    hyst = DDGI_RegionalHysteresis(pc, ProbeData[probeIdx].xyz, GridMinSpacing.xyz,
+                                   GridMinSpacing.w, InvalidateMin, InvalidateMaxHyst.xyz,
+                                   InvalidateMaxHyst.w, hyst);
+
+    // Detector de mudanca (rede da invalidacao por evento; ver DDGI_AdaptiveHysteresis).
+    // Reduzido por SONDA e nao por texel: por texel ele derrubaria a histerese justamente onde
+    // o estimador tem menos raios caindo naquele cone — ruido se auto-alimentando. A media
+    // sobre os 36 texels e tambem o que exige "uma proporcao da sonda" em vez de um texel
+    // isolado, entao um firefly sozinho nao dispara (entra com peso 1/36).
+    //
+    // O piso/banda morta de 0.02 e no dominio gamma do atlas (~0,003 de radiancia linear):
+    // abaixo dele os dois lados sao preto e a medida so amplificaria ruido (ver DDGI_RelChange3).
+    uint groupIdx = GTid.y * DDGI_TILE + GTid.x;
+    if (groupIdx == 0u) gChangeAccum = 0u;
+    GroupMemoryBarrierWithGroupSync();
+    const bool  adaptive = MiscParams2.w > 0.5f;
+    const float relTexel = adaptive ? DDGI_RelChange3(result, prev, 0.02f) : 0.0f;
+    InterlockedAdd(gChangeAccum, (uint)(relTexel * 1024.0f + 0.5f));
+    GroupMemoryBarrierWithGroupSync();
+    const float relProbe = (float)gChangeAccum * (1.0f / (1024.0f * DDGI_TILE * DDGI_TILE));
+    const float hystNew  = DDGI_AdaptiveHysteresis(relProbe, hyst);
+
+    // Sonda ENTERRADA (`occluded` acima escreve PRETO): resposta LIMITADA, nao mudo. Silenciar
+    // era o obvio — uma sonda oscilando em torno do limiar de 35% de backface produz a maior
+    // mudanca relativa que existe, e reagir com 0.50 a cada oscilacao seria uma sonda piscando.
+    // So que silenciar tambem deixa passar o caso REAL: geometria dinamica engolindo a sonda
+    // depois dos 180 frames de relocacao, quando a classificacao ja congelou e ninguem mais vai
+    // marca-la inativa — ela seguiria irradiando luz velha por ~150 frames.
+    //
+    // O teto de 0.90 (~29 frames para 95%) atende os dois: a oscilacao custa um filtro suave em
+    // vez de um pop, e a sonda realmente engolida apaga em meio segundo em vez de dois e meio.
+    // O `min` externo preserva a regra da casa — o detector so REDUZ, nunca aumenta: reset (0),
+    // relocacao (0) e invalidacao regional (0.75) continuam ganhando.
+    hyst = occluded ? min(hyst, max(hystNew, 0.90f)) : hystNew;
+
     float3 blended = lerp(result, prev, hyst);
     IrradAtlas[texel] = float4(blended, 1.0f);
 
@@ -107,7 +148,6 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // Barrier de DEVICE: as fontes sao texels do atlas escritos por outras threads do grupo.
     // Sem divergencia no return de cima: probeIdx e uniforme no grupo inteiro.
     DeviceMemoryBarrierWithGroupSync();
-    uint groupIdx  = GTid.y * DDGI_TILE + GTid.x;
     int2 padOrigin = tileOrigin - 1;
     [loop]
     for (uint b = groupIdx; b < DDGI_BORDER_COUNT; b += DDGI_TILE * DDGI_TILE) {

@@ -269,6 +269,42 @@ namespace Smile {
         OnGIHitSamplingChanged();
     }
 
+    bool FRenderSettings::GetGIAdaptiveHysteresis() const {
+        return R.DDGI.GetAdaptiveHysteresis();
+    }
+    void FRenderSettings::SetGIAdaptiveHysteresis(bool _V) {
+        if (_V == R.DDGI.GetAdaptiveHysteresis()) return;
+        R.DDGI.SetAdaptiveHysteresis(_V);
+        // GIAccumulation e nao RayVisibility: nao mudou o que o raio ve, mudou a REGRA com que
+        // o atlas acumula. A mascara e a mesma hoje; o nome e o que decide o dia em que um
+        // alvo novo entrar em so um dos dois (ver HistoryDomain.h).
+        //
+        // Limpar e obrigatorio para o A/B: sem isso o lado "ligado" comeca com sondas
+        // convergidas pelo lado "desligado" e a comparacao mede estado misturado.
+        Invalidate(Dom::GIAccumulation);
+    }
+
+    bool FRenderSettings::GetGIAdaptiveRays() const { return R.DDGI.GetAdaptiveRays(); }
+    void FRenderSettings::SetGIAdaptiveRays(bool _V) {
+        if (_V == R.DDGI.GetAdaptiveRays()) return;
+        R.DDGI.SetAdaptiveRays(_V); // agenda a reclassificacao (ver FDDGI::TriggerReclassify)
+        // Mesmo dominio do detector de histerese, e pela mesma razao: nao mudou o que o raio
+        // enxerga, mudou o ESTIMADOR que alimenta o atlas (quantas amostras cada sonda tem por
+        // frame). Sem o clear, o lado ligado do A/B comeca com sondas convergidas a 64 raios e a
+        // comparacao mede estado misturado em vez da diferenca de variancia.
+        Invalidate(Dom::GIAccumulation);
+    }
+
+    bool FRenderSettings::GetGIMeasureTerminatorOff() const { return R.GIMeasureTerminatorOff; }
+    void FRenderSettings::SetGIMeasureTerminatorOff(bool _V) {
+        if (_V == R.GIMeasureTerminatorOff) return;
+        R.GIMeasureTerminatorOff = _V;
+        // RayVisibility no sentido literal do dominio: mudou o que o raio ENXERGA no hit. Sem o
+        // clear, o lado "sem DDGI" da medicao comecaria com reservoirs e atlas cheios de energia
+        // que veio justamente do DDGI — o A/B mediria a propria memoria do sistema desligado.
+        Invalidate(Dom::RayVisibility);
+    }
+
     bool FRenderSettings::GetGIBackfacePolicy() const { return R.ReSTIRGI.GetBackfacePolicy(); }
     void FRenderSettings::SetGIBackfacePolicy(bool _V) {
         // Passa por aqui, e nao direto no FReSTIRGI, porque o clear dos reservoirs sozinho nao
@@ -668,6 +704,12 @@ namespace Smile {
 
     void FRenderSettings::MarkMaterialRTStateDirty()  { R.MaterialRTStateDirty  = true; }
     void FRenderSettings::MarkIndirectLightingDirty() { R.IndirectLightingDirty = true; }
+    void FRenderSettings::MarkSceneContentDirty()     { R.SceneContentDirty     = true; }
+
+    // O par do Renderer::NotifyGIRegionChanged: aquele cuida do atlas do DDGI por REGIAO, este
+    // cuida de todo o resto que acumulou sobre a luz/geometria antiga. Separados porque so o
+    // DDGI sabe invalidar por caixa — os outros nao tem granularidade espacial nenhuma.
+    void FRenderSettings::NotifySceneContentChanged() { Invalidate(Dom::SceneContent); }
 
     // Reservoirs guardam Lo medido com a luz antiga; o atlas do DDGI, idem.
     void FRenderSettings::NotifyIndirectLightingChanged() { Invalidate(Dom::SkyRadiance); }

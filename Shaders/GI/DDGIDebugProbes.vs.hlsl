@@ -76,8 +76,10 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VSOut o;
     o.pos      = mul(float4(worldPos, 1.0f), ViewProj);
     o.nrm      = sphereN;
-    o.irrTile  = (float2)DDGI_TileOrigin(pc, count, (int)AtlasParams.x);
-    o.distTile = (float2)DDGI_TileOrigin(pc, count, (int)DistAtlasParams.x);
+    o.irrTile  = (float2)DDGI_TileOrigin(pc, count, (int)AtlasParams.x,
+                                         DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x));
+    o.distTile = (float2)DDGI_TileOrigin(pc, count, (int)DistAtlasParams.x,
+                                         DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x));
 
     float relocMag = length(offset) / max(DebugParams.z, 1e-4f);
     float4 stats   = ProbeStats[probeIid];

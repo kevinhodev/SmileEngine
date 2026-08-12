@@ -122,6 +122,9 @@ namespace SmileEditor {
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool giAdaptiveHysteresis READ IsGIAdaptiveHysteresisEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool giAdaptiveRays READ IsGIAdaptiveRaysEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool giMeasureTerminatorOff READ IsGIMeasureTerminatorOff NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reSTIRDI READ IsReSTIRDIEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(double giSurfaceBiasMax READ GetGISurfaceBiasMax NOTIFY GISettingsChanged)
         Q_PROPERTY(double giVolumeFadeProbes READ GetGIVolumeFadeProbes NOTIFY GISettingsChanged)
@@ -306,6 +309,9 @@ namespace SmileEditor {
         bool              AreGIFoliageShadowsEnabled() const;
         bool              IsReflectionsCullBackfaceEnabled() const;
         bool              IsGIBackfacePolicyEnabled() const;
+        bool              IsGIAdaptiveHysteresisEnabled() const;
+        bool              IsGIAdaptiveRaysEnabled() const;
+        bool              IsGIMeasureTerminatorOff() const;
         bool              IsReSTIRDIEnabled() const;
         double            GetGISurfaceBiasMax() const;
         double            GetGIVolumeFadeProbes() const;
@@ -327,6 +333,9 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleGIFoliageShadows();
         Q_INVOKABLE void ToggleReflectionsCullBackface();
         Q_INVOKABLE void ToggleGIBackfacePolicy();
+        Q_INVOKABLE void ToggleGIAdaptiveHysteresis();
+        Q_INVOKABLE void ToggleGIAdaptiveRays();
+        Q_INVOKABLE void ToggleGIMeasureTerminatorOff();
         Q_INVOKABLE void ToggleReSTIRDI();
         Q_INVOKABLE void SetGISurfaceBiasMax(double meters);
         Q_INVOKABLE void SetGIVolumeFadeProbes(double probes);

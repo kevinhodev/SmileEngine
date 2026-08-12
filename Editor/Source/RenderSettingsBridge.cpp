@@ -877,6 +877,18 @@ namespace SmileEditor {
         return Renderer && Renderer->Settings().GetGIFoliageShadows();
     }
 
+    bool RenderSettingsBridge::IsGIAdaptiveHysteresisEnabled() const {
+        return Renderer && Renderer->Settings().GetGIAdaptiveHysteresis();
+    }
+
+    bool RenderSettingsBridge::IsGIAdaptiveRaysEnabled() const {
+        return Renderer && Renderer->Settings().GetGIAdaptiveRays();
+    }
+
+    bool RenderSettingsBridge::IsGIMeasureTerminatorOff() const {
+        return Renderer && Renderer->Settings().GetGIMeasureTerminatorOff();
+    }
+
     bool RenderSettingsBridge::IsReflectionsCullBackfaceEnabled() const {
         return Renderer && Renderer->Settings().GetReflectionsCullBackface();
     }
@@ -1035,6 +1047,33 @@ namespace SmileEditor {
         // O fan-out p/ os 3 consumidores do HitShading mora no FRenderSettings — era aqui.
         auto& Settings = RendererAccess->Settings();
         Settings.SetGIFoliageShadows(!Settings.GetGIFoliageShadows());
+        emit GISettingsChanged();
+    }
+
+    void RenderSettingsBridge::ToggleGIAdaptiveHysteresis() {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        // O reset do atlas (e de tudo que se apoia nele) mora no FRenderSettings, dominio
+        // GIAccumulation — sem ele o lado "ligado" do A/B comecaria com sondas convergidas
+        // pelo lado "desligado".
+        auto& Settings = RendererAccess->Settings();
+        Settings.SetGIAdaptiveHysteresis(!Settings.GetGIAdaptiveHysteresis());
+        emit GISettingsChanged();
+    }
+
+    void RenderSettingsBridge::ToggleGIAdaptiveRays() {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        auto& Settings = RendererAccess->Settings();
+        Settings.SetGIAdaptiveRays(!Settings.GetGIAdaptiveRays());
+        emit GISettingsChanged();
+    }
+
+    void RenderSettingsBridge::ToggleGIMeasureTerminatorOff() {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        auto& Settings = RendererAccess->Settings();
+        Settings.SetGIMeasureTerminatorOff(!Settings.GetGIMeasureTerminatorOff());
         emit GISettingsChanged();
     }
 

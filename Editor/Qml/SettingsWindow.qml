@@ -3146,6 +3146,183 @@ Rectangle {
                 }
 
                 Card {
+                    id: ddgiAdaptiveCard
+                    width: parent.width
+                    title: "Resposta do atlas — histerese adaptativa"
+                    height: adaptiveHystLabel.y + adaptiveHystLabel.height + contentPadding + 8
+
+                    Text {
+                        id: adaptiveHystHelper
+                        x: 20
+                        y: ddgiAdaptiveCard.headerHeight + ddgiAdaptiveCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Cada sonda guarda 98% do valor anterior por atualização, então uma " +
+                              "mudança na cena leva uns 150 quadros para ser absorvida. Quem " +
+                              "encurta esse tempo é a invalidação por evento: quando alguém " +
+                              "avisa que a região mudou, as sondas de lá passam a misturar " +
+                              "rápido.\n\n" +
+                              "O problema é que avisar é uma lista, e lista se esquece — mover " +
+                              "objeto, esconder no olho do outliner e editar cor ou intensidade " +
+                              "de luz não avisavam ninguém, e a luz velha ficava presa no atlas.\n\n" +
+                              "Ligado, o próprio passe de atualização compara a estimativa nova " +
+                              "com a guardada e derruba a histerese da sonda por conta própria: " +
+                              "cerca de três vezes mais luz cai para 0,90, uma ordem de " +
+                              "grandeza cai para 0,50. A medida é da sonda inteira, não de um " +
+                              "texel, para um firefly isolado não disparar, e fica limitada a " +
+                              "0,90 enquanto a sonda está enterrada dentro de geometria.\n\n" +
+                              "Vale só para a irradiância. O atlas de distância reamostra menos " +
+                              "de um raio por texel a cada quadro, então lá um detector " +
+                              "dispararia com o próprio ruído em vez de com mudança de cena.\n\n" +
+                              "Desligado por padrão. Na primeira calibração ele acendia com o " +
+                              "ruído do próprio estimador — a estimativa de um quadro vem de " +
+                              "uns 32 raios e varia sozinha mais do que o limiar de então —, e " +
+                              "isso prendia sondas de alta variância em histerese baixa, ou " +
+                              "seja, flicker espalhado. Os limiares subiram para fora do ruído, " +
+                              "mas essa versão ainda não passou por um A/B próprio.\n\n" +
+                              "E o papel dele encolheu: mover, esconder e editar luz agora " +
+                              "avisam sozinhos, então o que sobra para a rede pegar são " +
+                              "mudanças que ninguém ligou. O que procurar ao testar: sonda perto " +
+                              "de emissivo pequeno continua sendo o falso positivo provável. " +
+                              "Trocar reinicia o atlas e os históricos que se apoiam nele; " +
+                              "espere convergir antes de comparar."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: adaptiveHystLabel
+                        x: 20
+                        y: adaptiveHystHelper.y + adaptiveHystHelper.height + 18
+                        text: "Histerese adaptativa"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: adaptiveHystLabel.y - 6
+                        checked: renderModel.giAdaptiveHysteresis
+                        onToggled: renderModel.ToggleGIAdaptiveHysteresis()
+                    }
+                }
+
+                Card {
+                    id: ddgiAdaptiveRaysCard
+                    width: parent.width
+                    title: "Orçamento de raios por sonda"
+                    height: adaptiveRaysLabel.y + adaptiveRaysLabel.height + contentPadding + 8
+
+                    Text {
+                        id: adaptiveRaysHelper
+                        x: 20
+                        y: ddgiAdaptiveRaysCard.headerHeight + ddgiAdaptiveRaysCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Hoje toda sonda traça 64 raios por quadro, esteja ela encostada " +
+                              "numa parede ou boiando no meio da rua. Como o custo do DDGI é " +
+                              "raios vezes número de sondas, é esse produto que decide quantas " +
+                              "sondas cabem no quadro — e é a resposta a essa pergunta que " +
+                              "libera, ou não, uma grade mais fina.\n\n" +
+                              "Ligado, cada sonda recebe uma contagem proporcional à distância " +
+                              "até a geometria mais próxima: quem está a menos de meio espaçamento " +
+                              "de uma superfície fica no teto, quem está a mais de oito cai para " +
+                              "o piso. A ideia é que a sonda em espaço aberto vê quase só céu e " +
+                              "geometria distante, então poucos raios já descrevem bem o que ela " +
+                              "recebe — enquanto a encostada numa quina precisa de todos.\n\n" +
+                              "A classificação sai do mesmo passe que reloca as sondas, e é por " +
+                              "isso que este botão não fazia nada antes: com a relocação " +
+                              "desligada o passe saía cedo e a contagem congelava. Agora ele " +
+                              "classifica dos dois jeitos.\n\n" +
+                              "Nos quadros em que a classificação roda, o traçado volta aos 64 " +
+                              "raios de propósito: ela mede a proximidade pelo acerto mais " +
+                              "próximo, e medir isso com a sonda já decimada faria a estimativa " +
+                              "vir viesada para longe — a sonda cairia mais um degrau, e outro. " +
+                              "Como consequência, a economia só aparece depois que a relocação " +
+                              "converge, cerca de 180 quadros após carregar a cena.\n\n" +
+                              "O que procurar: a sonda decimada tem menos amostras por quadro, " +
+                              "logo mais variância — se aparecer cintilação, ela vem do céu " +
+                              "aberto e não dos cantos. Trocar reinicia o atlas e os históricos " +
+                              "que se apoiam nele; espere convergir antes de comparar, e olhe o " +
+                              "bloco do DDGI no profiler, porque o ganho de tempo é metade da " +
+                              "resposta."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: adaptiveRaysLabel
+                        x: 20
+                        y: adaptiveRaysHelper.y + adaptiveRaysHelper.height + 18
+                        text: "Raios adaptativos"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: adaptiveRaysLabel.y - 6
+                        checked: renderModel.giAdaptiveRays
+                        onToggled: renderModel.ToggleGIAdaptiveRays()
+                    }
+                }
+
+                Card {
+                    id: ddgiMeasureCard
+                    width: parent.width
+                    title: "Medição — DDGI como terminador"
+                    height: measureTermLabel.y + measureTermLabel.height + contentPadding + 8
+
+                    Text {
+                        id: measureTermHelper
+                        x: 20
+                        y: ddgiMeasureCard.headerHeight + ddgiMeasureCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Isto não é um ajuste de qualidade: é um experimento. Ligado, os " +
+                              "raios param de fechar o caminho no DDGI — some o segundo quique " +
+                              "das próprias sondas, o valor que o ReSTIR GI grava no reservoir " +
+                              "e o indireto dos acertos de reflexão. Todo o resto continua no " +
+                              "lugar e rodando: o volume é traçado, as sondas relocam, o atlas " +
+                              "atualiza, e o difuso da tela ainda pode lê-lo.\n\n" +
+                              "Serve para responder com número, e não com opinião, quanto o " +
+                              "DDGI realmente entrega neste pipeline — que é a pergunta que " +
+                              "decide se ele continua sendo o núcleo da iluminação indireta ou " +
+                              "vira só a rede de segurança para começo frio, névoa e preset " +
+                              "barato.\n\n" +
+                              "Como comparar: espere convergir dos dois lados antes de olhar, " +
+                              "porque trocar reinicia o atlas e os históricos — sem isso o lado " +
+                              "desligado ainda estaria mostrando a energia que veio do DDGI. " +
+                              "Olhe o interior de ambientes fechados e o fundo de superfícies " +
+                              "voltadas para longe da luz, que é onde o terminador pesa mais; " +
+                              "e olhe o custo por passe no profiler, porque o ganho de " +
+                              "desempenho faz parte da resposta.\n\n" +
+                              "Não deixe ligado fora da medição."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Text {
+                        id: measureTermLabel
+                        x: 20
+                        y: measureTermHelper.y + measureTermHelper.height + 18
+                        text: "Cortar o terminador"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: measureTermLabel.y - 6
+                        checked: renderModel.giMeasureTerminatorOff
+                        onToggled: renderModel.ToggleGIMeasureTerminatorOff()
+                    }
+                }
+
+                Card {
                     id: volumeFadeCard
                     width: parent.width
                     title: "Fora do volume de sondas"

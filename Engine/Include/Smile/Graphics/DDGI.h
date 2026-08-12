@@ -11,6 +11,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <unordered_map>
+#include <algorithm> // std::max nas contas da grade de dispatch
 #include <cstddef>
 
 namespace Smile {
@@ -18,6 +19,23 @@ namespace Smile {
     class FCommandQueue;
     class FScene;
     class FGpuMesh;
+
+    // O QUE mudou dentro da caixa de FDDGI::InvalidateRegion. Os dois invalidam o atlas do mesmo
+    // jeito; a diferenca esta na CLASSIFICACAO das sondas (inativa/ativa e contagem de raios), que
+    // e medida de GEOMETRIA e so por ela envelhece.
+    //
+    // Sem a distincao, editar a intensidade de uma luz agendava uma reclassificacao global de 6
+    // frames, com 64 raios e fora da fila assincrona, ~69 frames depois de soltar o slider — ou
+    // seja, um hitch atrasado o bastante para ninguem relacionar com o que acabou de fazer. E
+    // trabalho para nada: nenhuma sonda mudou de lugar nem passou a enxergar coisa diferente.
+    //
+    // Sem valor default de proposito. O default seguro nao existe: "radiometrico" faz o call site
+    // esquecido reintroduzir a classificacao velha em silencio, e "geometria" faz ele pagar o
+    // hitch. Obrigar a declarar e a unica opcao que nao escolhe um dos dois erros por omissao.
+    enum class EGIRegionChange {
+        Radiometric, // luz: cor, intensidade, raio, cone, direcao, on/off, posicao, add/remove
+        Geometry     // objeto: criado, removido, movido, escondido/mostrado
+    };
 
     struct alignas(256) DDGIConstants {
         Vec4 GridMinSpacing;  // xyz = origem do grid (mundo), w = espacamento
@@ -27,9 +45,11 @@ namespace Smile {
         Vec4 SunColorHyst;    // rgb = cor do sol, w = hysteresis (blend temporal)
         Vec4 TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
                               // (raios do DDGI partem de probes; o bias so desloca sombras no hit)
-        Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH, w = livre
+        Vec4 DistAtlasParams; // x = dist tile, y = dist atlasW, z = dist atlasH,
+                              // w = hysteresis do atlas de DISTANCIA (propria; ver kDistHysteresis)
         Vec4 MiscParams;      // x = relocationEnabled (Fase 2), y = deactivThresh, z = maxRays, w = minRays
-        Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), y = nº luzes (F5), z = ShadowRayMask, w = -
+        Vec4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado), y = nº luzes (F5),
+                              // z = ShadowRayMask, w = detector de histerese adaptativa (so a irradiancia le)
         // Perfil de epsilons (FRayEpsilonProfile), anexado no FIM p/ nao deslocar offsets. O DDGI
         // so usa a familia (2) — os raios dele partem de probes, nao do G-buffer.
         Vec4 RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
@@ -55,6 +75,12 @@ namespace Smile {
         Vec4 RadianceCacheCamCell;
         Vec4 RadianceCacheLodCapFlags;
         Vec4 RadianceCacheResources;
+        // Invalidacao regional do atlas de DISTANCIA. Campos proprios porque ele nao compartilha
+        // nem a hysteresis nem a JANELA com a irradiancia — so a caixa. Anexado no fim, como os
+        // anteriores, p/ nao deslocar offset nenhum.
+        Vec4 MiscParams3;     // x = hysteresis regional do dist atlas, y = 1 se a janela dele
+                              // esta aberta, z = 1 se o passe de relocacao/classificacao roda
+                              // neste frame (o TRACE le p/ nao decimar; ver DDGITrace), w = livre
     };
     static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
                   "DDGIConstants divergiu do cbuffer DDGICB");
@@ -62,6 +88,19 @@ namespace Smile {
                   "SkyParams deve permanecer anexado ao fim do DDGICB");
     static_assert(offsetof(DDGIConstants, InvalidateMin) == 288,
                   "InvalidateMin/MaxHyst devem permanecer anexados ao fim do DDGICB");
+    static_assert(offsetof(DDGIConstants, MiscParams3) == 368,
+                  "MiscParams3 deve permanecer anexado ao fim do DDGICB");
+
+    // Menor n com H^n <= Residual. Existe para a JANELA da invalidacao regional acompanhar a
+    // HISTERESE dela sozinha: as duas so fazem sentido juntas — o que a regiao promete e "sobra
+    // ~3% do historico quando a janela fecha", e isso e um par, nao dois numeros. Deixa-los
+    // soltos foi o que permitiu 0.75/12 passar por revisao: o valor era defensavel, a variancia
+    // instantanea que ele impunha (7 amostras efetivas) e que nao era.
+    constexpr u32 DDGIFramesForResidual(f32 _H, f32 _Residual) {
+        u32 N = 0; f32 V = 1.0f;
+        while (V > _Residual && N < 512u) { V *= _H; ++N; }
+        return N;
+    }
 
     class FDDGI : public FRenderPass {
     public:
@@ -71,9 +110,40 @@ namespace Smile {
         FPassShaderStems ShaderStems() const override;
         void OnRecreatePipelines(const FPassInitContext& Ctx) override;
 
-        static constexpr int kRaysPerProbe = 64; 
-        static constexpr int kTileSize     = 6;  
-        static constexpr int kDistTileSize = 14; 
+        static constexpr int kRaysPerProbe = 64;
+        static constexpr int kTileSize     = 6;
+        static constexpr int kDistTileSize = 14;
+        // Sondas por LINHA do ProbesTrace, e este numero E um knob de desempenho. A primeira
+        // versao daqui dizia que 256 "e o maior que cabe, entao nao ha o que calibrar": isso
+        // confunde CAPACIDADE com velocidade. 256*64 = 16384 enche a largura maxima de Texture2D,
+        // mas uma textura de 16384 de largura nao e necessariamente a melhor para cache/swizzle.
+        // Valores para A/B: 64 (largura 4096), 128 (8192), 256 (16384). Espelhado em
+        // DDGI_TRACE_PROBES_PER_ROW (DDGICommon.hlsli) — mudar aqui exige mudar la.
+        static constexpr u32 kTraceProbesPerRow = 256;
+        // `<=` e nao `==`: com `==` o assert exigia justamente o 256, ou seja proibia o A/B que o
+        // comentario acima manda fazer. O que a checagem tem de garantir e caber, nao encher.
+        static_assert(kTraceProbesPerRow * kRaysPerProbe <= 16384,
+                      "a linha do ProbesTrace nao pode passar da largura maxima de Texture2D; "
+                      "mudar aqui exige mudar DDGI_TRACE_PROBES_PER_ROW junto");
+
+        // Grade 2D de GRUPOS dos tres passes de uma sonda por grupo. O D3D12 para em 65535 grupos
+        // por dimensao, e com dispatch 1D esse era o teto real de sondas — abaixo do que os atlas
+        // comportam desde o reempacotamento, e invisivel ate o Dispatch falhar em runtime.
+        // Espelhado em DDGI_DISPATCH_GROUPS_X (DDGICommon.hlsli); a conta e inteira dos dois lados
+        // justamente para nao existir um numero a transportar e dessincronizar.
+        static constexpr u32 kDispatchGroupsX = 1024;
+        static_assert(kDispatchGroupsX <= 65535,
+                      "a largura da grade de grupos e ela propria um Dispatch");
+        // Divide NumProbes o mais exato possivel: a sobra fica abaixo do numero de linhas, entao
+        // nao se paga uma faixa de grupos que so testa e retorna.
+        static u32 DispatchGroupsX(u32 Probes) {
+            const u32 Rows = std::max((Probes + kDispatchGroupsX - 1) / kDispatchGroupsX, 1u);
+            return std::max((Probes + Rows - 1) / Rows, 1u);
+        }
+        static u32 DispatchGroupsY(u32 Probes) {
+            const u32 X = DispatchGroupsX(Probes);
+            return (Probes + X - 1) / X;
+        }
 
         void Initialize(ID3D12Device* Device);
 
@@ -141,20 +211,49 @@ namespace Smile {
         // O atlas de distancia guarda os dois momentos ja limitados a esta vizinhanca.
         // Nao confundir com MaxRayDistance(), que e o alcance do trace na cena inteira.
         f32  DistanceMomentMax() const { return SpacingV * 2.6f; }
-        // Ordem fisica dos tiles no atlas: X varia primeiro, depois Z; Y ocupa as linhas.
-        // ProbeLinear, usado pelos buffers, varia X, depois Y, depois Z.
+        // Conversao sonda <-> tile fisico do atlas. O atlas tem ORDEM PROPRIA — plano (x,z) nas
+        // colunas, y nas linhas, o plano enrolado em bandas — e ela nao e a dos buffers
+        // (DDGI_ProbeLinear). Manter as duas custa estas duas funcoes; unifica-las custaria a
+        // vizinhanca 2x2 que o gather de 8 sondas percorre, medida em ~0,4 ms. Ver DDGI_TileOrigin.
+        //
+        // As duas sao INVERSAS uma da outra e as duas espelham o shader. Qualquer mudanca no
+        // layout mexe nas tres.
         u32  AtlasTileFromProbe(u32 ProbeIndex) const {
-            if (ProbeIndex >= NumProbes || CountX <= 0 || CountY <= 0) return 0;
-            const u32 XY = static_cast<u32>(CountX * CountY);
-            const u32 Z  = ProbeIndex / XY;
-            const u32 R  = ProbeIndex - Z * XY;
-            const u32 Y  = R / static_cast<u32>(CountX);
-            const u32 X  = R - Y * static_cast<u32>(CountX);
-            return X + Z * static_cast<u32>(CountX)
-                     + Y * static_cast<u32>(CountX * CountZ);
+            if (ProbeIndex >= NumProbes || CountX <= 0 || CountY <= 0 || TilesPerRow == 0) return 0;
+            const u32 CX = static_cast<u32>(CountX), CY = static_cast<u32>(CountY);
+            const u32 X = ProbeIndex % CX;
+            const u32 Y = (ProbeIndex / CX) % CY;
+            const u32 Z = ProbeIndex / (CX * CY);
+            const u32 Plane = X + Z * CX;
+            const u32 Band  = Plane / TilesPerRow;
+            return (Y + Band * CY) * TilesPerRow + (Plane - Band * TilesPerRow);
         }
+        // Devolve false para celula de SOBRA: a grade tem TilesPerRow*bandas colunas de plano, e
+        // as ultimas podem nao corresponder a sonda nenhuma.
+        bool ProbeFromAtlasTile(u32 Tile, u32& OutProbe) const {
+            if (CountX <= 0 || CountY <= 0 || TilesPerRow == 0) return false;
+            const u32 CX = static_cast<u32>(CountX), CY = static_cast<u32>(CountY);
+            const u32 Row   = Tile / TilesPerRow;
+            const u32 C     = Tile - Row * TilesPerRow;
+            const u32 Y     = Row % CY;
+            const u32 Band  = Row / CY;
+            const u32 Plane = Band * TilesPerRow + C;
+            if (Plane >= CX * static_cast<u32>(CountZ)) return false;
+            OutProbe = (Plane % CX) + Y * CX + (Plane / CX) * CX * CY;
+            return OutProbe < NumProbes;
+        }
+        // Tiles por linha da grade dos atlas. O shader recupera este mesmo numero da LARGURA
+        // (DDGI_TilesPerRow) em vez de recebe-lo por cbuffer — ver o SetupForScene.
+        u32  AtlasTilesPerRow() const { return TilesPerRow; }
+        u32  AtlasTileRows() const { return TileBands * static_cast<u32>(CountY); }
 
-        void SetIntensity(f32 V)  { Intensity = V; }
+        // Zero e SENTINELA no cbuffer, nao valor: o Renderer manda DDGIParams.x = 0 para dizer "GI
+        // desligado" e os cinco consumidores leem `(x > 0) ? x : 1.0`. Sem o piso, um slider de
+        // intensidade em 0 viraria intensidade 1 — o oposto exato do pedido. Quem quer zero
+        // desliga o GI. Hoje o bug e latente (nao ha call site do setter, a intensidade e sempre
+        // 1.0); isto e o pre-requisito de expor o slider, nao detalhe de estilo.
+        static constexpr f32 kIntensityMin = 1e-3f;
+        void SetIntensity(f32 V)  { Intensity = V < kIntensityMin ? kIntensityMin : V; }
         f32  GetIntensity() const { return Intensity; }
         // Perfil compartilhado de epsilons (dono = Renderer, empurra todo frame).
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
@@ -195,20 +294,57 @@ namespace Smile {
         // nunca o cache inteiro. A hysteresis de dentro da caixa nao e 0 e sim alta-mas-rapida,
         // diferente da relocacao (que usa 0 porque o historico dela e de OUTRO lugar): aqui o
         // historico da sonda continua quase todo valido, entao misturar rapido converge sem o
-        // pop de amostra unica. Chamadas sucessivas UNEM as caixas.
-        void InvalidateRegion(const Vec3& Min, const Vec3& Max);
+        // pop de amostra unica.
+        //
+        // Chamadas sucessivas UNEM as caixas, e a uniao e CRUA — a folga de um espacamento sai
+        // no envio (UpdatePerFrame), nao aqui. E isso que torna seguro chamar por FRAME durante
+        // um gesto continuo: "antiga + nova" de um arraste vira uma chamada com cada caixa, sem
+        // a regiao inchar a cada uma.
+        // `Change` decide se a classificacao das sondas tambem envelheceu — ver EGIRegionChange.
+        void InvalidateRegion(const Vec3& Min, const Vec3& Max, EGIRegionChange Change);
 
-        void SetHysteresis(f32 V) { Hysteresis = V; }
+        // Teto de 0.98 na histerese ESTAVEL. Nao e preferencia: o paper (secao 4.4) usa alfa
+        // entre 0.85 e 0.98, e o Flax GRAMPEIA em 0.98
+        // (DynamicDiffuseGlobalIllumination.cpp: Clamp(TemporalResponse, 0.0f, 0.98f)). A 0.99
+        // o atlas leva ~300 updates — 5 s a 60 fps — para absorver 95% de qualquer mudanca, e
+        // cada evento de invalidacao que ninguem ligou custa esses 5 s inteiros.
+        static constexpr f32 kHysteresisMax = 0.98f;
+        void SetHysteresis(f32 V) {
+            Hysteresis = V > kHysteresisMax ? kHysteresisMax : (V < 0.0f ? 0.0f : V);
+        }
         f32  GetHysteresis() const{ return Hysteresis; }
+
+        // Rede de seguranca da invalidacao por evento: o proprio update mede quanto a sonda
+        // mudou e derruba a histerese dela sozinho. Ver DDGI_AdaptiveHysteresis (DDGICommon).
+        // Vale so para a irradiancia — o atlas de distancia reamostra menos de um raio por texel
+        // por frame e um detector la dispararia com o proprio ruido (ver DDGIUpdateDist).
+        //
+        // Default OFF desde o A/B de 2026-08-11: com os limiares originais (0.20/0.50) ele
+        // acendia com o RUIDO do estimador, nao com mudanca de cena, e prendia sonda de alta
+        // variancia em histerese reduzida — flicker espalhado. Os limiares foram recalibrados
+        // para fora do ruido (ver DDGICommon), mas a versao recalibrada ainda nao passou por A/B
+        // proprio, e o valor dela caiu muito depois da fase 2: com movimento, visibilidade e luz
+        // ja ligados por evento, o que sobra para a rede pegar sao mudancas de ordem de
+        // grandeza, nao de 40%.
+        void SetAdaptiveHysteresis(bool V) { AdaptiveHysteresis = V; }
+        bool GetAdaptiveHysteresis() const { return AdaptiveHysteresis; }
 
         void SetDeactivationThreshold(f32 V) { DeactivationThreshold = V; TriggerReclassify(); }
         f32  GetDeactivationThreshold() const { return DeactivationThreshold; }
 
+        // Raios por sonda variaveis com a proximidade de geometria (DDGI_DesiredRays, no passe de
+        // relocacao). Quem escreve o ProbeRayCount e SO aquele passe, entao os tres setters
+        // agendam uma reclassificacao — inclusive com relocacao DESLIGADA, caso em que o passe
+        // classifica sem mover a sonda. Antes o agendamento era guardado por `Relocation` e o
+        // toggle ficava inerte: sem relocacao, a contagem congelava no ultimo valor escrito.
         void SetAdaptiveRays(bool V) { AdaptiveRays = V; TriggerReclassify(); }
         bool GetAdaptiveRays() const { return AdaptiveRays; }
-        void SetMaxRays(int V) { MaxRays = V; TriggerReclassify(); }   
+        // Teto REAL = kRaysPerProbe. O trace tem um thread por raio (`numthreads(64)`) e decima
+        // com `stride = 64 / rayCount`, que so REDUZ: pedir 256 dava stride 0 -> 1 -> os mesmos 64
+        // raios. Os setters aceitavam ate 256 e o numero era ficcao na UI.
+        void SetMaxRays(int V) { MaxRays = ClampRays(V); TriggerReclassify(); }
         int  GetMaxRays() const { return MaxRays; }
-        void SetMinRays(int V) { MinRays = V; TriggerReclassify(); }   
+        void SetMinRays(int V) { MinRays = ClampRays(V); TriggerReclassify(); }
         int  GetMinRays() const { return MinRays; }
 
         // Folhagem nos shadow rays do hit (ON = alpha-test por candidato; OFF = mask so-opaco).
@@ -249,8 +385,23 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
         void ReleaseSceneResources(FTextureSRVHeap& SRVHeap);
 
+        // Potencia de 2, arredondando PARA BAIXO. O trace decima com `stride = kRaysPerProbe /
+        // rayCount` em inteiro, entao so potencia de 2 e exata: pedir 48 da stride 1 e traca os 64
+        // — o numero pedido e o numero gasto divergiam em silencio. Arredondar para baixo faz o
+        // getter devolver o que a GPU realmente vai fazer; mentir para baixo e melhor que para
+        // cima, porque o erro aparece como "pedi 48 e vi 32" em vez de "pedi 48 e paguei 64".
+        static int ClampRays(int V) {
+            if (V >= kRaysPerProbe) return kRaysPerProbe;
+            int R = 1;
+            while (R * 2 <= V) R *= 2;
+            return R;
+        }
+
+        // Reagenda o passe de relocacao, que e quem escreve ProbeData E ProbeRayCount. Nao pode
+        // depender de `Relocation`: a contagem de raios sai do MESMO passe, entao com relocacao
+        // desligada os setters de AdaptiveRays/Max/MinRays nao chegavam a lugar nenhum.
         void TriggerReclassify() {
-            if (Relocation && Ready && RelocateFramesLeft < kReclassifyFrames)
+            if (Ready && RelocateFramesLeft < kReclassifyFrames)
                 RelocateFramesLeft = kReclassifyFrames;
         }
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,
@@ -319,22 +470,80 @@ namespace Smile {
         u32  NumProbes   = 0;
         u32  AtlasWidth  = 0, AtlasHeight = 0;
         u32  DistAtlasWidth = 0, DistAtlasHeight = 0;
+        u32  TilesPerRow = 1; // colunas de plano (x,z) por linha do atlas; ver AtlasTilesPerRow
+        u32  TileBands   = 1; // ceil(CountX*CountZ / TilesPerRow); linhas = TileBands * CountY
 
         static constexpr D3D12_RESOURCE_STATES kAtlasRead =
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
         f32  Intensity    = 1.0f;
-        f32  Hysteresis   = 0.99f;
+        f32  Hysteresis   = kHysteresisMax;
+        bool AdaptiveHysteresis = false; // OFF ate A/B da recalibracao; ver SetAdaptiveHysteresis
         bool HysteresisResetPending = false; // ver ResetHistoryOnce
+        // Histerese do atlas de DISTANCIA, deliberadamente acima do teto da irradiancia: la a
+        // mistura temporal e atraso, aqui e a RECONSTRUCAO de um estimador com ~0,44 raio por
+        // texel por frame (o expoente 50 do UpdateDist estreita o lobo a 9,5 graus a meio peso).
+        // O tamanho efetivo da amostragem de uma EMA e (1+h)/(1-h): 0.99 da ~199, 0.98 daria
+        // ~99 — metade das amostras que formam os momentos do Chebyshev. Constante e nao knob
+        // ate haver A/B que peca outra coisa. Ver o bloco no DDGIUpdateDist.cs.hlsl.
+        static constexpr f32 kDistHysteresis = 0.99f;
 
-        // Invalidacao espacial (ver InvalidateRegion). 0.75^12 ~ 3% do valor velho: converge em
-        // ~12 frames sem o pop de amostra unica que a hysteresis 0 produz.
-        static constexpr f32 kInvalidateHysteresis = 0.75f;
-        static constexpr u32 kInvalidateFrames     = 12;
+        // Invalidacao espacial (ver InvalidateRegion). O par (histerese, janela) e escolhido por
+        // UM criterio: quanto do historico velho pode sobrar quando a janela fecha. Fixado o
+        // residual, a histerese vira um knob de VARIANCIA — quanto mais alta, mais frames e menos
+        // ruido por frame, com a mesma limpeza no fim.
+        //
+        // Era 0.75 / 12 frames (3,2% de residual). Reprovado em A/B 2026-08-11: mover um objeto
+        // fazia a regiao dele PISCAR, com o detector ligado ou desligado. A causa e o orcamento
+        // de raios: o numero efetivo de amostras de uma EMA e (1+h)/(1-h), ou seja 7 a 0.75. Com
+        // 64 raios por sonda (~32 com peso positivo por texel), 7 amostras nao seguram a
+        // variancia do estimador e a media temporal vira cintilacao visivel.
+        //
+        // 0.90 da 19 amostras efetivas — 2,7x a variancia a menos — pela mesma limpeza, so que
+        // em 34 frames em vez de 12. Para um CACHE isso e barato: o custo e a regiao levar ~0,6 s
+        // em vez de ~0,2 s para assentar. Se ainda piscar, o proximo degrau e 0.95 (39 amostras,
+        // 69 frames) e basta trocar este numero — a janela acompanha.
+        static constexpr f32 kInvalidateResidual   = 0.03f;
+        static constexpr f32 kInvalidateHysteresis = 0.90f;
+        static constexpr u32 kInvalidateFrames =
+            DDGIFramesForResidual(kInvalidateHysteresis, kInvalidateResidual);
+        // Faixa util da janela derivada. Pega os dois erros de retune: histerese baixa demais
+        // (janela curta = a regiao volta a piscar, que e o bug que 0.75 tinha) e histerese perto
+        // da base (janela longa demais = a regiao fica reduzida por mais de 2 s e a invalidacao
+        // vira lag visivel em vez de resposta).
+        static_assert(kInvalidateFrames >= 4 && kInvalidateFrames <= 128,
+                      "kInvalidateHysteresis fora da faixa util para o residual pedido");
+
+        // O atlas de DISTANCIA usa a mesma CAIXA e nada mais: histerese e janela sao proprias.
+        // Motivo, de novo, o orcamento de raios — 0.90 daria 19 amostras efetivas de um
+        // estimador com ~0,44 raio por texel por frame, e o flicker de iluminacao viraria
+        // flicker de VISIBILIDADE. 0.95 da 39 amostras, o que poe o ruido temporal dos momentos
+        // ABAIXO do piso de precisao que a quantizacao em half ja impoe (~4% relativo). O preco
+        // e a janela: 69 frames contra 34.
+        static constexpr f32 kInvalidateDistHysteresis = 0.95f;
+        static constexpr u32 kInvalidateDistFrames =
+            DDGIFramesForResidual(kInvalidateDistHysteresis, kInvalidateResidual);
+        static_assert(kInvalidateDistFrames >= kInvalidateFrames,
+                      "a janela do dist atlas nao pode ser mais curta que a da irradiancia: ele "
+                      "reconstroi de menos amostras, entao precisa de MAIS tempo, nao menos");
+
         Vec3 InvalidateMin_{};
         Vec3 InvalidateMax_{};
         u32  InvalidateFramesLeft_ = 0;
+        u32  InvalidateDistFramesLeft_ = 0; // janela propria, mais longa (ver acima)
+        // A classificacao de sondas (inativa/ativa e contagem de raios) congela quando a
+        // relocacao converge, entao uma edicao de cena a deixa DESATUALIZADA: parede removida =
+        // sonda que continua com a contagem de espaco fechado, objeto novo = sonda engolida que
+        // ninguem mais marca inativa (o proprio DDGIUpdate lamenta esse caso no comentario da
+        // sonda enterrada). A invalidacao regional sabe que a cena mudou ali; e o gancho certo.
+        //
+        // COALESCIDO no fechamento da janela, e nao disparado na hora: `InvalidateRegion` e
+        // chamada por FRAME durante um arraste de gizmo, e reclassificar a cada tique prenderia
+        // o update no caminho SINCRONO (CanRunAsync le RelocateFramesLeft) pelo gesto inteiro,
+        // alem de segurar o trace nos 64 raios o tempo todo. Como cada chamada reabre a janela,
+        // ela so fecha quando o gesto para — e ai a reclassificacao acontece uma vez so.
+        bool ReclassifyPending_ = false;
         f32  SkyIntensity = 1.0f;
         // NormalBias saiu daqui: o bias dos shadow rays do 2o hit e o mesmo p/ ReSTIR, reflexoes e
         // DDGI (o nome era historico), entao vive no perfil compartilhado — sem isso o sweep de

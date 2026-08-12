@@ -37,5 +37,23 @@ namespace Smile {
         // depois disso. ⚠️ AINDA SEM A/B PROPRIO — e a unica mudanca da sessao com impacto visual
         // garantido, e nunca foi olhada isolada. 0.0 devolve o comportamento anterior.
         f32 SecondaryRoughnessMin = 0.5f;
+
+        // === Gate de MEDICAO ==============================================================
+        // Zera o termo indireto do ShadeSurfaceHit — a contribuicao do DDGI como TERMINADOR de
+        // caminho — deixando tudo o mais no lugar: o volume continua sendo tracado e atualizado,
+        // as sondas continuam relocando, o deferred continua podendo amostrar o atlas. O que sai
+        // e so o que o DDGI fecha nos hits de RT: o 2o bounce das proprias sondas, o Lo gravado
+        // pelo ReSTIR GI e o indireto dos hits de reflexao.
+        //
+        // Existe para medir o valor do DDGI neste pipeline sem desmontar nada. E gate de
+        // experimento, nao knob de qualidade — nao ha configuracao em que deixa-lo ligado seja
+        // a resposta certa.
+        bool TerminatorOff = false;
+
+        // O que o shader le em GIDistParams.w: SkipMode nos dois bits baixos + o gate no bit 2.
+        // Empacotar aqui, e nao em cada dono, e o que garante que os cinco shaders que incluem o
+        // HitShading vejam o MESMO valor — a alternativa era um float4 novo em cinco cbuffers
+        // para carregar um booleano.
+        f32 SkipModePacked() const { return SkipMode + (TerminatorOff ? 4.0f : 0.0f); }
     };
 }

@@ -250,7 +250,7 @@ namespace Smile {
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
-                                GIHit.SkipMode };
+                                GIHit.SkipModePacked() };
         // .w = piso de roughness do hit secundario: o reservoir e cache NAO-direcional (ver
         // FGIHitSampling::SecondaryRoughnessMin e o bloco no ShadeSurfaceHit).
         CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,

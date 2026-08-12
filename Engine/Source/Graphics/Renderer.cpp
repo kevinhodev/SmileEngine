@@ -449,12 +449,19 @@ namespace Smile {
         return NewId;
     }
 
+    void Renderer::NotifyGIRegionChanged(const Vec3& _Min, const Vec3& _Max,
+                                         EGIRegionChange _Change) {
+        DDGI.InvalidateRegion(_Min, _Max, _Change);
+    }
+
     void Renderer::OnSceneStructureChanged(const Vec3* _ChangedMin, const Vec3* _ChangedMax) {
         const u32 Count = static_cast<u32>(Scene.Renderables().size());
 
         // Regiao que o GI precisa reavaliar. Invalidacao ESPACIAL, no lugar de derrubar o atlas
         // inteiro: o dominio SceneStructure nao carrega mais DDGIAtlas justamente por isto.
-        if (_ChangedMin && _ChangedMax) DDGI.InvalidateRegion(*_ChangedMin, *_ChangedMax);
+        // Geometria por definicao: quem chega aqui criou, removeu ou trocou um renderavel.
+        if (_ChangedMin && _ChangedMax)
+            DDGI.InvalidateRegion(*_ChangedMin, *_ChangedMax, EGIRegionChange::Geometry);
 
         // (1) Quem fala em indice e sobrevive ao frame, do lado da CPU.
         // O pick resolve kFramesInFlight depois do pedido: um pick em voo agora devolveria o
@@ -1895,6 +1902,7 @@ namespace Smile {
             GIHit.BiasScale  = DDGI.GetSurfaceBiasScale();
             GIHit.BiasMax    = DDGI.GetSurfaceBiasMax();
             GIHit.FadeProbes = DDGI.GetVolumeFadeProbes();
+            GIHit.TerminatorOff = GIMeasureTerminatorOff; // gate de medicao (ver Renderer.h)
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
             ReSTIRGI.SetGIHitSampling(GIHit);
@@ -2877,9 +2885,11 @@ namespace Smile {
                     }
                     CommandList->ResourceBarrier(2, AtlasBarriers);
 
-                    const Vec3 GridCount = DDGI.GridCount();
-                    const u32 TilesX = static_cast<u32>(GridCount.X) *
-                                       static_cast<u32>(GridCount.Z);
+                    // Tiles por linha vem do DDGI, e nao de CountX*CountZ: com o empacotamento 2D
+                    // a largura do atlas deixou de ser um par de eixos do grid (ver
+                    // DDGI_TileOrigin). O shader do DebugView deriva o mesmo numero da largura da
+                    // textura, entao os dois continuam concordando.
+                    const u32 TilesX = DDGI.AtlasTilesPerRow();
                     const u32 AtlasTile = DDGI.AtlasTileFromProbe(DebugProbeIndex);
                     const u32 TileX = AtlasTile % std::max(TilesX, 1u);
                     const u32 TileY = AtlasTile / std::max(TilesX, 1u);
@@ -4309,6 +4319,13 @@ namespace Smile {
             IndirectLightingDirty = false;
             Settings().NotifyIndirectLightingChanged();
         }
+        // Idem para visibilidade de objeto e edicao de luz puntual. Tambem em if separado: e o
+        // subconjunto sem DDGIAtlas (a caixa de regiao ja foi entregue no proprio setter, e
+        // nao e coalescida — ela e barata e a uniao dentro do FDDGI ja faz o trabalho).
+        if (SceneContentDirty) {
+            SceneContentDirty = false;
+            Settings().NotifySceneContentChanged();
+        }
 
         CommandQueue.BeginFrame();
 
@@ -4383,8 +4400,34 @@ namespace Smile {
         RecordGBuffer(Ctx);
 
         if (GIComputeFence != 0) {
+            // Bracket de STALL: par de timestamps na fila DIRETA em volta do wait. E a unica
+            // medida honesta do que decide a contagem de sondas do DDGI — o compute assincrono
+            // tem de terminar antes DESTE ponto, nao antes do fim do frame, entao a folga real e
+            // `wait - fim do compute` e nao o periodo. Medir pelo periodo superestima o orcamento.
+            //
+            // Por que nao dava para ler isso do profiler: ha GetTimestampFrequency por fila mas
+            // nenhum GetClockCalibration, entao os ticks da direta e os da compute estao em bases
+            // de tempo NAO correlacionadas — subtrair um do outro nao significa nada. Aqui os dois
+            // timestamps sao da MESMA fila: o primeiro fecha o segmento do G-buffer, o segundo so
+            // executa depois que a fence liberou. A diferenca e o stall, em base unica.
+            //
+            // Como ler, e o piso NAO e zero: o valor inclui o custo minimo de fechar o segmento,
+            // sinalizar e reenviar a fila, que no Bistro deu ~0,02 ms com o compute ja terminado.
+            // Esse e o BASELINE — "stall indistinguivel do overhead", nao 0,02 ms de espera. O
+            // criterio para achar o teto de sondas e subida SUSTENTADA acima desse baseline, e
+            // nao "descolou de zero".
+            //
+            // E ele demora a assentar: o FGpuProfiler suaviza por EMA de 0.1 e so exibe duas
+            // casas, entao um degrau leva ~30-40 frames para aparecer inteiro. Ler antes disso
+            // mostra o meio da rampa.
+            //
+            // O metodo nao mede folga POSITIVA — quando o compute ja acabou, o valor fica no
+            // baseline e nao diz por quanta margem. "Cabe N vezes mais sonda" so se prova
+            // subindo as sondas, nunca deduzindo deste numero.
+            GpuProfiler.Begin(CommandList, "Espera do DDGI (async)");
             CommandQueue.SubmitSegmentAndContinue();
             CommandQueue.GpuWait(ComputeQueue.NativeFence(), GIComputeFence);
+            GpuProfiler.End(CommandList); // ja no segmento de DEPOIS do wait
             ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
             CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
             CommandList->RSSetViewports(1, &Viewport);

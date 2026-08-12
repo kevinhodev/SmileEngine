@@ -117,6 +117,47 @@ float3 DDGI_OctDecode(float2 f) {
 
 int  DDGI_ProbeLinear(int3 c, int3 count) { return c.x + c.y * count.x + c.z * count.x * count.y; }
 
+// Endereco no ProbesTrace (radiancia + distancia assinada de cada raio de cada sonda). Era uma
+// linha por sonda, ou seja NumProbes virava a ALTURA de uma Texture2D e o grid parava em 16384
+// sondas. Enrolado em blocos de kProbesPerRow sondas por linha, o teto vira
+// kProbesPerRow * 16384 e deixa de ser o limite que morde.
+//
+// kProbesPerRow e CONSTANTE (nao parametro) para nao duplicar estado, mas E um knob: a primeira
+// versao disto dizia que 256 "e o maior que cabe, entao nao ha o que calibrar" — e isso confunde
+// CAPACIDADE com desempenho. 256*64 = 16384 enche a largura maxima, mas uma textura de 16384 de
+// largura nao e necessariamente a melhor para cache/swizzle. Valores uteis: 64 (largura 4096),
+// 128 (8192), 256 (16384). Espelhado em FDDGI::kTraceProbesPerRow — mudar aqui exige mudar la.
+#define DDGI_TRACE_PROBES_PER_ROW 256
+
+// Uma sonda por GRUPO nos tres passes pesados (trace, update, updateDist), e o D3D12 para em
+// 65535 grupos por dimensao. Com o dispatch 1D o teto de sondas era esse, muito abaixo do que os
+// atlas passaram a comportar depois do reempacotamento: os recursos seriam criados, o gridFits
+// aprovaria, e o Dispatch e que ficaria invalido em runtime. Dispatch 2D, com o indice da sonda
+// linearizado a partir de Gid.xy.
+//
+// A largura da grade de grupos NAO e parametro: sai de numProbes com aritmetica inteira, do mesmo
+// jeito e pelo mesmo motivo que o tilesPerRow sai da largura do atlas — CPU e GPU calculam o
+// MESMO numero em vez de trocar um numero que poderia dessincronizar. E escolhida para dividir
+// numProbes o mais exato possivel (sobra < numero de linhas), entao nao se paga uma faixa de
+// grupos que so testa e retorna.
+#define DDGI_DISPATCH_GROUPS_X 1024
+
+int DDGI_DispatchGroupsX(int numProbes) {
+    int rows = max((numProbes + DDGI_DISPATCH_GROUPS_X - 1) / DDGI_DISPATCH_GROUPS_X, 1);
+    return max((numProbes + rows - 1) / rows, 1);
+}
+
+int DDGI_ProbeFromGroup(uint2 gid, int numProbes) {
+    return (int)gid.x + (int)gid.y * DDGI_DispatchGroupsX(numProbes);
+}
+
+int2 DDGI_TraceTexel(int probeIdx, int rayIdx, int numProbes, int raysPerProbe) {
+    // Cena pequena nao paga a linha inteira: a largura alocada e min(numProbes, 256)*raios.
+    int perRow = min(numProbes, DDGI_TRACE_PROBES_PER_ROW);
+    perRow     = max(perRow, 1);
+    return int2((probeIdx % perRow) * raysPerProbe + rayIdx, probeIdx / perRow);
+}
+
 int3 DDGI_ProbeCoord(int idx, int3 count) {
     int xy = count.x * count.y;
     int z  = idx / xy;
@@ -126,18 +167,139 @@ int3 DDGI_ProbeCoord(int idx, int3 count) {
     return int3(x, y, z);
 }
 
+// Quantos tiles cabem numa LINHA do atlas. Nao e campo proprio de cbuffer de proposito: sai da
+// LARGURA, que todo consumidor do gather ja carrega ao lado do tamanho do tile, e assim nao existe
+// o estado duplicado que poderia dessincronizar. A largura E tilesPerRow*(tile+2) por construcao
+// no SetupForScene, entao esta divisao inteira e exata nos dois lados.
+//
+// Os dois atlas (irradiancia, tile 6+2, e distancia, tile 14+2) usam o MESMO tilesPerRow — o
+// indice do tile e o da SONDA, e a sonda e a mesma. Derivar de qualquer um dos dois da o mesmo
+// numero, o que e a propriedade que torna seguro derivar em vez de passar.
+int DDGI_TilesPerRow(float atlasW, int tile) {
+    return max((int)atlasW / (tile + 2), 1);
+}
+
 // Origem do INTERIOR do tile: cada tile tem 1px de borda octaedrica de cada lado (stride =
 // tile+2, como paper/RTXGI/Flax) — a borda recebe copia com o fold do octaedro (tabelas nos
 // passes de update) p/ o bilinear ser continuo na costura em vez do clamp achatar o anel externo.
-int2 DDGI_TileOrigin(int3 c, int3 count, int tile) {
-    int tileCol = c.x + c.z * count.x;
-    int tileRow = c.y;
-    int stride  = tile + 2;
-    return int2(tileCol * stride, tileRow * stride) + 1;
+//
+// Layout: o plano (x,z) corre nas COLUNAS e o y nas LINHAS — a mesma vizinhanca do layout
+// historico de fileira — so que o plano e ENROLADO em bandas de `tilesPerRow` colunas quando nao
+// cabe numa linha so. Com uma banda, isto e bit a bit o layout antigo.
+//
+// Por que a fileira precisou morrer: a largura era `count.x*count.z*(tile+2)`, e no atlas de
+// distancia (stride 16) isso estourava o limite de dimensao de Texture2D com 1024 colunas de
+// sonda. O Bistro ja usava 552 — uma segunda cascata nao caberia. Com bandas o teto vira o
+// PRODUTO (~1 milhao de sondas) em vez de um par de eixos.
+//
+// Por que NAO e o indice linear da sonda enrolado, que seria mais simples: o gather le OITO
+// sondas vizinhas, e no plano-em-colunas as quatro de (x..x+1, y..y+1) caem num bloco 2x2 de
+// tiles ADJACENTES — vizinhas na horizontal e na vertical. Enrolar o `DDGI_ProbeLinear` mantinha
+// so o par em x junto e jogava y a `count.x` tiles de distancia; medido, custou ~0,4 ms de
+// espera no Bistro com 9.920 sondas. A propriedade que o layout antigo tinha nao era acidente, e
+// e ela que este formato preserva.
+int2 DDGI_TileOrigin(int3 c, int3 count, int tile, int tilesPerRow) {
+    int plane  = c.x + c.z * count.x;
+    int band   = plane / tilesPerRow;
+    int col    = plane - band * tilesPerRow;
+    int row    = c.y + band * count.y;
+    int stride = tile + 2;
+    return int2(col * stride, row * stride) + 1;
 }
 
 float3 DDGI_ProbeWorldPos(int3 c, float3 gridMin, float spacing) {
     return gridMin + (float3)c * spacing;
+}
+
+// Teste da caixa de invalidacao regional (FDDGI::InvalidateRegion), com a posicao RELOCADA da
+// sonda. Compartilhado pelos DOIS atlas de proposito: se a irradiancia testasse a caixa com a
+// posicao de grid e a distancia com a relocada (ou vice-versa), uma sonda perto de parede —
+// justamente a que a relocacao move — poderia entrar em um e ficar de fora do outro, e o
+// resultado seria iluminacao nova com visibilidade velha, que e o defeito que isto fecha.
+//
+// A hysteresis regional entra por parametro porque os dois atlas NAO usam a mesma: ver o bloco
+// no DDGIUpdateDist sobre reconstrucao vs atraso.
+float DDGI_RegionalHysteresis(int3 probeCoord, float3 probeOffset, float3 gridMin, float spacing,
+                              float4 invMin, float3 invMax, float regionalHyst, float hyst) {
+    if (invMin.w <= 0.5f) return hyst;
+    float3 probePos = DDGI_ProbeWorldPos(probeCoord, gridMin, spacing) + probeOffset;
+    if (all(probePos >= invMin.xyz) && all(probePos <= invMax))
+        return min(hyst, regionalHyst);
+    return hyst;
+}
+
+// === Histerese adaptativa, dirigida pela MUDANCA MEDIDA ==================================
+// Invalidacao por evento e uma WHITELIST: falha em silencio quando alguem esquece de avisar.
+// Mover objeto pelo gizmo, esconder no olho do outliner e editar cor/intensidade de luz
+// puntual mudam a cena e NAO avisavam o DDGI — com histerese alta isso vira luz fantasma por
+// segundos. Este detector e a rede: compara a estimativa nova com a guardada e derruba a
+// histerese quando a sonda mudou de verdade, sem depender de ninguem avisar.
+//
+// NAO substitui a invalidacao por regiao (FDDGI::InvalidateRegion), que continua sendo a
+// resposta barata e dirigida — o detector so paga o preco DEPOIS que a mudanca ja apareceu na
+// estimativa. E rede, nao chao.
+//
+// Receita do "Scaling Probe-Based Real-Time Dynamic Global Illumination for Production"
+// (JCGT 2021); o paper de 2019 tem alfa fixo entre 0.85 e 0.98.
+
+// Denominador SIMETRICO com piso, E banda morta no NUMERADOR. As duas coisas, nao so a
+// primeira: com piso sozinho, 0 -> 0.02 (preto -> 0,003 de radiancia linear) ainda daria
+// rel = 1.0 e derrubaria a histerese ao maximo. O detector amplificaria exatamente o ruido que
+// existe para ignorar, e sonda escura em interior e justamente onde a exposicao mais levanta o
+// sinal. Subtrair a mesma banda mata isso SEM degrau — um `if` cortando no piso faria a sonda
+// trocar de regime ao cruza-lo.
+//
+// Efeito colateral, que e o desejado: a banda desloca `rel` em exatamente floorV/m, entao o
+// detector perde sensibilidade conforme a sonda escurece e fica mudo no piso — "mudanca menor
+// que o chao de ruido nao e mudanca". Para uma sonda de brilho normal (m ~ 1) o deslocamento e
+// 0,02, dentro da folga dos limiares da curva de resposta.
+//
+// A medida continua em [0,1] POR CONSTRUCAO, que e o que garante que o acumulador de ponto
+// fixo dos chamadores nao estoure.
+float DDGI_RelChange3(float3 a, float3 b, float floorV) {
+    float3 d = max(abs(a - b) - floorV, 0.0f);
+    float3 m = max(max(abs(a), abs(b)), floorV);
+    float3 r = d / m;
+    return max(r.x, max(r.y, r.z)); // max por canal, nao luminancia: luz colorida acendendo
+                                    // (so o R muda) some numa media ponderada
+}
+
+// Curva de resposta: dois limiares, e so REDUZ (o `min` no fim). Aumentar a histerese aqui
+// deixaria o detector SEGURANDO luz velha, que e o oposto do que ele existe para fazer.
+//
+// A medida chega no dominio GAMMA do atlas (o update guarda pow(L, 1/DDGI_IRRADIANCE_GAMMA)),
+// entao um fator r de radiancia LINEAR aparece aqui como r' = r^(1/1.5), e a medida simetrica
+// vale rel = 1 - 1/r'. A calibracao, convertida:
+//   rel 0.50  <=>  2,8x de luz linear -> 0.90 (~29 frames; mesmo valor da invalidacao regional)
+//   rel 0.80  <=>   11x de luz linear -> 0.50 (~4 frames)
+// Entre os dois a queda e continua: um degrau apareceria como pop na borda do efeito, que e
+// exatamente o artefato que a histerese existe para evitar.
+//
+// A calibracao ORIGINAL era 0.20/0.50 e foi REPROVADA em A/B (2026-08-11): flicker espalhado
+// com o detector ligado. A causa nao e o valor em si, e a comparacao — `result` e uma
+// estimativa Monte Carlo de ~32 raios com peso positivo, e o ruido relativo dela neste dominio
+// e ~0,15-0,25. O limiar de 0,20 estava DENTRO do ruido, entao a sonda de alta variancia
+// disparava o detector todo frame e ficava presa em histerese reduzida — o detector produzindo
+// exatamente o ruido que existe para filtrar.
+//
+// 0.50 poe o gatilho a ~2-3 sigma do ruido do estimador. O que o detector perde com isso e
+// sensibilidade a mudanca sutil, e isso deixou de importar: depois que movimento, visibilidade
+// e edicao de luz passaram a invalidar por evento, o que sobra para a rede pegar sao mudancas
+// de ORDEM DE GRANDEZA (a coisa que ninguem ligou), nao de 40%.
+//
+// O que ISTO ainda nao resolve, e por que o knob segue default-OFF: uma sonda com variancia
+// muito alta (emissivo pequeno no campo de visao) continua podendo cruzar 0.50 por ruido. A
+// correcao definitiva e exigir PERSISTENCIA — a mesma mudanca em N frames seguidos, sendo que
+// ruido troca de sinal e mudanca real nao —, e isso precisa de estado por sonda, que nao
+// existe hoje.
+float DDGI_AdaptiveHysteresis(float rel, float hyst) {
+    const float kRelModerate  = 0.50f;
+    const float kRelBig       = 0.80f;
+    const float kHystModerate = 0.90f;
+    const float kHystBig      = 0.50f;
+    if (rel <= kRelModerate) return hyst;
+    float t = saturate((rel - kRelModerate) / (kRelBig - kRelModerate));
+    return min(hyst, lerp(kHystModerate, kHystBig, t));
 }
 
 float3 DDGI_SampleProbe(Texture2D<float4> atlas, SamplerState samp, int2 tileOriginPx,
@@ -150,7 +312,7 @@ float3 DDGI_SampleProbe(Texture2D<float4> atlas, SamplerState samp, int2 tileOri
 
 float3 SampleDDGIIrradiance(Texture2D<float4> atlas, SamplerState samp, float3 worldPos,
                             float3 N, float3 gridMin, float spacing, int3 count,
-                            int tile, float2 atlasInvSize) {
+                            int tile, float2 atlasInvSize, int tilesPerRow) {
     float3 g    = (worldPos - gridMin) / spacing;
     int3   base = (int3)floor(g);
     float3 frac = saturate(g - (float3)base);
@@ -167,7 +329,7 @@ float3 SampleDDGIIrradiance(Texture2D<float4> atlas, SamplerState samp, float3 w
         float  w  = tw.x * tw.y * tw.z;
         if (w <= 0.0f) continue;
 
-        int2   tileOrigin = DDGI_TileOrigin(c, count, tile);
+        int2   tileOrigin = DDGI_TileOrigin(c, count, tile, tilesPerRow);
         float3 irr = DDGI_SampleProbe(atlas, samp, tileOrigin, tile, atlasInvSize, N);
         sum  += irr * w;
         wsum += w;
@@ -254,7 +416,7 @@ DDGITapCheb DDGI_EvaluateTapCheb(
         int i, int3 base, float3 frac, float3 biasPos, float3 rawPos, float3 N,
         float3 gridMin, float spacing, int3 count,
         Texture2D<float4> distAtlas, SamplerState samp, int distTile, float2 distInvSize,
-        Buffer<float4> probeData, uint skipMode) {
+        Buffer<float4> probeData, uint skipMode, int tilesPerRow) {
     int3 off = int3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
     int3 c   = clamp(base + off, int3(0, 0, 0), count - 1);
 
@@ -302,13 +464,20 @@ DDGITapCheb DDGI_EvaluateTapCheb(
     float3 rawToProbe  = rawPos - probePos;
     float3 dirBackface = rawToProbe / max(length(rawToProbe), 1e-4f);
 
-    // Pesos DEFENSIVOS com piso (receita do Flax, DDGI.hlsl): backface e Chebyshev se
-    // auto-sabotam em geometria densa/fina (miolo de sebe, cantos, frestas) — os pisos
-    // garantem que wsum nunca colapsa a zero => nunca retorna preto absoluto, so escurece.
+    // Pesos DEFENSIVOS com piso: backface e Chebyshev se auto-sabotam em geometria densa/fina
+    // (miolo de sebe, cantos, frestas) — os pisos garantem que wsum nunca colapsa a zero, entao a
+    // consulta nunca devolve preto absoluto, so escurece. Os pisos do Chebyshev (0.05), do peso
+    // final (1e-6), do trilinear (0.001) e a curva de crush sao mesmo do Flax (DDGI.hlsl:214-240).
+    //
+    // O `+ 0.05` no termo de BACKFACE nao e: la o teste e `Square(dot(...) * 0.5 + 0.5)` puro, e
+    // no paper tambem. O comentario anterior atribuia o somando ao Flax, e isso era FALSO. Ele
+    // afrouxa o cull — a sonda que esta do lado de tras da superficie guarda 5% de peso em vez de
+    // zero, o que injeta luz do outro lado da parede em canto fechado. Fica ate ter A/B proprio:
+    // e o unico piso desta funcao que nao veio de lugar nenhum.
     float backface = dot(-dirBackface, N) * 0.5f + 0.5f;
     float w = backface * backface + 0.05f;
 
-    int2   distOrigin = DDGI_TileOrigin(c, count, distTile);
+    int2   distOrigin = DDGI_TileOrigin(c, count, distTile, tilesPerRow);
     float2 md = DDGI_SampleProbeRG(distAtlas, samp, distOrigin, distTile, distInvSize, dirPP);
     tap.Mean  = md.x;
     tap.Mean2 = md.y;
@@ -339,7 +508,7 @@ float3 SampleDDGIIrradianceCheb(
         Texture2D<float4> irrAtlas, Texture2D<float4> distAtlas, SamplerState samp,
         float3 worldPos, float3 N, float3 gridMin, float spacing, int3 count,
         int irrTile, float2 irrInvSize, int distTile, float2 distInvSize, float3 biasVec,
-        Buffer<float4> probeData, uint skipMode) {
+        Buffer<float4> probeData, uint skipMode, int tilesPerRow) {
     float3 biasPos = worldPos + biasVec;
     float3 g    = (biasPos - gridMin) / spacing;
     int3   base = (int3)floor(g);
@@ -352,10 +521,11 @@ float3 SampleDDGIIrradianceCheb(
     for (int i = 0; i < 8; ++i) {
         DDGITapCheb tap = DDGI_EvaluateTapCheb(i, base, frac, biasPos, worldPos, N,
                                                gridMin, spacing, count, distAtlas, samp,
-                                               distTile, distInvSize, probeData, skipMode);
+                                               distTile, distInvSize, probeData, skipMode,
+                                               tilesPerRow);
         if (tap.Ignored) continue;
 
-        int2   irrOrigin = DDGI_TileOrigin(tap.Coord, count, irrTile);
+        int2   irrOrigin = DDGI_TileOrigin(tap.Coord, count, irrTile, tilesPerRow);
         float3 irr = DDGI_SampleProbe(irrAtlas, samp, irrOrigin, irrTile, irrInvSize, N);
         sum  += irr * tap.Weight;
         wsum += tap.Weight;

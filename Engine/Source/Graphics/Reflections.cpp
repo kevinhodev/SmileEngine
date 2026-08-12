@@ -634,7 +634,7 @@ namespace Smile {
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
-                                GIHit.SkipMode };
+                                GIHit.SkipModePacked() };
         // .w fica em ZERO de proposito: e o piso de roughness do hit secundario, e ele so vale
         // p/ quem guarda a radiancia num cache nao-direcional (DDGI e ReSTIR GI). Aqui o hit e
         // sombreado p/ uma visada conhecida e consumido uma vez so — clampar borraria

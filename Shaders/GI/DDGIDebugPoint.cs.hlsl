@@ -92,7 +92,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 (int)i, base, fracPart, biasPos, worldPos, N,
                 GridMinSpacing.xyz, GridMinSpacing.w, count,
                 DistanceAtlas, LinearClamp, (int)DistAtlasParams.x,
-                1.0f / DistAtlasParams.yz, ProbeData, skipMode);
+                1.0f / DistAtlasParams.yz, ProbeData, skipMode,
+                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x));
         } else {
             // Com o Chebyshev desligado o consumidor e o SampleDDGIIrradiance: trilinear
             // puro, sem bias, sem relocacao e sem skip de probe inativa. Os momentos ainda
@@ -113,7 +114,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
             const float2 moments = DDGI_SampleProbeRG(
                 DistanceAtlas, LinearClamp,
-                DDGI_TileOrigin(c, count, (int)DistAtlasParams.x),
+                DDGI_TileOrigin(c, count, (int)DistAtlasParams.x,
+                                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x)),
                 (int)DistAtlasParams.x, 1.0f / DistAtlasParams.yz,
                 probeToPoint / max(tap.DistToProbe, 1e-4f));
             tap.Mean  = moments.x;
@@ -122,7 +124,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
         const float3 irr = tap.Ignored ? 0.0f : DDGI_SampleProbe(
             IrradianceAtlas, LinearClamp,
-            DDGI_TileOrigin(tap.Coord, count, (int)AtlasParams.x),
+            DDGI_TileOrigin(tap.Coord, count, (int)AtlasParams.x,
+                            DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x)),
             (int)AtlasParams.x, 1.0f / AtlasParams.yz, N);
 
         probeIndices[i]      = tap.Index;

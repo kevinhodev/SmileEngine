@@ -330,13 +330,26 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     // entao extrapolar seria pior — a borda se reinjetaria. Sem o ambiente colorido do deferred
     // (nao existe no CB de um passe de RT), o hit desvanece o indireto para ZERO: escurece o
     // bounce distante em vez de inventar luz. O direto do hit (sol e puntuais) segue inteiro.
-    float volW = DDGI_VolumeWeight(hitPos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
+    // GIDistParams.w carrega DUAS coisas (ver FGIHitSampling::SkipModePacked): o skipMode de
+    // sonda inativa nos dois bits baixos e, no bit 2, o gate de MEDICAO — "corte o DDGI como
+    // terminador e me diga quanto muda". Com o gate ligado nao ha gather nenhum: o volW vai a
+    // zero e o custo do tap tambem sai, o que mantem a medicao honesta tambem no profiler.
+    const uint giHitFlags = (uint)GIDistParams.w;
+    const bool termOff    = (giHitFlags & 4u) != 0u;
+    float volW = termOff ? 0.0f
+                         : DDGI_VolumeWeight(hitPos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
     float3 indirect = float3(0.0f, 0.0f, 0.0f);
     if (volW > 0.0f) {
+        // Tiles por linha (empacotamento 2D; ver DDGI_TileOrigin) derivado do par
+        // (largura, tile) do atlas de distancia, que ja chega aqui pelo contrato de NOME do
+        // GIDistParams — os cinco shaders que incluem este arquivo o declaram, entao nao ha
+        // campo novo a plumbar nem estado duplicado a dessincronizar.
+        const int tilesPerRow = DDGI_TilesPerRow(GIDistParams.y, (int)GIDistParams.x);
         indirect = SampleDDGIIrradianceCheb(
             IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN,
             P.GridMin, P.Spacing, P.Count, P.AtlasTile, P.AtlasInvSize,
-            (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, (uint)GIDistParams.w);
+            (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, giHitFlags & 3u,
+            tilesPerRow);
         if (volW < 1.0f) indirect *= volW;
     }
 

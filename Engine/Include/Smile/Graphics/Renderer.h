@@ -326,6 +326,22 @@ namespace Smile {
         bool RemoveRenderable(u64 Id);
         u64  DuplicateRenderable(u64 Id);
 
+        // Edicao que muda o MUNDO sem mudar a LISTA: mover objeto ou luz, esconder no outliner,
+        // editar propriedade de luz. So as sondas do DDGI dentro da caixa reavaliam — o resto do
+        // atlas continua valido, que e a diferenca para o SceneStructure.
+        //
+        // Para uma MUDANCA de estado (moveu, mudou de raio), chame DUAS vezes, com a caixa
+        // ANTIGA e com a NOVA: FDDGI::InvalidateRegion une chamadas dentro da janela, e a uniao
+        // e crua — nao ha custo em chamar por frame durante um arraste.
+        //
+        // NAO cobre os historicos sem granularidade espacial (reservoirs, reflexoes, ReGIR,
+        // cache de radiancia). Quem muda ENERGIA ou visibilidade tambem chama
+        // Settings().MarkSceneContentDirty(); mover objeto nao precisa, porque ali os filtros
+        // reprojetam por motion vector e rejeitam o historico invalido sozinhos.
+        // `Change` distingue "mudou a geometria daqui" de "mudou a luz daqui". Os dois invalidam
+        // o atlas igual; so o primeiro reclassifica as sondas — ver EGIRegionChange (DDGI.h).
+        void NotifyGIRegionChanged(const Vec3& Min, const Vec3& Max, EGIRegionChange Change);
+
         // Selecao de LUZ. Indice em Scene.Lights(); -1 = nenhuma.
         //
         // A exclusividade com a selecao de renderavel deixou de ser combinada: as duas sao a
@@ -882,6 +898,7 @@ namespace Smile {
         bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
         bool             MaterialRTStateDirty  = false; // pedido de refresh coalescido p/ o proximo frame
         bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
+        bool             SceneContentDirty     = false; // idem (ver MarkSceneContentDirty)
         FDDGI            DDGI;
         FReGIR           ReGIR;
         // Cache de radiancia de saida em hash de mundo. Terminador dos raios secundarios, lido e
@@ -895,8 +912,15 @@ namespace Smile {
         bool             UseGI       = true;
         bool             GIDebug     = false; 
         bool             GIChebyshev = true;  
-        bool             GISkipInactiveProbes = true; 
-        bool             GISkipInactiveFallback = false; 
+        bool             GISkipInactiveProbes = true;
+        bool             GISkipInactiveFallback = false;
+        // Gate de MEDICAO, nao knob de qualidade: zera a contribuicao do DDGI como TERMINADOR
+        // dos hits de RT (2o bounce das sondas, Lo do ReSTIR GI, indireto das reflexoes) com
+        // todo o resto — volume, atlas, relocacao, sondas — intacto e rodando. Serve para
+        // responder "quanto o DDGI realmente entrega neste pipeline" com numero em vez de
+        // opiniao, que e a pergunta que decide se ele vira fallback ou continua o nucleo da GI.
+        // Ver FGIHitSampling::TerminatorOff.
+        bool             GIMeasureTerminatorOff = false;
 
         FReSTIRGI        ReSTIRGI;
         bool             UseReSTIRGI = false; // experimental; default OFF (nao toca o estado padrao)

@@ -185,7 +185,9 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
         } else {
             float3 gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, LinearClamp, wp, -dir,
                             DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                            (int)DDGIParams.y, invSize) * (DDGIParams.x / SMILE_PI);
+                            (int)DDGIParams.y, invSize,
+                            DDGI_TilesPerRow(DDGIParams.z, (int)DDGIParams.y))
+                        * (DDGIParams.x / SMILE_PI);
             amb = (volW >= 1.0f) ? gi : lerp(AmbientFallback.rgb, gi, volW);
         }
     } else {

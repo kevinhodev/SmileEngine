@@ -125,6 +125,8 @@ float3 DDGI_FallbackAmbient(float3 N) {
 
 float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
+    // Empacotamento 2D do atlas (ver DDGI_TileOrigin); derivado da largura, vale p/ os dois atlas.
+    int  tilesPerRow  = DDGI_TilesPerRow(DDGIParams.z, (int)DDGIParams.y);
     int  giFlags      = (int)DDGIDistParams.w;
     bool useChebyshev = (giFlags & 1) != 0;
     bool skip         = (giFlags & 2) != 0;
@@ -144,11 +146,11 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
         gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
                  worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
                  (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                 DDGIProbeData, skipMode);
+                 DDGIProbeData, skipMode, tilesPerRow);
     } else {
         gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
                  DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                 (int)DDGIParams.y, atlasInvSize);
+                 (int)DDGIParams.y, atlasInvSize, tilesPerRow);
     }
     return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }
