@@ -2814,15 +2814,26 @@ namespace Smile {
                     Tile.SrvSlot       = T.SrvSlot;
                     Tile.Decode        = T.Decode;
                     Tile.SubIndex      = T.SubIndex;
+                    // Escala do heatmap de distancia. A registrada e GLOBAL e sai da cascata
+                    // GROSSA, porque a vista do atlas inteiro mistura tiles de todas. Quando UM
+                    // tile e inspecionado, a escala vira a DAQUELA cascata: no overview a fina
+                    // fica escura mas legivel, e no tile ampliado ela usa a propria regua.
+                    f32 ExposureScale = 1.0f;
                     if (DebugProbeIndex != kNoDebugProbe && T.AtlasTilePx > 0 &&
                         T.Name.rfind("DDGI", 0) == 0) {
                         // Zero significa overview; +1 permite selecionar fisicamente o tile 0.
                         Tile.SubIndex = DDGI.AtlasTileFromProbe(DebugProbeIndex) + 1u;
+                        if (T.Decode == EDebugDecode::DDGIDistance && DDGI.ProbesPerCascade() > 0) {
+                            const u32 Casc = DebugProbeIndex / DDGI.ProbesPerCascade();
+                            const f32 TileMax = DDGI.CascadeDistanceMomentMax(Casc);
+                            const f32 GlobalMax = DDGI.DistanceMomentMax();
+                            if (TileMax > 0.0f) ExposureScale = GlobalMax / TileMax;
+                        }
                     }
                     Tile.AtlasTilePx   = T.AtlasTilePx;
                     Tile.Mip           = DebugMip < T.MipCount ? DebugMip : 0;
                     Tile.ChannelWeight = DebugChannelWeight;
-                    Tile.Exposure      = T.Exposure * DebugExposure;
+                    Tile.Exposure      = T.Exposure * DebugExposure * ExposureScale;
                     Tile.NearZ         = Vw.NearZ;
                     Tile.FarZ          = Vw.FarZ;
                     Tile.LinearFilter  = T.LinearFilter;

@@ -639,8 +639,13 @@ namespace SmileEditor {
         return Renderer ? static_cast<double>(Renderer->GetDebugExposure()) : 1.0;
     }
 
-    bool ViewportWidget::GetDebugProbeCoordValues(
-            int& _X, int& _Y, int& _Z, int& _CountX, int& _CountY, int& _CountZ) const {
+    // Decomposicao UNICA do indice de sonda que o painel inspeciona: global -> (cascata, indice
+    // local, coord). Cinco consumidores dependem dela — coord, posicao de mundo, descricao do
+    // grid, alcance de distancia e o stepping — e antes cada um refazia a conta assumindo indice
+    // LOCAL. Em qualquer cascata acima da 0 isso dava coordenada fora do grid, posicao calculada
+    // com a origem da cascata errada, e um stepping que reconstruia o indice sem a base da
+    // cascata, saltando para a 0 no primeiro passo.
+    bool ViewportWidget::GetDebugProbeCoordValues(FDebugProbeCoord& _Out) const {
         if (!Renderer || !DebugProbeSessionActive) return false;
         auto RendererAccess = Renderer.Lock();
         const auto& DDGI = Renderer->GetDDGI();
@@ -651,16 +656,23 @@ namespace SmileEditor {
         }
 
         const Smile::Vec3 Count = DDGI.GridCount();
-        _CountX = static_cast<int>(Count.X);
-        _CountY = static_cast<int>(Count.Y);
-        _CountZ = static_cast<int>(Count.Z);
-        if (_CountX <= 0 || _CountY <= 0 || _CountZ <= 0) return false;
+        _Out.CountX = static_cast<int>(Count.X);
+        _Out.CountY = static_cast<int>(Count.Y);
+        _Out.CountZ = static_cast<int>(Count.Z);
+        if (_Out.CountX <= 0 || _Out.CountY <= 0 || _Out.CountZ <= 0) return false;
 
-        const int XY = _CountX * _CountY;
-        _Z = static_cast<int>(Index) / XY;
-        const int R = static_cast<int>(Index) - _Z * XY;
-        _Y = R / _CountX;
-        _X = R - _Y * _CountX;
+        const int PerCascade = std::max(1, static_cast<int>(DDGI.ProbesPerCascade()));
+        _Out.Cascade    = static_cast<int>(Index) / PerCascade;
+        _Out.LocalIndex = static_cast<int>(Index) - _Out.Cascade * PerCascade;
+
+        const int XY = _Out.CountX * _Out.CountY;
+        _Out.Z = _Out.LocalIndex / XY;
+        const int R = _Out.LocalIndex - _Out.Z * XY;
+        _Out.Y = R / _Out.CountX;
+        _Out.X = R - _Out.Y * _Out.CountX;
+        // Origem e espacamento DA CASCATA, nao os da grossa que GridMin()/Spacing() devolvem.
+        _Out.GridMin = DDGI.CascadeGridMin(static_cast<Smile::u32>(_Out.Cascade));
+        _Out.Spacing = DDGI.CascadeSpacing(static_cast<Smile::u32>(_Out.Cascade));
         return true;
     }
 
@@ -671,21 +683,23 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetDebugProbeCoord() const {
-        int X, Y, Z, CX, CY, CZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
-        return QStringLiteral("grid (%1, %2, %3)").arg(X).arg(Y).arg(Z);
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
+        // A cascata entra no rotulo: sem ela, duas sondas em cascatas diferentes no mesmo
+        // vertice local sao indistinguiveis.
+        return QStringLiteral("cascata %1 · grid (%2, %3, %4)")
+            .arg(C.Cascade).arg(C.X).arg(C.Y).arg(C.Z);
     }
 
     QString ViewportWidget::GetDebugProbeWorld() const {
-        int X, Y, Z, CX, CY, CZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
-        auto RendererAccess = Renderer.Lock();
-        const auto& DDGI = Renderer->GetDDGI();
-        const Smile::Vec3 Min = DDGI.GridMin();
-        const double S = DDGI.Spacing();
-        const double PX = Min.X + static_cast<double>(X) * S;
-        const double PY = Min.Y + static_cast<double>(Y) * S;
-        const double PZ = Min.Z + static_cast<double>(Z) * S;
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
+        // Origem e espacamento DA CASCATA (ver a decomposicao): com os da grossa, a posicao da
+        // sonda de uma fina sairia em outro lugar do mundo.
+        const double S  = C.Spacing;
+        const double PX = C.GridMin.X + static_cast<double>(C.X) * S;
+        const double PY = C.GridMin.Y + static_cast<double>(C.Y) * S;
+        const double PZ = C.GridMin.Z + static_cast<double>(C.Z) * S;
         const QLocale Locale;
         return QStringLiteral("posição-base %1 · %2 · %3 m")
             .arg(Locale.toString(PX, 'f', 2))
@@ -694,19 +708,22 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetDebugProbeGrid() const {
-        int X, Y, Z, CX, CY, CZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
         const QLocale Locale;
         return QStringLiteral("%1 × %2 × %3 probes · spacing %4 m")
-            .arg(CX).arg(CY).arg(CZ)
-            .arg(Locale.toString(Renderer->GetDDGI().Spacing(), 'f', 2));
+            .arg(C.CountX).arg(C.CountY).arg(C.CountZ)
+            .arg(Locale.toString(static_cast<double>(C.Spacing), 'f', 2));
     }
 
     QString ViewportWidget::GetDebugProbeDistanceRange() const {
-        if (!Renderer || !DebugProbeSessionActive) return QString();
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
         const QLocale Locale;
+        // 2,6 espacamentos DA CASCATA — o mesmo clamp que o DDGIUpdateDist aplica aos momentos.
+        // O DistanceMomentMax() do FDDGI e um valor so e descreveria a fina para uma sonda grossa.
         return QStringLiteral("distância média · 0 → %1 m")
-            .arg(Locale.toString(Renderer->GetDDGI().DistanceMomentMax(), 'f', 2));
+            .arg(Locale.toString(static_cast<double>(C.Spacing) * 2.6, 'f', 2));
     }
 
     bool ViewportWidget::IsDebugPreviewReady() const {
@@ -878,12 +895,17 @@ namespace SmileEditor {
     void ViewportWidget::StepDebugProbe(int _DX, int _DY, int _DZ) {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();
-        int X, Y, Z, CountX, CountY, CountZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CountX, CountY, CountZ)) return;
-        const int NX = std::clamp(X + _DX, 0, CountX - 1);
-        const int NY = std::clamp(Y + _DY, 0, CountY - 1);
-        const int NZ = std::clamp(Z + _DZ, 0, CountZ - 1);
-        const int Index = NX + NY * CountX + NZ * CountX * CountY;
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return;
+        const int NX = std::clamp(C.X + _DX, 0, C.CountX - 1);
+        const int NY = std::clamp(C.Y + _DY, 0, C.CountY - 1);
+        const int NZ = std::clamp(C.Z + _DZ, 0, C.CountZ - 1);
+        // O indice reconstruido tem de voltar para o espaco GLOBAL. Sem a base da cascata, o
+        // primeiro passo do navegador saltaria da cascata inspecionada para a 0, e o painel
+        // passaria a mostrar outra sonda sem dizer que mudou de cascata.
+        const int PerCascade = C.CountX * C.CountY * C.CountZ;
+        const int Index = C.Cascade * PerCascade +
+                          (NX + NY * C.CountX + NZ * C.CountX * C.CountY);
         if (Index == GetDebugProbeIndex()) return;
         ResetDebugProbePoint();
         SelectDebugProbe(Index);
@@ -1491,16 +1513,26 @@ namespace SmileEditor {
                      I < Smile::FDDGIDebug::kPointProbeCount; ++I) {
                     const Smile::FDDGIPointProbeDiagnostic& P =
                         PointDiagnostic.Probes[I];
-                    const int Index = static_cast<int>(P.ProbeIndex);
-                    const int Z = Index / XY;
-                    const int R = Index - Z * XY;
+                    // O indice publicado e GLOBAL: cascata * sondasPorCascata + local. Decodifica-lo
+                    // direto daria coordenada fora do grid em qualquer cascata acima da 0 — no
+                    // Bistro o Z da cascata 1 comecaria em 24, num grid que tem 24.
+                    const int Index    = static_cast<int>(P.ProbeIndex);
+                    const int PerCasc  = std::max(1, XY * std::max(1, static_cast<int>(GridCount.Z)));
+                    const int Cascade  = Index / PerCasc;
+                    const int Local    = Index - Cascade * PerCasc;
+                    const int Z = Local / XY;
+                    const int R = Local - Z * XY;
                     const int Y = R / CountX;
                     const int X = R - Y * CountX;
 
                     QVariantMap Item;
                     Item.insert(QStringLiteral("probeIndex"), Index);
+                    Item.insert(QStringLiteral("cascade"), Cascade);
+                    // A cascata entra na coordenada mostrada: sem ela, duas sondas de cascatas
+                    // diferentes no mesmo vertice local apareceriam com o mesmo rotulo.
                     Item.insert(QStringLiteral("coord"),
-                                QStringLiteral("(%1,%2,%3)").arg(X).arg(Y).arg(Z));
+                                QStringLiteral("c%1 (%2,%3,%4)")
+                                    .arg(Cascade).arg(X).arg(Y).arg(Z));
                     Item.insert(QStringLiteral("active"), P.Active);
                     Item.insert(QStringLiteral("dominant"),
                                 static_cast<int>(I) == PointDiagnostic.DominantSlot);
@@ -1569,11 +1601,25 @@ namespace SmileEditor {
                     ? QString()
                     : QStringLiteral("  •  borda do volume (%1% DDGI)")
                           .arg(Locale.toString(PointDiagnostic.VolumeWeight * 100.0f, 'f', 0));
+                // Composicao de cascatas: e ela que explica por que ha DUAS paginas de oito taps
+                // e com que peso cada uma entrou. Sem isto o painel mostra o `cN` de cada tap sem
+                // dizer qual foi a DECISAO do seletor — o leitor teria de reconstrui-la somando
+                // pesos, que e justamente o que o diagnostico existe para poupar.
+                const bool Blended = PointDiagnostic.NextCascade != PointDiagnostic.PrimaryCascade;
+                const QString CascadeNote = Blended
+                    ? QStringLiteral("  •  c%1 %2% + c%3 %4%")
+                          .arg(PointDiagnostic.PrimaryCascade)
+                          .arg(Locale.toString(PointDiagnostic.PrimaryWeight * 100.0f, 'f', 0))
+                          .arg(PointDiagnostic.NextCascade)
+                          .arg(Locale.toString(
+                              (1.0f - PointDiagnostic.PrimaryWeight) * 100.0f, 'f', 0))
+                    : QStringLiteral("  •  c%1 100%").arg(PointDiagnostic.PrimaryCascade);
                 DebugProbePointSummary = QStringLiteral(
-                    "ponto %1 · %2 · %3 m  •  dominante #%4%5%6")
+                    "ponto %1 · %2 · %3 m%4  •  dominante #%5%6%7")
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.X, 'f', 2))
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.Y, 'f', 2))
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.Z, 'f', 2))
+                    .arg(CascadeNote)
                     .arg(DominantIndex)
                     .arg(RiskIndex >= 0
                         ? QStringLiteral("  •  maior risco #%1").arg(RiskIndex)

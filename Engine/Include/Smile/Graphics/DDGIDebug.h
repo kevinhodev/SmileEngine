@@ -131,6 +131,11 @@ namespace Smile {
             u8    _Tail[512 - 64 - 15 * 16 - 80] = {};
         };
         static_assert(sizeof(DDGIDebugConstants) == 512, "DDGIDebugConstants must be 512 bytes");
+        // Offset preso como nos outros cinco cbuffers: o tamanho sozinho nao pega campo
+        // acrescentado ANTES do bloco, que foi exatamente o defeito do RayParams no
+        // DDGIDebugStats — a cauda inteira deslizou 16 bytes e o build passou.
+        static_assert(offsetof(DDGIDebugConstants, Cascades) == 304,
+                      "bloco de cascatas anexado ao fim do DDGIDebugConstants");
 
         struct alignas(256) PointDiagnosticConstants {
             Mat44 InvViewProj;
@@ -147,6 +152,8 @@ namespace Smile {
         };
         static_assert(sizeof(PointDiagnosticConstants) == 256,
                       "PointDiagnosticConstants must be 256 bytes");
+        static_assert(offsetof(PointDiagnosticConstants, Cascades) == 176,
+                      "bloco de cascatas anexado ao fim do PointDiagnosticConstants");
 
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);

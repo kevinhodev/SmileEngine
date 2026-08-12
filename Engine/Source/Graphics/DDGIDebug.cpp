@@ -405,6 +405,13 @@ namespace Smile {
             Result.WorldNormal   = { Rows[1].X, Rows[1].Y, Rows[1].Z };
             Result.TotalWeight   = Rows[1].W;
             Result.VolumeWeight  = Rows[kPointRowVolumeIdx].X;
+            // YZW da mesma linha: a escolha de cascata que o gather fez neste ponto. O shader ja
+            // publicava os tres e o parser copiava so o X — os campos ficavam no default e o
+            // painel nao tinha como relatar a selecao REAL, que e metade do que o diagnostico
+            // existe para responder quando ha duas cascatas.
+            Result.PrimaryCascade = static_cast<i32>(std::lround(Rows[kPointRowVolumeIdx].Y));
+            Result.NextCascade    = static_cast<i32>(std::lround(Rows[kPointRowVolumeIdx].Z));
+            Result.PrimaryWeight  = Rows[kPointRowVolumeIdx].W;
             f32 BestWeight = -1.0f;
             // Abaixo deste limiar a perda de visibilidade e residual; nao destaque
             // uma probe como "risco" apenas porque ela foi a maior entre oito zeros.

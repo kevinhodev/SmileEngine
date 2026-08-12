@@ -266,8 +266,17 @@ namespace SmileEditor {
         // navegar pelo grid, clicar num contribuinte, fechar. O foco automatico do point-pick
         // chama o renderer direto e NAO passa por aqui, de proposito (ver DebugProbeBaseIndex).
         void SelectDebugProbe(int ProbeIndex);
-        bool GetDebugProbeCoordValues(int& X, int& Y, int& Z,
-                                      int& CountX, int& CountY, int& CountZ) const;
+        // Decomposicao unica do indice GLOBAL da sonda inspecionada. Ver o .cpp: os cinco
+        // consumidores tem de concordar, e antes cada um refazia a conta como se o indice fosse
+        // local.
+        struct FDebugProbeCoord {
+            int  X = 0, Y = 0, Z = 0;
+            int  CountX = 0, CountY = 0, CountZ = 0;
+            int  Cascade = 0, LocalIndex = 0;
+            Smile::Vec3 GridMin{};
+            Smile::f32  Spacing = 1.0f;
+        };
+        bool GetDebugProbeCoordValues(FDebugProbeCoord& Out) const;
 
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 

@@ -185,16 +185,23 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     // O volume e medido na cascata GROSSA (GridMinSpacing), que e quem define "dentro da cena" —
     // o mesmo campo que os cinco consumidores usam para o fade de borda.
     //
+    // Escala de cada pagina no resultado final. Exatamente a composicao do wrapper: cada cascata
+    // normaliza pelo PROPRIO somatorio e so entao entra no lerp.
+    //
+    // No fast path a primaria vale 1.0, e NAO PrimaryWeight. Os wrappers retornam `primary` sem
+    // escala nenhuma quando nao ha blend, entao escalar por 0,999 aqui faria os pesos
+    // normalizados nao somarem 1 e o diagnostico deixaria de reproduzir o gather — de pouco, mas
+    // "de pouco" e o suficiente para alguem perseguir a diferenca errada.
+    const float primaryScale = hasBlend ? choice.PrimaryWeight : 1.0f;
+    const float pageScale[2] = { primaryScale,
+                                 hasBlend ? (1.0f - choice.PrimaryWeight) : 0.0f };
     // yzw = a escolha de cascata. Sem ela o painel mostraria 16 taps sem dizer de onde vem cada
-    // metade, nem com que peso as duas se misturaram.
+    // metade, nem com que peso as duas se misturaram. O peso publicado e o EFETIVO (ja com o
+    // fast path aplicado), que e o que o painel precisa para conferir a soma.
     DiagnosticOut[DDGI_POINT_ROW_VOLUME] = float4(
         DDGI_VolumeWeight(worldPos, GridMinSpacing.xyz, GridMinSpacing.w, count, BiasParams.z),
         (float)choice.Primary, (float)(hasBlend ? choice.Next : choice.Primary),
-        choice.PrimaryWeight);
-    // Escala de cada pagina no resultado final. Exatamente a composicao do wrapper:
-    // cada cascata normaliza pelo PROPRIO somatorio e so entao entra no lerp.
-    const float pageScale[2] = { choice.PrimaryWeight,
-                                 hasBlend ? (1.0f - choice.PrimaryWeight) : 0.0f };
+        primaryScale);
     [unroll]
     for (uint i = 0u; i < DDGI_POINT_PROBES; ++i) {
         const uint  pg  = i / 8u;

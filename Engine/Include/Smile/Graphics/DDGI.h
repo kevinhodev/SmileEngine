@@ -292,7 +292,13 @@ namespace Smile {
         f32  MaxRayDistance() const { return MaxRayDist; } 
         // O atlas de distancia guarda os dois momentos ja limitados a esta vizinhanca.
         // Nao confundir com MaxRayDistance(), que e o alcance do trace na cena inteira.
-        f32  DistanceMomentMax() const { return Cascades[0].Spacing * 2.6f; }
+        // Da cascata GROSSA por default: e uma escala GLOBAL, usada para normalizar a vista do
+        // atlas inteiro, e o atlas tem tiles de todas as cascatas. Com o teto da fina (2 m) os
+        // tiles da grossa (8 m) saturariam por completo e o modo deixaria de discriminar; com o
+        // da grossa, os da fina ficam escuros mas legiveis — e quem inspeciona UM tile pede a
+        // escala dele por CascadeDistanceMomentMax.
+        f32  DistanceMomentMax() const { return Spacing() * 2.6f; }
+        f32  CascadeDistanceMomentMax(u32 C) const { return CascadeSpacing(C) * 2.6f; }
         // Conversao sonda <-> tile fisico do atlas. O atlas tem ORDEM PROPRIA — plano (x,z) nas
         // colunas, y nas linhas, o plano enrolado em bandas — e ela nao e a dos buffers
         // (DDGI_ProbeLinear). Manter as duas custa estas duas funcoes; unifica-las custaria a

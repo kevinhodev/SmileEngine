@@ -7,7 +7,7 @@
 cbuffer DDGIDebugCB : register(b0) {
     row_major float4x4 ViewProj;
     float4 GridMinSpacing;
-    float4 GridCount;       
+    float4 GridCount;
     float4 AtlasParams;
     float4 DistAtlasParams;
     float4 DebugParams;
@@ -36,7 +36,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     // clamp do UpdateDist). O DistAtlasParams.w vem da grossa e daria a uma sonda da fina um
     // piso quatro vezes maior que a gaiola dela.
     int   cascade   = DDGI_CascadeOfProbe(probeIdx, (int3)GridCount.xyz);
-    float minFront  = GICascadeGridMinSpacing[cascade].w * 2.6f; 
+    float minFront  = GICascadeGridMinSpacing[cascade].w * 2.6f;
     float sumFront  = 0.0f;
     int   frontCount = 0;
 
@@ -58,7 +58,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     float backRatio = realCount > 0 ? (float)backCount / (float)realCount : 0.0f;
     float meanFront = frontCount > 0 ? (sumFront / (float)frontCount) : 0.0f;
-    float state     = backRatio > 0.25f ? 0.0f : 1.0f; 
+    float state     = backRatio > 0.25f ? 0.0f : 1.0f;
 
     ProbeStats[probeIdx] = float4(backRatio, minFront, meanFront, state);
 }

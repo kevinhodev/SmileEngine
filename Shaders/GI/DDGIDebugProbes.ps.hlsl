@@ -4,9 +4,9 @@ cbuffer DDGIDebugCB : register(b0) {
     row_major float4x4 ViewProj;
     float4 GridMinSpacing;
     float4 GridCount;
-    float4 AtlasParams;     
-    float4 DistAtlasParams; 
-    float4 DebugParams;     
+    float4 AtlasParams;
+    float4 DistAtlasParams;
+    float4 DebugParams;
     float4 CameraPos;
 };
 
@@ -20,6 +20,10 @@ struct VSOut {
     nointerpolation float2 irrTile  : TEXCOORD0;
     nointerpolation float2 distTile : TEXCOORD1;
     nointerpolation float4 extra    : TEXCOORD2;
+    // Teto do heatmap de distancia, 2,6 x espacamento DA CASCATA desta sonda. Vem pelo
+    // interpolante porque o DistAtlasParams.w e um valor SO — com 2 m e 8 m, normalizar as
+    // grossas pelo teto da fina satura o heatmap inteiro e o modo deixa de discriminar.
+    nointerpolation float  distMax  : TEXCOORD3;
 };
 
 float3 Heat(float t) {
@@ -47,7 +51,7 @@ float4 main(VSOut i) : SV_Target {
         float2 inv = float2(1.0f / DistAtlasParams.y, 1.0f / DistAtlasParams.z);
         float2 md  = DDGI_SampleProbeRG(DistAtlas, LinearClamp, (int2)i.distTile,
                                         (int)DistAtlasParams.x, inv, N);
-        color = Heat(md.x / max(DistAtlasParams.w, 1e-3f));
+        color = Heat(md.x / max(i.distMax, 1e-3f));
     } else if (mode == 2) {
         color = Heat(i.extra.x);
     } else if (mode == 3) {
@@ -72,7 +76,7 @@ float4 main(VSOut i) : SV_Target {
                 : lerp(float3(0.04f, 0.16f, 0.28f),
                        float3(0.10f, 0.75f, 1.00f), strength);
     }
-    
+
     float shade = 0.55f + 0.45f * saturate(dot(N, normalize(float3(0.4f, 0.8f, 0.35f))));
     return float4(color * shade, 1.0f);
 }

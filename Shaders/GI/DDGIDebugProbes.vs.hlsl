@@ -5,12 +5,12 @@
 
 cbuffer DDGIDebugCB : register(b0) {
     row_major float4x4 ViewProj;
-    float4 GridMinSpacing; 
-    float4 GridCount;       
-    float4 AtlasParams;     
-    float4 DistAtlasParams; 
-    float4 DebugParams;     
-    float4 CameraPos;       
+    float4 GridMinSpacing;
+    float4 GridCount;
+    float4 AtlasParams;
+    float4 DistAtlasParams;
+    float4 DebugParams;
+    float4 CameraPos;
     float4 RayParams;       // z = selected count, w = risk slot
     // 4+4: os 16 slots do diagnostico (era 2+2 = 8). Espelha FDDGIDebug::DDGIDebugConstants.
     float4 SelectedIndices[4];
@@ -20,15 +20,19 @@ cbuffer DDGIDebugCB : register(b0) {
     float4 GICascadeGridMinSpacing[4];
 };
 
-Buffer<float4> ProbeData  : register(t0); 
-Buffer<float4> ProbeStats : register(t1); 
+Buffer<float4> ProbeData  : register(t0);
+Buffer<float4> ProbeStats : register(t1);
 
 struct VSOut {
     float4 pos      : SV_POSITION;
     float3 nrm      : NORMAL;
     nointerpolation float2 irrTile  : TEXCOORD0;
     nointerpolation float2 distTile : TEXCOORD1;
-    nointerpolation float4 extra    : TEXCOORD2; 
+    nointerpolation float4 extra    : TEXCOORD2;
+    // Teto do heatmap de distancia, 2,6 x espacamento DA CASCATA desta sonda. Vem pelo
+    // interpolante porque o DistAtlasParams.w e um valor SO — com 2 m e 8 m, normalizar as
+    // grossas pelo teto da fina satura o heatmap inteiro e o modo deixa de discriminar.
+    nointerpolation float  distMax  : TEXCOORD3;
 };
 
 VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
@@ -69,7 +73,7 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
         float2(0,0), float2(1,1), float2(0,1)
     };
     float dr = off[corner].x, ds = off[corner].y;
-    float theta = (ring + dr) / (float)DBG_RINGS * SMILE_PI;       
+    float theta = (ring + dr) / (float)DBG_RINGS * SMILE_PI;
     float phi   = (seg  + ds) / (float)DBG_SEGS  * (2.0f * SMILE_PI);
     float st = sin(theta), ct = cos(theta);
     float3 sphereN = float3(st * cos(phi), ct, st * sin(phi));
@@ -86,6 +90,7 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     o.nrm      = sphereN;
     o.irrTile  = (float2)DDGI_TileOrigin(pc, count, (int)AtlasParams.x,
                                          DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x), cascade);
+    o.distMax  = casc.w * 2.6f;
     o.distTile = (float2)DDGI_TileOrigin(pc, count, (int)DistAtlasParams.x,
                                          DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), cascade);
 
