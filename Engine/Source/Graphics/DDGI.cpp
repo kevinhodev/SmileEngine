@@ -278,29 +278,42 @@ namespace Smile {
         // DDGI_TileOrigin: e a forma que preserva o bloco 2x2 de tiles adjacentes que o gather
         // de 8 sondas percorre.
         //
-        // A largura alvo e a raiz do numero de sondas (atlas quase quadrado, as duas dimensoes
-        // crescendo juntas). Sobre ela, uma preferencia: se houver um DIVISOR de Cols perto do
-        // alvo, ele e melhor — banda exata nao deixa coluna sobrando, e o desperdicio cai a zero.
-        // No Bistro o alvo e 67 e o divisor e 69 (552 = 69*8), entao a grade fica exata.
+        // A banda tem de conter fileiras Z INTEIRAS: `TilesPerRow = CountX * zRowsPerBand`. Nao e
+        // arredondamento, e a condicao da vizinhanca — o plano e `x + z*CountX`, entao uma largura
+        // que nao seja multipla de CountX corta uma fileira X no meio e joga `x` e `x+1` em bandas
+        // diferentes, que e exatamente a adjacencia pela qual este layout existe.
+        //
+        // A versao anterior procurava um DIVISOR de CountX*CountZ perto da raiz de NumProbes. No
+        // Bistro caiu em 69 = 3*23 e funcionou — por sorte: 552 tem divisores como 92 e 276 que
+        // nao sao multiplos de 23, e ali a vizinhanca se perderia de novo. Ela tambem podia
+        // devolver mais de 1024 colunas (o teto do atlas de distancia) e fazer o gridFits recusar
+        // um grid que caberia com outra largura, abrindo o espacamento sem necessidade.
+        //
+        // CountZ nao passa de algumas dezenas, entao enumerar todos os candidatos custa nada.
+        // Criterio: minimizar a MAIOR dimensao — empurra para o quadrado e penaliza o desperdicio
+        // da banda incompleta de uma vez so, alem de ser exatamente o que a checagem de limite
+        // olha.
         //
         // O shader nao reproduz nada disto: ele le tilesPerRow da LARGURA do atlas. Por isso a
-        // heuristica pode ser o que for sem risco de divergir — e por isso ela pode melhorar
-        // depois sem tocar em shader nenhum.
-        auto tilesPerRowFor = [](u32 Probes, u32 Cols) {
-            u32 Target = 1;
-            while (Target * Target < Probes) ++Target;
-            Target = std::min(Target, std::max(Cols, 1u));
-            const u32 Limit = std::min(Cols, Target * 2u);
-            for (u32 C = Target; C <= Limit; ++C)
-                if (Cols % C == 0) return C;
-            return Target;
+        // heuristica pode mudar sem risco de divergir, e sem tocar em shader nenhum.
+        auto atlasGridFor = [](u32 CX, u32 CY, u32 CZ, u32& OutPerRow, u32& OutRows) {
+            CX = std::max(CX, 1u); CY = std::max(CY, 1u); CZ = std::max(CZ, 1u);
+            OutPerRow = CX; OutRows = CY * CZ; // zRowsPerBand = 1
+            u64 Best  = 0;
+            for (u32 ZRows = 1; ZRows <= CZ; ++ZRows) {
+                const u32 PerRow = CX * ZRows;
+                const u32 Rows   = ((CZ + ZRows - 1) / ZRows) * CY;
+                const u64 Score  = std::max<u64>(PerRow, Rows);
+                if (Best == 0 || Score < Best) { Best = Score; OutPerRow = PerRow; OutRows = Rows; }
+            }
         };
         auto gridFits = [&] {
             const u64 Probes = static_cast<u64>(CountX) * CountY * CountZ;
-            const u64 Cols   = static_cast<u64>(CountX) * CountZ;
-            const u64 PerRow = tilesPerRowFor(static_cast<u32>(Probes), static_cast<u32>(Cols));
-            const u64 Bands  = (Cols + PerRow - 1) / PerRow;
-            const u64 Rows   = Bands * CountY;
+            u32 PerRow32 = 1, Rows32 = 1;
+            atlasGridFor(static_cast<u32>(CountX), static_cast<u32>(CountY),
+                         static_cast<u32>(CountZ), PerRow32, Rows32);
+            const u64 PerRow = PerRow32;
+            const u64 Rows   = Rows32;
             // Maior dimensao de cada recurso. O atlas de distancia (stride 16) e o mais apertado
             // dos dois; o ProbesTrace paga a largura em raios.
             const u64 TraceRow = std::min<u64>(Probes, kTraceProbesPerRow);
@@ -338,14 +351,12 @@ namespace Smile {
         // como tilesPerRow*stride. Mexer numa sem a outra desalinha o atlas inteiro em silencio —
         // por isso as quatro dimensoes saem das MESMAS duas variaveis, aqui, e nao em quatro
         // expressoes independentes como antes.
-        const u32 Cols  = static_cast<u32>(CountX) * CountZ;
-        TilesPerRow     = tilesPerRowFor(NumProbes, Cols);
-        TileBands       = (Cols + TilesPerRow - 1) / TilesPerRow;
-        const u32 Rows  = TileBands * static_cast<u32>(CountY);
+        atlasGridFor(static_cast<u32>(CountX), static_cast<u32>(CountY),
+                     static_cast<u32>(CountZ), TilesPerRow, TileRows);
         AtlasWidth      = TilesPerRow * (kTileSize + 2);
-        AtlasHeight     = Rows        * (kTileSize + 2);
+        AtlasHeight     = TileRows    * (kTileSize + 2);
         DistAtlasWidth  = TilesPerRow * (kDistTileSize + 2);
-        DistAtlasHeight = Rows        * (kDistTileSize + 2);
+        DistAtlasHeight = TileRows    * (kDistTileSize + 2);
         // Idem para o ProbesTrace: kTraceProbesPerRow sondas por linha, cada uma ocupando
         // kRaysPerProbe texels. O espelho em HLSL e DDGI_TRACE_PROBES_PER_ROW.
         const u32 TraceProbesPerRow = std::min<u32>(NumProbes, kTraceProbesPerRow);

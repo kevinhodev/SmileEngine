@@ -254,10 +254,25 @@ enrolado em BANDAS** quando não cabe numa linha. Com uma banda é bit a bit o l
 histórico; com várias, o teto continua sendo o produto (~1 milhão). A vizinhança 2×2 volta
 inteira.
 
-No Bistro o resultado é exato, sem desperdício: `TilesPerRow = 69` (o `SetupForScene`
-prefere um divisor de `CountX·CountZ = 552` perto da raiz de `NumProbes`), 8 bandas, grade
+No Bistro o resultado é exato, sem desperdício: `TilesPerRow = 69`, 8 bandas, grade
 `69 × 64`. Atlas de distância `1104 × 1024` — **os mesmos 1.130.496 texels de antes da
 reforma**, agora em proporção 1,08:1 em vez de 69:1.
+
+**A banda tem de conter fileiras Z INTEIRAS**, e isso é condição da vizinhança, não
+arredondamento: o plano é `x + z·CountX`, então uma largura que não seja múltiplo de
+`CountX` corta uma fileira X no meio e joga `x` e `x+1` em bandas diferentes — a adjacência
+pela qual o layout existe. A primeira versão do seletor procurava um *divisor* de
+`CountX·CountZ` perto da raiz de `NumProbes` e caiu em `69 = 3·23` **por sorte**; `552` tem
+divisores como 92 e 276 que não são múltiplos de 23, e ali a vizinhança se perderia de novo.
+Ela também podia devolver mais de 1024 colunas e fazer o `gridFits` recusar um grid que
+caberia com outra largura, abrindo o espaçamento sem necessidade.
+
+O seletor agora enumera `zRowsPerBand` de 1 a `CountZ` e forma sempre
+`TilesPerRow = CountX · zRowsPerBand`, escolhendo o candidato que **minimiza a maior
+dimensão** — critério que empurra para o quadrado, penaliza o desperdício da banda
+incompleta e é exatamente o que a checagem de limite olha. `CountZ` não passa de algumas
+dezenas, então enumerar tudo não custa nada. No Bistro o vencedor é `zRowsPerBand = 3`, ou
+seja o mesmo 69 — agora por construção.
 
 Preço: `AtlasTileFromProbe` deixa de ser identidade e ganha uma inversa
 (`ProbeFromAtlasTile`), as duas no `FDDGI` para o editor e o renderer não duplicarem a

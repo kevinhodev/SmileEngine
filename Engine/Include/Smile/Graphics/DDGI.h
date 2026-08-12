@@ -245,7 +245,7 @@ namespace Smile {
         // Tiles por linha da grade dos atlas. O shader recupera este mesmo numero da LARGURA
         // (DDGI_TilesPerRow) em vez de recebe-lo por cbuffer — ver o SetupForScene.
         u32  AtlasTilesPerRow() const { return TilesPerRow; }
-        u32  AtlasTileRows() const { return TileBands * static_cast<u32>(CountY); }
+        u32  AtlasTileRows() const { return TileRows; }
 
         // Zero e SENTINELA no cbuffer, nao valor: o Renderer manda DDGIParams.x = 0 para dizer "GI
         // desligado" e os cinco consumidores leem `(x > 0) ? x : 1.0`. Sem o piso, um slider de
@@ -470,8 +470,11 @@ namespace Smile {
         u32  NumProbes   = 0;
         u32  AtlasWidth  = 0, AtlasHeight = 0;
         u32  DistAtlasWidth = 0, DistAtlasHeight = 0;
-        u32  TilesPerRow = 1; // colunas de plano (x,z) por linha do atlas; ver AtlasTilesPerRow
-        u32  TileBands   = 1; // ceil(CountX*CountZ / TilesPerRow); linhas = TileBands * CountY
+        // Grade de tiles do atlas. TilesPerRow e sempre um MULTIPLO de CountX (a banda contem
+        // fileiras Z inteiras — ver atlasGridFor no SetupForScene), e TileRows ja inclui as
+        // bandas: `TileRows = ceil(CountZ/zRowsPerBand) * CountY`.
+        u32  TilesPerRow = 1;
+        u32  TileRows    = 1;
 
         static constexpr D3D12_RESOURCE_STATES kAtlasRead =
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
