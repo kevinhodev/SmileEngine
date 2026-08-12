@@ -12,6 +12,13 @@ cbuffer DDGIDebugCB : register(b0) {
     float4 DistAtlasParams;
     float4 DebugParams;
     float4 CameraPos;
+    float4 RayParams;       // faltava aqui: sem ele todo o resto da cauda desliza 16 bytes
+    // 4+4: os 16 slots do diagnostico (era 2+2 = 8). Espelha FDDGIDebug::DDGIDebugConstants.
+    float4 SelectedIndices[4];
+    float4 SelectedWeights[4];
+    // Cascatas: a grade de CADA sonda vem daqui. O GridMinSpacing e o da grossa.
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 Texture2D<float4> ProbesTrace : register(t0);
@@ -25,7 +32,11 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     int   backCount = 0;
     int   realCount = 0;
-    float minFront  = DistAtlasParams.w; 
+    // Teto do "hit mais proximo" na regua da CASCATA desta sonda (2,6 espacamentos, o mesmo
+    // clamp do UpdateDist). O DistAtlasParams.w vem da grossa e daria a uma sonda da fina um
+    // piso quatro vezes maior que a gaiola dela.
+    int   cascade   = DDGI_CascadeOfProbe(probeIdx, (int3)GridCount.xyz);
+    float minFront  = GICascadeGridMinSpacing[cascade].w * 2.6f; 
     float sumFront  = 0.0f;
     int   frontCount = 0;
 

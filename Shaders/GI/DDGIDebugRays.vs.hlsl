@@ -8,7 +8,13 @@ cbuffer DDGIDebugCB : register(b0) {
     float4 DistAtlasParams;
     float4 DebugParams;     
     float4 CameraPos;       
-    float4 RayParams;       
+    float4 RayParams;
+    // 4+4: os 16 slots do diagnostico (era 2+2 = 8). Espelha FDDGIDebug::DDGIDebugConstants.
+    float4 SelectedIndices[4];
+    float4 SelectedWeights[4];
+    // Cascatas: a grade de CADA sonda vem daqui. O GridMinSpacing acima e o da GROSSA.
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 Buffer<float4> ProbeData     : register(t0); 
@@ -22,10 +28,13 @@ struct VSOut {
 
 VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VSOut o;
+    // Indice GLOBAL -> (cascata, local); a geometria e da cascata (ver DDGIDebugProbes).
     int3   count    = (int3)GridCount.xyz;
-    int3   pc       = DDGI_ProbeCoord((int)iid, count);
+    int    cascade  = DDGI_CascadeOfProbe((int)iid, count);
+    int3   pc       = DDGI_ProbeCoord(DDGI_LocalProbeIndex((int)iid, count), count);
+    float4 casc     = GICascadeGridMinSpacing[cascade];
     float4 pd       = ProbeData[iid];
-    float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, GridMinSpacing.w) + pd.xyz;
+    float3 probePos = DDGI_ProbeWorldPos(pc, casc.xyz, casc.w) + pd.xyz;
 
     if (pd.w < 0.0f || distance(probePos, CameraPos.xyz) > RayParams.y) {
         o.pos = float4(2, 2, 2, 1); o.uv = 0; o.info = 0; return o; 

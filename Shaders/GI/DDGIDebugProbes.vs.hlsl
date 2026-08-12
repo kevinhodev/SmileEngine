@@ -12,10 +12,12 @@ cbuffer DDGIDebugCB : register(b0) {
     float4 DebugParams;     
     float4 CameraPos;       
     float4 RayParams;       // z = selected count, w = risk slot
-    float4 SelectedIndices0;
-    float4 SelectedIndices1;
-    float4 SelectedWeights0;
-    float4 SelectedWeights1;
+    // 4+4: os 16 slots do diagnostico (era 2+2 = 8). Espelha FDDGIDebug::DDGIDebugConstants.
+    float4 SelectedIndices[4];
+    float4 SelectedWeights[4];
+    // Cascatas: a grade de CADA sonda vem daqui. O GridMinSpacing acima e o da GROSSA.
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 Buffer<float4> ProbeData  : register(t0); 
@@ -35,23 +37,27 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float selectedRisk = 0.0f;
     float selectedFocus = 0.0f;
     if ((uint)DebugParams.x == 5u && iid < (uint)RayParams.z) {
-        probeIid = iid < 4u
-            ? (uint)SelectedIndices0[iid]
-            : (uint)SelectedIndices1[iid - 4u];
-        selectedWeight = iid < 4u
-            ? SelectedWeights0[iid]
-            : SelectedWeights1[iid - 4u];
+        // O `iid < RayParams.z` acima ja limita a contagem publicada (<= 16), entao o par
+        // (vetor, componente) cobre os 16 slots sem um segundo teste. A versao anterior tinha um
+        // `iid < 4u` que virou teto de OITO quando os vetores eram dois — com quatro, ele
+        // silenciaria os slots de 4 em diante.
+        probeIid       = (uint)SelectedIndices[iid >> 2u][iid & 3u];
+        selectedWeight = SelectedWeights[iid >> 2u][iid & 3u];
         selectedRisk = RayParams.w >= 0.0f && iid == (uint)RayParams.w ? 1.0f : 0.0f;
     }
     selectedFocus = CameraPos.w >= 0.0f &&
                     probeIid == (uint)CameraPos.w ? 1.0f : 0.0f;
 
-    int3 count = (int3)GridCount.xyz;
-    int3 pc    = DDGI_ProbeCoord((int)probeIid, count);
+    // Indice GLOBAL -> (cascata, local): o buffer e global, a GEOMETRIA e da cascata. Sem isto
+    // as sondas das cascatas finas apareceriam empilhadas nas posicoes da grossa.
+    int3 count    = (int3)GridCount.xyz;
+    int  cascade  = DDGI_CascadeOfProbe((int)probeIid, count);
+    int3 pc       = DDGI_ProbeCoord(DDGI_LocalProbeIndex((int)probeIid, count), count);
+    float4 casc   = GICascadeGridMinSpacing[cascade];
 
     float4 pd       = ProbeData[probeIid];
     float3 offset   = pd.xyz;
-    float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, GridMinSpacing.w) + offset;
+    float3 probePos = DDGI_ProbeWorldPos(pc, casc.xyz, casc.w) + offset;
 
     uint quad   = vid / 6u;
     uint corner = vid % 6u;
@@ -69,7 +75,9 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float3 sphereN = float3(st * cos(phi), ct, st * sin(phi));
 
     // O foco e maior para continuar identificavel sem depender de cor.
-    float radius   = GridMinSpacing.w * DebugParams.y *
+    // Raio da esfera proporcional ao espacamento DA CASCATA: com o da grossa, as sondas da fina
+    // sairiam quatro vezes maiores que a celula delas e cobririam a vizinha.
+    float radius   = casc.w * DebugParams.y *
                      (selectedFocus > 0.5f ? 1.35f : 1.0f);
     float3 worldPos = probePos + sphereN * radius;
 
@@ -77,11 +85,15 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     o.pos      = mul(float4(worldPos, 1.0f), ViewProj);
     o.nrm      = sphereN;
     o.irrTile  = (float2)DDGI_TileOrigin(pc, count, (int)AtlasParams.x,
-                                         DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x), 0);
+                                         DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x), cascade);
     o.distTile = (float2)DDGI_TileOrigin(pc, count, (int)DistAtlasParams.x,
-                                         DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), 0);
+                                         DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), cascade);
 
-    float relocMag = length(offset) / max(DebugParams.z, 1e-4f);
+    // Normalizado pelo teto de relocacao DA CASCATA (0,45 espacamento, o maxOff do
+    // DDGIRelocate), e nao pelo DebugParams.z, que vem da grossa: uma sonda da fina relocada ao
+    // maximo apareceria com ~25% da intensidade — o modo de visualizacao diria "quase nao se
+    // moveu" exatamente onde ela se moveu o quanto podia.
+    float relocMag = length(offset) / max(casc.w * 0.45f, 1e-4f);
     float4 stats   = ProbeStats[probeIid];
 
     o.extra = (uint)DebugParams.x == 5u

@@ -321,6 +321,7 @@ namespace Smile {
             GridCount.X, GridCount.Y, GridCount.Z,
             static_cast<f32>(_DDGI.NumProbesCount())
         };
+        C->Cascades = _DDGI.CascadeConstants();
         C->AtlasParams = {
             _DDGI.TileSizeF(), _DDGI.AtlasW(), _DDGI.AtlasH(), 0.0f
         };
@@ -498,6 +499,7 @@ namespace Smile {
         C->ViewProj        = _ViewProj;
         C->GridMinSpacing  = { GMin.X, GMin.Y, GMin.Z, _DDGI.Spacing() };
         C->GridCount       = { GCnt.X, GCnt.Y, GCnt.Z, (f32)_DDGI.NumProbesCount() };
+        C->Cascades        = _DDGI.CascadeConstants();
         C->AtlasParams     = { _DDGI.TileSizeF(), _DDGI.AtlasW(), _DDGI.AtlasH(), 0.0f };
         C->DistAtlasParams = { _DDGI.DistTileSizeF(), _DDGI.DistAtlasW(), _DDGI.DistAtlasH(),
                                _DDGI.DistanceMomentMax() };
@@ -510,22 +512,22 @@ namespace Smile {
         C->RayParams       = { (f32)_FrameIndex, RayRadius,
                                static_cast<f32>(SelectedProbeCount),
                                static_cast<f32>(SelectedRiskSlot) };
-        C->SelectedIndices0 = {
-            static_cast<f32>(SelectedProbes[0]), static_cast<f32>(SelectedProbes[1]),
-            static_cast<f32>(SelectedProbes[2]), static_cast<f32>(SelectedProbes[3])
-        };
-        C->SelectedIndices1 = {
-            static_cast<f32>(SelectedProbes[4]), static_cast<f32>(SelectedProbes[5]),
-            static_cast<f32>(SelectedProbes[6]), static_cast<f32>(SelectedProbes[7])
-        };
-        C->SelectedWeights0 = {
-            SelectedWeights[0], SelectedWeights[1],
-            SelectedWeights[2], SelectedWeights[3]
-        };
-        C->SelectedWeights1 = {
-            SelectedWeights[4], SelectedWeights[5],
-            SelectedWeights[6], SelectedWeights[7]
-        };
+        // Quatro vetores de quatro = os 16 slots do diagnostico (duas paginas de oito). Em laco,
+        // e nao desenrolado em 0/1: com 16 as quatro copias manuais seriam quatro chances de
+        // trocar um indice.
+        static_assert(kPointProbeCount == 16, "o laco abaixo enche 4 float4 por vetor");
+        for (u32 V = 0; V < 4; ++V) {
+            C->SelectedIndices[V] = {
+                static_cast<f32>(SelectedProbes[V * 4 + 0]),
+                static_cast<f32>(SelectedProbes[V * 4 + 1]),
+                static_cast<f32>(SelectedProbes[V * 4 + 2]),
+                static_cast<f32>(SelectedProbes[V * 4 + 3])
+            };
+            C->SelectedWeights[V] = {
+                SelectedWeights[V * 4 + 0], SelectedWeights[V * 4 + 1],
+                SelectedWeights[V * 4 + 2], SelectedWeights[V * 4 + 3]
+            };
+        }
         const D3D12_GPU_VIRTUAL_ADDRESS CBAddr =
             CB->GetGPUVirtualAddress() + static_cast<UINT64>(_FrameSlot) * sizeof(DDGIDebugConstants);
 
