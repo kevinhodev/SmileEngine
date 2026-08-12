@@ -479,6 +479,14 @@ namespace Smile {
         void SetVolumeFadeProbes(f32 V) { VolumeFadeProbes = V < 0.0f ? 0.0f : V; }
         f32  GetVolumeFadeProbes() const { return VolumeFadeProbes; }
 
+        // Numero de cascatas PEDIDO. So vira o vigente no proximo SetupForScene, porque a
+        // contagem dimensiona atlas, ProbesTrace, buffers e dispatch — trocar em runtime exigiria
+        // realocar tudo no meio do frame. Quem chama e responsavel por recriar a cena.
+        void SetDesiredCascades(u32 V) {
+            DesiredCascades = V < 1 ? 1u : (V > kMaxCascades ? kMaxCascades : V);
+        }
+        u32  GetDesiredCascades() const { return DesiredCascades; }
+
     private:
         void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void CreateConstantBuffer(ID3D12Device* Device);
@@ -573,6 +581,16 @@ namespace Smile {
         };
         FCascade Cascades[kMaxCascades]{};
         u32  CascadeCount_    = 1;
+        // Centro da AABB da cena, guardado no SetupForScene. A 6.2b-i ancora as cascatas finas
+        // AQUI, e nao na camera: com duas variaveis novas (a segunda cascata e o scrolling) um
+        // artefato na transicao seria ambiguo. A 6.2b-ii troca isto pela posicao da camera, que e
+        // quando o scrolling passa a ser obrigatorio.
+        Vec3 SceneCenter{};
+        // Razao de espacamento entre cascatas vizinhas. 4 leva os 8,02 m do Bistro a 2,0 m na
+        // fina, dentro dos 1-2 m que o paper pede para escala humana. A Flax usa {1,3,6,10} a
+        // partir da mais fina; aqui a GROSSA e que esta fixada pela cena, entao a escala corre no
+        // sentido contrario.
+        static constexpr f32 kCascadeSpacingRatio = 4.0f;
         // Pedido pelo usuario; so vira CascadeCount_ no proximo SetupForScene, porque a contagem
         // dimensiona atlas e buffers. Default 1 = comportamento historico ate a 6.2b ter A/B.
         u32  DesiredCascades  = 1;

@@ -139,6 +139,11 @@ namespace Smile {
         bool GetGIAdaptiveHysteresis() const;
         void SetGIAdaptiveHysteresis(bool V);
 
+        // Numero de CASCATAS do DDGI. Recria o volume — a contagem dimensiona atlas,
+        // ProbesTrace, buffers e dispatch. Default 1 = comportamento historico.
+        u32  GetGICascadeCount() const;
+        void SetGICascadeCount(u32 V);
+
         // Raios por sonda variaveis com a proximidade de geometria: sonda em espaco aberto
         // decima para MinRays, sonda encostada em geometria fica no teto. E a alavanca de CUSTO
         // do DDGI — o orcamento hoje e 64 raios fixos vezes NumProbes.

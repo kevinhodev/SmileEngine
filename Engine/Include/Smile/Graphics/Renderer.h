@@ -354,6 +354,16 @@ namespace Smile {
         // o atlas igual; so o primeiro reclassifica as sondas — ver EGIRegionChange (DDGI.h).
         void NotifyGIRegionChanged(const Vec3& Min, const Vec3& Max, EGIRegionChange Change);
 
+        // Recria o volume do DDGI com os bounds da cena atual. Existe para a contagem de cascatas
+        // ser um A/B de um clique em vez de um restart: ela dimensiona atlas, ProbesTrace, buffers
+        // e dispatch, entao mudar em runtime exige realocar tudo — o SetupForScene ja e reentrante
+        // (libera os recursos antigos antes) e nao ha caminho barato aqui.
+        //
+        // Diferente do load, aqui a GPU esta OCUPADA: o SetupGIForScene drena a fila direta e a de
+        // compute antes de soltar qualquer coisa, senao o frame em voo seguiria lendo o atlas que
+        // acabou de ser liberado. Ver o bloco de drenagem la dentro.
+        void RebuildGIVolume() { SetupGIForScene(SceneBoundsMin, SceneBoundsMax); }
+
         // Selecao de LUZ. Indice em Scene.Lights(); -1 = nenhuma.
         //
         // A exclusividade com a selecao de renderavel deixou de ser combinada: as duas sao a

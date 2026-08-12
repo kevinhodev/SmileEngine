@@ -369,6 +369,9 @@ namespace Smile {
                               _AABBMin.Z - 0.5f * CoarseSpacing };
         for (u32 C = 0; C < kMaxCascades; ++C) Cascades[C] = { CoarseMin, CoarseSpacing };
 
+        SceneCenter = { 0.5f * (_AABBMin.X + _AABBMax.X),
+                        0.5f * (_AABBMin.Y + _AABBMax.Y),
+                        0.5f * (_AABBMin.Z + _AABBMax.Z) };
         ProbesPerCascade_ = static_cast<u32>(CountX) * CountY * CountZ;
         NumProbes         = ProbesPerCascade_ * CascadeCount_;
 
@@ -605,7 +608,27 @@ namespace Smile {
         // zerado (w = 0, nao e "inativo") e a sonda em ar livre nao se move — logo nao e
         // marcada. So as encostadas em parede escapavam.
         HysteresisResetPending = true;
-        RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0;
+        // Com relocacao ligada os 180 frames ja classificam; sem ela, quem escreve o ProbeRayCount
+        // e so este passe (ver TriggerReclassify), e o buffer acabou de nascer em 64 para todas as
+        // sondas — o que e o valor CERTO com raios adaptativos desligados e o teto com eles
+        // ligados. Os kReclassifyFrames existem para o segundo caso: sem eles a contagem ficaria
+        // congelada no maximo e o knob nasceria inerte no volume novo.
+        RelocateFramesLeft = Relocation ? kRelocateConvergeFrames
+                                        : (AdaptiveRays ? kReclassifyFrames : 0);
+        // O estado REGIONAL pertence ao volume que acabou de morrer. A caixa esta em coordenadas
+        // de uma grade que nao existe mais, e os contadores mandariam o atlas RECEM-ZERADO passar
+        // dezenas de frames com histerese reduzida numa regiao arbitraria da grade nova — os dois
+        // decrementos contam frames de UPDATE, entao a janela atravessa o rebuild inteira.
+        //
+        // Nada se perde: o reset one-shot acima e estritamente mais forte que qualquer invalidacao
+        // regional pendente (ele substitui o volume INTEIRO, nao so a caixa). Pelo mesmo motivo a
+        // reclassificacao pendente cai junto — a linha acima ja agenda a classificacao global de
+        // que o volume novo precisa, e o pedido velho descrevia uma edicao noutra grade.
+        InvalidateFramesLeft_     = 0;
+        InvalidateDistFramesLeft_ = 0;
+        InvalidateMin_            = {};
+        InvalidateMax_            = {};
+        ReclassifyPending_        = false;
         LogDebug("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
                 "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
                 "), spacing " + std::to_string(Cascades[0].Spacing) + ", atlas " +
@@ -626,13 +649,37 @@ namespace Smile {
     }
 
     void FDDGI::PrepareCascadePlacement(const Vec3& _CameraPos) {
-        (void)_CameraPos;
-        if (!Ready) return;
-        // 6.2a: todas as cascatas coincidem com a que cobre a cena, entao nao ha o que mover. A
-        // funcao existe agora, e nao quando for necessaria, porque o valor dela e a POSICAO na
-        // sequencia do frame: ela roda antes de os consumidores capturarem CascadeConstants(),
-        // e o UpdatePerFrame roda depois. Criar a costura junto com a cascata movel deixaria a
-        // escolha do lugar para o mesmo commit que ja teria muito o que validar.
+        (void)_CameraPos; // 6.2b-ii: as finas passam a seguir a camera, com scrolling toroidal
+        if (!Ready || CascadeCount_ <= 1) return;
+
+        // A GROSSA (indice CascadeCount_-1) e a que o SetupForScene dimensionou pela cena e nao se
+        // mexe. As finas saem dela dividindo o espacamento por kCascadeSpacingRatio a cada degrau,
+        // e sao CENTRADAS na cena.
+        //
+        // GridMin e o PRIMEIRO CENTRO de sonda, nao o canto da gaiola — mesma convencao da grossa,
+        // onde ele vale AABBMin - 0.5*spacing justamente para a gaiola cobrir a AABB. Por isso a
+        // conta aqui e so `centro - (count-1)*spacing/2` e nao ha meia celula a subtrair: os
+        // centros cobrem (count-1)*spacing e a gaiola sobra meia celula de cada lado sozinha.
+        const u32 Coarse = CoarseCascade();
+        for (u32 C = 0; C < Coarse; ++C) {
+            f32 Spacing = Cascades[Coarse].Spacing;
+            for (u32 Step = Coarse; Step > C; --Step) Spacing /= kCascadeSpacingRatio;
+
+            const Vec3 Center = SceneCenter;
+            // Snap ao proprio espacamento: sem isso a grade "nada" sob a geometria a cada
+            // recolocacao e cada sonda troca de posicao no mundo por uma fracao de celula, que e
+            // o pior caso para um cache temporal. Com o snap, ela so se move em celulas inteiras
+            // — que e exatamente o que o scrolling da 6.2b-ii sabe compensar.
+            auto SnapMin = [&](f32 CenterAxis, int Count) {
+                const f32 Extent = 0.5f * static_cast<f32>(Count - 1) * Spacing;
+                const f32 Raw    = CenterAxis - Extent;
+                return std::floor(Raw / Spacing) * Spacing;
+            };
+            Cascades[C].Spacing = Spacing;
+            Cascades[C].GridMin = { SnapMin(Center.X, CountX),
+                                    SnapMin(Center.Y, CountY),
+                                    SnapMin(Center.Z, CountZ) };
+        }
     }
 
     void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,

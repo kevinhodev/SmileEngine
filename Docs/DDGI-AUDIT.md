@@ -1,11 +1,26 @@
 # Auditoria do DDGI e estado da invalidação
 
-Estado em 11 de agosto de 2026. Este documento registra a revisão completa do DDGI
-cruzada com o paper original (Majercik et al., JCGT 2019), o código-fonte local da Flax
-e do RTXDI 3.0, mais o SDK RTXGI de memória. Registra o que as fases 1 a 4 corrigiram, o
-resultado dos A/Bs, e a fila do que ficou — incluindo a decisão estratégica em aberto.
+Estado em 12 de agosto de 2026. Este documento registra a revisão completa do DDGI cruzada
+com o paper original (Majercik et al., JCGT 2019), o código-fonte local da Flax e do
+RTXDI 3.0, mais o SDK RTXGI de memória — e as fases que saíram dela.
 
-Escrito no fim de uma sessão longa, para a próxima começar do ponto certo.
+**Onde a coisa está:** as fases 1 a 5 fecharam invalidação, medição e o layout dos atlas;
+a 6.1 e a 6.2a construíram o encanamento de cascatas sem mudar um pixel; o portão do debug
+migrou as três ferramentas de diagnóstico; e a **6.2b‑i acendeu a segunda cascata, fixa** —
+com os três achados da revisão dela corrigidos (entre eles um use-after-free de GPU no
+rebuild pelo editor) e **A/B aprovado: menos vazamento de luz, por +0,83 ms de frame**.
+Falta a 6.2b‑ii — a cascata fina seguindo a câmera, com scrolling toroidal. Ver
+"O que falta".
+
+| fase | commit | validação |
+|---|---|---|
+| 1–5 | `26b71a9`, `5d16cf2` | A/Bs + imagem idêntica no reempacotamento |
+| 6.1 | `ad6d754` | imagem idêntica (`CascadeCount = 1`) |
+| 6.2a | `9e6254e` | imagem idêntica, com os wrappers ativos |
+| portão do debug | `4d378ad`, `eb3b9f0` | idem |
+| 6.2b‑i | pendente de commit | **APROVADA** — menos vazamento de luz, por +0,83 ms de frame |
+
+Escrito no fim de sessões longas, para a próxima começar do ponto certo.
 
 ## Veredito
 
@@ -347,32 +362,181 @@ exato do novo, em vez de ser substituído por ele.
 - **A seleção de cascata NÃO entrou.** Com uma cascata ela é código morto e intestável;
   entra na 6.2 junto com a segunda. Os cinco sítios de gather passam `0` explicitamente.
 
-### ⚠️ Portão entre a 6.2a e a 6.2b: migrar o DEBUG
+### Fase 6.2a — seleção e blend, com uma cascata
 
-A segunda cascata **não pode acender** antes disto, e a razão não é cosmética. As três
-ferramentas de diagnóstico do DDGI ainda tratam índice global como coordenada local:
+Última fase invisível: `CascadeCount = 1`, imagem idêntica, mas agora com os wrappers
+ATIVOS — é isso que torna o teste um teste da seleção e não só do encanamento.
 
-- `DDGIDebugProbes.vs.hlsl` e `DDGIDebugRays.vs.hlsl` — posição, raio da esfera e
-  `DDGI_TileOrigin` precisam do `GridMin`/`Spacing` e do índice da cascata correspondente;
-- `DDGIDebugPoint.cs.hlsl` — grave: além de fixar cascata 0, ele publica **oito** taps, e
-  durante o blend o gather real usa até **dezesseis**. O painel que promete reproduzir
-  exatamente o gather passaria a mostrar metade dele.
+- **`DDGICascadeChoice {Primary, Next, PrimaryWeight}`** e `DDGI_SelectCascade`. Uma
+  cascata devolve `{0,0,1}`; dentro de uma fina, `{fina, fina+1, peso}`; fora das finas,
+  `{grossa, grossa, 1}`. `Next == Primary` é o sinal de "não há blend", e é o que faz os
+  wrappers pularem o segundo gather.
+- **Só as cascatas ANTERIORES à grossa desvanecem**, nas últimas 2,5 células (valor da
+  Flax). A grossa é fallback INCONDICIONAL: a borda externa dela continua sendo do
+  `DDGI_VolumeWeight`, que é configurável e desvanece ao longo de N células. Aplicar o
+  fade de cascata nela substituiria aquele em silêncio, e a equivalência com o
+  comportamento histórico morreria no instante em que o seletor fosse ligado.
+- **A seleção usa a posição CRUA.** É a "gaiola pelo ponto cru" que a auditoria exigia
+  junto com a cascata, e aqui ela deixa de ser detalhe: o bias escala com o espaçamento,
+  então dois pixels vizinhos de uma parede rasante poderiam escolher CASCATAS diferentes
+  por causa de um deslocamento artificial.
+- **Dois wrappers, não um.** `SampleDDGIIrradianceCascaded` e `...ChebCascaded`: o fog não
+  tem atlas de distância nem `ProbeData`, e obrigá-lo ao caminho do Chebyshev
+  acrescentaria bindings sem lhe dar nada. Eles devolvem SÓ a irradiância do DDGI — o peso
+  do volume e o fallback ficam no caller porque são diferentes em cada um (deferred e fog
+  caem no ambiente hemisférico, o `HitShading` cai em preto).
+- **O bias é recalculado por cascata DENTRO do wrapper**, e a assinatura pede
+  `(V, escala, teto)` em vez de um `biasVec` pronto — o erro não é possível sem mudar a
+  assinatura.
+- **`FDDGICascadeConstants`**: um POD, preenchido por `FDDGI::CascadeConstants()`, copiado
+  para os cinco cbuffers em vez de cinco loops independentes. Offsets presos por
+  `static_assert` nos cinco.
+- **`PrepareCascadePlacement` DECIDE, `UpdatePerFrame` PUBLICA.** A costura existe por
+  ordenação: os três publicadores capturam `CascadeConstants()` cedo, e o `UpdatePerFrame`
+  roda bem depois. Mover a cascata lá dentro deixaria os consumidores do frame amostrando
+  com a origem anterior enquanto o atlas já teria sido atualizado com a nova.
 
-O comentário do próprio `DDGIDebugPoint` diz que ele roda "a MESMA função, não uma cópia"
-justamente para não mentir. Uma ferramenta que mente é pior que ferramenta nenhuma: ela é
-consultada quando algo já está errado, e nesse momento manda a investigação para o lado
-errado. Ativar a cascata com o diagnóstico defasado é entrar no A/B mais difícil da série
-sem instrumento.
+### Portão do debug — fechado antes de acender a segunda cascata
 
-**Fila da fase 6.2** — o que ainda assume cascata única:
+O diagnóstico é o instrumento que distingue erro de seleção, de blend, de visibilidade e
+de scrolling. Entrar no A/B mais difícil da série com ele defasado seria entrar sem
+instrumento, e o comentário do próprio `DDGIDebugPoint` diz que ele roda "a MESMA função,
+não uma cópia" justamente para não mentir.
 
-- `DDGITrace` interpreta o `probeIdx` global como coordenada local e usa só o
-  `GridMinSpacing` — precisa do array por cascata;
-- relocação e visualizador de sondas ainda só olham a cascata 0;
-- `gridFits` dimensiona para uma cascata;
-- a folga da invalidação regional usa o espaçamento da cascata 0; com uma fina ela tem de
-  usar o da **grossa**, que é a maior;
-- a seleção no gather e a **gaiola pelo ponto cru**, que a auditoria exige que entre junto.
+- **Decomposição do índice, agora UMA.** `GetDebugProbeCoordValues` devolve `(cascata,
+  índice local, coord, contagens, GridMin, Spacing)` e os cinco consumidores usam esse
+  resultado. Antes cada um refazia a conta assumindo índice LOCAL, e o defeito se
+  replicava: coord fora do grid, posição com a origem da cascata errada, e um stepping que
+  reconstruía o índice sem a base da cascata — saltando para a cascata 0 no primeiro passo,
+  sem dizer que tinha trocado.
+- **`DDGIDebugPoint` virou duas páginas de oito** (primária e, no blend, a próxima), cada
+  uma com o próprio `base`/`frac` e o próprio BIAS. A normalização é **por página**: cada
+  grupo de oito divide pelo próprio somatório e só então entra na mistura. Somar os 16 num
+  denominador único daria pesos que a imagem nunca usou. O fast path é o mesmo teste dos
+  wrappers, e quando dispara a segunda página sai marcada como ignorada — os taps continuam
+  publicados para o painel poder dizer "não participaram".
+- **Duas escalas no heatmap de distância.** A global (overview) sai da cascata GROSSA: com
+  o teto da fina, os tiles grossos saturam por completo; com o da grossa, os finos ficam
+  escuros mas LEGÍVEIS — informação reduzida em vez de perdida. O tile inspecionado e as
+  esferas do visualizador usam a régua da própria cascata.
+- **Metadados da seleção**: o parser lia só o `X` da linha e os campos ficavam nos defaults
+  `(0, 0, 1)` — indistinguível de "uma cascata, sem blend", ou seja estado plausível e
+  falso. O resumo mostra `c0 72% + c1 28%`, ou `c1 100%` no fast path.
+
+### Fase 6.2b‑i — a segunda cascata, FIXA
+
+Primeira fase da série que muda a imagem. Uma variável nova só: a cascata existe, mas não
+se move.
+
+- Seletor **1 / 2** em Configurações → GI, que **recria o volume** na hora. Deixar para o
+  próximo load faria o botão aceitar o clique sem fazer nada visível.
+- A grossa é o volume de sempre, intocada. A fina sai dela por
+  `kCascadeSpacingRatio = 4`: **8,02 → 2,0 m no Bistro**, dentro dos 1–2 m do paper. Cobre
+  `46×16×48 m` (gaiola; os centros cobrem `44×14×46`).
+- Ancorada no centro da AABB da cena e **snapada ao próprio espaçamento**. Sem o snap a
+  grade nadaria sob a geometria e cada sonda trocaria de posição no mundo por uma fração de
+  célula — o pior caso para um cache temporal. Com ele, só se move em células inteiras, que
+  é o que o scrolling da 6.2b‑ii sabe compensar.
+
+**Por que FIXA:** com a fina seguindo a câmera, um artefato na transição seria ambíguo
+entre erro de seleção/blend e erro de scrolling.
+
+#### O que a revisão da 6.2b‑i pegou (12/08/2026)
+
+Três achados, e o primeiro era bloqueador do A/B — não do commit, do A/B: ele é um
+use-after-free de GPU que se manifesta como corrupção aleatória, exatamente o tipo de
+sintoma que envenenaria a leitura visual da fase.
+
+- **O rebuild liberava recurso ainda em uso pela GPU.** `RebuildGIVolume` (o clique no
+  seletor de cascatas) cai direto no `SetupGIForScene`, e ele começa soltando os recursos
+  e os slots de descritor do volume anterior. O lock do `RendererHandle` serializa a CPU e
+  **não diz nada sobre a GPU**: no editor a mutação vem da thread da GUI enquanto o último
+  frame ainda está em voo, referenciando o atlas e o `ProbesTrace` que estão prestes a ser
+  soltos e reusados. No load isso nunca apareceu porque ali a fila já está parada.
+  Corrigido com a drenagem das **duas** filas no topo do `SetupGIForScene`, e a ordem
+  importa: `CommandQueue.Flush()` **antes** de `ComputeQueue.WaitIdle()`, porque o update
+  do DDGI é submetido na fila de compute com um `Wait` no fence da direta
+  (`SubmitAfter`) — esperar a compute primeiro seria esperar por trabalho que ainda
+  depende da outra fila. Ficou na função inteira e não no `RebuildGIVolume` porque a
+  exposição é de todos os sete sistemas que ela realoca (`TemporalMotion`, `ReGIR`,
+  `RadianceCache`, `MeshLights`, reflexões, passe de debug), não só do DDGI.
+- **O estado regional sobrevivia ao rebuild.** O `SetupForScene` zerava
+  `HysteresisResetPending` e `RelocateFramesLeft` e deixava passar `InvalidateFramesLeft_`,
+  `InvalidateDistFramesLeft_`, a caixa e `ReclassifyPending_`. Como os dois contadores
+  contam frames de **update**, a janela atravessava o rebuild inteira: o atlas recém-zerado
+  passaria dezenas de frames com histerese reduzida numa região arbitrária da grade nova —
+  a caixa está em coordenadas de um volume que não existe mais. Zerados todos no setup.
+  Nada se perde: o reset one-shot é estritamente mais forte que qualquer invalidação
+  regional pendente, porque substitui o volume INTEIRO em vez de uma caixa.
+  - Efeito colateral que a limpeza obrigou a resolver: com `ReclassifyPending_` zerado,
+    relocação OFF e raios adaptativos ON, ninguém mais escreveria o `ProbeRayCount` do
+    volume novo e a contagem ficaria congelada no 64 do clear — o knob nasceria inerte.
+    `RelocateFramesLeft` passou a ser `Relocation ? kRelocateConvergeFrames : (AdaptiveRays
+    ? kReclassifyFrames : 0)`. É a mesma correção que a fase 4 fez nos setters, agora no
+    nascimento do volume.
+- **O texto do painel afirmava demais.** "A medição diz que cabe" apoiava-se nas ~9.920
+  sondas do sweep, que foram medidas com UMA cascata, em regime e no layout anterior — o
+  gather de duas tem outro padrão de acesso. Reescrito como expectativa, com o pedido de
+  medição no próprio painel (ver abaixo).
+
+### O A/B de custo da 6.2b‑i (12/08/2026) — e a lição que ele corrige
+
+Bistro, Release, RTX 3060 Ti, render 1573×804, em regime (badge `ASYNC` presente, ou seja
+`CanRunAsync()` verdadeiro e a relocação já convergida).
+
+| | 1 cascata | 2 cascatas | delta |
+|---|---|---|---|
+| sondas | 4.416 | 8.832 | ×2 |
+| raios/frame | ~283 mil | ~565 mil | ×2 |
+| `DDGI (async)` | 2,64 ms | 5,14 ms | **×1,95** |
+| `Espera do DDGI (async)` | 0,02 ms (piso) | 0,10 ms | +0,08 |
+| **frame de GPU** | **7,65 ms** | **8,48 ms** | **+0,83 (+10,8%)** |
+| FPS de GPU | 131 | 118 | −13 |
+| Z‑prepass | 0,88 ms | 1,69 ms | +0,81 |
+| G‑buffer | 0,87 ms | 1,08–1,21 ms | +0,2…+0,3 |
+| Deferred lighting | 0,65 ms | 0,63–0,65 ms | ~0 |
+| Reflexos (composite) | 0,66 ms | 0,61–0,68 ms | ~0 |
+| Volumetric fog | 0,27 ms | 0,25 ms | ~0 |
+| VRAM "GI e reflexos" | 312,9 MB | 322,4 MB | +9,5 MB |
+
+**O gather de duas cascatas é de graça.** Deferred, reflexões e as duas névoas não se
+mexeram — dentro do ruído. As duas páginas de oito taps, a seleção e o blend não aparecem
+na conta. O fast path da 6.2a (`Next == Primary` pula o segundo gather) está fazendo o que
+foi desenhado para fazer: só as células de borda pagam duas páginas.
+
+**O update escala linear e nada mais**: 0,598 µs/sonda contra 0,582 — ×1,95 para ×2 sondas.
+Todo o custo do sistema é o update, e ele é proporcional à contagem de sondas.
+
+**⚠️ E aqui está a correção metodológica: a ESPERA não é o instrumento de orçamento.** Ela
+saiu do piso (0,02 → 0,10 ms) mas explica **0,08 ms** de um custo de **0,83 ms**. O frame
+pagou dez vezes mais do que a espera acusou.
+
+Onde o resto foi parar: nos passes que dividem a GPU com o compute. A janela de overlap vai
+do `SubmitSegmentAndContinue` até o wait — céu, sombras, **Z‑prepass** e **G‑buffer**
+(`Renderer.cpp`, entre `RecordSkyAndClouds` e o bracket) — e são exatamente esses que
+subiram, +0,81 e +0,2…+0,3 ms. O Z‑prepass **não lê o DDGI**: não há caminho pelo qual uma
+mudança de GI o torne mais caro que não seja **contenção por SM e banda** com o compute
+assíncrono.
+
+Isso confirma, com número, o aviso que a fase 5 tinha escrito sem prova: *"escondido no
+overlap quer dizer que a fila direta não espera — não que o trabalho seja grátis"*. E
+**obriga a qualificar o sweep**: as "9.920 sondas escondidas" foram medidas com a ESPERA
+como critério, e a espera fica perto do piso enquanto o frame paga. O sweep provou o que
+enunciou — que a fila direta não estola — e isso é **menos** do que "cabe". O critério de
+orçamento passa a ser o **frame de GPU**; a espera vira o instrumento secundário, que
+detecta só o caso em que o compute nem cabe na janela.
+
+**Veredito da 6.2b‑i: APROVADA (12/08/2026).** O A/B visual no Bistro reduziu o vazamento
+de luz que ainda restava — que é literalmente a causa-raiz que abriu esta auditoria (grid de
+8 m contra os 1–2 m que o paper pede). Os 0,83 ms compram a correção do defeito que motivou
+a série inteira, e o sistema segue folgado para 60 fps. A cascata fica.
+
+⚠️ **Confounder honesto, e ele importa**: os dois passes FORA da janela também se mexeram
+(Motion temporal +0,12, GTAO −0,26 ms), o que põe o ruído entre capturas em ±0,2 ms. O
++0,81 do Z‑prepass é 4× isso, então contenção é de longe a melhor explicação — mas o
+Z‑terreno sozinho fez 0,66 → 1,14 ms, e custo de prepass de terreno depende de quanto
+terreno a câmera enxerga. Separar por completo exige um par de capturas da **mesma câmera**.
+O que não depende disso: o ×1,95 do update, o gather de graça e os +9,5 MB.
 
 ## Gate de medição
 
@@ -505,6 +669,12 @@ melhor ponto é 32.
 
 **O que ficou provado:** `9920 × 64 ≈ 635 mil raios/frame`, **2,25× o grid original**,
 seguem inteiramente escondidos no overlap — a espera não saiu do piso em nenhum degrau.
+
+⚠️ **Releitura obrigatória (12/08/2026): "escondido" era menos do que parecia.** O A/B da
+6.2b‑i mediu o frame de GPU pela primeira vez e mostrou que 8.832 sondas custam +0,83 ms de
+FRAME com a espera em 0,10 ms — ou seja o critério deste sweep (espera no piso) não prova
+que o grid é barato, só que a fila direta não estola. Ver "O A/B de custo da 6.2b‑i". O
+sweep continua válido no que enunciou; a conclusão de orçamento que se tirava dele, não.
 
 **O que continua desconhecido: o teto de TEMPO.** Ele não foi encontrado porque o limite
 de layout do atlas chegou primeiro. Só dá para achá-lo depois da reforma do empacotamento
@@ -639,26 +809,139 @@ O que se sabe hoje:
   Flax seleciona a cascata que contém o ponto e usa dithering por padrão
   (`DDGI_CASCADE_BLEND_SMOOTH = 0`).
 
-**A medição foi feita e mudou a pergunta.** Ver "Resultado da medição" acima. Isso
-reordena a fila:
+**A decisão foi tomada: cascata, e não hash.** O sweep mostrou que o tempo não era o
+obstáculo (2,25× cabe escondido), a fase 5 tirou o obstáculo que era real (o layout do
+atlas), e a 6.1/6.2a construíram o encanamento. A arquitetura escolhida está no bloco da
+fase 6.1: **a grossa é o volume de hoje e as finas entram por dentro** — o oposto da Flax,
+onde todas seguem a câmera e fora da última cai um fallback constante.
 
-0. **O sweep foi feito: 2,25× cabe sem sair do piso** (tabela na seção de medição). O
-   `kTargetMax` está de volta em 24 — subir a densidade sem a reforma do atlas era trocar
-   memória por 5,9 m de espaçamento, longe dos 1–2 m que o problema pede.
-1. **O custo não é o que impede a cascata.** O que impedia era o atlas.
-2. ✅ **Feito na fase 5: o layout dos dois atlas e do `ProbesTrace`.** O teto saiu de ~24
-   mil sondas efetivas para ~1 milhão. **Falta validar** (imagem idêntica) e **remedir a
-   banda** — a forma do atlas mudou de 69:1 para 1:1.
-3. **Agora a cascata**, e a **gaiola pelo ponto cru tem de entrar JUNTO** com ela — com
-   spacing de 1 m o teto do bias deixa de morder e a faixa afetada triplica.
-4. **"Raios adaptativos"** segue como alavanca independente, ainda sem A/B: ele devolve
-   tempo, e tempo é justamente o que já sobra. Mede-se se a cascata fina apertar o tempo.
+## O que falta
 
-**A correção de índice da gaiola de borda não espera pela cascata** — é erro de ÍNDICE e
-sobrevive a qualquer spacing. Ela muda a contagem de sondas (logo, o custo) e a cobertura
-na face `AABBMax`, então é A/B próprio e fase própria; a escolha entre "uma sonda a mais
-por eixo" (margem simétrica, +22% de sondas no Bistro) e "recentrar" (custo zero,
-cobertura justa) depende do resultado da medição acima.
+**A 6.2b‑i está fechada** — custo medido, visual aprovado (menos vazamento). Sobra dela um
+item barato e não bloqueante:
+
+- **Um ciclo `1 → 2 → 1 → 2`**, parado e após convergência, para o delta de frame virar
+  número definitivo. Hoje ele carrega o confounder do Z‑prepass (ver a tabela). Muda a
+  atribuição do custo, não o fato dele.
+
+**Próximo: 6.2b‑ii — a cascata fina segue a câmera.**
+
+Isso exige **scrolling toroidal**, e não como otimização: com snapping ao espaçamento a
+origem muda a cada 2 m andados, e sem scrolling todo o conteúdo guardado passa a
+representar outro ponto do mundo de uma vez — um flash por célula cruzada. O esquema é o da
+Flax (`GetDDGIScrollingProbeIndex`): a sonda de coordenada local `c` guarda no slot
+`(c + scroll) mod count`, e só as lâminas recém-expostas são limpas.
+
+Checklist acordada:
+
+- `ScrollOffset` (int3) e `ScrollClear` por cascata, no POD e nos cinco cbuffers;
+- o wrap entra em **todo** endereçamento de sonda (gather, trace, updates, relocate, debug);
+- limpar **só as lâminas novas**, nos quatro estados: irradiância, distância,
+  relocação/classificação e contagem de raios;
+- teleporte maior que uma dimensão da grade = reset completo **só da fina**;
+- a grossa nunca desliga e continua atualizando — é fallback incondicional;
+- testes: caminhada lenta cruzando células, diagonal, movimento vertical, e objeto
+  atravessando a borda da fina.
+
+**Depois da 6.2b‑ii**, e independentes entre si:
+
+- **Remedir a banda e refazer o sweep.** O sweep de `kTargetMax` vale para o layout de
+  antes do reempacotamento; e o blend muda o padrão de acesso do gather.
+- **A correção de índice da gaiola de borda.** É erro de ÍNDICE e sobrevive a qualquer
+  spacing, mas muda a contagem de sondas (logo, o custo) e a cobertura na face `AABBMax` —
+  A/B e fase próprios. A escolha entre "uma sonda a mais por eixo" (margem simétrica, +22%
+  de sondas no Bistro) e "recentrar" (custo zero, cobertura justa) depende dessa medição.
+- **A/B do piso `+0.05`** no peso de backface: não existe na Flax nem no paper (conferido
+  no fonte), e afrouxa o cull.
+- **Composição de energia**: o `HitShading` usa `((1-F)·diffuse + F)·indirect` e o deferred
+  soma `DiffuseColor·GI` sem o `(1-F)`. Incoerência interna, não erro físico.
+- **Terceira cascata (4 m)**, só se a 6.2b revelar transição ou alcance insuficientes. Com o
+  custo agora em FRAME e não em espera, a conta mudou: `3 × 4416 = 13.248` sondas seriam
+  ~7,7 ms de `DDGI (async)` e, extrapolando o degrau medido, ~+1,7 ms de frame sobre uma
+  cascata. Precisa de uma das alavancas abaixo ANTES, não depois.
+- **Remedir com um ciclo `1 → 2 → 1 → 2`** antes de fixar o custo em 0,83 ms (ver o
+  confounder do Z‑prepass na tabela do A/B).
+
+### Devolver os 0,83 ms — as alavancas, e a ordem importa
+
+Todo o custo é o UPDATE, e ele é linear na contagem de sondas (o gather saiu de graça na
+medição). As alavancas conhecidas atacam a mesma variável, então a escolha entre elas é de
+RISCO DE IMPLEMENTAÇÃO, não de retorno.
+
+**Ordem acordada (12/08/2026), e o princípio dela: terminar o COMPORTAMENTO antes de
+otimizar a distribuição de trabalho** — o scrolling da 6.2b‑ii ainda vai mudar quem atualiza
+o quê e quando, então otimizar antes seria calibrar sobre um alvo que se move.
+
+1. commitar a 6.2b‑i com os fixes da revisão;
+2. **6.2b‑ii** — a fina móvel, com scrolling toroidal, validada;
+3. A/B dos **raios adaptativos**;
+4. **compactar só as sondas que a Smile JÁ classifica como inativas** (ver a ressalva
+   abaixo — é menos do que "sonda que não precisa de raio");
+5. avaliar **separadamente** uma política "longe de geometria";
+6. **update escalonado**, já com estado temporal por cascata e medição de frame pacing.
+
+1. **Raios adaptativos** — já implementado (fase 4), nunca A/B'd, e é um toggle. Corta raios
+   por sonda onde não há geometria perto, o que reduz compute **e contenção** em TODO frame,
+   suavemente, sem tocar em estado nenhum. Era "devolve tempo, que é o que já sobra"; com o
+   orçamento medido em frame, virou a primeira coisa a tentar. Custo de implementação: zero.
+2. **Sondas inativas ainda traçam** (a Flax compacta e usa dispatch indireto). Não custa
+   variância nenhuma — a sonda inativa não contribui para o gather de todo jeito.
+
+   ⚠️ **Mas "inativa" aqui é uma coisa só, e mais estreita do que parece.** No
+   `DDGIRelocate.cs.hlsl`: `inactive = (backRatio > thresh) && (backfaceCount >= 6)` — ou
+   seja **sonda ENGOLIDA por geometria**, detectada por maioria de raios batendo em
+   backface. Sonda alta em espaço aberto tem `backRatio ≈ 0` e continua **ativa**; quem a
+   trata são os raios adaptativos, que a levam ao `MinRays` pela proximidade
+   (`prox = closestFront`). São dois mecanismos distintos e não intercambiáveis. Duas
+   consequências:
+   - a compactação rende o que a classificação atual já marca, e nada além disso. Ganho
+     estimável direto do visualizador de sondas, antes de escrever código;
+   - a classificação **só existe com relocação LIGADA**: com ela off o passe faz
+     `ProbeData = 0` e retorna, então nenhuma sonda é marcada inativa.
+
+   **A política "longe de geometria" da Flax é outra coisa e não deve entrar junto.** Lá ela
+   desativa sonda distante de geometria pelo Global SDF *e* elimina partes da cascata grossa
+   cobertas pelas finas. A segunda metade **conflita direto com a arquitetura escolhida
+   aqui**: a grossa é fallback INCONDICIONAL e precisa estar convergida em todo lugar (é o
+   oposto do desenho da Flax, onde fora da última cascata cai um constante). Se um dia
+   entrar, entra como avaliação separada e sem a parte de furar a grossa.
+3. **Update escalonado — fina todo frame, grossa a cada 2.** A aritmética fecha: com as duas
+   cascatas na mesma contagem, `2,57 + 2,57` vira `2,57 + 1,285` ≈ **3,9 ms amortizados**, e
+   a grossa é iluminação de baixa frequência espacial, que é o que tolera meia taxa. Mas é a
+   mais cara das três, e **não por causa do dispatch**:
+
+   ⚠️ **Todo o estado contado em FRAMES da `FDDGI` é global e passaria a divergir entre
+   cascatas.** `RecordUpdate` decrementa `InvalidateFramesLeft_` e
+   `InvalidateDistFramesLeft_` uma vez por chamada, consome o `HysteresisResetPending` uma
+   vez, e o dispatch cobre `NumProbes` — todas as cascatas. Com a grossa em meia taxa:
+   - a janela de invalidação fecharia com a grossa tendo recebido metade das misturas:
+     `0,90¹⁷ = 17%` de resíduo em vez dos 3% para que a janela foi dimensionada — fantasma
+     visível da iluminação antiga, e justamente na cascata que serve de fallback para tudo;
+   - o reset one-shot do `SetupForScene` seria consumido pelo update da fina, e a grossa
+     nasceria misturando 1% da estimativa nova com 99% de preto — **exatamente o bug da
+     fase 1**, de volta por outra porta;
+   - `RelocateFramesLeft` e a reclassificação têm o mesmo problema.
+
+   Nada disso é difícil: é tornar os contadores por cascata. Mas é precisamente a classe de
+   defeito que esta série inteira produziu (ver "Um padrão que atravessou a série"), então
+   merece fase própria com os contadores como O TRABALHO, e não como detalhe de uma
+   otimização. Segundo alerta: o retorno em FRAME não é o amortizado — nos frames em que a
+   grossa atualiza, a contenção é a de hoje, então o ganho aparece como frames ALTERNADOS
+   (~8,5 / ~7,7) e não como um frame liso de 8,0. A EMA do profiler mostra a média e
+   esconde exatamente isso.
+
+## Um padrão que atravessou a série inteira
+
+Vale registrar porque previu quase todos os defeitos: **nenhum bug real foi erro de
+matemática — todos foram estado duplicado que divergiu.** Cinco loops preenchendo o mesmo
+bloco de cascatas, dois arrays de cascata coexistindo num cbuffer, cinco consumidores
+refazendo a decomposição do índice, duas escalas de heatmap derivadas em separado, um
+`RayParams` faltando numa declaração espelhada.
+
+As defesas que ficaram são todas a mesma resposta: o POD único, os `static_assert` de
+OFFSET (não só de tamanho — o de tamanho não pega campo acrescentado antes do bloco), o
+`tilesPerRow` derivado da largura do atlas em vez de transportado, a largura da grade de
+dispatch derivada de `numProbes`, e a decomposição do índice centralizada.
 
 ## Onde está o quê
 
@@ -677,3 +960,9 @@ cobertura justa) depende do resultado da medição acima.
 | classificação de raios por sonda | `Shaders/GI/DDGIRelocate.cs.hlsl` |
 | empacotamento dos atlas | `DDGI_TileOrigin` / `DDGI_TilesPerRow` (`DDGICommon.hlsli`) + dimensões no `SetupForScene` |
 | empacotamento do `ProbesTrace` | `DDGI_TraceTexel` (`DDGICommon.hlsli`) + `kTraceProbesPerRow` (`DDGI.h`) |
+| seleção e blend de cascata | `DDGI_SelectCascade` + os dois wrappers (`DDGICommon.hlsli`) |
+| estado por cascata (POD dos 5 cbuffers) | `FDDGICascadeConstants` + `CascadeConstants()` (`DDGI.h`) |
+| colocação das cascatas no frame | `FDDGI::PrepareCascadePlacement` (`DDGI.cpp`) |
+| drenagem das filas antes de realocar | topo de `Renderer::SetupGIForScene` (`Renderer.cpp`) |
+| decomposição do índice no painel | `GetDebugProbeCoordValues` (`ViewportWidget.cpp`) |
+| diagnóstico pontual (2 páginas de 8) | `Shaders/GI/DDGIDebugPoint.cs.hlsl` |

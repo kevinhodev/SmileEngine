@@ -3209,6 +3209,92 @@ Rectangle {
                 }
 
                 Card {
+                    id: ddgiCascadesCard
+                    width: parent.width
+                    title: "Cascatas de sondas"
+                    height: cascadeRow.y + cascadeRow.height + contentPadding + 8
+
+                    Text {
+                        id: cascadeHelper
+                        x: 20
+                        y: ddgiCascadesCard.headerHeight + ddgiCascadesCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "O volume de sondas cobre a cena inteira com um espaçamento só, e " +
+                              "esse espaçamento sai do tamanho da cena: no Bistro dá 8 metros. " +
+                              "O paper pede 1 a 2 metros para escala humana, e é dessa diferença " +
+                              "que vêm o vazamento de luz através de parede fina, a separação " +
+                              "ruim entre cômodos e o bias de amostragem que precisou de um " +
+                              "teto em metros para não atravessar geometria.\n\n" +
+                              "Com duas cascatas, a grossa continua sendo exatamente esse volume " +
+                              "— cobrindo tudo, convergindo em todo lugar — e uma segunda, quatro " +
+                              "vezes mais fina, entra por dentro dela. Cada ponto é servido pela " +
+                              "mais fina que o contém, e as duas se misturam nas últimas células " +
+                              "da borda para não haver costura. O que sai da fina cai na grossa; " +
+                              "só o que sai da grossa cai no ambiente do céu.\n\n" +
+                              "Nesta etapa a fina fica PARADA, ancorada no centro da cena. Fazê-la " +
+                              "seguir a câmera exige rolagem toroidal do conteúdo dela, senão " +
+                              "cada dois metros andados invalidam tudo o que ela tinha guardado — " +
+                              "e isso é a etapa seguinte. Voe até o centro do mapa para ver o " +
+                              "efeito.\n\n" +
+                              "Custo, medido no Bistro (3060 Ti, 1573×804): cada cascata é um " +
+                              "grid inteiro de sondas, então duas dobram os raios por quadro — " +
+                              "8.832 sondas contra 4.416. O traçado vai de 2,64 para 5,14 ms, " +
+                              "linear na contagem, e o QUADRO de 7,65 para 8,48 ms: 131 para " +
+                              "118 FPS, cerca de 11%. Amostrar as duas cascatas, essa parte é de " +
+                              "graça — iluminação, reflexos e névoa não se mexeram.\n\n" +
+                              "O custo não aparece na espera pelo traçado (0,02 → 0,10 ms), e sim " +
+                              "nos passes que dividem a GPU com ele enquanto roda em paralelo: o " +
+                              "Z-prepass e o G-buffer ficam mais caros sem ler nada do GI. Quem " +
+                              "decide o orçamento é o quadro, não a linha de espera.\n\n" +
+                              "Para remedir: espere a relocação convergir (nos primeiros ~180 " +
+                              "updates ela força o caminho síncrono, e ali a espera não mede " +
+                              "nada) e mantenha a mesma câmera nos dois lados.\n\n" +
+                              "Trocar aqui RECRIA o volume: os atlas, o buffer de raios e as " +
+                              "sondas são realocados, e a iluminação indireta reconverge do zero."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+                    Row {
+                        id: cascadeRow
+                        x: 20
+                        y: cascadeHelper.y + cascadeHelper.height + 18
+                        spacing: 8
+                        Text {
+                            text: "Cascatas"
+                            color: root.textNormal
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 13
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Repeater {
+                            model: [1, 2]
+                            delegate: Rectangle {
+                                width: 44; height: 26; radius: 4
+                                color: renderModel.giCascadeCount === modelData
+                                       ? C.Theme.accent : "transparent"
+                                border.color: root.textSecondary
+                                border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    color: renderModel.giCascadeCount === modelData
+                                           ? "#ffffff" : root.textNormal
+                                    font.family: C.Theme.fontFamily
+                                    font.pixelSize: 13
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: renderModel.SetGICascadeCount(modelData)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Card {
                     id: ddgiAdaptiveRaysCard
                     width: parent.width
                     title: "Orçamento de raios por sonda"

@@ -885,6 +885,10 @@ namespace SmileEditor {
         return Renderer && Renderer->Settings().GetGIAdaptiveRays();
     }
 
+    int RenderSettingsBridge::GetGICascadeCount() const {
+        return Renderer ? static_cast<int>(Renderer->Settings().GetGICascadeCount()) : 1;
+    }
+
     bool RenderSettingsBridge::IsGIMeasureTerminatorOff() const {
         return Renderer && Renderer->Settings().GetGIMeasureTerminatorOff();
     }
@@ -1066,6 +1070,15 @@ namespace SmileEditor {
         auto RendererAccess = Renderer.Lock();
         auto& Settings = RendererAccess->Settings();
         Settings.SetGIAdaptiveRays(!Settings.GetGIAdaptiveRays());
+        emit GISettingsChanged();
+    }
+
+    void RenderSettingsBridge::SetGICascadeCount(int _V) {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        // Recria o volume do DDGI (atlas, ProbesTrace, buffers, dispatch). O lock e o mesmo dos
+        // outros knobs; a realocacao acontece fora da gravacao do frame.
+        RendererAccess->Settings().SetGICascadeCount(static_cast<Smile::u32>(_V < 1 ? 1 : _V));
         emit GISettingsChanged();
     }
 

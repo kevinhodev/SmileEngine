@@ -538,7 +538,26 @@ namespace Smile {
         PreviousDirectLightPositions.clear();
 
         if (!Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
-        if (!Atmosphere.IsInitialized()) return; 
+        if (!Atmosphere.IsInitialized()) return;
+
+        // Daqui para baixo TODO SetupForScene comeca liberando os recursos e os slots de
+        // descritor do volume anterior. O lock do RendererHandle serializa a CPU e nao diz nada
+        // sobre a GPU — quando este caminho vem de um clique no editor (RebuildGIVolume, pela
+        // contagem de cascatas) o ultimo frame ainda esta EM VOO e continua referenciando o
+        // atlas, o ProbesTrace e os slots que estao prestes a ser soltos e reusados.
+        //
+        // As duas filas, e nesta ordem. O update do DDGI mora na fila de COMPUTE, submetido com
+        // um Wait no fence da direta (ver SubmitAfter no RenderFrame): drenar a direta primeiro
+        // e o que permite ao trabalho pendente do compute de fato terminar em vez de ficar preso
+        // no proprio Wait. Flush sozinho nao alcanca a compute; WaitIdle sozinho esperaria por
+        // uma fila que ainda depende da outra.
+        //
+        // No load a fila ja esta parada e isto custa zero. Fica aqui, e nao no RebuildGIVolume,
+        // porque a exposicao e da funcao inteira: TemporalMotion, ReGIR, MeshLights, reflexoes e
+        // o passe de debug realocam pelo mesmo motivo e no mesmo instante.
+        CommandQueue.Flush();
+        ComputeQueue.WaitIdle();
+
         DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
                            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV());
         TemporalMotion.SetupForScene(Device.Native(), SRVHeap, Scene,

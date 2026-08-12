@@ -284,6 +284,19 @@ namespace Smile {
         Invalidate(Dom::GIAccumulation);
     }
 
+    u32 FRenderSettings::GetGICascadeCount() const { return R.DDGI.GetDesiredCascades(); }
+    void FRenderSettings::SetGICascadeCount(u32 _V) {
+        if (_V == R.DDGI.GetDesiredCascades()) return;
+        R.DDGI.SetDesiredCascades(_V);
+        // Recria o volume AQUI, e nao no proximo load: sem isso o knob pareceria inerte ate
+        // alguem recarregar a cena, que e a pior forma de um botao mentir — ele aceita o clique
+        // e nao faz nada visivel.
+        R.RebuildGIVolume();
+        // Tudo que se apoiava no volume antigo (sondas, indices, historicos de tela que
+        // acumularam sobre ele) descreve uma grade que nao existe mais.
+        Invalidate(Dom::GIAccumulation);
+    }
+
     bool FRenderSettings::GetGIAdaptiveRays() const { return R.DDGI.GetAdaptiveRays(); }
     void FRenderSettings::SetGIAdaptiveRays(bool _V) {
         if (_V == R.DDGI.GetAdaptiveRays()) return;

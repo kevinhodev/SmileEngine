@@ -124,6 +124,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giAdaptiveHysteresis READ IsGIAdaptiveHysteresisEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giAdaptiveRays READ IsGIAdaptiveRaysEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(int giCascadeCount READ GetGICascadeCount NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giMeasureTerminatorOff READ IsGIMeasureTerminatorOff NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reSTIRDI READ IsReSTIRDIEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(double giSurfaceBiasMax READ GetGISurfaceBiasMax NOTIFY GISettingsChanged)
@@ -311,6 +312,7 @@ namespace SmileEditor {
         bool              IsGIBackfacePolicyEnabled() const;
         bool              IsGIAdaptiveHysteresisEnabled() const;
         bool              IsGIAdaptiveRaysEnabled() const;
+        int               GetGICascadeCount() const;
         bool              IsGIMeasureTerminatorOff() const;
         bool              IsReSTIRDIEnabled() const;
         double            GetGISurfaceBiasMax() const;
@@ -335,6 +337,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleGIBackfacePolicy();
         Q_INVOKABLE void ToggleGIAdaptiveHysteresis();
         Q_INVOKABLE void ToggleGIAdaptiveRays();
+        Q_INVOKABLE void SetGICascadeCount(int V);
         Q_INVOKABLE void ToggleGIMeasureTerminatorOff();
         Q_INVOKABLE void ToggleReSTIRDI();
         Q_INVOKABLE void SetGISurfaceBiasMax(double meters);
