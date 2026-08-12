@@ -29,11 +29,24 @@ namespace Smile {
     // quem fecha a leitura e o shader, pelo bit que o FGIHitSampling::SkipModePacked publica.
     // Ler o neutro por engano custaria indireto preto, nao lixo; mas o gate existe para que nem
     // isso aconteca, e para que o custo do tap tambem saia.
+    // ⚠️ EXISTENCIA FISICA, NAO HABILITACAO — e a distincao e de TEMPO, nao de gosto.
+    // Esta struct e lida uma vez, no setup/resize, e o resultado fica LATCHED dentro das tabelas
+    // de descritores dos consumidores. Um knob de habilitacao (o `UseGI` do Renderer) muda a
+    // qualquer momento sem realocar nada — pOr isso ele NAO pode participar da escolha feita aqui.
+    // Ja foi assim uma vez: com `UseGI` nos dois lados, um setup com a GI desligada gravava os
+    // neutros nas tabelas e religar a GI abria o gate do shader (por frame) sobre um atlas 1x1
+    // zerado (latched), deixando o terminador preto ate o proximo setup.
+    //
+    // A divisao que vale: EXISTENCIA manda no descritor (aqui), HABILITACAO manda na leitura
+    // (FGIHitSampling::FallbackAvailable, recalculado todo frame). Quem acrescentar campo nesta
+    // struct precisa responder antes: "isto pode mudar sem passar por um SetupForResize?" Se puder,
+    // nao pertence a esta struct.
     struct FGIFallbackBindings {
         u32  IrradianceAtlasSRV = 0xFFFFFFFFu;
         u32  DistanceAtlasSRV   = 0xFFFFFFFFu;
         u32  ProbeDataSRV       = 0xFFFFFFFFu;
-        // Ha um volume DDGI utilizavel neste setup. Os slots acima sao validos nos dois casos.
+        // O volume DDGI EXISTE e os slots acima sao os dele. false = slots neutros. Em ambos os
+        // casos os tres sao validos; isto nao diz se a GI esta ligada neste frame.
         bool Available          = false;
     };
 

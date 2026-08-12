@@ -128,7 +128,7 @@ namespace Smile {
         B.IrradianceAtlasSRV = IrradSRV;
         B.DistanceAtlasSRV   = DistSRV;
         B.ProbeDataSRV       = ProbeDataSRV;
-        B.Available          = false; // neutro E "sem volume", por definicao
+        B.Available          = false; // neutro E "o volume nao existe", por definicao
         return B;
     }
 }

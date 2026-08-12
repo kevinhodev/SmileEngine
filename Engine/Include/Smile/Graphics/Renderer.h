@@ -667,9 +667,10 @@ namespace Smile {
         bool WantNrdIndirect() const; // NRD selecionado + ReSTIR GI ligado (o volume NAO entra)
         bool WantNrdDirect() const;   // NRD selecionado + ReSTIR DI ligado
         // Slots do fallback indireto para os SetupForResize de ReSTIR GI e reflexoes: os do DDGI
-        // quando ha volume utilizavel, os neutros quando nao ha. Nunca kInvalidSlot — ver
-        // FGIFallbackBindings. O predicado tem de ser o MESMO que alimenta o
-        // FGIHitSampling::FallbackAvailable, senao a tabela e o shader discordam sobre o frame.
+        // quando o volume EXISTE, os neutros quando nao existe. Nunca kInvalidSlot.
+        // Decide por DDGI.IsReady() e deliberadamente NAO olha o UseGI — o resultado fica latched
+        // na tabela ate o proximo setup, e o UseGI muda sem provocar setup nenhum. A habilitacao
+        // por frame vive no FGIHitSampling::FallbackAvailable. Ver GIFallback.h.
         FGIFallbackBindings GIFallbackBindingsForSetup() const;
         void SetupNrdIndirect();      // (re)aloca a instancia indireta e os packs que a leem
         void SetupNrdDirect();        // idem p/ a direta

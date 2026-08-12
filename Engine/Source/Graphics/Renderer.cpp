@@ -801,6 +801,10 @@ namespace Smile {
         // vive dentro de cada SetupForResize) e o volume entra como um contrato que sabe nao
         // existir. Os SetGIParams continuam saindo do FDDGI: sem volume eles descrevem uma grade
         // degenerada que o shader nunca consulta, porque o FallbackAvailable fecha o gate.
+        //
+        // O contrato decide por EXISTENCIA do volume, nao por UseGI: o que sai daqui fica latched
+        // na tabela ate o proximo setup, e o UseGI muda sem provocar setup. Ver
+        // GIFallbackBindingsForSetup.
         const FGIFallbackBindings GIFb = GIFallbackBindingsForSetup();
 
         Reflections.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
@@ -857,11 +861,28 @@ namespace Smile {
     }
 
     FGIFallbackBindings Renderer::GIFallbackBindingsForSetup() const {
-        // MESMO predicado do FGIHitSampling::FallbackAvailable (ver UpdateRTPasses). Se os dois
-        // divergirem, ou a tabela aponta para o neutro enquanto o shader acha que ha volume — GI
-        // preta —, ou aponta para o volume enquanto o shader nao o le — custo pago sem uso. Manter
-        // os dois lados presos ao mesmo `UseGI && DDGI.IsReady()` e o que impede as duas coisas.
-        if (UseGI && DDGI.IsReady()) {
+        // EXISTENCIA FISICA, e nao habilitacao. O `UseGI` NAO entra aqui, e a razao e de TEMPO de
+        // amostragem, nao de valor:
+        //
+        //   - esta funcao e lida uma vez, no setup/resize, e o resultado fica LATCHED dentro das
+        //     tabelas de descritores de reflexoes e ReSTIR GI;
+        //   - o FGIHitSampling::FallbackAvailable e recalculado TODO FRAME.
+        //
+        // Com `UseGI` nos dois lados, um setup ocorrido com a GI desligada gravava os neutros nas
+        // tabelas; religar a GI depois abria o gate do shader — que e por frame — enquanto as
+        // tabelas continuavam presas ao atlas 1x1 zerado. O terminador ficava PRETO ate alguem
+        // provocar outro setup (trocar de cena, redimensionar), porque o SetUseGI so vira o
+        // booleano: nao invalida, nao realoca, nao refaz tabela.
+        //
+        // `DDGI.IsReady()` pode ficar aqui porque tem a propriedade que falta ao `UseGI`: ele so
+        // muda dentro do FDDGI::SetupForScene, e o SetupGIForScene chama o
+        // SetupReflectionsForScene logo em seguida. Toda transicao dele ja vem acompanhada da
+        // remontagem das tabelas — o latch nunca fica velho.
+        //
+        // Divisao final: existencia manda no DESCRITOR (aqui), habilitacao manda na LEITURA
+        // (FallbackAvailable). Assim desligar a GI fecha o tap sem reconstruir nada, religar
+        // reabre no frame seguinte, e os neutros so entram quando nao ha volume de verdade.
+        if (DDGI.IsReady()) {
             FGIFallbackBindings B{};
             B.IrradianceAtlasSRV = DDGI.IrradianceAtlasSRV();
             B.DistanceAtlasSRV   = DDGI.DistAtlasSRV();
@@ -2010,10 +2031,13 @@ namespace Smile {
             GIHit.BiasMax    = DDGI.GetSurfaceBiasMax();
             GIHit.FadeProbes = DDGI.GetVolumeFadeProbes();
             GIHit.TerminatorOff = GIMeasureTerminatorOff; // gate de medicao (ver Renderer.h)
-            // Sem volume (ou com a GI desligada) os passes de RT ainda recebem descritores
-            // validos — os neutros do FGIFallbackBindings —, e e ESTE campo que impede o gather de
-            // ler o atlas 1x1 zerado como se fosse irradiancia. Mesmo predicado que decide quais
-            // slots vao para as tabelas, para os dois lados nunca discordarem.
+            // HABILITACAO por frame, contra a EXISTENCIA fisica que escolhe o descritor no
+            // GIFallbackBindingsForSetup. O `UseGI` mora deste lado justamente porque este lado e
+            // recalculado todo frame: o SetUseGI so vira o booleano, entao um gate que dependesse
+            // dele no lado do descritor ficaria latched no setup e mentiria ate o proximo.
+            //
+            // Sem volume os passes de RT ainda recebem descritores validos — os neutros —, e e
+            // ESTE campo que impede o gather de ler o atlas 1x1 zerado como se fosse irradiancia.
             GIHit.FallbackAvailable = UseGI && DDGI.IsReady();
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
