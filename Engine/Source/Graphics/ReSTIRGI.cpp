@@ -76,19 +76,26 @@ namespace Smile {
 
     void FReSTIRGI::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                    u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
-                                   u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
-                                   u32 _GBufferSlot, u32 _VelocitySlot,
-                                   u32 _DistSlot, u32 _ProbeDataSlot) {
+                                   u32 _InstanceSlot, const FGIFallbackBindings& _Fallback,
+                                   u32 _DepthSlot, u32 _GBufferSlot, u32 _VelocitySlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
+        const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
+        const u32 _DistSlot      = _Fallback.DistanceAtlasSRV;
+        const u32 _ProbeDataSlot = _Fallback.ProbeDataSRV;
         // Valida os SETE slots, nao so tres: todos vao direto p/ CpuHandleStaging ao montar as
         // tabelas, e la kInvalidSlot (0xFFFFFFFF) vira base + 0xFFFFFFFF * HandleSize — ~128 GiB
         // fora do heap. O CopyDescriptors le desse endereco: access violation, ou pior, descriptor
         // corrompido em silencio. Hoje o Renderer garante os quatro que faltavam, mas isso e
         // invariante de call site, nao da classe.
+        //
+        // Os tres do fallback continuam validados mesmo com Available == false: `sem volume` quer
+        // dizer slot NEUTRO, nunca slot invalido. Se chegou invalido, o Renderer nao criou os
+        // recursos neutros — e ai o certo e nao montar a tabela, nao montar com um buraco.
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
             _SkyViewSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot ||
-            _IrradSlot == kInvalidSlot || _DepthSlot == kInvalidSlot ||
+            _IrradSlot == kInvalidSlot || _DistSlot == kInvalidSlot ||
+            _ProbeDataSlot == kInvalidSlot || _DepthSlot == kInvalidSlot ||
             _GBufferSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot)
             return;
 

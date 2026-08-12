@@ -6,6 +6,7 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants
+#include "Smile/Graphics/GIFallback.h"
 #include "Smile/Graphics/ReGIR.h"
 #include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -97,17 +98,19 @@ namespace Smile {
 
         // (Re)cria a textura de saida (radiancia) no tamanho da tela e (re)monta as tabelas de
         // descritores. Chamar no setup da cena e em TODO resize (depth/gbuffer recriados). Os
-        // slots vem do DDGI (geometria/atlas), RaytracingScene (TLAS), Atmosphere (skyview) e
-        // Renderer (depth, gbuffer, BRDF LUT).
+        // slots vem do RaytracingScene (TLAS + InstanceGeo), Atmosphere (skyview), Renderer
+        // (depth, gbuffer, BRDF LUT) e do fallback indireto.
+        //
+        // O fallback chega como CONTRATO (FGIFallbackBindings): sem volume DDGI os tres slots sao
+        // os neutros do Renderer e o passe continua chegando a IsReady(). Reflexao nao precisa de
+        // sonda para existir — o gather do DDGI e so o terminador do 2o bounce dela.
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
-                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
+                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot,
+                            const FGIFallbackBindings& Fallback,
                             u32 DepthSlot, u32 GBufferSlot, u32 GBufferCSlot, u32 BRDFLutSlot,
                             u32 GBufferASlot, u32 VelocitySlot,
                             u32 SceneColorSlot, u32 SceneDepthSlot, u32 SceneColorMipCount,
                             u32 AtmosphereSpecularSlot, u32 HDRSpecularSlot,
-                            // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
-                            // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
-                            u32 DistSlot, u32 ProbeDataSlot,
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                             const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
 

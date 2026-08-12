@@ -123,6 +123,7 @@ set(ENGINE_SOURCES
     Source/Graphics/SunShadows.cpp
     Source/Graphics/LocalShadows.cpp
     Source/Graphics/RaytracingScene.cpp
+    Source/Graphics/GIFallback.cpp
     Source/Graphics/DDGI.cpp
     Source/Graphics/DDGIDebug.cpp
     Source/Graphics/ReSTIRGI.cpp

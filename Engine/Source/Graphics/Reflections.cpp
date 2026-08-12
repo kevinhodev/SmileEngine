@@ -209,21 +209,30 @@ namespace Smile {
 
     void FReflections::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                       u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
-                                      u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
+                                      u32 _InstanceSlot, const FGIFallbackBindings& _Fallback,
+                                       u32 _DepthSlot,
                                        u32 _GBufferSlot, u32 _GBufferCSlot, u32 _BRDFLutSlot,
                                        u32 _GBufferASlot, u32 _VelocitySlot,
                                        u32 _SceneColorSlot, u32 _SceneDepthSlot,
                                        u32 _SceneColorMipCount,
                                        u32 _AtmosphereSpecularSlot, u32 _HDRSpecularSlot,
-                                       u32 _DistSlot, u32 _ProbeDataSlot,
                                       const u32 _TransformSlots[FCommandQueue::kFramesInFlight],
                                       const u32 _SurfaceSlots[FCommandQueue::kFramesInFlight]) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
+        const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
+        const u32 _DistSlot      = _Fallback.DistanceAtlasSRV;
+        const u32 _ProbeDataSlot = _Fallback.ProbeDataSRV;
+        // Os tres do fallback entram na validacao mesmo com Available == false: "sem volume" quer
+        // dizer slot NEUTRO, nunca invalido. Chegar invalido significa que o Renderer nao criou os
+        // recursos neutros, e ai o certo e nao montar tabela nenhuma — nunca montar com um buraco,
+        // que e o que kInvalidSlot vira dentro do CopyDescriptors.
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
             _InstanceSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot ||
             _SceneColorSlot == kInvalidSlot || _SceneDepthSlot == kInvalidSlot ||
-            _AtmosphereSpecularSlot == kInvalidSlot || _HDRSpecularSlot == kInvalidSlot)
+            _AtmosphereSpecularSlot == kInvalidSlot || _HDRSpecularSlot == kInvalidSlot ||
+            _IrradSlot == kInvalidSlot || _DistSlot == kInvalidSlot ||
+            _ProbeDataSlot == kInvalidSlot)
             return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
             if (_TransformSlots[f] == kInvalidSlot || _SurfaceSlots[f] == kInvalidSlot) return;

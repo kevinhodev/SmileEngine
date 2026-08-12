@@ -43,6 +43,7 @@
 #include "Smile/Graphics/SunShadows.h"
 #include "Smile/Graphics/LocalShadows.h"
 #include "Smile/Graphics/RaytracingScene.h"
+#include "Smile/Graphics/GIFallback.h"
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/DDGIDebug.h"
 #include "Smile/Graphics/ReSTIRGI.h"
@@ -663,8 +664,13 @@ namespace Smile {
         // — mais da METADE da categoria "GI e reflexos" — e eram alocadas incondicionalmente,
         // inclusive no estado padrao, onde o denoiser pode ser DLSS-RR/None e os dois ReSTIR
         // nascem desligados. Aqui cada instancia so existe enquanto tem consumidor.
-        bool WantNrdIndirect() const; // NRD selecionado + ReSTIR GI ligado + volume DDGI pronto
+        bool WantNrdIndirect() const; // NRD selecionado + ReSTIR GI ligado (o volume NAO entra)
         bool WantNrdDirect() const;   // NRD selecionado + ReSTIR DI ligado
+        // Slots do fallback indireto para os SetupForResize de ReSTIR GI e reflexoes: os do DDGI
+        // quando ha volume utilizavel, os neutros quando nao ha. Nunca kInvalidSlot — ver
+        // FGIFallbackBindings. O predicado tem de ser o MESMO que alimenta o
+        // FGIHitSampling::FallbackAvailable, senao a tabela e o shader discordam sobre o frame.
+        FGIFallbackBindings GIFallbackBindingsForSetup() const;
         void SetupNrdIndirect();      // (re)aloca a instancia indireta e os packs que a leem
         void SetupNrdDirect();        // idem p/ a direta
         // Reconcilia desejado x alocado. Chamada pelos setters de denoiser e dos dois ReSTIR
@@ -916,6 +922,10 @@ namespace Smile {
         FLocalShadows   LocalShadows; // sombras de spot (F3a); budget kMaxShadows/frame
  
         FRaytracingScene RaytracingScene;
+        // Recursos neutros que respondem pelo fallback indireto quando nao ha volume DDGI. Vivem
+        // aqui, e nao no FDDGI, exatamente porque a pergunta que respondem e "e se o FDDGI nao
+        // existir". Criados uma vez no Initialize; nao dependem de cena nem de resolucao.
+        FGIFallbackResources GIFallback;
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
         bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
         bool             MaterialRTStateDirty  = false; // pedido de refresh coalescido p/ o proximo frame

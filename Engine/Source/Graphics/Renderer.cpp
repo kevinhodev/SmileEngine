@@ -230,6 +230,11 @@ namespace Smile {
             // os passes so nao criam a gemea instrumentada.
             FShaderTimer::InitializeApi(Device.Native(), SRVHeap);
             BvhDebug.Initialize(Device.Native());
+            // ANTES do DDGI e dos consumidores: o SetupReflectionsForScene le estes slots para
+            // montar as tabelas de reflexao/ReSTIR GI quando nao ha volume, e sem eles os dois
+            // passes recusariam o setup por slot invalido — que e exatamente o estado que a
+            // remocao do early-out existe para evitar.
+            GIFallback.Initialize(Device.Native(), CommandQueue, SRVHeap);
             DDGI.Initialize(Device.Native());
             ReGIR.Initialize(Device.Native());
             RadianceCache.Initialize(Device.Native());
@@ -782,32 +787,40 @@ namespace Smile {
             ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV(),
             MeshLights.LightSRVSlot(), MeshLights.AliasSRVSlot(),
             DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots);
-        // A direta nao depende do volume DDGI. Mantenha sua instancia RELAX e o pack antes do
-        // early-out abaixo para o ReSTIR DI continuar denoisado mesmo numa cena sem probes.
+        // A direta nao depende do volume DDGI. Ela ja vinha antes do early-out que existia aqui;
+        // agora ninguem depende, e a ordem so reflete que o pack dela le o TemporalMotion acima.
         SetupNrdDirect();
 
-        // Reflexoes, ReSTIR GI e NRD abaixo consomem efetivamente os recursos do volume.
-        if (!DDGI.IsReady()) return;
+        // ==== Fallback indireto ============================================================
+        // Era aqui que morava `if (!DDGI.IsReady()) return;`. Ele matava reflexoes, ReSTIR GI e o
+        // NRD indireto junto com o volume — tres passes cujo caminho PRINCIPAL nao consulta sonda
+        // nenhuma; o DDGI e so o terminador do 2o bounce deles. Numa cena sem volume o resultado
+        // era tela sem reflexo e sem GI indireta, e nao "GI mais pobre".
+        //
+        // No lugar dele, cada passe abaixo e guardado pelos PROPRIOS pre-requisitos (a validacao
+        // vive dentro de cada SetupForResize) e o volume entra como um contrato que sabe nao
+        // existir. Os SetGIParams continuam saindo do FDDGI: sem volume eles descrevem uma grade
+        // degenerada que o shader nunca consulta, porque o FallbackAvailable fecha o gate.
+        const FGIFallbackBindings GIFb = GIFallbackBindingsForSetup();
+
         Reflections.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                                 DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         Reflections.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
-            RaytracingScene.InstanceGeoSRV(), DDGI.IrradianceAtlasSRV(),
+            RaytracingScene.InstanceGeoSRV(), GIFb,
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
             GBuffer.SRVSlot(0), // GBufferA = BaseColor (tint do metal no reflexo)
             Targets.VelocitySRVSlot,
             Targets.SceneCopyTableStart, Targets.SceneCopyTableStart + 1, Targets.SceneColorMipCount,
             Atmosphere.SkyReflectionSRV(), HDREnv.SpecularSRV(),
-            DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV(),
             TemporalTransformSlots, TemporalSurfaceSlots);
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
-            RaytracingScene.InstanceGeoSRV(), DDGI.IrradianceAtlasSRV(),
-            Targets.DepthSRVSlot, GBuffer.SRVSlot(1), ReliableVelocitySlot,
-            DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
+            RaytracingScene.InstanceGeoSRV(), GIFb,
+            Targets.DepthSRVSlot, GBuffer.SRVSlot(1), ReliableVelocitySlot);
 
         // Alvos de timer: cada um no dominio do SEU dispatch — o gather do ReSTIR e full-res e o
         // trace de reflexao e half-res. Sem NVAPI, Initialize() e no-op e os alvos nao existem.
@@ -832,8 +845,31 @@ namespace Smile {
     bool Renderer::WantNrdIndirect() const {
         // Espelha o NrdIndirectMode do Render(): alocar por um criterio e consumir por outro
         // daria o pior dos dois mundos — memoria reservada sem uso, ou pack apontando p/ recurso
-        // liberado. O DDGI entra porque o SetupNrdIndirect vive depois do early-out do volume.
-        return Denoiser == EDenoiser::NRD && UseReSTIRGI && DDGI.IsReady();
+        // liberado.
+        //
+        // O DDGI SAIU do predicado. Ele estava aqui por acidente de posicao — o SetupNrdIndirect
+        // vivia depois do early-out do volume, entao alocar sem volume teria deixado o pack
+        // apontando para tabelas do ReSTIR GI que nunca foram montadas. Com o early-out removido,
+        // quem produz o sinal indireto e o ReSTIR GI (e o reflexo, no canal especular), e nenhum
+        // dos dois depende de sonda para existir. Manter o volume aqui faria o denoiser sumir numa
+        // cena sem DDGI e devolver GI crua e ruidosa exatamente onde ela mais precisa de filtro.
+        return Denoiser == EDenoiser::NRD && UseReSTIRGI;
+    }
+
+    FGIFallbackBindings Renderer::GIFallbackBindingsForSetup() const {
+        // MESMO predicado do FGIHitSampling::FallbackAvailable (ver UpdateRTPasses). Se os dois
+        // divergirem, ou a tabela aponta para o neutro enquanto o shader acha que ha volume — GI
+        // preta —, ou aponta para o volume enquanto o shader nao o le — custo pago sem uso. Manter
+        // os dois lados presos ao mesmo `UseGI && DDGI.IsReady()` e o que impede as duas coisas.
+        if (UseGI && DDGI.IsReady()) {
+            FGIFallbackBindings B{};
+            B.IrradianceAtlasSRV = DDGI.IrradianceAtlasSRV();
+            B.DistanceAtlasSRV   = DDGI.DistAtlasSRV();
+            B.ProbeDataSRV       = DDGI.ProbeDataSRV();
+            B.Available          = true;
+            return B;
+        }
+        return GIFallback.Bindings();
     }
 
     bool Renderer::WantNrdDirect() const {
@@ -1974,6 +2010,11 @@ namespace Smile {
             GIHit.BiasMax    = DDGI.GetSurfaceBiasMax();
             GIHit.FadeProbes = DDGI.GetVolumeFadeProbes();
             GIHit.TerminatorOff = GIMeasureTerminatorOff; // gate de medicao (ver Renderer.h)
+            // Sem volume (ou com a GI desligada) os passes de RT ainda recebem descritores
+            // validos — os neutros do FGIFallbackBindings —, e e ESTE campo que impede o gather de
+            // ler o atlas 1x1 zerado como se fosse irradiancia. Mesmo predicado que decide quais
+            // slots vao para as tabelas, para os dois lados nunca discordarem.
+            GIHit.FallbackAvailable = UseGI && DDGI.IsReady();
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
             const FDDGICascadeConstants GICasc = DDGI.CascadeConstants();
@@ -4611,6 +4652,7 @@ namespace Smile {
         BgVelocity.Shutdown();
         FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS/RR
         BvhDebug.Release(SRVHeap);
+        GIFallback.Release(SRVHeap);       // 3 slots + os recursos neutros do fallback indireto
         FShaderTimer::ShutdownApi();       // libera o slot falso da extensao + o buffer dummy
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);

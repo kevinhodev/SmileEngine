@@ -6,6 +6,7 @@
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
 #include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants
+#include "Smile/Graphics/GIFallback.h"
 #include "Smile/Graphics/ReGIR.h"
 #include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/RenderPass.h"
@@ -92,12 +93,14 @@ namespace Smile {
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
                          f32 AtlasTile, f32 AtlasW, f32 AtlasH, f32 MaxRayDist);
 
+        // O fallback chega como CONTRATO (FGIFallbackBindings) e nao como tres slots soltos: sem
+        // volume DDGI os slots sao os neutros do Renderer e o passe continua chegando a IsReady().
+        // Antes, o call site so chamava isto depois de um `if (!DDGI.IsReady()) return;`, e o
+        // ReSTIR GI — que nao consulta sonda no caminho principal — morria junto com o volume.
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
-                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 DepthSlot, u32 GBufferSlot, u32 VelocitySlot,
-                            // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
-                            // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
-                            u32 DistSlot, u32 ProbeDataSlot);
+                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot,
+                            const FGIFallbackBindings& Fallback,
+                            u32 DepthSlot, u32 GBufferSlot, u32 VelocitySlot);
 
         // PrevSurfaceSlot = SRV do historico de superficie do frame ANTERIOR
         // (FTemporalMotionVectors::SurfaceSRV(1 - FrameSlot)). E de la que o reuso temporal tira o

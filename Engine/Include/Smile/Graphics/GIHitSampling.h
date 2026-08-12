@@ -50,10 +50,28 @@ namespace Smile {
         // a resposta certa.
         bool TerminatorOff = false;
 
+        // === Disponibilidade do fallback ==================================================
+        // false = nao existe volume DDGI para consultar neste frame (nao pronto, ou GI desligada).
+        // Os passes de RT continuam recebendo descritores VALIDOS nesse caso — recursos neutros do
+        // Renderer, ver FGIFallbackBindings —, porque tabela de descritores nao aceita buraco. Quem
+        // fecha a leitura e o shader, e e este campo que a fecha.
+        //
+        // Separado do TerminatorOff de proposito, ainda que os dois acabem no mesmo bit: aquele e
+        // um gate de EXPERIMENTO, com toggle na UI e significado "meça o DDGI cortando-o"; este e
+        // um fato sobre o frame. Fundir os dois num campo so faria o toggle de medicao mentir sobre
+        // o estado da cena, e faria uma cena sem volume aparecer na UI como se alguem tivesse
+        // ligado o experimento.
+        bool FallbackAvailable = true;
+
         // O que o shader le em GIDistParams.w: SkipMode nos dois bits baixos + o gate no bit 2.
         // Empacotar aqui, e nao em cada dono, e o que garante que os cinco shaders que incluem o
         // HitShading vejam o MESMO valor — a alternativa era um float4 novo em cinco cbuffers
         // para carregar um booleano.
-        f32 SkipModePacked() const { return SkipMode + (TerminatorOff ? 4.0f : 0.0f); }
+        //
+        // As DUAS razoes fecham o mesmo bit porque o efeito pedido e identico: volW = 0, sem tap
+        // nenhum no atlas. O shader nao precisa distinguir "cortado para medir" de "nao existe".
+        f32 SkipModePacked() const {
+            return SkipMode + ((TerminatorOff || !FallbackAvailable) ? 4.0f : 0.0f);
+        }
     };
 }
