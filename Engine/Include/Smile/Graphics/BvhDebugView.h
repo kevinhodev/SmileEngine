@@ -46,7 +46,7 @@ namespace Smile {
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Release(FTextureSRVHeap& SRVHeap);
 
-        // Liga a TLAS e o snapshot de instancias (FDDGI::InstanceSRV). Precisa ser refeito toda
+        // Liga a TLAS e o snapshot de instancias (FRaytracingScene::InstanceGeoSRV). Precisa ser refeito toda
         // vez que a cena de RT e reconstruida — os slots mudam. Sem os dois, o passe nao roda.
         void SetSceneSRVs(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                           u32 TlasSRVSlot, u32 InstanceSRVSlot);

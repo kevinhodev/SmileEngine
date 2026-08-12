@@ -26,6 +26,18 @@ namespace Smile {
         constexpr u32 kInitialUAVs = 2;
         constexpr u32 kSpatialSRVs = 13;
         constexpr u32 kSpatialUAVs = 4;
+
+        // Posicao dos descritores de MESH LIGHT dentro de cada tabela. Existem com nome porque o
+        // RefreshMeshLightDescriptors reescreve ESTES slots sem refazer a tabela inteira — e um
+        // indice literal ali seria uma referencia invisivel aos arrays do SetupForResize: quem
+        // inserisse um SRV antes deles deslocaria tudo e o refresh passaria a sobrescrever o
+        // descritor errado, sem erro de compilacao e sem validation error. Mexer na ordem dos
+        // arrays exige mexer aqui.
+        constexpr u32 kInitialMeshLightIdx = 10; // t10 do InitialSlots
+        constexpr u32 kInitialMeshAliasIdx = 11; // t11 do InitialSlots
+        constexpr u32 kSpatialMeshLightIdx = 12; // t12 do SpatialSlots
+        static_assert(kInitialMeshAliasIdx < kInitialSRVs && kSpatialMeshLightIdx < kSpatialSRVs,
+                      "indice de mesh light fora da tabela");
         constexpr u32 kNrdPackSRVs = 8;
         constexpr u32 kNrdPackUAVs = 5;
         constexpr u32 kNrdCompositeSRVs = 6;
@@ -194,6 +206,8 @@ namespace Smile {
                 const u32 InitialSlots[kInitialSRVs] = {
                     GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot, VelocitySlot,
                     ResWSRV[Prev], ResBSRV[Prev], LightSlots[f], TlasSlot, InstanceSlot,
+                    // t10/t11: pool de mesh lights + alias table. Reescritos isoladamente pelo
+                    // RefreshMeshLightDescriptors — ver kInitialMeshLightIdx/kInitialMeshAliasIdx.
                     MeshLightSlot, MeshAliasSlot,
                     // t12: superficie do frame ANTERIOR — de onde sai o X1 do reuso temporal.
                     SurfaceSlots[1u - f] };
@@ -203,7 +217,9 @@ namespace Smile {
                 const u32 SpatialSlots[kSpatialSRVs] = {
                     GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot, TlasSlot, InstanceSlot,
                     ResWSRV[p], ResBSRV[p], LightSlots[f], TransformSlots[f],
-                    SurfaceSlots[f], SurfaceSlots[1u - f], MeshLightSlot };
+                    SurfaceSlots[f], SurfaceSlots[1u - f],
+                    // t12: pool de mesh lights — ver kSpatialMeshLightIdx.
+                    MeshLightSlot };
                 CopyTable(SpatialTable[p][f], SpatialSlots, kSpatialSRVs);
             }
         }
@@ -211,6 +227,49 @@ namespace Smile {
         FrameParity = 0;
         NeedsClear = true;
         Ready = true;
+    }
+
+    // As tabelas guardam uma COPIA do descritor (CopyDescriptors), nao uma referencia ao slot de
+    // origem. Quando o FMeshLights se reconstroi — Release + realocacao dos buffers e dos slots —
+    // as copias daqui continuam descrevendo os buffers ANTIGOS, ja liberados. Como a alias table
+    // e o pool sao lidos por TODA candidata inicial, o resultado nao e um pixel errado: sai peso
+    // absurdo/NaN no reservoir e a tela inteira estoura em branco.
+    //
+    // Isto acontecia no caminho BARATO do OnSceneStructureChanged (duplicar objeto sem estourar a
+    // folga), que reconstroi o FMeshLights e nao passa pelo SetupReflectionsForScene — o unico
+    // lugar que reconstruia estas tabelas. Ligar/desligar o ReSTIR DI so limpa reservoir; nao
+    // refaz descritor, e por isso o sintoma aparecia ao LIGAR o DI depois da duplicacao. Apagar os
+    // duplicados costumava "consertar" porque a realocacao reaproveitava os mesmos enderecos —
+    // coincidencia, nao correcao.
+    //
+    // Reescrever so os tres descritores em vez de chamar SetupForResize: aquele realoca todos os
+    // alvos fullscreen e os reservoirs, que nao tem nada a ver com a mudanca. O CHAMADOR garante
+    // as filas drenadas — sobrescrever descritor que a GPU esta lendo e o mesmo modo de falha.
+    void FReSTIRDI::RefreshMeshLightDescriptors(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                                u32 MeshLightSlot, u32 MeshAliasSlot) {
+        if (!Ready || MeshLightSlot == kInvalidSlot || MeshAliasSlot == kInvalidSlot) return;
+
+        auto CopyOne = [&](u32 DstSlot, u32 SrcSlot) {
+            D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(DstSlot);
+            D3D12_CPU_DESCRIPTOR_HANDLE Src = SRVHeap.CpuHandleStaging(SrcSlot);
+            UINT One = 1;
+            Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        };
+
+        // As DUAS paridades e os DOIS frames em voo: o dispatch escolhe a tabela por
+        // [paridade][FrameSlot], entao deixar qualquer combinacao para tras significa que o
+        // defeito volta em um frame a cada dois — que e pior de diagnosticar que voltar sempre.
+        for (u32 p = 0; p < kParityCount; ++p) {
+            for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f) {
+                if (InitialTable[p][f] != kInvalidSlot) {
+                    CopyOne(InitialTable[p][f] + kInitialMeshLightIdx, MeshLightSlot);
+                    CopyOne(InitialTable[p][f] + kInitialMeshAliasIdx, MeshAliasSlot);
+                }
+                if (SpatialTable[p][f] != kInvalidSlot)
+                    CopyOne(SpatialTable[p][f] + kSpatialMeshLightIdx, MeshLightSlot);
+            }
+        }
     }
 
     void FReSTIRDI::SetupNrdPack(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,

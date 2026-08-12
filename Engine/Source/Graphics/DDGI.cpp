@@ -31,24 +31,6 @@ namespace Smile {
                                              nullptr, 1, 1, _Label);
         }
 
-        struct DDGIInstanceGeo {
-            Vec4 BaseColor;
-            u32  VertexSrv   = 0; 
-            u32  IndexSrv    = 0; 
-            u32  AlbedoIndex = 0;
-            u32  HasAlbedo   = 0;
-            u32  TwoSidedRT  = 0; // = FMaterial::IsTwoSidedForRT (inclui AlphaTest), nao a flag crua
-            u32  Flags       = 0;
-            f32  AlphaCutoff = 0.5f;
-            f32  RoughnessFactor = 0.5f;
-            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; 
-            u32  EmissiveMapIndex = 0;
-            u32  MrMapIndex       = 0;
-            u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
-            u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
-        };
-        static_assert(sizeof(DDGIInstanceGeo) == 80, "DDGIInstanceGeo deve casar com o HLSL (80B)");
-
         ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                    D3D12_RESOURCE_STATES _State,
                                                    D3D12_RESOURCE_FLAGS _Flags = D3D12_RESOURCE_FLAG_NONE) {
@@ -88,12 +70,6 @@ namespace Smile {
         FreeSlot(DistUAVSlot, 1);
         FreeSlot(ProbesTraceSRVSlot, 1);
         FreeSlot(ProbesTraceUAVSlot, 1);
-        FreeSlot(InstanceSRVSlot, 1);
-        if (MeshGeoSlotBase != kInvalidSlot) {
-            _SRVHeap.Free(MeshGeoSlotBase, MeshGeoSlotCount);
-            MeshGeoSlotBase  = kInvalidSlot;
-            MeshGeoSlotCount = 0;
-        }
         FreeSlot(ProbeDataSRVSlot, 1);
         FreeSlot(ProbeRayCountSRVSlot, 1);
         FreeSlot(ProbeDataUAVSlot, 2); 
@@ -104,7 +80,6 @@ namespace Smile {
         IrradAtlas.Reset();
         DistAtlas.Reset();
         ProbesTrace.Reset();
-        InstanceGeoBuf.Reset();
         ProbeDataBuf.Reset();
         ProbeRayCountBuf.Reset();
         AtlasState         = D3D12_RESOURCE_STATE_COMMON;
@@ -115,80 +90,6 @@ namespace Smile {
         Ready = false;
     }
 
-    // Preenche o snapshot de materiais/geometria que TODO o RT le (DDGI, ReSTIR, reflexoes).
-    // Extraido do SetupForScene p/ poder ser REFEITO: editar AlphaTest/TwoSided/emissivo de um
-    // material no editor mudava so o constant buffer do material e deixava este snapshot velho.
-    void FDDGI::FillInstanceGeo(const FScene& _Scene, u8* _Mapped, u32 _Count) const {
-        for (u32 i = 0; i < _Count; ++i) {
-            const FRenderable& R = _Scene.Renderables()[i];
-            DDGIInstanceGeo g{};
-            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
-            if (R.Material) {
-                const MaterialConstants& MC = R.Material->Constants;
-                g.BaseColor = MC.BaseColorFactor;
-                // Mesmo criterio da flag de culling da TLAS (ver FMaterial::IsTwoSidedForRT):
-                // este campo e o que decide, no shader, se um hit pelo verso significa "dentro de
-                // solido" — tem que concordar com quem o raio consegue enxergar pelo verso.
-                g.TwoSidedRT = R.Material->IsTwoSidedForRT() ? 1u : 0u;
-                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
-                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
-                    g.HasAlbedo   = 1;
-                }
-
-                g.AlphaCutoff     = MC.AlphaCutoff;
-                g.RoughnessFactor = MC.RoughnessFactor;
-                // O RTEmissiveScale entra SO aqui: este InstanceGeo e o que os hits de RT leem
-                // (DDGI, ReSTIR GI e reflexoes). O raster segue com o EmissiveStrength puro, entao
-                // baixar a escala tira a malha de iluminar o ambiente sem apagar o brilho dela na
-                // tela. Ver MaterialConstants::RTEmissiveScale.
-                const f32 EmiRT = MC.EmissiveStrength * MC.RTEmissiveScale;
-                g.EmissiveFactor  = { MC.EmissiveFactor.X * EmiRT,
-                                      MC.EmissiveFactor.Y * EmiRT,
-                                      MC.EmissiveFactor.Z * EmiRT,
-                                      MC.MetallicFactor };
-                if (MC.AlphaTest)        g.Flags |= 1u;
-                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
-                // Categoria da instancia na TLAS (kRTMaskTranslucent). Espelhada aqui porque a
-                // mask e propriedade do RAIO: um shader nao consegue perguntar a TLAS com que
-                // mask a instancia entrou. Consumida so pelo BvhDebug — os outros passes
-                // distinguem translucido pela mask que eles proprios tracam.
-                if (R.Material->Blend)   g.Flags |= 128u;
-                if (R.Material->IsFinalized()) {
-                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
-                    if (MC.HasEmissiveMap) {
-                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
-                        g.Flags |= 2u;
-                    }
-                    if (MC.HasMetallicRoughnessMap) {
-                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
-                        g.Flags |= 8u;
-                        // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem
-                        // este bit o RT leria o canal errado e um material viraria metal (ou
-                        // dielétrico) por engano no bounce.
-                        if (MC.SpecularPacking) g.Flags |= 16u;
-                    }
-                    // Mapa Metalness SEPARADO (slot +6). Precisa existir aqui porque o loader
-                    // deixa MetallicFactor = 1 quando ha mapa — sem enxergar o mapa, o RT leria
-                    // "metal puro" e zeraria o difuso de um material que e quase todo dieletrico.
-                    if (MC.HasMetalnessMap) {
-                        g.MetalMapIndex = R.Material->AlbedoDescriptorIndex() + 6;
-                        g.Flags |= 32u;
-                    }
-                    if (MC.HasRoughnessMap) {
-                        g.RoughMapIndex = R.Material->AlbedoDescriptorIndex() + 7;
-                        g.Flags |= 64u;
-                    }
-                }
-            }
-            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
-            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
-            std::memcpy(_Mapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
-        }
-    }
-
-    // Re-upload do snapshot. O chamador (Renderer::NotifyMaterialRTStateChanged) e responsavel
-    // por garantir que a GPU nao esteja lendo o buffer — e um upload heap unico, sem versao por
-    // frame em voo, entao escrever com frames em voo corromperia o que eles estao lendo.
     void FDDGI::InvalidateRegion(const Vec3& _Min, const Vec3& _Max, EGIRegionChange _Change) {
         // Uniao com o que ja estava pendente: duas edicoes dentro da mesma janela de frames nao
         // podem fazer a segunda cancelar a primeira. A uniao e conservadora (pega sondas a mais),
@@ -222,21 +123,10 @@ namespace Smile {
         if (_Change == EGIRegionChange::Geometry) ReclassifyPending_ = true;
     }
 
-    void FDDGI::RefreshInstanceGeo(const FScene& _Scene) {
-        if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
-        const u32 Count = std::min(InstanceGeoCount,
-                                   static_cast<u32>(_Scene.Renderables().size()));
-        u8*         Mapped = nullptr;
-        D3D12_RANGE NoRead{ 0, 0 };
-        if (FAILED(InstanceGeoBuf->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)))) return;
-        FillInstanceGeo(_Scene, Mapped, Count);
-        InstanceGeoBuf->Unmap(0, nullptr);
-    }
-
     void FDDGI::SetupForScene(ID3D12Device* _Device, FCommandQueue& _Queue,
                               FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
                               const Vec3& _AABBMin, const Vec3& _AABBMax,
-                              u32 _TlasSRVSlot, u32 _SkyViewSRVSlot) {
+                              u32 _TlasSRVSlot, u32 _SkyViewSRVSlot, u32 _InstanceGeoSRVSlot) {
         if (!Initialized) return;
         ReleaseSceneResources(_SRVHeap);
 
@@ -407,56 +297,10 @@ namespace Smile {
         ProbesTrace = CreateTex2D(_Device, TraceProbesPerRow * kRaysPerProbe, TraceRows,
                                   kAtlasFormat, "DDGI · raios por sonda");
 
-        MeshGeoSlot.clear(); // membro: sobrevive p/ o RefreshInstanceGeo
-        std::vector<const FGpuMesh*> UniqueMeshes;
-        for (u32 i = 0; i < NumRenderables; ++i) {
-            const FGpuMesh* M = _Scene.Renderables()[i].Mesh;
-            if (!M || !M->IsValid() || MeshGeoSlot.count(M)) continue;
-            MeshGeoSlot[M] = 0;
-            UniqueMeshes.push_back(M);
-        }
-        MeshGeoSlotCount = static_cast<u32>(UniqueMeshes.size()) * 2;
-        MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
-        {
-            D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
-            GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
-            GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            for (u32 i = 0; i < static_cast<u32>(UniqueMeshes.size()); ++i) {
-                const FGpuMesh* M      = UniqueMeshes[i];
-                const u32       VbSlot = MeshGeoSlotBase + i * 2;
-
-                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
-                GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
-                GeoSrv.Buffer.NumElements         = M->VertexCount();
-                GeoSrv.Buffer.StructureByteStride = sizeof(Vertex);
-                _SRVHeap.CreateSRV(_Device, M->VertexResource(), GeoSrv, VbSlot);
-                GeoSrv.Format                     = DXGI_FORMAT_R32_UINT;
-                GeoSrv.Buffer.FirstElement        = M->IndexFirstElement();
-                GeoSrv.Buffer.NumElements         = M->GetIndexCount();
-                GeoSrv.Buffer.StructureByteStride = 0;
-                _SRVHeap.CreateSRV(_Device, M->IndexResource(), GeoSrv, VbSlot + 1);
-                MeshGeoSlot[M] = VbSlot;
-            }
-        }
         ProbeDataBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(Vec4),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-
-        // Snapshot com folga (SceneCapacityFor): objeto criado no editor cabe sem realocar
-        // descriptor nem refazer o SetupForScene. So os [0, NumRenderables) sao preenchidos —
-        // FillInstanceGeo le a lista da cena, e ir alem dela seria leitura fora do vetor.
-        // A cauda vai a zero: nenhuma instancia da TLAS aponta para la (a TLAS so tem os
-        // reais), mas zero e um estado legivel se algum dia um indice errado chegar ate aqui.
-        const u32 GeoCapacity = SceneCapacityFor(NumRenderables);
-        u8* GeoMapped = nullptr;
-        InstanceGeoBuf = CreateUploadBuffer(_Device,
-            static_cast<UINT64>(GeoCapacity) * sizeof(DDGIInstanceGeo), &GeoMapped);
-        InstanceGeoCount = GeoCapacity;
-        FillInstanceGeo(_Scene, GeoMapped, NumRenderables);
-        std::memset(GeoMapped + static_cast<size_t>(NumRenderables) * sizeof(DDGIInstanceGeo),
-                    0, static_cast<size_t>(GeoCapacity - NumRenderables) * sizeof(DDGIInstanceGeo));
-        InstanceGeoBuf->Unmap(0, nullptr);
 
         AtlasSRVSlot       = _SRVHeap.Allocate(1);
         AtlasUAVSlot       = _SRVHeap.Allocate(1);
@@ -464,7 +308,6 @@ namespace Smile {
         DistUAVSlot        = _SRVHeap.Allocate(1);
         ProbesTraceSRVSlot = _SRVHeap.Allocate(1);
         ProbesTraceUAVSlot = _SRVHeap.Allocate(1);
-        InstanceSRVSlot    = _SRVHeap.Allocate(1);
         ProbeDataSRVSlot     = _SRVHeap.Allocate(1);
         ProbeRayCountSRVSlot = _SRVHeap.Allocate(1);
 
@@ -493,12 +336,7 @@ namespace Smile {
         D3D12_SHADER_RESOURCE_VIEW_DESC BufSrv{};
         BufSrv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
         BufSrv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        BufSrv.Format                     = DXGI_FORMAT_UNKNOWN;
         BufSrv.Buffer.FirstElement        = 0;
-        BufSrv.Buffer.NumElements         = GeoCapacity; // = tamanho do buffer, nao da cena
-        BufSrv.Buffer.StructureByteStride = sizeof(DDGIInstanceGeo);
-        _SRVHeap.CreateSRV(_Device, InstanceGeoBuf.Get(), BufSrv, InstanceSRVSlot);
-
         BufSrv.Format                     = DXGI_FORMAT_R32G32B32A32_FLOAT;
         BufSrv.Buffer.NumElements         = NumProbes;
         BufSrv.Buffer.StructureByteStride = 0;
@@ -521,12 +359,12 @@ namespace Smile {
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
-            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            _SRVHeap.CpuHandleStaging(_InstanceGeoSRVSlot),
             _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
             // t4 = atlas de distancia (gather completo no 2o bounce). t5 segue filler: aqui o
             // ProbeData ja esta em t6, usado tambem pela origem do raio.
             _SRVHeap.CpuHandleStaging(DistSRVSlot),
-            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            _SRVHeap.CpuHandleStaging(_InstanceGeoSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
         };

@@ -5,10 +5,13 @@
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/GpuMesh.h"
+#include "Smile/Graphics/Mesh.h" // sizeof(Vertex): stride do SRV bindless de VB
 #include "Smile/Graphics/RTMasks.h"
+#include "Smile/Graphics/Material.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <algorithm>
 #include <string>
 #include <cstring>
 
@@ -47,6 +50,27 @@ namespace Smile {
             UAV.UAV.pResource = nullptr;
             _CL->ResourceBarrier(1, &UAV);
         }
+
+        // Espelho C++ do `InstanceGeo` do HLSL (ver RTGeometry.hlsli / HitShading.hlsli). O
+        // static_assert e o contrato: qualquer campo acrescentado aqui desloca o resto e faz todo
+        // hit de RT ler material trocado, em silencio.
+        struct FRTInstanceGeo {
+            Vec4 BaseColor;
+            u32  VertexSrv   = 0;
+            u32  IndexSrv    = 0;
+            u32  AlbedoIndex = 0;
+            u32  HasAlbedo   = 0;
+            u32  TwoSidedRT  = 0; // = FMaterial::IsTwoSidedForRT (inclui AlphaTest), nao a flag crua
+            u32  Flags       = 0;
+            f32  AlphaCutoff = 0.5f;
+            f32  RoughnessFactor = 0.5f;
+            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f };
+            u32  EmissiveMapIndex = 0;
+            u32  MrMapIndex       = 0;
+            u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
+            u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
+        };
+        static_assert(sizeof(FRTInstanceGeo) == 80, "FRTInstanceGeo deve casar com o HLSL (80B)");
     }
 
     static_assert(FRaytracingScene::kInstanceSlots == FCommandQueue::kFramesInFlight,
@@ -54,6 +78,18 @@ namespace Smile {
 
     void FRaytracingScene::Release(FTextureSRVHeap& _SRVHeap) {
         if (TlasSRVSlot_ != kInvalidSlot) { _SRVHeap.Free(TlasSRVSlot_, 1); TlasSRVSlot_ = kInvalidSlot; }
+        if (InstanceGeoSRVSlot_ != kInvalidSlot) {
+            _SRVHeap.Free(InstanceGeoSRVSlot_, 1);
+            InstanceGeoSRVSlot_ = kInvalidSlot;
+        }
+        if (MeshGeoSlotBase != kInvalidSlot) {
+            _SRVHeap.Free(MeshGeoSlotBase, MeshGeoSlotCount);
+            MeshGeoSlotBase  = kInvalidSlot;
+            MeshGeoSlotCount = 0;
+        }
+        InstanceGeoBuf.Reset();
+        InstanceGeoCount = 0;
+        MeshGeoSlot.clear();
         BlasPool.Reset();
         BlasByMesh.clear();
         Tlas.Reset();
@@ -123,6 +159,90 @@ namespace Smile {
             Inst.AccelerationStructure               = It->second;
             _Out.push_back(Inst);
         }
+    }
+
+    // Irma do CollectInstances: as duas percorrem a MESMA lista na MESMA ordem, e e essa ordem que
+    // liga as duas — o InstanceID que a TLAS carrega e o indice deste vetor, e e por ele que o hit
+    // de RT indexa o snapshot. Preencher aqui, e nao no dono do volume DDGI, e o que garante que
+    // as duas nunca sejam construidas em momentos diferentes.
+    void FRaytracingScene::FillInstanceGeo(const FScene& _Scene, u8* _Mapped, u32 _Count) const {
+        for (u32 i = 0; i < _Count; ++i) {
+            const FRenderable& R = _Scene.Renderables()[i];
+            FRTInstanceGeo g{};
+            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
+            if (R.Material) {
+                const MaterialConstants& MC = R.Material->Constants;
+                g.BaseColor = MC.BaseColorFactor;
+                // Mesmo criterio da flag de culling da TLAS (ver FMaterial::IsTwoSidedForRT, e o
+                // CollectInstances logo acima): este campo e o que decide, no shader, se um hit
+                // pelo verso significa "dentro de solido" — tem que concordar com quem o raio
+                // consegue enxergar pelo verso.
+                g.TwoSidedRT = R.Material->IsTwoSidedForRT() ? 1u : 0u;
+                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
+                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
+                    g.HasAlbedo   = 1;
+                }
+
+                g.AlphaCutoff     = MC.AlphaCutoff;
+                g.RoughnessFactor = MC.RoughnessFactor;
+                // O RTEmissiveScale entra SO aqui: este InstanceGeo e o que os hits de RT leem
+                // (DDGI, ReSTIR GI e reflexoes). O raster segue com o EmissiveStrength puro, entao
+                // baixar a escala tira a malha de iluminar o ambiente sem apagar o brilho dela na
+                // tela. Ver MaterialConstants::RTEmissiveScale.
+                const f32 EmiRT = MC.EmissiveStrength * MC.RTEmissiveScale;
+                g.EmissiveFactor  = { MC.EmissiveFactor.X * EmiRT,
+                                      MC.EmissiveFactor.Y * EmiRT,
+                                      MC.EmissiveFactor.Z * EmiRT,
+                                      MC.MetallicFactor };
+                if (MC.AlphaTest)        g.Flags |= 1u;
+                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
+                // Categoria da instancia na TLAS (kRTMaskTranslucent). Espelhada aqui porque a
+                // mask e propriedade do RAIO: um shader nao consegue perguntar a TLAS com que
+                // mask a instancia entrou. Consumida so pelo BvhDebug — os outros passes
+                // distinguem translucido pela mask que eles proprios tracam.
+                if (R.Material->Blend)   g.Flags |= 128u;
+                if (R.Material->IsFinalized()) {
+                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
+                    if (MC.HasEmissiveMap) {
+                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
+                        g.Flags |= 2u;
+                    }
+                    if (MC.HasMetallicRoughnessMap) {
+                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
+                        g.Flags |= 8u;
+                        // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem
+                        // este bit o RT leria o canal errado e um material viraria metal (ou
+                        // dielétrico) por engano no bounce.
+                        if (MC.SpecularPacking) g.Flags |= 16u;
+                    }
+                    // Mapa Metalness SEPARADO (slot +6). Precisa existir aqui porque o loader
+                    // deixa MetallicFactor = 1 quando ha mapa — sem enxergar o mapa, o RT leria
+                    // "metal puro" e zeraria o difuso de um material que e quase todo dieletrico.
+                    if (MC.HasMetalnessMap) {
+                        g.MetalMapIndex = R.Material->AlbedoDescriptorIndex() + 6;
+                        g.Flags |= 32u;
+                    }
+                    if (MC.HasRoughnessMap) {
+                        g.RoughMapIndex = R.Material->AlbedoDescriptorIndex() + 7;
+                        g.Flags |= 64u;
+                    }
+                }
+            }
+            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
+            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
+            std::memcpy(_Mapped + i * sizeof(FRTInstanceGeo), &g, sizeof(FRTInstanceGeo));
+        }
+    }
+
+    void FRaytracingScene::RefreshInstanceGeo(const FScene& _Scene) {
+        if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
+        const u32 Count = std::min(InstanceGeoCount,
+                                   static_cast<u32>(_Scene.Renderables().size()));
+        u8*         Mapped = nullptr;
+        D3D12_RANGE NoRead{ 0, 0 };
+        if (FAILED(InstanceGeoBuf->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)))) return;
+        FillInstanceGeo(_Scene, Mapped, Count);
+        InstanceGeoBuf->Unmap(0, nullptr);
     }
 
     bool FRaytracingScene::RecordTlasRebuild(ID3D12GraphicsCommandList4* _CL, const FScene& _Scene,
@@ -374,6 +494,65 @@ namespace Smile {
         SRV.Shader4ComponentMapping                 = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         SRV.RaytracingAccelerationStructure.Location = Tlas->GetGPUVirtualAddress();
         _SRVHeap.CreateSRV(_Device.Native(), nullptr, SRV, TlasSRVSlot_);
+
+        // === Snapshot InstanceGeo ==========================================================
+        // Depois da TLAS, e nao antes, porque o snapshot so tem sentido acompanhado dela: quem o
+        // le chega pelo InstanceID de um hit. Sem TLAS o Build ja retornou acima, e ai o
+        // InstanceGeoSRV segue invalido — o mesmo criterio que o FDDGI aplicava quando era dono
+        // disto (ele desistia com TlasSRVSlot == kInvalidSlot).
+        //
+        // Os SRVs bindless de VB/IB saem do MESMO UniqueMeshes que dimensionou os BLAS. O DDGI
+        // reconstruia essa lista com um criterio identico, palavra por palavra; uma so agora.
+        MeshGeoSlotCount = NumBlas * 2;
+        MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
+            GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
+            GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            for (u32 i = 0; i < NumBlas; ++i) {
+                const FGpuMesh* M      = UniqueMeshes[i];
+                const u32       VbSlot = MeshGeoSlotBase + i * 2;
+
+                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
+                GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
+                GeoSrv.Buffer.NumElements         = M->VertexCount();
+                GeoSrv.Buffer.StructureByteStride = sizeof(Vertex);
+                _SRVHeap.CreateSRV(_Device.Native(), M->VertexResource(), GeoSrv, VbSlot);
+                GeoSrv.Format                     = DXGI_FORMAT_R32_UINT;
+                GeoSrv.Buffer.FirstElement        = M->IndexFirstElement();
+                GeoSrv.Buffer.NumElements         = M->GetIndexCount();
+                GeoSrv.Buffer.StructureByteStride = 0;
+                _SRVHeap.CreateSRV(_Device.Native(), M->IndexResource(), GeoSrv, VbSlot + 1);
+                MeshGeoSlot[M] = VbSlot;
+            }
+        }
+
+        // Com folga (SceneCapacityFor): objeto criado no editor cabe sem realocar descritor nem
+        // refazer o Build. So os [0, NumRenderables) sao preenchidos — FillInstanceGeo le a lista
+        // da cena, e ir alem dela seria leitura fora do vetor. A cauda vai a zero: nenhuma
+        // instancia da TLAS aponta para la (a TLAS so tem as reais), mas zero e um estado legivel
+        // se algum dia um indice errado chegar ate aqui.
+        const u32 NumRenderables = static_cast<u32>(_Scene.Renderables().size());
+        const u32 GeoCapacity    = SceneCapacityFor(NumRenderables);
+        const GpuResources::FUploadBuffer GeoUpload = GpuResources::CreateUploadBuffer(
+            Dev5, static_cast<UINT64>(GeoCapacity) * sizeof(FRTInstanceGeo), 1,
+            /*ForConstantBuffer*/ false);
+        InstanceGeoBuf   = GeoUpload.Resource;
+        InstanceGeoCount = GeoCapacity;
+        FillInstanceGeo(_Scene, GeoUpload.Mapped, NumRenderables);
+        std::memset(GeoUpload.Mapped + static_cast<size_t>(NumRenderables) * sizeof(FRTInstanceGeo),
+                    0, static_cast<size_t>(GeoCapacity - NumRenderables) * sizeof(FRTInstanceGeo));
+        InstanceGeoBuf->Unmap(0, nullptr);
+
+        InstanceGeoSRVSlot_ = _SRVHeap.Allocate(1);
+        D3D12_SHADER_RESOURCE_VIEW_DESC GeoBufSrv{};
+        GeoBufSrv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+        GeoBufSrv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        GeoBufSrv.Format                     = DXGI_FORMAT_UNKNOWN;
+        GeoBufSrv.Buffer.FirstElement        = 0;
+        GeoBufSrv.Buffer.NumElements         = GeoCapacity; // = tamanho do buffer, nao da cena
+        GeoBufSrv.Buffer.StructureByteStride = sizeof(FRTInstanceGeo);
+        _SRVHeap.CreateSRV(_Device.Native(), InstanceGeoBuf.Get(), GeoBufSrv, InstanceGeoSRVSlot_);
 
         Built = true;
         const double BuildMB   = static_cast<double>(TotalBuild)   / (1024.0 * 1024.0);

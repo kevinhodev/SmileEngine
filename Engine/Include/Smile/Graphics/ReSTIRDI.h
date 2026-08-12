@@ -55,6 +55,13 @@ namespace Smile {
                             const u32 LightSlots[FCommandQueue::kFramesInFlight],
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                             const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
+        // Reescreve SO os descritores de mesh light das tabelas de trace, sem realocar alvo nem
+        // reservoir. Chamar sempre que o FMeshLights se reconstruir fora do SetupForResize — hoje,
+        // o caminho barato do Renderer::OnSceneStructureChanged. As tabelas guardam uma COPIA do
+        // descritor, entao sem isto o DI le o pool/alias ja liberados e a tela estoura em branco.
+        // Motivo completo no .cpp. O CHAMADOR garante as filas drenadas.
+        void RefreshMeshLightDescriptors(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                         u32 MeshLightSlot, u32 MeshAliasSlot);
         void SetupNrdPack(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                           u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                           u32 DepthSlot, u32 VelocitySlot,

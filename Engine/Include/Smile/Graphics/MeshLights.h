@@ -100,8 +100,8 @@ namespace Smile {
         void Initialize(ID3D12Device* Device);
         void RecreatePSO(ID3D12Device* Device);
 
-        // Faz o Survey, monta as tasks e cria os buffers. Precisa do SRV do InstanceGeo do DDGI,
-        // que e onde moram VB/IB bindless e os dados de material emissivo.
+        // Faz o Survey, monta as tasks e cria os buffers. Precisa do SRV do InstanceGeo
+        // (FRaytracingScene::InstanceGeoSRV), onde moram VB/IB bindless e o material emissivo.
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene,
                            u32 InstanceSlot);
 

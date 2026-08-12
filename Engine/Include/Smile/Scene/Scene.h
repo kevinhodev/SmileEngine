@@ -16,7 +16,7 @@ namespace Smile {
     //
     // Cinco estruturas sao dimensionadas pelo tamanho da cena: o ObjectCB (`MaxObjects`), a
     // tabela de bounds do HiZ, a TLAS + uploads de instancia, o buffer de transforms do
-    // TemporalMotion e o snapshot InstanceGeo do DDGI. Dimensionar pelo N EXATO fazia o
+    // TemporalMotion e o snapshot InstanceGeo da cena de RT. Dimensionar pelo N EXATO fazia o
     // primeiro objeto criado no editor estourar todas de uma vez e cair no re-setup completo
     // (rebuild de todos os BLAS + DDGI + MeshLights) a cada Ctrl+D.
     //

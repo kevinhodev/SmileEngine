@@ -10,7 +10,6 @@
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
-#include <unordered_map>
 #include <algorithm> // std::max nas contas da grade de dispatch
 #include <cstddef>
 
@@ -18,7 +17,6 @@ namespace Smile {
     class FTextureSRVHeap;
     class FCommandQueue;
     class FScene;
-    class FGpuMesh;
 
     // O QUE mudou dentro da caixa de FDDGI::InvalidateRegion. Os dois invalidam o atlas do mesmo
     // jeito; a diferenca esta na CLASSIFICACAO das sondas (inativa/ativa e contagem de raios), que
@@ -222,20 +220,12 @@ namespace Smile {
 
         void Initialize(ID3D12Device* Device);
 
+        // O InstanceGeoSRVSlot vem de fora — o snapshot de material/geometria por instancia e
+        // dado da CENA DE RT, nao do volume, e mora no FRaytracingScene. O DDGI aqui e um
+        // consumidor como os outros: ele o copia para a propria tabela de trace.
         void SetupForScene(ID3D12Device* Device, FCommandQueue& Queue, FTextureSRVHeap& SRVHeap,
                            const FScene& Scene, const Vec3& AABBMin, const Vec3& AABBMax,
-                           u32 TlasSRVSlot, u32 SkyViewSRVSlot);
-
-        // Re-upload do snapshot de materiais que TODO o RT le (DDGI, ReSTIR, reflexoes). Chamar
-        // quando uma propriedade de material que o RT enxerga muda em runtime (AlphaTest,
-        // TwoSided, emissivo...): o snapshot e criado uma vez no SetupForScene e nao acompanha a
-        // edicao. O CHAMADOR precisa garantir GPU ociosa — e um upload heap sem versao por frame.
-        void RefreshInstanceGeo(const FScene& Scene);
-
-        // Quantas instancias o snapshot acima consegue descrever. Alocado no SetupForScene pelo
-        // tamanho da cena de entao; o RefreshInstanceGeo trunca nele. Quem cria objeto com a cena
-        // ja carregada precisa consultar antes (Renderer::OnSceneStructureChanged).
-        u32 InstanceGeoCapacity() const { return InstanceGeoCount; }
+                           u32 TlasSRVSlot, u32 SkyViewSRVSlot, u32 InstanceGeoSRVSlot);
 
         // Decide ONDE cada cascata fica neste frame. Tem de rodar ANTES de qualquer consumidor
         // capturar CascadeConstants() — hoje sao tres, e todos capturam cedo: o FrameConstants, o
@@ -284,7 +274,6 @@ namespace Smile {
 
         bool IsReady() const { return Ready; }
         u32  IrradianceAtlasSRV() const { return AtlasSRVSlot; }
-        u32  InstanceSRV() const { return InstanceSRVSlot; }
         u32  SceneGITableStart()  const { return SceneGITableStart_; }
         u32  DistAtlasSRV()    const { return DistSRVSlot; }
         u32  ProbesTraceSRV()  const { return ProbesTraceSRVSlot; }
@@ -579,11 +568,7 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12Resource> IrradAtlas;       
         Microsoft::WRL::ComPtr<ID3D12Resource> DistAtlas;        
-        Microsoft::WRL::ComPtr<ID3D12Resource> ProbesTrace;      
-        Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;
-        u32                                    InstanceGeoCount = 0; // capacidade do snapshot acima
-        // Definido no .cpp (DDGIInstanceGeo e local daquele arquivo); _Mapped tem _Count entradas.
-        void FillInstanceGeo(const FScene& Scene, u8* Mapped, u32 Count) const;
+        Microsoft::WRL::ComPtr<ID3D12Resource> ProbesTrace;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeDataBuf;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeRayCountBuf; 
 
@@ -594,14 +579,6 @@ namespace Smile {
         u32 DistUAVSlot        = kInvalidSlot;
         u32 ProbesTraceSRVSlot = kInvalidSlot;
         u32 ProbesTraceUAVSlot = kInvalidSlot;
-        u32 InstanceSRVSlot    = kInvalidSlot;
-        // SRVs bindless de VB/IB por mesh único (2 slots contíguos por mesh: base+2i = VB,
-        // base+2i+1 = IB) — o InstanceGeo carrega os índices; substitui os merged buffers.
-        u32 MeshGeoSlotBase    = kInvalidSlot;
-        u32 MeshGeoSlotCount   = 0;
-        // Mesh -> slot bindless do VB (IB = +1). Era local do SetupForScene; virou membro porque
-        // o RefreshInstanceGeo precisa remontar o snapshot sem refazer a alocacao de descriptors.
-        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot;
         u32 ProbeDataSRVSlot   = kInvalidSlot;
         u32 ProbeDataUAVSlot   = kInvalidSlot;
         u32 ProbeRayCountSRVSlot = kInvalidSlot;

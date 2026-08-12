@@ -368,8 +368,36 @@ namespace Smile {
                ReSTIRGI.HasTimerPipeline() && Reflections.HasTimerPipeline();
     }
 
+    // Duas exigencias DIFERENTES pesam sobre esta funcao, e confundi-las custou uma regressao:
+    //
+    // (1) LIFETIME — o Build comeca com um Release que solta BlasPool, TLAS, scratch, os uploads
+    //     de instancia, o snapshot InstanceGeo e os descritores dos tres. O lock do RendererHandle
+    //     serializa a CPU e nao diz nada sobre a GPU: no editor esta chamada vem da thread da GUI
+    //     com o ultimo frame ainda EM VOO, tracando contra exatamente esses recursos. Por isso o
+    //     dreno vive AQUI e nao no chamador — a exposicao e da funcao, qualquer sitio que a chame
+    //     a tem. O SetupGIForScene tambem drena, e continua precisando: ele roda sozinho pelo
+    //     RebuildGIVolume. Drenar fila ja parada custa zero, que e o caso do load.
+    //
+    //     A ordem das duas e a mesma do SetupGIForScene e pelo mesmo motivo: o update do DDGI e
+    //     submetido na COMPUTE com um Wait no fence da DIRETA (SubmitAfter no RenderFrame), entao
+    //     drenar a direta primeiro e o que deixa o compute pendente de fato terminar em vez de
+    //     ficar preso no proprio Wait.
+    //
+    //     ⚠️ Nao confiar no Flush do RecreateObjectCB: ele so dispara quando `Count > MaxObjects`
+    //     e alcanca so a DIRETA. O caminho em que o NeedsResize dispara pela capacidade do
+    //     InstanceGeo sem estourar o MaxObjects chegava aqui sem dreno nenhum, com o DDGI
+    //     assincrono lendo o snapshot na compute.
+    //
+    // (2) O PAR com SetupGIForScene — outro problema, e o dreno nao o resolve. A tabela de trace
+    //     do DDGI carrega uma COPIA do descritor do snapshot (CopyDescriptors), entao ela nao
+    //     acompanha a realocacao sozinha; quem a reconstroi e o DDGI.SetupForScene. Toda chamada
+    //     daqui tem de ser seguida de um. Os dois sitios de hoje cumprem: o do load roda com a
+    //     cena vazia (o Build desiste sem criar nada, e o DDGI ainda nao tem tabela) e o do
+    //     OnSceneStructureChanged chama os dois em sequencia.
     void Renderer::BuildRaytracingScene() {
         if (!Device.RaytracingSupported()) return;
+        CommandQueue.Flush();
+        ComputeQueue.WaitIdle();
         RaytracingScene.Build(Device, CommandQueue, SRVHeap, Scene);
         TlasTransformsVersion = Scene.TransformsVersion();
     }
@@ -493,8 +521,8 @@ namespace Smile {
                                   Count > RaytracingScene.InstanceCapacity())
                               || (TemporalMotion.InstanceCount() > 0 &&
                                   Count > TemporalMotion.InstanceCount())
-                              || (DDGI.InstanceGeoCapacity() > 0 &&
-                                  Count > DDGI.InstanceGeoCapacity());
+                              || (RaytracingScene.InstanceGeoCapacity() > 0 &&
+                                  Count > RaytracingScene.InstanceGeoCapacity());
 
         if (NeedsResize) {
             if (Count > MaxObjects) {
@@ -508,10 +536,16 @@ namespace Smile {
             SetupGIForScene(SceneBoundsMin, SceneBoundsMax);
         } else {
             // Caminho barato (remocao, ou copia que ainda cabe): so o snapshot que o RT le por
-            // InstanceID precisa reacompanhar a lista. Mesmo Flush do NotifyMaterialRTStateChanged
+            // InstanceID precisa reacompanhar a lista. Mesmo dreno do NotifyMaterialRTStateChanged
             // e pela mesma razao — o InstanceGeo e upload heap sem versao por frame em voo.
+            //
+            // As DUAS filas: aqui havia so o Flush da direta, e o DDGI le o snapshot pela tabela
+            // de trace dele, que roda na COMPUTE. Reescrever o buffer com esse trace em voo
+            // corrompe o que ele esta lendo — sem device removal, so material trocado em alguns
+            // raios de um frame, que e a forma mais cara de descobrir isto.
             CommandQueue.Flush();
-            DDGI.RefreshInstanceGeo(Scene);
+            ComputeQueue.WaitIdle();
+            RaytracingScene.RefreshInstanceGeo(Scene);
             // MeshLights precisa do SetupForScene INTEIRO, nao de um MarkDirty: a lista de
             // tasks (uma por malha emissiva, com o InstanceIndex dentro) e montada so ali, e o
             // MarkDirty apenas re-dispara o extract sobre a lista VELHA. Numa remocao isso
@@ -519,7 +553,17 @@ namespace Smile {
             // emissiva, a copia simplesmente nao iluminaria. E ordens de grandeza mais barato
             // que o caminho caro — varre a cena em CPU e realoca buffers pequenos, sem tocar
             // nos ~200 MB de pool de BLAS.
-            MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene, DDGI.InstanceSRV());
+            MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene,
+                                     RaytracingScene.InstanceGeoSRV());
+            // O SetupForScene acima soltou os buffers do pool/alias e alocou outros. As tabelas de
+            // trace do ReSTIR DI carregam uma COPIA daqueles descritores e nao acompanham a troca:
+            // sem este refresh o DI le recurso liberado e a tela estoura em branco na primeira vez
+            // que ele roda depois de uma duplicacao. Este caminho e o unico que reconstroi o
+            // FMeshLights sem passar pelo SetupReflectionsForScene, que e onde as tabelas nascem.
+            // As filas ja foram drenadas acima, entao sobrescrever descritor aqui e seguro.
+            ReSTIRDI.RefreshMeshLightDescriptors(Device.Native(), SRVHeap,
+                                                 MeshLights.LightSRVSlot(),
+                                                 MeshLights.AliasSRVSlot());
             // A TLAS nao precisa de pedido explicito: a FScene ja bumpou TransformsVersion na
             // mutacao, e o rebuild por frame do RenderFrame reage a isso sozinho — a lista nova
             // cabe na capacidade, que e o que o NeedsResize acabou de garantir.
@@ -559,18 +603,21 @@ namespace Smile {
         ComputeQueue.WaitIdle();
 
         DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
-                           RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV());
+                           RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
+                           RaytracingScene.InstanceGeoSRV());
         TemporalMotion.SetupForScene(Device.Native(), SRVHeap, Scene,
-                                     RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV());
+                                     RaytracingScene.TlasSRVSlot(),
+                                     RaytracingScene.InstanceGeoSRV());
         ReGIR.SetupForScene(Device.Native(), SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
         // Nao recebe AABB: o hash e de MUNDO e o tamanho da celula vem da distancia a camera, nao
         // da extensao da cena. E justamente o que ele resolve em relacao ao grid do DDGI, cujo
         // espacamento sai de maxExt/23 e vira ~8 m no Bistro.
         RadianceCache.SetupForScene(Device.Native(), SRVHeap);
-        // Depois do DDGI: a extracao le VB/IB bindless e o material emissivo pelo InstanceGeo,
-        // que e o snapshot que o DDGI monta. Faz o levantamento e monta as tasks; a extracao em
-        // si so dispara no Record, e so quando sujo.
-        MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene, DDGI.InstanceSRV());
+        // A extracao le VB/IB bindless e o material emissivo pelo InstanceGeo, que agora vem do
+        // FRaytracingScene — construido junto da TLAS, antes desta funcao. Faz o levantamento e
+        // monta as tasks; a extracao em si so dispara no Record, e so quando sujo.
+        MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene,
+                                 RaytracingScene.InstanceGeoSRV());
 
         SetupReflectionsForScene();
 
@@ -718,7 +765,7 @@ namespace Smile {
         if (!Device.RaytracingSupported()) return;
         if (!GBuffer.IsInitialized() || Targets.DepthSRVSlot == kInvalidSlot) return;
 
-        // A direta local usa o snapshot InstanceGeo que hoje e propriedade do DDGI, mas nao usa
+        // A direta local usa o snapshot InstanceGeo (do FRaytracingScene), mas nao usa
         // atlas/probes. Se o snapshot ainda nao existe, o passe degenera para not-ready por conta
         // propria; assim uma troca de cena nunca deixa um alvo direto antigo aparentemente valido.
         TemporalMotion.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
@@ -732,7 +779,7 @@ namespace Smile {
 
         ReSTIRDI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), Targets.DepthSRVSlot,
-            ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV(),
+            ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV(),
             MeshLights.LightSRVSlot(), MeshLights.AliasSRVSlot(),
             DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots);
         // A direta nao depende do volume DDGI. Mantenha sua instancia RELAX e o pack antes do
@@ -745,7 +792,7 @@ namespace Smile {
                                 DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         Reflections.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
-            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
+            RaytracingScene.InstanceGeoSRV(), DDGI.IrradianceAtlasSRV(),
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
             GBuffer.SRVSlot(0), // GBufferA = BaseColor (tint do metal no reflexo)
             Targets.VelocitySRVSlot,
@@ -758,7 +805,7 @@ namespace Smile {
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
         ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
-            DDGI.InstanceSRV(), DDGI.IrradianceAtlasSRV(),
+            RaytracingScene.InstanceGeoSRV(), DDGI.IrradianceAtlasSRV(),
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), ReliableVelocitySlot,
             DDGI.DistAtlasSRV(), DDGI.ProbeDataSRV());
 
@@ -773,7 +820,7 @@ namespace Smile {
         // da tela e reconstrucao da cena de RT (os slots mudam nos dois).
         BvhDebug.Resize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
         BvhDebug.SetSceneSRVs(Device.Native(), SRVHeap,
-                              RaytracingScene.TlasSRVSlot(), DDGI.InstanceSRV());
+                              RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV());
 
         SetupNrdIndirect();
 

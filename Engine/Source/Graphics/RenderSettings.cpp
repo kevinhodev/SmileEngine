@@ -732,12 +732,17 @@ namespace Smile {
     void FRenderSettings::NotifyCameraCut() { Invalidate(Dom::CameraCut); }
 
     void FRenderSettings::NotifyMaterialRTStateChanged() {
-        // REFRESH (nao e invalidacao — e trabalho a refazer, nao memoria a descartar). O Flush
+        // REFRESH (nao e invalidacao — e trabalho a refazer, nao memoria a descartar). O dreno
         // e necessario: o InstanceGeo e um upload heap sem versao por frame em voo, entao
         // reescrever com frames voando corromperia o que eles leem. Custa um stall, mas isto so
         // dispara em edicao manual de material.
+        //
+        // As DUAS filas: havia so o Flush da direta, e o trace do DDGI le o snapshot na COMPUTE.
+        // Ver a nota do caminho barato do Renderer::OnSceneStructureChanged, que tinha o mesmo
+        // buraco pelo mesmo motivo.
         R.CommandQueue.Flush();
-        R.DDGI.RefreshInstanceGeo(R.Scene);
+        R.ComputeQueue.WaitIdle();
+        R.RaytracingScene.RefreshInstanceGeo(R.Scene);
         R.TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
         // E os historicos acumulados sobre a aparencia antiga.
         Invalidate(Dom::MaterialRTState);

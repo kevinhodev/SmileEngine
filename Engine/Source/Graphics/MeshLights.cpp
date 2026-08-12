@@ -18,7 +18,7 @@ using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     namespace {
-        // Mesmo criterio do FillInstanceGeo (DDGI.cpp): o que vale para o RT e o EmissiveStrength
+        // Mesmo criterio do FillInstanceGeo (RaytracingScene.cpp): o que vale para o RT e o EmissiveStrength
         // JA escalado pelo RTEmissiveScale. Uma malha com RTEmissiveScale = 0 foi marcada pelo
         // artista como "brilha na tela mas nao ilumina" e nao pode virar mesh light — senao o
         // slider deixaria de significar o que promete.
