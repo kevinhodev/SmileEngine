@@ -25,6 +25,7 @@ namespace SmileEditor {
     class LightsBridge;
     class SceneOutlinerBridge;
     class SceneDocument;
+    class CameraBookmarksBridge;
     class MaterialsBridge;
     class RenderSettingsBridge;
 
@@ -93,6 +94,9 @@ namespace SmileEditor {
         SceneDocument*        SceneDoc    = nullptr; // camada autorada da cena (.smap)
         QDockWidget*          LightsDock  = nullptr; // dock lateral do Scene Outliner ("Cena")
         MaterialsBridge*      MaterialsBr = nullptr; // ponte C++ -> MaterialsWindow.qml
+        // Bookmarks de camera (<cena>.cameras.json). Nao tem janela propria: mora na pagina de
+        // Renderizacao das Configuracoes, junto dos knobs que a captura precisa fixar.
+        CameraBookmarksBridge* CameraBookmarksBr = nullptr;
         RenderSettingsBridge* RenderBr   = nullptr; // ponte C++ -> knobs do SettingsWindow.qml
         QPointer<QDialog>     MaterialsDlg;          // janela flutuante do Editor de Materiais
 

@@ -12,6 +12,7 @@
 #include "SmileEditor/LightsBridge.h"
 #include "SmileEditor/SceneOutlinerBridge.h"
 #include "SmileEditor/SceneDocument.h"
+#include "SmileEditor/CameraBookmarksBridge.h"
 #include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
@@ -95,6 +96,7 @@ namespace SmileEditor {
         OutlinerBr = new SceneOutlinerBridge(this);   // Scene Outliner (renderer depois)
         SceneDoc   = new SceneDocument(this);         // camada autorada (.smap)
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
+        CameraBookmarksBr = new CameraBookmarksBridge(this); // bookmarks de camera (renderer depois)
         RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
@@ -120,6 +122,16 @@ namespace SmileEditor {
         WireMenuActions(); // conecta os menus depois que Viewport e ConsoleDock existem
 
         CreateStatusBar();
+
+        // Bookmarks -> barra de status. Depois do CreateStatusBar porque o StatusBr nasce la.
+        // Sem isto, uma falha de persistencia (disco cheio, arquivo somente-leitura, sidecar de
+        // outra versao) ficava so no valor de retorno que a QML descarta, e gravar uma camera
+        // parecia um clique sem efeito — o pior desfecho possivel, porque o usuario seguiria a
+        // sessao de captura acreditando ter uma referencia que nao existe.
+        if (CameraBookmarksBr && StatusBr) {
+            connect(CameraBookmarksBr, &CameraBookmarksBridge::Message, this,
+                    [this](const QString& _Text) { StatusBr->ShowMessage(_Text, 4000); });
+        }
 
         connect(Viewport, &ViewportWidget::TelemetryUpdated,    this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
@@ -428,6 +440,7 @@ namespace SmileEditor {
                     if (SceneDoc)    SceneDoc->OnSceneLoaded(Path, Additive);
                     if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
                     if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
+                    if (CameraBookmarksBr) CameraBookmarksBr->OnSceneLoaded(Path, Additive);
                     if (Viewport)    Viewport->NotifyDebugTargetsChanged();
                     if (StatusBr) {
                         StatusBr->ShowMessage(
@@ -682,6 +695,10 @@ namespace SmileEditor {
             RenderBr->SetViewport(Viewport);
         }
 
+        // Bookmarks de camera: so precisa do handle. Sem Refresh por frame — a pose gravada so
+        // muda por clique, e ler a camera todo frame nao diria nada sobre os SLOTS.
+        if (CameraBookmarksBr) CameraBookmarksBr->SetRenderer(Viewport->GetRenderer());
+
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {
             TodBridge->SetRenderer(Viewport->GetRenderer());
@@ -783,6 +800,7 @@ namespace SmileEditor {
                 QStringLiteral("SettingsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("renderModel"), RenderBr },
+                  { QStringLiteral("cameraBookmarks"), CameraBookmarksBr },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
                 Dialog);
             Panel->setObjectName(QStringLiteral("SettingsPanel"));

@@ -10,6 +10,11 @@ Rectangle {
     // Knobs de render (RenderSettingsBridge). Separado do viewportModel, que segue dono do
     // view mode, do visualizador de debug e da telemetria.
     required property var renderModel
+    // Bookmarks de camera (CameraBookmarksBridge). Como as demais, TEM de ser declarada aqui: a
+    // propriedade injetada pelo CreateQmlPanel so chega ao QML por esta porta. Sem a declaracao
+    // ela fica undefined, e todo binding e todo clique falham em silencio — sem erro visivel,
+    // porque um handler que chama metodo de undefined so aborta aquele handler.
+    required property var cameraBookmarks
     required property var settingsWindow
 
     color: "#141511"
@@ -3039,6 +3044,115 @@ Rectangle {
                         repeat: true
                         running: radianceCacheCard.visible && renderModel.radianceCacheEnabled
                         onTriggered: renderModel.RefreshRadianceCacheStats()
+                    }
+                }
+
+                Card {
+                    id: cameraBookmarksCard
+                    width: parent.width
+                    title: "Câmeras de referência — protocolo de captura"
+                    height: camSlotsColumn.y + camSlotsColumn.height + contentPadding + 8
+
+                    Text {
+                        id: camHelper
+                        x: 20
+                        y: cameraBookmarksCard.headerHeight + cameraBookmarksCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Quatro poses persistentes por cena, gravadas em <cena>.cameras.json " +
+                              "ao lado da cena — viajam com ela e entram no repositório.\n\n" +
+                              "Existem para o A/B do estimador. O que se compara a partir daqui é " +
+                              "ruído, convergência temporal e ocupação do cache, e os três são " +
+                              "função da posição EXATA da câmera: duas fotos tiradas à mão não " +
+                              "distinguem \"o estimador mudou\" de \"a câmera está meio metro à " +
+                              "esquerda\".\n\n" +
+                              "Restaurar aqui é NAVEGAÇÃO — teleporta e corta a câmera. Não é " +
+                              "captura: uma captura determinística precisa também zerar os caches " +
+                              "de mundo (DDGI, radiance cache), que o corte de câmera preserva de " +
+                              "propósito, e esperar o aquecimento."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    // Aviso de sidecar não entendido. Sem isto, gravar por cima de um arquivo
+                    // corrompido ou de outra versão seria silencioso — e é justamente o caso em
+                    // que o usuário precisa saber que existe um .bak antes de confiar no resultado.
+                    Text {
+                        id: camWarning
+                        x: 20
+                        y: camHelper.y + camHelper.height + 12
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        visible: cameraBookmarks.sidecarWarning !== ""
+                        height: visible ? implicitHeight : 0
+                        text: "⚠ " + cameraBookmarks.sidecarWarning
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    Column {
+                        id: camSlotsColumn
+                        x: 20
+                        y: camWarning.y + camWarning.height + (camWarning.visible ? 14 : 6)
+                        width: parent.width - 40
+                        spacing: 8
+
+                        Repeater {
+                            model: 4
+                            delegate: Item {
+                                width: camSlotsColumn.width
+                                height: 26
+                                readonly property bool filled:
+                                    cameraBookmarks.slotsFilled.length > index
+                                    && cameraBookmarks.slotsFilled[index]
+
+                                Text {
+                                    id: camSlotName
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "Câmera " + (index + 1)
+                                    color: parent.filled ? root.textNormal : root.textSecondary
+                                    font.family: C.Theme.fontFamily
+                                    font.pixelSize: 13
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    x: 90
+                                    width: parent.width - 90 - 150
+                                    elide: Text.ElideRight
+                                    // Pose legível: é o que permite conferir num diff do sidecar
+                                    // que a captura de ontem e a de hoje partiram do mesmo lugar.
+                                    //
+                                    // Lê da PROPRIEDADE slotLabels, não do invocável SlotLabel():
+                                    // uma chamada é avaliada uma vez e não reavalia, então
+                                    // regravar um slot já preenchido deixaria a pose ANTIGA na
+                                    // tela — justo a operação em que o usuário acabou de decidir
+                                    // que a referência mudou.
+                                    text: cameraBookmarks.slotLabels.length > index
+                                          && cameraBookmarks.slotLabels[index] !== ""
+                                          ? cameraBookmarks.slotLabels[index] : "vazia"
+                                    color: root.textSecondary
+                                    font.family: C.Theme.fontFamily
+                                    font.pixelSize: 11
+                                }
+                                Row {
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 6
+                                    ActionButton {
+                                        label: "Gravar"
+                                        onTapped: cameraBookmarks.Save(index)
+                                    }
+                                    ActionButton {
+                                        label: "Ir"
+                                        onTapped: cameraBookmarks.Restore(index)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
