@@ -93,7 +93,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 GridMinSpacing.xyz, GridMinSpacing.w, count,
                 DistanceAtlas, LinearClamp, (int)DistAtlasParams.x,
                 1.0f / DistAtlasParams.yz, ProbeData, skipMode,
-                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x));
+                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), /*cascata*/ 0);
         } else {
             // Com o Chebyshev desligado o consumidor e o SampleDDGIIrradiance: trilinear
             // puro, sem bias, sem relocacao e sem skip de probe inativa. Os momentos ainda
@@ -105,7 +105,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 biasPos - DDGI_ProbeWorldPos(c, GridMinSpacing.xyz, GridMinSpacing.w);
 
             tap.Coord       = c;
-            tap.Index       = (uint)DDGI_ProbeLinear(c, count);
+            // GLOBAL, como o ramo do Chebyshev (DDGI_EvaluateTapCheb): os dois publicam o mesmo
+            // campo e o diagnostico nao pode reportar indice local num e global no outro.
+            tap.Index       = (uint)DDGI_GlobalProbeIndex(DDGI_ProbeLinear(c, count),
+                                                          /*cascata*/ 0, count);
             tap.Ignored     = false;
             tap.DistToProbe = length(probeToPoint);
             tap.Trilinear   = tri.x * tri.y * tri.z;
@@ -115,7 +118,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             const float2 moments = DDGI_SampleProbeRG(
                 DistanceAtlas, LinearClamp,
                 DDGI_TileOrigin(c, count, (int)DistAtlasParams.x,
-                                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x)),
+                                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), 0),
                 (int)DistAtlasParams.x, 1.0f / DistAtlasParams.yz,
                 probeToPoint / max(tap.DistToProbe, 1e-4f));
             tap.Mean  = moments.x;
@@ -125,7 +128,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         const float3 irr = tap.Ignored ? 0.0f : DDGI_SampleProbe(
             IrradianceAtlas, LinearClamp,
             DDGI_TileOrigin(tap.Coord, count, (int)AtlasParams.x,
-                            DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x)),
+                            DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x), 0),
             (int)AtlasParams.x, 1.0f / AtlasParams.yz, N);
 
         probeIndices[i]      = tap.Index;

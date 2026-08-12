@@ -113,6 +113,13 @@ namespace Smile {
         static constexpr int kRaysPerProbe = 64;
         static constexpr int kTileSize     = 6;
         static constexpr int kDistTileSize = 14;
+        // Cascatas: volumes concentricos com a MESMA contagem de sondas e espacamentos
+        // diferentes. A de indice 0 e a mais FINA; a ULTIMA e a que cobre a cena inteira — o
+        // volume unico de hoje. Essa ordem e o oposto da Flax, onde a ultima cascata cai num
+        // FallbackIrradiance constante: aqui o fallback da cascata fina e a grossa, e so quem sai
+        // da grossa (o terreno) cai no ambiente hemisferico. Preserva a propriedade que o volume
+        // unico ja tinha — cobertura da cena inteira, convergindo em todo lugar.
+        static constexpr u32 kMaxCascades = 4;
         // Sondas por LINHA do ProbesTrace, e este numero E um knob de desempenho. A primeira
         // versao daqui dizia que 256 "e o maior que cabe, entao nao ha o que calibrar": isso
         // confunde CAPACIDADE com velocidade. 256*64 = 16384 enche a largura maxima de Texture2D,
@@ -195,11 +202,18 @@ namespace Smile {
         u32  ProbeRayCountSRV()const { return ProbeRayCountSRVSlot; } 
         ID3D12Resource* IrradianceAtlasResource() const { return IrradAtlas.Get(); }
         ID3D12Resource* DistanceAtlasResource() const   { return DistAtlas.Get(); }
+        // TOTAL, somando as cascatas — e o que dimensiona atlas, ProbesTrace e dispatch.
         u32  NumProbesCount()  const { return NumProbes; }
+        u32  ProbesPerCascade()const { return ProbesPerCascade_; }
+        u32  CascadeCount()    const { return CascadeCount_; }
         u32  RaysPerProbe()    const { return kRaysPerProbe; }
 
-        Vec3 GridMin()   const { return GridMinV; }
-        f32  Spacing()   const { return SpacingV; }
+        // Cascata 0 e a mais FINA. Com uma cascata so, estes dois sao o volume unico de sempre —
+        // e por isso os consumidores que ainda nao sabem de cascata continuam corretos.
+        Vec3 GridMin()   const { return Cascades[0].GridMin; }
+        f32  Spacing()   const { return Cascades[0].Spacing; }
+        Vec3 CascadeGridMin(u32 C) const { return Cascades[C < kMaxCascades ? C : 0].GridMin; }
+        f32  CascadeSpacing(u32 C) const { return Cascades[C < kMaxCascades ? C : 0].Spacing; }
         Vec3 GridCount() const { return Vec3{ (f32)CountX, (f32)CountY, (f32)CountZ }; }
         f32  AtlasW()    const { return (f32)AtlasWidth; }
         f32  AtlasH()    const { return (f32)AtlasHeight; }
@@ -210,7 +224,7 @@ namespace Smile {
         f32  MaxRayDistance() const { return MaxRayDist; } 
         // O atlas de distancia guarda os dois momentos ja limitados a esta vizinhanca.
         // Nao confundir com MaxRayDistance(), que e o alcance do trace na cena inteira.
-        f32  DistanceMomentMax() const { return SpacingV * 2.6f; }
+        f32  DistanceMomentMax() const { return Cascades[0].Spacing * 2.6f; }
         // Conversao sonda <-> tile fisico do atlas. O atlas tem ORDEM PROPRIA — plano (x,z) nas
         // colunas, y nas linhas, o plano enrolado em bandas — e ela nao e a dos buffers
         // (DDGI_ProbeLinear). Manter as duas custa estas duas funcoes; unifica-las custaria a
@@ -218,34 +232,45 @@ namespace Smile {
         //
         // As duas sao INVERSAS uma da outra e as duas espelham o shader. Qualquer mudanca no
         // layout mexe nas tres.
+        // O indice de sonda aqui e o GLOBAL (cascata * ProbesPerCascade + local); as cascatas
+        // empilham em blocos de LINHAS, uma depois da outra, como no DDGI_TileOrigin.
         u32  AtlasTileFromProbe(u32 ProbeIndex) const {
-            if (ProbeIndex >= NumProbes || CountX <= 0 || CountY <= 0 || TilesPerRow == 0) return 0;
+            if (ProbeIndex >= NumProbes || CountX <= 0 || CountY <= 0 || TilesPerRow == 0 ||
+                ProbesPerCascade_ == 0)
+                return 0;
             const u32 CX = static_cast<u32>(CountX), CY = static_cast<u32>(CountY);
-            const u32 X = ProbeIndex % CX;
-            const u32 Y = (ProbeIndex / CX) % CY;
-            const u32 Z = ProbeIndex / (CX * CY);
+            const u32 Cascade = ProbeIndex / ProbesPerCascade_;
+            const u32 Local   = ProbeIndex - Cascade * ProbesPerCascade_;
+            const u32 X = Local % CX;
+            const u32 Y = (Local / CX) % CY;
+            const u32 Z = Local / (CX * CY);
             const u32 Plane = X + Z * CX;
             const u32 Band  = Plane / TilesPerRow;
-            return (Y + Band * CY) * TilesPerRow + (Plane - Band * TilesPerRow);
+            const u32 Row   = Y + Band * CY + Cascade * TileRowsPerCascade;
+            return Row * TilesPerRow + (Plane - Band * TilesPerRow);
         }
         // Devolve false para celula de SOBRA: a grade tem TilesPerRow*bandas colunas de plano, e
         // as ultimas podem nao corresponder a sonda nenhuma.
         bool ProbeFromAtlasTile(u32 Tile, u32& OutProbe) const {
-            if (CountX <= 0 || CountY <= 0 || TilesPerRow == 0) return false;
+            if (CountX <= 0 || CountY <= 0 || TilesPerRow == 0 || TileRowsPerCascade == 0)
+                return false;
             const u32 CX = static_cast<u32>(CountX), CY = static_cast<u32>(CountY);
-            const u32 Row   = Tile / TilesPerRow;
-            const u32 C     = Tile - Row * TilesPerRow;
-            const u32 Y     = Row % CY;
-            const u32 Band  = Row / CY;
-            const u32 Plane = Band * TilesPerRow + C;
-            if (Plane >= CX * static_cast<u32>(CountZ)) return false;
-            OutProbe = (Plane % CX) + Y * CX + (Plane / CX) * CX * CY;
+            const u32 RowAbs  = Tile / TilesPerRow;
+            const u32 C       = Tile - RowAbs * TilesPerRow;
+            const u32 Cascade = RowAbs / TileRowsPerCascade;
+            const u32 Row     = RowAbs - Cascade * TileRowsPerCascade;
+            const u32 Y       = Row % CY;
+            const u32 Band    = Row / CY;
+            const u32 Plane   = Band * TilesPerRow + C;
+            if (Cascade >= CascadeCount_ || Plane >= CX * static_cast<u32>(CountZ)) return false;
+            OutProbe = Cascade * ProbesPerCascade_ +
+                       (Plane % CX) + Y * CX + (Plane / CX) * CX * CY;
             return OutProbe < NumProbes;
         }
         // Tiles por linha da grade dos atlas. O shader recupera este mesmo numero da LARGURA
         // (DDGI_TilesPerRow) em vez de recebe-lo por cbuffer — ver o SetupForScene.
         u32  AtlasTilesPerRow() const { return TilesPerRow; }
-        u32  AtlasTileRows() const { return TileRows; }
+        u32  AtlasTileRows() const { return TileRowsPerCascade * CascadeCount_; }
 
         // Zero e SENTINELA no cbuffer, nao valor: o Renderer manda DDGIParams.x = 0 para dizer "GI
         // desligado" e os cinco consumidores leem `(x > 0) ? x : 1.0`. Sem o piso, um slider de
@@ -464,17 +489,26 @@ namespace Smile {
         u32 FrameSlot  = 0;
         DDGIConstants CPU{};
 
-        Vec3 GridMinV{ 0,0,0 };
-        f32  SpacingV    = 1.0f;
+        // Uma cascata = um volume. A CONTAGEM de sondas por eixo e comum a todas (mesma escolha da
+        // Flax): so o par (origem, espacamento) varia, o que faz caber num Vec4 por cascata e
+        // deixa bandas, linhas e indice local derivaveis de `count` — sem campo novo de cbuffer em
+        // nenhum dos cinco consumidores do gather.
+        struct FCascade {
+            Vec3 GridMin{ 0,0,0 };
+            f32  Spacing = 1.0f;
+        };
+        FCascade Cascades[kMaxCascades]{};
+        u32  CascadeCount_    = 1;
         int  CountX = 0, CountY = 0, CountZ = 0;
-        u32  NumProbes   = 0;
+        u32  ProbesPerCascade_ = 0;
+        u32  NumProbes   = 0; // TOTAL = ProbesPerCascade_ * CascadeCount_
         u32  AtlasWidth  = 0, AtlasHeight = 0;
         u32  DistAtlasWidth = 0, DistAtlasHeight = 0;
         // Grade de tiles do atlas. TilesPerRow e sempre um MULTIPLO de CountX (a banda contem
         // fileiras Z inteiras — ver atlasGridFor no SetupForScene), e TileRows ja inclui as
         // bandas: `TileRows = ceil(CountZ/zRowsPerBand) * CountY`.
-        u32  TilesPerRow = 1;
-        u32  TileRows    = 1;
+        u32  TilesPerRow        = 1;
+        u32  TileRowsPerCascade = 1; // total de linhas = este x CascadeCount_
 
         static constexpr D3D12_RESOURCE_STATES kAtlasRead =
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |

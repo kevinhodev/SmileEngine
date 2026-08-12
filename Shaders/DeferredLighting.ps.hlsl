@@ -241,6 +241,10 @@ float3 DDGI_FallbackAmbient(float3 N) {
     return amb / giI;
 }
 
+// F6.1: o espaco de indice das sondas ja e por cascata, mas so existe UMA — a selecao da
+// cascata mais fina que contem o ponto entra na F6.2, junto com a segunda.
+static const int kDDGICascade = 0;
+
 float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
     // Tiles por linha do atlas (empacotamento 2D; ver DDGI_TileOrigin). Sai da largura que ja
@@ -267,11 +271,11 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
         gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
                  worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
                  (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                 DDGIProbeData, skipMode, tilesPerRow);
+                 DDGIProbeData, skipMode, tilesPerRow, kDDGICascade);
     } else {
         gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
                  DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                 (int)DDGIParams.y, atlasInvSize, tilesPerRow);
+                 (int)DDGIParams.y, atlasInvSize, tilesPerRow, kDDGICascade);
     }
     return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }

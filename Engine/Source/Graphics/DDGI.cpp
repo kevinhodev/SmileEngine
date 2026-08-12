@@ -268,9 +268,9 @@ namespace Smile {
         constexpr int kMaxPerAxis = 128; // rede secundaria; quem decide e o gridFits abaixo
         constexpr u64 kTexMax     = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 
-        SpacingV = std::max(maxExt / (kTargetMax - 1), 0.5f);
+        Cascades[0].Spacing = std::max(maxExt / (kTargetMax - 1), 0.5f);
         auto axisCount = [&](f32 e) {
-            int n = static_cast<int>(std::ceil(e / SpacingV)) + 1;
+            int n = static_cast<int>(std::ceil(e / Cascades[0].Spacing)) + 1;
             return std::clamp(n, 2, kMaxPerAxis);
         };
         // Layout dos atlas: o plano (x,z) nas colunas e o y nas linhas — a vizinhanca do layout
@@ -331,28 +331,41 @@ namespace Smile {
         };
         CountX = axisCount(ext.X); CountY = axisCount(ext.Y); CountZ = axisCount(ext.Z);
         if (!gridFits()) {
-            const f32 Requested = SpacingV;
+            const f32 Requested = Cascades[0].Spacing;
             // Converge sempre: o espacamento so cresce, e com ele as contagens caem ate o piso
             // de 2 por eixo (8 sondas), que cabe em qualquer um dos limites.
             while (!gridFits()) {
-                SpacingV *= 1.05f;
+                Cascades[0].Spacing *= 1.05f;
                 CountX = axisCount(ext.X); CountY = axisCount(ext.Y); CountZ = axisCount(ext.Z);
             }
             LogWarning("[GI] - DDGI: espacamento de " + std::to_string(Requested) +
                        " m nao cabe nos atlas (limite de dimensao de textura); aberto para " +
-                       std::to_string(SpacingV) + " m");
+                       std::to_string(Cascades[0].Spacing) + " m");
         }
-        GridMinV = { _AABBMin.X - 0.5f * SpacingV, _AABBMin.Y - 0.5f * SpacingV,
-                     _AABBMin.Z - 0.5f * SpacingV };
-        NumProbes       = static_cast<u32>(CountX) * CountY * CountZ;
+        // A cascata que cobre a cena inteira e a ULTIMA; com uma so, ela e tambem a de indice 0.
+        // O SetupForScene dimensiona ESSA — as finas, quando existirem, saem dela por escala e
+        // seguem a camera (fase 6.2), nao a AABB.
+        CascadeCount_ = 1;
+        const f32 CoarseSpacing = Cascades[0].Spacing;
+        const Vec3 CoarseMin{ _AABBMin.X - 0.5f * CoarseSpacing,
+                              _AABBMin.Y - 0.5f * CoarseSpacing,
+                              _AABBMin.Z - 0.5f * CoarseSpacing };
+        for (u32 C = 0; C < kMaxCascades; ++C) Cascades[C] = { CoarseMin, CoarseSpacing };
+
+        ProbesPerCascade_ = static_cast<u32>(CountX) * CountY * CountZ;
+        NumProbes         = ProbesPerCascade_ * CascadeCount_;
 
         // Grade 2D de tiles. O shader NAO recebe tilesPerRow por cbuffer: ele o recupera da
         // LARGURA (DDGI_TilesPerRow), e as duas contas so batem porque a largura e construida aqui
         // como tilesPerRow*stride. Mexer numa sem a outra desalinha o atlas inteiro em silencio —
         // por isso as quatro dimensoes saem das MESMAS duas variaveis, aqui, e nao em quatro
         // expressoes independentes como antes.
+        //
+        // As cascatas empilham em blocos de LINHAS (ver DDGI_TileOrigin): a grade de uma cascata
+        // e sempre a mesma, e a altura total multiplica pela contagem.
         atlasGridFor(static_cast<u32>(CountX), static_cast<u32>(CountY),
-                     static_cast<u32>(CountZ), TilesPerRow, TileRows);
+                     static_cast<u32>(CountZ), TilesPerRow, TileRowsPerCascade);
+        const u32 TileRows = TileRowsPerCascade * CascadeCount_;
         AtlasWidth      = TilesPerRow * (kTileSize + 2);
         AtlasHeight     = TileRows    * (kTileSize + 2);
         DistAtlasWidth  = TilesPerRow * (kDistTileSize + 2);
@@ -522,7 +535,7 @@ namespace Smile {
         _Device->CopyDescriptors(1, &UDst, &UDstCount, 2, USrc, USrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        CPU.GridMinSpacing  = { GridMinV.X, GridMinV.Y, GridMinV.Z, SpacingV };
+        CPU.GridMinSpacing  = { Cascades[0].GridMin.X, Cascades[0].GridMin.Y, Cascades[0].GridMin.Z, Cascades[0].Spacing };
         CPU.GridCountRays   = { (f32)CountX, (f32)CountY, (f32)CountZ, (f32)kRaysPerProbe };
         CPU.AtlasParams     = { (f32)kTileSize, (f32)AtlasWidth, (f32)AtlasHeight, (f32)NumProbes };
         CPU.DistAtlasParams = { (f32)kDistTileSize, (f32)DistAtlasWidth, (f32)DistAtlasHeight, 0.0f };
@@ -574,7 +587,7 @@ namespace Smile {
         RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0;
         LogDebug("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
                 "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
-                "), spacing " + std::to_string(SpacingV) + ", atlas " +
+                "), spacing " + std::to_string(Cascades[0].Spacing) + ", atlas " +
                 std::to_string(AtlasWidth) + "x" + std::to_string(AtlasHeight));
     }
 
@@ -614,7 +627,7 @@ namespace Smile {
         // ILUMINA o objeto e e iluminada por ele de fora da AABB dele, entao a caixa cresce um
         // espacamento de grid por lado p/ pegar a camada de sondas em volta, que e onde o color
         // bleed aparece. Como e derivada e nao acumulada, N chamadas custam o mesmo pad que uma.
-        const f32 Pad = SpacingV;
+        const f32 Pad = Cascades[0].Spacing;
         CPU.InvalidateMin     = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad,
                                   InvalidateMin_.Z - Pad, Invalidating ? 1.0f : 0.0f };
         CPU.InvalidateMaxHyst = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad,

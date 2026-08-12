@@ -349,7 +349,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
             IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN,
             P.GridMin, P.Spacing, P.Count, P.AtlasTile, P.AtlasInvSize,
             (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, giHitFlags & 3u,
-            tilesPerRow);
+            tilesPerRow, /*cascata*/ 0); // F6.1: volume unico; selecao entra na F6.2
         if (volW < 1.0f) indirect *= volW;
     }
 

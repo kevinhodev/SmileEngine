@@ -316,6 +316,47 @@ mudar.
    que o disparava era o do layout antigo.
 4. Refazer o sweep, anotando `DDGI (async)`, a espera e o frame de GPU.
 
+### Fase 6.1 — encanamento de cascatas, com uma cascata
+
+Pré-requisito de tudo que vem depois, e sem efeito visível: com `CascadeCount = 1` a imagem
+tem de ficar **idêntica**.
+
+**A decisão de arquitetura, e ela não é a da Flax.** Lá as 4 cascatas são todas centradas na
+câmera e fora da última cai um `FallbackIrradiance` constante — desenho para mundo aberto.
+Aqui a **cascata mais grossa é o volume de hoje**, que cobre a cena inteira e converge em
+todo lugar; as finas entram por dentro. O fallback da fina é a grossa, e só quem sai da
+grossa (o terreno) cai no ambiente hemisférico. Assim o comportamento atual é um subconjunto
+exato do novo, em vez de ser substituído por ele.
+
+- **Espaço de índice `(cascata, índice local)`.** O atlas e os buffers (`ProbeData`,
+  `ProbeRayCount`, `ProbesTrace`) falam em índice GLOBAL
+  (`cascata·porCascata + local`); a geometria — posição no mundo, gaiola, vizinhos — fala
+  em LOCAL, com o `(GridMin, Spacing)` daquela cascata. Com uma cascata os dois coincidem,
+  e é por isso que a fase não muda pixel nenhum.
+- **As cascatas empilham em blocos de LINHAS do atlas.** Mesmo motivo que decidiu o layout
+  em bandas: cada cascata mantém a própria grade intacta, então o bloco 2×2 de tiles
+  adjacentes continua valendo dentro dela. Intercalar cascatas na largura ou no índice
+  destruiria de novo a vizinhança que custou 0,45 ms. É onde a Flax também as empilha.
+- **Contagem de sondas IGUAL em todas as cascatas** (como a Flax). Só o par
+  `(origem, espaçamento)` varia, o que cabe num `Vec4` — e faz bandas, linhas por cascata e
+  índice local ficarem todos deriváveis de `count` e `tilesPerRow`. **Nenhum campo novo de
+  cbuffer em nenhum dos cinco consumidores do gather**: `DDGI_TileRowsPerCascade` sai de
+  `tilesPerRow / count.x`, o que só é possível porque o `atlasGridFor` garante que
+  `tilesPerRow` é múltiplo de `count.x`. A correção da fase anterior virou pré-requisito
+  desta.
+- **A seleção de cascata NÃO entrou.** Com uma cascata ela é código morto e intestável;
+  entra na 6.2 junto com a segunda. Os cinco sítios de gather passam `0` explicitamente.
+
+**Fila da fase 6.2** — o que ainda assume cascata única:
+
+- `DDGITrace` interpreta o `probeIdx` global como coordenada local e usa só o
+  `GridMinSpacing` — precisa do array por cascata;
+- relocação e visualizador de sondas ainda só olham a cascata 0;
+- `gridFits` dimensiona para uma cascata;
+- a folga da invalidação regional usa o espaçamento da cascata 0; com uma fina ela tem de
+  usar o da **grossa**, que é a maior;
+- a seleção no gather e a **gaiola pelo ponto cru**, que a auditoria exige que entre junto.
+
 ## Gate de medição
 
 `FGIHitSampling::TerminatorOff` — zera o termo indireto do `ShadeSurfaceHit` com todo o

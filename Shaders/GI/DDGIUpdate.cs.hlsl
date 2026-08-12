@@ -58,10 +58,15 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     if (probeIdx >= numProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;
-    int3 pc    = DDGI_ProbeCoord(probeIdx, count);
+    // Indice GLOBAL -> (cascata, indice local). A geometria da sonda e sempre LOCAL; so o atlas e
+    // os buffers falam em global. Com uma cascata os dois coincidem — e por isso a F6.1 nao muda
+    // pixel nenhum.
+    int  cascade  = DDGI_CascadeOfProbe(probeIdx, count);
+    int  localIdx = DDGI_LocalProbeIndex(probeIdx, count);
+    int3 pc    = DDGI_ProbeCoord(localIdx, count);
     int  tile  = (int)AtlasParams.x;
     int2 tileOrigin = DDGI_TileOrigin(pc, count, tile,
-                                      DDGI_TilesPerRow(AtlasParams.y, tile));
+                                      DDGI_TilesPerRow(AtlasParams.y, tile), cascade);
     int2 local      = int2(GTid.xy);
 
     float2 octUV = ((float2)local + 0.5f) / (float)tile; 
