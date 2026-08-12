@@ -13,6 +13,19 @@ cbuffer DDGICB : register(b0) {
     float4 DistAtlasParams;
     float4 MiscParams;
     float4 MiscParams2;     // x = canMarkActivated (relocacao tem +1 frame agendado)
+    // Preenchimento ate o bloco de cascatas. Este passe so precisa do ESPACAMENTO da cascata da
+    // sonda — os limiares de relocacao (minFront, maxOff) e a classificacao de raios sao todos
+    // em multiplos dele, entao usar o da grossa moveria a sonda da fina quatro vezes demais.
+    float4 RayEpsA;   float4 RayEpsB;
+    float4 GIDistParams; float4 GIBiasParams;
+    float4 ReGIRGridMinSlots; float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples; float4 ReGIRResources;
+    float4 SkyParams;
+    float4 InvalidateMin; float4 InvalidateMaxHyst;
+    float4 RadianceCacheCamCell; float4 RadianceCacheLodCapFlags; float4 RadianceCacheResources;
+    float4 MiscParams3;
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 Texture2D<float4> ProbesTrace  : register(t0);
@@ -40,7 +53,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     // congelava no ultimo valor escrito — era o que deixava o toggle AdaptiveRays inerte.
     bool relocate = MiscParams.x >= 0.5f;
 
-    float  spacing = GridMinSpacing.w;
+    // Espacamento da CASCATA desta sonda (indice global -> cascata). Todos os limiares abaixo sao
+    // multiplos dele.
+    int3   count   = (int3)GridCountRays.xyz;
+    float  spacing = GICascadeGridMinSpacing[DDGI_CascadeOfProbe(probeIdx, count)].w;
     uint   frame   = (uint)TraceParams.x;
     float4 prev    = ProbeData[probeIdx];
     float3 offset  = relocate ? prev.xyz : float3(0.0f, 0.0f, 0.0f);

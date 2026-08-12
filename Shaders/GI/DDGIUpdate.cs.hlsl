@@ -27,6 +27,14 @@ cbuffer DDGICB : register(b0) {
     float4 SkyParams;
     float4 InvalidateMin;     // xyz = min da caixa de invalidacao, w = 1 se ativa
     float4 InvalidateMaxHyst; // xyz = max da caixa, w = hysteresis dentro dela
+    float4 RadianceCacheCamCell;      // preenchimento p/ alcancar o bloco de cascatas
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
+    float4 MiscParams3;
+    // Cascatas: a posicao da sonda no teste de invalidacao regional sai daqui, nao do
+    // GridMinSpacing (que e a GROSSA).
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
@@ -106,13 +114,15 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // Invalidacao ESPACIAL (FDDGI::InvalidateRegion): um objeto nasceu ou morreu aqui perto.
     // Diferente do caso acima, a historia desta sonda continua quase toda valida — so a parcela
     // vinda daquele objeto mudou. Por isso troca por uma hysteresis RAPIDA em vez de zerar:
-    // converge em ~12 frames sem o pop de amostra unica. Fora da caixa, nada muda — e essa a
+    // converge em ~34 frames sem o pop de amostra unica. Fora da caixa, nada muda — e essa a
     // diferenca para o reset global, que jogava fora dado bom da cena inteira.
     // Posicao RELOCADA (o .xyz do ProbeData e offset de mundo): a sonda que a relocacao moveu
     // para fora de uma parede pode estar meio espacamento longe do vertice do grid, e e ela quem
     // mais precisa reavaliar. Mesmo teste, mesma origem, no atlas de distancia.
-    hyst = DDGI_RegionalHysteresis(pc, ProbeData[probeIdx].xyz, GridMinSpacing.xyz,
-                                   GridMinSpacing.w, InvalidateMin, InvalidateMaxHyst.xyz,
+    // Grid da CASCATA da sonda: o teste compara a posicao de mundo dela contra a caixa, e
+    // reconstrui-la com a origem/espacamento da grossa poria a sonda da fina em outro lugar.
+    hyst = DDGI_RegionalHysteresis(pc, ProbeData[probeIdx].xyz, GICascadeGridMinSpacing[cascade].xyz,
+                                   GICascadeGridMinSpacing[cascade].w, InvalidateMin, InvalidateMaxHyst.xyz,
                                    InvalidateMaxHyst.w, hyst);
 
     // Detector de mudanca (rede da invalidacao por evento; ver DDGI_AdaptiveHysteresis).
@@ -143,7 +153,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // O teto de 0.90 (~29 frames para 95%) atende os dois: a oscilacao custa um filtro suave em
     // vez de um pop, e a sonda realmente engolida apaga em meio segundo em vez de dois e meio.
     // O `min` externo preserva a regra da casa — o detector so REDUZ, nunca aumenta: reset (0),
-    // relocacao (0) e invalidacao regional (0.75) continuam ganhando.
+    // relocacao (0) e invalidacao regional (0.90) continuam ganhando.
     hyst = occluded ? min(hyst, max(hystNew, 0.90f)) : hystNew;
 
     float3 blended = lerp(result, prev, hyst);

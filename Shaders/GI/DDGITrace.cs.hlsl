@@ -35,6 +35,11 @@ cbuffer DDGICB : register(b0) {
     float4 RadianceCacheLodCapFlags;
     float4 RadianceCacheResources;
     float4 MiscParams3;     // z = 1 se o passe de classificacao de raios roda neste frame
+    // Cascatas. Os nomes sao os do contrato do HitShading (GICascade*), e este passe usa o MESMO
+    // bloco para a origem do raio — um so array, nao dois: dois nomes para o mesmo dado seria
+    // exatamente o estado duplicado que o resto desta fase evitou.
+    float4 GICascadeParams;          // x = nº de cascatas, y = sondas por cascata
+    float4 GICascadeGridMinSpacing[4];
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -68,8 +73,14 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     if (probeIdx >= numProbes) return;
 
     int3  count   = (int3)GridCountRays.xyz;
-    float spacing = GridMinSpacing.w;
-    int3  pc      = DDGI_ProbeCoord(probeIdx, count);
+    // Indice GLOBAL -> (cascata, indice local). A GEOMETRIA da sonda — coordenada no grid, origem
+    // e espacamento — e toda da cascata dela; o GridMinSpacing do cbuffer e o da GROSSA e serviria
+    // so por coincidencia enquanto existe uma cascata.
+    int   cascade  = DDGI_CascadeOfProbe(probeIdx, count);
+    int   localIdx = DDGI_LocalProbeIndex(probeIdx, count);
+    float3 gridMin = GICascadeGridMinSpacing[cascade].xyz;
+    float spacing  = GICascadeGridMinSpacing[cascade].w;
+    int3  pc       = DDGI_ProbeCoord(localIdx, count);
 
     // Frame de CLASSIFICACAO: o passe de relocacao le ESTE trace para decidir quantos raios cada
     // sonda merece, e ele mede a proximidade pelo hit mais proximo. Uma sonda ja decimada daria
@@ -87,7 +98,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         return;
     }
 
-    float3 probePos = DDGI_ProbeWorldPos(pc, GridMinSpacing.xyz, spacing) + GIProbeData[probeIdx].xyz;
+    float3 probePos = DDGI_ProbeWorldPos(pc, gridMin, spacing) + GIProbeData[probeIdx].xyz;
 
     float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x, (uint)probeIdx);
 
@@ -108,7 +119,11 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
-    P.GridMin        = GridMinSpacing.xyz;  P.Spacing      = spacing;
+    // A GROSSA, e nao a cascata desta sonda: o P.GridMin/P.Spacing alimenta o DDGI_VolumeWeight
+    // sobre o ponto de HIT, que pode cair em qualquer lugar da cena — quem escolhe a cascata la
+    // e o gather. Usar o espacamento da sonda que disparou o raio mediria a borda do volume com
+    // a regua errada.
+    P.GridMin        = GridMinSpacing.xyz;  P.Spacing      = GridMinSpacing.w;
     P.Count          = count;               P.AtlasTile    = (int)AtlasParams.x;
     P.AtlasInvSize   = float2(1.0f / AtlasParams.y, 1.0f / AtlasParams.z);
     P.SunDir         = sunDir;              P.SunIntensity = SunDirIntensity.w;

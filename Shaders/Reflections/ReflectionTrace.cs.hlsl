@@ -39,6 +39,9 @@ cbuffer ReflectionCB : register(b0) {
     float4 RadianceCacheCamCell;
     float4 RadianceCacheLodCapFlags;
     float4 RadianceCacheResources;
+    // Cascatas do DDGI, consumidas pelo gather do 2o bounce no HitShading (contrato por NOME).
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 // Politica de culling DESTE passe. O Lumen culla na reflexao e nao culla no gather do ReSTIR; a

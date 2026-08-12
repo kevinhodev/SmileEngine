@@ -1858,12 +1858,17 @@ namespace Smile {
                                     DDGI.DistAtlasH(), GIFlags };
             _CB->DDGIBiasParams = { DDGI.GetSurfaceBiasScale(), DDGI.GetSurfaceBiasMax(),
                                     DDGI.GetVolumeFadeProbes(), 0.0f };
+            _CB->DDGICascades   = DDGI.CascadeConstants();
         } else {
             _CB->DDGIGridMin    = { 0.0f, 0.0f, 0.0f, 1.0f };
             _CB->DDGIGridCount  = { 0.0f, 0.0f, 0.0f, 0.0f };
             _CB->DDGIParams     = { 0.0f, 6.0f, 1.0f, 1.0f };
             _CB->DDGIDistParams = { 14.0f, 1.0f, 1.0f, 0.0f };
             _CB->DDGIBiasParams = { 0.2f, 0.0f, 0.0f, 0.0f };
+            // O default do POD ja traz espacamento 1 nas quatro entradas — ver
+            // FDDGICascadeConstants. Antes isto era garantido A MAO aqui, e por isso valia so
+            // para este cbuffer.
+            _CB->DDGICascades   = {};
         }
 
         return Amb;
@@ -1905,6 +1910,9 @@ namespace Smile {
             GIHit.TerminatorOff = GIMeasureTerminatorOff; // gate de medicao (ver Renderer.h)
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
+            const FDDGICascadeConstants GICasc = DDGI.CascadeConstants();
+            Reflections.SetGICascades(GICasc);
+            ReSTIRGI.SetGICascades(GICasc);
             ReSTIRGI.SetGIHitSampling(GIHit);
         }
 
@@ -1970,6 +1978,7 @@ namespace Smile {
                 const Vec3 GCnt = DDGI.GridCount();
                 VF.DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
                 VF.DDGIGridCount = { GCnt.X, GCnt.Y, GCnt.Z, 1.0f };
+                VF.DDGICascades  = DDGI.CascadeConstants();
                 VF.DDGIParams    = { DDGI.GetIntensity(), DDGI.TileSizeF(),
                                      DDGI.AtlasW(), DDGI.AtlasH() };
                 VF.DDGIVolumeFadeProbes = DDGI.GetVolumeFadeProbes();
@@ -4353,6 +4362,11 @@ namespace Smile {
         // que o Time-of-Day acabou de mover e a molhadura que a chuva acabou de integrar.
         TickWorldClock();
         const FFrameLighting Lt  = ResolveFrameLighting();
+        // ANTES dos tres publicadores abaixo: eles capturam DDGI.CascadeConstants(), e a colocacao
+        // das cascatas tem de estar decidida quando isso acontece. O DDGI.UpdatePerFrame roda bem
+        // mais tarde (PrepareIndirectLighting) e apenas publica o que ja foi decidido aqui — ver
+        // FDDGI::PrepareCascadePlacement.
+        DDGI.PrepareCascadePlacement(Vw.CameraPosition);
         const FFrameAmbient  Amb = PublishFrameConstants(Vw, Lt, FrameSlot, MappedCB);
         PushRayTracingFrameState(Modes);
 

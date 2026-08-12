@@ -347,6 +347,23 @@ exato do novo, em vez de ser substituído por ele.
 - **A seleção de cascata NÃO entrou.** Com uma cascata ela é código morto e intestável;
   entra na 6.2 junto com a segunda. Os cinco sítios de gather passam `0` explicitamente.
 
+### ⚠️ Portão entre a 6.2a e a 6.2b: migrar o DEBUG
+
+A segunda cascata **não pode acender** antes disto, e a razão não é cosmética. As três
+ferramentas de diagnóstico do DDGI ainda tratam índice global como coordenada local:
+
+- `DDGIDebugProbes.vs.hlsl` e `DDGIDebugRays.vs.hlsl` — posição, raio da esfera e
+  `DDGI_TileOrigin` precisam do `GridMin`/`Spacing` e do índice da cascata correspondente;
+- `DDGIDebugPoint.cs.hlsl` — grave: além de fixar cascata 0, ele publica **oito** taps, e
+  durante o blend o gather real usa até **dezesseis**. O painel que promete reproduzir
+  exatamente o gather passaria a mostrar metade dele.
+
+O comentário do próprio `DDGIDebugPoint` diz que ele roda "a MESMA função, não uma cópia"
+justamente para não mentir. Uma ferramenta que mente é pior que ferramenta nenhuma: ela é
+consultada quando algo já está errado, e nesse momento manda a investigação para o lado
+errado. Ativar a cascata com o diagnóstico defasado é entrar no A/B mais difícil da série
+sem instrumento.
+
 **Fila da fase 6.2** — o que ainda assume cascata única:
 
 - `DDGITrace` interpreta o `probeIdx` global como coordenada local e usa só o

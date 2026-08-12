@@ -146,7 +146,19 @@ namespace Smile {
         Vec4  SkyAmbientSHG;
         Vec4  SkyAmbientSHB;
         Vec4  SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas), yzw = -
+
+        // --- Cascatas do DDGI (append no fim) ----------------------------------------------
+        // O MESMO bloco que vai para o fog, o ReSTIR GI, as reflexoes e o DDGICB, preenchido por
+        // FDDGI::CascadeConstants(). O DDGIGridMin/DDGIGridCount acima continuam sendo a cascata
+        // GROSSA — quem le aqueles sem saber de cascata quer dizer "o volume da cena" (fade de
+        // borda, fallback de fora). Ver FDDGI::GridMin.
+        FDDGICascadeConstants DDGICascades;
     };
+    // Offset PRESO, como no DDGIConstants. Nao e zelo: durante a fase 6.2a uma substituicao
+    // deixou dois arrays de cascata sobrepostos num cbuffer, e o segundo caia alem do que a CPU
+    // escreve — lixo lido em silencio. Um assert de offset teria pego na compilacao.
+    static_assert(offsetof(FrameConstants, DDGICascades) == 496,
+                  "o bloco de cascatas deve permanecer anexado ao fim do FrameConstants");
 
     // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
     // (StructuredBuffer t17, root SRV). PrevPosInvRadius fica no fim para os shaders raster

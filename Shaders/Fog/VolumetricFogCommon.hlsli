@@ -44,6 +44,9 @@ cbuffer VolFogCB : register(b0) {
     // Conservative depth (UE): froxel inteiro atras da geometria nao computa luz.
     row_major float4x4 CurViewProj; // frame ATUAL, SEM jitter (NDC da face do froxel)
     float4 ConsDepthParams; // x = ligado (>0.5), y = render W, z = render H, w unused
+    // Cascatas do DDGI: o DDGIGridMin acima e a GROSSA (ver FDDGI::GridMin).
+    float4 DDGICascadeParams;
+    float4 DDGICascadeGridMinSpacing[4];
 };
 
 // Profundidade (view-Z linear) do slice — inverso de VolFog_SliceFromDepth.

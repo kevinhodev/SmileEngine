@@ -260,6 +260,7 @@ namespace Smile {
         c.DDGIGridMin    = _P.DDGIGridMin;
         c.DDGIGridCount  = _P.DDGIGridCount;
         c.DDGIParams     = _P.DDGIParams;
+        c.DDGICascades   = _P.DDGICascades;
         c.AmbientFallback= { _P.SkyAmbient.X, _P.SkyAmbient.Y, _P.SkyAmbient.Z,
                              _P.DDGIVolumeFadeProbes };
 

@@ -33,6 +33,10 @@ cbuffer DDGICB : register(b0) {
     float4 RadianceCacheResources;
     float4 MiscParams3;       // x = hysteresis regional DESTE atlas, y = 1 se a janela dele esta
                               // aberta (e mais longa que a da irradiancia — ver DDGI.h)
+    // Cascatas: a posicao da sonda no teste de invalidacao regional e o clamp dos momentos saem
+    // daqui, nao do GridMinSpacing (que e a GROSSA).
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
@@ -88,7 +92,9 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // Cobre a diagonal da gaiola 2x2x2 (sqrt(3)*spacing) + bias/offset com folga; hits alem disso
     // nao interessam ao Chebyshev (o ponto amostrado esta sempre dentro da gaiola) e so inflavam
     // media/variancia, deixando o teste permissivo demais (leak atraves de parede) com 4.0.
-    float distMax = GridMinSpacing.w * 2.6f;
+    // Da CASCATA: o clamp dos momentos e 2,6 espacamentos, e o da grossa deixaria a fina medindo
+    // visibilidade quatro vezes alem da propria gaiola.
+    float distMax = GICascadeGridMinSpacing[cascade].w * 2.6f;
 
     uint  frame = (uint)TraceParams.x;
     float sumD = 0.0f, sumD2 = 0.0f, wsum = 0.0f;
@@ -141,8 +147,10 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // Janela propria: a do dist e mais longa, entao o flag de "aberta" nao pode ser o da
     // irradiancia. So o w do InvalidateMin e substituido; a CAIXA e a mesma.
     const float4 distInvMin = float4(InvalidateMin.xyz, MiscParams3.y);
-    hyst = DDGI_RegionalHysteresis(pc, ProbeData[probeIdx].xyz, GridMinSpacing.xyz,
-                                   GridMinSpacing.w, distInvMin, InvalidateMaxHyst.xyz,
+    // Grid da CASCATA da sonda: o teste compara a posicao de mundo dela contra a caixa, e
+    // reconstrui-la com a origem/espacamento da grossa poria a sonda da fina em outro lugar.
+    hyst = DDGI_RegionalHysteresis(pc, ProbeData[probeIdx].xyz, GICascadeGridMinSpacing[cascade].xyz,
+                                   GICascadeGridMinSpacing[cascade].w, distInvMin, InvalidateMaxHyst.xyz,
                                    MiscParams3.x, hyst);
     DistAtlas[texel] = lerp(result, prev, hyst);
 

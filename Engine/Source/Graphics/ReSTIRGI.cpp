@@ -262,6 +262,7 @@ namespace Smile {
         CPU.RadianceCacheCamCell     = RadianceCacheParams.CameraPosCell;
         CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
+        CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
         // O slot bindless viaja como float; -1 e o sentinela de "captura off" (o shader testa
         // < 0). Sem a permutacao instrumentada isto nunca e lido, mas fica coerente de todo jeito.

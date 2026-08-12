@@ -236,6 +236,68 @@ int  DDGI_GlobalProbeIndex(int localIdx, int cascade, int3 count) {
     return localIdx + cascade * DDGI_ProbesPerCascade(count);
 }
 
+#define DDGI_MAX_CASCADES 4
+// Largura do blend fino->grosso, em CELULAS medidas na cascata que esta saindo. A Flax usa 2,5
+// sondas (DDGI_CASCADE_BLEND_SIZE); corte seco deixaria uma costura visivel exatamente onde as
+// duas estimativas mais divergem, que e a borda da fina.
+#define DDGI_CASCADE_BLEND_CELLS 2.5f
+
+// Peso de permanencia na cascata: 1 no miolo, caindo a 0 nas ultimas DDGI_CASCADE_BLEND_CELLS
+// celulas antes da borda da gaiola. Fora dela, 0.
+//
+// Medido na posicao CRUA, sem o bias de superficie. Isto e a "gaiola pelo ponto cru" que a
+// auditoria exige que entre junto com a cascata, e aqui ela deixa de ser detalhe: o bias escala
+// com o espacamento, entao numa cascata de 2 m ele vale ate 0,30 m — se a selecao usasse o ponto
+// viesado, dois pixels vizinhos de uma parede rasante poderiam escolher cascatas DIFERENTES por
+// causa de um deslocamento artificial. O Flax faz igual (baseProbeCoords sai de worldPosition, e
+// o viesado so entra no alpha do trilinear).
+float DDGI_CascadeWeight(float3 rawPos, float3 gridMin, float spacing, int3 count) {
+    float3 gridMax = gridMin + (float3)(count - 1) * spacing;
+    float  margin  = 0.5f * spacing; // a gaiola vai meia celula alem da ultima sonda
+    float3 inside  = min(rawPos - (gridMin - margin), (gridMax + margin) - rawPos);
+    float  d       = min(inside.x, min(inside.y, inside.z));
+    return saturate(d / max(DDGI_CASCADE_BLEND_CELLS * spacing, 1e-4f));
+}
+
+// Qual cascata serve o ponto, e com quem ela se mistura na borda.
+//   uma cascata      -> { 0, 0, 1 }
+//   dentro de uma fina -> { fina, fina+1, peso }
+//   fora das finas   -> { grossa, grossa, 1 }
+// `Next == Primary` e o sinal de "nao ha blend": quem consome usa isso para pular o segundo
+// gather inteiro, que e o custo dominante.
+struct DDGICascadeChoice {
+    int   Primary;
+    int   Next;
+    float PrimaryWeight;
+};
+
+// Cascata mais FINA que contem o ponto, com o peso de permanencia nela (1 = so ela; <1 = mistura
+// com a proxima).
+//
+// So as cascatas ANTERIORES a grossa desvanecem. A grossa e fallback INCONDICIONAL: peso 1 em
+// qualquer ponto, e quem cuida da borda externa dela continua sendo o DDGI_VolumeWeight — que e
+// configuravel (VolumeFadeProbes), existe desde antes das cascatas e desvanece para o ambiente
+// hemisferico ao longo de N celulas, nao 2,5. Aplicar o fade de cascata tambem nela substituiria
+// aquele em silencio, e a equivalencia com o comportamento historico morreria exatamente quando o
+// seletor fosse ligado — sem erro de compilacao em lugar nenhum.
+//
+// O contrato com quem chama: o gate de "esta dentro do volume da cena" ja foi feito la fora, pelo
+// DDGI_VolumeWeight sobre a GROSSA. Aqui so se escolhe QUAL cascata serve o ponto.
+DDGICascadeChoice DDGI_SelectCascade(float3 rawPos, float4 cascades[DDGI_MAX_CASCADES],
+                                     int cascadeCount, int3 count) {
+    DDGICascadeChoice ch;
+    const int coarse = max(cascadeCount - 1, 0);
+    for (int c = 0; c < coarse; ++c) {
+        float w = DDGI_CascadeWeight(rawPos, cascades[c].xyz, cascades[c].w, count);
+        if (w > 0.0f) {
+            ch.Primary = c; ch.Next = c + 1; ch.PrimaryWeight = w;
+            return ch;
+        }
+    }
+    ch.Primary = coarse; ch.Next = coarse; ch.PrimaryWeight = 1.0f;
+    return ch;
+}
+
 float3 DDGI_ProbeWorldPos(int3 c, float3 gridMin, float spacing) {
     return gridMin + (float3)c * spacing;
 }
@@ -569,4 +631,75 @@ float3 SampleDDGIIrradianceCheb(
     return (wsum > 0.0f) ? (sum / wsum) : float3(0.0f, 0.0f, 0.0f);
 }
 
-#endif 
+// === Gather com cascatas ==================================================================
+// Os DOIS wrappers abaixo sao o unico lugar onde selecao e blend acontecem. Cada consumidor que
+// compusesse isso por conta propria seria mais uma copia para divergir — foi assim que a ordem do
+// atlas e o clique do visualizador se separaram uma vez.
+//
+// Sao DOIS e nao um porque o fog volumetrico nao tem atlas de distancia nem ProbeData: obriga-lo
+// a passar pelo caminho do Chebyshev acrescentaria bindings e acoplamento sem lhe dar nada.
+//
+// O que eles NAO fazem, de proposito: o peso do volume (DDGI_VolumeWeight) e o fallback de fora
+// dele. Cada caller tem o seu — o deferred e o fog caem no ambiente hemisferico, o HitShading cai
+// em PRETO (nao existe ambiente colorido no cbuffer de um passe de RT). Devolver "irradiancia do
+// DDGI e mais nada" e o que mantem essa diferenca com o dono dela.
+//
+// A selecao usa SEMPRE a posicao CRUA. Ver DDGI_CascadeWeight.
+
+float3 SampleDDGIIrradianceCascaded(
+        Texture2D<float4> atlas, SamplerState samp, float3 rawPos, float3 N,
+        float4 cascades[DDGI_MAX_CASCADES], int cascadeCount, int3 count,
+        int tile, float2 atlasInvSize, int tilesPerRow) {
+    DDGICascadeChoice ch = DDGI_SelectCascade(rawPos, cascades, cascadeCount, count);
+    float3 primary = SampleDDGIIrradiance(atlas, samp, rawPos, N,
+                                          cascades[ch.Primary].xyz, cascades[ch.Primary].w,
+                                          count, tile, atlasInvSize, tilesPerRow, ch.Primary);
+    if (ch.Next == ch.Primary || ch.PrimaryWeight >= 0.999f) return primary;
+
+    float3 next = SampleDDGIIrradiance(atlas, samp, rawPos, N,
+                                       cascades[ch.Next].xyz, cascades[ch.Next].w,
+                                       count, tile, atlasInvSize, tilesPerRow, ch.Next);
+    return lerp(next, primary, ch.PrimaryWeight);
+}
+
+// ⚠️ O BIAS E RECALCULADO POR CASCATA, e e o erro mais facil de cometer aqui. Ele nao entra
+// pronto porque `DDGI_SurfaceBias` escala com o ESPACAMENTO: ele e um deslocamento de
+// auto-sombra dimensionado para a densidade de sondas daquela cascata, entao usar o de outra e
+// simplesmente usar o parametro errado.
+//
+// A magnitude, com os defaults (escala 0,2 e teto de 0,40 m): a fina de 2 m pede
+// 0,75*2*0,2 = 0,30 m; a grossa de 8 m pediria 1,20 m e leva o teto, ficando em 0,40 m. A
+// diferenca e 0,10 m — 0,05 celula da fina, nao uma celula inteira. Com o teto DESLIGADO
+// (SurfaceBiasMax = 0, o comportamento historico) ela vai a 0,90 m, ou 0,45 celula.
+//
+// O risco nao e o tamanho do passo, e o que ele atravessa: 0,10 m ja e da ordem da espessura de
+// parede do Bistro, e a razao de o teto existir e justamente a amostra nao cruzar para o outro
+// lado. Errar isso reaparece como leak na faixa do blend, que e onde as duas estimativas ja
+// divergem mais. Por isso a assinatura pede (V, escala, teto) e nao um biasVec pronto.
+float3 SampleDDGIIrradianceChebCascaded(
+        Texture2D<float4> irrAtlas, Texture2D<float4> distAtlas, SamplerState samp,
+        float3 rawPos, float3 N, float3 V,
+        float4 cascades[DDGI_MAX_CASCADES], int cascadeCount, int3 count,
+        int irrTile, float2 irrInvSize, int distTile, float2 distInvSize,
+        Buffer<float4> probeData, uint skipMode, int tilesPerRow,
+        float biasScale, float biasMax) {
+    DDGICascadeChoice ch = DDGI_SelectCascade(rawPos, cascades, cascadeCount, count);
+
+    float3 primary = SampleDDGIIrradianceCheb(
+        irrAtlas, distAtlas, samp, rawPos, N,
+        cascades[ch.Primary].xyz, cascades[ch.Primary].w, count,
+        irrTile, irrInvSize, distTile, distInvSize,
+        DDGI_SurfaceBias(N, V, cascades[ch.Primary].w, biasScale, biasMax),
+        probeData, skipMode, tilesPerRow, ch.Primary);
+    if (ch.Next == ch.Primary || ch.PrimaryWeight >= 0.999f) return primary;
+
+    float3 next = SampleDDGIIrradianceCheb(
+        irrAtlas, distAtlas, samp, rawPos, N,
+        cascades[ch.Next].xyz, cascades[ch.Next].w, count,
+        irrTile, irrInvSize, distTile, distInvSize,
+        DDGI_SurfaceBias(N, V, cascades[ch.Next].w, biasScale, biasMax),
+        probeData, skipMode, tilesPerRow, ch.Next);
+    return lerp(next, primary, ch.PrimaryWeight);
+}
+
+#endif

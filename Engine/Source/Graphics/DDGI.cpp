@@ -268,6 +268,14 @@ namespace Smile {
         constexpr int kMaxPerAxis = 128; // rede secundaria; quem decide e o gridFits abaixo
         constexpr u64 kTexMax     = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 
+        // Fixado ANTES do dimensionamento: o gridFits mede atlas, ProbesTrace e dispatch pelo
+        // TOTAL de sondas, que e por cascata vezes esta contagem. Dimensionar pelo teto
+        // (kMaxCascades) engrossaria o espacamento de quem usa uma so; dimensionar por 1 e depois
+        // acender a segunda estouraria em silencio. Trocar a contagem exige refazer o
+        // SetupForScene, que e o que realoca os recursos.
+        CascadeCount_ = DesiredCascades < 1 ? 1u
+                      : (DesiredCascades > kMaxCascades ? kMaxCascades : DesiredCascades);
+
         Cascades[0].Spacing = std::max(maxExt / (kTargetMax - 1), 0.5f);
         auto axisCount = [&](f32 e) {
             int n = static_cast<int>(std::ceil(e / Cascades[0].Spacing)) + 1;
@@ -296,24 +304,34 @@ namespace Smile {
         //
         // O shader nao reproduz nada disto: ele le tilesPerRow da LARGURA do atlas. Por isso a
         // heuristica pode mudar sem risco de divergir, e sem tocar em shader nenhum.
-        auto atlasGridFor = [](u32 CX, u32 CY, u32 CZ, u32& OutPerRow, u32& OutRows) {
+        // `Cascades` entra no criterio porque a altura REAL do atlas e RowsPerCascade x cascatas.
+        // Otimizar so o bloco de uma cascata escolheria um formato quadrado por cascata e alto
+        // demais no total — e podia fazer o gridFits recusar um grid que outro empacotamento
+        // acomodaria, que e o mesmo erro que o seletor de bandas ja tinha cometido uma vez.
+        auto atlasGridFor = [](u32 CX, u32 CY, u32 CZ, u32 Cascades_, u32& OutPerRow,
+                               u32& OutRows) {
             CX = std::max(CX, 1u); CY = std::max(CY, 1u); CZ = std::max(CZ, 1u);
+            Cascades_ = std::max(Cascades_, 1u);
             OutPerRow = CX; OutRows = CY * CZ; // zRowsPerBand = 1
             u64 Best  = 0;
             for (u32 ZRows = 1; ZRows <= CZ; ++ZRows) {
                 const u32 PerRow = CX * ZRows;
                 const u32 Rows   = ((CZ + ZRows - 1) / ZRows) * CY;
-                const u64 Score  = std::max<u64>(PerRow, Rows);
+                const u64 Score  = std::max<u64>(PerRow, static_cast<u64>(Rows) * Cascades_);
                 if (Best == 0 || Score < Best) { Best = Score; OutPerRow = PerRow; OutRows = Rows; }
             }
         };
         auto gridFits = [&] {
-            const u64 Probes = static_cast<u64>(CountX) * CountY * CountZ;
-            u32 PerRow32 = 1, Rows32 = 1;
+            // TUDO que segue e por CASCATA ou TOTAL, e confundir os dois foi o jeito obvio de
+            // errar: a grade de tiles e por cascata (a altura multiplica), mas atlas, ProbesTrace,
+            // buffers e dispatch veem o TOTAL. Os nomes carregam a distincao.
+            const u64 PerCascade = static_cast<u64>(CountX) * CountY * CountZ;
+            const u64 Probes     = PerCascade * CascadeCount_;
+            u32 PerRow32 = 1, RowsPerCascade32 = 1;
             atlasGridFor(static_cast<u32>(CountX), static_cast<u32>(CountY),
-                         static_cast<u32>(CountZ), PerRow32, Rows32);
+                         static_cast<u32>(CountZ), CascadeCount_, PerRow32, RowsPerCascade32);
             const u64 PerRow = PerRow32;
-            const u64 Rows   = Rows32;
+            const u64 Rows   = static_cast<u64>(RowsPerCascade32) * CascadeCount_;
             // Maior dimensao de cada recurso. O atlas de distancia (stride 16) e o mais apertado
             // dos dois; o ProbesTrace paga a largura em raios.
             const u64 TraceRow = std::min<u64>(Probes, kTraceProbesPerRow);
@@ -342,10 +360,9 @@ namespace Smile {
                        " m nao cabe nos atlas (limite de dimensao de textura); aberto para " +
                        std::to_string(Cascades[0].Spacing) + " m");
         }
-        // A cascata que cobre a cena inteira e a ULTIMA; com uma so, ela e tambem a de indice 0.
-        // O SetupForScene dimensiona ESSA — as finas, quando existirem, saem dela por escala e
-        // seguem a camera (fase 6.2), nao a AABB.
-        CascadeCount_ = 1;
+        // A cascata que cobre a cena inteira e a ULTIMA. O SetupForScene dimensiona ESSA — as
+        // finas saem dela por escala e seguirao a camera (6.2b), nao a AABB. Aqui todas nascem
+        // iguais a grossa; quem as reposiciona por frame e o PrepareCascadePlacement.
         const f32 CoarseSpacing = Cascades[0].Spacing;
         const Vec3 CoarseMin{ _AABBMin.X - 0.5f * CoarseSpacing,
                               _AABBMin.Y - 0.5f * CoarseSpacing,
@@ -364,7 +381,7 @@ namespace Smile {
         // As cascatas empilham em blocos de LINHAS (ver DDGI_TileOrigin): a grade de uma cascata
         // e sempre a mesma, e a altura total multiplica pela contagem.
         atlasGridFor(static_cast<u32>(CountX), static_cast<u32>(CountY),
-                     static_cast<u32>(CountZ), TilesPerRow, TileRowsPerCascade);
+                     static_cast<u32>(CountZ), CascadeCount_, TilesPerRow, TileRowsPerCascade);
         const u32 TileRows = TileRowsPerCascade * CascadeCount_;
         AtlasWidth      = TilesPerRow * (kTileSize + 2);
         AtlasHeight     = TileRows    * (kTileSize + 2);
@@ -535,7 +552,11 @@ namespace Smile {
         _Device->CopyDescriptors(1, &UDst, &UDstCount, 2, USrc, USrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        CPU.GridMinSpacing  = { Cascades[0].GridMin.X, Cascades[0].GridMin.Y, Cascades[0].GridMin.Z, Cascades[0].Spacing };
+        // A GROSSA, nao a cascata 0: quem le este campo sem saber de cascata (fade de borda,
+        // alcance, folga da invalidacao) quer dizer "o volume da cena". Ver FDDGI::GridMin.
+        const FCascade& Coarse = Cascades[CoarseCascade()];
+        CPU.GridMinSpacing  = { Coarse.GridMin.X, Coarse.GridMin.Y, Coarse.GridMin.Z,
+                                Coarse.Spacing };
         CPU.GridCountRays   = { (f32)CountX, (f32)CountY, (f32)CountZ, (f32)kRaysPerProbe };
         CPU.AtlasParams     = { (f32)kTileSize, (f32)AtlasWidth, (f32)AtlasHeight, (f32)NumProbes };
         CPU.DistAtlasParams = { (f32)kDistTileSize, (f32)DistAtlasWidth, (f32)DistAtlasHeight, 0.0f };
@@ -604,6 +625,16 @@ namespace Smile {
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
+    void FDDGI::PrepareCascadePlacement(const Vec3& _CameraPos) {
+        (void)_CameraPos;
+        if (!Ready) return;
+        // 6.2a: todas as cascatas coincidem com a que cobre a cena, entao nao ha o que mover. A
+        // funcao existe agora, e nao quando for necessaria, porque o valor dela e a POSICAO na
+        // sequencia do frame: ela roda antes de os consumidores capturarem CascadeConstants(),
+        // e o UpdatePerFrame roda depois. Criar a costura junto com a cascata movel deixaria a
+        // escolha do lugar para o mesmo commit que ja teria muito o que validar.
+    }
+
     void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,
                                const Vec3& _SunColor, u32 _FrameIndex, u32 _PunctualLightCount) {
         if (!Ready) return;
@@ -627,7 +658,13 @@ namespace Smile {
         // ILUMINA o objeto e e iluminada por ele de fora da AABB dele, entao a caixa cresce um
         // espacamento de grid por lado p/ pegar a camada de sondas em volta, que e onde o color
         // bleed aparece. Como e derivada e nao acumulada, N chamadas custam o mesmo pad que uma.
-        const f32 Pad = Cascades[0].Spacing;
+        //
+        // Espacamento da cascata GROSSA, e nao o da cascata 0 (que passa a ser a mais FINA). A
+        // caixa e UMA so e vale para todas as cascatas, entao a folga tem de alcancar a camada de
+        // sondas em volta na grade mais ESPARSA — uma folga de 2 m deixaria sondas da grade de
+        // 8 m fora da invalidacao, preservando iluminacao e momentos de uma cena que ja mudou. A
+        // folga maior e conservadora para a fina, que e o lado seguro do erro.
+        const f32 Pad = Spacing();
         CPU.InvalidateMin     = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad,
                                   InvalidateMin_.Z - Pad, Invalidating ? 1.0f : 0.0f };
         CPU.InvalidateMaxHyst = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad,
@@ -636,6 +673,8 @@ namespace Smile {
         // z: o RecordUpdate so decrementa RelocateFramesLeft na hora de despachar, entao aqui
         // "> 0" ja significa "o passe de classificacao roda neste frame" — o trace usa isso para
         // mandar os 64 raios e nao alimentar o classificador com a propria decimacao.
+        // Cascatas: mesmo bloco que vai para os outros quatro cbuffers (ver CascadeConstants).
+        CPU.Cascades = CascadeConstants();
         CPU.MiscParams3       = { kInvalidateDistHysteresis,
                                   InvalidateDistFramesLeft_ > 0 ? 1.0f : 0.0f,
                                   RelocateFramesLeft > 0 ? 1.0f : 0.0f, 0.0f };

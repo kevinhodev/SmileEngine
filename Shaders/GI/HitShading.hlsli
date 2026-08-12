@@ -322,9 +322,11 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     // O papel de "direcao da camera" no bias e do raio: quem observa este ponto e a origem do
     // raio, entao V = -rayDir. Sem isso o termo de view empurraria o ponto para uma direcao sem
     // relacao com a visada e o bias perderia o sentido geometrico.
+    // O bias em si e calculado DENTRO do wrapper, uma vez por cascata — ele escala com o
+    // espacamento e no blend as duas cascatas querem valores diferentes. Aqui sobra so a regra de
+    // quem e o "V": a direcao da camera no bias e a do RAIO, porque quem observa este ponto e a
+    // origem dele. Por isso o wrapper recebe -rayDir.
     float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
-    float3 hitBias = DDGI_SurfaceBias(hitN, -rayDir, P.Spacing,
-                                      GIBiasParams.x, GIBiasParams.y);
     // Fora do volume o gather clampa e estende a ultima fileira de sondas ao infinito. Na tela
     // isso e substituido pelo ambiente hemisferico; aqui a radiancia do hit REALIMENTA o atlas,
     // entao extrapolar seria pior — a borda se reinjetaria. Sem o ambiente colorido do deferred
@@ -345,11 +347,19 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         // GIDistParams — os cinco shaders que incluem este arquivo o declaram, entao nao ha
         // campo novo a plumbar nem estado duplicado a dessincronizar.
         const int tilesPerRow = DDGI_TilesPerRow(GIDistParams.y, (int)GIDistParams.x);
-        indirect = SampleDDGIIrradianceCheb(
-            IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN,
-            P.GridMin, P.Spacing, P.Count, P.AtlasTile, P.AtlasInvSize,
-            (int)GIDistParams.x, distInvSize, hitBias, GIProbeData, giHitFlags & 3u,
-            tilesPerRow, /*cascata*/ 0); // F6.1: volume unico; selecao entra na F6.2
+        // Wrapper com selecao e blend de cascata. O bias NAO entra pronto — ver a nota no
+        // wrapper: ele escala com o espacamento e cada cascata quer o seu. O `hitBias` calculado
+        // acima some por isso.
+        //
+        // O fallback deste caller e PRETO, e nao ambiente hemisferico: nao existe cor de ambiente
+        // no cbuffer de um passe de RT. Por isso o volW continua aqui fora, e o wrapper devolve
+        // so a irradiancia do DDGI.
+        indirect = SampleDDGIIrradianceChebCascaded(
+            IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN, -rayDir,
+            GICascadeGridMinSpacing, (int)GICascadeParams.x, P.Count,
+            P.AtlasTile, P.AtlasInvSize, (int)GIDistParams.x, distInvSize,
+            GIProbeData, giHitFlags & 3u, tilesPerRow,
+            GIBiasParams.x, GIBiasParams.y);
         if (volW < 1.0f) indirect *= volW;
     }
 

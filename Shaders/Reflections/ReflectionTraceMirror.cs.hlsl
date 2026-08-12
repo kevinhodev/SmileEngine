@@ -37,6 +37,9 @@ cbuffer ReflectionCB : register(b0) {
     float4 RadianceCacheCamCell;
     float4 RadianceCacheLodCapFlags;
     float4 RadianceCacheResources;
+    // Cascatas do DDGI, consumidas pelo gather do 2o bounce no HitShading (contrato por NOME).
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 // Ver ReflectionTrace.cs.hlsl: politica por passe, no molde do Context.CullingMode do Lumen.

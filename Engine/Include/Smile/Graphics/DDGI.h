@@ -37,6 +37,33 @@ namespace Smile {
         Geometry     // objeto: criado, removido, movido, escondido/mostrado
     };
 
+    // Bloco de cascatas, IDENTICO nos cinco cbuffers que o carregam (FrameConstants, fog,
+    // ReSTIR GI, reflexoes e o DDGICB). Existe como POD, e nao como cinco pares de campos soltos,
+    // porque cinco loops de preenchimento independentes produzindo o mesmo estado e exatamente
+    // como um deles fica para tras numa edicao futura. Quem preenche e FDDGI::CascadeConstants().
+    //
+    // Espelhado em HLSL pelo par (CascadeParams, CascadeGridMinSpacing[4]) — a ordem dos dois
+    // campos e o tamanho do array fazem parte do contrato.
+    struct alignas(16) FDDGICascadeConstants {
+        Vec4 Params{ 1.0f, 0.0f, 0.0f, 0.0f }; // x = nº de cascatas, y = sondas por cascata
+        // Espacamento 1 e nao 0 no DEFAULT, e isto e a garantia e nao um detalhe: o seletor de
+        // cascata divide pelo espacamento, entao um bloco zerado — o que qualquer instancia
+        // default-construida seria — daria divisao por zero se algum caminho novo o ler. A
+        // primeira versao garantia isso a mao no caminho "GI desligado" do FrameConstants, e por
+        // isso a garantia NAO valia para os outros quatro cbuffers.
+        Vec4 GridMinSpacing[4]{ { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f },
+                                { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } };
+    };
+    // O tamanho sozinho nao prende o contrato: 80 bytes tambem passariam com os campos trocados
+    // de ordem ou com padding no meio. O offset e o alinhamento e que fazem o bloco ser
+    // copiavel para um cbuffer sem tradutor.
+    static_assert(sizeof(FDDGICascadeConstants) == 80,
+                  "o bloco de cascatas e copiado campo-a-campo para cinco cbuffers");
+    static_assert(alignof(FDDGICascadeConstants) == 16,
+                  "o bloco entra em cbuffer: alinhamento de float4");
+    static_assert(offsetof(FDDGICascadeConstants, GridMinSpacing) == 16,
+                  "o array tem de seguir imediatamente o Params, sem padding");
+
     struct alignas(256) DDGIConstants {
         Vec4 GridMinSpacing;  // xyz = origem do grid (mundo), w = espacamento
         Vec4 GridCountRays;   // xyz = nº de probes por eixo, w = raios por probe
@@ -81,6 +108,10 @@ namespace Smile {
         Vec4 MiscParams3;     // x = hysteresis regional do dist atlas, y = 1 se a janela dele
                               // esta aberta, z = 1 se o passe de relocacao/classificacao roda
                               // neste frame (o TRACE le p/ nao decimar; ver DDGITrace), w = livre
+        // Cascatas. Anexado no FIM como todo o resto, p/ nao deslocar offset nenhum. A cascata 0 e
+        // a mais FINA; a de indice (contagem-1) e a que cobre a cena. Contagem de sondas comum a
+        // todas, entao so este par varia — ver FDDGI::FCascade.
+        FDDGICascadeConstants Cascades; // = CascadeParams + CascadeGridMinSpacing[4] no HLSL
     };
     static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
                   "DDGIConstants divergiu do cbuffer DDGICB");
@@ -90,6 +121,8 @@ namespace Smile {
                   "InvalidateMin/MaxHyst devem permanecer anexados ao fim do DDGICB");
     static_assert(offsetof(DDGIConstants, MiscParams3) == 368,
                   "MiscParams3 deve permanecer anexado ao fim do DDGICB");
+    static_assert(offsetof(DDGIConstants, Cascades) == 384,
+                  "o bloco de cascatas deve permanecer anexado ao fim do DDGICB");
 
     // Menor n com H^n <= Residual. Existe para a JANELA da invalidacao regional acompanhar a
     // HISTERESE dela sozinha: as duas so fazem sentido juntas — o que a regiao promete e "sobra
@@ -169,6 +202,21 @@ namespace Smile {
         // ja carregada precisa consultar antes (Renderer::OnSceneStructureChanged).
         u32 InstanceGeoCapacity() const { return InstanceGeoCount; }
 
+        // Decide ONDE cada cascata fica neste frame. Tem de rodar ANTES de qualquer consumidor
+        // capturar CascadeConstants() — hoje sao tres, e todos capturam cedo: o FrameConstants, o
+        // estado de RT (reflexoes/ReSTIR) e o fog.
+        //
+        // A costura existe por ordenacao, nao por elegancia. O UpdatePerFrame roda DEPOIS deles,
+        // dentro do PrepareIndirectLighting; se a colocacao morasse la, a cascata fina se moveria
+        // para a posicao nova, o atlas seria atualizado com ela, e os consumidores daquele frame
+        // ainda estariam amostrando com a origem ANTERIOR — uma dessincronizacao de um frame,
+        // visivel como a iluminacao arrastando atras da camera. Com a cascata parada isto e um
+        // no-op; a 6.2b e quem enche a funcao.
+        //
+        // Regra da casa daqui pra frente: PrepareCascadePlacement DECIDE, UpdatePerFrame apenas
+        // PUBLICA o que ja foi decidido.
+        void PrepareCascadePlacement(const Vec3& CameraPos);
+
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, u32 PunctualLightCount = 0);
 
@@ -208,12 +256,32 @@ namespace Smile {
         u32  CascadeCount()    const { return CascadeCount_; }
         u32  RaysPerProbe()    const { return kRaysPerProbe; }
 
-        // Cascata 0 e a mais FINA. Com uma cascata so, estes dois sao o volume unico de sempre —
-        // e por isso os consumidores que ainda nao sabem de cascata continuam corretos.
-        Vec3 GridMin()   const { return Cascades[0].GridMin; }
-        f32  Spacing()   const { return Cascades[0].Spacing; }
+        // Cascata 0 e a mais FINA; a ULTIMA e a que cobre a cena.
+        //
+        // GridMin()/Spacing() devolvem a GROSSA de proposito. Todo consumidor que existia antes
+        // das cascatas — o fade de borda, o fallback fora do volume, a folga da invalidacao
+        // regional, o alcance do trace — quer dizer "o volume da cena", e essa e a grossa. Fazer
+        // estes dois apontarem para a cascata 0 mudaria o significado de cada um deles em
+        // silencio no dia em que a segunda cascata acender. Com uma cascata os dois sao o mesmo.
+        u32  CoarseCascade() const { return CascadeCount_ > 0 ? CascadeCount_ - 1 : 0; }
+        Vec3 GridMin()   const { return Cascades[CoarseCascade()].GridMin; }
+        f32  Spacing()   const { return Cascades[CoarseCascade()].Spacing; }
         Vec3 CascadeGridMin(u32 C) const { return Cascades[C < kMaxCascades ? C : 0].GridMin; }
         f32  CascadeSpacing(u32 C) const { return Cascades[C < kMaxCascades ? C : 0].Spacing; }
+
+        // Fonte UNICA do bloco de cascatas para todos os cbuffers que o carregam. As entradas
+        // acima da contagem repetem a GROSSA em vez de ficarem lixo: se algum dia um shader ler
+        // fora da faixa, ele amostra o volume da cena — degradado, nao indefinido.
+        FDDGICascadeConstants CascadeConstants() const {
+            FDDGICascadeConstants C{};
+            C.Params = { static_cast<f32>(CascadeCount_),
+                         static_cast<f32>(ProbesPerCascade_), 0.0f, 0.0f };
+            for (u32 i = 0; i < kMaxCascades; ++i) {
+                const FCascade& Cs = Cascades[i < CascadeCount_ ? i : CoarseCascade()];
+                C.GridMinSpacing[i] = { Cs.GridMin.X, Cs.GridMin.Y, Cs.GridMin.Z, Cs.Spacing };
+            }
+            return C;
+        }
         Vec3 GridCount() const { return Vec3{ (f32)CountX, (f32)CountY, (f32)CountZ }; }
         f32  AtlasW()    const { return (f32)AtlasWidth; }
         f32  AtlasH()    const { return (f32)AtlasHeight; }
@@ -499,6 +567,9 @@ namespace Smile {
         };
         FCascade Cascades[kMaxCascades]{};
         u32  CascadeCount_    = 1;
+        // Pedido pelo usuario; so vira CascadeCount_ no proximo SetupForScene, porque a contagem
+        // dimensiona atlas e buffers. Default 1 = comportamento historico ate a 6.2b ter A/B.
+        u32  DesiredCascades  = 1;
         int  CountX = 0, CountY = 0, CountZ = 0;
         u32  ProbesPerCascade_ = 0;
         u32  NumProbes   = 0; // TOTAL = ProbesPerCascade_ * CascadeCount_

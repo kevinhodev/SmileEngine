@@ -5,6 +5,7 @@
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants
 #include "Smile/Graphics/ReGIR.h"
 #include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/RenderPass.h"
@@ -63,7 +64,12 @@ namespace Smile {
         Vec4  RadianceCacheCamCell;
         Vec4  RadianceCacheLodCapFlags;
         Vec4  RadianceCacheResources;
+        // Cascatas do DDGI, para o gather do 2o bounce no HitShading. Mesmo bloco dos outros
+        // quatro cbuffers; o GIGridMinSpacing continua sendo a GROSSA (peso do volume).
+        FDDGICascadeConstants GICascades;
     };
+    static_assert(offsetof(ReSTIRGIConstants, GICascades) == 560,
+                  "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
     static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
                   "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
     static_assert(offsetof(ReSTIRGIConstants, SkyParams) == 464,
@@ -137,6 +143,9 @@ namespace Smile {
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        // Cascatas: empurradas por FRAME (nao no SetGIParams, que so roda em setup/resize) porque
+        // a origem da cascata fina segue a camera. Dono = Renderer, fonte = FDDGI.
+        void SetGICascades(const FDDGICascadeConstants& C) { GICascadesCPU = C; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
         // COM o bit de update: o reservoir do ReSTIR GI ja guarda radiancia nao-direcional (e por
         // isso que o RoughnessMin existe aqui). Ver FRadianceCache::ShaderParams.
@@ -271,6 +280,7 @@ namespace Smile {
         Vec4 GIGridMinSpacing{ 0, 0, 0, 1 };
         Vec4 GIGridCount{ 0, 0, 0, 0 };
         Vec4 GIAtlasParams{ 6, 1, 1, 0 };
+        FDDGICascadeConstants GICascadesCPU{};
         f32  GIMaxRayDist = 0.0f;
 
         u32  Width = 0, Height = 0;

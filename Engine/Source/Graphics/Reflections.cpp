@@ -648,6 +648,7 @@ namespace Smile {
         CPU.RadianceCacheCamCell     = RadianceCacheParams.CameraPosCell;
         CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
+        CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };

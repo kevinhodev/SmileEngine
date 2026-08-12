@@ -47,6 +47,9 @@ cbuffer FrameCB : register(b0) {
     float4 SkyAmbientSHG;
     float4 SkyAmbientSHB;
     float4 SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas)
+    // Cascatas do DDGI (append no fim do FrameConstants). O DDGIGridMin acima e a GROSSA.
+    float4 DDGICascadeParams;          // x = nº de cascatas, y = sondas por cascata
+    float4 DDGICascadeGridMinSpacing[4];
 };
 
 #include "Atmosphere/AtmosphereMath.hlsli"
@@ -123,9 +126,6 @@ float3 DDGI_FallbackAmbient(float3 N) {
     return amb / giI;
 }
 
-// F6.1: o espaco de indice das sondas ja e por cascata, mas so existe UMA — a selecao da
-// cascata mais fina que contem o ponto entra na F6.2, junto com a segunda.
-static const int kDDGICascade = 0;
 
 float3 SampleSceneDDGI(float3 worldPos, float3 N) {
     float2 atlasInvSize = float2(1.0f / DDGIParams.z, 1.0f / DDGIParams.w);
@@ -141,20 +141,24 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
                                    (int3)DDGIGridCount.xyz, DDGIBiasParams.z);
     if (volW <= 0.0f) return DDGI_FallbackAmbient(N);
 
+    // Selecao e blend de cascata moram nos wrappers (DDGICommon): cada consumidor compondo
+    // isso por conta propria seria mais uma copia para divergir. O peso do volume e o fallback
+    // ficam AQUI porque sao diferentes em cada caller — este cai no ambiente hemisferico.
     float3 gi;
     if (useChebyshev) {
         float2 distInvSize = float2(1.0f / DDGIDistParams.y, 1.0f / DDGIDistParams.z);
         float3 V = normalize(CameraPosition.xyz - worldPos);
-        float3 biasVec = DDGI_SurfaceBias(N, V, DDGIGridMin.w,
-                                          DDGIBiasParams.x, DDGIBiasParams.y);
-        gi = SampleDDGIIrradianceCheb(DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler,
-                 worldPos, N, DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                 (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize, biasVec,
-                 DDGIProbeData, skipMode, tilesPerRow, kDDGICascade);
+        gi = SampleDDGIIrradianceChebCascaded(
+                 DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler, worldPos, N, V,
+                 DDGICascadeGridMinSpacing, (int)DDGICascadeParams.x, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize,
+                 DDGIProbeData, skipMode, tilesPerRow,
+                 DDGIBiasParams.x, DDGIBiasParams.y);
     } else {
-        gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-                 DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                 (int)DDGIParams.y, atlasInvSize, tilesPerRow, kDDGICascade);
+        gi = SampleDDGIIrradianceCascaded(
+                 DDGIIrradianceAtlas, IBLSampler, worldPos, N,
+                 DDGICascadeGridMinSpacing, (int)DDGICascadeParams.x, (int3)DDGIGridCount.xyz,
+                 (int)DDGIParams.y, atlasInvSize, tilesPerRow);
     }
     return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);
 }

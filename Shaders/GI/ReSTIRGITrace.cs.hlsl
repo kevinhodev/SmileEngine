@@ -56,6 +56,9 @@ cbuffer ReSTIRCB : register(b0) {
     float4 RadianceCacheCamCell;
     float4 RadianceCacheLodCapFlags;
     float4 RadianceCacheResources;
+    // Cascatas do DDGI, consumidas pelo gather do 2o bounce no HitShading (contrato por NOME).
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).

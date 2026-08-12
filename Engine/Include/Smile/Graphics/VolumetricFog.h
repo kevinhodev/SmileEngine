@@ -6,6 +6,7 @@
 #include "Smile/Graphics/VolumeTexture.h"
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
+#include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants: bloco comum aos cinco cbuffers
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -52,6 +53,7 @@ namespace Smile {
             Vec4  DDGIGridMin{};             // xyz = origem, w = spacing
             Vec4  DDGIGridCount{};           // xyz = probes por eixo, w = DDGI on (>0.5)
             Vec4  DDGIParams{};              // x = intensidade, y = tile, z/w = atlas W/H
+            FDDGICascadeConstants DDGICascades{}; // ver FDDGI::CascadeConstants()
         };
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
@@ -140,7 +142,12 @@ namespace Smile {
             Vec4  CloudShadowParams2;
             Mat44 CurViewProj;
             Vec4  ConsDepthParams;
+            // Cascatas do DDGI (append no fim). Mesmo bloco dos outros quatro cbuffers; o
+            // DDGIGridMin acima continua sendo a GROSSA (fade de borda e fallback).
+            FDDGICascadeConstants DDGICascades;
         };
+        static_assert(offsetof(VolFogConstants, DDGICascades) == 640,
+                      "bloco de cascatas anexado ao fim do cbuffer do fog (ver Renderer.h)");
         static constexpr u32 kMissSupersamples = 4;    // amostras qdo a historia falha
         static constexpr f32 kHistoryWeight    = 0.9f; // blend da UE
 

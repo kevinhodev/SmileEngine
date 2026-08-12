@@ -5,6 +5,7 @@
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants
 #include "Smile/Graphics/ReGIR.h"
 #include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -63,7 +64,12 @@ namespace Smile {
         Vec4  RadianceCacheCamCell;
         Vec4  RadianceCacheLodCapFlags;
         Vec4  RadianceCacheResources;
+        // Cascatas do DDGI, para o gather do 2o bounce no HitShading. Mesmo bloco dos outros
+        // quatro cbuffers; o GIGridMinSpacing continua sendo a GROSSA (peso do volume).
+        FDDGICascadeConstants GICascades;
     };
+    static_assert(offsetof(ReflectionConstants, GICascades) == 688,
+                  "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
     static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 480,
                   "ReflectionConstants divergiu do cbuffer ReflectionCB");
     static_assert(offsetof(ReflectionConstants, ViewProj) == 544,
@@ -165,6 +171,9 @@ namespace Smile {
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        // Cascatas: empurradas por FRAME (nao no SetGIParams, que so roda em setup/resize) porque
+        // a origem da cascata fina segue a camera. Dono = Renderer, fonte = FDDGI.
+        void SetGICascades(const FDDGICascadeConstants& C) { GICascadesCPU = C; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
         // SEM o bit de update — o Renderer publica ShaderParams(false) aqui. A radiancia que este
         // passe produz vale para UMA direcao de espelho e o cache nao guarda direcao; grava-la
@@ -344,6 +353,7 @@ namespace Smile {
         Vec4 GIGridMinSpacing{ 0,0,0,1 };
         Vec4 GIGridCount{ 0,0,0,0 };
         Vec4 GIAtlasParams{ 6,1,1,0 };
+        FDDGICascadeConstants GICascadesCPU{};
         f32  GIMaxRayDist = 0.0f;
 
         u32  Width = 0, Height = 0;          // full-res (resolve, composite)
