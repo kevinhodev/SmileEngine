@@ -42,8 +42,8 @@ namespace Smile {
     // porque cinco loops de preenchimento independentes produzindo o mesmo estado e exatamente
     // como um deles fica para tras numa edicao futura. Quem preenche e FDDGI::CascadeConstants().
     //
-    // Espelhado em HLSL pelo par (CascadeParams, CascadeGridMinSpacing[4]) — a ordem dos dois
-    // campos e o tamanho do array fazem parte do contrato.
+    // Espelhado em HLSL pela trinca (CascadeParams, CascadeGridMinSpacing[4],
+    // CascadeScrollOffset[4]) — a ordem dos campos e o tamanho dos arrays fazem parte do contrato.
     struct alignas(16) FDDGICascadeConstants {
         Vec4 Params{ 1.0f, 0.0f, 0.0f, 0.0f }; // x = nº de cascatas, y = sondas por cascata
         // Espacamento 1 e nao 0 no DEFAULT, e isto e a garantia e nao um detalhe: o seletor de
@@ -53,16 +53,31 @@ namespace Smile {
         // isso a garantia NAO valia para os outros quatro cbuffers.
         Vec4 GridMinSpacing[4]{ { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f },
                                 { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } };
+        // 6.2b-ii: deslocamento TOROIDAL, em CELULAS, por cascata. A sonda de coordenada local `c`
+        // mora no slot `(c + scroll) mod count`, entao a grade rola sob a geometria sem que o
+        // conteudo guardado troque de lugar no mundo: so as laminas recem-expostas sao limpas.
+        // xyz = offset por eixo (sempre em [0, count)); w nao usado.
+        //
+        // ⚠️ Por que CARREGADO e nao DERIVADO de GridMin/spacing, que seria o padrao da casa (ver
+        // tilesPerRow): o scroll E `floor(GridMin/spacing) mod count`, mas so quando GridMin e
+        // multiplo exato do espacamento — invariante que a cascata GROSSA nao cumpre de proposito
+        // (o GridMin dela e `AABBMin - 0.5*spacing`, para a gaiola cobrir a AABB). Derivar exigiria
+        // uma divisao float aterrissando exatamente num inteiro, e meio ULP ali desloca o atlas
+        // INTEIRO em uma sonda — em silencio, que e o modo de falha que este arquivo mais teme.
+        // Derivar vale quando a conta e inteira dos dois lados; aqui nao e.
+        Vec4 ScrollOffset[4]{};
     };
-    // O tamanho sozinho nao prende o contrato: 80 bytes tambem passariam com os campos trocados
+    // O tamanho sozinho nao prende o contrato: 144 bytes tambem passariam com os campos trocados
     // de ordem ou com padding no meio. O offset e o alinhamento e que fazem o bloco ser
     // copiavel para um cbuffer sem tradutor.
-    static_assert(sizeof(FDDGICascadeConstants) == 80,
+    static_assert(sizeof(FDDGICascadeConstants) == 144,
                   "o bloco de cascatas e copiado campo-a-campo para cinco cbuffers");
     static_assert(alignof(FDDGICascadeConstants) == 16,
                   "o bloco entra em cbuffer: alinhamento de float4");
     static_assert(offsetof(FDDGICascadeConstants, GridMinSpacing) == 16,
                   "o array tem de seguir imediatamente o Params, sem padding");
+    static_assert(offsetof(FDDGICascadeConstants, ScrollOffset) == 80,
+                  "o scroll segue imediatamente o GridMinSpacing, sem padding");
 
     struct alignas(256) DDGIConstants {
         Vec4 GridMinSpacing;  // xyz = origem do grid (mundo), w = espacamento
@@ -112,7 +127,27 @@ namespace Smile {
         // a mais FINA; a de indice (contagem-1) e a que cobre a cena. Contagem de sondas comum a
         // todas, entao so este par varia — ver FDDGI::FCascade.
         FDDGICascadeConstants Cascades; // = CascadeParams + CascadeGridMinSpacing[4] no HLSL
+        // 6.2b-ii: quanto a cascata ROLOU, em CELULAS, desde o ultimo update que rodou. So os
+        // passes de update leem — NAO entra no POD das cinco, porque o gather nao limpa nada.
+        //
+        // A lamina recem-exposta sai de uma subtracao INTEIRA: a sonda de coordenada geometrica
+        // `c` ocupava, na janela anterior, a coordenada `c + delta`; se essa cai fora de
+        // [0, count), o slot representava outro ponto do mundo e o conteudo dele e lixo.
+        //
+        // ⚠️ A primeira versao disto carregava o GridMin ANTERIOR e comparava gaiolas em float —
+        // e comparava justamente nas BORDAS, onde meio ULP limpa uma lamina que nao mudou ou
+        // preserva uma que mudou. Era o mesmo erro que a decisao de carregar o scroll (em vez de
+        // derivar de GridMin/spacing) tinha acabado de evitar, reintroduzido a dois campos de
+        // distancia. Aqui a decisao e inteira ponta a ponta.
+        //
+        // O delta e CLAMPADO em +-(count+1) na CPU: alem disso a resposta ja e "a cascata inteira
+        // e nova" e o valor exato nao muda nada, mas o clamp mantem o inteiro exatamente
+        // representavel no float do cbuffer — teleporte de milhoes de celulas nao vira ruido.
+        // xyz = delta por eixo; w = 1 quando a cascata rolou desde o ultimo update.
+        Vec4 CascadeScrollDelta[4];
     };
+    static_assert(offsetof(DDGIConstants, CascadeScrollDelta) == 528,
+                  "o delta de scroll segue o bloco de cascatas, no fim do DDGICB");
     static_assert(offsetof(DDGIConstants, ReGIRGridMinSlots) == 208,
                   "DDGIConstants divergiu do cbuffer DDGICB");
     static_assert(offsetof(DDGIConstants, SkyParams) == 272,
@@ -230,15 +265,22 @@ namespace Smile {
         // gravadas em fila COMPUTE. TransitionForUpdate (atlases/trace -> UAV) vai na
         // fila DIRETA antes do signal; RecordUpdate (dispatches + transicoes UAV/NON_PIXEL,
         // compute-legais) roda em qualquer fila; TransitionForRead (atlases -> PIXEL|
-        // NON_PIXEL) vai na direta depois do wait. No caminho sincrono, chamar as tres em
+        // NON_PIXEL) vai na direta depois do wait. No caminho sincrono (async desligado no
+        // editor), chamar as tres em
         // sequencia na mesma list = comportamento antigo.
         void TransitionForUpdate(ID3D12GraphicsCommandList* CommandList);
         void RecordUpdate(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
         void TransitionForRead(ID3D12GraphicsCommandList* CommandList);
 
-        // Relocation de probes (transiente pos-setup) transiciona ProbeData no MEIO do
-        // update a partir de estado com PIXEL — nesses frames o update roda sincrono.
-        bool CanRunAsync() const { return RelocateFramesLeft == 0; }
+        // Sempre. Era `RelocateFramesLeft == 0`: o passe de relocacao promovia ProbeData de
+        // kAtlasRead (que contem PIXEL) para UAV no meio do RecordUpdate, e essa transicao e
+        // ilegal em fila de compute — entao os frames com relocacao agendada caiam no caminho
+        // sincrono. Desde a 6.2b-ii o ProbeData sai para NON_PIXEL no TransitionForUpdate, que
+        // roda na fila DIRETA, e o relocate so precisa de NON_PIXEL -> UAV. Ficou obrigatorio
+        // porque o scrolling agenda relocacao a cada celula cruzada: manter a regra antiga jogaria
+        // o DDGI no caminho sincrono exatamente enquanto a camera anda. De quebra, os 180 updates
+        // de convergencia inicial tambem passaram a rodar escondidos.
+        bool CanRunAsync() const { return true; }
 
         bool IsReady() const { return Ready; }
         u32  IrradianceAtlasSRV() const { return AtlasSRVSlot; }
@@ -268,6 +310,14 @@ namespace Smile {
         f32  Spacing()   const { return Cascades[CoarseCascade()].Spacing; }
         Vec3 CascadeGridMin(u32 C) const { return Cascades[C < kMaxCascades ? C : 0].GridMin; }
         f32  CascadeSpacing(u32 C) const { return Cascades[C < kMaxCascades ? C : 0].Spacing; }
+        // Scroll toroidal por cascata e eixo (0=X, 1=Y, 2=Z). Exposto para o editor desfazer o
+        // scroll ao traduzir indice de sonda -> coordenada de grid, com a MESMA conta do
+        // DDGI_GeometricCoord. O visualizador que enderecasse pelo slot mostraria uma sonda ao
+        // lado da que o gather usou, que e o tipo de erro que faz a ferramenta desmentir a imagem.
+        int  CascadeScroll(u32 C, int Axis) const {
+            const FCascade& Cs = Cascades[C < kMaxCascades ? C : 0];
+            return (Axis >= 0 && Axis < 3) ? Cs.Scroll[Axis] : 0;
+        }
 
         // Fonte UNICA do bloco de cascatas para todos os cbuffers que o carregam. As entradas
         // acima da contagem repetem a GROSSA em vez de ficarem lixo: se algum dia um shader ler
@@ -279,6 +329,9 @@ namespace Smile {
             for (u32 i = 0; i < kMaxCascades; ++i) {
                 const FCascade& Cs = Cascades[i < CascadeCount_ ? i : CoarseCascade()];
                 C.GridMinSpacing[i] = { Cs.GridMin.X, Cs.GridMin.Y, Cs.GridMin.Z, Cs.Spacing };
+                C.ScrollOffset[i]   = { static_cast<f32>(Cs.Scroll[0]),
+                                        static_cast<f32>(Cs.Scroll[1]),
+                                        static_cast<f32>(Cs.Scroll[2]), 0.0f };
             }
             return C;
         }
@@ -578,14 +631,22 @@ namespace Smile {
         struct FCascade {
             Vec3 GridMin{ 0,0,0 };
             f32  Spacing = 1.0f;
+            // 6.2b-ii. `OriginCells` e a coordenada da origem em CELULAS ABSOLUTAS do mundo, e e a
+            // fonte de verdade: GridMin = OriginCells * Spacing, e nao o contrario. Assim o scroll
+            // (OriginCells mod count) sai de aritmetica INTEIRA, sem nenhuma divisao float que
+            // precise aterrissar num inteiro. A cascata GROSSA nao rola e fica com scroll zero;
+            // para ela o GridMin continua vindo da AABB e o OriginCells nao e usado.
+            int  OriginCells[3]{ 0, 0, 0 };
+            int  Scroll[3]{ 0, 0, 0 };
+            // Origem, em celulas, no ULTIMO UPDATE que de fato rodou — nao no ultimo frame. A
+            // distincao e a mesma das janelas de invalidacao: se o DDGI ficar dois frames sem
+            // atualizar (async, toggle, cena sem TLAS) enquanto a camera anda tres celulas, as
+            // laminas expostas nos tres precisam ser limpas de uma vez. Latch no RecordUpdate,
+            // junto com os decrementos, e nao no UpdatePerFrame.
+            int  PrevOriginCells[3]{ 0, 0, 0 };
         };
         FCascade Cascades[kMaxCascades]{};
         u32  CascadeCount_    = 1;
-        // Centro da AABB da cena, guardado no SetupForScene. A 6.2b-i ancora as cascatas finas
-        // AQUI, e nao na camera: com duas variaveis novas (a segunda cascata e o scrolling) um
-        // artefato na transicao seria ambiguo. A 6.2b-ii troca isto pela posicao da camera, que e
-        // quando o scrolling passa a ser obrigatorio.
-        Vec3 SceneCenter{};
         // Razao de espacamento entre cascatas vizinhas. 4 leva os 8,02 m do Bistro a 2,0 m na
         // fina, dentro dos 1-2 m que o paper pede para escala humana. A Flax usa {1,3,6,10} a
         // partir da mais fina; aqui a GROSSA e que esta fixada pela cena, entao a escala corre no
@@ -700,6 +761,42 @@ namespace Smile {
         static constexpr u32 kRelocateConvergeFrames = 180;
         static constexpr u32 kReclassifyFrames = 6;
         u32  RelocateFramesLeft = 0;
+        // "Alguma cascata rolou desde o ultimo update que rodou" — DERIVADO, e nao um contador.
+        // A primeira versao disto era um `ScrollRelocateFramesLeft_` ao lado do de cima e tinha um
+        // defeito de ORDENACAO: o UpdatePerFrame PUBLICA o cbuffer e o RecordUpdate e que mexia no
+        // contador, entao o frame em que a lamina estreia publicava "o passe nao roda" e depois
+        // rodava o passe. Comparar OriginCells com PrevOriginCells nao tem esse problema porque as
+        // duas pontas ja existem nos dois momentos: publicar e executar leem o MESMO predicado.
+        //
+        // Continua sendo uma condicao separada do RelocateFramesLeft, e a separacao e o contrato:
+        // aquele agenda relocacao GLOBAL (convergencia inicial, reclassificacao pos-edicao), esta
+        // restringe a passada a LAMINA. "Scroll-only" e `RelocateFramesLeft == 0 && rolou`. Fundir
+        // as duas quebra os dois sentidos: um scroll durante os 180 frames iniciais viraria
+        // scroll-only e a convergencia global pararia pela metade; e um scroll isolado
+        // reclassificaria o grid inteiro — que e a porta pela qual a catraca do classificador
+        // (fase 4) voltaria, com as sondas ja decimadas sendo remedidas a partir da propria
+        // decimacao a cada celula andada.
+        bool ScrolledSinceLastUpdate() const {
+            for (u32 C = 0; C < CascadeCount_; ++C)
+                for (int A = 0; A < 3; ++A)
+                    if (Cascades[C].OriginCells[A] != Cascades[C].PrevOriginCells[A]) return true;
+            return false;
+        }
+        // O update SEGUINTE ao da estreia de uma lamina, e ele e obrigatorio — nao uma folga.
+        //
+        // Por que: no update da estreia a ordem dentro do RecordUpdate e trace -> update ->
+        // updateDist -> relocate. A sonda nova traca do VERTICE (offset zerado) e os dois atlas
+        // sao integrados a partir dali com histerese 0; so entao o relocate publica o offset
+        // one-shot. Ao fim do frame, ProbeData descreve uma posicao e os atlas descrevem outra.
+        // Sem um segundo update a histerese normal preserva essa incoerencia — e no atlas de
+        // DISTANCIA, com 0,99, ela dura ~199 updates, com o Chebyshev medindo distancias de uma
+        // origem contra momentos de outra.
+        //
+        // Como fecha: o relocate marca a sonda como "recem-relocada" (w >= 1), que e o MESMO
+        // mecanismo que a relocacao normal usa quando move uma sonda — o update seguinte ve o
+        // flag, zera a histerese e reintegra os dois atlas a partir da posicao nova. Nao ha
+        // mecanismo novo aqui; o que faltava era o frame em que ele age.
+        bool ScrollFollowUpPending = false;
 
         bool Initialized = false;
         bool Ready       = false;

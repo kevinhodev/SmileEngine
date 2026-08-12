@@ -37,6 +37,13 @@ cbuffer DDGICB : register(b0) {
     // daqui, nao do GridMinSpacing (que e a GROSSA).
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
+    // Quanto cada cascata ROLOU desde o ultimo update que rodou, em celulas (xyz), w = rolou.
+    // So os passes de update leem: e com ele que DDGI_NewlyExposed decide, em inteiro, se o slot
+    // guarda outro ponto do mundo. Ver DDGIConstants::CascadeScrollDelta.
+    float4 GICascadeScrollDelta[4];
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
@@ -79,9 +86,15 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // pixel nenhum.
     int  cascade  = DDGI_CascadeOfProbe(probeIdx, count);
     int  localIdx = DDGI_LocalProbeIndex(probeIdx, count);
-    int3 pc    = DDGI_ProbeCoord(localIdx, count);
+    // ARMAZENAMENTO -> GEOMETRIA, igual ao DDGIUpdate — e tem de ser igual mesmo: os dois atlas
+    // compartilham o indice de tile, entao um desacordo aqui poria a visibilidade de uma sonda
+    // sobre a irradiancia de outra.
+    int3 scroll = (int3)GICascadeScrollOffset[cascade].xyz;
+    int3 pc     = DDGI_GeometricCoord(DDGI_ProbeCoord(localIdx, count), scroll, count);
+    const bool newlyExposed =
+        DDGI_NewlyExposed(pc, (int3)GICascadeScrollDelta[cascade].xyz, count);
     int  tile  = (int)DistAtlasParams.x;
-    int2 tileOrigin = DDGI_TileOrigin(pc, count, tile,
+    int2 tileOrigin = DDGI_TileOrigin(pc, scroll, count, tile,
                                       DDGI_TilesPerRow(DistAtlasParams.y, tile), cascade);
     int2 local      = int2(GTid.xy);
 
@@ -143,7 +156,9 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // deixaria 19 amostras efetivas de um estimador que e ordens de grandeza mais ruidoso — o
     // flicker de iluminacao viraria flicker de VISIBILIDADE, que e pior (mancha de sombra
     // piscando em vez de brilho piscando).
-    float  hyst  = (ProbeData[probeIdx].w >= 1.0f) ? 0.0f : DistAtlasParams.w;
+    // Lamina nova: momentos zerados de fato, e nao "quase". Com media e 2o momento de outro lugar,
+    // o Chebyshev prende todo tap no piso de 0,05 e a sonda nova ocluiria tudo a volta dela.
+    float  hyst  = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : DistAtlasParams.w;
     // Janela propria: a do dist e mais longa, entao o flag de "aberta" nao pode ser o da
     // irradiancia. So o w do InvalidateMin e substituido; a CAIXA e a mesma.
     const float4 distInvMin = float4(InvalidateMin.xyz, MiscParams3.y);

@@ -356,7 +356,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
         // so a irradiancia do DDGI.
         indirect = SampleDDGIIrradianceChebCascaded(
             IrradAtlas, GIDistAtlas, LinearClamp, hitPos, hitN, -rayDir,
-            GICascadeGridMinSpacing, (int)GICascadeParams.x, P.Count,
+            GICascadeGridMinSpacing, GICascadeScrollOffset, (int)GICascadeParams.x, P.Count,
             P.AtlasTile, P.AtlasInvSize, (int)GIDistParams.x, distInvSize,
             GIProbeData, giHitFlags & 3u, tilesPerRow,
             GIBiasParams.x, GIBiasParams.y);

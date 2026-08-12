@@ -666,10 +666,27 @@ namespace SmileEditor {
         _Out.LocalIndex = static_cast<int>(Index) - _Out.Cascade * PerCascade;
 
         const int XY = _Out.CountX * _Out.CountY;
-        _Out.Z = _Out.LocalIndex / XY;
-        const int R = _Out.LocalIndex - _Out.Z * XY;
-        _Out.Y = R / _Out.CountX;
-        _Out.X = R - _Out.Y * _Out.CountX;
+        int SZ = _Out.LocalIndex / XY;
+        const int R = _Out.LocalIndex - SZ * XY;
+        int SY = R / _Out.CountX;
+        int SX = R - SY * _Out.CountX;
+        // ARMAZENAMENTO -> GEOMETRIA (o mesmo DDGI_GeometricCoord dos shaders). O indice de sonda
+        // enderessa um SLOT; com a cascata fina rolando atras da camera, a coordenada de grid e a
+        // posicao de mundo que o painel mostra so batem com a sonda de verdade depois de desfazer
+        // o scroll. Sem isto, o painel apontaria para uma sonda `scroll` celulas ao lado — e o
+        // erro seria pior parado do que andando, porque pareceria estavel.
+        const int Scroll[3] = { DDGI.CascadeScroll(static_cast<Smile::u32>(_Out.Cascade), 0),
+                                DDGI.CascadeScroll(static_cast<Smile::u32>(_Out.Cascade), 1),
+                                DDGI.CascadeScroll(static_cast<Smile::u32>(_Out.Cascade), 2) };
+        const int Counts[3] = { _Out.CountX, _Out.CountY, _Out.CountZ };
+        int Geo[3] = { SX, SY, SZ };
+        for (int A = 0; A < 3; ++A) {
+            Geo[A] -= Scroll[A];
+            if (Geo[A] < 0) Geo[A] += Counts[A];
+        }
+        _Out.X = Geo[0];
+        _Out.Y = Geo[1];
+        _Out.Z = Geo[2];
         // Origem e espacamento DA CASCATA, nao os da grossa que GridMin()/Spacing() devolvem.
         _Out.GridMin = DDGI.CascadeGridMin(static_cast<Smile::u32>(_Out.Cascade));
         _Out.Spacing = DDGI.CascadeSpacing(static_cast<Smile::u32>(_Out.Cascade));
@@ -897,15 +914,27 @@ namespace SmileEditor {
         auto RendererAccess = Renderer.Lock();
         FDebugProbeCoord C;
         if (!GetDebugProbeCoordValues(C)) return;
-        const int NX = std::clamp(C.X + _DX, 0, C.CountX - 1);
-        const int NY = std::clamp(C.Y + _DY, 0, C.CountY - 1);
-        const int NZ = std::clamp(C.Z + _DZ, 0, C.CountZ - 1);
+        // O passo e GEOMETRICO — andar uma sonda quer dizer andar uma celula no MUNDO, e e o que
+        // o `C` traz (o GetDebugProbeCoordValues ja desfez o scroll).
+        const int Counts[3] = { C.CountX, C.CountY, C.CountZ };
+        int Geo[3] = { std::clamp(C.X + _DX, 0, C.CountX - 1),
+                       std::clamp(C.Y + _DY, 0, C.CountY - 1),
+                       std::clamp(C.Z + _DZ, 0, C.CountZ - 1) };
+        // GEOMETRIA -> ARMAZENAMENTO antes de linearizar (o DDGI_StorageCoord dos shaders). Sem
+        // isto o scroll seria aplicado DUAS vezes — uma vez desfeito na leitura, nunca refeito na
+        // escrita — e cada passo saltaria para uma sonda a `scroll` celulas de distancia. Parado,
+        // o salto e constante e parece um bug de indexacao; e so andando que ele muda de tamanho.
+        const auto& DDGI = Renderer->GetDDGI();
+        for (int A = 0; A < 3; ++A) {
+            Geo[A] += DDGI.CascadeScroll(static_cast<Smile::u32>(C.Cascade), A);
+            if (Geo[A] >= Counts[A]) Geo[A] -= Counts[A];
+        }
         // O indice reconstruido tem de voltar para o espaco GLOBAL. Sem a base da cascata, o
         // primeiro passo do navegador saltaria da cascata inspecionada para a 0, e o painel
         // passaria a mostrar outra sonda sem dizer que mudou de cascata.
         const int PerCascade = C.CountX * C.CountY * C.CountZ;
         const int Index = C.Cascade * PerCascade +
-                          (NX + NY * C.CountX + NZ * C.CountX * C.CountY);
+                          (Geo[0] + Geo[1] * C.CountX + Geo[2] * C.CountX * C.CountY);
         if (Index == GetDebugProbeIndex()) return;
         ResetDebugProbePoint();
         SelectDebugProbe(Index);

@@ -538,6 +538,127 @@ Z‑terreno sozinho fez 0,66 → 1,14 ms, e custo de prepass de terreno depende 
 terreno a câmera enxerga. Separar por completo exige um par de capturas da **mesma câmera**.
 O que não depende disso: o ×1,95 do update, o gather de graça e os +9,5 MB.
 
+### Fase 6.2b‑ii — a cascata fina segue a câmera (scrolling toroidal)
+
+Implementada, Debug e Release verdes, **nunca executada**. A fina passou a ser ancorada na
+câmera em vez do centro da cena, e é isso que torna o scrolling obrigatório: com o snap ao
+espaçamento, a origem muda a cada 2 m andados, e sem scrolling todo o conteúdo guardado
+passaria a representar outro ponto do mundo de uma vez.
+
+**O invariante:** a sonda de coordenada geométrica `c` mora no slot `(c + scroll) mod count`,
+com `scroll = origem_em_células mod count`. Como o slot é `(origem + c) mod count`, ele
+depende só da célula ABSOLUTA do mundo — um ponto fixo do mundo nunca troca de slot enquanto
+a janela desliza. Só as lâminas recém-expostas viram conteúdo novo.
+
+**Três decisões, e as três são sobre onde o inteiro começa e termina.**
+
+1. **O scroll é CARREGADO, não derivado.** Seria natural derivá-lo de `GridMin/spacing` (o
+   padrão da casa, ver `tilesPerRow`) e custaria zero bytes. Não dá: a **grossa** tem
+   `GridMin = AABBMin − 0.5·spacing`, deliberadamente não snapado, então a divisão não cai
+   num inteiro. Derivar exigiria um float pousando exatamente num inteiro, e meio ULP ali
+   desloca o atlas inteiro em uma sonda — em silêncio. Derivar vale quando a conta é inteira
+   dos dois lados; aqui não é. Entrou como `ScrollOffset[4]` no POD (80 → 144 bytes).
+2. **A origem é guardada em CÉLULAS e o `GridMin` é derivado dela**, não o contrário. É o que
+   faz o `scroll` sair de aritmética inteira ponta a ponta, com resto forçado positivo (cena
+   em coordenadas negativas daria slot negativo).
+3. **A lâmina nova sai de uma subtração inteira.** `DDGI_NewlyExposed(c, delta, count)`: a
+   sonda ocupava, na janela anterior, a coordenada `c + delta`; se aquilo caía fora de
+   `[0, count)`, o slot guardava outro ponto do mundo. ⚠️ A primeira versão comparava as duas
+   gaiolas em coordenadas de mundo, em **float**, e comparava nas BORDAS — o mesmo erro que a
+   decisão (1) tinha acabado de evitar, reintroduzido a dois campos de distância. Teleporte
+   não precisa de caminho próprio: com `|delta| >= count` nenhuma coordenada sobrevive ao
+   teste e a cascata inteira se declara nova.
+
+**A limpeza é dos QUATRO estados, e não só dos dois atlas.** Histerese 0 na irradiância e nos
+momentos não basta — o slot reciclado ainda carrega o **offset de relocação** do lugar antigo,
+a **marca de inativa** e a **contagem de raios**. E limpar só os atlas seria *pior* que não
+limpar: o trace partiria da origem errada e o update tomaria esse resultado INTEIRO (histerese
+0, sem histórico para diluir). Por isso o mesmo teste roda nos quatro passes — trace (origem
+sem offset e 64 raios), update e updateDist (histerese 0), relocate (`prev` zerado, sem herdar
+`w < 0`).
+
+**Relocação one-shot na lâmina, e o motivo é de informação e não de qualidade.** O `delta` só é
+diferente de zero no update em que a lâmina estreia — só nele dá para saber QUAIS sondas são
+novas. O lerp de 0,25 é amortecimento de um laço de realimentação (a sonda move, o trace
+seguinte sai da posição nova, o alvo se corrige) e a sonda recém-exposta não tem esse frame
+seguinte. Ou chega ao lugar certo nesta passada, ou fica a um quarto do caminho para sempre.
+O clamp em `maxOff` já limita o salto.
+
+**`MiscParams3.w` — a passada de scroll não pode reclassificar o grid.** O `.z` (o passe roda)
+ganhou um par: `.w` diz que o agendamento veio SÓ da rolagem. Aí o relocate retorna cedo fora
+da lâmina — e o early-return fica **antes** da escrita do `ProbeRayCount`, porque reclassificar
+as sondas velhas ali as remediria a partir do trace DECIMADO delas, que é exatamente a catraca
+fechada na fase 4, reaberta uma célula por vez enquanto a câmera anda. Pelo mesmo motivo o
+trace só força os 64 raios globalmente quando `z && !w`; na lâmina, força sempre —
+`newlyExposed` vale **independentemente** de `scrollOnly`, porque durante os 180 frames
+iniciais uma rolagem chega com `z=1, w=0` e a sonda nova continua não podendo herdar nada.
+
+**O desbloqueio que a fase obrigou, e que vale sozinho: a relocação virou async-legal.** O
+scroll agenda relocação a cada célula cruzada, e `CanRunAsync()` devolvia falso enquanto
+houvesse relocação — ou seja, o DDGI cairia no caminho síncrono exatamente enquanto a câmera
+anda. A causa era uma transição: o relocate promovia `ProbeData` de `kAtlasRead` (que contém
+PIXEL) para UAV dentro do `RecordUpdate`, ilegal em fila de compute. Movendo a saída para o
+`TransitionForUpdate` — que roda na DIRETA — o relocate só precisa de `NON_PIXEL → UAV`.
+Conferido que nada entre o submit e o wait lê `ProbeData` (ali só há escritas de cbuffer de
+reflexões e ReSTIR). **De quebra, os 180 updates de convergência inicial passaram a rodar
+escondidos**, o que apaga a ressalva que o protocolo de medição repete desde a fase 4.
+
+**Equivalência preservada:** para a grossa, `Scroll = {0,0,0}` e `delta = 0` sempre, então
+`DDGI_StorageCoord`/`GeometricCoord` são identidade e o endereçamento dela é bit a bit o de
+antes do scrolling existir.
+
+#### O segundo tempo da lâmina, e por que ele é obrigatório
+
+A primeira versão tinha o `canMark` intacto (`RelocateFramesLeft > 1`), e concluí que isso era
+"verificado e seguro" porque nenhuma marca órfã seria escrita numa passada de scroll isolada.
+Estava certo sobre a órfã e **errado sobre a conclusão** — a mesma condição que evita a órfã
+estava dizendo que *não existe o frame de correção*, e é justamente ele que faltava.
+
+**O defeito:** na estreia da lâmina a ordem dentro do `RecordUpdate` é trace → update →
+updateDist → **relocate**. A sonda nova traça do VÉRTICE (offset zerado, correto) e os dois
+atlas são integrados dali com histerese 0 — e só então o relocate publica o offset one-shot. Ao
+fim do frame, `ProbeData` descreve uma posição e os atlas descrevem outra. Sem um segundo
+update, a histerese normal preserva a incoerência: no atlas de DISTÂNCIA, com 0,99, ela dura
+~199 updates, com o Chebyshev medindo distâncias de uma origem contra momentos de outra.
+
+**A correção não é um mecanismo novo — é alcançar o que já existe.** A marca de
+"recém-relocada" (`w >= 1` → histerese 0 no update seguinte) existe exatamente para "a sonda
+moveu, o atlas dela é do lugar antigo", e a relocação normal a usa todo dia. A lâmina não a
+alcançava porque `canMark` exigia um frame agendado depois. Então:
+
+- a estreia AGENDA o update seguinte (`ScrollFollowUpPending`), e com ele garantido a marca
+  passa a ser escrita (`canMark` ganhou `|| Scrolled`);
+- no update seguinte, o relocate continua restrito — agora a `newlyExposed || w >= 1` —, os
+  dois atlas são reintegrados a partir da posição relocada, e a marca é demovida;
+- o trace força os 64 raios também em `w >= 1`: o relocate vai reclassificar essa sonda a
+  partir DESTE trace, e deixá-la decimada alimentaria o classificador com a própria decimação —
+  a catraca da fase 4, pela porta do segundo tempo.
+
+As duas lâminas convivem se uma estreia durante um follow-up: são identificadas por critérios
+diferentes (`delta` e a marca `w >= 1`), então o predicado cobre as duas sem estado extra.
+
+**E o follow-up NÃO move a sonda de novo** — duas correções sobre a primeira tentativa, e as duas
+vieram do mesmo mal-entendido de que "o follow-up é só mais uma passada de relocação":
+
+- **Ele não pode relocar.** Este update existe para fechar a divergência que a estreia abriu (os
+  atlas integrados no vértice, o offset publicado depois). Nele o trace já sai da posição
+  one-shot e os dois atlas estão sendo reintegrados dela; mover outra vez recriaria a MESMA
+  divergência um update adiante, e sem nenhum frame agendado para fechá-la. Ele ainda varre o
+  trace — contagem de raios e classificação ativo/inativo são recalculadas —, só o deslocamento
+  fica parado.
+- **`canMark` sai de `ScrollDebut`, não de `ScrollWork`.** Ligá-lo no follow-up permitiria à
+  ÚLTIMA passada agendada escrever uma marca `w >= 1` que ninguém mais apaga (bastava um
+  `bigJump`): órfã, ou seja histerese 0 eterna naquela sonda — exatamente o defeito que o `> 1`
+  original existia para evitar. Só a estreia agenda um update seguinte, então só nela existe o
+  frame que demove.
+
+Daí os dois predicados separados no CPU: `ScrollDebut` (há lâmina nova neste update) e
+`ScrollWork` (o passe tem trabalho de scroll, estreia ou follow-up). Fundi-los foi o defeito.
+`ScrollFollowUpPending` também entrou no reset do `SetupForScene`, junto das janelas regionais:
+um follow-up pendente descreve uma lâmina de um volume que não existe mais.
+
+**O que falta:** rodar. Roteiro no fim de "O que falta".
+
 ## Gate de medição
 
 `FGIHitSampling::TerminatorOff` — zera o termo indireto do `ShadeSurfaceHit` com todo o
@@ -824,7 +945,23 @@ item barato e não bloqueante:
   número definitivo. Hoje ele carrega o confounder do Z‑prepass (ver a tabela). Muda a
   atribuição do custo, não o fato dele.
 
-**Próximo: 6.2b‑ii — a cascata fina segue a câmera.**
+**A 6.2b‑ii está IMPLEMENTADA e nunca rodou** (ver a seção dela). O que ela pede, em ordem:
+
+1. **Smoke com o debug layer ligado.** A mudança de estado do `ProbeData` para `NON_PIXEL` na
+   fila direta é a linha mais arriscada da fase, e é a única cujo erro o compilador não pega —
+   o debug layer pega, e na hora.
+2. **Caminhada lenta cruzando células**, que é o teste que o scrolling existe para passar. O
+   sintoma de scroll errado é um erro de UMA lâmina: invisível parado, rastro atrás da câmera
+   em movimento.
+3. **Diagonal** (as três lâminas de uma vez) e **movimento vertical** (o eixo Y tem `count`
+   menor, então a lâmina é proporcionalmente maior).
+4. **Teleporte** maior que a grade: tem de reconvergir sem flash, pelo caminho geral.
+5. **Objeto atravessando a borda da fina**, que cruza scrolling com invalidação regional.
+6. **Custo, de novo**: o A/B da 6.2b‑i foi com a fina PARADA. Andando, a relocação passa a
+   rodar a cada célula cruzada — barata agora que é async, mas nunca medida.
+
+**Depois disso**, a ordem acordada continua: A/B dos raios adaptativos, compactação das
+inativas, e o update escalonado por último.
 
 Isso exige **scrolling toroidal**, e não como otimização: com snapping ao espaçamento a
 origem muda a cada 2 m andados, e sem scrolling todo o conteúdo guardado passa a

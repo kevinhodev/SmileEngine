@@ -59,6 +59,9 @@ cbuffer ReSTIRCB : register(b0) {
     // Cascatas do DDGI, consumidas pelo gather do 2o bounce no HitShading (contrato por NOME).
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).

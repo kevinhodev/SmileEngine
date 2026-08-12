@@ -3232,11 +3232,11 @@ Rectangle {
                               "mais fina que o contém, e as duas se misturam nas últimas células " +
                               "da borda para não haver costura. O que sai da fina cai na grossa; " +
                               "só o que sai da grossa cai no ambiente do céu.\n\n" +
-                              "Nesta etapa a fina fica PARADA, ancorada no centro da cena. Fazê-la " +
-                              "seguir a câmera exige rolagem toroidal do conteúdo dela, senão " +
-                              "cada dois metros andados invalidam tudo o que ela tinha guardado — " +
-                              "e isso é a etapa seguinte. Voe até o centro do mapa para ver o " +
-                              "efeito.\n\n" +
+                              "A fina SEGUE A CÂMERA, e a grade dela rola por baixo em células " +
+                              "inteiras: o que já foi calculado continua valendo para o mesmo " +
+                              "ponto do mundo, e só a fatia que entrou pela borda é recalculada. " +
+                              "Sem isso, cada dois metros andados jogariam fora tudo o que ela " +
+                              "tinha guardado.\n\n" +
                               "Custo, medido no Bistro (3060 Ti, 1573×804): cada cascata é um " +
                               "grid inteiro de sondas, então duas dobram os raios por quadro — " +
                               "8.832 sondas contra 4.416. O traçado vai de 2,64 para 5,14 ms, " +
@@ -3248,8 +3248,8 @@ Rectangle {
                               "Z-prepass e o G-buffer ficam mais caros sem ler nada do GI. Quem " +
                               "decide o orçamento é o quadro, não a linha de espera.\n\n" +
                               "Para remedir: espere a relocação convergir (nos primeiros ~180 " +
-                              "updates ela força o caminho síncrono, e ali a espera não mede " +
-                              "nada) e mantenha a mesma câmera nos dois lados.\n\n" +
+                              "updates as sondas ainda estão se acomodando e todas traçam com 64 " +
+                              "raios) e mantenha a mesma câmera nos dois lados.\n\n" +
                               "Trocar aqui RECRIA o volume: os atlas, o buffer de raios e as " +
                               "sondas são realocados, e a iluminação indireta reconverge do zero."
                         color: root.textSecondary

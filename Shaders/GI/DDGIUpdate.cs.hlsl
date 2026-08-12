@@ -35,6 +35,13 @@ cbuffer DDGICB : register(b0) {
     // GridMinSpacing (que e a GROSSA).
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
+    // Quanto cada cascata ROLOU desde o ultimo update que rodou, em celulas (xyz), w = rolou.
+    // So os passes de update leem: e com ele que DDGI_NewlyExposed decide, em inteiro, se o slot
+    // guarda outro ponto do mundo. Ver DDGIConstants::CascadeScrollDelta.
+    float4 GICascadeScrollDelta[4];
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
@@ -71,9 +78,15 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // pixel nenhum.
     int  cascade  = DDGI_CascadeOfProbe(probeIdx, count);
     int  localIdx = DDGI_LocalProbeIndex(probeIdx, count);
-    int3 pc    = DDGI_ProbeCoord(localIdx, count);
+    // ARMAZENAMENTO -> GEOMETRIA (ver DDGI_GeometricCoord). O `pc` daqui pra frente e a coordenada
+    // no MUNDO; o tile volta a ser endereçado pelo slot dentro do DDGI_TileOrigin, com o mesmo
+    // scroll. Os dois sentidos na mesma funcao seriam faceis de trocar — por isso sao dois nomes.
+    int3 scroll = (int3)GICascadeScrollOffset[cascade].xyz;
+    int3 pc     = DDGI_GeometricCoord(DDGI_ProbeCoord(localIdx, count), scroll, count);
+    const bool newlyExposed =
+        DDGI_NewlyExposed(pc, (int3)GICascadeScrollDelta[cascade].xyz, count);
     int  tile  = (int)AtlasParams.x;
-    int2 tileOrigin = DDGI_TileOrigin(pc, count, tile,
+    int2 tileOrigin = DDGI_TileOrigin(pc, scroll, count, tile,
                                       DDGI_TilesPerRow(AtlasParams.y, tile), cascade);
     int2 local      = int2(GTid.xy);
 
@@ -109,7 +122,11 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
 
     // Probe recem-ativado/relocado (marcado pelo Relocate): historia e do lugar antigo (ou
     // preto de dentro da parede) — descarta e toma a estimativa nova inteira.
-    float  hyst    = (ProbeData[probeIdx].w >= 1.0f) ? 0.0f : SunColorHyst.w;
+    // A lamina recem-exposta pelo scroll entra pela MESMA porta, e e a porta certa: o conteudo do
+    // slot descreve outro ponto do mundo, exatamente como o da sonda que acabou de sair de dentro
+    // de uma parede. Misturar 1% da estimativa nova com 99% de um lugar a dezenas de metros e o
+    // arrasto que o scrolling existe para evitar.
+    float  hyst    = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : SunColorHyst.w;
 
     // Invalidacao ESPACIAL (FDDGI::InvalidateRegion): um objeto nasceu ou morreu aqui perto.
     // Diferente do caso acima, a historia desta sonda continua quase toda valida — so a parcela

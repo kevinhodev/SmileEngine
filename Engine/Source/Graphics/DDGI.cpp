@@ -361,17 +361,21 @@ namespace Smile {
                        std::to_string(Cascades[0].Spacing) + " m");
         }
         // A cascata que cobre a cena inteira e a ULTIMA. O SetupForScene dimensiona ESSA — as
-        // finas saem dela por escala e seguirao a camera (6.2b), nao a AABB. Aqui todas nascem
+        // finas saem dela por escala e seguem a CAMERA (6.2b-ii), nao a AABB. Aqui todas nascem
         // iguais a grossa; quem as reposiciona por frame e o PrepareCascadePlacement.
         const f32 CoarseSpacing = Cascades[0].Spacing;
         const Vec3 CoarseMin{ _AABBMin.X - 0.5f * CoarseSpacing,
                               _AABBMin.Y - 0.5f * CoarseSpacing,
                               _AABBMin.Z - 0.5f * CoarseSpacing };
-        for (u32 C = 0; C < kMaxCascades; ++C) Cascades[C] = { CoarseMin, CoarseSpacing };
+        // Origem em celulas zerada nas duas pontas (atual e anterior): o volume nasce sem scroll
+        // pendente. A grossa fica assim para sempre — ela nao rola, entao delta 0 e o endereco
+        // dela e bit a bit o de antes do scrolling existir.
+        for (u32 C = 0; C < kMaxCascades; ++C) {
+            Cascades[C] = FCascade{};
+            Cascades[C].GridMin = CoarseMin;
+            Cascades[C].Spacing = CoarseSpacing;
+        }
 
-        SceneCenter = { 0.5f * (_AABBMin.X + _AABBMax.X),
-                        0.5f * (_AABBMin.Y + _AABBMax.Y),
-                        0.5f * (_AABBMin.Z + _AABBMax.Z) };
         ProbesPerCascade_ = static_cast<u32>(CountX) * CountY * CountZ;
         NumProbes         = ProbesPerCascade_ * CascadeCount_;
 
@@ -629,6 +633,10 @@ namespace Smile {
         InvalidateMin_            = {};
         InvalidateMax_            = {};
         ReclassifyPending_        = false;
+        // Mesmo motivo dos de cima: o follow-up pendente descrevia uma lamina de um volume que nao
+        // existe mais. Atravessar o rebuild faria o primeiro update do volume novo rodar um
+        // relocate restrito a sondas marcadas que ninguem marcou.
+        ScrollFollowUpPending     = false;
         LogDebug("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
                 "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
                 "), spacing " + std::to_string(Cascades[0].Spacing) + ", atlas " +
@@ -649,7 +657,6 @@ namespace Smile {
     }
 
     void FDDGI::PrepareCascadePlacement(const Vec3& _CameraPos) {
-        (void)_CameraPos; // 6.2b-ii: as finas passam a seguir a camera, com scrolling toroidal
         if (!Ready || CascadeCount_ <= 1) return;
 
         // A GROSSA (indice CascadeCount_-1) e a que o SetupForScene dimensionou pela cena e nao se
@@ -665,20 +672,35 @@ namespace Smile {
             f32 Spacing = Cascades[Coarse].Spacing;
             for (u32 Step = Coarse; Step > C; --Step) Spacing /= kCascadeSpacingRatio;
 
-            const Vec3 Center = SceneCenter;
-            // Snap ao proprio espacamento: sem isso a grade "nada" sob a geometria a cada
-            // recolocacao e cada sonda troca de posicao no mundo por uma fracao de celula, que e
-            // o pior caso para um cache temporal. Com o snap, ela so se move em celulas inteiras
-            // — que e exatamente o que o scrolling da 6.2b-ii sabe compensar.
-            auto SnapMin = [&](f32 CenterAxis, int Count) {
+            // 6.2b-ii: as finas seguem a CAMERA. Era o centro da cena na 6.2b-i, e a troca e
+            // justamente o que torna o scrolling obrigatorio — sem ele, a cada celula andada todo
+            // o conteudo guardado passaria a representar outro ponto do mundo de uma vez.
+            const Vec3 Center = _CameraPos;
+            // Snap ao proprio espacamento, e o resultado sai em CELULAS INTEIRAS: sem o snap a
+            // grade "nada" sob a geometria e cada sonda troca de posicao no mundo por uma fracao
+            // de celula — o pior caso para um cache temporal, e o scrolling nao teria como
+            // compensar meia celula. Guardar a celula (e derivar o GridMin dela, nao o contrario)
+            // e o que faz o scroll ser aritmetica inteira ponta a ponta.
+            auto SnapCells = [&](f32 CenterAxis, int Count) {
                 const f32 Extent = 0.5f * static_cast<f32>(Count - 1) * Spacing;
-                const f32 Raw    = CenterAxis - Extent;
-                return std::floor(Raw / Spacing) * Spacing;
+                return static_cast<int>(std::floor((CenterAxis - Extent) / Spacing));
             };
+            const int Cells[3] = { SnapCells(Center.X, CountX),
+                                   SnapCells(Center.Y, CountY),
+                                   SnapCells(Center.Z, CountZ) };
+            const int Counts[3] = { CountX, CountY, CountZ };
+
             Cascades[C].Spacing = Spacing;
-            Cascades[C].GridMin = { SnapMin(Center.X, CountX),
-                                    SnapMin(Center.Y, CountY),
-                                    SnapMin(Center.Z, CountZ) };
+            for (int A = 0; A < 3; ++A) {
+                Cascades[C].OriginCells[A] = Cells[A];
+                // Resto SEMPRE positivo: o `%` de C trunca em direcao a zero, e origem negativa
+                // (cena com coordenadas negativas, que e o caso comum) daria slot negativo.
+                const int N = Counts[A] > 0 ? Counts[A] : 1;
+                Cascades[C].Scroll[A] = ((Cells[A] % N) + N) % N;
+            }
+            Cascades[C].GridMin = { static_cast<f32>(Cells[0]) * Spacing,
+                                    static_cast<f32>(Cells[1]) * Spacing,
+                                    static_cast<f32>(Cells[2]) * Spacing };
         }
     }
 
@@ -722,9 +744,43 @@ namespace Smile {
         // mandar os 64 raios e nao alimentar o classificador com a propria decimacao.
         // Cascatas: mesmo bloco que vai para os outros quatro cbuffers (ver CascadeConstants).
         CPU.Cascades = CascadeConstants();
+        // Delta de scroll em CELULAS desde o ultimo update que rodou, so para os passes de update
+        // (o gather nao limpa nada). Inteiro, e por isso identico nos quatro passes: se cada um
+        // deduzisse a lamina comparando gaiolas em float, teriam tolerancias diferentes na borda
+        // e discordariam sobre quais sondas limpar.
+        const int Counts[3] = { CountX, CountY, CountZ };
+        for (u32 i = 0; i < kMaxCascades; ++i) {
+            const FCascade& Cs = Cascades[i < CascadeCount_ ? i : CoarseCascade()];
+            f32  D[3]      = { 0.0f, 0.0f, 0.0f };
+            bool Scrolled  = false;
+            for (int A = 0; A < 3; ++A) {
+                const int Raw   = Cs.OriginCells[A] - Cs.PrevOriginCells[A];
+                // Alem de count+1 a resposta ja e "a cascata inteira e nova"; o clamp so mantem o
+                // inteiro exato no float do cbuffer.
+                const int Limit = Counts[A] + 1;
+                D[A] = static_cast<f32>(std::clamp(Raw, -Limit, Limit));
+                if (Raw != 0) Scrolled = true;
+            }
+            CPU.CascadeScrollDelta[i] = { D[0], D[1], D[2], Scrolled ? 1.0f : 0.0f };
+        }
+        // z = o passe de relocacao/classificacao roda neste frame; w = e uma passada SO de scroll.
+        // O par existe porque o trace le os dois: com z e sem w ele manda os 64 raios em TODAS as
+        // sondas (a catraca do classificador da fase 4 — medir proximidade a partir de uma sonda
+        // ja decimada a derruba mais um degrau); com w, so nas recem-expostas, que sao as unicas
+        // que o passe vai reclassificar. Sem essa distincao, andar reclassificaria o grid inteiro
+        // a cada celula cruzada e reabriria a catraca pela porta do scroll.
+        // DOIS predicados, e a separacao e o conserto: `ScrollWork` diz que o passe tem trabalho de
+        // scroll (estreia OU follow-up) e `ScrollDebut` diz que ha uma lamina NOVA neste update.
+        // Fundi-los deixava o `canMark` ligado no follow-up, e ali ele e veneno: se o segundo
+        // relocate movesse a sonda de novo, escreveria outra marca `w >= 1` num update que ja e o
+        // ultimo agendado — marca ORFA, ou seja histerese 0 permanente naquela sonda.
+        const bool ScrollDebut = ScrolledSinceLastUpdate();
+        const bool ScrollWork  = ScrollDebut || ScrollFollowUpPending;
+        const bool RelocRuns   = RelocateFramesLeft > 0 || ScrollWork;
+        const bool ScrollOnly  = RelocateFramesLeft == 0 && ScrollWork;
         CPU.MiscParams3       = { kInvalidateDistHysteresis,
                                   InvalidateDistFramesLeft_ > 0 ? 1.0f : 0.0f,
-                                  RelocateFramesLeft > 0 ? 1.0f : 0.0f, 0.0f };
+                                  RelocRuns ? 1.0f : 0.0f, ScrollOnly ? 1.0f : 0.0f };
         CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity,
                                 RayEps.HitShadowRayBias };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
@@ -761,7 +817,12 @@ namespace Smile {
         // z = ShadowRayMask (ver ReSTIRGI.cpp: translucido fora dos dois casos).
         // w = detector de mudanca por sonda (rede da invalidacao por evento; so a irradiancia
         // o consome — ver SetAdaptiveHysteresis).
-        CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f,
+        // `ScrollDebut` e nao `ScrollWork`, e a diferenca e o que separa uma marca com destino de
+        // uma marca orfa. So a ESTREIA agenda um update seguinte, entao so nela existe o frame que
+        // vai demover a marca. Autorizar no follow-up permitiria a ultima passada agendada
+        // escrever uma marca que ninguem mais apaga — histerese 0 eterna naquela sonda, que e o
+        // mesmo defeito que o `> 1` original existia para evitar.
+        CPU.MiscParams2     = { (Relocation && (RelocateFramesLeft > 1 || ScrollDebut)) ? 1.0f : 0.0f,
                                 static_cast<f32>(_PunctualLightCount),
                                 static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
                                                                 : kRTMaskShadowFast),
@@ -785,8 +846,17 @@ namespace Smile {
 
     void FDDGI::TransitionForUpdate(ID3D12GraphicsCommandList* _CL) {
         if (!Ready) return;
-        // Sai de kAtlasRead (contem PIXEL) -> so em fila direta. ProbeData fica de fora: o trace
-        // ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        // Sai de kAtlasRead (contem PIXEL) -> so em fila direta.
+        //
+        // ProbeData entra AQUI desde a 6.2b-ii, e essa linha e o que permite a relocacao rodar em
+        // compute assincrono. Antes ele ficava de fora e o passe de relocacao promovia
+        // kAtlasRead -> UAV la dentro do RecordUpdate; como kAtlasRead contem PIXEL, essa
+        // transicao e ILEGAL em fila de compute, e era por isso que o CanRunAsync devolvia falso
+        // enquanto houvesse relocacao agendada. Saindo para NON_PIXEL aqui — na fila DIRETA, onde
+        // e legal — o trace continua lendo como SRV e o relocate promove NON_PIXEL -> UAV, que e
+        // compute-legal. O TransitionForRead devolve para kAtlasRead depois do wait, tambem na
+        // direta. Sem isto o scrolling da fina jogaria o DDGI no caminho sincrono a cada celula
+        // cruzada, que e justamente quando a camera esta andando.
         //
         // Os ATLASES vao para NON_PIXEL, e NAO para UAV: o proximo passe e o TRACE, que os le
         // como SRV (t3 = irradiancia e t4 = distancia) no gather do 2o bounce. Estado de escrita
@@ -797,6 +867,8 @@ namespace Smile {
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, ProbeDataBuf.Get(), ProbeDataState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
     void FDDGI::TransitionForRead(ID3D12GraphicsCommandList* _CL) {
@@ -816,6 +888,34 @@ namespace Smile {
         // espera em vez de escoar sem ter misturado nada.
         if (InvalidateFramesLeft_ > 0)     --InvalidateFramesLeft_;
         if (InvalidateDistFramesLeft_ > 0) --InvalidateDistFramesLeft_;
+
+        // 6.2b-ii: o scroll fecha aqui, pelo mesmo motivo que os decrementos acima moram aqui e
+        // nao no UpdatePerFrame — o que importa e o ultimo update que RODOU. Se o DDGI ficar dois
+        // frames sem atualizar enquanto a camera anda tres celulas, as laminas expostas nos tres
+        // precisam ser limpas de uma vez; latchar por frame perderia as duas primeiras.
+        // A lamina nova estreia com ProbeData de outro lugar do mundo: offset de relocacao alheio
+        // e, pior, a MARCA de inativa — uma sonda marcada por estar enterrada 40 m atras faria o
+        // gather pular uma sonda perfeitamente boa aqui, e isso aparece como buraco no indireto.
+        // Quem reescreve ProbeData e so o passe de relocacao, e ele roda UMA vez por lamina: o
+        // `delta` so e diferente de zero neste update, entao so aqui da para saber quais sondas
+        // sao novas. Por isso a relocacao delas e one-shot (aplica o alvo inteiro em vez do lerp
+        // de 0,25 — ver DDGIRelocate); agendar mais frames nao daria convergencia, daria frames
+        // reclassificando o grid INTEIRO sem saber mais por que, forcando 64 raios em todas as
+        // 8.832 sondas enquanto a camera anda — Adaptive Rays neutralizado exatamente em
+        // movimento, que e quando ele mais renderia.
+        //
+        // O LATCH fecha aqui, e nao no UpdatePerFrame, pelo mesmo motivo dos decrementos acima: o
+        // que conta e o ultimo update que RODOU. Dois frames sem atualizar com a camera andando
+        // tres celulas tem de limpar as tres laminas de uma vez.
+        const bool ScrollDebut = ScrolledSinceLastUpdate();
+        const bool ScrolledNow = ScrollDebut || ScrollFollowUpPending;
+        // Agenda o update seguinte SE houve estreia agora; se este JA era o follow-up e nao houve
+        // estreia nova, fecha. Uma estreia durante um follow-up reabre — as duas laminas sao
+        // identificadas por criterios diferentes no shader (delta e a marca w>=1), entao convivem.
+        ScrollFollowUpPending = ScrollDebut;
+        for (u32 C = 0; C < CascadeCount_; ++C)
+            for (int A = 0; A < 3; ++A)
+                Cascades[C].PrevOriginCells[A] = Cascades[C].OriginCells[A];
 
         // Grade 2D de grupos, uma sonda por grupo. Os tres passes abaixo compartilham a MESMA
         // grade, e o shader recalcula X pela mesma formula em vez de recebe-la (ver
@@ -847,8 +947,8 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DistUAVSlot));
         _CL->Dispatch(GroupsX, GroupsY, 1);
 
-        if (RelocateFramesLeft > 0) {
-            --RelocateFramesLeft;
+        if (RelocateFramesLeft > 0 || ScrolledNow) {
+            if (RelocateFramesLeft > 0) --RelocateFramesLeft;
             Transition(_CL, ProbeDataBuf.Get(),     ProbeDataState,     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             RelocatePSO.Bind(_CL);
@@ -856,19 +956,25 @@ namespace Smile {
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbeDataUAVSlot)); 
             _CL->Dispatch((NumProbes + 63) / 64, 1, 1);
-            // ProbeData -> kAtlasRead fica no TransitionForRead (estado com PIXEL; e o
-            // relocate so roda no caminho sincrono — ver CanRunAsync).
+            // A promocao acima e NON_PIXEL -> UAV, legal em compute: quem tira o ProbeData do
+            // kAtlasRead (que contem PIXEL) e o TransitionForUpdate, na fila DIRETA. A volta para
+            // kAtlasRead fica no TransitionForRead, tambem na direta, depois do wait.
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
 
         // Reclassificacao pos-edicao, agendada quando a janela de invalidacao FECHA (ver
-        // ReclassifyPending_). Fica no fim da funcao de proposito: agendar antes do bloco acima
-        // faria o relocate despachar JA, e este RecordUpdate pode estar sendo gravado na fila de
-        // compute — onde a transicao do ProbeData a partir de um estado com PIXEL e ilegal. Aqui,
-        // o agendamento so vale a partir do proximo frame, que ja e avaliado pelo CanRunAsync.
+        // ReclassifyPending_). Fica no fim da funcao de proposito, e o motivo MUDOU na 6.2b-ii: era
+        // que agendar antes faria o relocate despachar ja, numa list de compute onde a transicao do
+        // ProbeData a partir de um estado com PIXEL seria ilegal — hoje ela e legal, porque a saida
+        // do kAtlasRead migrou para o TransitionForUpdate.
+        //
+        // O motivo que RESTA, e que sozinho ja manda: o cbuffer deste frame ja foi escrito pelo
+        // UpdatePerFrame, entao um agendamento feito aqui nao aparece no MiscParams3.z que o TRACE
+        // deste frame le. O passe classificaria a partir de um trace decimado — a catraca da fase
+        // 4. Agendando para o proximo frame, o trace ve o flag e manda os 64.
         //
         // A guarda de trabalho util: sem relocacao e sem raios adaptativos o passe so reescreve
-        // zeros e 64, e custaria 6 frames de caminho sincrono para nada.
+        // zeros e 64, e custaria 6 frames de dispatch para nada.
         if (ReclassifyPending_ && InvalidateFramesLeft_ == 0 && InvalidateDistFramesLeft_ == 0) {
             ReclassifyPending_ = false;
             if (Relocation || AdaptiveRays) TriggerReclassify();

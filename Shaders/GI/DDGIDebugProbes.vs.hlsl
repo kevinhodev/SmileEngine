@@ -18,6 +18,9 @@ cbuffer DDGIDebugCB : register(b0) {
     // Cascatas: a grade de CADA sonda vem daqui. O GridMinSpacing acima e o da GROSSA.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
 };
 
 Buffer<float4> ProbeData  : register(t0);
@@ -56,7 +59,13 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     // as sondas das cascatas finas apareceriam empilhadas nas posicoes da grossa.
     int3 count    = (int3)GridCount.xyz;
     int  cascade  = DDGI_CascadeOfProbe((int)probeIid, count);
-    int3 pc       = DDGI_ProbeCoord(DDGI_LocalProbeIndex((int)probeIid, count), count);
+    // ARMAZENAMENTO -> GEOMETRIA: o buffer e indexado por SLOT, e e a posicao de MUNDO que o
+    // visualizador desenha. Sem desfazer o scroll, as sondas da fina apareceriam deslocadas de
+    // `scroll` celulas em relacao a onde elas realmente sao amostradas — e o visualizador estaria
+    // desmentindo o gather em vez de explica-lo.
+    int3 scroll   = (int3)GICascadeScrollOffset[cascade].xyz;
+    int3 pc       = DDGI_GeometricCoord(DDGI_ProbeCoord(DDGI_LocalProbeIndex((int)probeIid, count),
+                                                        count), scroll, count);
     float4 casc   = GICascadeGridMinSpacing[cascade];
 
     float4 pd       = ProbeData[probeIid];
@@ -88,10 +97,10 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VSOut o;
     o.pos      = mul(float4(worldPos, 1.0f), ViewProj);
     o.nrm      = sphereN;
-    o.irrTile  = (float2)DDGI_TileOrigin(pc, count, (int)AtlasParams.x,
+    o.irrTile  = (float2)DDGI_TileOrigin(pc, scroll, count, (int)AtlasParams.x,
                                          DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x), cascade);
     o.distMax  = casc.w * 2.6f;
-    o.distTile = (float2)DDGI_TileOrigin(pc, count, (int)DistAtlasParams.x,
+    o.distTile = (float2)DDGI_TileOrigin(pc, scroll, count, (int)DistAtlasParams.x,
                                          DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), cascade);
 
     // Normalizado pelo teto de relocacao DA CASCATA (0,45 espacamento, o maxOff do

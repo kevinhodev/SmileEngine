@@ -188,7 +188,8 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
             // aqui (AmbientFallback), como nos outros callers.
             float3 gi = SampleDDGIIrradianceCascaded(
                             DDGIIrradianceAtlas, LinearClamp, wp, -dir,
-                            DDGICascadeGridMinSpacing, (int)DDGICascadeParams.x,
+                            DDGICascadeGridMinSpacing, DDGICascadeScrollOffset,
+                            (int)DDGICascadeParams.x,
                             (int3)DDGIGridCount.xyz, (int)DDGIParams.y, invSize,
                             DDGI_TilesPerRow(DDGIParams.z, (int)DDGIParams.y))
                         * (DDGIParams.x / SMILE_PI);

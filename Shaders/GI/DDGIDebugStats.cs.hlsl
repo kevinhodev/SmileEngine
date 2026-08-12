@@ -19,6 +19,9 @@ cbuffer DDGIDebugCB : register(b0) {
     // Cascatas: a grade de CADA sonda vem daqui. O GridMinSpacing e o da grossa.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
 };
 
 Texture2D<float4> ProbesTrace : register(t0);

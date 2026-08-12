@@ -15,6 +15,9 @@ cbuffer DDGIDebugCB : register(b0) {
     // Cascatas: a grade de CADA sonda vem daqui. O GridMinSpacing acima e o da GROSSA.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
 };
 
 Buffer<float4> ProbeData     : register(t0); 
@@ -31,7 +34,11 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     // Indice GLOBAL -> (cascata, local); a geometria e da cascata (ver DDGIDebugProbes).
     int3   count    = (int3)GridCount.xyz;
     int    cascade  = DDGI_CascadeOfProbe((int)iid, count);
-    int3   pc       = DDGI_ProbeCoord(DDGI_LocalProbeIndex((int)iid, count), count);
+    // ARMAZENAMENTO -> GEOMETRIA, como no DDGIDebugProbes: o rotulo tem de flutuar sobre a sonda
+    // que ele descreve, e o indice do buffer e um slot.
+    int3   pc       = DDGI_GeometricCoord(DDGI_ProbeCoord(DDGI_LocalProbeIndex((int)iid, count),
+                                                          count),
+                                          (int3)GICascadeScrollOffset[cascade].xyz, count);
     float4 casc     = GICascadeGridMinSpacing[cascade];
     float4 pd       = ProbeData[iid];
     float3 probePos = DDGI_ProbeWorldPos(pc, casc.xyz, casc.w) + pd.xyz;

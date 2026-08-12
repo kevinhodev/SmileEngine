@@ -127,8 +127,13 @@ namespace Smile {
             // as finas nas posicoes da grossa. Nao cabia nos 16 bytes de cauda que sobravam, e o
             // cbuffer passou a ocupar dois blocos de 256. Todos os sitios dimensionam por
             // sizeof(), entao o crescimento e local a esta declaracao.
+            // O bloco cresceu de 80 para 144 bytes na 6.2b-ii (o scroll toroidal por cascata) e a
+            // cauda absorveu a diferenca — os 512 continuam de pe, agora com 64 bytes a menos de
+            // padding. Quem avisou foi este static_assert de tamanho, que e o unico guarda que
+            // existe para o bloco crescer: o compilador de shader acha call site esquecido, mas
+            // um cbuffer que so ficou maior compila dos dois lados e desalinha em silencio.
             FDDGICascadeConstants Cascades;
-            u8    _Tail[512 - 64 - 15 * 16 - 80] = {};
+            u8    _Tail[512 - 64 - 15 * 16 - 144] = {};
         };
         static_assert(sizeof(DDGIDebugConstants) == 512, "DDGIDebugConstants must be 512 bytes");
         // Offset preso como nos outros cinco cbuffers: o tamanho sozinho nao pega campo
@@ -146,12 +151,15 @@ namespace Smile {
             Vec4  CameraPositionFlags;
             Vec4  PixelParams;
             Vec4  BiasParams; // x = escala do self-shadow bias, y = teto em metros (0 = sem teto)
-            // O diagnostico roda a MESMA selecao do gather, entao precisa do mesmo bloco. Aqui
-            // ele coube exato: 64 + 7*16 + 80 = 256, e a cauda de padding deixou de existir.
+            // O diagnostico roda a MESMA selecao do gather, entao precisa do mesmo bloco. Cabia
+            // exato em 256 (64 + 7*16 + 80) ate o bloco crescer para 144 com o scroll: agora sao
+            // 64 + 112 + 144 = 320, ou seja dois blocos de 256 com cauda. Todos os sitios
+            // dimensionam por sizeof(), entao o crescimento e local a esta declaracao.
             FDDGICascadeConstants Cascades;
+            u8    _Tail[512 - 64 - 7 * 16 - 144] = {};
         };
-        static_assert(sizeof(PointDiagnosticConstants) == 256,
-                      "PointDiagnosticConstants must be 256 bytes");
+        static_assert(sizeof(PointDiagnosticConstants) == 512,
+                      "PointDiagnosticConstants must be 512 bytes");
         static_assert(offsetof(PointDiagnosticConstants, Cascades) == 176,
                       "bloco de cascatas anexado ao fim do PointDiagnosticConstants");
 

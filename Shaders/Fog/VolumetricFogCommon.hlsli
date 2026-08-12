@@ -47,6 +47,9 @@ cbuffer VolFogCB : register(b0) {
     // Cascatas do DDGI: o DDGIGridMin acima e a GROSSA (ver FDDGI::GridMin).
     float4 DDGICascadeParams;
     float4 DDGICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 DDGICascadeScrollOffset[4];
 };
 
 // Profundidade (view-Z linear) do slice — inverso de VolFog_SliceFromDepth.

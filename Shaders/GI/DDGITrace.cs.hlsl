@@ -40,6 +40,13 @@ cbuffer DDGICB : register(b0) {
     // exatamente o estado duplicado que o resto desta fase evitou.
     float4 GICascadeParams;          // x = nº de cascatas, y = sondas por cascata
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
+    // Quanto cada cascata ROLOU desde o ultimo update que rodou, em celulas (xyz), w = rolou.
+    // So os passes de update leem: e com ele que DDGI_NewlyExposed decide, em inteiro, se o slot
+    // guarda outro ponto do mundo. Ver DDGIConstants::CascadeScrollDelta.
+    float4 GICascadeScrollDelta[4];
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -80,7 +87,15 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int   localIdx = DDGI_LocalProbeIndex(probeIdx, count);
     float3 gridMin = GICascadeGridMinSpacing[cascade].xyz;
     float spacing  = GICascadeGridMinSpacing[cascade].w;
-    int3  pc       = DDGI_ProbeCoord(localIdx, count);
+    // ARMAZENAMENTO -> GEOMETRIA. `localIdx` enderreca um SLOT; com scrolling, o ponto do mundo que
+    // ele representa neste frame sai desfazendo o scroll. Ler a geometria direto do slot daria uma
+    // sonda deslocada de `scroll` celulas — parada isso e um erro fixo, andando e um rastro.
+    int3  scroll = (int3)GICascadeScrollOffset[cascade].xyz;
+    int3  pc     = DDGI_GeometricCoord(DDGI_ProbeCoord(localIdx, count), scroll, count);
+    // Lamina recem-exposta: o slot guardava outro lugar do mundo, entao TUDO nele e lixo — inclusive
+    // o offset de relocacao que este passe usaria como origem dos raios.
+    const bool newlyExposed =
+        DDGI_NewlyExposed(pc, (int3)GICascadeScrollDelta[cascade].xyz, count);
 
     // Frame de CLASSIFICACAO: o passe de relocacao le ESTE trace para decidir quantos raios cada
     // sonda merece, e ele mede a proximidade pelo hit mais proximo. Uma sonda ja decimada daria
@@ -89,8 +104,23 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // comeco da cena: tempo de sobra para o grid inteiro escorregar ate o piso, e o A/B mediria
     // esse escorregamento em vez do que o knob faz. Nestes frames o trace ignora a contagem e
     // manda os 64, entao o classificador sempre decide sobre o conjunto cheio.
-    const bool classifyFrame = MiscParams3.z > 0.5f;
-    int rayCount = classifyFrame ? DDGI_RAYS : (int)ProbeRayCount[probeIdx];
+    //
+    // O `.w` restringe isso ao caso do SCROLL: ali o relocate so reclassifica a lamina nova, entao
+    // so ela precisa dos 64. Mandar os 64 no grid inteiro a cada celula andada neutralizaria os
+    // raios adaptativos justamente em movimento; e reclassificar o grid inteiro a partir da
+    // decimacao dele reabriria a catraca acima pela porta do scroll.
+    const bool scrollOnly    = MiscParams3.w > 0.5f;
+    const bool classifyFrame = MiscParams3.z > 0.5f && !scrollOnly;
+    // A lamina nova pede os 64 SEMPRE, e nao so quando `scrollOnly`: durante os 180 frames iniciais
+    // uma rolagem chega com z=1 e w=0, e a sonda nova continua precisando do conjunto cheio.
+    //
+    // A sonda marcada como recem-relocada (w >= 1) tambem: o relocate vai reclassifica-la NESTE
+    // frame, a partir DESTE trace, e ela e a que acabou de trocar de posicao. Deixa-la decimada
+    // aqui alimentaria o classificador com a propria decimacao — a catraca da fase 4, pela porta
+    // do segundo tempo da lamina.
+    const bool justRelocated = GIProbeData[probeIdx].w >= 1.0f;
+    int rayCount = (classifyFrame || newlyExposed || justRelocated)
+                 ? DDGI_RAYS : (int)ProbeRayCount[probeIdx];
     int stride   = DDGI_RAYS / max(rayCount, 1);
     if ((rayIdx % max(stride, 1)) != 0) {
         ProbesTrace[DDGI_TraceTexel(probeIdx, rayIdx, numProbes, DDGI_RAYS)] =
@@ -98,7 +128,13 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
         return;
     }
 
-    float3 probePos = DDGI_ProbeWorldPos(pc, gridMin, spacing) + GIProbeData[probeIdx].xyz;
+    // O offset de relocacao da lamina nova pertence ao lugar ANTIGO. Usa-lo aqui poe a origem dos
+    // raios a ate 0,45 celula de onde a sonda esta, e como o update dessa sonda vai tomar a
+    // estimativa INTEIRA (histerese 0, ela nao tem historico), o erro entra sem nada que o dilua —
+    // pior do que nao ter limpado nada. Ate o relocate deste mesmo frame reescrever o buffer, a
+    // sonda nova traca do vertice do grid.
+    float3 relocOffset = newlyExposed ? float3(0.0f, 0.0f, 0.0f) : GIProbeData[probeIdx].xyz;
+    float3 probePos = DDGI_ProbeWorldPos(pc, gridMin, spacing) + relocOffset;
 
     float3 dir = DDGI_RayDirection(rayIdx, DDGI_RAYS, (uint)TraceParams.x, (uint)probeIdx);
 

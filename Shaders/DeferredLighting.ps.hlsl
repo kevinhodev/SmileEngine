@@ -39,6 +39,9 @@ cbuffer FrameCB : register(b0) {
     // Cascatas do DDGI (append no fim do FrameConstants). O DDGIGridMin acima e a GROSSA.
     float4 DDGICascadeParams;          // x = nº de cascatas, y = sondas por cascata
     float4 DDGICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 DDGICascadeScrollOffset[4];
 };
 
 #include "Atmosphere/AtmosphereMath.hlsli"
@@ -271,14 +274,14 @@ float3 SampleSceneDDGI(float3 worldPos, float3 N) {
         float3 V = normalize(CameraPosition.xyz - worldPos);
         gi = SampleDDGIIrradianceChebCascaded(
                  DDGIIrradianceAtlas, DDGIDistanceAtlas, IBLSampler, worldPos, N, V,
-                 DDGICascadeGridMinSpacing, (int)DDGICascadeParams.x, (int3)DDGIGridCount.xyz,
+                 DDGICascadeGridMinSpacing, DDGICascadeScrollOffset, (int)DDGICascadeParams.x, (int3)DDGIGridCount.xyz,
                  (int)DDGIParams.y, atlasInvSize, (int)DDGIDistParams.x, distInvSize,
                  DDGIProbeData, skipMode, tilesPerRow,
                  DDGIBiasParams.x, DDGIBiasParams.y);
     } else {
         gi = SampleDDGIIrradianceCascaded(
                  DDGIIrradianceAtlas, IBLSampler, worldPos, N,
-                 DDGICascadeGridMinSpacing, (int)DDGICascadeParams.x, (int3)DDGIGridCount.xyz,
+                 DDGICascadeGridMinSpacing, DDGICascadeScrollOffset, (int)DDGICascadeParams.x, (int3)DDGIGridCount.xyz,
                  (int)DDGIParams.y, atlasInvSize, tilesPerRow);
     }
     return (volW >= 1.0f) ? gi : lerp(DDGI_FallbackAmbient(N), gi, volW);

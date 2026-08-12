@@ -117,6 +117,51 @@ float3 DDGI_OctDecode(float2 f) {
 
 int  DDGI_ProbeLinear(int3 c, int3 count) { return c.x + c.y * count.x + c.z * count.x * count.y; }
 
+// ---------------------------------------------------------------------------------------------
+// Scrolling toroidal (6.2b-ii)
+//
+// A cascata fina segue a camera, e a origem dela anda em CELULAS INTEIRAS. Sem scrolling, cada
+// celula andada faria todo o conteudo guardado passar a representar outro ponto do mundo de uma
+// vez — um flash por celula cruzada. Com ele, a sonda de coordenada GEOMETRICA `c` mora sempre no
+// slot `(c + scroll) mod count`, e como `scroll = origem_em_celulas mod count`, o slot de um ponto
+// FIXO do mundo nunca muda: `(origem + c) mod count` e invariante enquanto a janela desliza. So as
+// laminas recem-expostas viram conteudo novo.
+//
+// Duas funcoes e nao uma, e as duas existem para os dois sentidos serem impossiveis de confundir:
+//   - GEOMETRIA -> ARMAZENAMENTO: quem tem uma posicao de mundo (gather, debug) e quer o tile/indice;
+//   - ARMAZENAMENTO -> GEOMETRIA: quem recebeu um indice de sonda do dispatch (trace, updates,
+//     relocate) e quer saber que ponto do mundo ele representa NESTE frame.
+// Aplicar o sentido errado da um erro de UMA lamina — invisivel parado, e um rastro atras da
+// camera em movimento, que e o sintoma mais caro de diagnosticar.
+//
+// Sem `%`: `c` e `scroll` estao os dois em [0, count), entao a soma cabe em [0, 2*count) e um
+// subtract condicional resolve. Vale tambem para a inversa, em [-count, count).
+int3 DDGI_StorageCoord(int3 c, int3 scroll, int3 count) {
+    int3 s = c + scroll;
+    return s - count * (int3)(s >= count);
+}
+int3 DDGI_GeometricCoord(int3 s, int3 scroll, int3 count) {
+    int3 c = s - scroll;
+    return c + count * (int3)(c < 0);
+}
+
+// A sonda de coordenada geometrica `c` estreou NESTE update? Ela ocupava, na janela anterior, a
+// coordenada `c + delta` (delta = origem_atual - origem_anterior, em celulas); se aquilo caia fora
+// da grade, o slot guardava outro ponto do mundo e tudo que ha nele e lixo: irradiancia,
+// momentos de distancia, offset de relocacao, marca de inativa e contagem de raios.
+//
+// Inteiro de ponta a ponta, e isso e o ponto. A primeira versao comparava a gaiola ATUAL com a
+// ANTERIOR em coordenadas de mundo, em float — e comparava exatamente nas BORDAS, onde meio ULP
+// limpa uma lamina que nao mudou ou preserva uma que mudou. Era o mesmo erro que a decisao de
+// carregar o scroll (em vez de derivar de GridMin/spacing) tinha acabado de evitar.
+//
+// Teleporte nao precisa de caminho proprio: com |delta| >= count nenhuma coordenada sobrevive ao
+// teste e a cascata inteira se declara nova.
+bool DDGI_NewlyExposed(int3 cGeo, int3 scrollDelta, int3 count) {
+    int3 old = cGeo + scrollDelta;
+    return any(old < 0) || any(old >= count);
+}
+
 // Endereco no ProbesTrace (radiancia + distancia assinada de cada raio de cada sonda). Era uma
 // linha por sonda, ou seja NumProbes virava a ALTURA de uma Texture2D e o grid parava em 16384
 // sondas. Enrolado em blocos de kProbesPerRow sondas por linha, o teto vira
@@ -212,7 +257,11 @@ int DDGI_TileRowsPerCascade(int3 count, int tilesPerRow) {
     return bands * count.y;
 }
 
-int2 DDGI_TileOrigin(int3 c, int3 count, int tile, int tilesPerRow, int cascade) {
+// `c` e a coordenada GEOMETRICA; o scroll entra AQUI DENTRO, e nao no chamador, para nenhum
+// consumidor do atlas conseguir esquecer dele. Cascata parada (a grossa) manda scroll zero e isto
+// e bit a bit o endereçamento de antes.
+int2 DDGI_TileOrigin(int3 cGeo, int3 scroll, int3 count, int tile, int tilesPerRow, int cascade) {
+    int3 c     = DDGI_StorageCoord(cGeo, scroll, count);
     int plane  = c.x + c.z * count.x;
     int band   = plane / tilesPerRow;
     int col    = plane - band * tilesPerRow;
@@ -224,6 +273,9 @@ int2 DDGI_TileOrigin(int3 c, int3 count, int tile, int tilesPerRow, int cascade)
 // Espaco de indice das sondas: cascata c ocupa [c*porCascata, (c+1)*porCascata). Os buffers
 // (ProbeData, ProbeRayCount) e o ProbesTrace usam o indice GLOBAL; a geometria — posicao no
 // mundo, gaiola, vizinhos — usa o LOCAL, com o (GridMin, Spacing) daquela cascata.
+// Indice GLOBAL da sonda a partir da coordenada GEOMETRICA. Par do DDGI_TileOrigin: o scroll entra
+// aqui dentro pelo mesmo motivo — buffer e atlas tem de concordar sobre onde a sonda mora, e a
+// unica forma de garantir isso e nenhum dos dois deixar a escolha para o chamador.
 int  DDGI_ProbesPerCascade(int3 count) { return count.x * count.y * count.z; }
 int  DDGI_CascadeOfProbe(int globalIdx, int3 count) {
     return globalIdx / max(DDGI_ProbesPerCascade(count), 1);
@@ -234,6 +286,10 @@ int  DDGI_LocalProbeIndex(int globalIdx, int3 count) {
 }
 int  DDGI_GlobalProbeIndex(int localIdx, int cascade, int3 count) {
     return localIdx + cascade * DDGI_ProbesPerCascade(count);
+}
+int  DDGI_GlobalProbeFromGeo(int3 cGeo, int3 scroll, int cascade, int3 count) {
+    return DDGI_GlobalProbeIndex(DDGI_ProbeLinear(DDGI_StorageCoord(cGeo, scroll, count), count),
+                                 cascade, count);
 }
 
 #define DDGI_MAX_CASCADES 4
@@ -403,7 +459,8 @@ float3 DDGI_SampleProbe(Texture2D<float4> atlas, SamplerState samp, int2 tileOri
 
 float3 SampleDDGIIrradiance(Texture2D<float4> atlas, SamplerState samp, float3 worldPos,
                             float3 N, float3 gridMin, float spacing, int3 count,
-                            int tile, float2 atlasInvSize, int tilesPerRow, int cascade) {
+                            int tile, float2 atlasInvSize, int tilesPerRow, int cascade,
+                            int3 scroll) {
     float3 g    = (worldPos - gridMin) / spacing;
     int3   base = (int3)floor(g);
     float3 frac = saturate(g - (float3)base);
@@ -420,7 +477,7 @@ float3 SampleDDGIIrradiance(Texture2D<float4> atlas, SamplerState samp, float3 w
         float  w  = tw.x * tw.y * tw.z;
         if (w <= 0.0f) continue;
 
-        int2   tileOrigin = DDGI_TileOrigin(c, count, tile, tilesPerRow, cascade);
+        int2   tileOrigin = DDGI_TileOrigin(c, scroll, count, tile, tilesPerRow, cascade);
         float3 irr = DDGI_SampleProbe(atlas, samp, tileOrigin, tile, atlasInvSize, N);
         sum  += irr * w;
         wsum += w;
@@ -507,8 +564,11 @@ DDGITapCheb DDGI_EvaluateTapCheb(
         int i, int3 base, float3 frac, float3 biasPos, float3 rawPos, float3 N,
         float3 gridMin, float spacing, int3 count,
         Texture2D<float4> distAtlas, SamplerState samp, int distTile, float2 distInvSize,
-        Buffer<float4> probeData, uint skipMode, int tilesPerRow, int cascade) {
+        Buffer<float4> probeData, uint skipMode, int tilesPerRow, int cascade, int3 scroll) {
     int3 off = int3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+    // O clamp e GEOMETRICO — mantem o tap dentro da gaiola — e por isso vem ANTES do scroll. Na
+    // ordem contraria ele grampearia um slot, e a sonda da borda passaria a ler o outro extremo da
+    // grade, que e o ponto do mundo mais distante possivel dela.
     int3 c   = clamp(base + off, int3(0, 0, 0), count - 1);
 
     DDGITapCheb tap;
@@ -519,7 +579,7 @@ DDGITapCheb DDGI_EvaluateTapCheb(
     // `cascata*porCascata + local`, e a coordenada `c` aqui e LOCAL da cascata. Ler pelo local
     // pegaria a relocacao e a classificacao da cascata 0 em qualquer cascata acima dela — dormente
     // enquanto so existe uma, e silencioso quando deixar de existir.
-    uint index = (uint)DDGI_GlobalProbeIndex(DDGI_ProbeLinear(c, count), cascade, count);
+    uint index = (uint)DDGI_GlobalProbeFromGeo(c, scroll, cascade, count);
     if (skipMode != 0u && probeData[index].w < 0.0f) {
         if (skipMode >= 2u) {
             const int3 axisMask[3] = { int3(1,0,0), int3(0,1,0), int3(0,0,1) };
@@ -530,8 +590,7 @@ DDGITapCheb DDGI_EvaluateTapCheb(
                     int3 sc  = clamp(c + axisMask[ax] * (dir * sd), int3(0, 0, 0), count - 1);
                     // A busca por vizinho ativo nunca sai da cascata: `sc` e clampado no grid
                     // dela, entao o substituto tem de ser lido no bloco dela.
-                    uint candidate = (uint)DDGI_GlobalProbeIndex(
-                        DDGI_ProbeLinear(sc, count), cascade, count);
+                    uint candidate = (uint)DDGI_GlobalProbeFromGeo(sc, scroll, cascade, count);
                     if (probeData[candidate].w >= 0.0f) {
                         c = sc; index = candidate; found = true; break;
                     }
@@ -575,7 +634,7 @@ DDGITapCheb DDGI_EvaluateTapCheb(
     float backface = dot(-dirBackface, N) * 0.5f + 0.5f;
     float w = backface * backface + 0.05f;
 
-    int2   distOrigin = DDGI_TileOrigin(c, count, distTile, tilesPerRow, cascade);
+    int2   distOrigin = DDGI_TileOrigin(c, scroll, count, distTile, tilesPerRow, cascade);
     float2 md = DDGI_SampleProbeRG(distAtlas, samp, distOrigin, distTile, distInvSize, dirPP);
     tap.Mean  = md.x;
     tap.Mean2 = md.y;
@@ -606,7 +665,7 @@ float3 SampleDDGIIrradianceCheb(
         Texture2D<float4> irrAtlas, Texture2D<float4> distAtlas, SamplerState samp,
         float3 worldPos, float3 N, float3 gridMin, float spacing, int3 count,
         int irrTile, float2 irrInvSize, int distTile, float2 distInvSize, float3 biasVec,
-        Buffer<float4> probeData, uint skipMode, int tilesPerRow, int cascade) {
+        Buffer<float4> probeData, uint skipMode, int tilesPerRow, int cascade, int3 scroll) {
     float3 biasPos = worldPos + biasVec;
     float3 g    = (biasPos - gridMin) / spacing;
     int3   base = (int3)floor(g);
@@ -620,10 +679,10 @@ float3 SampleDDGIIrradianceCheb(
         DDGITapCheb tap = DDGI_EvaluateTapCheb(i, base, frac, biasPos, worldPos, N,
                                                gridMin, spacing, count, distAtlas, samp,
                                                distTile, distInvSize, probeData, skipMode,
-                                               tilesPerRow, cascade);
+                                               tilesPerRow, cascade, scroll);
         if (tap.Ignored) continue;
 
-        int2   irrOrigin = DDGI_TileOrigin(tap.Coord, count, irrTile, tilesPerRow, cascade);
+        int2   irrOrigin = DDGI_TileOrigin(tap.Coord, scroll, count, irrTile, tilesPerRow, cascade);
         float3 irr = DDGI_SampleProbe(irrAtlas, samp, irrOrigin, irrTile, irrInvSize, N);
         sum  += irr * tap.Weight;
         wsum += tap.Weight;
@@ -646,19 +705,25 @@ float3 SampleDDGIIrradianceCheb(
 //
 // A selecao usa SEMPRE a posicao CRUA. Ver DDGI_CascadeWeight.
 
+// O `scrolls` anda SEMPRE junto do `cascades`: os dois sao indexados pela cascata escolhida e uma
+// origem lida com o scroll de outra enderecaria o atlas inteiro errado. Por isso entram como par
+// nas duas assinaturas, e nao como um scroll unico "da cascata corrente" que o caller escolheria.
 float3 SampleDDGIIrradianceCascaded(
         Texture2D<float4> atlas, SamplerState samp, float3 rawPos, float3 N,
-        float4 cascades[DDGI_MAX_CASCADES], int cascadeCount, int3 count,
+        float4 cascades[DDGI_MAX_CASCADES], float4 scrolls[DDGI_MAX_CASCADES],
+        int cascadeCount, int3 count,
         int tile, float2 atlasInvSize, int tilesPerRow) {
     DDGICascadeChoice ch = DDGI_SelectCascade(rawPos, cascades, cascadeCount, count);
     float3 primary = SampleDDGIIrradiance(atlas, samp, rawPos, N,
                                           cascades[ch.Primary].xyz, cascades[ch.Primary].w,
-                                          count, tile, atlasInvSize, tilesPerRow, ch.Primary);
+                                          count, tile, atlasInvSize, tilesPerRow, ch.Primary,
+                                          (int3)scrolls[ch.Primary].xyz);
     if (ch.Next == ch.Primary || ch.PrimaryWeight >= 0.999f) return primary;
 
     float3 next = SampleDDGIIrradiance(atlas, samp, rawPos, N,
                                        cascades[ch.Next].xyz, cascades[ch.Next].w,
-                                       count, tile, atlasInvSize, tilesPerRow, ch.Next);
+                                       count, tile, atlasInvSize, tilesPerRow, ch.Next,
+                                       (int3)scrolls[ch.Next].xyz);
     return lerp(next, primary, ch.PrimaryWeight);
 }
 
@@ -679,7 +744,8 @@ float3 SampleDDGIIrradianceCascaded(
 float3 SampleDDGIIrradianceChebCascaded(
         Texture2D<float4> irrAtlas, Texture2D<float4> distAtlas, SamplerState samp,
         float3 rawPos, float3 N, float3 V,
-        float4 cascades[DDGI_MAX_CASCADES], int cascadeCount, int3 count,
+        float4 cascades[DDGI_MAX_CASCADES], float4 scrolls[DDGI_MAX_CASCADES],
+        int cascadeCount, int3 count,
         int irrTile, float2 irrInvSize, int distTile, float2 distInvSize,
         Buffer<float4> probeData, uint skipMode, int tilesPerRow,
         float biasScale, float biasMax) {
@@ -690,7 +756,7 @@ float3 SampleDDGIIrradianceChebCascaded(
         cascades[ch.Primary].xyz, cascades[ch.Primary].w, count,
         irrTile, irrInvSize, distTile, distInvSize,
         DDGI_SurfaceBias(N, V, cascades[ch.Primary].w, biasScale, biasMax),
-        probeData, skipMode, tilesPerRow, ch.Primary);
+        probeData, skipMode, tilesPerRow, ch.Primary, (int3)scrolls[ch.Primary].xyz);
     if (ch.Next == ch.Primary || ch.PrimaryWeight >= 0.999f) return primary;
 
     float3 next = SampleDDGIIrradianceCheb(
@@ -698,7 +764,7 @@ float3 SampleDDGIIrradianceChebCascaded(
         cascades[ch.Next].xyz, cascades[ch.Next].w, count,
         irrTile, irrInvSize, distTile, distInvSize,
         DDGI_SurfaceBias(N, V, cascades[ch.Next].w, biasScale, biasMax),
-        probeData, skipMode, tilesPerRow, ch.Next);
+        probeData, skipMode, tilesPerRow, ch.Next, (int3)scrolls[ch.Next].xyz);
     return lerp(next, primary, ch.PrimaryWeight);
 }
 

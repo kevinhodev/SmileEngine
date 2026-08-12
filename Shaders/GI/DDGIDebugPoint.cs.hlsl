@@ -26,6 +26,9 @@ cbuffer DDGIPointDebugCB : register(b0) {
     // Cascatas: o diagnostico roda a MESMA selecao do gather.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
 };
 
 Texture2D<float4> GBufferB        : register(t0);
@@ -100,6 +103,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const int    casc     = (page == 0u) ? choice.Primary : choice.Next;
     const bool   pageLive = (page == 0u) || hasBlend;
     const float4 cg       = GICascadeGridMinSpacing[casc];
+    // Scroll DA PAGINA, e nao um so: as duas paginas podem ser cascatas diferentes, e cada uma
+    // enderega o atlas com o proprio. Ler o da primaria nas duas mostraria a segunda pagina
+    // deslocada — e o painel existe justamente para nao mentir sobre qual sonda iluminou o pixel.
+    const int3   cscroll  = (int3)GICascadeScrollOffset[casc].xyz;
     // Bias POR CASCATA, como no wrapper: ele escala com o espacamento e a pagina de baixo tem
     // outro. Reaproveitar um so daria a uma das duas um ponto de amostragem que ela nunca usou.
     const float3 biasVec = useChebyshev
@@ -121,7 +128,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 cg.xyz, cg.w, count,
                 DistanceAtlas, LinearClamp, (int)DistAtlasParams.x,
                 1.0f / DistAtlasParams.yz, ProbeData, skipMode,
-                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), casc);
+                DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), casc, cscroll);
         } else {
             // Com o Chebyshev desligado o consumidor e o SampleDDGIIrradiance: trilinear
             // puro, sem bias, sem relocacao e sem skip de probe inativa. Os momentos ainda
@@ -135,8 +142,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             tap.Coord       = c;
             // GLOBAL, como o ramo do Chebyshev (DDGI_EvaluateTapCheb): os dois publicam o mesmo
             // campo e o diagnostico nao pode reportar indice local num e global no outro.
-            tap.Index       = (uint)DDGI_GlobalProbeIndex(DDGI_ProbeLinear(c, count),
-                                                          casc, count);
+            tap.Index       = (uint)DDGI_GlobalProbeFromGeo(c, cscroll, casc, count);
             tap.Ignored     = false;
             tap.DistToProbe = length(probeToPoint);
             tap.Trilinear   = tri.x * tri.y * tri.z;
@@ -145,7 +151,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
             const float2 moments = DDGI_SampleProbeRG(
                 DistanceAtlas, LinearClamp,
-                DDGI_TileOrigin(c, count, (int)DistAtlasParams.x,
+                DDGI_TileOrigin(c, cscroll, count, (int)DistAtlasParams.x,
                                 DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), casc),
                 (int)DistAtlasParams.x, 1.0f / DistAtlasParams.yz,
                 probeToPoint / max(tap.DistToProbe, 1e-4f));
@@ -155,7 +161,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
         const float3 irr = tap.Ignored ? 0.0f : DDGI_SampleProbe(
             IrradianceAtlas, LinearClamp,
-            DDGI_TileOrigin(tap.Coord, count, (int)AtlasParams.x,
+            DDGI_TileOrigin(tap.Coord, cscroll, count, (int)AtlasParams.x,
                             DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x), casc),
             (int)AtlasParams.x, 1.0f / AtlasParams.yz, N);
 
