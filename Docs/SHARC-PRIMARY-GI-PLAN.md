@@ -1,11 +1,11 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
-> **Onde estamos:** Fases 0-3 fechadas e medidas. **Fase 4 com o código todo entregue e a medida
-> principal feita** (11 commits): piso de confiança aprovado por A/B, capacidade e limiares de
-> aquecimento definidos por medida, aquecimento global e visualizador no lugar, e o lifecycle
-> auditado até a última porta lateral. Faltam **três gates de RUNTIME**, nenhum de código: a
-> captura em 2¹⁷, o teste vivo de luz/ToD e o smoke de hot reload. O bloco `➜ FASE 4` mais abaixo
-> tem os números, o que eles decidiram, e a fila do que resta.
+> **Onde estamos:** Fases 0-3 fechadas e medidas. **Fase 4 com o código todo entregue e dois dos
+> três gates de runtime passados** (13 commits): piso de confiança aprovado por A/B, capacidade
+> 2¹⁷ **confirmada em GPU** (19,21% de ocupação, `insertFull` = 0), luz/ToD respondendo, e o
+> lifecycle auditado até a última porta lateral. Falta **repetir o smoke de hot reload**, que
+> reprovou e achou dois bugs reais — já corrigidos. O bloco `➜ FASE 4` mais abaixo tem os números,
+> o que eles decidiram, e o que resta.
 >
 > Leia este bloco ESTADO inteiro antes de continuar; ele existe para não re-derivar decisão. A
 > seção "Estado de PARTIDA", lá embaixo, é retrato histórico e **não** descreve o código de hoje.
@@ -114,12 +114,13 @@ simultâneas, e a semântica vem primeiro.
 
 ### ➜ FASE 4 — medida feita; o código todo entrou; falta a confirmação
 
-Onze commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
+Treze commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
 `ed9f223` (separação de capacidade × contenção × teto × terminal), `318417b` (capacidade 2¹⁷),
 `ca1f9a9` (aquecimento global), `f624d7b` (visualizador), `9e64d64` (invalidação na borda + o reset
 que não pode ser perdido), `bdd383e` (o latch é a mudança de consulta; o tick sobe para o topo do
-frame), `3e4ab07` (o reload de shader também fecha a consulta) e `19ac2ea` (botão de reset e reload
-pelo funil). Todos compilam em Debug e Release, `ctest` 3/3.
+frame), `3e4ab07` (o reload de shader também fecha a consulta), `19ac2ea` (botão de reset e reload
+pelo funil), `b4eee02` (cancelar antes de recriar) e `97b0e79` (cancelar na **detecção**, e o
+`ShaderStems` do cache que nunca casava). Todos compilam em Debug e Release, `ctest` 3/3.
 
 **A medida do item 1 foi feita** — é a seção a seguir, e é dela que saíram os dois defaults novos.
 O que resta para fechar a fase é uma captura de confirmação na capacidade nova e o gate dinâmico
@@ -323,22 +324,51 @@ andar). `Fallback source` continua fora até a Fase 5, quando existir escolha de
 
 #### O que falta para FECHAR a Fase 4
 
-**Nada é de código — os três são gates de RUNTIME**, e nenhum deles tem como ser respondido lendo
-o repositório.
+**Nada é de código — os três são gates de RUNTIME.** Dois passaram; o terceiro **reprovou e achou
+dois bugs reais**, que é exatamente o que um gate de runtime existe para fazer.
 
-1. **Captura de confirmação em 2¹⁷** — `Sd` / V1 / C4 / N=128, mesma pose. Verificar: ocupação na
-   faixa, `insertFull` < 0,1%, contenção residual, cadeia saudável, imagem equivalente à de 2²⁰ e
-   **o `AutoWarmup` de volta ligado no fim da sessão** (o manifesto sai com `cacheAutoWarmup:
-   false` por construção; quem responde pela restauração é o painel, depois). É a primeira vez que
-   o gate de capacidade tem como falhar: em 2²⁰, com 2,40% de ocupação, ele passaria mesmo com um
-   hash ruim.
-2. **Teste vivo de luz/ToD**, com o modo `Age` e a telemetria abertos: "a convergência responde a
-   luz acesa/apagada e ToD sem congelar por dezenas de segundos". A régua determinística **não
-   cobre isto** — ela é de pose e tempo fixos, e este gate é dinâmico por definição. O instrumento
-   existe (miss `refresh`, `cacheEvicted`, o modo `Age`); o protocolo, não.
-3. **Smoke de hot reload**, inclusive **durante** uma captura: os pipelines trocam, o cache reseta,
-   os consumidores esquecem e a sessão cancela com a mensagem certa. São quatro efeitos de dois
-   commits recentes (`3e4ab07`, `19ac2ea`) que só se veem rodando.
+**1. Capacidade em 2¹⁷ — ✅ PASSOU.** Captura `Sd`/V1/C4/N=128 na mesma pose, build `b4eee02`
+limpo:
+
+| | 2²⁰ | 2¹⁷ |
+|---|---|---|
+| ocupação | 2,40% | **19,21%** |
+| `insertFull` | 0 | **0 (0,000%)** |
+| contenção / retries | 0 / 0 | 0 / 0 |
+| cadeia média (máx) | 1,0026 (3) | **1,0332 (7)** |
+| descartadas no teto | 1,223% | 1,223% |
+| acerto | 67,936% | 67,939% |
+| confiáveis / com amostra | 80,79% | 80,79% |
+
+A ocupação bateu na projeção aritmética (19,2%) e o gate de 0,1% passou **com dentes**: agora ele
+tinha como falhar. O crescimento da cadeia (1,0026 → 1,0332; máximo 3 → 7) é a assinatura esperada
+de 8× a carga e continua desprezível. Acerto e convergência ficaram idênticos — a tabela menor não
+custou nada de qualidade. O manifesto saiu com `cacheWarmup: "active"` e `cacheAutoWarmup: false`,
+que é o comportamento projetado da sessão.
+
+**2. Luz/ToD vivo — ✅ PASSOU.** ⚠️ Registrar a limitação junto do resultado: esta é a única
+conclusão da série **sem artefato arquivado**. Foi observação em sessão viva, por construção (a
+régua é de pose e tempo fixos), então ela não se reconfere depois lendo arquivo — só repetindo o
+teste.
+
+**3. Smoke de hot reload — ❌ REPROVOU.** O log é a prova de uma corrida: captura iniciada em
+`20:35:47,374`, alteração detectada em `20:35:48,867`, **captura gravada** em `20:35:50,290` — e o
+`ReloadShaders` só foi chamado depois disso, quando o CMake terminou. A sessão saiu declarada
+válida tendo renderizado parte dos 128 frames com um `.cso` e parte com outro.
+
+Dois defeitos, os dois corrigidos em `97b0e79`:
+
+- **A compilação é assíncrona (~1,5 s) e uma captura cabe inteira nessa janela.** Qualquer defesa
+  que dependa do reload *chegar* é tarde por construção. O cancelamento passou para o instante da
+  **detecção** (`NotifyShaderReloadQueued`, antes do `QProcess`), com o mesmo critério de stem
+  mapeado; o do `ReloadShaders` fica como segunda defesa.
+- **O `ShaderStems()` do radiance cache estava fora da convenção** — `"RadianceCacheResolve"` em vez
+  de `"RadianceCacheResolve.cs"` —, e a comparação é exata. Os três nunca casavam: editar qualquer
+  shader do cache logava "sem pipeline mapeado" e os PSOs ficavam os antigos. Eram os **únicos** da
+  engine assim. O gate estava, portanto, testando menos do que pretendia.
+
+Falta **repetir o 3** com o mesmo procedimento: o cancelamento tem de aparecer antes de "Captura
+gravada".
 
 Teleport/troca de cena não entra na lista: **satisfeito por construção**, e vale registrar por quê
 — a chave é de MUNDO, então teleportar não mostra radiância do lugar anterior, mostra ausência de
