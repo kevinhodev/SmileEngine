@@ -951,6 +951,9 @@ namespace SmileEditor {
     double RenderSettingsBridge::GetRadianceCacheUpdateFraction() const {
         return Renderer ? Renderer->Settings().GetRadianceCacheUpdateFraction() : 0.04;
     }
+    bool RenderSettingsBridge::IsRadianceCachePrevTerminal() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheUsePrevTerminal();
+    }
     double RenderSettingsBridge::GetRadianceCacheCellSize() const {
         return Renderer ? Renderer->Settings().GetRadianceCacheCellSize() : 0.50;
     }
@@ -1028,6 +1031,13 @@ namespace SmileEditor {
         if (!Renderer) return;
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheUpdateFraction(static_cast<float>(V));
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ToggleRadianceCachePrevTerminal() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheUsePrevTerminal(
+            !A->Settings().GetRadianceCacheUsePrevTerminal());
         emit GISettingsChanged();
     }
     void RenderSettingsBridge::SetRadianceCacheCellSize(double V) {

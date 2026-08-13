@@ -105,6 +105,12 @@ namespace Smile {
         // muda so a taxa de amostragem, e o que ja esta na tabela continua valendo.
         void SetRadianceCacheUpdateFraction(f32 V);
         f32  GetRadianceCacheUpdateFraction() const;
+        // Terminal do caminho de update no cache resolvido: e o que torna o update multi-bounce
+        // NO TEMPO (L = direta + f*L_anterior). Desligar isola a realimentacao — o raio do
+        // terminal e o ceu continuam saindo, so a consulta ao Resolved fecha. Invalida: a energia
+        // guardada nos dois regimes e diferente, e a media que misturasse os dois nao seria nenhum.
+        void SetRadianceCacheUsePrevTerminal(bool V);
+        bool GetRadianceCacheUsePrevTerminal() const;
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);

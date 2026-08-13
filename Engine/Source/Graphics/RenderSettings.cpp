@@ -198,6 +198,18 @@ namespace Smile {
         return R.RadianceCache.GetUpdateFraction();
     }
 
+    void FRenderSettings::SetRadianceCacheUsePrevTerminal(bool _V) {
+        if (_V == R.RadianceCache.GetUsePrevCacheAtTerminal()) return;
+        R.RadianceCache.SetUsePrevCacheAtTerminal(_V);
+        // A tabela guarda energias diferentes nos dois regimes (com o terminal, cada celula carrega
+        // o multi-bounce acumulado; sem ele, so o primeiro bounce). Uma media que misturasse os
+        // dois nao descreveria nenhum — e o A/B compararia historico contaminado.
+        Invalidate(Dom::RayVisibility);
+    }
+    bool FRenderSettings::GetRadianceCacheUsePrevTerminal() const {
+        return R.RadianceCache.GetUsePrevCacheAtTerminal();
+    }
+
     void FRenderSettings::SetRadianceCacheStatsEnabled(bool _V) {
         if (_V == R.RadianceCache.GetStatsEnabled()) return;
         // NAO invalida historico: o conteudo ja acumulado continua valendo, e derrubar o cache a

@@ -92,6 +92,18 @@ namespace Smile {
                 if (S.CacheUpdate) Rc += 'U';
                 if (S.CacheQuery)  Rc += 'Q';
                 if (S.CacheStats)  Rc += 'S';
+                // O PRODUTOR entra no nome pela mesma razao do S: duas capturas indistinguiveis na
+                // pasta sao um convite a compara-las, e produtor legado x dedicado nao sao duas
+                // amostras da mesma configuracao — sao dois estimadores. Com o dedicado vem junto
+                // o que muda a convergencia dele: a fracao (em celulas do tile, 1..25) e o T do
+                // terminal no cache anterior. Sem dedicado nenhum dos dois significa coisa alguma,
+                // entao nao aparecem.
+                if (S.CacheDedicatedUpdate) {
+                    Rc += 'D';
+                    Rc += std::to_string(
+                        static_cast<int>(S.CacheUpdateFraction * 25.0f + 0.5f));
+                    if (S.CacheUsePrevTerminal) Rc += 'T';
+                }
                 Add(Rc.c_str());
             }
             if (S.GIMeasureTerminatorOff) Add("noTerm");
@@ -448,6 +460,14 @@ namespace Smile {
                 File << "  \"reflections\": "  << Bool(_State.Reflections) << ",\n";
                 File << "  \"cacheUpdate\": "  << Bool(_State.CacheUpdate) << ",\n";
                 File << "  \"cacheQuery\": "   << Bool(_State.CacheQuery)  << ",\n";
+                // O ESTIMADOR que encheu a tabela, e os dois parametros que mandam na convergencia
+                // dele. Ver o bloco correspondente no FCaptureState.
+                File << "  \"cacheDedicatedUpdate\": "
+                     << Bool(_State.CacheDedicatedUpdate) << ",\n";
+                File << "  \"cacheUpdateFraction\": "
+                     << _State.CacheUpdateFraction << ",\n";
+                File << "  \"cacheUsePreviousTerminal\": "
+                     << Bool(_State.CacheUsePrevTerminal) << ",\n";
                 // Regime de medicao, nao detalhe de diagnostico: com a instrumentacao ligada os
                 // atomicos mudam quem vence as insercoes do cache. Comparar uma captura
                 // instrumentada com uma normal e comparar duas configuracoes diferentes.

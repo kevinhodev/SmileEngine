@@ -426,6 +426,48 @@ float3 PT_ComposeIndirect(FHitSurface S, FHitMaterial M, float3 V, float3 indire
 }
 
 // --------------------------------------------------------------------------------------------
+// Politica de auto-interseccao / backface (Lumen AvoidSelfIntersections modo Retrace)
+// --------------------------------------------------------------------------------------------
+// Os dois passos sao UMA politica so e nao podem ser separados: sozinha, a terminacao preta
+// transformaria toda auto-interseccao proxima em MANCHA PRETA, trocando um artefato por outro.
+// Primeiro se descarta o hit proximo suspeito; SO o que sobrar vira oclusao.
+//
+// Devolve `true` quando o caminho deve MORRER: verso de geometria one-sided que sobreviveu ao
+// teste de proximidade, ou seja, geometria real vista por dentro. O `q` sai re-tracado quando
+// houve retrace, entao o caller le hit/distancia DELE e nao do trace original.
+//
+// ⚠️ DUAS COPIAS DESTA POLITICA existem hoje no ReSTIRGITrace.cs.hlsl (gather e revalidacao),
+// escritas antes desta funcao. Elas devem migrar para ca — mas em commit proprio, com a
+// comparacao de DXIL que a serie usa, porque mexer nelas e mexer no caminho de RENDER.
+bool PT_ResolveSelfIntersection(inout RayQuery<RAY_FLAG_NONE> q, inout RayDesc ray, uint mask) {
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
+
+    bool twoSided;
+    bool backface = HitIsBackface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                  q.CommittedWorldToObject3x4(), ray.Direction, twoSided);
+    const float t = q.CommittedRayT();
+
+    float skipDist = -1.0f;
+    if (twoSided && t < kSelfIsectTwoSidedDist)                  skipDist = t + kSelfIsectRetraceBias;
+    else if (!twoSided && backface && t < kSelfIsectBackfaceDist) skipDist = kSelfIsectBackfaceDist;
+
+    if (skipDist > 0.0f) {
+        const float tmin = ray.TMin;
+        ray.TMin = skipDist;
+        q.TraceRayInline(Scene, RAY_FLAG_NONE, mask, ray);
+        SMILE_RT_PROCEED(q)
+        ray.TMin = tmin; // a origem nao mudou; so o intervalo daquela consulta
+        // Re-classifica SO aqui: no caminho comum a classificacao de cima ja vale, e o
+        // HitIsBackface custa 3 indices + 3 posicoes.
+        backface = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) &&
+                   HitIsBackface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                 q.CommittedWorldToObject3x4(), ray.Direction, twoSided);
+    }
+
+    return backface && !twoSided && q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
+// --------------------------------------------------------------------------------------------
 // Amostragem do BSDF — o bloco que so o updater da Fase 3 usa
 // --------------------------------------------------------------------------------------------
 // O render AVALIA a BRDF para uma direcao conhecida (a da luz, no BRDF_Direct); quem precisa

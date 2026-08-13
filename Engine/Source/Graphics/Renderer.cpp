@@ -1275,6 +1275,12 @@ namespace Smile {
         // exatamente a captura com N=0 — se declararia ativo tendo entregado flags zeradas.
         S.CacheUpdate = RadianceCache.PublishedUpdateThisFrame();
         S.CacheQuery  = RadianceCache.PublishedQueryThisFrame();
+        // Pelo mesmo criterio: QUEM escreveu e com que fracao EFETIVA. Produtor legado e dedicado
+        // sao dois estimadores, e sem isto as duas capturas sairiam com etiqueta e manifesto
+        // identicos — o pior caso possivel, porque nada no arquivo denunciaria a diferenca.
+        S.CacheDedicatedUpdate = RadianceCache.PublishedDedicatedThisFrame();
+        S.CacheUpdateFraction  = RadianceCache.PublishedUpdateFraction();
+        S.CacheUsePrevTerminal = RadianceCache.GetUsePrevCacheAtTerminal();
         S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
 
@@ -2947,7 +2953,8 @@ namespace Smile {
                 FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition,
                 Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
                 ReSTIRGI.GetFoliageShadows() ? kRTMaskShadowFull : kRTMaskShadowFast,
-                TemporalSampleIndex, Lt.RainSkyDim, DDGI.MaxRayDistance(), GILightCount);
+                TemporalSampleIndex, Lt.RainSkyDim, DDGI.MaxRayDistance(), GILightCount,
+                ReSTIRGI.GetBackfacePolicy());
         }
     }
 

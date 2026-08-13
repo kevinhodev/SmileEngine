@@ -268,6 +268,8 @@ namespace Smile {
         PublishedUpdate = false;
         PublishedQuery  = false;
         PublishedStats  = false;
+        PublishedDedicated   = false;
+        PublishedUpdateCells = 0;
         if (!Ready || !MappedCB) return;
         CPU.CacheParams = { static_cast<f32>(CapacityV),
                             static_cast<f32>(kMaxAccumSamples),
@@ -394,11 +396,15 @@ namespace Smile {
 
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f) {
             UpdateSrvTable[f] = SRVHeap.Allocate(kUpdateSrvCount);
-            // Oito de oito: o nono (t8, luzes) e escrito por frame pelo
-            // SetUpdatePunctualLightsSRV. Ate o primeiro frame passar por la ele fica com o
-            // conteudo do heap, e e por isso que RecordUpdate nao roda sem UpdatePassActive() —
-            // que so e verdade depois de o Renderer publicar as luzes.
-            const D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
+            // NOVE entradas, e a nona e FILLER. O t8 (luzes) e reescrito por frame pelo
+            // SetUpdatePunctualLightsSRV, e a ordem do frame garante que isso aconteca antes do
+            // dispatch — mas garantia por ORDEM DE CHAMADA e mais fraca que a tabela nascer
+            // completa. Sem o filler, um caminho novo que chegasse ao RecordUpdate sem passar pelo
+            // PrepareIndirectLighting leria o conteudo velho do heap naquele slot; com ele, o pior
+            // caso e ler o snapshot de instancias como se fosse luz — e nem isso acontece, porque
+            // o CB desse mesmo frame traria NumLights = 0 e o loop nao roda. Mesmo padrao dos
+            // fillers da tabela de trace do FReSTIRGI.
+            const D3D12_CPU_DESCRIPTOR_HANDLE Src[9] = {
                 SRVHeap.CpuHandleStaging(TlasSlot),
                 SRVHeap.CpuHandleStaging(SkyViewSlot),
                 SRVHeap.CpuHandleStaging(InstanceSlot),
@@ -407,10 +413,11 @@ namespace Smile {
                 SRVHeap.CpuHandleStaging(Fallback.ProbeDataSRV),
                 SRVHeap.CpuHandleStaging(DepthSlot),
                 SRVHeap.CpuHandleStaging(GBufferSlot),
+                SRVHeap.CpuHandleStaging(InstanceSlot), // t8: filler ate as luzes do 1o frame
             };
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(UpdateSrvTable[f]);
-            UINT Count = 8; UINT Ones[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
-            Device->CopyDescriptors(1, &Dst, &Count, 8, Src, Ones,
+            UINT Count = kUpdateSrvCount; UINT Ones[9] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+            Device->CopyDescriptors(1, &Dst, &Count, kUpdateSrvCount, Src, Ones,
                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
 
@@ -434,7 +441,8 @@ namespace Smile {
                                             const Vec3& InCameraPos, const Vec3& SunDir,
                                             f32 SunIntensity, const Vec3& SunColor,
                                             u32 ShadowRayMask, u32 FrameIndex, f32 SkyIntensity,
-                                            f32 MaxRayDist, u32 PunctualLightCount) {
+                                            f32 MaxRayDist, u32 PunctualLightCount,
+                                            bool BackfacePolicy) {
         if (!UpdateReady || !MappedUpdateCB) return;
         UpdateFrameSlot = InFrameSlot;
 
@@ -457,6 +465,7 @@ namespace Smile {
         U.TraceParams     = { static_cast<f32>(FrameIndex), MaxRayDist, SkyIntensity,
                               RayEps.HitShadowRayBias };
         U.ShadeParams     = { static_cast<f32>(PunctualLightCount), kUpdateAlbedoLOD, 0.0f, 0.0f };
+        U.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
 
         // Fracao -> celulas do tile 5x5. O piso de 1 e deliberado: com o passe ligado e fracao
         // arredondando para zero, nenhum caminho sairia e a tabela envelheceria ate o despejo com
@@ -464,6 +473,10 @@ namespace Smile {
         const f32 CellsF = UpdateFraction * 25.0f;
         u32 Cells = static_cast<u32>(CellsF + 0.5f);
         Cells = std::clamp(Cells, 1u, 25u);
+        // O que o shader vai receber de fato — e so isso e que o manifesto reporta. A quantizacao
+        // acontece AQUI, entao publicar o knob cru faria a captura afirmar uma fracao que nao foi
+        // a usada (0,10 pedido vira 3/25 = 0,12).
+        if (UpdatePassActive()) PublishedUpdateCells = Cells;
         // .y e o numero de VERTICES do caminho, e vale 1 sem knob: o laco de ate quatro com
         // backpropagation em ordem reversa e o commit seguinte da mesma fase. Um knob agora seria
         // um controle que nao controla nada — o shader nem le este campo.
@@ -540,7 +553,10 @@ namespace Smile {
         // Sob o MESMO criterio dos outros consumidores — "vai rodar de fato". O CB e preenchido
         // todo frame (custa nada), mas um frame que nao dispara o passe nao pode se registrar
         // como alimentado. E exatamente o caso do primeiro frame depois de um reset.
-        if (UpdatePassActive()) PublishedUpdate = true;
+        if (UpdatePassActive()) {
+            PublishedUpdate    = true;
+            PublishedDedicated = true;
+        }
         return P;
     }
 

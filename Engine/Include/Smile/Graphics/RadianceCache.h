@@ -52,7 +52,8 @@ namespace Smile {
         Vec4  SunColor;        // w = mask dos shadow rays (a MESMA do ReSTIR GI; ver RecordUpdate)
         Vec4  TraceParams;     // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
         Vec4  ShadeParams;     // x=nº de luzes puntuais, y=albedoLOD
-        Vec4  UpdateParams;    // x=celulas/frame do tile 5x5, y=maxBounces, z=terminal no cache
+        Vec4  PolicyParams;    // x = politica de backface (o MESMO toggle do ReSTIR GI)
+        Vec4  UpdateParams;    // x=celulas/frame do tile 5x5, y=vertices, z=terminal no cache
         Vec4  RayEpsA;
         Vec4  RayEpsB;
         Vec4  GIDistParams;
@@ -177,10 +178,13 @@ namespace Smile {
                                         u32 StagingSlot, u32 InFrameSlot);
         // CB do passe. Chamar no PrepareIndirectLighting (onde as luzes e o sol ja estao
         // resolvidos); a gravacao acontece depois do G-buffer.
+        // BackfacePolicy vem de FORA (o toggle do ReSTIR GI) e nao e knob desta classe: o cache
+        // alimenta o ReSTIR GI, e duas politicas de geometria diferentes fariam a mesma superficie
+        // ter duas radiancias conforme o caminho. Mesmo criterio do ShadowRayMask.
         void UpdatePassPerFrame(u32 InFrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                                 const Vec3& SunDir, f32 SunIntensity, const Vec3& SunColor,
                                 u32 ShadowRayMask, u32 FrameIndex, f32 SkyIntensity,
-                                f32 MaxRayDist, u32 PunctualLightCount);
+                                f32 MaxRayDist, u32 PunctualLightCount, bool BackfacePolicy);
         void RecordUpdate(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
         // Recursos do passe montados (tabelas validas). Nao diz que ele roda neste frame.
@@ -247,6 +251,16 @@ namespace Smile {
         // com, e PSNR de 48 dB entre os dois regimes. Entao ela e parte da CONFIGURACAO, nao um
         // observador invisivel, e por isso entra no manifesto e na etiqueta do arquivo.
         bool PublishedStatsThisFrame() const  { return PublishedStats; }
+        // QUEM escreveu neste frame — o passe dedicado, ou os hits do render. Publicado pelo mesmo
+        // mecanismo dos anteriores (o ShaderParams do produtor que rodou) em vez de reconstituido
+        // pelo manifesto a partir dos knobs: o `GetDedicatedUpdate` diz o que foi PEDIDO, e um
+        // frame com reset pendente ou tabelas nao montadas nao escreveu nada apesar do pedido.
+        bool PublishedDedicatedThisFrame() const { return PublishedDedicated; }
+        // Fracao EFETIVA deste frame, ja quantizada em celulas do tile 5x5 — o numero que o shader
+        // usou, nao o do slider. 0 = o passe nao rodou.
+        f32  PublishedUpdateFraction() const {
+            return static_cast<f32>(PublishedUpdateCells) / 25.0f;
+        }
 
         // ConsumerRuns = este consumidor vai realmente tracar neste frame. Os params sao montados
         // para todos (custa nada, e o passe pode nem rodar), mas so quem RODA conta para o
@@ -436,5 +450,9 @@ namespace Smile {
         mutable bool PublishedUpdate = false;
         mutable bool PublishedQuery  = false;
         mutable bool PublishedStats  = false;
+        mutable bool PublishedDedicated = false;
+        // Celulas do tile 5x5 que o shader REALMENTE recebeu neste frame. Zerada no UpdatePerFrame
+        // para que "0" signifique "o passe nao rodou" em vez de guardar o valor de um frame antigo.
+        u32 PublishedUpdateCells = 0;
     };
 }

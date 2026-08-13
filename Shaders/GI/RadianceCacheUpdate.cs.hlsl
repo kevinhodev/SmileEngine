@@ -42,6 +42,9 @@ cbuffer RadianceCacheUpdateCB : register(b0) {
     float4 SunColor;          // rgb = cor, w = mask dos shadow rays
     float4 TraceParams;       // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
     float4 ShadeParams;       // x=nº de luzes puntuais, y=albedoLOD, zw=livres
+    // x = politica de auto-interseccao/backface (0/1). O MESMO toggle do ReSTIR GI, empurrado
+    // pelo Renderer — ver o bloco no v0 sobre por que ele nao e knob proprio.
+    float4 PolicyParams;
     // x = celulas do tile 5x5 sorteadas por frame (1 = 4% dos pixels)
     // y = vertices do caminho; vale 1 e NAO e lido aqui — o laco chega no commit seguinte
     // z = consultar o cache resolvido no terminal (0/1)
@@ -178,10 +181,25 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
     // SEM culling, igual ao gather do ReSTIR GI: o cache tem de aprender tambem o verso de
-    // superficie fina (a chave ja separa os dois lados pelo octante da normal).
+    // superficie fina (a chave ja separa os dois lados pelo octante da normal). E a politica de
+    // backface abaixo que decide entre re-tracar e matar — deixar o DXR cullar descartaria o hit
+    // antes da classificacao.
     RayQuery<RAY_FLAG_NONE> q;
     q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)
+
+    // AUTO-INTERSECCAO / BACKFACE, sob o MESMO toggle do ReSTIR GI (PolicyParams.x) — e nao um
+    // knob proprio: o cache ALIMENTA o ReSTIR GI, e duas politicas de geometria diferentes fariam
+    // a mesma superficie ter duas radiancias conforme o caminho.
+    //
+    // A consequencia aqui e MAIS SEVERA que no render, e e por isso que ela vale mesmo sendo o
+    // toggle desligado por default la: o render consome um hit ruim uma vez e o descarta; o cache
+    // o GRAVA numa celula de mundo e o serve a todos os raios que caiam nela pelos proximos
+    // frames. Por isso um caminho morto aqui NAO grava zero — ele nao grava nada. Zero seria
+    // afirmar "deste ponto nao sai luz", e a media da celula carregaria a afirmacao; nao gravar e
+    // dizer "esta amostra nao descreve superficie nenhuma", que e o que de fato aconteceu.
+    if (PolicyParams.x > 0.5f && PT_ResolveSelfIntersection(q, ray, SMILE_RT_MASK_GATHER)) return;
+
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return; // ceu: nao ha celula a alimentar
 
     const float  hitDist = q.CommittedRayT();
@@ -201,8 +219,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // Aqui esta a diferenca de POLITICA que justificou a Fase 2 inteira. O render, neste ponto,
     // chamaria PT_SampleIndirectFallback e somaria DDGI. Este passe amostra o BSDF, traca mais um
     // raio e le o cache RESOLVIDO (ou o ceu, ou zero).
+    //
+    // O raio do terminal e o ceu saem SEMPRE; o knob (UpdateParams.z) fecha apenas a consulta ao
+    // `Resolved` no hit geometrico. Ele existe para isolar a REALIMENTACAO — "o multi-bounce vem
+    // do cache anterior?" — e um knob que tambem apagasse o trace e o ceu responderia outra
+    // pergunta, misturando tres mudancas numa medida so.
     float3 indirectLighting = float3(0.0f, 0.0f, 0.0f);
-    if (UpdateParams.z > 0.5f) {
+    {
         const float2 Edir  = GGX_Rand2E(px, frameIndex, SMILE_RNG_CACHE_BOUNCE);
         const float  Elobe = GGX_Rand2E(px, frameIndex, SMILE_RNG_CACHE_BOUNCE + 1u).x;
         const FBsdfSample B = PT_SampleBSDF(S, M, V, Edir, Elobe);
@@ -216,10 +239,19 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             bq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, bray);
             SMILE_RT_PROCEED(bq)
 
+            // Mesma politica no segundo segmento. Aqui o caminho morto vira ZERO (e nao "nao
+            // grava"): o vertice que se grava e o v0, e um segundo raio que termina dentro de
+            // geometria e OCLUSAO legitima de v0 — a terminacao preta do Lumen, com o retrace
+            // antes dela para nao transformar auto-interseccao em mancha.
+            const bool bKill = PolicyParams.x > 0.5f &&
+                               PT_ResolveSelfIntersection(bq, bray, SMILE_RT_MASK_GATHER);
+
             float3 Lterm = float3(0.0f, 0.0f, 0.0f);
-            if (bq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+            if (bKill) {
+                Lterm = float3(0.0f, 0.0f, 0.0f);
+            } else if (bq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
                 Lterm = ShadeSky(B.Dir, sunDir, P.SkyIntensity, P);
-            } else {
+            } else if (UpdateParams.z > 0.5f) {
                 // Chave do terminal montada com PT_LoadHitSurface, e nao com o HitGeomNormal
                 // barato: a normal do cache tem de ser a MESMA que o ShadeSurfaceHit usa para
                 // consultar (a interpolada com facing), senao update e query montam chaves

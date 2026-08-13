@@ -60,7 +60,15 @@ O que o passe faz hoje: seleciona ~4% dos pixels por permutação de período 25
 v0 com os blocos da Fase 2, amostra o BSDF, traça mais um raio e termina no **cache resolvido**, no
 céu, ou em zero. Nunca em DDGI.
 
-Quatro decisões que o commit #6 herda:
+Cinco decisões que o commit #6 herda:
+
+- **A política de backface vale AQUI mesmo estando desligada por default no render.** O toggle é o
+  mesmo (`FReSTIRGI::BackfacePolicy`) e o updater o recebe de fora, não como knob próprio — o cache
+  alimenta o ReSTIR GI, e duas políticas de geometria fariam a mesma superfície ter duas
+  radiâncias. O que muda é a consequência: o render consome um hit ruim uma vez, o cache o **grava**
+  numa célula de mundo e o serve por até 64 frames. Por isso caminho morto em v0 **não grava zero,
+  não grava nada** — zero afirmaria "deste ponto não sai luz" e a média carregaria a afirmação. No
+  segundo segmento é o contrário: ali o kill é oclusão legítima de v0, e vale zero.
 
 - **O vértice do G-buffer NÃO entra no cache.** Ele é só origem. Gravá-lo exigiria um segundo
   caminho de material a partir do G-buffer, que é a cópia divergente que a Fase 2 existiu para
@@ -88,6 +96,13 @@ entre eles não tem semântica. Nada foi acrescentado, removido ou trocado. Os c
 `MinCacheableRoughness` (o gate de cone do lobo que CHEGA, que só passa a existir quando um vértice
 pode ser alcançado por lobo estreito) e o `UpdateMaxBounces` de verdade — hoje o `UpdateParams.y`
 viaja como 1 e o shader nem o lê, de propósito: knob que não controla nada é pior que knob ausente.
+
+**Mesh lights não entram no updater, e isso é PARIDADE e não esquecimento.** O plano lista
+"mesh lights/ReGIR" entre os insumos, mas o `PT_AddDirectLocal` — que o ReSTIR GI e o DDGI usam nos
+hits deles — só trata puntuais e ReGIR; geometria emissiva contribui quando um raio a atinge, pelo
+`PT_LoadHitEmissive`. Acrescentá-las só no updater faria a mesma superfície ter duas radiâncias
+conforme o caminho, que é exatamente o que a Fase 2 fechou. Quando entrarem, entram no bloco
+compartilhado e nos três consumidores de uma vez.
 
 Não entrou e continua fora: `UseDDGIBootstrap`. Ele exige preencher a cauda de cascatas do cbuffer
 do passe, e a struct `FDDGICascadeConstants` mora no `DDGI.h`, que **inclui** o `RadianceCache.h` —

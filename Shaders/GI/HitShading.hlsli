@@ -85,26 +85,9 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity, FHitShadeParams P
 // primeiro fix de material.
 #include "PathTracingCommon.hlsli"
 
-// CLASSIFICACAO do hit, sem sombrear — a politica de auto-interseccao precisa decidir se
-// re-traca ANTES de pagar o shading, e o caller e quem escolhe o que fazer (o ReSTIR mata o
-// caminho, o DDGI usa o outSignedDist do ShadeSurfaceHit, as reflexoes tem politica propria).
-// Por isso isto NAO vive dentro do ShadeSurfaceHit, que e compartilhado pelos tres.
-//
-// `outTwoSided` sai junto porque a politica trata os dois casos com distancias diferentes.
-// Custo: os 3 indices + as 3 posicoes do triangulo — o mesmo que o HitGeomNormal ja faz.
-bool HitIsBackface(uint instId, uint tri, float3x4 worldToObject, float3 rayDir,
-                   out bool outTwoSided) {
-    InstanceGeo geo = Instances[instId];
-    outTwoSided = (geo.TwoSidedRT != 0);
-
-    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
-    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
-    float3 faceN;
-    if (!HitFaceNormal(Verts, Idx[tri * 3 + 0], Idx[tri * 3 + 1], Idx[tri * 3 + 2],
-                       worldToObject, faceN))
-        return false; // degenerado: nao da p/ afirmar que e verso
-    return dot(faceN, rayDir) > 0.0f;
-}
+// O HitIsBackface mudou-se para o RTGeometry.hlsli (incluido acima). Ele vivia AQUI, abaixo do
+// include do PathTracingCommon, e era isso que impedia a politica de auto-interseccao de virar
+// funcao compartilhada la — ela precisa da classificacao. Move puro, mesmo contrato de bindings.
 
 // A POLITICA do hit de render: em que ordem os blocos entram, onde o cache corta o caminho e o que
 // o resultado alimenta. Os blocos moram no PathTracingCommon.hlsli.

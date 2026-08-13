@@ -3008,10 +3008,28 @@ Rectangle {
                         onToggled: renderModel.ToggleRadianceCacheDedicatedUpdate()
                     }
 
+                    Text {
+                        id: rcTerminalLabel
+                        x: 20
+                        y: rcDedicatedLabel.y + 30
+                        text: "Terminal no cache anterior (multi-bounce)"
+                        color: renderModel.radianceCacheDedicatedUpdate ? root.textNormal
+                                                                        : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcTerminalLabel.y - 6
+                        enabled: renderModel.radianceCacheDedicatedUpdate
+                        checked: renderModel.radianceCachePrevTerminal
+                        onToggled: renderModel.ToggleRadianceCachePrevTerminal()
+                    }
+
                     ShadowSlider {
                         id: rcFractionSlider
                         x: 20
-                        y: rcDedicatedLabel.y + 26
+                        y: rcTerminalLabel.y + 26
                         width: parent.width - 40
                         // Sem produtor dedicado a fração não controla nada. O ShadowSlider não
                         // tem estado desabilitado próprio (o label dele é sempre textNormal),

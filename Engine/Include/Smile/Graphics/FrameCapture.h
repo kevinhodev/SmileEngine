@@ -93,6 +93,18 @@ namespace Smile {
         bool Reflections        = false;
         bool CacheUpdate        = false; // radiance cache: escrita
         bool CacheQuery         = false; // radiance cache: leitura
+        // QUEM escreveu. Sao dois ESTIMADORES, nao dois niveis de qualidade: com false o cache
+        // aprendeu dos hits do render (terminador = DDGI), com true de um path tracer proprio que
+        // nunca le sonda. Sem este campo, as duas capturas sairiam indistinguiveis — mesma
+        // etiqueta, mesmo manifesto, imagens que nao tem por que se parecer.
+        bool CacheDedicatedUpdate  = false;
+        // Fracao EFETIVA (quantizada em 1/25 pela permutacao do tile 5x5), nao a pedida: ela manda
+        // na velocidade de convergencia, entao duas capturas com fracoes diferentes tiradas no
+        // mesmo N estao em pontos diferentes do aquecimento.
+        f32  CacheUpdateFraction   = 0.0f;
+        // Terminal do caminho de update no cache resolvido. E o que separa "um bounce" de
+        // "multi-bounce no tempo" — a diferenca de energia entre os dois nao e sutil.
+        bool CacheUsePrevTerminal  = false;
         // Instrumentacao do cache. NAO e um observador neutro — ver
         // FRadianceCache::PublishedStatsThisFrame. Duas capturas so sao comparaveis se estiverem
         // no MESMO regime, e por isso ela entra tambem na etiqueta do nome do arquivo.
