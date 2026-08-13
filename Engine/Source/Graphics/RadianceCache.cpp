@@ -117,6 +117,8 @@ namespace Smile {
             StatsReadback[f].Reset();
             StatsReadbackPending[f] = false;
         }
+        CaptureStatsReadback.Reset();
+        CaptureStatsPending = false;
         StatsCPU = {};
         EntriesState = AccumState = ResolvedState = D3D12_RESOURCE_STATE_COMMON;
         StatsState   = D3D12_RESOURCE_STATE_COMMON;
@@ -159,6 +161,8 @@ namespace Smile {
                 StatsReadback[f] = GpuResources::CreateReadbackBuffer(Device, kStatBytes);
                 StatsReadbackPending[f] = false;
             }
+            CaptureStatsReadback = GpuResources::CreateReadbackBuffer(Device, kStatBytes);
+            CaptureStatsPending  = false;
         }
 
         // Os 4 UAVs em slots contiguos: o root param 2 do ResolvePSO e UM range de 4.
@@ -209,6 +213,10 @@ namespace Smile {
     void FRadianceCache::UpdatePerFrame(u32 InFrameSlot, const Vec3& InCameraPos) {
         FrameSlot = InFrameSlot;
         CameraPos = InCameraPos;
+        // Comeco do frame: ninguem pediu params ainda. Os tres ShaderParams dos consumidores vem
+        // logo a seguir, no mesmo PrepareIndirectLighting.
+        PublishedUpdate = false;
+        PublishedQuery  = false;
         if (!Ready || !MappedCB) return;
         CPU.CacheParams = { static_cast<f32>(CapacityV),
                             static_cast<f32>(kMaxAccumSamples),
@@ -408,6 +416,38 @@ namespace Smile {
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
+    void FRadianceCache::RecordStatsCopy(ID3D12GraphicsCommandList* CL) {
+        if (!Ready || !CL || !CaptureStatsReadback) return;
+        // A transicao para COPY_SOURCE tambem serve de barreira sobre a varredura do resolve, que
+        // acabou de escrever estes contadores por UAV.
+        Transition(CL, StatsBuf.Get(), StatsState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        CL->CopyBufferRegion(CaptureStatsReadback.Get(), 0, StatsBuf.Get(), 0, kStatBytes);
+        Transition(CL, StatsBuf.Get(), StatsState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        CaptureStatsPending = true;
+    }
+
+    bool FRadianceCache::CollectCaptureStats(FRadianceCacheStats& Out) {
+        if (!CaptureStatsPending || !CaptureStatsReadback) return false;
+        CaptureStatsPending = false;
+
+        void* Mapped = nullptr;
+        D3D12_RANGE ReadRange{ 0, kStatBytes };
+        if (FAILED(CaptureStatsReadback->Map(0, &ReadRange, &Mapped)) || !Mapped) return false;
+        const u32* S = static_cast<const u32*>(Mapped);
+        Out.Occupied = S[0];
+        Out.Valid    = S[1];
+        Out.Samples  = S[2];
+        Out.Evicted  = S[3];
+        // Query/Hits saem ZERO por construcao: o resolve zera os contadores logo antes da
+        // varredura, e esta copia e posterior a ela. Quem quer o hit rate do frame le o StatsCPU,
+        // que vem da copia PRE-resolve. Ver o comentario do RecordStatsCopy.
+        Out.Queries = 0;
+        Out.Hits    = 0;
+        D3D12_RANGE NoWrite{ 0, 0 };
+        CaptureStatsReadback->Unmap(0, &NoWrite);
+        return true;
+    }
+
     void FRadianceCache::CollectStats(u32 InFrameSlot) {
         if (InFrameSlot >= FCommandQueue::kFramesInFlight ||
             !StatsReadbackPending[InFrameSlot] || !StatsReadback[InFrameSlot]) {
@@ -429,7 +469,8 @@ namespace Smile {
         StatsReadback[InFrameSlot]->Unmap(0, &NoWrite);
     }
 
-    FRadianceCacheShaderParams FRadianceCache::ShaderParams(bool AllowUpdate) const {
+    FRadianceCacheShaderParams FRadianceCache::ShaderParams(bool AllowUpdate,
+                                                            bool ConsumerRuns) const {
         FRadianceCacheShaderParams P{};
         // Sem cena montada o shader nao pode nem consultar nem escrever: os indices bindless
         // apontariam para descritores livres.
@@ -441,6 +482,12 @@ namespace Smile {
         if (On) {
             if (QueryEnabled) Flags |= kFlagQuery;
             if (AllowUpdate)  Flags |= kFlagUpdate;
+            // Registro do que foi ENTREGUE A QUEM RODA, para o manifesto da captura nao ter de
+            // reconstituir esta condicao por fora e divergir dela. Ver PublishedUpdateThisFrame.
+            if (ConsumerRuns) {
+                PublishedUpdate = PublishedUpdate || AllowUpdate;
+                PublishedQuery  = PublishedQuery  || QueryEnabled;
+            }
             // So conta acerto/erro quando ha o que contar: sem query o contador so mediria zero
             // e ainda assim pagaria os atomicos.
             if (StatsEnabled && QueryEnabled) Flags |= kFlagStats;

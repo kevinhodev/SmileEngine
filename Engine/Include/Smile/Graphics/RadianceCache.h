@@ -106,6 +106,38 @@ namespace Smile {
         void UpdatePerFrame(u32 InFrameSlot, const Vec3& InCameraPos);
         void RecordResolve(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
+        // Segunda copia dos contadores, para buffer PROPRIO, a ser gravada DEPOIS do
+        // RecordResolve. Existe porque as duas metades da telemetria ficam prontas em momentos
+        // opostos do frame:
+        //
+        //   - QUERY/HITS sao escritos pelos traces e ZERADOS pelo resolve. So a copia que o
+        //     RecordResolve faz antes do dispatch os pega deste frame.
+        //   - OCUPACAO/VALID/SAMPLES sao escritos pela varredura DENTRO do resolve. Aquela mesma
+        //     copia os pega do frame ANTERIOR.
+        //
+        // Um frame de defasagem e invisivel no painel, e por isso o caminho normal tem uma copia
+        // so. No manifesto muda: ocupacao em funcao do N e exatamente o que a calibracao vai
+        // medir. A captura le as duas e monta o quadro do frame que ela gravou.
+        //
+        // Buffer separado do anel de proposito: escrever no anel poria zeros de query no painel
+        // por um frame a cada captura.
+        void RecordStatsCopy(ID3D12GraphicsCommandList* CL);
+        // Le a copia acima (exige a fila ja sincronizada). Falso se nao houver copia pendente.
+        bool CollectCaptureStats(FRadianceCacheStats& Out);
+
+        // O que os consumidores REALMENTE receberam neste frame, gravado pelo ShaderParams — que e
+        // por onde todos passam. Ler Enabled/QueryEnabled/ResetPending no fim do frame daria outra
+        // resposta: o RecordResolve limpa o ResetPending no meio do caminho, entao um frame que
+        // entregou flags ZERADAS aos traces (o primeiro depois de um reset, que e exatamente o
+        // caso N=0 da captura) terminaria se declarando ativo.
+        bool PublishedUpdateThisFrame() const { return PublishedUpdate; }
+        bool PublishedQueryThisFrame() const  { return PublishedQuery; }
+
+        // ConsumerRuns = este consumidor vai realmente tracar neste frame. Os params sao montados
+        // para todos (custa nada, e o passe pode nem rodar), mas so quem RODA conta para o
+        // registro acima — senao o manifesto diria "cache ativo" num frame em que nenhum trace o
+        // consultou, que e o mesmo tipo de mentira que o registro veio corrigir.
+
         // Visualizador. Alvo em resolucao de render, publicado no DebugTargets pelo nome
         // "Radiance cache · ocupacao" — a janela de debug o acha pela busca, como os demais.
         // O OnResize (re)cria a textura e as views; a publicacao e separada porque o registro do
@@ -157,7 +189,7 @@ namespace Smile {
 
         // Update = false para consumidor DIRECIONAL (reflexoes): a radiancia que ele produz vale
         // para uma direcao de espelho e o cache nao guarda direcao. Ele ainda pode CONSULTAR.
-        FRadianceCacheShaderParams ShaderParams(bool AllowUpdate) const;
+        FRadianceCacheShaderParams ShaderParams(bool AllowUpdate, bool ConsumerRuns = true) const;
 
     private:
         void CreateConstantBuffer(ID3D12Device* Device);
@@ -190,6 +222,12 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> StatsReadback[FCommandQueue::kFramesInFlight];
         bool StatsReadbackPending[FCommandQueue::kFramesInFlight] = {};
         FRadianceCacheStats StatsCPU{};
+
+        // Fora do anel: a captura sincroniza a fila e le no mesmo frame, entao um buffer basta —
+        // e nao pode ser o do anel, sob pena de publicar zeros de query no painel. Ver
+        // RecordStatsCopy.
+        Microsoft::WRL::ComPtr<ID3D12Resource> CaptureStatsReadback;
+        bool CaptureStatsPending = false;
 
         // Alvo do visualizador (resolucao de render) + o CB proprio dele.
         Microsoft::WRL::ComPtr<ID3D12Resource> DebugTex;
@@ -228,5 +266,9 @@ namespace Smile {
         bool ResetPending = false;
         bool Initialized  = false;
         bool Ready        = false;
+        // Zeradas no UpdatePerFrame, escritas pelo ShaderParams. Mutaveis porque o ShaderParams e
+        // const e continua sendo: ele nao muda o que o cache FAZ, so registra o que entregou.
+        mutable bool PublishedUpdate = false;
+        mutable bool PublishedQuery  = false;
     };
 }

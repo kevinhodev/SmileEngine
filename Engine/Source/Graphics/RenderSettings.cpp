@@ -14,6 +14,20 @@ namespace Smile {
     // que e o que permite acrescentar um acumulador novo sem varrer os setters.
     void FRenderSettings::Invalidate(EHistoryTarget _Targets) {
         using T = EHistoryTarget;
+        // FUNIL DA CAPTURA. Todo knob que derruba acumulador passa por aqui, e derrubar um
+        // acumulador no meio do aquecimento quebra o contrato "N frames apos UM reset" — a
+        // captura sairia sub-aquecida com o manifesto afirmando N. Como este e o ponto unico por
+        // onde a invalidacao passa, um gate aqui cobre os ~40 setters de uma vez, em vez de um
+        // gate por setter que o proximo knob esqueceria.
+        //
+        // O proprio capturador entra por aqui — no preset, no reset e na restauracao —, e por isso
+        // a excecao. Ela cobre o UpdateFrameCapture INTEIRO e nao so o reset: a restauracao passa
+        // pelos setters, e um pedido novo enfileirado no mesmo frame seria descartado por ela.
+        //
+        // NAO e completo, e vale registrar o limite: TemporalMotion e NrdDirect tem chamadas
+        // diretas de InvalidateHistory no Renderer que nao passam pelo funil.
+        if (!R.CaptureSetupGuard)
+            R.Capture.Cancel("um ajuste derrubou historico durante o aquecimento");
         if (HasTarget(_Targets, T::DDGIAtlas))        R.DDGI.ResetHistoryOnce();
         if (HasTarget(_Targets, T::ReGIR))            R.ReGIR.InvalidateHistory();
         if (HasTarget(_Targets, T::ReSTIRGI))         R.ReSTIRGI.InvalidateHistory();
@@ -29,6 +43,11 @@ namespace Smile {
         if (HasTarget(_Targets, T::HiZOcclusion))     R.HiZ.InvalidateResults();
         if (HasTarget(_Targets, T::ProbeDiagnostic))  R.RepeatDebugProbePoint();
         if (HasTarget(_Targets, T::RadianceCache))    R.RadianceCache.ResetOnce();
+        if (HasTarget(_Targets, T::SunShafts))        R.SunShafts.ResetHistory();
+        if (HasTarget(_Targets, T::OceanTemporal)) {
+            for (u32 C = 0; C < Renderer::kOceanCascades; ++C)
+                R.Ocean[C].ResetTemporalHistory();
+        }
     }
 
     // === Apresentacao e escala ==========================================================
@@ -585,7 +604,16 @@ namespace Smile {
 
     // === Agua ===========================================================================
 
-    void FRenderSettings::SetUseWater(bool _Use) { R.SetUseWater(_Use); }
+    // O espectro da FFT recomeca, entao o historico de displacement/foam das cascatas cai. Passa
+    // pelo funil e nao por um laco no setter: o FOceanFFT ja se reseta sozinho nos proprios
+    // setters de espectro, mas aquilo e invariante INTERNA da classe e ninguem de fora fica
+    // sabendo — nem uma captura em aquecimento, que precisa ser cancelada quando o mundo muda
+    // debaixo dela. Declarar aqui e o que poe o oceano no grafo.
+    void FRenderSettings::SetUseWater(bool _Use) {
+        if (_Use == R.UseWater) return;
+        R.SetUseWater(_Use);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     bool FRenderSettings::GetUseWater() const    { return R.UseWater; }
 
     bool FRenderSettings::GetWaterGuideInvisible() const { return R.Water.GetGuideInvisible(); }
@@ -595,17 +623,45 @@ namespace Smile {
         Invalidate(Dom::Guides); // muda os guides do RR: historico neural velho mente
     }
 
-    void FRenderSettings::SetWaterWindSpeed(f32 _V) { R.Water.SetWindSpeed(_V); }
+    // Os seis abaixo mudam o ESPECTRO: o FOceanFFT marca H0Dirty e derruba o historico temporal
+    // por conta propria. O Invalidate aqui nao existe para repetir esse reset — existe para
+    // DECLARA-LO, que e o que o funil precisa para cancelar uma captura em aquecimento. Sem isso o
+    // mundo mudava no meio da medicao e a captura saia como se nada tivesse acontecido.
+    void FRenderSettings::SetWaterWindSpeed(f32 _V) {
+        if (_V == R.Water.GetWindSpeed()) return;
+        R.Water.SetWindSpeed(_V);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterWindSpeed() const { return R.Water.GetWindSpeed(); }
-    void FRenderSettings::SetWaterWindDirection(f32 _Rad) { R.Water.SetWindDirection(_Rad); }
+    void FRenderSettings::SetWaterWindDirection(f32 _Rad) {
+        if (_Rad == R.Water.GetWindDirection()) return;
+        R.Water.SetWindDirection(_Rad);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterWindDirection() const   { return R.Water.GetWindDirection(); }
-    void FRenderSettings::SetWaterWavesAmount(f32 _V) { R.Water.SetWavesAmount(_V); }
+    void FRenderSettings::SetWaterWavesAmount(f32 _V) {
+        if (_V == R.Water.GetWavesAmount()) return;
+        R.Water.SetWavesAmount(_V);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterWavesAmount() const { return R.Water.GetWavesAmount(); }
-    void FRenderSettings::SetWaterSwell(f32 _V) { R.Water.SetSwell(_V); }
+    void FRenderSettings::SetWaterSwell(f32 _V) {
+        if (_V == R.Water.GetSwell()) return;
+        R.Water.SetSwell(_V);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterSwell() const { return R.Water.GetSwell(); }
-    void FRenderSettings::SetWaterSpectrumFetch(f32 _Km) { R.Water.SetSpectrumFetch(_Km); }
+    void FRenderSettings::SetWaterSpectrumFetch(f32 _Km) {
+        if (_Km == R.Water.GetSpectrumFetch()) return;
+        R.Water.SetSpectrumFetch(_Km);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterSpectrumFetch() const  { return R.Water.GetSpectrumFetch(); }
-    void FRenderSettings::SetWaterOceanDepth(f32 _M) { R.Water.SetOceanDepth(_M); }
+    void FRenderSettings::SetWaterOceanDepth(f32 _M) {
+        if (_M == R.Water.GetOceanDepth()) return;
+        R.Water.SetOceanDepth(_M);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterOceanDepth() const { return R.Water.GetOceanDepth(); }
     void FRenderSettings::SetWaterFFTDisplacementScale(f32 _V) {
         R.Water.SetFFTDisplacementScale(_V);
@@ -730,6 +786,19 @@ namespace Smile {
     void FRenderSettings::NotifySceneStructureChanged() { Invalidate(Dom::SceneStructure); }
 
     void FRenderSettings::NotifyCameraCut() { Invalidate(Dom::CameraCut); }
+
+    // Os passos 3 e 4 do protocolo de captura, juntos porque separa-los nao tem uso: um reset que
+    // limpe todo acumulador mas deixe a semente correndo produz ruido diferente a cada rodada,
+    // e zerar so a semente deixa o resto do estado herdado do trajeto. Ver Docs/CAPTURE-PROTOCOL.md.
+    //
+    // O FrameIndex absoluto NAO e tocado — fences, frame slots e lifetime dependem de ele ser
+    // monotonico. Essa e a razao de os dois contadores existirem separados.
+    // Chamada de dentro do UpdateFrameCapture, sob o CaptureSetupGuard — sem ele o funil
+    // cancelaria a sessao no ato de comeca-la.
+    void FRenderSettings::NotifyDeterministicCapture() {
+        Invalidate(Dom::DeterministicCapture);
+        R.TemporalSampleIndex = 0;
+    }
 
     void FRenderSettings::NotifyMaterialRTStateChanged() {
         // REFRESH (nao e invalidacao — e trabalho a refazer, nao memoria a descartar). O dreno

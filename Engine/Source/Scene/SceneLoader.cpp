@@ -266,6 +266,11 @@ namespace Smile {
 
     bool Renderer::CommitCookedScene(FPreparedCookedScenePtr _Prepared, bool _Additive) {
         if (!_Prepared) return false;
+        // Trocar (ou somar) cena no meio de um aquecimento troca geometria, luzes e todos os
+        // historicos sem reiniciar o N nem o indice de amostragem — e, numa troca da cena
+        // principal, o manifesto ainda sairia com o nome da cena ANTERIOR. Cancelar aqui, no
+        // commit, cobre tambem a carga por linha de comando e a aditiva.
+        Capture.Cancel("uma cena foi carregada durante o aquecimento");
         const Clock::time_point t0 = Clock::now();
         // Zera aqui e nao no Prepare: o Prepare so decodifica em CPU, quem cria recurso e o
         // commit. A janela do contador tem que casar com a fase que o log ao lado mede.

@@ -24,6 +24,7 @@
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/SceneTargets.h"
 #include "Smile/Graphics/FrameContext.h"
+#include "Smile/Graphics/FrameCapture.h"
 #include "Smile/Graphics/PassContext.h"
 #include "Smile/Graphics/RenderPass.h"
 #include "Smile/Graphics/DebugView.h"
@@ -495,6 +496,18 @@ namespace Smile {
         // ficou pronto desde a ultima chamada.
         bool ConsumeDebugPreview(std::vector<u8>& OutPixels);
 
+        // === Captura deterministica (Docs/CAPTURE-PROTOCOL.md) ===========================
+        // A REGUA da serie SHaRC: pose fixa, todo acumulador zerado, N frames RENDERIZADOS de
+        // aquecimento e entao um PNG + manifesto. Enfileira e volta na hora — a sessao inteira
+        // roda dentro do RenderFrame, ao longo de N+1 frames, e o resultado sai pelo Consume.
+        //
+        // A POSE E DO CHAMADOR: restaure o bookmark ANTES de pedir. Aqui nao ha como saber qual
+        // pose e a certa, e um teleporte depois do reset invalidaria o aquecimento.
+        bool RequestCapture(const FCaptureRequest& Request) { return Capture.Request(Request); }
+        bool CaptureBusy() const              { return Capture.Busy(); }
+        u32  CaptureWarmupRemaining() const   { return Capture.WarmupRemaining(); }
+        bool ConsumeCaptureResult(FFrameCapture::FResult& Out) { return Capture.ConsumeResult(Out); }
+
         u32  GetDepthSRVSlot() const         { return Targets.DepthSRVSlot; }
 
         // Terreno (F1: renderizacao apenas). Carregado pelo sidecar <cena>.terrain.json no
@@ -681,6 +694,42 @@ namespace Smile {
         void CreateIBLDescriptorTable();
         void CreateDebugPreviewTargets();
         void CollectDebugPreviewReadback(u32 FrameSlot);
+
+        // === Captura deterministica ======================================================
+        // Tres call sites, e cada um esta onde esta por um motivo:
+        //   UpdateFrameCapture  — topo do RenderFrame, ANTES do BeginFrame: preset muda upscaler
+        //                         e render scale, o que realoca alvos, e isso nao pode acontecer
+        //                         no meio da gravacao do command list.
+        //   RecordCopy          — no RecordPost, depois do tonemap e antes dos overlays.
+        //   FinishFrameCapture  — depois do EndFrame e ANTES do ++ dos contadores, para o
+        //                         manifesto gravar o indice com que este frame amostrou.
+        void UpdateFrameCapture();
+        // Modes deste frame: o manifesto registra o que RODOU (IsReady, gates, TAA acendendo por
+        // falta de upscaler), nao o que o operador selecionou.
+        void FinishFrameCapture(const FFrameModes& Modes, u32 FrameSlot);
+        FCaptureState    CollectCaptureState(const FFrameModes& Modes) const;
+        FCaptureSettings CurrentCaptureSettings() const;
+        void             ApplyCaptureSettings(const FCaptureSettings& S);
+        void             RestoreCaptureState(const FCaptureSettings& S);
+        f32              SettledWetness() const;
+        FFrameCapture    Capture;
+        // Sol da sessao, reafirmado a cada frame pelo TickWorldClock. Ver a nota la: o painel de
+        // TOD escreve direto na referencia do GetTimeOfDay(), sem passar por setter, entao a unica
+        // defesa que vale por construcao e reescrever.
+        f32              CaptureSunHours = 0.0f;
+        Vec3             CaptureSunDir{ 0.0f, 1.0f, 0.0f };
+        // Hora que a sessao FIXOU de fato (negativa = nenhuma). Diferente do pin PEDIDO: com o
+        // Time-of-Day desligado o pedido e ignorado, e o manifesto tem de dizer isso.
+        f32              CapturePinApplied = -1.0f;
+        // Enquanto verdadeiro, o funil de invalidacao NAO cancela a captura: e o proprio
+        // capturador mexendo no renderer (preset, reset, restauracao). Ver UpdateFrameCapture.
+        bool             CaptureSetupGuard = false;
+        // O ReGIR so constroi com consumidor E luz na cena; o gate real e montado no meio do
+        // frame, longe do FFrameModes. Guardado aqui para o manifesto registrar o que rodou.
+        bool             ReGIRRanThisFrame = false;
+        // Ocupacao lida da copia POS-resolve do frame capturado. Separada do Stats() do painel,
+        // que vem do anel e carrega query/hits — as duas metades tem origens diferentes.
+        FRadianceCacheStats CaptureCacheStats{};
 
         FD3D12Device    Device;
         FCommandQueue   CommandQueue;
@@ -1018,7 +1067,19 @@ namespace Smile {
         f32             IBLRotation   = 0.0f; 
         u32             IBLTableStart = 0;
 
-        Vec3 SunDir       = { 0.3f, 0.6f, 0.5f }; 
+        // Direcao AUTORADA do sol padrao — o vetor legivel, nao o valor do membro.
+        static Vec3 DefaultSunDirection() { return Vec3{ 0.3f, 0.6f, 0.5f }.Normalized(); }
+        // INVARIANTE: unitario. Todo caminho de escrita passa pelo SetSunDirection, que normaliza,
+        // e o inicializador abaixo estabelece a invariante em vez de deixar o primeiro setter
+        // faze-lo.
+        //
+        // Nascia com o literal CRU, e isso ficou visivel na primeira captura deterministica: a
+        // restauracao de estado no fim da sessao passa pelo SetSunDirection, entao a captura A
+        // gravava (0,3 0,6 0,5) e a B gravava o mesmo vetor normalizado. A imagem quase nao mudava
+        // — quem consome ja normaliza (ver ResolveFrameLighting) —, mas o manifesto divergia, e um
+        // manifesto que muda sozinho entre duas capturas identicas e o oposto do que ele existe
+        // para ser.
+        Vec3 SunDir       = DefaultSunDirection();
         Vec3 SunColorRGB  = { 1.0f, 0.96f, 0.9f };
         f32  SunIntensity = 5.0f;
 
@@ -1029,6 +1090,13 @@ namespace Smile {
 
         f32  ElapsedTime   = 0.0f;
         f32  LastDeltaTime = 0.0f;
+        // Passo de tempo durante uma captura deterministica. Fixo de proposito: o delta real vem
+        // do relogio de parede e faria dois aquecimentos do mesmo N assentarem fades em pontos
+        // diferentes. Ver a nota dos DOIS RELOGIOS no UpdateCamera.
+        static constexpr f32 kCaptureDeltaSeconds = 1.0f / 60.0f;
+        // FASE canonica da animacao durante a captura. O valor em si nao importa — importa ser o
+        // MESMO em toda captura, senao nuvem, oceano e vento entram no A/B como variavel.
+        static constexpr f32 kCaptureElapsedSeconds = 0.0f;
         // Contador ABSOLUTO de frames desde o boot. Monotonico e nunca reiniciado: quem depende de
         // "quantos frames ja passaram" — lifetime, contadores, diagnostico — le daqui.
         u32  FrameIndex    = 0;

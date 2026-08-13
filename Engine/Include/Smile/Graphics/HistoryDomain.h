@@ -42,6 +42,13 @@ namespace Smile {
         HiZOcclusion     = 1u << 12, // readback ring do occlusion culling
         ProbeDiagnostic  = 1u << 13, // one-shot por clique: reexecuta, senao o painel mente
         RadianceCache    = 1u << 14, // hash de MUNDO; media movel com teto de 64 amostras
+        // Os dois abaixo entraram com a captura deterministica. Eram acumuladores reais que
+        // simplesmente nunca tinham sido cadastrados: o unico reset de cada um era interno
+        // (SunShafts quando o passe adormece; Ocean no toggle da agua e nos parametros do
+        // espectro). Nenhum dominio os alcancava, entao "reset de tudo" nao era verdade —
+        // achado da revisao do capturador.
+        SunShafts        = 1u << 15, // temporal de TELA, reprojeta por PrevVP
+        OceanTemporal    = 1u << 16, // displacement/foam da FFT: historico de MUNDO
     };
 
     constexpr EHistoryTarget operator|(EHistoryTarget A, EHistoryTarget B) {
@@ -50,6 +57,26 @@ namespace Smile {
     constexpr bool HasTarget(EHistoryTarget Set, EHistoryTarget Bit) {
         return (static_cast<u32>(Set) & static_cast<u32>(Bit)) != 0;
     }
+
+    // O UNIVERSO dos bits acima, e nao mais um dominio: dominio se nomeia pelo motivo e se
+    // escreve como lista, e aqui a lista e justamente o que nao pode existir. Um alvo novo tem
+    // de entrar aqui SEM ninguem lembrar — esquecer um alvo num dominio de conteudo produz um
+    // sintoma visivel ("historico que nao morre"), enquanto esquece-lo na captura produz uma
+    // medicao silenciosamente dependente do trajeto ate a pose, que e o erro que a serie SHaRC
+    // nao pode se dar ao luxo de cometer.
+    inline constexpr u32 kHistoryTargetCount = 17;
+    inline constexpr EHistoryTarget kAllHistoryTargets =
+        static_cast<EHistoryTarget>((1u << kHistoryTargetCount) - 1u);
+
+    static_assert(static_cast<u32>(EHistoryTarget::OceanTemporal) ==
+                      (1u << (kHistoryTargetCount - 1u)),
+        "alvo novo no fim do enum sem subir o kHistoryTargetCount: o reset deterministico da "
+        "captura deixaria de pe exatamente o historico mais recente");
+
+    // O assert acima protege o enum de crescer sem o contador acompanhar. Ele NAO protege contra
+    // o erro que a revisao do capturador achou: um acumulador que existe na engine e nunca entrou
+    // no enum. Esse ninguem detecta por compilacao — a unica defesa e a pergunta, em toda revisao
+    // de passe novo: "isto sobrevive ao frame? entao tem um bit aqui".
 
     namespace HistoryDomain {
         using T = EHistoryTarget;
@@ -218,10 +245,34 @@ namespace Smile {
         // NAO caem os caches de MUNDO — DDGIAtlas e ReGIR. Uma sonda irradia o mesmo
         // independentemente de onde a camera esteja; derruba-las faria o GI reconvergir do zero
         // a cada duplo-clique no outliner, que e o oposto do que este dominio existe para evitar.
+        // SunShafts entra pelo mesmo argumento do VolumetricFog, que ja estava aqui: o temporal
+        // dele reprojeta por PrevVP, e um teleporte deixa a historia apontando para outro lugar.
+        // Estava de fora so porque o alvo nao existia — o unico reset era o do proprio passe ao
+        // adormecer. OceanTemporal NAO entra, e pelo argumento oposto (o mesmo do DDGIAtlas e do
+        // ReGIR): a FFT e simulacao de MUNDO, e a onda e a mesma independentemente de onde a
+        // camera esta.
         inline constexpr T CameraCut = T::TemporalAA | T::RayReconstruct | T::NrdIndirect |
                                        T::NrdDirect | T::ReSTIRGI | T::ReSTIRDI |
                                        T::Reflections | T::TemporalMotion | T::HiZOcclusion |
-                                       T::VolumetricFog | T::VolumetricClouds;
+                                       T::VolumetricFog | T::VolumetricClouds | T::SunShafts;
+
+        // CAPTURA DETERMINISTICA (Docs/CAPTURE-PROTOCOL.md). Mais forte que o corte de camera, e
+        // a diferenca sao exatamente os caches de MUNDO que o CameraCut se recusa a derrubar.
+        //
+        // La a recusa e certa: navegar nao muda o que uma sonda irradia, e derrubar o atlas a cada
+        // duplo-clique no outliner faria a GI reconvergir do zero. Numa captura isso se INVERTE. O
+        // estado inicial precisa ser conhecido, e nao "o que sobrou do trajeto ate aqui": o
+        // radiance cache chegaria com celulas de onde a camera passou e o atlas do DDGI com a
+        // convergencia do caminho percorrido, entao duas capturas da MESMA pose dariam numeros
+        // diferentes conforme o caminho ate ela — e a serie SHaRC compara justamente ocupacao do
+        // hash e convergencia temporal.
+        //
+        // O preco e o aquecimento: sao CENTENAS de frames, nao dezenas (histerese 0,99 no DDGI,
+        // teto de 64 amostras por celula no cache). E o preco de a medicao ser reproduzivel, e e
+        // por isso que o contador de aquecimento conta frame RENDERIZADO e nao tique de UI.
+        //
+        // Nao e uma lista: e o universo. Ver kAllHistoryTargets.
+        inline constexpr T DeterministicCapture = kAllHistoryTargets;
 
         // --- Invariante deste arquivo, verificada pelo compilador -------------------------
         // Os filtros de TELA so podem cair onde o historico deles realmente perdeu a
@@ -254,5 +305,20 @@ namespace Smile {
         static_assert(ResetsScreenFilters(Guides),       "trocou o depth/velocity da reprojecao");
         static_assert(ResetsScreenFilters(TemporalOnly), "trocou o filtro de tela");
         static_assert(ResetsScreenFilters(DenoiserSwap), "trocou o acumulador do denoiser");
+        static_assert(ResetsScreenFilters(DeterministicCapture),
+            "captura comeca do zero em TUDO, inclusive nos filtros de tela");
+
+        // E a invariante que a captura acrescenta ao arquivo: ela nao pode ser um dominio de
+        // conteudo COM alguns extras. Tem de ser um superconjunto proprio do corte de camera —
+        // e os tres bits que sobram sao os caches de mundo, o motivo de o dominio existir.
+        constexpr bool Contains(T Set, T Subset) {
+            return (static_cast<u32>(Set) & static_cast<u32>(Subset)) == static_cast<u32>(Subset);
+        }
+        static_assert(Contains(DeterministicCapture, CameraCut),
+            "a captura tem de derrubar pelo menos o que o corte de camera derruba");
+        static_assert(Contains(DeterministicCapture,
+                               T::DDGIAtlas | T::ReGIR | T::RadianceCache),
+            "os caches de MUNDO sao a diferenca entre captura e navegacao; sem eles a captura "
+            "herda o trajeto ate a pose e deixa de ser reproduzivel");
     }
 }

@@ -1,10 +1,30 @@
 # Biblioteca estatica da engine - SmileEngine
 
-# Gera VersionInfo.h a partir do template (.in) com as macros definidas no CMake raiz
+# Gera VersionInfo.h a partir do template (.in) com as macros definidas no CMake raiz.
+# Este aqui e o do CONFIGURE, e existe so para o arquivo ja estar em disco quando o CMake monta
+# a lista de fontes. O valor que vale e o carimbado a cada build pelo alvo abaixo.
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Smile/Core/VersionInfo.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/generated/Smile/Core/VersionInfo.h
     @ONLY
+)
+
+# Recarimba o header a cada build, para o SMILE_BUILD_COMMIT nao envelhecer — ver
+# cmake/StampVersion.cmake. O configure_file la dentro so reescreve quando o conteudo muda, entao
+# builds consecutivos sem commit novo nao recompilam nada.
+add_custom_target(SmileVersionStamp
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/Include/Smile/Core/VersionInfo.h.in
+        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/Smile/Core/VersionInfo.h
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DSMILE_VERSION_MAJOR=${SMILE_VERSION_MAJOR}
+        -DSMILE_VERSION_MINOR=${SMILE_VERSION_MINOR}
+        -DSMILE_VERSION_PATCH=${SMILE_VERSION_PATCH}
+        -DSMILE_BUILD_NUMBER=${SMILE_BUILD_NUMBER}
+        -DSMILE_BUILD_DATE=${SMILE_BUILD_DATE}
+        -P ${CMAKE_SOURCE_DIR}/cmake/StampVersion.cmake
+    COMMENT "Carimbando VersionInfo.h com o commit da build"
+    VERBATIM
 )
 
 set(ENGINE_HEADERS
@@ -78,6 +98,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/RenderSettings.h
     Include/Smile/Graphics/SceneTargets.h
     Include/Smile/Graphics/FrameContext.h
+    Include/Smile/Graphics/FrameCapture.h
     Include/Smile/Graphics/HistoryDomain.h
 )
 
@@ -161,6 +182,7 @@ set(ENGINE_SOURCES
     Source/Graphics/Renderer.cpp
     Source/Graphics/RenderSettings.cpp
     Source/Graphics/SceneTargets.cpp
+    Source/Graphics/FrameCapture.cpp
 )
 
 add_library(SmileEngine STATIC
@@ -168,6 +190,9 @@ add_library(SmileEngine STATIC
     ${ENGINE_GENERATED_HEADERS}
     ${ENGINE_SOURCES}
 )
+
+# O carimbo tem de rodar ANTES de compilar qualquer .cpp que inclua o VersionInfo.h.
+add_dependencies(SmileEngine SmileVersionStamp)
 
 # Fonte vendorado: mantem os avisos da engine acionaveis sem editar a biblioteca externa.
 set_source_files_properties(

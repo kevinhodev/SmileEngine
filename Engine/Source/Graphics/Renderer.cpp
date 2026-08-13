@@ -408,6 +408,17 @@ namespace Smile {
     }
 
     void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg) {
+        // Teleporte no meio de uma captura invalidaria o aquecimento inteiro em silencio — os
+        // caches de mundo ja acumularam N frames a partir da pose anterior, e a imagem sairia de
+        // uma pose sem o aquecimento dela. Recusar e melhor que cancelar: o duplo-clique no
+        // outliner e acidental por natureza, e cancelar jogaria fora minutos de aquecimento.
+        //
+        // Nao afeta o fluxo normal do disparo: o "Capturar" do slot restaura a pose ANTES de
+        // enfileirar o pedido, e ate ali o Busy() ainda e falso.
+        if (Capture.Busy()) {
+            LogWarning("Camera travada: ha uma captura deterministica em andamento");
+            return;
+        }
         Camera.SetPose(_Pos, _PitchDeg, _YawDeg);
         // Teleporte e o caso classico de corte: nenhum vetor de movimento liga o frame novo ao
         // antigo, e reprojetar traria imagem do lugar de onde a camera saiu. Antes daqui isto
@@ -692,14 +703,15 @@ namespace Smile {
         if (_Use)
             LogInfo("Oceano/agua ativados (FFT 256^2 + superficie)");
         UseWater = _Use;
-        for (u32 Cascade = 0; Cascade < kOceanCascades; ++Cascade)
-            Ocean[Cascade].ResetTemporalHistory();
-        // O historico das cascatas acima e do proprio oceano e tem de cair — o espectro FFT
-        // recomeca. Os filtros de TELA nao: ligar a agua e mudanca de CONTEUDO, e uma superficie
-        // grande aparecendo e disoclusao, que e o caso que TAA e FSR2 resolvem por construcao
-        // (acontece a cada passo de camera). O reset explicito que morava aqui era uma lista
-        // escrita a mao num setter — a classe de coisa que o HistoryDomain existe para eliminar —
-        // e era ele que fazia a tela piscar ao alternar o oceano.
+        // O reset do historico das cascatas mora no FRenderSettings::SetUseWater, pelo dominio
+        // OceanTemporal. Ficava aqui como laco escrito a mao — a classe de coisa que o
+        // HistoryDomain existe para eliminar —, e por estar fora do grafo ninguem mais ficava
+        // sabendo: em particular, uma captura em aquecimento nao era cancelada por ele.
+        //
+        // Os filtros de TELA continuam de fora, e isso e deliberado: ligar a agua e mudanca de
+        // CONTEUDO, e uma superficie grande aparecendo e disoclusao, que e o caso que TAA e FSR
+        // resolvem por construcao. Era o reset deles aqui que fazia a tela piscar ao alternar o
+        // oceano.
     }
 
     void Renderer::BuildDefaultScene() {
@@ -1057,6 +1069,259 @@ namespace Smile {
         return true;
     }
 
+    // === Captura deterministica (Docs/CAPTURE-PROTOCOL.md) ==============================
+
+    FCaptureSettings Renderer::CurrentCaptureSettings() const {
+        FCaptureSettings S;
+        S.Upscaler        = static_cast<u32>(Upscaler);
+        S.Denoiser        = static_cast<u32>(Denoiser);
+        S.UpscalerQuality = UpscalerQuality;
+        S.UseTAA          = UseTAA;
+        S.RenderScale     = RenderScale;
+        S.ElapsedTime     = ElapsedTime;
+        S.Wetness         = Weather.GetWetness();
+        S.TimeOfDayHours  = TimeOfDay.TimeHours;
+        S.SunDir[0] = SunDir.X; S.SunDir[1] = SunDir.Y; S.SunDir[2] = SunDir.Z;
+        return S;
+    }
+
+    // Molhadura ASSENTADA para a chuva atual — o valor que o TickWorldClock alcancaria com tempo
+    // infinito. Mesma regra de corte do tick (abaixo de 0,001 de chuva a molhadura vai a zero em
+    // vez de tender assintoticamente a ela).
+    //
+    // E este o valor canonico, e nao "o que estava no clique": o tau da molhadura e de 5 a 30
+    // segundos e um aquecimento de 128 frames cobre 2,1 s, entao o passo fixo sozinho NAO faz duas
+    // capturas convergirem — elas so partiriam do mesmo lugar por coincidencia. Partindo do
+    // assentado, a mesma chuva da a mesma molhadura em toda captura, e ela deixa de ser variavel.
+    f32 Renderer::SettledWetness() const {
+        const f32 Target = Weather.GetRainAmount();
+        return Target <= 0.001f ? 0.0f : Target;
+    }
+
+    // Aplica um conjunto de knobs pelos SETTERS, nao por atribuicao. E o que garante que o
+    // acoplamento upscaler/denoiser/render scale seja o mesmo do caminho normal — o preset nao
+    // pode inventar um estado que a UI nao consegue produzir, senao a captura mede um regime que
+    // nao existe fora dela.
+    void Renderer::ApplyCaptureSettings(const FCaptureSettings& _S) {
+        // Denoiser primeiro: DLSS_RR trava o upscaler em DLSS por conta propria (SetDenoiser), e
+        // faze-lo depois desfaria o upscaler que acabamos de escolher.
+        Settings().SetDenoiser(static_cast<EDenoiser>(_S.Denoiser));
+        Settings().SetUpscaler(static_cast<EUpscaler>(_S.Upscaler));
+        Settings().SetUpscalerQuality(_S.UpscalerQuality);
+        Settings().SetUseTAA(_S.UseTAA);
+        // Ignorado sob DLSS_RR (a res de entrada vem do modo de qualidade), e esse e o
+        // comportamento correto — ver Renderer::SetRenderScale.
+        Settings().SetRenderScale(_S.RenderScale);
+    }
+
+    // Devolve o mundo ao operador. O relogio e o sol voltam SEMPRE; os knobs so se o preset os
+    // mutou — reaplicar valores iguais pareceria inocente, mas SetUpscaler invalida o filtro de
+    // tela incondicionalmente, e o operador veria um frame aliasado no fim de toda captura
+    // gameplay.
+    void Renderer::RestoreCaptureState(const FCaptureSettings& _S) {
+        ElapsedTime      = _S.ElapsedTime;
+        TimeOfDay.TimeHours = _S.TimeOfDayHours;
+        SetSunDirection(Vec3{ _S.SunDir[0], _S.SunDir[1], _S.SunDir[2] });
+        Weather.SetWetness(_S.Wetness);
+        if (!_S.KnobsMutated) return;
+
+        // Knob a knob, e so os que continuam com o valor que o PRESET pos. Um que tenha mudado
+        // desde entao foi o operador quem mudou — o funil ja cancelou a captura por causa disso —,
+        // e devolver o valor antigo por cima apagaria a escolha dele sem aviso. O caso e concreto:
+        // trocar o upscaler no meio de uma captura cientifica cancelava a sessao e, no frame
+        // seguinte, o upscaler voltava sozinho para o que era antes.
+        const FCaptureSettings& Applied = Capture.AppliedByPreset();
+        FCaptureSettings Target = _S;
+        if (static_cast<u32>(Upscaler) != Applied.Upscaler) Target.Upscaler = static_cast<u32>(Upscaler);
+        if (static_cast<u32>(Denoiser) != Applied.Denoiser) Target.Denoiser = static_cast<u32>(Denoiser);
+        if (UpscalerQuality != Applied.UpscalerQuality)     Target.UpscalerQuality = UpscalerQuality;
+        if (UseTAA != Applied.UseTAA)                       Target.UseTAA = UseTAA;
+        if (RenderScale != Applied.RenderScale)             Target.RenderScale = RenderScale;
+        ApplyCaptureSettings(Target);
+    }
+
+    void Renderer::UpdateFrameCapture() {
+        // Tudo que o capturador faz com o renderer roda sob esta guarda. Preset, reset e
+        // restauracao passam pelos setters, que passam pelo funil de invalidacao — e o funil
+        // cancela capturas. Sem a guarda, a sessao se cancelaria ao comecar, e a restauracao
+        // descartaria um pedido novo enfileirado no mesmo frame.
+        struct FGuard {
+            bool& Flag;
+            ~FGuard() { Flag = false; }
+        } Guard{ CaptureSetupGuard };
+        CaptureSetupGuard = true;
+
+        // Restauracao ANTES de abrir sessao nova: as duas mexem em upscaler/render scale, e as
+        // duas so podem acontecer aqui, fora da gravacao do command list.
+        if (Capture.HasPendingRestore()) RestoreCaptureState(Capture.ConsumeRestore());
+
+        if (!Capture.HasPendingRequest()) return;
+
+        // O estado a devolver e guardado SEMPRE, nos dois presets: mesmo o gameplay, que nao toca
+        // em knob nenhum, muda o relogio.
+        FCaptureSettings Stash = CurrentCaptureSettings();
+
+        // Passo 1 do protocolo. Preset cientifico = resolucao nativa, sem upscaler E SEM TAA:
+        // `TAAActive = UseTAA && !UpscaleActive` faz o TAA ACENDER quando o upscaler sai, o que
+        // trocaria o jitter do FSR pelo Halton em vez de elimina-lo. Com os dois desligados o
+        // JitterPx fica em 0 e Projection == ProjUnjittered, que e o que "sem jitter" significa.
+        FCaptureSettings Applied = Stash;
+        if (Capture.Pending().Preset == ECapturePreset::Scientific) {
+            Stash.KnobsMutated = true;
+            FCaptureSettings Sci;
+            Sci.Upscaler        = static_cast<u32>(EUpscaler::None);
+            Sci.Denoiser        = static_cast<u32>(Denoiser); // eixo do operador, nao do preset
+            Sci.UpscalerQuality = 0;
+            Sci.UseTAA          = false;
+            Sci.RenderScale     = 1.0f;
+            // Sair do DLSS_RR e consequencia de tirar o upscaler (o RR faz denoise E upscale num
+            // eval so). Fica registrado no manifesto, que grava o estado EFETIVO.
+            if (Denoiser == EDenoiser::DLSS_RR) Sci.Denoiser = static_cast<u32>(EDenoiser::NRD);
+            ApplyCaptureSettings(Sci);
+            // O que ficou DE FATO no renderer, e nao o que o preset pediu: o SetUpscaler pode ter
+            // recusado um upscaler indisponivel e o SetRenderScale e ignorado sob DLSS_RR. E
+            // contra ISTO que a restauracao compara para saber se o operador mexeu.
+            Applied = CurrentCaptureSettings();
+            Applied.KnobsMutated = true;
+        }
+        Capture.StashSettings(Stash, Applied);
+
+        // Passo 2: FASE TEMPORAL CANONICA. Congelar o relogio onde ele estava fixaria uma fase
+        // arbitraria — a de quando o operador clicou —, e nuvem, oceano, vento e ondulacao saem
+        // dela. Duas capturas do mesmo bookmark, disparadas com minutos de diferenca, sairiam com
+        // nuvens em posicoes diferentes e o A/B mediria isso. Com valor fixo, a fase deixa de ser
+        // variavel: toda captura parte do mesmo instante do mundo.
+        //
+        // Zero e canonico por ser fixo, nao por ser especial. O salto que ele provoca e inerte
+        // aqui: o reset logo abaixo derruba todo historico que poderia reprojetar o estado velho.
+        ElapsedTime = kCaptureElapsedSeconds;
+        Weather.SetWetness(SettledWetness());
+
+        // A HORA e caso a parte: ela nao pode ser canonicalizada como o ElapsedTime, porque e a
+        // iluminacao AUTORADA e nao um contador sem significado. Entao ela e declarada por quem
+        // dispara — e duas capturas com a mesma hora declarada tem o mesmo sol por construcao,
+        // mesmo com o Time-of-Day correndo entre elas.
+        const f32 PinHours = Capture.Pending().PinTimeOfDayHours;
+        CapturePinApplied  = -1.0f;
+        if (PinHours >= 0.0f && TimeOfDay.Enabled) {
+            TimeOfDay.TimeHours = std::fmod(PinHours, 24.0f);
+            SetSunDirection(TimeOfDay.SunDirection());
+            // O EFETIVO, nao o pedido: com o TOD desligado o sol e autorado a mao e fixar a hora
+            // nao faz nada, entao o manifesto nao pode registrar um controle que nao houve.
+            CapturePinApplied = TimeOfDay.TimeHours;
+        }
+        // Reafirmados a cada frame da sessao (ver TickWorldClock). Com o TOD desligado o sol e
+        // autorado a mao e nao deriva da hora, por isso os dois sao guardados.
+        CaptureSunHours = TimeOfDay.TimeHours;
+        CaptureSunDir   = SunDir;
+
+        // Passos 3 e 4: reset deterministico + semente zerada. Depois do preset e do relogio,
+        // porque realocar alvos invalida historico por conta propria e a ordem inversa deixaria
+        // residuo do estado anterior nos acumuladores.
+        Capture.BeginSession();
+        Settings().NotifyDeterministicCapture();
+        LogInfo("Captura: aquecendo " + std::to_string(Capture.Active().WarmupFrames) +
+                " frames renderizados");
+    }
+
+    FCaptureState Renderer::CollectCaptureState(const FFrameModes& _Modes) const {
+        FCaptureState S;
+        S.OutputWidth  = OutputWidth();
+        S.OutputHeight = OutputHeight();
+        S.RenderWidth  = RenderWidth();
+        S.RenderHeight = RenderHeight();
+        S.RenderScale  = RenderScale;
+
+        switch (Upscaler) {
+            case EUpscaler::FSR:  S.Upscaler = "FSR";  break;
+            case EUpscaler::DLSS: S.Upscaler = "DLSS"; break;
+            default:              S.Upscaler = "None"; break;
+        }
+        switch (Denoiser) {
+            case EDenoiser::NRD:     S.Denoiser = "NRD";     break;
+            case EDenoiser::DLSS_RR: S.Denoiser = "DLSS_RR"; break;
+            default:                 S.Denoiser = "None";    break;
+        }
+        S.UpscalerQuality = UpscalerQuality;
+        // EFETIVO, nao selecionado: o preset cientifico desliga o upscaler, e sem upscaler o
+        // `TAAActive = UseTAA && !UpscaleActive` decide sozinho se o TAA acendeu.
+        S.UseTAA = _Modes.TAAActive;
+
+        // Daqui para baixo, tudo vem do FFrameModes deste frame — ou seja, do que RODOU, e nao do
+        // que o operador PEDIU. A diferenca nao e teorica: um toggle ligado com o passe fora do
+        // IsReady() (volume ausente, setup pendente, denoiser incompativel) faria o manifesto
+        // afirmar que o passe participou da imagem. Um manifesto que mente sobre a configuracao e
+        // pior que nenhum, porque o A/B seria feito em cima dele.
+        S.UseGI       = UseGI;               // dominio indireto: intencao, e nao ha passe unico
+        S.DDGIReady   = DDGI.IsReady();      // EXISTENCIA do volume (criterio do fallback)
+        S.ReSTIRGI    = _Modes.ReSTIRGIActive;
+        S.ReSTIRDI    = _Modes.ReSTIRDIActiveFrame;
+        S.ReGIR       = ReGIRRanThisFrame;    // toggle + consumidor + luz na cena
+        S.Reflections = _Modes.ReflectionsActive;
+        // O que o ShaderParams REALMENTE publicou aos traces deste frame. Recompor a condicao
+        // aqui (Enabled && Ready && !ResetPending) daria outra resposta: o resolve limpa o
+        // ResetPending no meio do frame, entao o primeiro frame depois de um reset — que e
+        // exatamente a captura com N=0 — se declararia ativo tendo entregado flags zeradas.
+        S.CacheUpdate = RadianceCache.PublishedUpdateThisFrame();
+        S.CacheQuery  = RadianceCache.PublishedQueryThisFrame();
+        S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
+
+        // Ocupacao do frame capturado (copia POS-resolve, feita junto do backbuffer) e hit rate
+        // do frame capturado (copia PRE-resolve, do anel). As duas metades ficam prontas em
+        // momentos opostos do frame — ver FRadianceCache::RecordStatsCopy.
+        //
+        // So quando o cache de fato participou: com o passe parado nao ha copia nova, e o readback
+        // devolveria um numero de idade desconhecida ao lado de `cacheUpdate: false`. Zero e mais
+        // honesto que velho.
+        //
+        // UPDATE **ou** QUERY: o A/B tem uma configuracao so-leitura legitima — reflexoes
+        // consultando com DDGI e ReSTIR GI desligados —, e ali a ocupacao e o hit rate sao
+        // justamente o que se quer medir. Gatear so pelo update zerava a linha inteira num caso
+        // que o proprio plano prevê.
+        if (S.CacheUpdate || S.CacheQuery) {
+            S.CacheOccupied = CaptureCacheStats.Occupied;
+            S.CacheValid    = CaptureCacheStats.Valid;
+            S.CacheSamples  = CaptureCacheStats.Samples;
+            S.CacheCapacity = RadianceCache.Capacity();
+            const FRadianceCacheStats& Ring = RadianceCache.Stats();
+            S.CacheQueries  = Ring.Queries;  // zero sem a instrumentacao ligada
+            S.CacheHits     = Ring.Hits;
+        }
+
+        // Antes do ++ dos contadores: e o indice com que ESTE frame amostrou.
+        S.TemporalSampleIndex = TemporalSampleIndex;
+        S.FrameIndex          = FrameIndex;
+
+        const Vec3 Pos = Camera.GetPosition();
+        S.CameraPos[0] = Pos.X; S.CameraPos[1] = Pos.Y; S.CameraPos[2] = Pos.Z;
+        S.PitchDeg = Camera.GetPitch() * ToDeg;
+        S.YawDeg   = Camera.GetYaw()   * ToDeg;
+        S.FovYDeg  = kFovYDegrees;
+
+        S.SunDir[0] = SunDir.X; S.SunDir[1] = SunDir.Y; S.SunDir[2] = SunDir.Z;
+        S.TimeOfDayHours     = TimeOfDay.TimeHours;
+        S.TimeOfDayEnabled   = TimeOfDay.Enabled;
+        S.PinnedHoursApplied = CapturePinApplied;
+        return S;
+    }
+
+    void Renderer::FinishFrameCapture(const FFrameModes& _Modes, u32 _FrameSlot) {
+        if (!Capture.AdvanceFrame()) return;
+        // A copia ja foi submetida junto do frame; so a captura paga o stall, uma vez, numa
+        // operacao que ja e explicitamente offline. Um readback por frame em voo evitaria o
+        // stall e custaria estado pendente atravessando frames — troca ruim aqui.
+        CommandQueue.Flush();
+        // As duas metades da telemetria do cache, agora que a fila esta sincronizada:
+        //  - do ANEL (copia pre-resolve deste frame): query/hits, que os traces escreveram e o
+        //    resolve zerou logo depois;
+        //  - do buffer da CAPTURA (copia pos-resolve): ocupacao, que a varredura acabou de gravar.
+        // Uma copia so nao entrega as duas, e a calibracao do N quer as duas.
+        RadianceCache.CollectStats(_FrameSlot);
+        CaptureCacheStats = {};
+        RadianceCache.CollectCaptureStats(CaptureCacheStats);
+        Capture.Finish(CollectCaptureState(_Modes));
+    }
+
 
 
 
@@ -1099,6 +1364,11 @@ namespace Smile {
 
     void Renderer::Resize(u32 _Width, u32 _Height) {
         if (!Initialized || _Width == 0 || _Height == 0) return;
+        // Recria os alvos e invalida historico, mas nao mexeria no contador de aquecimento: a
+        // sessao continuaria contando "N frames apos um reset" com um reset a mais no meio, e a
+        // captura sairia sub-aquecida sem nada denunciando. Recusar nao e opcao — a janela tem de
+        // poder ser redimensionada.
+        Capture.Cancel("a janela foi redimensionada durante o aquecimento");
         CommandQueue.Flush();
         SwapChain.Resize(Device.Native(), _Width, _Height);
         RecreateInternalTargets();
@@ -1120,6 +1390,15 @@ namespace Smile {
     void Renderer::ApplyRenderScale(f32 _Scale) {
         _Scale = _Scale < 0.33f ? 0.33f : (_Scale > 2.0f ? 2.0f : _Scale);
         if (_Scale == RenderScale) return;
+        // Segundo caminho que recria os alvos da cena — o outro e o Resize, que ja cancela. Aqui
+        // nao ha invalidacao pelo funil a que se pendurar: recriar recurso zera historico por
+        // CONSTRUCAO, sem passar por Invalidate, entao a captura seguiria contando "N frames apos
+        // um reset" com um reset a mais no meio. Chegam por aqui o slider de render scale e, via
+        // ApplyUpscalerScale, a troca de modo de qualidade do upscaler.
+        //
+        // Sob a guarda e o proprio preset da captura mudando a escala; ai nao ha o que cancelar.
+        if (!CaptureSetupGuard)
+            Capture.Cancel("a escala de renderizacao mudou durante o aquecimento");
         RenderScale = _Scale;
         if (!Initialized || SwapChain.GetWidth() == 0) return;
         CommandQueue.Flush();
@@ -1550,13 +1829,46 @@ namespace Smile {
     }
 
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
+        // CAPTURA: pose e relogio do mundo ficam ONDE ESTAO, e este e o unico ponto por onde o
+        // tempo de parede entra no renderer — por isso a trava mora aqui e nao espalhada pelos
+        // consumidores.
+        //
+        // Sem isso o aquecimento nao era reproduzivel. O reset deterministico fixa o estado
+        // INICIAL, mas centenas de frames depois a captura sai de um estado que o reset nao
+        // controla: o operador pode ter encostado no mouse (e a mesma pose por trajetorias
+        // diferentes aquece o cache de mundo com celulas diferentes), e nuvem, agua, vento e
+        // ondulacao continuam animando com o ElapsedTime. Duas capturas do mesmo bookmark
+        // divergiriam por causa de quantos segundos de relogio couberam entre elas.
+        //
+        // DOIS relogios, e a distincao e o que faz a captura ser reproduzivel:
+        //
+        //  - FASE DE ANIMACAO (ElapsedTime) fica PARADA. Nuvem, agua, vento e ondulacao sao
+        //    funcao dela; deixa-la correr faria a imagem depender de quantos segundos couberam
+        //    entre o clique e o disparo.
+        //  - PROCESSO QUE ASSENTA (molhadura da chuva, fade das sombras spot) continua, com um
+        //    delta FIXO. Congelar aqui seria tao arbitrario quanto animar: a molhadura pararia
+        //    onde o exp() estivesse no instante do clique, e duas capturas da mesma cena
+        //    divergiriam por causa disso. Com passo fixo elas convergem para o MESMO valor.
+        //    O delta fixo tambem e o que o upscaler recebe (UpParams.DeltaTimeSec) — zero ali
+        //    seria um insumo que nenhum frame normal produz.
+        //
+        // O Time-of-Day cai no primeiro grupo apesar de andar por delta, e por isso e o unico que
+        // precisa de gate proprio no TickWorldClock: mover o sol durante o aquecimento e
+        // exatamente o que duas capturas do mesmo bookmark nao podem ter de diferente.
+        //
+        // Nota do que isso NAO cobre: sequencia com sol em movimento ou objeto animado e outro
+        // tipo de teste (Fase 9 do plano), nao esta captura estatica.
+        if (Capture.Busy()) {
+            LastDeltaTime = kCaptureDeltaSeconds;
+            return;
+        }
         Camera.Update(_Input, _DeltaTime);
         ElapsedTime  += _DeltaTime;
         LastDeltaTime = _DeltaTime;
     }
 
     void Renderer::SetSunDirection(const Vec3& _Direction) {
-        SunDir = _Direction.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
+        SunDir = _Direction.NormalizedSafe(DefaultSunDirection());
     }
 
     void Renderer::SetSunAzimuthElevation(f32 _AzimuthDeg, f32 _ElevationDeg) {
@@ -1786,7 +2098,9 @@ namespace Smile {
     // local: e constante e so alimenta MoonLightCol e o MoonColorRaw publicado la.
     FFrameLighting Renderer::ResolveFrameLighting() {
         FFrameLighting L;
-        L.SunN = SunDir.NormalizedSafe(Vec3{ 0.3f, 0.6f, 0.5f }.Normalized());
+        // Redundante desde que o SunDir nasce unitario (ver a invariante no Renderer.h); fica como
+        // rede contra um NaN vindo de fora, que e o que o NormalizedSafe existe para conter.
+        L.SunN = SunDir.NormalizedSafe(DefaultSunDirection());
 
         L.RainSky    = Weather.GetDriveSky() ? Weather.GetRainAmount() : 0.0f;
         L.RainKeyDim = 1.0f - L.RainSky * 0.75f;
@@ -1853,7 +2167,20 @@ namespace Smile {
     }
 
     void Renderer::TickWorldClock() {
-        if (TimeOfDay.Enabled) {
+        // O gate da captura esta AQUI e nao no delta porque o Time-of-Day e o unico consumidor de
+        // delta que move o MUNDO em vez de assentar um valor — ver a nota no UpdateCamera. Com o
+        // sol andando durante o aquecimento, duas capturas do mesmo bookmark sairiam com
+        // iluminacao diferente apesar do reset deterministico, e o manifesto registrar a hora
+        // final nao as tornaria comparaveis.
+        //
+        // REAFIRMAR, e nao so parar de avancar: o painel de TOD escreve direto na referencia do
+        // GetTimeOfDay(), sem passar por setter nenhum, entao nao ha funil onde detectar a edicao.
+        // Reescrever hora e sol a cada frame faz "o sol nao se move durante uma sessao" valer por
+        // construcao, venha a escrita de onde vier — mesma politica da camera travada.
+        if (Capture.SessionActive()) {
+            TimeOfDay.TimeHours = CaptureSunHours;
+            SunDir              = CaptureSunDir;
+        } else if (TimeOfDay.Enabled) {
             TimeOfDay.Tick(LastDeltaTime);
             SetSunDirection(TimeOfDay.SunDirection());
         }
@@ -2451,6 +2778,10 @@ namespace Smile {
         }
 
         const bool ReGIROn = Settings().ReGIRActive() && HasReGIRConsumer && GILightCount > 0;
+        // O gate real do ReGIR e este, e nao o toggle: sem consumidor ou sem luz na cena a grade
+        // nem chega a ser construida. O manifesto da captura le daqui — reconstituir a condicao
+        // por fora e o comeco de uma divergencia.
+        ReGIRRanThisFrame = ReGIROn;
         if (ReGIROn) {
             FGpuScope Scope(GpuProfiler, CommandList, "ReGIR (build)");
             ReGIR.UpdatePerFrame(FrameSlot, TemporalSampleIndex, GILightCount, GILightSetSignature);
@@ -2465,9 +2796,15 @@ namespace Smile {
         // e ReSTIR GI podem ESCREVER (radiancia nao-direcional), as reflexoes so consultam. A
         // camera entra porque o nivel do hash sai da distancia ate ela.
         RadianceCache.UpdatePerFrame(FrameSlot, Vw.CameraPosition);
-        DDGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true));
-        ReSTIRGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true));
-        Reflections.SetRadianceCacheParams(RadianceCache.ShaderParams(false));
+        // O segundo argumento e "este consumidor vai tracar neste frame". Os params sao montados
+        // para os tres de qualquer jeito (custa nada, e o passe pode nem rodar), mas so quem roda
+        // entra no registro que o manifesto le — senao a captura afirmaria cache ativo num frame
+        // em que nenhum trace o consultou.
+        const bool DDGIWillTrace = UseGI && DDGI.IsReady();
+        DDGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true, DDGIWillTrace));
+        ReSTIRGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true, Modes.ReSTIRGIActive));
+        Reflections.SetRadianceCacheParams(
+            RadianceCache.ShaderParams(false, Modes.ReflectionsActive));
         // Os tres buffers precisam estar em UAV antes de QUALQUER trace: a escrita e a leitura
         // acontecem dentro do ShadeSurfaceHit, que os cinco shaders de trace compartilham.
         RadianceCache.TransitionForTrace(CommandList);
@@ -2745,6 +3082,18 @@ namespace Smile {
             FGpuScope Scope(GpuProfiler, CommandList, "Pós (bloom+tonemap)");
             PostProcessor.Execute(CommandList, SRVHeap, PostInput, SwapChain.CurrentRTV(),
                                   PostInputSRV, FrameSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
+        }
+
+        // Captura: DEPOIS do tonemap e ANTES dos overlays. O contorno de selecao e os gizmos que
+        // vem abaixo sao a ferramenta, nao a imagem — um PNG de regressao com a seta do gizmo
+        // atravessada muda pixels que nao tem nada a ver com o estimador.
+        if (Capture.ShouldShoot()) {
+            Capture.RecordCopy(Device.Native(), CommandList, SwapChain.CurrentBackBuffer(),
+                               SwapChain.GetWidth(), SwapChain.GetHeight());
+            // Aqui tambem estamos depois do RecordResolve do cache, entao esta copia pega a
+            // ocupacao que a varredura DESTE frame escreveu — a do anel, feita antes do dispatch,
+            // ainda e do frame anterior.
+            RadianceCache.RecordStatsCopy(CommandList);
         }
 
         if (Sel.Renderable >= 0 && Sel.Slot != FSelectionDraw::kNoSlot && Sel.Mesh
@@ -4483,6 +4832,12 @@ namespace Smile {
             Settings().NotifySceneContentChanged();
         }
 
+        // Captura deterministica: abre a sessao (preset + reset) ou desfaz o preset da anterior.
+        // AQUI, junto das coalescencias acima e antes do BeginFrame, pelo mesmo motivo delas —
+        // trocar upscaler/render scale realoca os alvos da cena, e isso nao pode acontecer com um
+        // command list aberto.
+        UpdateFrameCapture();
+
         CommandQueue.BeginFrame();
 
         GpuProfiler.BeginFrame(CommandQueue.FrameIndex());
@@ -4661,6 +5016,13 @@ namespace Smile {
         AsyncGIRanLastFrame = (GIComputeFence != 0);
         CommandQueue.EndFrame(CommandLists, 1);
 
+        // Avanca o aquecimento e, no frame de captura, grava PNG + manifesto. ANTES do ++ dos
+        // contadores logo abaixo: o manifesto grava o TemporalSampleIndex com que este frame
+        // amostrou, e ele e a prova de que o contrato "aquece 0..N-1, captura em N" valeu.
+        // Recebe os Modes deste frame porque o manifesto registra o que RODOU, nao o que foi
+        // pedido — ver CollectCaptureState.
+        FinishFrameCapture(Modes, FrameSlot);
+
         // === Avanco dos contadores de frame ==================================================
         // AQUI, e nao no meio do frame, e a posicao e que faz o contrato valer.
         //
@@ -4696,6 +5058,7 @@ namespace Smile {
     void Renderer::Shutdown() {
         if (!Initialized) return;
         CommandQueue.Flush();
+        Capture.Release();
         ComputeQueue.Shutdown();
         UploadQueue.Shutdown();
         Nrd.Shutdown();

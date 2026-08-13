@@ -371,6 +371,11 @@ namespace Smile {
         // tela — ver HistoryDomain::CameraCut. Nao chame em mudanca de conteudo: era isso que
         // fazia a cena piscar a cada knob.
         void NotifyCameraCut();
+        // Comeco de uma captura deterministica: derruba TODO acumulador (inclusive os caches de
+        // mundo, que o corte de camera preserva de proposito) e zera a semente de amostragem
+        // temporal. NAO e knob nem navegacao — o custo e reconverger a GI do zero, entao so o
+        // capturador chama. Ver HistoryDomain::DeterministicCapture e Docs/CAPTURE-PROTOCOL.md.
+        void NotifyDeterministicCapture();
 
     private:
         // Executor UNICO do grafo de invalidacao. Recebe uma mascara de HistoryDomain (ou uma
