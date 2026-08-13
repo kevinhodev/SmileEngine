@@ -1428,7 +1428,20 @@ namespace Smile {
         try {
             CommandQueue.Flush();
 
+            // Recarregar shader no meio de um aquecimento invalida a captura, e isso NAO e
+            // assunto do radiance cache: trocam-se os pipelines, e os frames ja contados sairam
+            // de um codigo diferente do que vai gerar o disparo. O manifesto afirmaria "N frames
+            // apos UM reset" sobre duas builds de shader.
+            //
+            // O cancelamento fica aqui, e nao pendurado no efeito colateral de algum passe. O do
+            // cache existe porque o reload RESETA a tabela dele (a semantica da chave pode ter
+            // mudado) e isso derruba historico de consumidor — mas ele so dispara quando a
+            // consulta estava aberta, e a captura tem de cair mesmo com o cache desligado.
+            //
+            // Nos dois caminhos que de fato recriam pipeline, e nao no topo: um stem sem pipeline
+            // mapeado nao muda nada em execucao, e cancelar ali seria falso positivo.
             if (_ChangedStem.empty()) {
+                Capture.Cancel("os shaders foram recarregados durante o aquecimento");
                 RecreateAllPSOs();
                 LogInfo("Shaders recarregados (reload completo)");
                 return true;
@@ -1438,6 +1451,7 @@ namespace Smile {
             const char* Owner = Passes.OwnerOfShaderStem(_ChangedStem);
             const u32   Hits  = Passes.RecreatePipelinesForStem(_ChangedStem, Ctx);
             if (Hits > 0) {
+                Capture.Cancel("os shaders foram recarregados durante o aquecimento");
                 LogInfo("Shader recarregado: " + _ChangedStem + " (passe: " + Owner +
                         (Hits > 1 ? ", " + std::to_string(Hits) + " instancias)" : ")"));
                 return true;

@@ -376,7 +376,15 @@ namespace Smile {
         return static_cast<u32>(R.RadianceCache.GetDebugMode());
     }
 
-    void FRenderSettings::ResetRadianceCache() { R.RadianceCache.ResetOnce(); }
+    // O botao de limpar a tabela, pelo FUNIL e nao pelo ResetOnce cru. Chamar o metodo da classe
+    // direto era a ultima porta lateral do lifecycle: o reset FECHA a consulta (o ResetPending
+    // zera as flags dos consumidores), e quem estava segurando radiancia vinda do cache —
+    // reservoirs do ReSTIR GI, atlas do DDGI — continuava a usa-la. Pelo mesmo motivo o botao
+    // tinha de cancelar captura em curso e nao cancelava.
+    //
+    // `RayVisibility` inteiro, com o cache dentro: aqui a tabela DEVE morrer, e e o proprio funil
+    // que chama o ResetOnce. E o oposto do toggle de leitura, que usa a mascara sem o cache.
+    void FRenderSettings::ResetRadianceCache() { Invalidate(Dom::RayVisibility); }
 
     const FRadianceCacheStats& FRenderSettings::RadianceCacheStats() const {
         return R.RadianceCache.Stats();
