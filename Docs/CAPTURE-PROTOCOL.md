@@ -244,25 +244,30 @@ captura, como o `S`.
 
 Nunca cruzar os três — e o nome do arquivo agora impede fazê-lo por distração.
 
-## O aquecimento global do cache × capturas de N baixo
+## A sessão desliga o aquecimento automático do cache
 
-Desde a Fase 4 o radiance cache tem estado próprio (`Resetting` → `Filling` → `Active`) e, com
-`AutoWarmup` ligado — que é o default —, **a consulta de render só abre quando a tabela vale a
-pena**: 70% das células com amostra confiáveis, ou 96 frames, o que vier primeiro.
+Desde a Fase 4 o radiance cache tem estado próprio (`Resetting` → `Filling` → `Active`) e, em
+produção, **a consulta de render só abre quando a tabela vale a pena** — e a borda `Filling →
+Active` **derruba o histórico dos consumidores**, porque o terminador do raio secundário acabou de
+mudar de fallback para cache.
 
-Isso é transparente no N calibrado: 128 > 96, então toda captura em N = 128 sai em `active` mesmo
-na pior cena. **Não é transparente abaixo disso.** Uma captura em N = 32 ou N = 64 pode sair ainda
-em `filling` — mesma pose, mesmos knobs, e uma imagem em que o cache não participou. Duas
-consequências práticas:
+Essa borda é incompatível com uma sessão de captura, e não por pouco. O passo 3 do protocolo zera
+o cache; ele então enche durante o aquecimento e a transição cai por volta do frame 30 de 128 —
+**dentro da janela de contagem**, derrubando acumulador no meio dela. É exatamente o que o funil de
+invalidação existe para impedir, e o funil de fato cancelaria a sessão. Em toda captura.
 
-- O manifesto carrega `cacheWarmup` e `cacheAutoWarmup`, e `cacheQuery` segue a consulta EFETIVA.
-  Uma captura tirada antes da hora se denuncia — mas só se alguém ler o campo.
-- **Um sweep de N que atravesse a fronteira mistura dois regimes.** Ou o sweep se faz com
-  `AutoWarmup` desligado (a consulta volta a seguir só o toggle, como antes da Fase 4), ou os
-  pontos abaixo de 96 se leem como "cache fechado", não como "cache frio".
+Por isso a sessão roda com `AutoWarmup` **desligado**, nos dois presets, e devolve no fim. A regra
+é a mesma do relógio do mundo, que o preset *gameplay* também canonicaliza apesar de não mexer em
+knob nenhum: não é preferência de qualidade, é evento agendado dentro da janela de aquecimento.
 
-Os 96 frames são deliberadamente **menores** que os 128 do aquecimento: iguais, a transição cairia
-exatamente no frame capturado, justamente nas cenas em que a fração de confiáveis nunca dispara.
+O que isso significa para a imagem capturada: a consulta segue o toggle do operador do primeiro ao
+último frame, e nos primeiros ela erra numa tabela fria. Inofensivo — o piso de confiança já impede
+célula fria de encerrar caminho, e ninguém olha um frame de aquecimento. O manifesto grava
+`cacheAutoWarmup: false`, então a captura declara o regime em que foi tirada.
+
+⚠️ **Consequência para quem lê os números:** as capturas medem o cache em regime permanente, não a
+transição. O custo do `Filling` (quantos frames o render passa sem cache depois de uma troca de
+cena) **não é observável pela régua** — é medida de sessão viva, no painel.
 
 ## Calibração do N
 
@@ -468,8 +473,9 @@ Quatro campos que parecem redundantes e não são:
   escolhido (commit `a67eadd`), e é isso que precisa ficar registrado.
 - **`cacheWarmup`** × `cacheQuery`: o segundo diz que a consulta estava fechada, o primeiro diz se
   foi o operador (`active` com a leitura desligada), um reset em curso (`resetting`, que acaba no
-  frame seguinte) ou o aquecimento (`filling`, que leva dezenas). Ver a seção do aquecimento
-  global acima — ele importa nas capturas de N baixo.
+  frame seguinte) ou o aquecimento (`filling`, que leva dezenas). Numa captura o terceiro caso não
+  deveria aparecer — a sessão desliga o aquecimento automático (ver a seção acima) —, e se
+  aparecer, é defeito e não configuração.
 
 `build` sai do `SMILE_BUILD_COMMIT`, carimbado **a cada build** e não no configure: um campo cuja
 única função é ser confiável não pode apontar para o commit anterior depois de um rebuild. Sufixo

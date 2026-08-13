@@ -113,10 +113,10 @@ simultâneas, e a semântica vem primeiro.
 
 ### ➜ FASE 4 — medida feita; o código todo entrou; falta a confirmação
 
-Sete commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
+Oito commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
 `ed9f223` (separação de capacidade × contenção × teto × terminal), `318417b` (capacidade 2¹⁷),
-`ca1f9a9` (aquecimento global), `f624d7b` (visualizador). Todos compilam em Debug e Release,
-`ctest` 3/3.
+`ca1f9a9` (aquecimento global), `f624d7b` (visualizador), `9e64d64` (invalidação na borda + o reset
+que não pode ser perdido). Todos compilam em Debug e Release, `ctest` 3/3.
 
 **A medida do item 1 foi feita** — é a seção a seguir, e é dela que saíram os dois defaults novos.
 O que resta para fechar a fase é uma captura de confirmação na capacidade nova e o gate dinâmico
@@ -231,18 +231,40 @@ tem `giPunctualLightCount: 0`. Vale igual nas duas capturas, então não contami
 **Capacidade: 2²⁰ → 2¹⁷** (`318417b`). A tabela terminou com 2,40% de ocupação. Não é
 descuido: a estimativa de 2²⁰ foi feita quando o produtor eram os **hits do render** e todo raio
 secundário inseria; o passe dedicado escreve por 4% dos pixels e derrubou a população em quase duas
-ordens de grandeza. 2¹⁷ é a única potência de dois em que os dois defaults em disputa cabem na
-faixa de 20-70%: 2¹⁶ põe V4 em 77,4%, 2¹⁸ põe V1 em 9,6%; 2¹⁷ dá V1 19,2% e V4 38,7%. VRAM do
-cache: 36 MiB → 4,5 MiB. ⚠️ Medida de UMA pose estática; câmera andando e interior sobem a
-ocupação, e quem denuncia é `insertFull`.
+ordens de grandeza.
 
-**Aquecimento global** (`ca1f9a9`) — o item estrutural que faltava. `Resetting` → `Filling` →
-`Active`, com o knob `AutoWarmup` nascendo ligado e desligado reproduzindo exatamente o regime
-anterior. Quatro decisões que não se re-derivam:
+2¹⁷ é o melhor **compromisso** contra a faixa de 20-70%, e não um encaixe — vale ser exato, porque
+a primeira redação deste bloco dizia "a única potência em que os dois cabem" e isso é falso:
+
+| | V1 | V4 | |
+|---|---|---|---|
+| 2¹⁶ | 38,4% | 77,4% | V4 estoura o teto por 7 pp |
+| **2¹⁷** | **19,2%** | **38,7%** | V1 rente ao piso, por 0,8 pp |
+| 2¹⁸ | 9,6% | 19,4% | os **dois** abaixo do piso |
+
+Nenhuma potência de dois põe os dois dentro da faixa, porque V4 é o dobro de V1 e a faixa é menos
+de quatro vezes. 2¹⁷ é o único em que nenhum lado erra por mais de um ponto — e erra para o lado
+barato: ficar sob o piso desperdiça memória, estourar o teto perde amostra. VRAM do cache: 36 MiB →
+4,5 MiB. ⚠️ Medida de UMA pose estática; câmera andando e interior sobem a ocupação, e quem
+denuncia é `insertFull`.
+
+**Aquecimento global** (`ca1f9a9` + `9e64d64`) — o item estrutural que faltava. `Resetting` →
+`Filling` → `Active`, com o knob `AutoWarmup` nascendo ligado e desligado reproduzindo exatamente o
+regime anterior. Seis decisões que não se re-derivam:
 
 - **`Filling` fecha a consulta do RENDER, não a do updater.** O terminal do produtor continua lendo
   o `Resolved`; é ele que enche o cache com multi-bounce em vez de só o primeiro bounce. Fechar os
   dois faria `Filling` produzir um conteúdo que `Active` teria de reconverter.
+- **A borda `Filling → Active` derruba o histórico dos CONSUMIDORES.** Ela é, para eles, a mesma
+  coisa que o operador abrir a leitura — o terminador do raio secundário muda —, e o toggle manual
+  sempre invalidou. Sem isso, o que o ReSTIR GI e o atlas do DDGI (histerese 0,99: centenas de
+  updates de memória) somaram durante o `Filling` continuaria a valer misturado com o cache. Era o
+  único caminho da engine que trocava o terminador sem limpar quem somou o anterior. A máscara
+  ("consumidores sim, tabela não") é função única, compartilhada pelos três eventos que são o mesmo.
+- **O estado sai do EVENTO, não de amostrar `ResetPending`.** `ResetOnce` é chamado de fora do
+  frame — knob da UI, carga de cena — e portanto também *depois* do tick; nesse caso o resolve
+  limparia o pending sem ninguém observar e o frame seguinte encontraria `Active` sobre uma tabela
+  recém-zerada. O `SetupForScene` escrevia a flag a dedo pela mesma porta lateral.
 - **O gate lê a varredura da tabela (`Confident`/`HasSamples`), não o hit rate.** O hit rate só
   existe com a instrumentação ligada, que é regime de MEDIÇÃO e não roda em produção — um gate
   preso nela ficaria em `Filling` para sempre no único modo em que ele importa.
@@ -251,8 +273,17 @@ anterior. Quatro decisões que não se re-derivam:
   carência o gate pularia para `Active` no primeiro frame depois de um reset.
 - Limiares: **70%** das células com amostra confiáveis (o regime permanente medido é 80,79%, e o
   gate fica abaixo porque essa fração tem um teto < 1 que depende do churn da cena), com teto de
-  **96 frames** — deliberadamente ≠ 128, que é o aquecimento do capturador; iguais, a transição
-  cairia no frame capturado justamente nas cenas em que a fração não dispara.
+  **96 frames** = 1,5× o `kStaleFrameMax`, ou seja mais de uma volta completa de despejo. **Tabela
+  com conteúdo é pré-requisito dos dois caminhos**: o teto cobre a cena que enche devagar, não a
+  que não enche — com o produtor parado ele recriaria, sem prazo para acabar, exatamente o custo de
+  consultar tabela vazia que o estado existe para evitar.
+
+**O capturador anda junto.** A borda passa pelo funil de invalidação, que cancela captura em curso;
+como o reset determinístico zera o cache no início de toda sessão, ela cairia por volta do frame 30
+de 128 **em toda captura**. A sessão passa a rodar com `AutoWarmup` desligado, nos dois presets,
+como já acontece com o relógio do mundo. Ver `Docs/CAPTURE-PROTOCOL.md`. Consequência a registrar:
+**as capturas medem o regime permanente, não a transição** — o custo do `Filling` é medida de
+sessão viva, no painel.
 
 **Visualizador** (`f624d7b`): modos `Age` (rampa quebrada no limiar de refresh, que é por célula) e
 `Confidence` (N contra o **piso**, saturando acima dele — é onde se vê a frente de aquecimento
@@ -810,7 +841,8 @@ Publicar um cache estável, responsivo e mensurável antes de habilitá-lo como 
   - `Filling`: update ativo, queries de render ainda não fazem early-out; ✅ e o terminal do
     **updater** continua consultando — é ele que enche o cache com multi-bounce.
   - `Active`: cobertura/convergência mínimas atingidas ou janela de warm-up completada; ✅ 70% das
-    células com amostra confiáveis, ou 96 frames.
+    células com amostra confiáveis, ou 96 frames — **sempre com tabela não vazia**, nos dois
+    caminhos. A borda invalida os consumidores, como o toggle manual de leitura.
   - `Resetting`: mudança de chave, cena ou teleport; queries fechadas até o resolve de reset. ✅ já
     era o `ResetPending`; o estado só o **nomeia**, para o painel e o manifesto distinguirem
     "resetando" (um frame) de "enchendo" (dezenas).
