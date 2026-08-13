@@ -328,15 +328,24 @@ namespace Smile {
         // `>` e nao `>=`: FillFrames e o frame que esta COMECANDO, entao a igualdade ainda deve um
         // frame de preenchimento.
         if (Converged || FillFrames > kWarmupMaxFrames) {
-            Warmup          = ERadianceCacheWarmup::Active;
-            WarmupActivated = true; // o Renderer consome e derruba o historico dos consumidores
+            Warmup = ERadianceCacheWarmup::Active;
+            // O latch descreve uma mudanca EFETIVA do que o render consulta — nao a transicao de
+            // estado. A maquina continua andando com o AutoWarmup desligado, de proposito (para o
+            // estado estar certo quando o knob voltar), mas ali ela nao estava fechando nada:
+            // invalidar seria derrubar historico sem que nada tivesse mudado para consumidor
+            // nenhum. E dentro de uma sessao de captura seria pior que inutil — o funil
+            // cancelaria a propria sessao que desliga o AutoWarmup justamente para nao cancelar.
+            //
+            // `QueryEnabled` entra pelo mesmo argumento, um nivel acima: com a leitura desligada o
+            // render nao consulta em estado nenhum, e abrir um portao atras de outro fechado nao
+            // muda o que chega aos consumidores.
+            WarmupActivated = AutoWarmup && QueryEnabled;
         }
     }
 
     void FRadianceCache::UpdatePerFrame(u32 InFrameSlot, const Vec3& InCameraPos) {
         FrameSlot = InFrameSlot;
         CameraPos = InCameraPos;
-        TickWarmup();
         // Comeco do frame: ninguem pediu params ainda. Os tres ShaderParams dos consumidores vem
         // logo a seguir, no mesmo PrepareIndirectLighting.
         PublishedUpdate = false;

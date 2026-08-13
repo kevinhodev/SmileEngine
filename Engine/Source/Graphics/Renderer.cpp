@@ -2904,10 +2904,6 @@ namespace Smile {
         // World radiance cache — mesmo padrao do ReGIR acima. A camera entra porque o nivel do
         // hash sai da distancia ate ela.
         RadianceCache.UpdatePerFrame(FrameSlot, Vw.CameraPosition);
-        // A borda do aquecimento, ANTES de os consumidores pedirem params: e neste frame que a
-        // consulta abre, e o historico tem de ser derrubado no mesmo frame em que o terminador
-        // muda. Um frame depois, os reservoirs ja teriam misturado as duas fontes.
-        if (RadianceCache.ConsumeWarmupActivation()) Settings().NotifyRadianceCacheActivated();
         RadianceCache.SetReGIRParams(ReGIRCB);
         // QUEM ESCREVE NA TABELA. Com o produtor dedicado da Fase 3 escolhido, ninguem do render
         // escreve: os traces voltam a so consultar e a fonte passa a ser o passe proprio, que nao
@@ -4998,6 +4994,16 @@ namespace Smile {
         CollectDebugPreviewReadback(FrameSlot);
         RadianceCache.CollectStats(FrameSlot);
         DDGIDebugPass.CollectPointDiagnostic(FrameSlot);
+
+        // Aquecimento global do cache, AQUI e nao junto do UpdatePerFrame dele. O tick le os
+        // contadores que o CollectStats acabou de entregar, e a borda `Filling -> Active` derruba
+        // o historico dos CONSUMIDORES — que publicam os cbuffers deles ao longo do frame, cada um
+        // no seu momento. A nevoa volumetrica resolve o `UseHistory` dela dentro do
+        // ResolveFrameLighting, bem antes do bloco de GI: notificada de la, ela ja teria decidido
+        // reprojetar a historia que o reset acabou de invalidar, e o descarte so valeria no frame
+        // seguinte. No topo do frame nao ha esse "depende de quem publicou primeiro".
+        RadianceCache.TickWarmup();
+        if (RadianceCache.ConsumeWarmupActivation()) Settings().NotifyRadianceCacheActivated();
         FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
             MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));
 

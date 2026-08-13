@@ -509,6 +509,16 @@ namespace Smile {
         // Frames em Filling (0 fora dele). E o que o painel mostra para o operador saber se a
         // espera acabou ou travou.
         u32  WarmupFillFrames() const { return FillFrames; }
+        // Anda a maquina de estados. Chamar UMA vez por frame, NO TOPO — antes de qualquer
+        // consumidor publicar o cbuffer dele, e nao junto do UpdatePerFrame, que roda no meio do
+        // caminho. A borda derruba historico, e quem ja resolveu o proprio `UseHistory` naquele
+        // frame nao ve o reset: a nevoa volumetrica publica o dela no ResolveFrameLighting, bem
+        // antes do bloco de GI, e reprojetaria um frame de historia que devia ter sido descartada.
+        //
+        // Depende so do readback dos contadores (CollectStats) e das flags da classe — nao da
+        // camera —, entao subir na ordem do frame nao custa nada.
+        void TickWarmup();
+
         // A BORDA `Filling -> Active`, uma vez so. Quem consome tem de derrubar o historico dos
         // consumidores: o terminador do raio secundario acabou de mudar de fallback para cache, e
         // o que eles acumularam durante o Filling foi medido com o OUTRO terminador — e a mesma
@@ -728,7 +738,6 @@ namespace Smile {
         // direto para Active no primeiro frame depois de um reset, que e exatamente o caso que
         // ele existe para cobrir.
         static constexpr u32 kWarmupStatsLag = FCommandQueue::kFramesInFlight + 1u;
-        void TickWarmup();
         bool Initialized  = false;
         bool Ready        = false;
         // Zeradas no UpdatePerFrame, escritas pelo ShaderParams. Mutaveis porque o ShaderParams e
