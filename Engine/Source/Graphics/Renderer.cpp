@@ -2791,8 +2791,15 @@ namespace Smile {
         // o mesmo fence; no sincrono/reflexoes, a ordem da propria command list basta.
         // Nao reconstrua os 2048 pools se nenhum passe vai consultar hits secundarios neste
         // frame. O toggle sozinho nao basta: DDGI, reflexoes e ReSTIR GI podem estar todos off.
+        // O passe de update do cache entra na lista: ele sombreia hits com luz local pelo MESMO
+        // PT_AddDirectLocal, entao e consumidor de ReGIR como qualquer trace. Sem ele aqui, o A/B
+        // da Fase 3 — que desliga DDGI, ReSTIR GI e reflexoes para isolar o produtor — deixaria a
+        // grade sem ser construida e o updater cairia no loop O(N) de luzes. Nao seria errado (o
+        // loop e a referencia exata), mas o custo do passe mudaria conforme toggles que nao tem
+        // nada a ver com ele, e e justamente esse custo que a fase precisa medir isolado.
         const bool HasReGIRConsumer = (UseGI && DDGI.IsReady()) ||
-                                      Modes.ReflectionsActive || Modes.ReSTIRGIActive;
+                                      Modes.ReflectionsActive || Modes.ReSTIRGIActive ||
+                                      Modes.RadianceCacheUpdateActive;
         // Extracao dos triangulos emissivos. Sai de graca no caso comum: a geometria emissiva e
         // estatica, entao o Record so faz trabalho no primeiro frame apos carregar a cena.
         if (MeshLights.IsReady()) {
