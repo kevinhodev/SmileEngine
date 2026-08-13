@@ -110,6 +110,11 @@ namespace Smile {
         // no MESMO regime, e por isso ela entra tambem na etiqueta do nome do arquivo.
         bool CacheStats         = false;
         bool GIMeasureTerminatorOff = false; // corta o DDGI so no hit secundario
+        // Politica de auto-interseccao/backface do gather E do produtor do cache — um toggle so
+        // para os dois (ver FRenderSettings::SetGIBackfacePolicy). Entra aqui porque o protocolo
+        // de medicao da Fase 3 pede capturas antes/depois dele: sem o campo, as duas sairiam com
+        // nome e manifesto identicos, que e o mesmo defeito que o produtor do cache tinha.
+        bool GIBackfacePolicy = false;
 
         // Ocupacao do hash e acerto de query no instante do disparo — dois dos quatro sinais que
         // a calibracao do N mede, e saem de graca porque os readbacks ja existem.

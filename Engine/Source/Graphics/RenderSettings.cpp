@@ -192,6 +192,16 @@ namespace Smile {
     }
 
     void FRenderSettings::SetRadianceCacheUpdateFraction(f32 _V) {
+        if (_V == R.RadianceCache.GetUpdateFraction()) return;
+        // NAO invalida — o que esta na tabela continua valendo, so a taxa de reposicao muda. Mas
+        // cancela captura em curso, e por um motivo que a invalidacao nao cobriria: o manifesto
+        // grava a fracao do frame FINAL, entao um aquecimento de 128 frames que rodasse metade a
+        // 4% e metade a 20% sairia declarando 20% — um arquivo que descreve uma configuracao que
+        // nunca existiu. Mesmo caso da instrumentacao do cache, que ja cancela por aqui.
+        //
+        // Os outros dois knobs do passe (produtor dedicado, terminal) nao precisam disto: eles
+        // invalidam, e o funil do Invalidate ja cancela a captura.
+        R.Capture.Cancel("a fracao do update do cache mudou durante o aquecimento");
         R.RadianceCache.SetUpdateFraction(_V);
     }
     f32 FRenderSettings::GetRadianceCacheUpdateFraction() const {
@@ -384,11 +394,21 @@ namespace Smile {
     void FRenderSettings::SetGIBackfacePolicy(bool _V) {
         // Passa por aqui, e nao direto no FReSTIRGI, porque o clear dos reservoirs sozinho nao
         // basta: o NRD e o RR acumulam SOBRE eles e o TAA sobre o resultado, entao um A/B feito
-        // so com o clear compararia um estado misturado. DDGI e reflexoes ficam de fora de
-        // proposito — a politica so toca no gather.
+        // so com o clear compararia um estado misturado.
+        //
+        // ERA ScreenResolve, com a justificativa "DDGI e reflexoes ficam de fora de proposito — a
+        // politica so toca no gather". Isso deixou de ser verdade quando o passe de update do
+        // radiance cache passou a ler o MESMO toggle: agora a politica decide o que um raio VE
+        // tambem no produtor de um cache de MUNDO, e as celulas treinadas sob a regra anterior
+        // sobreviveriam ate 64 frames misturando-se as novas — mais tempo do que qualquer A/B
+        // levaria para ser feito, e sem nada na tela denunciando.
+        //
+        // RayVisibility e o dominio pelo MOTIVO, que e a politica de nomes deste arquivo: mudou o
+        // que o raio enxerga. Ele ja carrega o RadianceCache, e leva junto DDGI e reflexoes — que
+        // nao aplicam a politica, mas CONSOMEM o cache e por isso herdaram o estado velho.
         if (_V == R.ReSTIRGI.GetBackfacePolicy()) return;
         R.ReSTIRGI.SetBackfacePolicy(_V); // ja marca NeedsClear nos reservoirs
-        Invalidate(Dom::ScreenResolve);
+        Invalidate(Dom::RayVisibility);
     }
 
     // O FDDGI e a fonte da verdade na leitura, como no toggle antigo do editor.

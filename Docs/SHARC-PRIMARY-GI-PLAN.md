@@ -62,13 +62,23 @@ céu, ou em zero. Nunca em DDGI.
 
 Cinco decisões que o commit #6 herda:
 
-- **A política de backface vale AQUI mesmo estando desligada por default no render.** O toggle é o
-  mesmo (`FReSTIRGI::BackfacePolicy`) e o updater o recebe de fora, não como knob próprio — o cache
-  alimenta o ReSTIR GI, e duas políticas de geometria fariam a mesma superfície ter duas
-  radiâncias. O que muda é a consequência: o render consome um hit ruim uma vez, o cache o **grava**
-  numa célula de mundo e o serve por até 64 frames. Por isso caminho morto em v0 **não grava zero,
-  não grava nada** — zero afirmaria "deste ponto não sai luz" e a média carregaria a afirmação. No
-  segundo segmento é o contrário: ali o kill é oclusão legítima de v0, e vale zero.
+- **A política de backface existe no updater, mas o toggle nasce DESLIGADO — e essa é uma decisão
+  pendente, não um esquecimento.** O toggle é o mesmo do ReSTIR GI (`FReSTIRGI::BackfacePolicy`) e
+  o updater o recebe de fora, não como knob próprio: o cache alimenta o ReSTIR GI, e duas políticas
+  de geometria fariam a mesma superfície ter duas radiâncias. **Na configuração padrão o bloco não
+  roda**, então a exposição continua no pipeline. Ligar o default muda a imagem do render, e o plano
+  proíbe fechar isso por "parece melhor". O que já está entregue é a capacidade de medir: a política
+  existe e o manifesto carrega `giBackfacePolicy`.
+
+  O argumento que mantém o default OFF no render não se transporta inteiro: lá o custo é um
+  `HitIsBackface` por raio contra uma diferença medida como invisível; aqui o custo é ~25× menor
+  (4% dos pixels) e a consequência dura mais — o render consome um hit ruim uma vez, o cache o
+  **grava** numa célula de mundo e o serve por até 64 frames. **A medida pode terminar com defaults
+  diferentes nos dois lados**, e aí a separação do toggle teria motivo medido em vez de gosto.
+
+  Ação em v0 e no segundo segmento é deliberadamente diferente: caminho morto em v0 **não grava
+  nada** — zero afirmaria "deste ponto não sai luz" e a média carregaria a afirmação. No segundo
+  segmento o kill vale **zero**, porque ali é oclusão legítima de v0.
 
 - **O vértice do G-buffer NÃO entra no cache.** Ele é só origem. Gravá-lo exigiria um segundo
   caminho de material a partir do G-buffer, que é a cópia divergente que a Fase 2 existiu para

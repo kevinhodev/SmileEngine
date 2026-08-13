@@ -1283,6 +1283,10 @@ namespace Smile {
         S.CacheUsePrevTerminal = RadianceCache.GetUsePrevCacheAtTerminal();
         S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
+        // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
+        // gather do ReSTIR GI e o produtor do cache) da mesma fonte, entao ela descreve o regime
+        // do frame inteiro. Mesmo criterio do GIMeasureTerminatorOff acima.
+        S.GIBackfacePolicy = ReSTIRGI.GetBackfacePolicy();
 
         // Ocupacao do frame capturado (copia POS-resolve, feita junto do backbuffer) e hit rate
         // do frame capturado (copia PRE-resolve, do anel). As duas metades ficam prontas em

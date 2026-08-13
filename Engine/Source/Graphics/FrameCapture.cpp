@@ -106,6 +106,9 @@ namespace Smile {
                 }
                 Add(Rc.c_str());
             }
+            // A politica de backface muda o que o raio ENXERGA — no gather e no produtor do cache
+            // —, entao duas capturas que so diferem nela sao duas configuracoes, nao duas amostras.
+            if (S.GIBackfacePolicy)       Add("bf");
             if (S.GIMeasureTerminatorOff) Add("noTerm");
             return Tag.empty() ? std::string("off") : Tag;
         }
@@ -472,6 +475,7 @@ namespace Smile {
                 // atomicos mudam quem vence as insercoes do cache. Comparar uma captura
                 // instrumentada com uma normal e comparar duas configuracoes diferentes.
                 File << "  \"cacheStatsEnabled\": " << Bool(_State.CacheStats) << ",\n";
+                File << "  \"giBackfacePolicy\": " << Bool(_State.GIBackfacePolicy) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";
                 File << "  \"cacheValid\": "    << _State.CacheValid    << ",\n";

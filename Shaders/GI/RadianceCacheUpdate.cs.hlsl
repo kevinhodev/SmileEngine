@@ -192,12 +192,24 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // knob proprio: o cache ALIMENTA o ReSTIR GI, e duas politicas de geometria diferentes fariam
     // a mesma superficie ter duas radiancias conforme o caminho.
     //
-    // A consequencia aqui e MAIS SEVERA que no render, e e por isso que ela vale mesmo sendo o
-    // toggle desligado por default la: o render consome um hit ruim uma vez e o descarta; o cache
-    // o GRAVA numa celula de mundo e o serve a todos os raios que caiam nela pelos proximos
-    // frames. Por isso um caminho morto aqui NAO grava zero — ele nao grava nada. Zero seria
-    // afirmar "deste ponto nao sai luz", e a media da celula carregaria a afirmacao; nao gravar e
-    // dizer "esta amostra nao descreve superficie nenhuma", que e o que de fato aconteceu.
+    // ⚠️ E ESSE TOGGLE NASCE DESLIGADO. Na configuracao padrao este bloco nao roda, e a exposicao
+    // que ele fecha CONTINUA no pipeline. Isso e uma decisao adiada de proposito, nao um
+    // esquecimento: ligar o default muda a imagem do RENDER (o toggle e um so), e o plano proibe
+    // fechar isso por "parece melhor" — precisa de A/B. O que este commit entrega e a capacidade
+    // de medir: a politica existe aqui, e o manifesto agora carrega `giBackfacePolicy`, entao as
+    // duas capturas deixaram de ser indistinguiveis. A escolha do default sai da medida.
+    //
+    // O argumento que mantem o default OFF no render nao se transporta inteiro para ca. La ele e
+    // "tracando sem culling, o backface ja bloqueia o raio; a terminacao preta so troca quase-preto
+    // por exatamente-zero, contra um HitIsBackface por raio". Aqui o custo e ~25x menor (4% dos
+    // pixels) e a consequencia dura mais: o render consome um hit ruim uma vez e o descarta, o
+    // cache o GRAVA numa celula de mundo e o serve pelos proximos frames. E por isso que a medida
+    // pode muito bem terminar com defaults DIFERENTES nos dois lados — o que exigiria separar o
+    // toggle, e ai a separacao teria motivo medido em vez de gosto.
+    //
+    // Caminho morto aqui NAO grava zero — nao grava nada. Zero afirmaria "deste ponto nao sai
+    // luz" e a media da celula carregaria a afirmacao; nao gravar diz "esta amostra nao descreve
+    // superficie nenhuma", que e o que de fato aconteceu.
     if (PolicyParams.x > 0.5f && PT_ResolveSelfIntersection(q, ray, SMILE_RT_MASK_GATHER)) return;
 
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return; // ceu: nao ha celula a alimentar
