@@ -112,6 +112,12 @@ namespace Smile {
         // Terminal do caminho de update no cache resolvido. E o que separa "um bounce" de
         // "multi-bounce no tempo" — a diferenca de energia entre os dois nao e sutil.
         bool CacheUsePrevTerminal  = false;
+        // Vertices sombreados por caminho e piso de roughness gravavel. Os dois decidem o que a
+        // celula guarda, e os dois sao EIXO DE MEDICAO da Fase 3: o A/B 1x4 e o sweep do piso.
+        // Sem eles no arquivo, as capturas dessas duas medidas sairiam indistinguiveis — o mesmo
+        // defeito que o produtor e a fracao ja tiveram.
+        u32  CacheMaxVertices      = 0;
+        f32  CacheMinRoughness     = 0.0f;
         // Instrumentacao do cache. NAO e um observador neutro — ver
         // FRadianceCache::PublishedStatsThisFrame. Duas capturas so sao comparaveis se estiverem
         // no MESMO regime, e por isso ela entra tambem na etiqueta do nome do arquivo.

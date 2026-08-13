@@ -286,6 +286,10 @@ namespace Smile {
         f32  PublishedUpdateFraction() const {
             return static_cast<f32>(PublishedUpdateCells) / 25.0f;
         }
+        // Os outros dois parametros que decidem o que a tabela guarda. Publicados pelo mesmo
+        // criterio: sao o que o SHADER recebeu neste frame, e 0 quando o passe nao rodou.
+        u32  PublishedUpdateVertices() const { return PublishedVertices; }
+        f32  PublishedMinCacheableRoughness() const { return PublishedMinRoughness; }
 
         // ConsumerRuns = este consumidor vai realmente tracar neste frame. Os params sao montados
         // para todos (custa nada, e o passe pode nem rodar), mas so quem RODA conta para o
@@ -480,8 +484,10 @@ namespace Smile {
         mutable bool PublishedQuery  = false;
         mutable bool PublishedStats  = false;
         mutable bool PublishedDedicated = false;
-        // Celulas do tile 5x5 que o shader REALMENTE recebeu neste frame. Zerada no UpdatePerFrame
-        // para que "0" signifique "o passe nao rodou" em vez de guardar o valor de um frame antigo.
+        // O que o shader REALMENTE recebeu neste frame. Zerados no UpdatePerFrame para que "0"
+        // signifique "o passe nao rodou" em vez de guardar o valor de um frame antigo.
         u32 PublishedUpdateCells = 0;
+        u32 PublishedVertices    = 0;
+        f32 PublishedMinRoughness = 0.0f;
     };
 }

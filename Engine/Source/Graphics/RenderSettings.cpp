@@ -234,11 +234,18 @@ namespace Smile {
 
     void FRenderSettings::SetRadianceCacheMinCacheableRoughness(f32 _V) {
         if (_V == R.RadianceCache.GetMinCacheableRoughness()) return;
-        // NAO invalida — ele muda quais amostras NOVAS entram, nao o significado das guardadas.
-        // Mas cancela captura pelo mesmo motivo da fracao: o manifesto grava o valor do frame
-        // final, e um aquecimento com dois valores sairia declarando um so.
-        R.Capture.Cancel("o piso de roughness gravavel mudou durante o aquecimento");
         R.RadianceCache.SetMinCacheableRoughness(_V);
+        // INVALIDA, e o comentario anterior aqui estava errado. Ele dizia "muda quais amostras
+        // NOVAS entram, nao o significado das guardadas" — mas o que muda e justamente o que a
+        // CELULA promete conter. Subir o piso quer dizer "daqui em diante so radiancia de lobo
+        // largo mora aqui", e a media continuaria carregando as amostras estreitas ja aceitas,
+        // por ate 64 delas. O A/B do knob seria feito sobre celulas contaminadas com o regime que
+        // ele existe para retirar — e o efeito medido apareceria diluido, ou nao apareceria.
+        //
+        // Mesmo criterio do produtor dedicado e do numero de vertices: knob que muda o que ENTRA
+        // na celula limpa a tabela. O Invalidate tambem cancela captura em curso, entao o
+        // Capture.Cancel explicito que estava aqui deixou de ser necessario.
+        Invalidate(Dom::RayVisibility);
     }
     f32 FRenderSettings::GetRadianceCacheMinCacheableRoughness() const {
         return R.RadianceCache.GetMinCacheableRoughness();

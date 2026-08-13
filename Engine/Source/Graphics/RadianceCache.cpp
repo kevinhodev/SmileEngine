@@ -268,8 +268,10 @@ namespace Smile {
         PublishedUpdate = false;
         PublishedQuery  = false;
         PublishedStats  = false;
-        PublishedDedicated   = false;
-        PublishedUpdateCells = 0;
+        PublishedDedicated    = false;
+        PublishedUpdateCells  = 0;
+        PublishedVertices     = 0;
+        PublishedMinRoughness = 0.0f;
         if (!Ready || !MappedCB) return;
         CPU.CacheParams = { static_cast<f32>(CapacityV),
                             static_cast<f32>(kMaxAccumSamples),
@@ -476,7 +478,11 @@ namespace Smile {
         // O que o shader vai receber de fato — e so isso e que o manifesto reporta. A quantizacao
         // acontece AQUI, entao publicar o knob cru faria a captura afirmar uma fracao que nao foi
         // a usada (0,10 pedido vira 3/25 = 0,12).
-        if (UpdatePassActive()) PublishedUpdateCells = Cells;
+        if (UpdatePassActive()) {
+            PublishedUpdateCells  = Cells;
+            PublishedVertices     = UpdateMaxVertices;
+            PublishedMinRoughness = MinCacheableRoughness;
+        }
         U.UpdateParams = { static_cast<f32>(Cells), static_cast<f32>(UpdateMaxVertices),
                            UsePrevCacheAtTerminal ? 1.0f : 0.0f, MinCacheableRoughness };
 

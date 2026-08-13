@@ -357,7 +357,29 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
         verts[bounce].Throughput = B.Throughput;
 
-        ray.Origin    = PT_ShadowRayOrigin(S, P); // mesma fuga do plano do triangulo
+        // ORIGEM DO SEGMENTO: offset ULP (Wachter-Binder), NAO o do shadow ray.
+        //
+        // Isto era PT_ShadowRayOrigin, e estava errado: aquele aplica o ShadowRayBias, que vale
+        // 0,20 m por default. Num raio de TRANSPORTE isso desloca o vertice em 20 cm antes de
+        // tracar — atravessa parede fina (e o vazamento vai parar numa celula do cache, servido
+        // por dezenas de frames) e move a origem do segmento para longe do ponto cuja radiancia se
+        // esta medindo. A propria base ja tinha tomado esta decisao duas vezes, e por escrito: o
+        // ReSTIRGITrace ("o normal-bias de 0.2 aqui contaminava a medida") e os dois traces de
+        // reflexao ("o bias 0.2 na origem deslocava o reflexo de contato e inflava o hitT") usam
+        // offset so-numerico. O shadow ray continua com o bias dele — la o 0,20 e anti-acne
+        // calibrado, e nao ha segmento cuja geometria dependa da origem.
+        //
+        // OffsetRayWB e nao OffsetRayGBuffer: aqui a posicao vem de um hit EXATO, e nao da
+        // reconstrucao do G-buffer (depth + normal quantizada), cujo erro maior e o que justifica
+        // os termos calibrados daquele.
+        //
+        // Normal orientada para a direcao de SAIDA: a OffsetN aponta contra o raio que CHEGOU, e
+        // no caso comum isso coincide com o hemisferio da amostra. Quando a interpolada e a de
+        // face discordam (silhueta de malha suavizada), o lobo pode sair do outro lado — e ai um
+        // offset fixo empurraria a origem ATRAVES da superficie, que e o mesmo modo de falha que
+        // se esta fechando.
+        const float3 offN = (dot(S.OffsetN, B.Dir) >= 0.0f) ? S.OffsetN : -S.OffsetN;
+        ray.Origin    = OffsetRayWB(S.Pos, offN);
         ray.Direction = B.Dir;
         ray.TMin      = RayEpsB.x;
         ray.TMax      = TraceParams.y;

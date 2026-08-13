@@ -78,6 +78,16 @@ Uma armadilha que a extração do gate de cone revelou e que vale para o resto d
 não deveria acontecer, e a comparação de DXIL pegou. Transcrito na forma original, os três shaders
 de reflexão voltaram a sair com o mesmo conjunto de instruções.
 
+**O bias de shadow ray não serve para raio de transporte** — e essa lição já tinha sido aprendida
+duas vezes nesta base antes de eu reintroduzi-la. O `PT_ShadowRayOrigin` aplica o
+`HitShadowRayBias`, que vale **0,20 m**: num raio de bounce isso desloca a origem em 20 cm, atravessa
+parede fina — e o vazamento vai parar numa célula do cache, servido por dezenas de frames — e ainda
+move a origem para longe do ponto cuja radiância se está medindo. O `ReSTIRGITrace` ("o normal-bias
+de 0.2 aqui contaminava a medida") e os dois traces de reflexão ("o bias 0.2 na origem deslocava o
+reflexo de contato e inflava o hitT") já usavam offset só-numérico. Os segmentos do updater agora
+usam `OffsetRayWB` com a normal de face orientada para a direção de saída; o shadow ray mantém o
+bias dele, onde o 0,20 é anti-acne calibrado e nenhum segmento depende da origem.
+
 ### Estado anterior — commit #5
 
 **O produtor dedicado existe.** `Shaders/GI/RadianceCacheUpdate.cs.hlsl` + `FRadianceCache::

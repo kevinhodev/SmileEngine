@@ -102,6 +102,11 @@ namespace Smile {
                     Rc += 'D';
                     Rc += std::to_string(
                         static_cast<int>(S.CacheUpdateFraction * 25.0f + 0.5f));
+                    // Vertices e piso de roughness: os dois eixos de medicao do multi-bounce. O
+                    // piso vai em porcento inteiro para caber num nome de arquivo sem virgula.
+                    Rc += 'V'; Rc += std::to_string(S.CacheMaxVertices);
+                    Rc += 'R'; Rc += std::to_string(
+                        static_cast<int>(S.CacheMinRoughness * 100.0f + 0.5f));
                     if (S.CacheUsePrevTerminal) Rc += 'T';
                 }
                 Add(Rc.c_str());
@@ -477,6 +482,8 @@ namespace Smile {
                      << _State.CacheUpdateFraction << ",\n";
                 File << "  \"cacheUsePreviousTerminal\": "
                      << Bool(_State.CacheUsePrevTerminal) << ",\n";
+                File << "  \"cacheMaxVertices\": "  << _State.CacheMaxVertices  << ",\n";
+                File << "  \"cacheMinRoughness\": " << _State.CacheMinRoughness << ",\n";
                 // Regime de medicao, nao detalhe de diagnostico: com a instrumentacao ligada os
                 // atomicos mudam quem vence as insercoes do cache. Comparar uma captura
                 // instrumentada com uma normal e comparar duas configuracoes diferentes.

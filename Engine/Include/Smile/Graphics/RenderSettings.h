@@ -116,8 +116,8 @@ namespace Smile {
         // celula guarda em cada regime e diferente.
         void SetRadianceCacheMaxVertices(u32 V);
         u32  GetRadianceCacheMaxVertices() const;
-        // Piso de roughness do lobo que CHEGA para o vertice ser gravavel. Nao invalida: muda so
-        // quais amostras NOVAS entram, e as ja guardadas continuam descrevendo o que descreviam.
+        // Piso de roughness do lobo que CHEGA para o vertice ser gravavel. INVALIDA: o que muda e
+        // o que a celula promete conter, e as amostras estreitas ja aceitas continuariam na media.
         void SetRadianceCacheMinCacheableRoughness(f32 V);
         f32  GetRadianceCacheMinCacheableRoughness() const;
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida

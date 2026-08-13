@@ -1283,6 +1283,8 @@ namespace Smile {
         S.CacheDedicatedUpdate = RadianceCache.PublishedDedicatedThisFrame();
         S.CacheUpdateFraction  = RadianceCache.PublishedUpdateFraction();
         S.CacheUsePrevTerminal = RadianceCache.GetUsePrevCacheAtTerminal();
+        S.CacheMaxVertices     = RadianceCache.PublishedUpdateVertices();
+        S.CacheMinRoughness    = RadianceCache.PublishedMinCacheableRoughness();
         S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
