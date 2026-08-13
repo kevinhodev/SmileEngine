@@ -1,5 +1,27 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
+## ESTADO — 2026-08-12 (fim do dia)
+
+**Capturador feito**, menos a calibração do N. O `Docs/CAPTURE-PROTOCOL.md` tem a tabela de peças,
+onde cada uma mora e como se usa. Em resumo: domínio `DeterministicCapture` (o universo dos alvos,
+inclusive os caches de mundo), `FFrameCapture` com aquecimento contado em frames **renderizados**,
+PNG do backbuffer pós-tonemap/pré-overlays, manifesto JSON derivado do estado real, presets
+científico/gameplay e disparo pela UI ao lado dos bookmarks. O commit da build entra no manifesto
+por um carimbo de *build time* (`cmake/StampVersion.cmake`), não de configure.
+
+**Validado em GPU**: duas capturas consecutivas do mesmo slot, preset científico, N = 128 —
+`temporalSampleIndex == 128` nas duas, pose/resolução/modos idênticos, PSNR 66,4 dB e 169 pixels de
+1,26 M acima de 1 nível. A primeira rodada já pagou por si: achou o `SunDir` nascendo não
+normalizado, que fazia o manifesto divergir entre duas capturas idênticas. Detalhes no
+`CAPTURE-PROTOCOL.md`.
+
+Aquelas duas **não são baseline** — build `-dirty`, cache e TOD desligados. As baselines de verdade
+saem com a build commitada, TOD ligado e cache ativo.
+
+O que resta da Fase 0 continua sendo **medição**: calibrar o N (teto de 512, medindo delta do atlas
+DDGI, ocupação/amostras do cache, hit rate e delta temporal do sinal GI final) e então tirar as
+quatro baselines. Depois disso, o commit #4.
+
 ## ESTADO — 2026-08-12
 
 Bloco de retomada. Tudo abaixo já foi decidido e verificado no código; não re-derivar.
@@ -39,10 +61,8 @@ resolver, e por isso ela entrou antes do commit #4 em vez de depois.
 
 ### O que falta, em ordem
 
-1. **Capturador** (`Docs/CAPTURE-PROTOCOL.md` tem o desenho completo). Caminho crítico: domínio
-   `DeterministicCapture` no `HistoryDomain.h` — pequeno, isolado, desbloqueia o resto. Depois:
-   contador de aquecimento por frame **renderizado**, presets científico/gameplay, PNG + manifesto.
-   Instrumentação de convergência para calibrar o N (teto de 512).
+1. ~~**Capturador**~~ — feito, exceto a **calibração do N** (instrumentação de convergência, teto
+   de 512). Ver o bloco de estado no topo e o `Docs/CAPTURE-PROTOCOL.md`.
 2. **Commit #4** — `gi: split hit shading from indirect fallback policy`. Quebra o
    `ShadeSurfaceHit`, introduz `FPathState` e `FRCQueryResult`. É o primeiro teste real da régua:
    promete não mudar imagem, então serve para validar o capturador.

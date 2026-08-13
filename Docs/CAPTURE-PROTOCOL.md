@@ -14,11 +14,37 @@ não da cena "mais ou menos igual".
 |---|---|
 | Bookmarks de câmera (`<cena>.cameras.json`, 4 slots) | **Feito** — commit `3361762` |
 | `TemporalSampleIndex` separado do `FrameIndex` | **Feito** |
-| Domínio `DeterministicCapture` no `HistoryDomain` | Pendente |
-| Contador de aquecimento por frame **renderizado** | Pendente |
+| Domínio `DeterministicCapture` no `HistoryDomain` | **Feito** |
+| Contador de aquecimento por frame **renderizado** | **Feito** — `FFrameCapture` |
+| PNG + manifesto | **Feito** — WIC 24bppBGR + JSON plano ao lado |
+| Presets científico/gameplay | **Feito** |
 | Instrumentação de convergência (calibrar o N) | Pendente |
-| PNG + manifesto | Pendente |
-| Presets científico/gameplay | Pendente |
+
+### Onde mora cada peça
+
+| Peça | Arquivo |
+|---|---|
+| Domínio de reset | `HistoryDomain::DeterministicCapture` → `FRenderSettings::NotifyDeterministicCapture` |
+| Máquina de estados, readback, PNG e manifesto | `Engine/{Include/Smile,Source}/Graphics/FrameCapture.*` |
+| Preset, coleta de estado e os 3 call sites | `Renderer::UpdateFrameCapture` / `RecordPost` / `FinishFrameCapture` |
+| Disparo pela UI | `Editor/…/CaptureBridge.*` + card no `SettingsWindow.qml` |
+| Commit da build no manifesto | `cmake/StampVersion.cmake` → `SMILE_BUILD_COMMIT` |
+
+O **N ainda é escolhido à mão** no slider (default 128). Fixá-lo por medição é o que falta, e é o
+item que fecha o protocolo — ver "Calibração do N" abaixo.
+
+### Uso
+
+Configurações → Renderização → cards *Câmeras de referência* e *Captura determinística*.
+"Capturar" num slot restaura a pose e dispara na mesma ação — em dois cliques haveria espaço para
+capturar da pose errada, que é justamente o que os slots existem para impedir. "Capturar aqui"
+usa a câmera livre e grava `bookmarkSlot: -1`.
+
+Saída em `<exe>/Captures/`, com nome derivado do estado real:
+`<cena>_slot0_sci_N128_gi-ddgi-rgi-rcUQ_20260812-143355.{png,json}`.
+
+O PNG é o backbuffer **depois do tonemap e antes dos overlays do editor** — contorno de seleção e
+gizmos são a ferramenta, não a imagem.
 
 ## Ordem de uma captura
 
@@ -32,6 +58,93 @@ Fixa, e a ordem importa em cada passo:
    convergiu nada, e contar ticks tornaria o N dependente da carga da máquina.
 6. **Capturar o frame seguinte.**
 7. **Gravar PNG + manifesto.**
+
+## O que a sessão fixa além do reset
+
+O reset fixa o estado **inicial dos acumuladores**. Isso não basta: centenas de frames depois, a
+captura sai de um estado que o reset não controla. Enquanto a sessão corre:
+
+- **Câmera travada** — `UpdateCamera` ignora input e `SetCameraPose` recusa teleporte (com aviso no
+  log). A mesma pose alcançada por trajetórias diferentes aquece o cache de mundo com células
+  diferentes, e um duplo-clique no outliner é acidental por natureza. Recusar é melhor que
+  cancelar: cancelar jogaria fora minutos de aquecimento.
+- **Fase de animação canônica** — `ElapsedTime` vai para um valor fixo (`kCaptureElapsedSeconds`) e
+  não avança; o valor real volta no fim. Nuvem, oceano, vento e ondulação saem dessa fase.
+  *Congelar onde estava* não resolveria: fixaria uma fase **arbitrária**, a de quando o operador
+  clicou, e duas capturas do mesmo bookmark disparadas com minutos de diferença sairiam com nuvens
+  em posições diferentes. O zero é canônico por ser fixo, não por ser especial; o salto que ele
+  provoca é inerte porque o reset logo em seguida derruba todo histórico que reprojetaria o estado
+  velho.
+- **Hora do dia declarada, não congelada** — a hora é a iluminação **autorada**, não um contador
+  sem significado como o `ElapsedTime`; canonicalizá-la num valor fixo destruiria a capacidade de
+  capturar uma cena de fim de tarde. Mas congelá-la onde estava também não serve: com o Time of Day
+  correndo, duas capturas disparadas com minutos de diferença têm sóis diferentes, e um manifesto
+  registrando as duas horas não torna as imagens comparáveis.
+
+  Então ela vira **parâmetro da captura**, como a pose: `FCaptureRequest::PinTimeOfDayHours`, com um
+  campo na UI (“Hora do dia fixada”, semeado uma vez com o relógio do mundo e depois estável). Duas
+  capturas com a mesma hora declarada têm o mesmo sol por construção.
+
+  Durante a sessão, hora e direção do sol são **reafirmadas a cada frame**, não apenas impedidas de
+  avançar: o painel de TOD escreve direto na referência de `GetTimeOfDay()`, sem passar por setter,
+  então não existe funil onde detectar a edição. Reescrever a cada frame faz “o sol não se move
+  durante uma sessão” valer por construção, venha a escrita de onde vier — mesma política da câmera
+  travada. No fim, o relógio do operador volta.
+- **Molhadura no valor assentado** — `SettledWetness()`, o valor que a chuva atual alcançaria com
+  tempo infinito. Aqui o passo fixo sozinho **não** basta: o τ é de 5 a 30 s e 128 frames cobrem
+  2,1 s, então duas capturas só partiriam do mesmo ponto por coincidência. Partindo do assentado, a
+  mesma chuva dá a mesma molhadura sempre.
+
+O que **não** para: processos que *assentam* rápido (fade das sombras spot) continuam, com passo
+fixo de `1/60 s`. O passo fixo também é o que o upscaler recebe em `DeltaTimeSec` — zero ali seria
+um insumo que nenhum frame normal produz.
+
+## O que cancela uma sessão
+
+O contrato é "N frames consecutivos após **um** reset". Três classes de evento o quebram sem tocar
+no capturador, e nenhuma pode ser recusada — o operador tem o direito de redimensionar a janela:
+
+| Evento | Onde |
+|---|---|
+| Resize da janela | `Renderer::Resize` |
+| Render scale / modo de qualidade do upscaler | `Renderer::ApplyRenderScale` |
+| Carga de cena (inclusive aditiva e por linha de comando) | `Renderer::CommitCookedScene` |
+| Qualquer knob que derrube acumulador | `FRenderSettings::Invalidate` |
+
+Os dois primeiros existem porque **recriar recurso zera histórico por construção**, sem passar por
+`Invalidate` — não há invalidação no funil a que se pendurar. `ApplyRenderScale` é o ponto onde os
+dois caminhos que recriam alvos se encontram: o slider de render scale e, via `ApplyUpscalerScale`,
+a troca de modo de qualidade do upscaler.
+
+O terceiro é um gate no **funil**: todo knob que invalida história passa por `Invalidate`, então um
+teste ali cobre os ~40 setters de uma vez, em vez de um gate por setter que o próximo knob
+esqueceria. O próprio capturador passa por lá — no preset, no reset e na restauração —, e por isso
+tudo que ele faz roda sob `CaptureSetupGuard`; sem essa exceção a sessão se cancelaria no ato de
+começar, e a restauração descartaria um pedido novo enfileirado no mesmo frame.
+
+O cancelamento alcança também o pedido **ainda pendente**. A janela entre o `Request` e o primeiro
+frame é curta mas real, e uma cena trocada dentro dela faria a sessão começar na cena nova
+carregando nome e bookmark da antiga.
+
+O funil **não** é completo, e os limites ficam registrados: `TemporalMotion` e `NrdDirect` têm
+chamadas diretas de `InvalidateHistory` no `Renderer` que não passam por ele.
+
+> **Achado da revisão:** o oceano era o terceiro caso. Os setters de espectro do `FOceanFFT`
+> (vento, ondas, swell, fetch, profundidade) derrubam o histórico temporal por conta própria —
+> invariante interna da classe —, e por isso ninguém de fora ficava sabendo, inclusive uma captura
+> em aquecimento. Agora os setters da fachada **declaram** o reset (`Invalidate(OceanTemporal)`) em
+> vez de repeti-lo à mão; o `Renderer::SetUseWater` perdeu o laço que tinha.
+
+**Se o operador mexer num knob durante a sessão**, o cancelamento não pode desfazer a escolha dele:
+a restauração compara, campo a campo, o valor atual com o que o **preset** aplicou, e só devolve o
+antigo onde os dois ainda batem. Sem isso, trocar o upscaler no meio de uma captura científica
+cancelava a sessão e, no frame seguinte, o upscaler voltava sozinho para o valor anterior.
+
+Cancelar é em voz alta (log + barra de status): uma captura sub-aquecida em silêncio é pior que
+captura nenhuma, porque entra no A/B parecendo válida. Vale inclusive para o pedido cancelado
+**antes de começar** — a UI já escreveu "aquecendo N frames" no clique, e sumir só com uma linha de
+log deixaria esse texto na tela para sempre. Todo pedido aceito termina em sucesso ou falha
+visível.
 
 ## Por que o reset é mais forte que o corte de câmera
 
@@ -47,7 +160,42 @@ conforme o caminho até ela.
 
 Daí um domínio próprio, nomeado pelo motivo — que é a política do arquivo.
 
+> **Achado da revisão:** "todo acumulador" era uma afirmação falsa quando o domínio nasceu. O
+> `kAllHistoryTargets` cobre o universo do *enum*, e dois acumuladores reais nunca tinham sido
+> cadastrados nele: o temporal do `FSunShafts` e o histórico de displacement/foam da FFT do oceano.
+> O único reset de cada um era interno (o passe adormecendo; o toggle da água). Ambos ganharam bit.
+> O `static_assert` do arquivo protege o enum de crescer sem o contador acompanhar, mas **não**
+> detecta um acumulador que nunca entrou — para esse a única defesa é a pergunta em toda revisão de
+> passe novo: *isto sobrevive ao frame? então tem um bit no `EHistoryTarget`*.
+>
+> O `SunShafts` entrou também no `CameraCut` (temporal de tela, reprojeta por `PrevVP` — mesmo
+> argumento do fog volumétrico, que já estava lá); o oceano **não**, porque é simulação de mundo e
+> a onda é a mesma independentemente de onde a câmera está.
+
+## Primeira rodada (smoke test)
+
+Duas capturas consecutivas do mesmo slot, preset científico, N = 128, TOD e radiance cache
+desligados. O protocolo se sustentou: `temporalSampleIndex == 128` nas duas, pose/FOV/resolução e
+modos de render idênticos, PSNR de 66,4 dB, 99,99% dos pixels dentro de 1 nível e 169 pixels de
+1.264.692 acima disso — ruído residual do estimador cru.
+
+**E a régua achou um bug na primeira vez que foi usada**, que é o que ela existe para fazer. O
+`SunDir` nascia com o literal autorado `(0,3 0,6 0,5)`, **não normalizado**; como toda escrita passa
+pelo `SetSunDirection`, que normaliza, a restauração de estado no fim da primeira sessão convertia o
+membro. A captura A gravava o vetor cru e a B o mesmo vetor unitário. A imagem quase não mudava —
+quem consome já normaliza —, mas o manifesto divergia entre duas capturas idênticas, que é
+exatamente o que ele não pode fazer. O membro passou a nascer unitário
+(`Renderer::DefaultSunDirection`), e a invariante ficou declarada onde ele é.
+
+Estas duas capturas **não são baseline**: a build era `-dirty`, o cache estava desligado (a
+telemetria dele não foi exercitada) e o ReGIR não rodou por falta das condições efetivas. Servem
+como prova de que o caminho de GPU funciona.
+
 ## Calibração do N
+
+> **É o que falta.** O capturador já aceita qualquer N e o grava no manifesto; o que não existe
+> ainda é a medição que escolhe o número. Até lá o default de 128 é um palpite — e, pelo argumento
+> de ordem de grandeza abaixo, provavelmente baixo demais.
 
 O N é **fixo para todo o A/B**, escolhido uma vez por calibração. Parada adaptativa por captura
 daria N diferente entre configurações, e a diferença de N viraria viés: a configuração que converge
@@ -131,8 +279,13 @@ fonte de diferença entre rodadas e mede o sinal, não o reconstrutor.
 > — sem resíduo. (Hoje o `UseTAA` já nasce desligado em favor do FSR, mas isso é um default, não
 > uma garantia do preset.)
 
+> **Consequência assumida:** o denoiser é eixo do operador, não do preset — capturas cruas e
+> denoisadas são as duas necessárias. Mas com **DLSS RR** os dois eixos são um só (o RR faz denoise
+> *e* upscale num eval), então tirar o upscaler derruba o RR para NRD. O preset não esconde isso: o
+> manifesto grava o estado **efetivo**, e é ele que vale na comparação.
+
 **Gameplay** — upscaler e denoiser reais. Para validar o que o jogador vê, que é o único resultado
-que importa no fim.
+que importa no fim. Não muta nada: captura a engine como o operador a configurou.
 
 Os dois são necessários e medem coisas diferentes. Uma regressão que só aparece no gameplay é uma
 interação com o upscaler; uma que só aparece no científico é do estimador e o upscaler está
@@ -141,10 +294,79 @@ mascarando.
 ## Manifesto
 
 Ao lado do PNG, com nome derivado do estado real da engine e não digitado à mão — erro humano na
-terceira rodada é o que o PNG automático existe para eliminar:
+terceira rodada é o que o PNG automático existe para eliminar. JSON plano, uma chave por linha,
+mesma forma dos sidecars que o `SceneLoader` já lê, e legível num diff.
 
-cena, slot, toggles de A/B (cache escrita/leitura, ReSTIR GI, DDGI), resolução, render scale,
-upscaler, denoiser, N do aquecimento, e commit da build.
+Cena, slot, preset, N e commit da build; resolução de saída e de render, render scale, upscaler +
+qualidade, denoiser e TAA; os toggles do A/B (`useGI`, `ddgiReady`, `restirGI`, `restirDI`,
+`regir`, `reflections`, `cacheUpdate`, `cacheQuery`, `giTerminatorOff`); ocupação do radiance cache
+no instante do disparo; pose e FOV da câmera; direção do sol e hora do TOD.
+
+Os toggles são os **efetivos**, e cada um vem de onde a decisão realmente é tomada — recompor a
+condição por fora é o começo de uma divergência:
+
+| Campo | Fonte |
+|---|---|
+| `restirGI`, `restirDI`, `reflections`, `taa` | `FFrameModes` do frame capturado |
+| `regir` | o gate real, que também exige consumidor e `GILightCount > 0` |
+| `cacheUpdate`, `cacheQuery` | o que o `ShaderParams` publicou **a um consumidor que rodou** |
+
+O caso do cache mostra por que a distinção importa, em dois eixos. `ResetPending` é limpo pelo
+resolve no meio do frame, então recompor `Enabled && Ready && !ResetPending` no fim daria "ativo"
+para um frame que entregou flags **zeradas** aos traces — que é exatamente a captura com `N = 0`. E
+os params são montados para os três consumidores (DDGI, ReSTIR GI, reflexões) mesmo quando o passe
+não vai rodar, então o registro só conta quem de fato traçou; sem isso o manifesto afirmaria cache
+ativo num frame em que ninguém o consultou.
+
+As métricas do cache saem quando ele **atualizou ou consultou** — não só quando atualizou. A
+configuração só-leitura (reflexões consultando com DDGI e ReSTIR GI desligados) é legítima no A/B, e
+é justamente ali que ocupação e hit rate interessam.
+
+Elas são as do frame disparado, e vêm de **duas** cópias porque as duas metades
+ficam prontas em momentos opostos: `cacheQueries`/`cacheHits` são escritos pelos traces e zerados
+pelo resolve (só a cópia pré-resolve os pega), enquanto `cacheOccupied`/`cacheValid`/`cacheSamples`
+são escritos pela varredura *dentro* do resolve (só uma cópia pós-resolve os pega). Um frame de
+defasagem é invisível no painel — por isso o caminho normal tem uma cópia só —, mas ocupação em
+função do N é precisamente o que a calibração vai medir. Queries/hits ficam em zero sem a
+instrumentação do cache ligada.
+
+> **Limite conhecido de `cacheQueries`/`cacheHits`:** o trace tardio de reflexões roda **depois** do
+> resolve, então as consultas dele caem no frame seguinte. A medida é, a rigor, "queries dos passes
+> anteriores ao resolve deste frame + reflexões do frame anterior". Para a calibração isso não
+> atrapalha — o viés é idêntico entre capturas da mesma configuração, que é como os números são
+> usados —, mas não leia o campo como "todas as consultas deste frame".
+
+Se o manifesto não puder ser gravado, a captura **falha e os dois arquivos são descartados**. Uma
+imagem sozinha não é comparável — não se sabe de que configuração, de que N nem de que build ela
+saiu — e comparável é a única coisa que ela deveria ser.
+
+Os dois são escritos em `.tmp` e renomeados no fim, **manifesto primeiro, PNG por último**. Os dois
+renames não são atômicos entre si, então a ordem escolhe qual é o único estado intermediário
+possível: um manifesto sem imagem, que é obviamente incompleto, em vez de um PNG órfão, que parece
+uma captura boa cujo manifesto alguém apagou. Falha no segundo rename desfaz o primeiro.
+
+Quatro campos que parecem redundantes e não são:
+
+- **`pinnedTimeOfDayRequested`** × **`pinnedTimeOfDayApplied`** × `timeOfDayHours`: o pedido, o que
+  de fato foi fixado, e o que o mundo tinha. Os dois primeiros divergem quando o Time of Day está
+  **desligado**: ali o sol é autorado à mão e não deriva da hora, então fixar a hora não faz nada, e
+  gravar o pedido como se tivesse valido faria o manifesto afirmar um controle que não houve — duas
+  capturas com o mesmo pin pedido poderiam ter sóis completamente diferentes. Negativo no aplicado =
+  a sessão não fixou hora nenhuma. `timeOfDayEnabled` acompanha para o leitor saber por quê.
+
+- **`temporalSampleIndex`** tem de ser **igual ao N**. É a prova, no arquivo, de que o contrato
+  "aquece `0…N−1`, captura em `N`" valeu naquela rodada. Se divergir, o aquecimento foi
+  interrompido (resize, troca de cena, um frame que morreu) e a captura não é comparável.
+- **`ddgiReady`** é a *existência* do volume, não o `useGI` — é por existência que o fallback é
+  escolhido (commit `a67eadd`), e é isso que precisa ficar registrado.
+
+`build` sai do `SMILE_BUILD_COMMIT`, carimbado **a cada build** e não no configure: um campo cuja
+única função é ser confiável não pode apontar para o commit anterior depois de um rebuild. Sufixo
+`-dirty` quando a árvore tinha alterações não commitadas — uma captura tirada no meio de uma edição
+não pode se passar por uma tirada do commit limpo. **Arquivo não rastreado também conta**: um
+`.hlsli` novo incluído por um shader existente entra na compilação sem produzir uma linha de diff
+rastreada, e marcar limpo nesse estado poria no manifesto um commit em que a imagem não se
+reproduz. O preço é um `-dirty` a mais quando há rascunho na árvore, e esse é o lado certo de errar.
 
 ## Futuro
 
