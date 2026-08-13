@@ -519,23 +519,33 @@ namespace Smile {
         // camera —, entao subir na ordem do frame nao custa nada.
         void TickWarmup();
 
-        // A BORDA `Filling -> Active`, uma vez so. Quem consome tem de derrubar o historico dos
-        // consumidores: o terminador do raio secundario acabou de mudar de fallback para cache, e
-        // o que eles acumularam durante o Filling foi medido com o OUTRO terminador — e a mesma
-        // razao pela qual o toggle manual de leitura invalida (ver FRenderSettings). Sem isto, a
-        // transicao automatica seria o unico caminho da engine que troca o terminador sem limpar
-        // quem somou o anterior.
+        // A consulta do render MUDOU por conta propria — sem passar por setter nenhum. Quem
+        // consome tem de derrubar o historico dos consumidores: o terminador do raio secundario
+        // trocou, e o que eles acumularam foi medido com o outro. E a mesma razao pela qual o
+        // toggle manual de leitura invalida (ver FRenderSettings).
+        //
+        // Duas bordas, um latch, porque a acao e a mesma nos dois sentidos:
+        //   ABRIU  — `Filling -> Active` com o aquecimento automatico governando a consulta;
+        //   FECHOU — o reload de shader, que reseta a tabela sem passar pelo funil.
+        // Os demais resets chegam por setter, e o setter ja invalida.
         //
         // Latch em vez de callback porque esta classe nao conhece o FRenderSettings — e o mesmo
         // padrao do `ConsumeRestore` do capturador.
-        bool ConsumeWarmupActivation() {
-            const bool V = WarmupActivated;
-            WarmupActivated = false;
+        bool ConsumeQueryChange() {
+            const bool V = QueryChanged;
+            QueryChanged = false;
             return V;
         }
         // A consulta do RENDER esta liberada neste frame? Com AutoWarmup desligado, sempre.
         bool WarmupAllowsQuery() const {
             return !AutoWarmup || WarmupState() == ERadianceCacheWarmup::Active;
+        }
+        // A consulta do render esta EFETIVAMENTE aberta agora — a condicao inteira, e nao so o
+        // portao do aquecimento. E a mesma que o ShaderParams usa para armar o kFlagQuery, e mora
+        // aqui para os dois nao poderem divergir: quem decide invalidar historico tem de estar
+        // olhando exatamente o que os traces receberam.
+        bool QueryEffective() const {
+            return Enabled && Ready && !ResetPending && QueryEnabled && WarmupAllowsQuery();
         }
 
         // Fracao das celulas COM AMOSTRA que precisa estar confiavel (N >= piso) para Filling
@@ -730,7 +740,8 @@ namespace Smile {
         // teto compara com `>`: em `FillFrames == kWarmupMaxFrames` faltava rodar o proprio frame
         // 96, e trocar de estado ali entregaria 95 frames de preenchimento com o nome de 96.
         u32  FillFrames = 0;
-        bool WarmupActivated = false; // borda Filling -> Active, consumida pelo Renderer
+        // A consulta do render abriu ou fechou sozinha. Consumido no topo do frame pelo Renderer.
+        bool QueryChanged = false;
         // Defasagem do readback dos contadores, em frames, e o motivo de o gate nao poder olhar
         // o StatsCPU nos primeiros frames de Filling: o resolve do frame F copia a varredura de
         // F-1, e o anel entrega essa copia kFramesInFlight frames depois. Antes disso o StatsCPU

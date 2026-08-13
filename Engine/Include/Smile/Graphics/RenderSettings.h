@@ -135,10 +135,11 @@ namespace Smile {
         // Estado atual do aquecimento e ha quantos frames ele esta enchendo (0 fora de Filling).
         const char* RadianceCacheWarmupName() const;
         u32  RadianceCacheWarmupFrames() const;
-        // A borda `Filling -> Active` aconteceu neste frame. Chamada pelo Renderer logo depois do
-        // UpdatePerFrame do cache: derruba o historico dos CONSUMIDORES, porque o terminador do
-        // raio secundario acabou de mudar. Mesma invalidacao do toggle manual de leitura.
-        void NotifyRadianceCacheActivated();
+        // A consulta ao cache mudou sem passar por setter nenhum — o aquecimento a abriu, ou um
+        // reload de shader a fechou. Chamada pelo Renderer no TOPO do frame: derruba o historico
+        // dos CONSUMIDORES, porque o terminador do raio secundario acabou de trocar. Mesma
+        // invalidacao do toggle manual de leitura, nos dois sentidos.
+        void NotifyRadianceCacheQueryChanged();
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);

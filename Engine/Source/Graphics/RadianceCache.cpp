@@ -80,7 +80,23 @@ namespace Smile {
         CreateUpdatePipeline(Ctx.Device);
         // Full HLSL reloads may change the shared hash/key semantics. Old entries are then
         // undecodable by the new query code even though the buffers themselves survived.
+        //
+        // ANTES do ResetOnce, que ja poe o estado em Resetting e tornaria a resposta falsa: a
+        // consulta estava aberta e vai FECHAR, e isso e uma troca de terminador como qualquer
+        // outra — o ReSTIR GI e o atlas do DDGI seguram radiancia que veio do cache, sob uma
+        // semantica de chave que este reload pode ter acabado de mudar.
+        //
+        // Este e o unico ResetOnce da classe que nao vem acompanhado de invalidacao: os outros
+        // chegam por setter do FRenderSettings ou pelo proprio funil. Por isso o latch e armado
+        // AQUI e nao dentro do ResetOnce — la ele pegaria tambem o reset da sessao de captura,
+        // que roda sob a guarda justamente para nao cancelar nada, e o cancelaria no frame
+        // seguinte, fora dela.
+        const bool WasQuerying = QueryEffective();
         if (Ready) ResetOnce();
+        // De brinde, o que fechava a captura por fora: um hot reload durante o aquecimento
+        // resetava o cache sem cancelar a sessao. Consumido pelo funil, agora cancela — e deve:
+        // os pipelines mudaram no meio da contagem.
+        if (WasQuerying) QueryChanged = true;
     }
 
     FPassShaderStems FRadianceCache::ShaderStems() const {
@@ -339,7 +355,10 @@ namespace Smile {
             // `QueryEnabled` entra pelo mesmo argumento, um nivel acima: com a leitura desligada o
             // render nao consulta em estado nenhum, e abrir um portao atras de outro fechado nao
             // muda o que chega aos consumidores.
-            WarmupActivated = AutoWarmup && QueryEnabled;
+            //
+            // E `AutoWarmup && QueryEffective()` escrito por extenso: os retornos antecipados la
+            // em cima ja garantem Enabled, Ready e o pending fora.
+            QueryChanged = AutoWarmup && QueryEnabled;
         }
     }
 
@@ -873,7 +892,11 @@ namespace Smile {
         // A consulta EFETIVA, e nao o knob: em Filling o render ainda nao le a tabela. Daqui para
         // baixo o `QueryEnabled` cru nao aparece mais — flags, contadores e registro do manifesto
         // saem todos deste booleano, senao um frame de aquecimento se declararia consultando.
-        const bool Query = QueryEnabled && WarmupAllowsQuery();
+        //
+        // Pelo QueryEffective(), que e a mesma expressao que decide invalidar historico: se as
+        // duas divergissem, a invalidacao estaria olhando uma coisa e os traces recebendo outra.
+        // `Query` ja implica `On`, entao o aninhamento abaixo continua correto.
+        const bool Query = QueryEffective();
         u32 Flags = 0u;
         if (On) {
             if (Query)       Flags |= kFlagQuery;

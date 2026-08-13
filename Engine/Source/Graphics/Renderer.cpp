@@ -4996,14 +4996,18 @@ namespace Smile {
         DDGIDebugPass.CollectPointDiagnostic(FrameSlot);
 
         // Aquecimento global do cache, AQUI e nao junto do UpdatePerFrame dele. O tick le os
-        // contadores que o CollectStats acabou de entregar, e a borda `Filling -> Active` derruba
+        // contadores que o CollectStats acabou de entregar, e uma mudanca da consulta derruba
         // o historico dos CONSUMIDORES — que publicam os cbuffers deles ao longo do frame, cada um
         // no seu momento. A nevoa volumetrica resolve o `UseHistory` dela dentro do
         // ResolveFrameLighting, bem antes do bloco de GI: notificada de la, ela ja teria decidido
         // reprojetar a historia que o reset acabou de invalidar, e o descarte so valeria no frame
         // seguinte. No topo do frame nao ha esse "depende de quem publicou primeiro".
+        //
+        // O latch cobre os dois sentidos: o aquecimento ABRINDO a consulta, e o reload de shader
+        // FECHANDO-A (ele reseta a tabela de fora do funil, entre frames — ver
+        // FRadianceCache::OnRecreatePipelines).
         RadianceCache.TickWarmup();
-        if (RadianceCache.ConsumeWarmupActivation()) Settings().NotifyRadianceCacheActivated();
+        if (RadianceCache.ConsumeQueryChange()) Settings().NotifyRadianceCacheQueryChanged();
         FrameConstants* MappedCB = reinterpret_cast<FrameConstants*>(
             MappedFrameBase + static_cast<size_t>(FrameSlot) * sizeof(FrameConstants));
 

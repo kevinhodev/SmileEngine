@@ -196,18 +196,23 @@ namespace Smile {
         Invalidate(RadianceCacheConsumersOnly());
     }
 
-    void FRenderSettings::NotifyRadianceCacheActivated() {
-        // A borda `Filling -> Active` e, para os consumidores, a MESMA coisa que o operador ligar
-        // a leitura: o terminador do raio secundario deixa de ser o fallback e passa a ser o
-        // cache. O que eles acumularam durante o Filling foi medido com o outro terminador — os
-        // reservoirs do ReSTIR GI, o atlas do DDGI (histerese 0,99, ou seja centenas de updates de
-        // memoria), o NRD. Sem isto, esta seria a unica troca de terminador da engine que nao
-        // limpa quem somou o anterior.
+    void FRenderSettings::NotifyRadianceCacheQueryChanged() {
+        // Para os consumidores isto e a MESMA coisa que o operador mexer no toggle de leitura: o
+        // terminador do raio secundario troca entre fallback e cache. O que eles acumularam foi
+        // medido com o outro — os reservoirs do ReSTIR GI, o atlas do DDGI (histerese 0,99, ou
+        // seja centenas de updates de memoria), o NRD.
+        //
+        // Vale NOS DOIS SENTIDOS, e o de fechar demorou mais a aparecer porque parecia inofensivo:
+        // o reload de shader reseta a tabela — a semantica da chave pode ter mudado — e a consulta
+        // fecha sozinha, sem passar por setter nenhum. Quem estava segurando radiancia vinda do
+        // cache continuava a usa-la.
         //
         // Passa pelo funil de proposito: se acontecer no meio de um aquecimento de captura, a
-        // sessao TEM de ser cancelada — e o contrato "N frames apos UM reset" quebrado no meio.
-        // Na pratica nao acontece, porque a sessao roda com o aquecimento automatico desligado
-        // (ver Renderer::UpdateFrameCapture), e essa e a razao de ela desliga-lo.
+        // sessao TEM de ser cancelada — o contrato "N frames apos UM reset" foi quebrado no meio.
+        // E o caso concreto do reload de shader, que ate aqui trocava os pipelines e resetava o
+        // cache sem a captura ficar sabendo. A borda do aquecimento nao chega a acontecer dentro
+        // de uma sessao: ela roda com o automatico desligado, e o latch so arma quando a consulta
+        // muda DE FATO (ver FRadianceCache::ConsumeQueryChange).
         Invalidate(RadianceCacheConsumersOnly());
     }
     bool FRenderSettings::GetRadianceCacheAutoWarmup() const {
