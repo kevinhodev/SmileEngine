@@ -381,7 +381,21 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         const float3 offN = (dot(S.OffsetN, B.Dir) >= 0.0f) ? S.OffsetN : -S.OffsetN;
         ray.Origin    = OffsetRayWB(S.Pos, offN);
         ray.Direction = B.Dir;
-        ray.TMin      = RayEpsB.x;
+        // TMin ZERO, como o raio de origem acima e como os tres raios de transporte da engine
+        // (ReSTIRGITrace, ReflectionTrace, ReflectionTraceMirror). Era RayEpsB.x — o TMin dos
+        // SHADOW rays, 1 cm —, e o proprio RayEpsilons.h avisa contra isto na definicao dele:
+        // "soma com o bias de origem: em 1 cm, oclusor a menos de 1 cm do hit e invisivel MESMO
+        // DEPOIS DE O BIAS CAIR". Era exatamente o estado que sobrou ao remover os 20 cm: contato
+        // dentro de 1 cm deixava de ocluir, e o cache aprenderia "sem oclusor por perto" em canto
+        // apertado — do lado errado, porque erro assim CLAREIA.
+        //
+        // A REGRA, ja que este e o quarto sitio em que ela se aplica: este passe traca DUAS
+        // familias de raio a partir do mesmo FHitShadeParams. Shadow ray usa os epsilons de sombra
+        // (bias 0,20 + TMin 1 cm, calibrados como anti-acne). Raio de TRANSPORTE nao usa nenhum
+        // dos dois — ele confia no offset ULP da origem e vai com TMin 0, porque qualquer corte no
+        // inicio do intervalo apaga geometria real. Segmento novo que nasca aqui herda esta linha,
+        // nao a de cima.
+        ray.TMin      = 0.0f;
         ray.TMax      = TraceParams.y;
         // A roughness que viaja e a do MATERIAL quando o lobo foi especular, e difusa quando nao:
         // e ela que o proximo vertice consulta para saber se pode ser gravado.
