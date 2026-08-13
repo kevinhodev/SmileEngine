@@ -22,7 +22,10 @@
 
 cbuffer RadianceCacheCB : register(b0) {
     float4 CacheParams;  // x = capacity, y = maxAccumSamples, z = staleFrameMax, w = resetAll
-    float4 StatsParams;  // x = modo (0 resolve, 1 clear), yzw livres
+    // y = PISO DE CONFIANCA, o mesmo que a consulta usa. O resolve precisa dele para contar
+    // quantas celulas estao de fato utilizaveis: `tem amostra` e `encerra um caminho` deixaram de
+    // ser a mesma coisa quando o piso entrou, e o estado global Filling/Active vai ler o segundo.
+    float4 StatsParams;  // x = modo (0 resolve, 1 clear), y = piso de confianca, zw livres
 };
 
 RWStructuredBuffer<uint>  Entries  : register(u0);
@@ -34,18 +37,20 @@ RWStructuredBuffer<uint>  Stats    : register(u3); // ver RC_STAT_* no RadianceC
 // Com o reduce em groupshared sobra UM atomico por grupo de 64 — 16 k no total na capacidade
 // padrao, que e ruido.
 groupshared uint SharedOccupied[64];
-groupshared uint SharedValid[64];
+groupshared uint SharedHasSamples[64];
 groupshared uint SharedSamples[64];
 groupshared uint SharedEvicted[64];
+groupshared uint SharedConfident[64];
 
 [numthreads(64, 1, 1)]
 void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     if (StatsParams.x > 0.5f) {
         if (did.x == 0u) {
-            Stats[RC_STAT_OCCUPIED] = 0u;
-            Stats[RC_STAT_VALID]    = 0u;
-            Stats[RC_STAT_SAMPLES]  = 0u;
-            Stats[RC_STAT_EVICTED]  = 0u;
+            Stats[RC_STAT_OCCUPIED]    = 0u;
+            Stats[RC_STAT_HAS_SAMPLES] = 0u;
+            Stats[RC_STAT_SAMPLES]     = 0u;
+            Stats[RC_STAT_EVICTED]     = 0u;
+            Stats[RC_STAT_CONFIDENT]   = 0u;
             // Os contadores de query sao escritos pelos TRACES, que rodam antes do resolve. Zerar
             // aqui apagaria a medida do proprio frame; eles sao zerados no clear do frame seguinte,
             // que e o que o painel le. Ver RC_STAT_QUERY_*.
@@ -59,21 +64,27 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             Stats[RC_STAT_MISS_EMPTY]   = 0u;
             Stats[RC_STAT_MISS_WARMING] = 0u;
             Stats[RC_STAT_MISS_STALE]   = 0u;
-            Stats[RC_STAT_INS_TRIES]    = 0u;
-            Stats[RC_STAT_INS_FULL]     = 0u;
-            Stats[RC_STAT_INS_PROBES]   = 0u;
+            Stats[RC_STAT_INS_TRIES]     = 0u;
+            Stats[RC_STAT_INS_FULL]      = 0u;
+            Stats[RC_STAT_INS_CONTENDED] = 0u;
+            Stats[RC_STAT_INS_RETRIES]   = 0u;
+            Stats[RC_STAT_INS_CAPPED]    = 0u;
+            Stats[RC_STAT_INS_PROBES]    = 0u;
             // PROBEMAX e escrito por InterlockedMax, entao o zero e obrigatorio e nao cosmetico:
             // sem ele o maximo do frame nunca desceria e o painel mostraria o pior caso da sessao
             // inteira como se fosse o de agora.
             Stats[RC_STAT_INS_PROBEMAX] = 0u;
             // O produtor. PATH_DEPTH tambem e InterlockedMax, e vale a mesma observacao.
-            Stats[RC_STAT_PATHS]       = 0u;
-            Stats[RC_STAT_PATH_VERTS]  = 0u;
-            Stats[RC_STAT_PATH_DEPTH]  = 0u;
-            Stats[RC_STAT_TERM_SKY]    = 0u;
-            Stats[RC_STAT_TERM_CACHE]  = 0u;
-            Stats[RC_STAT_TERM_KILLED] = 0u;
-            Stats[RC_STAT_TERM_ZERO]   = 0u;
+            Stats[RC_STAT_PATHS]        = 0u;
+            Stats[RC_STAT_PATH_VERTS]   = 0u;
+            Stats[RC_STAT_PATH_DEPTH]   = 0u;
+            Stats[RC_STAT_TERM_SKY]     = 0u;
+            Stats[RC_STAT_TERM_CACHE]   = 0u;
+            Stats[RC_STAT_TERM_KILLED]  = 0u;
+            Stats[RC_STAT_TERM_MISS]    = 0u;
+            Stats[RC_STAT_TERM_NOQUERY] = 0u;
+            Stats[RC_STAT_TERM_LOBE]    = 0u;
+            Stats[RC_STAT_TERM_OTHER]   = 0u;
         }
         return;
     }
@@ -85,7 +96,10 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     // evictedOut e uma TAXA POR FRAME (quantas cairam neste resolve), nao um acumulado — e o que
     // diz se a evicção esta dando conta do fluxo de celulas novas. Zero com a camera andando
     // significa tabela que so cresce.
-    uint occupied = 0u, valid = 0u, samplesOut = 0u, evictedOut = 0u;
+    uint occupied = 0u, hasSamples = 0u, samplesOut = 0u, evictedOut = 0u, confident = 0u;
+    // Piso de confianca do frame. O `max(...,1)` faz "0" e "1" significarem a mesma coisa, como no
+    // RC_QueryInner: uma amostra e o minimo para a celula ter radiancia.
+    const uint minSamples = max((uint)StatsParams.y, 1u);
 
     // Reset global: usado quando a cena troca ou a camera teleporta — o conteudo descreve outro
     // lugar do mundo e envelhecer celula por celula levaria STALE_FRAME_MAX frames.
@@ -138,7 +152,11 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             Resolved[idx] = uint4(asuint(radiance),
                                   (samples & 0xFFFFu) | (min(frames, 0xFFFFu) << 16u));
             occupied   = 1u;
-            valid      = samples > 0u ? 1u : 0u;
+            // As DUAS contagens, e nao uma. `hasSamples` diz que a celula tem radiancia;
+            // `confident` diz que ela encerra um caminho. Entre 1 amostra e o piso a celula conta
+            // na primeira e nao na segunda — e e a segunda que descreve o cache utilizavel.
+            hasSamples = samples > 0u ? 1u : 0u;
+            confident  = samples >= minSamples ? 1u : 0u;
             samplesOut = samples;
         }
 
@@ -146,28 +164,31 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
         Accum[base + 2u] = 0u; Accum[base + 3u] = 0u;
     }
 
-    SharedOccupied[tid.x] = occupied;
-    SharedValid[tid.x]    = valid;
-    SharedSamples[tid.x]  = samplesOut;
-    SharedEvicted[tid.x]  = evictedOut;
+    SharedOccupied[tid.x]   = occupied;
+    SharedHasSamples[tid.x] = hasSamples;
+    SharedSamples[tid.x]    = samplesOut;
+    SharedEvicted[tid.x]    = evictedOut;
+    SharedConfident[tid.x]  = confident;
     GroupMemoryBarrierWithGroupSync();
 
     [unroll]
     for (uint stride = 32u; stride > 0u; stride >>= 1u) {
         if (tid.x < stride) {
-            SharedOccupied[tid.x] += SharedOccupied[tid.x + stride];
-            SharedValid[tid.x]    += SharedValid[tid.x + stride];
-            SharedSamples[tid.x]  += SharedSamples[tid.x + stride];
-            SharedEvicted[tid.x]  += SharedEvicted[tid.x + stride];
+            SharedOccupied[tid.x]   += SharedOccupied[tid.x + stride];
+            SharedHasSamples[tid.x] += SharedHasSamples[tid.x + stride];
+            SharedSamples[tid.x]    += SharedSamples[tid.x + stride];
+            SharedEvicted[tid.x]    += SharedEvicted[tid.x + stride];
+            SharedConfident[tid.x]  += SharedConfident[tid.x + stride];
         }
         GroupMemoryBarrierWithGroupSync();
     }
 
     if (tid.x == 0u) {
         uint ignored;
-        if (SharedOccupied[0] > 0u) InterlockedAdd(Stats[RC_STAT_OCCUPIED], SharedOccupied[0], ignored);
-        if (SharedValid[0]    > 0u) InterlockedAdd(Stats[RC_STAT_VALID],    SharedValid[0],    ignored);
-        if (SharedSamples[0]  > 0u) InterlockedAdd(Stats[RC_STAT_SAMPLES],  SharedSamples[0],  ignored);
-        if (SharedEvicted[0]  > 0u) InterlockedAdd(Stats[RC_STAT_EVICTED],  SharedEvicted[0],  ignored);
+        if (SharedOccupied[0]   > 0u) InterlockedAdd(Stats[RC_STAT_OCCUPIED],    SharedOccupied[0],   ignored);
+        if (SharedHasSamples[0] > 0u) InterlockedAdd(Stats[RC_STAT_HAS_SAMPLES], SharedHasSamples[0], ignored);
+        if (SharedSamples[0]    > 0u) InterlockedAdd(Stats[RC_STAT_SAMPLES],     SharedSamples[0],    ignored);
+        if (SharedEvicted[0]    > 0u) InterlockedAdd(Stats[RC_STAT_EVICTED],     SharedEvicted[0],    ignored);
+        if (SharedConfident[0]  > 0u) InterlockedAdd(Stats[RC_STAT_CONFIDENT],   SharedConfident[0],  ignored);
     }
 }

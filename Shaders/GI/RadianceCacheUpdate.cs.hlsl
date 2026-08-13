@@ -145,10 +145,19 @@ struct FPathVertex {
 // Por onde o caminho terminou. A ordem espelha RC_STAT_TERM_* (o endereçamento e
 // `RC_STAT_TERM_SKY + kind`), e o valor so e lido pela telemetria — nenhuma decisao de transporte
 // depende dele.
-#define RCU_TERM_SKY    0u
-#define RCU_TERM_CACHE  1u
-#define RCU_TERM_KILLED 2u
-#define RCU_TERM_ZERO   3u
+//
+// Os quatro do fim eram um `ZERO` so, e ele juntava causas que pedem acoes OPOSTAS: MISS e cache
+// frio (passa com o tempo), NOQUERY e o operador tendo desligado o terminal, LOBE e material, e
+// OTHER e o teto de vertices. Todos entregam a mesma radiancia — zero pela frente — e e por isso
+// que um contador unico parecia suficiente; mas "o numero subiu" nao dizia qual dos quatro.
+#define RCU_TERM_SKY     0u
+#define RCU_TERM_CACHE   1u
+#define RCU_TERM_KILLED  2u
+#define RCU_TERM_MISS    3u
+#define RCU_TERM_NOQUERY 4u
+#define RCU_TERM_LOBE    5u
+#define RCU_TERM_OTHER   6u
+#define RCU_TERM_COUNT   7u
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
@@ -221,9 +230,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     FPathVertex verts[RCU_MAX_VERTS];
     uint  count = 0u;                        // vertices sombreados
     float3 Lterm = float3(0.0f, 0.0f, 0.0f); // radiancia que entra pelo fim do caminho
-    // Comeca em ZERO porque esse e o caso residual: lobo invalido, terminal desligado, ou miss no
-    // cache. Os outros tres se declaram nos pontos de saida do laco.
-    uint  termKind = RCU_TERM_ZERO;
+    // OTHER e o residual — o caminho que sai do laco pelo teto de vertices sem passar pelo bloco
+    // do terminal. Todas as outras saidas se declaram no ponto em que acontecem.
+    uint  termKind = RCU_TERM_OTHER;
 
     RayDesc ray;
     ray.Origin    = OffsetRayGBuffer(x1, N, dir, camDist);
@@ -304,6 +313,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // depender do otimizador: em Debug (-Od) nao ha unroll, o indice de `verts[bounce]` fica
         // dinamico e o DXC recusa o acesso como fora de faixa. Release compilava; Debug nao.
         if (count >= maxVerts || bounce >= (uint)RCU_MAX_VERTS) {
+            termKind = RCU_TERM_NOQUERY; // sobrescrito abaixo se a consulta de fato acontecer
             if (UpdateParams.z > 0.5f) {
                 // Chave do terminal montada com PT_LoadHitSurface, e nao com o HitGeomNormal
                 // barato: a normal do cache tem de ser a MESMA que o ShadeSurfaceHit usa para
@@ -319,6 +329,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 const FRCQueryResult Q = RC_QueryEx(P.Cache, T.Pos, T.CacheN, hitDist,
                                                     rayRoughness);
                 if (RC_QueryHit(Q)) { Lterm = Q.Radiance; termKind = RCU_TERM_CACHE; }
+                else                { termKind = RCU_TERM_MISS; }
             }
             break;
         }
@@ -366,7 +377,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         const FBsdfSample B = PT_SampleBSDF(S, M, V, Edir, Elobe);
         // Sem direcao valida o caminho para aqui com terminal ZERO, e os vertices ja andados
         // continuam validos — eles so perdem o que viria da frente.
-        if (!B.Valid) break;
+        if (!B.Valid) { termKind = RCU_TERM_LOBE; break; }
 
         verts[bounce].Throughput = B.Throughput;
 
@@ -454,9 +465,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             InterlockedAdd(stats[RC_STAT_PATH_VERTS], waveVerts, ignored);
             InterlockedMax(stats[RC_STAT_PATH_DEPTH], waveDepth, ignored);
         }
-        // Um atomico por tipo PRESENTE na wave — e nao quatro sempre. O laco desenrola sobre
+        // Um atomico por tipo PRESENTE na wave — e nao sete sempre. O laco desenrola sobre
         // constantes, entao o indice do buffer continua literal.
-        [unroll] for (uint t = 0u; t < 4u; ++t) {
+        [unroll] for (uint t = 0u; t < RCU_TERM_COUNT; ++t) {
             const uint n = WaveActiveCountBits(termKind == t);
             if (n > 0u && WaveIsFirstLane()) {
                 InterlockedAdd(stats[RC_STAT_TERM_SKY + t], n, ignored);

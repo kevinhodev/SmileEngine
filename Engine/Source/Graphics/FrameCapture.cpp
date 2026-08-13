@@ -502,9 +502,14 @@ namespace Smile {
                 File << "  \"giBackfacePolicy\": " << Bool(_State.GIBackfacePolicy) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";
-                File << "  \"cacheValid\": "    << _State.CacheValid    << ",\n";
-                File << "  \"cacheSamples\": "  << _State.CacheSamples  << ",\n";
-                File << "  \"cacheCapacity\": " << _State.CacheCapacity << ",\n";
+                // `cacheValid` mantem o nome antigo — N >= 1 — para as capturas ja tiradas
+                // continuarem comparaveis; `cacheConfident` (N >= piso) e o numero que descreve o
+                // cache utilizavel desde que o piso existe.
+                File << "  \"cacheValid\": "     << _State.CacheValid     << ",\n";
+                File << "  \"cacheConfident\": " << _State.CacheConfident << ",\n";
+                File << "  \"cacheSamples\": "   << _State.CacheSamples   << ",\n";
+                File << "  \"cacheEvicted\": "   << _State.CacheEvicted   << ",\n";
+                File << "  \"cacheCapacity\": "  << _State.CacheCapacity  << ",\n";
                 File << "  \"cacheQueries\": "  << _State.CacheQueries  << ",\n";
                 File << "  \"cacheHits\": "     << _State.CacheHits     << ",\n";
                 // Detalhe (zerado sem `cacheStatsDetail`). Os cinco motivos de miss pedem coisas
@@ -517,7 +522,11 @@ namespace Smile {
                 File << "  \"cacheMissWarming\": "      << _State.CacheMissWarming << ",\n";
                 File << "  \"cacheMissStale\": "        << _State.CacheMissStale   << ",\n";
                 File << "  \"cacheInsertTries\": "      << _State.CacheInsertTries << ",\n";
+                // FULL e capacidade; CONTENDED e concorrencia. O gate de 0,1% e sobre o primeiro.
                 File << "  \"cacheInsertFull\": "       << _State.CacheInsertFull  << ",\n";
+                File << "  \"cacheInsertContended\": "  << _State.CacheContended   << ",\n";
+                File << "  \"cacheInsertRetries\": "    << _State.CacheRetries     << ",\n";
+                File << "  \"cacheInsertCapped\": "     << _State.CacheCapped      << ",\n";
                 File << "  \"cacheProbeSum\": "         << _State.CacheProbeSum    << ",\n";
                 File << "  \"cacheProbeMax\": "         << _State.CacheProbeMax    << ",\n";
                 // O produtor: caminhos, profundidade e por onde eles terminaram.
@@ -527,7 +536,10 @@ namespace Smile {
                 File << "  \"cacheTermSky\": "          << _State.CacheTermSky     << ",\n";
                 File << "  \"cacheTermCache\": "        << _State.CacheTermCache   << ",\n";
                 File << "  \"cacheTermKilled\": "       << _State.CacheTermKilled  << ",\n";
-                File << "  \"cacheTermZero\": "         << _State.CacheTermZero    << ",\n";
+                File << "  \"cacheTermMiss\": "         << _State.CacheTermMiss    << ",\n";
+                File << "  \"cacheTermNoQuery\": "      << _State.CacheTermNoQuery << ",\n";
+                File << "  \"cacheTermLobe\": "         << _State.CacheTermLobe    << ",\n";
+                File << "  \"cacheTermOther\": "        << _State.CacheTermOther   << ",\n";
                 File << "  \"cameraX\": " << _State.CameraPos[0] << ",\n";
                 File << "  \"cameraY\": " << _State.CameraPos[1] << ",\n";
                 File << "  \"cameraZ\": " << _State.CameraPos[2] << ",\n";

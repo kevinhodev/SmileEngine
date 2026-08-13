@@ -146,6 +146,12 @@ namespace Smile {
         // Queries/Hits ficam em zero sem a instrumentacao do cache ligada (ela custa dois
         // atomicos disputados por wave em todo trace, entao e knob proprio).
         u32 CacheOccupied = 0, CacheValid = 0, CacheSamples = 0, CacheCapacity = 0;
+        // CONFIAVEIS (N >= piso) separadas de `CacheValid` (N >= 1). Sao numeros diferentes desde
+        // que o piso existe, e e este que descreve o cache utilizavel.
+        u32 CacheConfident = 0;
+        // Despejos do frame. O painel ja mostrava, o arquivo nao guardava — e teste determinístico
+        // de refresh/evicção perdia justamente o número que ele existe para observar.
+        u32 CacheEvicted = 0;
         u32 CacheQueries = 0, CacheHits = 0;
         // Misses por motivo e saude da insercao, so com `cacheStatsDetail`. Entram no arquivo
         // porque DOIS gates de saida da Fase 4 sao exatamente estes numeros — "falha por balde
@@ -153,13 +159,19 @@ namespace Smile {
         // e um gate que so existe num painel volatil nao e verificavel depois.
         u32 CacheMissShort = 0, CacheMissCone = 0, CacheMissNoEntry = 0;
         u32 CacheMissEmpty = 0, CacheMissWarming = 0, CacheMissStale = 0;
-        u32 CacheInsertTries = 0, CacheInsertFull = 0;
+        // `InsertFull` (capacidade) separado de `Contended` (concorrencia): o gate de 0,1% e sobre
+        // o primeiro, e somar o segundo mandaria aumentar a tabela por um problema que tabela
+        // maior nao resolve. `Capped` e amostra descartada no teto de 64 — insercao que deu certo
+        // e amostra que se perdeu mesmo assim.
+        u32 CacheInsertTries = 0, CacheInsertFull = 0, CacheContended = 0;
+        u32 CacheRetries = 0, CacheCapped = 0;
         u32 CacheProbeSum = 0, CacheProbeMax = 0;
         // O produtor. `cachePaths` contra `cacheUpdateFraction` e o gate de saida da Fase 3 que
         // ficou sem medida, e o terminal por tipo e o que separa "o cache realimenta" de "o cache
         // so ve ceu" numa captura de arquivo, sem depender de alguem ter olhado o painel na hora.
         u32 CachePaths = 0, CachePathVerts = 0, CachePathDepth = 0;
-        u32 CacheTermSky = 0, CacheTermCache = 0, CacheTermKilled = 0, CacheTermZero = 0;
+        u32 CacheTermSky = 0, CacheTermCache = 0, CacheTermKilled = 0;
+        u32 CacheTermMiss = 0, CacheTermNoQuery = 0, CacheTermLobe = 0, CacheTermOther = 0;
 
         // Semente com que ESTE frame amostrou. Tem de bater com o N do aquecimento; se nao bater,
         // o contrato de warm-up quebrou em algum lugar e o manifesto denuncia.

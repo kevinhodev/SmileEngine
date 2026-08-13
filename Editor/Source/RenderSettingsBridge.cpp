@@ -992,8 +992,11 @@ namespace SmileEditor {
     double RenderSettingsBridge::GetRadianceCacheConvergence() const {
         if (!Renderer) return 0.0;
         const auto& S = Renderer->Settings().RadianceCacheStats();
-        if (S.Valid == 0) return 0.0;
-        return static_cast<double>(S.Samples) / static_cast<double>(S.Valid);
+        // Denominador = celulas COM AMOSTRA, e nao as confiaveis: isto e "quantas amostras tem, em
+        // media, a celula que tem alguma". Dividir pelas confiaveis excluiria justamente as que
+        // estao aquecendo, e a media subiria por construcao quando o piso subisse.
+        if (S.HasSamples == 0) return 0.0;
+        return static_cast<double>(S.Samples) / static_cast<double>(S.HasSamples);
     }
     double RenderSettingsBridge::GetRadianceCacheMemoryMB() const {
         if (!Renderer) return 0.0;
@@ -1009,8 +1012,11 @@ namespace SmileEditor {
         const QString Hit = Renderer->Settings().GetRadianceCacheStatsEnabled()
             ? QString::number(GetRadianceCacheHitRate(), 'f', 1) + QStringLiteral("%")
             : QStringLiteral("— (instrumentação off)");
-        return QStringLiteral("%1 / %2 células · acerto %3 · %4 amostras/célula · despejadas %5")
-            .arg(S.Occupied).arg(Cap).arg(Hit)
+        // Confiáveis ao lado de ocupadas: são o número que diz quanto do cache de fato encerra um
+        // caminho, e a distância entre os dois é o aquecimento em curso.
+        return QStringLiteral("%1 / %2 células · %3 confiáveis · acerto %4 · %5 amostras/célula · "
+                              "despejadas %6")
+            .arg(S.Occupied).arg(Cap).arg(S.Confident).arg(Hit)
             .arg(QString::number(GetRadianceCacheConvergence(), 'f', 1))
             .arg(S.Evicted);
     }
@@ -1032,10 +1038,11 @@ namespace SmileEditor {
         // A insercao tem denominador PROPRIO (tentativas de escrita), e nao as consultas: sao
         // populacoes diferentes, e dividir uma pela outra daria um numero sem nome.
         const double T = S.InsertTries > 0 ? static_cast<double>(S.InsertTries) : 0.0;
-        const QString Full = T > 0.0
-            ? QString::number(100.0 * static_cast<double>(S.InsertFull) / T, 'f', 3) +
-              QStringLiteral("%")
-            : QStringLiteral("—");
+        auto InsPct = [T](Smile::u32 N) {
+            if (T <= 0.0) return QStringLiteral("—");
+            return QString::number(100.0 * static_cast<double>(N) / T, 'f', 3) +
+                   QStringLiteral("%");
+        };
         const QString Probes = T > 0.0
             ? QString::number(static_cast<double>(S.ProbeSum) / T, 'f', 1)
             : QStringLiteral("—");
@@ -1053,15 +1060,20 @@ namespace SmileEditor {
             : QStringLiteral("—");
         return QStringLiteral(
                    "miss: segmento %1 · cone %2 · sem chave %3 · sem amostra %4 · aquecendo %5 · "
-                   "refresh %6\ninserção: %7 tentativas · balde cheio %8 · sondagens %9 (máx %10)"
-                   "\nprodutor: %11 caminhos · profundidade %12 (máx %13) · terminal céu %14 · "
-                   "cache %15 · morto %16 · zero %17")
+                   "refresh %6"
+                   "\ninserção: %7 tentativas · balde cheio %8 · contenção %9 · descartadas no "
+                   "teto %10 · sondagens %11 (máx %12)"
+                   "\nprodutor: %13 caminhos · profundidade %14 (máx %15)"
+                   "\nterminal: céu %16 · cache %17 · morto %18 · miss %19 · sem consulta %20 · "
+                   "lobo %21 · outro %22")
             .arg(Pct(S.MissShort), Pct(S.MissCone), Pct(S.MissNoEntry), Pct(S.MissEmpty),
                  Pct(S.MissWarming), Pct(S.MissStale))
-            .arg(S.InsertTries).arg(Full).arg(Probes).arg(S.ProbeMax)
-            .arg(S.Paths).arg(Depth).arg(S.PathDepth)
+            .arg(S.InsertTries)
+            .arg(InsPct(S.InsertFull), InsPct(S.Contended), InsPct(S.Capped), Probes)
+            .arg(S.ProbeMax).arg(S.Paths).arg(Depth).arg(S.PathDepth)
             .arg(TermPct(S.TermSky), TermPct(S.TermCache), TermPct(S.TermKilled),
-                 TermPct(S.TermZero));
+                 TermPct(S.TermMiss), TermPct(S.TermNoQuery), TermPct(S.TermLobe),
+                 TermPct(S.TermOther));
     }
 
     void RenderSettingsBridge::ToggleRadianceCache() {

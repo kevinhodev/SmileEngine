@@ -77,14 +77,19 @@
 // POTENCIA DE 2: o escalonamento abaixo usa mascara.
 #define RC_REFRESH_FRAME_MAX 8u
 
-// Contadores do painel. Os quatro primeiros sao produzidos pelo RESOLVE (varredura da tabela);
+// Contadores do painel. Os cinco primeiros sao produzidos pelo RESOLVE (varredura da tabela);
 // os dois seguintes pelos TRACES, dentro do RC_Query. Ver RadianceCacheResolve.cs.hlsl.
-#define RC_STAT_OCCUPIED 0u  // celulas com chave valida
-#define RC_STAT_VALID    1u  // dessas, quantas ja tem amostra (radiancia utilizavel)
-#define RC_STAT_SAMPLES  2u  // soma de N — dividido por VALID da a convergencia media
-#define RC_STAT_EVICTED  3u
-#define RC_STAT_QUERIES  4u
-#define RC_STAT_HITS     5u
+#define RC_STAT_OCCUPIED    0u // celulas com chave valida
+// "TEM AMOSTRA" nao e "e confiavel", e o nome antigo (`VALID`) dizia a segunda coisa. A consulta
+// so aproveita a celula com `sampleNum >= MinSamples`; entre 1 e o piso ela existe, tem radiancia,
+// e mesmo assim devolve WARMING. Com um contador so, o painel — e o futuro Filling/Active, que vai
+// ler exatamente isto — contaria como pronta a celula que o raio recusa.
+#define RC_STAT_HAS_SAMPLES 1u // celulas com N >= 1
+#define RC_STAT_SAMPLES     2u // soma de N — dividido por HAS_SAMPLES da a convergencia media
+#define RC_STAT_EVICTED     3u
+#define RC_STAT_CONFIDENT   4u // celulas com N >= piso: as que de fato encerram um caminho
+#define RC_STAT_QUERIES     5u
+#define RC_STAT_HITS        6u
 // --- detalhe (RC_FLAG_STATS_DETAIL) ---------------------------------------------------------
 // POR QUE OS MISSES SE SEPARAM. Com um so numero de acerto, os cinco motivos de erro chegam ao
 // painel somados — e eles pedem coisas OPOSTAS. Chave ausente e capacidade (tabela pequena ou
@@ -92,19 +97,34 @@
 // e some sozinho; refresh e a resposta a luz dinamica funcionando; segmento curto e cone estreito
 // sao limites geometricos do proprio cache, que nao se conserta aumentando nada. Sem separa-los,
 // "acerto de 40%" nao diz se falta memoria, se falta aquecer ou se a cena e assim.
-#define RC_STAT_MISS_SHORT   6u  // segmento menor que a celula
-#define RC_STAT_MISS_CONE    7u  // cone especular menor que a celula
-#define RC_STAT_MISS_NOENTRY 8u  // chave nao encontrada (ausente ou balde cheio)
-#define RC_STAT_MISS_EMPTY   9u  // celula existe, ainda sem radiancia
-#define RC_STAT_MISS_WARMING 10u // tem radiancia, abaixo do piso de confianca
-#define RC_STAT_MISS_STALE   11u // tem dado, mas velho: vai refrescar
-// Insercao — a saude do hash. `FULL` e o balde cheio do [Gautron2020] ("fingers crossed we fit"),
-// e o plano da a meta: menos de 0,1% das tentativas, ideal menos de 0,01%. PROBES/TRIES da o
-// comprimento medio da cadeia de sondagem, e PROBES_MAX o pior caso do frame.
-#define RC_STAT_INS_TRIES    12u
-#define RC_STAT_INS_FULL     13u
-#define RC_STAT_INS_PROBES   14u
-#define RC_STAT_INS_PROBEMAX 15u
+#define RC_STAT_MISS_SHORT   7u  // segmento menor que a celula
+#define RC_STAT_MISS_CONE    8u  // cone especular menor que a celula
+#define RC_STAT_MISS_NOENTRY 9u  // chave nao encontrada (ausente ou balde cheio)
+#define RC_STAT_MISS_EMPTY   10u // celula existe, ainda sem radiancia
+#define RC_STAT_MISS_WARMING 11u // tem radiancia, abaixo do piso de confianca
+#define RC_STAT_MISS_STALE   12u // tem dado, mas velho: vai refrescar
+// Insercao — a saude do hash.
+//
+// FULL e CONTENDED sao FALHAS DIFERENTES e nao podem compartilhar contador. `FULL` e o balde cheio
+// do [Gautron2020] ("fingers crossed we fit") — a cadeia inteira ocupada por outras chaves, que e
+// um problema de CAPACIDADE e e sobre ele que o plano poe a meta de 0,1%. `CONTENDED` e perder 32
+// disputas de CAS seguidas, que e um problema de CONCORRENCIA no mesmo balde: a tabela pode estar
+// vazia e ainda assim acontecer, se muitas threads do mesmo frame caem na mesma celula. Somados,
+// o gate de capacidade mediria contencao e mandaria aumentar a tabela, que nao conserta contencao.
+//
+// PROBES conta a PRIMEIRA varredura — o comprimento da cadeia, que e o que uma consulta paga. As
+// varreduras de retry andam na mesma cadeia e so inflariam a media com trabalho de contencao, que
+// e o que RETRIES mede em separado.
+#define RC_STAT_INS_TRIES    13u
+#define RC_STAT_INS_FULL     14u
+#define RC_STAT_INS_CONTENDED 15u
+#define RC_STAT_INS_RETRIES  16u // disputas de CAS perdidas (soma), inclusive as que venceram depois
+#define RC_STAT_INS_PROBES   17u
+#define RC_STAT_INS_PROBEMAX 18u
+// Amostra DESCARTADA no teto: a celula ja tinha 64 reservas neste frame. Nao e falha de insercao —
+// a chave esta la —, e sem este contador `TRIES - FULL - CONTENDED` mentiria como "updates
+// aceitos". Aceitos = TRIES - FULL - CONTENDED - CAPPED.
+#define RC_STAT_INS_CAPPED   19u
 // O PRODUTOR, visto de dentro (escritos pelo RadianceCacheUpdate.cs.hlsl). Sao a outra metade da
 // pergunta: os de cima dizem o que a consulta encontrou, estes dizem o que o passe de update
 // esteve fazendo. `PATHS` contra a fracao pedida fecha o gate de saida da Fase 3 que nunca foi
@@ -112,15 +132,23 @@
 // tipo responde a pergunta que decide a serie inteira — de onde vem a energia que entra no cache.
 // Terminal em CACHE quer dizer realimentacao viva; tudo em SKY quer dizer que o multi-bounce
 // ainda nao comecou.
-#define RC_STAT_PATHS        16u
-#define RC_STAT_PATH_VERTS   17u // soma de vertices sombreados; / PATHS = profundidade media
-#define RC_STAT_PATH_DEPTH   18u // maximo do frame
+#define RC_STAT_PATHS        20u
+#define RC_STAT_PATH_VERTS   21u // soma de vertices sombreados; / PATHS = profundidade media
+#define RC_STAT_PATH_DEPTH   22u // maximo do frame
 // A ORDEM importa: o shader endereça por `RC_STAT_TERM_SKY + kind`.
-#define RC_STAT_TERM_SKY     19u
-#define RC_STAT_TERM_CACHE   20u
-#define RC_STAT_TERM_KILLED  21u // segmento morto pela politica de backface
-#define RC_STAT_TERM_ZERO    22u // miss no terminal, lobo invalido, ou terminal desligado
-#define RC_STAT_COUNT        23u
+//
+// Os quatro ultimos eram um `ZERO` so, e ele misturava causas que pedem acoes opostas: miss no
+// terminal quer dizer cache frio (passa com o tempo), terminal DESLIGADO e o operador tendo
+// pedido isso, lobo invalido e material, e o limite de vertices e o knob. Um numero unico subindo
+// nao dizia qual dos quatro.
+#define RC_STAT_TERM_SKY      23u
+#define RC_STAT_TERM_CACHE    24u
+#define RC_STAT_TERM_KILLED   25u // segmento morto pela politica de backface
+#define RC_STAT_TERM_MISS     26u // chegou ao terminal, consultou, nao achou
+#define RC_STAT_TERM_NOQUERY  27u // chegou ao terminal com a consulta desligada
+#define RC_STAT_TERM_LOBE     28u // amostragem de BSDF nao devolveu direcao
+#define RC_STAT_TERM_OTHER    29u // residual: teto de vertices sem passar pelo terminal
+#define RC_STAT_COUNT         30u
 
 // Publicado no CB de cada consumidor do HitShading.hlsli, igual ao FReGIRShaderParams.
 //
@@ -265,26 +293,45 @@ bool RC_Find(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint ca
 // --------------------------------------------------------------------------------------------
 // Insercao (atomica) — caminho de UPDATE
 // --------------------------------------------------------------------------------------------
-// `probes` conta os slots LIDOS ate decidir, somando todas as tentativas do CAS. E o unico lugar
-// em que o comprimento da cadeia de sondagem e observavel de graca — a busca da query percorre a
-// MESMA cadeia, entao a distribuicao medida aqui descreve as duas, e medir so aqui poupa atomicos
-// no caminho quente (a insercao roda em 4% dos pixels; a consulta, em todo raio secundario).
-bool RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint capacity,
-               out uint entryIndex, out uint probes) {
-    entryIndex = 0u;
-    probes     = 0u;
+// POR QUE O RETORNO NAO E BOOL. As duas maneiras de falhar sao problemas diferentes e pedem acoes
+// opostas: `FULL` e a cadeia inteira ocupada por outras chaves (capacidade — tabela maior, celula
+// maior, LOD mais agressivo), e `CONTENDED` e perder 32 disputas de CAS seguidas no mesmo balde
+// (concorrencia — acontece com a tabela longe de cheia se muitas threads do frame caem na mesma
+// celula, e aumentar a tabela nao muda nada). Com um bool os dois viravam o mesmo contador, e o
+// gate de capacidade do plano estaria medindo, em parte, uma coisa que ele nao conserta.
+#define RC_INSERT_OK        0u
+#define RC_INSERT_FULL      1u
+#define RC_INSERT_CONTENDED 2u
+
+// `chainProbes` conta so a PRIMEIRA varredura: e o comprimento da cadeia de sondagem, que e o que
+// uma consulta paga. As varreduras de retry andam na MESMA cadeia — soma-las inflaria a media com
+// trabalho de contencao, e e `retries` que mede isso, em separado.
+//
+// Este e o unico lugar em que a cadeia e observavel de graca: a busca da query percorre a mesma,
+// entao a distribuicao daqui descreve as duas, e medir so aqui poupa atomicos no caminho quente
+// (a insercao roda em 4% dos pixels; a consulta, em todo raio secundario).
+uint RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint capacity,
+               out uint entryIndex, out uint chainProbes, out uint retries) {
+    entryIndex  = 0u;
+    chainProbes = 0u;
+    retries     = 0u;
     // Primeiro PROCURA a chave ate o fim da cadeia, guardando o primeiro slot reutilizavel. Nao
     // podemos tomar o tombstone imediatamente: a mesma chave pode continuar viva mais adiante.
     // Depois tenta publicar no slot escolhido por CAS; se outra chave ganhar a corrida, recomeca.
     [loop] for (uint attempt = 0u; attempt < RC_BUCKET_SIZE; ++attempt) {
         uint reusable = 0xFFFFFFFFu;
         uint expected = RC_INVALID_CHECKSUM;
+        uint walked   = 0u;
 
         for (uint i = 0u; i < RC_BUCKET_SIZE; ++i) {
             const uint idx    = (slot + i) & (capacity - 1u);
             const uint stored = entries[idx];
-            ++probes;
-            if (stored == checksum) { entryIndex = idx; return true; }
+            ++walked;
+            if (stored == checksum) {
+                entryIndex = idx;
+                if (attempt == 0u) chainProbes = walked;
+                return RC_INSERT_OK;
+            }
 
             if (stored == RC_TOMBSTONE_CHECKSUM && reusable == 0xFFFFFFFFu) {
                 reusable = idx;
@@ -298,22 +345,26 @@ bool RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
                 break; // nada desta cadeia existe depois do primeiro vazio verdadeiro
             }
         }
+        if (attempt == 0u) chainProbes = walked;
 
-        if (reusable == 0xFFFFFFFFu) return false; // balde cheio, sem tombstone
+        // Balde cheio: descarta a amostra. [Gautron2020] aceita o mesmo ("fingers crossed we fit,
+        // else we have to drop some results") — perder uma amostra e melhor que despejar uma
+        // celula viva de outra regiao.
+        if (reusable == 0xFFFFFFFFu) return RC_INSERT_FULL;
 
         uint prev;
         InterlockedCompareExchange(entries[reusable], expected, checksum, prev);
         if (prev == expected || prev == checksum) {
             entryIndex = reusable;
-            return true;
+            return RC_INSERT_OK;
         }
         // Outra chave tomou o candidato entre a leitura e o CAS. A nova varredura encontra tanto
         // ela quanto uma insercao concorrente da NOSSA chave e escolhe o proximo reutilizavel.
+        ++retries;
     }
-    // Balde cheio: descarta a amostra. [Gautron2020] aceita o mesmo ("fingers crossed we fit,
-    // else we have to drop some results") — perder uma amostra e melhor que despejar uma celula
-    // viva de outra regiao.
-    return false;
+    // Trinta e duas disputas de CAS perdidas. A cadeia pode estar longe de cheia — isto e
+    // CONTENCAO, e nao capacidade, e por isso nao conta como balde cheio.
+    return RC_INSERT_CONTENDED;
 }
 
 // --------------------------------------------------------------------------------------------
@@ -541,8 +592,9 @@ void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, fl
 
     RWStructuredBuffer<uint> entries =
         ResourceDescriptorHeap[NonUniformResourceIndex(P.EntriesUAV)];
-    uint entryIndex, probes;
-    const bool inserted = RC_Insert(entries, slot, checksum, P.Capacity, entryIndex, probes);
+    uint entryIndex, chainProbes, retries;
+    const uint ins = RC_Insert(entries, slot, checksum, P.Capacity, entryIndex,
+                               chainProbes, retries);
 
     // Telemetria de INSERCAO — a saude do hash, que e o que decide se a capacidade esta certa.
     //
@@ -553,25 +605,30 @@ void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, fl
     //
     // Contado ANTES do retorno da falha, e nao depois: o balde cheio e justamente o caso que
     // interessa, e um `return` acima dele mediria zero exatamente quando o numero importa.
+    // FULL e CONTENDED em contadores SEPARADOS — ver RC_Insert.
     [branch] if ((P.Flags & RC_FLAG_STATS_DETAIL) != 0u) {
-        const uint waveTries  = WaveActiveCountBits(true);
-        const uint waveFull   = WaveActiveCountBits(!inserted);
-        const uint waveProbes = WaveActiveSum(probes);
-        const uint waveMax    = WaveActiveMax(probes);
+        const uint waveTries   = WaveActiveCountBits(true);
+        const uint waveFull    = WaveActiveCountBits(ins == RC_INSERT_FULL);
+        const uint waveCont    = WaveActiveCountBits(ins == RC_INSERT_CONTENDED);
+        const uint waveRetries = WaveActiveSum(retries);
+        const uint waveProbes  = WaveActiveSum(chainProbes);
+        const uint waveMax     = WaveActiveMax(chainProbes);
         if (WaveIsFirstLane()) {
             RWStructuredBuffer<uint> stats =
                 ResourceDescriptorHeap[NonUniformResourceIndex(P.StatsUAV)];
             uint ignored;
             InterlockedAdd(stats[RC_STAT_INS_TRIES],  waveTries,  ignored);
             InterlockedAdd(stats[RC_STAT_INS_PROBES], waveProbes, ignored);
-            if (waveFull > 0u) InterlockedAdd(stats[RC_STAT_INS_FULL], waveFull, ignored);
+            if (waveFull    > 0u) InterlockedAdd(stats[RC_STAT_INS_FULL],      waveFull,    ignored);
+            if (waveCont    > 0u) InterlockedAdd(stats[RC_STAT_INS_CONTENDED], waveCont,    ignored);
+            if (waveRetries > 0u) InterlockedAdd(stats[RC_STAT_INS_RETRIES],   waveRetries, ignored);
             // Max, e nao Add: o pior caso do frame nao e uma soma. Sem ele so haveria a media, e
             // uma media de 2 sondagens convive tranquilamente com uma cadeia de 32 numa regiao —
             // que e exatamente a que vai comecar a perder amostras.
             InterlockedMax(stats[RC_STAT_INS_PROBEMAX], waveMax, ignored);
         }
     }
-    if (!inserted) return;
+    if (ins != RC_INSERT_OK) return;
 
     // NaN/Inf viram 0 aqui e nao no resolve: um asuint de NaN somado ao acumulador contamina a
     // celula para sempre (o resolve nao teria como distinguir depois).
@@ -590,9 +647,26 @@ void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, fl
     // caso, 67 amostras no clamp ja ultrapassavam uint32 (6500 * 1e4 * 67). Reserve uma das 64
     // vagas por CAS ANTES de tocar RGB; quem chega depois descarta a amostra sem contaminar a
     // media. A barreira UAV antes do resolve garante que contagem e canais terminaram.
+    // O descarte no teto e CONTADO. Sem isto, `TRIES - FULL - CONTENDED` se leria como "updates
+    // aceitos" e estaria errado: a chave existe, a insercao deu certo, e a amostra foi jogada fora
+    // mesmo assim. Aceitos = TRIES - FULL - CONTENDED - CAPPED.
+    //
+    // O contador fica AQUI e nao no chamador porque este e o unico ponto que sabe a diferenca —
+    // e um `return` no meio de um laco de reserva, indistinguivel de fora de um retorno normal.
     [loop] for (;;) {
         const uint count = accum[base + 3u];
-        if (count >= RC_SAMPLE_NUM_MAX) return;
+        if (count >= RC_SAMPLE_NUM_MAX) {
+            [branch] if ((P.Flags & RC_FLAG_STATS_DETAIL) != 0u) {
+                const uint waveCapped = WaveActiveCountBits(true);
+                if (WaveIsFirstLane()) {
+                    RWStructuredBuffer<uint> stats =
+                        ResourceDescriptorHeap[NonUniformResourceIndex(P.StatsUAV)];
+                    uint ignored;
+                    InterlockedAdd(stats[RC_STAT_INS_CAPPED], waveCapped, ignored);
+                }
+            }
+            return;
+        }
         uint prevCount;
         InterlockedCompareExchange(accum[base + 3u], count, count + 1u, prevCount);
         if (prevCount == count) break;

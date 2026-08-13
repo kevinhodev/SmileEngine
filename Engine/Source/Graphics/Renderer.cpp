@@ -1310,10 +1310,12 @@ namespace Smile {
         // justamente o que se quer medir. Gatear so pelo update zerava a linha inteira num caso
         // que o proprio plano prevê.
         if (S.CacheUpdate || S.CacheQuery) {
-            S.CacheOccupied = CaptureCacheStats.Occupied;
-            S.CacheValid    = CaptureCacheStats.Valid;
-            S.CacheSamples  = CaptureCacheStats.Samples;
-            S.CacheCapacity = RadianceCache.Capacity();
+            S.CacheOccupied  = CaptureCacheStats.Occupied;
+            S.CacheValid     = CaptureCacheStats.HasSamples;
+            S.CacheConfident = CaptureCacheStats.Confident;
+            S.CacheSamples   = CaptureCacheStats.Samples;
+            S.CacheEvicted   = CaptureCacheStats.Evicted;
+            S.CacheCapacity  = RadianceCache.Capacity();
             const FRadianceCacheStats& Ring = RadianceCache.Stats();
             S.CacheQueries  = Ring.Queries;  // zero sem a instrumentacao ligada
             S.CacheHits     = Ring.Hits;
@@ -1328,6 +1330,9 @@ namespace Smile {
             S.CacheMissStale   = Ring.MissStale;
             S.CacheInsertTries = Ring.InsertTries;
             S.CacheInsertFull  = Ring.InsertFull;
+            S.CacheContended   = Ring.Contended;
+            S.CacheRetries     = Ring.Retries;
+            S.CacheCapped      = Ring.Capped;
             S.CacheProbeSum    = Ring.ProbeSum;
             S.CacheProbeMax    = Ring.ProbeMax;
             S.CachePaths       = Ring.Paths;
@@ -1336,7 +1341,10 @@ namespace Smile {
             S.CacheTermSky     = Ring.TermSky;
             S.CacheTermCache   = Ring.TermCache;
             S.CacheTermKilled  = Ring.TermKilled;
-            S.CacheTermZero    = Ring.TermZero;
+            S.CacheTermMiss    = Ring.TermMiss;
+            S.CacheTermNoQuery = Ring.TermNoQuery;
+            S.CacheTermLobe    = Ring.TermLobe;
+            S.CacheTermOther   = Ring.TermOther;
         }
 
         // Antes do ++ dos contadores: e o indice com que ESTE frame amostrou.

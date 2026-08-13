@@ -35,7 +35,9 @@ namespace Smile {
 
     struct alignas(256) RadianceCacheConstants {
         Vec4 CacheParams; // x = capacidade; y = maxAccumSamples; z = staleFrameMax; w = reset
-        Vec4 StatsParams; // x = modo do dispatch (0 resolve, 1 clear dos contadores)
+        // y = piso de confianca. O resolve conta as celulas CONFIAVEIS separadas das que so tem
+        // amostra, e para isso precisa do mesmo numero que a consulta usa.
+        Vec4 StatsParams; // x = modo do dispatch (0 resolve, 1 clear dos contadores); y = piso
     };
 
     // b0 do passe dedicado de update (Fase 3). Casa campo-a-campo com o cbuffer
@@ -97,16 +99,21 @@ namespace Smile {
         Count
     };
 
-    // O que o painel mostra. Os quatro primeiros vem da varredura da tabela no resolve; os dois
+    // O que o painel mostra. Os cinco primeiros vem da varredura da tabela no resolve; os dois
     // seguintes, do RC_Query dentro dos traces (so com a instrumentacao ligada); o resto, do
     // regime de DETALHE (ver kFlagStatsDetail).
     struct FRadianceCacheStats {
-        u32 Occupied = 0;  // celulas com chave valida
-        u32 Valid    = 0;  // dessas, quantas ja tem radiancia utilizavel
-        u32 Samples  = 0;  // soma de N; / Valid = convergencia media
-        u32 Evicted  = 0;
-        u32 Queries  = 0;
-        u32 Hits     = 0;
+        u32 Occupied   = 0; // celulas com chave valida
+        // TEM AMOSTRA nao e CONFIAVEL, e o nome antigo (`Valid`) dizia a segunda coisa. Entre 1
+        // amostra e o piso a celula existe, tem radiancia, e a consulta ainda assim devolve
+        // WARMING. Sao dois numeros; o segundo e o que descreve o cache utilizavel, e e ele que o
+        // futuro Filling/Active vai ler.
+        u32 HasSamples = 0; // celulas com N >= 1
+        u32 Confident  = 0; // celulas com N >= piso de confianca
+        u32 Samples    = 0; // soma de N; / HasSamples = convergencia media
+        u32 Evicted    = 0;
+        u32 Queries    = 0;
+        u32 Hits       = 0;
         // Misses por MOTIVO. Eles pedem coisas opostas — capacidade, cobertura, tempo, ou nada
         // (limite geometrico do cache) —, e somados num numero so nao respondem nenhuma delas.
         // A ordem espelha RC_STAT_MISS_* e o static_assert abaixo trava o par com os RC_QUERY_*.
@@ -116,10 +123,19 @@ namespace Smile {
         u32 MissEmpty   = 0; // celula sem amostra            -> cobertura do produtor
         u32 MissWarming = 0; // abaixo do piso de confianca   -> so tempo
         u32 MissStale   = 0; // vai refrescar                 -> resposta a luz dinamica
-        // Saude do hash, medida na insercao. A meta do plano: InsertFull < 0,1% de InsertTries.
+        // Saude do hash, medida na insercao. A meta do plano (InsertFull < 0,1% de InsertTries) e
+        // sobre CAPACIDADE, e por isso `Contended` e contador separado: perder 32 disputas de CAS
+        // acontece com a tabela longe de cheia e nao se conserta com tabela maior. Somados, o gate
+        // mandaria crescer a tabela por um problema de concorrencia.
         u32 InsertTries = 0;
-        u32 InsertFull  = 0;
-        u32 ProbeSum    = 0; // / InsertTries = comprimento medio da cadeia
+        u32 InsertFull  = 0; // cadeia inteira ocupada  -> capacidade
+        u32 Contended   = 0; // 32 CAS perdidos         -> concorrencia no mesmo balde
+        u32 Retries     = 0; // disputas perdidas (soma), inclusive as que venceram depois
+        // Amostra descartada por a celula ja ter 64 reservas NESTE frame. A chave existe e a
+        // insercao deu certo — sem este contador, `Tries - Full - Contended` se leria como
+        // "aceitos" e estaria errado. Aceitos = Tries - Full - Contended - Capped.
+        u32 Capped      = 0;
+        u32 ProbeSum    = 0; // / InsertTries = comprimento medio da CADEIA (1a varredura so)
         u32 ProbeMax    = 0; // pior caso DO FRAME (o resolve zera todo frame)
         // O PRODUTOR visto de dentro. `Paths` contra a fracao pedida fecha o gate da Fase 3 que
         // nunca foi medido; o terminal por tipo diz de onde vem a energia que entra no cache —
@@ -127,10 +143,16 @@ namespace Smile {
         u32 Paths      = 0;
         u32 PathVerts  = 0; // / Paths = profundidade media
         u32 PathDepth  = 0; // maxima do frame
-        u32 TermSky    = 0;
-        u32 TermCache  = 0;
-        u32 TermKilled = 0; // segmento morto pela politica de backface
-        u32 TermZero   = 0; // miss no terminal, lobo invalido, ou terminal desligado
+        // Os quatro ultimos entregam a mesma radiancia (zero pela frente) e por isso pareciam um
+        // contador so — mas pedem acoes opostas: miss e cache frio, noquery e o operador tendo
+        // desligado o terminal, lobe e material, e other e o teto de vertices.
+        u32 TermSky     = 0;
+        u32 TermCache   = 0;
+        u32 TermKilled  = 0; // segmento morto pela politica de backface
+        u32 TermMiss    = 0; // consultou o terminal e nao achou
+        u32 TermNoQuery = 0; // chegou ao terminal com a consulta desligada
+        u32 TermLobe    = 0; // amostragem de BSDF sem direcao valida
+        u32 TermOther   = 0; // residual: teto de vertices sem passar pelo terminal
     };
 
     // World Radiance Cache — radiancia de SAIDA em espaco de mundo, hash espacial

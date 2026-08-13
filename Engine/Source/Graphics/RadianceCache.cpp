@@ -21,7 +21,7 @@ namespace Smile {
         constexpr u32 kAccumStride    = sizeof(u32) * 4;
         constexpr u32 kResolvedStride = sizeof(u32) * 4;
         // Espelha RC_STAT_COUNT do RadianceCache.hlsli.
-        constexpr u32 kStatCount      = 23;
+        constexpr u32 kStatCount      = 30;
         constexpr u32 kStatBytes      = kStatCount * sizeof(u32);
         // Os seis contadores de miss sao endereçados no shader por
         // `RC_STAT_MISS_SHORT + (status - RC_QUERY_SHORT_SEGMENT)`, ou seja as duas sequencias
@@ -30,8 +30,8 @@ namespace Smile {
         // da telemetria de insercao. Mudar um dos lados sem o outro trocaria "cone estreito" por
         // "chave ausente" no painel — dois diagnosticos opostos, e nada acusaria.
         // O mesmo vale para o bloco do PRODUTOR, endereçado por `RC_STAT_TERM_SKY + kind`.
-        static_assert(kStatCount == 23, "layout dos contadores: 6 de tabela/query + 6 de miss + 4 "
-                                        "de insercao + 7 do produtor. Mudou o shader? Mude a "
+        static_assert(kStatCount == 30, "layout dos contadores: 7 de tabela/query + 6 de miss + 7 "
+                                        "de insercao + 10 do produtor. Mudou o shader? Mude a "
                                         "leitura tambem.");
         // Modos do dispatch do resolve (StatsParams.x). Ver o cabecalho do shader.
         constexpr f32 kModeResolve    = 0.0f;
@@ -291,9 +291,12 @@ namespace Smile {
                             static_cast<f32>(kStaleFrameMax),
                             ResetPending ? 1.0f : 0.0f };
         const size_t Base = static_cast<size_t>(FrameSlot) * 2u * sizeof(RadianceCacheConstants);
-        CPU.StatsParams = { kModeResolve, 0.0f, 0.0f, 0.0f };
+        // O piso vai nas DUAS variantes por simetria, mas so a do resolve o le (o clear nao conta
+        // celula nenhuma). A varredura precisa dele para separar "tem amostra" de "e confiavel".
+        const f32 MinS = static_cast<f32>(MinSampleCount);
+        CPU.StatsParams = { kModeResolve, MinS, 0.0f, 0.0f };
         std::memcpy(MappedCB + Base, &CPU, sizeof(CPU));
-        CPU.StatsParams = { kModeClearStats, 0.0f, 0.0f, 0.0f };
+        CPU.StatsParams = { kModeClearStats, MinS, 0.0f, 0.0f };
         std::memcpy(MappedCB + Base + sizeof(RadianceCacheConstants), &CPU, sizeof(CPU));
     }
 
@@ -720,10 +723,11 @@ namespace Smile {
         D3D12_RANGE ReadRange{ 0, kStatBytes };
         if (FAILED(CaptureStatsReadback->Map(0, &ReadRange, &Mapped)) || !Mapped) return false;
         const u32* S = static_cast<const u32*>(Mapped);
-        Out.Occupied = S[0];
-        Out.Valid    = S[1];
-        Out.Samples  = S[2];
-        Out.Evicted  = S[3];
+        Out.Occupied   = S[0];
+        Out.HasSamples = S[1];
+        Out.Samples    = S[2];
+        Out.Evicted    = S[3];
+        Out.Confident  = S[4];
         // Query/Hits saem ZERO por construcao: o resolve zera os contadores logo antes da
         // varredura, e esta copia e posterior a ela. Quem quer o hit rate do frame le o StatsCPU,
         // que vem da copia PRE-resolve. Ver o comentario do RecordStatsCopy.
@@ -749,31 +753,38 @@ namespace Smile {
         D3D12_RANGE ReadRange{ 0, kStatBytes };
         if (FAILED(StatsReadback[InFrameSlot]->Map(0, &ReadRange, &Mapped)) || !Mapped) return;
         const u32* S = static_cast<const u32*>(Mapped);
-        StatsCPU.Occupied = S[0];
-        StatsCPU.Valid    = S[1];
-        StatsCPU.Samples  = S[2];
-        StatsCPU.Evicted  = S[3];
-        StatsCPU.Queries  = S[4];
-        StatsCPU.Hits     = S[5];
+        StatsCPU.Occupied   = S[0];
+        StatsCPU.HasSamples = S[1];
+        StatsCPU.Samples    = S[2];
+        StatsCPU.Evicted    = S[3];
+        StatsCPU.Confident  = S[4];
+        StatsCPU.Queries    = S[5];
+        StatsCPU.Hits       = S[6];
         // Zerados sem o regime de detalhe. Deixa-los assim e o correto: o painel distingue "zero
         // medido" de "nao medido" pelo proprio knob, como ja faz com o hit rate.
-        StatsCPU.MissShort   = S[6];
-        StatsCPU.MissCone    = S[7];
-        StatsCPU.MissNoEntry = S[8];
-        StatsCPU.MissEmpty   = S[9];
-        StatsCPU.MissWarming = S[10];
-        StatsCPU.MissStale   = S[11];
-        StatsCPU.InsertTries = S[12];
-        StatsCPU.InsertFull  = S[13];
-        StatsCPU.ProbeSum    = S[14];
-        StatsCPU.ProbeMax    = S[15];
-        StatsCPU.Paths       = S[16];
-        StatsCPU.PathVerts   = S[17];
-        StatsCPU.PathDepth   = S[18];
-        StatsCPU.TermSky     = S[19];
-        StatsCPU.TermCache   = S[20];
-        StatsCPU.TermKilled  = S[21];
-        StatsCPU.TermZero    = S[22];
+        StatsCPU.MissShort   = S[7];
+        StatsCPU.MissCone    = S[8];
+        StatsCPU.MissNoEntry = S[9];
+        StatsCPU.MissEmpty   = S[10];
+        StatsCPU.MissWarming = S[11];
+        StatsCPU.MissStale   = S[12];
+        StatsCPU.InsertTries = S[13];
+        StatsCPU.InsertFull  = S[14];
+        StatsCPU.Contended   = S[15];
+        StatsCPU.Retries     = S[16];
+        StatsCPU.ProbeSum    = S[17];
+        StatsCPU.ProbeMax    = S[18];
+        StatsCPU.Capped      = S[19];
+        StatsCPU.Paths       = S[20];
+        StatsCPU.PathVerts   = S[21];
+        StatsCPU.PathDepth   = S[22];
+        StatsCPU.TermSky     = S[23];
+        StatsCPU.TermCache   = S[24];
+        StatsCPU.TermKilled  = S[25];
+        StatsCPU.TermMiss    = S[26];
+        StatsCPU.TermNoQuery = S[27];
+        StatsCPU.TermLobe    = S[28];
+        StatsCPU.TermOther   = S[29];
         D3D12_RANGE NoWrite{ 0, 0 };
         StatsReadback[InFrameSlot]->Unmap(0, &NoWrite);
     }
