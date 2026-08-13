@@ -1,26 +1,35 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
-## ESTADO — 2026-08-12 (fim do dia)
+## ESTADO — 2026-08-13
 
-**Capturador feito**, menos a calibração do N. O `Docs/CAPTURE-PROTOCOL.md` tem a tabela de peças,
-onde cada uma mora e como se usa. Em resumo: domínio `DeterministicCapture` (o universo dos alvos,
-inclusive os caches de mundo), `FFrameCapture` com aquecimento contado em frames **renderizados**,
-PNG do backbuffer pós-tonemap/pré-overlays, manifesto JSON derivado do estado real, presets
-científico/gameplay e disparo pela UI ao lado dos bookmarks. O commit da build entra no manifesto
-por um carimbo de *build time* (`cmake/StampVersion.cmake`), não de configure.
+**A régua está pronta e calibrada.** O `Docs/CAPTURE-PROTOCOL.md` é a referência; aqui fica só o
+que muda o plano.
 
-**Validado em GPU**: duas capturas consecutivas do mesmo slot, preset científico, N = 128 —
-`temporalSampleIndex == 128` nas duas, pose/resolução/modos idênticos, PSNR 66,4 dB e 169 pixels de
-1,26 M acima de 1 nível. A primeira rodada já pagou por si: achou o `SunDir` nascendo não
-normalizado, que fazia o manifesto divergir entre duas capturas idênticas. Detalhes no
-`CAPTURE-PROTOCOL.md`.
+Capturador completo: domínio `DeterministicCapture` (o universo dos alvos, inclusive os caches de
+mundo), `FFrameCapture` com aquecimento em frames **renderizados**, PNG pós-tonemap/pré-overlays,
+manifesto derivado do estado **efetivo**, presets científico/gameplay, disparo pela UI ao lado dos
+bookmarks, e o commit da build carimbado a cada *build*. Commits `49b2e88`, `1a16ba7`, `4ef2cf4`,
+`3872f97`.
 
-Aquelas duas **não são baseline** — build `-dirty`, cache e TOD desligados. As baselines de verdade
-saem com a build commitada, TOD ligado e cache ativo.
+**N = 128, calibrado** por sweep de 32/64/128/256. A ocupação do cache termina em 64, mas a
+repetibilidade da imagem só estabiliza em 128 (50,6 → 54,4 → 59,3 dB), e 256 rende 0,03 dB pelo
+dobro da espera. Escolher pela ocupação teria dado metade do necessário — que é precisamente o erro
+que o plano previa ao exigir o delta do sinal final na lista de sinais.
 
-O que resta da Fase 0 continua sendo **medição**: calibrar o N (teto de 512, medindo delta do atlas
-DDGI, ocupação/amostras do cache, hit rate e delta temporal do sinal GI final) e então tirar as
-quatro baselines. Depois disso, o commit #4.
+Três achados que a régua produziu antes de medir qualquer estimador, e que valem para o resto da
+série:
+
+- `SunDir` nascia **não normalizado**, e a restauração de estado o convertia: o manifesto divergia
+  entre duas capturas idênticas. Corrigido na origem.
+- Dois acumuladores reais (`SunShafts`, FFT do oceano) nunca tinham entrado no `EHistoryTarget`, e
+  "reset de tudo" era falso.
+- A **instrumentação do cache não é neutra**: os atômicos mudam o escalonamento das waves e, com
+  ele, quais threads vencem as inserções (73.218 × 73.195 células, 48 dB entre os regimes). Ela é
+  parte da configuração — entra no manifesto e no nome do arquivo, e alterná-la cancela a captura.
+
+**O que falta da Fase 0 são as quatro baselines**, agora com regra de operação definida:
+instrumentação **desligada** (elas são comparação de imagem), TOD com hora fixada, build limpa. As
+quatro configurações da matriz já são alternáveis pela UI. Depois delas, o commit #4.
 
 ## ESTADO — 2026-08-12
 

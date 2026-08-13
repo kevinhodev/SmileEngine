@@ -18,7 +18,7 @@ não da cena "mais ou menos igual".
 | Contador de aquecimento por frame **renderizado** | **Feito** — `FFrameCapture` |
 | PNG + manifesto | **Feito** — WIC 24bppBGR + JSON plano ao lado |
 | Presets científico/gameplay | **Feito** |
-| Instrumentação de convergência (calibrar o N) | Pendente |
+| Calibração do N | **Feito** — N = 128, ver o sweep abaixo |
 
 ### Onde mora cada peça
 
@@ -30,8 +30,8 @@ não da cena "mais ou menos igual".
 | Disparo pela UI | `Editor/…/CaptureBridge.*` + card no `SettingsWindow.qml` |
 | Commit da build no manifesto | `cmake/StampVersion.cmake` → `SMILE_BUILD_COMMIT` |
 
-O **N ainda é escolhido à mão** no slider (default 128). Fixá-lo por medição é o que falta, e é o
-item que fecha o protocolo — ver "Calibração do N" abaixo.
+O protocolo está fechado. O N default (128) saiu de medição — ver "Calibração do N" abaixo; o
+slider continua existindo para quem quiser exercitar outro ponto.
 
 ### Uso
 
@@ -227,47 +227,60 @@ Nunca cruzar os dois — e o nome do arquivo agora impede fazê-lo por distraç�
 
 ## Calibração do N
 
-> **É o que falta.** O capturador já aceita qualquer N e o grava no manifesto; o que não existe
-> ainda é a medição que escolhe o número. Até lá o default de 128 é um palpite — e, pelo argumento
-> de ordem de grandeza abaixo, provavelmente baixo demais.
+> **Calibrado: N = 128.** É o default do capturador e da UI. O número deixou de ser palpite.
 
 O N é **fixo para todo o A/B**, escolhido uma vez por calibração. Parada adaptativa por captura
 daria N diferente entre configurações, e a diferença de N viraria viés: a configuração que converge
 mais devagar seria medida com mais tempo de acumulação, que é precisamente a variável em teste.
 
-Calibrar com teto de 512 frames, medindo:
+### O sweep
 
-- delta do atlas DDGI entre frames;
-- ocupação e amostras/célula do radiance cache;
-- hit rate do cache;
-- **delta temporal do sinal GI final**.
+Instrumentação ligada em todos os pontos (ver a regra de operação acima); dois disparos por N, para
+que a coluna de repetibilidade signifique alguma coisa.
 
-O último não é redundante: ocupação pode estabilizar enquanto a radiância ainda converge — a tabela
-enche antes de as médias assentarem. Usar só ocupação daria um N cedo demais.
+| N | ocupação | amostras/célula | repetibilidade (PSNR A×B) | hit rate |
+|---|---|---|---|---|
+| 32 | 70.005 | 18,31 | 50,62 dB | 77,85% |
+| 64 | 73.099 | 22,98 | 54,38 dB | 73,76% |
+| **128** | **73.195** | **30,06** | **59,29 dB** | 77,73% |
+| 256 | 72.987 | 38,86 | 59,32 dB | 73,73% |
 
-Ordem de grandeza esperada: **centenas** de frames, não dezenas. A histerese do DDGI é 0,99 (o
-`HistoryDomain.h` cita ~199 updates para o atlas de distância) e o radiance cache tem teto de 64
-amostras por célula.
+A **ocupação** termina em N=64 — de 64 para 256 ela nem cresce, oscila em torno de 73 mil células.
+Se fosse o único sinal, o N teria sido escolhido em 64.
 
-### Sweep — pontos medidos
+A **repetibilidade** conta outra história e é ela que decide: 50,6 → 54,4 → 59,3 dB de 32 a 128, e
+então **59,29 → 59,32 dB** de 128 para 256. Três centésimos de dB pelo dobro da espera. É o platô, e
+ele está em 128.
 
-Instrumentação ligada em todos (ver a regra de operação acima).
+Isto é exatamente o que o parágrafo anterior deste arquivo previa: a tabela enche antes de as médias
+assentarem, e parar pela ocupação daria um N cedo demais. Ficou medido em vez de argumentado — e a
+distância entre 64 (ocupação pronta) e 128 (imagem estável) é o tamanho do erro que se teria
+cometido.
 
-| N | hit rate | ocupação | amostras/célula |
-|---|---|---|---|
-| 32 | — | — | — |
-| 64 | — | — | — |
-| **128** | **77,735%** | 73.195 (6,98%) | 30,06 |
-| 256 | — | — | — |
+O teto de 512 não precisou ser exercitado.
 
-O ponto de 128 é o primeiro, e já diz duas coisas. A média de **30 amostras por célula** está
-abaixo da metade do teto de 64 — o cache ainda está enchendo, não assentando —, e a ocupação de 7%
-mostra que a tabela `2^20` está folgada nesta cena, longe dos 95,2% que já saturaram um preset
-antigo. Os dois apontam para um N maior; faltam 32/64/256 para achar onde a curva achata.
+### Duas coisas que o sweep ensinou sobre a própria régua
 
-Vale lembrar que ocupação e radiância convergem em ritmos diferentes: a tabela enche antes de as
-médias assentarem, e é por isso que o delta temporal do sinal GI final está na lista de sinais.
-Parar em 128 porque a ocupação estabilizou seria escolher o N cedo demais.
+**Hit rate instantâneo não serve para escolher N.** Ele oscila entre ~73,7% e ~77,8% sem tendência,
+e a causa está no shader: uma célula só conta como hit enquanto `age < threshold`, e o limiar é
+**escalonado por célula** — `RC_REFRESH_FRAME_MAX + (checksum & 7)`, ou seja, uma janela de 8 a 15
+frames (`RadianceCache.hlsli`). O escalonamento existe para o refresh não virar pico periódico. A
+consequência para a medição é que uma captura de **um frame** pega cada célula numa fase arbitrária
+do ciclo de manutenção dela, e o número resultante diz mais sobre a fase que sobre a convergência.
+
+Some-se a isso o que o próprio shader documenta: `RC_STAT_HITS` conta o **retorno antecipado** (o
+custo economizado), não a cobertura da tabela. Cobertura seria `hasData`, e hoje não é reportada.
+
+Duas saídas, quando isso importar — a segunda é melhor:
+
+1. média de 16–32 frames em vez de amostra de um frame, o que embute o ciclo inteiro;
+2. reportar `hasData` como contador próprio: cobertura não depende da fase do refresh, então
+   mediria convergência sem precisar de média.
+
+**Imagens de N diferentes não se comparam pixel a pixel.** Cada captura sai com `TSI = N`, portanto
+com semente temporal diferente — o ruído é outro por construção. O dado válido do sweep é a
+repetibilidade **dentro** do mesmo N, que é a coluna acima. Comparar 128 contra 256 pixel a pixel
+mediria a semente.
 
 ## `TemporalSampleIndex`
 

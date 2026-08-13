@@ -52,6 +52,10 @@ namespace Smile {
         std::string    Label;                 // prefixo do arquivo; vazio = "capture"
         std::string    SceneName;             // so p/ o manifesto (o motor nao guarda o path da cena)
         i32            BookmarkSlot = -1;     // -1 = camera livre; so p/ o manifesto
+        // 128 e CALIBRADO, nao arredondado: sweep de 32/64/128/256 em Docs/CAPTURE-PROTOCOL.md. A
+        // ocupacao do cache termina em 64, mas a repetibilidade da imagem so estabiliza em 128
+        // (50,6 -> 54,4 -> 59,3 dB), e de 128 para 256 sao 0,03 dB pelo dobro da espera.
+        // Escolher pela ocupacao teria dado 64 — metade do necessario.
         u32            WarmupFrames = 128;
         ECapturePreset Preset       = ECapturePreset::Scientific;
         // Hora do dia a FIXAR durante a sessao, em [0,24); negativo = usar a hora corrente.

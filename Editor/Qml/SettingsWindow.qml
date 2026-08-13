@@ -3187,6 +3187,10 @@ Rectangle {
                     // não por captura, justamente para não variar entre configurações: parada
                     // adaptativa daria mais tempo de acumulação à configuração que converge mais
                     // devagar, que é precisamente a variável em teste.
+                    //
+                    // 128 é calibrado (sweep 32/64/128/256 em Docs/CAPTURE-PROTOCOL.md): a
+                    // repetibilidade da imagem estabiliza aí, e 256 custa o dobro para ganhar
+                    // 0,03 dB. O slider fica para exercitar outro ponto, não para o uso normal.
                     property int  warmupFrames: 128
                     property bool scientific: true
                     // Hora fixada durante a sessão. Não pode ser "a hora atual no clique": com o
