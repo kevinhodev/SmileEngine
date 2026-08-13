@@ -27,9 +27,44 @@ série:
   ele, quais threads vencem as inserções (73.218 × 73.195 células, 48 dB entre os regimes). Ela é
   parte da configuração — entra no manifesto e no nome do arquivo, e alterná-la cancela a captura.
 
-**O que falta da Fase 0 são as quatro baselines**, agora com regra de operação definida:
-instrumentação **desligada** (elas são comparação de imagem), TOD com hora fixada, build limpa. As
-quatro configurações da matriz já são alternáveis pela UI. Depois delas, o commit #4.
+**Fase 0 fechada**: as quatro baselines foram tiradas no commit `ed7b543` limpo, slot 0, TOD 10:00
+fixada, N = 128, instrumentação desligada. Elas são o registro do "antes" e **devem envelhecer** —
+é para isso que existem. Controles novos podem ser tirados a qualquer momento, mas não as
+substituem.
+
+**Fase 2 fechada** — commit `e70ade7` (#4 da lista), validado contra as baselines. `ShadeSurfaceHit`
+decomposto em `PathTracingCommon.hlsli`, `FRCQueryResult` com status de miss, política isolada no
+wrapper. **Uma parte foi explicitamente adiada**: throughput/PDF/lobo do `FPathState` e a
+amostragem de BSDF nascem na Fase 3 junto com o produtor delas — ver o bloco na Fase 2, que marca
+item a item. Não ler como "Fase 2 inteira concluída".
+
+Evidência de que o refactor não muda o estimador, antes mesmo do A/B visual: o DXIL de Release
+(`-O3`, sem debug info) dos sete shaders afetados tem **contagens idênticas** de `traceRayInline`,
+`rawBufferLoad`, `sample`, atômicos e de toda a aritmética. A única diferença é `−1 phi / +1 select
+/ −1 zext / −1 and` por call site — um booleano reencodado, porque `cacheN` e `hitN` eram duas
+expressões iguais em lados opostos do retorno antecipado e agora são um valor só. **Esta técnica
+vale para toda a série**: em refactor que promete não mudar imagem, comparar o histograma de
+`dx.op` do DXIL de Release custa minutos e responde antes de acender a GPU.
+
+---
+
+### ➜ PRÓXIMO PASSO: Fase 3 — o path tracer esparso de update
+
+Tudo antes dela está feito. A Fase 3 é onde o estimador muda de verdade pela primeira vez, e ela
+começa por **completar o `FPathState`** (throughput, PDF, lobo) antes de escrever o laço de bounces
+— nessa ordem, porque é o laço que dá valor aos campos.
+
+Três coisas já decididas que a Fase 3 herda e não deve re-derivar:
+
+- **Onde o passe entra**: depois de `RecordGBuffer(Ctx)` e antes de `RecordSceneLighting(Ctx)`. Não
+  em `PrepareIndirectLighting()`, que roda antes do G-buffer existir.
+- **O update nunca lê DDGI** como fonte normal. Um cache alimentado por DDGI só esconderia um sinal
+  cuja origem continuaria sendo DDGI. O `UseDDGIBootstrap` é knob de diagnóstico e nasce desligado.
+- **`Accum` recebe o frame atual; `Resolved` é somente leitura** para os traces do mesmo frame. É a
+  barreira contra auto-realimentação, e o motivo de o resolve continuar no fim.
+
+Para medir a Fase 3, a régua já está pronta: baselines em `ed7b543`, N = 128, instrumentação
+desligada para imagem e ligada para telemetria (nunca as duas séries misturadas).
 
 ## ESTADO — 2026-08-12
 
@@ -291,12 +326,25 @@ Separar carregamento de superfície, iluminação local, transporte indireto e p
   - fallback indireto DDGI;
   - composição da radiância de saída.
 - Introduzir um pequeno `FPathState` HLSL com, no mínimo:
-  - origem/direção;
-  - throughput;
-  - depth;
-  - roughness/cone do segmento;
-  - PDF e lobo escolhido;
-  - flags de modo: render, cache update, replay futuro.
+  - origem/direção; ✅ **feito**
+  - throughput; ⏳ **adiado para a Fase 3**
+  - depth; ✅ **feito**
+  - roughness/cone do segmento; ✅ **feito**
+  - PDF e lobo escolhido; ⏳ **adiado para a Fase 3**
+  - flags de modo: render, cache update, replay futuro. ✅ render e cache update; ⏳ replay na Fase 3.
+
+> **Parte da Fase 2 explicitamente PENDENTE** (commit #4, `PathTracingCommon.hlsli`). Throughput,
+> PDF e lobo escolhido não entraram porque nenhum produtor os preenche ainda: quem os calcula é o
+> laço de bounces do updater, que só existe na Fase 3. Campo sem produtor nasce com valor
+> inventado, e o primeiro consumidor a lê-lo herdaria a invenção sem saber.
+>
+> Pelo mesmo motivo **não há amostragem de BSDF reutilizável** ainda — o render avalia a BRDF para
+> uma direção conhecida (`BRDF_Direct`), não *amostra* um lobo; a amostragem nasce com quem precisa
+> dela, que é o updater.
+>
+> A consequência prática: quem abrir a Fase 3 completa o `FPathState` **antes** de escrever o laço,
+> e não depois. Isso não é dívida técnica — é a ordem certa —, mas não pode passar por "Fase 2
+> concluída" numa leitura rápida.
 - A API de consulta ao cache deve devolver um resultado estruturado em vez de apenas `bool`:
 
 ```hlsl
