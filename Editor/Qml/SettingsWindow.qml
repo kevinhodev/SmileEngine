@@ -2911,7 +2911,7 @@ Rectangle {
                     id: radianceCacheCard
                     width: parent.width
                     title: "World radiance cache — terminador dos raios secundários"
-                    height: rcStatsText.y + rcStatsText.height + contentPadding + 8
+                    height: rcMissText.y + rcMissText.height + contentPadding + 8
 
                     Text {
                         id: rcHelper
@@ -2999,9 +2999,26 @@ Rectangle {
                     }
 
                     Text {
-                        id: rcDedicatedLabel
+                        id: rcDetailLabel
                         x: 20
                         y: rcStatsLabel.y + 30
+                        text: "Detalhar erros e inserção"
+                        color: renderModel.radianceCacheStats ? root.textNormal : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcDetailLabel.y - 6
+                        enabled: renderModel.radianceCacheStats
+                        checked: renderModel.radianceCacheStatsDetail
+                        onToggled: renderModel.ToggleRadianceCacheStatsDetail()
+                    }
+
+                    Text {
+                        id: rcDedicatedLabel
+                        x: 20
+                        y: rcDetailLabel.y + 30
                         text: "Produtor dedicado (path tracer esparso)"
                         color: renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
@@ -3157,6 +3174,23 @@ Rectangle {
                         text: renderModel.radianceCacheSummary + "  ·  " +
                               renderModel.radianceCacheOccupancy.toFixed(1).replace(".", ",") +
                               "% de " + renderModel.radianceCacheMemoryMB.toFixed(0) + " MB"
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    // Só ocupa espaço quando há o que mostrar: sem o regime de detalhe a linha
+                    // sairia inteira em travessões, que ocupa altura e não informa nada.
+                    Text {
+                        id: rcMissText
+                        x: 20
+                        y: rcStatsText.y + rcStatsText.height + 6
+                        width: parent.width - 40
+                        visible: renderModel.radianceCacheStatsDetail
+                        height: visible ? implicitHeight : 0
+                        wrapMode: Text.WordWrap
+                        text: renderModel.radianceCacheMissBreakdown
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11

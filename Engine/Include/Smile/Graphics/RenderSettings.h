@@ -130,6 +130,11 @@ namespace Smile {
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);
         bool GetRadianceCacheStatsEnabled() const;
+        // Detalhe: misses por MOTIVO e saude da insercao (balde cheio, sondagens). Terceiro
+        // regime de medicao, nao um detalhe do segundo — soma atomicos por cima e por isso entra
+        // no manifesto e na etiqueta. Nao invalida historico; cancela captura em curso.
+        void SetRadianceCacheStatsDetailEnabled(bool V);
+        bool GetRadianceCacheStatsDetailEnabled() const;
         // Mudam a CHAVE do hash: todo valor guardado passa a viver noutra celula, entao o
         // conteudo antigo vira lixo enderecado errado. Invalidam.
         void SetRadianceCacheCellSize(f32 V);

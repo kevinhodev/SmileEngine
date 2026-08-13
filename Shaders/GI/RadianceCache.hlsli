@@ -78,14 +78,34 @@
 #define RC_REFRESH_FRAME_MAX 8u
 
 // Contadores do painel. Os quatro primeiros sao produzidos pelo RESOLVE (varredura da tabela);
-// os dois ultimos pelos TRACES, dentro do RC_Query. Ver RadianceCacheResolve.cs.hlsl.
+// os dois seguintes pelos TRACES, dentro do RC_Query. Ver RadianceCacheResolve.cs.hlsl.
 #define RC_STAT_OCCUPIED 0u  // celulas com chave valida
 #define RC_STAT_VALID    1u  // dessas, quantas ja tem amostra (radiancia utilizavel)
 #define RC_STAT_SAMPLES  2u  // soma de N — dividido por VALID da a convergencia media
 #define RC_STAT_EVICTED  3u
 #define RC_STAT_QUERIES  4u
 #define RC_STAT_HITS     5u
-#define RC_STAT_COUNT    6u
+// --- detalhe (RC_FLAG_STATS_DETAIL) ---------------------------------------------------------
+// POR QUE OS MISSES SE SEPARAM. Com um so numero de acerto, os cinco motivos de erro chegam ao
+// painel somados — e eles pedem coisas OPOSTAS. Chave ausente e capacidade (tabela pequena ou
+// balde cheio); celula sem amostra e cobertura (o produtor nao chega ali); aquecendo e so tempo,
+// e some sozinho; refresh e a resposta a luz dinamica funcionando; segmento curto e cone estreito
+// sao limites geometricos do proprio cache, que nao se conserta aumentando nada. Sem separa-los,
+// "acerto de 40%" nao diz se falta memoria, se falta aquecer ou se a cena e assim.
+#define RC_STAT_MISS_SHORT   6u  // segmento menor que a celula
+#define RC_STAT_MISS_CONE    7u  // cone especular menor que a celula
+#define RC_STAT_MISS_NOENTRY 8u  // chave nao encontrada (ausente ou balde cheio)
+#define RC_STAT_MISS_EMPTY   9u  // celula existe, ainda sem radiancia
+#define RC_STAT_MISS_WARMING 10u // tem radiancia, abaixo do piso de confianca
+#define RC_STAT_MISS_STALE   11u // tem dado, mas velho: vai refrescar
+// Insercao — a saude do hash. `FULL` e o balde cheio do [Gautron2020] ("fingers crossed we fit"),
+// e o plano da a meta: menos de 0,1% das tentativas, ideal menos de 0,01%. PROBES/TRIES da o
+// comprimento medio da cadeia de sondagem, e PROBES_MAX o pior caso do frame.
+#define RC_STAT_INS_TRIES    12u
+#define RC_STAT_INS_FULL     13u
+#define RC_STAT_INS_PROBES   14u
+#define RC_STAT_INS_PROBEMAX 15u
+#define RC_STAT_COUNT        16u
 
 // Publicado no CB de cada consumidor do HitShading.hlsli, igual ao FReGIRShaderParams.
 //
@@ -110,6 +130,17 @@ struct FRadianceCacheParams {
 // Instrumentacao de acerto/erro do query. Separada dos outros dois porque CUSTA: mesmo com a
 // reducao por wave, sao dois atomicos disputados por todo o dispatch. Liga so com o painel aberto.
 #define RC_FLAG_STATS  4u
+// TERCEIRO REGIME, e nao um detalhe do segundo.
+//
+// A contagem de atomicos do RC_FLAG_STATS e CONGELADA: ela ja e nao-neutra (os atomicos mudam o
+// escalonamento das waves e, com ele, quais threads vencem as insercoes — medido, 73.218 celulas
+// contra 73.195, 48 dB entre os regimes), e a serie de medidas tirada nela so continua comparavel
+// enquanto o numero de atomicos por wave nao muda. Acrescentar contador por Status ALI seria
+// mudanca de imagem disfarcada de telemetria.
+//
+// Entao o detalhe e uma configuracao propria: quem quer o diagnostico paga um regime que se
+// declara no manifesto e na etiqueta, e as capturas do regime `S` continuam valendo.
+#define RC_FLAG_STATS_DETAIL 8u
 
 // Contrato de CBUFFER, por NOME — igual ao RayEpsA/RayEpsB e ao GIDistParams. Todo consumidor do
 // HitShading.hlsli declara estas tres linhas no b0 dele (anexadas no FIM da struct C++
@@ -219,9 +250,14 @@ bool RC_Find(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint ca
 // --------------------------------------------------------------------------------------------
 // Insercao (atomica) — caminho de UPDATE
 // --------------------------------------------------------------------------------------------
+// `probes` conta os slots LIDOS ate decidir, somando todas as tentativas do CAS. E o unico lugar
+// em que o comprimento da cadeia de sondagem e observavel de graca — a busca da query percorre a
+// MESMA cadeia, entao a distribuicao medida aqui descreve as duas, e medir so aqui poupa atomicos
+// no caminho quente (a insercao roda em 4% dos pixels; a consulta, em todo raio secundario).
 bool RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint capacity,
-               out uint entryIndex) {
+               out uint entryIndex, out uint probes) {
     entryIndex = 0u;
+    probes     = 0u;
     // Primeiro PROCURA a chave ate o fim da cadeia, guardando o primeiro slot reutilizavel. Nao
     // podemos tomar o tombstone imediatamente: a mesma chave pode continuar viva mais adiante.
     // Depois tenta publicar no slot escolhido por CAS; se outra chave ganhar a corrida, recomeca.
@@ -232,6 +268,7 @@ bool RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
         for (uint i = 0u; i < RC_BUCKET_SIZE; ++i) {
             const uint idx    = (slot + i) & (capacity - 1u);
             const uint stored = entries[idx];
+            ++probes;
             if (stored == checksum) { entryIndex = idx; return true; }
 
             if (stored == RC_TOMBSTONE_CHECKSUM && reusable == 0xFFFFFFFFu) {
@@ -420,10 +457,11 @@ FRCQueryResult RC_QueryEx(FRadianceCacheParams P, float3 samplePos, float3 sampl
     // para custo economizado, e o que mantem a serie comparavel com as medidas de antes do
     // refresh. Cobertura seria `Status >= RC_QUERY_STALE`, e hoje nao e reportada.
     //
-    // A contagem de atomicos aqui e CONGELADA: um a mais mudaria o escalonamento das waves e, com
-    // ele, quais threads vencem as insercoes do cache — medido, 73.218 celulas contra 73.195 entre
-    // os regimes com e sem instrumentacao. Acrescentar contador por Status e mudanca de imagem no
-    // regime instrumentado, nao adicao inocente de telemetria.
+    // A contagem de atomicos DESTE BLOCO e CONGELADA: um a mais mudaria o escalonamento das waves
+    // e, com ele, quais threads vencem as insercoes do cache — medido, 73.218 celulas contra
+    // 73.195 entre os regimes com e sem instrumentacao. E por isso que o detalhe por Status entra
+    // no bloco SEGUINTE, sob flag propria, e nao aqui: com ele aqui, toda a serie de medidas ja
+    // tirada no regime `S` deixaria de ser comparavel com as proximas.
     [branch] if ((P.Flags & RC_FLAG_STATS) != 0u) {
         // UM atomico por WAVE, nao por lane: sao milhoes de consultas por frame e dois enderecos
         // so. WaveActiveCountBits conta as lanes ATIVAS, entao vale sob divergencia — que e a
@@ -436,6 +474,32 @@ FRCQueryResult RC_QueryEx(FRadianceCacheParams P, float3 samplePos, float3 sampl
             uint ignored;
             InterlockedAdd(stats[RC_STAT_QUERIES], waveQueries, ignored);
             if (waveHits > 0u) InterlockedAdd(stats[RC_STAT_HITS], waveHits, ignored);
+        }
+
+        // POR QUE ISTO EXIGE OS DOIS BITS. O detalhe descreve a mesma populacao de raios que o
+        // QUERIES/HITS acima — os raios de RENDER. O passe de update recebe o bit de detalhe (ele
+        // conta as INSERCOES dele, que sao outra populacao e outro contador) mas nunca o de STATS,
+        // e sem esta conjuncao o terminal dele somaria os misses aqui e as duas populacoes
+        // chegariam ao painel misturadas. Mesma regra do UpdatePassParams, aplicada ao contador
+        // certo em vez de ao passe inteiro.
+        [branch] if ((P.Flags & RC_FLAG_STATS_DETAIL) != 0u) {
+            // Um atomico por MOTIVO PRESENTE na wave, nao por lane e nao por motivo possivel: uma
+            // wave coerente (o caso comum, porque raios vizinhos caem em celulas vizinhas) paga um
+            // ou dois. O laco desenrola sobre constantes, entao nao ha indice dinamico.
+            RWStructuredBuffer<uint> stats =
+                ResourceDescriptorHeap[NonUniformResourceIndex(P.StatsUAV)];
+            const uint status = R.Status;
+            uint ignored;
+            [unroll] for (uint s = RC_QUERY_SHORT_SEGMENT; s <= RC_QUERY_STALE; ++s) {
+                const uint n = WaveActiveCountBits(status == s);
+                if (n > 0u && WaveIsFirstLane()) {
+                    // RC_STAT_MISS_SHORT e o primeiro slot e RC_QUERY_SHORT_SEGMENT o primeiro
+                    // status contado: as duas sequencias andam juntas de proposito, e o
+                    // static_assert do C++ trava o par.
+                    InterlockedAdd(stats[RC_STAT_MISS_SHORT + (s - RC_QUERY_SHORT_SEGMENT)],
+                                   n, ignored);
+                }
+            }
         }
     }
     return R;
@@ -462,8 +526,37 @@ void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, fl
 
     RWStructuredBuffer<uint> entries =
         ResourceDescriptorHeap[NonUniformResourceIndex(P.EntriesUAV)];
-    uint entryIndex;
-    if (!RC_Insert(entries, slot, checksum, P.Capacity, entryIndex)) return;
+    uint entryIndex, probes;
+    const bool inserted = RC_Insert(entries, slot, checksum, P.Capacity, entryIndex, probes);
+
+    // Telemetria de INSERCAO — a saude do hash, que e o que decide se a capacidade esta certa.
+    //
+    // Sem o bit de STATS junto, ao contrario do detalhe da consulta: aqui a populacao e "quem
+    // ESCREVE na tabela", e com o produtor dedicado quem escreve e so o passe de update — que
+    // nunca recebe RC_FLAG_STATS, porque o QUERIES/HITS descreve raios de render. Os dois
+    // contadores medem coisas diferentes e por isso tem gates diferentes.
+    //
+    // Contado ANTES do retorno da falha, e nao depois: o balde cheio e justamente o caso que
+    // interessa, e um `return` acima dele mediria zero exatamente quando o numero importa.
+    [branch] if ((P.Flags & RC_FLAG_STATS_DETAIL) != 0u) {
+        const uint waveTries  = WaveActiveCountBits(true);
+        const uint waveFull   = WaveActiveCountBits(!inserted);
+        const uint waveProbes = WaveActiveSum(probes);
+        const uint waveMax    = WaveActiveMax(probes);
+        if (WaveIsFirstLane()) {
+            RWStructuredBuffer<uint> stats =
+                ResourceDescriptorHeap[NonUniformResourceIndex(P.StatsUAV)];
+            uint ignored;
+            InterlockedAdd(stats[RC_STAT_INS_TRIES],  waveTries,  ignored);
+            InterlockedAdd(stats[RC_STAT_INS_PROBES], waveProbes, ignored);
+            if (waveFull > 0u) InterlockedAdd(stats[RC_STAT_INS_FULL], waveFull, ignored);
+            // Max, e nao Add: o pior caso do frame nao e uma soma. Sem ele so haveria a media, e
+            // uma media de 2 sondagens convive tranquilamente com uma cadeia de 32 numa regiao —
+            // que e exatamente a que vai comecar a perder amostras.
+            InterlockedMax(stats[RC_STAT_INS_PROBEMAX], waveMax, ignored);
+        }
+    }
+    if (!inserted) return;
 
     // NaN/Inf viram 0 aqui e nao no resolve: um asuint de NaN somado ao acumulador contamina a
     // celula para sempre (o resolve nao teria como distinguir depois).

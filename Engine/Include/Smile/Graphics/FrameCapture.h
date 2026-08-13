@@ -130,6 +130,10 @@ namespace Smile {
         // FRadianceCache::PublishedStatsThisFrame. Duas capturas so sao comparaveis se estiverem
         // no MESMO regime, e por isso ela entra tambem na etiqueta do nome do arquivo.
         bool CacheStats         = false;
+        // Regime de DETALHE: misses por motivo e saude da insercao. Entra no manifesto pelo mesmo
+        // motivo que o de cima, e com mais forca — ele soma atomicos tambem no PRODUTOR, onde eles
+        // decidem quem vence a corrida do CAS e, portanto, o conteudo da tabela.
+        bool CacheStatsDetail   = false;
         bool GIMeasureTerminatorOff = false; // corta o DDGI so no hit secundario
         // Politica de auto-interseccao/backface do gather E do produtor do cache — um toggle so
         // para os dois (ver FRenderSettings::SetGIBackfacePolicy). Entra aqui porque o protocolo
@@ -143,6 +147,14 @@ namespace Smile {
         // atomicos disputados por wave em todo trace, entao e knob proprio).
         u32 CacheOccupied = 0, CacheValid = 0, CacheSamples = 0, CacheCapacity = 0;
         u32 CacheQueries = 0, CacheHits = 0;
+        // Misses por motivo e saude da insercao, so com `cacheStatsDetail`. Entram no arquivo
+        // porque DOIS gates de saida da Fase 4 sao exatamente estes numeros — "falha por balde
+        // cheio abaixo de 0,1% das insercoes" e a leitura de ocupacao que decide a capacidade —,
+        // e um gate que so existe num painel volatil nao e verificavel depois.
+        u32 CacheMissShort = 0, CacheMissCone = 0, CacheMissNoEntry = 0;
+        u32 CacheMissEmpty = 0, CacheMissWarming = 0, CacheMissStale = 0;
+        u32 CacheInsertTries = 0, CacheInsertFull = 0;
+        u32 CacheProbeSum = 0, CacheProbeMax = 0;
 
         // Semente com que ESTE frame amostrou. Tem de bater com o N do aquecimento; se nao bater,
         // o contrato de warm-up quebrou em algum lugar e o manifesto denuncia.

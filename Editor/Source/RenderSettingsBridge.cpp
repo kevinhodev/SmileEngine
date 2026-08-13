@@ -945,6 +945,9 @@ namespace SmileEditor {
     bool RenderSettingsBridge::IsRadianceCacheStats() const {
         return Renderer && Renderer->Settings().GetRadianceCacheStatsEnabled();
     }
+    bool RenderSettingsBridge::IsRadianceCacheStatsDetail() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheStatsDetailEnabled();
+    }
     bool RenderSettingsBridge::IsRadianceCacheDedicatedUpdate() const {
         return Renderer && Renderer->Settings().GetRadianceCacheDedicatedUpdate();
     }
@@ -1011,6 +1014,38 @@ namespace SmileEditor {
             .arg(QString::number(GetRadianceCacheConvergence(), 'f', 1))
             .arg(S.Evicted);
     }
+    QString RenderSettingsBridge::GetRadianceCacheMissBreakdown() const {
+        if (!Renderer) return QString();
+        if (!Renderer->Settings().GetRadianceCacheStatsDetailEnabled()) {
+            return QStringLiteral("detalhe desligado");
+        }
+        const auto& S = Renderer->Settings().RadianceCacheStats();
+        // Percentual sobre as CONSULTAS, e nao sobre os misses: "12% dos raios pararam por cone
+        // estreito" e uma frase acionavel; "38% dos erros" depende de quantos erros houve e muda
+        // de significado sozinha quando o cache aquece.
+        const double Q = S.Queries > 0 ? static_cast<double>(S.Queries) : 0.0;
+        auto Pct = [Q](Smile::u32 N) {
+            if (Q <= 0.0) return QStringLiteral("—");
+            return QString::number(100.0 * static_cast<double>(N) / Q, 'f', 1) +
+                   QStringLiteral("%");
+        };
+        // A insercao tem denominador PROPRIO (tentativas de escrita), e nao as consultas: sao
+        // populacoes diferentes, e dividir uma pela outra daria um numero sem nome.
+        const double T = S.InsertTries > 0 ? static_cast<double>(S.InsertTries) : 0.0;
+        const QString Full = T > 0.0
+            ? QString::number(100.0 * static_cast<double>(S.InsertFull) / T, 'f', 3) +
+              QStringLiteral("%")
+            : QStringLiteral("—");
+        const QString Probes = T > 0.0
+            ? QString::number(static_cast<double>(S.ProbeSum) / T, 'f', 1)
+            : QStringLiteral("—");
+        return QStringLiteral(
+                   "miss: segmento %1 · cone %2 · sem chave %3 · sem amostra %4 · aquecendo %5 · "
+                   "refresh %6\ninserção: %7 tentativas · balde cheio %8 · sondagens %9 (máx %10)")
+            .arg(Pct(S.MissShort), Pct(S.MissCone), Pct(S.MissNoEntry), Pct(S.MissEmpty),
+                 Pct(S.MissWarming), Pct(S.MissStale))
+            .arg(S.InsertTries).arg(Full).arg(Probes).arg(S.ProbeMax);
+    }
 
     void RenderSettingsBridge::ToggleRadianceCache() {
         if (!Renderer) return;
@@ -1028,6 +1063,13 @@ namespace SmileEditor {
         if (!Renderer) return;
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheStatsEnabled(!A->Settings().GetRadianceCacheStatsEnabled());
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ToggleRadianceCacheStatsDetail() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheStatsDetailEnabled(
+            !A->Settings().GetRadianceCacheStatsDetailEnabled());
         emit GISettingsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheDedicatedUpdate() {

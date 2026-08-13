@@ -92,6 +92,7 @@ namespace Smile {
                 if (S.CacheUpdate) Rc += 'U';
                 if (S.CacheQuery)  Rc += 'Q';
                 if (S.CacheStats)  Rc += 'S';
+                if (S.CacheStatsDetail) Rc += 'd'; // minusculo: qualifica o S, nao e outro eixo
                 // Piso de confianca, junto do Q porque e a CONSULTA que ele governa — e sai do
                 // nome quando ninguem consultou, onde ele nao descreveria nada. `C1` e o regime
                 // anterior a Fase 4 (uma amostra ja encerrava um caminho), que continua alcancavel
@@ -497,6 +498,7 @@ namespace Smile {
                 // atomicos mudam quem vence as insercoes do cache. Comparar uma captura
                 // instrumentada com uma normal e comparar duas configuracoes diferentes.
                 File << "  \"cacheStatsEnabled\": " << Bool(_State.CacheStats) << ",\n";
+                File << "  \"cacheStatsDetail\": " << Bool(_State.CacheStatsDetail) << ",\n";
                 File << "  \"giBackfacePolicy\": " << Bool(_State.GIBackfacePolicy) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";
@@ -505,6 +507,19 @@ namespace Smile {
                 File << "  \"cacheCapacity\": " << _State.CacheCapacity << ",\n";
                 File << "  \"cacheQueries\": "  << _State.CacheQueries  << ",\n";
                 File << "  \"cacheHits\": "     << _State.CacheHits     << ",\n";
+                // Detalhe (zerado sem `cacheStatsDetail`). Os cinco motivos de miss pedem coisas
+                // opostas — capacidade, cobertura, tempo, ou nada — e somados nao respondem
+                // nenhuma; `insertFull/insertTries` e o gate de saida do balde cheio.
+                File << "  \"cacheMissShortSegment\": " << _State.CacheMissShort   << ",\n";
+                File << "  \"cacheMissNarrowCone\": "   << _State.CacheMissCone    << ",\n";
+                File << "  \"cacheMissNoEntry\": "      << _State.CacheMissNoEntry << ",\n";
+                File << "  \"cacheMissNoSamples\": "    << _State.CacheMissEmpty   << ",\n";
+                File << "  \"cacheMissWarming\": "      << _State.CacheMissWarming << ",\n";
+                File << "  \"cacheMissStale\": "        << _State.CacheMissStale   << ",\n";
+                File << "  \"cacheInsertTries\": "      << _State.CacheInsertTries << ",\n";
+                File << "  \"cacheInsertFull\": "       << _State.CacheInsertFull  << ",\n";
+                File << "  \"cacheProbeSum\": "         << _State.CacheProbeSum    << ",\n";
+                File << "  \"cacheProbeMax\": "         << _State.CacheProbeMax    << ",\n";
                 File << "  \"cameraX\": " << _State.CameraPos[0] << ",\n";
                 File << "  \"cameraY\": " << _State.CameraPos[1] << ",\n";
                 File << "  \"cameraZ\": " << _State.CameraPos[2] << ",\n";

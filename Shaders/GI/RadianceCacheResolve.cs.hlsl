@@ -51,6 +51,21 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             // que e o que o painel le. Ver RC_STAT_QUERY_*.
             Stats[RC_STAT_QUERIES] = 0u;
             Stats[RC_STAT_HITS]    = 0u;
+            // Idem para o detalhe: misses por motivo vem dos traces, insercoes vem do passe de
+            // update — os dois rodam antes daqui, e a copia do anel os pega deste frame.
+            Stats[RC_STAT_MISS_SHORT]   = 0u;
+            Stats[RC_STAT_MISS_CONE]    = 0u;
+            Stats[RC_STAT_MISS_NOENTRY] = 0u;
+            Stats[RC_STAT_MISS_EMPTY]   = 0u;
+            Stats[RC_STAT_MISS_WARMING] = 0u;
+            Stats[RC_STAT_MISS_STALE]   = 0u;
+            Stats[RC_STAT_INS_TRIES]    = 0u;
+            Stats[RC_STAT_INS_FULL]     = 0u;
+            Stats[RC_STAT_INS_PROBES]   = 0u;
+            // PROBEMAX e escrito por InterlockedMax, entao o zero e obrigatorio e nao cosmetico:
+            // sem ele o maximo do frame nunca desceria e o painel mostraria o pior caso da sessao
+            // inteira como se fosse o de agora.
+            Stats[RC_STAT_INS_PROBEMAX] = 0u;
         }
         return;
     }

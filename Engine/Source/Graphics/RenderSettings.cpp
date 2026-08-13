@@ -284,6 +284,19 @@ namespace Smile {
         R.Capture.Cancel("a instrumentacao do cache foi alternada durante o aquecimento");
         R.RadianceCache.SetStatsEnabled(_V);
     }
+    void FRenderSettings::SetRadianceCacheStatsDetailEnabled(bool _V) {
+        if (_V == R.RadianceCache.GetStatsDetailEnabled()) return;
+        // Mesmo tratamento do knob acima, e pelo mesmo motivo levado um passo adiante: o detalhe
+        // acrescenta atomicos AO PRODUTOR tambem (a telemetria de insercao), onde eles mudam quem
+        // vence a corrida do CAS. E o regime que mais mexe no escalonamento, entao alterna-lo no
+        // meio de um aquecimento produz uma captura que nao pertence a serie nenhuma.
+        R.Capture.Cancel("o detalhe da instrumentacao do cache foi alternado durante o aquecimento");
+        R.RadianceCache.SetStatsDetailEnabled(_V);
+    }
+    bool FRenderSettings::GetRadianceCacheStatsDetailEnabled() const {
+        return R.RadianceCache.GetStatsDetailEnabled();
+    }
+
     bool FRenderSettings::GetRadianceCacheStatsEnabled() const {
         return R.RadianceCache.GetStatsEnabled();
     }

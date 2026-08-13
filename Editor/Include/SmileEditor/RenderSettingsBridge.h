@@ -110,6 +110,13 @@ namespace SmileEditor {
         Q_PROPERTY(bool radianceCacheEnabled READ IsRadianceCacheEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheQuery READ IsRadianceCacheQuery NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheStats READ IsRadianceCacheStats NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool radianceCacheStatsDetail READ IsRadianceCacheStatsDetail
+                       NOTIFY GISettingsChanged)
+        // Decomposicao dos misses e saude do hash — texto pronto, e nao dez propriedades: o painel
+        // nao tem o que fazer com os numeros crus alem de imprimi-los lado a lado, e a regra de
+        // "zero medido x nao medido" mora do lado do C++, onde o knob esta.
+        Q_PROPERTY(QString radianceCacheMissBreakdown READ GetRadianceCacheMissBreakdown
+                       NOTIFY StatsChanged)
         Q_PROPERTY(bool radianceCacheDedicatedUpdate READ IsRadianceCacheDedicatedUpdate
                        NOTIFY GISettingsChanged)
         Q_PROPERTY(double radianceCacheUpdateFraction READ GetRadianceCacheUpdateFraction
@@ -310,6 +317,7 @@ namespace SmileEditor {
         bool              IsRadianceCacheEnabled() const;
         bool              IsRadianceCacheQuery() const;
         bool              IsRadianceCacheStats() const;
+        bool              IsRadianceCacheStatsDetail() const;
         bool              IsRadianceCacheDedicatedUpdate() const;
         double            GetRadianceCacheUpdateFraction() const; // 0..1
         bool              IsRadianceCachePrevTerminal() const;
@@ -324,6 +332,7 @@ namespace SmileEditor {
         double            GetRadianceCacheConvergence() const;  // amostras/celula, 0..kMaxAccum
         double            GetRadianceCacheMemoryMB() const;
         QString           GetRadianceCacheSummary() const;
+        QString           GetRadianceCacheMissBreakdown() const;
         bool              IsReSTIRGIVisibilityEnabled() const;
         bool              AreGIFoliageShadowsEnabled() const;
         bool              IsReflectionsCullBackfaceEnabled() const;
@@ -343,6 +352,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleRadianceCache();
         Q_INVOKABLE void ToggleRadianceCacheQuery();
         Q_INVOKABLE void ToggleRadianceCacheStats();
+        Q_INVOKABLE void ToggleRadianceCacheStatsDetail();
         Q_INVOKABLE void ToggleRadianceCacheDedicatedUpdate();
         Q_INVOKABLE void SetRadianceCacheUpdateFraction(double V);
         Q_INVOKABLE void ToggleRadianceCachePrevTerminal();

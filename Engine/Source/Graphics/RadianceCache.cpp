@@ -21,8 +21,16 @@ namespace Smile {
         constexpr u32 kAccumStride    = sizeof(u32) * 4;
         constexpr u32 kResolvedStride = sizeof(u32) * 4;
         // Espelha RC_STAT_COUNT do RadianceCache.hlsli.
-        constexpr u32 kStatCount      = 6;
+        constexpr u32 kStatCount      = 16;
         constexpr u32 kStatBytes      = kStatCount * sizeof(u32);
+        // Os seis contadores de miss sao endereçados no shader por
+        // `RC_STAT_MISS_SHORT + (status - RC_QUERY_SHORT_SEGMENT)`, ou seja as duas sequencias
+        // andam juntas. Aqui a leitura do readback os desdobra na ordem do struct, e o que trava o
+        // par e este bloco: os seis motivos comecam no slot 6, e o primeiro slot depois deles e o
+        // da telemetria de insercao. Mudar um dos lados sem o outro trocaria "cone estreito" por
+        // "chave ausente" no painel — dois diagnosticos opostos, e nada acusaria.
+        static_assert(kStatCount == 16, "layout dos contadores: 6 de tabela/query + 6 de miss + 4 "
+                                        "de insercao. Mudou o shader? Mude a leitura tambem.");
         // Modos do dispatch do resolve (StatsParams.x). Ver o cabecalho do shader.
         constexpr f32 kModeResolve    = 0.0f;
         constexpr f32 kModeClearStats = 1.0f;
@@ -268,6 +276,7 @@ namespace Smile {
         PublishedUpdate = false;
         PublishedQuery  = false;
         PublishedStats  = false;
+        PublishedDetail = false;
         PublishedDedicated    = false;
         PublishedUpdateCells  = 0;
         PublishedVertices     = 0;
@@ -542,6 +551,15 @@ namespace Smile {
         u32 Flags = kFlagUpdate;
         if (UsePrevCacheAtTerminal) Flags |= kFlagQuery;
         // Sem kFlagStats, sempre — ver a nota da declaracao.
+        //
+        // COM kFlagStatsDetail, e isso nao contradiz a regra acima. Ela existe porque QUERIES/HITS
+        // descrevem os RAIOS DE RENDER, e somar o terminal deste passe misturaria duas populacoes.
+        // O detalhe carrega dois grupos com gates diferentes justamente por isso: os misses por
+        // motivo exigem os DOIS bits (e este passe nao tem o de stats, entao nao os toca), e a
+        // telemetria de INSERCAO exige so este — e ela descreve quem ESCREVE na tabela, que com o
+        // produtor dedicado e este passe e mais ninguem. Sem isto, a saude do hash nao teria como
+        // ser medida no unico regime em que ela existe.
+        if (StatsEnabled && StatsDetail) Flags |= kFlagStatsDetail;
         P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
         // O MESMO piso de confianca do render. Ele so age se o terminal for consultar, e por isso
         // o registro abaixo esta amarrado ao kFlagQuery e nao ao passe rodar.
@@ -562,7 +580,8 @@ namespace Smile {
         if (UpdatePassActive()) {
             PublishedUpdate    = true;
             PublishedDedicated = true;
-            if ((Flags & kFlagQuery) != 0u) PublishedMinSamples = MinSampleCount;
+            if ((Flags & kFlagQuery) != 0u)       PublishedMinSamples = MinSampleCount;
+            if ((Flags & kFlagStatsDetail) != 0u) PublishedDetail     = true;
         }
         return P;
     }
@@ -705,6 +724,10 @@ namespace Smile {
         // Query/Hits saem ZERO por construcao: o resolve zera os contadores logo antes da
         // varredura, e esta copia e posterior a ela. Quem quer o hit rate do frame le o StatsCPU,
         // que vem da copia PRE-resolve. Ver o comentario do RecordStatsCopy.
+        //
+        // O mesmo vale para os doze do detalhe — misses e insercao sao escritos antes do resolve —,
+        // e por isso eles nem sao lidos aqui: quem monta o manifesto os pega do anel, junto do
+        // hit rate, que e a metade da telemetria que essa copia nao ve.
         Out.Queries = 0;
         Out.Hits    = 0;
         D3D12_RANGE NoWrite{ 0, 0 };
@@ -729,6 +752,18 @@ namespace Smile {
         StatsCPU.Evicted  = S[3];
         StatsCPU.Queries  = S[4];
         StatsCPU.Hits     = S[5];
+        // Zerados sem o regime de detalhe. Deixa-los assim e o correto: o painel distingue "zero
+        // medido" de "nao medido" pelo proprio knob, como ja faz com o hit rate.
+        StatsCPU.MissShort   = S[6];
+        StatsCPU.MissCone    = S[7];
+        StatsCPU.MissNoEntry = S[8];
+        StatsCPU.MissEmpty   = S[9];
+        StatsCPU.MissWarming = S[10];
+        StatsCPU.MissStale   = S[11];
+        StatsCPU.InsertTries = S[12];
+        StatsCPU.InsertFull  = S[13];
+        StatsCPU.ProbeSum    = S[14];
+        StatsCPU.ProbeMax    = S[15];
         D3D12_RANGE NoWrite{ 0, 0 };
         StatsReadback[InFrameSlot]->Unmap(0, &NoWrite);
     }
@@ -752,6 +787,7 @@ namespace Smile {
                 PublishedUpdate = PublishedUpdate || AllowUpdate;
                 PublishedQuery  = PublishedQuery  || QueryEnabled;
                 PublishedStats  = PublishedStats  || (StatsEnabled && QueryEnabled);
+                PublishedDetail = PublishedDetail || (StatsEnabled && StatsDetail);
                 // So com consulta: sem ela o piso nao decide nada neste consumidor, e registra-lo
                 // faria o manifesto declarar um controle que nao agiu sobre a imagem.
                 if (QueryEnabled) PublishedMinSamples = MinSampleCount;
@@ -759,6 +795,10 @@ namespace Smile {
             // So conta acerto/erro quando ha o que contar: sem query o contador so mediria zero
             // e ainda assim pagaria os atomicos.
             if (StatsEnabled && QueryEnabled) Flags |= kFlagStats;
+            // O detalhe NAO exige QueryEnabled: metade dele (a telemetria de insercao) vive no
+            // RC_Update, e o produtor legado escreve por este mesmo caminho. O que ele exige e a
+            // instrumentacao ligada, para o regime ser um so e nao dois.
+            if (StatsEnabled && StatsDetail) Flags |= kFlagStatsDetail;
         }
         P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
         P.LodCapacityFlags = { LodDistance, static_cast<f32>(CapacityV),

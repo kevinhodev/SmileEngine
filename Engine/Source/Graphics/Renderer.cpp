@@ -1290,6 +1290,7 @@ namespace Smile {
         // quem quer que tenha recebido a flag de query.
         S.CacheMinSamples      = RadianceCache.PublishedMinSampleCount();
         S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
+        S.CacheStatsDetail = RadianceCache.PublishedStatsDetailThisFrame();
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
         // gather do ReSTIR GI e o produtor do cache) da mesma fonte, entao ela descreve o regime
@@ -1316,6 +1317,19 @@ namespace Smile {
             const FRadianceCacheStats& Ring = RadianceCache.Stats();
             S.CacheQueries  = Ring.Queries;  // zero sem a instrumentacao ligada
             S.CacheHits     = Ring.Hits;
+            // Do mesmo anel, e zerados sem o regime de detalhe: as duas metades da telemetria vem
+            // da mesma copia PRE-resolve, porque misses e insercoes sao escritos pelos passes que
+            // rodam antes dele.
+            S.CacheMissShort   = Ring.MissShort;
+            S.CacheMissCone    = Ring.MissCone;
+            S.CacheMissNoEntry = Ring.MissNoEntry;
+            S.CacheMissEmpty   = Ring.MissEmpty;
+            S.CacheMissWarming = Ring.MissWarming;
+            S.CacheMissStale   = Ring.MissStale;
+            S.CacheInsertTries = Ring.InsertTries;
+            S.CacheInsertFull  = Ring.InsertFull;
+            S.CacheProbeSum    = Ring.ProbeSum;
+            S.CacheProbeMax    = Ring.ProbeMax;
         }
 
         // Antes do ++ dos contadores: e o indice com que ESTE frame amostrou.

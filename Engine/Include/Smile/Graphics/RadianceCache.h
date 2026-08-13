@@ -98,7 +98,8 @@ namespace Smile {
     };
 
     // O que o painel mostra. Os quatro primeiros vem da varredura da tabela no resolve; os dois
-    // ultimos, do RC_Query dentro dos traces (so quando a instrumentacao esta ligada).
+    // seguintes, do RC_Query dentro dos traces (so com a instrumentacao ligada); o resto, do
+    // regime de DETALHE (ver kFlagStatsDetail).
     struct FRadianceCacheStats {
         u32 Occupied = 0;  // celulas com chave valida
         u32 Valid    = 0;  // dessas, quantas ja tem radiancia utilizavel
@@ -106,6 +107,20 @@ namespace Smile {
         u32 Evicted  = 0;
         u32 Queries  = 0;
         u32 Hits     = 0;
+        // Misses por MOTIVO. Eles pedem coisas opostas — capacidade, cobertura, tempo, ou nada
+        // (limite geometrico do cache) —, e somados num numero so nao respondem nenhuma delas.
+        // A ordem espelha RC_STAT_MISS_* e o static_assert abaixo trava o par com os RC_QUERY_*.
+        u32 MissShort   = 0; // segmento menor que a celula
+        u32 MissCone    = 0; // cone especular menor que a celula
+        u32 MissNoEntry = 0; // chave ausente ou balde cheio  -> capacidade
+        u32 MissEmpty   = 0; // celula sem amostra            -> cobertura do produtor
+        u32 MissWarming = 0; // abaixo do piso de confianca   -> so tempo
+        u32 MissStale   = 0; // vai refrescar                 -> resposta a luz dinamica
+        // Saude do hash, medida na insercao. A meta do plano: InsertFull < 0,1% de InsertTries.
+        u32 InsertTries = 0;
+        u32 InsertFull  = 0;
+        u32 ProbeSum    = 0; // / InsertTries = comprimento medio da cadeia
+        u32 ProbeMax    = 0; // pior caso DO FRAME (o resolve zera todo frame)
     };
 
     // World Radiance Cache — radiancia de SAIDA em espaco de mundo, hash espacial
@@ -138,6 +153,10 @@ namespace Smile {
         static constexpr u32 kFlagQuery  = 1u;
         static constexpr u32 kFlagUpdate = 2u;
         static constexpr u32 kFlagStats  = 4u;
+        // TERCEIRO regime de medicao, e nao um detalhe do segundo: a contagem de atomicos do
+        // kFlagStats e congelada para a serie ja tirada nela continuar comparavel. Ver o
+        // RC_FLAG_STATS_DETAIL no shader.
+        static constexpr u32 kFlagStatsDetail = 8u;
 
         // Espelham RC_SAMPLE_NUM_MAX / RC_STALE_FRAME_MAX do shader. Mudar aqui sem mudar la
         // deixa o teto de amostras incoerente com o teto do ponto fixo do acumulador.
@@ -303,6 +322,9 @@ namespace Smile {
         // com, e PSNR de 48 dB entre os dois regimes. Entao ela e parte da CONFIGURACAO, nao um
         // observador invisivel, e por isso entra no manifesto e na etiqueta do arquivo.
         bool PublishedStatsThisFrame() const  { return PublishedStats; }
+        // Idem para o regime de detalhe, que soma atomicos por cima do anterior — inclusive no
+        // produtor, onde eles mudam quem vence as insercoes.
+        bool PublishedStatsDetailThisFrame() const { return PublishedDetail; }
         // QUEM escreveu neste frame — o passe dedicado, ou os hits do render. Publicado pelo mesmo
         // mecanismo dos anteriores (o ShaderParams do produtor que rodou) em vez de reconstituido
         // pelo manifesto a partir dos knobs: o `GetDedicatedUpdate` diz o que foi PEDIDO, e um
@@ -347,6 +369,12 @@ namespace Smile {
         // trace do frame, entao e knob proprio e nao vem junto do Enabled.
         void SetStatsEnabled(bool V) { StatsEnabled = V; }
         bool GetStatsEnabled() const { return StatsEnabled; }
+        // Detalhe: misses por motivo (nos traces) e saude da insercao (no produtor). Exige a
+        // instrumentacao ligada — sozinho ele nao teria denominador para o hit rate — e e um
+        // regime PROPRIO, com etiqueta e manifesto: os atomicos extras mudam o escalonamento das
+        // waves, e sem separa-lo a serie ja medida em `S` deixaria de ser comparavel.
+        void SetStatsDetailEnabled(bool V) { StatsDetail = V; }
+        bool GetStatsDetailEnabled() const { return StatsDetail; }
 
         // Os passes de trace escrevem por atomico bindless e leem o Resolved; ambos precisam do
         // recurso em UNORDERED_ACCESS / NON_PIXEL. Chamar antes de gravar os traces do frame.
@@ -449,6 +477,7 @@ namespace Smile {
         u32 DebugWidth = 0, DebugHeight = 0;
         ERadianceCacheDebugMode DebugMode = ERadianceCacheDebugMode::Cells;
         bool StatsEnabled = false;
+        bool StatsDetail  = false;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         // Tabela de 3 UAVs CONTIGUOS (o range do root param 2 e um so). Os indices bindless
@@ -540,6 +569,7 @@ namespace Smile {
         mutable bool PublishedUpdate = false;
         mutable bool PublishedQuery  = false;
         mutable bool PublishedStats  = false;
+        mutable bool PublishedDetail = false;
         mutable bool PublishedDedicated = false;
         // O que o shader REALMENTE recebeu neste frame. Zerados no UpdatePerFrame para que "0"
         // signifique "o passe nao rodou" em vez de guardar o valor de um frame antigo.
