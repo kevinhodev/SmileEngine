@@ -92,6 +92,13 @@ namespace Smile {
                 if (S.CacheUpdate) Rc += 'U';
                 if (S.CacheQuery)  Rc += 'Q';
                 if (S.CacheStats)  Rc += 'S';
+                // Piso de confianca, junto do Q porque e a CONSULTA que ele governa — e sai do
+                // nome quando ninguem consultou, onde ele nao descreveria nada. `C1` e o regime
+                // anterior a Fase 4 (uma amostra ja encerrava um caminho), que continua alcancavel
+                // pelo knob e e o outro braco do A/B.
+                if (S.CacheMinSamples > 0u) {
+                    Rc += 'C'; Rc += std::to_string(S.CacheMinSamples);
+                }
                 // O PRODUTOR entra no nome pela mesma razao do S: duas capturas indistinguiveis na
                 // pasta sao um convite a compara-las, e produtor legado x dedicado nao sao duas
                 // amostras da mesma configuracao — sao dois estimadores. Com o dedicado vem junto
@@ -484,6 +491,8 @@ namespace Smile {
                      << Bool(_State.CacheUsePrevTerminal) << ",\n";
                 File << "  \"cacheMaxVertices\": "  << _State.CacheMaxVertices  << ",\n";
                 File << "  \"cacheMinRoughness\": " << _State.CacheMinRoughness << ",\n";
+                // Piso de confianca da CONSULTA (Fase 4). Zero = ninguem consultou neste frame.
+                File << "  \"cacheMinSamples\": "   << _State.CacheMinSamples   << ",\n";
                 // Regime de medicao, nao detalhe de diagnostico: com a instrumentacao ligada os
                 // atomicos mudam quem vence as insercoes do cache. Comparar uma captura
                 // instrumentada com uma normal e comparar duas configuracoes diferentes.

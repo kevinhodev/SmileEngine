@@ -118,6 +118,14 @@ namespace Smile {
         // defeito que o produtor e a fracao ja tiveram.
         u32  CacheMaxVertices      = 0;
         f32  CacheMinRoughness     = 0.0f;
+        // Piso de confianca EFETIVO: amostras minimas para uma celula encerrar um caminho. Zero
+        // quer dizer "ninguem consultou o cache neste frame", e nao "piso zero".
+        //
+        // Ele muda a imagem por dois caminhos ao mesmo tempo — quantos raios de render terminam no
+        // cache, e o que o terminal do updater grava nas celulas seguintes —, entao duas capturas
+        // que so diferem nele sao duas configuracoes. Mesmo criterio dos vertices e do piso de
+        // roughness, e por isso ele entra tambem na etiqueta do nome do arquivo.
+        u32  CacheMinSamples       = 0;
         // Instrumentacao do cache. NAO e um observador neutro — ver
         // FRadianceCache::PublishedStatsThisFrame. Duas capturas so sao comparaveis se estiverem
         // no MESMO regime, e por isso ela entra tambem na etiqueta do nome do arquivo.

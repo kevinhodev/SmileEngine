@@ -960,6 +960,10 @@ namespace SmileEditor {
     double RenderSettingsBridge::GetRadianceCacheMinRoughness() const {
         return Renderer ? Renderer->Settings().GetRadianceCacheMinCacheableRoughness() : 0.5;
     }
+    int RenderSettingsBridge::GetRadianceCacheMinSamples() const {
+        return Renderer ? static_cast<int>(Renderer->Settings().GetRadianceCacheMinSampleCount())
+                        : 4;
+    }
     double RenderSettingsBridge::GetRadianceCacheCellSize() const {
         return Renderer ? Renderer->Settings().GetRadianceCacheCellSize() : 0.50;
     }
@@ -1049,6 +1053,12 @@ namespace SmileEditor {
         if (!Renderer) return;
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheMinCacheableRoughness(static_cast<float>(V));
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::SetRadianceCacheMinSamples(int V) {
+        if (!Renderer || V < 1) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheMinSampleCount(static_cast<Smile::u32>(V));
         emit GISettingsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCachePrevTerminal() {

@@ -272,6 +272,7 @@ namespace Smile {
         PublishedUpdateCells  = 0;
         PublishedVertices     = 0;
         PublishedMinRoughness = 0.0f;
+        PublishedMinSamples   = 0;
         if (!Ready || !MappedCB) return;
         CPU.CacheParams = { static_cast<f32>(CapacityV),
                             static_cast<f32>(kMaxAccumSamples),
@@ -542,8 +543,10 @@ namespace Smile {
         if (UsePrevCacheAtTerminal) Flags |= kFlagQuery;
         // Sem kFlagStats, sempre — ver a nota da declaracao.
         P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
+        // O MESMO piso de confianca do render. Ele so age se o terminal for consultar, e por isso
+        // o registro abaixo esta amarrado ao kFlagQuery e nao ao passe rodar.
         P.LodCapacityFlags = { LodDistance, static_cast<f32>(CapacityV),
-                               static_cast<f32>(Flags), 0.0f };
+                               static_cast<f32>(Flags), static_cast<f32>(MinSampleCount) };
         P.Resources        = { static_cast<f32>(UavTable + 0),
                                static_cast<f32>(UavTable + 1),
                                static_cast<f32>(UavTable + 2),
@@ -559,6 +562,7 @@ namespace Smile {
         if (UpdatePassActive()) {
             PublishedUpdate    = true;
             PublishedDedicated = true;
+            if ((Flags & kFlagQuery) != 0u) PublishedMinSamples = MinSampleCount;
         }
         return P;
     }
@@ -651,7 +655,13 @@ namespace Smile {
         // O visualizador consulta a tabela mas nunca escreve nela: params SEM update e SEM stats.
         // Um dispatch de tela cheia contando "queries" poluiria a taxa de acerto que o painel
         // mostra, que e sobre os RAIOS e nao sobre os pixels.
-        const FRadianceCacheShaderParams P = ShaderParams(/*AllowUpdate*/ false);
+        //
+        // E ConsumerRuns = FALSE, apesar de este passe rodar de fato. O registro descreve a
+        // configuracao da IMAGEM CAPTURADA, e o visualizador escreve num alvo de debug que nao e o
+        // backbuffer. Com o default (true), abrir a janela de debug bastava para o manifesto
+        // declarar `cacheQuery: true` num frame em que nenhum trace de render consultou o cache.
+        const FRadianceCacheShaderParams P = ShaderParams(/*AllowUpdate*/ false,
+                                                          /*ConsumerRuns*/ false);
         D.RadianceCacheCamCell     = P.CameraPosCell;
         D.RadianceCacheLodCapFlags = P.LodCapacityFlags;
         D.RadianceCacheResources   = P.Resources;
@@ -742,6 +752,9 @@ namespace Smile {
                 PublishedUpdate = PublishedUpdate || AllowUpdate;
                 PublishedQuery  = PublishedQuery  || QueryEnabled;
                 PublishedStats  = PublishedStats  || (StatsEnabled && QueryEnabled);
+                // So com consulta: sem ela o piso nao decide nada neste consumidor, e registra-lo
+                // faria o manifesto declarar um controle que nao agiu sobre a imagem.
+                if (QueryEnabled) PublishedMinSamples = MinSampleCount;
             }
             // So conta acerto/erro quando ha o que contar: sem query o contador so mediria zero
             // e ainda assim pagaria os atomicos.
@@ -749,7 +762,7 @@ namespace Smile {
         }
         P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
         P.LodCapacityFlags = { LodDistance, static_cast<f32>(CapacityV),
-                               static_cast<f32>(Flags), 0.0f };
+                               static_cast<f32>(Flags), static_cast<f32>(MinSampleCount) };
         P.Resources        = { static_cast<f32>(UavTable + 0),
                                static_cast<f32>(UavTable + 1),
                                static_cast<f32>(UavTable + 2),

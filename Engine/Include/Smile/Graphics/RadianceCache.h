@@ -25,7 +25,11 @@ namespace Smile {
     // A documentacao do algoritmo (e as fontes) esta em Shaders/GI/RadianceCache.hlsli.
     struct FRadianceCacheShaderParams {
         Vec4 CameraPosCell;    // xyz = camera; w = aresta da celula no nivel 0, em metros
-        Vec4 LodCapacityFlags; // x = distancia do LOD; y = capacidade; z = flags; w = livre
+        // w = PISO DE CONFIANCA (amostras minimas para a celula encerrar um caminho). Ele coube no
+        // campo que sobrava desta linha de proposito: os cinco traces, o visualizador e o passe de
+        // update ja declaram estes tres Vec4 no b0 deles, entao um piso configuravel nao custou
+        // mudanca de layout de cbuffer em lugar nenhum.
+        Vec4 LodCapacityFlags; // x = distancia do LOD; y = capacidade; z = flags; w = piso
         Vec4 Resources;        // x = Entries UAV; y = Accum UAV; z = Resolved UAV; w = Stats UAV
     };
 
@@ -240,6 +244,29 @@ namespace Smile {
             MinCacheableRoughness = V < 0.0f ? 0.0f : (V > 1.0f ? 1.0f : V);
         }
         f32  GetMinCacheableRoughness() const { return MinCacheableRoughness; }
+        // PISO DE CONFIANCA — amostras minimas para a celula poder ENCERRAR um caminho.
+        //
+        // Ate a Fase 4 o unico teste era `sampleNum == 0`: uma celula de UMA amostra devolvia
+        // RC_QUERY_HIT e o chamador parava de sombrear, adotando uma unica amostra de path tracer
+        // como radiancia convergida — e servindo-a a todos os raios que caissem ali pelos frames
+        // seguintes. Este e o "celula fria nao pode terminar um path" do plano.
+        //
+        // Vale para os DOIS lados (consulta do render e terminal do updater), como a politica de
+        // backface e pelo mesmo motivo: dois pisos fariam a mesma celula ser confiavel num caminho
+        // e nao no outro.
+        //
+        // Invalida a tabela: o terminal do updater consulta com este piso, entao o que a celula
+        // GUARDA depende dele — mesmo criterio dos vertices e do piso de roughness.
+        void SetMinSampleCount(u32 V) {
+            const u32 C = V < 1u ? 1u : (V > kMaxMinSamples ? kMaxMinSamples : V);
+            if (C != MinSampleCount) ResetOnce();
+            MinSampleCount = C;
+        }
+        u32  GetMinSampleCount() const { return MinSampleCount; }
+        // Teto do knob, e nao do formato: `sampleNum` cabe em 16 bits e o acumulador para em
+        // kMaxAccumSamples. Acima de uns poucos a celula so ficaria inalcancavel — com 64 nenhuma
+        // celula jamais seria consultavel antes de estar no teto, e o cache viraria decoracao.
+        static constexpr u32 kMaxMinSamples = 16;
         // Espelha o RCU_MAX_VERTS do shader, que e constante de COMPILACAO la (o array de vertices
         // precisa viver em registrador). Pedir mais que isto no CB nao alocaria nada — o shader
         // clampa —, entao o teto vale dos dois lados.
@@ -290,6 +317,10 @@ namespace Smile {
         // criterio: sao o que o SHADER recebeu neste frame, e 0 quando o passe nao rodou.
         u32  PublishedUpdateVertices() const { return PublishedVertices; }
         f32  PublishedMinCacheableRoughness() const { return PublishedMinRoughness; }
+        // Piso de confianca EFETIVO. Zero quer dizer "ninguem consultou o cache neste frame" — e
+        // nao "piso zero": ele so descreve alguma coisa quando houve consulta, e as consultas vem
+        // de dois lugares independentes (os traces de render e o terminal do updater).
+        u32  PublishedMinSampleCount() const { return PublishedMinSamples; }
 
         // ConsumerRuns = este consumidor vai realmente tracar neste frame. Os params sao montados
         // para todos (custa nada, e o passe pode nem rodar), mas so quem RODA conta para o
@@ -480,6 +511,15 @@ namespace Smile {
         // de cena, nao para todas — reabrir com medida de interior antes de trata-lo como geral.
         u32  UpdateMaxVertices     = 1;
         f32  MinCacheableRoughness = 0.5f;
+        // 4 amostras. E um ponto de partida a MEDIR, nao um numero herdado de fonte nenhuma — o
+        // que a serie tem para calibra-lo e o A/B, e `1` reproduz exatamente o comportamento
+        // anterior ao piso, que e o outro braco dele.
+        //
+        // A ordem de grandeza vem do que a Fase 3 mediu: com N = 128 frames de aquecimento a
+        // celula media tinha 39 das 64 amostras, ou seja ~0,3 amostra por frame. Um piso de 4 e
+        // alcancado em ~13 frames — pequeno diante dos 64 do despejo, e grande o bastante para a
+        // media ja nao ser uma amostra unica de path tracer.
+        u32  MinSampleCount        = 4;
         // LOD do albedo nos hits, igual ao do ReSTIR GI. Um numero, nao um knob: divergir dele
         // faria o cache aprender um albedo e o render consumir outro.
         static constexpr f32 kUpdateAlbedoLOD = 2.0f;
@@ -506,5 +546,9 @@ namespace Smile {
         u32 PublishedUpdateCells = 0;
         u32 PublishedVertices    = 0;
         f32 PublishedMinRoughness = 0.0f;
+        // Escrito pelos DOIS construtores de params, e por isso mutavel como os de cima: quem
+        // consulta o cache pode ser um trace de render ou o terminal do updater, e o piso descreve
+        // o frame se qualquer um dos dois rodou com a flag de query.
+        mutable u32 PublishedMinSamples = 0;
     };
 }

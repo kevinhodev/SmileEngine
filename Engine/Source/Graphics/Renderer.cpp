@@ -1285,6 +1285,10 @@ namespace Smile {
         S.CacheUsePrevTerminal = RadianceCache.GetUsePrevCacheAtTerminal();
         S.CacheMaxVertices     = RadianceCache.PublishedUpdateVertices();
         S.CacheMinRoughness    = RadianceCache.PublishedMinCacheableRoughness();
+        // Piso de confianca EFETIVO — zero quando ninguem consultou o cache neste frame. Ele vale
+        // para os dois lados (traces de render e terminal do updater), entao vem publicado por
+        // quem quer que tenha recebido a flag de query.
+        S.CacheMinSamples      = RadianceCache.PublishedMinSampleCount();
         S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o

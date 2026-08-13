@@ -62,16 +62,12 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     if (nLen < 1e-4f) return; // pixel sem normal geometrica (masked fora do pre-pass)
     const float3 N = nRaw / nLen;
 
+    // Pela macro, e nao por uma copia a dedo das dez atribuicoes: um campo novo no contrato (o
+    // MinSamples entrou assim) nao pode depender de alguem lembrar de acrescenta-lo aqui tambem —
+    // o visualizador leria zero e pintaria como confiavel exatamente a celula que a consulta
+    // recusa.
     FRadianceCacheParams P;
-    P.CameraPos    = RadianceCacheCamCell.xyz;
-    P.BaseCellSize = RadianceCacheCamCell.w;
-    P.LodDistance  = RadianceCacheLodCapFlags.x;
-    P.Capacity     = (uint)RadianceCacheLodCapFlags.y;
-    P.Flags        = (uint)RadianceCacheLodCapFlags.z;
-    P.EntriesUAV   = (uint)RadianceCacheResources.x;
-    P.AccumUAV     = (uint)RadianceCacheResources.y;
-    P.ResolvedUAV  = (uint)RadianceCacheResources.z;
-    P.StatsUAV     = (uint)RadianceCacheResources.w;
+    RC_UNPACK_PARAMS_INTO(P);
     if (P.Capacity == 0u) return; // cena sem cache montado
 
     const uint  level    = RC_GridLevel(worldPos, P.CameraPos, P.LodDistance);
@@ -111,11 +107,18 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     } else if (mode == RC_DEBUG_HITMISS) {
         // Isto mostra COBERTURA da superficie visivel, nao promete o resultado de um raio real:
         // so o caller conhece segmentLength e pode aplicar a guarda segmento < tamanho da celula.
+        //
+        // O piso de confianca entra aqui pela mesma razao que a chave e recalculada em vez de
+        // reimplementada: um visualizador que diverge da consulta mente exatamente quando mais
+        // importa. Sem ele, a celula de uma amostra sairia VERDE ("posso encerrar um caminho
+        // aqui") enquanto o raio de verdade a recusa, e o aquecimento pareceria instantaneo.
         const uint refreshThreshold = RC_REFRESH_FRAME_MAX +
                                       (checksum & (RC_REFRESH_FRAME_MAX - 1u));
-        const bool usable = sampleNum > 0u && age < refreshThreshold;
-        color = usable          ? float3(0.15f, 0.85f, 0.25f)  // retorno antecipado disponivel
-              : sampleNum > 0u  ? float3(1.00f, 0.45f, 0.08f)  // vai pedir refresh
+        const bool confident = sampleNum >= max(P.MinSamples, 1u);
+        color = (confident && age < refreshThreshold)
+                                ? float3(0.15f, 0.85f, 0.25f)  // retorno antecipado disponivel
+              : confident       ? float3(1.00f, 0.45f, 0.08f)  // vai pedir refresh
+              : sampleNum > 0u  ? float3(0.20f, 0.55f, 0.95f)  // aquecendo: abaixo do piso
               : found           ? float3(0.95f, 0.80f, 0.15f)  // chave ainda sem amostra
                                 : float3(0.90f, 0.15f, 0.15f); // nunca preenchida
     } else if (mode == RC_DEBUG_LOD) {

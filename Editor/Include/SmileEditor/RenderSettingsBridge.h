@@ -120,6 +120,8 @@ namespace SmileEditor {
                        NOTIFY GISettingsChanged)
         Q_PROPERTY(double radianceCacheMinRoughness READ GetRadianceCacheMinRoughness
                        NOTIFY GISettingsChanged)
+        Q_PROPERTY(int radianceCacheMinSamples READ GetRadianceCacheMinSamples
+                       NOTIFY GISettingsChanged)
         Q_PROPERTY(double radianceCacheCellSize READ GetRadianceCacheCellSize NOTIFY GISettingsChanged)
         Q_PROPERTY(double radianceCacheLodDistance READ GetRadianceCacheLodDistance NOTIFY GISettingsChanged)
         Q_PROPERTY(int radianceCacheDebugMode READ GetRadianceCacheDebugMode NOTIFY GISettingsChanged)
@@ -313,6 +315,7 @@ namespace SmileEditor {
         bool              IsRadianceCachePrevTerminal() const;
         int               GetRadianceCacheMaxVertices() const;
         double            GetRadianceCacheMinRoughness() const;
+        int               GetRadianceCacheMinSamples() const;
         double            GetRadianceCacheCellSize() const;
         double            GetRadianceCacheLodDistance() const;
         int               GetRadianceCacheDebugMode() const;
@@ -345,6 +348,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleRadianceCachePrevTerminal();
         Q_INVOKABLE void SetRadianceCacheMaxVertices(int V);
         Q_INVOKABLE void SetRadianceCacheMinRoughness(double V);
+        Q_INVOKABLE void SetRadianceCacheMinSamples(int V);
         Q_INVOKABLE void SetRadianceCacheCellSize(double V);
         Q_INVOKABLE void SetRadianceCacheLodDistance(double V);
         Q_INVOKABLE void SetRadianceCacheDebugMode(int V);

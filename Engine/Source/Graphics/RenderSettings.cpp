@@ -251,6 +251,25 @@ namespace Smile {
         return R.RadianceCache.GetMinCacheableRoughness();
     }
 
+    void FRenderSettings::SetRadianceCacheMinSampleCount(u32 _V) {
+        if (_V == R.RadianceCache.GetMinSampleCount()) return;
+        R.RadianceCache.SetMinSampleCount(_V); // ja arma o ResetOnce da tabela
+        // INVALIDA pelos dois lados, e vale distinguir os dois porque so um deles e obvio.
+        //
+        // O obvio: o piso muda o que os traces de render APROVEITAM, e o que eles ja aproveitaram
+        // esta acumulado no atlas do DDGI e nos reservoirs do ReSTIR.
+        //
+        // O outro: o TERMINAL do updater tambem consulta com este piso, entao ele muda o que a
+        // celula GUARDA — subir o piso quer dizer "daqui em diante o multi-bounce so entra por
+        // celula confiavel", e a media continuaria carregando o que entrou pelo regime frouxo por
+        // ate 64 amostras. E o mesmo argumento do piso de roughness, e o motivo de o setter da
+        // classe limpar a tabela.
+        Invalidate(Dom::RayVisibility);
+    }
+    u32 FRenderSettings::GetRadianceCacheMinSampleCount() const {
+        return R.RadianceCache.GetMinSampleCount();
+    }
+
     void FRenderSettings::SetRadianceCacheStatsEnabled(bool _V) {
         if (_V == R.RadianceCache.GetStatsEnabled()) return;
         // NAO invalida historico: o conteudo ja acumulado continua valendo, e derrubar o cache a

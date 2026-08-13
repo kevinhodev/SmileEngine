@@ -2934,7 +2934,14 @@ Rectangle {
                               "cache guarda um sinal cuja origem continua sendo o volume. Ligado, " +
                               "um passe próprio traça a partir do G-buffer e nunca lê sonda: é " +
                               "essa a fonte independente que o SHaRC exige. São dois estimadores, " +
-                              "não dois níveis de qualidade — trocar limpa a tabela."
+                              "não dois níveis de qualidade — trocar limpa a tabela.\n\n" +
+                              "AMOSTRAS MÍNIMAS é o piso de confiança: um acerto ENCERRA o " +
+                              "caminho de quem perguntou, então uma célula com uma amostra só " +
+                              "serviria uma única amostra de path tracer como se fosse radiância " +
+                              "convergida — para todos os raios que caírem ali, por dezenas de " +
+                              "quadros. Com 1 o cache volta a esse comportamento, que é o outro " +
+                              "braço do A/B. No visualizador de cobertura, azul é célula " +
+                              "aquecendo: tem radiância, mas ainda abaixo do piso."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -3080,9 +3087,31 @@ Rectangle {
                     }
 
                     ShadowSlider {
-                        id: rcCellSlider
+                        id: rcMinSamplesSlider
                         x: 20
                         y: rcMinRoughSlider.y + 50
+                        width: parent.width - 40
+                        // NÃO segue o produtor dedicado: este piso governa a CONSULTA, e ela
+                        // acontece com qualquer produtor. Ele vale também para o terminal do
+                        // updater, mas não nasce dele.
+                        enabled: renderModel.radianceCacheEnabled
+                        opacity: renderModel.radianceCacheEnabled ? 1.0 : 0.45
+                        label: "Amostras mínimas para encerrar um caminho"
+                        from: 1; to: 16; step: 1
+                        value: renderModel.radianceCacheMinSamples
+                        valueText: renderModel.radianceCacheMinSamples +
+                                   (renderModel.radianceCacheMinSamples === 1 ? " amostra"
+                                                                              : " amostras")
+                        // released, e não committed: o piso muda o que o terminal do updater grava,
+                        // então trocá-lo limpa a tabela. Arrastar com commit contínuo limparia o
+                        // cache a cada passo.
+                        onReleased: (v) => renderModel.SetRadianceCacheMinSamples(v)
+                    }
+
+                    ShadowSlider {
+                        id: rcCellSlider
+                        x: 20
+                        y: rcMinSamplesSlider.y + 50
                         width: parent.width - 40
                         label: "Aresta da célula (nível 0)"
                         from: 0.05; to: 2.0; step: 0.05

@@ -120,6 +120,12 @@ namespace Smile {
         // o que a celula promete conter, e as amostras estreitas ja aceitas continuariam na media.
         void SetRadianceCacheMinCacheableRoughness(f32 V);
         f32  GetRadianceCacheMinCacheableRoughness() const;
+        // Piso de CONFIANCA (1..16): amostras minimas para a celula poder ENCERRAR um caminho. Com
+        // 1 o cache volta ao comportamento anterior a Fase 4, em que uma unica amostra de path
+        // tracer era servida como radiancia convergida. INVALIDA: o terminal do updater consulta
+        // com este piso, entao ele decide tambem o que a celula GUARDA.
+        void SetRadianceCacheMinSampleCount(u32 V);
+        u32  GetRadianceCacheMinSampleCount() const;
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);

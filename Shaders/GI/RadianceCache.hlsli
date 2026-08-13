@@ -100,6 +100,9 @@ struct FRadianceCacheParams {
     uint   EntriesUAV;   uint  AccumUAV;
     uint   ResolvedUAV;  uint  StatsUAV;
     uint   Flags;                             // bit0 = query, bit1 = update, bit2 = stats
+    // PISO DE CONFIANCA: amostras minimas para a celula poder ENCERRAR um caminho. Ver o gate no
+    // RC_QueryInner. 0 e 1 reproduzem o comportamento anterior a este piso.
+    uint   MinSamples;
 };
 
 #define RC_FLAG_QUERY  1u
@@ -117,16 +120,24 @@ struct FRadianceCacheParams {
 // tipo de lista mantida a dedo que o RenderPass.h existe para extinguir: bastaria UMA delas
 // esquecer o ResolvedUAV para aquele consumidor ler lixo, e o sintoma sairia como radiancia
 // errada so em um dos caminhos.
-#define RC_UNPACK_PARAMS(P)                                        \
-    P.Cache.CameraPos    = RadianceCacheCamCell.xyz;               \
-    P.Cache.BaseCellSize = RadianceCacheCamCell.w;                 \
-    P.Cache.LodDistance  = RadianceCacheLodCapFlags.x;             \
-    P.Cache.Capacity     = (uint)RadianceCacheLodCapFlags.y;       \
-    P.Cache.Flags        = (uint)RadianceCacheLodCapFlags.z;       \
-    P.Cache.EntriesUAV   = (uint)RadianceCacheResources.x;         \
-    P.Cache.AccumUAV     = (uint)RadianceCacheResources.y;         \
-    P.Cache.ResolvedUAV  = (uint)RadianceCacheResources.z;         \
-    P.Cache.StatsUAV     = (uint)RadianceCacheResources.w;
+//
+// Duas formas porque ha dois formatos de destino: os traces guardam a struct dentro do
+// FHitShadeParams (`P.Cache`) e o VISUALIZADOR tem um FRadianceCacheParams solto. O visualizador
+// mantinha uma copia a dedo das nove atribuicoes — e ela ja seria a decima primeira linha a
+// esquecer quando este bloco cresceu com o MinSamples. A lista passa a ser uma so.
+#define RC_UNPACK_PARAMS_INTO(C)                                   \
+    C.CameraPos    = RadianceCacheCamCell.xyz;                     \
+    C.BaseCellSize = RadianceCacheCamCell.w;                       \
+    C.LodDistance  = RadianceCacheLodCapFlags.x;                   \
+    C.Capacity     = (uint)RadianceCacheLodCapFlags.y;             \
+    C.Flags        = (uint)RadianceCacheLodCapFlags.z;             \
+    C.MinSamples   = (uint)RadianceCacheLodCapFlags.w;             \
+    C.EntriesUAV   = (uint)RadianceCacheResources.x;               \
+    C.AccumUAV     = (uint)RadianceCacheResources.y;               \
+    C.ResolvedUAV  = (uint)RadianceCacheResources.z;               \
+    C.StatsUAV     = (uint)RadianceCacheResources.w;
+
+#define RC_UNPACK_PARAMS(P) RC_UNPACK_PARAMS_INTO(P.Cache)
 
 // --------------------------------------------------------------------------------------------
 // Hash
@@ -268,8 +279,14 @@ bool RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
 #define RC_QUERY_NARROW_CONE   2u // cone especular menor que a celula: o RGB apagaria a direcao
 #define RC_QUERY_NO_ENTRY      3u // chave nao encontrada (ausente ou balde cheio)
 #define RC_QUERY_NO_SAMPLES    4u // celula existe, ainda sem radiancia
-#define RC_QUERY_STALE         5u // tem dado, mas velho: o chamador sombreia e o update refresca
-#define RC_QUERY_HIT           6u // aproveitavel
+#define RC_QUERY_WARMING       5u // tem radiancia, mas abaixo do piso de confianca
+#define RC_QUERY_STALE         6u // tem dado, mas velho: o chamador sombreia e o update refresca
+#define RC_QUERY_HIT           7u // aproveitavel
+
+// Os seis ESTADOS DE CELULA da Fase 4 saem daqui, sem buffer novo: `ausente` = NO_ENTRY,
+// `presente sem amostra` = NO_SAMPLES, `aquecendo` = WARMING, `confiavel` = HIT, `precisa refresh`
+// = STALE. O sexto (`despejada`) nao e observavel pela consulta por construcao — o resolve troca a
+// chave por tombstone no mesmo passe, entao a busca seguinte cai em NO_ENTRY.
 
 struct FRCQueryResult {
     float3 Radiance;    // zerada em tudo que nao for HIT (ver a nota no RC_QueryEx)
@@ -352,18 +369,35 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
         ResourceDescriptorHeap[NonUniformResourceIndex(P.ResolvedUAV)];
     const uint4 packed    = resolved[entryIndex];
     const uint  sampleNum = packed.w & 0xFFFFu;
-    R.SampleCount = sampleNum;
-    if (sampleNum == 0u) { R.Status = RC_QUERY_NO_SAMPLES; return R; }
-
     // Idade em frames sem realimentacao — o MESMO campo que o resolve incrementa e usa para
     // despejar. Ja veio no `packed`: a decisao de refrescar nao custa leitura extra.
+    const uint  age       = packed.w >> 16u;
+    R.SampleCount = sampleNum;
+    R.Age         = age;
+    if (sampleNum == 0u) { R.Status = RC_QUERY_NO_SAMPLES; return R; }
+
+    // PISO DE CONFIANCA. Um acerto aqui ENCERRA o caminho de quem perguntou: o chamador para de
+    // sombrear e adota este RGB como toda a radiancia que vem dali para a frente. Com o teste
+    // sendo so `sampleNum == 0`, uma celula de UMA amostra fazia isso — uma unica amostra de path
+    // tracer, com toda a variancia dela, servida como radiancia convergida a todos os raios que
+    // caissem naquela celula, e por ate RC_STALE_FRAME_MAX frames.
     //
-    // O limiar e escalonado pelo checksum. Sem isso todas as celulas nascidas no mesmo frame
-    // vencem no mesmo frame e o custo do refresh vira um pico periodico em vez de um piso
+    // O piso vem do CB (nao e constante) porque `1` reproduz exatamente o comportamento anterior:
+    // e assim que o A/B do knob se faz sem recompilar. Ele vale igual para a consulta do RENDER e
+    // para o TERMINAL do passe de update — de proposito, e pelo mesmo motivo da politica de
+    // backface: o cache alimenta quem o consulta, e dois pisos diferentes fariam a mesma celula
+    // valer como confiavel de um lado e nao do outro. No terminal ele importa ate mais: ali a
+    // amostra ruim nao e consumida uma vez, e GRAVADA na celula seguinte da cadeia de multi-bounce.
+    //
+    // Custo do piso: durante o aquecimento o terminal devolve zero por mais alguns frames, entao a
+    // tabela demora um pouco mais a virar multi-bounce. E o lado certo do erro — escuro e
+    // transitorio, contra ruido gravado e servido.
+    if (sampleNum < P.MinSamples) { R.Status = RC_QUERY_WARMING; return R; }
+
+    // O limiar de refresh e escalonado pelo checksum. Sem isso todas as celulas nascidas no mesmo
+    // frame vencem no mesmo frame e o custo do refresh vira um pico periodico em vez de um piso
     // constante — o mesmo motivo pelo qual o secondary shadow map do AC Shadows e time-sliced.
-    const uint age       = packed.w >> 16u;
     const uint threshold = RC_REFRESH_FRAME_MAX + (checksum & (RC_REFRESH_FRAME_MAX - 1u));
-    R.Age      = age;
     R.Radiance = asfloat(packed.xyz);
     R.Status   = (age >= threshold) ? RC_QUERY_STALE : RC_QUERY_HIT;
     return R;
