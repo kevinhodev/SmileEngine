@@ -1,5 +1,12 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
+> **Onde estamos:** Fases 0-3 **fechadas e medidas**. Próxima: **Fase 4** (confiança, estados,
+> telemetria) — o bloco `➜ PRÓXIMO PASSO` mais abaixo tem o que a Fase 3 apurou sobre ela,
+> incluindo uma auditoria já feita e um defeito com endereço. Depois, Fase 5.
+>
+> Leia este bloco ESTADO inteiro antes de continuar; ele existe para não re-derivar decisão. A
+> seção "Estado de PARTIDA", lá embaixo, é retrato histórico e **não** descreve o código de hoje.
+
 ## ESTADO — 2026-08-13
 
 **A régua está pronta e calibrada.** O `Docs/CAPTURE-PROTOCOL.md` é a referência; aqui fica só o
@@ -95,8 +102,43 @@ E sobreposição perfeita não existe aqui: o RayQuery disputa SM e RT cores com
 Fica como commit próprio, na Fase 7, com as dependências já conhecidas (G-buffer antes, resolve
 depois, e a fila compute já ocupada pelo DDGI nessa mesma janela).
 
-Fila do que vem, nesta ordem: **V2 medido → async → time-slicing/adaptação**. Mesmo 3,75 ms do V1
-ainda é caro num frame de 7,45.
+Fila do que vem: **Fase 4 (confiança e estados) → Fase 5 (SHaRC primário)**. Fora da linha crítica e
+sem bloquear: medir **V2**, e **async** como commit próprio. Mesmo 3,75 ms do V1 ainda é caro num
+frame de 7,45 — mas async e semântica de confiança ao mesmo tempo criariam duas classes de bug
+simultâneas, e a semântica vem primeiro.
+
+---
+
+### ➜ PRÓXIMO PASSO: Fase 4 — confiança, estados e telemetria
+
+A Fase 4 já está escrita mais abaixo neste arquivo; o que segue é o que a Fase 3 apurou sobre ela e
+que muda a ordem de ataque.
+
+**A auditoria da matemática do resolve (item 1 da Fase 4) já foi feita, lendo o código — e ela passa
+no que se temia, mas achou outra coisa.**
+
+O que se temia — peso histórico efetivo maior que o teto — **não acontece**. Em
+`RadianceCacheResolve.cs.hlsl:95-101` a mistura é `(prevRadiance·prevSamples + newSum) / total` com
+`samples = min(total, 64)`; como `prevSamples` vem de `Resolved`, que só foi escrito por esse mesmo
+`min`, ele nunca passa de 64. A média corrente vira EMA de constante 1/64, que é o
+`maxAccumulatedFrames` da SHaRC. **Correto — não mexer.**
+
+**O que está errado é a outra ponta: não existe piso de confiança na consulta.** Em
+`RadianceCache.hlsli`, o `RC_QueryInner` rejeita só `sampleNum == 0` (`RC_QUERY_NO_SAMPLES`) e
+qualquer coisa acima disso vira `HIT` ou `STALE` pela idade. **Uma célula com UMA amostra encerra um
+path de render como se estivesse convergida** — uma única amostra de path tracer, com todo o ruído
+dela, servida como radiância confiável a todos os raios que caírem naquela célula.
+
+É exatamente o "célula fria não pode terminar um path" da Fase 4, e agora tem endereço: o gate
+entra no `RC_QueryInner`, ao lado do teste de `sampleNum`, e o estado da célula sai de
+`sampleCount`/`age` sem buffer novo — como o plano já manda.
+
+**Sobre capacidade: não decidir por estes números ainda.** V1 ocupa 25.165 células (2,4% de 2²⁰) e
+V4 50.718 (4,8%) — muito abaixo da faixa de 20-70% da Fase 4. Mas a faixa existe para dizer se o
+hash está saudável, e **os contadores que respondem isso (colisão, bucket cheio, probes por busca)
+ainda não existem**. Reduzir a tabela antes deles é ajustar o que não se mediu. E a conta de 2¹⁸ tem
+de ser refeita contra o **default atual**: com V1 daria 9,6% (25.165/262.144), não os 19,3% que V4
+daria — o default mudou depois dessa estimativa.
 
 ### Histórico — implementação dos commits #5 e #6
 
@@ -306,13 +348,22 @@ Esta implementação deve evoluir o que já existe. Não importar uma implementa
 8. ReSTIR DI e os dois domínios de denoising permanecem separados. Direta continua em `NrdDirect`; GI/reflexos continuam no `Nrd` indireto.
 9. RTXDI ReSTIR PT fica fora do caminho crítico e do critério de conclusão. O cache deve funcionar com o `FReSTIRGI` atual; o apêndice de ReSTIR PT só é executado se houver autorização e hardware-alvo compatível.
 
-## Estado atual que não pode ser ignorado
+## Estado de PARTIDA (como o código estava quando este plano foi escrito)
+
+> ⚠️ **Isto NÃO é o estado atual** — o título dizia "Estado atual" e envelheceu mal. É o retrato do
+> ponto zero, mantido porque as fases foram escritas contra ele. O que vale hoje está no bloco
+> **ESTADO** no topo do arquivo. Os cinco primeiros itens abaixo **já foram resolvidos**: as Fases 1
+> e 3 removeram o early return, soltaram o `InstanceGeo` do DDGI e trocaram o produtor do cache.
 
 - `Renderer::SetupForScene` já monta `RadianceCache` independentemente da AABB.
-- O setup de resize ainda contém `if (!DDGI.IsReady()) return;` antes de reflexões, ReSTIR GI e NRD indireto em `Engine/Source/Graphics/Renderer.cpp`.
-- `FReSTIRGI::SetupForResize` exige atlas de irradiância, atlas de distância e `ProbeData` do DDGI.
-- O snapshot bindless `InstanceGeo` ainda é exposto por `FDDGI::InstanceSRV()`, apesar de ser dado geral da cena de RT.
-- `ShadeSurfaceHit` consulta o cache cedo, mas, em miss, calcula direto + emissivo + DDGI e grava esse resultado de volta com `RC_Update`. Portanto, hoje o cache aprende principalmente um sinal derivado do DDGI.
+- ~~O setup de resize ainda contém `if (!DDGI.IsReady()) return;`~~ — removido na Fase 1 (`14571d7`).
+- ~~`FReSTIRGI::SetupForResize` exige atlas/ProbeData do DDGI~~ — passou a receber
+  `FGIFallbackBindings`, que sabe não existir (Fase 1).
+- ~~O snapshot `InstanceGeo` é exposto por `FDDGI::InstanceSRV()`~~ — mudou-se para
+  `FRaytracingScene` (Fase 1, `1a52ce9`).
+- ~~`ShadeSurfaceHit` grava o resultado com `RC_Update`, então o cache aprende um sinal derivado do
+  DDGI~~ — **este era o problema central da série, e a Fase 3 o fechou**: quem escreve é o passe
+  dedicado, e os traces de render só consultam.
 - O cache atual já possui LOD por distância, normal por octante, proteção por comprimento do segmento, gate de cone especular, média temporal, refresh, tombstones, evicção, visualizador e readback de métricas.
 - O `FReSTIRGI` já possui trace inicial, reuso temporal, reuso espacial, Jacobiano, limite de idade configurável, boiling filter, pack para NRD e histórico de superfície confiável.
 - O RTXDI local é 3.0 e contém ReSTIR PT, mas o SmileEngine não liga o runtime; atualmente apenas replica/adapta partes dos algoritmos nos shaders próprios.
