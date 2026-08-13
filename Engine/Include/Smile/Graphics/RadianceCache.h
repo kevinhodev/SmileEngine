@@ -195,10 +195,30 @@ namespace Smile {
         static constexpr u32 kMaxAccumSamples = 64;
         static constexpr u32 kStaleFrameMax   = 64;
 
-        // 2^20 = ~1,05 M celulas = 36 MB (4 + 16 + 16). A SHaRC sugere 2^22 (160 MB) para Night
-        // City; as cenas da Smile sao uma ordem de grandeza menores em extensao, e a categoria
-        // "GI e reflexos" do VramTracker ja e a segunda maior da engine.
-        static constexpr u32 kDefaultCapacityLog2 = 20;
+        // 2^17 = 131.072 celulas = 4,5 MB (4 + 16 + 16 bytes por celula). Isto e RESULTADO DE
+        // MEDIDA, e nao a estimativa que estava aqui: com o produtor dedicado a tabela de 2^20
+        // ocupava 2,40% (25.176 celulas, Bistro exterior, V1, C4, N=128). A conta antiga foi feita
+        // quando quem alimentava o cache eram os hits do RENDER — todo raio secundario inseria, e
+        // 2^20 fazia sentido. O passe dedicado escreve por 4% dos pixels e derrubou a populacao
+        // em quase duas ordens de grandeza; a capacidade nao tinha sido refeita contra ele.
+        //
+        // 2^17 e a UNICA potencia de dois em que os dois defaults em disputa cabem na faixa de
+        // 20-70% que o gate da Fase 4 pede:
+        //
+        //     2^16 -> V1 38,4%  V4 77,4%   (V4 estoura o teto)
+        //     2^17 -> V1 19,2%  V4 38,7%
+        //     2^18 -> V1  9,6%  V4 19,4%   (V1 abaixo do piso)
+        //
+        // ⚠️ RESSALVA DE ESCOPO, a mesma do UpdateMaxVertices: a medida e de UMA pose estatica na
+        // Bistro exterior. Camera andando mantem vivas as celulas dos ultimos kStaleFrameMax
+        // frames e sobe a ocupacao; interior tambem. Quem descobre isso e `InsertFull` — o gate de
+        // 0,1% existe exatamente para esta capacidade nao virar decisao de fe. Subir de volta e um
+        // argumento no SetupForScene, sem recompilar nada.
+        //
+        // A SHaRC do Cyberpunk usa 2^22 (~160 MB) para Night City; as cenas da Smile sao uma ordem
+        // de grandeza menores em extensao, e a categoria "GI e reflexos" do VramTracker ja e a
+        // segunda maior da engine.
+        static constexpr u32 kDefaultCapacityLog2 = 17;
         static constexpr u32 kMaxCapacityLog2     = 22;
 
         void Initialize(ID3D12Device* Device);
