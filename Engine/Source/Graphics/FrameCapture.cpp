@@ -459,7 +459,13 @@ namespace Smile {
                 File << "  \"ddgiReady\": "    << Bool(_State.DDGIReady)   << ",\n";
                 File << "  \"restirGI\": "     << Bool(_State.ReSTIRGI)    << ",\n";
                 File << "  \"restirDI\": "     << Bool(_State.ReSTIRDI)    << ",\n";
+                // `regir` continua sendo o EFETIVO — os manifestos ja capturados da serie usam
+                // esta chave com esse significado, e renomea-la quebraria a comparacao com eles.
+                // Os dois novos ficam ao lado para que "pedido true, efetivo false" seja legivel
+                // sem sair do arquivo.
                 File << "  \"regir\": "        << Bool(_State.ReGIR)       << ",\n";
+                File << "  \"regirRequested\": " << Bool(_State.ReGIRRequested) << ",\n";
+                File << "  \"giPunctualLightCount\": " << _State.PunctualLightCount << ",\n";
                 File << "  \"reflections\": "  << Bool(_State.Reflections) << ",\n";
                 File << "  \"cacheUpdate\": "  << Bool(_State.CacheUpdate) << ",\n";
                 File << "  \"cacheQuery\": "   << Bool(_State.CacheQuery)  << ",\n";

@@ -727,6 +727,12 @@ namespace Smile {
         // O ReGIR so constroi com consumidor E luz na cena; o gate real e montado no meio do
         // frame, longe do FFrameModes. Guardado aqui para o manifesto registrar o que rodou.
         bool             ReGIRRanThisFrame = false;
+        // Luzes PUNTUAIS elegiveis (habilitadas, com intensidade, raio e RTWeight > 0) que o frame
+        // empacotou para o indireto. Vai ao manifesto porque e o numero que EXPLICA um ReGIR
+        // pedido e nao construido: a Bistro tem `"lights": []` e ilumina por geometria emissiva,
+        // entao GILightCount = 0 e a grade nao tem o que pooling. Sem este campo, "regir: false"
+        // com o toggle ligado parece bug e custa uma rodada de medicao para nao ser.
+        u32              GILightCountThisFrame = 0;
         // Ocupacao lida da copia POS-resolve do frame capturado. Separada do Stats() do painel,
         // que vem do anel e carrega query/hits — as duas metades tem origens diferentes.
         FRadianceCacheStats CaptureCacheStats{};

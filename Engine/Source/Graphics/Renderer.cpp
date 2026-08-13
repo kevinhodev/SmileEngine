@@ -1268,6 +1268,8 @@ namespace Smile {
         S.ReSTIRGI    = _Modes.ReSTIRGIActive;
         S.ReSTIRDI    = _Modes.ReSTIRDIActiveFrame;
         S.ReGIR       = ReGIRRanThisFrame;    // toggle + consumidor + luz na cena
+        S.ReGIRRequested     = UseReGIR;      // so o toggle — a diferenca entre os dois e o achado
+        S.PunctualLightCount = GILightCountThisFrame;
         S.Reflections = _Modes.ReflectionsActive;
         // O que o ShaderParams REALMENTE publicou aos traces deste frame. Recompor a condicao
         // aqui (Enabled && Ready && !ResetPending) daria outra resposta: o resolve limpa o
@@ -2821,7 +2823,8 @@ namespace Smile {
         // O gate real do ReGIR e este, e nao o toggle: sem consumidor ou sem luz na cena a grade
         // nem chega a ser construida. O manifesto da captura le daqui — reconstituir a condicao
         // por fora e o comeco de uma divergencia.
-        ReGIRRanThisFrame = ReGIROn;
+        ReGIRRanThisFrame     = ReGIROn;
+        GILightCountThisFrame = GILightCount;
         if (ReGIROn) {
             FGpuScope Scope(GpuProfiler, CommandList, "ReGIR (build)");
             ReGIR.UpdatePerFrame(FrameSlot, TemporalSampleIndex, GILightCount, GILightSetSignature);

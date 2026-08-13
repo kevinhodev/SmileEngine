@@ -89,7 +89,14 @@ namespace Smile {
         bool DDGIReady          = false; // o VOLUME existe (criterio de fallback, ver a67eadd)
         bool ReSTIRGI           = false;
         bool ReSTIRDI           = false;
-        bool ReGIR              = false;
+        bool ReGIR              = false; // EFETIVO: a grade foi construida neste frame
+        // Os dois campos que explicam um ReGIR pedido e nao construido. Ele exige consumidor E
+        // luz PUNTUAL elegivel; numa cena iluminada so por geometria emissiva (a Bistro tem
+        // `"lights": []`) o toggle fica ligado e a grade nunca sai. Sem isto, o manifesto diz
+        // "regir: false" e nao ha como distinguir toggle desligado, recurso ausente e cena sem
+        // luz puntual — foram tres hipoteses e uma rodada de medicao para descobrir a terceira.
+        bool ReGIRRequested     = false; // o toggle
+        u32  PunctualLightCount = 0;     // luzes elegiveis empacotadas para o indireto
         bool Reflections        = false;
         bool CacheUpdate        = false; // radiance cache: escrita
         bool CacheQuery         = false; // radiance cache: leitura
