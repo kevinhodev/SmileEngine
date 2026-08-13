@@ -66,6 +66,14 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             // sem ele o maximo do frame nunca desceria e o painel mostraria o pior caso da sessao
             // inteira como se fosse o de agora.
             Stats[RC_STAT_INS_PROBEMAX] = 0u;
+            // O produtor. PATH_DEPTH tambem e InterlockedMax, e vale a mesma observacao.
+            Stats[RC_STAT_PATHS]       = 0u;
+            Stats[RC_STAT_PATH_VERTS]  = 0u;
+            Stats[RC_STAT_PATH_DEPTH]  = 0u;
+            Stats[RC_STAT_TERM_SKY]    = 0u;
+            Stats[RC_STAT_TERM_CACHE]  = 0u;
+            Stats[RC_STAT_TERM_KILLED] = 0u;
+            Stats[RC_STAT_TERM_ZERO]   = 0u;
         }
         return;
     }

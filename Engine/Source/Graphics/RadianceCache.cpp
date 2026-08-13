@@ -21,7 +21,7 @@ namespace Smile {
         constexpr u32 kAccumStride    = sizeof(u32) * 4;
         constexpr u32 kResolvedStride = sizeof(u32) * 4;
         // Espelha RC_STAT_COUNT do RadianceCache.hlsli.
-        constexpr u32 kStatCount      = 16;
+        constexpr u32 kStatCount      = 23;
         constexpr u32 kStatBytes      = kStatCount * sizeof(u32);
         // Os seis contadores de miss sao endereçados no shader por
         // `RC_STAT_MISS_SHORT + (status - RC_QUERY_SHORT_SEGMENT)`, ou seja as duas sequencias
@@ -29,8 +29,10 @@ namespace Smile {
         // par e este bloco: os seis motivos comecam no slot 6, e o primeiro slot depois deles e o
         // da telemetria de insercao. Mudar um dos lados sem o outro trocaria "cone estreito" por
         // "chave ausente" no painel — dois diagnosticos opostos, e nada acusaria.
-        static_assert(kStatCount == 16, "layout dos contadores: 6 de tabela/query + 6 de miss + 4 "
-                                        "de insercao. Mudou o shader? Mude a leitura tambem.");
+        // O mesmo vale para o bloco do PRODUTOR, endereçado por `RC_STAT_TERM_SKY + kind`.
+        static_assert(kStatCount == 23, "layout dos contadores: 6 de tabela/query + 6 de miss + 4 "
+                                        "de insercao + 7 do produtor. Mudou o shader? Mude a "
+                                        "leitura tambem.");
         // Modos do dispatch do resolve (StatsParams.x). Ver o cabecalho do shader.
         constexpr f32 kModeResolve    = 0.0f;
         constexpr f32 kModeClearStats = 1.0f;
@@ -66,7 +68,8 @@ namespace Smile {
         // 1 UAV que o shader NAO declara: o caminho de escrita do passe e todo bindless, mas um
         // range de 0 descritores nao serializa em D3D12 — o mesmo motivo do BindingSRV do resolve.
         // O destino e o buffer de contadores porque e nele que a telemetria deste passe (caminhos
-        // lancados, profundidade, terminal por tipo) vai escrever na Fase 4.
+        // lancados, profundidade, terminal por tipo) escreve desde a Fase 4 — por bindless, como
+        // todo o resto; o binding aqui continua existindo so para o range serializar.
         UpdatePSO.Initialize(Device, "RadianceCacheUpdate.cs_6_6.cso", kUpdateSrvCount, 1, true);
     }
 
@@ -764,6 +767,13 @@ namespace Smile {
         StatsCPU.InsertFull  = S[13];
         StatsCPU.ProbeSum    = S[14];
         StatsCPU.ProbeMax    = S[15];
+        StatsCPU.Paths       = S[16];
+        StatsCPU.PathVerts   = S[17];
+        StatsCPU.PathDepth   = S[18];
+        StatsCPU.TermSky     = S[19];
+        StatsCPU.TermCache   = S[20];
+        StatsCPU.TermKilled  = S[21];
+        StatsCPU.TermZero    = S[22];
         D3D12_RANGE NoWrite{ 0, 0 };
         StatsReadback[InFrameSlot]->Unmap(0, &NoWrite);
     }

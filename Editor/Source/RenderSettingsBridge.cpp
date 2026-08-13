@@ -1039,12 +1039,29 @@ namespace SmileEditor {
         const QString Probes = T > 0.0
             ? QString::number(static_cast<double>(S.ProbeSum) / T, 'f', 1)
             : QStringLiteral("—");
+        // O produtor tem denominador proprio de novo — os caminhos lancados. Terminal em CACHE e
+        // o numero que diz se a realimentacao esta viva; tudo em SKY, com o cache ligado ha
+        // tempo, e sinal de que o multi-bounce nao comecou.
+        const double PathsD = S.Paths > 0 ? static_cast<double>(S.Paths) : 0.0;
+        auto TermPct = [PathsD](Smile::u32 N) {
+            if (PathsD <= 0.0) return QStringLiteral("—");
+            return QString::number(100.0 * static_cast<double>(N) / PathsD, 'f', 1) +
+                   QStringLiteral("%");
+        };
+        const QString Depth = PathsD > 0.0
+            ? QString::number(static_cast<double>(S.PathVerts) / PathsD, 'f', 2)
+            : QStringLiteral("—");
         return QStringLiteral(
                    "miss: segmento %1 · cone %2 · sem chave %3 · sem amostra %4 · aquecendo %5 · "
-                   "refresh %6\ninserção: %7 tentativas · balde cheio %8 · sondagens %9 (máx %10)")
+                   "refresh %6\ninserção: %7 tentativas · balde cheio %8 · sondagens %9 (máx %10)"
+                   "\nprodutor: %11 caminhos · profundidade %12 (máx %13) · terminal céu %14 · "
+                   "cache %15 · morto %16 · zero %17")
             .arg(Pct(S.MissShort), Pct(S.MissCone), Pct(S.MissNoEntry), Pct(S.MissEmpty),
                  Pct(S.MissWarming), Pct(S.MissStale))
-            .arg(S.InsertTries).arg(Full).arg(Probes).arg(S.ProbeMax);
+            .arg(S.InsertTries).arg(Full).arg(Probes).arg(S.ProbeMax)
+            .arg(S.Paths).arg(Depth).arg(S.PathDepth)
+            .arg(TermPct(S.TermSky), TermPct(S.TermCache), TermPct(S.TermKilled),
+                 TermPct(S.TermZero));
     }
 
     void RenderSettingsBridge::ToggleRadianceCache() {

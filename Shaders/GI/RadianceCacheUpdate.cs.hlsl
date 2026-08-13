@@ -142,6 +142,14 @@ struct FPathVertex {
     bool   Eligible;
 };
 
+// Por onde o caminho terminou. A ordem espelha RC_STAT_TERM_* (o endereçamento e
+// `RC_STAT_TERM_SKY + kind`), e o valor so e lido pela telemetria — nenhuma decisao de transporte
+// depende dele.
+#define RCU_TERM_SKY    0u
+#define RCU_TERM_CACHE  1u
+#define RCU_TERM_KILLED 2u
+#define RCU_TERM_ZERO   3u
+
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
     const uint2 px = dtid.xy;
@@ -213,6 +221,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     FPathVertex verts[RCU_MAX_VERTS];
     uint  count = 0u;                        // vertices sombreados
     float3 Lterm = float3(0.0f, 0.0f, 0.0f); // radiancia que entra pelo fim do caminho
+    // Comeca em ZERO porque esse e o caso residual: lobo invalido, terminal desligado, ou miss no
+    // cache. Os outros tres se declaram nos pontos de saida do laco.
+    uint  termKind = RCU_TERM_ZERO;
 
     RayDesc ray;
     ray.Origin    = OffsetRayGBuffer(x1, N, dir, camDist);
@@ -263,7 +274,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // direta e o emissivo que eles ja mediram. Em `bounce == 0` isto e equivalente a desistir,
         // porque `count` fica em zero e a volta nao grava nada.
         if (PolicyParams.x > 0.5f && PT_ResolveSelfIntersection(q, ray, SMILE_RT_MASK_GATHER)) {
-            Lterm = float3(0.0f, 0.0f, 0.0f);
+            Lterm    = float3(0.0f, 0.0f, 0.0f);
+            termKind = RCU_TERM_KILLED;
             break;
         }
 
@@ -272,7 +284,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // completo; era o `return` do commit anterior que jogava fora justamente o caso mais
         // comum de iluminacao de exterior.
         if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
-            Lterm = ShadeSky(ray.Direction, sunDir, P.SkyIntensity, P);
+            Lterm    = ShadeSky(ray.Direction, sunDir, P.SkyIntensity, P);
+            termKind = RCU_TERM_SKY;
             break;
         }
 
@@ -305,7 +318,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 // exatamente o sinal que esta serie existe para trocar.
                 const FRCQueryResult Q = RC_QueryEx(P.Cache, T.Pos, T.CacheN, hitDist,
                                                     rayRoughness);
-                if (RC_QueryHit(Q)) Lterm = Q.Radiance;
+                if (RC_QueryHit(Q)) { Lterm = Q.Radiance; termKind = RCU_TERM_CACHE; }
             }
             break;
         }
@@ -417,5 +430,37 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // O clamp de faixa, o descarte de NaN/Inf e a reserva de vaga no acumulador ficam no
         // RC_Update — onde ja estavam para o produtor antigo.
         if (verts[i].Eligible) RC_Update(P.Cache, verts[i].Pos, verts[i].CacheN, L);
+    }
+
+    // ============================================================================================
+    // TELEMETRIA DO PRODUTOR (regime de detalhe)
+    // ============================================================================================
+    // Chega aqui so quem LANCOU caminho: os pixels nao sorteados e os de ceu ja retornaram la em
+    // cima, e e isso que faz `PATHS` medir a fracao efetiva em vez do dispatch.
+    //
+    // As waves aqui sao esparsas por construcao (4% dos pixels), entao a reducao por wave rende
+    // menos que nos traces — mas o dispatch tambem e ~25x menor, e sem estes numeros o gate da
+    // Fase 3 que exige "a taxa de paths e a profundidade media batem com os parametros" nao tem
+    // como ser verificado.
+    [branch] if ((P.Cache.Flags & RC_FLAG_STATS_DETAIL) != 0u) {
+        RWStructuredBuffer<uint> stats =
+            ResourceDescriptorHeap[NonUniformResourceIndex(P.Cache.StatsUAV)];
+        const uint wavePaths = WaveActiveCountBits(true);
+        const uint waveVerts = WaveActiveSum(count);
+        const uint waveDepth = WaveActiveMax(count);
+        uint ignored;
+        if (WaveIsFirstLane()) {
+            InterlockedAdd(stats[RC_STAT_PATHS],      wavePaths, ignored);
+            InterlockedAdd(stats[RC_STAT_PATH_VERTS], waveVerts, ignored);
+            InterlockedMax(stats[RC_STAT_PATH_DEPTH], waveDepth, ignored);
+        }
+        // Um atomico por tipo PRESENTE na wave — e nao quatro sempre. O laco desenrola sobre
+        // constantes, entao o indice do buffer continua literal.
+        [unroll] for (uint t = 0u; t < 4u; ++t) {
+            const uint n = WaveActiveCountBits(termKind == t);
+            if (n > 0u && WaveIsFirstLane()) {
+                InterlockedAdd(stats[RC_STAT_TERM_SKY + t], n, ignored);
+            }
+        }
     }
 }

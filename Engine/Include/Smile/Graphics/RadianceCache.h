@@ -121,6 +121,16 @@ namespace Smile {
         u32 InsertFull  = 0;
         u32 ProbeSum    = 0; // / InsertTries = comprimento medio da cadeia
         u32 ProbeMax    = 0; // pior caso DO FRAME (o resolve zera todo frame)
+        // O PRODUTOR visto de dentro. `Paths` contra a fracao pedida fecha o gate da Fase 3 que
+        // nunca foi medido; o terminal por tipo diz de onde vem a energia que entra no cache —
+        // tudo em SKY quer dizer que a realimentacao ainda nao comecou.
+        u32 Paths      = 0;
+        u32 PathVerts  = 0; // / Paths = profundidade media
+        u32 PathDepth  = 0; // maxima do frame
+        u32 TermSky    = 0;
+        u32 TermCache  = 0;
+        u32 TermKilled = 0; // segmento morto pela politica de backface
+        u32 TermZero   = 0; // miss no terminal, lobo invalido, ou terminal desligado
     };
 
     // World Radiance Cache — radiancia de SAIDA em espaco de mundo, hash espacial

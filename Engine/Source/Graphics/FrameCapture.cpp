@@ -520,6 +520,14 @@ namespace Smile {
                 File << "  \"cacheInsertFull\": "       << _State.CacheInsertFull  << ",\n";
                 File << "  \"cacheProbeSum\": "         << _State.CacheProbeSum    << ",\n";
                 File << "  \"cacheProbeMax\": "         << _State.CacheProbeMax    << ",\n";
+                // O produtor: caminhos, profundidade e por onde eles terminaram.
+                File << "  \"cachePaths\": "            << _State.CachePaths       << ",\n";
+                File << "  \"cachePathVerts\": "        << _State.CachePathVerts   << ",\n";
+                File << "  \"cachePathDepthMax\": "     << _State.CachePathDepth   << ",\n";
+                File << "  \"cacheTermSky\": "          << _State.CacheTermSky     << ",\n";
+                File << "  \"cacheTermCache\": "        << _State.CacheTermCache   << ",\n";
+                File << "  \"cacheTermKilled\": "       << _State.CacheTermKilled  << ",\n";
+                File << "  \"cacheTermZero\": "         << _State.CacheTermZero    << ",\n";
                 File << "  \"cameraX\": " << _State.CameraPos[0] << ",\n";
                 File << "  \"cameraY\": " << _State.CameraPos[1] << ",\n";
                 File << "  \"cameraZ\": " << _State.CameraPos[2] << ",\n";

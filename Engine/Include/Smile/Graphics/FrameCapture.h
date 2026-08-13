@@ -155,6 +155,11 @@ namespace Smile {
         u32 CacheMissEmpty = 0, CacheMissWarming = 0, CacheMissStale = 0;
         u32 CacheInsertTries = 0, CacheInsertFull = 0;
         u32 CacheProbeSum = 0, CacheProbeMax = 0;
+        // O produtor. `cachePaths` contra `cacheUpdateFraction` e o gate de saida da Fase 3 que
+        // ficou sem medida, e o terminal por tipo e o que separa "o cache realimenta" de "o cache
+        // so ve ceu" numa captura de arquivo, sem depender de alguem ter olhado o painel na hora.
+        u32 CachePaths = 0, CachePathVerts = 0, CachePathDepth = 0;
+        u32 CacheTermSky = 0, CacheTermCache = 0, CacheTermKilled = 0, CacheTermZero = 0;
 
         // Semente com que ESTE frame amostrou. Tem de bater com o N do aquecimento; se nao bater,
         // o contrato de warm-up quebrou em algum lugar e o manifesto denuncia.

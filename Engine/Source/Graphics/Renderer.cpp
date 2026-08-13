@@ -1330,6 +1330,13 @@ namespace Smile {
             S.CacheInsertFull  = Ring.InsertFull;
             S.CacheProbeSum    = Ring.ProbeSum;
             S.CacheProbeMax    = Ring.ProbeMax;
+            S.CachePaths       = Ring.Paths;
+            S.CachePathVerts   = Ring.PathVerts;
+            S.CachePathDepth   = Ring.PathDepth;
+            S.CacheTermSky     = Ring.TermSky;
+            S.CacheTermCache   = Ring.TermCache;
+            S.CacheTermKilled  = Ring.TermKilled;
+            S.CacheTermZero    = Ring.TermZero;
         }
 
         // Antes do ++ dos contadores: e o indice com que ESTE frame amostrou.

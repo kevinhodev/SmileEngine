@@ -105,7 +105,22 @@
 #define RC_STAT_INS_FULL     13u
 #define RC_STAT_INS_PROBES   14u
 #define RC_STAT_INS_PROBEMAX 15u
-#define RC_STAT_COUNT        16u
+// O PRODUTOR, visto de dentro (escritos pelo RadianceCacheUpdate.cs.hlsl). Sao a outra metade da
+// pergunta: os de cima dizem o que a consulta encontrou, estes dizem o que o passe de update
+// esteve fazendo. `PATHS` contra a fracao pedida fecha o gate de saida da Fase 3 que nunca foi
+// medido ("a taxa de paths e a profundidade media batem com os parametros"), e o TERMINAL por
+// tipo responde a pergunta que decide a serie inteira — de onde vem a energia que entra no cache.
+// Terminal em CACHE quer dizer realimentacao viva; tudo em SKY quer dizer que o multi-bounce
+// ainda nao comecou.
+#define RC_STAT_PATHS        16u
+#define RC_STAT_PATH_VERTS   17u // soma de vertices sombreados; / PATHS = profundidade media
+#define RC_STAT_PATH_DEPTH   18u // maximo do frame
+// A ORDEM importa: o shader endereça por `RC_STAT_TERM_SKY + kind`.
+#define RC_STAT_TERM_SKY     19u
+#define RC_STAT_TERM_CACHE   20u
+#define RC_STAT_TERM_KILLED  21u // segmento morto pela politica de backface
+#define RC_STAT_TERM_ZERO    22u // miss no terminal, lobo invalido, ou terminal desligado
+#define RC_STAT_COUNT        23u
 
 // Publicado no CB de cada consumidor do HitShading.hlsli, igual ao FReGIRShaderParams.
 //
