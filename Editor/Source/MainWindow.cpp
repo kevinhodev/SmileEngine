@@ -13,6 +13,7 @@
 #include "SmileEditor/SceneOutlinerBridge.h"
 #include "SmileEditor/SceneDocument.h"
 #include "SmileEditor/CameraBookmarksBridge.h"
+#include "SmileEditor/CaptureBridge.h"
 #include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
@@ -97,6 +98,7 @@ namespace SmileEditor {
         SceneDoc   = new SceneDocument(this);         // camada autorada (.smap)
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
         CameraBookmarksBr = new CameraBookmarksBridge(this); // bookmarks de camera (renderer depois)
+        CaptureBr  = new CaptureBridge(this);         // captura deterministica (renderer depois)
         RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
@@ -131,6 +133,13 @@ namespace SmileEditor {
         if (CameraBookmarksBr && StatusBr) {
             connect(CameraBookmarksBr, &CameraBookmarksBridge::Message, this,
                     [this](const QString& _Text) { StatusBr->ShowMessage(_Text, 4000); });
+        }
+        // Captura -> barra de status, pelo mesmo argumento: o resultado sai N frames depois do
+        // clique, e sem um aviso o operador nao tem como distinguir "ainda aquecendo" de "o
+        // pedido nao entrou". O caminho do PNG tambem sai por aqui.
+        if (CaptureBr && StatusBr) {
+            connect(CaptureBr, &CaptureBridge::Message, this,
+                    [this](const QString& _Text) { StatusBr->ShowMessage(_Text, 6000); });
         }
 
         connect(Viewport, &ViewportWidget::TelemetryUpdated,    this, &MainWindow::UpdateStats);
@@ -441,6 +450,7 @@ namespace SmileEditor {
                     if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
                     if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
                     if (CameraBookmarksBr) CameraBookmarksBr->OnSceneLoaded(Path, Additive);
+                    if (CaptureBr)   CaptureBr->OnSceneLoaded(Path, Additive);
                     if (Viewport)    Viewport->NotifyDebugTargetsChanged();
                     if (StatusBr) {
                         StatusBr->ShowMessage(
@@ -698,6 +708,9 @@ namespace SmileEditor {
         // Bookmarks de camera: so precisa do handle. Sem Refresh por frame — a pose gravada so
         // muda por clique, e ler a camera todo frame nao diria nada sobre os SLOTS.
         if (CameraBookmarksBr) CameraBookmarksBr->SetRenderer(Viewport->GetRenderer());
+        // Captura: idem, so o handle. O progresso e puxado por Timer do QML enquanto o card
+        // estiver visivel — a sessao roda na render thread e a GUI so pergunta.
+        if (CaptureBr) CaptureBr->SetRenderer(Viewport->GetRenderer());
 
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {
@@ -801,6 +814,7 @@ namespace SmileEditor {
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("renderModel"), RenderBr },
                   { QStringLiteral("cameraBookmarks"), CameraBookmarksBr },
+                  { QStringLiteral("capture"), CaptureBr },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
                 Dialog);
             Panel->setObjectName(QStringLiteral("SettingsPanel"));

@@ -15,6 +15,9 @@ Rectangle {
     // ela fica undefined, e todo binding e todo clique falham em silencio — sem erro visivel,
     // porque um handler que chama metodo de undefined so aborta aquele handler.
     required property var cameraBookmarks
+    // Captura determinística (CaptureBridge). Mesma regra da de cima — sem esta linha o botão de
+    // capturar não faz nada e não diz nada.
+    required property var capture
     required property var settingsWindow
 
     color: "#141511"
@@ -3104,6 +3107,7 @@ Rectangle {
                         Repeater {
                             model: 4
                             delegate: Item {
+                                id: camSlotRow
                                 width: camSlotsColumn.width
                                 height: 26
                                 readonly property bool filled:
@@ -3150,7 +3154,188 @@ Rectangle {
                                         label: "Ir"
                                         onTapped: cameraBookmarks.Restore(index)
                                     }
+                                    // Restaurar E capturar, nesta ordem, num clique só. A ordem
+                                    // do protocolo é preset → câmera → reset, e o reset acontece
+                                    // dentro do motor no frame seguinte: as duas chamadas abaixo
+                                    // terminam antes dele. Fazer isso em dois cliques deixaria
+                                    // espaço para capturar da pose errada, que é o erro que os
+                                    // slots existem para eliminar.
+                                    ActionButton {
+                                        label: "Capturar"
+                                        opacity: camSlotRow.filled && !capture.busy ? 1.0 : 0.45
+                                        onTapped: {
+                                            if (capture.busy) return
+                                            if (!cameraBookmarks.Restore(index)) return
+                                            capture.Shoot(index, captureCard.warmupFrames,
+                                                          captureCard.scientific,
+                                                          captureCard.pinnedHours)
+                                        }
+                                    }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    id: captureCard
+                    width: parent.width
+                    title: "Captura determinística — PNG + manifesto"
+                    height: captureColumn.y + captureColumn.height + contentPadding + 8
+
+                    // O N é FIXO para todo o A/B, escolhido uma vez por calibração. Fica aqui, e
+                    // não por captura, justamente para não variar entre configurações: parada
+                    // adaptativa daria mais tempo de acumulação à configuração que converge mais
+                    // devagar, que é precisamente a variável em teste.
+                    property int  warmupFrames: 128
+                    property bool scientific: true
+                    // Hora fixada durante a sessão. Não pode ser "a hora atual no clique": com o
+                    // Time of Day correndo, duas capturas disparadas com minutos de diferença
+                    // sairiam com sóis diferentes, e nenhum reset conserta isso depois. Aqui ela é
+                    // um valor DECLARADO, que não muda entre uma captura e outra a menos que o
+                    // operador mude — que é o que torna o A/B válido por construção.
+                    //
+                    // Negativa = ainda não inicializada; o Timer abaixo puxa a hora do mundo na
+                    // primeira vez que o card aparece.
+                    property real pinnedHours: -1
+                    function formatHours(h) {
+                        if (h < 0) return "—"
+                        var hh = Math.floor(h)
+                        var mm = Math.floor((h - hh) * 60)
+                        return (hh < 10 ? "0" : "") + hh + ":" + (mm < 10 ? "0" : "") + mm
+                    }
+
+                    Text {
+                        id: captureHelper
+                        x: 20
+                        y: captureCard.headerHeight + captureCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Zera TODO acumulador — inclusive os caches de mundo (DDGI, ReGIR, " +
+                              "radiance cache, FFT do oceano), que o corte de câmera preserva de " +
+                              "propósito — reinicia a semente de amostragem, aquece N frames " +
+                              "RENDERIZADOS e grava o frame seguinte em PNG, com um manifesto do " +
+                              "estado real da engine ao lado.\n\n" +
+                              "Durante a sessão a câmera fica TRAVADA e o mundo para: sol, nuvens, " +
+                              "água e vento não avançam. Sem isso, duas capturas do mesmo bookmark " +
+                              "sairiam de estados diferentes conforme quantos segundos couberam " +
+                              "entre elas — e o A/B mediria o relógio, não o estimador.\n\n" +
+                              "O aquecimento é de centenas de frames, não de dezenas: a histerese " +
+                              "do DDGI é 0,99 e o radiance cache tem teto de 64 amostras por " +
+                              "célula."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
+                    Column {
+                        id: captureColumn
+                        x: 20
+                        y: captureHelper.y + captureHelper.height + 12
+                        width: parent.width - 40
+                        spacing: 6
+
+                        C.ToggleRow {
+                            label: "Preset científico"
+                            hint: "nativo, sem upscaler e sem TAA"
+                            checked: captureCard.scientific
+                            interactive: !capture.busy
+                            onToggled: captureCard.scientific = !captureCard.scientific
+                        }
+
+                        C.SliderRow {
+                            label: "Frames de aquecimento (N)"
+                            valueText: captureCard.warmupFrames.toFixed(0)
+                            from: 0
+                            to: 512
+                            stepSize: 8
+                            boundValue: captureCard.warmupFrames
+                            interactive: !capture.busy
+                            onMoved: (v) => captureCard.warmupFrames = Math.round(v)
+                        }
+
+                        Item {
+                            width: parent.width
+                            height: 26
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "Hora do dia fixada"
+                                color: capture.busy ? root.textMuted : root.textNormal
+                                font.family: C.Theme.fontFamily
+                                font.pixelSize: 11
+                            }
+                            Row {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 8
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: captureCard.formatHours(captureCard.pinnedHours)
+                                    color: root.textSecondary
+                                    font.family: C.Theme.fontFamily
+                                    font.pixelSize: 11
+                                }
+                                ActionButton {
+                                    label: "Usar hora atual"
+                                    opacity: capture.busy ? 0.45 : 1.0
+                                    onTapped: {
+                                        if (capture.busy) return
+                                        var h = capture.CurrentTimeOfDayHours()
+                                        if (h >= 0) captureCard.pinnedHours = h
+                                    }
+                                }
+                            }
+                        }
+
+                        Item {
+                            width: parent.width
+                            height: 28
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width - 130
+                                elide: Text.ElideMiddle
+                                text: capture.busy
+                                      ? "aquecendo — faltam " + capture.warmupRemaining + " frames"
+                                      : (capture.lastResult !== "" ? capture.lastResult
+                                                                   : "nenhuma captura nesta sessão")
+                                color: capture.busy ? root.blue : root.textSecondary
+                                font.family: C.Theme.fontFamily
+                                font.pixelSize: 11
+                            }
+                            ActionButton {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                label: "Capturar aqui"
+                                opacity: capture.busy ? 0.45 : 1.0
+                                // Sem restaurar pose: captura da câmera livre, para inspecionar um
+                                // ponto que ainda não virou bookmark. O manifesto grava slot -1.
+                                onTapped: {
+                                    if (!capture.busy)
+                                        capture.Shoot(-1, captureCard.warmupFrames,
+                                                      captureCard.scientific,
+                                                      captureCard.pinnedHours)
+                                }
+                            }
+                        }
+                    }
+
+                    // A sessão vive na render thread; a GUI pergunta. Só enquanto o card está
+                    // visível ou uma captura está em curso — o mesmo critério do card de stats do
+                    // radiance cache logo acima.
+                    Timer {
+                        interval: 200
+                        repeat: true
+                        running: captureCard.visible || capture.busy
+                        onTriggered: {
+                            capture.Poll()
+                            // Semeia a hora fixada uma única vez, com o relógio do mundo. Depois
+                            // disso ela é do operador: puxá-la do mundo a cada tique faria
+                            // exatamente o que a fixação existe para impedir.
+                            if (captureCard.pinnedHours < 0) {
+                                var h = capture.CurrentTimeOfDayHours()
+                                if (h >= 0) captureCard.pinnedHours = h
                             }
                         }
                     }

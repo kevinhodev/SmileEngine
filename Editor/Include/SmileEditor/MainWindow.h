@@ -26,6 +26,7 @@ namespace SmileEditor {
     class SceneOutlinerBridge;
     class SceneDocument;
     class CameraBookmarksBridge;
+    class CaptureBridge;
     class MaterialsBridge;
     class RenderSettingsBridge;
 
@@ -97,6 +98,9 @@ namespace SmileEditor {
         // Bookmarks de camera (<cena>.cameras.json). Nao tem janela propria: mora na pagina de
         // Renderizacao das Configuracoes, junto dos knobs que a captura precisa fixar.
         CameraBookmarksBridge* CameraBookmarksBr = nullptr;
+        // Captura deterministica. Vizinha dos bookmarks pela mesma razao: o protocolo e pose fixa
+        // + knobs fixos, e as duas metades tem de estar a um clique uma da outra.
+        CaptureBridge*        CaptureBr  = nullptr;
         RenderSettingsBridge* RenderBr   = nullptr; // ponte C++ -> knobs do SettingsWindow.qml
         QPointer<QDialog>     MaterialsDlg;          // janela flutuante do Editor de Materiais
 
