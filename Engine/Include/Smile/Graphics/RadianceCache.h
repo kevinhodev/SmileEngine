@@ -459,9 +459,26 @@ namespace Smile {
         // 4% dos pixels por frame — o numero publicado do Cyberpunk 2077 para o update do SHaRC.
         f32  UpdateFraction  = 0.04f;
         bool UsePrevCacheAtTerminal = true;
-        // 4 vertices = o numero do update do SHaRC no Cyberpunk. Custa 5 raios por pixel
-        // selecionado, contra 2 do produtor de um bounce.
-        u32  UpdateMaxVertices     = 4;
+        // 1 VERTICE por default, e nao os 4 do SHaRC do Cyberpunk. Isto e resultado de MEDIDA, e a
+        // medida foi na Bistro EXTERIOR — ver a ressalva no fim.
+        //
+        // V1 -> V4, 3060 Ti, preset gameplay com FSR: updater de 3,75 -> 7,73 ms (2,06x), frame de
+        // 7,45 -> 11,36 ms. O resto do frame custa ~3,7 ms nos dois, ou seja o passe soma quase
+        // integralmente, sem sobreposicao. O que os 3,98 ms compram: +0,45% de luminancia media e
+        // 44,79 dB entre as duas imagens (88,4% dos pixels dentro de 1 nivel). Real, e pequeno
+        // demais para dobrar o custo do passe.
+        //
+        // O numero que explica o porque: V4 acumula 2,00x as amostras de V1 — exatamente o dobro.
+        // Como V1 grava 1 vertice por caminho por construcao, V4 grava em media DOIS, de quatro
+        // possiveis. Os vertices 3 e 4 quase nao sao alcancados: o caminho escapa para o ceu ou
+        // cai na elegibilidade antes. Pagar cinco raios para gravar dois vertices e o que a conta
+        // diz que esta acontecendo.
+        //
+        // ⚠️ RESSALVA DE ESCOPO: a Bistro exterior e uma cena em que o caminho escapa cedo, e e
+        // por isso que a media da 2,00. Em INTERIOR o caminho bate mais, a media sobe na direcao de
+        // 4, e V4 passa a custar mais E entregar mais. Este default esta calibrado para uma classe
+        // de cena, nao para todas — reabrir com medida de interior antes de trata-lo como geral.
+        u32  UpdateMaxVertices     = 1;
         f32  MinCacheableRoughness = 0.5f;
         // LOD do albedo nos hits, igual ao do ReSTIR GI. Um numero, nao um knob: divergir dele
         // faria o cache aprender um albedo e o render consumir outro.

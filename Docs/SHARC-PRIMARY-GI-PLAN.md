@@ -48,7 +48,57 @@ vale para toda a série**: em refactor que promete não mudar imagem, comparar o
 
 ---
 
-### Fase 3 — commits #5 e #6 dentro; falta MEDIR o multi-bounce
+### Fase 3 — fechada em transporte e estabilidade; default V1 por medida
+
+**Medido na Bistro exterior, 3060 Ti, preset gameplay com FSR.** O par V1×V4 é comparável porque o
+resto do frame ficou igual; os absolutos pertencem a essa configuração.
+
+| | V1 | V4 |
+|---|---|---|
+| updater | 3,75 ms | 7,73 ms (2,06×) |
+| frame | 7,45 ms | 11,36 ms |
+| resolve | 0,06 ms | 0,06 ms |
+| células (N=256) | 25.165 | 50.718 |
+| amostras/célula | 39,00 | 38,65 |
+
+**O default passou para `UpdateMaxVertices = 1`.** Os 3,98 ms extras do V4 compram +0,45% de
+luminância média e 44,79 dB entre as duas imagens (88,4% dos pixels dentro de 1 nível, 0,56% acima
+de 10). É ganho real e pequeno demais para dobrar o custo do passe nesta GPU.
+
+**O número que explica o porquê, e que decide o próximo passo:** V4 acumula **exatamente 2,00×** as
+amostras de V1. Como V1 grava 1 vértice por caminho por construção, **V4 grava em média dois**, de
+quatro possíveis — os vértices 3 e 4 quase não são alcançados (o caminho escapa para o céu ou cai na
+elegibilidade). Cinco raios para gravar dois vértices. Por isso **V2 é a medida seguinte** e não um
+palpite: ele corta exatamente na média. Não dá para afirmar que V2 = V4 — isso depende da cauda da
+distribuição, não da média —, mas a média em 2,00 diz que a cauda é fina.
+
+**O que o V4 compra é cobertura, não convergência.** Dobra as superfícies no cache (50,7k × 25,2k
+células) mantendo as mesmas amostras por célula (38,65 × 39,00). Ele espalha o caminho, não adensa
+a mesma célula.
+
+⚠️ **A ressalva de escopo importa mais que o número.** A Bistro exterior é uma cena em que o caminho
+escapa cedo — é *por isso* que a média dá 2,00. Em interior o caminho bate mais, a média sobe na
+direção de 4, e V4 passa a custar mais **e entregar mais**. O default está calibrado para uma classe
+de cena; reabrir com medida de interior antes de tratá-lo como geral.
+
+**Limitação do instrumento, descoberta aqui.** O sweep entre N diferentes **não** mede PSNR de
+convergência: cada N termina num `TemporalSampleIndex` diferente, logo num frame estocástico
+diferente do ReSTIR GI, e é esse ruído que domina N64×N128×N256. Ocupação e energia continuam
+válidas através do sweep (não dependem do frame sorteado) e é por elas que a estabilidade está
+provada. Para uma curva **visual** por N seria preciso ou capturar com NRD ligado, ou pinar o índice
+de amostragem do frame capturado — e a segunda opção quebra o contrato atual do manifesto ("o tsi
+tem de bater com o N do aquecimento"), então seria mudança declarada do capturador, não ajuste.
+
+**Async saiu de "talvez" para requisito** — mas não resgata o V4. Com sobreposição perfeita o piso
+é `max(updater, resto)`: V1 iria a ~3,75 ms (esconde os 3,7 ms do resto), V4 continuaria em 7,73 ms.
+E sobreposição perfeita não existe aqui: o RayQuery disputa SM e RT cores com os passes gráficos.
+Fica como commit próprio, na Fase 7, com as dependências já conhecidas (G-buffer antes, resolve
+depois, e a fila compute já ocupada pelo DDGI nessa mesma janela).
+
+Fila do que vem, nesta ordem: **V2 medido → async → time-slicing/adaptação**. Mesmo 3,75 ms do V1
+ainda é caro num frame de 7,45.
+
+### Histórico — implementação dos commits #5 e #6
 
 **O laço multi-bounce entrou** (commit #6). O caminho anda até `UpdateMaxVertices` vértices
 sombreados (default 4, custo = V+1 raios) e a radiância volta em ordem reversa,
