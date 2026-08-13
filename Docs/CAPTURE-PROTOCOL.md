@@ -265,6 +265,12 @@ O que isso significa para a imagem capturada: a consulta segue o toggle do opera
 célula fria de encerrar caminho, e ninguém olha um frame de aquecimento. O manifesto grava
 `cacheAutoWarmup: false`, então a captura declara o regime em que foi tirada.
 
+**A máquina de estados continua andando** — desligar o automático tira o portão, não o relógio.
+Por isso `cacheWarmup` pode sair como `filling` numa captura legítima: ele descreve o estado, não
+um bloqueio. Pela mesma razão a borda `Filling → Active` acontece dentro da sessão sem cancelá-la:
+o que dispara a invalidação é a mudança **efetiva** da consulta (`AutoWarmup && QueryEnabled`), e
+com o automático desligado a transição não muda nada para consumidor nenhum.
+
 ⚠️ **Consequência para quem lê os números:** as capturas medem o cache em regime permanente, não a
 transição. O custo do `Filling` (quantos frames o render passa sem cache depois de uma troca de
 cena) **não é observável pela régua** — é medida de sessão viva, no painel.
@@ -471,11 +477,13 @@ Quatro campos que parecem redundantes e não são:
   interrompido (resize, troca de cena, um frame que morreu) e a captura não é comparável.
 - **`ddgiReady`** é a *existência* do volume, não o `useGI` — é por existência que o fallback é
   escolhido (commit `a67eadd`), e é isso que precisa ficar registrado.
-- **`cacheWarmup`** × `cacheQuery`: o segundo diz que a consulta estava fechada, o primeiro diz se
-  foi o operador (`active` com a leitura desligada), um reset em curso (`resetting`, que acaba no
-  frame seguinte) ou o aquecimento (`filling`, que leva dezenas). Numa captura o terceiro caso não
-  deveria aparecer — a sessão desliga o aquecimento automático (ver a seção acima) —, e se
-  aparecer, é defeito e não configuração.
+- **`cacheWarmup`** só descreve **onde a máquina está**, e não se a consulta foi bloqueada. A
+  máquina continua andando com o aquecimento automático desligado — de propósito, para o estado
+  estar certo quando o knob voltar —, então **`filling` aparece normalmente numa captura** e não é
+  defeito: ali ele não bloqueia nada. Quem diz se a consulta estava aberta é `cacheQuery`; quem
+  diz se o estado *podia* fechá-la é `cacheAutoWarmup`. Os três juntos, e não um deles: `filling` +
+  `cacheAutoWarmup: false` + `cacheQuery: true` é uma captura perfeitamente válida com a tabela
+  ainda enchendo.
 
 `build` sai do `SMILE_BUILD_COMMIT`, carimbado **a cada build** e não no configure: um campo cuja
 única função é ser confiável não pode apontar para o commit anterior depois de um rebuild. Sufixo

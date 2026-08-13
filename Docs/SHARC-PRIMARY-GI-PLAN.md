@@ -113,10 +113,11 @@ simultâneas, e a semântica vem primeiro.
 
 ### ➜ FASE 4 — medida feita; o código todo entrou; falta a confirmação
 
-Oito commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
+Nove commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
 `ed9f223` (separação de capacidade × contenção × teto × terminal), `318417b` (capacidade 2¹⁷),
 `ca1f9a9` (aquecimento global), `f624d7b` (visualizador), `9e64d64` (invalidação na borda + o reset
-que não pode ser perdido). Todos compilam em Debug e Release, `ctest` 3/3.
+que não pode ser perdido) e `bdd383e` (o latch é a mudança de consulta; o tick sobe para o topo do
+frame). Todos compilam em Debug e Release, `ctest` 3/3.
 
 **A medida do item 1 foi feita** — é a seção a seguir, e é dela que saíram os dois defaults novos.
 O que resta para fechar a fase é uma captura de confirmação na capacidade nova e o gate dinâmico
@@ -242,10 +243,14 @@ a primeira redação deste bloco dizia "a única potência em que os dois cabem"
 | **2¹⁷** | **19,2%** | **38,7%** | V1 rente ao piso, por 0,8 pp |
 | 2¹⁸ | 9,6% | 19,4% | os **dois** abaixo do piso |
 
-Nenhuma potência de dois põe os dois dentro da faixa, porque V4 é o dobro de V1 e a faixa é menos
-de quatro vezes. 2¹⁷ é o único em que nenhum lado erra por mais de um ponto — e erra para o lado
-barato: ficar sob o piso desperdiça memória, estourar o teto perde amostra. VRAM do cache: 36 MiB →
-4,5 MiB. ⚠️ Medida de UMA pose estática; câmera andando e interior sobem a ocupação, e quem
+**A tabela é a prova; a razão entre V1 e V4 só explica por que errar é possível.** Para os dois
+caberem seria preciso V1 ∈ [20%, 35%] — o piso da faixa embaixo, e o teto dividido por dois em
+cima. Essa janela é **1,75× larga** e potências de dois consecutivas andam **2×**, ou seja mais que
+a janela: dá para pular por cima dela inteira. Nada garante que isso aconteça — em outra cena a
+janela pegaria —, e nesta acontece, por pouco: 2¹⁷ cai 0,8 pp abaixo dela e 2¹⁶, 3,4 pp acima.
+
+2¹⁷ é o único em que nenhum lado erra por mais de um ponto — e erra para o lado barato: ficar sob o
+piso desperdiça memória, estourar o teto perde amostra. VRAM do cache: 36 MiB → 4,5 MiB. ⚠️ Medida de UMA pose estática; câmera andando e interior sobem a ocupação, e quem
 denuncia é `insertFull`.
 
 **Aquecimento global** (`ca1f9a9` + `9e64d64`) — o item estrutural que faltava. `Resetting` →
@@ -261,6 +266,16 @@ regime anterior. Seis decisões que não se re-derivam:
   updates de memória) somaram durante o `Filling` continuaria a valer misturado com o cache. Era o
   único caminho da engine que trocava o terminador sem limpar quem somou o anterior. A máscara
   ("consumidores sim, tabela não") é função única, compartilhada pelos três eventos que são o mesmo.
+- **O que dispara a invalidação é a mudança EFETIVA da consulta (`AutoWarmup && QueryEnabled`), e
+  não a transição de estado.** A máquina anda sempre — inclusive com o automático desligado, para o
+  estado estar certo quando o knob voltar —, e ali ela não estava fechando nada: invalidar seria
+  derrubar histórico sem que nada tivesse mudado para consumidor nenhum. Numa sessão de captura
+  seria pior: ela desliga o automático justamente para a borda não cancelá-la, e a borda a
+  cancelaria assim mesmo.
+- **O tick roda no TOPO do frame**, logo depois do `CollectStats` que o alimenta e antes de
+  qualquer consumidor publicar cbuffer. A névoa volumétrica resolve o `UseHistory` dela ainda no
+  `ResolveFrameLighting`: notificada do bloco de GI, ela já teria decidido reprojetar a história
+  que o reset acabou de invalidar. A borda não pode depender de quem publica primeiro.
 - **O estado sai do EVENTO, não de amostrar `ResetPending`.** `ResetOnce` é chamado de fora do
   frame — knob da UI, carga de cena — e portanto também *depois* do tick; nesse caso o resolve
   limparia o pending sem ninguém observar e o frame seguinte encontraria `Active` sobre uma tabela
@@ -281,9 +296,11 @@ regime anterior. Seis decisões que não se re-derivam:
 **O capturador anda junto.** A borda passa pelo funil de invalidação, que cancela captura em curso;
 como o reset determinístico zera o cache no início de toda sessão, ela cairia por volta do frame 30
 de 128 **em toda captura**. A sessão passa a rodar com `AutoWarmup` desligado, nos dois presets,
-como já acontece com o relógio do mundo. Ver `Docs/CAPTURE-PROTOCOL.md`. Consequência a registrar:
-**as capturas medem o regime permanente, não a transição** — o custo do `Filling` é medida de
-sessão viva, no painel.
+como já acontece com o relógio do mundo — e é a condição do latch acima que faz esse desligamento
+de fato proteger a sessão. Ver `Docs/CAPTURE-PROTOCOL.md`. Duas consequências a registrar: **as
+capturas medem o regime permanente, não a transição** (o custo do `Filling` é medida de sessão
+viva, no painel), e **`cacheWarmup: "filling"` numa captura é legítimo** — a máquina anda, o portão
+é que está aberto.
 
 **Visualizador** (`f624d7b`): modos `Age` (rampa quebrada no limiar de refresh, que é por célula) e
 `Confidence` (N contra o **piso**, saturando acima dele — é onde se vê a frente de aquecimento
