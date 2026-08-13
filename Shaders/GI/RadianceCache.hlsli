@@ -256,23 +256,46 @@ bool RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
 // --------------------------------------------------------------------------------------------
 // API de alto nivel
 // --------------------------------------------------------------------------------------------
-// Le a radiancia resolvida (frames ANTERIORES) na posicao. Devolve false quando nao ha entrada
-// util — o chamador entao sombreia normalmente.
+// ONDE a consulta parou. Um bool respondia "aproveitei?" e perdia o resto — e o resto e o que a
+// telemetria de miss da Fase 4 vai querer separar: miss por chave, por celula fria, por segmento
+// curto e por cone estreito sao problemas DIFERENTES (capacidade, aquecimento, geometria do
+// caminho, e um limite do proprio cache nao-direcional). Com um bool, os quatro chegam ao painel
+// como o mesmo numero.
+//
+// Ordenado pelo ponto de desistencia, do mais cedo ao mais tarde.
+#define RC_QUERY_DISABLED      0u // flag de query off: nem olhou a tabela
+#define RC_QUERY_SHORT_SEGMENT 1u // segmento menor que a celula: seria auto-referencia
+#define RC_QUERY_NARROW_CONE   2u // cone especular menor que a celula: o RGB apagaria a direcao
+#define RC_QUERY_NO_ENTRY      3u // chave nao encontrada (ausente ou balde cheio)
+#define RC_QUERY_NO_SAMPLES    4u // celula existe, ainda sem radiancia
+#define RC_QUERY_STALE         5u // tem dado, mas velho: o chamador sombreia e o update refresca
+#define RC_QUERY_HIT           6u // aproveitavel
+
+struct FRCQueryResult {
+    float3 Radiance;    // zerada em tudo que nao for HIT (ver a nota no RC_QueryEx)
+    float  CellSize;    // aresta da celula no nivel resolvido; 0 se nem chegou a calcular
+    uint   SampleCount; // N da celula (0 quando nao ha entrada)
+    uint   Age;         // frames sem realimentacao
+    uint   Status;      // RC_QUERY_*
+};
+
+bool RC_QueryHit(FRCQueryResult R) { return R.Status == RC_QUERY_HIT; }
+
+// Le a radiancia resolvida (frames ANTERIORES) na posicao.
 //
 // `segmentLength` e o comprimento do segmento de raio que chegou aqui. Consultar o cache com
 // segmento MENOR que a celula e auto-referencia: origem e hit caem na mesma celula e o valor
 // devolvido descreve a propria superficie de origem. E a mesma guarda do `GetVoxelSize()` da
 // SHaRC e do "continue tracing until the path segment length is bigger than the voxel size" do
 // [Sousa2025].
-bool RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
-                   float segmentLength, float rayRoughness,
-                   out float3 radiance, out bool needsRefresh) {
-    radiance     = float3(0.0f, 0.0f, 0.0f);
-    needsRefresh = false;
+FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
+                             float segmentLength, float rayRoughness) {
+    FRCQueryResult R = (FRCQueryResult)0;
 
     const uint  level    = RC_GridLevel(samplePos, P.CameraPos, P.LodDistance);
     const float cellSize = RC_CellSize(level, P.BaseCellSize);
-    if (segmentLength < cellSize) return false;
+    R.CellSize = cellSize;
+    if (segmentLength < cellSize) { R.Status = RC_QUERY_SHORT_SEGMENT; return R; }
 
     // SHaRC only reuses cached radiance for glossy rays once their cone covers a voxel. Before
     // that point an RGB cache would erase directional detail. Negative roughness means diffuse.
@@ -281,7 +304,7 @@ bool RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal
         const float alpha2 = alpha * alpha;
         const float coneSpread = 2.0f * segmentLength
                                * sqrt(0.5f * alpha2 / max(1.0f - alpha2, 1e-6f));
-        if (coneSpread < cellSize) return false;
+        if (coneSpread < cellSize) { R.Status = RC_QUERY_NARROW_CONE; return R; }
     }
 
     uint slot, checksum;
@@ -290,13 +313,17 @@ bool RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal
     RWStructuredBuffer<uint> entries =
         ResourceDescriptorHeap[NonUniformResourceIndex(P.EntriesUAV)];
     uint entryIndex;
-    if (!RC_Find(entries, slot, checksum, P.Capacity, entryIndex)) return false;
+    if (!RC_Find(entries, slot, checksum, P.Capacity, entryIndex)) {
+        R.Status = RC_QUERY_NO_ENTRY;
+        return R;
+    }
 
     RWStructuredBuffer<uint4> resolved =
         ResourceDescriptorHeap[NonUniformResourceIndex(P.ResolvedUAV)];
     const uint4 packed    = resolved[entryIndex];
     const uint  sampleNum = packed.w & 0xFFFFu;
-    if (sampleNum == 0u) return false;
+    R.SampleCount = sampleNum;
+    if (sampleNum == 0u) { R.Status = RC_QUERY_NO_SAMPLES; return R; }
 
     // Idade em frames sem realimentacao — o MESMO campo que o resolve incrementa e usa para
     // despejar. Ja veio no `packed`: a decisao de refrescar nao custa leitura extra.
@@ -306,30 +333,33 @@ bool RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal
     // constante — o mesmo motivo pelo qual o secondary shadow map do AC Shadows e time-sliced.
     const uint age       = packed.w >> 16u;
     const uint threshold = RC_REFRESH_FRAME_MAX + (checksum & (RC_REFRESH_FRAME_MAX - 1u));
-    needsRefresh         = age >= threshold;
-
-    radiance = asfloat(packed.xyz);
-    return true;
+    R.Age      = age;
+    R.Radiance = asfloat(packed.xyz);
+    R.Status   = (age >= threshold) ? RC_QUERY_STALE : RC_QUERY_HIT;
+    return R;
 }
 
-bool RC_Query(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
-              float segmentLength, float rayRoughness, out float3 radiance) {
-    radiance = float3(0.0f, 0.0f, 0.0f);
-    if ((P.Flags & RC_FLAG_QUERY) == 0u) return false;
+FRCQueryResult RC_QueryEx(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
+                          float segmentLength, float rayRoughness) {
+    FRCQueryResult R = (FRCQueryResult)0;
+    R.Status = RC_QUERY_DISABLED;
+    if ((P.Flags & RC_FLAG_QUERY) == 0u) return R;
 
-    // `hasData` = a celula existe e tem radiancia. `hit` = alem disso, esta nova o bastante para
-    // ser APROVEITADA. A diferenca entre as duas e o refresh, e e o chamador sombreando inteiro.
-    bool needsRefresh;
-    const bool hasData = RC_QueryInner(P, samplePos, sampleNormal, segmentLength, rayRoughness,
-                                       radiance, needsRefresh);
-    const bool hit     = hasData && !needsRefresh;
+    R = RC_QueryInner(P, samplePos, sampleNormal, segmentLength, rayRoughness);
+    const bool hit = RC_QueryHit(R);
     // A celula tem dado, mas quem pediu vai sombrear do zero: devolver a radiancia velha junto
-    // seria um pe no caminho de quem ler isto depois.
-    if (!hit) radiance = float3(0.0f, 0.0f, 0.0f);
+    // seria um pe no caminho de quem ler isto depois. O SampleCount e a Age SOBREVIVEM ao STALE de
+    // proposito — sao diagnostico, e "velha ha quantos frames" e justamente o que se quer saber.
+    if (!hit) R.Radiance = float3(0.0f, 0.0f, 0.0f);
 
     // RC_STAT_HITS conta o RETORNO ANTECIPADO, nao a cobertura da tabela — e o numero que mapeia
     // para custo economizado, e o que mantem a serie comparavel com as medidas de antes do
-    // refresh. Cobertura seria `hasData`, e hoje nao e reportada.
+    // refresh. Cobertura seria `Status >= RC_QUERY_STALE`, e hoje nao e reportada.
+    //
+    // A contagem de atomicos aqui e CONGELADA: um a mais mudaria o escalonamento das waves e, com
+    // ele, quais threads vencem as insercoes do cache — medido, 73.218 celulas contra 73.195 entre
+    // os regimes com e sem instrumentacao. Acrescentar contador por Status e mudanca de imagem no
+    // regime instrumentado, nao adicao inocente de telemetria.
     [branch] if ((P.Flags & RC_FLAG_STATS) != 0u) {
         // UM atomico por WAVE, nao por lane: sao milhoes de consultas por frame e dois enderecos
         // so. WaveActiveCountBits conta as lanes ATIVAS, entao vale sob divergencia — que e a
@@ -344,7 +374,15 @@ bool RC_Query(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
             if (waveHits > 0u) InterlockedAdd(stats[RC_STAT_HITS], waveHits, ignored);
         }
     }
-    return hit;
+    return R;
+}
+
+// Forma booleana, mantida para quem so quer "aproveitei?" — hoje, todos os consumidores.
+bool RC_Query(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
+              float segmentLength, float rayRoughness, out float3 radiance) {
+    const FRCQueryResult R = RC_QueryEx(P, samplePos, sampleNormal, segmentLength, rayRoughness);
+    radiance = R.Radiance;
+    return RC_QueryHit(R);
 }
 
 // Acumula a radiancia de saida que o ShadeSurfaceHit produziu. Ponto fixo + InterlockedAdd
