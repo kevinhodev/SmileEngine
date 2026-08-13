@@ -1423,6 +1423,16 @@ namespace Smile {
         Passes.RecreateAllPipelines(MakePassInitContext());
     }
 
+    void Renderer::NotifyShaderReloadQueued(const std::string& _ChangedStem) {
+        if (!Initialized) return;
+        // MESMO criterio do ReloadShaders, e de proposito: stem vazio (.hlsli, que varios shaders
+        // incluem) forca reload completo; stem nomeado so vale se algum passe o reivindicar. Um
+        // .hlsl que ninguem compila nao muda nada em execucao, e cancelar por ele seria um falso
+        // positivo — o operador editando um shader fora do caminho perderia a captura sem motivo.
+        if (!_ChangedStem.empty() && !Passes.OwnerOfShaderStem(_ChangedStem)) return;
+        Capture.Cancel("um shader mudou no disco durante o aquecimento");
+    }
+
     bool Renderer::ReloadShaders(const std::string& _ChangedStem) {
         if (!Initialized) return false;
         try {

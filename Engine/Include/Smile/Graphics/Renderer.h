@@ -239,6 +239,18 @@ namespace Smile {
         // nem extensao (ex.: "WaterSurface.ps"). Vazio (ou stem nao mapeado / .hlsli
         // incluido por varios shaders) => reload completo.
         bool ReloadShaders(const std::string& ChangedStem = "");
+        // Um reload FOI ENFILEIRADO — o arquivo mudou no disco e a compilacao vai comecar. Chamar
+        // no instante da deteccao, ANTES de disparar o compilador.
+        //
+        // Existe porque a compilacao e assincrona e demora ~1,5 s: uma captura de 128 frames
+        // termina bem dentro dessa janela e sairia GRAVADA como valida, tendo renderizado parte
+        // dos frames com o .cso antigo e parte com o novo. Cancelar quando o `ReloadShaders`
+        // chega e tarde demais — foi medido, o arquivo ficou pronto 1,4 s antes.
+        //
+        // Só cancela; nao recria nada. Quem recria continua sendo o ReloadShaders, depois que o
+        // compilador termina — e o cancelamento de la fica como segunda defesa, para o caminho em
+        // que o reload chega sem ter passado por aqui.
+        void NotifyShaderReloadQueued(const std::string& ChangedStem = "");
 
         void UpdateCamera(const CameraInput& Input, f32 DeltaTime);
         // Grava e submete o frame. A apresentacao fica separada para que o owner da render

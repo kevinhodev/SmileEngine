@@ -103,8 +103,14 @@ namespace Smile {
         // O RadianceCache.hlsli nao entra: header nao gera .cso. Editar um .hlsli dispara o
         // reload COMPLETO, que passa por aqui de qualquer forma — e tambem pelos traces que o
         // incluem, que e o que importa quando o hash muda.
-        static const char* const Stems[] = { "RadianceCacheResolve", "RadianceCacheDebug",
-                                             "RadianceCacheUpdate" };
+        //
+        // COM o `.cs`. O stem que chega vem do nome do arquivo sem a extensao final
+        // ("RadianceCacheResolve.cs.hlsl" -> "RadianceCacheResolve.cs") e a comparacao e exata;
+        // sem o sufixo, estes tres nunca casavam e editar qualquer um deles logava "compilado, mas
+        // sem pipeline mapeado para hot reload" — os PSOs do cache eram os unicos da engine que
+        // nao recarregavam. Todo o resto ja seguia a convencao.
+        static const char* const Stems[] = { "RadianceCacheResolve.cs", "RadianceCacheDebug.cs",
+                                             "RadianceCacheUpdate.cs" };
         return { Stems, 3u };
     }
 

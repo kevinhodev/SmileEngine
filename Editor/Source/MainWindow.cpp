@@ -1029,6 +1029,25 @@ namespace SmileEditor {
     void MainWindow::TriggerShaderCompileAndReload(const QString& _Path) {
         Smile::LogInfo("Alteracao Detectada no Shader: " + QFileInfo(_Path).fileName().toStdString());
 
+        // O stem sai AQUI, na deteccao, e nao la no fim da compilacao — e o mesmo valor viaja para
+        // as duas chamadas, entao nao ha como as duas derivarem coisas diferentes.
+        //
+        // .hlsli (include) afeta varios shaders -> stem vazio forca reload completo. Caso
+        // contrario, deriva o stem do .cso: "WaterSurface.ps.hlsl" -> "WaterSurface.ps".
+        const QFileInfo ShaderInfo(_Path);
+        const bool IsInclude = ShaderInfo.suffix().compare("hlsli", Qt::CaseInsensitive) == 0;
+        const std::string ChangedStem =
+            IsInclude ? std::string() : ShaderInfo.completeBaseName().toStdString();
+
+        // ANTES de disparar o compilador. A compilacao leva ~1,5 s e o renderer nao para durante
+        // ela: uma captura de 128 frames cabe inteira nessa janela e sairia gravada como valida,
+        // com parte dos frames feita com o .cso antigo. Medido — a captura foi gravada 1,4 s antes
+        // de o ReloadShaders sequer ser chamado. Quem decide se ha o que cancelar e o renderer,
+        // que e quem conhece o mapeamento de stems.
+        if (Viewport && Viewport->GetRenderer()) {
+            Viewport->GetRenderer()->NotifyShaderReloadQueued(ChangedStem);
+        }
+
 #ifdef SMILE_CMAKE_BINARY_DIR
         QString BuildDir = QStringLiteral(SMILE_CMAKE_BINARY_DIR);
 #else
@@ -1050,15 +1069,12 @@ namespace SmileEditor {
         Smile::LogInfo("Compilando Shader via CMake (" + BuildConfig.toStdString() + ")...");
         CompileProcess->start("cmake", Arguments);
 
-        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess, _Path](int _ExitCode, QProcess::ExitStatus _Status) {
+        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess, ChangedStem](int _ExitCode, QProcess::ExitStatus _Status) {
             if (_Status == QProcess::NormalExit && _ExitCode == 0) {
                 if (Viewport && Viewport->GetRenderer()) {
-                    // .hlsli (include) afeta varios shaders -> stem vazio forca reload completo.
-                    // Caso contrario, deriva o stem do .cso: "WaterSurface.ps.hlsl" -> "WaterSurface.ps".
-                    const QFileInfo ShaderInfo(_Path);
-                    const bool IsInclude = ShaderInfo.suffix().compare("hlsli", Qt::CaseInsensitive) == 0;
-                    const std::string ChangedStem =
-                        IsInclude ? std::string() : ShaderInfo.completeBaseName().toStdString();
+                    // O stem foi derivado na deteccao e capturado por valor: re-deriva-lo aqui
+                    // abriria a porta para o cancelamento e o reload discordarem sobre qual
+                    // pipeline mudou.
                     if (Viewport->GetRenderer()->ReloadShaders(ChangedStem)) {
                         if (StatusBr) StatusBr->ShowMessage(tr("Shader Recarregado com Sucesso."), 3000);
                     } else {
