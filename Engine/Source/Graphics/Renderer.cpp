@@ -1440,6 +1440,13 @@ namespace Smile {
             //
             // Nos dois caminhos que de fato recriam pipeline, e nao no topo: um stem sem pipeline
             // mapeado nao muda nada em execucao, e cancelar ali seria falso positivo.
+            //
+            // E ANTES da recriacao, nao depois. `RecreatePipelinesForStem` casa TODOS os donos do
+            // stem (as tres cascatas de FFT do oceano sao tres), e se o segundo lancar depois de o
+            // primeiro ja ter sido recriado, o `catch` la embaixo devolve false com a sessao ainda
+            // viva — contando frames por cima de pipelines MISTURADOS, que e pior que os dois casos
+            // limpos. Cancelar antes custa uma sessao numa recarga que talvez nem falhe; nao
+            // cancelar custa uma captura que se declara valida e nao e.
             if (_ChangedStem.empty()) {
                 Capture.Cancel("os shaders foram recarregados durante o aquecimento");
                 RecreateAllPSOs();
@@ -1448,10 +1455,14 @@ namespace Smile {
             }
 
             const FPassInitContext Ctx = MakePassInitContext();
+            // `Owner` nao e so log: ele e a mesma pergunta que o `Hits` responde, feita ANTES de
+            // mutar qualquer coisa. As duas varrem a mesma lista de donos contra o mesmo
+            // `ShaderStems()`, entao dono nao-nulo e exatamente "vai recriar pelo menos um" — o
+            // que permite cancelar antes sem inventar falso positivo para stem nao mapeado.
             const char* Owner = Passes.OwnerOfShaderStem(_ChangedStem);
-            const u32   Hits  = Passes.RecreatePipelinesForStem(_ChangedStem, Ctx);
+            if (Owner) Capture.Cancel("os shaders foram recarregados durante o aquecimento");
+            const u32 Hits = Passes.RecreatePipelinesForStem(_ChangedStem, Ctx);
             if (Hits > 0) {
-                Capture.Cancel("os shaders foram recarregados durante o aquecimento");
                 LogInfo("Shader recarregado: " + _ChangedStem + " (passe: " + Owner +
                         (Hits > 1 ? ", " + std::to_string(Hits) + " instancias)" : ")"));
                 return true;
