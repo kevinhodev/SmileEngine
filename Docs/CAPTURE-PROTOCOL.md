@@ -191,6 +191,40 @@ Estas duas capturas **não são baseline**: a build era `-dirty`, o cache estava
 telemetria dele não foi exercitada) e o ReGIR não rodou por falta das condições efetivas. Servem
 como prova de que o caminho de GPU funciona.
 
+## A instrumentação do cache não é um observador neutro
+
+Segunda rodada, com o radiance cache ativo e a instrumentação ligada. A telemetria se repetiu
+**exatamente** entre duas capturas — 1.291.572 consultas, 1.004.003 hits (77,735%), 73.195 células
+ocupadas, 2.200.350 amostras — com PSNR de 59,3 dB entre os PNGs.
+
+Mas o mesmo par, medido contra o regime **sem** instrumentação, denunciou o que nenhum dos dois
+regimes mostraria sozinho:
+
+| | células | amostras |
+|---|---|---|
+| sem instrumentação | 73.218 | 2.200.003 |
+| com instrumentação | 73.195 | 2.200.350 |
+
+PSNR de 48,2 dB entre os regimes. A causa é o custo dos atômicos disputados por wave: eles mudam o
+escalonamento e, com ele, **quais threads vencem as inserções** do cache. O efeito é minúsculo
+(0,03% das células) e não é erro de ninguém — é o observador alterando o observado.
+
+A consequência é de protocolo, não de código: a instrumentação é **parte da configuração**, não uma
+janela para dentro dela. Por isso ela entra no manifesto (`cacheStatsEnabled`, efetivo como os
+demais) e na etiqueta do arquivo (`rcUQS`), e alterná-la durante o aquecimento **cancela** a
+captura — meio warm-up em cada regime não pertence a nenhuma das duas séries.
+
+Ela **não** invalida o histórico do cache ao ser ligada: o conteúdo acumulado continua valendo, e
+derrubá-lo tornaria a instrumentação inútil justamente para quem quer olhar um cache quente.
+
+### Regra de operação
+
+- **Calibrar o N**: instrumentação ligada no sweep inteiro. O hit rate é um dos quatro sinais, e
+  todos os pontos precisam do mesmo regime para a curva significar alguma coisa.
+- **Comparar imagem**: instrumentação desligada, nos dois lados do A/B.
+
+Nunca cruzar os dois — e o nome do arquivo agora impede fazê-lo por distração.
+
 ## Calibração do N
 
 > **É o que falta.** O capturador já aceita qualquer N e o grava no manifesto; o que não existe
@@ -214,6 +248,26 @@ enche antes de as médias assentarem. Usar só ocupação daria um N cedo demais
 Ordem de grandeza esperada: **centenas** de frames, não dezenas. A histerese do DDGI é 0,99 (o
 `HistoryDomain.h` cita ~199 updates para o atlas de distância) e o radiance cache tem teto de 64
 amostras por célula.
+
+### Sweep — pontos medidos
+
+Instrumentação ligada em todos (ver a regra de operação acima).
+
+| N | hit rate | ocupação | amostras/célula |
+|---|---|---|---|
+| 32 | — | — | — |
+| 64 | — | — | — |
+| **128** | **77,735%** | 73.195 (6,98%) | 30,06 |
+| 256 | — | — | — |
+
+O ponto de 128 é o primeiro, e já diz duas coisas. A média de **30 amostras por célula** está
+abaixo da metade do teto de 64 — o cache ainda está enchendo, não assentando —, e a ocupação de 7%
+mostra que a tabela `2^20` está folgada nesta cena, longe dos 95,2% que já saturaram um preset
+antigo. Os dois apontam para um N maior; faltam 32/64/256 para achar onde a curva achata.
+
+Vale lembrar que ocupação e radiância convergem em ritmos diferentes: a tabela enche antes de as
+médias assentarem, e é por isso que o delta temporal do sinal GI final está na lista de sinais.
+Parar em 128 porque a ocupação estabilizou seria escolher o N cedo demais.
 
 ## `TemporalSampleIndex`
 

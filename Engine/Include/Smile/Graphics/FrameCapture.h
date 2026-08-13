@@ -89,6 +89,10 @@ namespace Smile {
         bool Reflections        = false;
         bool CacheUpdate        = false; // radiance cache: escrita
         bool CacheQuery         = false; // radiance cache: leitura
+        // Instrumentacao do cache. NAO e um observador neutro — ver
+        // FRadianceCache::PublishedStatsThisFrame. Duas capturas so sao comparaveis se estiverem
+        // no MESMO regime, e por isso ela entra tambem na etiqueta do nome do arquivo.
+        bool CacheStats         = false;
         bool GIMeasureTerminatorOff = false; // corta o DDGI so no hit secundario
 
         // Ocupacao do hash e acerto de query no instante do disparo — dois dos quatro sinais que

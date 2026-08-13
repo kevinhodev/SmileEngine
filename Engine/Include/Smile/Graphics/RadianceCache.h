@@ -132,6 +132,11 @@ namespace Smile {
         // caso N=0 da captura) terminaria se declarando ativo.
         bool PublishedUpdateThisFrame() const { return PublishedUpdate; }
         bool PublishedQueryThisFrame() const  { return PublishedQuery; }
+        // A instrumentacao NAO e neutra: os atomicos disputados por wave mudam o escalonamento e,
+        // com ele, quais threads vencem as insercoes do cache. Medido — 73.218 celulas sem, 73.195
+        // com, e PSNR de 48 dB entre os dois regimes. Entao ela e parte da CONFIGURACAO, nao um
+        // observador invisivel, e por isso entra no manifesto e na etiqueta do arquivo.
+        bool PublishedStatsThisFrame() const  { return PublishedStats; }
 
         // ConsumerRuns = este consumidor vai realmente tracar neste frame. Os params sao montados
         // para todos (custa nada, e o passe pode nem rodar), mas so quem RODA conta para o
@@ -270,5 +275,6 @@ namespace Smile {
         // const e continua sendo: ele nao muda o que o cache FAZ, so registra o que entregou.
         mutable bool PublishedUpdate = false;
         mutable bool PublishedQuery  = false;
+        mutable bool PublishedStats  = false;
     };
 }

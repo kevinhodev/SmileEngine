@@ -1264,6 +1264,7 @@ namespace Smile {
         // exatamente a captura com N=0 — se declararia ativo tendo entregado flags zeradas.
         S.CacheUpdate = RadianceCache.PublishedUpdateThisFrame();
         S.CacheQuery  = RadianceCache.PublishedQueryThisFrame();
+        S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
 
         // Ocupacao do frame capturado (copia POS-resolve, feita junto do backbuffer) e hit rate

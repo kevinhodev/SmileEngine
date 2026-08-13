@@ -179,7 +179,18 @@ namespace Smile {
     }
 
     void FRenderSettings::SetRadianceCacheStatsEnabled(bool _V) {
-        R.RadianceCache.SetStatsEnabled(_V); // so mede; nao invalida nada
+        if (_V == R.RadianceCache.GetStatsEnabled()) return;
+        // NAO invalida historico: o conteudo ja acumulado continua valendo, e derrubar o cache a
+        // cada vez que se liga o contador tornaria a instrumentacao inutil justamente para quem
+        // quer olhar um cache quente.
+        //
+        // Mas TAMBEM nao e neutra, e isso foi medido: os atomicos disputados por wave mudam o
+        // escalonamento e, com ele, quais threads vencem as insercoes — 73.218 celulas contra
+        // 73.195, PSNR de 48 dB entre os regimes. Trocar de regime no meio de um aquecimento
+        // produziria uma captura meio instrumentada e meio nao, que nao pertence a nenhuma das
+        // duas series. Sem guarda de setup: o capturador nao mexe neste knob.
+        R.Capture.Cancel("a instrumentacao do cache foi alternada durante o aquecimento");
+        R.RadianceCache.SetStatsEnabled(_V);
     }
     bool FRenderSettings::GetRadianceCacheStatsEnabled() const {
         return R.RadianceCache.GetStatsEnabled();

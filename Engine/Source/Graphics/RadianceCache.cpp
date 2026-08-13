@@ -217,6 +217,7 @@ namespace Smile {
         // logo a seguir, no mesmo PrepareIndirectLighting.
         PublishedUpdate = false;
         PublishedQuery  = false;
+        PublishedStats  = false;
         if (!Ready || !MappedCB) return;
         CPU.CacheParams = { static_cast<f32>(CapacityV),
                             static_cast<f32>(kMaxAccumSamples),
@@ -487,6 +488,7 @@ namespace Smile {
             if (ConsumerRuns) {
                 PublishedUpdate = PublishedUpdate || AllowUpdate;
                 PublishedQuery  = PublishedQuery  || QueryEnabled;
+                PublishedStats  = PublishedStats  || (StatsEnabled && QueryEnabled);
             }
             // So conta acerto/erro quando ha o que contar: sem query o contador so mediria zero
             // e ainda assim pagaria os atomicos.

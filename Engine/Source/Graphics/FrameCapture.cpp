@@ -84,8 +84,16 @@ namespace Smile {
             if (S.ReSTIRDI)    Add("rdi");
             if (S.ReGIR)       Add("regir");
             if (S.Reflections) Add("refl");
-            if (S.CacheUpdate) Add(S.CacheQuery ? "rcUQ" : "rcU");
-            else if (S.CacheQuery) Add("rcQ");
+            // O S da instrumentacao entra no NOME, e nao so no manifesto: os dois regimes produzem
+            // ocupacao e imagem diferentes (atomicos mudam o escalonamento das waves), entao duas
+            // capturas indistinguiveis na pasta seriam um convite a compara-las.
+            if (S.CacheUpdate || S.CacheQuery) {
+                std::string Rc = "rc";
+                if (S.CacheUpdate) Rc += 'U';
+                if (S.CacheQuery)  Rc += 'Q';
+                if (S.CacheStats)  Rc += 'S';
+                Add(Rc.c_str());
+            }
             if (S.GIMeasureTerminatorOff) Add("noTerm");
             return Tag.empty() ? std::string("off") : Tag;
         }
@@ -440,6 +448,10 @@ namespace Smile {
                 File << "  \"reflections\": "  << Bool(_State.Reflections) << ",\n";
                 File << "  \"cacheUpdate\": "  << Bool(_State.CacheUpdate) << ",\n";
                 File << "  \"cacheQuery\": "   << Bool(_State.CacheQuery)  << ",\n";
+                // Regime de medicao, nao detalhe de diagnostico: com a instrumentacao ligada os
+                // atomicos mudam quem vence as insercoes do cache. Comparar uma captura
+                // instrumentada com uma normal e comparar duas configuracoes diferentes.
+                File << "  \"cacheStatsEnabled\": " << Bool(_State.CacheStats) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";
                 File << "  \"cacheValid\": "    << _State.CacheValid    << ",\n";
