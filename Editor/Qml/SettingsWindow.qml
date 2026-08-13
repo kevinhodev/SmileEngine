@@ -2941,7 +2941,14 @@ Rectangle {
                               "convergida — para todos os raios que caírem ali, por dezenas de " +
                               "quadros. Com 1 o cache volta a esse comportamento, que é o outro " +
                               "braço do A/B. No visualizador de cobertura, azul é célula " +
-                              "aquecendo: tem radiância, mas ainda abaixo do piso."
+                              "aquecendo: tem radiância, mas ainda abaixo do piso.\n\n" +
+                              "O AQUECIMENTO AUTOMÁTICO é o \"ligue a escrita primeiro\" acima " +
+                              "feito pela máquina: depois de um reset a leitura fica fechada " +
+                              "enquanto a tabela enche (estado \"filling\") e abre sozinha quando " +
+                              "70% das células com amostra já passaram do piso, ou no máximo em " +
+                              "96 quadros. O produtor continua terminando no cache o tempo todo — " +
+                              "é assim que ele enche com multi-bounce. Desligue para o A/B: aí a " +
+                              "leitura segue só o toggle acima, como antes."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2982,9 +2989,26 @@ Rectangle {
                     }
 
                     Text {
-                        id: rcStatsLabel
+                        id: rcWarmupLabel
                         x: 20
                         y: rcQueryLabel.y + 30
+                        text: "Aquecimento automático"
+                        color: renderModel.radianceCacheQuery ? root.textNormal : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcWarmupLabel.y - 6
+                        enabled: renderModel.radianceCacheQuery
+                        checked: renderModel.radianceCacheAutoWarmup
+                        onToggled: renderModel.ToggleRadianceCacheAutoWarmup()
+                    }
+
+                    Text {
+                        id: rcStatsLabel
+                        x: 20
+                        y: rcWarmupLabel.y + 30
                         text: "Instrumentar acerto/erro"
                         color: renderModel.radianceCacheQuery ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
@@ -3173,7 +3197,11 @@ Rectangle {
                         wrapMode: Text.WordWrap
                         text: renderModel.radianceCacheSummary + "  ·  " +
                               renderModel.radianceCacheOccupancy.toFixed(1).replace(".", ",") +
-                              "% de " + renderModel.radianceCacheMemoryMB.toFixed(0) + " MB"
+                              // Uma casa decimal: com a capacidade de 2^17 o cache inteiro cabe em
+                              // 4,5 MB, e arredondar para inteiro mostraria "5 MB".
+                              "% de " + renderModel.radianceCacheMemoryMB.toFixed(1)
+                                            .replace(".", ",") + " MB" +
+                              "  ·  " + renderModel.radianceCacheWarmup
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11

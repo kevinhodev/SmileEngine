@@ -271,9 +271,56 @@ namespace Smile {
                  std::to_string(BaseCellSize) + " m");
     }
 
+    const char* FRadianceCache::WarmupStateName() const {
+        switch (WarmupState()) {
+            case ERadianceCacheWarmup::Resetting: return "resetting";
+            case ERadianceCacheWarmup::Filling:   return "filling";
+            default:                              return "active";
+        }
+    }
+
+    // Resetting -> Filling -> Active. Roda uma vez por frame, no UpdatePerFrame, ANTES de qualquer
+    // consumidor pedir params — e depois do CollectStats do BeginFrame, que e de onde sai o unico
+    // sinal que ele le.
+    //
+    // Ele le a VARREDURA DA TABELA (celulas confiaveis / celulas com amostra), e nao o hit rate,
+    // e isso nao e detalhe de implementacao: o hit rate so existe com a instrumentacao ligada, que
+    // e um regime de MEDICAO e nao roda em producao. Um gate que dependesse dela ficaria preso em
+    // Filling para sempre no unico modo em que ele importa. A varredura, ao contrario, e escrita
+    // pelo resolve todo frame, sem flag nenhuma.
+    void FRadianceCache::TickWarmup() {
+        // Cache desligado: CONGELA, nao volta para Resetting. A tabela continua la (SetEnabled nao
+        // invalida), entao religar deve devolver o estado que a tabela merece, e nao uma espera
+        // nova por um conteudo que ja existe.
+        if (!Ready || !Enabled) return;
+
+        if (ResetPending) {
+            Warmup     = ERadianceCacheWarmup::Resetting;
+            FillFrames = 0;
+            return;
+        }
+        // O resolve de reset ja rodou (ele limpa o ResetPending no fim do frame).
+        if (Warmup == ERadianceCacheWarmup::Resetting) Warmup = ERadianceCacheWarmup::Filling;
+        if (Warmup != ERadianceCacheWarmup::Filling) return;
+
+        ++FillFrames;
+        if (FillFrames <= kWarmupStatsLag) return; // StatsCPU ainda e do regime anterior
+
+        // "Confiaveis o bastante" tem denominador nas celulas COM AMOSTRA, e nao na capacidade:
+        // a fracao ocupada da tabela e uma propriedade da CENA (quanta superficie o produtor
+        // alcanca), nao do aquecimento. Medir contra a capacidade faria uma cena pequena nunca
+        // aquecer.
+        const bool Converged =
+            StatsCPU.HasSamples > 0u &&
+            static_cast<f32>(StatsCPU.Confident) >=
+                kWarmupConfidentRatio * static_cast<f32>(StatsCPU.HasSamples);
+        if (Converged || FillFrames >= kWarmupMaxFrames) Warmup = ERadianceCacheWarmup::Active;
+    }
+
     void FRadianceCache::UpdatePerFrame(u32 InFrameSlot, const Vec3& InCameraPos) {
         FrameSlot = InFrameSlot;
         CameraPos = InCameraPos;
+        TickWarmup();
         // Comeco do frame: ninguem pediu params ainda. Os tres ShaderParams dos consumidores vem
         // logo a seguir, no mesmo PrepareIndirectLighting.
         PublishedUpdate = false;
@@ -798,24 +845,28 @@ namespace Smile {
         // tabela do regime anterior (e atualizar seria trabalho descartado alguns passes depois).
         // O resolve continua ativo via IsActive; so os consumidores recebem flags zeradas.
         const bool On = Enabled && Ready && !ResetPending;
+        // A consulta EFETIVA, e nao o knob: em Filling o render ainda nao le a tabela. Daqui para
+        // baixo o `QueryEnabled` cru nao aparece mais — flags, contadores e registro do manifesto
+        // saem todos deste booleano, senao um frame de aquecimento se declararia consultando.
+        const bool Query = QueryEnabled && WarmupAllowsQuery();
         u32 Flags = 0u;
         if (On) {
-            if (QueryEnabled) Flags |= kFlagQuery;
-            if (AllowUpdate)  Flags |= kFlagUpdate;
+            if (Query)       Flags |= kFlagQuery;
+            if (AllowUpdate) Flags |= kFlagUpdate;
             // Registro do que foi ENTREGUE A QUEM RODA, para o manifesto da captura nao ter de
             // reconstituir esta condicao por fora e divergir dela. Ver PublishedUpdateThisFrame.
             if (ConsumerRuns) {
                 PublishedUpdate = PublishedUpdate || AllowUpdate;
-                PublishedQuery  = PublishedQuery  || QueryEnabled;
-                PublishedStats  = PublishedStats  || (StatsEnabled && QueryEnabled);
+                PublishedQuery  = PublishedQuery  || Query;
+                PublishedStats  = PublishedStats  || (StatsEnabled && Query);
                 PublishedDetail = PublishedDetail || (StatsEnabled && StatsDetail);
                 // So com consulta: sem ela o piso nao decide nada neste consumidor, e registra-lo
                 // faria o manifesto declarar um controle que nao agiu sobre a imagem.
-                if (QueryEnabled) PublishedMinSamples = MinSampleCount;
+                if (Query) PublishedMinSamples = MinSampleCount;
             }
             // So conta acerto/erro quando ha o que contar: sem query o contador so mediria zero
             // e ainda assim pagaria os atomicos.
-            if (StatsEnabled && QueryEnabled) Flags |= kFlagStats;
+            if (StatsEnabled && Query) Flags |= kFlagStats;
             // O detalhe NAO exige QueryEnabled: metade dele (a telemetria de insercao) vive no
             // RC_Update, e o produtor legado escreve por este mesmo caminho. O que ele exige e a
             // instrumentacao ligada, para o regime ser um so e nao dois.

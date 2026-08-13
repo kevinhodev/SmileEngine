@@ -126,6 +126,15 @@ namespace Smile {
         // com este piso, entao ele decide tambem o que a celula GUARDA.
         void SetRadianceCacheMinSampleCount(u32 V);
         u32  GetRadianceCacheMinSampleCount() const;
+        // Aquecimento GLOBAL automatico (Resetting -> Filling -> Active): a consulta de render so
+        // abre quando a tabela ja tem celulas confiaveis suficientes. Desligar reproduz o regime
+        // anterior, em que a consulta seguia so o toggle acima — e esse e o braco de A/B. Invalida
+        // os CONSUMIDORES, nao a tabela, pelo mesmo motivo do toggle de query.
+        void SetRadianceCacheAutoWarmup(bool V);
+        bool GetRadianceCacheAutoWarmup() const;
+        // Estado atual do aquecimento e ha quantos frames ele esta enchendo (0 fora de Filling).
+        const char* RadianceCacheWarmupName() const;
+        u32  RadianceCacheWarmupFrames() const;
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);

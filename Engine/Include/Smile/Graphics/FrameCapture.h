@@ -134,6 +134,16 @@ namespace Smile {
         // motivo que o de cima, e com mais forca — ele soma atomicos tambem no PRODUTOR, onde eles
         // decidem quem vence a corrida do CAS e, portanto, o conteudo da tabela.
         bool CacheStatsDetail   = false;
+        // Estado do aquecimento GLOBAL no disparo, e o knob que o governa. `cacheQuery` ja diz se
+        // a consulta estava aberta; isto diz POR QUE ela estava fechada, e sao esperas de duracao
+        // muito diferente ("resetando" acaba no proximo frame, "enchendo" leva dezenas).
+        //
+        // Ele importa mais para as capturas de N BAIXO: com o aquecimento automatico ligado, uma
+        // captura em N=32 pode sair ainda em `filling` — mesma pose, mesmos knobs, imagem sem
+        // cache nenhum. Sem este campo, ela seria indistinguivel de uma captura em que o cache
+        // simplesmente nao acertou nada.
+        const char* CacheWarmup = "";
+        bool CacheAutoWarmup    = false;
         bool GIMeasureTerminatorOff = false; // corta o DDGI so no hit secundario
         // Politica de auto-interseccao/backface do gather E do produtor do cache — um toggle so
         // para os dois (ver FRenderSettings::SetGIBackfacePolicy). Entra aqui porque o protocolo

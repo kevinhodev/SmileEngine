@@ -178,6 +178,27 @@ namespace Smile {
         return R.RadianceCache.GetQueryEnabled();
     }
 
+    void FRenderSettings::SetRadianceCacheAutoWarmup(bool _V) {
+        if (_V == R.RadianceCache.GetAutoWarmup()) return;
+        R.RadianceCache.SetAutoWarmup(_V);
+        // Mesma forma exata do toggle de query acima, e pelo mesmo motivo: o que muda e QUEM LE a
+        // tabela, nao o que ela guarda. Apagar o cache aqui destruiria justamente o aquecimento
+        // que este knob existe para administrar.
+        const auto ConsumersOnly = static_cast<EHistoryTarget>(
+            static_cast<u32>(Dom::RayVisibility) &
+            ~static_cast<u32>(EHistoryTarget::RadianceCache));
+        Invalidate(ConsumersOnly);
+    }
+    bool FRenderSettings::GetRadianceCacheAutoWarmup() const {
+        return R.RadianceCache.GetAutoWarmup();
+    }
+    const char* FRenderSettings::RadianceCacheWarmupName() const {
+        return R.RadianceCache.WarmupStateName();
+    }
+    u32 FRenderSettings::RadianceCacheWarmupFrames() const {
+        return R.RadianceCache.WarmupFillFrames();
+    }
+
     void FRenderSettings::SetRadianceCacheDedicatedUpdate(bool _V) {
         if (_V == R.RadianceCache.GetDedicatedUpdate()) return;
         // O setter da classe ja arma o ResetOnce da tabela — as duas fontes produzem estatisticas

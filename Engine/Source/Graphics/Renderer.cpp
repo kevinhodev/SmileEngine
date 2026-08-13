@@ -1291,6 +1291,13 @@ namespace Smile {
         S.CacheMinSamples      = RadianceCache.PublishedMinSampleCount();
         S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
         S.CacheStatsDetail = RadianceCache.PublishedStatsDetailThisFrame();
+        // Aquecimento global. Nao precisa de campo "publicado" como os de cima: o estado so muda no
+        // UpdatePerFrame, no comeco do frame, e ler aqui devolve o mesmo valor com que os
+        // consumidores foram montados. O que ele acrescenta ao `cacheQuery` e o MOTIVO de a
+        // consulta estar fechada — "enchendo" e "resetando" pedem esperas de ordem completamente
+        // diferente, e uma captura tirada antes da hora tem de se denunciar.
+        S.CacheWarmup     = RadianceCache.WarmupStateName();
+        S.CacheAutoWarmup = RadianceCache.GetAutoWarmup();
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
         // gather do ReSTIR GI e o produtor do cache) da mesma fonte, entao ela descreve o regime

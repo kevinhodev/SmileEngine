@@ -499,6 +499,10 @@ namespace Smile {
                 // instrumentada com uma normal e comparar duas configuracoes diferentes.
                 File << "  \"cacheStatsEnabled\": " << Bool(_State.CacheStats) << ",\n";
                 File << "  \"cacheStatsDetail\": " << Bool(_State.CacheStatsDetail) << ",\n";
+                // O estado do aquecimento global no disparo. Com `cacheQuery: false` ele e a
+                // diferenca entre "esta enchendo, espere" e "o operador desligou a consulta".
+                File << "  \"cacheWarmup\": \""     << _State.CacheWarmup << "\",\n";
+                File << "  \"cacheAutoWarmup\": "   << Bool(_State.CacheAutoWarmup) << ",\n";
                 File << "  \"giBackfacePolicy\": " << Bool(_State.GIBackfacePolicy) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";

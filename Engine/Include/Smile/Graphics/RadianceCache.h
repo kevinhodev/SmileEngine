@@ -99,6 +99,23 @@ namespace Smile {
         Count
     };
 
+    // Aquecimento GLOBAL da tabela (Fase 4). O piso de confianca decide CELULA A CELULA; isto
+    // decide pelo cache INTEIRO, e responde outra pergunta: "ja vale a pena o render consultar?".
+    // Sem ele, o primeiro frame depois de uma troca de cena abre a consulta numa tabela vazia —
+    // todo raio paga a busca, erra, e cai no fallback assim mesmo.
+    enum class ERadianceCacheWarmup : u32 {
+        // Tabela sendo limpa. NAO e comportamento novo: e o `ResetPending`, que ja fechava os dois
+        // lados. Ele entra no enum porque o painel e o manifesto precisam distinguir "fechado
+        // porque esta resetando" de "fechado porque esta enchendo" — sao esperas de duracao
+        // completamente diferente (um frame contra dezenas).
+        Resetting = 0,
+        // O produtor enche. O RENDER ainda nao consulta; o TERMINAL DO UPDATER sim, e e isso que
+        // faz o cache encher com multi-bounce em vez de so o primeiro bounce. Fechar os dois
+        // deixaria Filling produzindo um conteudo que Active teria de reconverter.
+        Filling,
+        Active
+    };
+
     // O que o painel mostra. Os cinco primeiros vem da varredura da tabela no resolve; os dois
     // seguintes, do RC_Query dentro dos traces (so com a instrumentacao ligada); o resto, do
     // regime de DETALHE (ver kFlagStatsDetail).
@@ -445,8 +462,54 @@ namespace Smile {
         // Query e update sao knobs separados de proposito: o A/B util e ligar o update, deixar o
         // cache encher por alguns segundos e SO entao ligar a leitura. Ligando os dois de uma vez
         // os primeiros frames leem uma tabela vazia e o resultado parece um bug.
+        //
+        // Isso descreve o A/B; o AutoWarmup abaixo e o mesmo gesto feito pela maquina, em
+        // producao, sem depender de alguem contar os segundos.
         void SetQueryEnabled(bool V)  { QueryEnabled = V; }
         bool GetQueryEnabled() const  { return QueryEnabled; }
+
+        // === Aquecimento global (Fase 4) ==================================================
+        // Modo de PRODUCAO: a consulta de render so abre quando a tabela vale a pena. Desligar
+        // reproduz EXATAMENTE o regime anterior — a consulta segue o QueryEnabled e mais nada —,
+        // e e esse o outro braco do A/B, como `MinSampleCount = 1` e para o piso de confianca.
+        //
+        // Nao invalida a tabela, e a diferenca com os outros knobs desta fase e o motivo: este nao
+        // muda o que ENTRA na celula, so quem le. Mesmo criterio do QueryEnabled, que tambem nao
+        // invalida.
+        void SetAutoWarmup(bool V) { AutoWarmup = V; }
+        bool GetAutoWarmup() const { return AutoWarmup; }
+        // O `ResetPending` entra na LEITURA, e nao so no tick: quem arma o reset pode ser um knob
+        // no meio do frame, depois de o tick ja ter passado. Nesse frame os consumidores ja
+        // recebem flags zeradas, e o estado tem de dizer o mesmo — senao o manifesto sairia com
+        // "active" num frame que nao consultou nada.
+        ERadianceCacheWarmup WarmupState() const {
+            return ResetPending ? ERadianceCacheWarmup::Resetting : Warmup;
+        }
+        const char* WarmupStateName() const;
+        // Frames em Filling (0 fora dele). E o que o painel mostra para o operador saber se a
+        // espera acabou ou travou.
+        u32  WarmupFillFrames() const { return FillFrames; }
+        // A consulta do RENDER esta liberada neste frame? Com AutoWarmup desligado, sempre.
+        bool WarmupAllowsQuery() const {
+            return !AutoWarmup || WarmupState() == ERadianceCacheWarmup::Active;
+        }
+
+        // Fracao das celulas COM AMOSTRA que precisa estar confiavel (N >= piso) para Filling
+        // terminar. Medido na Bistro exterior (V1, piso 4, N=128): o regime permanente e 80,8% —
+        // 20.340 confiaveis de 25.176 com amostra. O piso fica ABAIXO disso de proposito: o
+        // produtor cria celulas novas todo frame, entao essa fracao tem um TETO menor que 1 que
+        // depende da cena, e um gate colado no teto medido de uma cena nao dispararia em outra
+        // com mais churn — viraria decoracao, e quem decidiria de fato seria sempre o teto de
+        // frames abaixo.
+        static constexpr f32 kWarmupConfidentRatio = 0.70f;
+        // Teto de espera, para Filling nao ficar preso numa cena cujo regime permanente fica
+        // abaixo da fracao acima. 96 = 1,5x o kStaleFrameMax: a tabela ja deu mais de uma volta
+        // completa de despejo, entao o que estiver la e o regime permanente e nao o transiente.
+        //
+        // E deliberadamente MENOR que os 128 frames de aquecimento do capturador: com 128 os dois
+        // numeros coincidiriam e a transicao cairia exatamente no frame capturado, justamente nas
+        // cenas em que a fracao nunca dispara. Ver Docs/CAPTURE-PROTOCOL.md.
+        static constexpr u32 kWarmupMaxFrames = 96;
 
         // Aresta da celula no nivel 0. 0,25 m e o valor do idTech 8.
         void SetBaseCellSize(f32 V)   { BaseCellSize = V < 0.01f ? 0.01f : V; }
@@ -614,6 +677,19 @@ namespace Smile {
         bool Enabled      = false; // opt-in ate fechar o A/B visual do segundo bounce
         bool QueryEnabled = false;
         bool ResetPending = false;
+        // Aquecimento global. Nasce em Resetting porque e onde o SetupForScene poe a tabela: os
+        // buffers vem com lixo do CreateCommittedResource e o primeiro resolve TEM de ser reset.
+        bool AutoWarmup   = true;
+        ERadianceCacheWarmup Warmup = ERadianceCacheWarmup::Resetting;
+        u32  FillFrames = 0;
+        // Defasagem do readback dos contadores, em frames, e o motivo de o gate nao poder olhar
+        // o StatsCPU nos primeiros frames de Filling: o resolve do frame F copia a varredura de
+        // F-1, e o anel entrega essa copia kFramesInFlight frames depois. Antes disso o StatsCPU
+        // ainda descreve a tabela do regime ANTERIOR — cheia e confiavel —, e o gate pularia
+        // direto para Active no primeiro frame depois de um reset, que e exatamente o caso que
+        // ele existe para cobrir.
+        static constexpr u32 kWarmupStatsLag = FCommandQueue::kFramesInFlight + 1u;
+        void TickWarmup();
         bool Initialized  = false;
         bool Ready        = false;
         // Zeradas no UpdatePerFrame, escritas pelo ShaderParams. Mutaveis porque o ShaderParams e

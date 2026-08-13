@@ -942,6 +942,18 @@ namespace SmileEditor {
     bool RenderSettingsBridge::IsRadianceCacheQuery() const {
         return Renderer && Renderer->Settings().GetRadianceCacheQuery();
     }
+    bool RenderSettingsBridge::IsRadianceCacheAutoWarmup() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheAutoWarmup();
+    }
+    QString RenderSettingsBridge::GetRadianceCacheWarmup() const {
+        if (!Renderer) return QStringLiteral("—");
+        const auto& S = Renderer->Settings();
+        const QString Name = QString::fromLatin1(S.RadianceCacheWarmupName());
+        // Os frames so aparecem em `filling`: fora dele o contador vale zero e imprimi-lo daria a
+        // impressao de um relogio parado.
+        if (Name != QStringLiteral("filling")) return Name;
+        return Name + QStringLiteral(" (%1 frames)").arg(S.RadianceCacheWarmupFrames());
+    }
     bool RenderSettingsBridge::IsRadianceCacheStats() const {
         return Renderer && Renderer->Settings().GetRadianceCacheStatsEnabled();
     }
@@ -1086,6 +1098,12 @@ namespace SmileEditor {
         if (!Renderer) return;
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheQuery(!A->Settings().GetRadianceCacheQuery());
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ToggleRadianceCacheAutoWarmup() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheAutoWarmup(!A->Settings().GetRadianceCacheAutoWarmup());
         emit GISettingsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheStats() {

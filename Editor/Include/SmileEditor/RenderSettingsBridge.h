@@ -109,6 +109,11 @@ namespace SmileEditor {
         // readback (ver FRadianceCacheStats) — por isso so tem READ.
         Q_PROPERTY(bool radianceCacheEnabled READ IsRadianceCacheEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheQuery READ IsRadianceCacheQuery NOTIFY GISettingsChanged)
+        // Aquecimento automatico: knob (bool) + o estado em que ele esta, que e telemetria e muda
+        // sozinho — por isso o estado sai por StatsChanged e nao por GISettingsChanged.
+        Q_PROPERTY(bool radianceCacheAutoWarmup READ IsRadianceCacheAutoWarmup
+                       NOTIFY GISettingsChanged)
+        Q_PROPERTY(QString radianceCacheWarmup READ GetRadianceCacheWarmup NOTIFY StatsChanged)
         Q_PROPERTY(bool radianceCacheStats READ IsRadianceCacheStats NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheStatsDetail READ IsRadianceCacheStatsDetail
                        NOTIFY GISettingsChanged)
@@ -316,6 +321,8 @@ namespace SmileEditor {
         bool              IsReGIREnabled() const;
         bool              IsRadianceCacheEnabled() const;
         bool              IsRadianceCacheQuery() const;
+        bool              IsRadianceCacheAutoWarmup() const;
+        QString           GetRadianceCacheWarmup() const;
         bool              IsRadianceCacheStats() const;
         bool              IsRadianceCacheStatsDetail() const;
         bool              IsRadianceCacheDedicatedUpdate() const;
@@ -351,6 +358,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleReGIR();
         Q_INVOKABLE void ToggleRadianceCache();
         Q_INVOKABLE void ToggleRadianceCacheQuery();
+        Q_INVOKABLE void ToggleRadianceCacheAutoWarmup();
         Q_INVOKABLE void ToggleRadianceCacheStats();
         Q_INVOKABLE void ToggleRadianceCacheStatsDetail();
         Q_INVOKABLE void ToggleRadianceCacheDedicatedUpdate();
