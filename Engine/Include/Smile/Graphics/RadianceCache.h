@@ -224,12 +224,17 @@ namespace Smile {
         // 2^20 fazia sentido. O passe dedicado escreve por 4% dos pixels e derrubou a populacao
         // em quase duas ordens de grandeza; a capacidade nao tinha sido refeita contra ele.
         //
-        // 2^17 e a UNICA potencia de dois em que os dois defaults em disputa cabem na faixa de
-        // 20-70% que o gate da Fase 4 pede:
+        // 2^17 e o melhor COMPROMISSO contra a faixa de 20-70% do gate da Fase 4 — nao um encaixe
+        // perfeito, e vale ser exato sobre isso: V1 fica em 19,2%, oito decimos ABAIXO do piso da
+        // faixa. Nenhuma potencia de dois poe os dois defaults dentro dela, porque V4 e o dobro de
+        // V1 e a faixa e menos de quatro vezes:
         //
-        //     2^16 -> V1 38,4%  V4 77,4%   (V4 estoura o teto)
-        //     2^17 -> V1 19,2%  V4 38,7%
-        //     2^18 -> V1  9,6%  V4 19,4%   (V1 abaixo do piso)
+        //     2^16 -> V1 38,4%  V4 77,4%   (V4 estoura o teto por 7 pp)
+        //     2^17 -> V1 19,2%  V4 38,7%   (V1 rente ao piso, por 0,8 pp)
+        //     2^18 -> V1  9,6%  V4 19,4%   (os DOIS abaixo do piso)
+        //
+        // 2^17 e o unico em que nenhum lado erra por mais de um ponto, e erra para o lado barato:
+        // ficar sob o piso desperdicia memoria, estourar o teto perde amostra.
         //
         // ⚠️ RESSALVA DE ESCOPO, a mesma do UpdateMaxVertices: a medida e de UMA pose estatica na
         // Bistro exterior. Camera andando mantem vivas as celulas dos ultimos kStaleFrameMax
@@ -457,7 +462,17 @@ namespace Smile {
         // Limpa a tabela inteira no proximo resolve. Necessario quando a cena troca ou a camera
         // teleporta: o conteudo descreve outro lugar do mundo e envelhecer celula a celula
         // levaria kStaleFrameMax frames de fantasma.
-        void ResetOnce() { ResetPending = true; }
+        //
+        // O estado do aquecimento e escrito AQUI, e nao amostrado do `ResetPending` pelo tick. Este
+        // metodo e chamado de fora do frame — knob da UI, carga de cena — e portanto tambem DEPOIS
+        // do tick: nesse caso o resolve do fim do frame limparia o pending sem que ninguem tivesse
+        // observado, e o frame seguinte encontraria `Active` sobre uma tabela recem-zerada. O
+        // estado tem de sair do EVENTO, nao de uma flag que outro passe apaga.
+        void ResetOnce() {
+            ResetPending = true;
+            Warmup       = ERadianceCacheWarmup::Resetting;
+            FillFrames   = 0;
+        }
 
         u32  Capacity() const { return CapacityV; }
         u64  MemoryBytes() const;
@@ -494,6 +509,20 @@ namespace Smile {
         // Frames em Filling (0 fora dele). E o que o painel mostra para o operador saber se a
         // espera acabou ou travou.
         u32  WarmupFillFrames() const { return FillFrames; }
+        // A BORDA `Filling -> Active`, uma vez so. Quem consome tem de derrubar o historico dos
+        // consumidores: o terminador do raio secundario acabou de mudar de fallback para cache, e
+        // o que eles acumularam durante o Filling foi medido com o OUTRO terminador — e a mesma
+        // razao pela qual o toggle manual de leitura invalida (ver FRenderSettings). Sem isto, a
+        // transicao automatica seria o unico caminho da engine que troca o terminador sem limpar
+        // quem somou o anterior.
+        //
+        // Latch em vez de callback porque esta classe nao conhece o FRenderSettings — e o mesmo
+        // padrao do `ConsumeRestore` do capturador.
+        bool ConsumeWarmupActivation() {
+            const bool V = WarmupActivated;
+            WarmupActivated = false;
+            return V;
+        }
         // A consulta do RENDER esta liberada neste frame? Com AutoWarmup desligado, sempre.
         bool WarmupAllowsQuery() const {
             return !AutoWarmup || WarmupState() == ERadianceCacheWarmup::Active;
@@ -511,9 +540,10 @@ namespace Smile {
         // abaixo da fracao acima. 96 = 1,5x o kStaleFrameMax: a tabela ja deu mais de uma volta
         // completa de despejo, entao o que estiver la e o regime permanente e nao o transiente.
         //
-        // E deliberadamente MENOR que os 128 frames de aquecimento do capturador: com 128 os dois
-        // numeros coincidiriam e a transicao cairia exatamente no frame capturado, justamente nas
-        // cenas em que a fracao nunca dispara. Ver Docs/CAPTURE-PROTOCOL.md.
+        // O teto NAO dispensa a tabela ter conteudo — ver o TickWarmup. Ele existe para cobrir a
+        // cena que enche devagar, nao a que nao enche: com o produtor parado, abrir a consulta
+        // depois de 96 frames recriaria exatamente o custo (busca em toda consulta, miss em todas)
+        // que este estado existe para evitar, e sem prazo para acabar.
         static constexpr u32 kWarmupMaxFrames = 96;
 
         // Aresta da celula no nivel 0. 0,25 m e o valor do idTech 8.
@@ -686,7 +716,11 @@ namespace Smile {
         // buffers vem com lixo do CreateCommittedResource e o primeiro resolve TEM de ser reset.
         bool AutoWarmup   = true;
         ERadianceCacheWarmup Warmup = ERadianceCacheWarmup::Resetting;
+        // Frame de Filling que ESTA COMECANDO — o tick roda antes do trabalho do frame. Por isso o
+        // teto compara com `>`: em `FillFrames == kWarmupMaxFrames` faltava rodar o proprio frame
+        // 96, e trocar de estado ali entregaria 95 frames de preenchimento com o nome de 96.
         u32  FillFrames = 0;
+        bool WarmupActivated = false; // borda Filling -> Active, consumida pelo Renderer
         // Defasagem do readback dos contadores, em frames, e o motivo de o gate nao poder olhar
         // o StatsCPU nos primeiros frames de Filling: o resolve do frame F copia a varredura de
         // F-1, e o anel entrega essa copia kFramesInFlight frames depois. Antes disso o StatsCPU

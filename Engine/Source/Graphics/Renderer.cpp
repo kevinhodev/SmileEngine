@@ -1093,6 +1093,7 @@ namespace Smile {
         S.Wetness         = Weather.GetWetness();
         S.TimeOfDayHours  = TimeOfDay.TimeHours;
         S.SunDir[0] = SunDir.X; S.SunDir[1] = SunDir.Y; S.SunDir[2] = SunDir.Z;
+        S.CacheAutoWarmup = RadianceCache.GetAutoWarmup();
         return S;
     }
 
@@ -1134,6 +1135,12 @@ namespace Smile {
         TimeOfDay.TimeHours = _S.TimeOfDayHours;
         SetSunDirection(Vec3{ _S.SunDir[0], _S.SunDir[1], _S.SunDir[2] });
         Weather.SetWetness(_S.Wetness);
+        // Antes do early return: o aquecimento automatico e desligado nos DOIS presets, entao tem
+        // de voltar nos dois. Com a mesma regra de nao pisar no operador que vale para os knobs
+        // abaixo — se ele mexeu no toggle durante a sessao, o funil ja cancelou a captura e a
+        // escolha nova e dele.
+        if (RadianceCache.GetAutoWarmup() == Capture.AppliedByPreset().CacheAutoWarmup)
+            Settings().SetRadianceCacheAutoWarmup(_S.CacheAutoWarmup);
         if (!_S.KnobsMutated) return;
 
         // Knob a knob, e so os que continuam com o valor que o PRESET pos. Um que tenha mudado
@@ -1195,6 +1202,23 @@ namespace Smile {
             Applied = CurrentCaptureSettings();
             Applied.KnobsMutated = true;
         }
+
+        // NOS DOIS PRESETS, como o relogio: o aquecimento automatico do cache sai da sessao.
+        //
+        // Ele nao e um knob de qualidade que o gameplay deva preservar — e um evento agendado
+        // dentro da janela de aquecimento. Com ele ligado, a borda `Filling -> Active` cai por
+        // volta do frame 30 de 128 e derruba o historico dos consumidores no meio da contagem: a
+        // captura sairia sub-aquecida com o manifesto afirmando N, que e exatamente o que o funil
+        // de invalidacao existe para impedir — e, de fato, o funil cancelaria a sessao. Como o
+        // reset deterministico logo abaixo zera o cache, isso aconteceria em TODA captura.
+        //
+        // Desligado, a sessao inteira roda sob uma regra so: a consulta segue o toggle de leitura
+        // do operador do primeiro ao ultimo frame. Nos primeiros ela erra numa tabela fria, que e
+        // inofensivo — o piso de confianca ja impede celula fria de encerrar caminho, e ninguem
+        // olha um frame de aquecimento. O manifesto grava `cacheAutoWarmup`, entao a captura diz
+        // em que regime foi tirada.
+        Settings().SetRadianceCacheAutoWarmup(false);
+        Applied.CacheAutoWarmup = false;
         Capture.StashSettings(Stash, Applied);
 
         // Passo 2: FASE TEMPORAL CANONICA. Congelar o relogio onde ele estava fixaria uma fase
@@ -2880,6 +2904,10 @@ namespace Smile {
         // World radiance cache — mesmo padrao do ReGIR acima. A camera entra porque o nivel do
         // hash sai da distancia ate ela.
         RadianceCache.UpdatePerFrame(FrameSlot, Vw.CameraPosition);
+        // A borda do aquecimento, ANTES de os consumidores pedirem params: e neste frame que a
+        // consulta abre, e o historico tem de ser derrubado no mesmo frame em que o terminador
+        // muda. Um frame depois, os reservoirs ja teriam misturado as duas fontes.
+        if (RadianceCache.ConsumeWarmupActivation()) Settings().NotifyRadianceCacheActivated();
         RadianceCache.SetReGIRParams(ReGIRCB);
         // QUEM ESCREVE NA TABELA. Com o produtor dedicado da Fase 3 escolhido, ninguem do render
         // escreve: os traces voltam a so consultar e a fonte passa a ser o passe proprio, que nao

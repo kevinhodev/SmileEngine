@@ -263,7 +263,12 @@ namespace Smile {
         // Os buffers nascem com lixo (CreateCommittedResource nao zera). Uma chave aleatoria que
         // por acaso valha um checksum plausivel devolveria radiancia inventada no primeiro frame,
         // entao o primeiro resolve TEM que ser um reset.
-        ResetPending = true;
+        //
+        // Pelo ResetOnce, e nao escrevendo o ResetPending a dedo: o aquecimento global tambem
+        // nasce daqui, e uma cena nova herdando o `Active` da anterior abriria a consulta sobre a
+        // tabela recem-criada. Escrever a flag direto e a porta lateral que faz o estado divergir
+        // do evento — a mesma que ja custou um bug de "reset armado depois do tick".
+        ResetOnce();
         Ready = true;
 
         LogDebug("[GI] - Radiance cache: " + std::to_string(CapacityV) + " celulas, " +
@@ -294,27 +299,38 @@ namespace Smile {
         // nova por um conteudo que ja existe.
         if (!Ready || !Enabled) return;
 
-        if (ResetPending) {
-            Warmup     = ERadianceCacheWarmup::Resetting;
+        // Ainda esperando o resolve de reset. Quem pos o estado em Resetting foi o proprio
+        // ResetOnce — este tick nao amostra o `ResetPending` para decidir, so espera ele sair.
+        if (ResetPending) return;
+
+        if (Warmup == ERadianceCacheWarmup::Resetting) {
+            Warmup     = ERadianceCacheWarmup::Filling;
             FillFrames = 0;
-            return;
         }
-        // O resolve de reset ja rodou (ele limpa o ResetPending no fim do frame).
-        if (Warmup == ERadianceCacheWarmup::Resetting) Warmup = ERadianceCacheWarmup::Filling;
         if (Warmup != ERadianceCacheWarmup::Filling) return;
 
         ++FillFrames;
         if (FillFrames <= kWarmupStatsLag) return; // StatsCPU ainda e do regime anterior
 
+        // TABELA COM CONTEUDO e pre-requisito dos DOIS caminhos, e nao so do de convergencia. Sem
+        // isto o teto de frames abriria a consulta sobre uma tabela vazia — o produtor desligado,
+        // ou parado por qualquer motivo —, que e exatamente o custo (busca em toda consulta, miss
+        // em todas) que este estado existe para evitar, e sem prazo para acabar. Enquanto nao ha o
+        // que ler, esperar e a resposta certa; o A/B manual continua disponivel para forcar.
+        if (StatsCPU.HasSamples == 0u) return;
+
         // "Confiaveis o bastante" tem denominador nas celulas COM AMOSTRA, e nao na capacidade:
         // a fracao ocupada da tabela e uma propriedade da CENA (quanta superficie o produtor
         // alcanca), nao do aquecimento. Medir contra a capacidade faria uma cena pequena nunca
         // aquecer.
-        const bool Converged =
-            StatsCPU.HasSamples > 0u &&
-            static_cast<f32>(StatsCPU.Confident) >=
-                kWarmupConfidentRatio * static_cast<f32>(StatsCPU.HasSamples);
-        if (Converged || FillFrames >= kWarmupMaxFrames) Warmup = ERadianceCacheWarmup::Active;
+        const bool Converged = static_cast<f32>(StatsCPU.Confident) >=
+                               kWarmupConfidentRatio * static_cast<f32>(StatsCPU.HasSamples);
+        // `>` e nao `>=`: FillFrames e o frame que esta COMECANDO, entao a igualdade ainda deve um
+        // frame de preenchimento.
+        if (Converged || FillFrames > kWarmupMaxFrames) {
+            Warmup          = ERadianceCacheWarmup::Active;
+            WarmupActivated = true; // o Renderer consome e derruba o historico dos consumidores
+        }
     }
 
     void FRadianceCache::UpdatePerFrame(u32 InFrameSlot, const Vec3& InCameraPos) {

@@ -228,6 +228,13 @@ namespace Smile {
         // mao e nao deriva da hora.
         f32  TimeOfDayHours = 0.0f;
         f32  SunDir[3]      = { 0.0f, 1.0f, 0.0f };
+        // Aquecimento automatico do radiance cache: guardado nos DOIS presets, como o estado
+        // temporal acima, e pelo mesmo tipo de motivo — nao e uma preferencia de qualidade, e uma
+        // coisa que quebra a sessao. Com ele ligado, a borda `Filling -> Active` cai no meio do
+        // aquecimento e derruba o historico dos consumidores, o que quebra o contrato "N frames
+        // apos UM reset" (e, pelo funil, cancelaria a captura). A sessao inteira roda com ele
+        // desligado; o manifesto grava o que valeu, entao a captura se descreve.
+        bool CacheAutoWarmup = false;
     };
 
     // Maquina de estados + recursos + IO. NAO conhece o Renderer: quem aplica preset, faz o reset

@@ -178,16 +178,37 @@ namespace Smile {
         return R.RadianceCache.GetQueryEnabled();
     }
 
+    // Um so lugar monta a mascara: "os consumidores esquecem, a tabela fica". Ela e usada por tres
+    // eventos que sao o MESMO evento visto de angulos diferentes — o operador abrindo a leitura, o
+    // operador mexendo no aquecimento automatico, e o aquecimento abrindo a leitura sozinho.
+    // Duplicar a mascara e como um deles deixaria de acompanhar os outros.
+    static EHistoryTarget RadianceCacheConsumersOnly() {
+        return static_cast<EHistoryTarget>(static_cast<u32>(Dom::RayVisibility) &
+                                           ~static_cast<u32>(EHistoryTarget::RadianceCache));
+    }
+
     void FRenderSettings::SetRadianceCacheAutoWarmup(bool _V) {
         if (_V == R.RadianceCache.GetAutoWarmup()) return;
         R.RadianceCache.SetAutoWarmup(_V);
         // Mesma forma exata do toggle de query acima, e pelo mesmo motivo: o que muda e QUEM LE a
         // tabela, nao o que ela guarda. Apagar o cache aqui destruiria justamente o aquecimento
         // que este knob existe para administrar.
-        const auto ConsumersOnly = static_cast<EHistoryTarget>(
-            static_cast<u32>(Dom::RayVisibility) &
-            ~static_cast<u32>(EHistoryTarget::RadianceCache));
-        Invalidate(ConsumersOnly);
+        Invalidate(RadianceCacheConsumersOnly());
+    }
+
+    void FRenderSettings::NotifyRadianceCacheActivated() {
+        // A borda `Filling -> Active` e, para os consumidores, a MESMA coisa que o operador ligar
+        // a leitura: o terminador do raio secundario deixa de ser o fallback e passa a ser o
+        // cache. O que eles acumularam durante o Filling foi medido com o outro terminador — os
+        // reservoirs do ReSTIR GI, o atlas do DDGI (histerese 0,99, ou seja centenas de updates de
+        // memoria), o NRD. Sem isto, esta seria a unica troca de terminador da engine que nao
+        // limpa quem somou o anterior.
+        //
+        // Passa pelo funil de proposito: se acontecer no meio de um aquecimento de captura, a
+        // sessao TEM de ser cancelada — e o contrato "N frames apos UM reset" quebrado no meio.
+        // Na pratica nao acontece, porque a sessao roda com o aquecimento automatico desligado
+        // (ver Renderer::UpdateFrameCapture), e essa e a razao de ela desliga-lo.
+        Invalidate(RadianceCacheConsumersOnly());
     }
     bool FRenderSettings::GetRadianceCacheAutoWarmup() const {
         return R.RadianceCache.GetAutoWarmup();
