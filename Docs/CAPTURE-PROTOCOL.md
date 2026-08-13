@@ -217,13 +217,32 @@ captura — meio warm-up em cada regime não pertence a nenhuma das duas séries
 Ela **não** invalida o histórico do cache ao ser ligada: o conteúdo acumulado continua valendo, e
 derrubá-lo tornaria a instrumentação inútil justamente para quem quer olhar um cache quente.
 
+### São TRÊS regimes, e não dois (Fase 4)
+
+A Fase 4 acrescentou o **detalhe** — misses por motivo, saúde da inserção e telemetria do produtor.
+Ele não entrou junto do `S` justamente por causa da medida acima: a contagem de atômicos do regime
+instrumentado é **congelada**, senão toda a série já tirada nele deixa de ser comparável com as
+próximas. Então:
+
+| regime | etiqueta | atômicos por wave | o que mede |
+|---|---|---|---|
+| limpo | — | 0 | imagem |
+| instrumentado | `S` | 2, na consulta | ocupação, hit rate |
+| detalhado | `Sd` | + até 6 na consulta, 4 na inserção, 7 no produtor | por que erra, e o que o produtor faz |
+
+O terceiro mexe mais que o segundo, e num lugar novo: os atômicos de inserção ficam **dentro do
+produtor**, onde decidem quem vence o CAS. Manifesto: `cacheStatsDetail`. Alterná-lo cancela a
+captura, como o `S`.
+
 ### Regra de operação
 
 - **Calibrar o N**: instrumentação ligada no sweep inteiro. O hit rate é um dos quatro sinais, e
   todos os pontos precisam do mesmo regime para a curva significar alguma coisa.
 - **Comparar imagem**: instrumentação desligada, nos dois lados do A/B.
+- **Diagnosticar o cache** (por que o hit rate é esse, o hash está saudável, o produtor faz o que
+  se pediu): `Sd`. Série própria — não comparar com pontos tirados em `S`.
 
-Nunca cruzar os dois — e o nome do arquivo agora impede fazê-lo por distração.
+Nunca cruzar os três — e o nome do arquivo agora impede fazê-lo por distração.
 
 ## Calibração do N
 

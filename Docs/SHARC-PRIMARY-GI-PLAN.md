@@ -1,8 +1,8 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
-> **Onde estamos:** Fases 0-3 **fechadas e medidas**. Próxima: **Fase 4** (confiança, estados,
-> telemetria) — o bloco `➜ PRÓXIMO PASSO` mais abaixo tem o que a Fase 3 apurou sobre ela,
-> incluindo uma auditoria já feita e um defeito com endereço. Depois, Fase 5.
+> **Onde estamos:** Fases 0-3 fechadas e medidas. **Fase 4 EM CURSO** — a confiança e a
+> telemetria inteira entraram (3 commits); faltam o aquecimento global e a **medição**. O bloco
+> `➜ FASE 4` mais abaixo tem o que já está em código e a fila do que resta, em ordem.
 >
 > Leia este bloco ESTADO inteiro antes de continuar; ele existe para não re-derivar decisão. A
 > seção "Estado de PARTIDA", lá embaixo, é retrato histórico e **não** descreve o código de hoje.
@@ -109,36 +109,87 @@ simultâneas, e a semântica vem primeiro.
 
 ---
 
-### ➜ PRÓXIMO PASSO: Fase 4 — confiança, estados e telemetria
+### ➜ FASE 4 — o que já entrou, e a fila do que falta
 
-A Fase 4 já está escrita mais abaixo neste arquivo; o que segue é o que a Fase 3 apurou sobre ela e
-que muda a ordem de ataque.
+Três commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor).
+Todos compilam em Debug e Release, `ctest` 3/3. **Nada foi medido ainda** — a Fase 4 não fecha por
+código.
 
-**A auditoria da matemática do resolve (item 1 da Fase 4) já foi feita, lendo o código — e ela passa
-no que se temia, mas achou outra coisa.**
-
-O que se temia — peso histórico efetivo maior que o teto — **não acontece**. Em
+**A auditoria da matemática do resolve (item 1) foi feita antes, lendo o código, e passa.** Em
 `RadianceCacheResolve.cs.hlsl:95-101` a mistura é `(prevRadiance·prevSamples + newSum) / total` com
 `samples = min(total, 64)`; como `prevSamples` vem de `Resolved`, que só foi escrito por esse mesmo
 `min`, ele nunca passa de 64. A média corrente vira EMA de constante 1/64, que é o
 `maxAccumulatedFrames` da SHaRC. **Correto — não mexer.**
 
-**O que está errado é a outra ponta: não existe piso de confiança na consulta.** Em
-`RadianceCache.hlsli`, o `RC_QueryInner` rejeita só `sampleNum == 0` (`RC_QUERY_NO_SAMPLES`) e
-qualquer coisa acima disso vira `HIT` ou `STALE` pela idade. **Uma célula com UMA amostra encerra um
-path de render como se estivesse convergida** — uma única amostra de path tracer, com todo o ruído
-dela, servida como radiância confiável a todos os raios que caírem naquela célula.
+#### O que entrou (não re-derivar)
 
-É exatamente o "célula fria não pode terminar um path" da Fase 4, e agora tem endereço: o gate
-entra no `RC_QueryInner`, ao lado do teste de `sampleNum`, e o estado da célula sai de
-`sampleCount`/`age` sem buffer novo — como o plano já manda.
+**Piso de confiança.** O `RC_QueryInner` rejeitava só `sampleNum == 0`; uma célula de UMA amostra
+encerrava um path como se estivesse convergida. Agora há `RC_QUERY_WARMING` e um piso vindo do CB
+(`RadianceCacheLodCapFlags.w`, que estava livre — **nenhuma mudança de layout de cbuffer**, e é por
+isso que o campo foi para lá). Default 4, faixa 1..16, e **`1` reproduz exatamente o regime
+anterior** — é esse o outro braço do A/B. Quatro decisões dentro dele:
 
-**Sobre capacidade: não decidir por estes números ainda.** V1 ocupa 25.165 células (2,4% de 2²⁰) e
-V4 50.718 (4,8%) — muito abaixo da faixa de 20-70% da Fase 4. Mas a faixa existe para dizer se o
-hash está saudável, e **os contadores que respondem isso (colisão, bucket cheio, probes por busca)
-ainda não existem**. Reduzir a tabela antes deles é ajustar o que não se mediu. E a conta de 2¹⁸ tem
-de ser refeita contra o **default atual**: com V1 daria 9,6% (25.165/262.144), não os 19,3% que V4
+- Vale para os **dois lados**, consulta de render e terminal do updater, pelo mesmo argumento da
+  política de backface. No terminal pesa mais: ali a amostra ruim não é consumida uma vez, é
+  **gravada** na próxima célula da cadeia.
+- Invalida a tabela (`ResetOnce` + `Dom::RayVisibility`), entra no manifesto (`cacheMinSamples`) e
+  na etiqueta (`C<n>`). É a terceira vez que a regra "invalidação + manifesto + etiqueta" se aplica
+  a um knob novo, e a primeira em que ela não foi esquecida.
+- Os **seis estados de célula** do plano saem dos status da query sem buffer novo; o sexto
+  (despejada) não é observável por construção — o resolve troca a chave por tombstone no mesmo
+  passe, e a busca seguinte cai em `NO_ENTRY`.
+- O visualizador desempacotava os params **a dedo**; passou a usar a macro
+  (`RC_UNPACK_PARAMS_INTO`). Sem isso ele pintaria de verde exatamente a célula que a consulta
+  recusa. O modo "cobertura" ganhou azul = aquecendo.
+
+**Telemetria completa, num TERCEIRO REGIME.** `RC_FLAG_STATS_DETAIL` existe separado porque a
+contagem de atômicos do `RC_FLAG_STATS` é **congelada**: ela já é não-neutra, e a série medida nela
+só continua comparável enquanto esse número não muda. O detalhe se declara no manifesto
+(`cacheStatsDetail`) e na etiqueta (`d` minúsculo, que qualifica o `S`), e cancela captura em curso.
+
+Os dois grupos têm **gates diferentes**, e é isso que mantém cada contador com uma população só:
+
+| grupo | gate | população |
+|---|---|---|
+| miss por motivo (6) | `STATS` **e** `DETAIL` | raios de render — o updater não tem `STATS` |
+| inserção (4) | só `DETAIL` | quem **escreve** na tabela — com produtor dedicado, só o updater |
+| produtor (7) | só `DETAIL` | caminhos do updater |
+
+Sondagens são contadas no `RC_Insert`, não no `RC_Find`: as duas percorrem a **mesma** cadeia, e
+medir na inserção poupa atômicos no caminho quente (4% dos pixels contra todo raio secundário).
+`PROBEMAX` e `PATH_DEPTH` usam `InterlockedMax` e o resolve **precisa** zerá-los — senão o painel
+mostraria o pior caso da sessão como se fosse o do frame.
+
+Os 21 contadores vão para o manifesto além do painel: dois gates de saída são exatamente esses
+números, e gate que só existe em painel volátil não é verificável depois.
+
+**Correção de honestidade, de brinde:** o visualizador se registrava como consumidor
+(`ConsumerRuns` default), então abrir a janela de debug bastava para o manifesto declarar
+`cacheQuery: true` num frame sem nenhum trace de render consultando.
+
+#### O que falta, em ordem
+
+1. **MEDIR.** Nada abaixo se decide sem isto, e agora há instrumento. A primeira rodada responde
+   três coisas de uma vez, com o regime `d` ligado: (a) quanto o piso custa em hit rate e quanto
+   dele é `aquecendo` — que some sozinho — contra `sem chave`, que não some; (b) `insertFull /
+   insertTries` contra a meta de 0,1%; (c) `cachePaths` contra a fração pedida, e o terminal por
+   tipo, que é o gate da Fase 3 que ficou sem medida.
+2. **Aquecimento global** (`Filling` / `Active` / `Resetting`). É o único item de código
+   estrutural que resta na fase, e os limiares dele saem da medida acima — por isso vem depois.
+   O controle manual update/query fica, para o A/B.
+3. **Visualizador**: modos `Age` e `Confidence` próprios. O `Fallback source` só faz sentido depois
+   da Fase 5, quando existir escolha de fallback por hit.
+
+**Sobre capacidade: continua sem decidir, mas agora é medível.** V1 ocupa 25.165 células (2,4% de
+2²⁰) e V4 50.718 (4,8%) — muito abaixo da faixa de 20-70% da Fase 4. A faixa existe para dizer se o
+hash está saudável, e é isso que os contadores de inserção respondem agora. A conta de 2¹⁸ tem de
+ser refeita contra o **default atual**: com V1 daria 9,6% (25.165/262.144), não os 19,3% que V4
 daria — o default mudou depois dessa estimativa.
+
+⚠️ **As baselines de imagem NÃO servem para a rodada de telemetria.** Elas foram tiradas com a
+instrumentação desligada, e o regime `d` mexe no escalonamento também do **produtor** (os atômicos
+de inserção mudam quem vence o CAS). Telemetria e imagem continuam em séries separadas, como já
+valia para o `S` — só que agora há três regimes, não dois.
 
 ### Histórico — implementação dos commits #5 e #6
 
@@ -659,30 +710,37 @@ Publicar um cache estável, responsivo e mensurável antes de habilitá-lo como 
 
 ### Trabalho
 
-- Manter o limite de 64 amostras e a evicção após 64 frames como ponto inicial.
-- Manter o refresh escalonado por checksum para evitar tempestades periódicas.
-- Verificar matematicamente a média após atingir o teto. O peso histórico deve permanecer limitado; não deixar a célula congelar com um `prevSamples` efetivo maior que o armazenado.
-- Definir estados explícitos da célula:
-  - ausente;
-  - presente sem amostra;
-  - aquecendo;
-  - confiável;
-  - precisa refresh;
-  - stale/evictada.
-- A confiança inicial pode usar somente `sampleCount`, `age` e elegibilidade geométrica. Variância/segundo momento só entra se os testes mostrarem necessidade; não aumentar 16 MiB por buffer sem evidência.
-- Criar aquecimento global do cache:
+- Manter o limite de 64 amostras e a evicção após 64 frames como ponto inicial. ✅ **já era assim**
+- Manter o refresh escalonado por checksum para evitar tempestades periódicas. ✅ **já era assim**
+- Verificar matematicamente a média após atingir o teto. O peso histórico deve permanecer limitado; não deixar a célula congelar com um `prevSamples` efetivo maior que o armazenado. ✅ **auditado, correto — não mexer**
+- Definir estados explícitos da célula: ✅ **saem dos status da query, sem buffer novo**
+  - ausente; → `RC_QUERY_NO_ENTRY`
+  - presente sem amostra; → `RC_QUERY_NO_SAMPLES`
+  - aquecendo; → `RC_QUERY_WARMING` (novo)
+  - confiável; → `RC_QUERY_HIT`
+  - precisa refresh; → `RC_QUERY_STALE`
+  - stale/evictada. → **não observável pela consulta**, e de propósito: o resolve troca a chave por
+    tombstone no mesmo passe, então a busca seguinte cai em `NO_ENTRY`.
+- A confiança inicial pode usar somente `sampleCount`, `age` e elegibilidade geométrica. Variância/segundo momento só entra se os testes mostrarem necessidade; não aumentar 16 MiB por buffer sem evidência. ✅ **piso por `sampleCount`; nenhum buffer novo**
+- Criar aquecimento global do cache: ⏳ **PENDENTE — o único item estrutural que resta**
   - `Filling`: update ativo, queries de render ainda não fazem early-out;
   - `Active`: cobertura/convergência mínimas atingidas ou janela de warm-up completada;
   - `Resetting`: mudança de chave, cena ou teleport; queries fechadas até o resolve de reset.
-- Preservar o controle manual update/query para A/B, mas o modo de produção deve ser automático.
-- Expandir estatísticas:
-  - tentativas e falhas de inserção;
-  - probes percorridos por busca, média e máximo;
-  - misses por chave, zero samples, refresh, segmento curto e cone estreito;
-  - updates aceitos/descartados;
-  - paths lançados e profundidade média/máxima;
-  - terminal por sky, emissivo, cache anterior ou limite de bounce.
+- Preservar o controle manual update/query para A/B, mas o modo de produção deve ser automático. ⏳ nasce com o item acima
+- Expandir estatísticas: ✅ **21 contadores, sob `RC_FLAG_STATS_DETAIL`**
+  - tentativas e falhas de inserção; ✅
+  - probes percorridos por busca, média e máximo; ✅ medidos na INSERÇÃO — a busca da query
+    percorre a mesma cadeia, e medir lá dobraria os atômicos do caminho quente.
+  - misses por chave, zero samples, refresh, segmento curto e cone estreito; ✅ + `aquecendo`
+  - updates aceitos/descartados; ✅ `insertTries` − `insertFull`
+  - paths lançados e profundidade média/máxima; ✅
+  - terminal por sky, emissivo, cache anterior ou limite de bounce. ✅ como sky / cache / **segmento
+    morto** / zero. Emissivo não é um terminal separado neste produtor: ele entra no `local` do
+    vértice pelo `PT_LoadHitEmissive`, não fecha o caminho.
 - Expandir visualização com `Age`, `Confidence`, `Fallback source` e, se barato, `Path depth`.
+  ⏳ **PARCIAL** — o modo "cobertura" passou a distinguir aquecendo (azul) e respeita o piso; modos
+  próprios de `Age`/`Confidence` faltam. `Fallback source` só faz sentido depois da Fase 5, quando
+  existir escolha de fallback por hit.
 
 ### Gate de saída
 
