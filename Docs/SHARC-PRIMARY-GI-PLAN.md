@@ -1,11 +1,10 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
-> **Onde estamos:** Fases 0-3 fechadas e medidas. **Fase 4 com o código todo entregue e dois dos
-> três gates de runtime passados** (13 commits): piso de confiança aprovado por A/B, capacidade
-> 2¹⁷ **confirmada em GPU** (19,21% de ocupação, `insertFull` = 0), luz/ToD respondendo, e o
-> lifecycle auditado até a última porta lateral. Falta **repetir o smoke de hot reload**, que
-> reprovou e achou dois bugs reais — já corrigidos. O bloco `➜ FASE 4` mais abaixo tem os números,
-> o que eles decidiram, e o que resta.
+> **Onde estamos:** Fases 0-4 **FECHADAS**. A Fase 4 fechou com os três gates de runtime passados
+> (13 commits): piso de confiança aprovado por A/B, capacidade 2¹⁷ confirmada em GPU (19,21% de
+> ocupação, `insertFull` = 0), luz/ToD respondendo, hot reload cancelando captura. **Fase 5 EM
+> CURSO** — e ela começa com uma auditoria que muda o tamanho dela: a política de sombreamento que
+> a Fase 5 pede **já está em pé** desde a decomposição da Fase 2. Ver o bloco `➜ FASE 5`.
 >
 > Leia este bloco ESTADO inteiro antes de continuar; ele existe para não re-derivar decisão. A
 > seção "Estado de PARTIDA", lá embaixo, é retrato histórico e **não** descreve o código de hoje.
@@ -351,7 +350,12 @@ conclusão da série **sem artefato arquivado**. Foi observação em sessão viv
 régua é de pose e tempo fixos), então ela não se reconfere depois lendo arquivo — só repetindo o
 teste.
 
-**3. Smoke de hot reload — ❌ REPROVOU.** O log é a prova de uma corrida: captura iniciada em
+**3. Smoke de hot reload — ✅ PASSOU depois de reprovar.** Reload normal e cancelamento durante
+captura, os dois confirmados após as correções. O que ele achou na primeira tentativa está abaixo,
+porque é o registro de por que o gate existia — e de por que gate de runtime não se troca por
+leitura de código.
+
+O log da reprovação é a prova de uma corrida: captura iniciada em
 `20:35:47,374`, alteração detectada em `20:35:48,867`, **captura gravada** em `20:35:50,290` — e o
 `ReloadShaders` só foi chamado depois disso, quando o CMake terminou. A sessão saiu declarada
 válida tendo renderizado parte dos 128 frames com um `.cso` e parte com outro.
@@ -367,8 +371,52 @@ Dois defeitos, os dois corrigidos em `97b0e79`:
   shader do cache logava "sem pipeline mapeado" e os PSOs ficavam os antigos. Eram os **únicos** da
   engine assim. O gate estava, portanto, testando menos do que pretendia.
 
-Falta **repetir o 3** com o mesmo procedimento: o cancelamento tem de aparecer antes de "Captura
-gravada".
+**A Fase 4 está FECHADA.** Os três gates passaram, e o terceiro só passou depois de derrubar dois
+bugs que nenhuma leitura de código tinha achado em cinco rodadas de auditoria — inclusive uma delas
+dedicada a este mesmo caminho. É o argumento a favor de gate de runtime, escrito aqui para a
+Fase 5 não ser tentada a pular o dela.
+
+---
+
+### ➜ FASE 5 — a auditoria de abertura muda o tamanho da fase
+
+**A política de sombreamento que a Fase 5 pede já está em pé**, e não por antecipação: ela caiu
+como consequência da decomposição da Fase 2 e do produtor dedicado da Fase 3. Conferido linha a
+linha em `HitShading.hlsli:99-147` contra a lista de trabalho da fase:
+
+| Item da Fase 5 | Estado |
+|---|---|
+| traçar da primária ao ponto secundário | ✅ é o que os cinco traces fazem |
+| classificar o hit e formar a chave | ✅ `PT_LoadHitSurface` → `S.CacheN` |
+| consultar o cache **antes** do material caro | ✅ e o comentário do arquivo já marca a ordem como CONTRATO |
+| hit confiável vira `Lo` e encerra | ✅ `if (RC_QueryHit(Q)) return Q.Radiance` |
+| em miss, avaliar material/direto/emissivo | ✅ nessa ordem |
+| DDGI **só** no terminal do miss | ✅ `PT_SampleIndirectFallback` só é alcançado depois do miss |
+| sem DDGI, ambiente/zero explícito | ✅ fora do volume desvanece para ZERO de propósito — não extrapola |
+| render não escreve em `Accum` | ✅ desde a Fase 3; o CPU deixou de armar o bit |
+| distância do primeiro hit preservada para o NRD | ✅ `outSignedDist` é escrito **antes** do retorno antecipado |
+
+O que sobra, portanto, **não é a política — é a promoção e o instrumento dela**:
+
+1. **O cache ainda nasce DESLIGADO** (`Enabled = false`, `QueryEnabled = false`, "opt-in até fechar
+   o A/B visual"). Toda a série foi medida com ele ligado à mão. Promover a fonte primária é, em
+   código, virar esses dois defaults — e essa é a borda em que ReSTIR GI, NRD/RR e TAA têm de
+   esquecer, porque o terminador do raio secundário muda para todo mundo de uma vez.
+2. **A telemetria de FONTE não existe.** O gate de saída da fase é literalmente "com fallback DDGI
+   habilitado, sua taxa de uso cai conforme o cache aquece — *a telemetria prova isso*". Hoje os
+   contadores dizem por que a consulta ERROU, e nada diz o que respondeu depois dela: DDGI, zero
+   fora do volume, ou zero por gate de medição. Sem isso o gate não é verificável, e é a mesma
+   ordem que a série inteira seguiu — instrumento antes de estimador.
+3. **`Fallback source` no visualizador**, que a Fase 4 adiou explicitamente para cá: por pixel, qual
+   fonte respondeu. É o par visual do contador acima.
+4. **Comparação contra as baselines da Fase 0** — que envelheceram de propósito e existem para
+   este momento.
+
+⚠️ **A regra dos regimes de medição vale aqui e tem consequência.** Acrescentar contador ao regime
+`Sd` invalidaria retroativamente a série já tirada nele. A telemetria de fonte precisa de decisão
+explícita: regime novo, ou argumento de que ela é neutra **para o conteúdo do cache** — que é
+plausível, já que com o produtor dedicado os traces de render não inserem, mas é argumento a
+verificar, não a assumir.
 
 Teleport/troca de cena não entra na lista: **satisfeito por construção**, e vale registrar por quê
 — a chave é de MUNDO, então teleportar não mostra radiância do lugar anterior, mostra ausência de
