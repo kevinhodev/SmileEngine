@@ -27,10 +27,12 @@ Texture2D<float>    Depth     : register(t0);
 Texture2D<float4>   NormalTex : register(t1);
 RWTexture2D<float4> Output    : register(u0);
 
-#define RC_DEBUG_CELLS     0
-#define RC_DEBUG_HITMISS   1
-#define RC_DEBUG_LOD       2
-#define RC_DEBUG_CONVERGED 3
+#define RC_DEBUG_CELLS      0
+#define RC_DEBUG_HITMISS    1
+#define RC_DEBUG_LOD        2
+#define RC_DEBUG_CONVERGED  3
+#define RC_DEBUG_AGE        4
+#define RC_DEBUG_CONFIDENCE 5
 
 float3 RC_LevelColor(uint level) {
     // Rampa discreta: nivel e inteiro, entao interpolar so borraria a fronteira que interessa ver.
@@ -123,10 +125,45 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                                 : float3(0.90f, 0.15f, 0.15f); // nunca preenchida
     } else if (mode == RC_DEBUG_LOD) {
         color = RC_LevelColor(level);
-    } else {
+    } else if (mode == RC_DEBUG_CONVERGED) {
         const float t = saturate((float)sampleNum / (float)RC_SAMPLE_NUM_MAX);
         color = lerp(float3(0.75f, 0.10f, 0.10f), float3(0.15f, 0.85f, 0.30f), t);
         if (!found) color = float3(0.05f, 0.05f, 0.05f);
+    } else if (mode == RC_DEBUG_AGE) {
+        // IDADE em frames desde a ultima amostra, com o LIMIAR DE REFRESH visivel como cor. A
+        // rampa e quebrada nele de proposito: o refresh e o mecanismo que responde a luz dinamica,
+        // e uma rampa linear de 0 a 64 esconderia justamente o ponto de virada — os primeiros 8-15
+        // frames sairiam todos do mesmo verde.
+        //
+        // O limiar e por CELULA (escalonado pelo checksum, para o refresh nao acontecer para todo
+        // mundo no mesmo frame), entao a cor tambem e — e o mosaico que isso produz nao e ruido, e
+        // o escalonamento funcionando.
+        const uint threshold = RC_REFRESH_FRAME_MAX + (checksum & (RC_REFRESH_FRAME_MAX - 1u));
+        if (!found) {
+            color = float3(0.05f, 0.05f, 0.05f);
+        } else if (age < threshold) {
+            // Verde -> amarelo ate pedir refresh.
+            const float t = saturate((float)age / (float)threshold);
+            color = lerp(float3(0.15f, 0.85f, 0.25f), float3(0.95f, 0.90f, 0.15f), t);
+        } else {
+            // Amarelo -> vermelho ate o despejo. Vermelho aqui quer dizer "esta celula sai da
+            // tabela no proximo resolve", que e o oposto do vermelho do modo de convergencia.
+            const float d = (float)(RC_STALE_FRAME_MAX - threshold);
+            const float t = saturate((float)(age - threshold) / max(d, 1.0f));
+            color = lerp(float3(0.95f, 0.90f, 0.15f), float3(0.90f, 0.15f, 0.15f), t);
+        }
+    } else {
+        // CONFIANCA, que nao e convergencia: o modo acima mostra N/64 (quanto a media ja
+        // convergiu), este mostra N contra o PISO — a fronteira que decide se a celula pode
+        // encerrar um caminho. Acima do piso ele satura, porque dali para cima a resposta da
+        // consulta e a mesma e o que muda e so a qualidade da media, que o outro modo ja conta.
+        //
+        // E este o modo que mostra a FRENTE DE AQUECIMENTO andando pela cena depois de um reset,
+        // que e o sinal que o estado global Filling le em forma de numero.
+        const uint  floorN = max(P.MinSamples, 1u);
+        const float t = saturate((float)sampleNum / (float)floorN);
+        color = found ? lerp(float3(0.75f, 0.10f, 0.10f), float3(0.15f, 0.85f, 0.30f), t)
+                      : float3(0.05f, 0.05f, 0.05f);
     }
 
     Output[px] = float4(color, 1.0f);

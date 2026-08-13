@@ -3182,9 +3182,10 @@ Rectangle {
                         y: rcLodSlider.y + 50
                         width: parent.width - 40
                         label: "Visualizador (janela de debug: \"radiance\")"
-                        from: 0; to: 3; step: 1
+                        from: 0; to: 5; step: 1
                         value: renderModel.radianceCacheDebugMode
-                        valueText: ["células", "cobertura", "nível", "convergência"][renderModel.radianceCacheDebugMode]
+                        valueText: ["células", "cobertura", "nível", "convergência",
+                                    "idade", "confiança"][renderModel.radianceCacheDebugMode]
                         // Só troca o modo do visualizador: não invalida nada, então commit contínuo.
                         onCommitted: (v) => renderModel.SetRadianceCacheDebugMode(v)
                     }

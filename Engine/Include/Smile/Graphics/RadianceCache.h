@@ -95,7 +95,12 @@ namespace Smile {
         Cells = 0,   // cor por celula — a estrutura do hash no mundo
         HitMiss,     // cobertura: verde = utilizavel; laranja = refresh; amarelo = sem amostra
         Lod,         // nivel da celula por distancia da camera
-        Converged,   // N/kMaxAccumSamples
+        Converged,   // N/kMaxAccumSamples — quanto a MEDIA convergiu
+        Age,         // frames desde a ultima amostra, com o limiar de refresh como cor
+        // N contra o PISO, e nao contra o teto: a fronteira que decide se a celula encerra um
+        // caminho. E o modo que mostra a frente de aquecimento andando depois de um reset — o
+        // mesmo sinal que o estado global Filling le em forma de numero.
+        Confidence,
         Count
     };
 
