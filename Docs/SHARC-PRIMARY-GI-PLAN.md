@@ -1,10 +1,11 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
 > **Onde estamos:** Fases 0-3 fechadas e medidas. **Fase 4 com o código todo entregue e a medida
-> principal feita** (7 commits): piso de confiança aprovado por A/B, capacidade e limiares de
-> aquecimento definidos por medida, aquecimento global e visualizador no lugar. Faltam **duas
-> confirmações**, não código: a captura em 2¹⁷ e o gate dinâmico de luz/ToD. O bloco `➜ FASE 4`
-> mais abaixo tem os números, o que eles decidiram, e a fila do que resta.
+> principal feita** (11 commits): piso de confiança aprovado por A/B, capacidade e limiares de
+> aquecimento definidos por medida, aquecimento global e visualizador no lugar, e o lifecycle
+> auditado até a última porta lateral. Faltam **três gates de RUNTIME**, nenhum de código: a
+> captura em 2¹⁷, o teste vivo de luz/ToD e o smoke de hot reload. O bloco `➜ FASE 4` mais abaixo
+> tem os números, o que eles decidiram, e a fila do que resta.
 >
 > Leia este bloco ESTADO inteiro antes de continuar; ele existe para não re-derivar decisão. A
 > seção "Estado de PARTIDA", lá embaixo, é retrato histórico e **não** descreve o código de hoje.
@@ -113,12 +114,12 @@ simultâneas, e a semântica vem primeiro.
 
 ### ➜ FASE 4 — medida feita; o código todo entrou; falta a confirmação
 
-Dez commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
+Onze commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
 `ed9f223` (separação de capacidade × contenção × teto × terminal), `318417b` (capacidade 2¹⁷),
 `ca1f9a9` (aquecimento global), `f624d7b` (visualizador), `9e64d64` (invalidação na borda + o reset
 que não pode ser perdido), `bdd383e` (o latch é a mudança de consulta; o tick sobe para o topo do
-frame) e `3e4ab07` (o reload de shader também fecha a consulta). Todos compilam em Debug e Release,
-`ctest` 3/3.
+frame), `3e4ab07` (o reload de shader também fecha a consulta) e `19ac2ea` (botão de reset e reload
+pelo funil). Todos compilam em Debug e Release, `ctest` 3/3.
 
 **A medida do item 1 foi feita** — é a seção a seguir, e é dela que saíram os dois defaults novos.
 O que resta para fechar a fase é uma captura de confirmação na capacidade nova e o gate dinâmico
@@ -279,9 +280,14 @@ regime anterior. Seis decisões que não se re-derivam:
   que o reset acabou de invalidar. A borda não pode depender de quem publica primeiro.
 - **A consulta FECHANDO também é troca de terminador**, e o único caminho que a fecha sozinha é o
   reload de shader — ele reseta a tabela (a semântica da chave pode ter mudado) sem passar por
-  setter nenhum. O latch cobre os dois sentidos. De brinde, esse reload passou a **cancelar
-  captura**: até aqui ele trocava os pipelines e resetava o cache no meio de um aquecimento sem a
-  sessão ficar sabendo, e ela sairia afirmando "N frames após UM reset" tendo tido dois.
+  setter nenhum. O latch cobre os dois sentidos.
+- **Tudo que fecha ou abre a consulta passa pelo FUNIL.** Foi a última classe de defeito desta
+  fase, e ela apareceu três vezes seguidas em lugares diferentes: a borda do aquecimento, o reload
+  de shader e o botão de resetar a tabela (que chamava `ResetOnce` cru — fechava a consulta sem
+  invalidar ninguém e sem cancelar captura). O `ReloadShaders` cancela captura **por conta
+  própria**, e não de carona no latch do cache: trocar pipeline invalida a sessão porque *os
+  shaders* mudaram, não porque um passe resetou algo — com `cacheQuery: false` a carona não
+  chegava.
 - **O estado sai do EVENTO, não de amostrar `ResetPending`.** `ResetOnce` é chamado de fora do
   frame — knob da UI, carga de cena — e portanto também *depois* do tick; nesse caso o resolve
   limparia o pending sem ninguém observar e o frame seguinte encontraria `Active` sobre uma tabela
@@ -317,15 +323,26 @@ andar). `Fallback source` continua fora até a Fase 5, quando existir escolha de
 
 #### O que falta para FECHAR a Fase 4
 
-1. **Uma captura de confirmação em 2¹⁷**, regime `Sd`, mesma pose: ocupação na faixa,
-   `insertFull` < 0,1%, contenção residual, cadeia saudável e imagem equivalente à de 2²⁰. É a
-   primeira vez que o gate de capacidade tem como falhar.
-2. **O gate dinâmico**: "a convergência responde a luz acesa/apagada e ToD sem congelar por dezenas
-   de segundos". A régua determinística **não cobre isto** — ela é de pose e tempo fixos. O
-   instrumento existe (miss `refresh`, `cacheEvicted` e o modo `Age` novo); o protocolo, não.
-3. Teleport/troca de cena: **satisfeito por construção** e vale registrar por quê — a chave é de
-   MUNDO, então teleportar não mostra radiância do lugar anterior, mostra ausência de célula no
-   lugar novo. Troca de cena arma `ResetPending` no `SetupForScene`.
+**Nada é de código — os três são gates de RUNTIME**, e nenhum deles tem como ser respondido lendo
+o repositório.
+
+1. **Captura de confirmação em 2¹⁷** — `Sd` / V1 / C4 / N=128, mesma pose. Verificar: ocupação na
+   faixa, `insertFull` < 0,1%, contenção residual, cadeia saudável, imagem equivalente à de 2²⁰ e
+   **o `AutoWarmup` de volta ligado no fim da sessão** (o manifesto sai com `cacheAutoWarmup:
+   false` por construção; quem responde pela restauração é o painel, depois). É a primeira vez que
+   o gate de capacidade tem como falhar: em 2²⁰, com 2,40% de ocupação, ele passaria mesmo com um
+   hash ruim.
+2. **Teste vivo de luz/ToD**, com o modo `Age` e a telemetria abertos: "a convergência responde a
+   luz acesa/apagada e ToD sem congelar por dezenas de segundos". A régua determinística **não
+   cobre isto** — ela é de pose e tempo fixos, e este gate é dinâmico por definição. O instrumento
+   existe (miss `refresh`, `cacheEvicted`, o modo `Age`); o protocolo, não.
+3. **Smoke de hot reload**, inclusive **durante** uma captura: os pipelines trocam, o cache reseta,
+   os consumidores esquecem e a sessão cancela com a mensagem certa. São quatro efeitos de dois
+   commits recentes (`3e4ab07`, `19ac2ea`) que só se veem rodando.
+
+Teleport/troca de cena não entra na lista: **satisfeito por construção**, e vale registrar por quê
+— a chave é de MUNDO, então teleportar não mostra radiância do lugar anterior, mostra ausência de
+célula no lugar novo. Troca de cena arma `ResetPending` no `SetupForScene`.
 
 ⚠️ **As baselines de imagem NÃO servem para a rodada de telemetria.** Elas foram tiradas com a
 instrumentação desligada, e o regime `d` mexe no escalonamento também do **produtor** (os atômicos
