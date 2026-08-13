@@ -271,9 +271,12 @@ um bloqueio. Pela mesma razão a borda `Filling → Active` acontece dentro da s
 o que dispara a invalidação é a mudança **efetiva** da consulta (`AutoWarmup && QueryEnabled`), e
 com o automático desligado a transição não muda nada para consumidor nenhum.
 
-⚠️ **Consequência para quem lê os números:** as capturas medem o cache em regime permanente, não a
-transição. O custo do `Filling` (quantos frames o render passa sem cache depois de uma troca de
-cena) **não é observável pela régua** — é medida de sessão viva, no painel.
+⚠️ **O que a régua deixa de medir é a POLÍTICA, não a convergência fria.** A convergência fria ela
+mede muito bem — é exatamente o que o sweep de N faz: `N = 32` e `N = 64` são retratos do cache a
+meio caminho, e `N = 0` é o retrato dele vazio. O que nenhuma captura observa é o **bloqueio
+automático** em `Filling`: quantos frames o render passaria sem consultar o cache depois de uma
+troca de cena, e como a imagem salta quando a consulta abre. Isso é medida de sessão viva, no
+painel — a sessão desliga justamente o mecanismo que produziria o efeito.
 
 ## Calibração do N
 

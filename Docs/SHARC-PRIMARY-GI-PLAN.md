@@ -113,11 +113,12 @@ simultâneas, e a semântica vem primeiro.
 
 ### ➜ FASE 4 — medida feita; o código todo entrou; falta a confirmação
 
-Nove commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
+Dez commits: `5bf1e48` (piso de confiança), `1c9035b` (miss e inserção), `bfb386c` (produtor),
 `ed9f223` (separação de capacidade × contenção × teto × terminal), `318417b` (capacidade 2¹⁷),
 `ca1f9a9` (aquecimento global), `f624d7b` (visualizador), `9e64d64` (invalidação na borda + o reset
-que não pode ser perdido) e `bdd383e` (o latch é a mudança de consulta; o tick sobe para o topo do
-frame). Todos compilam em Debug e Release, `ctest` 3/3.
+que não pode ser perdido), `bdd383e` (o latch é a mudança de consulta; o tick sobe para o topo do
+frame) e `3e4ab07` (o reload de shader também fecha a consulta). Todos compilam em Debug e Release,
+`ctest` 3/3.
 
 **A medida do item 1 foi feita** — é a seção a seguir, e é dela que saíram os dois defaults novos.
 O que resta para fechar a fase é uma captura de confirmação na capacidade nova e o gate dinâmico
@@ -276,6 +277,11 @@ regime anterior. Seis decisões que não se re-derivam:
   qualquer consumidor publicar cbuffer. A névoa volumétrica resolve o `UseHistory` dela ainda no
   `ResolveFrameLighting`: notificada do bloco de GI, ela já teria decidido reprojetar a história
   que o reset acabou de invalidar. A borda não pode depender de quem publica primeiro.
+- **A consulta FECHANDO também é troca de terminador**, e o único caminho que a fecha sozinha é o
+  reload de shader — ele reseta a tabela (a semântica da chave pode ter mudado) sem passar por
+  setter nenhum. O latch cobre os dois sentidos. De brinde, esse reload passou a **cancelar
+  captura**: até aqui ele trocava os pipelines e resetava o cache no meio de um aquecimento sem a
+  sessão ficar sabendo, e ela sairia afirmando "N frames após UM reset" tendo tido dois.
 - **O estado sai do EVENTO, não de amostrar `ResetPending`.** `ResetOnce` é chamado de fora do
   frame — knob da UI, carga de cena — e portanto também *depois* do tick; nesse caso o resolve
   limparia o pending sem ninguém observar e o frame seguinte encontraria `Active` sobre uma tabela
@@ -297,10 +303,13 @@ regime anterior. Seis decisões que não se re-derivam:
 como o reset determinístico zera o cache no início de toda sessão, ela cairia por volta do frame 30
 de 128 **em toda captura**. A sessão passa a rodar com `AutoWarmup` desligado, nos dois presets,
 como já acontece com o relógio do mundo — e é a condição do latch acima que faz esse desligamento
-de fato proteger a sessão. Ver `Docs/CAPTURE-PROTOCOL.md`. Duas consequências a registrar: **as
-capturas medem o regime permanente, não a transição** (o custo do `Filling` é medida de sessão
-viva, no painel), e **`cacheWarmup: "filling"` numa captura é legítimo** — a máquina anda, o portão
-é que está aberto.
+de fato proteger a sessão. Ver `Docs/CAPTURE-PROTOCOL.md`. Duas consequências a registrar:
+
+- **O que a régua deixa de medir é a POLÍTICA, não a convergência fria.** A convergência fria é
+  justamente o que o sweep de N mede — `N = 32`/`64` são o cache a meio caminho, `N = 0` é ele
+  vazio. O que nenhuma captura observa é o *bloqueio automático* em `Filling`: quantos frames o
+  render passa sem cache depois de uma troca de cena, e como a imagem salta quando a consulta abre.
+- **`cacheWarmup: "filling"` numa captura é legítimo** — a máquina anda, o portão é que está aberto.
 
 **Visualizador** (`f624d7b`): modos `Age` (rampa quebrada no limiar de refresh, que é por célula) e
 `Confidence` (N contra o **piso**, saturando acima dele — é onde se vê a frente de aquecimento
