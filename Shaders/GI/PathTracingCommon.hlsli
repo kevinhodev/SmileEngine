@@ -23,14 +23,18 @@
 // PT_AddDirectLocal sobre por que ele acumula por `inout` em vez de devolver o proprio termo.
 // ================================================================================================
 
+// GGX_TangentBasis / GGX_SampleVNDF / GGX_VndfPdf, para o PT_SampleBSDF do fim do arquivo. Header
+// so de funcoes — sem recurso, sem cbuffer —, entao entrar na cadeia dos cinco traces que incluem
+// o HitShading nao acopla nada nem custa DXIL: funcao nao chamada e eliminada. Dois deles
+// (ReSTIRGITrace, ReflectionTrace) ja o incluiam por conta propria; a guarda de include cuida.
+#include "../Reflections/GGXSample.hlsli"
+
 // Estado do CAMINHO que chegou ao hit — o que se sabe do raio, nao da superficie.
 //
-// Hoje o render usa Origin/Dir/SegmentLength/RayRoughness; Depth e Mode ja existem porque a Fase 3
-// bifurca por eles (o updater tem profundidade propria e politica de terminacao propria).
-//
-// Throughput, PDF e lobo escolhido NAO estao aqui, apesar de o plano os listar: nenhum consumidor
-// os preenche ainda, e campo sem produtor e campo que nasce mentindo. Entram na Fase 3, junto com o
-// laco de bounces que os calcula — e ai com valor de verdade.
+// Origin/Dir/SegmentLength/RayRoughness sao o que o render usa. Depth, Mode, Throughput, Pdf e
+// Lobe existem para o LACO DE BOUNCES do updater da Fase 3, que e quem os produz. Os tres ultimos
+// nasceram junto com o PT_SampleBSDF no fim deste arquivo, e nao antes, de proposito: campo sem
+// produtor nasce com valor inventado e o primeiro consumidor herda a invencao sem saber.
 struct FPathState {
     float3 Origin;        // origem do segmento que chegou a este hit
     float3 Dir;           // direcao dele, normalizada
@@ -40,10 +44,21 @@ struct FPathState {
     float  RayRoughness;
     uint   Depth;         // 0 = primeiro hit secundario
     uint   Mode;          // PT_MODE_*
+    // Produto dos f*cos/pdf de todos os vertices ANTERIORES a este. Vale 1 no primeiro hit — nao
+    // porque "ainda nao houve espalhamento", mas porque o updater usa o vertice do G-buffer so
+    // como ORIGEM: o que ele grava no cache e a radiancia de SAIDA de cada vertice, e essa conta
+    // comeca no proprio vertice. Ver o cabecalho do RadianceCacheUpdate.cs.hlsl.
+    float3 Throughput;
+    float  Pdf;           // densidade (angulo solido) da MISTURA que gerou Dir; 0 = nao amostrado
+    uint   Lobe;          // PT_LOBE_*: quem gerou Dir
 };
 
 #define PT_MODE_RENDER       0u // trace de render: CONSULTA o cache
 #define PT_MODE_CACHE_UPDATE 1u // Fase 3: o passe dedicado que o ALIMENTA
+
+#define PT_LOBE_NONE     0u // direcao nao veio de amostragem de BSDF (raio de origem, revalidacao)
+#define PT_LOBE_DIFFUSE  1u
+#define PT_LOBE_SPECULAR 2u
 
 FPathState PT_MakePathState(float3 rayOrigin, float3 rayDir, float hitDist, float rayRoughness) {
     FPathState S;
@@ -53,6 +68,9 @@ FPathState PT_MakePathState(float3 rayOrigin, float3 rayDir, float hitDist, floa
     S.RayRoughness  = rayRoughness;
     S.Depth         = 0u;
     S.Mode          = PT_MODE_RENDER;
+    S.Throughput    = float3(1.0f, 1.0f, 1.0f);
+    S.Pdf           = 0.0f;
+    S.Lobe          = PT_LOBE_NONE;
     return S;
 }
 
@@ -405,6 +423,90 @@ float3 PT_ComposeIndirect(FHitSurface S, FHitMaterial M, float3 V, float3 indire
     const float NoV = saturate(dot(S.ShadingN, V));
     const float3 ambientF = F_SchlickRoughness(M.SpecularColor, NoV, M.Roughness);
     return ((1.0f - ambientF) * M.DiffuseColor + ambientF) * indirect;
+}
+
+// --------------------------------------------------------------------------------------------
+// Amostragem do BSDF — o bloco que so o updater da Fase 3 usa
+// --------------------------------------------------------------------------------------------
+// O render AVALIA a BRDF para uma direcao conhecida (a da luz, no BRDF_Direct); quem precisa
+// SORTEAR a direcao e o laco de bounces do updater. Por isso isto nasce aqui e nao na Fase 2:
+// nao havia produtor.
+//
+// Nao ha BRDF nova. O peso sai do PROPRIO BRDF_Direct com radiancia unitaria — o mesmo Burley,
+// o mesmo GGX e a mesma compensacao de Kulla-Conty que a luz direta usa. Escrever "albedo/pi"
+// aqui seria uma segunda BRDF, e ela divergiria no primeiro ajuste do modelo difuso.
+struct FBsdfSample {
+    float3 Dir;        // direcao amostrada, em MUNDO
+    float3 Throughput; // f * cos / pdf — o peso da radiancia que vier de Dir
+    float  Pdf;        // densidade da mistura, em angulo solido
+    uint   Lobe;       // PT_LOBE_*: qual lobo gerou a direcao
+    bool   Valid;
+};
+
+// `Edir` sorteia a direcao dentro do lobo; `Elobe` escolhe o lobo. Numeros separados de proposito:
+// reaproveitar uma componente de Edir para a escolha correlaciona lobo e direcao, e a correlacao
+// aparece como faixa de material na tabela do cache.
+FBsdfSample PT_SampleBSDF(FHitSurface S, FHitMaterial M, float3 V, float2 Edir, float Elobe) {
+    FBsdfSample B;
+    B.Dir        = float3(0.0f, 0.0f, 1.0f);
+    B.Throughput = float3(0.0f, 0.0f, 0.0f);
+    B.Pdf        = 0.0f;
+    B.Lobe       = PT_LOBE_NONE;
+    B.Valid      = false;
+
+    const float3x3 basis = GGX_TangentBasis(S.ShadingN);
+    const float3   Vt    = mul(basis, V);
+    // Visada abaixo do horizonte da normal de SHADING. Acontece de verdade: o facing usa a normal
+    // de FACE (ver PT_LoadHitSurface), entao perto da silhueta de uma malha suavizada a
+    // interpolada pode ficar do outro lado. Sem caminho valido para amostrar, o caminho morre —
+    // o que custa uma amostra, e nao um lobo com pdf negativa.
+    if (Vt.z <= 1e-4f) return B;
+
+    // Probabilidade do lobo pela ENERGIA de cada um [Cyberpunk 2077, "escolher o lobo a partir da
+    // energia difusa/especular"]. Metal tem DiffuseColor zero e cairia inteiro no especular, que e
+    // o certo: com o piso de roughness do secundario (PT_LoadHitMaterial) esse lobo e largo o
+    // bastante para o cache nao-direcional representa-lo.
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+    const float  wd    = dot(M.DiffuseColor,  kLuma);
+    const float  ws    = dot(M.SpecularColor, kLuma);
+    const float  pDiff = (wd + ws > 1e-6f) ? saturate(wd / (wd + ws)) : 1.0f;
+
+    const float  alpha = max(M.Alpha, 1e-3f);
+    const bool   diffuseLobe = (Elobe < pDiff);
+
+    float3 Lt;
+    if (diffuseLobe) {
+        // Cosseno-hemisferico (Malley), o mesmo mapeamento do sample inicial do ReSTIR GI.
+        const float r    = sqrt(Edir.x);
+        const float phi  = 2.0f * SMILE_PI * Edir.y;
+        Lt = float3(r * cos(phi), r * sin(phi), sqrt(saturate(1.0f - Edir.x)));
+    } else {
+        const float4 ggx = GGX_SampleVNDF(Edir, alpha, Vt);
+        Lt = reflect(-Vt, ggx.xyz);
+        // Reflexao abaixo do horizonte: o VNDF permite, a BRDF nao. Descartar (e nao dobrar para
+        // cima) mantem o estimador sem vies — a energia perdida e a que o proprio lobo perde.
+        if (Lt.z <= 1e-4f) return B;
+    }
+
+    // pdf da MISTURA, e nao a do lobo sorteado: as duas tecnicas podem gerar a mesma direcao,
+    // entao a densidade real e a soma ponderada. Dividir so pela do lobo escolhido tambem seria
+    // nao-enviesado, mas com a variancia que aparece justo onde os lobos se sobrepoem.
+    const float pdfDiff = Lt.z * (1.0f / SMILE_PI);
+    const float pdfSpec = GGX_VndfPdf(alpha, Vt, Lt);
+    const float pdf     = pDiff * pdfDiff + (1.0f - pDiff) * pdfSpec;
+    if (!(pdf > 1e-6f)) return B;
+
+    const float3 L = normalize(mul(Lt, basis));
+    // Radiancia unitaria => o retorno E o f * cos.
+    const float3 fCos = BRDF_Direct(S.ShadingN, V, L, float3(1.0f, 1.0f, 1.0f),
+                                    M.DiffuseColor, M.SpecularColor, M.Roughness, M.A2, 0.0f);
+
+    B.Dir        = L;
+    B.Throughput = fCos / pdf;
+    B.Pdf        = pdf;
+    B.Lobe       = diffuseLobe ? PT_LOBE_DIFFUSE : PT_LOBE_SPECULAR;
+    B.Valid      = any(B.Throughput > 0.0f);
+    return B;
 }
 
 #endif

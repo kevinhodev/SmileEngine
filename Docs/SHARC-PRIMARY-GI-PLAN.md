@@ -48,23 +48,63 @@ vale para toda a série**: em refactor que promete não mudar imagem, comparar o
 
 ---
 
-### ➜ PRÓXIMO PASSO: Fase 3 — o path tracer esparso de update
+### Fase 3 em curso — commit #5 dentro, #6 é o próximo
 
-Tudo antes dela está feito. A Fase 3 é onde o estimador muda de verdade pela primeira vez, e ela
-começa por **completar o `FPathState`** (throughput, PDF, lobo) antes de escrever o laço de bounces
-— nessa ordem, porque é o laço que dá valor aos campos.
+**O produtor dedicado existe.** `Shaders/GI/RadianceCacheUpdate.cs.hlsl` + `FRadianceCache::
+RecordUpdate`, gravado depois do `RecordGBuffer` e antes da espera do DDGI assíncrono. Com ele
+ativo o CPU **para de armar o bit de update dos traces de render** — o cache deixou de aprender de
+carona um sinal cujo terminador era o DDGI.
 
-Três coisas já decididas que a Fase 3 herda e não deve re-derivar:
+O que o passe faz hoje: seleciona ~4% dos pixels por permutação de período 25 sobre o tile 5×5
+(sem buracos — cada posição dispara uma vez a cada 25 frames), traça do G-buffer até **v0**, sombreia
+v0 com os blocos da Fase 2, amostra o BSDF, traça mais um raio e termina no **cache resolvido**, no
+céu, ou em zero. Nunca em DDGI.
 
-- **Onde o passe entra**: depois de `RecordGBuffer(Ctx)` e antes de `RecordSceneLighting(Ctx)`. Não
-  em `PrepareIndirectLighting()`, que roda antes do G-buffer existir.
-- **O update nunca lê DDGI** como fonte normal. Um cache alimentado por DDGI só esconderia um sinal
-  cuja origem continuaria sendo DDGI. O `UseDDGIBootstrap` é knob de diagnóstico e nasce desligado.
+Quatro decisões que o commit #6 herda:
+
+- **O vértice do G-buffer NÃO entra no cache.** Ele é só origem. Gravá-lo exigiria um segundo
+  caminho de material a partir do G-buffer, que é a cópia divergente que a Fase 2 existiu para
+  impedir. O vértice gravado é o primeiro hit — a mesma população que as consultas acertam.
+- **Multi-bounce no tempo, antes do multi-bounce no frame.** Escrita em `Accum`, leitura de
+  `Resolved`: `L_novo = direta + f·L_velho` é uma iteração de ponto fixo entre frames que já
+  converge para o transporte completo. O laço de 4 vértices encurta a latência, não cria o efeito.
+- **A chave do terminal usa `PT_LoadHitSurface`, não `HitGeomNormal`.** A normal do cache tem de ser
+  a mesma que o `ShadeSurfaceHit` usa para consultar (interpolada com facing); a de face divergiria
+  perto da silhueta de malha suavizada e update e query montariam chaves diferentes para o mesmo
+  ponto.
+- **O passe de update não conta em `RC_STAT_QUERIES/HITS`.** Aqueles contadores descrevem os raios
+  de RENDER, e a instrumentação não é neutra (é o achado de `3872f97`). Somar as consultas do
+  terminal mudaria a série e a medida ao mesmo tempo.
+
+Evidência de que o render não mudou, pela técnica que a Fase 2 estabeleceu: o DXIL de Release dos
+cinco traces que incluem o `PathTracingCommon.hlsli` tem **o mesmo conjunto de instruções**. Os três
+shaders de reflexão saem idênticos até a numeração SSA; `ReSTIRGITrace` e `DDGITrace` diferem em
+**8 nós `phi` reordenados dentro do próprio bloco** — e phi de um bloco é simultâneo, então a ordem
+entre eles não tem semântica. Nada foi acrescentado, removido ou trocado. Os campos novos do
+`FPathState` e o `PT_SampleBSDF` não têm chamador ali e o DCE os elimina.
+
+**Falta da Fase 3** (commit #6, `gi: backpropagate multi-bounce radiance into WRC`): o laço de até
+4 vértices, a backpropagation em ordem reversa, `RC_Update` por vértice elegível, o
+`MinCacheableRoughness` (o gate de cone do lobo que CHEGA, que só passa a existir quando um vértice
+pode ser alcançado por lobo estreito) e o `UpdateMaxBounces` de verdade — hoje o `UpdateParams.y`
+viaja como 1 e o shader nem o lê, de propósito: knob que não controla nada é pior que knob ausente.
+
+Não entrou e continua fora: `UseDDGIBootstrap`. Ele exige preencher a cauda de cascatas do cbuffer
+do passe, e a struct `FDDGICascadeConstants` mora no `DDGI.h`, que **inclui** o `RadianceCache.h` —
+tirá-la de lá é refactor, e refactor não se mistura com mudança de estimador no mesmo commit.
+
+Duas coisas já decididas que continuam valendo:
+
+- **O update nunca lê DDGI** como fonte normal. Hoje isso é propriedade do código, não gate: o
+  `PT_SampleIndirectFallback` não tem chamador no passe, e o DXC o elimina.
 - **`Accum` recebe o frame atual; `Resolved` é somente leitura** para os traces do mesmo frame. É a
   barreira contra auto-realimentação, e o motivo de o resolve continuar no fim.
 
-Para medir a Fase 3, a régua já está pronta: baselines em `ed7b543`, N = 128, instrumentação
-desligada para imagem e ligada para telemetria (nunca as duas séries misturadas).
+Para medir, a régua já está pronta: baselines em `ed7b543`, N = 128, instrumentação desligada para
+imagem e ligada para telemetria (nunca as duas séries misturadas). **O commit #5 ainda não foi
+medido** — ele compila em Debug e Release e o DXIL prova que o render não mudou, mas o gate de saída
+da Fase 3 (ocupação cresce só pelo passe dedicado, com DDGI desligado e query de render desligada)
+é medição, e ela não foi feita.
 
 ## ESTADO — 2026-08-12
 
@@ -415,12 +455,17 @@ RC_Update(pos_i, normal_i, L_i) para cada vértice elegível
 
 ### Novos parâmetros mínimos
 
-- `UpdateFraction`, default `0.04`.
-- `UpdateMaxBounces`, default `4`.
+- `UpdateFraction`, default `0.04`. ✅ **feito** — quantizado em 1/25 pela permutação do tile.
+- `UpdateMaxBounces`, default `4`. ⏳ nasce com o laço (commit #6); hoje o campo viaja como 1 e o
+  shader não o lê.
 - `RenderMaxBounces`, inicialmente preserva o comportamento atual do ReSTIR GI.
-- `MinCacheableRoughness` ou regra equivalente.
-- `UsePreviousCacheAtTerminal`, default ligado.
-- `UseDDGIBootstrap`, somente debug, default desligado.
+- `MinCacheableRoughness` ou regra equivalente. ⏳ commit #6 — só faz sentido quando um vértice
+  puder ser alcançado por lobo estreito; em v0 o raio que chega é sempre difuso.
+- `UsePreviousCacheAtTerminal`, default ligado. ✅ **feito**.
+- `UseDDGIBootstrap`, somente debug, default desligado. ❌ **não entrou** — depende de tirar o
+  `FDDGICascadeConstants` do `DDGI.h` (ciclo de include), e isso é refactor próprio.
+- `DedicatedUpdate` (não estava na lista): escolhe entre o produtor dedicado e os hits do render.
+  Nasce LIGADO; o caminho antigo fica como controle de A/B. ✅ **feito**.
 
 ### Arquivos prováveis
 

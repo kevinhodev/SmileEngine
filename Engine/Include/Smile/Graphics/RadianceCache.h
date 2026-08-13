@@ -5,8 +5,17 @@
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RenderPass.h"
 #include "Smile/Graphics/CommandQueue.h"
+// Insumos do passe dedicado de update (Fase 3). Os quatro sao headers de contrato, sem
+// dependencia de volta para este — nenhum ciclo. O DDGI.h, que TEM ciclo (ele inclui este
+// arquivo), fica de fora de proposito: ver a nota na cauda de cascatas do
+// RadianceCacheUpdateConstants.
+#include "Smile/Graphics/GIFallback.h"
+#include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/RayEpsilons.h"
+#include "Smile/Graphics/ReGIR.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <cstddef>
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -23,6 +32,46 @@ namespace Smile {
     struct alignas(256) RadianceCacheConstants {
         Vec4 CacheParams; // x = capacidade; y = maxAccumSamples; z = staleFrameMax; w = reset
         Vec4 StatsParams; // x = modo do dispatch (0 resolve, 1 clear dos contadores)
+    };
+
+    // b0 do passe dedicado de update (Fase 3). Casa campo-a-campo com o cbuffer
+    // RadianceCacheUpdateCB de Shaders/GI/RadianceCacheUpdate.cs.hlsl.
+    //
+    // Boa parte do bloco existe pelo CONTRATO DO HitShading.hlsli, que e por NOME: o header
+    // declara o gather de fallback e os cinco traces que o incluem tem de trazer os campos dele no
+    // b0 para o arquivo compilar. Este passe nao chama esse gather (e a ausencia de chamador e o
+    // que garante "o update nunca le DDGI"), entao a cauda de cascatas viaja zerada.
+    struct alignas(256) RadianceCacheUpdateConstants {
+        Mat44 InvViewProj;
+        Vec4  CameraPos;
+        Vec4  ScreenParams;    // W, H, 1/W, 1/H
+        Vec4  GridMinSpacing;  // DDGI grosso — contrato, nao consumido
+        Vec4  GridCount;
+        Vec4  AtlasParams;
+        Vec4  SunDirIntensity;
+        Vec4  SunColor;        // w = mask dos shadow rays (a MESMA do ReSTIR GI; ver RecordUpdate)
+        Vec4  TraceParams;     // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
+        Vec4  ShadeParams;     // x=nº de luzes puntuais, y=albedoLOD
+        Vec4  UpdateParams;    // x=celulas/frame do tile 5x5, y=maxBounces, z=terminal no cache
+        Vec4  RayEpsA;
+        Vec4  RayEpsB;
+        Vec4  GIDistParams;
+        Vec4  GIBiasParams;    // .w = piso de roughness do secundario (este SIM e lido)
+        Vec4  ReGIRGridMinSlots;
+        Vec4  ReGIRInvCellEnabled;
+        Vec4  ReGIRGridCountSamples;
+        Vec4  ReGIRResources;
+        Vec4  SkyParams;
+        Vec4  RadianceCacheCamCell;
+        Vec4  RadianceCacheLodCapFlags;
+        Vec4  RadianceCacheResources;
+        // Espelha o FDDGICascadeConstants campo a campo, sem SER ele: DDGI.h inclui este header,
+        // entao incluir DDGI.h aqui fecharia um ciclo. Quem precisar preencher isto de verdade
+        // (o UseDDGIBootstrap de diagnostico do plano) tira a struct do DDGI.h para um header
+        // proprio primeiro — em change set separado, porque e refactor e nao estimator.
+        Vec4  GICascadeParams;
+        Vec4  GICascadeGridMinSpacing[4];
+        Vec4  GICascadeScrollOffset[4];
     };
 
     struct alignas(256) RadianceCacheDebugConstants {
@@ -105,6 +154,67 @@ namespace Smile {
 
         void UpdatePerFrame(u32 InFrameSlot, const Vec3& InCameraPos);
         void RecordResolve(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+
+        // === Passe dedicado de update (Fase 3) ===========================================
+        // O produtor PROPRIO do cache. Ate ele existir, quem alimentava a tabela eram os hits do
+        // render, cujo terminador era o DDGI — o cache guardava um sinal cuja origem continuava
+        // sendo DDGI. Com este passe ativo o Renderer para de armar o bit de update dos traces
+        // (ver AllowUpdate em ShaderParams) e a fonte passa a ser este dispatch.
+        //
+        // Os slots seguem o padrao do FReSTIRGI: o fallback chega como CONTRATO porque as
+        // posicoes t3/t4/t5 do shader existem so para o gather do HitShading compilar — este
+        // passe nunca as le, mas descriptor table nao aceita buraco.
+        static constexpr u32 kUpdateSrvCount = 9; // TLAS, sky, inst, irrad, dist, probe, depth,
+                                                  // gbuffer, luzes
+        void SetupUpdatePass(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot,
+                             const FGIFallbackBindings& Fallback,
+                             u32 DepthSlot, u32 GBufferSlot, u32 Width, u32 Height);
+        // t8 reescrito por frame no heap shader-visible: uma tabela por frame em voo, escrita na
+        // do FrameSlot corrente (padrao do FReflections). Sem isso o frame N-1, ainda em voo,
+        // leria o buffer de luzes que o N acabou de publicar.
+        void SetUpdatePunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                        u32 StagingSlot, u32 InFrameSlot);
+        // CB do passe. Chamar no PrepareIndirectLighting (onde as luzes e o sol ja estao
+        // resolvidos); a gravacao acontece depois do G-buffer.
+        void UpdatePassPerFrame(u32 InFrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
+                                const Vec3& SunDir, f32 SunIntensity, const Vec3& SunColor,
+                                u32 ShadowRayMask, u32 FrameIndex, f32 SkyIntensity,
+                                f32 MaxRayDist, u32 PunctualLightCount);
+        void RecordUpdate(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
+
+        // Recursos do passe montados (tabelas validas). Nao diz que ele roda neste frame.
+        bool IsUpdatePassReady() const { return UpdateReady; }
+        // Roda neste frame: recursos prontos, cache ligado e o produtor dedicado escolhido. O
+        // ResetPending entra porque ate o resolve de reset terminar a tabela e do regime anterior
+        // — alimenta-la seria trabalho descartado alguns passes depois.
+        bool UpdatePassActive() const {
+            return UpdateReady && Enabled && Ready && DedicatedUpdate && !ResetPending;
+        }
+
+        // Perfil de epsilons e parametros do hit, no mesmo regime dos outros passes de RT: dono e
+        // o Renderer, que empurra a copia todo frame. Ver FRayEpsilonProfile / FGIHitSampling.
+        void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
+        void SetGIHitSampling(const FGIHitSampling& S)   { GIHit = S; }
+        void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
+            SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
+        }
+
+        // O produtor do cache e o passe dedicado (true) ou os hits do render (false). Invalida a
+        // tabela nas DUAS bordas: as duas fontes produzem estatisticas diferentes para a mesma
+        // celula, e uma media que mistura as duas nao descreve nenhuma das duas.
+        void SetDedicatedUpdate(bool V) { if (V != DedicatedUpdate) ResetOnce(); DedicatedUpdate = V; }
+        bool GetDedicatedUpdate() const { return DedicatedUpdate; }
+        // Fracao dos pixels que lanca caminho por frame. 0,04 = o valor publicado do Cyberpunk.
+        // Quantizada em celulas do tile 5x5, entao o passo util e 1/25.
+        void SetUpdateFraction(f32 V) { UpdateFraction = V < 0.0f ? 0.0f : (V > 1.0f ? 1.0f : V); }
+        f32  GetUpdateFraction() const { return UpdateFraction; }
+        // Terminal do caminho de update no cache RESOLVIDO (frames anteriores). E o que transforma
+        // um bounce por frame em multi-bounce no tempo; desligar deixa o cache aprender so o
+        // primeiro bounce, que e o A/B que separa "o cache funciona" de "o cache realimenta".
+        void SetUsePrevCacheAtTerminal(bool V) { UsePrevCacheAtTerminal = V; }
+        bool GetUsePrevCacheAtTerminal() const { return UsePrevCacheAtTerminal; }
 
         // Segunda copia dos contadores, para buffer PROPRIO, a ser gravada DEPOIS do
         // RecordResolve. Existe porque as duas metades da telemetria ficam prontas em momentos
@@ -194,10 +304,29 @@ namespace Smile {
 
         // Update = false para consumidor DIRECIONAL (reflexoes): a radiancia que ele produz vale
         // para uma direcao de espelho e o cache nao guarda direcao. Ele ainda pode CONSULTAR.
+        //
+        // Com o produtor dedicado ativo, o Renderer passa AllowUpdate = false para TODOS os
+        // consumidores de render: eles voltam a so consultar, que e a divisao que a Fase 3 existe
+        // para estabelecer.
         FRadianceCacheShaderParams ShaderParams(bool AllowUpdate, bool ConsumerRuns = true) const;
 
     private:
+        // Flags do proprio passe de update — nao saem do ShaderParams porque as regras sao outras:
+        //
+        //   UPDATE: sempre (e a razao de ele existir).
+        //   QUERY:  segue o UsePrevCacheAtTerminal, e NAO o QueryEnabled do render. Sao perguntas
+        //           diferentes: "os traces aproveitam o cache?" e "o caminho de update termina
+        //           nele?". Amarra-las faria o A/B de query desligar o multi-bounce sem avisar.
+        //   STATS:  NUNCA. Os contadores de acerto/erro descrevem os RAIOS DE RENDER, e o proprio
+        //           plano registra que a instrumentacao nao e neutra (os atomicos mudam o
+        //           escalonamento das waves e, com ele, quais threads vencem as insercoes).
+        //           Somar as consultas do updater mudaria a serie e a medida ao mesmo tempo.
+        FRadianceCacheShaderParams UpdatePassParams() const;
+
         void CreateConstantBuffer(ID3D12Device* Device);
+        void CreateUpdatePipeline(ID3D12Device* Device); // Initialize e OnRecreatePipelines
+        void ReleaseUpdatePass(FTextureSRVHeap& SRVHeap);
+        D3D12_GPU_VIRTUAL_ADDRESS UpdateCBAddr() const;
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Resource,
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         // Variant 0 = resolve, 1 = clear dos contadores. Duas entradas por frame em voo porque os
@@ -210,6 +339,7 @@ namespace Smile {
 
         FComputePipeline ResolvePSO;
         FComputePipeline DebugPSO;
+        FComputePipeline UpdatePSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Entries;  // checksum por celula (0 = vazia)
         Microsoft::WRL::ComPtr<ID3D12Resource> Accum;    // 4 uints/celula: rgb ponto fixo + N
@@ -259,6 +389,36 @@ namespace Smile {
         u8* MappedCB = nullptr;
         RadianceCacheConstants CPU{};
         u32 FrameSlot = 0;
+
+        // --- passe dedicado de update -----------------------------------------------------
+        Microsoft::WRL::ComPtr<ID3D12Resource> UpdateCB;
+        u8* MappedUpdateCB = nullptr;
+        RadianceCacheUpdateConstants UpdateCPU{};
+        // Uma tabela por frame em voo: o t8 (luzes) e reescrito por frame e as outras oito
+        // entradas sao estaveis. Ver SetUpdatePunctualLightsSRV.
+        u32 UpdateSrvTable[FCommandQueue::kFramesInFlight] = { kInvalidSlot, kInvalidSlot };
+        static_assert(FCommandQueue::kFramesInFlight == 2,
+                      "o inicializador acima e escrito na unha: com mais frames em voo as tabelas "
+                      "extras nasceriam com 0, que e um slot VALIDO do heap — o Free devolveria "
+                      "descritor alheio em vez de acusar");
+        u32 UpdateWidth = 0, UpdateHeight = 0;
+        u32 UpdateFrameSlot = 0;
+        bool UpdateReady = false;
+
+        FRayEpsilonProfile RayEps;
+        FGIHitSampling     GIHit;
+        FReGIRShaderParams ReGIRParams{};
+        Vec4               SkyLutParams{};
+
+        // Produtor dedicado (true) x hits do render (false). Nasce LIGADO: e o desenho da Fase 3,
+        // e o caminho antigo fica como controle de A/B, nao como default de producao.
+        bool DedicatedUpdate = true;
+        // 4% dos pixels por frame — o numero publicado do Cyberpunk 2077 para o update do SHaRC.
+        f32  UpdateFraction  = 0.04f;
+        bool UsePrevCacheAtTerminal = true;
+        // LOD do albedo nos hits, igual ao do ReSTIR GI. Um numero, nao um knob: divergir dele
+        // faria o cache aprender um albedo e o render consumir outro.
+        static constexpr f32 kUpdateAlbedoLOD = 2.0f;
 
         Vec3 CameraPos{ 0.0f, 0.0f, 0.0f };
         u32  CapacityV    = 0;

@@ -19,6 +19,14 @@ float GGX_D(float a2, float NoH) {
     return a2 / (SMILE_PI * d * d);
 }
 
+// Bounded VNDF sampling [Eto & Tokuyoshi 2023]. `V` e a visada em espaco TANGENTE (z = normal).
+//
+// MEDIDA DO `.w`: e a densidade no HALF-VECTOR, nao em angulo solido da direcao refletida. A do
+// paper (`ndf / (2*(k*i.z + t))`) e a da DIRECAO; esta devolve 4*VoH vezes aquela, que e o
+// Jacobiano da reflexao. Quem so pesa a amostra com o proprio peso do VNDF nao percebe a diferenca
+// (ela cancela), mas quem MISTURA lobos precisa das duas densidades na mesma medida — e ai a
+// escolha errada e um fator 4*VoH de energia. Ver GGX_VndfPdf abaixo, que devolve a de angulo
+// solido e e a que entra na pdf da mistura.
 float4 GGX_SampleVNDF(float2 E, float alpha, float3 V) {
     float2 Alpha = float2(alpha, alpha);
     float3 Vh = normalize(float3(Alpha * V.xy, V.z));
@@ -40,6 +48,31 @@ float4 GGX_SampleVNDF(float2 E, float alpha, float3 V) {
     float D   = a2 / (SMILE_PI * d * d);
     float pdf = 2.0f * VoH * D / (k * NoV + sqrt(NoV * (NoV - NoV * a2) + a2));
     return float4(H, pdf);
+}
+
+// Densidade, EM ANGULO SOLIDO, de uma direcao `L` qualquer sob o sampler acima. Tudo em espaco
+// tangente (z = normal). Nao substitui o `.w` do GGX_SampleVNDF: aquele sai de graca junto com a
+// amostra, este avalia a densidade de uma direcao que pode ter vindo de OUTRO lobo — que e
+// exatamente o que a pdf da mistura precisa (balance heuristic de uma amostra so, Veach 9.2.4:
+// o estimador vira f / soma_j c_j p_j, entao cada p_j tem de saber avaliar a direcao do vizinho).
+//
+// As constantes k e t sao as MESMAS do sampler, deliberadamente escritas na mesma forma: se
+// divergirem, a mistura deixa de somar 1 e a energia escapa sem nenhum sintoma local.
+float GGX_VndfPdf(float alpha, float3 V, float3 L) {
+    float3 H = V + L;
+    float h2 = dot(H, H);
+    if (h2 < 1e-12f) return 0.0f;
+    H *= rsqrt(h2);
+    if (H.z <= 0.0f || L.z <= 0.0f) return 0.0f;
+
+    float a2  = alpha * alpha;
+    float NoV = max(V.z, 1e-5f);
+    float aa  = saturate(alpha);
+    float s   = 1.0f + length(V.xy);
+    float aa2 = aa * aa, s2 = s * s;
+    float k   = (s2 - aa2 * s2) / (s2 + aa2 * NoV * NoV);
+    float t   = sqrt(NoV * (NoV - NoV * a2) + a2);
+    return GGX_D(a2, saturate(H.z)) / (2.0f * (k * NoV + t));
 }
 
 // PCG de 1 entrada — usado p/ AVANCAR um stream ja semeado (RngNext), nao p/ semear.
@@ -83,6 +116,8 @@ uint GGX_XXHash32(uint4 p) {
 // 12000 foi o stream do ponto na fonte esferica; ficou orfao quando o reservoir passou a guardar
 // a UV da amostra e os dois passes deixaram de precisar concordar por seed. Nao reciclar o id:
 // manter o buraco preserva a decorrelacao dos streams vizinhos entre versoes.
+#define SMILE_RNG_CACHE_ORIGIN 13000u // direcao que sai do G-buffer no updater do radiance cache
+#define SMILE_RNG_CACHE_BOUNCE 14000u // + 2*depth (+1): lobo e direcao do BSDF no vertice `depth`
 
 uint GGX_SeedE(uint2 px, uint frame, uint effect) {
     return GGX_XXHash32(uint4(frame, px.x, px.y, effect));

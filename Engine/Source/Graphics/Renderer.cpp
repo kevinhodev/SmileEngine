@@ -838,6 +838,17 @@ namespace Smile {
             RaytracingScene.InstanceGeoSRV(), GIFb,
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), ReliableVelocitySlot);
 
+        // Produtor dedicado do radiance cache (Fase 3). Mesmos insumos do ReSTIR GI menos o
+        // velocity — ele nao tem historico de tela: o "historico" dele e a propria tabela, que e
+        // de mundo. O fallback vai pelo mesmo contrato, mas por um motivo diferente dos outros
+        // dois: aqui os tres slots existem so para o gather do HitShading COMPILAR, e nunca sao
+        // lidos. E o que torna "o update nunca le DDGI" uma propriedade do codigo, e nao um gate
+        // que alguem pode religar por engano.
+        RadianceCache.SetupUpdatePass(Device.Native(), SRVHeap,
+            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
+            RaytracingScene.InstanceGeoSRV(), GIFb,
+            Targets.DepthSRVSlot, GBuffer.SRVSlot(1), RenderWidth(), RenderHeight());
+
         // Alvos de timer: cada um no dominio do SEU dispatch — o gather do ReSTIR e full-res e o
         // trace de reflexao e half-res. Sem NVAPI, Initialize() e no-op e os alvos nao existem.
         TimerGI.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
@@ -2002,6 +2013,10 @@ namespace Smile {
         M.NrdDirectMode       = M.ReSTIRDIActiveFrame && ReSTIRDI.IsNrdReady() &&
                                 NrdDirect.IsReady() && Denoiser == EDenoiser::NRD;
         M.AOWillRun           = UseAO && AO.IsReady();
+        // O produtor dedicado do cache nao depende de ReSTIR GI nem de DDGI: ele traca a partir do
+        // G-buffer e termina no proprio cache. Depende so de o cache estar ligado e das tabelas
+        // dele montadas — que e exatamente o que UpdatePassActive() responde.
+        M.RadianceCacheUpdateActive = RadianceCache.UpdatePassActive();
         const u32 CacheDebugIndex = DebugTargets::IndexOf(FRadianceCache::kDebugTargetName);
         M.RadianceCacheDebugActive = RadianceCache.CanVisualize() &&
             CacheDebugIndex != DebugTargets::kInvalid &&
@@ -2349,6 +2364,9 @@ namespace Smile {
         Reflections.SetWaterReflectionScale(Water.GetReflectionScale());
         Reflections.SetWaterWindDirection(Water.GetWindDirection());
         DDGI.SetRayEpsilons(RayEps);
+        // O produtor do cache traca os MESMOS raios de gather e de sombra dos outros tres; um
+        // perfil proprio aqui seria a copia por passe que a centralizacao fechou.
+        RadianceCache.SetRayEpsilons(RayEps);
 
         // Gather do 2o bounce (ShadeSurfaceHit): mesmo raciocinio do perfil de epsilons — um so
         // para os tres passes, empurrado todo frame. O skipMode espelha exatamente o que o
@@ -2378,6 +2396,10 @@ namespace Smile {
             Reflections.SetGICascades(GICasc);
             ReSTIRGI.SetGICascades(GICasc);
             ReSTIRGI.SetGIHitSampling(GIHit);
+            // O produtor do cache recebe o MESMO bloco pelo unico campo que ele le: o piso de
+            // roughness do secundario. As cascatas nao vao junto — ele nao amostra sonda, e a
+            // cauda do cbuffer dele viaja zerada de proposito (ver RadianceCacheUpdateConstants).
+            RadianceCache.SetGIHitSampling(GIHit);
         }
 
         ReSTIRGI.SetUseNrd(_Modes.NrdIndirectMode); // Modes.RRMode => false => ReSTIR entrega GI cru (ruidoso)
@@ -2793,17 +2815,27 @@ namespace Smile {
         Reflections.SetReGIRParams(ReGIRCB);
         ReSTIRGI.SetReGIRParams(ReGIRCB);
 
-        // World radiance cache — mesmo padrao do ReGIR acima. A diferenca esta no argumento: DDGI
-        // e ReSTIR GI podem ESCREVER (radiancia nao-direcional), as reflexoes so consultam. A
-        // camera entra porque o nivel do hash sai da distancia ate ela.
+        // World radiance cache — mesmo padrao do ReGIR acima. A camera entra porque o nivel do
+        // hash sai da distancia ate ela.
         RadianceCache.UpdatePerFrame(FrameSlot, Vw.CameraPosition);
+        RadianceCache.SetReGIRParams(ReGIRCB);
+        // QUEM ESCREVE NA TABELA. Com o produtor dedicado da Fase 3 escolhido, ninguem do render
+        // escreve: os traces voltam a so consultar e a fonte passa a ser o passe proprio, que nao
+        // le DDGI. Sem isso, o cache continuaria aprendendo o sinal que esta serie veio trocar.
+        //
+        // O gate e a POLITICA (`GetDedicatedUpdate`), e nao "o passe vai rodar de fato": se o
+        // produtor dedicado esta escolhido mas as tabelas dele nao subiram, o certo e a ocupacao
+        // ficar parada e denunciar o problema — cair no produtor antigo em silencio devolveria o
+        // sinal do DDGI por baixo, que e o pior desfecho possivel para uma medicao.
+        const bool LegacyProducer = !RadianceCache.GetDedicatedUpdate();
         // O segundo argumento e "este consumidor vai tracar neste frame". Os params sao montados
         // para os tres de qualquer jeito (custa nada, e o passe pode nem rodar), mas so quem roda
         // entra no registro que o manifesto le — senao a captura afirmaria cache ativo num frame
         // em que nenhum trace o consultou.
         const bool DDGIWillTrace = UseGI && DDGI.IsReady();
-        DDGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true, DDGIWillTrace));
-        ReSTIRGI.SetRadianceCacheParams(RadianceCache.ShaderParams(true, Modes.ReSTIRGIActive));
+        DDGI.SetRadianceCacheParams(RadianceCache.ShaderParams(LegacyProducer, DDGIWillTrace));
+        ReSTIRGI.SetRadianceCacheParams(
+            RadianceCache.ShaderParams(LegacyProducer, Modes.ReSTIRGIActive));
         Reflections.SetRadianceCacheParams(
             RadianceCache.ShaderParams(false, Modes.ReflectionsActive));
         // Os tres buffers precisam estar em UAV antes de QUALQUER trace: a escrita e a leitura
@@ -2820,6 +2852,7 @@ namespace Smile {
         DDGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
         Reflections.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
         ReSTIRGI.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
+        RadianceCache.SetSkyParams(SkyViewHeightKm, SkyBottomRKm);
         DDGI.SetSkyIntensity(Lt.RainSkyDim); // reflexoes e ReSTIR recebem no proprio UpdatePerFrame
 
         if (Modes.ReliableMotionActive) {
@@ -2891,6 +2924,23 @@ namespace Smile {
                                     RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
                                     TemporalSampleIndex, Lt.RainSkyDim, Vw.View,
                                     PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
+        }
+
+        // Passe dedicado de update do cache (Fase 3). Preenchido AQUI, onde luzes e sol ja estao
+        // resolvidos; gravado depois do G-buffer, que e de onde saem as origens dos caminhos.
+        //
+        // A mask de sombra sai do ReSTIR GI de proposito, em vez de virar knob proprio: o cache
+        // ALIMENTA o ReSTIR GI, e se um contasse a folhagem nas sombras e o outro nao, a mesma
+        // superficie teria duas radiancias conforme o caminho — e o A/B do toggle mediria a
+        // divergencia entre os dois, nao o efeito da folhagem.
+        if (Modes.RadianceCacheUpdateActive) {
+            RadianceCache.SetUpdatePunctualLightsSRV(Device.Native(), SRVHeap,
+                                                     GILightSRVSlot[FrameSlot], FrameSlot);
+            RadianceCache.UpdatePassPerFrame(
+                FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition,
+                Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
+                ReSTIRGI.GetFoliageShadows() ? kRTMaskShadowFull : kRTMaskShadowFast,
+                TemporalSampleIndex, Lt.RainSkyDim, DDGI.MaxRayDistance(), GILightCount);
         }
     }
 
@@ -4914,6 +4964,31 @@ namespace Smile {
         RecordDepthPrepass(Ctx);
 
         RecordGBuffer(Ctx);
+
+        // PRODUTOR DEDICADO DO RADIANCE CACHE (Fase 3). Aqui, e nao em PrepareIndirectLighting:
+        // as origens dos caminhos sao pixels do G-buffer, que ate a linha de cima nao existiam.
+        //
+        // Antes da espera do DDGI assincrono de proposito — ele nao consome DDGI, entao este
+        // trabalho na fila direta pode sobrepor o compute que ainda esta em voo. O preco e
+        // devolver o depth a DEPTH_WRITE no fim do bloco: dali para frente o codigo assume esse
+        // estado (o RecordSceneLighting so o move quando o ReSTIR GI roda). O G-buffer nao precisa
+        // de restauracao — ele rastreia o proprio estado.
+        if (Modes.RadianceCacheUpdateActive) {
+            FGpuScope Scope(GpuProfiler, CommandList, "Radiance cache (update)");
+            FBarrierBatch Batch;
+            Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Batch.Flush(CommandList);
+
+            RadianceCache.RecordUpdate(CommandList, SRVHeap);
+
+            FBarrierBatch Restore;
+            Restore.Transition(Targets.DepthBuffer.Get(),
+                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Restore.Flush(CommandList);
+        }
 
         if (GIComputeFence != 0) {
             // Bracket de STALL: par de timestamps na fila DIRETA em volta do wait. E a unica

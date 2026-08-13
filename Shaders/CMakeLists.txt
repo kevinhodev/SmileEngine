@@ -65,13 +65,15 @@ if(SMILE_SHADER_TIMER_AVAILABLE)
         OUTPUT_NAME ReSTIRGITraceTimed ${SMILE_TIMER_FLAGS})
 endif()
 # World radiance cache — hash espacial de radiancia de saida, terminador dos raios secundarios.
-# O update e a query moram no ShadeSurfaceHit (RadianceCache.hlsli, sem .cso proprio); so o
-# resolve e um passe.
+# A query mora no ShadeSurfaceHit (RadianceCache.hlsli, sem .cso proprio); o resolve e o passe
+# dedicado de update (Fase 3) tem os seus.
 # cs_6_6 e nao 6_0: o resolve so usa u0/u1/u2 explicitos, mas inclui o RadianceCache.hlsli, e as
 # funcoes de query/update de la acessam ResourceDescriptorHeap (bindless, SM 6.6). Os cinco
 # traces que consomem o cache ja sao 6_6.
 smile_compile_shader(GI/RadianceCacheResolve.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/RadianceCacheDebug.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
+# Path tracer esparso que ALIMENTA o cache: ~4% dos pixels por frame, sem ler DDGI.
+smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl  cs_6_6 main SHADER_OUTPUTS)
 # ReGIR — pools de luz em grade de mundo para os hits secundarios.
 smile_compile_shader(GI/ReGIRBuild.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReGIRAverage.cs.hlsl cs_6_0 main SHADER_OUTPUTS)

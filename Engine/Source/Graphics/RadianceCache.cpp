@@ -46,14 +46,27 @@ namespace Smile {
         // Visualizador: 2 SRVs (depth, normal) + 1 UAV de saida. Bindless para chegar na tabela
         // do cache, igual aos traces.
         DebugPSO.Initialize(Device, "RadianceCacheDebug.cs_6_6.cso", 2, 1, true);
+        CreateUpdatePipeline(Device);
         CreateConstantBuffer(Device);
         Initialized = true;
+    }
+
+    void FRadianceCache::CreateUpdatePipeline(ID3D12Device* Device) {
+        // 9 SRVs (ver kUpdateSrvCount) e bindless, porque a tabela do cache e alcancada por
+        // ResourceDescriptorHeap, igual aos traces.
+        //
+        // 1 UAV que o shader NAO declara: o caminho de escrita do passe e todo bindless, mas um
+        // range de 0 descritores nao serializa em D3D12 — o mesmo motivo do BindingSRV do resolve.
+        // O destino e o buffer de contadores porque e nele que a telemetria deste passe (caminhos
+        // lancados, profundidade, terminal por tipo) vai escrever na Fase 4.
+        UpdatePSO.Initialize(Device, "RadianceCacheUpdate.cs_6_6.cso", kUpdateSrvCount, 1, true);
     }
 
     void FRadianceCache::OnRecreatePipelines(const FPassInitContext& Ctx) {
         if (!Initialized || !Ctx.Device) return;
         ResolvePSO.Initialize(Ctx.Device, "RadianceCacheResolve.cs_6_6.cso", 1, 4, false);
         DebugPSO.Initialize(Ctx.Device, "RadianceCacheDebug.cs_6_6.cso", 2, 1, true);
+        CreateUpdatePipeline(Ctx.Device);
         // Full HLSL reloads may change the shared hash/key semantics. Old entries are then
         // undecodable by the new query code even though the buffers themselves survived.
         if (Ready) ResetOnce();
@@ -63,8 +76,9 @@ namespace Smile {
         // O RadianceCache.hlsli nao entra: header nao gera .cso. Editar um .hlsli dispara o
         // reload COMPLETO, que passa por aqui de qualquer forma — e tambem pelos traces que o
         // incluem, que e o que importa quando o hash muda.
-        static const char* const Stems[] = { "RadianceCacheResolve", "RadianceCacheDebug" };
-        return { Stems, 2u };
+        static const char* const Stems[] = { "RadianceCacheResolve", "RadianceCacheDebug",
+                                             "RadianceCacheUpdate" };
+        return { Stems, 3u };
     }
 
     bool FRadianceCache::IsActive(const FFrameModes&) const {
@@ -76,8 +90,16 @@ namespace Smile {
 
     void FRadianceCache::CreateConstantBuffer(ID3D12Device* Device) {
         static_assert(sizeof(RadianceCacheConstants) % 256 == 0 &&
-                      sizeof(RadianceCacheDebugConstants) % 256 == 0,
+                      sizeof(RadianceCacheDebugConstants) % 256 == 0 &&
+                      sizeof(RadianceCacheUpdateConstants) % 256 == 0,
                       "os CBAddr indexam por sizeof(); root CBV exige 256-alinhado");
+        // A cauda de cascatas espelha o FDDGICascadeConstants, que este header nao pode incluir
+        // (ciclo). Sem o tipo, o que resta e travar o TAMANHO: 16 + 4x16 + 4x16 = 144 B, os
+        // mesmos que o static_assert do DDGI.h exige la. Divergir aqui deslocaria todo o bloco
+        // do cache no cbuffer e o shader leria os UAVs errados.
+        static_assert(sizeof(RadianceCacheUpdateConstants) -
+                          offsetof(RadianceCacheUpdateConstants, GICascadeParams) >= 144,
+                      "cauda de cascatas menor que o FDDGICascadeConstants que ela espelha");
 
         // 2 variantes por frame em voo (resolve e clear-stats; ver CBAddr).
         const GpuResources::FUploadBuffer Main = GpuResources::CreateUploadBuffer(
@@ -89,6 +111,11 @@ namespace Smile {
             Device, sizeof(RadianceCacheDebugConstants), FCommandQueue::kFramesInFlight);
         DebugCB       = Debug.Resource;
         MappedDebugCB = Debug.Mapped;
+
+        const GpuResources::FUploadBuffer Upd = GpuResources::CreateUploadBuffer(
+            Device, sizeof(RadianceCacheUpdateConstants), FCommandQueue::kFramesInFlight);
+        UpdateCB       = Upd.Resource;
+        MappedUpdateCB = Upd.Mapped;
     }
 
     D3D12_GPU_VIRTUAL_ADDRESS FRadianceCache::CBAddr(u32 Variant) const {
@@ -99,6 +126,14 @@ namespace Smile {
     D3D12_GPU_VIRTUAL_ADDRESS FRadianceCache::DebugCBAddr() const {
         return DebugCB->GetGPUVirtualAddress() +
                static_cast<UINT64>(FrameSlot) * sizeof(RadianceCacheDebugConstants);
+    }
+
+    D3D12_GPU_VIRTUAL_ADDRESS FRadianceCache::UpdateCBAddr() const {
+        // UpdateFrameSlot, e nao FrameSlot: o CB e preenchido no PrepareIndirectLighting e o
+        // dispatch acontece depois do G-buffer. Sao o mesmo frame hoje, mas amarrar a gravacao ao
+        // slot que ESCREVEU o buffer e o que mantem os dois pontos independentes.
+        return UpdateCB->GetGPUVirtualAddress() +
+               static_cast<UINT64>(UpdateFrameSlot) * sizeof(RadianceCacheUpdateConstants);
     }
 
     u64 FRadianceCache::MemoryBytes() const {
@@ -112,6 +147,10 @@ namespace Smile {
         };
         Free(UavTable, 4);
         Free(BindingSRV, 1);
+        // A tabela do passe de update carrega o snapshot InstanceGeo e a TLAS, que a troca de
+        // cena realoca. Solta-la aqui garante que o UpdateReady so volte a ser true depois de um
+        // SetupUpdatePass novo — senao o dispatch usaria descritores da cena anterior.
+        ReleaseUpdatePass(SRVHeap);
         Entries.Reset(); Accum.Reset(); Resolved.Reset(); StatsBuf.Reset();
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f) {
             StatsReadback[f].Reset();
@@ -124,6 +163,17 @@ namespace Smile {
         StatsState   = D3D12_RESOURCE_STATE_COMMON;
         CapacityV = 0;
         Ready = false;
+    }
+
+    void FRadianceCache::ReleaseUpdatePass(FTextureSRVHeap& SRVHeap) {
+        for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f) {
+            if (UpdateSrvTable[f] != kInvalidSlot) {
+                SRVHeap.Free(UpdateSrvTable[f], kUpdateSrvCount);
+                UpdateSrvTable[f] = kInvalidSlot;
+            }
+        }
+        UpdateWidth = UpdateHeight = 0;
+        UpdateReady = false;
     }
 
     void FRadianceCache::ReleaseDebug(FTextureSRVHeap& SRVHeap) {
@@ -308,6 +358,190 @@ namespace Smile {
         CL->Dispatch((CapacityV + 63u) / 64u, 1, 1);
 
         ResetPending = false;
+    }
+
+    // ================================================================================================
+    // Passe dedicado de update (Fase 3)
+    // ================================================================================================
+    void FRadianceCache::SetupUpdatePass(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                         u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot,
+                                         const FGIFallbackBindings& Fallback,
+                                         u32 DepthSlot, u32 GBufferSlot,
+                                         u32 Width, u32 Height) {
+        if (!Initialized) return;
+        ReleaseUpdatePass(SRVHeap);
+
+        // Os OITO slots estaveis, e nao so os tres obvios: todos vao direto para
+        // CpuHandleStaging, e la um kInvalidSlot (0xFFFFFFFF) vira base + 0xFFFFFFFF * HandleSize
+        // — ~128 GiB fora do heap, lidos pelo CopyDescriptors. Mesma validacao do FReSTIRGI, pelo
+        // mesmo motivo: e invariante da CLASSE, nao do call site.
+        //
+        // Os tres do fallback entram mesmo com Available == false. Este passe nunca os le, mas
+        // eles ocupam t3/t4/t5 e a tabela precisa estar cheia; "sem volume" quer dizer slot
+        // NEUTRO, nunca slot invalido.
+        if (Width == 0 || Height == 0 ||
+            TlasSlot == kInvalidSlot || SkyViewSlot == kInvalidSlot ||
+            InstanceSlot == kInvalidSlot || DepthSlot == kInvalidSlot ||
+            GBufferSlot == kInvalidSlot ||
+            Fallback.IrradianceAtlasSRV == kInvalidSlot ||
+            Fallback.DistanceAtlasSRV == kInvalidSlot ||
+            Fallback.ProbeDataSRV == kInvalidSlot) {
+            return;
+        }
+
+        UpdateWidth  = Width;
+        UpdateHeight = Height;
+
+        for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f) {
+            UpdateSrvTable[f] = SRVHeap.Allocate(kUpdateSrvCount);
+            // Oito de oito: o nono (t8, luzes) e escrito por frame pelo
+            // SetUpdatePunctualLightsSRV. Ate o primeiro frame passar por la ele fica com o
+            // conteudo do heap, e e por isso que RecordUpdate nao roda sem UpdatePassActive() —
+            // que so e verdade depois de o Renderer publicar as luzes.
+            const D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
+                SRVHeap.CpuHandleStaging(TlasSlot),
+                SRVHeap.CpuHandleStaging(SkyViewSlot),
+                SRVHeap.CpuHandleStaging(InstanceSlot),
+                SRVHeap.CpuHandleStaging(Fallback.IrradianceAtlasSRV),
+                SRVHeap.CpuHandleStaging(Fallback.DistanceAtlasSRV),
+                SRVHeap.CpuHandleStaging(Fallback.ProbeDataSRV),
+                SRVHeap.CpuHandleStaging(DepthSlot),
+                SRVHeap.CpuHandleStaging(GBufferSlot),
+            };
+            D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(UpdateSrvTable[f]);
+            UINT Count = 8; UINT Ones[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
+            Device->CopyDescriptors(1, &Dst, &Count, 8, Src, Ones,
+                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
+
+        UpdateReady = true;
+    }
+
+    void FRadianceCache::SetUpdatePunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                                    u32 StagingSlot, u32 InFrameSlot) {
+        if (!UpdateReady || InFrameSlot >= FCommandQueue::kFramesInFlight ||
+            StagingSlot == kInvalidSlot) {
+            return;
+        }
+        D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(UpdateSrvTable[InFrameSlot] + 8);
+        D3D12_CPU_DESCRIPTOR_HANDLE Src = SRVHeap.CpuHandleStaging(StagingSlot);
+        UINT One = 1;
+        Device->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    void FRadianceCache::UpdatePassPerFrame(u32 InFrameSlot, const Mat44& InvViewProj,
+                                            const Vec3& InCameraPos, const Vec3& SunDir,
+                                            f32 SunIntensity, const Vec3& SunColor,
+                                            u32 ShadowRayMask, u32 FrameIndex, f32 SkyIntensity,
+                                            f32 MaxRayDist, u32 PunctualLightCount) {
+        if (!UpdateReady || !MappedUpdateCB) return;
+        UpdateFrameSlot = InFrameSlot;
+
+        RadianceCacheUpdateConstants& U = UpdateCPU;
+        U = RadianceCacheUpdateConstants{}; // a cauda de cascatas fica zerada, e e assim que ela viaja
+        U.InvViewProj  = InvViewProj;
+        U.CameraPos    = { InCameraPos.X, InCameraPos.Y, InCameraPos.Z, 1.0f };
+        U.ScreenParams = { static_cast<f32>(UpdateWidth), static_cast<f32>(UpdateHeight),
+                           1.0f / static_cast<f32>(UpdateWidth),
+                           1.0f / static_cast<f32>(UpdateHeight) };
+        // Grade/atlas do DDGI: NEUTROS, nao os reais. Este passe nao amostra sonda, e o unico
+        // consumidor destes campos e o gather que ele nao chama. 1 no lugar de 0 nas dimensoes do
+        // atlas porque o FHitShadeParams calcula 1/AtlasParams.yz ao montar a struct — com zero
+        // sairia inf num campo que ninguem le, e inf num registrador e o tipo de coisa que
+        // reaparece meses depois num shader diferente.
+        U.AtlasParams  = { 6.0f, 1.0f, 1.0f, 0.0f };
+        U.SunDirIntensity = { SunDir.X, SunDir.Y, SunDir.Z, SunIntensity };
+        U.SunColor        = { SunColor.X, SunColor.Y, SunColor.Z,
+                              static_cast<f32>(ShadowRayMask) };
+        U.TraceParams     = { static_cast<f32>(FrameIndex), MaxRayDist, SkyIntensity,
+                              RayEps.HitShadowRayBias };
+        U.ShadeParams     = { static_cast<f32>(PunctualLightCount), kUpdateAlbedoLOD, 0.0f, 0.0f };
+
+        // Fracao -> celulas do tile 5x5. O piso de 1 e deliberado: com o passe ligado e fracao
+        // arredondando para zero, nenhum caminho sairia e a tabela envelheceria ate o despejo com
+        // a UI dizendo "update ativo". Quem quer zero desliga o produtor dedicado.
+        const f32 CellsF = UpdateFraction * 25.0f;
+        u32 Cells = static_cast<u32>(CellsF + 0.5f);
+        Cells = std::clamp(Cells, 1u, 25u);
+        // .y e o numero de VERTICES do caminho, e vale 1 sem knob: o laco de ate quatro com
+        // backpropagation em ordem reversa e o commit seguinte da mesma fase. Um knob agora seria
+        // um controle que nao controla nada — o shader nem le este campo.
+        U.UpdateParams = { static_cast<f32>(Cells), 1.0f,
+                           UsePrevCacheAtTerminal ? 1.0f : 0.0f, 0.0f };
+
+        U.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
+                      RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
+        U.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
+                      FRayEpsilonProfile::kOriginAngularMinRatio };
+        // GIDistParams so viaja pelo contrato de nome; o .w traz o skipMode com o bit de corte do
+        // terminador ja ligado (FallbackAvailable/TerminatorOff), o que e coerente com um passe
+        // que nao consulta o volume de jeito nenhum.
+        U.GIDistParams = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
+                           GIHit.SkipModePacked() };
+        // .w e o unico campo desta linha que o passe LE: o piso de roughness do secundario. Ele
+        // importa aqui mais que em qualquer consumidor — este e o produtor do cache
+        // nao-direcional.
+        U.GIBiasParams = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,
+                           GIHit.SecondaryRoughnessMin };
+        U.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
+        U.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
+        U.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
+        U.ReGIRResources        = ReGIRParams.Resources;
+        U.SkyParams             = SkyLutParams;
+
+        const FRadianceCacheShaderParams P = UpdatePassParams();
+        U.RadianceCacheCamCell     = P.CameraPosCell;
+        U.RadianceCacheLodCapFlags = P.LodCapacityFlags;
+        U.RadianceCacheResources   = P.Resources;
+
+        std::memcpy(MappedUpdateCB +
+                        static_cast<size_t>(UpdateFrameSlot) * sizeof(RadianceCacheUpdateConstants),
+                    &U, sizeof(U));
+    }
+
+    void FRadianceCache::RecordUpdate(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap) {
+        if (!UpdatePassActive() || UpdateSrvTable[UpdateFrameSlot] == kInvalidSlot) return;
+
+        // Os buffers do cache ja estao em UNORDERED_ACCESS desde o TransitionForTrace do
+        // PrepareIndirectLighting, e continuam ate o resolve. Nao ha barreira a emitir contra os
+        // traces de render: este passe ESCREVE Accum e LE Resolved, e o resolve do fim do frame ja
+        // ordena as duas coisas contra a leitura dele.
+        UpdatePSO.Bind(CL);
+        CL->SetComputeRootConstantBufferView(0, UpdateCBAddr());
+        CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(UpdateSrvTable[UpdateFrameSlot]));
+        // Root param 2 existe so porque um range de 0 descritores nao serializa (ver
+        // CreateUpdatePipeline); o shader nao declara UAV nenhum.
+        CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(UavTable + 3));
+
+        // Dispatch de tela CHEIA com early-out pela mascara, e nao um dispatch compactado de 4%
+        // dos pixels: o plano manda comprovar a correcao antes de comprimir, e a compactacao
+        // (work list + indirect dispatch) e a Fase 7.
+        CL->Dispatch((UpdateWidth + 7u) / 8u, (UpdateHeight + 7u) / 8u, 1);
+    }
+
+    FRadianceCacheShaderParams FRadianceCache::UpdatePassParams() const {
+        FRadianceCacheShaderParams P{};
+        u32 Flags = kFlagUpdate;
+        if (UsePrevCacheAtTerminal) Flags |= kFlagQuery;
+        // Sem kFlagStats, sempre — ver a nota da declaracao.
+        P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
+        P.LodCapacityFlags = { LodDistance, static_cast<f32>(CapacityV),
+                               static_cast<f32>(Flags), 0.0f };
+        P.Resources        = { static_cast<f32>(UavTable + 0),
+                               static_cast<f32>(UavTable + 1),
+                               static_cast<f32>(UavTable + 2),
+                               static_cast<f32>(UavTable + 3) };
+        // Quem realmente entregou o update neste frame passou a ser este passe. O manifesto da
+        // captura le daqui (ver PublishedUpdateThisFrame): sem isto, uma captura com o produtor
+        // dedicado ativo se declararia "cache sem update", porque nenhum consumidor de render
+        // recebe mais o bit.
+        //
+        // Sob o MESMO criterio dos outros consumidores — "vai rodar de fato". O CB e preenchido
+        // todo frame (custa nada), mas um frame que nao dispara o passe nao pode se registrar
+        // como alimentado. E exatamente o caso do primeiro frame depois de um reset.
+        if (UpdatePassActive()) PublishedUpdate = true;
+        return P;
     }
 
     void FRadianceCache::OnResize(const FPassInitContext& Ctx) {

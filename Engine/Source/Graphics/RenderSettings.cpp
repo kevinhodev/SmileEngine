@@ -178,6 +178,26 @@ namespace Smile {
         return R.RadianceCache.GetQueryEnabled();
     }
 
+    void FRenderSettings::SetRadianceCacheDedicatedUpdate(bool _V) {
+        if (_V == R.RadianceCache.GetDedicatedUpdate()) return;
+        // O setter da classe ja arma o ResetOnce da tabela — as duas fontes produzem estatisticas
+        // diferentes para a mesma celula, e uma media que mistura as duas nao descreve nenhuma.
+        R.RadianceCache.SetDedicatedUpdate(_V);
+        // E os CONSUMIDORES tambem esquecem: o que o raio secundario devolve muda de ORIGEM, e
+        // esse valor ja esta acumulado no atlas do DDGI e nos reservoirs do ReSTIR.
+        Invalidate(Dom::RayVisibility);
+    }
+    bool FRenderSettings::GetRadianceCacheDedicatedUpdate() const {
+        return R.RadianceCache.GetDedicatedUpdate();
+    }
+
+    void FRenderSettings::SetRadianceCacheUpdateFraction(f32 _V) {
+        R.RadianceCache.SetUpdateFraction(_V);
+    }
+    f32 FRenderSettings::GetRadianceCacheUpdateFraction() const {
+        return R.RadianceCache.GetUpdateFraction();
+    }
+
     void FRenderSettings::SetRadianceCacheStatsEnabled(bool _V) {
         if (_V == R.RadianceCache.GetStatsEnabled()) return;
         // NAO invalida historico: o conteudo ja acumulado continua valendo, e derrubar o cache a

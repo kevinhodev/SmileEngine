@@ -163,6 +163,10 @@ namespace Smile {
         // O visualizador do cache tambem consome a normal geometrica do prepass. Separado de AO
         // para nao executar GTAO apenas porque uma ferramenta de debug esta aberta.
         bool RadianceCacheDebugActive = false;
+        // Passe dedicado de update do radiance cache (Fase 3): o produtor PROPRIO do cache, que
+        // roda depois do G-buffer. Quando ele esta ativo, os traces de render deixam de escrever
+        // na tabela e voltam a so consultar.
+        bool RadianceCacheUpdateActive = false;
         bool GeometricNormalWillRun   = false;
 
         // --- Agua -----------------------------------------------------------------------

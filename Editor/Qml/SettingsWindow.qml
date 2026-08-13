@@ -2928,7 +2928,13 @@ Rectangle {
                               "radiância de verdade em vez de irradiância tratada como tal.\n\n" +
                               "Ligue a ESCRITA primeiro, espere a ocupação subir, e só então a " +
                               "LEITURA. Ligando as duas juntas os primeiros quadros consultam uma " +
-                              "tabela vazia e o resultado parece bug."
+                              "tabela vazia e o resultado parece bug.\n\n" +
+                              "O PRODUTOR DEDICADO troca quem alimenta a tabela. Desligado, ela " +
+                              "aprende dos hits do render — cujo terminador é o DDGI, ou seja, o " +
+                              "cache guarda um sinal cuja origem continua sendo o volume. Ligado, " +
+                              "um passe próprio traça a partir do G-buffer e nunca lê sonda: é " +
+                              "essa a fonte independente que o SHaRC exige. São dois estimadores, " +
+                              "não dois níveis de qualidade — trocar limpa a tabela."
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2985,10 +2991,48 @@ Rectangle {
                         onToggled: renderModel.ToggleRadianceCacheStats()
                     }
 
+                    Text {
+                        id: rcDedicatedLabel
+                        x: 20
+                        y: rcStatsLabel.y + 30
+                        text: "Produtor dedicado (path tracer esparso)"
+                        color: renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcDedicatedLabel.y - 6
+                        enabled: renderModel.radianceCacheEnabled
+                        checked: renderModel.radianceCacheDedicatedUpdate
+                        onToggled: renderModel.ToggleRadianceCacheDedicatedUpdate()
+                    }
+
+                    ShadowSlider {
+                        id: rcFractionSlider
+                        x: 20
+                        y: rcDedicatedLabel.y + 26
+                        width: parent.width - 40
+                        // Sem produtor dedicado a fração não controla nada. O ShadowSlider não
+                        // tem estado desabilitado próprio (o label dele é sempre textNormal),
+                        // então a opacidade é o que dá o sinal visual junto do enabled.
+                        enabled: renderModel.radianceCacheDedicatedUpdate
+                        opacity: renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
+                        label: "Pixels que lançam caminho por quadro"
+                        // Passo de 1/25: a seleção é uma permutação sobre o tile 5x5, então
+                        // valores intermediários arredondam para a mesma contagem de células.
+                        from: 0.04; to: 0.40; step: 0.04
+                        value: renderModel.radianceCacheUpdateFraction
+                        valueText: (renderModel.radianceCacheUpdateFraction * 100).toFixed(0) + "%"
+                        // committed, e nao released: mudar a fração não invalida a tabela —
+                        // muda só a taxa de amostragem, e o que já está guardado continua valendo.
+                        onCommitted: (v) => renderModel.SetRadianceCacheUpdateFraction(v)
+                    }
+
                     ShadowSlider {
                         id: rcCellSlider
                         x: 20
-                        y: rcStatsLabel.y + 26
+                        y: rcFractionSlider.y + 50
                         width: parent.width - 40
                         label: "Aresta da célula (nível 0)"
                         from: 0.05; to: 2.0; step: 0.05

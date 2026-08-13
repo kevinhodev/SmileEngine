@@ -95,6 +95,16 @@ namespace Smile {
         bool GetRadianceCacheEnabled() const;
         void SetRadianceCacheQuery(bool V);
         bool GetRadianceCacheQuery() const;
+        // QUEM alimenta a tabela: o passe dedicado da Fase 3 (true) ou os hits do render (false).
+        // Nao e ajuste de qualidade — sao dois ESTIMADORES. O antigo aprendia um sinal cujo
+        // terminador era o DDGI; o dedicado traca do G-buffer e nunca le sonda. Invalida.
+        void SetRadianceCacheDedicatedUpdate(bool V);
+        bool GetRadianceCacheDedicatedUpdate() const;
+        // Fracao dos pixels que lanca caminho por frame no passe dedicado (0,04 = o numero
+        // publicado do Cyberpunk). Quantizada em 1/25 pela permutacao do tile 5x5. NAO invalida:
+        // muda so a taxa de amostragem, e o que ja esta na tabela continua valendo.
+        void SetRadianceCacheUpdateFraction(f32 V);
+        f32  GetRadianceCacheUpdateFraction() const;
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);
