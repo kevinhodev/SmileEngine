@@ -15,13 +15,23 @@
 // CSM e outra cadeia de luz, e grava-la exigiria um SEGUNDO caminho de material a partir do
 // G-buffer — a copia divergente que a Fase 2 existiu para impedir.
 //
-// UM BOUNCE, MULTI-BOUNCE NO TEMPO
-// Este commit traca dois raios: G-buffer -> v0 (o vertice que se grava) e v0 -> terminal. O
-// terminal e o cache RESOLVIDO (frames anteriores), o ceu, ou zero — nunca DDGI. Como a escrita
-// vai para `Accum` e a leitura vem de `Resolved`, a realimentacao e uma iteracao de ponto fixo
-// entre FRAMES: L_novo = direta + f*L_velho. Com f < 1 ela converge para o transporte completo,
-// que e o que a SHaRC chama de backpropagation com o cache do frame anterior. O laco de ate 4
-// vertices DENTRO do frame (e a backpropagation em ordem reversa) e o commit seguinte.
+// MULTI-BOUNCE: NO FRAME E NO TEMPO
+// O caminho anda ate RCU_MAX_VERTS vertices sombreados (knob, default 4) e mais um raio para o
+// TERMINAL, que e o ceu, o cache RESOLVIDO (frames anteriores) ou zero — nunca DDGI. Depois a
+// radiancia volta em ordem REVERSA, e cada vertice elegivel recebe a sua:
+//
+//     L_terminal = ceu / cache anterior / zero
+//     L_i        = local_i + throughput_i * L_(i+1)      (local = direta + emissivo)
+//     RC_Update(pos_i, normal_i, L_i)                    para cada i elegivel
+//
+// As DUAS realimentacoes coexistem e nao se confundem. A do FRAME e este laco: quatro vertices
+// resolvidos de uma vez, latencia zero. A do TEMPO e o terminal lendo `Resolved` e a escrita indo
+// para `Accum` — L_novo = direta + f*L_velho, uma iteracao de ponto fixo que ja convergia para o
+// transporte completo com um vertice so. O laco nao cria o efeito; ele encurta a latencia e
+// reduz o vies do truncamento, que e o que a SHaRC obtem com os quatro bounces do update.
+//
+// Com UpdateMaxVertices = 1 o passe reproduz exatamente o comportamento do commit anterior — e e
+// esse o A/B que separa "o multi-bounce do frame vale o custo" de "o do tempo ja bastava".
 //
 // ORDEM NO FRAME (decidida no plano, nao re-derivar): depois do RecordGBuffer e antes do
 // RecordSceneLighting. Nao em PrepareIndirectLighting, que roda antes de o G-buffer existir.
@@ -46,8 +56,9 @@ cbuffer RadianceCacheUpdateCB : register(b0) {
     // pelo Renderer — ver o bloco no v0 sobre por que ele nao e knob proprio.
     float4 PolicyParams;
     // x = celulas do tile 5x5 sorteadas por frame (1 = 4% dos pixels)
-    // y = vertices do caminho; vale 1 e NAO e lido aqui — o laco chega no commit seguinte
+    // y = vertices SOMBREADOS do caminho (1..RCU_MAX_VERTS); o custo em raios e y + 1
     // z = consultar o cache resolvido no terminal (0/1)
+    // w = piso de roughness do lobo QUE CHEGA para o vertice ser gravavel
     float4 UpdateParams;
     float4 RayEpsA;           // perfil de epsilons (contrato do RayOffset.hlsli)
     float4 RayEpsB;
@@ -108,6 +119,28 @@ bool RCU_PixelSelected(uint2 px, uint frame, uint cellsPerFrame) {
     const uint slot = (tile * 13u) % 25u;
     return ((slot + frame) % 25u) < cellsPerFrame;
 }
+
+// Teto de vertices do caminho. CONSTANTE DE COMPILACAO, e nao so o teto do knob: os dois lacos
+// abaixo sao [unroll] justamente para que `verts[i]` fique com indice literal e o array viva em
+// REGISTRADOR. Com indice dinamico o DXC o joga em scratch, e um caminho de 4 vertices lendo e
+// escrevendo memoria por iteracao custaria mais que os proprios raios.
+#define RCU_MAX_VERTS 4
+
+// O que se guarda de cada vertice ate a volta. Exatamente o que a backpropagation consome — e
+// nada alem: `Pos`/`CacheN` para a chave, `Local` (direta + emissivo) e `Throughput` para a
+// recorrencia, e `Eligible` porque um vertice alcancado por lobo estreito nao pode ser gravado.
+//
+// 12 floats + 1 bit por vertice, 4 vertices. A alternativa da SHaRC guarda o INDICE da celula
+// (inserido na ida) em vez de posicao e normal, o que economiza 5 registradores por vertice ao
+// preco de reservar entrada para caminho que talvez nao seja gravado. Fica anotada: o plano manda
+// medir a pressao de registradores antes de otimizar, e nao supor.
+struct FPathVertex {
+    float3 Pos;
+    float3 CacheN;
+    float3 Local;
+    float3 Throughput;
+    bool   Eligible;
+};
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
@@ -174,121 +207,179 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.CacheRayRoughness  = -1.0f; // o raio de origem e difuso
     RC_UNPACK_PARAMS(P);
 
-    // --- v0: o vertice que vai para o cache -------------------------------------------------
+    // ============================================================================================
+    // IDA: anda o caminho, guardando o que a volta vai consumir
+    // ============================================================================================
+    FPathVertex verts[RCU_MAX_VERTS];
+    uint  count = 0u;                        // vertices sombreados
+    float3 Lterm = float3(0.0f, 0.0f, 0.0f); // radiancia que entra pelo fim do caminho
+
     RayDesc ray;
     ray.Origin    = OffsetRayGBuffer(x1, N, dir, camDist);
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
-    // SEM culling, igual ao gather do ReSTIR GI: o cache tem de aprender tambem o verso de
-    // superficie fina (a chave ja separa os dois lados pelo octante da normal). E a politica de
-    // backface abaixo que decide entre re-tracar e matar — deixar o DXR cullar descartaria o hit
-    // antes da classificacao.
-    RayQuery<RAY_FLAG_NONE> q;
-    q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
-    SMILE_RT_PROCEED(q)
+    // Roughness do lobo que GEROU o raio corrente. O de origem e cosseno-hemisferico: difuso.
+    // E ela — nao a do material atingido — que decide se o proximo vertice e gravavel.
+    float rayRoughness = -1.0f;
 
-    // AUTO-INTERSECCAO / BACKFACE, sob o MESMO toggle do ReSTIR GI (PolicyParams.x) — e nao um
-    // knob proprio: o cache ALIMENTA o ReSTIR GI, e duas politicas de geometria diferentes fariam
-    // a mesma superficie ter duas radiancias conforme o caminho.
-    //
-    // ⚠️ E ESSE TOGGLE NASCE DESLIGADO. Na configuracao padrao este bloco nao roda, e a exposicao
-    // que ele fecha CONTINUA no pipeline. Isso e uma decisao adiada de proposito, nao um
-    // esquecimento: ligar o default muda a imagem do RENDER (o toggle e um so), e o plano proibe
-    // fechar isso por "parece melhor" — precisa de A/B. O que este commit entrega e a capacidade
-    // de medir: a politica existe aqui, e o manifesto agora carrega `giBackfacePolicy`, entao as
-    // duas capturas deixaram de ser indistinguiveis. A escolha do default sai da medida.
-    //
-    // O argumento que mantem o default OFF no render nao se transporta inteiro para ca. La ele e
-    // "tracando sem culling, o backface ja bloqueia o raio; a terminacao preta so troca quase-preto
-    // por exatamente-zero, contra um HitIsBackface por raio". Aqui o custo e ~25x menor (4% dos
-    // pixels) e a consequencia dura mais: o render consome um hit ruim uma vez e o descarta, o
-    // cache o GRAVA numa celula de mundo e o serve pelos proximos frames. E por isso que a medida
-    // pode muito bem terminar com defaults DIFERENTES nos dois lados — o que exigiria separar o
-    // toggle, e ai a separacao teria motivo medido em vez de gosto.
-    //
-    // Caminho morto aqui NAO grava zero — nao grava nada. Zero afirmaria "deste ponto nao sai
-    // luz" e a media da celula carregaria a afirmacao; nao gravar diz "esta amostra nao descreve
-    // superficie nenhuma", que e o que de fato aconteceu.
-    if (PolicyParams.x > 0.5f && PT_ResolveSelfIntersection(q, ray, SMILE_RT_MASK_GATHER)) return;
+    const uint maxVerts = min((uint)UpdateParams.y, (uint)RCU_MAX_VERTS);
 
-    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return; // ceu: nao ha celula a alimentar
+    // maxVerts vertices + 1 raio de terminal. O [unroll] e o que mantem `verts` em registrador
+    // (ver RCU_MAX_VERTS); os `break` continuam valendo depois de desenrolado.
+    [unroll] for (uint bounce = 0u; bounce <= (uint)RCU_MAX_VERTS; ++bounce) {
+        if (bounce > maxVerts) break; // teto em tempo de execucao, dentro do teto de compilacao
 
-    const float  hitDist = q.CommittedRayT();
-    const uint   instId  = q.CommittedInstanceID();
-    const FHitSurface  S = PT_LoadHitSurface(Instances[instId], q.CommittedPrimitiveIndex(),
-                                             q.CommittedTriangleBarycentrics(),
-                                             q.CommittedWorldToObject3x4(),
-                                             ray.Origin, ray.Direction, hitDist);
-    const float3 V = normalize(-ray.Direction);
-    const FHitMaterial M = PT_LoadHitMaterial(Instances[instId], S.UV, P.AlbedoLOD, P.RoughnessMin);
+        // SEM culling, igual ao gather do ReSTIR GI: o cache tem de aprender tambem o verso de
+        // superficie fina (a chave ja separa os dois lados pelo octante da normal). E a politica
+        // de backface abaixo que decide entre re-tracar e matar — deixar o DXR cullar descartaria
+        // o hit antes da classificacao.
+        RayQuery<RAY_FLAG_NONE> q;
+        q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
+        SMILE_RT_PROCEED(q)
 
-    float3 directLighting = PT_ShadeDirectSun(S, M, V, P);
-    PT_AddDirectLocal(S, M, V, P, directLighting);
-    const float3 emissive = PT_LoadHitEmissive(Instances[instId], S.UV, P.AlbedoLOD);
+        // AUTO-INTERSECCAO / BACKFACE, sob o MESMO toggle do ReSTIR GI (PolicyParams.x) — e nao
+        // um knob proprio: o cache ALIMENTA o ReSTIR GI, e duas politicas de geometria diferentes
+        // fariam a mesma superficie ter duas radiancias conforme o caminho.
+        //
+        // ⚠️ E ESSE TOGGLE NASCE DESLIGADO. Na configuracao padrao este bloco nao roda, e a
+        // exposicao que ele fecha CONTINUA no pipeline. Isso e uma decisao adiada de proposito,
+        // nao um esquecimento: ligar o default muda a imagem do RENDER (o toggle e um so), e o
+        // plano proibe fechar isso por "parece melhor" — precisa de A/B. O que ja esta entregue e
+        // a capacidade de medir: a politica existe aqui e o manifesto carrega `giBackfacePolicy`,
+        // entao as duas capturas deixaram de ser indistinguiveis. O default sai da medida.
+        //
+        // O argumento que mantem o default OFF no render nao se transporta inteiro para ca. La ele
+        // e "tracando sem culling, o backface ja bloqueia o raio; a terminacao preta so troca
+        // quase-preto por exatamente-zero, contra um HitIsBackface por raio". Aqui o custo e ~25x
+        // menor (4% dos pixels) e a consequencia dura mais: o render consome um hit ruim uma vez e
+        // o descarta, o cache o GRAVA numa celula de mundo e o serve pelos proximos frames. E por
+        // isso que a medida pode terminar com defaults DIFERENTES nos dois lados — e ai a
+        // separacao do toggle teria motivo medido em vez de gosto.
+        //
+        // TERMINACAO PRETA, e nao descarte do caminho: o segmento morto significa "dali para a
+        // frente nao vem luz", que e uma afirmacao sobre o SEGMENTO. Os vertices ja andados
+        // continuam validos e recebem zero pela frente — matar o caminho inteiro jogaria fora a
+        // direta e o emissivo que eles ja mediram. Em `bounce == 0` isto e equivalente a desistir,
+        // porque `count` fica em zero e a volta nao grava nada.
+        if (PolicyParams.x > 0.5f && PT_ResolveSelfIntersection(q, ray, SMILE_RT_MASK_GATHER)) {
+            Lterm = float3(0.0f, 0.0f, 0.0f);
+            break;
+        }
 
-    // --- terminal: o indireto de v0 ---------------------------------------------------------
-    // Aqui esta a diferenca de POLITICA que justificou a Fase 2 inteira. O render, neste ponto,
-    // chamaria PT_SampleIndirectFallback e somaria DDGI. Este passe amostra o BSDF, traca mais um
-    // raio e le o cache RESOLVIDO (ou o ceu, ou zero).
-    //
-    // O raio do terminal e o ceu saem SEMPRE; o knob (UpdateParams.z) fecha apenas a consulta ao
-    // `Resolved` no hit geometrico. Ele existe para isolar a REALIMENTACAO — "o multi-bounce vem
-    // do cache anterior?" — e um knob que tambem apagasse o trace e o ceu responderia outra
-    // pergunta, misturando tres mudancas numa medida so.
-    float3 indirectLighting = float3(0.0f, 0.0f, 0.0f);
-    {
-        const float2 Edir  = GGX_Rand2E(px, frameIndex, SMILE_RNG_CACHE_BOUNCE);
-        const float  Elobe = GGX_Rand2E(px, frameIndex, SMILE_RNG_CACHE_BOUNCE + 1u).x;
-        const FBsdfSample B = PT_SampleBSDF(S, M, V, Edir, Elobe);
-        if (B.Valid) {
-            RayDesc bray;
-            bray.Origin    = PT_ShadowRayOrigin(S, P); // mesma fuga do plano do triangulo
-            bray.Direction = B.Dir;
-            bray.TMin      = RayEpsB.x;
-            bray.TMax      = TraceParams.y;
-            RayQuery<RAY_FLAG_NONE> bq;
-            bq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, bray);
-            SMILE_RT_PROCEED(bq)
+        // Raio escapou: o ceu fecha o caminho, e os vertices ja andados recebem essa energia na
+        // volta. NAO e `return` — com um vertice sombreado e o ceu no fim, o caminho e valido e
+        // completo; era o `return` do commit anterior que jogava fora justamente o caso mais
+        // comum de iluminacao de exterior.
+        if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+            Lterm = ShadeSky(ray.Direction, sunDir, P.SkyIntensity, P);
+            break;
+        }
 
-            // Mesma politica no segundo segmento. Aqui o caminho morto vira ZERO (e nao "nao
-            // grava"): o vertice que se grava e o v0, e um segundo raio que termina dentro de
-            // geometria e OCLUSAO legitima de v0 — a terminacao preta do Lumen, com o retrace
-            // antes dela para nao transformar auto-interseccao em mancha.
-            const bool bKill = PolicyParams.x > 0.5f &&
-                               PT_ResolveSelfIntersection(bq, bray, SMILE_RT_MASK_GATHER);
+        const float hitDist = q.CommittedRayT();
 
-            float3 Lterm = float3(0.0f, 0.0f, 0.0f);
-            if (bKill) {
-                Lterm = float3(0.0f, 0.0f, 0.0f);
-            } else if (bq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
-                Lterm = ShadeSky(B.Dir, sunDir, P.SkyIntensity, P);
-            } else if (UpdateParams.z > 0.5f) {
+        // Ja ha vertices sombreados de sobra: ESTE hit e o TERMINAL, e nao mais um vertice. Ele
+        // nao paga material nem luz — so a consulta ao cache RESOLVIDO, que e o que resume todo o
+        // transporte dali para a frente.
+        //
+        // O raio do terminal e o ceu acima saem SEMPRE; o knob (UpdateParams.z) fecha apenas esta
+        // consulta. Ele existe para isolar a REALIMENTACAO — "o multi-bounce vem do cache
+        // anterior?" — e um knob que tambem apagasse o trace responderia outra pergunta.
+        // Este hit e o TERMINAL quando ja ha vertices de sobra — ou quando o indice do array
+        // acabou. As duas condicoes dizem a mesma coisa (maxVerts nunca passa de RCU_MAX_VERTS, e
+        // `count == bounce` aqui), e a segunda esta escrita porque a PROVA do limite nao pode
+        // depender do otimizador: em Debug (-Od) nao ha unroll, o indice de `verts[bounce]` fica
+        // dinamico e o DXC recusa o acesso como fora de faixa. Release compilava; Debug nao.
+        if (count >= maxVerts || bounce >= (uint)RCU_MAX_VERTS) {
+            if (UpdateParams.z > 0.5f) {
                 // Chave do terminal montada com PT_LoadHitSurface, e nao com o HitGeomNormal
                 // barato: a normal do cache tem de ser a MESMA que o ShadeSurfaceHit usa para
                 // consultar (a interpolada com facing), senao update e query montam chaves
                 // diferentes para o mesmo ponto perto de silhueta de malha suavizada.
-                const float  bDist = bq.CommittedRayT();
                 const FHitSurface T = PT_LoadHitSurface(
-                    Instances[bq.CommittedInstanceID()], bq.CommittedPrimitiveIndex(),
-                    bq.CommittedTriangleBarycentrics(), bq.CommittedWorldToObject3x4(),
-                    bray.Origin, bray.Direction, bDist);
+                    Instances[q.CommittedInstanceID()], q.CommittedPrimitiveIndex(),
+                    q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
+                    ray.Origin, ray.Direction, hitDist);
                 // Miss de cache => ZERO, e nao DDGI. O caminho fica escuro enquanto a tabela
                 // esfria, e e assim que se ve o cache aquecer; somar DDGI aqui devolveria
                 // exatamente o sinal que esta serie existe para trocar.
-                const FRCQueryResult Q = RC_QueryEx(P.Cache, T.Pos, T.CacheN, bDist, -1.0f);
+                const FRCQueryResult Q = RC_QueryEx(P.Cache, T.Pos, T.CacheN, hitDist,
+                                                    rayRoughness);
                 if (RC_QueryHit(Q)) Lterm = Q.Radiance;
             }
-            indirectLighting = B.Throughput * Lterm;
+            break;
         }
+
+        // --- vertice sombreado ---------------------------------------------------------------
+        const uint instId = q.CommittedInstanceID();
+        const FHitSurface S = PT_LoadHitSurface(Instances[instId], q.CommittedPrimitiveIndex(),
+                                                q.CommittedTriangleBarycentrics(),
+                                                q.CommittedWorldToObject3x4(),
+                                                ray.Origin, ray.Direction, hitDist);
+        const float3 V = normalize(-ray.Direction);
+        const FHitMaterial M = PT_LoadHitMaterial(Instances[instId], S.UV, P.AlbedoLOD,
+                                                  P.RoughnessMin);
+
+        float3 local = PT_ShadeDirectSun(S, M, V, P);
+        PT_AddDirectLocal(S, M, V, P, local);
+        local += PT_LoadHitEmissive(Instances[instId], S.UV, P.AlbedoLOD);
+
+        // ELEGIBILIDADE: o vertice so entra na tabela se o lobo que CHEGOU nele for largo o
+        // bastante. O cache guarda um RGB por celula e o serve a qualquer direcao; radiancia de
+        // saida vista por um lobo estreito so vale para aquela direcao, e grava-la mentiria para
+        // todos os que consultarem a celula depois.
+        //
+        // Duas guardas, e as duas usam a MESMA funcao que a query usa (RC_ConeCoversCell):
+        // roughness acima do piso, e cone cobrindo a celula. O gate de SEGMENTO CURTO da query
+        // NAO se aplica aqui — la ele evita auto-referencia (origem e hit na mesma celula), e o
+        // produtor nao le nada, so escreve o que aquele ponto emite.
+        const float cellSize = RC_CellSizeAt(P.Cache, S.Pos);
+        const bool  eligible = (rayRoughness < 0.0f) ||
+                               (rayRoughness >= UpdateParams.w &&
+                                RC_ConeCoversCell(hitDist, rayRoughness, cellSize));
+
+        verts[bounce].Pos        = S.Pos;
+        verts[bounce].CacheN     = S.CacheN;
+        verts[bounce].Local      = local;
+        verts[bounce].Throughput = float3(0.0f, 0.0f, 0.0f); // preenchido pela amostragem abaixo
+        verts[bounce].Eligible   = eligible;
+        count = bounce + 1u;
+
+        // --- proximo segmento ----------------------------------------------------------------
+        // Streams por PROFUNDIDADE: sem isso os quatro vertices sorteariam a mesma direcao no
+        // mesmo pixel, e o caminho andaria em ziguezague correlacionado em vez de amostrar.
+        const float2 Edir  = GGX_Rand2E(px, frameIndex, SMILE_RNG_CACHE_BOUNCE + bounce * 2u);
+        const float  Elobe = GGX_Rand2E(px, frameIndex, SMILE_RNG_CACHE_BOUNCE + bounce * 2u + 1u).x;
+        const FBsdfSample B = PT_SampleBSDF(S, M, V, Edir, Elobe);
+        // Sem direcao valida o caminho para aqui com terminal ZERO, e os vertices ja andados
+        // continuam validos — eles so perdem o que viria da frente.
+        if (!B.Valid) break;
+
+        verts[bounce].Throughput = B.Throughput;
+
+        ray.Origin    = PT_ShadowRayOrigin(S, P); // mesma fuga do plano do triangulo
+        ray.Direction = B.Dir;
+        ray.TMin      = RayEpsB.x;
+        ray.TMax      = TraceParams.y;
+        // A roughness que viaja e a do MATERIAL quando o lobo foi especular, e difusa quando nao:
+        // e ela que o proximo vertice consulta para saber se pode ser gravado.
+        rayRoughness  = (B.Lobe == PT_LOBE_SPECULAR) ? M.Roughness : -1.0f;
     }
 
-    // Mesma ordem de soma do ShadeSurfaceHit (direta + indireta + emissivo). As duas politicas
-    // produzem grandezas diferentes e nao ha promessa de igualdade bit a bit entre elas, mas ler
-    // as duas lado a lado e o que torna a DIFERENCA obvia — e a diferenca e so o termo do meio.
-    const float3 Lo = directLighting + indirectLighting + emissive;
-
-    // Uma amostra por pixel selecionado. O clamp de faixa, o descarte de NaN/Inf e a reserva de
-    // vaga no acumulador ficam no RC_Update — que e onde eles ja estavam para o produtor antigo.
-    RC_Update(P.Cache, S.Pos, S.CacheN, Lo);
+    // ============================================================================================
+    // VOLTA: backpropagation em ordem reversa
+    // ============================================================================================
+    // L_i = local_i + throughput_i * L_(i+1), com L_(count) = Lterm. Cada vertice elegivel recebe
+    // a SUA radiancia de saida — e nao a do caminho inteiro —, que e o que a celula tem de guardar.
+    //
+    // O [unroll] com guarda por `count` mantem o indice literal (ver RCU_MAX_VERTS). Ele desenrola
+    // a partir do teto de COMPILACAO, entao um caminho curto so pula iteracoes.
+    float3 L = Lterm;
+    [unroll] for (int i = RCU_MAX_VERTS - 1; i >= 0; --i) {
+        if ((uint)i >= count) continue;
+        L = verts[i].Local + verts[i].Throughput * L;
+        // O clamp de faixa, o descarte de NaN/Inf e a reserva de vaga no acumulador ficam no
+        // RC_Update — onde ja estavam para o produtor antigo.
+        if (verts[i].Eligible) RC_Update(P.Cache, verts[i].Pos, verts[i].CacheN, L);
+    }
 }

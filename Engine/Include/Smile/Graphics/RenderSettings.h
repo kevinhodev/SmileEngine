@@ -111,6 +111,15 @@ namespace Smile {
         // guardada nos dois regimes e diferente, e a media que misturasse os dois nao seria nenhum.
         void SetRadianceCacheUsePrevTerminal(bool V);
         bool GetRadianceCacheUsePrevTerminal() const;
+        // Vertices SOMBREADOS por caminho de update (1..4). Custo em raios = V + 1. Com 1 o passe
+        // reproduz o produtor de um bounce, e e esse o A/B do multi-bounce. Invalida: o que a
+        // celula guarda em cada regime e diferente.
+        void SetRadianceCacheMaxVertices(u32 V);
+        u32  GetRadianceCacheMaxVertices() const;
+        // Piso de roughness do lobo que CHEGA para o vertice ser gravavel. Nao invalida: muda so
+        // quais amostras NOVAS entram, e as ja guardadas continuam descrevendo o que descreviam.
+        void SetRadianceCacheMinCacheableRoughness(f32 V);
+        f32  GetRadianceCacheMinCacheableRoughness() const;
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);

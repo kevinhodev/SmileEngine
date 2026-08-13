@@ -220,6 +220,30 @@ namespace Smile {
         return R.RadianceCache.GetUsePrevCacheAtTerminal();
     }
 
+    void FRenderSettings::SetRadianceCacheMaxVertices(u32 _V) {
+        if (_V == R.RadianceCache.GetUpdateMaxVertices()) return;
+        R.RadianceCache.SetUpdateMaxVertices(_V); // ja arma o ResetOnce da tabela
+        // Com um vertice a celula acumula a serie de ponto fixo ao longo de frames; com quatro ela
+        // ja chega resolvida. Sao energias diferentes na MESMA celula, e quem consumiu a anterior
+        // (atlas do DDGI, reservoirs) carrega o regime velho.
+        Invalidate(Dom::RayVisibility);
+    }
+    u32 FRenderSettings::GetRadianceCacheMaxVertices() const {
+        return R.RadianceCache.GetUpdateMaxVertices();
+    }
+
+    void FRenderSettings::SetRadianceCacheMinCacheableRoughness(f32 _V) {
+        if (_V == R.RadianceCache.GetMinCacheableRoughness()) return;
+        // NAO invalida — ele muda quais amostras NOVAS entram, nao o significado das guardadas.
+        // Mas cancela captura pelo mesmo motivo da fracao: o manifesto grava o valor do frame
+        // final, e um aquecimento com dois valores sairia declarando um so.
+        R.Capture.Cancel("o piso de roughness gravavel mudou durante o aquecimento");
+        R.RadianceCache.SetMinCacheableRoughness(_V);
+    }
+    f32 FRenderSettings::GetRadianceCacheMinCacheableRoughness() const {
+        return R.RadianceCache.GetMinCacheableRoughness();
+    }
+
     void FRenderSettings::SetRadianceCacheStatsEnabled(bool _V) {
         if (_V == R.RadianceCache.GetStatsEnabled()) return;
         // NAO invalida historico: o conteudo ja acumulado continua valendo, e derrubar o cache a

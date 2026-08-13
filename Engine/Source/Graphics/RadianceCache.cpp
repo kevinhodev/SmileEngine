@@ -477,11 +477,8 @@ namespace Smile {
         // acontece AQUI, entao publicar o knob cru faria a captura afirmar uma fracao que nao foi
         // a usada (0,10 pedido vira 3/25 = 0,12).
         if (UpdatePassActive()) PublishedUpdateCells = Cells;
-        // .y e o numero de VERTICES do caminho, e vale 1 sem knob: o laco de ate quatro com
-        // backpropagation em ordem reversa e o commit seguinte da mesma fase. Um knob agora seria
-        // um controle que nao controla nada — o shader nem le este campo.
-        U.UpdateParams = { static_cast<f32>(Cells), 1.0f,
-                           UsePrevCacheAtTerminal ? 1.0f : 0.0f, 0.0f };
+        U.UpdateParams = { static_cast<f32>(Cells), static_cast<f32>(UpdateMaxVertices),
+                           UsePrevCacheAtTerminal ? 1.0f : 0.0f, MinCacheableRoughness };
 
         U.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                       RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };

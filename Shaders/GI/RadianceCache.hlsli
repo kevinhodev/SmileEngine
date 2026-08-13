@@ -281,6 +281,40 @@ struct FRCQueryResult {
 
 bool RC_QueryHit(FRCQueryResult R) { return R.Status == RC_QUERY_HIT; }
 
+// Aresta da celula no ponto — a conta que a chave usa, exposta para quem precisa dela ANTES de
+// montar a chave (o gate de cone abaixo, e a elegibilidade do vertice no updater).
+float RC_CellSizeAt(FRadianceCacheParams P, float3 samplePos) {
+    return RC_CellSize(RC_GridLevel(samplePos, P.CameraPos, P.LodDistance), P.BaseCellSize);
+}
+
+// O cone do lobo que gerou o raio cobre ao menos uma celula?
+//
+// A SHaRC so reusa radiancia cacheada para raio glossy depois que o cone dele cobre um voxel;
+// antes disso um cache RGB apagaria o detalhe direcional. Roughness NEGATIVA = transporte difuso,
+// que sempre passa.
+//
+// Isto vive numa funcao, e nao inline no RC_QueryInner, porque o PRODUTOR precisa da mesma
+// pergunta: um vertice alcancado por lobo estreito tem radiancia de saida que so vale para
+// aquela direcao, e grava-la seria mentir para todo mundo que consultar a celula depois. Duas
+// copias da regra divergiriam na primeira calibracao — e o sintoma seria o cache aceitar na
+// escrita o que recusa na leitura, ou o contrario.
+// A forma do teste e a do bloco original, e nao a inversao mais curta (`if (r < 0) return true`).
+// Nao e estilo: `>=` e `<` diferem sob NaN, e a inversao trocaria `fcmp ult` por `fcmp olt` no
+// DXIL — com roughness NaN, o gate deixaria de tratar o raio como difuso e passaria a rejeita-lo
+// como cone estreito. Mudanca de comportamento num caso que "nao deveria acontecer" e exatamente
+// o tipo de aposta que esta base ja perdeu antes; escrito assim, a extracao sai byte a byte igual
+// nos tres shaders de reflexao, que sao os unicos que passam roughness positiva.
+bool RC_ConeCoversCell(float segmentLength, float rayRoughness, float cellSize) {
+    if (rayRoughness >= 0.0f) {
+        const float alpha  = saturate(rayRoughness) * saturate(rayRoughness);
+        const float alpha2 = alpha * alpha;
+        const float coneSpread = 2.0f * segmentLength
+                               * sqrt(0.5f * alpha2 / max(1.0f - alpha2, 1e-6f));
+        if (coneSpread < cellSize) return false;
+    }
+    return true;
+}
+
 // Le a radiancia resolvida (frames ANTERIORES) na posicao.
 //
 // `segmentLength` e o comprimento do segmento de raio que chegou aqui. Consultar o cache com
@@ -297,14 +331,10 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
     R.CellSize = cellSize;
     if (segmentLength < cellSize) { R.Status = RC_QUERY_SHORT_SEGMENT; return R; }
 
-    // SHaRC only reuses cached radiance for glossy rays once their cone covers a voxel. Before
-    // that point an RGB cache would erase directional detail. Negative roughness means diffuse.
-    if (rayRoughness >= 0.0f) {
-        const float alpha  = saturate(rayRoughness) * saturate(rayRoughness);
-        const float alpha2 = alpha * alpha;
-        const float coneSpread = 2.0f * segmentLength
-                               * sqrt(0.5f * alpha2 / max(1.0f - alpha2, 1e-6f));
-        if (coneSpread < cellSize) { R.Status = RC_QUERY_NARROW_CONE; return R; }
+    // Mesma regra que o produtor usa para decidir se um vertice e gravavel — ver RC_ConeCoversCell.
+    if (!RC_ConeCoversCell(segmentLength, rayRoughness, cellSize)) {
+        R.Status = RC_QUERY_NARROW_CONE;
+        return R;
     }
 
     uint slot, checksum;

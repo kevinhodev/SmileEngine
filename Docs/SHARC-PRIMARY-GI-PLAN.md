@@ -48,7 +48,37 @@ vale para toda a série**: em refactor que promete não mudar imagem, comparar o
 
 ---
 
-### Fase 3 em curso — commit #5 dentro, #6 é o próximo
+### Fase 3 — commits #5 e #6 dentro; falta MEDIR o multi-bounce
+
+**O laço multi-bounce entrou** (commit #6). O caminho anda até `UpdateMaxVertices` vértices
+sombreados (default 4, custo = V+1 raios) e a radiância volta em ordem reversa,
+`L_i = local_i + throughput_i · L_(i+1)`, com `RC_Update` em cada vértice elegível.
+
+Quatro coisas que a implementação decidiu e que não devem ser re-derivadas:
+
+- **As duas realimentações coexistem e não se confundem.** A do FRAME é o laço; a do TEMPO é o
+  terminal lendo `Resolved` enquanto a escrita vai para `Accum`, e ela **já convergia sozinha** com
+  um vértice. O laço não cria o multi-bounce — encurta a latência e tira o viés do truncamento.
+  `UpdateMaxVertices = 1` reproduz o commit #5 exatamente, e é esse o A/B que decide se o laço se
+  paga.
+- **Segmento morto termina o caminho em PRETO, não descarta os vértices já andados.** O kill diz
+  "dali para frente não vem luz" — uma afirmação sobre o *segmento*. A direta e o emissivo que os
+  vértices anteriores já mediram continuam válidos. Em `bounce == 0` isso equivale a desistir,
+  porque `count` fica em zero.
+- **Elegibilidade usa a MESMA função da query** (`RC_ConeCoversCell`). O gate de *segmento curto* da
+  query **não** se aplica ao produtor: lá ele evita auto-referência (ler a própria célula), e o
+  produtor não lê nada — só escreve o que aquele ponto emite.
+- **O array de vértices fica em registrador**, verificado: `getelementptr` = 0 no DXIL, ou seja,
+  nenhum acesso indexado a memória. É o que os dois `[unroll]` compram, e é por isso que
+  `RCU_MAX_VERTS` é constante de compilação e o knob só clampa dentro dela.
+
+Uma armadilha que a extração do gate de cone revelou e que vale para o resto da série: escrever
+`if (r < 0) return true` no lugar de `if (r >= 0) { ... }` troca `fcmp ult` por `fcmp olt` no DXIL —
+**as duas formas divergem sob NaN**. A inversão "mais limpa" mudava o comportamento de um caso que
+não deveria acontecer, e a comparação de DXIL pegou. Transcrito na forma original, os três shaders
+de reflexão voltaram a sair com o mesmo conjunto de instruções.
+
+### Estado anterior — commit #5
 
 **O produtor dedicado existe.** `Shaders/GI/RadianceCacheUpdate.cs.hlsl` + `FRadianceCache::
 RecordUpdate`, gravado depois do `RecordGBuffer` e antes da espera do DDGI assíncrono. Com ele

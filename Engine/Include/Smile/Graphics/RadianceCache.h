@@ -219,6 +219,31 @@ namespace Smile {
         // primeiro bounce, que e o A/B que separa "o cache funciona" de "o cache realimenta".
         void SetUsePrevCacheAtTerminal(bool V) { UsePrevCacheAtTerminal = V; }
         bool GetUsePrevCacheAtTerminal() const { return UsePrevCacheAtTerminal; }
+        // Vertices SOMBREADOS por caminho. Custo em raios = V + 1 (o ultimo e o terminal). 4 e o
+        // numero do Cyberpunk; 1 reproduz exatamente o produtor de um bounce, e e esse o A/B que
+        // separa "o multi-bounce do frame vale o custo" de "o do tempo ja bastava".
+        //
+        // Invalida: o que a tabela guarda em cada regime e diferente — com um vertice a celula
+        // acumula a serie de ponto fixo entre frames, com quatro ela ja chega resolvida.
+        void SetUpdateMaxVertices(u32 V) {
+            const u32 C = V < 1u ? 1u : (V > kMaxUpdateVertices ? kMaxUpdateVertices : V);
+            if (C != UpdateMaxVertices) ResetOnce();
+            UpdateMaxVertices = C;
+        }
+        u32  GetUpdateMaxVertices() const { return UpdateMaxVertices; }
+        // Piso de roughness do lobo que CHEGA para o vertice poder ser gravado. Nasce igual ao
+        // FGIHitSampling::SecondaryRoughnessMin de proposito: aquele e o piso que o material recebe
+        // no hit, entao qualquer lobo especular deste passe ja e pelo menos assim largo — os dois
+        // numeros descrevem a mesma decisao ("o que o cache nao-direcional consegue representar")
+        // vista de dois lados. Subir este acima daquele e que passa a rejeitar de verdade.
+        void SetMinCacheableRoughness(f32 V) {
+            MinCacheableRoughness = V < 0.0f ? 0.0f : (V > 1.0f ? 1.0f : V);
+        }
+        f32  GetMinCacheableRoughness() const { return MinCacheableRoughness; }
+        // Espelha o RCU_MAX_VERTS do shader, que e constante de COMPILACAO la (o array de vertices
+        // precisa viver em registrador). Pedir mais que isto no CB nao alocaria nada — o shader
+        // clampa —, entao o teto vale dos dois lados.
+        static constexpr u32 kMaxUpdateVertices = 4;
 
         // Segunda copia dos contadores, para buffer PROPRIO, a ser gravada DEPOIS do
         // RecordResolve. Existe porque as duas metades da telemetria ficam prontas em momentos
@@ -430,6 +455,10 @@ namespace Smile {
         // 4% dos pixels por frame — o numero publicado do Cyberpunk 2077 para o update do SHaRC.
         f32  UpdateFraction  = 0.04f;
         bool UsePrevCacheAtTerminal = true;
+        // 4 vertices = o numero do update do SHaRC no Cyberpunk. Custa 5 raios por pixel
+        // selecionado, contra 2 do produtor de um bounce.
+        u32  UpdateMaxVertices     = 4;
+        f32  MinCacheableRoughness = 0.5f;
         // LOD do albedo nos hits, igual ao do ReSTIR GI. Um numero, nao um knob: divergir dele
         // faria o cache aprender um albedo e o render consumir outro.
         static constexpr f32 kUpdateAlbedoLOD = 2.0f;

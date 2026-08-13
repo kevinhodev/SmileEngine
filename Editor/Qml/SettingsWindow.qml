@@ -3048,9 +3048,41 @@ Rectangle {
                     }
 
                     ShadowSlider {
-                        id: rcCellSlider
+                        id: rcVertsSlider
                         x: 20
                         y: rcFractionSlider.y + 50
+                        width: parent.width - 40
+                        enabled: renderModel.radianceCacheDedicatedUpdate
+                        opacity: renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
+                        label: "Vértices por caminho (custo = V+1 raios)"
+                        from: 1; to: 4; step: 1
+                        value: renderModel.radianceCacheMaxVertices
+                        valueText: renderModel.radianceCacheMaxVertices + (
+                                   renderModel.radianceCacheMaxVertices === 1 ? " vért." : " vért.")
+                        // released, e nao committed: trocar o número de vértices limpa a tabela
+                        // (a célula guarda energias diferentes em cada regime). Fazer isso a cada
+                        // passo de um arraste limparia o cache quatro vezes seguidas.
+                        onReleased: (v) => renderModel.SetRadianceCacheMaxVertices(v)
+                    }
+
+                    ShadowSlider {
+                        id: rcMinRoughSlider
+                        x: 20
+                        y: rcVertsSlider.y + 50
+                        width: parent.width - 40
+                        enabled: renderModel.radianceCacheDedicatedUpdate
+                        opacity: renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
+                        label: "Roughness mínima do lobo que chega"
+                        from: 0.0; to: 1.0; step: 0.05
+                        value: renderModel.radianceCacheMinRoughness
+                        valueText: renderModel.radianceCacheMinRoughness.toFixed(2).replace(".", ",")
+                        onCommitted: (v) => renderModel.SetRadianceCacheMinRoughness(v)
+                    }
+
+                    ShadowSlider {
+                        id: rcCellSlider
+                        x: 20
+                        y: rcMinRoughSlider.y + 50
                         width: parent.width - 40
                         label: "Aresta da célula (nível 0)"
                         from: 0.05; to: 2.0; step: 0.05
