@@ -1029,7 +1029,26 @@ namespace Smile {
 
         f32  ElapsedTime   = 0.0f;
         f32  LastDeltaTime = 0.0f;
+        // Contador ABSOLUTO de frames desde o boot. Monotonico e nunca reiniciado: quem depende de
+        // "quantos frames ja passaram" — lifetime, contadores, diagnostico — le daqui.
         u32  FrameIndex    = 0;
+        // Semente das sequencias TEMPORAIS: jitter de upscaler/TAA e todo RNG por frame (ReSTIR,
+        // reflexoes, DDGI, ReGIR, AO, sombras, nevoa, nuvens, NRD).
+        //
+        // Existe separado porque a captura deterministica precisa REINICIAR a amostragem sem
+        // reiniciar o resto. Comecar cada captura num FrameIndex diferente produz ruido diferente,
+        // e ai o A/B do commit "refactor sem mudanca de imagem" mediria a semente em vez do
+        // refactor. Reiniciar o FrameIndex global para conseguir isso quebraria tudo que conta
+        // frames absolutos — dois papeis que so pareciam um.
+        //
+        // Fora da captura os dois andam juntos; so o reset deterministico os separa.
+        //
+        // Isso NAO quer dizer imagem identica a de antes deste commit. Os dois passaram a avancar
+        // no FIM do frame (ver o comentario no RenderFrame): antes o `++` ficava logo depois do
+        // ResolveFrameView, entao o jitter usava um valor e todo o resto do frame usava o
+        // seguinte. Corrigir isso desloca algumas sementes em -1 — mudanca de RUIDO, nao de
+        // energia, e o preco de o contrato de warm-up ser verdadeiro por construcao.
+        u32  TemporalSampleIndex = 0;
 
         bool Initialized = false;
 

@@ -1732,11 +1732,11 @@ namespace Smile {
 
         V.Projection = V.ProjUnjittered;
         if (_Modes.UpscaleActive) {
-            _ActiveUp->GetJitter(FrameIndex, V.JitterPxX, V.JitterPxY); // FSR: sequencia do SDK; DLSS: Halton
+            _ActiveUp->GetJitter(TemporalSampleIndex, V.JitterPxX, V.JitterPxY); // FSR: sequencia do SDK; DLSS: Halton
             V.ProjJitterYSign = -1.0f;
         } else if (_Modes.TAAActive) {
             const u32 kJitterPhases = 8;
-            const u32 Idx = (FrameIndex % kJitterPhases) + 1;
+            const u32 Idx = (TemporalSampleIndex % kJitterPhases) + 1;
             V.JitterPxX = Halton(Idx, 2) - 0.5f;
             V.JitterPxY = Halton(Idx, 3) - 0.5f;
         }
@@ -1880,6 +1880,11 @@ namespace Smile {
         _CB->IBLParams      = { IBLIntensity, IBLRotation,
                                 static_cast<f32>(FHDREnvironment::kSpecularMips - 1),
                                 IBLEnabled };
+        // O .z e o contador ABSOLUTO, e continua sendo — nenhum shader le Time.z hoje (so o .w,
+        // gate do AODebug), entao a escolha de indice aqui nao muda imagem nenhuma. Fica no
+        // FrameIndex porque, se algum dia alguem ler, "quantos frames desde o boot" e a leitura
+        // que o nome sugere; quem precisar de semente tem o TemporalSampleIndex, que e passado
+        // explicitamente a cada passe. Campo sem consumidor: candidato a limpeza em outro commit.
         _CB->Time           = { ElapsedTime, LastDeltaTime,
                                 static_cast<f32>(FrameIndex),
                                 AODebug ? 1.0f : 0.0f };
@@ -2088,7 +2093,7 @@ namespace Smile {
             FVolumetricFogPass::FFrameParams VF{};
             VF.InvViewProjUnjit = _Vw.InvViewProjUnjit;
             VF.ViewProjUnjit    = _Vw.ViewProjUnjittered;
-            VF.FrameIndex       = FrameIndex;
+            VF.FrameIndex       = TemporalSampleIndex;
             VF.CameraPos        = _Vw.CameraPosition;
             VF.CameraForward    = CamForwardW;
             VF.DirToSun         = _Lt.KeyDir;
@@ -2162,7 +2167,7 @@ namespace Smile {
         VolumetricClouds.UpdatePerFrame(_FrameSlot, _Vw.InvVPNoTrans, _Vw.InvViewProjFull,
                                         _Vw.ViewProjUnjittered, _Vw.CameraPosition, kKmPerWorldUnit,
                                         CloudGroundRadius, _Lt.KeyDir, _Lt.KeyCloudCol,
-                                        _Amb.Sky, _Amb.Ground, ElapsedTime, FrameIndex,
+                                        _Amb.Sky, _Amb.Ground, ElapsedTime, TemporalSampleIndex,
                                         SunIntensity);
         VolumetricClouds.SetCoverage(CloudCovBase);
 
@@ -2196,7 +2201,7 @@ namespace Smile {
                                      _Lt.KeyColor.Z * _Lt.KeyInt };
             const f32 ShaftNoiseFrame =
                 (_Modes.TAAActive || _Modes.UpscaleActive || SunShafts.GetVolTemporal())
-                    ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
+                    ? static_cast<f32>(TemporalSampleIndex % 64u) : 0.0f;
             const Vec3 ShaftMediumAlbedo = _Modes.VolFogActive
                 ? VolumetricFog.GetAlbedo() : Vec3{ 1.0f, 1.0f, 1.0f };
             const f32 ShaftExtinctionScale = _Modes.VolFogActive
@@ -2448,7 +2453,7 @@ namespace Smile {
         const bool ReGIROn = Settings().ReGIRActive() && HasReGIRConsumer && GILightCount > 0;
         if (ReGIROn) {
             FGpuScope Scope(GpuProfiler, CommandList, "ReGIR (build)");
-            ReGIR.UpdatePerFrame(FrameSlot, FrameIndex, GILightCount, GILightSetSignature);
+            ReGIR.UpdatePerFrame(FrameSlot, TemporalSampleIndex, GILightCount, GILightSetSignature);
             ReGIR.RecordBuild(CommandList, SRVHeap);
         }
         const FReGIRShaderParams ReGIRCB = ReGIR.ShaderParams(ReGIROn);
@@ -2492,7 +2497,7 @@ namespace Smile {
         GIComputeFence = 0;
         if (UseGI && DDGI.IsReady()) {
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
-            DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, FrameIndex, GILightCount);
+            DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, TemporalSampleIndex, GILightCount);
             if (UseAsyncCompute && DDGI.CanRunAsync()) {
                 DDGI.TransitionForUpdate(CommandList);
                 const u64 S1 = CommandQueue.SubmitSegmentAndContinue();
@@ -2531,7 +2536,7 @@ namespace Smile {
             Reflections.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection, PrevViewProj,
                                        Vw.CameraPosition, PrevCameraPosition,
                                        RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt,
-                                       Lt.KeyColor, FrameIndex, ReflSkyIntensity, Vw.View,
+                                       Lt.KeyColor, TemporalSampleIndex, ReflSkyIntensity, Vw.View,
                                        WaterUsesAtmosphere, WaterEnvironmentIntensity, GILightCount,
                                        TemporalMotion.InstanceCount(), Modes.MotionHistoryValidThisFrame);
         }
@@ -2546,7 +2551,7 @@ namespace Smile {
                                       ? TemporalMotion.SurfaceSRV(1u - FrameSlot) : 0xFFFFFFFFu;
             ReSTIRGI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition,
                                     RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
-                                    FrameIndex, Lt.RainSkyDim, Vw.View,
+                                    TemporalSampleIndex, Lt.RainSkyDim, Vw.View,
                                     PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
         }
     }
@@ -3189,7 +3194,7 @@ namespace Smile {
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "RELAX indireto");
                     Nrd.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
-                                 Vw.JitterPx, PrevJitterPx, FrameIndex);
+                                 Vw.JitterPx, PrevJitterPx, TemporalSampleIndex);
                     Nrd.Denoise(CommandList);
                 }
                 {
@@ -3240,7 +3245,7 @@ namespace Smile {
                     ReSTIRDI.SetRayEpsilons(RayEps);
                     ReSTIRDI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.View, PrevViewProj,
                                             Vw.CameraPosition,
-                                            RenderWidth(), RenderHeight(), FrameIndex,
+                                            RenderWidth(), RenderHeight(), TemporalSampleIndex,
                                             FrameLightCount, kRTMaskShadowFull,
                                             /*EnableTemporalPermutation=*/Modes.RRMode,
                                             TemporalMotion.InstanceCount(),
@@ -3259,7 +3264,7 @@ namespace Smile {
                     {
                         FGpuScope ChildScope(GpuProfiler, CommandList, "RELAX direto");
                         NrdDirect.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
-                                           Vw.JitterPx, PrevJitterPx, FrameIndex);
+                                           Vw.JitterPx, PrevJitterPx, TemporalSampleIndex);
                         NrdDirect.Denoise(CommandList);
                     }
                     {
@@ -3720,7 +3725,7 @@ namespace Smile {
 
         {
             const f32 ShadowNoiseFrame = (Modes.TAAActive || Modes.UpscaleActive)
-                ? static_cast<f32>(FrameIndex % 64u) : 0.0f;
+                ? static_cast<f32>(TemporalSampleIndex % 64u) : 0.0f;
             SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, Vw.View, Vw.CameraPosition,
                                       Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame,
                                       Scene.StaticCastersVersion());
@@ -3933,7 +3938,7 @@ namespace Smile {
                 const f32 M22 = Vw.Projection.M[2][2];
                 const f32 M32 = Vw.Projection.M[3][2];
                 AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, Vw.View,
-                                  RenderWidth(), RenderHeight(), FrameIndex);
+                                  RenderWidth(), RenderHeight(), TemporalSampleIndex);
 
                 FBarrierBatch Batch;
                 Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -4515,7 +4520,6 @@ namespace Smile {
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        Modes.ReflectionsActive ? 1.0f : 0.0f,
                                        Modes.ReSTIRGIActive ? (Modes.NrdIndirectMode ? 2.0f : 1.0f) : 0.0f };
-        ++FrameIndex;
 
         MappedCB->InvViewProj  = Vw.InvViewProjFull;
         MappedCB->RenderParams = { Vw.MipBias, 0.0f, 0.0f, 0.0f };
@@ -4621,7 +4625,7 @@ namespace Smile {
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
             DDGIDebugPass.Render(FrameSlot, CommandList, SRVHeap, DDGI, Vw.ViewProjection, Vw.CameraPosition,
-                                 FrameIndex);
+                                 TemporalSampleIndex);
             DDGIDebugDrew = true;
         }
 
@@ -4656,6 +4660,33 @@ namespace Smile {
 
         AsyncGIRanLastFrame = (GIComputeFence != 0);
         CommandQueue.EndFrame(CommandLists, 1);
+
+        // === Avanco dos contadores de frame ==================================================
+        // AQUI, e nao no meio do frame, e a posicao e que faz o contrato valer.
+        //
+        // O incremento vivia logo depois do ResolveFrameView. Como aquele ja tinha consumido o
+        // indice para o JITTER, o resto do frame — nevoa, ReGIR, DDGI, reflexoes, os dois ReSTIR,
+        // NRD, sombras, AO — rodava com o valor SEGUINTE. Um frame amostrava em duas sementes
+        // diferentes.
+        //
+        // Isso passou despercebido enquanto era so o FrameIndex, porque ninguem comparava os dois
+        // grupos. Deixa de passar com a captura deterministica: apos zerar, o aquecimento usaria
+        // 0..N-1 no jitter e 1..N em todo o resto, e o frame capturado misturaria N com N+1 — ou
+        // seja, o contrato de warm-up seria falso por construcao, e a captura "deterministica"
+        // dependeria de qual metade do frame se olhasse.
+        //
+        // Com o avanco no fim, todo consumidor do frame le o MESMO valor, e o `0..N-1 / captura em
+        // N` sai da definicao em vez de sair da sorte de onde o `++` estava.
+        //
+        // ⚠️ Muda semente: alguns passes recebem um valor a menos que antes deste commit, entao a
+        // imagem NAO e bit a bit igual a do commit anterior. E a correcao da semantica, nao um
+        // efeito colateral dela — e e melhor pagar isso agora, antes de o capturador existir e de
+        // haver capturas de referencia gravadas com a semantica errada.
+        //
+        // Os dois andam juntos: so o reset deterministico os separa, zerando o de amostragem e
+        // deixando o absoluto correr.
+        ++FrameIndex;
+        ++TemporalSampleIndex;
     }
 
     void Renderer::PresentFrame() {
