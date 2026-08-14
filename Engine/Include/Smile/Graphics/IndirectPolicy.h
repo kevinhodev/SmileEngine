@@ -207,6 +207,8 @@ namespace Smile {
     //      passe, volume vivo). NUNCA de `FFrameModes` — o modo e consequencia dela, nao insumo.
     //   2. O snapshot efetivo e resolvido UMA vez, no topo do frame.
     //   3. `FFrameModes`, cbuffers, invalidacao e manifesto consomem esse MESMO snapshot.
+    //   4. O snapshot ANTERIOR so e atualizado depois de a politica do frame estar fixada — nunca
+    //      dentro da comparacao. Atualizar antes apaga a borda para quem ler depois no frame.
     //
     // Sem (1) a funcao perguntaria ao modo que ela define; sem (2)+(3) a captura poderia observar
     // uma politica diferente da que renderizou o frame.
