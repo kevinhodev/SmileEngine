@@ -163,9 +163,13 @@ namespace Smile {
         // Ha raio consumindo o fallback? So o primario SHaRC traca secundarios que terminam nele.
         // Falso, o campo de fallback descreve politica que ninguem exerceu no frame.
         bool IndirectFallbackActive = false;
-        // Consumo do atlas por papel: superficie (folhagem, subsurface, translucidos) e nevoa.
-        bool DDGISurfaceUsed    = false;
-        bool DDGIVolumetricUsed = false;
+        // DISPONIBILIDADE do atlas por papel — superficie (folhagem, subsurface, translucidos) e
+        // nevoa —, e nao uso. Volume vivo numa cena sem folhagem nem translucidos ainda marca
+        // superficie como disponivel; com a nevoa desligada, idem para a volumetrica. Uso REAL de
+        // superficie ja tem instrumento proprio (a telemetria de fonte, `srcDdgi`); uso real da
+        // volumetrica nao tem, e nao se inventa aqui.
+        bool DDGISurfaceAvailable    = false;
+        bool DDGIVolumetricAvailable = false;
         bool GIMeasureTerminatorOff = false; // corta o DDGI so no hit secundario
         // Politica de auto-interseccao/backface do gather E do produtor do cache — um toggle so
         // para os dois (ver FRenderSettings::SetGIBackfacePolicy). Entra aqui porque o protocolo

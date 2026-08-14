@@ -546,8 +546,12 @@ namespace Smile {
                 // consumiu — com o primario em DDGI ou Off, ninguem traca secundario ate ele.
                 File << "  \"indirectFallbackActive\": "
                      << Bool(_State.IndirectFallbackActive) << ",\n";
-                File << "  \"ddgiSurfaceUsed\": "    << Bool(_State.DDGISurfaceUsed)    << ",\n";
-                File << "  \"ddgiVolumetricUsed\": " << Bool(_State.DDGIVolumetricUsed) << ",\n";
+                // DISPONIBILIDADE, e nao uso — ver FCaptureState. Uso real de superficie sai da
+                // telemetria de fonte (`srcDdgi`); o da volumetrica nao tem instrumento.
+                File << "  \"ddgiSurfaceAvailable\": "
+                     << Bool(_State.DDGISurfaceAvailable)    << ",\n";
+                File << "  \"ddgiVolumetricAvailable\": "
+                     << Bool(_State.DDGIVolumetricAvailable) << ",\n";
                 File << "  \"giBackfacePolicy\": " << Bool(_State.GIBackfacePolicy) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";

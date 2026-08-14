@@ -1332,8 +1332,8 @@ namespace Smile {
         {
             const FEffectiveIndirectPolicy Pol = EffectiveIndirectPolicy();
             S.IndirectFallbackActive = Pol.FallbackActive;
-            S.DDGISurfaceUsed        = Pol.DDGISurface;
-            S.DDGIVolumetricUsed     = Pol.DDGIVolumetric;
+            S.DDGISurfaceAvailable    = Pol.DDGISurface;
+            S.DDGIVolumetricAvailable = Pol.DDGIVolumetric;
         }
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
