@@ -3232,10 +3232,10 @@ Rectangle {
                         x: 20
                         y: rcStatsText.y + rcStatsText.height + 6
                         width: parent.width - 40
-                        // O regime EFETIVO: o sub-toggle sozinho não faz o shader contar, e a
-                        // linha ficaria visível mostrando números de outro frame.
-                        visible: renderModel.radianceCacheStats &&
-                                 renderModel.radianceCacheStatsSource
+                        // Quem decide é o TEXTO, e não uma cópia da regra aqui: o C++ devolve
+                        // vazio quando o regime não está medindo de fato (cache participando +
+                        // base + sub-regime). Duplicar a condição no QML foi como ela drifou.
+                        visible: text.length > 0
                         height: visible ? implicitHeight : 0
                         wrapMode: Text.WordWrap
                         text: renderModel.radianceCacheSourceBreakdown
@@ -3252,9 +3252,8 @@ Rectangle {
                         x: 20
                         y: rcSourceText.y + rcSourceText.height + (rcSourceText.visible ? 6 : 0)
                         width: parent.width - 40
-                        // Idem à linha de fonte acima — o detalhe também exige a base.
-                        visible: renderModel.radianceCacheStats &&
-                                 renderModel.radianceCacheStatsDetail
+                        // Idem à linha de fonte acima: o texto vazio é que esconde a linha.
+                        visible: text.length > 0
                         height: visible ? implicitHeight : 0
                         wrapMode: Text.WordWrap
                         text: renderModel.radianceCacheMissBreakdown

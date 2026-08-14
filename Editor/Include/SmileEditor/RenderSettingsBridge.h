@@ -333,6 +333,10 @@ namespace SmileEditor {
         bool              IsRadianceCacheStatsDetail() const;
         bool              IsRadianceCacheStatsSource() const;
         QString           GetRadianceCacheSourceBreakdown() const;
+        // Regime de medicao EFETIVO (cache participando + instrumentacao-base). Regra unica das
+        // linhas de telemetria; ver o corpo. Nao e Q_PROPERTY de proposito: quem decide se a linha
+        // aparece e o TEXTO estar vazio, e nao o QML repetir a regra.
+        bool              CacheTelemetryLive() const;
         bool              IsRadianceCacheDedicatedUpdate() const;
         double            GetRadianceCacheUpdateFraction() const; // 0..1
         bool              IsRadianceCachePrevTerminal() const;

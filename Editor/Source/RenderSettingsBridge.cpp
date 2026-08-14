@@ -966,12 +966,9 @@ namespace SmileEditor {
     QString RenderSettingsBridge::GetRadianceCacheSourceBreakdown() const {
         if (!Renderer) return QString();
         const auto& Set = Renderer->Settings();
-        // O regime EFETIVO, e não o toggle da fonte sozinho: o shader só conta com os dois ligados
-        // (ver FRadianceCache::ShaderParams). Com a instrumentação-base desligada o que sobrou no
-        // readback descreve outro frame — e o painel o mostraria como se fosse de agora.
-        const bool Measuring = Set.GetRadianceCacheStatsEnabled() &&
-                               Set.GetRadianceCacheStatsSourceEnabled();
-        if (!Measuring) return QStringLiteral("fonte: — (telemetria off)");
+        // Mesma regra da linha de miss, pela mesma função: cache participando + base ligada + o
+        // sub-regime desta linha. O shader só conta com todos eles, e a UI não pode afirmar mais.
+        if (!CacheTelemetryLive() || !Set.GetRadianceCacheStatsSourceEnabled()) return QString();
         const auto& S = Set.RadianceCacheStats();
         // ZERO MEDIDO não é "não medido". Um frame sem nenhum hit secundário — câmera para o céu,
         // ou todos os raios escapando — é medição válida, e imprimir "off" ali esconderia
@@ -1067,11 +1064,22 @@ namespace SmileEditor {
             .arg(QString::number(GetRadianceCacheConvergence(), 'f', 1))
             .arg(S.Evicted);
     }
+    // O regime de medição EFETIVO por trás de uma linha de telemetria: o cache participando do
+    // frame E a instrumentação-base ligada. Uma regra só, aqui, porque ela já drifou duas vezes —
+    // o QML tinha a dele e o shader a sua. Com o cache desligado o resolve não roda, nada é
+    // reescrito, e o que sobrou no readback descreve um frame de idade desconhecida.
+    bool RenderSettingsBridge::CacheTelemetryLive() const {
+        if (!Renderer) return false;
+        const auto& S = Renderer->Settings();
+        return S.GetRadianceCacheEnabled() && S.GetRadianceCacheStatsEnabled();
+    }
+
     QString RenderSettingsBridge::GetRadianceCacheMissBreakdown() const {
-        if (!Renderer) return QString();
-        if (!Renderer->Settings().GetRadianceCacheStatsDetailEnabled()) {
-            return QStringLiteral("detalhe desligado");
-        }
+        // String VAZIA quando não há o que mostrar, e não um aviso: a linha some, e é o próprio
+        // QML que decide isso perguntando `text.length`. Um "detalhe desligado" na tela ocupava
+        // altura para repetir o que o toggle logo acima já diz.
+        if (!CacheTelemetryLive()) return QString();
+        if (!Renderer->Settings().GetRadianceCacheStatsDetailEnabled()) return QString();
         const auto& S = Renderer->Settings().RadianceCacheStats();
         // Percentual sobre as CONSULTAS, e nao sobre os misses: "12% dos raios pararam por cone
         // estreito" e uma frase acionavel; "38% dos erros" depende de quantos erros houve e muda

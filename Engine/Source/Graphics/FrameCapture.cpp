@@ -87,7 +87,15 @@ namespace Smile {
             // O S da instrumentacao entra no NOME, e nao so no manifesto: os dois regimes produzem
             // ocupacao e imagem diferentes (atomicos mudam o escalonamento das waves), entao duas
             // capturas indistinguiveis na pasta seriam um convite a compara-las.
-            if (S.CacheUpdate || S.CacheQuery) {
+            // O bloco sai quando o cache participou de QUALQUER forma — escrevendo, sendo
+            // consultado, ou sendo MEDIDO. Medir tambem e participar: `Sf` em reflexoes-only, com
+            // o produtor legado escolhido e a consulta fechada, nao liga nem update nem query, e o
+            // nome do arquivo sairia identico ao de uma captura sem instrumentacao nenhuma —
+            // exatamente as "duas capturas indistinguiveis na pasta" contra as quais este bloco
+            // foi escrito. O manifesto ja registrava a diferenca; o nome, nao.
+            const bool CacheInFrame = S.CacheUpdate || S.CacheQuery ||
+                                      S.CacheStats  || S.CacheStatsDetail || S.CacheStatsSource;
+            if (CacheInFrame) {
                 std::string Rc = "rc";
                 if (S.CacheUpdate) Rc += 'U';
                 if (S.CacheQuery)  Rc += 'Q';
