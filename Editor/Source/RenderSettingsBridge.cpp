@@ -923,9 +923,20 @@ namespace SmileEditor {
 
     void RenderSettingsBridge::ToggleReSTIRGI() {
         if (!Renderer) return;
-        auto RendererAccess = Renderer.Lock();
-        RendererAccess->Settings().SetUseReSTIRGI(!RendererAccess->Settings().GetUseReSTIRGI());
+        bool SourceDebugDropped = false;
+        {
+            auto RendererAccess = Renderer.Lock();
+            auto& Settings = RendererAccess->Settings();
+            const bool MapBefore = Settings.GetGISourceDebug();
+            Settings.SetUseReSTIRGI(!Settings.GetUseReSTIRGI());
+            // Desligar este passe DERRUBA o mapa da fonte (ele é escrito no RecordTrace daqui), e
+            // isso tira um alvo do registro — a janela precisa saber, exatamente como quando o
+            // operador mexe no toggle do mapa.
+            SourceDebugDropped = MapBefore && !Settings.GetGISourceDebug();
+        } // lock solto antes dos sinais (o QML relê no ato e pega o mesmo lock)
+
         emit GISettingsChanged();
+        if (SourceDebugDropped && Viewport) Viewport->NotifyDebugTargetsChanged();
     }
 
     void RenderSettingsBridge::ToggleReGIR() {
@@ -1223,9 +1234,24 @@ namespace SmileEditor {
     }
     void RenderSettingsBridge::ToggleGISourceDebug() {
         if (!Renderer) return;
-        auto A = Renderer.Lock();
-        A->Settings().SetGISourceDebug(!A->Settings().GetGISourceDebug());
+        bool Changed = false;
+        {
+            auto A = Renderer.Lock();
+            const bool Before = A->Settings().GetGISourceDebug();
+            A->Settings().SetGISourceDebug(!Before);
+            // O setter pode RECUSAR (sem produtor vivo), então o que importa é o efeito e não o
+            // pedido — notificar uma troca que não houve remontaria o modelo à toa.
+            Changed = Before != A->Settings().GetGISourceDebug();
+        } // lock SOLTO antes dos sinais: ver abaixo
+
         emit GISettingsChanged();
+        // A lista de alvos da janela de debug é CACHEADA no modelo do viewport e só é relida
+        // quando estes sinais saem. Sem isto o alvo entrava e saía do registro do engine — o que
+        // já funcionava — e a janela continuava exibindo o modelo antigo e o último preview.
+        //
+        // Fora do escopo do lock de propósito: o QML relê as propriedades no ato e tenta pegar o
+        // mesmo lock do renderer. Emitir com ele na mão é convite a deadlock.
+        if (Changed && Viewport) Viewport->NotifyDebugTargetsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheDedicatedUpdate() {
         if (!Renderer) return;
