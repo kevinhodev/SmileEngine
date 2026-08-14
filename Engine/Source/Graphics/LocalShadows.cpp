@@ -301,6 +301,8 @@ namespace Smile {
             Vec4 Planes[6];
             ExtractFrustumPlanes(_ViewProj, Planes);
             ID3D12PipelineState* Cur = nullptr; // local: o ExtraDraw da view anterior trocou o PSO
+            FDrawSubmitCache Submit;
+            _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             for (u32 k : CullScratch) {
                 const FShadowDrawItem& It = _Items[k];
                 if (AABBOutsidePlanes(Planes, It.AABBMin, It.AABBMax)) continue;
@@ -308,8 +310,8 @@ namespace Smile {
                 ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
                 _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
-                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);
-                It.Mesh->Draw(_CommandList);
+                if (AlphaTested) Submit.BindMaterial(_CommandList, _SRVHeap, It.Mat);
+                Submit.DrawMesh(_CommandList, It.Mesh);
             }
         };
 

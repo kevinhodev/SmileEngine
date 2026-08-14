@@ -27,6 +27,11 @@ namespace Smile {
 
         void Draw(ID3D12GraphicsCommandList* CommandList) const;
 
+        // VB/IB sem Draw nem topology. O cache de submissao usa isto para pular
+        // IASet* quando o mesh nao mudou; o topology fica a cargo do passe (uma vez).
+        void BindIA(ID3D12GraphicsCommandList* CommandList) const;
+        void DrawIndexed(ID3D12GraphicsCommandList* CommandList) const;
+
         bool IsValid()       const { return IndexCount > 0; }
         u32  GetIndexCount() const { return IndexCount; }
 
@@ -51,5 +56,26 @@ namespace Smile {
         u32                                    IndexCount     = 0;
         u32                                    VbFirstElement = 0;
         u32                                    IbFirstElement = 0;
+    };
+
+    class FMaterial;
+    class FTextureSRVHeap;
+
+    // Cache de submissao por passe: Bind de material e IA de mesh sao idempotentes
+    // enquanto o ponteiro nao muda. O CSM ja pulava o Bind; o G-buffer e o prepass
+    // reemitiam os dois a cada item, mesmo com a root signature compartilhada.
+    // Resetar ao trocar de root signature / DSV / PSO incompativel.
+    struct FDrawSubmitCache {
+        const FGpuMesh*   LastMesh = nullptr;
+        const FMaterial*  LastMat  = nullptr;
+
+        void Reset() {
+            LastMesh = nullptr;
+            LastMat  = nullptr;
+        }
+
+        void BindMaterial(ID3D12GraphicsCommandList* CommandList,
+                          FTextureSRVHeap& SRVHeap, const FMaterial* Mat);
+        void DrawMesh(ID3D12GraphicsCommandList* CommandList, const FGpuMesh* Mesh);
     };
 }

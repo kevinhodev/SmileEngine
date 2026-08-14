@@ -629,8 +629,9 @@ namespace Smile {
         // e re-liga a root signature, o que invalida as descriptor tables — o primeiro
         // material precisa religar mesmo que seja o mesmo do fim da fase anterior.
         ID3D12PipelineState* Cur     = nullptr;
-        const FMaterial*     LastMat = nullptr;
+        FDrawSubmitCache     Submit;
         u32 Drawn = 0;
+        _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = _Begin; k < _End; ++k) {
             const FShadowDrawItem& It = _Items[k];
             if (!CasterVisible(It, _Cascade, MinExtent, _St)) continue;
@@ -639,13 +640,9 @@ namespace Smile {
             ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
             if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
             _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
-            // A lista chega ordenada por (mobilidade, alpha-test, material) do Renderer, entao
-            // os itens que compartilham material sao adjacentes e o Bind repetido some.
-            if (AlphaTested && It.Mat != LastMat) {
-                It.Mat->Bind(_CommandList, _SRVHeap);
-                LastMat = It.Mat;
-            }
-            It.Mesh->Draw(_CommandList);
+            // A lista chega ordenada por (mobilidade, alpha-test, material, mesh).
+            if (AlphaTested) Submit.BindMaterial(_CommandList, _SRVHeap, It.Mat);
+            Submit.DrawMesh(_CommandList, It.Mesh);
         }
         return Drawn;
     }

@@ -23,4 +23,8 @@ float2 OceanComplexMul(float2 z, float2 w) {
     return float2(z.x * w.x - z.y * w.y, z.y * w.x + z.x * w.y);
 }
 
+float4 OceanComplexMul2(float4 z, float2 w) {
+    return float4(OceanComplexMul(z.xy, w), OceanComplexMul(z.zw, w));
+}
+
 #endif 

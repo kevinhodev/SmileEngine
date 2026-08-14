@@ -624,6 +624,8 @@ namespace Smile {
         const f32 MinZ = Snapped.Z - kOccHalfExtent, MaxZ = Snapped.Z + kOccHalfExtent;
 
         ID3D12PipelineState* Cur = nullptr;
+        FDrawSubmitCache Submit;
+        _Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = 0; k < _Count; ++k) {
             const FOccluderItem& It = _Items[k];
             if (!It.Mesh) continue;
@@ -633,8 +635,8 @@ namespace Smile {
             ID3D12PipelineState* Want = AlphaTested ? OccMaskedPSO.Get() : OccOpaquePSO.Get();
             if (Want != Cur) { _Cmd->SetPipelineState(Want); Cur = Want; }
             _Cmd->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
-            if (AlphaTested) It.Mat->Bind(_Cmd, _SRVHeap);
-            It.Mesh->Draw(_Cmd);
+            if (AlphaTested) Submit.BindMaterial(_Cmd, _SRVHeap, It.Mat);
+            Submit.DrawMesh(_Cmd, It.Mesh);
         }
 
         B.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
