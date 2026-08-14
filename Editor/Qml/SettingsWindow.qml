@@ -2913,10 +2913,26 @@ Rectangle {
                     title: "World radiance cache — terminador dos raios secundários"
                     height: rcMissText.y + rcMissText.height + contentPadding + 8
 
+                    // A POLÍTICA vem antes de tudo e NÃO depende do cache: `DDGI primary` e `Off`
+                    // são estados válidos, e é justamente neles que o card do SHaRC importa menos.
+                    // Aninhá-la na linha de telemetria do cache (onde ela nasceu) a escondia
+                    // exatamente quando ela era a informação mais útil da página.
+                    Text {
+                        id: rcPolicyText
+                        x: 20
+                        y: radianceCacheCard.headerHeight + radianceCacheCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: renderModel.indirectPolicySummary
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 12
+                    }
+
                     Text {
                         id: rcHelper
                         x: 20
-                        y: radianceCacheCard.headerHeight + radianceCacheCard.contentPadding
+                        y: rcPolicyText.y + rcPolicyText.height + 10
                         width: parent.width - 40
                         wrapMode: Text.WordWrap
                         text: "Guarda a radiância de saída que o ShadeSurfaceHit já calculou, num " +
@@ -3241,10 +3257,7 @@ Rectangle {
                         // A memória FICA, e a diferença é o critério: ela é do recurso, vale
                         // enquanto o cache existir e não depende de medição nenhuma. Uma casa
                         // decimal porque em 2^17 o cache inteiro cabe em 4,5 MB.
-                        // A política do indireto abre a linha: ela é o contexto de tudo abaixo —
-                        // ocupação e acerto do cache só significam algo sabendo quem é o primário.
-                        text: renderModel.indirectPolicySummary + "\n" +
-                              renderModel.radianceCacheSummary + "  ·  " +
+                        text: renderModel.radianceCacheSummary + "  ·  " +
                               renderModel.radianceCacheMemoryMB.toFixed(1).replace(".", ",") +
                               " MB  ·  " + renderModel.radianceCacheWarmup
                         color: root.textSecondary

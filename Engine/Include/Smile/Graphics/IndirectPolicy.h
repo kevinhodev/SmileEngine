@@ -106,6 +106,25 @@ namespace Smile {
     //        para o primeiro caso.
     // ============================================================================================
 
+    // ============================================================================================
+    // 3. CADA CALL SITE TERMINA NUMA PERGUNTA NOMEADA. Sao quatro, e nenhuma e sinonimo de outra:
+    //
+    //      Renderer::DDGIVolumeLive()            -> executar/manter o volume   (orcamento)
+    //      Renderer::EffectiveFallback() == DDGI -> fallback de superficie      (politica)
+    //      Renderer::DDGIVolumetricAvailable()   -> deferred e nevoa lendo o atlas (consumo)
+    //      Renderer::EffectivePrimary()          -> escolha da saida principal  (estimador)
+    //
+    //    Duas delas devolvem o MESMO booleano hoje (`VolumeLive` e `VolumetricAvailable`), e isso
+    //    nao e duplicacao a eliminar: e o contrato. O dia em que a politica de superficie disser
+    //    Black com o volume vivo, a nevoa continua lendo — e nenhum call site volumetrico precisa
+    //    mudar, porque ele ja pergunta a coisa certa. Colapsar as duas por serem iguais AGORA
+    //    reintroduz exatamente a confusao que custou esta fase.
+    //
+    //    Criterio de revisao para a classificacao dos sete pontos: se um `UseGI` sobreviver, ou se
+    //    alguem escrever `DDGIVolumeLive()` num ponto volumetrico, a classificacao falhou mesmo
+    //    com a imagem identica.
+    // ============================================================================================
+
     inline const char* IndirectPrimaryName(EIndirectPrimary P) {
         switch (P) {
             case EIndirectPrimary::ReSTIR_SHaRC: return "restir_sharc";

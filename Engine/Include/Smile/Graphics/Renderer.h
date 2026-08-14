@@ -1033,6 +1033,13 @@ namespace Smile {
         // essa divergencia e informacao: ela diz "o enum ainda nao esta ligado", e nao "o pedido
         // foi degradado por indisponibilidade". Ver a nota no CollectCaptureState.
         EIndirectPrimary  EffectivePrimary() const;
+        // A QUARTA pergunta: o deferred e a nevoa podem ler o atlas? Hoje ela vale o mesmo que
+        // `DDGIVolumeLive()`, e existir separada NAO e redundancia — e o contrato. O consumo
+        // volumetrico nao depende da politica de superficie: com `fallback = Black` ou
+        // `primario = ReSTIR_SHaRC`, a nevoa continua lendo o atlas, porque irradiancia
+        // volumetrica nao tem substituto no cache (esparso e cego a direcao). Amarrar os dois pelo
+        // mesmo booleano foi a origem da confusao que a Fase 6 veio desfazer.
+        bool              DDGIVolumetricAvailable() const;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;

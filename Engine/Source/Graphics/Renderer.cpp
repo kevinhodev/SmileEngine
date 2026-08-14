@@ -1685,6 +1685,13 @@ namespace Smile {
     // miss), e confundi-las foi o defeito que motivou a fase.
     bool Renderer::DDGIVolumeLive() const { return UseGI && DDGI.IsReady(); }
 
+    // Mesmo valor que `DDGIVolumeLive()` HOJE, e de proposito: o que muda entre as duas nao e o
+    // resultado, e a PERGUNTA. Esta responde "a nevoa e o deferred podem ler o atlas?", e a
+    // resposta seguira sendo o volume existir mesmo quando a politica de superficie disser Black.
+    // Se um dia divergirem, e aqui que a divergencia entra — e nenhum call site volumetrico vai
+    // precisar mudar.
+    bool Renderer::DDGIVolumetricAvailable() const { return DDGIVolumeLive(); }
+
     EIndirectPrimary Renderer::EffectivePrimary() const {
         // Lido do que MANDA hoje, e nao do enum: o seletor ainda nao roteia nada, e inventar aqui
         // uma leitura do pedido faria o manifesto afirmar um pipeline que nao existe.
