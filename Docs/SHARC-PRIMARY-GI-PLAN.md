@@ -3,9 +3,12 @@
 > **Onde estamos:** Fases 0-5 **FECHADAS**. A Fase 5 fechou com o SHaRC promovido a fonte
 > primária por default e com o número que faltava: **o DDGI responde 30,14% dos hits secundários**,
 > e não os 8,4% que a primeira versão da telemetria reportava — a diferença é o achado, não o
-> ruído. Ver `➜ FASE 5` no fim deste bloco.
+> ruído. Ver `➜ FASE 5`.
 >
-> Histórico: Fases 0-4 fechadas antes. A Fase 4 fechou com os três gates de runtime passados
+> **Fase 6 EM CURSO**, 16 commits e **nenhum mudou imagem** — toda a estrutura e a observabilidade
+> estão em pé, e falta o seletor funcional. O contrato inteiro dela mora em
+> `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse header antes de escrever qualquer
+> linha da fase**. O bloco `➜ FASE 6` abaixo tem o ponto de retomada em cinco passos. A Fase 4 fechou com os três gates de runtime passados
 > (13 commits): piso de confiança aprovado por A/B, capacidade 2¹⁷ confirmada em GPU (19,21% de
 > ocupação, `insertFull` = 0), luz/ToD respondendo, hot reload cancelando captura. **Fase 5 EM
 > CURSO** — e ela começa com uma auditoria que muda o tamanho dela: a política de sombreamento que
@@ -478,6 +481,51 @@ desligados — irrelevante para *fontes do GI secundário*, que é o que ela med
 **O visualizador tem um limite no nome, de propósito:** ele mostra a fonte do **candidato traçado**
 neste frame, não a da amostra final — o reservoir ainda pode trocá-la pela temporal ou pela de um
 vizinho. Um mapa da amostra final exigiria carregar a classe através dos dois reúsos.
+
+---
+
+### ➜ FASE 6 — estrutura pronta; falta o seletor
+
+**16 commits, nenhum mudando imagem.** O contrato inteiro está em `IndirectPolicy.h` — enums,
+cinco perguntas, invariante de resolução, tabela de estados alcançáveis. Este bloco é só o mapa;
+**o header é a fonte**.
+
+O que entrou: os dois enums com o rollback para DDGI primário preservado; as **cinco perguntas**
+que substituíram `UseGI` nos **dez** call sites (execução, fallback dos raios, superfície,
+volumétrico, roteamento); `FEffectiveIndirectPolicy` com `FallbackActive` e comparação por papel;
+e observabilidade completa — manifesto com pedido × efetivo, etiqueta `PsFd`, painel com a seta só
+na divergência.
+
+**Três achados que a fase produziu antes de mudar uma linha de imagem:**
+
+- `UseGI` servia **três perguntas** em oito pontos, e a maioria (5 de 9) era *consumo*, não
+  execução nem política. Era essa assimetria que o fazia parecer interruptor global.
+- **Superfície não é volumétrico.** A primeira classificação pôs deferred, translúcidos e debug em
+  "volumétrico" porque todos leem o atlas. Ler o atlas não é a categoria — o **uso** é.
+- **O DDGI tem um terceiro papel**: auxiliar de superfície (folhagem, subsurface, translúcidos do
+  `ForwardBlend`). Por isso `DDGISurfaceAvailable()` **não pode** virar `EffectivePrimary() == DDGI`
+  — selecionar SHaRC apagaria os três em silêncio.
+
+#### Ponto de retomada — o seletor funcional, em cinco passos
+
+Unidade **atômica**: derivação, `FFrameModes`, roteamento e detector no mesmo commit. Separá-los
+cria a divergência que a invariante (1) do header proíbe.
+
+1. resolver `FEffectiveIndirectPolicy` **uma vez** no topo do frame;
+2. comparar com o snapshot anterior e invalidar **por domínio** (superfície ≠ névoa);
+3. derivar `FFrameModes` desse valor — `Modes.ReSTIRGIActive` sai dele;
+4. trace, NRD, deferred, telemetria e captura consomem o **mesmo** snapshot;
+5. atualizar o snapshot anterior **só depois** de a política do frame estar fixada.
+
+Degradação decidida: `ReSTIR_SHaRC` → `ReSTIR_SHaRC` se pronto → `DDGI` se o volume vive → `Off`.
+A alavanca de roteamento é o `t16` (`ReSTIRGITex`, gateado por `ReflectionParams.w`), mas fechar só
+a leitura não basta: trace, resampling, NRD indireto e o registro na telemetria caem junto, senão o
+frame paga por trabalho que ninguém lê.
+
+Depois: Bugbot e a matriz de runtime (seis gates, definidos com o revisor). **Só então** reduzir o
+orçamento do DDGI — menos probes por frame, relight menos frequente, cascatas distantes mais
+grosseiras, e eventualmente separar visibilidade de relight. Async e as otimizações da idTech8
+ficam na Fase 7, por decisão explícita: não misturar semântica de fallback com scheduling.
 
 Teleport/troca de cena não entra na lista: **satisfeito por construção**, e vale registrar por quê
 — a chave é de MUNDO, então teleportar não mostra radiância do lugar anterior, mostra ausência de
