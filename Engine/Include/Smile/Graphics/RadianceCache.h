@@ -808,8 +808,20 @@ namespace Smile {
         // 0,25 m / 12 m saturava 95,2% da tabela e fazia qualquer medida de custo perder valor.
         f32  BaseCellSize = 0.50f;
         f32  LodDistance  = 6.0f;
-        bool Enabled      = false; // opt-in ate fechar o A/B visual do segundo bounce
-        bool QueryEnabled = false;
+        // LIGADOS por default desde a Fase 5 — o cache e a fonte PRIMARIA do indireto nos hits
+        // elegiveis, e o DDGI cobre o que sobra (miss, celula fria, geometria inelegivel). Ate
+        // aqui os dois nasciam desligados e toda a serie foi medida com alguem os ligando a mao;
+        // era o "opt-in ate fechar o A/B visual do segundo bounce", e esse A/B fechou.
+        //
+        // O que a promocao custa, para nao ser descoberto depois: o passe de update passa a rodar
+        // em toda cena (3,75 ms no V1 medido na 3060 Ti) e o cache ocupa 4,5 MiB. O que ela paga e
+        // 68% dos raios secundarios terminando numa consulta de tabela em vez de material,
+        // sombra e gather — que e a economia que a Fase 3 mediu e a Fase 4 confirmou.
+        //
+        // Os dois continuam knobs, e continuam SEPARADOS: o A/B de "escrita sem leitura" segue
+        // valendo, e desligar os dois reproduz o pipeline pre-Fase-5 sem recompilar nada.
+        bool Enabled      = true;
+        bool QueryEnabled = true;
         bool ResetPending = false;
         // Aquecimento global. Nasce em Resetting porque e onde o SetupForScene poe a tabela: os
         // buffers vem com lixo do CreateCommittedResource e o primeiro resolve TEM de ser reset.

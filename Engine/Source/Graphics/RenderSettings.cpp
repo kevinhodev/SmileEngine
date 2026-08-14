@@ -163,21 +163,6 @@ namespace Smile {
     }
     bool FRenderSettings::GetRadianceCacheEnabled() const { return R.RadianceCache.GetEnabled(); }
 
-    void FRenderSettings::SetRadianceCacheQuery(bool _V) {
-        if (_V == R.RadianceCache.GetQueryEnabled()) return;
-        R.RadianceCache.SetQueryEnabled(_V);
-        // Trocar o terminador invalida quem ACUMULOU a resposta, mas nao a tabela que acabamos de
-        // aquecer em write-only. Passar RayVisibility inteiro apagaria o cache exatamente quando
-        // o usuario liga a leitura para o A/B.
-        const auto ConsumersOnly = static_cast<EHistoryTarget>(
-            static_cast<u32>(Dom::RayVisibility) &
-            ~static_cast<u32>(EHistoryTarget::RadianceCache));
-        Invalidate(ConsumersOnly);
-    }
-    bool FRenderSettings::GetRadianceCacheQuery() const {
-        return R.RadianceCache.GetQueryEnabled();
-    }
-
     // Um so lugar monta a mascara: "os consumidores esquecem, a tabela fica". Ela e usada por tres
     // eventos que sao o MESMO evento visto de angulos diferentes — o operador abrindo a leitura, o
     // operador mexendo no aquecimento automatico, e o aquecimento abrindo a leitura sozinho.
@@ -185,6 +170,21 @@ namespace Smile {
     static EHistoryTarget RadianceCacheConsumersOnly() {
         return static_cast<EHistoryTarget>(static_cast<u32>(Dom::RayVisibility) &
                                            ~static_cast<u32>(EHistoryTarget::RadianceCache));
+    }
+
+    void FRenderSettings::SetRadianceCacheQuery(bool _V) {
+        if (_V == R.RadianceCache.GetQueryEnabled()) return;
+        R.RadianceCache.SetQueryEnabled(_V);
+        // Trocar o terminador invalida quem ACUMULOU a resposta, mas nao a tabela que acabamos de
+        // aquecer em write-only. Passar RayVisibility inteiro apagaria o cache exatamente quando
+        // o usuario liga a leitura para o A/B.
+        //
+        // Pela funcao, e nao pela copia que estava aqui: era a terceira do mesmo `&~` no arquivo,
+        // e as tres tinham de mudar juntas.
+        Invalidate(RadianceCacheConsumersOnly());
+    }
+    bool FRenderSettings::GetRadianceCacheQuery() const {
+        return R.RadianceCache.GetQueryEnabled();
     }
 
     void FRenderSettings::SetRadianceCacheAutoWarmup(bool _V) {
