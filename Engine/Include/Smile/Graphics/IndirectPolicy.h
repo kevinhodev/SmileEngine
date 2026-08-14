@@ -201,6 +201,24 @@ namespace Smile {
     // ============================================================================================
     // ============================================================================================
 
+    // ORDEM DE RESOLUCAO — invariante, e o que impede um ciclo:
+    //
+    //   1. `EffectivePrimary()` deriva SO de pedido + capacidades (`UseReSTIRGI`, readiness do
+    //      passe, volume vivo). NUNCA de `FFrameModes` — o modo e consequencia dela, nao insumo.
+    //   2. O snapshot efetivo e resolvido UMA vez, no topo do frame.
+    //   3. `FFrameModes`, cbuffers, invalidacao e manifesto consomem esse MESMO snapshot.
+    //
+    // Sem (1) a funcao perguntaria ao modo que ela define; sem (2)+(3) a captura poderia observar
+    // uma politica diferente da que renderizou o frame.
+    //
+    // Corolario para o seletor: `primario = DDGI` nao pode se limitar a fechar a leitura no
+    // shader. `Modes.ReSTIRGIActive` sai do snapshot, e com ele caem trace, resampling, NRD
+    // indireto e o registro do passe na telemetria — senao o frame paga por trabalho que ninguem
+    // le, e o manifesto conta um participante que nao participou.
+    //
+    // Degradacao do primario: ReSTIR_SHaRC pedido -> ReSTIR_SHaRC se pronto; senao DDGI se o
+    // volume estiver vivo; senao Off.
+
     // O estado EFETIVO do frame, num valor comparavel. E o que o detector de borda observa: a
     // imagem muda com qualquer um destes campos, e nao so com o fallback.
     //
