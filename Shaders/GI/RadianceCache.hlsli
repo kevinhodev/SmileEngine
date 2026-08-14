@@ -546,6 +546,29 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
     return R;
 }
 
+// As classes de FONTE como valor, para quem quer o dado e nao o contador. A ordem espelha os
+// RC_STAT_SRC_* (o enderecamento e `RC_STAT_SRC_CACHE + kind`), e as duas ultimas nao tem contador
+// porque nao passam pelo ShadeSurfaceHit — quem as conhece e o trace.
+#define RC_SRC_CACHE      0u
+#define RC_SRC_DDGI       1u
+#define RC_SRC_ZERO       2u
+#define RC_SRC_INELIGIBLE 3u
+#define RC_SRC_SKY        4u // o raio escapou: nao houve hit para classificar
+#define RC_SRC_KILLED     5u // segmento morto pela politica de backface
+
+// Cor por classe, aqui e nao no consumidor: o visualizador de fonte e o contador tem de falar da
+// MESMA particao, e duas tabelas de cor divergiriam na primeira classe nova.
+float3 RC_SourceColor(uint kind) {
+    switch (kind) {
+        case RC_SRC_CACHE:      return float3(0.15f, 0.85f, 0.25f); // o cache respondeu
+        case RC_SRC_DDGI:       return float3(1.00f, 0.55f, 0.10f); // caiu no fallback
+        case RC_SRC_ZERO:       return float3(0.75f, 0.10f, 0.10f); // sem volume: zero explicito
+        case RC_SRC_INELIGIBLE: return float3(0.20f, 0.55f, 0.95f); // limite geometrico do cache
+        case RC_SRC_SKY:        return float3(0.55f, 0.60f, 0.70f);
+        default:                return float3(0.35f, 0.10f, 0.45f); // morto
+    }
+}
+
 // FONTE do terminal (quarto regime). Um atomico por WAVE, como todo o resto — nao por lane.
 //
 // Cada lane passa por EXATAMENTE UMA chamada destas, em pontos diferentes do ShadeSurfaceHit, e e

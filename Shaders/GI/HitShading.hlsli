@@ -96,9 +96,16 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity, FHitShadeParams P
 // call sites (DDGITrace, ReSTIRGITrace x2, ReflectionTrace, ReflectionTraceMirror,
 // WaterReflectionTrace) nao mudaram uma linha. O que mudou e que a POLITICA agora e legivel de uma
 // vez, e o path tracer da Fase 3 pode escrever a DELE reusando os mesmos blocos.
-float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObject,
-                       float3 rayOrigin, float3 rayDir, float hitDist,
-                       FHitShadeParams P, out float outSignedDist) {
+// A variante que devolve TAMBEM a fonte do terminal (RC_SRC_*). Ela existe porque a fonte so e
+// conhecida AQUI: reconstrui-la fora — consultando o cache na superficie primaria, por exemplo —
+// ignoraria comprimento de segmento, cone especular e o fato de o hit ser secundario, e pintaria
+// um resultado que nenhum raio produziu.
+//
+// O `ShadeSurfaceHit` de sempre continua existindo como encaminhador logo abaixo: os cinco call
+// sites que nao querem a fonte nao mudam uma linha, e o DXC elimina o `out` nao usado.
+float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObject,
+                         float3 rayOrigin, float3 rayDir, float hitDist,
+                         FHitShadeParams P, out float outSignedDist, out uint outSource) {
     InstanceGeo geo = Instances[instId];
 
     const FHitSurface S = PT_LoadHitSurface(geo, tri, bary, worldToObject,
@@ -127,6 +134,7 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
                                             Path.SegmentLength, Path.RayRoughness);
         if (RC_QueryHit(Q)) {
             RC_CountSource(P.Cache, RC_STAT_SRC_CACHE);
+            outSource = RC_SRC_CACHE;
             return Q.Radiance; // outSignedDist ja foi escrito acima
         }
         srcIneligible = RC_QueryIneligible(Q);
@@ -153,9 +161,19 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     // As tres classes restantes, aqui e nao espalhadas: cada lane cai em exatamente uma, e com a
     // do cache-hit la em cima a soma fecha com o TOTAL. E essa igualdade que valida o instrumento
     // antes de qualquer conclusao sobre a curva.
-    if (srcIneligible)     RC_CountSource(P.Cache, RC_STAT_SRC_INELIGIBLE);
-    else if (ddgiAnswered) RC_CountSource(P.Cache, RC_STAT_SRC_DDGI);
-    else                   RC_CountSource(P.Cache, RC_STAT_SRC_ZERO);
+    //
+    // O `outSource` sai da MESMA cadeia de decisao, e nao de uma segunda: contador e visualizador
+    // discordando sobre a mesma particao seria pior que nao ter o visualizador.
+    if (srcIneligible) {
+        RC_CountSource(P.Cache, RC_STAT_SRC_INELIGIBLE);
+        outSource = RC_SRC_INELIGIBLE;
+    } else if (ddgiAnswered) {
+        RC_CountSource(P.Cache, RC_STAT_SRC_DDGI);
+        outSource = RC_SRC_DDGI;
+    } else {
+        RC_CountSource(P.Cache, RC_STAT_SRC_ZERO);
+        outSource = RC_SRC_ZERO;
+    }
 
     const float3 emissive = PT_LoadHitEmissive(geo, S.UV, P.AlbedoLOD);
 
@@ -172,6 +190,16 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     RC_Update(P.Cache, S.Pos, S.CacheN, outRadiance);
 
     return outRadiance;
+}
+
+// Encaminhador: a assinatura historica, intacta para os cinco call sites que nao querem a fonte.
+// O `out` descartado nao custa nada — sem consumidor, o DXC elimina as escritas.
+float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObject,
+                       float3 rayOrigin, float3 rayDir, float hitDist,
+                       FHitShadeParams P, out float outSignedDist) {
+    uint ignoredSource;
+    return ShadeSurfaceHitEx(instId, tri, bary, worldToObject, rayOrigin, rayDir, hitDist, P,
+                             outSignedDist, ignoredSource);
 }
 
 #endif
