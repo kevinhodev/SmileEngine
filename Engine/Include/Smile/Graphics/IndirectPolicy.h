@@ -109,10 +109,12 @@ namespace Smile {
     // ============================================================================================
     // 3. CADA CALL SITE TERMINA NUMA PERGUNTA NOMEADA. Sao quatro, e nenhuma e sinonimo de outra:
     //
-    //      Renderer::DDGIVolumeLive()            -> executar/manter o volume   (orcamento)
-    //      Renderer::EffectiveFallback() == DDGI -> fallback de superficie      (politica)
-    //      Renderer::DDGIVolumetricAvailable()   -> deferred e nevoa lendo o atlas (consumo)
-    //      Renderer::EffectivePrimary()          -> escolha da saida principal  (estimador)
+    //      Renderer::DDGIVolumeLive()            -> executar/manter o volume    (orcamento)
+    //      Renderer::EffectiveFallback() == DDGI -> fallback dos RAIOS           (politica)
+    //      Renderer::DDGISurfaceAvailable()      -> deferred, folhagem/subsurface,
+    //                                               translucidos e debug de GI   (consumo)
+    //      Renderer::DDGIVolumetricAvailable()   -> SOMENTE nevoa/volume         (consumo)
+    //      Renderer::EffectivePrimary()          -> roteamento principal         (estimador)
     //
     //    Duas delas devolvem o MESMO booleano hoje (`VolumeLive` e `VolumetricAvailable`), e isso
     //    nao e duplicacao a eliminar: e o contrato. O dia em que a politica de superficie disser
@@ -132,12 +134,24 @@ namespace Smile {
     //        DDGIWillTrace         o passe vai tracar neste frame
     //        bloco do GIComputeFence  bifurcacao para a fila compute
     //
+    //      CONSUMO DE SUPERFICIE -> DDGISurfaceAvailable()
+    //        CB do frame           DDGIGridMin/Count/Params/DistParams — lidos pelo DEFERRED e
+    //                              pelo ForwardBlend
+    //        GITable do deferred   GI primaria, fill de folhagem, termo traseiro de subsurface
+    //        GITable dos TRANSLUCIDOS  ambiente difuso do ForwardBlend (nao e o debug view!)
+    //        DeferredDebugView     a visualizacao de GI, que e de superficie
+    //
     //      CONSUMO VOLUMETRICO -> DDGIVolumetricAvailable()
-    //        CB do frame           DDGIGridMin/Count/Params/DistParams — lidos pelo DEFERRED
     //        CB da nevoa           VF.* com grid e atlas
     //        VolumetricFog::Execute  SRV do atlas de irradiancia
-    //        GITable do deferred   (DOIS pontos: caminho normal e o de debug view)
-    //        DeferredDebugView     a visualizacao de GI le o mesmo atlas
+    //
+    //    ⚠️ A PRIMEIRA VERSAO DESTA CLASSIFICACAO ERROU AQUI, e o erro merece ficar: ela pos os
+    //    quatro pontos de superficie em "volumetrico" porque todos LEEM O ATLAS. Ler o atlas nao e
+    //    a categoria — o USO e. A nevoa integra meio participante; o deferred sombreia superficie,
+    //    e os dois respondem a politicas diferentes. Com `primario = Off`, um helper chamado
+    //    "volumetrico" continuaria iluminando superficie: imagem identica hoje, mentira no dia da
+    //    divergencia. Foi o segundo ponto do arquivo em que "todos devolvem o mesmo booleano"
+    //    quase apagou uma distincao real.
     //
     //      POLITICA DE FALLBACK -> EffectiveFallback() == DDGI
     //        GIHit.FallbackAvailable   ✅ ja convertido

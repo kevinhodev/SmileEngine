@@ -1692,6 +1692,13 @@ namespace Smile {
     // precisar mudar.
     bool Renderer::DDGIVolumetricAvailable() const { return DDGIVolumeLive(); }
 
+    // Superficie. Mesmo booleano das outras duas HOJE, e o terceiro nome nao e exagero: quando o
+    // primario deixar de ser DDGI, e AQUI que a condicao passa a olhar `EffectivePrimary()`,
+    // enquanto a volumetrica continua olhando so o volume. Sem o nome separado, essa mudanca
+    // precisaria descobrir, um a um, quais dos leitores do atlas eram de superficie — que e
+    // exatamente a arqueologia que a Fase 6 esta pagando agora.
+    bool Renderer::DDGISurfaceAvailable() const { return DDGIVolumeLive(); }
+
     EIndirectPrimary Renderer::EffectivePrimary() const {
         // Lido do que MANDA hoje, e nao do enum: o seletor ainda nao roteia nada, e inventar aqui
         // uma leitura do pedido faria o manifesto afirmar um pipeline que nao existe.

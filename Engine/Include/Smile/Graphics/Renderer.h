@@ -1040,6 +1040,16 @@ namespace Smile {
         // volumetrica nao tem substituto no cache (esparso e cego a direcao). Amarrar os dois pelo
         // mesmo booleano foi a origem da confusao que a Fase 6 veio desfazer.
         bool              DDGIVolumetricAvailable() const;
+        // A QUINTA: o atlas pode iluminar SUPERFICIE? Deferred (GI primaria, fill de folhagem,
+        // termo traseiro de subsurface, debug de GI) e translucidos do ForwardBlend.
+        //
+        // Ler o atlas NAO e ser consumidor volumetrico — foi assim que a primeira classificacao
+        // errou. A nevoa integra meio participante; o deferred sombreia superficie. As duas leem a
+        // mesma textura e respondem a POLITICAS DIFERENTES: com `primario = Off` a superficie para
+        // de receber DDGI e a nevoa continua integrando, porque irradiancia volumetrica nao tem
+        // substituto. Chamar o helper volumetrico no deferred manteria a imagem identica HOJE e
+        // mentiria no dia em que as duas divergissem — que e o dia em que estes nomes existem.
+        bool              DDGISurfaceAvailable() const;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;
