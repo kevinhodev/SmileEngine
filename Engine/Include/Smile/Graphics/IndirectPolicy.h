@@ -120,9 +120,31 @@ namespace Smile {
     //    mudar, porque ele ja pergunta a coisa certa. Colapsar as duas por serem iguais AGORA
     //    reintroduz exatamente a confusao que custou esta fase.
     //
-    //    Criterio de revisao para a classificacao dos sete pontos: se um `UseGI` sobreviver, ou se
-    //    alguem escrever `DDGIVolumeLive()` num ponto volumetrico, a classificacao falhou mesmo
-    //    com a imagem identica.
+    //    Criterio de revisao para a classificacao: se um `UseGI` sobreviver, ou se alguem escrever
+    //    `DDGIVolumeLive()` num ponto volumetrico, a classificacao falhou mesmo com a imagem
+    //    identica.
+    //
+    //    CLASSIFICACAO FEITA (Renderer.cpp; sao NOVE, e nao sete — a auditoria de abertura contou
+    //    por baixo). Uma ja convertida, oito pendentes de substituicao mecanica:
+    //
+    //      EXECUCAO DO VOLUME  -> DDGIVolumeLive()
+    //        HasReGIRConsumer      o trace do DDGI consome ReGIR? (orcamento do pool)
+    //        DDGIWillTrace         o passe vai tracar neste frame
+    //        bloco do GIComputeFence  bifurcacao para a fila compute
+    //
+    //      CONSUMO VOLUMETRICO -> DDGIVolumetricAvailable()
+    //        CB do frame           DDGIGridMin/Count/Params/DistParams — lidos pelo DEFERRED
+    //        CB da nevoa           VF.* com grid e atlas
+    //        VolumetricFog::Execute  SRV do atlas de irradiancia
+    //        GITable do deferred   (DOIS pontos: caminho normal e o de debug view)
+    //        DeferredDebugView     a visualizacao de GI le o mesmo atlas
+    //
+    //      POLITICA DE FALLBACK -> EffectiveFallback() == DDGI
+    //        GIHit.FallbackAvailable   ✅ ja convertido
+    //
+    //    Nenhum ponto pediu `EffectivePrimary()`: a escolha da saida principal ainda nao existe
+    //    como roteamento — e o commit seguinte, o primeiro que muda imagem. Que a pergunta nao
+    //    tenha call site AGORA e informacao, nao lacuna.
     // ============================================================================================
 
     inline const char* IndirectPrimaryName(EIndirectPrimary P) {
