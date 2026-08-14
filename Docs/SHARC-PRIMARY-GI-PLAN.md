@@ -1,6 +1,11 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
-> **Onde estamos:** Fases 0-4 **FECHADAS**. A Fase 4 fechou com os três gates de runtime passados
+> **Onde estamos:** Fases 0-5 **FECHADAS**. A Fase 5 fechou com o SHaRC promovido a fonte
+> primária por default e com o número que faltava: **o DDGI responde 30,14% dos hits secundários**,
+> e não os 8,4% que a primeira versão da telemetria reportava — a diferença é o achado, não o
+> ruído. Ver `➜ FASE 5` no fim deste bloco.
+>
+> Histórico: Fases 0-4 fechadas antes. A Fase 4 fechou com os três gates de runtime passados
 > (13 commits): piso de confiança aprovado por A/B, capacidade 2¹⁷ confirmada em GPU (19,21% de
 > ocupação, `insertFull` = 0), luz/ToD respondendo, hot reload cancelando captura. **Fase 5 EM
 > CURSO** — e ela começa com uma auditoria que muda o tamanho dela: a política de sombreamento que
@@ -417,6 +422,56 @@ O que sobra, portanto, **não é a política — é a promoção e o instrumento
 explícita: regime novo, ou argumento de que ela é neutra **para o conteúdo do cache** — que é
 plausível, já que com o produtor dedicado os traces de render não inserem, mas é argumento a
 verificar, não a assumir.
+
+#### FASE 5 FECHADA — o número que faltava
+
+**Decisão registrada:** quarto regime (`Sf`), com o `Sd` **congelado** como referência histórica.
+A telemetria de fonte é neutra para o *conteúdo* do cache (os traces de render não inserem desde a
+Fase 3), e mesmo assim não coube no `Sd`: ela não é neutra para custo do trace, contenção no UAV de
+estatísticas nem overlap com o updater. **"Não muda a imagem" é menos que "é comparável".**
+
+**A medida (`Sdf`, N = TSI = 128, ocupação 19,2%, confiáveis 80,8%, `insertFull` = 0, ToD 10:00):**
+
+| fonte | hits | fração |
+|---|---|---|
+| cache | 877.439 | **67,94%** |
+| DDGI | 389.327 | **30,14%** |
+| zero | 24.822 | 1,92% |
+| **total** | **1.291.588** | 100% |
+| *inelegíveis* | *280.807* | *21,74% — eixo separado, sobreposto a DDGI/zero* |
+
+As identidades fecharam **sem sobra**: `877.439 + 389.327 + 24.822 = 1.291.588` e
+`inelegíveis == missShort + missCone` (280.807 = 280.807 + 0).
+
+**O achado é a diferença entre 30,14% e 8,4%.** A primeira versão do instrumento dava prioridade a
+`inelegível` sobre `DDGI` — tratava "por que o cache não pôde responder" como se fosse alternativa
+a "quem forneceu a radiância" — e com isso o contador do DDGI media só os raios que *eram elegíveis
+e erraram*. O uso real estava subcontado em **3,6×**, e isso explica algo que já se via na tela sem
+explicação: desligar o DDGI produzia uma diferença visual grande demais para 8%.
+
+⚠️ **A lição vale além deste contador:** a partição errada não dá número errado por ruído — dá um
+número **preciso e falso**, que passa em toda conferência de soma. A soma fechava nas duas versões.
+
+**O que mais entrou:** promoção dos defaults (`Enabled`/`QueryEnabled` ligados — o cache é a fonte
+primária sem intervenção manual), o visualizador **"GI · fonte do candidato traçado"** e a auditoria
+de abertura, que achou a política de sombreamento **já pronta** desde a Fase 2.
+
+**Gates de saída, honestamente:**
+
+- ✅ não há leitura de DDGI no cache-update path — propriedade do código (sem chamador);
+- ✅ não há dupla contagem — o cache hit retorna antes do fallback, por construção;
+- ✅ ReSTIR spatial/temporal sem artefato novo — imagem conferida contra o regime medido à mão;
+- ⏳ **a CURVA** ("a taxa de uso do DDGI cai conforme o cache aquece") **não foi medida** — o que
+  existe é o ponto de regime permanente em N=128. O instrumento agora permite a curva; o protocolo
+  para varrer N com o regime `Sf` não foi escrito.
+
+**Duas ressalvas do registro:** a captura saiu como `59750f5-dirty` (`tmp/` e um doc não rastreado),
+então ela vale como medida e não como registro científico definitivo; e ReSTIR DI e ReGIR estavam
+desligados — irrelevante para *fontes do GI secundário*, que é o que ela mede.
+
+**O visualizador tem um limite no nome, de propósito:** ele mostra a fonte do **candidato traçado**
+neste frame, não a da amostra final — o reservoir ainda pode trocá-la pela temporal ou pela de um
+vizinho. Um mapa da amostra final exigiria carregar a classe através dos dois reúsos.
 
 Teleport/troca de cena não entra na lista: **satisfeito por construção**, e vale registrar por quê
 — a chave é de MUNDO, então teleportar não mostra radiância do lugar anterior, mostra ausência de
