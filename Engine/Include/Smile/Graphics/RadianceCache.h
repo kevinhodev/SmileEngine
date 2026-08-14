@@ -207,6 +207,17 @@ namespace Smile {
         bool Source = false;
     };
 
+    // Contadores + meta como UM valor. Existe para quem le de fora de outra thread: pedir os dois
+    // em chamadas separadas solta e retoma o lock do renderer no meio, e o par pode vir de frames
+    // diferentes — meta novo com contador velho, que e exatamente o que o meta veio impedir.
+    // Copia por valor: sao ~150 bytes num painel de diagnostico.
+    struct FRadianceCacheSnapshot {
+        FRadianceCacheStats     Stats;
+        FRadianceCacheStatsMeta Meta;
+        u32                     Capacity = 0; // junto, pela mesma razao: a ocupacao e Occupied/Cap
+        u64                     Bytes    = 0;
+    };
+
     // World Radiance Cache — radiancia de SAIDA em espaco de mundo, hash espacial
     // multirresolucao [Gautron2020] / [Sousa2025] / SHaRC.
     //
@@ -483,22 +494,27 @@ namespace Smile {
         // Validade e regime DO SNAPSHOT acima. Quem exibe tem de ler os dois juntos — o `Stats()`
         // sozinho nao diz de quando e nem de qual regime ele veio.
         const FRadianceCacheStatsMeta& StatsMetaCPU() const { return StatsMeta; }
+        // Os quatro juntos, por VALOR. E este que a UI usa; os acessores por referencia acima
+        // continuam para quem ja esta dentro do renderer (o capturador), onde nao ha lock a soltar.
+        FRadianceCacheSnapshot Snapshot() const {
+            return { StatsCPU, StatsMeta, CapacityV, MemoryBytes() };
+        }
 
         void SetDebugMode(ERadianceCacheDebugMode M) { DebugMode = M; }
         ERadianceCacheDebugMode GetDebugMode() const { return DebugMode; }
         // Instrumentacao de acerto/erro do query. Custa dois atomicos disputados por wave em todo
         // trace do frame, entao e knob proprio e nao vem junto do Enabled.
-        void SetStatsEnabled(bool V) { StatsEnabled = V; }
+        void SetStatsEnabled(bool V) { StatsEnabled = V; InvalidateStatsSnapshot(); }
         bool GetStatsEnabled() const { return StatsEnabled; }
         // Detalhe: misses por motivo (nos traces) e saude da insercao (no produtor). Exige a
         // instrumentacao ligada — sozinho ele nao teria denominador para o hit rate — e e um
         // regime PROPRIO, com etiqueta e manifesto: os atomicos extras mudam o escalonamento das
         // waves, e sem separa-lo a serie ja medida em `S` deixaria de ser comparavel.
-        void SetStatsDetailEnabled(bool V) { StatsDetail = V; }
+        void SetStatsDetailEnabled(bool V) { StatsDetail = V; InvalidateStatsSnapshot(); }
         bool GetStatsDetailEnabled() const { return StatsDetail; }
         // Fonte do terminal por hit de render. Exige a instrumentacao ligada pelo mesmo motivo do
         // detalhe — sem ela o regime seria um quinto, e regime que ninguem compara nao serve.
-        void SetStatsSourceEnabled(bool V) { StatsSource = V; }
+        void SetStatsSourceEnabled(bool V) { StatsSource = V; InvalidateStatsSnapshot(); }
         bool GetStatsSourceEnabled() const { return StatsSource; }
 
         // Os passes de trace escrevem por atomico bindless e leem o Resolved; ambos precisam do
@@ -538,7 +554,12 @@ namespace Smile {
         //
         // Isso descreve o A/B; o AutoWarmup abaixo e o mesmo gesto feito pela maquina, em
         // producao, sem depender de alguem contar os segundos.
-        void SetQueryEnabled(bool V)  { QueryEnabled = V; }
+        // Todo knob que muda O QUE OS CONTADORES SIGNIFICAM invalida o snapshot — este e os quatro
+        // de telemetria abaixo. Nao porque a medida antiga esteja errada (ela nao esta: o meta diz
+        // sob qual regime ela saiu), mas porque durante a latencia do anel o painel exibiria o
+        // regime ANTERIOR ao lado de um toggle que ja diz outra coisa. Dois frames de contradicao
+        // visivel valem menos que dois frames de linha ausente.
+        void SetQueryEnabled(bool V)  { QueryEnabled = V; InvalidateStatsSnapshot(); }
         bool GetQueryEnabled() const  { return QueryEnabled; }
 
         // === Aquecimento global (Fase 4) ==================================================
@@ -549,7 +570,7 @@ namespace Smile {
         // Nao invalida a tabela, e a diferenca com os outros knobs desta fase e o motivo: este nao
         // muda o que ENTRA na celula, so quem le. Mesmo criterio do QueryEnabled, que tambem nao
         // invalida.
-        void SetAutoWarmup(bool V) { AutoWarmup = V; }
+        void SetAutoWarmup(bool V) { AutoWarmup = V; InvalidateStatsSnapshot(); }
         bool GetAutoWarmup() const { return AutoWarmup; }
         // O `ResetPending` entra na LEITURA, e nao so no tick: quem arma o reset pode ser um knob
         // no meio do frame, depois de o tick ja ter passado. Nesse frame os consumidores ja

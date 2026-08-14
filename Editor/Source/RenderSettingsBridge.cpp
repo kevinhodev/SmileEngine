@@ -965,11 +965,13 @@ namespace SmileEditor {
     }
     QString RenderSettingsBridge::GetRadianceCacheSourceBreakdown() const {
         if (!Renderer) return QString();
-        const auto& Set = Renderer->Settings();
-        // Mesma regra da linha de miss, pela mesma função e pela mesma fonte: o regime do
-        // SNAPSHOT, e não o toggle pedido.
-        if (!CacheTelemetryLive() || !Set.RadianceCacheStatsMeta().Source) return QString();
-        const auto& S = Set.RadianceCacheStats();
+        // Só `Source`, e NÃO a instrumentação-base junto: `Sf` de reflexões-only é regime
+        // suportado e nele `Meta.Stats` é falso (o bit de consulta exige query aberta). Exigir a
+        // base aqui esconderia exatamente o caso que o contador de fonte veio medir — os
+        // contadores de fonte têm denominador PRÓPRIO e não dependem dos de consulta.
+        Smile::FRadianceCacheSnapshot Snap;
+        if (!CacheSnapshot(Snap) || !Snap.Meta.Source) return QString();
+        const auto& S = Snap.Stats;
         // ZERO MEDIDO não é "não medido". Um frame sem nenhum hit secundário — câmera para o céu,
         // ou todos os raios escapando — é medição válida, e imprimir "off" ali esconderia
         // justamente o caso que faria alguém desconfiar do número.
@@ -1020,71 +1022,88 @@ namespace SmileEditor {
     int RenderSettingsBridge::GetRadianceCacheDebugMode() const {
         return Renderer ? static_cast<int>(Renderer->Settings().GetRadianceCacheDebugMode()) : 0;
     }
+    // UMA leitura, por VALOR, sob UM lock. O `Renderer->` devolve um Access temporário que solta o
+    // lock no fim da expressão (ver RenderThread.h), então guardar referência para os contadores e
+    // pedir o meta numa segunda chamada podia atravessar um frame: meta novo, contador velho — o
+    // par exato que o meta veio impedir. Todos os getters de telemetria passam por aqui.
+    bool RenderSettingsBridge::CacheSnapshot(Smile::FRadianceCacheSnapshot& _Out) const {
+        if (!Renderer) return false;
+        auto A = Renderer.Lock();
+        if (!A) return false;
+        _Out = A->Settings().RadianceCacheSnapshot();
+        return _Out.Meta.Valid;
+    }
+
     double RenderSettingsBridge::GetRadianceCacheOccupancy() const {
-        if (!Renderer) return 0.0;
-        const Smile::u32 Cap = Renderer->Settings().RadianceCacheCapacity();
-        if (Cap == 0) return 0.0;
-        return 100.0 * static_cast<double>(Renderer->Settings().RadianceCacheStats().Occupied) /
-               static_cast<double>(Cap);
+        Smile::FRadianceCacheSnapshot Snap;
+        if (!CacheSnapshot(Snap) || Snap.Capacity == 0) return 0.0;
+        return 100.0 * static_cast<double>(Snap.Stats.Occupied) /
+               static_cast<double>(Snap.Capacity);
     }
     double RenderSettingsBridge::GetRadianceCacheHitRate() const {
-        if (!Renderer) return 0.0;
-        const auto& S = Renderer->Settings().RadianceCacheStats();
-        if (S.Queries == 0) return 0.0;
-        return 100.0 * static_cast<double>(S.Hits) / static_cast<double>(S.Queries);
+        Smile::FRadianceCacheSnapshot Snap;
+        // Exige o regime DO SNAPSHOT: sem `Stats` os contadores de consulta nem rodaram, e o
+        // quociente seria 0/0 apresentado como 0%.
+        if (!CacheSnapshot(Snap) || !Snap.Meta.Stats || Snap.Stats.Queries == 0) return 0.0;
+        return 100.0 * static_cast<double>(Snap.Stats.Hits) /
+               static_cast<double>(Snap.Stats.Queries);
     }
     double RenderSettingsBridge::GetRadianceCacheConvergence() const {
-        if (!Renderer) return 0.0;
-        const auto& S = Renderer->Settings().RadianceCacheStats();
+        Smile::FRadianceCacheSnapshot Snap;
+        if (!CacheSnapshot(Snap) || Snap.Stats.HasSamples == 0) return 0.0;
         // Denominador = celulas COM AMOSTRA, e nao as confiaveis: isto e "quantas amostras tem, em
         // media, a celula que tem alguma". Dividir pelas confiaveis excluiria justamente as que
         // estao aquecendo, e a media subiria por construcao quando o piso subisse.
-        if (S.HasSamples == 0) return 0.0;
-        return static_cast<double>(S.Samples) / static_cast<double>(S.HasSamples);
+        return static_cast<double>(Snap.Stats.Samples) /
+               static_cast<double>(Snap.Stats.HasSamples);
     }
     double RenderSettingsBridge::GetRadianceCacheMemoryMB() const {
+        // A memória é do RECURSO, não do snapshot: ela vale enquanto o cache existir, e some
+        // sozinha quando a capacidade zera. Não passa pelo `Valid`.
         if (!Renderer) return 0.0;
         return static_cast<double>(Renderer->Settings().RadianceCacheBytes()) / (1024.0 * 1024.0);
     }
     QString RenderSettingsBridge::GetRadianceCacheSummary() const {
         if (!Renderer) return QString();
-        const auto& S = Renderer->Settings().RadianceCacheStats();
-        const Smile::u32 Cap = Renderer->Settings().RadianceCacheCapacity();
-        if (Cap == 0) return QStringLiteral("cache não montado");
-        // Queries = 0 nao e o mesmo que taxa de acerto 0: sem a instrumentacao ligada o
-        // contador nem roda, e mostrar "0%" ali seria mentira.
-        const QString Hit = Renderer->Settings().GetRadianceCacheStatsEnabled()
-            ? QString::number(GetRadianceCacheHitRate(), 'f', 1) + QStringLiteral("%")
+        Smile::FRadianceCacheSnapshot Snap;
+        const bool Live = CacheSnapshot(Snap);
+        if (Snap.Capacity == 0) return QStringLiteral("cache não montado");
+        // SEM snapshot válido não há o que resumir. Antes esta linha imprimia os últimos números
+        // conhecidos ao lado de toggles atuais — com o cache desligado, para sempre.
+        if (!Live) return QStringLiteral("%1 células de capacidade · sem medição no frame")
+                              .arg(Snap.Capacity);
+        // Composto de UMA cópia, e não chamando os getters acima: cada um deles pega o próprio
+        // lock, e a linha misturaria números de frames diferentes.
+        const QString Hit = Snap.Meta.Stats
+            ? QString::number(Snap.Stats.Queries > 0
+                                  ? 100.0 * static_cast<double>(Snap.Stats.Hits) /
+                                        static_cast<double>(Snap.Stats.Queries)
+                                  : 0.0, 'f', 1) + QStringLiteral("%")
             : QStringLiteral("— (instrumentação off)");
+        const double Conv = Snap.Stats.HasSamples > 0
+            ? static_cast<double>(Snap.Stats.Samples) /
+                  static_cast<double>(Snap.Stats.HasSamples)
+            : 0.0;
         // Confiáveis ao lado de ocupadas: são o número que diz quanto do cache de fato encerra um
         // caminho, e a distância entre os dois é o aquecimento em curso.
         return QStringLiteral("%1 / %2 células · %3 confiáveis · acerto %4 · %5 amostras/célula · "
                               "despejadas %6")
-            .arg(S.Occupied).arg(Cap).arg(S.Confident).arg(Hit)
-            .arg(QString::number(GetRadianceCacheConvergence(), 'f', 1))
-            .arg(S.Evicted);
-    }
-    // O regime de medição por trás de uma linha de telemetria — lido DO SNAPSHOT, e não dos
-    // toggles. A diferença é a correção inteira: o toggle diz o que foi PEDIDO agora, e os números
-    // na tela vêm de um readback de frames atrás, tirado sob o regime que valia então. Entre uma
-    // coisa e outra cabem um reset, um reload e uma troca de regime.
-    //
-    // Uma regra só, aqui, porque ela já drifou duas vezes — o QML tinha a dele e o shader a sua.
-    bool RenderSettingsBridge::CacheTelemetryLive() const {
-        if (!Renderer) return false;
-        const auto& M = Renderer->Settings().RadianceCacheStatsMeta();
-        return M.Valid && M.Stats;
+            .arg(Snap.Stats.Occupied).arg(Snap.Capacity).arg(Snap.Stats.Confident).arg(Hit)
+            .arg(QString::number(Conv, 'f', 1))
+            .arg(Snap.Stats.Evicted);
     }
 
     QString RenderSettingsBridge::GetRadianceCacheMissBreakdown() const {
         // String VAZIA quando não há o que mostrar, e não um aviso: a linha some, e é o próprio
         // QML que decide isso perguntando `text.length`. Um "detalhe desligado" na tela ocupava
         // altura para repetir o que o toggle logo acima já diz.
-        if (!CacheTelemetryLive()) return QString();
-        // O sub-regime também sai do SNAPSHOT: ligar o detalhe agora não faz os números de dois
-        // frames atrás terem sido medidos com ele.
-        if (!Renderer->Settings().RadianceCacheStatsMeta().Detail) return QString();
-        const auto& S = Renderer->Settings().RadianceCacheStats();
+        //
+        // Os DOIS sub-regimes que esta linha precisa saem do snapshot: `Detail` produz os motivos,
+        // `Stats` produz o denominador (as consultas). Ligar o detalhe agora não faz os números de
+        // dois frames atrás terem sido medidos com ele.
+        Smile::FRadianceCacheSnapshot Snap;
+        if (!CacheSnapshot(Snap) || !Snap.Meta.Detail || !Snap.Meta.Stats) return QString();
+        const auto& S = Snap.Stats;
         // Percentual sobre as CONSULTAS, e nao sobre os misses: "12% dos raios pararam por cone
         // estreito" e uma frase acionavel; "38% dos erros" depende de quantos erros houve e muda
         // de significado sozinha quando o cache aquece.
@@ -1152,12 +1171,14 @@ namespace SmileEditor {
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheQuery(!A->Settings().GetRadianceCacheQuery());
         emit GISettingsChanged();
+        emit StatsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheAutoWarmup() {
         if (!Renderer) return;
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheAutoWarmup(!A->Settings().GetRadianceCacheAutoWarmup());
         emit GISettingsChanged();
+        emit StatsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheStats() {
         if (!Renderer) return;
@@ -1243,6 +1264,7 @@ namespace SmileEditor {
         auto A = Renderer.Lock();
         A->Settings().ResetRadianceCache();
         emit GISettingsChanged();
+        emit StatsChanged(); // o reset invalida o snapshot; a tela tem de saber no ato
     }
     void RenderSettingsBridge::RefreshRadianceCacheStats() { emit StatsChanged(); }
 

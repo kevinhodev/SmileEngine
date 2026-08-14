@@ -192,6 +192,10 @@ namespace Smile {
         CaptureStatsReadback.Reset();
         CaptureStatsPending = false;
         StatsCPU = {};
+        // O META tambem, e nao so os numeros: zerar `StatsCPU` deixando o meta valido descreveria
+        // um snapshot de zeros como medida legitima. Um setup interrompido no meio (troca de cena
+        // que falha) pararia aqui, e o painel exibiria esses zeros como se fossem do frame.
+        InvalidateStatsSnapshot();
         EntriesState = AccumState = ResolvedState = D3D12_RESOURCE_STATE_COMMON;
         StatsState   = D3D12_RESOURCE_STATE_COMMON;
         CapacityV = 0;
@@ -852,15 +856,15 @@ namespace Smile {
             return;
         }
         StatsReadbackPending[InFrameSlot] = false;
-        // O meta do slot vira o meta publicado. Um slot invalidado entre a copia e a leitura
-        // (reset, cache desligado) chega com Valid = false e o painel para de exibir — os numeros
-        // continuam sendo copiados de proposito, porque um snapshot invalido ainda ajuda a depurar
-        // o painel; o que ele nao pode e ser apresentado como atual.
-        StatsMeta = StatsSlotMeta[InFrameSlot];
 
         void* Mapped = nullptr;
         D3D12_RANGE ReadRange{ 0, kStatBytes };
+        // O META e promovido DEPOIS do Map, junto dos valores, e nao antes. Com a promocao no topo,
+        // um Map que falha deixava o regime NOVO descrito ao lado dos contadores VELHOS — o par
+        // exato que este mecanismo existe para impedir —, e sem retry, porque o pending ja tinha
+        // sido consumido. Aqui o par troca junto ou nao troca.
         if (FAILED(StatsReadback[InFrameSlot]->Map(0, &ReadRange, &Mapped)) || !Mapped) return;
+        StatsMeta = StatsSlotMeta[InFrameSlot];
         const u32* S = static_cast<const u32*>(Mapped);
         StatsCPU.Occupied   = S[0];
         StatsCPU.HasSamples = S[1];

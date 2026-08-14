@@ -37,6 +37,7 @@ namespace Smile {
     // So a referencia de retorno precisa do tipo aqui; a definicao chega pelo Renderer.h no .cpp.
     struct FRadianceCacheStats;
     struct FRadianceCacheStatsMeta;
+    struct FRadianceCacheSnapshot;
 
     class FRenderSettings {
     public:
@@ -170,6 +171,10 @@ namespace Smile {
         // vem de frames atras e pode ter sido tirado sob outro regime, ou ter sido invalidado
         // depois por reset/desligamento.
         const FRadianceCacheStatsMeta& RadianceCacheStatsMeta() const;
+        // Contadores + meta + capacidade + bytes, por VALOR e numa leitura so. E o acessor certo
+        // para quem chama de outra thread: os dois de cima devolvem REFERENCIA, e uma referencia
+        // sobrevive ao lock temporario do RendererHandle — o par voltaria de frames diferentes.
+        FRadianceCacheSnapshot RadianceCacheSnapshot() const;
         u64  RadianceCacheBytes() const;
         u32  RadianceCacheCapacity() const;
         void SetUseReSTIRGI(bool V);

@@ -4,6 +4,12 @@
 #include <QVariantList>
 #include "SmileEditor/RenderThread.h"
 
+namespace Smile {
+    // So o parametro por referencia precisa do tipo aqui; a definicao chega pelo Renderer.h no
+    // .cpp. Mesmo criterio do FRenderSettings, que declara os irmaos dele da mesma forma.
+    struct FRadianceCacheSnapshot;
+}
+
 namespace SmileEditor {
     class ViewportWidget;
 
@@ -333,10 +339,11 @@ namespace SmileEditor {
         bool              IsRadianceCacheStatsDetail() const;
         bool              IsRadianceCacheStatsSource() const;
         QString           GetRadianceCacheSourceBreakdown() const;
-        // Regime de medicao EFETIVO (cache participando + instrumentacao-base). Regra unica das
-        // linhas de telemetria; ver o corpo. Nao e Q_PROPERTY de proposito: quem decide se a linha
-        // aparece e o TEXTO estar vazio, e nao o QML repetir a regra.
-        bool              CacheTelemetryLive() const;
+        // Contadores + meta + capacidade numa leitura SO, por valor e sob um lock so. Falso quando
+        // nao ha snapshot valido. Todo getter de telemetria passa por aqui: pedir as partes em
+        // chamadas separadas atravessa o lock temporario do RendererHandle e mistura frames.
+        // Nao e Q_PROPERTY de proposito — quem decide se a linha aparece e o TEXTO estar vazio.
+        bool              CacheSnapshot(Smile::FRadianceCacheSnapshot& Out) const;
         bool              IsRadianceCacheDedicatedUpdate() const;
         double            GetRadianceCacheUpdateFraction() const; // 0..1
         bool              IsRadianceCachePrevTerminal() const;

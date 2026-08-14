@@ -406,6 +406,9 @@ namespace Smile {
     const FRadianceCacheStatsMeta& FRenderSettings::RadianceCacheStatsMeta() const {
         return R.RadianceCache.StatsMetaCPU();
     }
+    FRadianceCacheSnapshot FRenderSettings::RadianceCacheSnapshot() const {
+        return R.RadianceCache.Snapshot();
+    }
     u64 FRenderSettings::RadianceCacheBytes() const { return R.RadianceCache.MemoryBytes(); }
     u32 FRenderSettings::RadianceCacheCapacity() const { return R.RadianceCache.Capacity(); }
 
