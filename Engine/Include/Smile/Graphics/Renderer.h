@@ -1028,6 +1028,11 @@ namespace Smile {
         // O fallback EFETIVO do frame: a politica pedida, degradada pelo que existe. Pedir DDGI
         // sem volume vivo nao e erro — e Black, e o manifesto tem de registrar o que valeu.
         EIndirectFallback EffectiveFallback() const;
+        // O primario EFETIVO — o que o pipeline de fato fez neste frame, lido dos flags que hoje
+        // mandam de verdade. Enquanto o seletor nao rotear nada, ele pode DIVERGIR do pedido, e
+        // essa divergencia e informacao: ela diz "o enum ainda nao esta ligado", e nao "o pedido
+        // foi degradado por indisponibilidade". Ver a nota no CollectCaptureState.
+        EIndirectPrimary  EffectivePrimary() const;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;

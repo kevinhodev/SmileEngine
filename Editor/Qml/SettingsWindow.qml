@@ -3241,7 +3241,10 @@ Rectangle {
                         // A memória FICA, e a diferença é o critério: ela é do recurso, vale
                         // enquanto o cache existir e não depende de medição nenhuma. Uma casa
                         // decimal porque em 2^17 o cache inteiro cabe em 4,5 MB.
-                        text: renderModel.radianceCacheSummary + "  ·  " +
+                        // A política do indireto abre a linha: ela é o contexto de tudo abaixo —
+                        // ocupação e acerto do cache só significam algo sabendo quem é o primário.
+                        text: renderModel.indirectPolicySummary + "\n" +
+                              renderModel.radianceCacheSummary + "  ·  " +
                               renderModel.radianceCacheMemoryMB.toFixed(1).replace(".", ",") +
                               " MB  ·  " + renderModel.radianceCacheWarmup
                         color: root.textSecondary

@@ -1323,6 +1323,12 @@ namespace Smile {
         // diferente, e uma captura tirada antes da hora tem de se denunciar.
         S.CacheWarmup     = RadianceCache.WarmupStateName();
         S.CacheAutoWarmup = RadianceCache.GetAutoWarmup();
+        // Politica do indireto: os dois lados. O efetivo descreve o pipeline; o pedido descreve a
+        // intencao, e a distancia entre eles e o que uma captura sozinha nao teria como contar.
+        S.IndirectPrimaryRequested  = IndirectPrimaryName(IndirectPrimary);
+        S.IndirectPrimaryEffective  = IndirectPrimaryName(EffectivePrimary());
+        S.IndirectFallbackRequested = IndirectFallbackName(IndirectFallback);
+        S.IndirectFallbackEffective = IndirectFallbackName(EffectiveFallback());
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
         // gather do ReSTIR GI e o produtor do cache) da mesma fonte, entao ela descreve o regime
@@ -1678,6 +1684,18 @@ namespace Smile {
     // primeira e sobre EXISTENCIA (o volume roda), a segunda e sobre POLITICA (quem responde o
     // miss), e confundi-las foi o defeito que motivou a fase.
     bool Renderer::DDGIVolumeLive() const { return UseGI && DDGI.IsReady(); }
+
+    EIndirectPrimary Renderer::EffectivePrimary() const {
+        // Lido do que MANDA hoje, e nao do enum: o seletor ainda nao roteia nada, e inventar aqui
+        // uma leitura do pedido faria o manifesto afirmar um pipeline que nao existe.
+        //
+        // A ordem espelha o pipeline: o ReSTIR GI produz o indireto de superficie quando roda; sem
+        // ele, quem restou alimentando o deferred e o atlas do volume; sem os dois, nao ha
+        // indireto de superficie — e o direto e a nevoa seguem inteiros.
+        if (UseReSTIRGI && ReSTIRGI.IsReady()) return EIndirectPrimary::ReSTIR_SHaRC;
+        if (DDGIVolumeLive())                  return EIndirectPrimary::DDGI;
+        return EIndirectPrimary::Off;
+    }
 
     EIndirectFallback Renderer::EffectiveFallback() const {
         // Degrada em vez de mentir: o manifesto e a UI registram o que ACONTECEU, e nao o que foi

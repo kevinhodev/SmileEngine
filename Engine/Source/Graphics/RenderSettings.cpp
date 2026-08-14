@@ -360,6 +360,15 @@ namespace Smile {
         return R.RadianceCache.GetStatsDetailEnabled();
     }
 
+    EIndirectPrimary FRenderSettings::GetIndirectPrimary() const { return R.IndirectPrimary; }
+    EIndirectPrimary FRenderSettings::EffectiveIndirectPrimary() const {
+        return R.EffectivePrimary();
+    }
+    EIndirectFallback FRenderSettings::GetIndirectFallback() const { return R.IndirectFallback; }
+    EIndirectFallback FRenderSettings::EffectiveIndirectFallback() const {
+        return R.EffectiveFallback();
+    }
+
     void FRenderSettings::SetGISourceDebug(bool _V) {
         // LIGAR exige o produtor vivo, e o produtor e EXATAMENTE o que o Modes calcula:
         // `ReSTIRGIActive = UseReSTIRGI && ReSTIRGI.IsReady()`. Nada mais.

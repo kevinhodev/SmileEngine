@@ -78,6 +78,21 @@ namespace Smile {
                 if (!Tag.empty()) Tag += '-';
                 Tag += Piece;
             };
+            // Politica EFETIVA na etiqueta, sempre e em duas letras: `P<primario>F<fallback>`.
+            // Sempre, e nao "so quando difere do padrao", porque ausencia significando "o de
+            // sempre" e um default implicito — e default implicito envelhece calado quando o
+            // padrao muda. Duas capturas de politicas diferentes nunca colidem de nome.
+            //
+            // O EFETIVO, e nao o pedido: o nome do arquivo descreve a imagem que esta dentro dele.
+            // Quem quer saber o que foi pedido abre o manifesto, que traz os dois.
+            {
+                auto Letter = [](const char* Name) { return Name[0]; }; // s/d/o e d/e/b
+                std::string Pol = "P";
+                Pol += Letter(S.IndirectPrimaryEffective);
+                Pol += 'F';
+                Pol += Letter(S.IndirectFallbackEffective);
+                Add(Pol.c_str());
+            }
             if (S.UseGI)       Add("gi");
             if (S.DDGIReady)   Add("ddgi");
             if (S.ReSTIRGI)    Add("rgi");
@@ -517,6 +532,16 @@ namespace Smile {
                 // diferenca entre "esta enchendo, espere" e "o operador desligou a consulta".
                 File << "  \"cacheWarmup\": \""     << _State.CacheWarmup << "\",\n";
                 File << "  \"cacheAutoWarmup\": "   << Bool(_State.CacheAutoWarmup) << ",\n";
+                // Politica do indireto, os dois lados. Ver FCaptureState: so o efetivo apagaria a
+                // degradacao, e so o pedido mentiria sobre a imagem.
+                File << "  \"indirectPrimaryRequested\": \""
+                     << _State.IndirectPrimaryRequested  << "\",\n";
+                File << "  \"indirectPrimaryEffective\": \""
+                     << _State.IndirectPrimaryEffective  << "\",\n";
+                File << "  \"indirectFallbackRequested\": \""
+                     << _State.IndirectFallbackRequested << "\",\n";
+                File << "  \"indirectFallbackEffective\": \""
+                     << _State.IndirectFallbackEffective << "\",\n";
                 File << "  \"giBackfacePolicy\": " << Bool(_State.GIBackfacePolicy) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";

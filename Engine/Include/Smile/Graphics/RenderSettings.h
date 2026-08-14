@@ -6,6 +6,8 @@
 #include "Smile/Graphics/Upscaler.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/HistoryDomain.h"
+// Enums por VALOR nos getters de politica; o header e folha (so Core/Types.h), sem ciclo.
+#include "Smile/Graphics/IndirectPolicy.h"
 
 // Fachada unica dos knobs de render.
 //
@@ -142,6 +144,13 @@ namespace Smile {
         // dos CONSUMIDORES, porque o terminador do raio secundario acabou de trocar. Mesma
         // invalidacao do toggle manual de leitura, nos dois sentidos.
         void NotifyRadianceCacheQueryChanged();
+        // Politica do indireto (Fase 6). Os getters de EFETIVO devolvem o que o pipeline fez —
+        // pedido degradado pelo que existe —, e por ora o primario efetivo pode divergir do pedido
+        // porque o seletor ainda nao roteia. Ver IndirectPolicy.h.
+        EIndirectPrimary  GetIndirectPrimary() const;
+        EIndirectPrimary  EffectiveIndirectPrimary() const;
+        EIndirectFallback GetIndirectFallback() const;
+        EIndirectFallback EffectiveIndirectFallback() const;
         // Mapa por pixel da FONTE do candidato tracado pelo ReSTIR GI (cache / DDGI / zero / ceu /
         // morto). E do FReSTIRGI, e nao do cache, mas mora aqui junto do resto do diagnostico de
         // GI. Nao invalida historico — so pinta um alvo de debug. Re-registra os alvos, porque o

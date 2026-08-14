@@ -148,6 +148,18 @@ namespace Smile {
         // simplesmente nao acertou nada.
         const char* CacheWarmup = "";
         bool CacheAutoWarmup    = false;
+        // Politica do indireto, PEDIDA e EFETIVA (Fase 6). As duas, e nao so a efetiva: sozinha,
+        // ela nao mente sobre a imagem mas apaga a DEGRADACAO — `black` nao distingue "pedi preto
+        // para medir" de "pedi DDGI e nao havia volume" de "pedi Environment, que nao existe".
+        //
+        // ⚠️ No primario as duas divergem por outro motivo enquanto a Fase 6 nao termina: o seletor
+        // ainda NAO ROTEIA. Pedir `ddgi` e ver `restir_sharc` no efetivo significa "o enum nao esta
+        // ligado", e nao "degradou por indisponibilidade". Quando o roteamento entrar, esta nota
+        // sai — e a divergencia volta a significar so degradacao.
+        const char* IndirectPrimaryRequested  = "";
+        const char* IndirectPrimaryEffective  = "";
+        const char* IndirectFallbackRequested = "";
+        const char* IndirectFallbackEffective = "";
         bool GIMeasureTerminatorOff = false; // corta o DDGI so no hit secundario
         // Politica de auto-interseccao/backface do gather E do produtor do cache — um toggle so
         // para os dois (ver FRenderSettings::SetGIBackfacePolicy). Entra aqui porque o protocolo

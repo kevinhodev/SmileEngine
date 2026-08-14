@@ -1082,6 +1082,26 @@ namespace SmileEditor {
         if (!Renderer) return 0.0;
         return static_cast<double>(Renderer->Settings().RadianceCacheBytes()) / (1024.0 * 1024.0);
     }
+    QString RenderSettingsBridge::GetIndirectPolicySummary() const {
+        if (!Renderer) return QString();
+        auto A = Renderer.Lock();          // um lock só: os quatro descrevem o mesmo instante
+        if (!A) return QString();
+        const auto& S = A->Settings();
+        const QString PReq = QString::fromLatin1(Smile::IndirectPrimaryName(S.GetIndirectPrimary()));
+        const QString PEff = QString::fromLatin1(
+            Smile::IndirectPrimaryName(S.EffectiveIndirectPrimary()));
+        const QString FReq = QString::fromLatin1(
+            Smile::IndirectFallbackName(S.GetIndirectFallback()));
+        const QString FEff = QString::fromLatin1(
+            Smile::IndirectFallbackName(S.EffectiveIndirectFallback()));
+        // A seta só aparece quando há divergência: iguais, ela seria ruído; diferentes, ela é a
+        // única coisa que interessa na linha.
+        auto Pair = [](const QString& Req, const QString& Eff) {
+            return Req == Eff ? Req : QStringLiteral("%1 → %2").arg(Req, Eff);
+        };
+        return QStringLiteral("primário: %1  ·  fallback: %2")
+            .arg(Pair(PReq, PEff), Pair(FReq, FEff));
+    }
     QString RenderSettingsBridge::GetRadianceCacheSummary() const {
         if (!Renderer) return QString();
         Smile::FRadianceCacheSnapshot Snap;

@@ -157,6 +157,11 @@ namespace SmileEditor {
         Q_PROPERTY(double radianceCacheConvergence READ GetRadianceCacheConvergence NOTIFY StatsChanged)
         Q_PROPERTY(double radianceCacheMemoryMB READ GetRadianceCacheMemoryMB NOTIFY GISettingsChanged)
         Q_PROPERTY(QString radianceCacheSummary READ GetRadianceCacheSummary NOTIFY StatsChanged)
+        // Politica do indireto: primario e fallback, PEDIDO e EFETIVO. Sai por GISettingsChanged
+        // porque o pedido e knob; o efetivo tambem muda com disponibilidade do volume, e ai quem
+        // atualiza e o Timer do painel.
+        Q_PROPERTY(QString indirectPolicySummary READ GetIndirectPolicySummary
+                       NOTIFY GISettingsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY GISettingsChanged)
@@ -362,6 +367,7 @@ namespace SmileEditor {
         double            GetRadianceCacheConvergence() const;  // amostras/celula, 0..kMaxAccum
         double            GetRadianceCacheMemoryMB() const;
         QString           GetRadianceCacheSummary() const;
+        QString           GetIndirectPolicySummary() const;
         QString           GetRadianceCacheMissBreakdown() const;
         bool              IsReSTIRGIVisibilityEnabled() const;
         bool              AreGIFoliageShadowsEnabled() const;
