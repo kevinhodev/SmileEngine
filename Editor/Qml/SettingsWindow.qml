@@ -3061,19 +3061,18 @@ Rectangle {
                         x: 20
                         y: rcSourceLabel.y + 30
                         text: "Mapa da fonte (janela de debug)"
-                        // Quem escreve o mapa é o trace do ReSTIR GI, e ele só roda com o GI GLOBAL
-                        // ligado — por isso os dois na condição. O engine recusa a ativação de
-                        // qualquer forma (ver SetGISourceDebug); isto aqui é não oferecer um botão
-                        // que não faria nada.
-                        color: (renderModel.ddgiEnabled && renderModel.restirGIEnabled)
-                                   ? root.textNormal : root.textSecondary
+                        // Só o ReSTIR GI: é o trace dele que escreve o mapa. `ddgiEnabled` (o
+                        // `UseGI` global) NÃO entra — ele governa o volume DDGI, e o trace roda sem
+                        // ele. O engine recusa a ativação pelo mesmo critério; isto aqui é não
+                        // oferecer um botão que não faria nada.
+                        color: renderModel.restirGIEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcSourceVizLabel.y - 6
-                        enabled: renderModel.ddgiEnabled && renderModel.restirGIEnabled
+                        enabled: renderModel.restirGIEnabled
                         checked: renderModel.giSourceDebug
                         onToggled: renderModel.ToggleGISourceDebug()
                     }

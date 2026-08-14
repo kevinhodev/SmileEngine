@@ -156,10 +156,10 @@ namespace Smile {
         R.RegisterDebugTargets(); // o alvo so e oferecido enquanto alguem o enche
     }
 
-    void FRenderSettings::SetUseGI(bool _V) {
-        R.UseGI = _V;
-        if (!_V) DropGISourceDebugIfOrphaned();
-    }
+    // NAO derruba o mapa da fonte: `UseGI` e o volume DDGI, e o trace do ReSTIR GI — que escreve o
+    // mapa — roda sem ele. Derrubar aqui matava o caso mais interessante do visualizador, que e
+    // olhar de onde o indireto vem com o DDGI fora.
+    void FRenderSettings::SetUseGI(bool _V) { R.UseGI = _V; }
     bool FRenderSettings::GetUseGI() const  { return R.UseGI; }
 
     void FRenderSettings::SetUseReGIR(bool _V) {
@@ -361,14 +361,16 @@ namespace Smile {
     }
 
     void FRenderSettings::SetGISourceDebug(bool _V) {
-        // LIGAR exige o produtor vivo. O mapa e escrito dentro do RecordTrace do ReSTIR GI, que
-        // por sua vez so roda com o GI global ligado — sem os dois, o alvo voltaria ao registro
-        // sem ninguem para enche-lo, que e o estado obsoleto que a borda de desligamento acabou de
-        // fechar. O gate mora AQUI e nao so na UI porque o QML nao e o unico chamador possivel:
-        // este setter e publico, e o proximo caller (script, atalho, preset) nao vai lembrar.
+        // LIGAR exige o produtor vivo, e o produtor e EXATAMENTE o que o Modes calcula:
+        // `ReSTIRGIActive = UseReSTIRGI && ReSTIRGI.IsReady()`. Nada mais.
+        //
+        // ⚠️ `UseGI` NAO entra, e ja entrou errado uma vez. Ele governa o volume DDGI — e por isso
+        // que a propriedade do editor se chama `ddgiEnabled` —, e o `RecordTrace` do ReSTIR GI roda
+        // sem ele. Exigi-lo aqui recusava um caso legitimo: mapa da fonte com o GI global
+        // desligado, que e justamente quando se quer ver de onde o indireto ainda vem.
         //
         // DESLIGAR nunca e recusado — a guarda protege a ativacao, nao o inverso.
-        if (_V && (!R.UseGI || !R.UseReSTIRGI)) return;
+        if (_V && !(R.UseReSTIRGI && R.ReSTIRGI.IsReady())) return;
         if (_V == R.ReSTIRGI.GetSourceDebug()) return;
         R.ReSTIRGI.SetSourceDebug(_V);
         // O registro dos alvos e reconstruido do ZERO e so em eventos de setup — ele nao roda por
