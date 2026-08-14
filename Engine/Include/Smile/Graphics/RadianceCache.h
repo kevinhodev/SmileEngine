@@ -175,6 +175,20 @@ namespace Smile {
         u32 TermNoQuery = 0; // chegou ao terminal com a consulta desligada
         u32 TermLobe    = 0; // amostragem de BSDF sem direcao valida
         u32 TermOther   = 0; // residual: teto de vertices sem passar pelo terminal
+        // FONTE do terminal do render (quarto regime, `Sf`). Os de miss dizem por que a consulta
+        // errou; estes dizem o que respondeu DEPOIS dela, que e a curva do gate da Fase 5.
+        //
+        // MUTUAMENTE EXCLUSIVOS, e a soma tem de fechar: Cache + DDGI + Zero + Ineligible = Total.
+        // Essa igualdade e o primeiro teste do instrumento — antes dela, nenhuma conclusao sobre a
+        // curva vale.
+        u32 SrcTotal      = 0; // todo hit sombreado; o denominador
+        u32 SrcCache      = 0;
+        u32 SrcDDGI       = 0; // o cache errou e o volume respondeu
+        u32 SrcZero       = 0; // o cache errou e nao havia volume: zero explicito
+        // Nem chegou a consultar: segmento menor que a celula ou cone mais estreito que ela.
+        // Separado porque nenhum aquecimento move estes — no `ddgiFallback` eles seriam um piso
+        // permanente, e a curva que o gate quer ver descendo pareceria travada.
+        u32 SrcIneligible = 0;
     };
 
     // World Radiance Cache — radiancia de SAIDA em espaco de mundo, hash espacial
@@ -211,6 +225,13 @@ namespace Smile {
         // kFlagStats e congelada para a serie ja tirada nela continuar comparavel. Ver o
         // RC_FLAG_STATS_DETAIL no shader.
         static constexpr u32 kFlagStatsDetail = 8u;
+        // QUARTO regime (`Sf`): a FONTE do terminal de cada hit de render. Separado do detalhe pelo
+        // mesmo argumento que separou o detalhe do basico, com uma ressalva propria: esta
+        // telemetria e neutra para o CONTEUDO do cache (com o produtor dedicado, os traces de
+        // render nao inserem), e mesmo assim nao cabe no `Sd` — ela nao e neutra para o custo do
+        // trace, para a contencao no UAV de estatisticas, nem para o overlap com o updater. "Nao
+        // muda a imagem" e menos que "e comparavel".
+        static constexpr u32 kFlagStatsSource = 16u;
 
         // Espelham RC_SAMPLE_NUM_MAX / RC_STALE_FRAME_MAX do shader. Mudar aqui sem mudar la
         // deixa o teto de amostras incoerente com o teto do ponto fixo do acumulador.
@@ -404,6 +425,8 @@ namespace Smile {
         // Idem para o regime de detalhe, que soma atomicos por cima do anterior — inclusive no
         // produtor, onde eles mudam quem vence as insercoes.
         bool PublishedStatsDetailThisFrame() const { return PublishedDetail; }
+        // Idem para o regime de FONTE, que soma mais um atomico por hit sombreado.
+        bool PublishedStatsSourceThisFrame() const { return PublishedSource; }
         // QUEM escreveu neste frame — o passe dedicado, ou os hits do render. Publicado pelo mesmo
         // mecanismo dos anteriores (o ShaderParams do produtor que rodou) em vez de reconstituido
         // pelo manifesto a partir dos knobs: o `GetDedicatedUpdate` diz o que foi PEDIDO, e um
@@ -454,6 +477,10 @@ namespace Smile {
         // waves, e sem separa-lo a serie ja medida em `S` deixaria de ser comparavel.
         void SetStatsDetailEnabled(bool V) { StatsDetail = V; }
         bool GetStatsDetailEnabled() const { return StatsDetail; }
+        // Fonte do terminal por hit de render. Exige a instrumentacao ligada pelo mesmo motivo do
+        // detalhe — sem ela o regime seria um quinto, e regime que ninguem compara nao serve.
+        void SetStatsSourceEnabled(bool V) { StatsSource = V; }
+        bool GetStatsSourceEnabled() const { return StatsSource; }
 
         // Os passes de trace escrevem por atomico bindless e leem o Resolved; ambos precisam do
         // recurso em UNORDERED_ACCESS / NON_PIXEL. Chamar antes de gravar os traces do frame.
@@ -648,6 +675,7 @@ namespace Smile {
         ERadianceCacheDebugMode DebugMode = ERadianceCacheDebugMode::Cells;
         bool StatsEnabled = false;
         bool StatsDetail  = false;
+        bool StatsSource  = false;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         // Tabela de 3 UAVs CONTIGUOS (o range do root param 2 e um so). Os indices bindless
@@ -757,6 +785,7 @@ namespace Smile {
         mutable bool PublishedQuery  = false;
         mutable bool PublishedStats  = false;
         mutable bool PublishedDetail = false;
+        mutable bool PublishedSource = false;
         mutable bool PublishedDedicated = false;
         // O que o shader REALMENTE recebeu neste frame. Zerados no UpdatePerFrame para que "0"
         // signifique "o passe nao rodou" em vez de guardar o valor de um frame antigo.

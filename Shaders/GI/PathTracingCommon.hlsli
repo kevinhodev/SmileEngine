@@ -415,6 +415,22 @@ float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P
     return indirect;
 }
 
+// Overload que devolve TAMBEM quem respondeu. Existe para a telemetria de fonte da Fase 5 poder
+// separar "o volume cobriu este ponto" de "nao havia volume e o indireto foi zero explicito" —
+// duas coisas que a radiancia devolvida nao distingue (um DDGI legitimamente escuro tambem sai
+// preto). `volW` e o unico lugar onde essa diferenca existe, e ela morria dentro da funcao.
+//
+// Sem duplicar corpo: quem responde e o mesmo bloco de cima. `termOff` conta como NAO respondido,
+// e corretamente — o gate de medicao existe justamente para tirar o DDGI do terminal.
+float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P,
+                                 out bool outDDGIAnswered) {
+    const uint giHitFlags = (uint)GIDistParams.w;
+    const bool termOff    = (giHitFlags & 4u) != 0u;
+    outDDGIAnswered = !termOff &&
+                      DDGI_VolumeWeight(S.Pos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z) > 0.0f;
+    return PT_SampleIndirectFallback(S, rayDir, P);
+}
+
 // O atlas fornece irradiancia difusa, nao uma distribuicao direcional que permita integrar
 // GGX de verdade. O fallback split-sum usa Fresnel roughness-aware e reserva (1-F) para o
 // difuso: metal devolve energia tingida por F0 sem fingir que o atlas conhece a direcao de

@@ -21,7 +21,7 @@ namespace Smile {
         constexpr u32 kAccumStride    = sizeof(u32) * 4;
         constexpr u32 kResolvedStride = sizeof(u32) * 4;
         // Espelha RC_STAT_COUNT do RadianceCache.hlsli.
-        constexpr u32 kStatCount      = 30;
+        constexpr u32 kStatCount      = 35;
         constexpr u32 kStatBytes      = kStatCount * sizeof(u32);
         // Os seis contadores de miss sao endereçados no shader por
         // `RC_STAT_MISS_SHORT + (status - RC_QUERY_SHORT_SEGMENT)`, ou seja as duas sequencias
@@ -30,9 +30,9 @@ namespace Smile {
         // da telemetria de insercao. Mudar um dos lados sem o outro trocaria "cone estreito" por
         // "chave ausente" no painel — dois diagnosticos opostos, e nada acusaria.
         // O mesmo vale para o bloco do PRODUTOR, endereçado por `RC_STAT_TERM_SKY + kind`.
-        static_assert(kStatCount == 30, "layout dos contadores: 7 de tabela/query + 6 de miss + 7 "
-                                        "de insercao + 10 do produtor. Mudou o shader? Mude a "
-                                        "leitura tambem.");
+        static_assert(kStatCount == 35, "layout dos contadores: 7 de tabela/query + 6 de miss + 7 "
+                                        "de insercao + 10 do produtor + 5 de fonte. Mudou o "
+                                        "shader? Mude a leitura tambem.");
         // Modos do dispatch do resolve (StatsParams.x). Ver o cabecalho do shader.
         constexpr f32 kModeResolve    = 0.0f;
         constexpr f32 kModeClearStats = 1.0f;
@@ -377,6 +377,7 @@ namespace Smile {
         PublishedQuery  = false;
         PublishedStats  = false;
         PublishedDetail = false;
+        PublishedSource = false;
         PublishedDedicated    = false;
         PublishedUpdateCells  = 0;
         PublishedVertices     = 0;
@@ -882,6 +883,11 @@ namespace Smile {
         StatsCPU.TermNoQuery = S[27];
         StatsCPU.TermLobe    = S[28];
         StatsCPU.TermOther   = S[29];
+        StatsCPU.SrcTotal      = S[30];
+        StatsCPU.SrcCache      = S[31];
+        StatsCPU.SrcDDGI       = S[32];
+        StatsCPU.SrcZero       = S[33];
+        StatsCPU.SrcIneligible = S[34];
         D3D12_RANGE NoWrite{ 0, 0 };
         StatsReadback[InFrameSlot]->Unmap(0, &NoWrite);
     }
@@ -914,6 +920,10 @@ namespace Smile {
                 PublishedQuery  = PublishedQuery  || Query;
                 PublishedStats  = PublishedStats  || (StatsEnabled && Query);
                 PublishedDetail = PublishedDetail || (StatsEnabled && StatsDetail);
+                // A fonte descreve o terminal de um hit SOMBREADO, e nao a consulta: ela e
+                // publicada por quem roda, mesmo sem query — com o cache fechado todo hit termina
+                // em DDGI ou zero, e e legitimo querer medir isso.
+                PublishedSource = PublishedSource || (StatsEnabled && StatsSource);
                 // So com consulta: sem ela o piso nao decide nada neste consumidor, e registra-lo
                 // faria o manifesto declarar um controle que nao agiu sobre a imagem.
                 if (Query) PublishedMinSamples = MinSampleCount;
@@ -925,6 +935,9 @@ namespace Smile {
             // RC_Update, e o produtor legado escreve por este mesmo caminho. O que ele exige e a
             // instrumentacao ligada, para o regime ser um so e nao dois.
             if (StatsEnabled && StatsDetail) Flags |= kFlagStatsDetail;
+            // Nao exige Query pelo mesmo motivo do registro acima: o contador de FONTE mede o que
+            // terminou o hit, e "o cache estava fechado, tudo foi DDGI" e uma medida valida.
+            if (StatsEnabled && StatsSource) Flags |= kFlagStatsSource;
         }
         P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
         P.LodCapacityFlags = { LodDistance, static_cast<f32>(CapacityV),

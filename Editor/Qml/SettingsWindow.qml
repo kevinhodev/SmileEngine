@@ -3040,9 +3040,26 @@ Rectangle {
                     }
 
                     Text {
-                        id: rcDedicatedLabel
+                        id: rcSourceLabel
                         x: 20
                         y: rcDetailLabel.y + 30
+                        text: "Telemetria de fonte (cache × DDGI)"
+                        color: renderModel.radianceCacheStats ? root.textNormal : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcSourceLabel.y - 6
+                        enabled: renderModel.radianceCacheStats
+                        checked: renderModel.radianceCacheStatsSource
+                        onToggled: renderModel.ToggleRadianceCacheStatsSource()
+                    }
+
+                    Text {
+                        id: rcDedicatedLabel
+                        x: 20
+                        y: rcSourceLabel.y + 30
                         text: "Produtor dedicado (path tracer esparso)"
                         color: renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
@@ -3209,12 +3226,28 @@ Rectangle {
                         lineHeight: 1.35
                     }
 
+                    // Mesma regra do bloco de miss abaixo: só ocupa altura quando foi medido.
+                    Text {
+                        id: rcSourceText
+                        x: 20
+                        y: rcStatsText.y + rcStatsText.height + 6
+                        width: parent.width - 40
+                        visible: renderModel.radianceCacheStatsSource
+                        height: visible ? implicitHeight : 0
+                        wrapMode: Text.WordWrap
+                        text: renderModel.radianceCacheSourceBreakdown
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
                     // Só ocupa espaço quando há o que mostrar: sem o regime de detalhe a linha
                     // sairia inteira em travessões, que ocupa altura e não informa nada.
                     Text {
                         id: rcMissText
                         x: 20
-                        y: rcStatsText.y + rcStatsText.height + 6
+                        y: rcSourceText.y + rcSourceText.height + (rcSourceText.visible ? 6 : 0)
                         width: parent.width - 40
                         visible: renderModel.radianceCacheStatsDetail
                         height: visible ? implicitHeight : 0

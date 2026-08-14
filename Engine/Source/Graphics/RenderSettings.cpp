@@ -344,6 +344,20 @@ namespace Smile {
         return R.RadianceCache.GetStatsDetailEnabled();
     }
 
+    void FRenderSettings::SetRadianceCacheStatsSourceEnabled(bool _V) {
+        if (_V == R.RadianceCache.GetStatsSourceEnabled()) return;
+        // Terceira vez que este bloco se repete, e a repeticao e o ponto: cada regime de medicao
+        // cancela captura em curso porque uma sessao que troca de regime no meio nao pertence a
+        // serie nenhuma. Este acrescenta UM atomico por hit sombreado — nao muda o conteudo do
+        // cache (os traces de render nao inserem desde a Fase 3), mas muda custo, contencao no UAV
+        // de estatisticas e overlap com o updater. "Nao muda a imagem" nao e "e comparavel".
+        R.Capture.Cancel("a telemetria de fonte foi alternada durante o aquecimento");
+        R.RadianceCache.SetStatsSourceEnabled(_V);
+    }
+    bool FRenderSettings::GetRadianceCacheStatsSourceEnabled() const {
+        return R.RadianceCache.GetStatsSourceEnabled();
+    }
+
     bool FRenderSettings::GetRadianceCacheStatsEnabled() const {
         return R.RadianceCache.GetStatsEnabled();
     }

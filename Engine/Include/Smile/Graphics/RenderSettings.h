@@ -149,6 +149,11 @@ namespace Smile {
         // no manifesto e na etiqueta. Nao invalida historico; cancela captura em curso.
         void SetRadianceCacheStatsDetailEnabled(bool V);
         bool GetRadianceCacheStatsDetailEnabled() const;
+        // FONTE do terminal por hit de render: cache / DDGI / zero / inelegivel, mutuamente
+        // exclusivos e com denominador proprio. QUARTO regime de medicao — o `Sd` fica congelado
+        // como referencia historica. Nao invalida historico; cancela captura em curso.
+        void SetRadianceCacheStatsSourceEnabled(bool V);
+        bool GetRadianceCacheStatsSourceEnabled() const;
         // Mudam a CHAVE do hash: todo valor guardado passa a viver noutra celula, entao o
         // conteudo antigo vira lixo enderecado errado. Invalidam.
         void SetRadianceCacheCellSize(f32 V);

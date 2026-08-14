@@ -85,6 +85,14 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             Stats[RC_STAT_TERM_NOQUERY] = 0u;
             Stats[RC_STAT_TERM_LOBE]    = 0u;
             Stats[RC_STAT_TERM_OTHER]   = 0u;
+            // Fonte do terminal do render (quarto regime). Zerados no MESMO dispatch de clear que
+            // os de query, e nao no de varredura: como eles, sao escritos pelos TRACES, que rodam
+            // antes do resolve — zera-los na varredura apagaria a medida do proprio frame.
+            Stats[RC_STAT_SRC_TOTAL]      = 0u;
+            Stats[RC_STAT_SRC_CACHE]      = 0u;
+            Stats[RC_STAT_SRC_DDGI]       = 0u;
+            Stats[RC_STAT_SRC_ZERO]       = 0u;
+            Stats[RC_STAT_SRC_INELIGIBLE] = 0u;
         }
         return;
     }

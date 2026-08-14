@@ -960,6 +960,31 @@ namespace SmileEditor {
     bool RenderSettingsBridge::IsRadianceCacheStatsDetail() const {
         return Renderer && Renderer->Settings().GetRadianceCacheStatsDetailEnabled();
     }
+    bool RenderSettingsBridge::IsRadianceCacheStatsSource() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheStatsSourceEnabled();
+    }
+    QString RenderSettingsBridge::GetRadianceCacheSourceBreakdown() const {
+        if (!Renderer) return QString();
+        const auto& S = Renderer->Settings().RadianceCacheStats();
+        if (S.SrcTotal == 0) return QStringLiteral("fonte: — (telemetria off)");
+        const double T = static_cast<double>(S.SrcTotal);
+        auto Pct = [T](Smile::u32 N) {
+            return QString::number(100.0 * static_cast<double>(N) / T, 'f', 1) +
+                   QStringLiteral("%");
+        };
+        // A SOMA é impressa junto, e não como conferência do desenvolvedor: as quatro classes são
+        // mutuamente exclusivas por construção, então qualquer sobra é defeito do instrumento —
+        // e um instrumento que só se valida em teste offline não se valida quando importa.
+        const Smile::u32 Sum = S.SrcCache + S.SrcDDGI + S.SrcZero + S.SrcIneligible;
+        const QString Check = (Sum == S.SrcTotal)
+            ? QStringLiteral("✓")
+            : QStringLiteral("✗ sobra %1").arg(static_cast<long long>(S.SrcTotal) -
+                                               static_cast<long long>(Sum));
+        return QStringLiteral("fonte: cache %1 · DDGI %2 · zero %3 · inelegível %4 "
+                              "(%5 hits · soma %6)")
+            .arg(Pct(S.SrcCache), Pct(S.SrcDDGI), Pct(S.SrcZero), Pct(S.SrcIneligible))
+            .arg(S.SrcTotal).arg(Check);
+    }
     bool RenderSettingsBridge::IsRadianceCacheDedicatedUpdate() const {
         return Renderer && Renderer->Settings().GetRadianceCacheDedicatedUpdate();
     }
@@ -1117,6 +1142,13 @@ namespace SmileEditor {
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheStatsDetailEnabled(
             !A->Settings().GetRadianceCacheStatsDetailEnabled());
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ToggleRadianceCacheStatsSource() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheStatsSourceEnabled(
+            !A->Settings().GetRadianceCacheStatsSourceEnabled());
         emit GISettingsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheDedicatedUpdate() {

@@ -148,7 +148,30 @@
 #define RC_STAT_TERM_NOQUERY  27u // chegou ao terminal com a consulta desligada
 #define RC_STAT_TERM_LOBE     28u // amostragem de BSDF nao devolveu direcao
 #define RC_STAT_TERM_OTHER    29u // residual: teto de vertices sem passar pelo terminal
-#define RC_STAT_COUNT         30u
+// --- fonte do terminal do RENDER (RC_FLAG_STATS_SOURCE) --------------------------------------
+// QUARTO REGIME, e nao um campo a mais no terceiro. O `Sd` esta CONGELADO: a serie tirada nele
+// tem timings, ocupacao e imagem, e acrescentar atomicos ali mudaria custo do trace, contencao no
+// UAV de estatisticas e o overlap com o updater — nada disso e neutro, mesmo que o CONTEUDO do
+// cache nao mude (com o produtor dedicado os traces de render nao inserem).
+//
+// O que estes contam e a outra metade da pergunta da Fase 5. Os de MISS dizem por que a consulta
+// errou; estes dizem o que respondeu DEPOIS dela — e e essa a curva que o gate de saida pede:
+// `cacheHit` subindo e `ddgiFallback` caindo conforme o cache aquece.
+//
+// MUTUAMENTE EXCLUSIVOS, com precedencia declarada, e a soma tem de fechar com TOTAL:
+//
+//     SRC_CACHE + SRC_DDGI + SRC_ZERO + SRC_INELIGIBLE == SRC_TOTAL
+//
+// INELIGIBLE vem PRIMEIRO e por isso e obrigatorio, nao opcional: sao os raios que a geometria
+// impede de consultar (segmento menor que a celula, cone estreito), e eles terminam em DDGI ou em
+// zero como qualquer outro. Somados ao `ddgiFallback`, poriam nele um piso que NUNCA desce — na
+// Bistro sao 21,7% das consultas — e a curva que o gate quer ver descendo pareceria travada.
+#define RC_STAT_SRC_TOTAL      30u // todo hit sombreado; o denominador
+#define RC_STAT_SRC_CACHE      31u
+#define RC_STAT_SRC_DDGI       32u // o cache errou e o volume respondeu
+#define RC_STAT_SRC_ZERO       33u // o cache errou e nao havia volume: zero explicito
+#define RC_STAT_SRC_INELIGIBLE 34u // nem chegou a consultar (segmento curto / cone estreito)
+#define RC_STAT_COUNT          35u
 
 // Publicado no CB de cada consumidor do HitShading.hlsli, igual ao FReGIRShaderParams.
 //
@@ -184,6 +207,15 @@ struct FRadianceCacheParams {
 // Entao o detalhe e uma configuracao propria: quem quer o diagnostico paga um regime que se
 // declara no manifesto e na etiqueta, e as capturas do regime `S` continuam valendo.
 #define RC_FLAG_STATS_DETAIL 8u
+// QUARTO REGIME, pelo mesmo argumento aplicado ao terceiro — e com uma diferenca que vale
+// registrar, porque ela e a tentacao que este bit recusa.
+//
+// A telemetria de FONTE e neutra para o CONTEUDO do cache: desde a Fase 3 os traces de render nao
+// inserem, entao o escalonamento deles nao decide mais quem vence CAS nenhum. Seria facil concluir
+// dai que ela cabe no `Sd`. Nao cabe: ela continua nao sendo neutra para o CUSTO do trace, para a
+// contencao no UAV de estatisticas, para o overlap com o updater assincrono e, por consequencia,
+// para os TIMINGS ja medidos em `Sd`. "Nao muda a imagem" e menos que "e comparavel".
+#define RC_FLAG_STATS_SOURCE 16u
 
 // Contrato de CBUFFER, por NOME — igual ao RayEpsA/RayEpsB e ao GIDistParams. Todo consumidor do
 // HitShading.hlsli declara estas tres linhas no b0 dele (anexadas no FIM da struct C++
@@ -400,6 +432,14 @@ struct FRCQueryResult {
 };
 
 bool RC_QueryHit(FRCQueryResult R) { return R.Status == RC_QUERY_HIT; }
+// O raio nem chegou a olhar a tabela, e nao vai chegar: os dois limites sao GEOMETRICOS (segmento
+// menor que a celula, cone mais estreito que ela) e nenhum aquecimento os move. Existe para a
+// telemetria de fonte poder separa-los do "o cache errou" de verdade — somados aos misses, eles
+// poriam no fallback um piso que nunca desce. `DISABLED` fica de fora de proposito: ali o cache
+// podia ter respondido e o operador o desligou, que e outra coisa.
+bool RC_QueryIneligible(FRCQueryResult R) {
+    return R.Status == RC_QUERY_SHORT_SEGMENT || R.Status == RC_QUERY_NARROW_CONE;
+}
 
 // Aresta da celula no ponto — a conta que a chave usa, exposta para quem precisa dela ANTES de
 // montar a chave (o gate de cone abaixo, e a elegibilidade do vertice no updater).
@@ -504,6 +544,26 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
     R.Radiance = asfloat(packed.xyz);
     R.Status   = (age >= threshold) ? RC_QUERY_STALE : RC_QUERY_HIT;
     return R;
+}
+
+// FONTE do terminal (quarto regime). Um atomico por WAVE, como todo o resto — nao por lane.
+//
+// Cada lane passa por EXATAMENTE UMA chamada destas, em pontos diferentes do ShadeSurfaceHit, e e
+// isso que faz a soma fechar: `WaveActiveCountBits(true)` conta as lanes ativas NAQUELE ponto, e
+// sob divergencia isso e precisamente a classe que ali se decidiu. Quem sai pelo retorno antecipado
+// do cache hit ja foi contado antes de sair; os demais se classificam depois do fallback.
+//
+// O TOTAL e contado no topo, antes de qualquer divergencia, para ser um denominador de verdade —
+// e nao a soma dos que sobreviveram ate o fim.
+void RC_CountSource(FRadianceCacheParams P, uint statIndex) {
+    [branch] if ((P.Flags & RC_FLAG_STATS_SOURCE) == 0u) return;
+    const uint n = WaveActiveCountBits(true);
+    if (WaveIsFirstLane()) {
+        RWStructuredBuffer<uint> stats =
+            ResourceDescriptorHeap[NonUniformResourceIndex(P.StatsUAV)];
+        uint ignored;
+        InterlockedAdd(stats[statIndex], n, ignored);
+    }
 }
 
 FRCQueryResult RC_QueryEx(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,

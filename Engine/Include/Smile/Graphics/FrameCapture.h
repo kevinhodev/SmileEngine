@@ -134,6 +134,10 @@ namespace Smile {
         // motivo que o de cima, e com mais forca — ele soma atomicos tambem no PRODUTOR, onde eles
         // decidem quem vence a corrida do CAS e, portanto, o conteudo da tabela.
         bool CacheStatsDetail   = false;
+        // QUARTO regime (`Sf`): a fonte do terminal por hit de render. Entra no manifesto e na
+        // etiqueta pelo mesmo motivo dos outros dois — um atomico a mais por hit sombreado muda
+        // custo e contencao, e o `Sd` fica CONGELADO como referencia historica.
+        bool CacheStatsSource   = false;
         // Estado do aquecimento GLOBAL no disparo, e o knob que o governa. `cacheQuery` ja diz se
         // a consulta estava aberta; isto diz POR QUE ela estava fechada, e sao esperas de duracao
         // muito diferente ("resetando" acaba no proximo frame, "enchendo" leva dezenas).
@@ -182,6 +186,12 @@ namespace Smile {
         u32 CachePaths = 0, CachePathVerts = 0, CachePathDepth = 0;
         u32 CacheTermSky = 0, CacheTermCache = 0, CacheTermKilled = 0;
         u32 CacheTermMiss = 0, CacheTermNoQuery = 0, CacheTermLobe = 0, CacheTermOther = 0;
+        // Fonte do terminal do RENDER (so com `cacheStatsSource`). O gate de saida da Fase 5 e
+        // uma CURVA nestes numeros — `srcCache` subindo e `srcDdgi` caindo conforme o cache
+        // aquece —, e curva nao se confere em painel volatil. A soma das quatro classes tem de
+        // fechar com `srcTotal`; e esse o primeiro teste do instrumento.
+        u32 CacheSrcTotal = 0, CacheSrcCache = 0, CacheSrcDDGI = 0;
+        u32 CacheSrcZero = 0, CacheSrcIneligible = 0;
 
         // Semente com que ESTE frame amostrou. Tem de bater com o N do aquecimento; se nao bater,
         // o contrato de warm-up quebrou em algum lugar e o manifesto denuncia.

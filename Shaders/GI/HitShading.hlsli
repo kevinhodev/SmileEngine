@@ -112,11 +112,24 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     //
     // Esta ordem e CONTRATO, nao arrumacao: adiantar o material para "organizar melhor" jogaria
     // fora justamente a economia que o cache existe para dar.
+    // Denominador da telemetria de FONTE, no topo e antes de qualquer divergencia: ele tem de
+    // contar todo hit sombreado, e nao os que sobreviveram ate o fim da funcao.
+    RC_CountSource(P.Cache, RC_STAT_SRC_TOTAL);
+
     const FPathState Path = PT_MakePathState(rayOrigin, rayDir, hitDist, P.CacheRayRoughness);
+    // Elegibilidade GEOMETRICA do raio, guardada para depois do fallback. Segmento menor que a
+    // celula e cone mais estreito que ela sao limites que nenhum aquecimento move: contados junto
+    // com o `ddgiFallback`, poriam nele um piso permanente e a curva do gate de saida da Fase 5
+    // pareceria travada.
+    bool srcIneligible = false;
     {
         const FRCQueryResult Q = RC_QueryEx(P.Cache, S.Pos, S.CacheN,
                                             Path.SegmentLength, Path.RayRoughness);
-        if (RC_QueryHit(Q)) return Q.Radiance; // outSignedDist ja foi escrito acima
+        if (RC_QueryHit(Q)) {
+            RC_CountSource(P.Cache, RC_STAT_SRC_CACHE);
+            return Q.Radiance; // outSignedDist ja foi escrito acima
+        }
+        srcIneligible = RC_QueryIneligible(Q);
     }
 
     // DEPOIS do miss, e nao antes: daqui para baixo e o caminho caro. O `V` entra aqui pelo mesmo
@@ -128,9 +141,21 @@ float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObjec
     float3 directLighting = PT_ShadeDirectSun(S, M, V, P);
     PT_AddDirectLocal(S, M, V, P, directLighting);
 
-    // Fallback indireto. Na Fase 5 e ESTA linha que troca de fonte — o cache passa a responder
-    // primeiro e o DDGI fica so no ramo de miss. Hoje ela e o unico terminador.
-    const float3 indirect = PT_SampleIndirectFallback(S, rayDir, P);
+    // Fallback indireto — alcancavel SO depois do miss do cache, que e o que a Fase 5 pede e o que
+    // a ordem acima ja garantia desde a Fase 2.
+    //
+    // `ddgiAnswered` separa "o volume cobriu este ponto" de "nao havia volume e o indireto foi zero
+    // explicito". A radiancia devolvida nao distingue os dois — um DDGI legitimamente escuro
+    // tambem sai preto —, e e essa diferenca que o gate de saida da fase le.
+    bool ddgiAnswered;
+    const float3 indirect = PT_SampleIndirectFallback(S, rayDir, P, ddgiAnswered);
+
+    // As tres classes restantes, aqui e nao espalhadas: cada lane cai em exatamente uma, e com a
+    // do cache-hit la em cima a soma fecha com o TOTAL. E essa igualdade que valida o instrumento
+    // antes de qualquer conclusao sobre a curva.
+    if (srcIneligible)     RC_CountSource(P.Cache, RC_STAT_SRC_INELIGIBLE);
+    else if (ddgiAnswered) RC_CountSource(P.Cache, RC_STAT_SRC_DDGI);
+    else                   RC_CountSource(P.Cache, RC_STAT_SRC_ZERO);
 
     const float3 emissive = PT_LoadHitEmissive(geo, S.UV, P.AlbedoLOD);
 

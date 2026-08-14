@@ -117,6 +117,12 @@ namespace SmileEditor {
         Q_PROPERTY(bool radianceCacheStats READ IsRadianceCacheStats NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheStatsDetail READ IsRadianceCacheStatsDetail
                        NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool radianceCacheStatsSource READ IsRadianceCacheStatsSource
+                       NOTIFY GISettingsChanged)
+        // Decomposicao da FONTE do terminal — texto pronto, como o breakdown de miss acima e pelo
+        // mesmo motivo: a regra de "zero medido x nao medido" mora do lado do C++, onde o knob esta.
+        Q_PROPERTY(QString radianceCacheSourceBreakdown READ GetRadianceCacheSourceBreakdown
+                       NOTIFY StatsChanged)
         // Decomposicao dos misses e saude do hash — texto pronto, e nao dez propriedades: o painel
         // nao tem o que fazer com os numeros crus alem de imprimi-los lado a lado, e a regra de
         // "zero medido x nao medido" mora do lado do C++, onde o knob esta.
@@ -325,6 +331,8 @@ namespace SmileEditor {
         QString           GetRadianceCacheWarmup() const;
         bool              IsRadianceCacheStats() const;
         bool              IsRadianceCacheStatsDetail() const;
+        bool              IsRadianceCacheStatsSource() const;
+        QString           GetRadianceCacheSourceBreakdown() const;
         bool              IsRadianceCacheDedicatedUpdate() const;
         double            GetRadianceCacheUpdateFraction() const; // 0..1
         bool              IsRadianceCachePrevTerminal() const;
@@ -361,6 +369,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleRadianceCacheAutoWarmup();
         Q_INVOKABLE void ToggleRadianceCacheStats();
         Q_INVOKABLE void ToggleRadianceCacheStatsDetail();
+        Q_INVOKABLE void ToggleRadianceCacheStatsSource();
         Q_INVOKABLE void ToggleRadianceCacheDedicatedUpdate();
         Q_INVOKABLE void SetRadianceCacheUpdateFraction(double V);
         Q_INVOKABLE void ToggleRadianceCachePrevTerminal();

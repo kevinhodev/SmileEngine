@@ -1315,6 +1315,7 @@ namespace Smile {
         S.CacheMinSamples      = RadianceCache.PublishedMinSampleCount();
         S.CacheStats  = RadianceCache.PublishedStatsThisFrame();
         S.CacheStatsDetail = RadianceCache.PublishedStatsDetailThisFrame();
+        S.CacheStatsSource = RadianceCache.PublishedStatsSourceThisFrame();
         // Aquecimento global. Nao precisa de campo "publicado" como os de cima: o estado so muda no
         // UpdatePerFrame, no comeco do frame, e ler aqui devolve o mesmo valor com que os
         // consumidores foram montados. O que ele acrescenta ao `cacheQuery` e o MOTIVO de a
@@ -1376,6 +1377,11 @@ namespace Smile {
             S.CacheTermNoQuery = Ring.TermNoQuery;
             S.CacheTermLobe    = Ring.TermLobe;
             S.CacheTermOther   = Ring.TermOther;
+            S.CacheSrcTotal      = Ring.SrcTotal;
+            S.CacheSrcCache      = Ring.SrcCache;
+            S.CacheSrcDDGI       = Ring.SrcDDGI;
+            S.CacheSrcZero       = Ring.SrcZero;
+            S.CacheSrcIneligible = Ring.SrcIneligible;
         }
 
         // Antes do ++ dos contadores: e o indice com que ESTE frame amostrou.

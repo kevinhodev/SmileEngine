@@ -93,6 +93,7 @@ namespace Smile {
                 if (S.CacheQuery)  Rc += 'Q';
                 if (S.CacheStats)  Rc += 'S';
                 if (S.CacheStatsDetail) Rc += 'd'; // minusculo: qualifica o S, nao e outro eixo
+                if (S.CacheStatsSource) Rc += 'f'; // idem: `Sf` e a telemetria de FONTE
                 // Piso de confianca, junto do Q porque e a CONSULTA que ele governa — e sai do
                 // nome quando ninguem consultou, onde ele nao descreveria nada. `C1` e o regime
                 // anterior a Fase 4 (uma amostra ja encerrava um caminho), que continua alcancavel
@@ -544,6 +545,15 @@ namespace Smile {
                 File << "  \"cacheTermNoQuery\": "      << _State.CacheTermNoQuery << ",\n";
                 File << "  \"cacheTermLobe\": "         << _State.CacheTermLobe    << ",\n";
                 File << "  \"cacheTermOther\": "        << _State.CacheTermOther   << ",\n";
+                // Fonte do terminal do render. `srcTotal` e o denominador, e a soma das quatro
+                // classes tem de bater com ele — a igualdade e o teste do instrumento, e ela so e
+                // conferivel depois se os cinco numeros estiverem no arquivo.
+                File << "  \"cacheStatsSource\": "      << Bool(_State.CacheStatsSource) << ",\n";
+                File << "  \"srcTotal\": "              << _State.CacheSrcTotal      << ",\n";
+                File << "  \"srcCache\": "              << _State.CacheSrcCache      << ",\n";
+                File << "  \"srcDdgi\": "               << _State.CacheSrcDDGI       << ",\n";
+                File << "  \"srcNoDdgiZero\": "         << _State.CacheSrcZero       << ",\n";
+                File << "  \"srcIneligible\": "         << _State.CacheSrcIneligible << ",\n";
                 File << "  \"cameraX\": " << _State.CameraPos[0] << ",\n";
                 File << "  \"cameraY\": " << _State.CameraPos[1] << ",\n";
                 File << "  \"cameraZ\": " << _State.CameraPos[2] << ",\n";
