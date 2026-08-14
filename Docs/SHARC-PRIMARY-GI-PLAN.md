@@ -8,7 +8,9 @@
 > **Fase 6 EM CURSO** — os 16 primeiros commits não mudaram imagem; o **seletor funcional entrou**
 > e é o primeiro que pode mudar. Nos defaults ele reproduz o comportamento anterior linha a linha;
 > a imagem só muda quando alguém escolhe `DDGI` ou `Off` no primário, ou `Preto` no fallback.
-> **Nada foi medido em GPU ainda** — o que existe é build limpo em Debug e Release e `ctest` 3/3.
+> **Rodou em sessão viva e passou** (2026-08-14), mas isso é *smoke*, não medida: continua sem
+> captura, sem telemetria e sem a matriz de seis gates. Ver "O que o teste vivo cobriu" no bloco
+> `➜ FASE 6`.
 > O contrato inteiro da fase mora em `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse
 > header antes de escrever qualquer linha da fase**. O bloco `➜ FASE 6` abaixo tem o que o seletor
 > decidiu e o que falta. A Fase 4 fechou com os três gates de runtime passados
@@ -636,10 +638,31 @@ A regra que sai daqui vale para o próximo campo "efetivo" da série: **gate mon
 `cacheQuery`; agora vale para o RR. Ler o modo é reconstituir a condição por fora, e reconstituir a
 condição por fora é o começo de uma divergência.
 
-Falta: **medir**. Nada nesta fase foi rodado em GPU ainda — o que existe é build limpo em Debug e
-Release e `ctest` 3/3.
+#### O que o teste vivo cobriu — e o que ele explicitamente NÃO cobriu
 
-Depois: Bugbot e a matriz de runtime (seis gates, definidos com o revisor). **Só então** reduzir o
+**Rodou e passou em sessão viva, 2026-08-14.** O código sai do "compila" e entra no "executa": não
+há crash, device removal nem tela quebrada com o seletor no lugar, e os defaults seguem produzindo
+a imagem de sempre.
+
+⚠️ **Isto é smoke, e a distinção não é preciosismo — é a regra da série.** Vale exatamente o que a
+Fase 4 registrou para o gate de luz/ToD: **conclusão sem artefato arquivado**, que não se reconfere
+depois lendo arquivo, só repetindo o teste. E vale menos que aquele, porque aquele era um gate
+definido *antes*; este é "abri e não quebrou".
+
+O que continua **aberto**, e nenhum deles é observação de tela:
+
+- a **matriz de seis gates** de runtime, ainda por definir com o revisor;
+- captura com `indirectPrimaryEffective: ddgi` comparada às baselines da Fase 0 — o gate "o modo
+  DDGI primary reproduz o baseline para rollback";
+- a leitura dos campos novos do manifesto num arquivo real (`indirectDenoiserEffective`,
+  `directDenoiserEffective`, e o caso `RRPoisoned` dando `None`/`None`);
+- o acoplamento NRD↔reflexões no braço de rollback, que é o mais fácil de não ver: a imagem *parece*
+  certa, e o reflexo é que está cru;
+- as bordas do detector — trocar primário e fallback com o volume vivo, e o volume aparecendo e
+  sumindo — em que o sintoma de erro é histórico sobrevivendo, não pixel errado. **Estas em
+  particular não se veem olhando**: é o tipo de defeito que a Fase 4 só pegou porque tinha gate.
+
+Depois: a matriz de runtime (seis gates, definidos com o revisor). **Só então** reduzir o
 orçamento do DDGI — menos probes por frame, relight menos frequente, cascatas distantes mais
 grosseiras, e eventualmente separar visibilidade de relight. Async e as otimizações da idTech8
 ficam na Fase 7, por decisão explícita: não misturar semântica de fallback com scheduling.
