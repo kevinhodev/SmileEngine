@@ -3057,9 +3057,25 @@ Rectangle {
                     }
 
                     Text {
-                        id: rcDedicatedLabel
+                        id: rcSourceVizLabel
                         x: 20
                         y: rcSourceLabel.y + 30
+                        text: "Mapa da fonte (janela de debug)"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcSourceVizLabel.y - 6
+                        checked: renderModel.giSourceDebug
+                        onToggled: renderModel.ToggleGISourceDebug()
+                    }
+
+                    Text {
+                        id: rcDedicatedLabel
+                        x: 20
+                        y: rcSourceVizLabel.y + 30
                         text: "Produtor dedicado (path tracer esparso)"
                         color: renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily

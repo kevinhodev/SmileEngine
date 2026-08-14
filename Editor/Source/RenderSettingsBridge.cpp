@@ -999,6 +999,9 @@ namespace SmileEditor {
             .arg(Pct(S.SrcCache), Pct(S.SrcDDGI), Pct(S.SrcZero))
             .arg(S.SrcTotal).arg(Check).arg(Pct(S.SrcIneligible));
     }
+    bool RenderSettingsBridge::IsGISourceDebug() const {
+        return Renderer && Renderer->Settings().GetGISourceDebug();
+    }
     bool RenderSettingsBridge::IsRadianceCacheDedicatedUpdate() const {
         return Renderer && Renderer->Settings().GetRadianceCacheDedicatedUpdate();
     }
@@ -1217,6 +1220,12 @@ namespace SmileEditor {
             !A->Settings().GetRadianceCacheStatsSourceEnabled());
         emit GISettingsChanged();
         emit StatsChanged();
+    }
+    void RenderSettingsBridge::ToggleGISourceDebug() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetGISourceDebug(!A->Settings().GetGISourceDebug());
+        emit GISettingsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheDedicatedUpdate() {
         if (!Renderer) return;

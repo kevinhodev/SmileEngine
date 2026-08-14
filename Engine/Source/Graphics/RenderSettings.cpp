@@ -344,6 +344,18 @@ namespace Smile {
         return R.RadianceCache.GetStatsDetailEnabled();
     }
 
+    void FRenderSettings::SetGISourceDebug(bool _V) {
+        if (_V == R.ReSTIRGI.GetSourceDebug()) return;
+        R.ReSTIRGI.SetSourceDebug(_V);
+        // O registro dos alvos e reconstruido do ZERO e so em eventos de setup — ele nao roda por
+        // frame. Como o alvo da fonte so se registra com o toggle ligado (senao a UI ofereceria
+        // uma textura que ninguem esta enchendo), a troca do toggle E um desses eventos.
+        R.RegisterDebugTargets();
+        // Nao invalida historico nenhum: escrever falsa-cor num alvo proprio nao muda o que
+        // qualquer acumulador guarda. O `DebugParams.y` decide a escrita por frame.
+    }
+    bool FRenderSettings::GetGISourceDebug() const { return R.ReSTIRGI.GetSourceDebug(); }
+
     void FRenderSettings::SetRadianceCacheStatsSourceEnabled(bool _V) {
         if (_V == R.RadianceCache.GetStatsSourceEnabled()) return;
         // Terceira vez que este bloco se repete, e a repeticao e o ponto: cada regime de medicao

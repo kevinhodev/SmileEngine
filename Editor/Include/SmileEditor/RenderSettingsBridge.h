@@ -125,6 +125,9 @@ namespace SmileEditor {
                        NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheStatsSource READ IsRadianceCacheStatsSource
                        NOTIFY GISettingsChanged)
+        // Mapa por pixel da fonte do candidato tracado. Alvo proprio na janela de debug — o
+        // contador diz QUANTO, este diz ONDE.
+        Q_PROPERTY(bool giSourceDebug READ IsGISourceDebug NOTIFY GISettingsChanged)
         // Decomposicao da FONTE do terminal — texto pronto, como o breakdown de miss acima e pelo
         // mesmo motivo: a regra de "zero medido x nao medido" mora do lado do C++, onde o knob esta.
         Q_PROPERTY(QString radianceCacheSourceBreakdown READ GetRadianceCacheSourceBreakdown
@@ -338,6 +341,7 @@ namespace SmileEditor {
         bool              IsRadianceCacheStats() const;
         bool              IsRadianceCacheStatsDetail() const;
         bool              IsRadianceCacheStatsSource() const;
+        bool              IsGISourceDebug() const;
         QString           GetRadianceCacheSourceBreakdown() const;
         // Contadores + meta + capacidade numa leitura SO, por valor e sob um lock so. Falso quando
         // nao ha snapshot valido. Todo getter de telemetria passa por aqui: pedir as partes em
@@ -381,6 +385,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleRadianceCacheStats();
         Q_INVOKABLE void ToggleRadianceCacheStatsDetail();
         Q_INVOKABLE void ToggleRadianceCacheStatsSource();
+        Q_INVOKABLE void ToggleGISourceDebug();
         Q_INVOKABLE void ToggleRadianceCacheDedicatedUpdate();
         Q_INVOKABLE void SetRadianceCacheUpdateFraction(double V);
         Q_INVOKABLE void ToggleRadianceCachePrevTerminal();

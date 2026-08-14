@@ -70,6 +70,13 @@ namespace Smile {
             Res0State[i] = Res1State[i] = D3D12_RESOURCE_STATE_COMMON;
         }
         Free(PackSrvTable, 4); Free(PackUavTable, 4); Free(NrdOutSRV, 1);
+        // O alvo da fonte entra aqui como todo o resto. Faltando, cada resize perdia dois slots do
+        // heap para sempre — e, se o setup seguinte falhasse, o SRV antigo continuaria registrado
+        // apontando para uma textura que ja nao existe.
+        Free(SourceDebugSRV, 1);
+        Free(SourceDebugUAV, 1);
+        SourceDebugTex.Reset();
+        SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
         GITexture.Reset();
         GITextureState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
@@ -341,7 +348,11 @@ namespace Smile {
         Transition(_CL, Res0[p].Get(), Res0State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, Res1[p].Get(), Res1State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        if (SourceDebugTex) {
+        // So com o debug LIGADO. A justificativa anterior ("o estado e do recurso, nao do knob")
+        // nao se sustenta: o ultimo frame ligado termina em SRV, e desligado o recurso pode
+        // simplesmente ficar la — ninguem escreve nele. Sem o gate eram duas barreiras por frame
+        // (SRV->UAV->SRV) para um alvo que o shader nem toca.
+        if (SourceDebug && SourceDebugTex) {
             Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         }
@@ -387,13 +398,11 @@ namespace Smile {
         Transition(_CL, GITexture.Get(), GITextureState,
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        // O alvo da fonte segue para leitura pelo mesmo caminho e pelo mesmo motivo: ele e
-        // registrado no DebugTargets e o FDebugView nao emite barreira nenhuma. Sem esta, o visor
-        // leria um recurso em UNORDERED_ACCESS — erro de debug layer e leitura indefinida.
-        //
-        // Sempre, e nao so com o debug ligado: o estado do recurso e do RECURSO, nao do knob, e
-        // deixa-lo em UAV quando o operador desliga o toggle poria a barreira em divida.
-        if (SourceDebugTex) {
+        // O alvo da fonte volta para leitura pelo mesmo motivo da GITexture crua: ele e registrado
+        // no DebugTargets e o FDebugView nao emite barreira nenhuma — sem esta, o visor leria um
+        // recurso em UNORDERED_ACCESS. Gatada igual a de subida: o par abre e fecha junto, entao o
+        // recurso nunca fica em UAV depois de um frame com o debug desligado.
+        if (SourceDebug && SourceDebugTex) {
             Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -402,7 +411,11 @@ namespace Smile {
     }
 
     void FReSTIRGI::OnRegisterDebugTargets() {
-        if (!SourceDebugTex || SourceDebugSRV == kInvalidSlot) return;
+        // Exige o toggle LIGADO, e nao so o recurso existir: registrado com o debug desligado, o
+        // alvo aparece na lista e o operador pode seleciona-lo — para ver uma textura que ninguem
+        // escreveu neste frame (lixo de alocacao, ou o mapa de quando o toggle esteve ligado).
+        // Um alvo so deve ser oferecido quando alguem esta enchendo ele.
+        if (!SourceDebug || !SourceDebugTex || SourceDebugSRV == kInvalidSlot) return;
         // Raw: o shader ja escreve cor de diagnostico em faixa visivel. Passar por tonemap
         // distorceria a leitura — verde e laranja tem de sair como sao.
         DebugTargets::Register(kSourceDebugTargetName, SourceDebugSRV, EDebugDecode::Raw,

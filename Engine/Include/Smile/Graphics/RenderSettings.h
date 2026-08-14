@@ -142,6 +142,12 @@ namespace Smile {
         // dos CONSUMIDORES, porque o terminador do raio secundario acabou de trocar. Mesma
         // invalidacao do toggle manual de leitura, nos dois sentidos.
         void NotifyRadianceCacheQueryChanged();
+        // Mapa por pixel da FONTE do candidato tracado pelo ReSTIR GI (cache / DDGI / zero / ceu /
+        // morto). E do FReSTIRGI, e nao do cache, mas mora aqui junto do resto do diagnostico de
+        // GI. Nao invalida historico — so pinta um alvo de debug. Re-registra os alvos, porque o
+        // alvo so e oferecido enquanto alguem o enche.
+        void SetGISourceDebug(bool V);
+        bool GetGISourceDebug() const;
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);
