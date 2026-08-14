@@ -36,6 +36,7 @@ namespace Smile {
     class Renderer;
     // So a referencia de retorno precisa do tipo aqui; a definicao chega pelo Renderer.h no .cpp.
     struct FRadianceCacheStats;
+    struct FRadianceCacheStatsMeta;
 
     class FRenderSettings {
     public:
@@ -165,6 +166,10 @@ namespace Smile {
         u32  GetRadianceCacheDebugMode() const;
         void ResetRadianceCache();
         const FRadianceCacheStats& RadianceCacheStats() const;
+        // Validade e regime DO SNAPSHOT acima. Ler os dois juntos nao e recomendacao: o snapshot
+        // vem de frames atras e pode ter sido tirado sob outro regime, ou ter sido invalidado
+        // depois por reset/desligamento.
+        const FRadianceCacheStatsMeta& RadianceCacheStatsMeta() const;
         u64  RadianceCacheBytes() const;
         u32  RadianceCacheCapacity() const;
         void SetUseReSTIRGI(bool V);

@@ -966,9 +966,9 @@ namespace SmileEditor {
     QString RenderSettingsBridge::GetRadianceCacheSourceBreakdown() const {
         if (!Renderer) return QString();
         const auto& Set = Renderer->Settings();
-        // Mesma regra da linha de miss, pela mesma função: cache participando + base ligada + o
-        // sub-regime desta linha. O shader só conta com todos eles, e a UI não pode afirmar mais.
-        if (!CacheTelemetryLive() || !Set.GetRadianceCacheStatsSourceEnabled()) return QString();
+        // Mesma regra da linha de miss, pela mesma função e pela mesma fonte: o regime do
+        // SNAPSHOT, e não o toggle pedido.
+        if (!CacheTelemetryLive() || !Set.RadianceCacheStatsMeta().Source) return QString();
         const auto& S = Set.RadianceCacheStats();
         // ZERO MEDIDO não é "não medido". Um frame sem nenhum hit secundário — câmera para o céu,
         // ou todos os raios escapando — é medição válida, e imprimir "off" ali esconderia
@@ -1064,14 +1064,16 @@ namespace SmileEditor {
             .arg(QString::number(GetRadianceCacheConvergence(), 'f', 1))
             .arg(S.Evicted);
     }
-    // O regime de medição EFETIVO por trás de uma linha de telemetria: o cache participando do
-    // frame E a instrumentação-base ligada. Uma regra só, aqui, porque ela já drifou duas vezes —
-    // o QML tinha a dele e o shader a sua. Com o cache desligado o resolve não roda, nada é
-    // reescrito, e o que sobrou no readback descreve um frame de idade desconhecida.
+    // O regime de medição por trás de uma linha de telemetria — lido DO SNAPSHOT, e não dos
+    // toggles. A diferença é a correção inteira: o toggle diz o que foi PEDIDO agora, e os números
+    // na tela vêm de um readback de frames atrás, tirado sob o regime que valia então. Entre uma
+    // coisa e outra cabem um reset, um reload e uma troca de regime.
+    //
+    // Uma regra só, aqui, porque ela já drifou duas vezes — o QML tinha a dele e o shader a sua.
     bool RenderSettingsBridge::CacheTelemetryLive() const {
         if (!Renderer) return false;
-        const auto& S = Renderer->Settings();
-        return S.GetRadianceCacheEnabled() && S.GetRadianceCacheStatsEnabled();
+        const auto& M = Renderer->Settings().RadianceCacheStatsMeta();
+        return M.Valid && M.Stats;
     }
 
     QString RenderSettingsBridge::GetRadianceCacheMissBreakdown() const {
@@ -1079,7 +1081,9 @@ namespace SmileEditor {
         // QML que decide isso perguntando `text.length`. Um "detalhe desligado" na tela ocupava
         // altura para repetir o que o toggle logo acima já diz.
         if (!CacheTelemetryLive()) return QString();
-        if (!Renderer->Settings().GetRadianceCacheStatsDetailEnabled()) return QString();
+        // O sub-regime também sai do SNAPSHOT: ligar o detalhe agora não faz os números de dois
+        // frames atrás terem sido medidos com ele.
+        if (!Renderer->Settings().RadianceCacheStatsMeta().Detail) return QString();
         const auto& S = Renderer->Settings().RadianceCacheStats();
         // Percentual sobre as CONSULTAS, e nao sobre os misses: "12% dos raios pararam por cone
         // estreito" e uma frase acionavel; "38% dos erros" depende de quantos erros houve e muda
@@ -1131,11 +1135,17 @@ namespace SmileEditor {
                  TermPct(S.TermOther));
     }
 
+    // Os quatro toggles que governam a telemetria emitem TAMBEM o StatsChanged. Sem isso as linhas
+    // de diagnostico so reagiriam ao Timer do painel — que para junto com o cache —, e desligar a
+    // instrumentacao deixava numeros antigos na tela por tempo indefinido. Um Q_PROPERTY tem UM
+    // sinal de NOTIFY, entao quem muda a validade avisa nos dois canais em vez de a propriedade
+    // escutar dois.
     void RenderSettingsBridge::ToggleRadianceCache() {
         if (!Renderer) return;
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheEnabled(!A->Settings().GetRadianceCacheEnabled());
         emit GISettingsChanged();
+        emit StatsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheQuery() {
         if (!Renderer) return;
@@ -1154,6 +1164,7 @@ namespace SmileEditor {
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheStatsEnabled(!A->Settings().GetRadianceCacheStatsEnabled());
         emit GISettingsChanged();
+        emit StatsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheStatsDetail() {
         if (!Renderer) return;
@@ -1161,6 +1172,7 @@ namespace SmileEditor {
         A->Settings().SetRadianceCacheStatsDetailEnabled(
             !A->Settings().GetRadianceCacheStatsDetailEnabled());
         emit GISettingsChanged();
+        emit StatsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheStatsSource() {
         if (!Renderer) return;
@@ -1168,6 +1180,7 @@ namespace SmileEditor {
         A->Settings().SetRadianceCacheStatsSourceEnabled(
             !A->Settings().GetRadianceCacheStatsSourceEnabled());
         emit GISettingsChanged();
+        emit StatsChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheDedicatedUpdate() {
         if (!Renderer) return;

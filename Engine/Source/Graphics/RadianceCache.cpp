@@ -454,6 +454,12 @@ namespace Smile {
             Transition(CL, StatsBuf.Get(), StatsState, D3D12_RESOURCE_STATE_COPY_SOURCE);
             CL->CopyBufferRegion(StatsReadback[FrameSlot].Get(), 0, StatsBuf.Get(), 0, kStatBytes);
             StatsReadbackPending[FrameSlot] = true;
+            // O REGIME viaja junto da copia. Aqui os Published* ja sao finais — todos os
+            // consumidores do frame ja pediram params —, e e a ultima chance de saber sob que
+            // regime estes numeros foram produzidos: quando o anel os entregar, dois frames
+            // adiante, os knobs podem ser outros e o painel compararia coisas diferentes.
+            StatsSlotMeta[FrameSlot] = { /*Valid*/ true, PublishedStats, PublishedDetail,
+                                         PublishedSource };
             Transition(CL, StatsBuf.Get(), StatsState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         }
 
@@ -846,6 +852,11 @@ namespace Smile {
             return;
         }
         StatsReadbackPending[InFrameSlot] = false;
+        // O meta do slot vira o meta publicado. Um slot invalidado entre a copia e a leitura
+        // (reset, cache desligado) chega com Valid = false e o painel para de exibir — os numeros
+        // continuam sendo copiados de proposito, porque um snapshot invalido ainda ajuda a depurar
+        // o painel; o que ele nao pode e ser apresentado como atual.
+        StatsMeta = StatsSlotMeta[InFrameSlot];
 
         void* Mapped = nullptr;
         D3D12_RANGE ReadRange{ 0, kStatBytes };

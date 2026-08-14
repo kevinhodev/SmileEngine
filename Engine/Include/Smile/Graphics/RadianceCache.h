@@ -191,6 +191,22 @@ namespace Smile {
         u32 SrcIneligible = 0;
     };
 
+    // O que um snapshot de contadores PRECISA carregar junto para significar alguma coisa: se ele
+    // ainda descreve o presente, e sob qual regime foi medido.
+    //
+    // Sem isto o painel comparava numeros com os TOGGLES PEDIDOS, que e outra coisa: o readback
+    // vem kFramesInFlight frames atras, e entre a medida e a leitura o operador pode ter trocado
+    // de regime, resetado a tabela ou desligado o cache. O sintoma era um numero do regime
+    // anterior exibido como se fosse de agora — e, com o cache desligado, exibido para sempre,
+    // porque nada mais o reescreve.
+    struct FRadianceCacheStatsMeta {
+        bool Valid  = false; // ha snapshot e ele nao foi invalidado depois de tirado
+        // Regime EFETIVO do frame que o produziu — o que o shader recebeu, nao o que o knob pedia.
+        bool Stats  = false;
+        bool Detail = false;
+        bool Source = false;
+    };
+
     // World Radiance Cache — radiancia de SAIDA em espaco de mundo, hash espacial
     // multirresolucao [Gautron2020] / [Sousa2025] / SHaRC.
     //
@@ -464,6 +480,9 @@ namespace Smile {
         // junto dos outros Collect* do Renderer.
         void CollectStats(u32 InFrameSlot);
         const FRadianceCacheStats& Stats() const { return StatsCPU; }
+        // Validade e regime DO SNAPSHOT acima. Quem exibe tem de ler os dois juntos — o `Stats()`
+        // sozinho nao diz de quando e nem de qual regime ele veio.
+        const FRadianceCacheStatsMeta& StatsMetaCPU() const { return StatsMeta; }
 
         void SetDebugMode(ERadianceCacheDebugMode M) { DebugMode = M; }
         ERadianceCacheDebugMode GetDebugMode() const { return DebugMode; }
@@ -499,12 +518,19 @@ namespace Smile {
             ResetPending = true;
             Warmup       = ERadianceCacheWarmup::Resetting;
             FillFrames   = 0;
+            // Os snapshots em voo descrevem a tabela ANTERIOR. Eles nao passam a estar errados —
+            // mediram bem o frame deles —, mas param de descrever o presente, e e isso que um
+            // painel afirma ao exibi-los.
+            InvalidateStatsSnapshot();
         }
 
         u32  Capacity() const { return CapacityV; }
         u64  MemoryBytes() const;
 
-        void SetEnabled(bool V)       { Enabled = V; }
+        // Desligar INVALIDA o snapshot, e este e o caso que mais enganava: sem o cache o resolve
+        // nao roda, nenhuma copia nova e gravada, e os ultimos numeros ficariam na tela
+        // indefinidamente — nao por um frame, para sempre.
+        void SetEnabled(bool V)       { Enabled = V; if (!V) InvalidateStatsSnapshot(); }
         bool GetEnabled() const       { return Enabled; }
         // Query e update sao knobs separados de proposito: o A/B util e ligar o update, deixar o
         // cache encher por alguns segundos e SO entao ligar a leitura. Ligando os dois de uma vez
@@ -655,7 +681,11 @@ namespace Smile {
         // garantiu que a copia terminou. Sem o anel, ler no mesmo frame seria um stall da fila.
         Microsoft::WRL::ComPtr<ID3D12Resource> StatsReadback[FCommandQueue::kFramesInFlight];
         bool StatsReadbackPending[FCommandQueue::kFramesInFlight] = {};
+        // Metadados POR SLOT, gravados junto da copia: o regime e uma propriedade do frame que
+        // mediu, e ele nao sobrevive a viagem pelo anel de outra forma.
+        FRadianceCacheStatsMeta StatsSlotMeta[FCommandQueue::kFramesInFlight] = {};
         FRadianceCacheStats StatsCPU{};
+        FRadianceCacheStatsMeta StatsMeta{};
 
         // Fora do anel: a captura sincroniza a fila e le no mesmo frame, entao um buffer basta —
         // e nao pode ser o do anel, sob pena de publicar zeros de query no painel. Ver
@@ -777,6 +807,13 @@ namespace Smile {
         // direto para Active no primeiro frame depois de um reset, que e exatamente o caso que
         // ele existe para cobrir.
         static constexpr u32 kWarmupStatsLag = FCommandQueue::kFramesInFlight + 1u;
+
+        // Os snapshots deixam de descrever o presente. Nao apaga os NUMEROS de proposito: quem os
+        // le passa pelo `Valid`, e manter os valores ajuda a depurar o proprio painel.
+        void InvalidateStatsSnapshot() {
+            StatsMeta.Valid = false;
+            for (auto& M : StatsSlotMeta) M.Valid = false;
+        }
         bool Initialized  = false;
         bool Ready        = false;
         // Zeradas no UpdatePerFrame, escritas pelo ShaderParams. Mutaveis porque o ShaderParams e
