@@ -3232,7 +3232,10 @@ Rectangle {
                         x: 20
                         y: rcStatsText.y + rcStatsText.height + 6
                         width: parent.width - 40
-                        visible: renderModel.radianceCacheStatsSource
+                        // O regime EFETIVO: o sub-toggle sozinho não faz o shader contar, e a
+                        // linha ficaria visível mostrando números de outro frame.
+                        visible: renderModel.radianceCacheStats &&
+                                 renderModel.radianceCacheStatsSource
                         height: visible ? implicitHeight : 0
                         wrapMode: Text.WordWrap
                         text: renderModel.radianceCacheSourceBreakdown
@@ -3249,7 +3252,9 @@ Rectangle {
                         x: 20
                         y: rcSourceText.y + rcSourceText.height + (rcSourceText.visible ? 6 : 0)
                         width: parent.width - 40
-                        visible: renderModel.radianceCacheStatsDetail
+                        // Idem à linha de fonte acima — o detalhe também exige a base.
+                        visible: renderModel.radianceCacheStats &&
+                                 renderModel.radianceCacheStatsDetail
                         height: visible ? implicitHeight : 0
                         wrapMode: Text.WordWrap
                         text: renderModel.radianceCacheMissBreakdown

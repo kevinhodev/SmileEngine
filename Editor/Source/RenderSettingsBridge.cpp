@@ -965,8 +965,18 @@ namespace SmileEditor {
     }
     QString RenderSettingsBridge::GetRadianceCacheSourceBreakdown() const {
         if (!Renderer) return QString();
-        const auto& S = Renderer->Settings().RadianceCacheStats();
-        if (S.SrcTotal == 0) return QStringLiteral("fonte: — (telemetria off)");
+        const auto& Set = Renderer->Settings();
+        // O regime EFETIVO, e não o toggle da fonte sozinho: o shader só conta com os dois ligados
+        // (ver FRadianceCache::ShaderParams). Com a instrumentação-base desligada o que sobrou no
+        // readback descreve outro frame — e o painel o mostraria como se fosse de agora.
+        const bool Measuring = Set.GetRadianceCacheStatsEnabled() &&
+                               Set.GetRadianceCacheStatsSourceEnabled();
+        if (!Measuring) return QStringLiteral("fonte: — (telemetria off)");
+        const auto& S = Set.RadianceCacheStats();
+        // ZERO MEDIDO não é "não medido". Um frame sem nenhum hit secundário — câmera para o céu,
+        // ou todos os raios escapando — é medição válida, e imprimir "off" ali esconderia
+        // justamente o caso que faria alguém desconfiar do número.
+        if (S.SrcTotal == 0) return QStringLiteral("fonte: nenhum hit sombreado neste frame");
         const double T = static_cast<double>(S.SrcTotal);
         auto Pct = [T](Smile::u32 N) {
             return QString::number(100.0 * static_cast<double>(N) / T, 'f', 1) +

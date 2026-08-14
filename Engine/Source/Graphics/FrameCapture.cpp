@@ -91,7 +91,12 @@ namespace Smile {
                 std::string Rc = "rc";
                 if (S.CacheUpdate) Rc += 'U';
                 if (S.CacheQuery)  Rc += 'Q';
-                if (S.CacheStats)  Rc += 'S';
+                // O `S` sai quando QUALQUER regime de instrumentacao entregou bit — e nao so o de
+                // acerto/erro. Os tres campos publicados sao independentes de proposito
+                // (`cacheStats` exige consulta, os outros dois nao), e sem esta uniao um frame com
+                // a consulta fechada e o detalhe ou a fonte ligados produzia etiqueta `d` ou `f`
+                // sozinha: um regime que nao existe, e que na pasta se pareceria com outro.
+                if (S.CacheStats || S.CacheStatsDetail || S.CacheStatsSource) Rc += 'S';
                 if (S.CacheStatsDetail) Rc += 'd'; // minusculo: qualifica o S, nao e outro eixo
                 if (S.CacheStatsSource) Rc += 'f'; // idem: `Sf` e a telemetria de FONTE
                 // Piso de confianca, junto do Q porque e a CONSULTA que ele governa — e sai do

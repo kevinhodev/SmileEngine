@@ -1377,6 +1377,15 @@ namespace Smile {
             S.CacheTermNoQuery = Ring.TermNoQuery;
             S.CacheTermLobe    = Ring.TermLobe;
             S.CacheTermOther   = Ring.TermOther;
+        }
+
+        // A FONTE tem gate PROPRIO, e nao o `update || query` acima. Os dois blocos medem
+        // populacoes diferentes: aquele descreve a tabela e as consultas a ela, este descreve o
+        // TERMINAL de todo hit sombreado — que existe mesmo com a consulta fechada. O caso concreto
+        // e legitimo e vai acontecer: reflexoes medindo `Sf` com o cache sem update nem query, para
+        // saber quanto delas termina em DDGI. Ali o shader conta e o manifesto gravaria zeros.
+        if (S.CacheStatsSource) {
+            const FRadianceCacheStats& Ring = RadianceCache.Stats();
             S.CacheSrcTotal      = Ring.SrcTotal;
             S.CacheSrcCache      = Ring.SrcCache;
             S.CacheSrcDDGI       = Ring.SrcDDGI;
