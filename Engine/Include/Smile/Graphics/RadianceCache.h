@@ -186,9 +186,12 @@ namespace Smile {
         u32 SrcDDGI       = 0; // o cache errou e o volume respondeu
         u32 SrcZero       = 0; // o cache errou e nao havia volume: zero explicito
         // Nem chegou a consultar: segmento menor que a celula ou cone mais estreito que ela. Estes
-        // raios ESTAO tambem em `SrcDDGI` ou `SrcZero` — eles receberam radiancia de alguem. O
-        // contador existe para dizer quanto do fallback e ESTRUTURAL (geometria, que nenhum
-        // aquecimento move) e, portanto, quanto da curva do gate nao vai descer nunca.
+        // raios estao TAMBEM em `SrcDDGI` ou `SrcZero` — nunca em `SrcCache`, por construcao.
+        //
+        // Ele mede quanto dos hits o cache NAO PODE atender por geometria, e so isso. Quanto disso
+        // caiu especificamente no DDGI e interseccao, e interseccao nao sai de totais marginais:
+        // precisaria de um contador de `ineligible && ddgiAnswered`, que nao existe e que esta
+        // fase nao exige.
         u32 SrcIneligible = 0;
     };
 

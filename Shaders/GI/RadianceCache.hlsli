@@ -574,12 +574,19 @@ float3 RC_SourceColor(uint kind) {
     }
 }
 
-// FONTE do terminal (quarto regime). Um atomico por WAVE, como todo o resto — nao por lane.
+// Contagem por WAVE, como todo o resto — nao por lane. Um atomico por classe presente na wave.
 //
-// Cada lane passa por EXATAMENTE UMA chamada destas, em pontos diferentes do ShadeSurfaceHit, e e
-// isso que faz a soma fechar: `WaveActiveCountBits(true)` conta as lanes ativas NAQUELE ponto, e
-// sob divergencia isso e precisamente a classe que ali se decidiu. Quem sai pelo retorno antecipado
-// do cache hit ja foi contado antes de sair; os demais se classificam depois do fallback.
+// CONTRATO, por EIXO — e ele deixou de ser "uma chamada por lane" quando os eixos se separaram:
+//
+//   eixo FONTE (este): cada lane passa por exatamente UMA chamada, em pontos diferentes do
+//     ShadeSurfaceHit. Quem sai pelo retorno antecipado do cache hit e contado antes de sair; os
+//     demais se classificam depois do fallback. E isso que faz `cache + ddgi + zero == total`.
+//   eixo ELEGIBILIDADE (RC_CountEligibility, abaixo): uma lane inelegivel chama TAMBEM ali, ou
+//     seja faz duas chamadas no total. Nao ha contradicao — sao dois eixos —, mas quem ler
+//     "exatamente uma" e for somar tudo vai errar.
+//
+// `WaveActiveCountBits(true)` conta as lanes ativas NAQUELE ponto, e sob divergencia isso e
+// precisamente a classe que ali se decidiu.
 //
 // O TOTAL e contado no topo, antes de qualquer divergencia, para ser um denominador de verdade —
 // e nao a soma dos que sobreviveram ate o fim.
@@ -592,6 +599,17 @@ void RC_CountSource(FRadianceCacheParams P, uint statIndex) {
         uint ignored;
         InterlockedAdd(stats[statIndex], n, ignored);
     }
+}
+
+// O SEGUNDO eixo, com nome proprio para o call site nao parecer uma quarta classe de fonte. Ele
+// cruza com `SRC_DDGI` e `SRC_ZERO` — nunca com `SRC_CACHE`, por construcao: um raio inelegivel
+// nem chega a olhar a tabela.
+//
+// O que ele NAO diz, e vale registrar para ninguem afirmar de graca: quanto da inelegibilidade
+// caiu especificamente no DDGI. Isso seria um contador de `ineligible && ddgiAnswered`, e ele nao
+// existe — os totais marginais nao respondem interseccao.
+void RC_CountEligibility(FRadianceCacheParams P) {
+    RC_CountSource(P, RC_STAT_SRC_INELIGIBLE);
 }
 
 FRCQueryResult RC_QueryEx(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,

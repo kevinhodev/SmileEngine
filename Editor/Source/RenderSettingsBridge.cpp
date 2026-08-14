@@ -989,11 +989,13 @@ namespace SmileEditor {
             ? QStringLiteral("✓")
             : QStringLiteral("✗ sobra %1").arg(static_cast<long long>(S.SrcTotal) -
                                                static_cast<long long>(Sum));
-        // `inelegível` vem depois do travessão porque é OUTRO EIXO: ele cruza com as três fontes
-        // em vez de competir com elas. É a parcela do DDGI que é estrutural — geometria, não
-        // aquecimento —, e portanto a que não desce com o cache esquentando.
+        // `inelegível` vem depois do travessão porque é OUTRO EIXO. Ele cruza com DDGI e com zero
+        // — nunca com cache, por construção —, e o texto diz exatamente isso e nada além: os
+        // totais marginais NÃO respondem quanto da inelegibilidade caiu especificamente no DDGI.
+        // Afirmar "é a parcela estrutural do DDGI" seria inventar uma interseção não medida; para
+        // tê-la seria preciso um contador de `ineligible && ddgiAnswered`, que não existe.
         return QStringLiteral("fonte: cache %1 · DDGI %2 · zero %3 (%4 hits · soma %5)"
-                              " — inelegíveis %6 (dentro dos acima)")
+                              " — inelegíveis %6 (em DDGI ou zero)")
             .arg(Pct(S.SrcCache), Pct(S.SrcDDGI), Pct(S.SrcZero))
             .arg(S.SrcTotal).arg(Check).arg(Pct(S.SrcIneligible));
     }

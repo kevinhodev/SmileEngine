@@ -191,8 +191,8 @@ namespace Smile {
         // aquece —, e curva nao se confere em painel volatil.
         //
         // DOIS EIXOS: `cache + ddgi + zero == total` (quem forneceu) e `ineligible` (por que nao
-        // foi o cache), que CRUZA com os tres — um raio inelegivel recebeu DDGI ou zero como
-        // qualquer outro. Ele e a parcela ESTRUTURAL do fallback, a que nao desce com aquecimento.
+        // foi o cache), que cruza com DDGI e com zero — nunca com cache. Quanto da inelegibilidade
+        // caiu no DDGI e interseccao, e nao sai destes numeros: leia os dois eixos como marginais.
         u32 CacheSrcTotal = 0, CacheSrcCache = 0, CacheSrcDDGI = 0;
         u32 CacheSrcZero = 0, CacheSrcIneligible = 0;
 

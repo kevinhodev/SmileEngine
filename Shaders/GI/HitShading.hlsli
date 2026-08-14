@@ -178,10 +178,11 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
         RC_CountSource(P.Cache, RC_STAT_SRC_ZERO);
         outSource = RC_SRC_ZERO;
     }
-    // Eixo separado, contado DEPOIS da reconvergencia: aqui a wave volta inteira e o
-    // `WaveActiveCountBits` de dentro conta so as lanes inelegiveis. Somar por cima das duas
-    // classes acima e o ponto — este contador cruza com elas, nao compete.
-    if (srcIneligible) RC_CountSource(P.Cache, RC_STAT_SRC_INELIGIBLE);
+    // Eixo separado — e com nome proprio, para o call site nao parecer uma quarta classe de fonte.
+    // Contado DEPOIS da reconvergencia: aqui a wave volta inteira e o `WaveActiveCountBits` de
+    // dentro conta so as lanes inelegiveis. Esta lane ja foi contada acima, em DDGI ou ZERO; sao
+    // duas chamadas em dois eixos, e nao duas classes para a mesma pergunta.
+    if (srcIneligible) RC_CountEligibility(P.Cache);
 
     const float3 emissive = PT_LoadHitEmissive(geo, S.UV, P.AlbedoLOD);
 
