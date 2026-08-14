@@ -2498,7 +2498,8 @@ namespace Smile {
                                         0.0f, 0.0f, 0.0f };
         }
 
-        if (UseGI && DDGI.IsReady()) {
+        // Superficie: estes campos sao lidos pelo DeferredLighting e pelo ForwardBlend.
+        if (DDGISurfaceAvailable()) {
             const Vec3 GMin = DDGI.GridMin();
             const Vec3 GCnt = DDGI.GridCount();
             _CB->DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
@@ -2647,7 +2648,7 @@ namespace Smile {
             VF.NearZ            = _Vw.NearZ;
             VF.RenderW          = RenderWidth();
             VF.RenderH          = RenderHeight();
-            if (UseGI && DDGI.IsReady()) {
+            if (DDGIVolumetricAvailable()) {
                 const Vec3 GMin = DDGI.GridMin();
                 const Vec3 GCnt = DDGI.GridCount();
                 VF.DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
@@ -2985,7 +2986,7 @@ namespace Smile {
         // grade sem ser construida e o updater cairia no loop O(N) de luzes. Nao seria errado (o
         // loop e a referencia exata), mas o custo do passe mudaria conforme toggles que nao tem
         // nada a ver com ele, e e justamente esse custo que a fase precisa medir isolado.
-        const bool HasReGIRConsumer = (UseGI && DDGI.IsReady()) ||
+        const bool HasReGIRConsumer = DDGIVolumeLive() ||
                                       Modes.ReflectionsActive || Modes.ReSTIRGIActive ||
                                       Modes.RadianceCacheUpdateActive;
         // Extracao dos triangulos emissivos. Sai de graca no caso comum: a geometria emissiva e
@@ -3028,7 +3029,7 @@ namespace Smile {
         // para os tres de qualquer jeito (custa nada, e o passe pode nem rodar), mas so quem roda
         // entra no registro que o manifesto le — senao a captura afirmaria cache ativo num frame
         // em que nenhum trace o consultou.
-        const bool DDGIWillTrace = UseGI && DDGI.IsReady();
+        const bool DDGIWillTrace = DDGIVolumeLive();
         DDGI.SetRadianceCacheParams(RadianceCache.ShaderParams(LegacyProducer, DDGIWillTrace));
         ReSTIRGI.SetRadianceCacheParams(
             RadianceCache.ShaderParams(LegacyProducer, Modes.ReSTIRGIActive));
@@ -3062,7 +3063,7 @@ namespace Smile {
         }
 
         GIComputeFence = 0;
-        if (UseGI && DDGI.IsReady()) {
+        if (DDGIVolumeLive()) {
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, TemporalSampleIndex, GILightCount);
             if (UseAsyncCompute && DDGI.CanRunAsync()) {
@@ -3411,7 +3412,7 @@ namespace Smile {
                 LocalShadows.EnsureReadableCompute(CommandList);
                 VolumetricFog.Execute(CommandList, SRVHeap, SunShadows.ConstantsAddress(),
                                       SunShadows.ShadowSRVSlot(),
-                                      (UseGI && DDGI.IsReady()) ? DDGI.IrradianceAtlasSRV()
+                                      DDGIVolumetricAvailable() ? DDGI.IrradianceAtlasSRV()
                                                                 : Targets.DepthSRVSlot,
                                       LightBuffer->GetGPUVirtualAddress() +
                                           static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight),
@@ -3893,7 +3894,8 @@ namespace Smile {
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
             {
-                const u32 GITable = (UseGI && DDGI.IsReady()) ? DDGI.SceneGITableStart() : IBLTableStart;
+                const u32 GITable = DDGISurfaceAvailable() ? DDGI.SceneGITableStart()
+                                                           : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
             }
             {
@@ -3930,7 +3932,7 @@ namespace Smile {
             GpuProfiler.Begin(CommandList, "Deferred lighting");
             // Aditivo (soma sobre o emissivo do geometry pass); nas views de debug SSAO/GI o
             // shader retorna a visualizacao inteira -> PSO opaco p/ substituir a tela.
-            const bool DeferredDebugView = AODebug || (UseGI && DDGI.IsReady() && GIDebug);
+            const bool DeferredDebugView = AODebug || (DDGISurfaceAvailable() && GIDebug);
             CommandList->SetPipelineState(DeferredDebugView
                 ? PipelineState.PSODeferredLightingDebug()
                 : PipelineState.PSODeferredLighting());
@@ -4262,7 +4264,9 @@ namespace Smile {
                 CommandList->SetGraphicsRootDescriptorTable(
                     6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
                 {
-                    const u32 GITable = (UseGI && DDGI.IsReady())
+                    // Translucidos: ambiente difuso do ForwardBlend, que nao recebe a textura do
+                    // ReSTIR GI — por isso superficie, e nao volumetrico.
+                    const u32 GITable = DDGISurfaceAvailable()
                         ? DDGI.SceneGITableStart() : IBLTableStart;
                     CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
                 }
