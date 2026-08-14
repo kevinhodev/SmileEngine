@@ -13,11 +13,19 @@
 > rodar. Ver `➜ FASE 6`.
 > O contrato inteiro da fase mora em `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse
 > header antes de escrever qualquer linha da fase**. O bloco `➜ FASE 6` abaixo tem o que o seletor
-> decidiu e o que falta. A Fase 4 fechou com os três gates de runtime passados
-> (13 commits): piso de confiança aprovado por A/B, capacidade 2¹⁷ confirmada em GPU (19,21% de
-> ocupação, `insertFull` = 0), luz/ToD respondendo, hot reload cancelando captura. **Fase 5 EM
-> CURSO** — e ela começa com uma auditoria que muda o tamanho dela: a política de sombreamento que
-> a Fase 5 pede **já está em pé** desde a decomposição da Fase 2. Ver o bloco `➜ FASE 5`.
+> decidiu e o que falta.
+>
+> ⚠️ **A FASE 6 NÃO ESTÁ FECHADA, e a Fase 7 abre assim mesmo — por decisão explícita** (2026-08-14).
+> Duas dívidas ficam abertas e nomeadas, para nenhuma leitura rápida tratá-las como feitas:
+>
+> 1. **a matriz de seis gates, aprovada e não rodada** — é o gate de saída da Fase 6;
+> 2. **o orçamento do DDGI não começou** (menos probes/frame, relight menos frequente, cascatas
+>    distantes mais grosseiras). Ele é a cauda da Fase 6, não da 7.
+>
+> Isto é dívida de MEDIÇÃO e de tuning, não de estrutura: o seletor está inteiro e roteando, então
+> a Fase 7 não constrói sobre um contrato indefinido. Mas vale o aviso que a própria série escreveu
+> — a Fase 4 só achou dois bugs reais porque rodou o gate dela depois de cinco rodadas de auditoria
+> de código não terem achado nada.
 >
 > Leia este bloco ESTADO inteiro antes de continuar; ele existe para não re-derivar decisão. A
 > seção "Estado de PARTIDA", lá embaixo, é retrato histórico e **não** descreve o código de hoje.
@@ -704,6 +712,13 @@ Depois das seis: **só então** reduzir o
 orçamento do DDGI — menos probes por frame, relight menos frequente, cascatas distantes mais
 grosseiras, e eventualmente separar visibilidade de relight. Async e as otimizações da idTech8
 ficam na Fase 7, por decisão explícita: não misturar semântica de fallback com scheduling.
+
+⚠️ **As duas frases acima descrevem a ORDEM PLANEJADA, e ela foi quebrada de propósito** — a Fase 7
+abre com a matriz não rodada e o orçamento do DDGI não começado (ver o bloco ESTADO no topo). Ficam
+como dívida nomeada, e nesta ordem quando forem retomadas: **primeiro as seis**, porque o orçamento
+do DDGI mexe justamente no fallback que elas medem. Reduzir probes antes de rodar a matriz tornaria
+o teste 1 — "equivalente ao estado anterior ao seletor" — impossível de interpretar: uma diferença
+poderia vir do seletor ou do orçamento novo, e não haveria como separar.
 
 Teleport/troca de cena não entra na lista: **satisfeito por construção**, e vale registrar por quê
 — a chave é de MUNDO, então teleportar não mostra radiância do lugar anterior, mostra ausência de
