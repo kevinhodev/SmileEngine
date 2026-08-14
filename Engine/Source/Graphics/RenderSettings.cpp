@@ -361,6 +361,14 @@ namespace Smile {
     }
 
     void FRenderSettings::SetGISourceDebug(bool _V) {
+        // LIGAR exige o produtor vivo. O mapa e escrito dentro do RecordTrace do ReSTIR GI, que
+        // por sua vez so roda com o GI global ligado — sem os dois, o alvo voltaria ao registro
+        // sem ninguem para enche-lo, que e o estado obsoleto que a borda de desligamento acabou de
+        // fechar. O gate mora AQUI e nao so na UI porque o QML nao e o unico chamador possivel:
+        // este setter e publico, e o proximo caller (script, atalho, preset) nao vai lembrar.
+        //
+        // DESLIGAR nunca e recusado — a guarda protege a ativacao, nao o inverso.
+        if (_V && (!R.UseGI || !R.UseReSTIRGI)) return;
         if (_V == R.ReSTIRGI.GetSourceDebug()) return;
         R.ReSTIRGI.SetSourceDebug(_V);
         // O registro dos alvos e reconstruido do ZERO e so em eventos de setup — ele nao roda por
