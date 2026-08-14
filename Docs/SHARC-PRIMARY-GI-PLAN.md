@@ -8,9 +8,9 @@
 > **Fase 6 EM CURSO** — os 16 primeiros commits não mudaram imagem; o **seletor funcional entrou**
 > e é o primeiro que pode mudar. Nos defaults ele reproduz o comportamento anterior linha a linha;
 > a imagem só muda quando alguém escolhe `DDGI` ou `Off` no primário, ou `Preto` no fallback.
-> **Rodou em sessão viva e passou** (2026-08-14), mas isso é *smoke*, não medida: continua sem
-> captura, sem telemetria e sem a matriz de seis gates. Ver "O que o teste vivo cobriu" no bloco
-> `➜ FASE 6`.
+> **Rodou em sessão viva e passou** (2026-08-14), mas isso é *smoke*, não medida. A **matriz de
+> runtime está definida** e é o gate de saída da fase — seis testes, configuração fixa, ainda por
+> rodar. Ver `➜ FASE 6`.
 > O contrato inteiro da fase mora em `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse
 > header antes de escrever qualquer linha da fase**. O bloco `➜ FASE 6` abaixo tem o que o seletor
 > decidiu e o que falta. A Fase 4 fechou com os três gates de runtime passados
@@ -649,20 +649,58 @@ Fase 4 registrou para o gate de luz/ToD: **conclusão sem artefato arquivado**, 
 depois lendo arquivo, só repetindo o teste. E vale menos que aquele, porque aquele era um gate
 definido *antes*; este é "abri e não quebrou".
 
-O que continua **aberto**, e nenhum deles é observação de tela:
+O que continua **aberto** está na matriz abaixo, e nenhum item dela é observação de tela.
 
-- a **matriz de seis gates** de runtime, ainda por definir com o revisor;
-- captura com `indirectPrimaryEffective: ddgi` comparada às baselines da Fase 0 — o gate "o modo
-  DDGI primary reproduz o baseline para rollback";
-- a leitura dos campos novos do manifesto num arquivo real (`indirectDenoiserEffective`,
-  `directDenoiserEffective`, e o caso `RRPoisoned` dando `None`/`None`);
-- o acoplamento NRD↔reflexões no braço de rollback, que é o mais fácil de não ver: a imagem *parece*
-  certa, e o reflexo é que está cru;
-- as bordas do detector — trocar primário e fallback com o volume vivo, e o volume aparecendo e
-  sumindo — em que o sintoma de erro é histórico sobrevivendo, não pixel errado. **Estas em
-  particular não se veem olhando**: é o tipo de defeito que a Fase 4 só pegou porque tinha gate.
+#### A MATRIZ DE RUNTIME — gate de saída da Fase 6
 
-Depois: a matriz de runtime (seis gates, definidos com o revisor). **Só então** reduzir o
+**Definida com o revisor; ainda por rodar.** Ela fecha a fase: passando as seis, o seletor está
+fechado e só então começa o orçamento do DDGI.
+
+**Configuração fixa em todas** — mesmo slot, TOD e `N = 128`; radiance cache ON; consulta do cache
+ON; ReSTIR GI ON; ReSTIR DI ON e idêntico em todas; volume DDGI ON exceto no teste 5;
+instrumentação `S`/`d`/`f` **OFF**.
+
+⚠️ **Instrumentação OFF põe esta matriz na série de IMAGEM, e isso tem consequência.** O teste 2
+mede a contribuição residual do DDGI **por diferença de imagem contra o teste 1**, e não por
+contador: sem o regime `Sf` não há `srcDdgi`, e misturar as duas séries é a regra que a Fase 5
+fixou. Quem quiser o número dos 30,14% de novo tira uma rodada `Sf` separada.
+
+| # | Primário | Fallback | O que tem de acontecer |
+|---|---|---|---|
+| 1 | `ReSTIR + SHaRC` | `DDGI` | equivalente visual ao estado anterior ao seletor — é o controle |
+| 2 | `ReSTIR + SHaRC` | `Preto` | contribuição residual do DDGI; **fog e auxiliares continuam** |
+| 3 | `DDGI` | `DDGI` | ReSTIR GI para; manifesto conforme abaixo |
+| 4 | `Off` | — | indireto de superfície some; direta e fog DDGI continuam |
+| 5 | `DDGI`, volume OFF | — | degradação: resumo e manifesto mostram `ddgi → off` |
+| 6 | troca durante captura | — | cancela, históricos certos reiniciam, zero validation error |
+
+Manifesto esperado no teste 3, com NRD pedido:
+
+```json
+"indirectPrimaryEffective": "ddgi",
+"restirGI": false,
+"indirectDenoiserEffective": "None",
+"directDenoiserEffective": "NRD",
+```
+
+**Três notas de leitura, conferidas contra o código antes de rodar:**
+
+- **Teste 3 é o braço que expõe o acoplamento NRD↔reflexões.** `indirectDenoiserEffective: None`
+  não é só o GI: o reflexo também sai cru nesse frame. A imagem *parece* certa e é o reflexo que
+  mudou — comparar o teste 3 com o baseline sem olhar o reflexo é o erro fácil aqui.
+- **Teste 4 não desliga o volume, e é por isso que ele isola o que promete.** Com `primário = Off`,
+  `DDGISurfaceAvailable()` fica falso e o deferred perde o atlas, enquanto `DDGIVolumetricAvailable()`
+  segue verdadeiro e a névoa continua integrando. As sondas continuam traçando — isso é orçamento,
+  não consumo. Desligar o volume junto mudaria a névoa e a medida deixaria de ser só sobre
+  superfície.
+- **Teste 6 cancela no frame SEGUINTE, não no clique.** O setter do enum não invalida de propósito;
+  quem invalida é o detector de borda, no topo do frame seguinte. A sessão acumula um frame sob a
+  política nova antes de morrer — inofensivo, porque cancelada não produz artefato, mas explica por
+  que o log de cancelamento não é simultâneo ao clique. O `SetIndirectPrimary` ainda faz
+  `ReconcileNrdAllocation` **na hora** (Flush + realoc dos pools do NRD), e é exatamente esse
+  caminho que o "zero validation error" do teste existe para cobrir.
+
+Depois das seis: **só então** reduzir o
 orçamento do DDGI — menos probes por frame, relight menos frequente, cascatas distantes mais
 grosseiras, e eventualmente separar visibilidade de relight. Async e as otimizações da idTech8
 ficam na Fase 7, por decisão explícita: não misturar semântica de fallback com scheduling.
