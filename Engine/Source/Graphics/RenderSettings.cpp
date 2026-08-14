@@ -152,6 +152,12 @@ namespace Smile {
     // ver pede de novo, e o toggle diz exatamente o que esta acontecendo.
     void FRenderSettings::DropGISourceDebugIfOrphaned() {
         if (!R.ReSTIRGI.GetSourceDebug()) return;
+        // A CONDICAO agora esta aqui dentro, e o nome do metodo passou a ser verdade. Ela vivia nos
+        // chamadores, e com o seletor da Fase 6 apareceram tres — o toggle do ReSTIR GI, o combo do
+        // primario e o detector de borda do topo do frame —, cada um com sua chance de errar o
+        // criterio. O produtor e o PRIMARIO EFETIVO e nao `UseReSTIRGI`: com `primario = DDGI` o
+        // passe esta pronto e mesmo assim nao traca.
+        if (R.EffectivePrimary() == EIndirectPrimary::ReSTIR_SHaRC) return;
         R.ReSTIRGI.SetSourceDebug(false);
         R.RegisterDebugTargets(); // o alvo so e oferecido enquanto alguem o enche
     }
@@ -360,26 +366,69 @@ namespace Smile {
         return R.RadianceCache.GetStatsDetailEnabled();
     }
 
+    // Os dois setters so escrevem. Quem derruba historico e o detector de borda do topo do frame
+    // (Renderer::ResolveIndirectPolicy), e por um motivo que o setter nao teria como cobrir: o
+    // EFETIVO muda sozinho quando o volume aparece ou some, e nesse caminho nao ha setter nenhum.
+    // Uma invalidacao aqui seria a segunda, redundante com a do detector — e a captura seria
+    // cancelada duas vezes pelo mesmo evento.
+    //
+    // Pedir uma politica que nao existe tambem nao e recusado aqui: `EffectivePrimary` degrada e o
+    // manifesto registra os dois lados. Recusar no setter transformaria "pedi SHaRC sem o passe
+    // pronto" num knob que volta sozinho, que e o comportamento mais confuso possivel numa UI.
+    void FRenderSettings::SetIndirectPrimary(EIndirectPrimary _V) {
+        if (_V == R.IndirectPrimary) return;
+        R.IndirectPrimary = _V;
+        // A UNICA coisa que este setter faz alem de escrever, e ela nao e invalidacao: os pools do
+        // NRD indireto existem so enquanto o ReSTIR GI for o primario PEDIDO (ver WantNrdIndirect).
+        // Tem de ser aqui porque o Reconcile faz Flush + realocacao — trabalho de entre-frames, que
+        // o detector de borda do topo do frame nao pode fazer. Mesmo par do SetUseReSTIRGI.
+        R.ReconcileNrdAllocation();
+    }
     EIndirectPrimary FRenderSettings::GetIndirectPrimary() const { return R.IndirectPrimary; }
     EIndirectPrimary FRenderSettings::EffectiveIndirectPrimary() const {
         return R.EffectivePrimary();
     }
+    void FRenderSettings::SetIndirectFallback(EIndirectFallback _V) { R.IndirectFallback = _V; }
     EIndirectFallback FRenderSettings::GetIndirectFallback() const { return R.IndirectFallback; }
     EIndirectFallback FRenderSettings::EffectiveIndirectFallback() const {
         return R.EffectiveFallback();
     }
 
+    void FRenderSettings::NotifyIndirectPolicyChanged(bool _Terminator, bool _Route,
+                                                      bool _Volumetric) {
+        EHistoryTarget Targets = EHistoryTarget::None;
+        // TERMINADOR: o fallback trocou. Muda o que os cinco traces encontram no miss, e o ATLAS
+        // esta entre eles — as sondas terminam no mesmo lugar. Por isso este, e so este, leva a
+        // NEVOA junto: quem reseta o atlas move o chao de quem o le.
+        if (_Terminator) Targets = Targets | Dom::IndirectTerminator;
+        // ROTA: trocou quem produz o indireto de superficie na tela. Nenhum raio muda de destino,
+        // entao o atlas e a nevoa ficam de pe. Mesma mascara do toggle do UseReSTIRGI, que e o
+        // mesmo evento por outro knob.
+        if (_Route)      Targets = Targets | Dom::IndirectSurfaceRoute;
+        // VOLUMETRIA: o volume apareceu ou sumiu, e ai a fonte da nevoa mudou de verdade.
+        if (_Volumetric) Targets = Targets | Dom::IndirectVolumetricSource;
+        if (Targets == EHistoryTarget::None) return;
+        // Passa pelo funil de proposito, como o NotifyRadianceCacheQueryChanged: uma troca de
+        // politica no meio de um aquecimento quebra o contrato "N frames apos UM reset", e a
+        // sessao tem de ser cancelada em vez de sair declarando uma politica que valeu por metade
+        // dos frames.
+        Invalidate(Targets);
+    }
+
     void FRenderSettings::SetGISourceDebug(bool _V) {
-        // LIGAR exige o produtor vivo, e o produtor e EXATAMENTE o que o Modes calcula:
-        // `ReSTIRGIActive = UseReSTIRGI && ReSTIRGI.IsReady()`. Nada mais.
+        // LIGAR exige o produtor vivo, e o produtor e EXATAMENTE o que o Modes calcula. Com o
+        // seletor da Fase 6 isso deixou de ser `UseReSTIRGI && IsReady()` e passou a ser o PRIMARIO
+        // EFETIVO: com `primario = DDGI` o passe esta pronto e mesmo assim nao traca, entao ligar o
+        // mapa aqui ofereceria uma textura que ninguem enche.
         //
         // ⚠️ `UseGI` NAO entra, e ja entrou errado uma vez. Ele governa o volume DDGI — e por isso
         // que a propriedade do editor se chama `ddgiEnabled` —, e o `RecordTrace` do ReSTIR GI roda
         // sem ele. Exigi-lo aqui recusava um caso legitimo: mapa da fonte com o GI global
-        // desligado, que e justamente quando se quer ver de onde o indireto ainda vem.
+        // desligado, que e justamente quando se quer ver de onde o indireto ainda vem. Note que a
+        // condicao nova continua permitindo esse caso: sem volume, `primario` segue ReSTIR_SHaRC.
         //
         // DESLIGAR nunca e recusado — a guarda protege a ativacao, nao o inverso.
-        if (_V && !(R.UseReSTIRGI && R.ReSTIRGI.IsReady())) return;
+        if (_V && R.EffectivePrimary() != EIndirectPrimary::ReSTIR_SHaRC) return;
         if (_V == R.ReSTIRGI.GetSourceDebug()) return;
         R.ReSTIRGI.SetSourceDebug(_V);
         // O registro dos alvos e reconstruido do ZERO e so em eventos de setup — ele nao roda por

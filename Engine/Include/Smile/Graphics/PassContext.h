@@ -5,6 +5,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/FrameContext.h"
+#include "Smile/Graphics/IndirectPolicy.h"
 
 // O QUE UMA FASE DE GRAVACAO RECEBE.
 //
@@ -94,6 +95,12 @@ namespace Smile {
         const FFrameView*     View    = nullptr;
         const FFrameLighting* Light   = nullptr;
         const FFrameAmbient*  Ambient = nullptr;
+        // Politica do indireto deste frame (IndirectPolicy.h). Viaja pelo contexto em vez de ser
+        // reperguntada por call site: a invariante (2)+(3) e "resolver UMA vez e distribuir o
+        // mesmo valor", e um call site que chamasse `DDGISurfaceAvailable()` de novo poderia
+        // responder outra coisa se algum insumo mudasse no meio do frame — e a captura sairia
+        // descrevendo uma politica diferente da que rendeu a imagem.
+        const FEffectiveIndirectPolicy* Policy = nullptr;
 
         // --- Alvos e binding -------------------------------------------------------------
         FSceneTargets*              Targets      = nullptr;

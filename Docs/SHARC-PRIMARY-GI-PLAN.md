@@ -5,10 +5,13 @@
 > e não os 8,4% que a primeira versão da telemetria reportava — a diferença é o achado, não o
 > ruído. Ver `➜ FASE 5`.
 >
-> **Fase 6 EM CURSO**, 16 commits e **nenhum mudou imagem** — toda a estrutura e a observabilidade
-> estão em pé, e falta o seletor funcional. O contrato inteiro dela mora em
-> `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse header antes de escrever qualquer
-> linha da fase**. O bloco `➜ FASE 6` abaixo tem o ponto de retomada em cinco passos. A Fase 4 fechou com os três gates de runtime passados
+> **Fase 6 EM CURSO** — os 16 primeiros commits não mudaram imagem; o **seletor funcional entrou**
+> e é o primeiro que pode mudar. Nos defaults ele reproduz o comportamento anterior linha a linha;
+> a imagem só muda quando alguém escolhe `DDGI` ou `Off` no primário, ou `Preto` no fallback.
+> **Nada foi medido em GPU ainda** — o que existe é build limpo em Debug e Release e `ctest` 3/3.
+> O contrato inteiro da fase mora em `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse
+> header antes de escrever qualquer linha da fase**. O bloco `➜ FASE 6` abaixo tem o que o seletor
+> decidiu e o que falta. A Fase 4 fechou com os três gates de runtime passados
 > (13 commits): piso de confiança aprovado por A/B, capacidade 2¹⁷ confirmada em GPU (19,21% de
 > ocupação, `insertFull` = 0), luz/ToD respondendo, hot reload cancelando captura. **Fase 5 EM
 > CURSO** — e ela começa com uma auditoria que muda o tamanho dela: a política de sombreamento que
@@ -506,21 +509,135 @@ na divergência.
   `ForwardBlend`). Por isso `DDGISurfaceAvailable()` **não pode** virar `EffectivePrimary() == DDGI`
   — selecionar SHaRC apagaria os três em silêncio.
 
-#### Ponto de retomada — o seletor funcional, em cinco passos
+#### O SELETOR ENTROU — os cinco passos, fechados
 
-Unidade **atômica**: derivação, `FFrameModes`, roteamento e detector no mesmo commit. Separá-los
-cria a divergência que a invariante (1) do header proíbe.
+Unidade **atômica**, como previsto: derivação, `FFrameModes`, roteamento e detector no mesmo
+commit. Os cinco passos, e o que cada um virou em código:
 
-1. resolver `FEffectiveIndirectPolicy` **uma vez** no topo do frame;
-2. comparar com o snapshot anterior e invalidar **por domínio** (superfície ≠ névoa);
-3. derivar `FFrameModes` desse valor — `Modes.ReSTIRGIActive` sai dele;
-4. trace, NRD, deferred, telemetria e captura consomem o **mesmo** snapshot;
-5. atualizar o snapshot anterior **só depois** de a política do frame estar fixada.
+1. `Renderer::ResolveIndirectPolicy()` no topo do `RenderFrame`, **antes** do `ResolveFrameModes`;
+2. detector de borda por **domínio** — `HistoryDomain::IndirectTerminator`,
+   `IndirectSurfaceRoute` e `IndirectVolumetricSource`, avaliados de forma independente e somados
+   (eram **dois** domínios até a revisão; ver P1 abaixo);
+3. `Modes.ReSTIRGIActive = Policy.Primary == ReSTIR_SHaRC`, e `ResolveFrameModes` passou a
+   **receber** a política em vez de perguntar de novo;
+4. o snapshot viaja pelo `FPassContext` (`Ctx.Policy`) e pelos parâmetros das quatro funções de
+   update — dez call sites, nenhum re-resolvendo;
+5. `PrevIndirectPolicy` atualizado no fim do `ResolveIndirectPolicy`, nunca dentro da comparação.
 
-Degradação decidida: `ReSTIR_SHaRC` → `ReSTIR_SHaRC` se pronto → `DDGI` se o volume vive → `Off`.
-A alavanca de roteamento é o `t16` (`ReSTIRGITex`, gateado por `ReflectionParams.w`), mas fechar só
-a leitura não basta: trace, resampling, NRD indireto e o registro na telemetria caem junto, senão o
-frame paga por trabalho que ninguém lê.
+`EffectivePrimary()` deixou de ler "o que manda hoje" e passou a ler o **pedido degradado por
+capacidade**: `ReSTIR_SHaRC` se o passe estiver pronto → `DDGI` se o volume vive → `Off`. A segunda
+linha testa `!= Off` e não `== DDGI` de propósito: ela atende os **dois** casos, o rollback pedido e
+a queda do SHaRC sem passe pronto. `Off` só se alcança pedindo — degradar para `Off` por
+indisponibilidade apagaria a imagem em silêncio.
+
+**Quatro coisas que a implementação decidiu e não devem ser re-derivadas:**
+
+- **`FallbackActive` estava subcontando, e o detector dependia dele.** A definição anterior era
+  `Primary == ReSTIR_SHaRC`, mas o `PT_SampleIndirectFallback` mora no `ShadeSurfaceHit`
+  compartilhado: quem termina nele são os **cinco** traces de render (ReSTIR GI, as três reflexões,
+  o 2º bounce das sondas). Com primário DDGI, trocar o fallback de DDGI para Black mudava o
+  terminador das reflexões e o detector não via borda nenhuma. Agora conta os três
+  produtores. Nos defaults o valor não mudou — só nas configurações que ainda não existiam.
+- **Os setters do enum NÃO invalidam.** O efetivo muda sem passar por setter (basta o volume
+  aparecer ou sumir), então a invalidação mora só no detector. Invalidar nos dois lugares
+  cancelaria a captura duas vezes pelo mesmo evento.
+- **`DropGISourceDebugIfOrphaned` ganhou a condição que o nome já prometia.** Ela vivia nos
+  chamadores; o seletor criou o terceiro (o combo), e cada chamador é uma chance de errar o
+  critério. O produtor do mapa é o **primário efetivo**, não `UseReSTIRGI` — com `primário = DDGI`
+  o passe está pronto e não traça. O caminho do operador ainda dropa no *bridge*, síncrono, porque
+  o detector não tem como notificar a janela de debug.
+- **A UI é segmentada por chips, não slider.** Primário e fallback não são escala de qualidade, e
+  um slider desenharia uma ordem que não existe. `Environment` **não tem chip**: pedi-lo é pedir
+  Black, e um controle que não muda pixel nenhum é pior que um estado só documentado.
+
+**⚠️ Acoplamento a verificar na matriz de runtime:** `NrdIndirectMode` depende de
+`ReSTIRGIActive`, então `primário = DDGI` também tira o NRD das **reflexões**. Não é regressão — é
+exatamente o que desligar o `UseReSTIRGI` já fazia —, mas significa que o braço "DDGI primary" do
+A/B compara reflexo denoisado contra reflexo cru se ninguém olhar.
+
+#### O que a revisão derrubou — dois achados, e o primeiro corrige o contrato
+
+**P1 — o atlas é acumulador, não recurso estático, e a nota 2b do header dependia disso.** A
+primeira versão tinha UM domínio de superfície, `DDGIAtlas | ReSTIRGI | Reflections |
+ProbeDiagnostic | Resolve`, deixando a névoa de fora com o argumento textual do header: "ela lê o
+atlas direto e continua lendo exatamente o mesmo". **A frase só vale enquanto o atlas não é
+resetado — e era esse mesmo domínio que o resetava.** Os dois lados do erro:
+
+- trocar o **primário** zerava o atlas sem necessidade (nenhum raio muda de destino);
+- trocar o **fallback** zerava o atlas e deixava a névoa reprojetando inscatter somado sobre o
+  atlas convergido contra um atlas de volta à estimativa de um trace só.
+
+A correção é uma decomposição por **causa**, e ela é verificável no código: o `GIHitSampling` e o
+`RadianceCacheParams` das sondas saem do **fallback** e do **volume vivo**, nunca do primário
+(`Renderer.cpp`, `PushRayTracingFrameState` e `PrepareIndirectLighting`). Logo:
+
+| borda | o que muda | domínio |
+|---|---|---|
+| **fallback** (`TerminatorDiffers`) | o terminador dos **cinco** traces, atlas incluído | `IndirectTerminator` — com `VolumetricFog` |
+| **primário / superfície** (`SurfaceRouteDiffers`) | quem produz o indireto na **tela** | `IndirectSurfaceRoute` — `ReSTIRGI \| ScreenResolve`, sem atlas e sem névoa |
+| **volume** (`VolumetricDiffers`) | a fonte da névoa | `IndirectVolumetricSource` |
+
+A regra que sobrou, mais curta que o parágrafo que ela substitui: **quem reseta o atlas leva a
+névoa junto.** E a máscara da rota é *exatamente* a do `SetUseReSTIRGI`, porque é o mesmo evento
+alcançado por outro knob — divergir das duas seria a regra que a Fase 4 já pagou.
+
+**P2 — pools do NRD indireto retidos.** `WantNrdIndirect()` seguia `UseReSTIRGI` enquanto o consumo
+passou a seguir a política: escolher DDGI parava o denoiser e mantinha a alocação. Corrigido, com
+uma decisão que **não** é a óbvia: o predicado passou a ler o primário **PEDIDO**, não o
+`EffectivePrimary()`. É a mesma regra de tempo de amostragem do `GIFallbackBindingsForSetup` —
+`ReconcileNrdAllocation` faz `Flush` + realocação + rerregistro de alvos, trabalho de *entre*
+frames, que só pode sair de um setter. O efetivo muda sozinho (volume aparece, passe deixa de estar
+pronto) por caminhos sem setter nenhum; amarrado a ele, o predicado diria uma coisa e a alocação
+seria outra até alguém mexer num knob — pior que a retenção que o achado apontou. A assimetria que
+sobra é a que já existia: pedido em SHaRC com o passe sem `IsReady()` mantém os pools de pé.
+Memória reservada é o lado barato do erro; o caro é pack apontando para recurso liberado.
+
+**P3 — a assimetria do P2 precisava ser LEGÍVEL, não só correta.** Corrigir a alocação não conserta
+o manifesto: com `denoiser: NRD` + `primário = DDGI` o arquivo continuava gravando `denoiser: NRD`
+enquanto o indireto saía cru. É a mesma classe de defeito que a série já pagou três vezes — pedido
+publicado como execução (`regir`, `cacheQuery`, `indirectPrimary`) —, e aqui ela é pior que as
+outras porque a divergência é **assimétrica**: o indireto cai e a direta não.
+
+O manifesto ganhou `indirectDenoiserEffective` e `directDenoiserEffective`, lidos direto de
+`NrdIndirectMode` / `NrdDirectMode` / `RRMode` — sem recompor a condição, que é como o campo
+voltaria a descrever o pedido por outro caminho. A chave `denoiser` **fica com o significado
+antigo** (o pedido), pela mesma regra do `regir`/`regirRequested`: renomeá-la quebraria a comparação
+com os manifestos já tirados da série.
+
+O rollback agora se lê assim, e é comparável com a baseline histórica sem abrir o código:
+
+```json
+"denoiser": "NRD",
+"indirectPrimaryEffective": "ddgi",
+"indirectDenoiserEffective": "None",
+"directDenoiserEffective": "NRD",
+```
+
+A **etiqueta não precisou de letra nova**: o eixo que mudou é a política, e ela já está lá em
+`P<primário>F<fallback>`; o denoiser sempre foi só de manifesto, antes e depois disto.
+
+**P3b — e o campo novo nasceu com o defeito que ele existia para corrigir.** A primeira versão leu
+`Modes.RRMode`, que é "RR selecionado e pronto" — não "RR executou". O `RRPoisoned` (visualizador de
+render targets ou overlay de sondas escrevendo no HDR) pula o bloco de upscale **inteiro**: o frame
+sai cru e sem upscale, e o manifesto gravaria `DLSS_RR` nos dois domínios de uma imagem que nenhum
+denoiser tocou. Publicar *pedido* como *execução* uma camada acima é o mesmo erro com outro nome.
+
+Corrigido pelo precedente do `ReGIRRanThisFrame`: `RRRanThisFrame` zerado no topo do `RecordResolve`
+e marcado **no ponto do `Dispatch`** — o único lugar que só é alcançado quando o eval aconteceu.
+
+```json
+"denoiser": "DLSS_RR",
+"indirectDenoiserEffective": "None",
+"directDenoiserEffective": "None",
+```
+
+A regra que sai daqui vale para o próximo campo "efetivo" da série: **gate montado longe do
+`FFrameModes` só se registra de onde ele é decidido.** Já valia para `regir`, `cacheUpdate` e
+`cacheQuery`; agora vale para o RR. Ler o modo é reconstituir a condição por fora, e reconstituir a
+condição por fora é o começo de uma divergência.
+
+Falta: **medir**. Nada nesta fase foi rodado em GPU ainda — o que existe é build limpo em Debug e
+Release e `ctest` 3/3.
 
 Depois: Bugbot e a matriz de runtime (seis gates, definidos com o revisor). **Só então** reduzir o
 orçamento do DDGI — menos probes por frame, relight menos frequente, cascatas distantes mais

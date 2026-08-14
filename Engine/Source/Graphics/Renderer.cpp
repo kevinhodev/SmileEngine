@@ -880,7 +880,25 @@ namespace Smile {
         // quem produz o sinal indireto e o ReSTIR GI (e o reflexo, no canal especular), e nenhum
         // dos dois depende de sonda para existir. Manter o volume aqui faria o denoiser sumir numa
         // cena sem DDGI e devolver GI crua e ruidosa exatamente onde ela mais precisa de filtro.
-        return Denoiser == EDenoiser::NRD && UseReSTIRGI;
+        //
+        // O PRIMARIO entrou com o seletor da Fase 6, senao escolher DDGI deixava os pools do NRD
+        // indireto alocados para um denoiser que nao roda mais — o `NrdIndirectMode` sai de
+        // `ReSTIRGIActive`, que agora sai da politica.
+        //
+        // ⚠️ E o primario PEDIDO, e nao o `EffectivePrimary()`, contra o que o instinto sugere. A
+        // razao e de TEMPO de amostragem, a mesma do GIFallbackBindingsForSetup logo abaixo: este
+        // predicado governa ALOCACAO, e a alocacao acontece no `ReconcileNrdAllocation`, que faz
+        // `CommandQueue.Flush()` + realoc + reregistro de alvos. Ela so pode rodar a partir de um
+        // setter, entre frames. O EFETIVO muda sozinho — o volume aparece, o passe deixa de estar
+        // pronto — e por caminhos que nao passam por setter nenhum: amarrado a ele, o predicado
+        // diria uma coisa e a alocacao seria outra ate alguem mexer num knob. O pedido so muda por
+        // setter, e o `SetIndirectPrimary` chama o Reconcile.
+        //
+        // A assimetria que sobra e a que ja existia e e benigna: com o pedido em SHaRC e o passe
+        // sem `IsReady()`, os pools ficam de pe sem uso. Memoria reservada e o lado barato do erro;
+        // o caro e pack apontando para recurso liberado.
+        return Denoiser == EDenoiser::NRD && UseReSTIRGI &&
+               IndirectPrimary == EIndirectPrimary::ReSTIR_SHaRC;
     }
 
     FGIFallbackBindings Renderer::GIFallbackBindingsForSetup() const {
@@ -1259,7 +1277,8 @@ namespace Smile {
                 " frames renderizados");
     }
 
-    FCaptureState Renderer::CollectCaptureState(const FFrameModes& _Modes) const {
+    FCaptureState Renderer::CollectCaptureState(const FFrameModes& _Modes,
+                                                const FEffectiveIndirectPolicy& _Policy) const {
         FCaptureState S;
         S.OutputWidth  = OutputWidth();
         S.OutputHeight = OutputHeight();
@@ -1277,6 +1296,26 @@ namespace Smile {
             case EDenoiser::DLSS_RR: S.Denoiser = "DLSS_RR"; break;
             default:                 S.Denoiser = "None";    break;
         }
+        // O denoiser que RODOU, por dominio, direto dos modos deste frame — sem recompor a
+        // condicao, que e como o campo voltaria a descrever o pedido por outro caminho.
+        //
+        // A ASSIMETRIA e o motivo de existirem dois: `NrdIndirectMode` carrega o `ReSTIRGIActive`,
+        // que agora sai da politica, e o direto nao. Escolher `primario = DDGI` com o NRD pedido
+        // deixa o INDIRETO cru (GI e reflexao compostas sem filtro) e a DIRETA denoisada — e o
+        // manifesto tem de dizer isso, senao o braco de rollback do A/B se compara com a baseline
+        // historica como se os dois tivessem NRD.
+        //
+        // O RR entra nos dois quando roda: ele nao filtra por dominio, filtra a cor composta.
+        //
+        // ⚠️ `RRRanThisFrame`, e NAO `Modes.RRMode`. O modo diz "selecionado e pronto"; o campo diz
+        // "avaliou". Com o visualizador de debug ou o overlay de sondas escrevendo no HDR, o
+        // `RRPoisoned` pula o bloco de upscale inteiro — o frame sai cru e sem upscale, e o modo
+        // continuaria true. Mesmo par do `ReGIR` x `ReGIRRequested` logo abaixo: gate montado longe
+        // do FFrameModes so se registra de onde ele e decidido.
+        S.IndirectDenoiserEffective = _Modes.NrdIndirectMode ? "NRD"
+                                    : (RRRanThisFrame ? "DLSS_RR" : "None");
+        S.DirectDenoiserEffective   = _Modes.NrdDirectMode   ? "NRD"
+                                    : (RRRanThisFrame ? "DLSS_RR" : "None");
         S.UpscalerQuality = UpscalerQuality;
         // EFETIVO, nao selecionado: o preset cientifico desliga o upscaler, e sem upscaler o
         // `TAAActive = UseTAA && !UpscaleActive` decide sozinho se o TAA acendeu.
@@ -1325,16 +1364,18 @@ namespace Smile {
         S.CacheAutoWarmup = RadianceCache.GetAutoWarmup();
         // Politica do indireto: os dois lados. O efetivo descreve o pipeline; o pedido descreve a
         // intencao, e a distancia entre eles e o que uma captura sozinha nao teria como contar.
+        //
+        // O efetivo vem do SNAPSHOT que rendeu o frame, e nao re-resolvido aqui. Este metodo roda
+        // depois do EndFrame; recompor a politica agora poderia observar um estado que ja mudou —
+        // e o manifesto descreveria uma configuracao que nunca produziu a imagem. E a mesma classe
+        // de defeito do snapshot de contadores da Fase 5, um nivel acima (invariante 3).
         S.IndirectPrimaryRequested  = IndirectPrimaryName(IndirectPrimary);
-        S.IndirectPrimaryEffective  = IndirectPrimaryName(EffectivePrimary());
+        S.IndirectPrimaryEffective  = IndirectPrimaryName(_Policy.Primary);
         S.IndirectFallbackRequested = IndirectFallbackName(IndirectFallback);
-        S.IndirectFallbackEffective = IndirectFallbackName(EffectiveFallback());
-        {
-            const FEffectiveIndirectPolicy Pol = EffectiveIndirectPolicy();
-            S.IndirectFallbackActive = Pol.FallbackActive;
-            S.DDGISurfaceAvailable    = Pol.DDGISurface;
-            S.DDGIVolumetricAvailable = Pol.DDGIVolumetric;
-        }
+        S.IndirectFallbackEffective = IndirectFallbackName(_Policy.Fallback);
+        S.IndirectFallbackActive    = _Policy.FallbackActive;
+        S.DDGISurfaceAvailable      = _Policy.DDGISurface;
+        S.DDGIVolumetricAvailable   = _Policy.DDGIVolumetric;
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
         // gather do ReSTIR GI e o produtor do cache) da mesma fonte, entao ela descreve o regime
@@ -1422,7 +1463,8 @@ namespace Smile {
         return S;
     }
 
-    void Renderer::FinishFrameCapture(const FFrameModes& _Modes, u32 _FrameSlot) {
+    void Renderer::FinishFrameCapture(const FFrameModes& _Modes,
+                                      const FEffectiveIndirectPolicy& _Policy, u32 _FrameSlot) {
         if (!Capture.AdvanceFrame()) return;
         // A copia ja foi submetida junto do frame; so a captura paga o stall, uma vez, numa
         // operacao que ja e explicitamente offline. Um readback por frame em voo evitaria o
@@ -1436,7 +1478,7 @@ namespace Smile {
         RadianceCache.CollectStats(_FrameSlot);
         CaptureCacheStats = {};
         RadianceCache.CollectCaptureStats(CaptureCacheStats);
-        Capture.Finish(CollectCaptureState(_Modes));
+        Capture.Finish(CollectCaptureState(_Modes, _Policy));
     }
 
 
@@ -1691,41 +1733,65 @@ namespace Smile {
     // miss), e confundi-las foi o defeito que motivou a fase.
     bool Renderer::DDGIVolumeLive() const { return UseGI && DDGI.IsReady(); }
 
-    // Mesmo valor que `DDGIVolumeLive()` HOJE, e de proposito: o que muda entre as duas nao e o
-    // resultado, e a PERGUNTA. Esta responde "a nevoa e o deferred podem ler o atlas?", e a
-    // resposta seguira sendo o volume existir mesmo quando a politica de superficie disser Black.
-    // Se um dia divergirem, e aqui que a divergencia entra — e nenhum call site volumetrico vai
-    // precisar mudar.
+    // Mesmo valor que `DDGIVolumeLive()`, e de proposito: o que muda entre as duas nao e o
+    // resultado, e a PERGUNTA. Esta responde "a nevoa pode ler o atlas?", e a resposta continua
+    // sendo o volume existir — irradiancia volumetrica nao tem substituto no cache. Ela NAO
+    // acompanhou a de superficie abaixo quando o seletor entrou, e e exatamente isso que as duas
+    // existirem separadas comprou: nenhum call site volumetrico precisou mudar.
     bool Renderer::DDGIVolumetricAvailable() const { return DDGIVolumeLive(); }
 
-    // Superficie. Mesmo booleano das outras duas HOJE, e o terceiro nome nao e exagero: quando o
-    // primario deixar de ser DDGI, e AQUI que a condicao passa a olhar `EffectivePrimary()`,
-    // enquanto a volumetrica continua olhando so o volume. Sem o nome separado, essa mudanca
-    // precisaria descobrir, um a um, quais dos leitores do atlas eram de superficie — que e
-    // exatamente a arqueologia que a Fase 6 esta pagando agora.
-    bool Renderer::DDGISurfaceAvailable() const { return DDGIVolumeLive(); }
+    // Superficie, e aqui a divergencia JA ACONTECEU — foi o seletor que a produziu. Com
+    // `primario = Off` nao ha indireto de superficie e o atlas para de iluminar o deferred,
+    // enquanto a nevoa acima segue integrando com ele. Sem o nome separado, esta mudanca teria de
+    // descobrir um a um quais leitores do atlas eram de superficie.
+    //
+    // ⚠️ E `!= Off`, e NAO `== DDGI`: mesmo com SHaRC primario o atlas atende tres consumos de
+    // superficie que ninguem mais atende — fill de folhagem, termo traseiro de subsurface e os
+    // translucidos do ForwardBlend. Amarrar isto ao primario faria escolher SHaRC apagar as tres
+    // em silencio. Ver IndirectPolicy.h, secao 4.
+    bool Renderer::DDGISurfaceAvailable() const {
+        return DDGIVolumeLive() && EffectivePrimary() != EIndirectPrimary::Off;
+    }
+
+    // CAPACIDADES, e nao modos. Sao os insumos do EffectivePrimary, e existem como funcao para o
+    // FFrameModes e a politica nao poderem divergir: o modo SAI da politica (invariante 1), entao
+    // a expressao tem de ter um dono so. Enquanto era literal repetido, `UseGI` chegou a entrar
+    // numa das copias — o defeito que abriu a Fase 6.
+    bool Renderer::ReSTIRGIReady() const    { return UseReSTIRGI && ReSTIRGI.IsReady(); }
+    bool Renderer::ReflectionsReady() const { return UseReflections && Reflections.IsReady(); }
 
     FEffectiveIndirectPolicy Renderer::EffectiveIndirectPolicy() const {
         FEffectiveIndirectPolicy P;
-        P.Primary  = EffectivePrimary();
-        P.Fallback = EffectiveFallback();
-        // So o SHaRC traca raios secundarios que terminam no fallback. Com DDGI ou Off, o campo
-        // `Fallback` descreve uma politica que ninguem exerce neste frame.
-        P.FallbackActive = P.Primary == EIndirectPrimary::ReSTIR_SHaRC;
+        P.VolumeLive = DDGIVolumeLive();
+        P.Primary    = EffectivePrimary();
+        P.Fallback   = EffectiveFallback();
+        // QUEM CONSOME o fallback. Nao e so o primario SHaRC: o `PT_SampleIndirectFallback` mora
+        // no `ShadeSurfaceHit` compartilhado, entao os raios de reflexao e o 2o bounce das sondas
+        // terminam nele pela mesma porta. Este campo e lido pelo `TerminatorDiffers`, que decide se
+        // as REFLEXOES e o ATLAS esquecem — conta-los e o que impede a borda de passar despercebida
+        // quando o primario e DDGI e o fallback vai de DDGI a Black.
+        P.FallbackActive = P.Primary == EIndirectPrimary::ReSTIR_SHaRC ||
+                           ReflectionsReady() || P.VolumeLive;
+        // Pelos helpers, e nao recompondo a condicao aqui: a definicao de cada pergunta tem de
+        // continuar num lugar so, senao o snapshot e o call site podem divergir em silencio.
         P.DDGISurface    = DDGISurfaceAvailable();
         P.DDGIVolumetric = DDGIVolumetricAvailable();
         return P;
     }
 
     EIndirectPrimary Renderer::EffectivePrimary() const {
-        // Lido do que MANDA hoje, e nao do enum: o seletor ainda nao roteia nada, e inventar aqui
-        // uma leitura do pedido faria o manifesto afirmar um pipeline que nao existe.
+        // PEDIDO degradado por CAPACIDADE, e nada mais — nunca `FFrameModes`, que e consequencia
+        // desta funcao e nao insumo dela (invariante 1 do IndirectPolicy.h).
         //
-        // A ordem espelha o pipeline: o ReSTIR GI produz o indireto de superficie quando roda; sem
-        // ele, quem restou alimentando o deferred e o atlas do volume; sem os dois, nao ha
-        // indireto de superficie — e o direto e a nevoa seguem inteiros.
-        if (UseReSTIRGI && ReSTIRGI.IsReady()) return EIndirectPrimary::ReSTIR_SHaRC;
-        if (DDGIVolumeLive())                  return EIndirectPrimary::DDGI;
+        // A cadeia e a documentada: SHaRC se o passe estiver pronto; senao DDGI se o volume
+        // estiver vivo; senao Off. A segunda linha atende DOIS casos de proposito — o pedido
+        // explicito de DDGI (rollback) e a queda do SHaRC sem passe pronto —, e e por isso que ela
+        // testa `!= Off` em vez de `== DDGI`. Pedir Off e a unica forma de nao haver indireto de
+        // superficie: degradar para Off por indisponibilidade seria apagar a imagem em silencio.
+        if (IndirectPrimary == EIndirectPrimary::ReSTIR_SHaRC && ReSTIRGIReady())
+            return EIndirectPrimary::ReSTIR_SHaRC;
+        if (IndirectPrimary != EIndirectPrimary::Off && DDGIVolumeLive())
+            return EIndirectPrimary::DDGI;
         return EIndirectPrimary::Off;
     }
 
@@ -2196,10 +2262,48 @@ namespace Smile {
         return true;
     }
 
+    // A politica do indireto deste frame, resolvida UMA vez, e a borda sobre o valor EFETIVO.
+    //
+    // Roda no topo do frame pelo mesmo motivo do TickWarmup do cache, e o motivo nao e estetico: a
+    // invalidacao derruba historico de consumidores que publicam cbuffer em momentos diferentes do
+    // frame. A nevoa resolve o `UseHistory` dela ainda no ResolveFrameLighting — notificada depois
+    // disso, ela ja teria decidido reprojetar a historia que o reset acabou de invalidar.
+    FEffectiveIndirectPolicy Renderer::ResolveIndirectPolicy() {
+        const FEffectiveIndirectPolicy P = EffectiveIndirectPolicy();
+
+        // O PRIMEIRO valor observado apenas INICIALIZA (nota 2a do IndirectPolicy.h). Tratado como
+        // borda, ele derrubaria historico no primeiro frame de toda cena e — pior — cancelaria a
+        // sessao de captura recem-aberta, porque a invalidacao passa pelo funil.
+        if (HasPrevIndirectPolicy) {
+            // TRES bordas, avaliadas de forma INDEPENDENTE, e as mascaras se somam. Trocar o
+            // primario nao move raio nenhum; trocar o fallback move os cinco traces e o atlas com
+            // eles; o volume sumir move a nevoa. Um `else if` aqui perderia as combinacoes — e o
+            // volume sumindo dispara as tres de uma vez.
+            const bool Terminator = P.TerminatorDiffers(PrevIndirectPolicy);
+            const bool Route      = P.SurfaceRouteDiffers(PrevIndirectPolicy);
+            const bool Volumetric = P.VolumetricDiffers(PrevIndirectPolicy);
+            if (Terminator || Route || Volumetric)
+                Settings().NotifyIndirectPolicyChanged(Terminator, Route, Volumetric);
+        }
+        // O mapa da fonte morre junto com o produtor, e o seletor criou um caminho novo para o
+        // produtor parar: com `primario = DDGI` o ReSTIR GI esta pronto e nao traca, entao o alvo
+        // continuaria oferecido mostrando o ultimo frame que alguem escreveu. Aqui, e nao so no
+        // setter do enum, porque o efetivo tambem cai sozinho — volume que some, passe que deixa de
+        // estar pronto. A CONDICAO mora dentro do Drop, que desiste barato quando o mapa ja esta
+        // desligado ou quando o produtor esta vivo.
+        Settings().DropGISourceDebugIfOrphaned();
+
+        // (4) So DEPOIS de a politica do frame estar fixada, e nunca dentro da comparacao:
+        // atualizar antes apagaria a borda para quem lesse depois no mesmo frame.
+        PrevIndirectPolicy    = P;
+        HasPrevIndirectPolicy = true;
+        return P;
+    }
+
     // Resolve num lugar so "que passes rodam neste frame". Todos os insumos sao membros que
     // nao mudam durante a gravacao (verificado: nenhum deles e reescrito dentro do RenderFrame),
     // entao resolver de antemao e equivalente a resolver espalhado — e passavel a uma fase.
-    FFrameModes Renderer::ResolveFrameModes() {
+    FFrameModes Renderer::ResolveFrameModes(const FEffectiveIndirectPolicy& _Policy) {
         FFrameModes M;
         M.UpscaleActive = (ActiveUpscaler() != nullptr);
         M.TAAActive     = UseTAA && !M.UpscaleActive && TemporalAA.IsInitialized();
@@ -2207,8 +2311,14 @@ namespace Smile {
         // acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
         M.RRMode = (Denoiser == EDenoiser::DLSS_RR) && DlssRR.IsInitialized() && RRGuides.IsReady();
 
-        M.ReflectionsActive   = UseReflections && Reflections.IsReady();
-        M.ReSTIRGIActive      = UseReSTIRGI && ReSTIRGI.IsReady();
+        M.ReflectionsActive   = ReflectionsReady();
+        // O ROTEAMENTO. Sai da politica, e nao da capacidade: com `primario = DDGI` o ReSTIR GI
+        // esta pronto e mesmo assim nao roda, porque quem produz o indireto de superficie e o
+        // atlas. E deste booleano que caem, juntos, o trace, o resampling, o NRD indireto, a t16
+        // do deferred e o registro do passe na telemetria — fechar so a leitura no shader deixaria
+        // o frame pagando por trabalho que ninguem le e o manifesto contando um participante que
+        // nao participou.
+        M.ReSTIRGIActive      = _Policy.Primary == EIndirectPrimary::ReSTIR_SHaRC;
         M.ReSTIRDIActiveFrame = UseReSTIRDI && ReSTIRDI.IsReady();
         M.NrdIndirectMode     = M.ReSTIRGIActive && Nrd.IsReady() &&
                                 Denoiser == EDenoiser::NRD;
@@ -2413,8 +2523,9 @@ namespace Smile {
     }
 
     FFrameAmbient Renderer::PublishFrameConstants(const FFrameView& _Vw,
-                                                  const FFrameLighting& _Lt, u32 _FrameSlot,
-                                                  FrameConstants* _CB) {
+                                                  const FFrameLighting& _Lt,
+                                                  const FEffectiveIndirectPolicy& _Policy,
+                                                  u32 _FrameSlot, FrameConstants* _CB) {
         // NOTA DE ORDEM (a unica reordenacao desta extracao): estas tres escritas corriam ANTES
         // do TickWorldClock. Descer para ca e inerte — o relogio so escreve SunDir e a molhadura,
         // e nenhum dos insumos abaixo (posicao da camera, HDRI, tempo decorrido, FrameIndex) e
@@ -2517,7 +2628,7 @@ namespace Smile {
         }
 
         // Superficie: estes campos sao lidos pelo DeferredLighting e pelo ForwardBlend.
-        if (DDGISurfaceAvailable()) {
+        if (_Policy.DDGISurface) {
             const Vec3 GMin = DDGI.GridMin();
             const Vec3 GCnt = DDGI.GridCount();
             _CB->DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
@@ -2548,7 +2659,8 @@ namespace Smile {
         return Amb;
     }
 
-    void Renderer::PushRayTracingFrameState(const FFrameModes& _Modes) {
+    void Renderer::PushRayTracingFrameState(const FFrameModes& _Modes,
+                                            const FEffectiveIndirectPolicy& _Policy) {
         // DLSS Ray Reconstruction: denoiser neural que substitui NRD + SR. Precisa do RR inicializado
         // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
         // Instrumentacao de timer: um gate so, empurrado todo frame. kInvalidSlot manda o passe
@@ -2596,7 +2708,10 @@ namespace Smile {
             // e o volume estiver vivo. Antes da Fase 6 isto era so `UseGI && IsReady()`, ou seja o
             // DDGI era fallback por existir — nao havia como pedir Black para medir de quanto ele
             // e responsavel, que e exatamente a medida que a Fase 5 acabou entregando (30,14%).
-            GIHit.FallbackAvailable = EffectiveFallback() == EIndirectFallback::DDGI;
+            //
+            // Do SNAPSHOT do frame, e nao re-resolvido aqui: os cinco traces que recebem este
+            // bloco tem de ver a mesma politica que o manifesto vai gravar (invariante 3).
+            GIHit.FallbackAvailable = _Policy.Fallback == EIndirectFallback::DDGI;
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
             const FDDGICascadeConstants GICasc = DDGI.CascadeConstants();
@@ -2614,7 +2729,9 @@ namespace Smile {
         Reflections.SetRawSpec(_Modes.RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
     }
 
-    void Renderer::UpdateAtmosphereAndVolumetrics(const FFrameModes& _Modes, const FFrameView& _Vw,
+    void Renderer::UpdateAtmosphereAndVolumetrics(const FFrameModes& _Modes,
+                                                  const FEffectiveIndirectPolicy& _Policy,
+                                                  const FFrameView& _Vw,
                                                   const FFrameLighting& _Lt,
                                                   const FFrameAmbient& _Amb, u32 _FrameSlot,
                                                   FrameConstants* _CB) {
@@ -2666,7 +2783,7 @@ namespace Smile {
             VF.NearZ            = _Vw.NearZ;
             VF.RenderW          = RenderWidth();
             VF.RenderH          = RenderHeight();
-            if (DDGIVolumetricAvailable()) {
+            if (_Policy.DDGIVolumetric) {
                 const Vec3 GMin = DDGI.GridMin();
                 const Vec3 GCnt = DDGI.GridCount();
                 VF.DDGIGridMin   = { GMin.X, GMin.Y, GMin.Z, DDGI.Spacing() };
@@ -2809,7 +2926,9 @@ namespace Smile {
         }
     }
 
-    FPassContext Renderer::MakePassContext(const FFrameModes& _Modes, const FFrameView& _Vw,
+    FPassContext Renderer::MakePassContext(const FFrameModes& _Modes,
+                                           const FEffectiveIndirectPolicy& _Policy,
+                                           const FFrameView& _Vw,
                                            const FFrameLighting& _Lt, const FFrameAmbient& _Amb,
                                            u32 _FrameSlot) {
         FPassContext C;
@@ -2828,6 +2947,7 @@ namespace Smile {
         C.View    = &_Vw;
         C.Light   = &_Lt;
         C.Ambient = &_Amb;
+        C.Policy  = &_Policy;
 
         C.Targets      = &Targets;
         C.FrameCB      = ConstantBuffer->GetGPUVirtualAddress() +
@@ -2929,6 +3049,7 @@ namespace Smile {
     void Renderer::PrepareIndirectLighting(FPassContext& _Ctx) {
         auto* CommandList             = _Ctx.Cmd;
         const FFrameModes& Modes      = *_Ctx.Modes;
+        const FEffectiveIndirectPolicy& Policy = *_Ctx.Policy;
         const FFrameView& Vw          = *_Ctx.View;
         const FFrameLighting& Lt      = *_Ctx.Light;
         const u32 FrameSlot           = _Ctx.FrameSlot;
@@ -3004,7 +3125,7 @@ namespace Smile {
         // grade sem ser construida e o updater cairia no loop O(N) de luzes. Nao seria errado (o
         // loop e a referencia exata), mas o custo do passe mudaria conforme toggles que nao tem
         // nada a ver com ele, e e justamente esse custo que a fase precisa medir isolado.
-        const bool HasReGIRConsumer = DDGIVolumeLive() ||
+        const bool HasReGIRConsumer = Policy.VolumeLive ||
                                       Modes.ReflectionsActive || Modes.ReSTIRGIActive ||
                                       Modes.RadianceCacheUpdateActive;
         // Extracao dos triangulos emissivos. Sai de graca no caso comum: a geometria emissiva e
@@ -3047,7 +3168,7 @@ namespace Smile {
         // para os tres de qualquer jeito (custa nada, e o passe pode nem rodar), mas so quem roda
         // entra no registro que o manifesto le — senao a captura afirmaria cache ativo num frame
         // em que nenhum trace o consultou.
-        const bool DDGIWillTrace = DDGIVolumeLive();
+        const bool DDGIWillTrace = Policy.VolumeLive;
         DDGI.SetRadianceCacheParams(RadianceCache.ShaderParams(LegacyProducer, DDGIWillTrace));
         ReSTIRGI.SetRadianceCacheParams(
             RadianceCache.ShaderParams(LegacyProducer, Modes.ReSTIRGIActive));
@@ -3081,7 +3202,7 @@ namespace Smile {
         }
 
         GIComputeFence = 0;
-        if (DDGIVolumeLive()) {
+        if (Policy.VolumeLive) {
             DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, TemporalSampleIndex, GILightCount);
             if (UseAsyncCompute && DDGI.CanRunAsync()) {
@@ -3174,6 +3295,11 @@ namespace Smile {
         const u32 FrameSlot      = _Ctx.FrameSlot;
         IUpscaler* ActiveUp      = _ActiveUp;
         const bool RRPoisoned    = _RRPoisoned;
+
+        // Zerado no topo e marcado SO no caminho que chega ao Dispatch — mesmo padrao do
+        // ReGIRRanThisFrame. Esta funcao roda uma vez por frame e sem retorno antecipado antes
+        // daqui, entao o zero vale para o frame inteiro.
+        RRRanThisFrame = false;
 
         ID3D12Resource* PostInput    = Targets.HDRColorBuffer.Get();
         u32             PostInputSRV = Targets.HDRSRVSlot;
@@ -3274,6 +3400,10 @@ namespace Smile {
                                 IsRR ? "DLSS-RR" : (Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR"));
                 ActiveUp->Dispatch(CommandList, UpParams);
             }
+            // AQUI, e nao no `IsRR` la de cima: este ponto so e alcancado quando o eval aconteceu
+            // de verdade. Com `RRPoisoned` o `else if` inteiro nao roda, o RR nao denoisa nada e o
+            // frame sai cru — e e exatamente isso que o manifesto tem de dizer.
+            RRRanThisFrame = IsRR;
             RRResetPending = false;   // reset consumido
 
             // Manual hooking (eDisableCLStateTracking): o SL pode ter mexido no estado do CL e nao tem
@@ -3408,6 +3538,7 @@ namespace Smile {
     void Renderer::RecordVolumetricsAndRain(FPassContext& _Ctx) {
         auto* CommandList              = _Ctx.Cmd;
         const FFrameModes& Modes       = *_Ctx.Modes;
+        const FEffectiveIndirectPolicy& Policy = *_Ctx.Policy;
         const FFrameView& Vw           = *_Ctx.View;
         const FFrameLighting& Lt       = *_Ctx.Light;
         const u32 FrameSlot            = _Ctx.FrameSlot;
@@ -3430,8 +3561,8 @@ namespace Smile {
                 LocalShadows.EnsureReadableCompute(CommandList);
                 VolumetricFog.Execute(CommandList, SRVHeap, SunShadows.ConstantsAddress(),
                                       SunShadows.ShadowSRVSlot(),
-                                      DDGIVolumetricAvailable() ? DDGI.IrradianceAtlasSRV()
-                                                                : Targets.DepthSRVSlot,
+                                      Policy.DDGIVolumetric ? DDGI.IrradianceAtlasSRV()
+                                                            : Targets.DepthSRVSlot,
                                       LightBuffer->GetGPUVirtualAddress() +
                                           static_cast<u64>(FrameSlot) * kMaxLights * sizeof(FGPULight),
                                       LocalShadows.ShadowSRVSlot(),
@@ -3770,6 +3901,7 @@ namespace Smile {
     void Renderer::RecordSceneLighting(FPassContext& _Ctx) {
         auto* CommandList              = _Ctx.Cmd;
         const FFrameModes& Modes       = *_Ctx.Modes;
+        const FEffectiveIndirectPolicy& Policy = *_Ctx.Policy;
         const FFrameView& Vw           = *_Ctx.View;
         const FFrameLighting& Lt       = *_Ctx.Light;
         const u32 FrameSlot            = _Ctx.FrameSlot;
@@ -3912,8 +4044,8 @@ namespace Smile {
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
             CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
             {
-                const u32 GITable = DDGISurfaceAvailable() ? DDGI.SceneGITableStart()
-                                                           : IBLTableStart;
+                const u32 GITable = Policy.DDGISurface ? DDGI.SceneGITableStart()
+                                                       : IBLTableStart;
                 CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
             }
             {
@@ -3950,7 +4082,7 @@ namespace Smile {
             GpuProfiler.Begin(CommandList, "Deferred lighting");
             // Aditivo (soma sobre o emissivo do geometry pass); nas views de debug SSAO/GI o
             // shader retorna a visualizacao inteira -> PSO opaco p/ substituir a tela.
-            const bool DeferredDebugView = AODebug || (DDGISurfaceAvailable() && GIDebug);
+            const bool DeferredDebugView = AODebug || (Policy.DDGISurface && GIDebug);
             CommandList->SetPipelineState(DeferredDebugView
                 ? PipelineState.PSODeferredLightingDebug()
                 : PipelineState.PSODeferredLighting());
@@ -4042,6 +4174,7 @@ namespace Smile {
     void Renderer::RecordForwardAndClouds(FPassContext& _Ctx) {
         auto* CommandList              = _Ctx.Cmd;
         const FFrameModes& Modes       = *_Ctx.Modes;
+        const FEffectiveIndirectPolicy& Policy = *_Ctx.Policy;
         const FFrameView& Vw           = *_Ctx.View;
         const FFrameLighting& Lt       = *_Ctx.Light;
         const u32 FrameSlot            = _Ctx.FrameSlot;
@@ -4284,7 +4417,7 @@ namespace Smile {
                 {
                     // Translucidos: ambiente difuso do ForwardBlend, que nao recebe a textura do
                     // ReSTIR GI — por isso superficie, e nao volumetrico.
-                    const u32 GITable = DDGISurfaceAvailable()
+                    const u32 GITable = Policy.DDGISurface
                         ? DDGI.SceneGITableStart() : IBLTableStart;
                     CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
                 }
@@ -5116,7 +5249,11 @@ namespace Smile {
         ObjectPicker.Tick();
 
         IUpscaler* ActiveUp = ActiveUpscaler();          // FSR ou DLSS-SR ativo (nullptr = None/indisponivel)
-        const FFrameModes Modes = ResolveFrameModes();
+        // POLITICA DO INDIRETO, resolvida UMA vez e antes do FFrameModes — que sai dela, e nunca o
+        // contrario (IndirectPolicy.h, invariante 1). Daqui para baixo ninguem pergunta de novo:
+        // trace, cbuffers, deferred, nevoa, telemetria e manifesto leem este mesmo valor.
+        const FEffectiveIndirectPolicy Policy = ResolveIndirectPolicy();
+        const FFrameModes Modes = ResolveFrameModes(Policy);
         const FFrameView  Vw    = ResolveFrameView(Modes, ActiveUp);
         LastViewProj = Vw.ViewProjUnjittered;
 
@@ -5153,8 +5290,8 @@ namespace Smile {
         // mais tarde (PrepareIndirectLighting) e apenas publica o que ja foi decidido aqui — ver
         // FDDGI::PrepareCascadePlacement.
         DDGI.PrepareCascadePlacement(Vw.CameraPosition);
-        const FFrameAmbient  Amb = PublishFrameConstants(Vw, Lt, FrameSlot, MappedCB);
-        PushRayTracingFrameState(Modes);
+        const FFrameAmbient  Amb = PublishFrameConstants(Vw, Lt, Policy, FrameSlot, MappedCB);
+        PushRayTracingFrameState(Modes, Policy);
 
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        Modes.ReflectionsActive ? 1.0f : 0.0f,
@@ -5163,10 +5300,10 @@ namespace Smile {
         MappedCB->InvViewProj  = Vw.InvViewProjFull;
         MappedCB->RenderParams = { Vw.MipBias, 0.0f, 0.0f, 0.0f };
 
-        UpdateAtmosphereAndVolumetrics(Modes, Vw, Lt, Amb, FrameSlot, MappedCB);
+        UpdateAtmosphereAndVolumetrics(Modes, Policy, Vw, Lt, Amb, FrameSlot, MappedCB);
         UpdateWaterAndOcean(Modes, Vw, Lt, Amb, FrameSlot);
 
-        FPassContext Ctx = MakePassContext(Modes, Vw, Lt, Amb, FrameSlot);
+        FPassContext Ctx = MakePassContext(Modes, Policy, Vw, Lt, Amb, FrameSlot);
         // Aliases sobre o contexto — NAO copias. Sobrevivem a migracao porque os poucos blocos que
         // continuam inline aqui embaixo sao estrutura de FRAME, nao passe: a espera do fence da
         // fila assincrona, o clear dos alvos de instrumentacao e os dois ganchos de debug. Nenhum
@@ -5330,7 +5467,7 @@ namespace Smile {
         // amostrou, e ele e a prova de que o contrato "aquece 0..N-1, captura em N" valeu.
         // Recebe os Modes deste frame porque o manifesto registra o que RODOU, nao o que foi
         // pedido — ver CollectCaptureState.
-        FinishFrameCapture(Modes, FrameSlot);
+        FinishFrameCapture(Modes, Policy, FrameSlot);
 
         // === Avanco dos contadores de frame ==================================================
         // AQUI, e nao no meio do frame, e a posicao e que faz o contrato valer.

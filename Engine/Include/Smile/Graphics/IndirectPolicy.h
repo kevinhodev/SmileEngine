@@ -94,16 +94,23 @@ namespace Smile {
     //    2b. A MASCARA depende de POR QUE o efetivo mudou, e nao so de que mudou. As tres
     //        perguntas do topo deste arquivo voltam aqui:
     //
-    //          - trocou a POLITICA com o volume ainda vivo (ex.: DDGI -> Black): muda o terminador
-    //            do raio secundario, entao ReSTIR GI, reflexoes e NRD esquecem. A NEVOA NAO — ela
-    //            le o atlas direto, pela pergunta (3), e continua lendo exatamente o mesmo.
-    //            Derrubar o historico dela seria custo puro e um flicker sem causa.
-    //          - sumiu ou apareceu o VOLUME: ai a nevoa entra junto, porque a fonte dela mudou de
-    //            verdade.
+    //          - trocou o FALLBACK com o volume ainda vivo (ex.: DDGI -> Black): muda o terminador
+    //            do raio secundario, entao ReSTIR GI, reflexoes, NRD **e o atlas** esquecem — as
+    //            sondas tracam pelo mesmo `ShadeSurfaceHit` e terminam no mesmo fallback.
+    //          - trocou o PRIMARIO: muda quem produz o indireto na TELA. Nenhum raio muda de
+    //            destino, entao o atlas fica de pe.
+    //          - sumiu ou apareceu o VOLUME: a fonte da nevoa mudou de verdade.
     //
-    //        Ou seja: uma mascara "consumidores de SUPERFICIE" e outra com os volumetricos. O
-    //        `RadianceCacheConsumersOnly` do FRenderSettings inclui VolumetricFog hoje e nao serve
-    //        para o primeiro caso.
+    //        ⚠️ ESTA NOTA DIZIA "a nevoa NAO — ela le o atlas direto e continua lendo exatamente o
+    //        mesmo", e a frase estava errada no primeiro caso. Ela trata o atlas como recurso
+    //        estatico que se le, quando ele e tambem um ACUMULADOR e um consumidor da politica:
+    //        derrubar o atlas move o chao da nevoa, que reprojetaria inscatter somado sobre o atlas
+    //        convergido contra um atlas de volta ao primeiro trace. A regra correta e mais simples
+    //        de lembrar: **quem reseta o atlas leva a nevoa junto**.
+    //
+    //        FEITO, em TRES dominios e nao dois: `HistoryDomain::IndirectTerminator` (com atlas e
+    //        nevoa), `IndirectSurfaceRoute` (sem os dois) e `IndirectVolumetricSource`. As bordas
+    //        sao avaliadas de forma INDEPENDENTE e as mascaras se somam.
     // ============================================================================================
 
     // ============================================================================================
@@ -157,9 +164,15 @@ namespace Smile {
     //      POLITICA DE FALLBACK -> EffectiveFallback() == DDGI
     //        GIHit.FallbackAvailable   ✅ ja convertido
     //
-    //    Nenhum ponto pediu `EffectivePrimary()`: a escolha da saida principal ainda nao existe
-    //    como roteamento — e o commit seguinte, o primeiro que muda imagem. Que a pergunta nao
-    //    tenha call site AGORA e informacao, nao lacuna.
+    //      ROTEAMENTO PRINCIPAL -> EffectivePrimary()
+    //        Modes.ReSTIRGIActive      o estimador de superficie roda? Dele caem trace,
+    //                                  resampling, NRD indireto, a t16 do deferred e o registro
+    //                                  do passe na telemetria.
+    //        DDGISurfaceAvailable()    `!= Off` — o atlas ilumina superficie enquanto EXISTIR
+    //                                  indireto de superficie, seja ele quem for (ver secao 4).
+    //
+    //    Os dois entraram com o seletor. Ate ele, a pergunta nao tinha call site nenhum, e a
+    //    ausencia era informacao: o enum existia sem rotear nada.
     //
     // ============================================================================================
     // 4. O TERCEIRO PAPEL DO DDGI: AUXILIAR DE SUPERFICIE.
@@ -224,20 +237,44 @@ namespace Smile {
     // O estado EFETIVO do frame, num valor comparavel. E o que o detector de borda observa: a
     // imagem muda com qualquer um destes campos, e nao so com o fallback.
     //
-    // `FallbackActive` = existe raio que consome o fallback. So o primario ReSTIR_SHaRC traca
-    // raios secundarios que terminam nele; com DDGI ou Off, o campo `Fallback` descreve uma
-    // politica que ninguem exerce, e afirma-la no manifesto seria falso.
+    // `FallbackActive` = existe raio que consome o fallback — e NAO e so o ReSTIR GI. A primeira
+    // versao deste campo dizia `Primary == ReSTIR_SHaRC`, e subcontava: o `ShadeSurfaceHit` e
+    // compartilhado, entao o `PT_SampleIndirectFallback` responde o miss dos CINCO traces de
+    // render (ReSTIR GI, as tres reflexoes e o 2o bounce das sondas). Com primario DDGI, trocar o
+    // fallback de DDGI para Black mudava o terminador das reflexoes e o detector nao via borda
+    // nenhuma. O campo e lido pelo `TerminatorDiffers`, que decide se as REFLEXOES e o ATLAS
+    // esquecem — logo ele tem de contar os raios dos dois.
+    //
+    // `VolumeLive` e a pergunta de ORCAMENTO (o passe do DDGI roda). Nenhum comparador o le, e
+    // isso e verdade derivada e nao descuido: hoje `DDGIVolumetric == VolumeLive` por definicao,
+    // entao toda borda dele ja aparece no `VolumetricDiffers`. No dia em que as duas divergirem,
+    // este campo precisa de comparador proprio — ele esta aqui para o frame inteiro ler a mesma
+    // resposta, que e a invariante (2)+(3) abaixo.
     struct FEffectiveIndirectPolicy {
         EIndirectPrimary  Primary        = EIndirectPrimary::Off;
         EIndirectFallback Fallback       = EIndirectFallback::Black;
         bool              FallbackActive = false; // ha raio consumindo o fallback
+        bool              VolumeLive     = false; // o passe do DDGI roda neste frame (orcamento)
         bool              DDGISurface    = false; // auxiliares: folhagem, subsurface, translucidos
         bool              DDGIVolumetric = false; // nevoa
 
-        // Superficie e volumetria mudam por motivos diferentes e invalidam historicos diferentes.
-        bool SurfaceDiffers(const FEffectiveIndirectPolicy& O) const {
-            return Primary != O.Primary || FallbackActive != O.FallbackActive ||
-                   (FallbackActive && Fallback != O.Fallback) || DDGISurface != O.DDGISurface;
+        // TRES perguntas, e nao duas. A primeira versao tinha um `SurfaceDiffers` so, juntando
+        // primario e fallback — e isso derrubava o ATLAS por troca de primario, que nao mexe em
+        // sonda nenhuma. Cada uma invalida um dominio diferente do HistoryDomain.h.
+
+        // O que os raios secundarios encontram no MISS. Muda o conteudo de tudo que acumula
+        // radiancia tracada — o atlas do DDGI inclusive, porque o 2o bounce das sondas termina no
+        // mesmo lugar. E como este e o unico que reseta o atlas, e o unico que arrasta a nevoa
+        // junto (ver nota 2b).
+        bool TerminatorDiffers(const FEffectiveIndirectPolicy& O) const {
+            return FallbackActive != O.FallbackActive ||
+                   (FallbackActive && Fallback != O.Fallback);
+        }
+        // QUEM produz o indireto de superficie na tela, e se o atlas ainda o ilumina. Nao move raio
+        // nenhum: o que as sondas e as reflexoes tracam sai do fallback e do volume vivo, nunca do
+        // primario. O atlas fica de pe, e a nevoa nao e notificada.
+        bool SurfaceRouteDiffers(const FEffectiveIndirectPolicy& O) const {
+            return Primary != O.Primary || DDGISurface != O.DDGISurface;
         }
         bool VolumetricDiffers(const FEffectiveIndirectPolicy& O) const {
             return DDGIVolumetric != O.DDGIVolumetric;

@@ -80,7 +80,26 @@ namespace Smile {
         f32 RenderScale = 1.0f;
 
         const char* Upscaler = "";
+        // O denoiser PEDIDO. Continua com este nome e este significado: os manifestos ja tirados
+        // da serie usam a chave assim, e renomea-la quebraria a comparacao com eles.
         const char* Denoiser = "";
+        // O denoiser que RODOU, por DOMINIO. Existe porque o pedido nao descreve a execucao desde
+        // que o seletor da Fase 6 entrou, e a divergencia e assimetrica: `NrdIndirectMode` sai de
+        // `ReSTIRGIActive`, que sai da politica, enquanto `NrdDirectMode` nao. Com
+        // `denoiser: NRD` + `primario: ddgi` o indireto sai CRU — GI e reflexao compostas sem
+        // filtro — e a direta continua denoisada. Sem estes dois campos, esse rollback e a baseline
+        // historica sairiam com `denoiser: NRD` nos dois e ninguem saberia comparar o que.
+        //
+        // O RR nao e por dominio — ele denoisa a cor COMPOSTA num eval so —, entao aparece nos dois
+        // quando EXECUTA. Isso e descricao, e nao aproximacao: sob RR os dois dominios chegam crus
+        // a ele e saem filtrados por ele.
+        //
+        // ⚠️ "Executa" e literal: o gate e `RRRanThisFrame`, marcado no ponto do Dispatch, e nao o
+        // modo. Com o visualizador de debug ou o overlay de sondas escrevendo no HDR, o eval do RR
+        // e PULADO e o frame sai cru — e ai os dois campos dizem `None` com `denoiser: DLSS_RR`
+        // logo acima, que e a leitura correta daquele arquivo.
+        const char* IndirectDenoiserEffective = "";
+        const char* DirectDenoiserEffective   = "";
         int  UpscalerQuality = 0;
         bool UseTAA = false;
 
@@ -152,15 +171,16 @@ namespace Smile {
         // ela nao mente sobre a imagem mas apaga a DEGRADACAO — `black` nao distingue "pedi preto
         // para medir" de "pedi DDGI e nao havia volume" de "pedi Environment, que nao existe".
         //
-        // ⚠️ No primario as duas divergem por outro motivo enquanto a Fase 6 nao termina: o seletor
-        // ainda NAO ROTEIA. Pedir `ddgi` e ver `restir_sharc` no efetivo significa "o enum nao esta
-        // ligado", e nao "degradou por indisponibilidade". Quando o roteamento entrar, esta nota
-        // sai — e a divergencia volta a significar so degradacao.
+        // Com o seletor da Fase 6 no lugar, divergencia no primario significa **degradacao** e
+        // nada mais: pedido que a capacidade nao honrou (SHaRC sem o passe pronto, DDGI sem
+        // volume). A nota que morava aqui avisava do periodo em que o enum existia sem rotear, e
+        // ela mesma dizia para sair quando o roteamento entrasse.
         const char* IndirectPrimaryRequested  = "";
         const char* IndirectPrimaryEffective  = "";
         const char* IndirectFallbackRequested = "";
         const char* IndirectFallbackEffective = "";
-        // Ha raio consumindo o fallback? So o primario SHaRC traca secundarios que terminam nele.
+        // Ha raio consumindo o fallback? NAO e so o primario SHaRC: o `ShadeSurfaceHit` e
+        // compartilhado, entao reflexoes e o 2o bounce das sondas terminam no mesmo fallback.
         // Falso, o campo de fallback descreve politica que ninguem exerceu no frame.
         bool IndirectFallbackActive = false;
         // DISPONIBILIDADE do atlas por papel — superficie (folhagem, subsurface, translucidos) e

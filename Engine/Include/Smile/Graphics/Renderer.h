@@ -600,9 +600,21 @@ namespace Smile {
         void ReportInitProgress(std::string_view Label, std::string_view Detail,
                                 f32 Fraction) const;
 
+        // Resolve a politica do indireto do frame e DETECTA A BORDA sobre o valor efetivo. Roda
+        // uma vez, no topo do RenderFrame, antes de qualquer consumidor publicar cbuffer — mesma
+        // posicao e mesmo motivo do TickWarmup do radiance cache.
+        //
+        // O efetivo muda SEM passar por setter nenhum (o volume aparece ou some), entao invalidar
+        // no setter do enum nao bastaria. Invalida por DOMINIO: superficie e volumetria mudam por
+        // motivos diferentes. Ver IndirectPolicy.h, contrato 2.
+        FEffectiveIndirectPolicy ResolveIndirectPolicy();
         // Resolve "que passes rodam neste frame" (FrameContext.h). Chamado uma vez no topo do
         // RenderFrame; todos os insumos sao membros estaveis durante a gravacao.
-        FFrameModes ResolveFrameModes();
+        //
+        // Recebe a politica JA RESOLVIDA em vez de perguntar de novo: `ReSTIRGIActive` sai dela, e
+        // a invariante (1) do IndirectPolicy.h proibe o caminho inverso — o modo e consequencia da
+        // politica, nunca insumo dela.
+        FFrameModes ResolveFrameModes(const FEffectiveIndirectPolicy& Policy);
         // Camera/matrizes/jitter do frame (FrameContext.h). Precisa do upscaler ativo p/ o jitter.
         FFrameView  ResolveFrameView(const FFrameModes& Modes, IUpscaler* ActiveUp);
         // Sol, lua, chuva e a luz-chave. So calculo; as publicacoes ficam no RenderFrame.
@@ -622,16 +634,20 @@ namespace Smile {
         // noite/estrelas da atmosfera. Devolve o ambiente hemisferico porque ele e calculado no
         // mesmo integral que produz a SH publicada aqui — e cinco subsistemas o consomem depois.
         FFrameAmbient PublishFrameConstants(const FFrameView& View, const FFrameLighting& Light,
+                                            const FEffectiveIndirectPolicy& Policy,
                                             u32 FrameSlot, FrameConstants* MappedCB);
 
         // Empurra o estado do frame para os passes de RT (slot do timer, perfil de epsilons,
         // amostragem do 2o bounce, quem denoisa). Um lugar so: sem isto cada passe teria a
         // propria copia e um sweep de calibracao mexeria em metade deles.
-        void PushRayTracingFrameState(const FFrameModes& Modes);
+        void PushRayTracingFrameState(const FFrameModes& Modes,
+                                      const FEffectiveIndirectPolicy& Policy);
 
         // Atmosfera, height fog, froxel, sun shafts, nuvens e a projecao da sombra de nuvem.
         // Recebe o ambiente porque o froxel e as nuvens integram sobre ele.
-        void UpdateAtmosphereAndVolumetrics(const FFrameModes& Modes, const FFrameView& View,
+        void UpdateAtmosphereAndVolumetrics(const FFrameModes& Modes,
+                                            const FEffectiveIndirectPolicy& Policy,
+                                            const FFrameView& View,
                                             const FFrameLighting& Light,
                                             const FFrameAmbient& Ambient, u32 FrameSlot,
                                             FrameConstants* MappedCB);
@@ -645,7 +661,9 @@ namespace Smile {
         // Daqui em diante existe command list. Cada fase recebe o mesmo FPassContext e abre com
         // o mesmo prologo de desempacotar o que usa — o idioma e o `CRenderView* pRenderView =
         // RenderView()` que cada stage da Cry faz no topo do Execute.
-        FPassContext MakePassContext(const FFrameModes& Modes, const FFrameView& View,
+        FPassContext MakePassContext(const FFrameModes& Modes,
+                                     const FEffectiveIndirectPolicy& Policy,
+                                     const FFrameView& View,
                                      const FFrameLighting& Light, const FFrameAmbient& Ambient,
                                      u32 FrameSlot);
 
@@ -690,7 +708,10 @@ namespace Smile {
         // — mais da METADE da categoria "GI e reflexos" — e eram alocadas incondicionalmente,
         // inclusive no estado padrao, onde o denoiser pode ser DLSS-RR/None e os dois ReSTIR
         // nascem desligados. Aqui cada instancia so existe enquanto tem consumidor.
-        bool WantNrdIndirect() const; // NRD selecionado + ReSTIR GI ligado (o volume NAO entra)
+        // NRD selecionado + ReSTIR GI ligado + primario PEDIDO em SHaRC. O volume NAO entra, e o
+        // primario e o pedido e nao o efetivo: isto governa ALOCACAO, que so pode rodar a partir de
+        // um setter. Ver o corpo.
+        bool WantNrdIndirect() const;
         bool WantNrdDirect() const;   // NRD selecionado + ReSTIR DI ligado
         // Slots do fallback indireto para os SetupForResize de ReSTIR GI e reflexoes: os do DDGI
         // quando o volume EXISTE, os neutros quando nao existe. Nunca kInvalidSlot.
@@ -719,8 +740,12 @@ namespace Smile {
         void UpdateFrameCapture();
         // Modes deste frame: o manifesto registra o que RODOU (IsReady, gates, TAA acendendo por
         // falta de upscaler), nao o que o operador selecionou.
-        void FinishFrameCapture(const FFrameModes& Modes, u32 FrameSlot);
-        FCaptureState    CollectCaptureState(const FFrameModes& Modes) const;
+        void FinishFrameCapture(const FFrameModes& Modes, const FEffectiveIndirectPolicy& Policy,
+                                u32 FrameSlot);
+        // A politica vem pelo MESMO snapshot que rendeu o frame, e nao re-resolvida aqui: o
+        // manifesto tem de descrever a politica com que a imagem foi feita. Invariante (3).
+        FCaptureState    CollectCaptureState(const FFrameModes& Modes,
+                                             const FEffectiveIndirectPolicy& Policy) const;
         FCaptureSettings CurrentCaptureSettings() const;
         void             ApplyCaptureSettings(const FCaptureSettings& S);
         void             RestoreCaptureState(const FCaptureSettings& S);
@@ -740,6 +765,12 @@ namespace Smile {
         // O ReGIR so constroi com consumidor E luz na cena; o gate real e montado no meio do
         // frame, longe do FFrameModes. Guardado aqui para o manifesto registrar o que rodou.
         bool             ReGIRRanThisFrame = false;
+        // O DLSS-RR de fato AVALIOU neste frame. Mesmo padrao do ReGIR acima, e pelo mesmo motivo:
+        // `Modes.RRMode` diz "selecionado e pronto", nao "executou". O `RRPoisoned` — visualizador
+        // de debug ou overlay de sondas escrevendo no HDR — pula o bloco de upscale INTEIRO, e
+        // nesse frame o RR nao denoisa nada. Sem este campo o manifesto gravaria `DLSS_RR` nos dois
+        // dominios de um frame que saiu cru e sem upscale.
+        bool             RRRanThisFrame    = false;
         // Luzes PUNTUAIS elegiveis (habilitadas, com intensidade, raio e RTWeight > 0) que o frame
         // empacotou para o indireto. Vai ao manifesto porque e o numero que EXPLICA um ReGIR
         // pedido e nao construido: a Bistro tem `"lights": []` e ilumina por geometria emissiva,
@@ -1025,6 +1056,11 @@ namespace Smile {
         // definicao so. Ele NAO responde "o DDGI e o fallback" nem "o DDGI e o primario": para
         // isso existem os enums.
         bool             DDGIVolumeLive() const;
+        // CAPACIDADE dos dois produtores de RT que a politica consulta: "o passe conseguiria
+        // tracar". Nao sao modos — o FFrameModes sai da politica, e a politica sai daqui. Existem
+        // como funcao para as duas leituras nao poderem divergir.
+        bool             ReSTIRGIReady() const;
+        bool             ReflectionsReady() const;
         // O fallback EFETIVO do frame: a politica pedida, degradada pelo que existe. Pedir DDGI
         // sem volume vivo nao e erro — e Black, e o manifesto tem de registrar o que valeu.
         EIndirectFallback EffectiveFallback() const;
@@ -1062,6 +1098,16 @@ namespace Smile {
         bool              DDGISurfaceAvailable() const;
         // Os cinco efetivos num valor so, para o detector de borda comparar por frame.
         FEffectiveIndirectPolicy EffectiveIndirectPolicy() const;
+        // O que o detector viu no frame ANTERIOR. Atualizado no fim do ResolveIndirectPolicy, ou
+        // seja depois de a politica deste frame estar fixada — atualizar dentro da comparacao
+        // apagaria a borda para quem lesse depois (invariante 4).
+        //
+        // O primeiro valor observado apenas INICIALIZA: `indefinido -> DDGI` nao e borda, so passou
+        // a existir observador. Tratado como borda, ele derrubaria historico no primeiro frame de
+        // toda cena e cancelaria a sessao de captura recem-aberta, porque a invalidacao passa pelo
+        // funil. Ver IndirectPolicy.h, nota 2a.
+        FEffectiveIndirectPolicy PrevIndirectPolicy;
+        bool                     HasPrevIndirectPolicy = false;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;

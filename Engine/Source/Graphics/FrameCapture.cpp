@@ -496,6 +496,13 @@ namespace Smile {
                 File << "  \"upscaler\": \"" << _State.Upscaler << "\",\n";
                 File << "  \"upscalerQuality\": " << _State.UpscalerQuality << ",\n";
                 File << "  \"denoiser\": \"" << _State.Denoiser << "\",\n";
+                // Pedido acima, EFETIVO por dominio aqui — mesma forma do `regir`/`regirRequested`
+                // logo abaixo, e pelo mesmo motivo. Os dois divergem do pedido de formas
+                // diferentes, entao sao dois campos e nao um.
+                File << "  \"indirectDenoiserEffective\": \""
+                     << _State.IndirectDenoiserEffective << "\",\n";
+                File << "  \"directDenoiserEffective\": \""
+                     << _State.DirectDenoiserEffective   << "\",\n";
                 File << "  \"taa\": " << Bool(_State.UseTAA) << ",\n";
                 File << "  \"useGI\": "        << Bool(_State.UseGI)       << ",\n";
                 File << "  \"ddgiReady\": "    << Bool(_State.DDGIReady)   << ",\n";

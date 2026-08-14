@@ -141,6 +141,43 @@ namespace Smile {
                                             T::VolumetricFog | T::ProbeDiagnostic |
                                             T::RadianceCache | Resolve;
 
+        // Trocou o TERMINADOR do raio secundario: o fallback foi de DDGI a Black (ou de volta), ou
+        // passou a haver / deixou de haver quem o consuma. Vale para os CINCO traces de render de
+        // uma vez, porque o `PT_SampleIndirectFallback` mora no `ShadeSurfaceHit` compartilhado —
+        // e o ATLAS do DDGI esta entre os consumidores, ja que o 2o bounce das sondas termina no
+        // fallback como qualquer outro raio.
+        //
+        // ⚠️ A NEVOA ENTRA, e a primeira versao deste dominio a deixou de fora. O contrato do
+        // IndirectPolicy.h dizia "a nevoa continua lendo exatamente o mesmo", e isso so vale
+        // enquanto o atlas nao e resetado — mas e justamente este dominio que o reseta. O chao da
+        // nevoa se move junto: ela reprojetaria inscatter acumulado sobre o atlas convergido contra
+        // um atlas que voltou a estimativa de um trace so.
+        //
+        // A TABELA do cache fica de pe: desde a Fase 3 os traces de render nao inserem e o terminal
+        // do updater nunca leu DDGI, entao o CONTEUDO dela nao depende desta politica.
+        //
+        // Mesma mascara e MESMO MOTIVO do `RadianceCacheConsumersOnly` (RenderSettings.cpp) —
+        // trocar o terminador entre cache e fallback e este mesmo evento visto de outro angulo.
+        // Ficam separados enquanto aquele for derivado do RayVisibility por subtracao.
+        inline constexpr T IndirectTerminator = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
+                                                T::VolumetricFog | T::ProbeDiagnostic | Resolve;
+
+        // Trocou QUEM PRODUZ o indireto de superficie na tela (primario), ou se o atlas ainda o
+        // ilumina. NAO move raio nenhum: sondas e reflexoes tracam igual, com o mesmo terminador —
+        // verificado, o `GIHitSampling` e o `RadianceCacheParams` das sondas saem do fallback e do
+        // volume vivo, nunca do primario. Por isso o ATLAS fica de pe aqui, e com ele a nevoa.
+        //
+        // E o MESMO evento que o toggle do `UseReSTIRGI` alcancado por outro knob, entao a mascara
+        // e a daquele setter. Divergir das duas seria exatamente a regra que a Fase 4 pagou:
+        // automatismo que duplica um gesto manual tem de fazer TUDO o que ele faz.
+        inline constexpr T IndirectSurfaceRoute = T::ReSTIRGI | ScreenResolve;
+
+        // O VOLUME apareceu ou sumiu, e a fonte da nevoa mudou de verdade — ela reprojeta inscatter
+        // acumulado com um atlas que deixou de existir, ou que acabou de nascer. Separado dos dois
+        // acima porque as bordas sao independentes: a politica troca com o volume vivo, e o volume
+        // some sem a politica mudar.
+        inline constexpr T IndirectVolumetricSource = T::VolumetricFog;
+
         // Mudou a GEOMETRIA do raio (epsilons, offsets, TMin). Alcanca tambem o shadow ray da
         // direta, por isso inclui o eixo do DI.
         inline constexpr T RayGeometry = T::DDGIAtlas | T::ReSTIRGI | T::ReSTIRDI |
@@ -293,6 +330,9 @@ namespace Smile {
         static_assert(!ResetsScreenFilters(RayVisibility), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(GIAccumulation), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(RayGeometry),   "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(IndirectTerminator),        "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(IndirectSurfaceRoute),      "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(IndirectVolumetricSource),  "dominio de conteudo");
         static_assert(!ResetsScreenFilters(SkyRadiance),   "dominio de conteudo");
         static_assert(!ResetsScreenFilters(IndirectSampler), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(MaterialRTState), "dominio de conteudo");

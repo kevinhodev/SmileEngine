@@ -431,6 +431,33 @@ condição por fora é o começo de uma divergência:
 | `regir` | o gate real, que também exige consumidor e `GILightCount > 0` |
 | `cacheUpdate`, `cacheQuery` | o que o `ShaderParams` publicou **a um consumidor que rodou** |
 | `cacheWarmup` | o estado do aquecimento global, que diz **por que** `cacheQuery` está falso |
+| `indirectDenoiserEffective`, `directDenoiserEffective` | `NrdIndirectMode` / `NrdDirectMode` do frame, e `RRRanThisFrame` — o RR **executado**, não o selecionado |
+
+⚠️ **`denoiser` é o PEDIDO, e os dois campos por domínio são o que rodou.** A chave antiga fica com
+o significado antigo — os manifestos já tirados da série a usam assim —, mas ela deixou de descrever
+a execução quando o seletor da Fase 6 entrou, e a divergência é **assimétrica**: `NrdIndirectMode`
+carrega o `ReSTIRGIActive`, que sai da política do indireto, e o direto não. Com `denoiser: NRD` e
+`indirectPrimaryEffective: ddgi`, o indireto sai **cru** — GI e reflexão compostas sem filtro — e a
+direta continua denoisada. Comparar esse braço de rollback com a baseline histórica lendo só
+`denoiser` compararia imagem filtrada contra imagem crua sem nada no arquivo denunciando.
+
+O RR aparece nos **dois** quando executa, e isso é descrição e não arredondamento: ele não filtra
+por domínio, filtra a cor composta num eval só.
+
+⚠️ **"Executa" é literal, e é por isso que o gate é `RRRanThisFrame` e não `RRMode`.** Com o
+visualizador de render targets ou o overlay de sondas escrevendo no HDR, o `RRPoisoned` pula o bloco
+de upscale **inteiro** — o frame sai cru e sem upscale — e o modo continuaria dizendo que o RR
+estava lá. Nesse frame o manifesto sai assim, e a leitura é exata:
+
+```json
+"denoiser": "DLSS_RR",
+"indirectDenoiserEffective": "None",
+"directDenoiserEffective": "None",
+```
+
+É o mesmo par do `regir` × `regirRequested`: **gate montado longe do `FFrameModes` só se registra de
+onde ele é decidido** — `RRRanThisFrame` é marcado no ponto do `Dispatch`, e zerado no topo do
+`RecordResolve`.
 
 O caso do cache mostra por que a distinção importa, em dois eixos. `ResetPending` é limpo pelo
 resolve no meio do frame, então recompor `Enabled && Ready && !ResetPending` no fim daria "ativo"

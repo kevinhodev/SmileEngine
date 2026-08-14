@@ -145,12 +145,27 @@ namespace Smile {
         // invalidacao do toggle manual de leitura, nos dois sentidos.
         void NotifyRadianceCacheQueryChanged();
         // Politica do indireto (Fase 6). Os getters de EFETIVO devolvem o que o pipeline fez —
-        // pedido degradado pelo que existe —, e por ora o primario efetivo pode divergir do pedido
-        // porque o seletor ainda nao roteia. Ver IndirectPolicy.h.
+        // pedido degradado pelo que existe. Ver IndirectPolicy.h.
+        //
+        // Os SETTERS nao invalidam nada, e isso e desenho e nao esquecimento: o valor efetivo muda
+        // sem passar por setter nenhum (basta o volume aparecer ou sumir), entao a invalidacao mora
+        // no DETECTOR DE BORDA do topo do frame, que cobre os dois caminhos com uma regra so.
+        // Invalidar aqui tambem produziria invalidacao dupla no caminho que passa pelo setter.
+        void SetIndirectPrimary(EIndirectPrimary V);
         EIndirectPrimary  GetIndirectPrimary() const;
         EIndirectPrimary  EffectiveIndirectPrimary() const;
+        void SetIndirectFallback(EIndirectFallback V);
         EIndirectFallback GetIndirectFallback() const;
         EIndirectFallback EffectiveIndirectFallback() const;
+        // A politica EFETIVA mudou entre dois frames. Chamada pelo Renderer no topo do frame, com
+        // o que de fato diferiu — a MASCARA mora aqui, como a de todos os outros eventos, para as
+        // tres bordas nao poderem divergir uma da outra.
+        //
+        // Sao TRES e nao duas, e a diferenca custou um achado: `Terminator` (o fallback trocou —
+        // move os cinco traces E o atlas, e por isso leva a nevoa junto) e `Route` (trocou quem
+        // produz na tela — nao move raio nenhum, entao o atlas fica). Junta-las derrubava o atlas
+        // por troca de primario. As tres sao independentes e podem vir juntas no mesmo frame.
+        void NotifyIndirectPolicyChanged(bool Terminator, bool Route, bool Volumetric);
         // Mapa por pixel da FONTE do candidato tracado pelo ReSTIR GI (cache / DDGI / zero / ceu /
         // morto). E do FReSTIRGI, e nao do cache, mas mora aqui junto do resto do diagnostico de
         // GI. Nao invalida historico — so pinta um alvo de debug. Re-registra os alvos, porque o
