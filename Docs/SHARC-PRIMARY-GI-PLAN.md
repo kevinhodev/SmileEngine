@@ -462,8 +462,14 @@ de abertura, que achou a política de sombreamento **já pronta** desde a Fase 2
 - ✅ não há dupla contagem — o cache hit retorna antes do fallback, por construção;
 - ✅ ReSTIR spatial/temporal sem artefato novo — imagem conferida contra o regime medido à mão;
 - ⏳ **a CURVA** ("a taxa de uso do DDGI cai conforme o cache aquece") **não foi medida** — o que
-  existe é o ponto de regime permanente em N=128. O instrumento agora permite a curva; o protocolo
-  para varrer N com o regime `Sf` não foi escrito.
+  existe é o ponto de regime permanente em N=128.
+
+**DÍVIDA DE RUNTIME registrada (a curva).** Ela não bloqueia a Fase 6 — é medida, não estrutura —
+e o protocolo é simples o bastante para caber aqui: capturas em **N = 0 / 32 / 64 / 128** no regime
+`Sf`, mesma pose, verificando `cache` ↑, `DDGI` ↓ e `zero` **estável**. O `zero` é o controle: ele
+não deveria se mover com o aquecimento, porque descreve ausência de volume e não frieza do cache —
+se ele andar junto, a leitura da curva está errada antes de qualquer conclusão. `N = 0` é o retrato
+do cache vazio e dá o ponto de partida: ali quase tudo tem de cair em `DDGI`.
 
 **Duas ressalvas do registro:** a captura saiu como `59750f5-dirty` (`tmp/` e um doc não rastreado),
 então ela vale como medida e não como registro científico definitivo; e ReSTIR DI e ReGIR estavam

@@ -84,6 +84,26 @@ namespace Smile {
     //    rodadas de revisao para ficar certo; este comeca sabendo onde as pedras estao:
     //    o detector roda antes de qualquer consumidor publicar cbuffer, e o latch descreve a
     //    mudanca EFETIVA e nao a transicao de estado.
+    //
+    //    2a. O PRIMEIRO valor observado apenas INICIALIZA. `uninitialized -> DDGI` nao e borda:
+    //        nada mudou, so passou a existir observador. Tratado como borda, ele invalidaria
+    //        historico no primeiro frame de toda cena e — pior — cancelaria a sessao de captura
+    //        recem-aberta, porque a invalidacao passa pelo funil. O estado anterior nasce
+    //        indefinido e a primeira leitura o preenche em silencio.
+    //
+    //    2b. A MASCARA depende de POR QUE o efetivo mudou, e nao so de que mudou. As tres
+    //        perguntas do topo deste arquivo voltam aqui:
+    //
+    //          - trocou a POLITICA com o volume ainda vivo (ex.: DDGI -> Black): muda o terminador
+    //            do raio secundario, entao ReSTIR GI, reflexoes e NRD esquecem. A NEVOA NAO — ela
+    //            le o atlas direto, pela pergunta (3), e continua lendo exatamente o mesmo.
+    //            Derrubar o historico dela seria custo puro e um flicker sem causa.
+    //          - sumiu ou apareceu o VOLUME: ai a nevoa entra junto, porque a fonte dela mudou de
+    //            verdade.
+    //
+    //        Ou seja: uma mascara "consumidores de SUPERFICIE" e outra com os volumetricos. O
+    //        `RadianceCacheConsumersOnly` do FRenderSettings inclui VolumetricFog hoje e nao serve
+    //        para o primeiro caso.
     // ============================================================================================
 
     inline const char* IndirectPrimaryName(EIndirectPrimary P) {
