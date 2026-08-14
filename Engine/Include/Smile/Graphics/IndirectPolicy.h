@@ -180,9 +180,23 @@ namespace Smile {
     //    enquanto EXISTIR indireto de superficie, seja ele quem for.
     //
     //    ⚠️ E ISSO MUDA COMO O MANIFESTO SE LE: `fallback: black` NAO significa "nenhum DDGI em
-    //    superficie" enquanto os auxiliares existirem. Ele descreve o terminador dos RAIOS. Quem
-    //    quiser medir superficie sem nenhum DDGI precisa de `primario = Off` — ou de um campo
-    //    proprio, se um dia for util distinguir os auxiliares ligados dos desligados.
+    //    superficie" enquanto os auxiliares existirem. Ele descreve o terminador dos RAIOS.
+    //
+    //    OS ESTADOS ALCANCAVEIS, para ninguem escolher o errado achando que isolou alguma coisa:
+    //
+    //      ReSTIR_SHaRC + fallback Black + volume vivo
+    //          SHaRC nos raios, sem DDGI como terminador. Os AUXILIARES continuam (folhagem,
+    //          subsurface, translucidos) e a nevoa tambem.
+    //      ReSTIR_SHaRC + volume desligado
+    //          SHaRC sem nenhum DDGI em superficie — mas a VOLUMETRIA perde o atlas junto, entao
+    //          a nevoa muda tambem e a medida deixa de ser so sobre superficie.
+    //      Primary = Off
+    //          nenhum indireto de superficie. Isto NAO isola o DDGI: apaga o SHaRC tambem.
+    //
+    //    ⚠️ "SHaRC sem DDGI em superficie, MANTENDO o DDGI na nevoa" NAO E ALCANCAVEL hoje. Ele
+    //    exige um toggle/papel explicito para o auxiliar de superficie, e nao existe. Nao inventar
+    //    um estado equivalente com os knobs atuais — nenhum deles faz isso, e a versao anterior
+    //    desta nota afirmava que `Primary = Off` fazia, o que apagaria o SHaRC junto.
     // ============================================================================================
     // ============================================================================================
 
