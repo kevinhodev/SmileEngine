@@ -1049,6 +1049,16 @@ namespace Smile {
         // de receber DDGI e a nevoa continua integrando, porque irradiancia volumetrica nao tem
         // substituto. Chamar o helper volumetrico no deferred manteria a imagem identica HOJE e
         // mentiria no dia em que as duas divergissem — que e o dia em que estes nomes existem.
+        //
+        // ⚠️ SEMANTICA FIXADA ANTES DO SELETOR, e ela NAO e `EffectivePrimary() == DDGI`. Mesmo em
+        // `ReSTIR_SHaRC` o atlas atende tres excecoes de superficie que ninguem mais atende:
+        // fill de folhagem, termo traseiro de subsurface, e os TRANSLUCIDOS do ForwardBlend, que
+        // nao recebem a textura do ReSTIR GI. Amarrar este helper ao primario faria selecionar
+        // SHaRC apagar as tres de uma vez, em silencio.
+        //
+        // A regra e `DDGIVolumeLive() && EffectivePrimary() != Off`: o atlas ilumina superficie
+        // enquanto houver indireto de superficie, seja ele quem for. As tres sao DDGI AUXILIAR DE
+        // SUPERFICIE — terceiro papel, nem primario nem fallback dos raios.
         bool              DDGISurfaceAvailable() const;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  

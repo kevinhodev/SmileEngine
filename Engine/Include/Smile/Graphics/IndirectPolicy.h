@@ -159,6 +159,31 @@ namespace Smile {
     //    Nenhum ponto pediu `EffectivePrimary()`: a escolha da saida principal ainda nao existe
     //    como roteamento — e o commit seguinte, o primeiro que muda imagem. Que a pergunta nao
     //    tenha call site AGORA e informacao, nao lacuna.
+    //
+    // ============================================================================================
+    // 4. O TERCEIRO PAPEL DO DDGI: AUXILIAR DE SUPERFICIE.
+    //
+    //    A taxonomia tinha dois papeis para o atlas em superficie — primario e fallback dos raios
+    //    — e falta um. Mesmo com `primario = ReSTIR_SHaRC`, o DDGI segue atendendo TRES consumos
+    //    de superficie que ninguem mais atende:
+    //
+    //      - fill de folhagem;
+    //      - termo traseiro de subsurface;
+    //      - TRANSLUCIDOS do ForwardBlend, que nao recebem a textura do ReSTIR GI.
+    //
+    //    Consequencia direta para o seletor: `DDGISurfaceAvailable()` NAO pode virar
+    //    `EffectivePrimary() == DDGI`. Se virar, escolher SHaRC apaga as tres de uma vez e em
+    //    silencio — uma mudanca de imagem que ninguem pediu, escondida dentro de uma mudanca de
+    //    politica que prometia so trocar o terminador dos raios.
+    //
+    //    A regra: `DDGIVolumeLive() && EffectivePrimary() != Off`. O atlas ilumina superficie
+    //    enquanto EXISTIR indireto de superficie, seja ele quem for.
+    //
+    //    ⚠️ E ISSO MUDA COMO O MANIFESTO SE LE: `fallback: black` NAO significa "nenhum DDGI em
+    //    superficie" enquanto os auxiliares existirem. Ele descreve o terminador dos RAIOS. Quem
+    //    quiser medir superficie sem nenhum DDGI precisa de `primario = Off` — ou de um campo
+    //    proprio, se um dia for util distinguir os auxiliares ligados dos desligados.
+    // ============================================================================================
     // ============================================================================================
 
     inline const char* IndirectPrimaryName(EIndirectPrimary P) {
