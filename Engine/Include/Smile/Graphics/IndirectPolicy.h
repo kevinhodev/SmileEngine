@@ -126,8 +126,9 @@ namespace Smile {
     //    `DDGIVolumeLive()` num ponto volumetrico, a classificacao falhou mesmo com a imagem
     //    identica.
     //
-    //    CLASSIFICACAO FEITA (Renderer.cpp; sao NOVE, e nao sete — a auditoria de abertura contou
-    //    por baixo). Uma ja convertida, oito pendentes de substituicao mecanica:
+    //    CLASSIFICACAO (Renderer.cpp): DEZ pontos — 3 de volume, 4 de superficie, 2 volumetricos e
+    //    1 de fallback. A auditoria de abertura contou sete e a primeira revisao contou nove; a
+    //    lista abaixo e a fonte, e a soma dela e que vale.
     //
     //      EXECUCAO DO VOLUME  -> DDGIVolumeLive()
     //        HasReGIRConsumer      o trace do DDGI consome ReGIR? (orcamento do pool)
