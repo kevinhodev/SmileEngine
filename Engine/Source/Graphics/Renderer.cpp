@@ -1680,10 +1680,20 @@ namespace Smile {
     bool Renderer::DDGIVolumeLive() const { return UseGI && DDGI.IsReady(); }
 
     EIndirectFallback Renderer::EffectiveFallback() const {
-        // Degrada em vez de mentir: pedir DDGI sem volume vivo vira Black, e e Black que o
-        // manifesto registra. O gather ja se comportava assim — `FallbackAvailable` era falso e o
-        // hit desvanecia para zero —, mas isso nao aparecia em lugar nenhum.
+        // Degrada em vez de mentir: o manifesto e a UI registram o que ACONTECEU, e nao o que foi
+        // pedido. Duas degradacoes, e as duas terminam em Black porque o shader termina em zero.
+        //
+        // 1. DDGI sem volume vivo. O gather ja se comportava assim — `FallbackAvailable` falso, o
+        //    hit desvanecendo para zero —, mas isso nao aparecia em lugar nenhum.
         if (IndirectFallback == EIndirectFallback::DDGI && !DDGIVolumeLive())
+            return EIndirectFallback::Black;
+        // 2. Environment NAO EXISTE ainda: nao ha cor de ambiente no cbuffer de um passe de RT
+        //    (ver PT_SampleIndirectFallback, que por isso desvanece para preto fora do volume).
+        //    Enquanto for assim, pedi-lo E pedir Black, e reportar "environment" seria a mentira
+        //    de sempre: um estado publicado que o shader nao produz.
+        //
+        //    QUANDO ele existir, esta linha some — e ela e o marcador de onde procurar.
+        if (IndirectFallback == EIndirectFallback::Environment)
             return EIndirectFallback::Black;
         return IndirectFallback;
     }

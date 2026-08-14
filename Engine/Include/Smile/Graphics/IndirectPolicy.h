@@ -44,8 +44,14 @@ namespace Smile {
     // dos hits secundarios na Bistro exterior. Trocar DDGI por Black nao apaga 30% do brilho —
     // apaga 30% dos CAMINHOS, e o que sobra e uma imagem mais escura de forma desigual.
     enum class EIndirectFallback : u32 {
-        DDGI = 0,   // irradiancia do volume, quando ele existe
-        Environment, // ambiente hemisferico/IBL — nao existe no cbuffer dos passes de RT hoje
+        DDGI = 0,    // irradiancia do volume, quando ele existe
+        // ⚠️ DECLARADO, NAO IMPLEMENTADO. Nao ha cor de ambiente no cbuffer de um passe de RT, e o
+        // gather desvanece para preto fora do volume justamente por isso. O
+        // `Renderer::EffectiveFallback` DEGRADA este valor para Black enquanto for assim — pedi-lo
+        // e pedir Black, e reportar "environment" no manifesto seria publicar um estado que o
+        // shader nao produz. Ele fica no enum como intencao nomeada, e nao como pendencia
+        // escondida atras de um numero que ninguem honra.
+        Environment,
         Black        // zero explicito; util para MEDIR de quanto o fallback e responsavel
     };
 
