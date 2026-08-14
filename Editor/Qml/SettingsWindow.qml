@@ -80,6 +80,11 @@ Rectangle {
     // ---- Componentes compartilhados (Editor/Qml/components) ----
     component WindowButton: C.WindowButton {}
     component Toggle: C.Toggle {}
+    // Segmentado por chips. Escolhido em vez de um ShadowSlider com rótulo por posição, que é o
+    // padrão desta página para os outros enums: primário e fallback NÃO são escala de qualidade —
+    // são estimadores diferentes, e trocar entre eles invalida acumulador. Um slider desenharia
+    // uma ordem que não existe, e "arrastar até o meio" leria como meio-termo entre dois.
+    component Chip: C.Chip {}
 
     component ShadowSlider: Item {
         id: srow
@@ -2929,10 +2934,98 @@ Rectangle {
                         font.pixelSize: 12
                     }
 
+                    // O SELETOR, logo abaixo do resumo porque é dele que o resumo fala: a linha de
+                    // cima mostra pedido → efetivo, e estas duas linhas são o PEDIDO. Quando o
+                    // pedido não pode ser honrado (SHaRC sem o passe pronto, DDGI sem volume), o
+                    // chip continua marcado e a seta aparece acima — o combo não volta sozinho.
+                    Text {
+                        id: rcPrimaryLabel
+                        x: 20
+                        y: rcPolicyText.y + rcPolicyText.height + 14
+                        text: "Primário — quem PRODUZ o indireto de superfície"
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                    }
+                    Row {
+                        id: rcPrimaryRow
+                        x: 20
+                        y: rcPrimaryLabel.y + rcPrimaryLabel.height + 6
+                        spacing: 6
+                        Chip {
+                            label: "ReSTIR + SHaRC"
+                            active: renderModel.indirectPrimary === 0
+                            onTapped: renderModel.SetIndirectPrimary(0)
+                        }
+                        Chip {
+                            // ROLLBACK da série. Não remover sem um gate que prove que ninguém
+                            // precisa mais dele: é o controle contra o qual as baselines da Fase 0
+                            // foram tiradas.
+                            label: "DDGI"
+                            active: renderModel.indirectPrimary === 1
+                            onTapped: renderModel.SetIndirectPrimary(1)
+                        }
+                        Chip {
+                            // Off apaga o indireto de superfície INTEIRO — SHaRC junto. Não isola
+                            // o DDGI, e a névoa continua lendo o atlas.
+                            label: "Off"
+                            active: renderModel.indirectPrimary === 2
+                            onTapped: renderModel.SetIndirectPrimary(2)
+                        }
+                    }
+
+                    Text {
+                        id: rcFallbackLabel
+                        x: 20
+                        y: rcPrimaryRow.y + rcPrimaryRow.height + 12
+                        text: "Fallback — quem RESPONDE o miss do raio secundário"
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                    }
+                    Row {
+                        id: rcFallbackRow
+                        x: 20
+                        y: rcFallbackLabel.y + rcFallbackLabel.height + 6
+                        spacing: 6
+                        Chip {
+                            label: "DDGI"
+                            active: renderModel.indirectFallback === 0
+                            onTapped: renderModel.SetIndirectFallback(0)
+                        }
+                        Chip {
+                            // `Environment` existe no enum e NÃO tem chip: não há cor de ambiente
+                            // no cbuffer de um passe de RT, então pedi-lo é pedir preto. Um chip
+                            // que não muda pixel nenhum seria um controle morto na tela; a intenção
+                            // fica nomeada no IndirectPolicy.h, que é onde ela pode ser cumprida.
+                            label: "Preto"
+                            active: renderModel.indirectFallback === 2
+                            onTapped: renderModel.SetIndirectFallback(2)
+                        }
+                    }
+
+                    Text {
+                        id: rcPolicyHelper
+                        x: 20
+                        y: rcFallbackRow.y + rcFallbackRow.height + 10
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: "Trocar qualquer um dos dois invalida os históricos de SUPERFÍCIE " +
+                              "(ReSTIR GI, reflexões, atlas do DDGI, NRD): o terminador do raio " +
+                              "secundário muda para todos de uma vez. A NÉVOA não é derrubada — " +
+                              "ela lê o atlas direto e continua lendo exatamente o mesmo.\n\n" +
+                              "\"Preto\" não é um look: é a medida de quanto o fallback responde. " +
+                              "Na Bistro exterior ele respondeu 30,14% dos hits secundários."
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                        lineHeight: 1.35
+                    }
+
                     Text {
                         id: rcHelper
                         x: 20
-                        y: rcPolicyText.y + rcPolicyText.height + 10
+                        y: rcPolicyHelper.y + rcPolicyHelper.height + 14
                         width: parent.width - 40
                         wrapMode: Text.WordWrap
                         text: "Guarda a radiância de saída que o ShadeSurfaceHit já calculou, num " +

@@ -162,6 +162,15 @@ namespace SmileEditor {
         // atualiza e o Timer do painel.
         Q_PROPERTY(QString indirectPolicySummary READ GetIndirectPolicySummary
                        NOTIFY GISettingsChanged)
+        // O PEDIDO, que e o que o combo edita. O efetivo nao vira propriedade separada de
+        // proposito: ele so significa alguma coisa ao lado do pedido, e e o summary acima que
+        // mostra os dois com a seta na divergencia. Publicar o efetivo sozinho convidaria a UI a
+        // exibi-lo como se fosse a selecao — e ai selecionar SHaRC sem o passe pronto pareceria um
+        // combo que volta sozinho.
+        // 0 = ReSTIR+SHaRC, 1 = DDGI, 2 = Off  (ordem de EIndirectPrimary)
+        Q_PROPERTY(int indirectPrimary READ GetIndirectPrimary NOTIFY GISettingsChanged)
+        // 0 = DDGI, 1 = Environment, 2 = Black  (ordem de EIndirectFallback)
+        Q_PROPERTY(int indirectFallback READ GetIndirectFallback NOTIFY GISettingsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY GISettingsChanged)
@@ -378,9 +387,16 @@ namespace SmileEditor {
         int               GetGICascadeCount() const;
         bool              IsGIMeasureTerminatorOff() const;
         bool              IsReSTIRDIEnabled() const;
+        int               GetIndirectPrimary() const;
+        int               GetIndirectFallback() const;
         double            GetGISurfaceBiasMax() const;
         double            GetGIVolumeFadeProbes() const;
         QVariantList      GetRayEpsilons() const;
+
+        // Politica do indireto. Indices de EIndirectPrimary/EIndirectFallback; fora da faixa nao
+        // faz nada, em vez de cair num default silencioso.
+        Q_INVOKABLE void SetIndirectPrimary(int V);
+        Q_INVOKABLE void SetIndirectFallback(int V);
 
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();

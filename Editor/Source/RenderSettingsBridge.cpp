@@ -1102,6 +1102,56 @@ namespace SmileEditor {
         return QStringLiteral("primário: %1  ·  fallback: %2")
             .arg(Pair(PReq, PEff), Pair(FReq, FEff));
     }
+    int RenderSettingsBridge::GetIndirectPrimary() const {
+        if (!Renderer) return 0;
+        return static_cast<int>(Renderer->Settings().GetIndirectPrimary());
+    }
+    int RenderSettingsBridge::GetIndirectFallback() const {
+        if (!Renderer) return 0;
+        return static_cast<int>(Renderer->Settings().GetIndirectFallback());
+    }
+    void RenderSettingsBridge::SetIndirectPrimary(int _V) {
+        if (!Renderer) return;
+        // Faixa checada aqui, e nao com um default no switch: um indice fora da faixa e bug de QML,
+        // e cair em ReSTIR_SHaRC em silencio trocaria o estimador da cena por causa de um typo.
+        if (_V < 0 || _V > static_cast<int>(Smile::EIndirectPrimary::Off)) return;
+        bool SourceDebugDropped = false;
+        {
+            auto RendererAccess = Renderer.Lock();
+            auto& Settings = RendererAccess->Settings();
+            const auto V = static_cast<Smile::EIndirectPrimary>(_V);
+            if (V == Settings.GetIndirectPrimary()) return;
+            const bool MapBefore = Settings.GetGISourceDebug();
+            Settings.SetIndirectPrimary(V);
+            // Mesmo caso do ToggleReSTIRGI: sair de SHaRC para o produtor do mapa da fonte, que e
+            // o RecordTrace do ReSTIR GI. O detector de borda do renderer faria isso sozinho no
+            // proximo frame, mas ele nao tem como notificar a janela de debug — entao o caminho do
+            // OPERADOR resolve aqui, sincrono, e o detector segue cobrindo os automaticos.
+            //
+            // O historico NAO e derrubado aqui: quem derruba e o detector, que ve a borda do valor
+            // EFETIVO. Invalidar tambem no setter cancelaria a captura duas vezes pelo mesmo evento.
+            Settings.DropGISourceDebugIfOrphaned();
+            SourceDebugDropped = MapBefore && !Settings.GetGISourceDebug();
+        } // lock solto antes dos sinais
+
+        emit GISettingsChanged();
+        if (SourceDebugDropped && Viewport) Viewport->NotifyDebugTargetsChanged();
+    }
+    void RenderSettingsBridge::SetIndirectFallback(int _V) {
+        if (!Renderer) return;
+        if (_V < 0 || _V > static_cast<int>(Smile::EIndirectFallback::Black)) return;
+        {
+            auto RendererAccess = Renderer.Lock();
+            auto& Settings = RendererAccess->Settings();
+            const auto V = static_cast<Smile::EIndirectFallback>(_V);
+            if (V == Settings.GetIndirectFallback()) return;
+            // Nao mexe no mapa da fonte: o produtor dele e o primario, e o fallback so troca o que
+            // o raio devolve no miss. O mapa continua tendo o que pintar — e a cor muda, que e
+            // exatamente o que se quer ver.
+            Settings.SetIndirectFallback(V);
+        }
+        emit GISettingsChanged();
+    }
     QString RenderSettingsBridge::GetRadianceCacheSummary() const {
         if (!Renderer) return QString();
         Smile::FRadianceCacheSnapshot Snap;
