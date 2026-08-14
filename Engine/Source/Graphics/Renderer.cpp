@@ -1674,6 +1674,20 @@ namespace Smile {
     // Publica no registro os alvos que ja possuem SRV. Nomes sao a chave (o filtro do
     // visualizador e por substring), entao os prefixos importam: digitar "gbuffer" traz o
     // G-buffer inteiro, "reflex" traz os estagios de reflexao.
+    // As duas definicoes que a Fase 6 extraiu do `UseGI` repetido. Ficam juntas de proposito: a
+    // primeira e sobre EXISTENCIA (o volume roda), a segunda e sobre POLITICA (quem responde o
+    // miss), e confundi-las foi o defeito que motivou a fase.
+    bool Renderer::DDGIVolumeLive() const { return UseGI && DDGI.IsReady(); }
+
+    EIndirectFallback Renderer::EffectiveFallback() const {
+        // Degrada em vez de mentir: pedir DDGI sem volume vivo vira Black, e e Black que o
+        // manifesto registra. O gather ja se comportava assim — `FallbackAvailable` era falso e o
+        // hit desvanecia para zero —, mas isso nao aparecia em lugar nenhum.
+        if (IndirectFallback == EIndirectFallback::DDGI && !DDGIVolumeLive())
+            return EIndirectFallback::Black;
+        return IndirectFallback;
+    }
+
     void Renderer::RegisterDebugTargets() {
         using namespace DebugTargets;
         constexpr u32 kNoSlot = 0xFFFFFFFFu;
@@ -2517,7 +2531,11 @@ namespace Smile {
             //
             // Sem volume os passes de RT ainda recebem descritores validos — os neutros —, e e
             // ESTE campo que impede o gather de ler o atlas 1x1 zerado como se fosse irradiancia.
-            GIHit.FallbackAvailable = UseGI && DDGI.IsReady();
+            // POLITICA, e nao existencia: o gather so le o atlas se o DDGI for o fallback ESCOLHIDO
+            // e o volume estiver vivo. Antes da Fase 6 isto era so `UseGI && IsReady()`, ou seja o
+            // DDGI era fallback por existir — nao havia como pedir Black para medir de quanto ele
+            // e responsavel, que e exatamente a medida que a Fase 5 acabou entregando (30,14%).
+            GIHit.FallbackAvailable = EffectiveFallback() == EIndirectFallback::DDGI;
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
             const FDDGICascadeConstants GICasc = DDGI.CascadeConstants();

@@ -45,6 +45,7 @@
 #include "Smile/Graphics/LocalShadows.h"
 #include "Smile/Graphics/RaytracingScene.h"
 #include "Smile/Graphics/GIFallback.h"
+#include "Smile/Graphics/IndirectPolicy.h"
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/DDGIDebug.h"
 #include "Smile/Graphics/ReSTIRGI.h"
@@ -1009,8 +1010,25 @@ namespace Smile {
         FMeshLights      MeshLights;
         bool             UseReGIR = false; // bring-up: hits secundarios; default OFF para A/B
         FDDGIDebug       DDGIDebugPass; 
+        // `UseGI` e, e sempre foi, o interruptor do VOLUME DDGI — grid, trace e update das sondas.
+        // O nome sugere "iluminacao global ligada" e por isso ja induziu erro (ver
+        // IndirectPolicy.h); a politica de quem PRODUZ e de quem RESPONDE mora nos dois enums
+        // abaixo, e nao aqui.
         bool             UseGI       = true;
-        bool             GIDebug     = false; 
+        // Politica do indireto (Fase 6). Os defaults reproduzem EXATAMENTE o comportamento da Fase
+        // 5: o cache/ReSTIR produz, o DDGI responde o que sobra. Trocar o primario invalida
+        // acumulador — sao estimadores diferentes, nao niveis de qualidade.
+        EIndirectPrimary  IndirectPrimary  = EIndirectPrimary::ReSTIR_SHaRC;
+        EIndirectFallback IndirectFallback = EIndirectFallback::DDGI;
+        // O volume esta VIVO neste frame — existe e esta ligado. Era `UseGI && DDGI.IsReady()`
+        // repetido em oito pontos, servindo tres perguntas diferentes; agora tem nome e uma
+        // definicao so. Ele NAO responde "o DDGI e o fallback" nem "o DDGI e o primario": para
+        // isso existem os enums.
+        bool             DDGIVolumeLive() const;
+        // O fallback EFETIVO do frame: a politica pedida, degradada pelo que existe. Pedir DDGI
+        // sem volume vivo nao e erro — e Black, e o manifesto tem de registrar o que valeu.
+        EIndirectFallback EffectiveFallback() const;
+        bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;
         bool             GISkipInactiveFallback = false;
