@@ -3061,13 +3061,17 @@ Rectangle {
                         x: 20
                         y: rcSourceLabel.y + 30
                         text: "Mapa da fonte (janela de debug)"
-                        color: root.textNormal
+                        // Quem escreve o mapa é o trace do ReSTIR GI: sem ele o toggle não teria o
+                        // que produzir. O engine também derruba o mapa sozinho nessa borda — isto
+                        // aqui é só não oferecer o botão que não faria nada.
+                        color: renderModel.restirGIEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcSourceVizLabel.y - 6
+                        enabled: renderModel.restirGIEnabled
                         checked: renderModel.giSourceDebug
                         onToggled: renderModel.ToggleGISourceDebug()
                     }

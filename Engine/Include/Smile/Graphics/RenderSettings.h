@@ -148,6 +148,10 @@ namespace Smile {
         // alvo so e oferecido enquanto alguem o enche.
         void SetGISourceDebug(bool V);
         bool GetGISourceDebug() const;
+        // Desliga o mapa quando o passe que o escreve para de rodar (ReSTIR GI ou GI global
+        // desligados). Publico porque as duas bordas chamam; ver o corpo para o porque de desligar
+        // em vez de calcular um estado efetivo.
+        void DropGISourceDebugIfOrphaned();
         // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
         // historico — so mede.
         void SetRadianceCacheStatsEnabled(bool V);

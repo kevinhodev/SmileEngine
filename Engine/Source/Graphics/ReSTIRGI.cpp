@@ -117,6 +117,11 @@ namespace Smile {
             Res1[i] = CreateUAVTex2D(_Device, Width, Height, kRes1Format, "ReSTIR GI · reservoir");
         }
         // Falsa-cor de diagnostico, entao 8 bits por canal bastam — nao e radiancia.
+        //
+        // CUSTO, para nao ser esquecido: RGBA8 permanente sao ~4,8 MiB nesta resolucao e ~31,6 MiB
+        // em 4K, alocados exista ou nao alguem olhando. Aceitavel para ferramenta de editor agora;
+        // se incomodar, o caminho e R8_UINT com o decode no visor — a classe cabe em 3 bits e
+        // economizaria 75%. A cor ja vive numa funcao so (RC_SourceColor), entao a troca e local.
         SourceDebugTex = CreateUAVTex2D(_Device, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM,
                                         "ReSTIR GI · fonte do candidato");
         GITextureState = D3D12_RESOURCE_STATE_COMMON;

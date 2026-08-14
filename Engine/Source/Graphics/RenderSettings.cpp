@@ -143,7 +143,23 @@ namespace Smile {
 
     // === Iluminacao global ==============================================================
 
-    void FRenderSettings::SetUseGI(bool _V) { R.UseGI = _V; }
+    // O mapa de fonte e produzido DENTRO do RecordTrace do ReSTIR GI. Sem esse passe, ninguem
+    // escreve no alvo — e ele continuaria registrado, exibindo o ultimo frame para sempre.
+    //
+    // Desliga o toggle em vez de calcular um "efetivo": visualizacao de diagnostico nao precisa
+    // sobreviver ao passe que a produz, e o estado que sobra na UI passa a ser verdadeiro em vez
+    // de uma promessa suspensa. Religar o ReSTIR GI NAO traz o mapa de volta sozinho — quem quer
+    // ver pede de novo, e o toggle diz exatamente o que esta acontecendo.
+    void FRenderSettings::DropGISourceDebugIfOrphaned() {
+        if (!R.ReSTIRGI.GetSourceDebug()) return;
+        R.ReSTIRGI.SetSourceDebug(false);
+        R.RegisterDebugTargets(); // o alvo so e oferecido enquanto alguem o enche
+    }
+
+    void FRenderSettings::SetUseGI(bool _V) {
+        R.UseGI = _V;
+        if (!_V) DropGISourceDebugIfOrphaned();
+    }
     bool FRenderSettings::GetUseGI() const  { return R.UseGI; }
 
     void FRenderSettings::SetUseReGIR(bool _V) {
@@ -431,6 +447,9 @@ namespace Smile {
         // descida eles param de ser lidos, entao limpar seria custo puro.
         if (_V) Invalidate(EHistoryTarget::ReSTIRGI);
         R.UseReSTIRGI = _V;
+        // O mapa de fonte morre junto: quem o escreve e o RecordTrace deste passe. Ver
+        // DropGISourceDebugIfOrphaned.
+        if (!_V) DropGISourceDebugIfOrphaned();
         // Nas DUAS bordas, espelhando o SetUseReSTIRDI: ligar ou desligar o ReSTIR GI muda
         // drasticamente o sinal que o NRD acumula, que o RR reconstroi e que o TAA integra.
         // Antes daqui so o NrdIndirect caia — o RR seguia com historico neural de um sinal
