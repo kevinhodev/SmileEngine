@@ -201,6 +201,29 @@ namespace Smile {
     // ============================================================================================
     // ============================================================================================
 
+    // O estado EFETIVO do frame, num valor comparavel. E o que o detector de borda observa: a
+    // imagem muda com qualquer um destes campos, e nao so com o fallback.
+    //
+    // `FallbackActive` = existe raio que consome o fallback. So o primario ReSTIR_SHaRC traca
+    // raios secundarios que terminam nele; com DDGI ou Off, o campo `Fallback` descreve uma
+    // politica que ninguem exerce, e afirma-la no manifesto seria falso.
+    struct FEffectiveIndirectPolicy {
+        EIndirectPrimary  Primary        = EIndirectPrimary::Off;
+        EIndirectFallback Fallback       = EIndirectFallback::Black;
+        bool              FallbackActive = false; // ha raio consumindo o fallback
+        bool              DDGISurface    = false; // auxiliares: folhagem, subsurface, translucidos
+        bool              DDGIVolumetric = false; // nevoa
+
+        // Superficie e volumetria mudam por motivos diferentes e invalidam historicos diferentes.
+        bool SurfaceDiffers(const FEffectiveIndirectPolicy& O) const {
+            return Primary != O.Primary || FallbackActive != O.FallbackActive ||
+                   (FallbackActive && Fallback != O.Fallback) || DDGISurface != O.DDGISurface;
+        }
+        bool VolumetricDiffers(const FEffectiveIndirectPolicy& O) const {
+            return DDGIVolumetric != O.DDGIVolumetric;
+        }
+    };
+
     inline const char* IndirectPrimaryName(EIndirectPrimary P) {
         switch (P) {
             case EIndirectPrimary::ReSTIR_SHaRC: return "restir_sharc";

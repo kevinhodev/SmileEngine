@@ -1329,6 +1329,12 @@ namespace Smile {
         S.IndirectPrimaryEffective  = IndirectPrimaryName(EffectivePrimary());
         S.IndirectFallbackRequested = IndirectFallbackName(IndirectFallback);
         S.IndirectFallbackEffective = IndirectFallbackName(EffectiveFallback());
+        {
+            const FEffectiveIndirectPolicy Pol = EffectiveIndirectPolicy();
+            S.IndirectFallbackActive = Pol.FallbackActive;
+            S.DDGISurfaceUsed        = Pol.DDGISurface;
+            S.DDGIVolumetricUsed     = Pol.DDGIVolumetric;
+        }
         S.GIMeasureTerminatorOff = GIMeasureTerminatorOff;
         // Toggle, e nao "efetivo": esta politica e lida por frame pelos DOIS consumidores (o
         // gather do ReSTIR GI e o produtor do cache) da mesma fonte, entao ela descreve o regime
@@ -1698,6 +1704,18 @@ namespace Smile {
     // precisaria descobrir, um a um, quais dos leitores do atlas eram de superficie — que e
     // exatamente a arqueologia que a Fase 6 esta pagando agora.
     bool Renderer::DDGISurfaceAvailable() const { return DDGIVolumeLive(); }
+
+    FEffectiveIndirectPolicy Renderer::EffectiveIndirectPolicy() const {
+        FEffectiveIndirectPolicy P;
+        P.Primary  = EffectivePrimary();
+        P.Fallback = EffectiveFallback();
+        // So o SHaRC traca raios secundarios que terminam no fallback. Com DDGI ou Off, o campo
+        // `Fallback` descreve uma politica que ninguem exerce neste frame.
+        P.FallbackActive = P.Primary == EIndirectPrimary::ReSTIR_SHaRC;
+        P.DDGISurface    = DDGISurfaceAvailable();
+        P.DDGIVolumetric = DDGIVolumetricAvailable();
+        return P;
+    }
 
     EIndirectPrimary Renderer::EffectivePrimary() const {
         // Lido do que MANDA hoje, e nao do enum: o seletor ainda nao roteia nada, e inventar aqui

@@ -542,6 +542,12 @@ namespace Smile {
                      << _State.IndirectFallbackRequested << "\",\n";
                 File << "  \"indirectFallbackEffective\": \""
                      << _State.IndirectFallbackEffective << "\",\n";
+                // Sem isto o arquivo afirmaria "fallback: ddgi" num frame em que nenhum raio o
+                // consumiu — com o primario em DDGI ou Off, ninguem traca secundario ate ele.
+                File << "  \"indirectFallbackActive\": "
+                     << Bool(_State.IndirectFallbackActive) << ",\n";
+                File << "  \"ddgiSurfaceUsed\": "    << Bool(_State.DDGISurfaceUsed)    << ",\n";
+                File << "  \"ddgiVolumetricUsed\": " << Bool(_State.DDGIVolumetricUsed) << ",\n";
                 File << "  \"giBackfacePolicy\": " << Bool(_State.GIBackfacePolicy) << ",\n";
                 File << "  \"giTerminatorOff\": " << Bool(_State.GIMeasureTerminatorOff) << ",\n";
                 File << "  \"cacheOccupied\": " << _State.CacheOccupied << ",\n";

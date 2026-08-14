@@ -1060,6 +1060,8 @@ namespace Smile {
         // enquanto houver indireto de superficie, seja ele quem for. As tres sao DDGI AUXILIAR DE
         // SUPERFICIE — terceiro papel, nem primario nem fallback dos raios.
         bool              DDGISurfaceAvailable() const;
+        // Os cinco efetivos num valor so, para o detector de borda comparar por frame.
+        FEffectiveIndirectPolicy EffectiveIndirectPolicy() const;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;

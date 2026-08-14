@@ -160,6 +160,12 @@ namespace Smile {
         const char* IndirectPrimaryEffective  = "";
         const char* IndirectFallbackRequested = "";
         const char* IndirectFallbackEffective = "";
+        // Ha raio consumindo o fallback? So o primario SHaRC traca secundarios que terminam nele.
+        // Falso, o campo de fallback descreve politica que ninguem exerceu no frame.
+        bool IndirectFallbackActive = false;
+        // Consumo do atlas por papel: superficie (folhagem, subsurface, translucidos) e nevoa.
+        bool DDGISurfaceUsed    = false;
+        bool DDGIVolumetricUsed = false;
         bool GIMeasureTerminatorOff = false; // corta o DDGI so no hit secundario
         // Politica de auto-interseccao/backface do gather E do produtor do cache — um toggle so
         // para os dois (ver FRenderSettings::SetGIBackfacePolicy). Entra aqui porque o protocolo
