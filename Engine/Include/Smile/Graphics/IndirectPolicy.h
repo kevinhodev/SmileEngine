@@ -55,6 +55,37 @@ namespace Smile {
         Black        // zero explicito; util para MEDIR de quanto o fallback e responsavel
     };
 
+    // ============================================================================================
+    // DOIS CONTRATOS para quem consumir estes enums. Nenhum dos dois e opcional, e os dois saem de
+    // defeito ja pago nesta serie.
+    //
+    // 1. O MANIFESTO GRAVA OS DOIS: pedido E efetivo.
+    //
+    //    Gravar so o efetivo nao mente sobre a imagem — e essa era a tentacao —, mas apaga a
+    //    DEGRADACAO. Uma captura que diz `fallback: black` nao distingue "o operador pediu preto
+    //    para medir" de "pediu DDGI e nao havia volume" nem de "pediu Environment, que nao
+    //    existe". Sao tres configuracoes diferentes com o mesmo pixel, e a serie inteira mostrou
+    //    que duas capturas indistinguiveis na pasta sao um convite a compara-las.
+    //
+    //    Forma sugerida: `indirectFallbackRequested` + `indirectFallbackEffective`. Iguais na
+    //    maioria dos frames; quando divergem, e a divergencia que interessa.
+    //
+    // 2. MUDANCA DO EFETIVO INVALIDA OS CONSUMIDORES — inclusive a que ninguem pediu.
+    //
+    //    ⚠️ A armadilha esta aqui: o efetivo muda SEM passar por setter nenhum. Basta o volume
+    //    aparecer ou sumir (carga de cena, resize que recria o DDGI, `UseGI` mexido noutro
+    //    caminho) para `EffectiveFallback` ir de DDGI a Black e voltar — e isso troca o terminador
+    //    do raio secundario para todo mundo, que e exatamente o evento que obriga ReSTIR GI, atlas
+    //    do DDGI e NRD a esquecer.
+    //
+    //    Logo NAO basta invalidar no setter do enum: e preciso um DETECTOR DE BORDA sobre o valor
+    //    efetivo, avaliado por frame, no topo — mesmo desenho do aquecimento do radiance cache
+    //    (latch + consumidor no Renderer + invalidacao dos consumidores). Aquele levou quatro
+    //    rodadas de revisao para ficar certo; este comeca sabendo onde as pedras estao:
+    //    o detector roda antes de qualquer consumidor publicar cbuffer, e o latch descreve a
+    //    mudanca EFETIVA e nao a transicao de estado.
+    // ============================================================================================
+
     inline const char* IndirectPrimaryName(EIndirectPrimary P) {
         switch (P) {
             case EIndirectPrimary::ReSTIR_SHaRC: return "restir_sharc";
