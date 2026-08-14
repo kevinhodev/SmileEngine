@@ -3213,13 +3213,16 @@ Rectangle {
                         y: rcModeSlider.y + 52
                         width: parent.width - 40
                         wrapMode: Text.WordWrap
+                        // A ocupação saiu daqui e foi para dentro do resumo: ela só significa algo
+                        // junto da validade do snapshot, e o C++ é quem a conhece. Concatenar a
+                        // propriedade numérica crua produzia "sem medição · 0,0%".
+                        //
+                        // A memória FICA, e a diferença é o critério: ela é do recurso, vale
+                        // enquanto o cache existir e não depende de medição nenhuma. Uma casa
+                        // decimal porque em 2^17 o cache inteiro cabe em 4,5 MB.
                         text: renderModel.radianceCacheSummary + "  ·  " +
-                              renderModel.radianceCacheOccupancy.toFixed(1).replace(".", ",") +
-                              // Uma casa decimal: com a capacidade de 2^17 o cache inteiro cabe em
-                              // 4,5 MB, e arredondar para inteiro mostraria "5 MB".
-                              "% de " + renderModel.radianceCacheMemoryMB.toFixed(1)
-                                            .replace(".", ",") + " MB" +
-                              "  ·  " + renderModel.radianceCacheWarmup
+                              renderModel.radianceCacheMemoryMB.toFixed(1).replace(".", ",") +
+                              " MB  ·  " + renderModel.radianceCacheWarmup
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11

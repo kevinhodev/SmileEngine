@@ -1072,6 +1072,14 @@ namespace SmileEditor {
         // conhecidos ao lado de toggles atuais — com o cache desligado, para sempre.
         if (!Live) return QStringLiteral("%1 células de capacidade · sem medição no frame")
                               .arg(Snap.Capacity);
+        // A OCUPAÇÃO entra no texto daqui, e não é concatenada no QML a partir da propriedade
+        // numérica: sem medição aquela propriedade devolve 0,0, e "sem medição · 0,0%" lê como
+        // ocupação zero — que é um estado real e completamente diferente. Número que só significa
+        // algo junto de uma condição não pode ser publicado sozinho.
+        const double Occ = Snap.Capacity > 0
+            ? 100.0 * static_cast<double>(Snap.Stats.Occupied) /
+                  static_cast<double>(Snap.Capacity)
+            : 0.0;
         // Composto de UMA cópia, e não chamando os getters acima: cada um deles pega o próprio
         // lock, e a linha misturaria números de frames diferentes.
         const QString Hit = Snap.Meta.Stats
@@ -1086,9 +1094,11 @@ namespace SmileEditor {
             : 0.0;
         // Confiáveis ao lado de ocupadas: são o número que diz quanto do cache de fato encerra um
         // caminho, e a distância entre os dois é o aquecimento em curso.
-        return QStringLiteral("%1 / %2 células · %3 confiáveis · acerto %4 · %5 amostras/célula · "
-                              "despejadas %6")
-            .arg(Snap.Stats.Occupied).arg(Snap.Capacity).arg(Snap.Stats.Confident).arg(Hit)
+        return QStringLiteral("%1 / %2 células (%3%) · %4 confiáveis · acerto %5 · "
+                              "%6 amostras/célula · despejadas %7")
+            .arg(Snap.Stats.Occupied).arg(Snap.Capacity)
+            .arg(QString::number(Occ, 'f', 1).replace('.', ','))
+            .arg(Snap.Stats.Confident).arg(Hit)
             .arg(QString::number(Conv, 'f', 1))
             .arg(Snap.Stats.Evicted);
     }

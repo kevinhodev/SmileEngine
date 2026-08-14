@@ -369,6 +369,15 @@ namespace Smile {
             // E `AutoWarmup && QueryEffective()` escrito por extenso: os retornos antecipados la
             // em cima ja garantem Enabled, Ready e o pending fora.
             QueryChanged = AutoWarmup && QueryEnabled;
+            // E o SNAPSHOT cai junto, pela mesma condicao. Os contadores em voo foram medidos com
+            // a consulta FECHADA e, a partir deste frame, ela abre: sem isto o painel juntaria
+            // numeros de um regime com o estado do outro durante a latencia do anel.
+            //
+            // Todos os caminhos MANUAIS que mexem no QueryEffective ja invalidavam; este e o
+            // automatico, e e a terceira vez nesta fase que uma transicao autonoma esquece de
+            // fazer o que o toggle equivalente faz. O padrao vale como regra: automatismo que
+            // duplica um gesto manual duplica TODAS as consequencias dele.
+            if (QueryChanged) InvalidateStatsSnapshot();
         }
     }
 
