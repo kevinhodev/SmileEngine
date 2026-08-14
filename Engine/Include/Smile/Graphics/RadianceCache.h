@@ -178,16 +178,17 @@ namespace Smile {
         // FONTE do terminal do render (quarto regime, `Sf`). Os de miss dizem por que a consulta
         // errou; estes dizem o que respondeu DEPOIS dela, que e a curva do gate da Fase 5.
         //
-        // MUTUAMENTE EXCLUSIVOS, e a soma tem de fechar: Cache + DDGI + Zero + Ineligible = Total.
-        // Essa igualdade e o primeiro teste do instrumento — antes dela, nenhuma conclusao sobre a
-        // curva vale.
+        // DOIS EIXOS: `Cache + DDGI + Zero == Total` responde QUEM FORNECEU a radiancia, e
+        // `Ineligible` responde POR QUE nao foi o cache — ele CRUZA com os tres, nao compete.
+        // A primeira igualdade e o teste do instrumento; a segunda cruza com `MissShort+MissCone`.
         u32 SrcTotal      = 0; // todo hit sombreado; o denominador
         u32 SrcCache      = 0;
         u32 SrcDDGI       = 0; // o cache errou e o volume respondeu
         u32 SrcZero       = 0; // o cache errou e nao havia volume: zero explicito
-        // Nem chegou a consultar: segmento menor que a celula ou cone mais estreito que ela.
-        // Separado porque nenhum aquecimento move estes — no `ddgiFallback` eles seriam um piso
-        // permanente, e a curva que o gate quer ver descendo pareceria travada.
+        // Nem chegou a consultar: segmento menor que a celula ou cone mais estreito que ela. Estes
+        // raios ESTAO tambem em `SrcDDGI` ou `SrcZero` — eles receberam radiancia de alguem. O
+        // contador existe para dizer quanto do fallback e ESTRUTURAL (geometria, que nenhum
+        // aquecimento move) e, portanto, quanto da curva do gate nao vai descer nunca.
         u32 SrcIneligible = 0;
     };
 

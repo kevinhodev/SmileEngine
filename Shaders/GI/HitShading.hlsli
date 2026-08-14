@@ -158,22 +158,30 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
     bool ddgiAnswered;
     const float3 indirect = PT_SampleIndirectFallback(S, rayDir, P, ddgiAnswered);
 
-    // As tres classes restantes, aqui e nao espalhadas: cada lane cai em exatamente uma, e com a
-    // do cache-hit la em cima a soma fecha com o TOTAL. E essa igualdade que valida o instrumento
-    // antes de qualquer conclusao sobre a curva.
+    // DOIS EIXOS ORTOGONAIS, e nao uma particao so. Foi assim que o primeiro corte errou: ele
+    // punha `inelegivel` como se fosse ALTERNATIVA a `ddgi`, e um raio inelegivel que recebe
+    // radiancia do volume e as duas coisas ao mesmo tempo — o cache nao podia responder, E o DDGI
+    // respondeu. Com a precedencia anterior o numero do DDGI media so os raios que ERAM elegiveis
+    // e erraram, escondendo o resto dentro do outro contador: 8,4% de DDGI ao lado de 21,7% de
+    // inelegiveis que tambem consumiam DDGI.
     //
-    // O `outSource` sai da MESMA cadeia de decisao, e nao de uma segunda: contador e visualizador
-    // discordando sobre a mesma particao seria pior que nao ter o visualizador.
-    if (srcIneligible) {
-        RC_CountSource(P.Cache, RC_STAT_SRC_INELIGIBLE);
-        outSource = RC_SRC_INELIGIBLE;
-    } else if (ddgiAnswered) {
+    //   QUEM FORNECEU:   CACHE + DDGI + ZERO == TOTAL
+    //   POR QUE NAO O CACHE: INELIGIBLE == missShort + missCone
+    //
+    // O `outSource` responde a PRIMEIRA pergunta — e a radiancia que esta na tela —, e por isso
+    // nao existe cor de "inelegivel": ela nao e uma fonte. Quem quiser o motivo le o contador, que
+    // continua contando a mesma populacao de sempre e continua batendo com os misses do `Sd`.
+    if (ddgiAnswered) {
         RC_CountSource(P.Cache, RC_STAT_SRC_DDGI);
         outSource = RC_SRC_DDGI;
     } else {
         RC_CountSource(P.Cache, RC_STAT_SRC_ZERO);
         outSource = RC_SRC_ZERO;
     }
+    // Eixo separado, contado DEPOIS da reconvergencia: aqui a wave volta inteira e o
+    // `WaveActiveCountBits` de dentro conta so as lanes inelegiveis. Somar por cima das duas
+    // classes acima e o ponto — este contador cruza com elas, nao compete.
+    if (srcIneligible) RC_CountSource(P.Cache, RC_STAT_SRC_INELIGIBLE);
 
     const float3 emissive = PT_LoadHitEmissive(geo, S.UV, P.AlbedoLOD);
 

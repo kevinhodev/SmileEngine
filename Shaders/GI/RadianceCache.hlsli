@@ -158,14 +158,18 @@
 // errou; estes dizem o que respondeu DEPOIS dela — e e essa a curva que o gate de saida pede:
 // `cacheHit` subindo e `ddgiFallback` caindo conforme o cache aquece.
 //
-// MUTUAMENTE EXCLUSIVOS, com precedencia declarada, e a soma tem de fechar com TOTAL:
+// DOIS EIXOS ORTOGONAIS, e nao uma particao unica. A primeira versao disto errou exatamente aqui:
+// punha INELIGIBLE como alternativa a DDGI, e um raio inelegivel que recebe radiancia do volume e
+// as duas coisas ao mesmo tempo. O numero do DDGI passava a medir so os raios que ERAM elegiveis e
+// erraram — 8,4% medidos —, enquanto 21,7% de inelegiveis consumiam DDGI escondidos no outro
+// contador. Justamente a ilusao que este instrumento existe para desfazer.
 //
-//     SRC_CACHE + SRC_DDGI + SRC_ZERO + SRC_INELIGIBLE == SRC_TOTAL
+//   QUEM FORNECEU a radiancia:  SRC_CACHE + SRC_DDGI + SRC_ZERO == SRC_TOTAL
+//   POR QUE nao foi o cache:    SRC_INELIGIBLE == missShort + missCone   (eixo proprio)
 //
-// INELIGIBLE vem PRIMEIRO e por isso e obrigatorio, nao opcional: sao os raios que a geometria
-// impede de consultar (segmento menor que a celula, cone estreito), e eles terminam em DDGI ou em
-// zero como qualquer outro. Somados ao `ddgiFallback`, poriam nele um piso que NUNCA desce — na
-// Bistro sao 21,7% das consultas — e a curva que o gate quer ver descendo pareceria travada.
+// INELIGIBLE cruza com os tres primeiros em vez de competir com eles, e continua obrigatorio pelo
+// motivo INVERTIDO do que estava escrito aqui: e ele que diz quanto do DDGI e estrutural — o piso
+// que nenhum aquecimento move — em vez de esconder esse piso da conta.
 #define RC_STAT_SRC_TOTAL      30u // todo hit sombreado; o denominador
 #define RC_STAT_SRC_CACHE      31u
 #define RC_STAT_SRC_DDGI       32u // o cache errou e o volume respondeu
@@ -549,23 +553,24 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
 // As classes de FONTE como valor, para quem quer o dado e nao o contador. A ordem espelha os
 // RC_STAT_SRC_* (o enderecamento e `RC_STAT_SRC_CACHE + kind`), e as duas ultimas nao tem contador
 // porque nao passam pelo ShadeSurfaceHit — quem as conhece e o trace.
-#define RC_SRC_CACHE      0u
-#define RC_SRC_DDGI       1u
-#define RC_SRC_ZERO       2u
-#define RC_SRC_INELIGIBLE 3u
-#define RC_SRC_SKY        4u // o raio escapou: nao houve hit para classificar
-#define RC_SRC_KILLED     5u // segmento morto pela politica de backface
+// Nao ha `RC_SRC_INELIGIBLE`: inelegibilidade nao e uma FONTE de radiancia — e o motivo de a fonte
+// ter sido outra. Ela vive no eixo dos contadores, e um raio inelegivel se pinta como DDGI ou ZERO,
+// que e o que de fato acendeu aquele pixel.
+#define RC_SRC_CACHE  0u
+#define RC_SRC_DDGI   1u
+#define RC_SRC_ZERO   2u
+#define RC_SRC_SKY    3u // o raio escapou: nao houve hit para classificar
+#define RC_SRC_KILLED 4u // segmento morto pela politica de backface
 
 // Cor por classe, aqui e nao no consumidor: o visualizador de fonte e o contador tem de falar da
 // MESMA particao, e duas tabelas de cor divergiriam na primeira classe nova.
 float3 RC_SourceColor(uint kind) {
     switch (kind) {
-        case RC_SRC_CACHE:      return float3(0.15f, 0.85f, 0.25f); // o cache respondeu
-        case RC_SRC_DDGI:       return float3(1.00f, 0.55f, 0.10f); // caiu no fallback
-        case RC_SRC_ZERO:       return float3(0.75f, 0.10f, 0.10f); // sem volume: zero explicito
-        case RC_SRC_INELIGIBLE: return float3(0.20f, 0.55f, 0.95f); // limite geometrico do cache
-        case RC_SRC_SKY:        return float3(0.55f, 0.60f, 0.70f);
-        default:                return float3(0.35f, 0.10f, 0.45f); // morto
+        case RC_SRC_CACHE: return float3(0.15f, 0.85f, 0.25f); // o cache respondeu
+        case RC_SRC_DDGI:  return float3(1.00f, 0.55f, 0.10f); // caiu no fallback
+        case RC_SRC_ZERO:  return float3(0.75f, 0.10f, 0.10f); // sem volume: zero explicito
+        case RC_SRC_SKY:   return float3(0.55f, 0.60f, 0.70f);
+        default:           return float3(0.35f, 0.10f, 0.45f); // morto
     }
 }
 

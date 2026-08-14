@@ -188,8 +188,11 @@ namespace Smile {
         u32 CacheTermMiss = 0, CacheTermNoQuery = 0, CacheTermLobe = 0, CacheTermOther = 0;
         // Fonte do terminal do RENDER (so com `cacheStatsSource`). O gate de saida da Fase 5 e
         // uma CURVA nestes numeros — `srcCache` subindo e `srcDdgi` caindo conforme o cache
-        // aquece —, e curva nao se confere em painel volatil. A soma das quatro classes tem de
-        // fechar com `srcTotal`; e esse o primeiro teste do instrumento.
+        // aquece —, e curva nao se confere em painel volatil.
+        //
+        // DOIS EIXOS: `cache + ddgi + zero == total` (quem forneceu) e `ineligible` (por que nao
+        // foi o cache), que CRUZA com os tres — um raio inelegivel recebeu DDGI ou zero como
+        // qualquer outro. Ele e a parcela ESTRUTURAL do fallback, a que nao desce com aquecimento.
         u32 CacheSrcTotal = 0, CacheSrcCache = 0, CacheSrcDDGI = 0;
         u32 CacheSrcZero = 0, CacheSrcIneligible = 0;
 
