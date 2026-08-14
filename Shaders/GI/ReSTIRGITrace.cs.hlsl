@@ -98,6 +98,19 @@ SamplerState LinearWrap  : register(s1);
 #include "HitShading.hlsli"
 #include "ReSTIRReservoir.hlsli"
 
+// Visualizador da FONTE do candidato tracado. Bindless pelo DebugParams.y, com -1 = desligado —
+// o mesmo sentinela do timer, e nunca `kInvalidSlot` convertido para float (0xFFFFFFFF nao e
+// exato em f32 e viraria um indice enorme, valido para o branch).
+//
+// SEM CLEAR: o dispatch cobre a textura inteira e todos os caminhos de saida escrevem, entao nao
+// sobra pixel de frame anterior. E por isso que o retorno do ceu primario tambem pinta.
+void WriteSourceViz(uint2 px, uint kind) {
+    if (DebugParams.y < 0.0f) return;
+    RWTexture2D<float4> dst =
+        ResourceDescriptorHeap[NonUniformResourceIndex((uint)DebugParams.y)];
+    dst[px] = float4(RC_SourceColor(kind), 1.0f);
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
     uint2 px = dtid.xy;
@@ -108,6 +121,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     if (deviceZ <= 0.0f) {
         GIOut[px]    = float4(0.0f, 0.0f, 0.0f, 0.0f);
         CurrRes0[px] = 0.0f; CurrRes1[px] = uint4(0u, 0u, 0u, 0u);
+        // Ceu NA TELA: nao ha superficie primaria, logo nao ha raio secundario para classificar.
+        // Classe propria — confundi-la com o miss do secundario faria o fundo parecer falha do
+        // estimador.
+        WriteSourceViz(px, RC_SRC_NOSURFACE);
         return;
     }
 
@@ -240,16 +257,22 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // reservoir sabe que aquela direcao nao rende nada) mas, com wInit = 0, o WRS nao a
         // seleciona — x2/n2 sao calculados p/ o hitDist do NRD e NAO chegam a entrar no
         // reservoir nem no Jacobiano.
+        uint srcKind = RC_SRC_KILLED; // sobrescrito pelo Ex quando o caminho nao morre
         Lo = killPath ? float3(0.0f, 0.0f, 0.0f)
-                      : ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
-                                        q.CommittedTriangleBarycentrics(),
-                                        q.CommittedWorldToObject3x4(),
-                                        ray.Origin, ray.Direction, hitDist, P, sd);
+                      : ShadeSurfaceHitEx(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                          q.CommittedTriangleBarycentrics(),
+                                          q.CommittedWorldToObject3x4(),
+                                          ray.Origin, ray.Direction, hitDist, P, sd, srcKind);
+        // A classe do HIT vem de quem decidiu a radiancia; `killed` e do trace, que e quem conhece
+        // a politica de backface. Ver o nome do alvo: isto e a fonte do CANDIDATO deste frame, e
+        // nao a da amostra que o reservoir vai acabar servindo depois do reuso.
+        WriteSourceViz(px, srcKind);
     } else {
         hitDist = TraceParams.y;
         Lo = ShadeSky(dir, sunDir, P.SkyIntensity, P);
         x2 = ray.Origin + ray.Direction * hitDist; // ponto distante na direcao do ceu
         n2 = -dir;                                  // normal "virada" p/ o ponto visivel
+        WriteSourceViz(px, RC_SRC_SKY);
     }
 
     // Firefly clamp: limita outliers de luminancia (mata os pontinhos brilhantes que o WRS

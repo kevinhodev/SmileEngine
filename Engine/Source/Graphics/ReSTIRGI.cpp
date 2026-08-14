@@ -3,6 +3,7 @@
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/ShaderTimer.h"
+#include "Smile/Graphics/DebugTargets.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -108,7 +109,11 @@ namespace Smile {
             Res0[i] = CreateUAVTex2D(_Device, Width, Height, kRes0Format, "ReSTIR GI · reservoir");
             Res1[i] = CreateUAVTex2D(_Device, Width, Height, kRes1Format, "ReSTIR GI · reservoir");
         }
+        // Falsa-cor de diagnostico, entao 8 bits por canal bastam — nao e radiancia.
+        SourceDebugTex = CreateUAVTex2D(_Device, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                        "ReSTIR GI · fonte do candidato");
         GITextureState = D3D12_RESOURCE_STATE_COMMON;
+        SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
         FrameParity = 0; NeedsClear = true;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
@@ -126,6 +131,8 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, Res, Uav, UavSlot);
         };
         MakeSrvUav(GITexture.Get(), kGIFormat, GITexSRV, GITexUAV);
+        MakeSrvUav(SourceDebugTex.Get(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                   SourceDebugSRV, SourceDebugUAV);
         for (u32 i = 0; i < 2; ++i) {
             MakeSrvUav(Res0[i].Get(), kRes0Format, Res0SRV[i], Res0UAV[i]);
             MakeSrvUav(Res1[i].Get(), kRes1Format, Res1SRV[i], Res1UAV[i]);
@@ -273,9 +280,14 @@ namespace Smile {
         CPU.SkyParams             = SkyLutParams;
         // O slot bindless viaja como float; -1 e o sentinela de "captura off" (o shader testa
         // < 0). Sem a permutacao instrumentada isto nunca e lido, mas fica coerente de todo jeito.
+        // `.y` = alvo da FONTE do candidato, pelo MESMO sentinela. -1 desliga, e o shader testa
+        // `< 0` — nunca converter kInvalidSlot para float: 0xFFFFFFFF nao e representavel exato em
+        // f32 e viraria um indice bindless enorme, valido para o branch e catastrofico no heap.
         CPU.DebugParams           = { (TraceTimed && TimerSlot != kInvalidSlot)
                                           ? static_cast<f32>(TimerSlot) : -1.0f,
-                                      0.0f, 0.0f, 0.0f };
+                                      (SourceDebug && SourceDebugUAV != kInvalidSlot)
+                                          ? static_cast<f32>(SourceDebugUAV) : -1.0f,
+                                      0.0f, 0.0f };
         CPU.HistoryParams         = { static_cast<f32>(HasSurfaceHistory ? _PrevSurfaceSlot : 0u),
                                       0.0f, 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
@@ -329,6 +341,10 @@ namespace Smile {
         Transition(_CL, Res0[p].Get(), Res0State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, Res1[p].Get(), Res1State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        if (SourceDebugTex) {
+            Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
 
         if (_Profiler) _Profiler->Begin(_CL, "Temporal + Trace Secundário");
         const bool Timed = TraceTimed && TimerSlot != kInvalidSlot;
@@ -371,7 +387,26 @@ namespace Smile {
         Transition(_CL, GITexture.Get(), GITextureState,
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // O alvo da fonte segue para leitura pelo mesmo caminho e pelo mesmo motivo: ele e
+        // registrado no DebugTargets e o FDebugView nao emite barreira nenhuma. Sem esta, o visor
+        // leria um recurso em UNORDERED_ACCESS — erro de debug layer e leitura indefinida.
+        //
+        // Sempre, e nao so com o debug ligado: o estado do recurso e do RECURSO, nao do knob, e
+        // deixa-lo em UAV quando o operador desliga o toggle poria a barreira em divida.
+        if (SourceDebugTex) {
+            Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         FrameParity ^= 1u;
+    }
+
+    void FReSTIRGI::OnRegisterDebugTargets() {
+        if (!SourceDebugTex || SourceDebugSRV == kInvalidSlot) return;
+        // Raw: o shader ja escreve cor de diagnostico em faixa visivel. Passar por tonemap
+        // distorceria a leitura — verde e laranja tem de sair como sao.
+        DebugTargets::Register(kSourceDebugTargetName, SourceDebugSRV, EDebugDecode::Raw,
+                               0, 1, 1.0f, 0, /*LinearFilter*/ false);
     }
 
     void FReSTIRGI::SetupNrdPack(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,

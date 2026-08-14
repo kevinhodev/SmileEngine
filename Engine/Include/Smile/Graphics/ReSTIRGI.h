@@ -82,6 +82,14 @@ namespace Smile {
     // UseReSTIRGI (default OFF).
     class FReSTIRGI : public FRenderPass {
     public:
+        // "candidato tracado", e nao "fonte do indireto": o reservoir pode substituir esta amostra
+        // pela temporal ou pela espacial depois. O nome carrega a ressalva porque o mapa nao tem
+        // como carrega-la.
+        static constexpr const char* kSourceDebugTargetName = "GI · fonte do candidato tracado";
+        void SetSourceDebug(bool V) { SourceDebug = V; }
+        bool GetSourceDebug() const { return SourceDebug; }
+        void OnRegisterDebugTargets() override;
+
         // --- Contrato de passe (RenderPass.h) ---
         const char* Name() const override { return "ReSTIR GI"; }
         bool IsInitialized() const override { return Ready; }
@@ -246,6 +254,16 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> Res0[2], Res1[2];
         D3D12_RESOURCE_STATES Res0State[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
         D3D12_RESOURCE_STATES Res1State[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+
+        // Visualizador da FONTE do candidato tracado neste frame. O nome e o contrato: o mapa
+        // mostra onde o raio NOVO terminou (cache / DDGI / zero), e NAO a fonte da radiancia final
+        // — o reservoir ainda pode trocar essa amostra pela temporal ou pela de um vizinho no
+        // spatial. Um mapa da amostra final exigiria carregar a classe junto do reservoir atraves
+        // dos dois reusos, que e outro escopo e outro pacote.
+        Microsoft::WRL::ComPtr<ID3D12Resource> SourceDebugTex;
+        u32 SourceDebugSRV = 0xFFFFFFFFu, SourceDebugUAV = 0xFFFFFFFFu;
+        D3D12_RESOURCE_STATES SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
+        bool SourceDebug = false;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 GITexSRV   = kInvalidSlot;

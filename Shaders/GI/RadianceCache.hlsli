@@ -559,8 +559,12 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
 #define RC_SRC_CACHE  0u
 #define RC_SRC_DDGI   1u
 #define RC_SRC_ZERO   2u
-#define RC_SRC_SKY    3u // o raio escapou: nao houve hit para classificar
+#define RC_SRC_SKY    3u // o raio SECUNDARIO escapou: nao houve hit para classificar
 #define RC_SRC_KILLED 4u // segmento morto pela politica de backface
+// Nao ha superficie primaria neste pixel (ceu na tela). Distinto do SKY: la o raio saiu e nao
+// achou nada; aqui nem chegou a existir raio secundario. Sem esta classe, os dois casos se
+// confundiriam na imagem e o operador leria ceu de fundo como falha do estimador.
+#define RC_SRC_NOSURFACE 5u
 
 // Cor por classe, aqui e nao no consumidor: o visualizador de fonte e o contador tem de falar da
 // MESMA particao, e duas tabelas de cor divergiriam na primeira classe nova.
@@ -569,8 +573,9 @@ float3 RC_SourceColor(uint kind) {
         case RC_SRC_CACHE: return float3(0.15f, 0.85f, 0.25f); // o cache respondeu
         case RC_SRC_DDGI:  return float3(1.00f, 0.55f, 0.10f); // caiu no fallback
         case RC_SRC_ZERO:  return float3(0.75f, 0.10f, 0.10f); // sem volume: zero explicito
-        case RC_SRC_SKY:   return float3(0.55f, 0.60f, 0.70f);
-        default:           return float3(0.35f, 0.10f, 0.45f); // morto
+        case RC_SRC_SKY:       return float3(0.55f, 0.60f, 0.70f);
+        case RC_SRC_NOSURFACE: return float3(0.04f, 0.04f, 0.05f); // ceu na tela: nao ha o que medir
+        default:               return float3(0.35f, 0.10f, 0.45f); // morto
     }
 }
 
