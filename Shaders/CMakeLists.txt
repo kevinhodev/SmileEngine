@@ -73,7 +73,12 @@ endif()
 smile_compile_shader(GI/RadianceCacheResolve.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/RadianceCacheDebug.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 # Path tracer esparso que ALIMENTA o cache: ~4% dos pixels por frame, sem ler DDGI.
-smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl  cs_6_6 main SHADER_OUTPUTS)
+# As duas permutacoes ficam no MESMO binario para o A/B de scheduling da Fase 7 nao comparar
+# builds diferentes. Compact e o default; Legacy preserva o full-screen + early-out como controle.
+smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+    -D RCU_COMPACT_DISPATCH=1)
+smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME RadianceCacheUpdateLegacy -D RCU_COMPACT_DISPATCH=0)
 # ReGIR — pools de luz em grade de mundo para os hits secundarios.
 smile_compile_shader(GI/ReGIRBuild.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReGIRAverage.cs.hlsl cs_6_0 main SHADER_OUTPUTS)

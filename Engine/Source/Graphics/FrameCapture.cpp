@@ -139,6 +139,9 @@ namespace Smile {
                     Rc += 'D';
                     Rc += std::to_string(
                         static_cast<int>(S.CacheUpdateFraction * 25.0f + 0.5f));
+                    // K = compactado, L = legacy full-screen. O scheduler muda a ordem dos CAS
+                    // e portanto faz parte da configuracao, mesmo selecionando os mesmos pixels.
+                    Rc += S.CacheCompactUpdate ? 'K' : 'L';
                     // Vertices e piso de roughness: os dois eixos de medicao do multi-bounce. O
                     // piso vai em porcento inteiro para caber num nome de arquivo sem virgula.
                     Rc += 'V'; Rc += std::to_string(S.CacheMaxVertices);
@@ -522,6 +525,8 @@ namespace Smile {
                 // dele. Ver o bloco correspondente no FCaptureState.
                 File << "  \"cacheDedicatedUpdate\": "
                      << Bool(_State.CacheDedicatedUpdate) << ",\n";
+                File << "  \"cacheCompactUpdate\": "
+                     << Bool(_State.CacheCompactUpdate) << ",\n";
                 File << "  \"cacheUpdateFraction\": "
                      << _State.CacheUpdateFraction << ",\n";
                 File << "  \"cacheUsePreviousTerminal\": "

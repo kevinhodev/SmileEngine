@@ -1016,6 +1016,9 @@ namespace SmileEditor {
     bool RenderSettingsBridge::IsRadianceCacheDedicatedUpdate() const {
         return Renderer && Renderer->Settings().GetRadianceCacheDedicatedUpdate();
     }
+    bool RenderSettingsBridge::IsRadianceCacheCompactUpdate() const {
+        return Renderer && Renderer->Settings().GetRadianceCacheCompactUpdate();
+    }
     double RenderSettingsBridge::GetRadianceCacheUpdateFraction() const {
         return Renderer ? Renderer->Settings().GetRadianceCacheUpdateFraction() : 0.04;
     }
@@ -1328,6 +1331,13 @@ namespace SmileEditor {
         auto A = Renderer.Lock();
         A->Settings().SetRadianceCacheDedicatedUpdate(
             !A->Settings().GetRadianceCacheDedicatedUpdate());
+        emit GISettingsChanged();
+    }
+    void RenderSettingsBridge::ToggleRadianceCacheCompactUpdate() {
+        if (!Renderer) return;
+        auto A = Renderer.Lock();
+        A->Settings().SetRadianceCacheCompactUpdate(
+            !A->Settings().GetRadianceCacheCompactUpdate());
         emit GISettingsChanged();
     }
     void RenderSettingsBridge::SetRadianceCacheUpdateFraction(double V) {

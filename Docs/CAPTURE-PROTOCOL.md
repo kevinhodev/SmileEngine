@@ -419,8 +419,9 @@ mesma forma dos sidecars que o `SceneLoader` já lê, e legível num diff.
 
 Cena, slot, preset, N e commit da build; resolução de saída e de render, render scale, upscaler +
 qualidade, denoiser e TAA; os toggles do A/B (`useGI`, `ddgiReady`, `restirGI`, `restirDI`,
-`regir`, `reflections`, `cacheUpdate`, `cacheQuery`, `giTerminatorOff`); ocupação do radiance cache
-no instante do disparo; pose e FOV da câmera; direção do sol e hora do TOD.
+`regir`, `reflections`, `cacheUpdate`, `cacheQuery`, `cacheCompactUpdate`, `giTerminatorOff`);
+ocupação do radiance cache no instante do disparo; pose e FOV da câmera; direção do sol e hora do
+TOD. No nome curto, `K` identifica o updater compacto e `L` o controle legacy full-screen.
 
 Os toggles são os **efetivos**, e cada um vem de onde a decisão realmente é tomada — recompor a
 condição por fora é o começo de uma divergência:

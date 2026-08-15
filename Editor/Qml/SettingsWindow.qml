@@ -3044,6 +3044,11 @@ Rectangle {
                               "um passe próprio traça a partir do G-buffer e nunca lê sonda: é " +
                               "essa a fonte independente que o SHaRC exige. São dois estimadores, " +
                               "não dois níveis de qualidade — trocar limpa a tabela.\n\n" +
+                              "DISPATCH COMPACTO troca apenas o scheduling desse produtor. Ligado, " +
+                              "a bijeção do tile 5×5 cria waves cheias; desligado, roda o controle " +
+                              "full-screen anterior com early-out. Os pixels são os mesmos, mas a " +
+                              "ordem dos CAS pode mudar o conteúdo, então trocar também limpa a " +
+                              "tabela. K/L no nome da captura identifica os dois braços.\n\n" +
                               "AMOSTRAS MÍNIMAS é o piso de confiança: um acerto ENCERRA o " +
                               "caminho de quem perguntou, então uma célula com uma amostra só " +
                               "serviria uma única amostra de path tracer como se fosse radiância " +
@@ -3204,9 +3209,27 @@ Rectangle {
                     }
 
                     Text {
-                        id: rcTerminalLabel
+                        id: rcCompactLabel
                         x: 20
                         y: rcDedicatedLabel.y + 30
+                        text: "Dispatch compacto (tile 5×5)"
+                        color: renderModel.radianceCacheDedicatedUpdate ? root.textNormal
+                                                                        : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Toggle {
+                        anchors.right: parent.right; anchors.rightMargin: 20
+                        y: rcCompactLabel.y - 6
+                        enabled: renderModel.radianceCacheDedicatedUpdate
+                        checked: renderModel.radianceCacheCompactUpdate
+                        onToggled: renderModel.ToggleRadianceCacheCompactUpdate()
+                    }
+
+                    Text {
+                        id: rcTerminalLabel
+                        x: 20
+                        y: rcCompactLabel.y + 30
                         text: "Terminal no cache anterior (multi-bounce)"
                         color: renderModel.radianceCacheDedicatedUpdate ? root.textNormal
                                                                         : root.textSecondary

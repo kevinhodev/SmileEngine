@@ -260,6 +260,17 @@ namespace Smile {
         return R.RadianceCache.GetDedicatedUpdate();
     }
 
+    void FRenderSettings::SetRadianceCacheCompactUpdate(bool _V) {
+        if (_V == R.RadianceCache.GetCompactUpdate()) return;
+        // O conjunto de pixels e o RNG sao equivalentes, mas waves diferentes chegam aos CAS em
+        // outra ordem. Misturar as duas agendas na mesma tabela destruiria justamente o A/B.
+        R.RadianceCache.SetCompactUpdate(_V); // arma ResetOnce
+        Invalidate(Dom::RayVisibility);
+    }
+    bool FRenderSettings::GetRadianceCacheCompactUpdate() const {
+        return R.RadianceCache.GetCompactUpdate();
+    }
+
     void FRenderSettings::SetRadianceCacheUpdateFraction(f32 _V) {
         if (_V == R.RadianceCache.GetUpdateFraction()) return;
         // NAO invalida — o que esta na tabela continua valendo, so a taxa de reposicao muda. Mas

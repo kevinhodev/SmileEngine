@@ -124,6 +124,9 @@ namespace Smile {
         // nunca le sonda. Sem este campo, as duas capturas sairiam indistinguiveis — mesma
         // etiqueta, mesmo manifesto, imagens que nao tem por que se parecer.
         bool CacheDedicatedUpdate  = false;
+        // Scheduler do produtor dedicado. O conjunto de pixels e equivalente, mas a ordem de CAS
+        // nao: sem este campo o controle full-screen e o compacto sairiam indistinguiveis.
+        bool CacheCompactUpdate    = false;
         // Fracao EFETIVA (quantizada em 1/25 pela permutacao do tile 5x5), nao a pedida: ela manda
         // na velocidade de convergencia, entao duas capturas com fracoes diferentes tiradas no
         // mesmo N estao em pontos diferentes do aquecimento.

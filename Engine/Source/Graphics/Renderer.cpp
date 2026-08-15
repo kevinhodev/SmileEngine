@@ -1344,6 +1344,7 @@ namespace Smile {
         // sao dois estimadores, e sem isto as duas capturas sairiam com etiqueta e manifesto
         // identicos — o pior caso possivel, porque nada no arquivo denunciaria a diferenca.
         S.CacheDedicatedUpdate = RadianceCache.PublishedDedicatedThisFrame();
+        S.CacheCompactUpdate   = S.CacheDedicatedUpdate && RadianceCache.GetCompactUpdate();
         S.CacheUpdateFraction  = RadianceCache.PublishedUpdateFraction();
         S.CacheUsePrevTerminal = RadianceCache.GetUsePrevCacheAtTerminal();
         S.CacheMaxVertices     = RadianceCache.PublishedUpdateVertices();

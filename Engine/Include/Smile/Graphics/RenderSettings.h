@@ -104,6 +104,10 @@ namespace Smile {
         // terminador era o DDGI; o dedicado traca do G-buffer e nunca le sonda. Invalida.
         void SetRadianceCacheDedicatedUpdate(bool V);
         bool GetRadianceCacheDedicatedUpdate() const;
+        // Scheduling do produtor dedicado: compactacao analitica da Fase 7 (true) ou dispatch de
+        // tela cheia anterior (false). E um eixo de A/B, nao muda a semantica do estimador.
+        void SetRadianceCacheCompactUpdate(bool V);
+        bool GetRadianceCacheCompactUpdate() const;
         // Fracao dos pixels que lanca caminho por frame no passe dedicado (0,04 = o numero
         // publicado do Cyberpunk). Quantizada em 1/25 pela permutacao do tile 5x5. NAO invalida:
         // muda so a taxa de amostragem, e o que ja esta na tabela continua valendo.

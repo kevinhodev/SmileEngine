@@ -51,7 +51,10 @@ cbuffer RadianceCacheUpdateCB : register(b0) {
     float4 SunDirIntensity;   // xyz = direcao P/ o sol, w = intensidade
     float4 SunColor;          // rgb = cor, w = mask dos shadow rays
     float4 TraceParams;       // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
-    float4 ShadeParams;       // x=nº de luzes puntuais, y=albedoLOD, zw=livres
+    // z = grupos X do dispatch compacto. Viaja no CB porque Dispatch pode precisar de Y quando
+    // a fracao/resolucao faz o total passar do limite D3D12 de 65.535 grupos por dimensao; o
+    // shader lineariza (dtid.x, dtid.y) com o MESMO pitch que o CPU usou.
+    float4 ShadeParams;       // x=nº de luzes puntuais, y=albedoLOD, z=dispatchGroupsX, w=livre
     // x = politica de auto-interseccao/backface (0/1). O MESMO toggle do ReSTIR GI, empurrado
     // pelo Renderer — ver o bloco no v0 sobre por que ele nao e knob proprio.
     float4 PolicyParams;
@@ -104,7 +107,13 @@ SamplerState LinearWrap  : register(s1);
 #include "../RayOffset.hlsli"
 #include "HitShading.hlsli"
 
-// SELECAO ESPARSA — ~4% dos pixels por frame, sem buracos.
+#ifndef RCU_COMPACT_DISPATCH
+    // Hot reload/manual DXC continua produzindo o caminho de producao quando o chamador nao
+    // declara a permutacao. O CMake compila explicitamente 1 (compacto) e 0 (controle legado).
+    #define RCU_COMPACT_DISPATCH 1
+#endif
+
+// SELECAO ESPARSA — ~4% dos pixels por frame, sem buracos, ja COMPACTADA em waves cheias.
 //
 // Permutacao de periodo 25 sobre o tile 5x5, e nao um sorteio independente por pixel: com sorteio,
 // a fracao e respeitada NA MEDIA mas um pixel qualquer pode passar dezenas de frames sem nunca ser
@@ -114,11 +123,41 @@ SamplerState LinearWrap  : register(s1);
 // O `* 13` e a permutacao: 13 e coprimo com 25, entao tile -> frame e uma bijecao, e frames
 // consecutivos caem em posicoes 2 apart no tile (13*2 = 26 = 1 mod 25) em vez de varrerem o tile
 // em ordem de raster — o padrao do frame nao "escorrega" pela tela.
+//
+// Ate a Fase 6 o dispatch era de TELA CHEIA e cada thread fazia o teste acima. Com uma celula por
+// tile, isso deixava ~4% das lanes vivas no ponto em que comeca o RayQuery — uma wave inteira era
+// ocupada para dois ou tres caminhos. A Fase 7 inverte a bijecao e despacha diretamente
+// `tiles*cellsPerFrame` work items. Nao ha lista, contador atomico nem passe de compactacao porque
+// a lista ja e uma funcao fechada de (workItem, frame): `2` e o inverso de `13` modulo `25`.
+//
+// PROVA DA EQUIVALENCIA. Para rank em [0, cellsPerFrame), escolhemos
+//
+//   slot  = (rank - frame) mod 25
+//   local = slot * 13^-1 mod 25 = slot * 2 mod 25
+//
+// Logo `(local*13 + frame) mod 25 == rank`, exatamente o predicado antigo. Cada rank produz um
+// local diferente porque as duas multiplicacoes sao bijecoes; portanto nao ha pixel repetido nem
+// perdido. Tiles parciais da borda ainda saem da funcao e sao rejeitados pelo bounds check — o
+// mesmo conjunto que o dispatch de tela cheia alcancava.
+#if RCU_COMPACT_DISPATCH
+uint2 RCU_WorkItemPixel(uint workItem, uint2 tileCount, uint frame, uint cellsPerFrame) {
+    const uint tileIndex = workItem / cellsPerFrame;
+    const uint rank      = workItem - tileIndex * cellsPerFrame;
+    const uint2 tile     = uint2(tileIndex % tileCount.x, tileIndex / tileCount.x);
+
+    const uint slot  = (rank + 25u - (frame % 25u)) % 25u;
+    const uint local = (slot * 2u) % 25u;
+    return tile * 5u + uint2(local % 5u, local / 5u);
+}
+#else
+// CONTROLE DA FASE 7: o predicado exato que existia antes da compactacao. Mantido como uma
+// permutacao separada do shader para o A/B nao pagar branch por lane nem comparar dois binarios.
 bool RCU_PixelSelected(uint2 px, uint frame, uint cellsPerFrame) {
-    const uint tile = (px.y % 5u) * 5u + (px.x % 5u);
-    const uint slot = (tile * 13u) % 25u;
+    const uint local = (px.y % 5u) * 5u + (px.x % 5u);
+    const uint slot  = (local * 13u) % 25u;
     return ((slot + frame) % 25u) < cellsPerFrame;
 }
+#endif
 
 // Teto de vertices do caminho. CONSTANTE DE COMPILACAO, e nao so o teto do knob: os dois lacos
 // abaixo sao [unroll] justamente para que `verts[i]` fique com indice literal e o array viva em
@@ -159,13 +198,30 @@ struct FPathVertex {
 #define RCU_TERM_OTHER   6u
 #define RCU_TERM_COUNT   7u
 
+#if RCU_COMPACT_DISPATCH
+[numthreads(64, 1, 1)]
+#else
 [numthreads(8, 8, 1)]
+#endif
 void main(uint3 dtid : SV_DispatchThreadID) {
-    const uint2 px = dtid.xy;
-    if (px.x >= (uint)ScreenParams.x || px.y >= (uint)ScreenParams.y) return;
-
     const uint frameIndex = (uint)TraceParams.x;
-    if (!RCU_PixelSelected(px, frameIndex, (uint)UpdateParams.x)) return;
+    const uint cellsPerFrame = clamp((uint)UpdateParams.x, 1u, 25u);
+    const uint2 screenSize   = (uint2)ScreenParams.xy;
+
+#if RCU_COMPACT_DISPATCH
+    const uint2 tileCount    = (screenSize + 4u) / 5u;
+    const uint  workItemCount = tileCount.x * tileCount.y * cellsPerFrame;
+    const uint  dispatchGroupsX = max(1u, (uint)ShadeParams.z);
+    const uint  workItem = dtid.x + dtid.y * dispatchGroupsX * 64u;
+    if (workItem >= workItemCount) return;
+
+    const uint2 px = RCU_WorkItemPixel(workItem, tileCount, frameIndex, cellsPerFrame);
+    if (px.x >= screenSize.x || px.y >= screenSize.y) return;
+#else
+    const uint2 px = dtid.xy;
+    if (px.x >= screenSize.x || px.y >= screenSize.y) return;
+    if (!RCU_PixelSelected(px, frameIndex, cellsPerFrame)) return;
+#endif
 
     // Ceu: nao ha superficie de onde partir. (O ceu tambem nao e celula de cache — ele e um
     // TERMINADOR, e entra la embaixo pelo ShadeSky.)

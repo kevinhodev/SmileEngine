@@ -139,6 +139,8 @@ namespace SmileEditor {
                        NOTIFY StatsChanged)
         Q_PROPERTY(bool radianceCacheDedicatedUpdate READ IsRadianceCacheDedicatedUpdate
                        NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool radianceCacheCompactUpdate READ IsRadianceCacheCompactUpdate
+                       NOTIFY GISettingsChanged)
         Q_PROPERTY(double radianceCacheUpdateFraction READ GetRadianceCacheUpdateFraction
                        NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCachePrevTerminal READ IsRadianceCachePrevTerminal
@@ -363,6 +365,7 @@ namespace SmileEditor {
         // Nao e Q_PROPERTY de proposito — quem decide se a linha aparece e o TEXTO estar vazio.
         bool              CacheSnapshot(Smile::FRadianceCacheSnapshot& Out) const;
         bool              IsRadianceCacheDedicatedUpdate() const;
+        bool              IsRadianceCacheCompactUpdate() const;
         double            GetRadianceCacheUpdateFraction() const; // 0..1
         bool              IsRadianceCachePrevTerminal() const;
         int               GetRadianceCacheMaxVertices() const;
@@ -409,6 +412,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleRadianceCacheStatsSource();
         Q_INVOKABLE void ToggleGISourceDebug();
         Q_INVOKABLE void ToggleRadianceCacheDedicatedUpdate();
+        Q_INVOKABLE void ToggleRadianceCacheCompactUpdate();
         Q_INVOKABLE void SetRadianceCacheUpdateFraction(double V);
         Q_INVOKABLE void ToggleRadianceCachePrevTerminal();
         Q_INVOKABLE void SetRadianceCacheMaxVertices(int V);

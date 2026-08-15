@@ -57,7 +57,7 @@ namespace Smile {
         Vec4  SunDirIntensity;
         Vec4  SunColor;        // w = mask dos shadow rays (a MESMA do ReSTIR GI; ver RecordUpdate)
         Vec4  TraceParams;     // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
-        Vec4  ShadeParams;     // x=nº de luzes puntuais, y=albedoLOD
+        Vec4  ShadeParams;     // x=nº luzes, y=albedoLOD, z=grupos X do dispatch compacto
         Vec4  PolicyParams;    // x = politica de backface (o MESMO toggle do ReSTIR GI)
         Vec4  UpdateParams;    // x=celulas/frame do tile 5x5, y=vertices, z=terminal no cache
         Vec4  RayEpsA;
@@ -364,6 +364,11 @@ namespace Smile {
         // celula, e uma media que mistura as duas nao descreve nenhuma das duas.
         void SetDedicatedUpdate(bool V) { if (V != DedicatedUpdate) ResetOnce(); DedicatedUpdate = V; }
         bool GetDedicatedUpdate() const { return DedicatedUpdate; }
+        // Scheduling do MESMO estimador: compacto (waves cheias, default da Fase 7) ou o
+        // full-screen + early-out anterior. Duas PSOs evitam que o controle pague um branch e
+        // permitem A/B no mesmo binario. Invalida porque a ordem dos CAS muda o conteudo.
+        void SetCompactUpdate(bool V) { if (V != CompactUpdate) ResetOnce(); CompactUpdate = V; }
+        bool GetCompactUpdate() const { return CompactUpdate; }
         // Fracao dos pixels que lanca caminho por frame. 0,04 = o valor publicado do Cyberpunk.
         // Quantizada em celulas do tile 5x5, entao o passo util e 1/25.
         void SetUpdateFraction(f32 V) { UpdateFraction = V < 0.0f ? 0.0f : (V > 1.0f ? 1.0f : V); }
@@ -690,6 +695,7 @@ namespace Smile {
         FComputePipeline ResolvePSO;
         FComputePipeline DebugPSO;
         FComputePipeline UpdatePSO;
+        FComputePipeline UpdateLegacyPSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Entries;  // checksum por celula (0 = vazia)
         Microsoft::WRL::ComPtr<ID3D12Resource> Accum;    // 4 uints/celula: rgb ponto fixo + N
@@ -759,6 +765,9 @@ namespace Smile {
                       "descritor alheio em vez de acusar");
         u32 UpdateWidth = 0, UpdateHeight = 0;
         u32 UpdateFrameSlot = 0;
+        // Calculados junto do CB: o shader recebe UpdateDispatchX em ShadeParams.z para
+        // linearizar um dispatch que pode ocupar Y quando passa de 65.535 grupos.
+        u32 UpdateDispatchX = 0, UpdateDispatchY = 0;
         bool UpdateReady = false;
 
         FRayEpsilonProfile RayEps;
@@ -769,6 +778,9 @@ namespace Smile {
         // Produtor dedicado (true) x hits do render (false). Nasce LIGADO: e o desenho da Fase 3,
         // e o caminho antigo fica como controle de A/B, nao como default de producao.
         bool DedicatedUpdate = true;
+        // Scheduling compacto da Fase 7. O false continua alcancavel como controle medido no
+        // mesmo binario; nao e um segundo estimador nem um fallback automatico.
+        bool CompactUpdate = true;
         // 4% dos pixels por frame — o numero publicado do Cyberpunk 2077 para o update do SHaRC.
         f32  UpdateFraction  = 0.04f;
         bool UsePrevCacheAtTerminal = true;

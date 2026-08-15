@@ -71,6 +71,8 @@ namespace Smile {
         // lancados, profundidade, terminal por tipo) escreve desde a Fase 4 — por bindless, como
         // todo o resto; o binding aqui continua existindo so para o range serializar.
         UpdatePSO.Initialize(Device, "RadianceCacheUpdate.cs_6_6.cso", kUpdateSrvCount, 1, true);
+        UpdateLegacyPSO.Initialize(Device, "RadianceCacheUpdateLegacy.cs_6_6.cso",
+                                   kUpdateSrvCount, 1, true);
     }
 
     void FRadianceCache::OnRecreatePipelines(const FPassInitContext& Ctx) {
@@ -210,6 +212,7 @@ namespace Smile {
             }
         }
         UpdateWidth = UpdateHeight = 0;
+        UpdateDispatchX = UpdateDispatchY = 0;
         UpdateReady = false;
     }
 
@@ -578,6 +581,7 @@ namespace Smile {
                                             u32 ShadowRayMask, u32 FrameIndex, f32 SkyIntensity,
                                             f32 MaxRayDist, u32 PunctualLightCount,
                                             bool BackfacePolicy) {
+        UpdateDispatchX = UpdateDispatchY = 0;
         if (!UpdateReady || !MappedUpdateCB) return;
         UpdateFrameSlot = InFrameSlot;
 
@@ -599,7 +603,6 @@ namespace Smile {
                               static_cast<f32>(ShadowRayMask) };
         U.TraceParams     = { static_cast<f32>(FrameIndex), MaxRayDist, SkyIntensity,
                               RayEps.HitShadowRayBias };
-        U.ShadeParams     = { static_cast<f32>(PunctualLightCount), kUpdateAlbedoLOD, 0.0f, 0.0f };
         U.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
 
         // Fracao -> celulas do tile 5x5. O piso de 1 e deliberado: com o passe ligado e fracao
@@ -608,6 +611,27 @@ namespace Smile {
         const f32 CellsF = UpdateFraction * 25.0f;
         u32 Cells = static_cast<u32>(CellsF + 0.5f);
         Cells = std::clamp(Cells, 1u, 25u);
+        if (CompactUpdate) {
+            // O caminho normal cabe inteiro em X (793 grupos na captura 1573x804/C1). O split em
+            // Y preserva resolucoes altas e C25 sem ultrapassar o limite de 65.535 grupos por
+            // dimensao. O pitch X viaja em ShadeParams.z; sem ele Y repetiria indices.
+            constexpr u64 kTileSize = 5ull;
+            constexpr u64 kThreads  = 64ull;
+            constexpr u64 kMaxGroups = D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION;
+            const u64 TileCountX = (static_cast<u64>(UpdateWidth)  + kTileSize - 1ull) / kTileSize;
+            const u64 TileCountY = (static_cast<u64>(UpdateHeight) + kTileSize - 1ull) / kTileSize;
+            const u64 WorkItems  = TileCountX * TileCountY * static_cast<u64>(Cells);
+            const u64 Groups     = (WorkItems + kThreads - 1ull) / kThreads;
+            UpdateDispatchX = static_cast<u32>(std::min(Groups, kMaxGroups));
+            UpdateDispatchY = static_cast<u32>((Groups + UpdateDispatchX - 1ull) /
+                                               UpdateDispatchX);
+        } else {
+            // Controle pre-Fase-7: uma thread por pixel, 8x8, com o predicado 5x5 no shader.
+            UpdateDispatchX = (UpdateWidth  + 7u) / 8u;
+            UpdateDispatchY = (UpdateHeight + 7u) / 8u;
+        }
+        U.ShadeParams = { static_cast<f32>(PunctualLightCount), kUpdateAlbedoLOD,
+                          CompactUpdate ? static_cast<f32>(UpdateDispatchX) : 0.0f, 0.0f };
         // O que o shader vai receber de fato — e so isso e que o manifesto reporta. A quantizacao
         // acontece AQUI, entao publicar o knob cru faria a captura afirmar uma fracao que nao foi
         // a usada (0,10 pedido vira 3/25 = 0,12).
@@ -650,23 +674,33 @@ namespace Smile {
     }
 
     void FRadianceCache::RecordUpdate(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap) {
-        if (!UpdatePassActive() || UpdateSrvTable[UpdateFrameSlot] == kInvalidSlot) return;
+        if (!UpdatePassActive() || UpdateSrvTable[UpdateFrameSlot] == kInvalidSlot ||
+            UpdateDispatchX == 0u || UpdateDispatchY == 0u) {
+            return;
+        }
 
         // Os buffers do cache ja estao em UNORDERED_ACCESS desde o TransitionForTrace do
         // PrepareIndirectLighting, e continuam ate o resolve. Nao ha barreira a emitir contra os
         // traces de render: este passe ESCREVE Accum e LE Resolved, e o resolve do fim do frame ja
         // ordena as duas coisas contra a leitura dele.
-        UpdatePSO.Bind(CL);
+        (CompactUpdate ? UpdatePSO : UpdateLegacyPSO).Bind(CL);
         CL->SetComputeRootConstantBufferView(0, UpdateCBAddr());
         CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(UpdateSrvTable[UpdateFrameSlot]));
         // Root param 2 existe so porque um range de 0 descritores nao serializa (ver
         // CreateUpdatePipeline); o shader nao declara UAV nenhum.
         CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(UavTable + 3));
 
-        // Dispatch de tela CHEIA com early-out pela mascara, e nao um dispatch compactado de 4%
-        // dos pixels: o plano manda comprovar a correcao antes de comprimir, e a compactacao
-        // (work list + indirect dispatch) e a Fase 7.
-        CL->Dispatch((UpdateWidth + 7u) / 8u, (UpdateHeight + 7u) / 8u, 1);
+        // COMPACTACAO ANALITICA da Fase 7. A mascara 5x5 e uma bijecao conhecida, portanto o
+        // shader inverte a permutacao e transforma cada indice linear diretamente num pixel
+        // selecionado. Nao e preciso materializar work list, contar itens por atomico nem fazer
+        // indirect dispatch: existem exatamente `tiles * cells` candidatos, salvo os poucos que
+        // caem fora nos tiles parciais da borda.
+        //
+        // 64 threads lineares casam com o [numthreads(64,1,1)] do shader. As dimensoes foram
+        // calculadas no MESMO ponto que quantizou `cells` e escreveu o pitch X no CB; RecordUpdate
+        // so consome o snapshot para CPU e shader nao re-derivarem a mesma topologia em lugares
+        // diferentes.
+        CL->Dispatch(UpdateDispatchX, UpdateDispatchY, 1);
     }
 
     FRadianceCacheShaderParams FRadianceCache::UpdatePassParams() const {

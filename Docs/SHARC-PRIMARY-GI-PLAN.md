@@ -22,6 +22,12 @@
 > 2. **o orçamento do DDGI não começou** (menos probes/frame, relight menos frequente, cascatas
 >    distantes mais grosseiras). Ele é a cauda da Fase 6, não da 7.
 >
+> **Fase 7: primeiro corte APROVADO em runtime** (2026-08-15). A compactação analítica do tile 5×5
+> derrubou o updater de **3,75 para 0,87 ms (4,31×)** e o total GPU de **15,65 para 12,57 ms**.
+> Update + resolve ficou em **0,93 ms**, abaixo da meta de 1,5 ms; o A/B de imagem deu 60,33 dB e
+> variação de energia de −0,00047%, com ocupação/amostras idênticas. O registro ainda carrega
+> `3f0f943-dirty`; repetir sob hash limpo é higiene de arquivo, não gate de correção. Ver `➜ FASE 7`.
+>
 > É dívida de MEDIÇÃO e de tuning, não de estrutura: o seletor está inteiro e roteando, então a
 > Fase 7 não constrói sobre contrato indefinido. Mas vale o aviso que a própria série escreveu — a
 > Fase 4 só achou dois bugs reais porque rodou o gate dela **depois** de cinco rodadas de auditoria
@@ -758,6 +764,86 @@ plano erra sem perceber.
 scheduling (Fase 7) não entram no mesmo commit. E a otimização de hit packets da idTech8 **não
 entra se quebrar backpropagation ou introduzir bias não medido** — ela é um segundo produtor
 possível, não requisito da correção SHaRC.
+
+#### PRIMEIRO CORTE DA FASE 7 — compactação analítica do tile 5×5 APROVADA
+
+O full-screen early-out do updater saiu. Ele despachava uma thread por pixel para manter só uma
+posição de cada tile 5×5 viva no default de 4%; quando o `RayQuery` começava, cada wave carregava
+em média duas ou três lanes úteis. O novo dispatch cria diretamente um work item por posição
+selecionada e usa 64 threads lineares. Não há buffer de work list, contador atômico nem
+`ExecuteIndirect`: a máscara não é aleatória, é a permutação determinística que já existia.
+
+A inversão é exata e fica provada no shader. O seletor antigo aceitava o `local` quando
+`(local·13 + frame) mod 25 < cells`. Para o work item de rank `r`, o novo calcula
+`slot = (r − frame) mod 25` e `local = slot·2 mod 25`; **2 é o inverso de 13 módulo 25**. Logo o
+predicado antigo vale com resultado `r`, e os mesmos `cells` pixels do tile saem uma vez cada. O
+pixel e o `frameIndex` que alimentam todos os streams de RNG não mudam.
+
+Na resolução da medida anterior (1573×804, `cells = 1`), a topologia cai de **19.897 grupos /
+1.273.408 threads lançadas** para **793 grupos / 50.752 threads**. Os ~50,7 mil caminhos caros são
+os mesmos; o ganho procurado é ocupá-los em waves cheias em vez de pagar waves quase vazias. Isto é
+o primeiro degrau da "geração/compactação de work items" da especificação, sem ainda separar trace,
+hit packet e shading.
+
+**O que as três referências decidiram aqui:**
+
+- a idTech8 separa visibilidade, hit compacto de 128 bits, células ativas e shading por material;
+  isso continua sendo um produtor alternativo posterior, porque sombrear uma célula uma vez não
+  preserva automaticamente a backpropagation dos vértices do path da Smile;
+- o capítulo do Cyberpunk confirma 4% dos pixels, até quatro bounces, resolve separado e
+  backpropagation; e mostra compactação hierárquica para amostragem estocástica, mas aqui a
+  bijeção permite eliminar os atômicos inteiramente;
+- o AC Shadows reforça orçamento rígido e seleção por prioridade, além de separar relight barato
+  de atualização geométrica. Isso alimenta o próximo degrau adaptativo, não este corte mecânico.
+
+⚠️ **A equivalência de conjunto não fechava a equivalência de imagem.** Agrupar os mesmos caminhos
+em waves diferentes muda a ordem de chegada nos CAS do hash — a série já mediu que scheduling muda
+quem vence inserções. Portanto o código compilar prova o mapeamento e a integridade, não o gate da
+otimização. Por isso o gate exigiu A/B vivo, mesma pose/TOD/N=128 e instrumentação OFF, arquivando
+custo do updater, frame, ocupação e PSNR/energia. A medida abaixo é o que fechou essa ressalva.
+
+**O controle agora vive no mesmo binário.** `Dispatch compacto (tile 5×5)` escolhe duas PSOs
+compiladas do mesmo HLSL: ligado usa 64 threads lineares e a inversão analítica; desligado usa o
+full-screen 8×8 com o predicado anterior. Não há branch por lane entre os braços nem diferença de
+build. Trocar limpa cache e consumidores, porque a agenda muda a ordem dos CAS. O manifesto grava
+`cacheCompactUpdate`; o nome curto usa `K` (compacto) ou `L` (legacy), depois de `D1`.
+
+A primeira captura viva do compacto, anterior a esse seletor, foi um **smoke provisório**:
+`BistroExterior`, slot 0, gameplay/FSR nativo, N=128, instrumentação OFF, V1/C4, build
+`3f0f943-dirty`. Terminou com 25.226 células ocupadas (19,25%), 20.325 confiáveis, 821.322 amostras
+(32,56/célula) e 60 despejos, sem artefato catastrófico. Ela não aprova o corte: não tem o campo K/L,
+não carrega tempos de GPU e ainda não tem o braço legacy na mesma build.
+
+#### A/B K×L — 2026-08-15: gate visual e de custo PASSOU
+
+Mesmo binário Release, Bistro exterior, slot 0, gameplay com FSR nativo, N=128, V1/C4, 4%,
+instrumentação OFF. Capturas `…rcUQC4D1KV1R50T_20260815-001448` e
+`…rcUQC4D1LV1R50T_20260815-001503`. O diff dos manifestos contém somente o scheduler K/L e os
+campos inevitáveis de arquivo/tempo/frame absoluto; `temporalSampleIndex = 128` e todo o estado
+efetivo são iguais.
+
+**Custo (EMA dos timestamps do profiler):**
+
+- updater: **3,75 → 0,87 ms**, redução de **76,8%**, speedup de **4,31×**;
+- resolve: 0,03 → 0,06 ms — diferença de 0,03 ms no piso da régua, sem regressão material;
+- update + resolve: **3,78 → 0,93 ms**, redução de **75,4%**, abaixo da meta de 1,5 ms por 0,57 ms;
+- total GPU por passe: **15,65 → 12,57 ms**, menos 3,08 ms / **19,68%** de frame time;
+- equivalente de 63,90 → 79,55 FPS, ganho de **24,5%**. DDGI ficou 3,03 → 3,05 ms e FSR em
+  0,68 ms nos dois; o ganho não veio de outro passe ter sido desligado.
+
+**Estado do cache:** idêntico nos dois braços — 25.226 ocupadas (19,25%), 20.325 confiáveis,
+821.320 amostras (32,56/célula) e 60 despejos. A agenda mudou sem perder cobertura ou convergência.
+
+**Imagem:** PSNR **60,33 dB**, MSE 0,0602 em RGB8, 92,92% dos pixels exatamente iguais, 99,65%
+dentro de um nível e somente 127 pixels (0,0100%) acima de 10; máximo 29. A luminância linear média
+foi 0,01633038 em K e 0,01633046 em L, delta de **−0,00047%**. Inspeção visual sem faixa 5×5,
+buraco, perda sistemática de luz ou artefato novo.
+
+**Decisão:** `Dispatch compacto` permanece **ON por default e aprovado**. O controle L continua no
+mesmo binário enquanto a Fase 7 estiver aberta, porque custa pouco e torna qualquer regressão
+posterior reproduzível. A única dívida deste registro é de procedência: os dois manifestos dizem
+`3f0f943-dirty`; depois do commit/rebuild, um par limpo deve substituir o arquivo definitivo sem
+reabrir o gate técnico se o diff contiver somente o carimbo da build.
 
 ### Histórico — implementação dos commits #5 e #6
 
