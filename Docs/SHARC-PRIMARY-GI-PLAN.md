@@ -949,7 +949,8 @@ viaja como 1 e o shader nem o lê, de propósito: knob que não controla nada é
 hits deles — só trata puntuais e ReGIR; geometria emissiva contribui quando um raio a atinge, pelo
 `PT_LoadHitEmissive`. Acrescentá-las só no updater faria a mesma superfície ter duas radiâncias
 conforme o caminho, que é exatamente o que a Fase 2 fechou. Quando entrarem, entram no bloco
-compartilhado e nos três consumidores de uma vez.
+compartilhado e nos três consumidores de uma vez. A ordem de implementação, os gates e o presample
+RIS que precisa vir antes dessa integração estão registrados em `Docs/MESH-LIGHTS-PLAN.md`.
 
 Não entrou e continua fora: `UseDDGIBootstrap`. Ele exige preencher a cauda de cascatas do cbuffer
 do passe, e a struct `FDDGICascadeConstants` mora no `DDGI.h`, que **inclui** o `RadianceCache.h` —
