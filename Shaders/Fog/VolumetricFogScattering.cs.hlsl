@@ -183,9 +183,16 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
         if (volW <= 0.0f) {
             amb = AmbientFallback.rgb;
         } else {
-            float3 gi = SampleDDGIIrradiance(DDGIIrradianceAtlas, LinearClamp, wp, -dir,
-                            DDGIGridMin.xyz, DDGIGridMin.w, (int3)DDGIGridCount.xyz,
-                            (int)DDGIParams.y, invSize) * (DDGIParams.x / SMILE_PI);
+            // Wrapper SEM Chebyshev: o fog nao tem atlas de distancia nem ProbeData, e e por
+            // isso que existem dois wrappers em vez de um. O fallback de fora do volume fica
+            // aqui (AmbientFallback), como nos outros callers.
+            float3 gi = SampleDDGIIrradianceCascaded(
+                            DDGIIrradianceAtlas, LinearClamp, wp, -dir,
+                            DDGICascadeGridMinSpacing, DDGICascadeScrollOffset,
+                            (int)DDGICascadeParams.x,
+                            (int3)DDGIGridCount.xyz, (int)DDGIParams.y, invSize,
+                            DDGI_TilesPerRow(DDGIParams.z, (int)DDGIParams.y))
+                        * (DDGIParams.x / SMILE_PI);
             amb = (volW >= 1.0f) ? gi : lerp(AmbientFallback.rgb, gi, volW);
         }
     } else {

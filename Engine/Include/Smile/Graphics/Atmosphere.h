@@ -4,10 +4,10 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Texture.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
 #include "Smile/Graphics/VolumeTexture.h"
 #include "Smile/Graphics/CubeTexture.h"
 #include "Smile/Graphics/ComputePipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -64,8 +64,13 @@ namespace Smile {
         D3D12_RESOURCE_STATES State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     };
 
-    class FAtmosphere {
+    class FAtmosphere : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Céu e atmosfera"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kTransmittanceW = 256;
         static constexpr u32 kTransmittanceH = 64;
         static constexpr u32 kMultiScatterW  = 32;
@@ -149,7 +154,7 @@ namespace Smile {
         f32 BottomRadiusKm()   const { return CPUConstants.PlanetRadii.X; }
         f32 TopRadiusKm()      const { return CPUConstants.PlanetRadii.Y; }
         D3D12_GPU_VIRTUAL_ADDRESS ConstantsAddress() const { return CBAddr(); }
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         void LoadMoonTexture(ID3D12Device* Device, FUploadQueue& UploadQueue,
                              FTextureSRVHeap& SRVHeap, const std::wstring& Path);
@@ -173,6 +178,7 @@ namespace Smile {
         void BuildInputTables(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
         void BuildSkyRootSignature(ID3D12Device* Device);
         void BuildStarPipeline(ID3D12Device* Device, DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
+        void CreateBakePipelines(ID3D12Device* Device); // LUTs: Initialize e OnRecreatePipelines
         void BuildSkyPSO(ID3D12Device* Device,
                          DXGI_FORMAT RTFormat, DXGI_FORMAT DSFormat);
         void Bake(ID3D12Device* Device, FCommandQueue& CmdQueue);
@@ -184,23 +190,23 @@ namespace Smile {
 
         FTexture            MoonTexture;
         bool                MoonTexLoaded = false;
-        FVolumetricPipeline TransmittancePSO;
-        FVolumetricPipeline MultiScatterPSO;
-        FVolumetricPipeline SkyViewPSO;
+        FComputePipeline TransmittancePSO;
+        FComputePipeline MultiScatterPSO;
+        FComputePipeline SkyViewPSO;
 
         FVolumeTexture      AerialPerspectiveVolume;
-        FVolumetricPipeline AerialPerspectivePSO;
+        FComputePipeline AerialPerspectivePSO;
 
         static constexpr u32 kSkyReflSize    = 64;
         static constexpr u32 kSkyReflMips    = 7;  // 64..1 — casa com kSpecularMaxMip=6 da água
         static constexpr u32 kSkyReflSamples = 64; // céu é liso; 64 taps GGX bastam por frame
         FCubeTexture        SkyReflRaw;   // fonte (SkyView→cube + mip chain)
         FCubeTexture        SkyReflSpec;  // prefiltrado GGX (consumido pela água)
-        FVolumetricPipeline SkyReflBakePSO;
+        FComputePipeline SkyReflBakePSO;
         FComputePipeline    SkyReflMipGenPSO;
         FComputePipeline    SkyReflPrefilterPSO;
 
-        FVolumetricPipeline IntegrateAmbientPSO;
+        FComputePipeline IntegrateAmbientPSO;
         Microsoft::WRL::ComPtr<ID3D12Resource> AmbientBuffer;   // DEFAULT, 2x float4, UAV
         Microsoft::WRL::ComPtr<ID3D12Resource> AmbientReadback; // READBACK ring (kFramesInFlight)
         u8* AmbientMapped   = nullptr;

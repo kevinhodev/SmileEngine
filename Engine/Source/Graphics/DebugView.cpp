@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <iterator>
 
 namespace Smile {
 
@@ -14,6 +15,7 @@ namespace Smile {
     }
 
     void FDebugView::Initialize(ID3D12Device* _Device, DXGI_FORMAT _RTFormat) {
+        RTFormat = _RTFormat; // cacheado: ha DUAS instancias (viewport e preview), formatos distintos
         if (Initialized) return;
         BuildRootSignature(_Device);
         BuildPSO(_Device, _RTFormat);
@@ -43,7 +45,18 @@ namespace Smile {
         VelRange.BaseShaderRegister                = 4;
         VelRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        // t5 = o MESMO descritor de t0, visto como Texture2DArray (decode ArraySlice). Duas
+        // entradas para um descritor so porque a dimensao da view faz parte da declaracao no
+        // HLSL — nao existe SRV de dimensao TEXTURE2D que enderece array slice, entao alvo de
+        // array precisa de uma declaracao propria. Cada tile le exatamente uma das duas: o
+        // shader ramifica no Decode antes de tocar em qualquer das texturas.
+        D3D12_DESCRIPTOR_RANGE ArrayRange{};
+        ArrayRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ArrayRange.NumDescriptors                    = 1;
+        ArrayRange.BaseShaderRegister                = 5;
+        ArrayRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_ROOT_PARAMETER RootParams[5]{};
         // b0: decode/tile | pesos | exposicao/aspecto | offset UV/display
         RootParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         RootParams[0].Constants.ShaderRegister = 0;
@@ -64,6 +77,11 @@ namespace Smile {
         RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
         RootParams[3].DescriptorTable.pDescriptorRanges   = &VelRange;
         RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        RootParams[4].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[4].DescriptorTable.NumDescriptorRanges = 1;
+        RootParams[4].DescriptorTable.pDescriptorRanges   = &ArrayRange;
+        RootParams[4].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -204,7 +222,12 @@ namespace Smile {
             K.LinearFilter      = T.LinearFilter ? 1u : 0u;
 
             _CommandList->SetGraphicsRoot32BitConstants(0, 16, &K, 0);
+            // t0 e t5 recebem o MESMO descritor: qual dos dois o shader le e decidido pelo
+            // Decode. Ligar os dois sempre (em vez de so o que sera usado) evita ter de manter
+            // um recurso dummy vivo aqui so para o outro slot nao ficar sem binding — a tabela
+            // nao lida nunca e acessada, porque a ramificacao acontece antes.
             _CommandList->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(T.SrvSlot));
+            _CommandList->SetGraphicsRootDescriptorTable(4, _SRVHeap.GpuHandle(T.SrvSlot));
             _CommandList->DrawInstanced(3, 1, 0, 0);
         }
 
@@ -218,4 +241,14 @@ namespace Smile {
         _CommandList->RSSetViewports(1, &_FullViewport);
         _CommandList->RSSetScissorRects(1, &FullScissor);
     }
+
+    FPassShaderStems FDebugView::ShaderStems() const {
+        static const char* const kStems[] = { "DebugView.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDebugView::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (PSO) BuildPSO(_Ctx.Device, RTFormat);
+    }
+
 }

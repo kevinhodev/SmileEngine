@@ -1,4 +1,5 @@
 #include "Smile/Graphics/D3D12Device.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <d3d12sdklayers.h>
@@ -50,6 +51,8 @@ namespace Smile {
     }
 
     FD3D12Device::~FD3D12Device() noexcept {
+        if (Device) GpuResources::ShutdownDefaultAllocator(Device.Get());
+
         if (DebugInfoQueue && DebugCallbackRegistered) {
             const HRESULT Hr = DebugInfoQueue->UnregisterMessageCallback(DebugCallbackCookie);
             if (FAILED(Hr)) {
@@ -155,6 +158,22 @@ namespace Smile {
             LogDebug("[D3D12] - DXR Tier 1.1+ disponivel (inline ray tracing / GI habilitavel)");
         else
             LogWarning("[D3D12] - DXR indisponivel (Tier < 1.1); GI sera desativada");
+
+        // ResourceHeapTier e capability SEPARADA do DXR (OPTIONS x OPTIONS5): na pratica toda
+        // GPU com DXR e Tier 2, mas a spec trata as duas como independentes, e assumir uma pela
+        // outra so daria errado no relatorio de bug de alguem. Tier 1 exige heap separado para
+        // buffer, textura comum e textura RT/DS — restricao que qualquer politica de placed
+        // resource ou pool teria de respeitar, entao o valor fica registrado desde ja.
+        D3D12_FEATURE_DATA_D3D12_OPTIONS Options{};
+        if (SUCCEEDED(Device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS,
+                                                  &Options, sizeof(Options)))) {
+            ResourceHeapTier = Options.ResourceHeapTier;
+            LogDebug("[D3D12] - Resource Heap Tier: " +
+                     std::to_string(static_cast<int>(Options.ResourceHeapTier)));
+        }
+
+        GpuResources::InitializeDefaultAllocator(
+            Device.Get(), Adapter.Get(), ResourceHeapTier);
     }
 
     const FVideoMemoryInfo& FD3D12Device::QueryVideoMemory() const {

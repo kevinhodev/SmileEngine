@@ -4,7 +4,9 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/VolumeTexture.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
+#include "Smile/Graphics/RenderPass.h"
+#include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants: bloco comum aos cinco cbuffers
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -18,8 +20,13 @@ namespace Smile {
     // dele o analitico continua. F2: jitter Halton + reprojecao temporal no scattering
     // (historia ping-pong, blend 0.9, supersampling em history-miss — receita da UE).
     // F3 adiciona luzes puntuais.
-    class FVolumetricFogPass {
+    class FVolumetricFogPass : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Volumetric fog"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kGridW = 160, kGridH = 90, kGridZ = 64;
 
         struct FFrameParams {
@@ -46,6 +53,7 @@ namespace Smile {
             Vec4  DDGIGridMin{};             // xyz = origem, w = spacing
             Vec4  DDGIGridCount{};           // xyz = probes por eixo, w = DDGI on (>0.5)
             Vec4  DDGIParams{};              // x = intensidade, y = tile, z/w = atlas W/H
+            FDDGICascadeConstants DDGICascades{}; // ver FDDGI::CascadeConstants()
         };
 
         void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
@@ -75,7 +83,7 @@ namespace Smile {
         u32  IntegratedSRVSlot() const { return Integrated.SRVSlot(); }
         // (B, O, S, kGridZ) do ultimo UpdatePerFrame — o fog fullscreen fatia igual.
         Vec4 GridZParams() const   { return GridZ; }
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         // Historia obsoleta quando o efeito dorme um frame ou os params do grid mudam.
         void ResetHistory() { HistoryValid = false; }
@@ -107,6 +115,7 @@ namespace Smile {
         bool GetConservativeDepth() const { return ConservativeDepth; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         // Espelho exato do VolFogCB (VolumetricFogCommon.hlsli).
         struct alignas(256) VolFogConstants {
             Vec4  GridZParams;
@@ -133,7 +142,12 @@ namespace Smile {
             Vec4  CloudShadowParams2;
             Mat44 CurViewProj;
             Vec4  ConsDepthParams;
+            // Cascatas do DDGI (append no fim). Mesmo bloco dos outros quatro cbuffers; o
+            // DDGIGridMin acima continua sendo a GROSSA (fade de borda e fallback).
+            FDDGICascadeConstants DDGICascades;
         };
+        static_assert(offsetof(VolFogConstants, DDGICascades) == 640,
+                      "bloco de cascatas anexado ao fim do cbuffer do fog (ver Renderer.h)");
         static constexpr u32 kMissSupersamples = 4;    // amostras qdo a historia falha
         static constexpr f32 kHistoryWeight    = 0.9f; // blend da UE
 
@@ -145,9 +159,9 @@ namespace Smile {
         FVolumeTexture Integrated;           // (inscatter acumulado, transmitancia)
         u32  CurrentScatter = 0;             // indice escrito NESTE frame
 
-        FVolumetricPipeline SetupPSO;     // b0 + t0 (unused) + u0
-        FVolumetricPipeline IntegratePSO; // b0 + t0 (scattering) + u0
-        FVolumetricPipeline ConsDepthPSO; // b0 + t0 (depth da cena) + u0
+        FComputePipeline SetupPSO;     // b0 + t0 (unused) + u0
+        FComputePipeline IntegratePSO; // b0 + t0 (scattering) + u0
+        FComputePipeline ConsDepthPSO; // b0 + t0 (depth da cena) + u0
 
         // Conservative depth 160x90 R16F, ping-pong (prev alimenta o fixup da historia).
         Microsoft::WRL::ComPtr<ID3D12Resource> ConsDepthTex[2];

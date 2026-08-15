@@ -2,10 +2,14 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants
+#include "Smile/Graphics/GIFallback.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RadianceCache.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstddef>
@@ -27,7 +31,7 @@ namespace Smile {
         Vec4  SunColor;        // rgb = cor do sol, w = ShadowRayMask (mask dos shadow rays no hit)
         Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
                                // (so sombras no hit; origem de raio do G-buffer usa offset robusto)
-        Vec4  ShadeParams;     // x = realHitShading (0/1), y = albedoLOD, z = fireflyMax, w = validateInterval
+        Vec4  ShadeParams;     // x = livre, y = albedoLOD, z = fireflyMax, w = validateInterval
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
@@ -36,7 +40,10 @@ namespace Smile {
         // existente — em especial o View, que o ReSTIRNrdPack le em 256.
         Vec4  RayEpsA;         // x=originFloorMin, y=originFloorPerMeter, z=angularMax, w=shadowRayBiasMin
         Vec4  RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
-        Vec4  PolicyParams;      // x = politica de backface no gather (0/1); yzw livres
+        Vec4  PolicyParams;      // x = politica de backface no gather (0/1),
+                                 // y = strength do boiling filter (0 = off),
+                                 // z = correcao de vies do temporal (0/1),
+                                 // w = kill de backface no Jacobiano (0 = abs() historico)
         // Gather do 2o bounce no hit (contrato do HitShading.hlsli): o mesmo sampler completo
         // do deferred, com Chebyshev e skip de sonda inativa.
         Vec4  GIDistParams;      // x=distTile, y=distAtlasW, z=distAtlasH, w=skipMode
@@ -50,7 +57,20 @@ namespace Smile {
         Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
         // Instrumentacao de timer (FShaderTimer). Anexado no FIM pela mesma razao dos anteriores.
         Vec4  DebugParams;       // x = slot bindless do alvo de timer (< 0 = captura off)
+        // Historico de superficie do FTemporalMotionVectors: de onde sai o x1 do reservoir
+        // temporal desde que ele deixou de ser gravado (ver ReSTIRReservoir.hlsli).
+        Vec4  HistoryParams;     // x = slot bindless do Surface do frame ANTERIOR
+        // World radiance cache (FRadianceCacheShaderParams). Contrato por NOME com o
+        // RC_UNPACK_PARAMS do RadianceCache.hlsli; anexado no FIM como os anteriores.
+        Vec4  RadianceCacheCamCell;
+        Vec4  RadianceCacheLodCapFlags;
+        Vec4  RadianceCacheResources;
+        // Cascatas do DDGI, para o gather do 2o bounce no HitShading. Mesmo bloco dos outros
+        // quatro cbuffers; o GIGridMinSpacing continua sendo a GROSSA (peso do volume).
+        FDDGICascadeConstants GICascades;
     };
+    static_assert(offsetof(ReSTIRGIConstants, GICascades) == 560,
+                  "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
     static_assert(offsetof(ReSTIRGIConstants, ReGIRGridMinSlots) == 400,
                   "ReSTIRGIConstants divergiu do cbuffer ReSTIRCB");
     static_assert(offsetof(ReSTIRGIConstants, SkyParams) == 464,
@@ -58,26 +78,48 @@ namespace Smile {
 
     // ReSTIR GI — final-gather difuso por pixel sobre o DDGI (radiance cache). Molde do FReflections.
     // A3: Pass A (trace + reservoir temporal) -> Pass B (reuso espacial + Jacobiano + resolve).
-    // Reservoir {x1,x2,n2,Lo,M,W} em 4 tex ping-pong. Atras do toggle UseReSTIRGI (default OFF).
-    class FReSTIRGI {
+    // Reservoir {x2,n2,Lo,M,W} em 2 tex ping-pong (x1 e reconstruido). Atras do toggle
+    // UseReSTIRGI (default OFF).
+    class FReSTIRGI : public FRenderPass {
     public:
+        // "candidato tracado", e nao "fonte do indireto": o reservoir pode substituir esta amostra
+        // pela temporal ou pela espacial depois. O nome carrega a ressalva porque o mapa nao tem
+        // como carrega-la.
+        static constexpr const char* kSourceDebugTargetName = "GI · fonte do candidato tracado";
+        void SetSourceDebug(bool V) { SourceDebug = V; }
+        bool GetSourceDebug() const { return SourceDebug; }
+        void OnRegisterDebugTargets() override;
+
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "ReSTIR GI"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device);
 
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
                          f32 AtlasTile, f32 AtlasW, f32 AtlasH, f32 MaxRayDist);
 
+        // O fallback chega como CONTRATO (FGIFallbackBindings) e nao como tres slots soltos: sem
+        // volume DDGI os slots sao os neutros do Renderer e o passe continua chegando a IsReady().
+        // Antes, o call site so chamava isto depois de um `if (!DDGI.IsReady()) return;`, e o
+        // ReSTIR GI — que nao consulta sonda no caminho principal — morria junto com o volume.
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
-                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
-                            u32 DepthSlot, u32 GBufferSlot,
-                            u32 VelocitySlot,
-                            // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
-                            // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
-                            u32 DistSlot, u32 ProbeDataSlot);
+                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot,
+                            const FGIFallbackBindings& Fallback,
+                            u32 DepthSlot, u32 GBufferSlot, u32 VelocitySlot);
 
+        // PrevSurfaceSlot = SRV do historico de superficie do frame ANTERIOR
+        // (FTemporalMotionVectors::SurfaceSRV(1 - FrameSlot)). E de la que o reuso temporal tira o
+        // x1, que saiu do reservoir. kInvalidSlot DESLIGA o reuso temporal deste frame: sem
+        // historico de superficie nao ha como reconstruir o ponto visivel anterior, e ler um
+        // descriptor invalido seria pior que perder um frame de acumulo.
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
                             const Mat44& View, const Vec2& JitterDeltaUv,
+                            u32 PrevSurfaceSlot,
                             u32 PunctualLightCount = 0);
 
         // F5: copia o SRV do buffer de luzes puntuais do frame pro t13 da tabela de trace da
@@ -112,7 +154,13 @@ namespace Smile {
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        // Cascatas: empurradas por FRAME (nao no SetGIParams, que so roda em setup/resize) porque
+        // a origem da cascata fina segue a camera. Dono = Renderer, fonte = FDDGI.
+        void SetGICascades(const FDDGICascadeConstants& C) { GICascadesCPU = C; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // COM o bit de update: o reservoir do ReSTIR GI ja guarda radiancia nao-direcional (e por
+        // isso que o RoughnessMin existe aqui). Ver FRadianceCache::ShaderParams.
+        void SetRadianceCacheParams(const FRadianceCacheShaderParams& P) { RadianceCacheParams = P; }
         // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
         // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
         void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
@@ -138,8 +186,6 @@ namespace Smile {
         // Invalidam o historico: mudam o Lo JA GRAVADO nos reservoirs, e com ValidateInterval = 0
         // (config estavel atual) nao ha re-shade periodico — sem o clear, a radiancia do modo
         // anterior sobrevive ate a reprojecao rejeitar por posicao, e o toggle fica meio aplicado.
-        void SetRealHitShading(bool V) { if (V != RealHit) NeedsClear = true; RealHit = V; }
-        bool GetRealHitShading() const { return RealHit; }
         void SetTemporal(bool V)   { if (V && !Temporal) NeedsClear = true; Temporal = V; }
         bool GetTemporal() const   { return Temporal; }
         void SetFoliageShadows(bool V) { if (V != FoliageShadows) NeedsClear = true;
@@ -162,53 +208,84 @@ namespace Smile {
         bool GetSpatial() const    { return Spatial; }
         void SetVisibility(bool V) { Visibility = V; }
         bool GetVisibility() const { return Visibility; }
+        // Boiling filter: NAO invalida historico (so muda o corte de outlier deste frame em
+        // diante), entao serve de A/B direto — 0 desliga e devolve o comportamento anterior.
+        void SetBoilingStrength(f32 V) { BoilingStrength = V; }
+        f32  GetBoilingStrength() const { return BoilingStrength; }
+        // Correcao de vies do reuso temporal (estilo RTXDI Basic). INVALIDA nas DUAS bordas: o W
+        // gravado no reservoir depende do modo, e um W inflado do modo anterior sobreviveria
+        // varios frames realimentando o wSum — o A/B compararia historico contaminado.
+        void SetTemporalBiasCorrection(bool V) {
+            if (V != TemporalBiasCorr) NeedsClear = true;
+            TemporalBiasCorr = V;
+        }
+        bool GetTemporalBiasCorrection() const { return TemporalBiasCorr; }
+        // Muda quais amostras sao ACEITAS no reuso, entao o que ja esta gravado foi montado sob
+        // a outra regra: invalida nas duas bordas, igual a correcao de vies.
+        void SetJacobianKillBackface(bool V) {
+            if (V != JacobianKillBackface) NeedsClear = true;
+            JacobianKillBackface = V;
+        }
+        bool GetJacobianKillBackface() const { return JacobianKillBackface; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
         void CreateConstantBuffer(ID3D12Device* Device);
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;   // 14 SRV, 5 UAV, heap-directly-indexed (Pass A)
+        FComputePipeline TracePSO;   // 14 SRV, 3 UAV, heap-directly-indexed (Pass A)
         // Gemea instrumentada do Pass A: mesmas tabelas, mas com o slot falso da NVAPI no root
         // sig e o timer no shader. PSO separada e nao um if no CB porque a instrumentacao custa
         // registrador — o passe normal nao pode pagar por um recurso de debug.
-        FVolumetricPipeline TracePSOTimed;
-        FVolumetricPipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
-        FVolumetricPipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
+        FComputePipeline TracePSOTimed;
+        FComputePipeline SpatialPSO; // 10 SRV, 1 UAV, heap-directly-indexed (Pass B; alpha-test M6)
+        FComputePipeline NrdPackPSO; // 4 SRV [GITex,gbuf,depth,vel], 4 UAV [NRD IN] (Fase C)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> GITexture;
         D3D12_RESOURCE_STATES GITextureState = D3D12_RESOURCE_STATE_COMMON;
-        // Reservoir ping-pong: A=RGBA32F[x1,M], B=RGBA32F[x2,W], C=RGBA16F[Lo], D=RGBA16F[n2].
-        Microsoft::WRL::ComPtr<ID3D12Resource> ResA[2], ResB[2], ResC[2], ResD[2];
-        D3D12_RESOURCE_STATES ResAState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
-        D3D12_RESOURCE_STATES ResBState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
-        D3D12_RESOURCE_STATES ResCState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
-        D3D12_RESOURCE_STATES ResDState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+        // Reservoir ping-pong em DUAS texturas (eram quatro): 32 B/pixel no lugar de 48.
+        //   Res0 = RGBA32F      [x2.xyz, W]
+        //   Res1 = RGBA32_UINT  [n2 oct | Lo RGB9E5 | M+idade | n1 oct]
+        // O x1 saiu: vem do depth (espacial) e do historico de superficie (temporal). Ver o
+        // cabecalho de empacotamento em Shaders/GI/ReSTIRReservoir.hlsli.
+        Microsoft::WRL::ComPtr<ID3D12Resource> Res0[2], Res1[2];
+        D3D12_RESOURCE_STATES Res0State[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+        D3D12_RESOURCE_STATES Res1State[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
+
+        // Visualizador da FONTE do candidato tracado neste frame. O nome e o contrato: o mapa
+        // mostra onde o raio NOVO terminou (cache / DDGI / zero), e NAO a fonte da radiancia final
+        // — o reservoir ainda pode trocar essa amostra pela temporal ou pela de um vizinho no
+        // spatial. Um mapa da amostra final exigiria carregar a classe junto do reservoir atraves
+        // dos dois reusos, que e outro escopo e outro pacote.
+        Microsoft::WRL::ComPtr<ID3D12Resource> SourceDebugTex;
+        u32 SourceDebugSRV = 0xFFFFFFFFu, SourceDebugUAV = 0xFFFFFFFFu;
+        D3D12_RESOURCE_STATES SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
+        bool SourceDebug = false;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 GITexSRV   = kInvalidSlot;
         u32 GITexUAV   = kInvalidSlot;
-        u32 ResASRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResBSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResCSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResDSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResAUAV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResBUAV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResCUAV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResDUAV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res0SRV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res1SRV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res0UAV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 Res1UAV[2] = { kInvalidSlot, kInvalidSlot };
         // Indexadas pela PARIDADE do ping-pong (FrameParity), nao pelo FrameSlot do frame em voo:
         // o conteudo da tabela depende de qual conjunto de reservoirs e prev e qual e curr.
-        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,inst,inst,depth,gbuf,vel,prevA..D,luzes]
-        //                    (prev = Res*[1-p]; o 14o, t13, e reescrito por frame — ver
-        //                     SetPunctualLightsSRV, que DEVE usar a mesma paridade do RecordTrace).
-        // TraceUAVTable[p] = 5 UAVs  [GITex, currA..D] (curr = Res*[p]).
-        // SpatialTable[p]  = 10 SRVs [TLAS, currA..D, gbuf, depth, inst, inst, inst].
+        // TraceTable[p]    = 14 SRVs [TLAS,sky,inst,irrad,dist,probe,depth,gbuf,vel,prev0,prev1,
+        //                             filler,filler,luzes] (prev = Res*[1-p]). Os fillers
+        //                    sobrou do reservoir de 4 texturas e fica de proposito: o t13 das
+        //                    luzes e reescrito por frame num offset FIXO (SetPunctualLightsSRV),
+        //                    entao encolher a tabela mudaria o registrador delas.
+        // TraceUAVTable[p] = 3 UAVs  [GITex, curr0, curr1].
+        // SpatialTable[p]  = 10 SRVs [TLAS, curr0, curr1, filler, filler, gbuf, depth, inst×3].
         static constexpr u32 kParityTables = 2;
         u32 TraceTable[kParityTables]    = { kInvalidSlot, kInvalidSlot };
         u32 TraceUAVTable[kParityTables] = { kInvalidSlot, kInvalidSlot };
         u32 SpatialTable[kParityTables]  = { kInvalidSlot, kInvalidSlot };
+
         // NRD pack (Fase C). PackSrvTable = [GITex,gbuf,depth,vel]; PackUavTable = [viewZ,nr,mv,radHit].
         u32 PackSrvTable = kInvalidSlot;
         u32 PackUavTable = kInvalidSlot;
@@ -224,6 +301,7 @@ namespace Smile {
         Vec4 GIGridMinSpacing{ 0, 0, 0, 1 };
         Vec4 GIGridCount{ 0, 0, 0, 0 };
         Vec4 GIAtlasParams{ 6, 1, 1, 0 };
+        FDDGICascadeConstants GICascadesCPU{};
         f32  GIMaxRayDist = 0.0f;
 
         u32  Width = 0, Height = 0;
@@ -235,7 +313,6 @@ namespace Smile {
         bool Ready       = false;
 
         // Tunaveis.
-        bool RealHit        = true;
         f32  AlbedoLOD      = 2.0f;
         bool Temporal       = true;
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
@@ -248,6 +325,20 @@ namespace Smile {
                                       // visibilidade nos pesos MIS da correcao de bias (ate K raios).
                                       // Off por padrao (custo); toggle no editor p/ A/B
         f32  MCap           = 20.0f;
+        // Corte de outlier RELATIVO a vizinhanca, no fim do Pass A (ver o bloco no shader). A
+        // RTXDI liga por default no GI com 0.2 (RTXDI_BoilingFilterParameters), mas aqui nasce
+        // DESLIGADO: entrou junto com a correcao de vies do temporal e o A/B de 2026-08-07 nao
+        // conseguiu separar os dois (o firefly que ele deveria cortar era alimentado por ela).
+        // Fica pronto p/ ser medido sozinho, contra o temporal ja no 1/M.
+        f32  BoilingStrength = 0.0f;
+        // Correcao de vies do reuso temporal (RTXDI Basic). OFF: fiel a RTXDI, mas instavel sem a
+        // realimentacao espacial que amortece o pico la — ver o bloco longo no ReSTIRGITrace.
+        bool TemporalBiasCorr = false;
+        // saturate() nos cossenos do Jacobiano (RTXDI/Lumen) vs o abs() historico. De volta a ON:
+        // o run de baseline de 2026-08-07 saiu com o firefly INTACTO, entao nada desta sessao o
+        // causa, e esta correcao (que so REJEITA amostra, nunca acrescenta energia) nao tem por
+        // que continuar desligada.
+        bool JacobianKillBackface = true;
         // MaxAge saiu daqui p/ o FRayEpsilonProfile: virou knob de calibracao junto com os
         // epsilons de raio, e o perfil e compartilhado com reflexoes/DDGI.
         f32  PosRejectScale = 0.01f;
@@ -266,6 +357,7 @@ namespace Smile {
         FRayEpsilonProfile RayEps;
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        FRadianceCacheShaderParams RadianceCacheParams{};
         Vec4               SkyLutParams{};
     };
 }

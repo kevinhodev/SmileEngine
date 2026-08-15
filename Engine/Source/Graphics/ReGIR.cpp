@@ -1,9 +1,10 @@
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -21,23 +22,10 @@ namespace Smile {
                       "SharedWeight[] e o stride da reducao (ou faca o load em passos de 64).");
 
         ComPtr<ID3D12Resource> CreateStructuredUAV(ID3D12Device* Device, u32 Count, u32 Stride) {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = static_cast<UINT64>(Count) * Stride;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Buffer)));
-            VramTracker::Register(Buffer.Get(), EVramCategory::GI);
-            return Buffer;
+            return GpuResources::CreateBuffer(
+                Device, static_cast<u64>(Count) * Stride,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON,
+                EVramCategory::GI, "ReGIR · grade");
         }
     }
 
@@ -55,22 +43,13 @@ namespace Smile {
     }
 
     void FReGIR::CreateConstantBuffer(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                sizeof(ReGIRConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        static_assert(sizeof(ReGIRConstants) % 256 == 0,
+                      "o CBAddr indexa por sizeof(); root CBV exige 256-alinhado");
+
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            Device, sizeof(ReGIRConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     D3D12_GPU_VIRTUAL_ADDRESS FReGIR::CBAddr() const {
@@ -241,4 +220,14 @@ namespace Smile {
                                  static_cast<f32>(On ? AverageSRV[CurrentParity] : 0u), 0.0f, 0.0f };
         return P;
     }
+
+    FPassShaderStems FReGIR::ShaderStems() const {
+        static const char* const kStems[] = { "ReGIRBuild.cs", "ReGIRAverage.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FReGIR::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Ready) RecreatePSO(_Ctx.Device);
+    }
+
 }

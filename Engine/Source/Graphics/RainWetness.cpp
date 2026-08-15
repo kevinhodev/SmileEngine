@@ -1,5 +1,5 @@
 #include "Smile/Graphics/RainWetness.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GBuffer.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
@@ -9,6 +9,7 @@
 #include "Smile/Core/Logger.h"
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
 
@@ -233,28 +234,13 @@ namespace Smile {
     }
 
     void FRainWetness::CreateConstantBuffer(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(RainWetnessConstants) % 256 == 0,
+                      "o CB e indexado por sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                sizeof(RainWetnessConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedBase = reinterpret_cast<u8*>(Ptr);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(RainWetnessConstants), FCommandQueue::kFramesInFlight);
+        ConstantBuffer = Upload.Resource;
+        MappedBase     = Upload.Mapped;
         RainWetnessConstants Zero{};
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
             std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(RainWetnessConstants),
@@ -271,27 +257,14 @@ namespace Smile {
         if (ScratchSRVBase == 0xFFFFFFFFu)
             ScratchSRVBase = _SRVHeap.Allocate(2); // [A,B] contiguos = uma tabela
 
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         auto Make = [&](Microsoft::WRL::ComPtr<ID3D12Resource>& _Out, DXGI_FORMAT _Fmt, u32 _Slot) {
             _Out.Reset();
 
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = _Width;
-            Desc.Height           = _Height;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = _Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
             // Ciclo de estados deterministico por Execute: COPY_DEST -> PSR -> COPY_DEST.
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr, IID_PPV_ARGS(&_Out)));
-            VramTracker::Register(_Out.Get(), EVramCategory::Misc);
+            _Out = GpuResources::CreateTex2D(
+                _Device, _Width, _Height, _Fmt, D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_COPY_DEST, EVramCategory::Misc, nullptr,
+                1, 1, "Chuva · scratch");
 
             D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
             SRVDesc.Format                  = _Fmt;
@@ -553,32 +526,17 @@ namespace Smile {
         // Depth 512^2 D32 + SRV R32. Criado em PSR: so vira DEPTH_WRITE dentro do Record;
         // ate o 1o render o shader nem amostra (RainOccParams.x = 0 sem OccEverRendered).
         {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = kOccSize;
-            Desc.Height           = kOccSize;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_R32_TYPELESS;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
             D3D12_CLEAR_VALUE Clear{};
             Clear.Format             = DXGI_FORMAT_D32_FLOAT;
             Clear.DepthStencil.Depth = 1.0f;
 
             // PSR|NPSR: o PS da wetness/cortina e o VS das particulas (F5) leem o mapa
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &Clear, IID_PPV_ARGS(&OccDepth)));
-            VramTracker::Register(OccDepth.Get(), EVramCategory::Misc);
             OccState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            OccDepth = GpuResources::CreateTex2D(
+                _Device, kOccSize, kOccSize, DXGI_FORMAT_R32_TYPELESS,
+                D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, OccState, EVramCategory::Misc,
+                &Clear, 1, 1, "Chuva · oclusao");
 
             OccDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
             D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
@@ -597,26 +555,10 @@ namespace Smile {
 
         // CB do ortho (uma matriz por frame em voo; so escrito no frame que re-renderiza).
         {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * 256;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr, IID_PPV_ARGS(&OccCB)));
-            D3D12_RANGE NoRead{ 0, 0 };
-            void* Ptr = nullptr;
-            SMILE_HR(OccCB->Map(0, &NoRead, &Ptr));
-            MappedOccCB = reinterpret_cast<u8*>(Ptr);
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, 256, FCommandQueue::kFramesInFlight);
+            OccCB       = Upload.Resource;
+            MappedOccCB = Upload.Mapped;
         }
     }
 
@@ -682,6 +624,8 @@ namespace Smile {
         const f32 MinZ = Snapped.Z - kOccHalfExtent, MaxZ = Snapped.Z + kOccHalfExtent;
 
         ID3D12PipelineState* Cur = nullptr;
+        FDrawSubmitCache Submit;
+        _Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = 0; k < _Count; ++k) {
             const FOccluderItem& It = _Items[k];
             if (!It.Mesh) continue;
@@ -691,8 +635,8 @@ namespace Smile {
             ID3D12PipelineState* Want = AlphaTested ? OccMaskedPSO.Get() : OccOpaquePSO.Get();
             if (Want != Cur) { _Cmd->SetPipelineState(Want); Cur = Want; }
             _Cmd->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
-            if (AlphaTested) It.Mat->Bind(_Cmd, _SRVHeap);
-            It.Mesh->Draw(_Cmd);
+            if (AlphaTested) Submit.BindMaterial(_Cmd, _SRVHeap, It.Mat);
+            Submit.DrawMesh(_Cmd, It.Mesh);
         }
 
         B.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -737,4 +681,14 @@ namespace Smile {
             _Cmd->DrawInstanced(6, ParticleCount, 0, 0);
         }
     }
+
+    FPassShaderStems FRainWetness::ShaderStems() const {
+        static const char* const kStems[] = { "RainWetness.ps", "RainCurtain.ps", "RainParticles.vs", "RainParticles.ps", "RainSplash.vs", "RainSplash.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FRainWetness::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (PSO) Recreate(_Ctx.Device);
+    }
+
 }

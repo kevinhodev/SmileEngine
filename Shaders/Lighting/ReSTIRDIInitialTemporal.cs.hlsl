@@ -31,17 +31,20 @@ Texture2D<float4> GBufferB : register(t1);
 Texture2D<float4> GBufferC : register(t2);
 Texture2D<float>  Depth    : register(t3);
 Texture2D<float2> Velocity : register(t4);
-Texture2D<float4> PrevResA : register(t5); // xyz=x1, w=W
+Texture2D<float>  PrevResW : register(t5); // W (o x1 saiu — ver ReSTIRDICommon.hlsli)
 Texture2D<uint4>  PrevResB : register(t6); // x=light, y=uv(reserv), z=M+idade, w=n1 oct
 StructuredBuffer<FGPULightFull> Lights : register(t7);
 RaytracingAccelerationStructure Scene : register(t8);
 StructuredBuffer<InstanceGeo> Instances : register(t9);
 StructuredBuffer<FTriangleLightGPU> TriLights : register(t10);
 StructuredBuffer<FMeshLightAlias>   MeshAlias : register(t11);
+// Historico de superficie do frame ANTERIOR: float4(worldPos, instanceId+1). De onde sai o X1 do
+// reservoir temporal. Valido so quando TemporalPolicy.y (motion history) esta ligado.
+Texture2D<float4> PrevSurface : register(t12);
 
 SamplerState LinearWrap : register(s1);
 
-RWTexture2D<float4> CurrResA : register(u0);
+RWTexture2D<float>  CurrResW : register(u0);
 RWTexture2D<uint4>  CurrResB : register(u1);
 
 #include "../GI/RTAlphaTest.hlsli"
@@ -74,7 +77,7 @@ bool DI_SelectedOccluded(float3 lightPoint, float3 x1, float3 n1, float3 L, floa
 }
 
 void StoreInvalid(int2 px) {
-    CurrResA[px] = 0.0f;
+    CurrResW[px] = 0.0f;
     CurrResB[px] = uint4(0xFFFFFFFFu, 0u, 0u, 0u);
 }
 
@@ -200,19 +203,25 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     ppx = perm;
             }
 
-            const float4 pa = PrevResA.Load(int3(ppx, 0));
-            const uint4  pb = PrevResB.Load(int3(ppx, 0));
-            ReSTIRDIReservoir prev = DI_LoadReservoir(pa, pb);
+            const uint4 pb = PrevResB.Load(int3(ppx, 0));
+            ReSTIRDIReservoir prev = DI_LoadReservoir(PrevResW.Load(int3(ppx, 0)), pb);
             float prevM, prevAge;
             DI_UnpackMAge(pb.z, prevM, prevAge);
             prev.M = min(prevM, Sampling.y);
 
+            // O X1 anterior vem do historico de superficie, nao do reservoir (ver
+            // ReSTIRDICommon.hlsli). So e lido depois dos testes que nao dependem dele: um
+            // reservoir sem amostra ou sem M nunca toca a textura de superficie, que pode estar
+            // velha de um frame em que o passe de motion confiavel nao rodou.
             const float3 prevN = DDGI_OctDecode(prev.N1Oct);
             const float posReject = Reuse.y * max(camDist, 1.0f);
             bool valid = prev.LightIndex < totalCount && prev.M > 0.0f && prev.W > 0.0f &&
-                         dot(prevN, n1) >= Reuse.z &&
-                         length(prev.X1 - x1) < posReject &&
-                         abs(dot(n1, prev.X1 - x1)) < 0.2f * posReject;
+                         dot(prevN, n1) >= Reuse.z;
+            if (valid) {
+                prev.X1 = PrevSurface.Load(int3(ppx, 0)).xyz;
+                valid = length(prev.X1 - x1) < posReject &&
+                        abs(dot(n1, prev.X1 - x1)) < 0.2f * posReject;
+            }
 
             if (valid && Reuse.w > 0.0f) {
                 const float stagger = 0.75f + 0.5f *
@@ -242,8 +251,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
     DIResFinalize(r, selectedTarget);
 
-    float4 outA; uint4 outB;
-    DI_StoreReservoir(r, age, outA, outB);
-    CurrResA[px] = outA;
+    float outW; uint4 outB;
+    DI_StoreReservoir(r, age, outW, outB);
+    CurrResW[px] = outW;
     CurrResB[px] = outB;
 }

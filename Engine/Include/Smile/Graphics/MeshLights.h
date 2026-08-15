@@ -2,7 +2,8 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <vector>
@@ -63,8 +64,18 @@ namespace Smile {
     // so na GPU depois do upload (FGpuMesh nao guarda copia na CPU), entao area = |cross(e1,e2)|/2
     // e o fluxo = area*pi*luminancia so saem no passe de extracao. A contagem, que e o numero que
     // destrava a decisao, vem de FGpuMesh::GetIndexCount() e esta disponivel de graca.
-    class FMeshLights {
+    class FMeshLights : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) -------------------------------------------
+        // O stem "MeshLightExtract.cs" nao estava na tabela do ReloadShaders, apesar de o
+        // RecreatePSO abaixo existir e ja ser chamado pelo RecreateAllPSOs: editar o shader
+        // logava "sem pipeline mapeado". Declarado aqui, os dois caminhos passam a concordar
+        // por construcao.
+        const char* Name() const override { return "MeshLights (extract)"; }
+        bool IsInitialized() const override { return Ready; }
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+        FPassShaderStems ShaderStems() const override;
+
         struct FStats {
             u32 EmissiveMeshes      = 0; // renderables com material emissivo
             u32 EmissiveTriangles   = 0; // total de triangulos emissivos (o numero que decide)
@@ -89,8 +100,8 @@ namespace Smile {
         void Initialize(ID3D12Device* Device);
         void RecreatePSO(ID3D12Device* Device);
 
-        // Faz o Survey, monta as tasks e cria os buffers. Precisa do SRV do InstanceGeo do DDGI,
-        // que e onde moram VB/IB bindless e os dados de material emissivo.
+        // Faz o Survey, monta as tasks e cria os buffers. Precisa do SRV do InstanceGeo
+        // (FRaytracingScene::InstanceGeoSRV), onde moram VB/IB bindless e o material emissivo.
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene,
                            u32 InstanceSlot);
 
@@ -116,7 +127,7 @@ namespace Smile {
 
         FStats SceneStats{};
 
-        FVolumetricPipeline ExtractPSO;   // 2 SRV, 1 UAV, bindless
+        FComputePipeline ExtractPSO;   // 2 SRV, 1 UAV, bindless
         bool Initialized = false;
         bool Ready       = false;
         bool Dirty       = false;

@@ -1,7 +1,6 @@
 #include "Smile/Graphics/ShaderTimer.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
-#include "Smile/Core/HResultCheck.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/Logger.h"
 
 #if SMILE_NVAPI_ENABLED
@@ -52,24 +51,15 @@ namespace Smile {
             return false;
         }
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = kExtnStructStride;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        if (FAILED(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&DummyBuffer)))) {
+        if (FAILED(GpuResources::TryCreateBuffer(
+                _Device, DummyBuffer, kExtnStructStride,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Misc,
+                "Slot da NVAPI"))) {
             LogWarning("Buffer do slot da NVAPI nao pode ser criado — timer de shader desligado.");
             NvAPI_Unload();
             return false;
         }
-        VramTracker::Register(DummyBuffer.Get(), EVramCategory::Misc);
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
         Uav.ViewDimension                = D3D12_UAV_DIMENSION_BUFFER;
@@ -112,20 +102,10 @@ namespace Smile {
 
         // R32_FLOAT e nao R32_UINT: o visualizador le todo alvo como Texture2D<float4>, e o
         // heatmap so precisa de ordem de grandeza — ciclos cabem folgadamente no mantissa.
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = _Width;
-        Desc.Height           = _Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kTimerFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Target)));
-        VramTracker::Register(Target.Get(), EVramCategory::Misc);
+        Target = GpuResources::CreateTex2D(
+            _Device, _Width, _Height, kTimerFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON,
+            EVramCategory::Misc, nullptr, 1, 1, "Timer de shader");
         State = D3D12_RESOURCE_STATE_COMMON;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};

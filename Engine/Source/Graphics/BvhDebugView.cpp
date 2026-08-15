@@ -1,10 +1,11 @@
 #include "Smile/Graphics/BvhDebugView.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -17,27 +18,19 @@ namespace Smile {
     }
 
     void FBvhDebugView::Initialize(ID3D12Device* _Device) {
-        PSO.Initialize(_Device, "BvhDebug.cs_6_6.cso", 2, 1, /*HeapDirectlyIndexed=*/true);
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
 
     void FBvhDebugView::CreateConstantBuffer(ID3D12Device* _Device) {
-        const UINT64 Size = sizeof(BvhDebugConstants) * FCommandQueue::kFramesInFlight;
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = Size;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        static_assert(sizeof(BvhDebugConstants) % 256 == 0,
+                      "o indexador do CB usa sizeof(); root CBV exige 256-alinhado");
+
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(BvhDebugConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     void FBvhDebugView::Resize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -50,20 +43,10 @@ namespace Smile {
         Width_ = Height_ = 0;
         if (!Initialized || _Width == 0 || _Height == 0) return;
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = _Width;
-        Desc.Height           = _Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Target)));
-        VramTracker::Register(Target.Get(), EVramCategory::Misc);
+        Target = GpuResources::CreateTex2D(
+            _Device, _Width, _Height, kFormat, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COMMON, EVramCategory::Misc, nullptr, 1, 1,
+            "Visualizador de BVH");
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
         Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -163,4 +146,19 @@ namespace Smile {
         Transition(_CL, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
+
+    void FBvhDebugView::CreatePipelines(ID3D12Device* _Device) {
+        PSO.Initialize(_Device, "BvhDebug.cs_6_6.cso", 2, 1, /*HeapDirectlyIndexed=*/true);
+    }
+
+
+    FPassShaderStems FBvhDebugView::ShaderStems() const {
+        static const char* const kStems[] = { "BvhDebug.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FBvhDebugView::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

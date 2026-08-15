@@ -1,8 +1,11 @@
 #include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
 #include "Smile/Scene/CookedFormat.h"
+#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <cstdlib> // getenv: override do caminho da captura de descritores
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -43,27 +46,14 @@ namespace Smile {
         if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
         ObjectCB.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(ObjectConstants) % 256 == 0,
+                      "o CB de objeto e indexado por sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC d{};
-        d.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        d.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                             MaxObjects * sizeof(ObjectConstants);
-        d.Height           = 1;
-        d.DepthOrArraySize = 1;
-        d.MipLevels        = 1;
-        d.Format           = DXGI_FORMAT_UNKNOWN;
-        d.SampleDesc       = { 1, 0 };
-        d.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        d.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-        SMILE_HR(Device.Native()->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &d, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ObjectCB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* p = nullptr;
-        SMILE_HR(ObjectCB->Map(0, &NoRead, &p));
-        MappedObjectCB = reinterpret_cast<u8*>(p);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            Device.Native(), sizeof(ObjectConstants),
+            FCommandQueue::kFramesInFlight * MaxObjects);
+        ObjectCB       = Upload.Resource;
+        MappedObjectCB = Upload.Mapped;
 
         // Buffers de bounds/visibilidade do occlusion culling acompanham a capacidade
         // (a fila ja foi flushada acima; recriar aqui e seguro).
@@ -276,7 +266,29 @@ namespace Smile {
 
     bool Renderer::CommitCookedScene(FPreparedCookedScenePtr _Prepared, bool _Additive) {
         if (!_Prepared) return false;
+        // Trocar (ou somar) cena no meio de um aquecimento troca geometria, luzes e todos os
+        // historicos sem reiniciar o N nem o indice de amostragem — e, numa troca da cena
+        // principal, o manifesto ainda sairia com o nome da cena ANTERIOR. Cancelar aqui, no
+        // commit, cobre tambem a carga por linha de comando e a aditiva.
+        Capture.Cancel("uma cena foi carregada durante o aquecimento");
         const Clock::time_point t0 = Clock::now();
+        // Zera aqui e nao no Prepare: o Prepare so decodifica em CPU, quem cria recurso e o
+        // commit. A janela do contador tem que casar com a fase que o log ao lado mede.
+        GpuResources::ResetCreationStats();
+
+        // Captura os descritores REAIS do LOAD, do mesmo jeito que o RecreateInternalTargets
+        // faz com os do resize. Os dois conjuntos sao populacoes DIFERENTES e a distincao
+        // decide a frente de alocacao: o resize sao ~79 recursos GRANDES (o commit de pagina
+        // domina, e so um pool que RETEM memoria ajuda), o load sao ~471 recursos pequenos (o
+        // overhead por heap domina, que e o que sub-alocar remove). Medir um e concluir sobre
+        // o outro seria repetir o erro que ja custou tres conclusoes nesta frente.
+#if SMILE_DIAGNOSTICS
+        const char* CaptureOverride = std::getenv("SMILE_CAPTURE_DESCS_LOAD");
+        // Variavel propria e nao a do resize: com a mesma, um dump sobrescreveria o outro e
+        // sobraria um arquivo so, sem dizer de qual janela veio.
+        GpuResources::FDescCaptureSession DescCapture(
+            CaptureOverride ? CaptureOverride : "smile-load-descs.txt");
+#endif
         const FPreparedCookedScene& Prepared = *_Prepared;
         const fs::path& base = Prepared.BasePath;
         const fs::path& scenePath = Prepared.ScenePath;
@@ -306,10 +318,20 @@ namespace Smile {
             ImportedTextures.clear();
         }
 
+        // Cada fase abaixo guarda um snapshot e loga o DELTA. Sem isso o contador so dava o
+        // total do commit, e comparar esse total contra o tempo de uma fase leva a conclusao
+        // errada — foi o que aconteceu na primeira leitura desta instrumentacao.
+        //
+        // PhaseSum acumula os deltas para a linha "nao atribuido" no fim fechar a conta: as
+        // fases somavam 487 dos 492 recursos, e os cinco que faltavam (paginas de CB de
+        // material, ObjectCB/HiZ) nao apareciam em lugar nenhum.
+        GpuResources::FCreationStats PhaseSum{};
         const Clock::time_point TextureUploadStart = Clock::now();
+        const auto TexCreationBase = GpuResources::CreationStats();
         std::vector<FTexture> texs = FTexture::CreateBatchFromCPU(
             Device.Native(), UploadQueue, SRVHeap, Prepared.TextureData);
         const double msTexUpload = MsSince(TextureUploadStart);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/texturas", TexCreationBase);
         const std::vector<std::string>& relList = Prepared.TexturePaths;
         std::unordered_map<std::string, FTexture*> texByPath;
         u32 uploaded = 0;
@@ -427,6 +449,7 @@ namespace Smile {
         };
 
         const Clock::time_point tMeshUploadStart = Clock::now();
+        const auto MeshCreationBase = GpuResources::CreationStats();
         std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(
             Device.Native(), UploadQueue, Prepared.Meshes);
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
@@ -453,6 +476,7 @@ namespace Smile {
         }
 
         const double msMeshUpload = MsSince(tMeshUploadStart);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/meshes", MeshCreationBase);
 
         // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
         // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
@@ -502,6 +526,7 @@ namespace Smile {
         // "unitsPerTexel", "heightScale", "originX/Y/Z"). Sem sidecar em carga de
         // substituicao, descarrega o terreno anterior.
         const Clock::time_point TerrainStart = Clock::now();
+        const auto TerrainCreationBase = GpuResources::CreationStats();
         {
             fs::path terrainPath = base; terrainPath += L".terrain.json";
             if (fs::exists(terrainPath)) {
@@ -635,16 +660,22 @@ namespace Smile {
             }
         }
         const double msTerrain = MsSince(TerrainStart);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/terreno", TerrainCreationBase);
 
         // O volume de GI NAO inclui o terreno de proposito: um terreno de km esticaria o
         // grid de probes do DDGI. Fora do volume o shading cai no fallback de ambiente;
         // terreno no GI de verdade vem na F3 (BLAS proxy na TLAS).
         const Clock::time_point RaytracingStart = Clock::now();
+        const auto RtCreationBase = GpuResources::CreationStats();
         BuildRaytracingScene();
         const double msRaytracing = MsSince(RaytracingStart);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/blasTlas", RtCreationBase);
+
         const Clock::time_point GIStart = Clock::now();
+        const auto GiCreationBase = GpuResources::CreationStats();
         SetupGIForScene(sceneMin, sceneMax);
         const double msGI = MsSince(GIStart);
+        GpuResources::AccumulatePhase(PhaseSum, "commit/setupGI", GiCreationBase);
 
         // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
         // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
@@ -666,6 +697,15 @@ namespace Smile {
                 std::to_string(sh.MaterialCount) + " materiais, " +
                 std::to_string(sh.RenderableCount) + " renderaveis, " +
                 std::to_string(uploaded) + " texturas");
+        // Depois do commit: texturas, meshes, BLAS/TLAS e o setup de GI ja existem, entao este e
+        // o primeiro ponto em que o breakdown descreve a cena inteira.
+        VramTracker::LogBreakdown(Device.QueryVideoMemory().LocalUsage);
+        // O par do breakdown: aquele diz QUANTO esta alocado, este diz quanto CUSTOU alocar.
+        GpuResources::LogCreationUnattributed("commit/nao-atribuido", PhaseSum);
+        GpuResources::LogCreationStats("load da cena");
+#if SMILE_DIAGNOSTICS
+        DescCapture.Complete();
+#endif
         return true;
     }
 }

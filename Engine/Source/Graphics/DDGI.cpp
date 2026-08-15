@@ -1,7 +1,6 @@
 #include "Smile/Graphics/DDGI.h"
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/RTMasks.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Scene/Scene.h"
@@ -16,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -24,34 +24,18 @@ namespace Smile {
         constexpr DXGI_FORMAT kAtlasFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
         ComPtr<ID3D12Resource> CreateTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
-                                           DXGI_FORMAT _Fmt) {
+                                           DXGI_FORMAT _Fmt, const char* _Label = nullptr) {
             return GpuResources::CreateTex2D(_Device, _W, _H, _Fmt,
                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
+                                             nullptr, 1, 1, _Label);
         }
-
-        struct DDGIInstanceGeo {
-            Vec4 BaseColor;
-            u32  VertexSrv   = 0; 
-            u32  IndexSrv    = 0; 
-            u32  AlbedoIndex = 0;
-            u32  HasAlbedo   = 0;
-            u32  TwoSidedRT  = 0; // = FMaterial::IsTwoSidedForRT (inclui AlphaTest), nao a flag crua
-            u32  Flags       = 0;
-            f32  AlphaCutoff = 0.5f;
-            f32  RoughnessFactor = 0.5f;
-            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f }; 
-            u32  EmissiveMapIndex = 0;
-            u32  MrMapIndex       = 0;
-            u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
-            u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
-        };
-        static_assert(sizeof(DDGIInstanceGeo) == 80, "DDGIInstanceGeo deve casar com o HLSL (80B)");
 
         ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* _Device, UINT64 _Size,
                                                    D3D12_RESOURCE_STATES _State,
                                                    D3D12_RESOURCE_FLAGS _Flags = D3D12_RESOURCE_FLAG_NONE) {
-            return GpuResources::CreateBuffer(_Device, _Size, _Flags, _State, EVramCategory::GI);
+            return GpuResources::CreateBuffer(_Device, _Size, _Flags, _State, EVramCategory::GI,
+                                              "DDGI · buffers");
         }
 
         ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* _Device, UINT64 _Size,
@@ -66,10 +50,7 @@ namespace Smile {
     }
 
     void FDDGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); 
-        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
-        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
-        RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
@@ -89,12 +70,6 @@ namespace Smile {
         FreeSlot(DistUAVSlot, 1);
         FreeSlot(ProbesTraceSRVSlot, 1);
         FreeSlot(ProbesTraceUAVSlot, 1);
-        FreeSlot(InstanceSRVSlot, 1);
-        if (MeshGeoSlotBase != kInvalidSlot) {
-            _SRVHeap.Free(MeshGeoSlotBase, MeshGeoSlotCount);
-            MeshGeoSlotBase  = kInvalidSlot;
-            MeshGeoSlotCount = 0;
-        }
         FreeSlot(ProbeDataSRVSlot, 1);
         FreeSlot(ProbeRayCountSRVSlot, 1);
         FreeSlot(ProbeDataUAVSlot, 2); 
@@ -105,7 +80,6 @@ namespace Smile {
         IrradAtlas.Reset();
         DistAtlas.Reset();
         ProbesTrace.Reset();
-        InstanceGeoBuf.Reset();
         ProbeDataBuf.Reset();
         ProbeRayCountBuf.Reset();
         AtlasState         = D3D12_RESOURCE_STATE_COMMON;
@@ -116,85 +90,15 @@ namespace Smile {
         Ready = false;
     }
 
-    // Preenche o snapshot de materiais/geometria que TODO o RT le (DDGI, ReSTIR, reflexoes).
-    // Extraido do SetupForScene p/ poder ser REFEITO: editar AlphaTest/TwoSided/emissivo de um
-    // material no editor mudava so o constant buffer do material e deixava este snapshot velho.
-    void FDDGI::FillInstanceGeo(const FScene& _Scene, u8* _Mapped, u32 _Count) const {
-        for (u32 i = 0; i < _Count; ++i) {
-            const FRenderable& R = _Scene.Renderables()[i];
-            DDGIInstanceGeo g{};
-            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
-            if (R.Material) {
-                const MaterialConstants& MC = R.Material->Constants;
-                g.BaseColor = MC.BaseColorFactor;
-                // Mesmo criterio da flag de culling da TLAS (ver FMaterial::IsTwoSidedForRT):
-                // este campo e o que decide, no shader, se um hit pelo verso significa "dentro de
-                // solido" — tem que concordar com quem o raio consegue enxergar pelo verso.
-                g.TwoSidedRT = R.Material->IsTwoSidedForRT() ? 1u : 0u;
-                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
-                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
-                    g.HasAlbedo   = 1;
-                }
-
-                g.AlphaCutoff     = MC.AlphaCutoff;
-                g.RoughnessFactor = MC.RoughnessFactor;
-                // O RTEmissiveScale entra SO aqui: este InstanceGeo e o que os hits de RT leem
-                // (DDGI, ReSTIR GI e reflexoes). O raster segue com o EmissiveStrength puro, entao
-                // baixar a escala tira a malha de iluminar o ambiente sem apagar o brilho dela na
-                // tela. Ver MaterialConstants::RTEmissiveScale.
-                const f32 EmiRT = MC.EmissiveStrength * MC.RTEmissiveScale;
-                g.EmissiveFactor  = { MC.EmissiveFactor.X * EmiRT,
-                                      MC.EmissiveFactor.Y * EmiRT,
-                                      MC.EmissiveFactor.Z * EmiRT,
-                                      MC.MetallicFactor };
-                if (MC.AlphaTest)        g.Flags |= 1u;
-                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
-                // Categoria da instancia na TLAS (kRTMaskTranslucent). Espelhada aqui porque a
-                // mask e propriedade do RAIO: um shader nao consegue perguntar a TLAS com que
-                // mask a instancia entrou. Consumida so pelo BvhDebug — os outros passes
-                // distinguem translucido pela mask que eles proprios tracam.
-                if (R.Material->Blend)   g.Flags |= 128u;
-                if (R.Material->IsFinalized()) {
-                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
-                    if (MC.HasEmissiveMap) {
-                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
-                        g.Flags |= 2u;
-                    }
-                    if (MC.HasMetallicRoughnessMap) {
-                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
-                        g.Flags |= 8u;
-                        // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem
-                        // este bit o RT leria o canal errado e um material viraria metal (ou
-                        // dielétrico) por engano no bounce.
-                        if (MC.SpecularPacking) g.Flags |= 16u;
-                    }
-                    // Mapa Metalness SEPARADO (slot +6). Precisa existir aqui porque o loader
-                    // deixa MetallicFactor = 1 quando ha mapa — sem enxergar o mapa, o RT leria
-                    // "metal puro" e zeraria o difuso de um material que e quase todo dieletrico.
-                    if (MC.HasMetalnessMap) {
-                        g.MetalMapIndex = R.Material->AlbedoDescriptorIndex() + 6;
-                        g.Flags |= 32u;
-                    }
-                    if (MC.HasRoughnessMap) {
-                        g.RoughMapIndex = R.Material->AlbedoDescriptorIndex() + 7;
-                        g.Flags |= 64u;
-                    }
-                }
-            }
-            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
-            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
-            std::memcpy(_Mapped + i * sizeof(DDGIInstanceGeo), &g, sizeof(DDGIInstanceGeo));
-        }
-    }
-
-    // Re-upload do snapshot. O chamador (Renderer::NotifyMaterialRTStateChanged) e responsavel
-    // por garantir que a GPU nao esteja lendo o buffer — e um upload heap unico, sem versao por
-    // frame em voo, entao escrever com frames em voo corromperia o que eles estao lendo.
-    void FDDGI::InvalidateRegion(const Vec3& _Min, const Vec3& _Max) {
+    void FDDGI::InvalidateRegion(const Vec3& _Min, const Vec3& _Max, EGIRegionChange _Change) {
         // Uniao com o que ja estava pendente: duas edicoes dentro da mesma janela de frames nao
         // podem fazer a segunda cancelar a primeira. A uniao e conservadora (pega sondas a mais),
         // que e o lado seguro — o errado seria deixar de fora uma sonda que precisava atualizar.
-        if (InvalidateFramesLeft_ > 0) {
+        // Une enquanto QUALQUER uma das duas janelas estiver aberta: a caixa e compartilhada, e
+        // a do atlas de distancia e a mais longa. Zerar a caixa por causa da janela curta ter
+        // fechado deixaria o dist atlas com uma caixa que ja nao descreve o que ele ainda vai
+        // misturar.
+        if (InvalidateFramesLeft_ > 0 || InvalidateDistFramesLeft_ > 0) {
             InvalidateMin_ = { std::min(InvalidateMin_.X, _Min.X),
                                std::min(InvalidateMin_.Y, _Min.Y),
                                std::min(InvalidateMin_.Z, _Min.Z) };
@@ -205,30 +109,24 @@ namespace Smile {
             InvalidateMin_ = _Min;
             InvalidateMax_ = _Max;
         }
-        // Uma sonda ILUMINA o objeto e e iluminada por ele de fora da AABB dele; a caixa cresce
-        // um espacamento de grid em cada lado p/ pegar a camada de sondas em volta, que e onde o
-        // color bleed do objeto aparece.
-        const f32 Pad = SpacingV;
-        InvalidateMin_ = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad, InvalidateMin_.Z - Pad };
-        InvalidateMax_ = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad, InvalidateMax_.Z + Pad };
-        InvalidateFramesLeft_ = kInvalidateFrames;
-    }
-
-    void FDDGI::RefreshInstanceGeo(const FScene& _Scene) {
-        if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
-        const u32 Count = std::min(InstanceGeoCount,
-                                   static_cast<u32>(_Scene.Renderables().size()));
-        u8*         Mapped = nullptr;
-        D3D12_RANGE NoRead{ 0, 0 };
-        if (FAILED(InstanceGeoBuf->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)))) return;
-        FillInstanceGeo(_Scene, Mapped, Count);
-        InstanceGeoBuf->Unmap(0, nullptr);
+        // A caixa guardada aqui e CRUA: o espacamento de folga entra so na hora de mandar para o
+        // shader (UpdatePerFrame). Padding aqui dentro se ACUMULA — a caixa pendente ja vinha
+        // padded, a chamada seguinte unia com ela e padava de novo, entao a regiao crescia um
+        // spacing por lado A CADA CHAMADA. Com uma edicao isolada isso passava despercebido; com
+        // arraste de gizmo, que invalida por FRAME, a caixa engoliria o volume em ~1 segundo.
+        InvalidateFramesLeft_     = kInvalidateFrames;
+        InvalidateDistFramesLeft_ = kInvalidateDistFrames;
+        // So GEOMETRIA envelhece a classificacao: ela mede onde a sonda esta em relacao as
+        // superficies, e luz nenhuma mexe nisso (ver EGIRegionChange). O flag e OU-acumulado
+        // porque a janela e compartilhada — uma edicao de geometria seguida de tres de luz dentro
+        // da mesma janela ainda precisa da reclassificacao no fim.
+        if (_Change == EGIRegionChange::Geometry) ReclassifyPending_ = true;
     }
 
     void FDDGI::SetupForScene(ID3D12Device* _Device, FCommandQueue& _Queue,
                               FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
                               const Vec3& _AABBMin, const Vec3& _AABBMax,
-                              u32 _TlasSRVSlot, u32 _SkyViewSRVSlot) {
+                              u32 _TlasSRVSlot, u32 _SkyViewSRVSlot, u32 _InstanceGeoSRVSlot) {
         if (!Initialized) return;
         ReleaseSceneResources(_SRVHeap);
 
@@ -242,77 +140,167 @@ namespace Smile {
                      std::max(_AABBMax.Y - _AABBMin.Y, 0.1f),
                      std::max(_AABBMax.Z - _AABBMin.Z, 0.1f) };
         f32 maxExt = std::max(ext.X, std::max(ext.Y, ext.Z));
-        const int kTargetMax = 24, kMaxPerAxis = 32;
-        SpacingV = std::max(maxExt / (kTargetMax - 1), 0.5f);
+        // kTargetMax = densidade do grid. E o unico parafuso do espacamento: spacing sai de
+        // maxExt/(kTargetMax-1), e dele saem as tres contagens. No Bistro, 24 da 8,018 m.
+        //
+        // O teto sao limites de DIMENSAO de Texture2D (16384) nos tres recursos que escalam com o
+        // grid. Com o empacotamento 2D (ver DDGI_TileOrigin e DDGI_TraceTexel) nenhum deles depende
+        // mais de um PAR de eixos: os atlas viraram uma grade de tilesPerRow x tileRows e o
+        // ProbesTrace uma grade de kTraceProbesPerRow sondas por linha. O que limita agora e o
+        // NUMERO DE SONDAS, e o teto e ~1 milhao — antes eram 1024 colunas de sonda no atlas de
+        // distancia (o Bistro ja usava 552, e uma segunda cascata nao caberia).
+        //
+        // A checagem continua em RUNTIME e sobre os valores REAIS: em tempo de compilacao so daria
+        // para supor cena cubica, e o pior caso reprovaria grid que cabe folgado. A resposta a nao
+        // caber e abrir o espacamento ate caber — perder resolucao de sonda e ruim, criar textura
+        // invalida e pior, e era isso que acontecia em silencio.
+        constexpr int kTargetMax  = 24;
+        constexpr int kMaxPerAxis = 128; // rede secundaria; quem decide e o gridFits abaixo
+        constexpr u64 kTexMax     = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+
+        // Fixado ANTES do dimensionamento: o gridFits mede atlas, ProbesTrace e dispatch pelo
+        // TOTAL de sondas, que e por cascata vezes esta contagem. Dimensionar pelo teto
+        // (kMaxCascades) engrossaria o espacamento de quem usa uma so; dimensionar por 1 e depois
+        // acender a segunda estouraria em silencio. Trocar a contagem exige refazer o
+        // SetupForScene, que e o que realoca os recursos.
+        CascadeCount_ = DesiredCascades < 1 ? 1u
+                      : (DesiredCascades > kMaxCascades ? kMaxCascades : DesiredCascades);
+
+        Cascades[0].Spacing = std::max(maxExt / (kTargetMax - 1), 0.5f);
         auto axisCount = [&](f32 e) {
-            int n = static_cast<int>(std::ceil(e / SpacingV)) + 1;
+            int n = static_cast<int>(std::ceil(e / Cascades[0].Spacing)) + 1;
             return std::clamp(n, 2, kMaxPerAxis);
         };
+        // Layout dos atlas: o plano (x,z) nas colunas e o y nas linhas — a vizinhanca do layout
+        // historico —, com o plano enrolado em BANDAS quando nao cabe numa linha. Ver
+        // DDGI_TileOrigin: e a forma que preserva o bloco 2x2 de tiles adjacentes que o gather
+        // de 8 sondas percorre.
+        //
+        // A banda tem de conter fileiras Z INTEIRAS: `TilesPerRow = CountX * zRowsPerBand`. Nao e
+        // arredondamento, e a condicao da vizinhanca — o plano e `x + z*CountX`, entao uma largura
+        // que nao seja multipla de CountX corta uma fileira X no meio e joga `x` e `x+1` em bandas
+        // diferentes, que e exatamente a adjacencia pela qual este layout existe.
+        //
+        // A versao anterior procurava um DIVISOR de CountX*CountZ perto da raiz de NumProbes. No
+        // Bistro caiu em 69 = 3*23 e funcionou — por sorte: 552 tem divisores como 92 e 276 que
+        // nao sao multiplos de 23, e ali a vizinhanca se perderia de novo. Ela tambem podia
+        // devolver mais de 1024 colunas (o teto do atlas de distancia) e fazer o gridFits recusar
+        // um grid que caberia com outra largura, abrindo o espacamento sem necessidade.
+        //
+        // CountZ nao passa de algumas dezenas, entao enumerar todos os candidatos custa nada.
+        // Criterio: minimizar a MAIOR dimensao — empurra para o quadrado e penaliza o desperdicio
+        // da banda incompleta de uma vez so, alem de ser exatamente o que a checagem de limite
+        // olha.
+        //
+        // O shader nao reproduz nada disto: ele le tilesPerRow da LARGURA do atlas. Por isso a
+        // heuristica pode mudar sem risco de divergir, e sem tocar em shader nenhum.
+        // `Cascades` entra no criterio porque a altura REAL do atlas e RowsPerCascade x cascatas.
+        // Otimizar so o bloco de uma cascata escolheria um formato quadrado por cascata e alto
+        // demais no total — e podia fazer o gridFits recusar um grid que outro empacotamento
+        // acomodaria, que e o mesmo erro que o seletor de bandas ja tinha cometido uma vez.
+        auto atlasGridFor = [](u32 CX, u32 CY, u32 CZ, u32 Cascades_, u32& OutPerRow,
+                               u32& OutRows) {
+            CX = std::max(CX, 1u); CY = std::max(CY, 1u); CZ = std::max(CZ, 1u);
+            Cascades_ = std::max(Cascades_, 1u);
+            OutPerRow = CX; OutRows = CY * CZ; // zRowsPerBand = 1
+            u64 Best  = 0;
+            for (u32 ZRows = 1; ZRows <= CZ; ++ZRows) {
+                const u32 PerRow = CX * ZRows;
+                const u32 Rows   = ((CZ + ZRows - 1) / ZRows) * CY;
+                const u64 Score  = std::max<u64>(PerRow, static_cast<u64>(Rows) * Cascades_);
+                if (Best == 0 || Score < Best) { Best = Score; OutPerRow = PerRow; OutRows = Rows; }
+            }
+        };
+        auto gridFits = [&] {
+            // TUDO que segue e por CASCATA ou TOTAL, e confundir os dois foi o jeito obvio de
+            // errar: a grade de tiles e por cascata (a altura multiplica), mas atlas, ProbesTrace,
+            // buffers e dispatch veem o TOTAL. Os nomes carregam a distincao.
+            const u64 PerCascade = static_cast<u64>(CountX) * CountY * CountZ;
+            const u64 Probes     = PerCascade * CascadeCount_;
+            u32 PerRow32 = 1, RowsPerCascade32 = 1;
+            atlasGridFor(static_cast<u32>(CountX), static_cast<u32>(CountY),
+                         static_cast<u32>(CountZ), CascadeCount_, PerRow32, RowsPerCascade32);
+            const u64 PerRow = PerRow32;
+            const u64 Rows   = static_cast<u64>(RowsPerCascade32) * CascadeCount_;
+            // Maior dimensao de cada recurso. O atlas de distancia (stride 16) e o mais apertado
+            // dos dois; o ProbesTrace paga a largura em raios.
+            const u64 TraceRow = std::min<u64>(Probes, kTraceProbesPerRow);
+            // E o DISPATCH, que nao e recurso e por isso quase ficou de fora: os tres passes
+            // pesados sao uma sonda por grupo, e o D3D12 para em 65535 grupos por dimensao. Sem
+            // esta linha o gridFits aprovaria, as texturas seriam criadas, e so o Dispatch
+            // falharia — em runtime, longe daqui.
+            constexpr u64 kMaxGroups = 65535;
+            return PerRow * (kDistTileSize + 2) <= kTexMax &&
+                   Rows   * (kDistTileSize + 2) <= kTexMax &&
+                   TraceRow * kRaysPerProbe <= kTexMax &&
+                   (Probes + TraceRow - 1) / TraceRow <= kTexMax &&
+                   DispatchGroupsX(static_cast<u32>(Probes)) <= kMaxGroups &&
+                   DispatchGroupsY(static_cast<u32>(Probes)) <= kMaxGroups;
+        };
         CountX = axisCount(ext.X); CountY = axisCount(ext.Y); CountZ = axisCount(ext.Z);
-        GridMinV = { _AABBMin.X - 0.5f * SpacingV, _AABBMin.Y - 0.5f * SpacingV,
-                     _AABBMin.Z - 0.5f * SpacingV };
-        NumProbes       = static_cast<u32>(CountX) * CountY * CountZ;
+        if (!gridFits()) {
+            const f32 Requested = Cascades[0].Spacing;
+            // Converge sempre: o espacamento so cresce, e com ele as contagens caem ate o piso
+            // de 2 por eixo (8 sondas), que cabe em qualquer um dos limites.
+            while (!gridFits()) {
+                Cascades[0].Spacing *= 1.05f;
+                CountX = axisCount(ext.X); CountY = axisCount(ext.Y); CountZ = axisCount(ext.Z);
+            }
+            LogWarning("[GI] - DDGI: espacamento de " + std::to_string(Requested) +
+                       " m nao cabe nos atlas (limite de dimensao de textura); aberto para " +
+                       std::to_string(Cascades[0].Spacing) + " m");
+        }
+        // A cascata que cobre a cena inteira e a ULTIMA. O SetupForScene dimensiona ESSA — as
+        // finas saem dela por escala e seguem a CAMERA (6.2b-ii), nao a AABB. Aqui todas nascem
+        // iguais a grossa; quem as reposiciona por frame e o PrepareCascadePlacement.
+        const f32 CoarseSpacing = Cascades[0].Spacing;
+        const Vec3 CoarseMin{ _AABBMin.X - 0.5f * CoarseSpacing,
+                              _AABBMin.Y - 0.5f * CoarseSpacing,
+                              _AABBMin.Z - 0.5f * CoarseSpacing };
+        // Origem em celulas zerada nas duas pontas (atual e anterior): o volume nasce sem scroll
+        // pendente. A grossa fica assim para sempre — ela nao rola, entao delta 0 e o endereco
+        // dela e bit a bit o de antes do scrolling existir.
+        for (u32 C = 0; C < kMaxCascades; ++C) {
+            Cascades[C] = FCascade{};
+            Cascades[C].GridMin = CoarseMin;
+            Cascades[C].Spacing = CoarseSpacing;
+        }
 
-        AtlasWidth      = static_cast<u32>(CountX) * CountZ * (kTileSize + 2);
-        AtlasHeight     = static_cast<u32>(CountY) * (kTileSize + 2);
-        DistAtlasWidth  = static_cast<u32>(CountX) * CountZ * (kDistTileSize + 2);
-        DistAtlasHeight = static_cast<u32>(CountY) * (kDistTileSize + 2);
+        ProbesPerCascade_ = static_cast<u32>(CountX) * CountY * CountZ;
+        NumProbes         = ProbesPerCascade_ * CascadeCount_;
+
+        // Grade 2D de tiles. O shader NAO recebe tilesPerRow por cbuffer: ele o recupera da
+        // LARGURA (DDGI_TilesPerRow), e as duas contas so batem porque a largura e construida aqui
+        // como tilesPerRow*stride. Mexer numa sem a outra desalinha o atlas inteiro em silencio —
+        // por isso as quatro dimensoes saem das MESMAS duas variaveis, aqui, e nao em quatro
+        // expressoes independentes como antes.
+        //
+        // As cascatas empilham em blocos de LINHAS (ver DDGI_TileOrigin): a grade de uma cascata
+        // e sempre a mesma, e a altura total multiplica pela contagem.
+        atlasGridFor(static_cast<u32>(CountX), static_cast<u32>(CountY),
+                     static_cast<u32>(CountZ), CascadeCount_, TilesPerRow, TileRowsPerCascade);
+        const u32 TileRows = TileRowsPerCascade * CascadeCount_;
+        AtlasWidth      = TilesPerRow * (kTileSize + 2);
+        AtlasHeight     = TileRows    * (kTileSize + 2);
+        DistAtlasWidth  = TilesPerRow * (kDistTileSize + 2);
+        DistAtlasHeight = TileRows    * (kDistTileSize + 2);
+        // Idem para o ProbesTrace: kTraceProbesPerRow sondas por linha, cada uma ocupando
+        // kRaysPerProbe texels. O espelho em HLSL e DDGI_TRACE_PROBES_PER_ROW.
+        const u32 TraceProbesPerRow = std::min<u32>(NumProbes, kTraceProbesPerRow);
+        const u32 TraceRows         = (NumProbes + TraceProbesPerRow - 1) / TraceProbesPerRow;
         MaxRayDist      = std::sqrt(ext.X * ext.X + ext.Y * ext.Y + ext.Z * ext.Z) * 1.5f;
 
-        IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat);
-        DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT);
-        ProbesTrace = CreateTex2D(_Device, static_cast<u32>(kRaysPerProbe), NumProbes, kAtlasFormat);
+        IrradAtlas  = CreateTex2D(_Device, AtlasWidth, AtlasHeight, kAtlasFormat,
+                                  "DDGI · atlas irradiancia");
+        DistAtlas   = CreateTex2D(_Device, DistAtlasWidth, DistAtlasHeight, DXGI_FORMAT_R16G16_FLOAT,
+                                  "DDGI · atlas distancia");
+        ProbesTrace = CreateTex2D(_Device, TraceProbesPerRow * kRaysPerProbe, TraceRows,
+                                  kAtlasFormat, "DDGI · raios por sonda");
 
-        MeshGeoSlot.clear(); // membro: sobrevive p/ o RefreshInstanceGeo
-        std::vector<const FGpuMesh*> UniqueMeshes;
-        for (u32 i = 0; i < NumRenderables; ++i) {
-            const FGpuMesh* M = _Scene.Renderables()[i].Mesh;
-            if (!M || !M->IsValid() || MeshGeoSlot.count(M)) continue;
-            MeshGeoSlot[M] = 0;
-            UniqueMeshes.push_back(M);
-        }
-        MeshGeoSlotCount = static_cast<u32>(UniqueMeshes.size()) * 2;
-        MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
-        {
-            D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
-            GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
-            GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            for (u32 i = 0; i < static_cast<u32>(UniqueMeshes.size()); ++i) {
-                const FGpuMesh* M      = UniqueMeshes[i];
-                const u32       VbSlot = MeshGeoSlotBase + i * 2;
-
-                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
-                GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
-                GeoSrv.Buffer.NumElements         = M->VertexCount();
-                GeoSrv.Buffer.StructureByteStride = sizeof(Vertex);
-                _SRVHeap.CreateSRV(_Device, M->VertexResource(), GeoSrv, VbSlot);
-                GeoSrv.Format                     = DXGI_FORMAT_R32_UINT;
-                GeoSrv.Buffer.FirstElement        = M->IndexFirstElement();
-                GeoSrv.Buffer.NumElements         = M->GetIndexCount();
-                GeoSrv.Buffer.StructureByteStride = 0;
-                _SRVHeap.CreateSRV(_Device, M->IndexResource(), GeoSrv, VbSlot + 1);
-                MeshGeoSlot[M] = VbSlot;
-            }
-        }
         ProbeDataBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(Vec4),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-
-        // Snapshot com folga (SceneCapacityFor): objeto criado no editor cabe sem realocar
-        // descriptor nem refazer o SetupForScene. So os [0, NumRenderables) sao preenchidos —
-        // FillInstanceGeo le a lista da cena, e ir alem dela seria leitura fora do vetor.
-        // A cauda vai a zero: nenhuma instancia da TLAS aponta para la (a TLAS so tem os
-        // reais), mas zero e um estado legivel se algum dia um indice errado chegar ate aqui.
-        const u32 GeoCapacity = SceneCapacityFor(NumRenderables);
-        u8* GeoMapped = nullptr;
-        InstanceGeoBuf = CreateUploadBuffer(_Device,
-            static_cast<UINT64>(GeoCapacity) * sizeof(DDGIInstanceGeo), &GeoMapped);
-        InstanceGeoCount = GeoCapacity;
-        FillInstanceGeo(_Scene, GeoMapped, NumRenderables);
-        std::memset(GeoMapped + static_cast<size_t>(NumRenderables) * sizeof(DDGIInstanceGeo),
-                    0, static_cast<size_t>(GeoCapacity - NumRenderables) * sizeof(DDGIInstanceGeo));
-        InstanceGeoBuf->Unmap(0, nullptr);
 
         AtlasSRVSlot       = _SRVHeap.Allocate(1);
         AtlasUAVSlot       = _SRVHeap.Allocate(1);
@@ -320,7 +308,6 @@ namespace Smile {
         DistUAVSlot        = _SRVHeap.Allocate(1);
         ProbesTraceSRVSlot = _SRVHeap.Allocate(1);
         ProbesTraceUAVSlot = _SRVHeap.Allocate(1);
-        InstanceSRVSlot    = _SRVHeap.Allocate(1);
         ProbeDataSRVSlot     = _SRVHeap.Allocate(1);
         ProbeRayCountSRVSlot = _SRVHeap.Allocate(1);
 
@@ -349,12 +336,7 @@ namespace Smile {
         D3D12_SHADER_RESOURCE_VIEW_DESC BufSrv{};
         BufSrv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
         BufSrv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        BufSrv.Format                     = DXGI_FORMAT_UNKNOWN;
         BufSrv.Buffer.FirstElement        = 0;
-        BufSrv.Buffer.NumElements         = GeoCapacity; // = tamanho do buffer, nao da cena
-        BufSrv.Buffer.StructureByteStride = sizeof(DDGIInstanceGeo);
-        _SRVHeap.CreateSRV(_Device, InstanceGeoBuf.Get(), BufSrv, InstanceSRVSlot);
-
         BufSrv.Format                     = DXGI_FORMAT_R32G32B32A32_FLOAT;
         BufSrv.Buffer.NumElements         = NumProbes;
         BufSrv.Buffer.StructureByteStride = 0;
@@ -377,12 +359,12 @@ namespace Smile {
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSRVSlot),
-            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            _SRVHeap.CpuHandleStaging(_InstanceGeoSRVSlot),
             _SRVHeap.CpuHandleStaging(AtlasSRVSlot),
             // t4 = atlas de distancia (gather completo no 2o bounce). t5 segue filler: aqui o
             // ProbeData ja esta em t6, usado tambem pela origem do raio.
             _SRVHeap.CpuHandleStaging(DistSRVSlot),
-            _SRVHeap.CpuHandleStaging(InstanceSRVSlot),
+            _SRVHeap.CpuHandleStaging(_InstanceGeoSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeRayCountSRVSlot),
         };
@@ -415,7 +397,11 @@ namespace Smile {
         _Device->CopyDescriptors(1, &UDst, &UDstCount, 2, USrc, USrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        CPU.GridMinSpacing  = { GridMinV.X, GridMinV.Y, GridMinV.Z, SpacingV };
+        // A GROSSA, nao a cascata 0: quem le este campo sem saber de cascata (fade de borda,
+        // alcance, folga da invalidacao) quer dizer "o volume da cena". Ver FDDGI::GridMin.
+        const FCascade& Coarse = Cascades[CoarseCascade()];
+        CPU.GridMinSpacing  = { Coarse.GridMin.X, Coarse.GridMin.Y, Coarse.GridMin.Z,
+                                Coarse.Spacing };
         CPU.GridCountRays   = { (f32)CountX, (f32)CountY, (f32)CountZ, (f32)kRaysPerProbe };
         CPU.AtlasParams     = { (f32)kTileSize, (f32)AtlasWidth, (f32)AtlasHeight, (f32)NumProbes };
         CPU.DistAtlasParams = { (f32)kDistTileSize, (f32)DistAtlasWidth, (f32)DistAtlasHeight, 0.0f };
@@ -454,10 +440,44 @@ namespace Smile {
         _Queue.ExecuteAndSync(Lists, 1);
 
         Ready = true;
-        RelocateFramesLeft = Relocation ? kRelocateConvergeFrames : 0; 
+        // Os tres recursos acabaram de ser ZERADOS ali em cima, entao o primeiro update tem que
+        // SUBSTITUIR, nao misturar. Sem isto ele mistura 1% da estimativa nova com 99% de preto
+        // e o volume inteiro converge a 0.99^n: ~300 updates, 5 s a 60 fps, com a cena nascendo
+        // sem indireto e clareando sozinha.
+        //
+        // A relocacao NAO cobre este caso, apesar de marcar sondas com hysteresis 0: ela so
+        // marca `wasInactive || bigJump` (DDGIRelocate.cs.hlsl), e pos-setup o ProbeData esta
+        // zerado (w = 0, nao e "inativo") e a sonda em ar livre nao se move — logo nao e
+        // marcada. So as encostadas em parede escapavam.
+        HysteresisResetPending = true;
+        // Com relocacao ligada os 180 frames ja classificam; sem ela, quem escreve o ProbeRayCount
+        // e so este passe (ver TriggerReclassify), e o buffer acabou de nascer em 64 para todas as
+        // sondas — o que e o valor CERTO com raios adaptativos desligados e o teto com eles
+        // ligados. Os kReclassifyFrames existem para o segundo caso: sem eles a contagem ficaria
+        // congelada no maximo e o knob nasceria inerte no volume novo.
+        RelocateFramesLeft = Relocation ? kRelocateConvergeFrames
+                                        : (AdaptiveRays ? kReclassifyFrames : 0);
+        // O estado REGIONAL pertence ao volume que acabou de morrer. A caixa esta em coordenadas
+        // de uma grade que nao existe mais, e os contadores mandariam o atlas RECEM-ZERADO passar
+        // dezenas de frames com histerese reduzida numa regiao arbitraria da grade nova — os dois
+        // decrementos contam frames de UPDATE, entao a janela atravessa o rebuild inteira.
+        //
+        // Nada se perde: o reset one-shot acima e estritamente mais forte que qualquer invalidacao
+        // regional pendente (ele substitui o volume INTEIRO, nao so a caixa). Pelo mesmo motivo a
+        // reclassificacao pendente cai junto — a linha acima ja agenda a classificacao global de
+        // que o volume novo precisa, e o pedido velho descrevia uma edicao noutra grade.
+        InvalidateFramesLeft_     = 0;
+        InvalidateDistFramesLeft_ = 0;
+        InvalidateMin_            = {};
+        InvalidateMax_            = {};
+        ReclassifyPending_        = false;
+        // Mesmo motivo dos de cima: o follow-up pendente descrevia uma lamina de um volume que nao
+        // existe mais. Atravessar o rebuild faria o primeiro update do volume novo rodar um
+        // relocate restrito a sondas marcadas que ninguem marcou.
+        ScrollFollowUpPending     = false;
         LogDebug("[GI] - DDGI volume: " + std::to_string(CountX) + "x" + std::to_string(CountY) +
                 "x" + std::to_string(CountZ) + " probes (" + std::to_string(NumProbes) +
-                "), spacing " + std::to_string(SpacingV) + ", atlas " +
+                "), spacing " + std::to_string(Cascades[0].Spacing) + ", atlas " +
                 std::to_string(AtlasWidth) + "x" + std::to_string(AtlasHeight));
     }
 
@@ -474,6 +494,54 @@ namespace Smile {
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
+    void FDDGI::PrepareCascadePlacement(const Vec3& _CameraPos) {
+        if (!Ready || CascadeCount_ <= 1) return;
+
+        // A GROSSA (indice CascadeCount_-1) e a que o SetupForScene dimensionou pela cena e nao se
+        // mexe. As finas saem dela dividindo o espacamento por kCascadeSpacingRatio a cada degrau,
+        // e sao CENTRADAS na cena.
+        //
+        // GridMin e o PRIMEIRO CENTRO de sonda, nao o canto da gaiola — mesma convencao da grossa,
+        // onde ele vale AABBMin - 0.5*spacing justamente para a gaiola cobrir a AABB. Por isso a
+        // conta aqui e so `centro - (count-1)*spacing/2` e nao ha meia celula a subtrair: os
+        // centros cobrem (count-1)*spacing e a gaiola sobra meia celula de cada lado sozinha.
+        const u32 Coarse = CoarseCascade();
+        for (u32 C = 0; C < Coarse; ++C) {
+            f32 Spacing = Cascades[Coarse].Spacing;
+            for (u32 Step = Coarse; Step > C; --Step) Spacing /= kCascadeSpacingRatio;
+
+            // 6.2b-ii: as finas seguem a CAMERA. Era o centro da cena na 6.2b-i, e a troca e
+            // justamente o que torna o scrolling obrigatorio — sem ele, a cada celula andada todo
+            // o conteudo guardado passaria a representar outro ponto do mundo de uma vez.
+            const Vec3 Center = _CameraPos;
+            // Snap ao proprio espacamento, e o resultado sai em CELULAS INTEIRAS: sem o snap a
+            // grade "nada" sob a geometria e cada sonda troca de posicao no mundo por uma fracao
+            // de celula — o pior caso para um cache temporal, e o scrolling nao teria como
+            // compensar meia celula. Guardar a celula (e derivar o GridMin dela, nao o contrario)
+            // e o que faz o scroll ser aritmetica inteira ponta a ponta.
+            auto SnapCells = [&](f32 CenterAxis, int Count) {
+                const f32 Extent = 0.5f * static_cast<f32>(Count - 1) * Spacing;
+                return static_cast<int>(std::floor((CenterAxis - Extent) / Spacing));
+            };
+            const int Cells[3] = { SnapCells(Center.X, CountX),
+                                   SnapCells(Center.Y, CountY),
+                                   SnapCells(Center.Z, CountZ) };
+            const int Counts[3] = { CountX, CountY, CountZ };
+
+            Cascades[C].Spacing = Spacing;
+            for (int A = 0; A < 3; ++A) {
+                Cascades[C].OriginCells[A] = Cells[A];
+                // Resto SEMPRE positivo: o `%` de C trunca em direcao a zero, e origem negativa
+                // (cena com coordenadas negativas, que e o caso comum) daria slot negativo.
+                const int N = Counts[A] > 0 ? Counts[A] : 1;
+                Cascades[C].Scroll[A] = ((Cells[A] % N) + N) % N;
+            }
+            Cascades[C].GridMin = { static_cast<f32>(Cells[0]) * Spacing,
+                                    static_cast<f32>(Cells[1]) * Spacing,
+                                    static_cast<f32>(Cells[2]) * Spacing };
+        }
+    }
+
     void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,
                                const Vec3& _SunColor, u32 _FrameIndex, u32 _PunctualLightCount) {
         if (!Ready) return;
@@ -484,14 +552,73 @@ namespace Smile {
         // passe realmente roda, no RecordUpdate.
         CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 HysteresisResetPending ? 0.0f : Hysteresis };
+        // O atlas de DISTANCIA tem histerese propria (ver kDistHysteresis) — x/y/z do
+        // DistAtlasParams vem do SetupForScene e nao mudam por frame, entao so o w e reescrito.
+        // O reset one-shot vale para os dois: apos o SetupForScene os momentos sao ZERO, e com
+        // media/2o momento em zero o Chebyshev prende todo tap no piso de 0,05.
+        CPU.DistAtlasParams.W = HysteresisResetPending ? 0.0f : kDistHysteresis;
         // Caixa de invalidacao espacial. Como o reset global, so e CONSUMIDA quando o passe roda
         // (o decremento mora no RecordUpdate) — senao um frame em que o DDGI nem atualiza gastaria
         // a janela. w do Min = "ha invalidacao ativa"; w do Max = a hysteresis de dentro dela.
         const bool Invalidating = InvalidateFramesLeft_ > 0;
-        CPU.InvalidateMin     = { InvalidateMin_.X, InvalidateMin_.Y, InvalidateMin_.Z,
-                                  Invalidating ? 1.0f : 0.0f };
-        CPU.InvalidateMaxHyst = { InvalidateMax_.X, InvalidateMax_.Y, InvalidateMax_.Z,
-                                  kInvalidateHysteresis };
+        // A folga entra AQUI, uma vez, sobre a uniao crua (ver InvalidateRegion): uma sonda
+        // ILUMINA o objeto e e iluminada por ele de fora da AABB dele, entao a caixa cresce um
+        // espacamento de grid por lado p/ pegar a camada de sondas em volta, que e onde o color
+        // bleed aparece. Como e derivada e nao acumulada, N chamadas custam o mesmo pad que uma.
+        //
+        // Espacamento da cascata GROSSA, e nao o da cascata 0 (que passa a ser a mais FINA). A
+        // caixa e UMA so e vale para todas as cascatas, entao a folga tem de alcancar a camada de
+        // sondas em volta na grade mais ESPARSA — uma folga de 2 m deixaria sondas da grade de
+        // 8 m fora da invalidacao, preservando iluminacao e momentos de uma cena que ja mudou. A
+        // folga maior e conservadora para a fina, que e o lado seguro do erro.
+        const f32 Pad = Spacing();
+        CPU.InvalidateMin     = { InvalidateMin_.X - Pad, InvalidateMin_.Y - Pad,
+                                  InvalidateMin_.Z - Pad, Invalidating ? 1.0f : 0.0f };
+        CPU.InvalidateMaxHyst = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad,
+                                  InvalidateMax_.Z + Pad, kInvalidateHysteresis };
+        // Mesma caixa, janela e histerese proprias (ver kInvalidateDistHysteresis).
+        // z: o RecordUpdate so decrementa RelocateFramesLeft na hora de despachar, entao aqui
+        // "> 0" ja significa "o passe de classificacao roda neste frame" — o trace usa isso para
+        // mandar os 64 raios e nao alimentar o classificador com a propria decimacao.
+        // Cascatas: mesmo bloco que vai para os outros quatro cbuffers (ver CascadeConstants).
+        CPU.Cascades = CascadeConstants();
+        // Delta de scroll em CELULAS desde o ultimo update que rodou, so para os passes de update
+        // (o gather nao limpa nada). Inteiro, e por isso identico nos quatro passes: se cada um
+        // deduzisse a lamina comparando gaiolas em float, teriam tolerancias diferentes na borda
+        // e discordariam sobre quais sondas limpar.
+        const int Counts[3] = { CountX, CountY, CountZ };
+        for (u32 i = 0; i < kMaxCascades; ++i) {
+            const FCascade& Cs = Cascades[i < CascadeCount_ ? i : CoarseCascade()];
+            f32  D[3]      = { 0.0f, 0.0f, 0.0f };
+            bool Scrolled  = false;
+            for (int A = 0; A < 3; ++A) {
+                const int Raw   = Cs.OriginCells[A] - Cs.PrevOriginCells[A];
+                // Alem de count+1 a resposta ja e "a cascata inteira e nova"; o clamp so mantem o
+                // inteiro exato no float do cbuffer.
+                const int Limit = Counts[A] + 1;
+                D[A] = static_cast<f32>(std::clamp(Raw, -Limit, Limit));
+                if (Raw != 0) Scrolled = true;
+            }
+            CPU.CascadeScrollDelta[i] = { D[0], D[1], D[2], Scrolled ? 1.0f : 0.0f };
+        }
+        // z = o passe de relocacao/classificacao roda neste frame; w = e uma passada SO de scroll.
+        // O par existe porque o trace le os dois: com z e sem w ele manda os 64 raios em TODAS as
+        // sondas (a catraca do classificador da fase 4 — medir proximidade a partir de uma sonda
+        // ja decimada a derruba mais um degrau); com w, so nas recem-expostas, que sao as unicas
+        // que o passe vai reclassificar. Sem essa distincao, andar reclassificaria o grid inteiro
+        // a cada celula cruzada e reabriria a catraca pela porta do scroll.
+        // DOIS predicados, e a separacao e o conserto: `ScrollWork` diz que o passe tem trabalho de
+        // scroll (estreia OU follow-up) e `ScrollDebut` diz que ha uma lamina NOVA neste update.
+        // Fundi-los deixava o `canMark` ligado no follow-up, e ali ele e veneno: se o segundo
+        // relocate movesse a sonda de novo, escreveria outra marca `w >= 1` num update que ja e o
+        // ultimo agendado — marca ORFA, ou seja histerese 0 permanente naquela sonda.
+        const bool ScrollDebut = ScrolledSinceLastUpdate();
+        const bool ScrollWork  = ScrollDebut || ScrollFollowUpPending;
+        const bool RelocRuns   = RelocateFramesLeft > 0 || ScrollWork;
+        const bool ScrollOnly  = RelocateFramesLeft == 0 && ScrollWork;
+        CPU.MiscParams3       = { kInvalidateDistHysteresis,
+                                  InvalidateDistFramesLeft_ > 0 ? 1.0f : 0.0f,
+                                  RelocRuns ? 1.0f : 0.0f, ScrollOnly ? 1.0f : 0.0f };
         CPU.TraceParams     = { (f32)_FrameIndex, MaxRayDist, SkyIntensity,
                                 RayEps.HitShadowRayBias };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
@@ -499,25 +626,45 @@ namespace Smile {
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
-                                GIHit.SkipMode };
-        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+                                GIHit.SkipModePacked() };
+        // .w = piso de roughness do hit: a sonda integra o hit num cosseno e serve o hemisferio
+        // inteiro — cache NAO-direcional, mesmo caso do reservoir do ReSTIR GI (ver
+        // FGIHitSampling::SecondaryRoughnessMin).
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,
+                                GIHit.SecondaryRoughnessMin };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.RadianceCacheCamCell     = RadianceCacheParams.CameraPosCell;
+        CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
+        CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.SkyParams             = SkyLutParams;
-        CPU.DistAtlasParams.W = RealHitShading ? 1.0f : 0.0f; 
 
-        const f32 EffMax = AdaptiveRays ? (f32)MaxRays : 64.0f;
-        const f32 EffMin = AdaptiveRays ? (f32)MinRays : 64.0f;
+        // Detector desligado = piso e teto no MESMO kRaysPerProbe, ou seja o DDGI_DesiredRays
+        // clampa em 64 e a classificacao vira identidade. Era 64.0f literal nos dois — o vinculo
+        // com a largura do grupo do trace so existia no comentario.
+        const f32 EffMax = AdaptiveRays ? (f32)MaxRays : (f32)kRaysPerProbe;
+        // min(Min, Max): os dois setters sao independentes de proposito (baixar o teto nao deve
+        // mexer no piso pelas costas de quem esta ajustando), entao a ordem so pode ser garantida
+        // aqui. Invertidos, o `clamp(desired, min, max)` do HLSL devolve o MAX em silencio.
+        const f32 EffMin = AdaptiveRays ? (f32)std::min(MinRays, MaxRays) : (f32)kRaysPerProbe;
         CPU.MiscParams      = { Relocation ? 1.0f : 0.0f, DeactivationThreshold, EffMax, EffMin };
         // Marca de "recem-ativado" so quando o Relocate ainda tem >=1 frame agendado DEPOIS
         // deste (a marca precisa do proximo Relocate p/ o auto-demote; orfa = hyst 0 eterno).
         // z = ShadowRayMask (ver ReSTIRGI.cpp: translucido fora dos dois casos).
-        CPU.MiscParams2     = { (Relocation && RelocateFramesLeft > 1) ? 1.0f : 0.0f,
+        // w = detector de mudanca por sonda (rede da invalidacao por evento; so a irradiancia
+        // o consome — ver SetAdaptiveHysteresis).
+        // `ScrollDebut` e nao `ScrollWork`, e a diferenca e o que separa uma marca com destino de
+        // uma marca orfa. So a ESTREIA agenda um update seguinte, entao so nela existe o frame que
+        // vai demover a marca. Autorizar no follow-up permitiria a ultima passada agendada
+        // escrever uma marca que ninguem mais apaga — histerese 0 eterna naquela sonda, que e o
+        // mesmo defeito que o `> 1` original existia para evitar.
+        CPU.MiscParams2     = { (Relocation && (RelocateFramesLeft > 1 || ScrollDebut)) ? 1.0f : 0.0f,
                                 static_cast<f32>(_PunctualLightCount),
                                 static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
-                                                                : kRTMaskShadowFast), 0.0f };
+                                                                : kRTMaskShadowFast),
+                                AdaptiveHysteresis ? 1.0f : 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }
@@ -537,8 +684,17 @@ namespace Smile {
 
     void FDDGI::TransitionForUpdate(ID3D12GraphicsCommandList* _CL) {
         if (!Ready) return;
-        // Sai de kAtlasRead (contem PIXEL) -> so em fila direta. ProbeData fica de fora: o trace
-        // ainda LE ele como SRV (offsets de relocation) antes do relocate.
+        // Sai de kAtlasRead (contem PIXEL) -> so em fila direta.
+        //
+        // ProbeData entra AQUI desde a 6.2b-ii, e essa linha e o que permite a relocacao rodar em
+        // compute assincrono. Antes ele ficava de fora e o passe de relocacao promovia
+        // kAtlasRead -> UAV la dentro do RecordUpdate; como kAtlasRead contem PIXEL, essa
+        // transicao e ILEGAL em fila de compute, e era por isso que o CanRunAsync devolvia falso
+        // enquanto houvesse relocacao agendada. Saindo para NON_PIXEL aqui — na fila DIRETA, onde
+        // e legal — o trace continua lendo como SRV e o relocate promove NON_PIXEL -> UAV, que e
+        // compute-legal. O TransitionForRead devolve para kAtlasRead depois do wait, tambem na
+        // direta. Sem isto o scrolling da fina jogaria o DDGI no caminho sincrono a cada celula
+        // cruzada, que e justamente quando a camera esta andando.
         //
         // Os ATLASES vao para NON_PIXEL, e NAO para UAV: o proximo passe e o TRACE, que os le
         // como SRV (t3 = irradiancia e t4 = distancia) no gather do 2o bounce. Estado de escrita
@@ -549,6 +705,8 @@ namespace Smile {
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, DistAtlas.Get(),   DistState,   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, ProbeDataBuf.Get(), ProbeDataState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
     void FDDGI::TransitionForRead(ID3D12GraphicsCommandList* _CL) {
@@ -566,14 +724,50 @@ namespace Smile {
         // Idem para a janela da invalidacao espacial: conta FRAMES DE UPDATE, nao frames de
         // aplicacao. Se o DDGI ficar sem atualizar (async, toggle, cena sem TLAS), a janela
         // espera em vez de escoar sem ter misturado nada.
-        if (InvalidateFramesLeft_ > 0) --InvalidateFramesLeft_;
+        if (InvalidateFramesLeft_ > 0)     --InvalidateFramesLeft_;
+        if (InvalidateDistFramesLeft_ > 0) --InvalidateDistFramesLeft_;
+
+        // 6.2b-ii: o scroll fecha aqui, pelo mesmo motivo que os decrementos acima moram aqui e
+        // nao no UpdatePerFrame — o que importa e o ultimo update que RODOU. Se o DDGI ficar dois
+        // frames sem atualizar enquanto a camera anda tres celulas, as laminas expostas nos tres
+        // precisam ser limpas de uma vez; latchar por frame perderia as duas primeiras.
+        // A lamina nova estreia com ProbeData de outro lugar do mundo: offset de relocacao alheio
+        // e, pior, a MARCA de inativa — uma sonda marcada por estar enterrada 40 m atras faria o
+        // gather pular uma sonda perfeitamente boa aqui, e isso aparece como buraco no indireto.
+        // Quem reescreve ProbeData e so o passe de relocacao, e ele roda UMA vez por lamina: o
+        // `delta` so e diferente de zero neste update, entao so aqui da para saber quais sondas
+        // sao novas. Por isso a relocacao delas e one-shot (aplica o alvo inteiro em vez do lerp
+        // de 0,25 — ver DDGIRelocate); agendar mais frames nao daria convergencia, daria frames
+        // reclassificando o grid INTEIRO sem saber mais por que, forcando 64 raios em todas as
+        // 8.832 sondas enquanto a camera anda — Adaptive Rays neutralizado exatamente em
+        // movimento, que e quando ele mais renderia.
+        //
+        // O LATCH fecha aqui, e nao no UpdatePerFrame, pelo mesmo motivo dos decrementos acima: o
+        // que conta e o ultimo update que RODOU. Dois frames sem atualizar com a camera andando
+        // tres celulas tem de limpar as tres laminas de uma vez.
+        const bool ScrollDebut = ScrolledSinceLastUpdate();
+        const bool ScrolledNow = ScrollDebut || ScrollFollowUpPending;
+        // Agenda o update seguinte SE houve estreia agora; se este JA era o follow-up e nao houve
+        // estreia nova, fecha. Uma estreia durante um follow-up reabre — as duas laminas sao
+        // identificadas por criterios diferentes no shader (delta e a marca w>=1), entao convivem.
+        ScrollFollowUpPending = ScrollDebut;
+        for (u32 C = 0; C < CascadeCount_; ++C)
+            for (int A = 0; A < 3; ++A)
+                Cascades[C].PrevOriginCells[A] = Cascades[C].OriginCells[A];
+
+        // Grade 2D de grupos, uma sonda por grupo. Os tres passes abaixo compartilham a MESMA
+        // grade, e o shader recalcula X pela mesma formula em vez de recebe-la (ver
+        // DDGI_ProbeFromGroup). Com 1D o teto era 65535 sondas — abaixo do que os atlas
+        // comportam, e sem sintoma ate o Dispatch falhar.
+        const u32 GroupsX = DispatchGroupsX(NumProbes);
+        const u32 GroupsY = DispatchGroupsY(NumProbes);
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbesTraceUAVSlot));
-        _CL->Dispatch(NumProbes, 1, 1);
+        _CL->Dispatch(GroupsX, GroupsY, 1);
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -582,17 +776,17 @@ namespace Smile {
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(AtlasUAVSlot));
-        _CL->Dispatch(NumProbes, 1, 1);
+        _CL->Dispatch(GroupsX, GroupsY, 1);
 
         Transition(_CL, DistAtlas.Get(), DistState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         UpdateDistPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DistUAVSlot));
-        _CL->Dispatch(NumProbes, 1, 1);
+        _CL->Dispatch(GroupsX, GroupsY, 1);
 
-        if (RelocateFramesLeft > 0) {
-            --RelocateFramesLeft;
+        if (RelocateFramesLeft > 0 || ScrolledNow) {
+            if (RelocateFramesLeft > 0) --RelocateFramesLeft;
             Transition(_CL, ProbeDataBuf.Get(),     ProbeDataState,     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             RelocatePSO.Bind(_CL);
@@ -600,9 +794,46 @@ namespace Smile {
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbeDataUAVSlot)); 
             _CL->Dispatch((NumProbes + 63) / 64, 1, 1);
-            // ProbeData -> kAtlasRead fica no TransitionForRead (estado com PIXEL; e o
-            // relocate so roda no caminho sincrono — ver CanRunAsync).
+            // A promocao acima e NON_PIXEL -> UAV, legal em compute: quem tira o ProbeData do
+            // kAtlasRead (que contem PIXEL) e o TransitionForUpdate, na fila DIRETA. A volta para
+            // kAtlasRead fica no TransitionForRead, tambem na direta, depois do wait.
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
+
+        // Reclassificacao pos-edicao, agendada quando a janela de invalidacao FECHA (ver
+        // ReclassifyPending_). Fica no fim da funcao de proposito, e o motivo MUDOU na 6.2b-ii: era
+        // que agendar antes faria o relocate despachar ja, numa list de compute onde a transicao do
+        // ProbeData a partir de um estado com PIXEL seria ilegal — hoje ela e legal, porque a saida
+        // do kAtlasRead migrou para o TransitionForUpdate.
+        //
+        // O motivo que RESTA, e que sozinho ja manda: o cbuffer deste frame ja foi escrito pelo
+        // UpdatePerFrame, entao um agendamento feito aqui nao aparece no MiscParams3.z que o TRACE
+        // deste frame le. O passe classificaria a partir de um trace decimado — a catraca da fase
+        // 4. Agendando para o proximo frame, o trace ve o flag e manda os 64.
+        //
+        // A guarda de trabalho util: sem relocacao e sem raios adaptativos o passe so reescreve
+        // zeros e 64, e custaria 6 frames de dispatch para nada.
+        if (ReclassifyPending_ && InvalidateFramesLeft_ == 0 && InvalidateDistFramesLeft_ == 0) {
+            ReclassifyPending_ = false;
+            if (Relocation || AdaptiveRays) TriggerReclassify();
+        }
     }
+
+    void FDDGI::CreatePipelines(ID3D12Device* _Device) {
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); 
+        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
+        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
+        RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
+    }
+
+
+    FPassShaderStems FDDGI::ShaderStems() const {
+        static const char* const kStems[] = { "DDGITrace.cs", "DDGIUpdate.cs", "DDGIUpdateDist.cs", "DDGIRelocate.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDDGI::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

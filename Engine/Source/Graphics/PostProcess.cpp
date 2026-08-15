@@ -1,5 +1,5 @@
 #include "Smile/Graphics/PostProcess.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -8,6 +8,7 @@
 #include <vector>
 #include <stdexcept>
 #include <algorithm>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -56,42 +57,24 @@ namespace Smile {
             BloomBlurBuffers[i].Reset();
         }
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
 
-        for (int i = 0; i < kNumBloomLevels; ++i) {
-            Desc.Width  = BloomWidths[i];
-            Desc.Height = BloomHeights[i];
-            SMILE_HR(Device->CreateCommittedResource(
-                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-                IID_PPV_ARGS(&BloomBuffers[i])));
-            VramTracker::Register(BloomBuffers[i].Get(), EVramCategory::RenderTargets);
-        }
+        auto CreateBloomTarget = [&](int Level) {
+            return GpuResources::CreateTex2D(
+                Device, BloomWidths[Level], BloomHeights[Level], DXGI_FORMAT_R16G16B16A16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, EVramCategory::RenderTargets,
+                &ClearValue, 1, 1, "Bloom");
+        };
 
-        for (int i = 0; i < kNumBloomLevels - 1; ++i) {
-            Desc.Width  = BloomWidths[i];
-            Desc.Height = BloomHeights[i];
-            SMILE_HR(Device->CreateCommittedResource(
-                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-                IID_PPV_ARGS(&BloomBlurBuffers[i])));
-            VramTracker::Register(BloomBlurBuffers[i].Get(), EVramCategory::RenderTargets);
-        }
+        for (int i = 0; i < kNumBloomLevels; ++i)
+            BloomBuffers[i] = CreateBloomTarget(i);
+
+        for (int i = 0; i < kNumBloomLevels - 1; ++i)
+            BloomBlurBuffers[i] = CreateBloomTarget(i);
 
         if (!BloomRTVHeap.Native())
             BloomRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 9, false);
@@ -242,24 +225,14 @@ namespace Smile {
     }
 
     void FPostProcessor::CreateConstantBuffers(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES UploadHeap{};
-        UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        // Bloco unico de 4 KB com layout proprio (params + downsample/upsample por nivel, em
+        // passos de 256 escritos a mao no CreateBloomTextures), nao um slice por frame — dai
+        // SliceCount 1 e o alinhamento de CBV desligado.
+        const GpuResources::FUploadBuffer Upload =
+            GpuResources::CreateUploadBuffer(Device, 4096, 1, false);
+        CBParams         = Upload.Resource;
+        MappedParamsBase = Upload.Mapped;
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = 4096; 
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CBParams)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CBParams->Map(0, &NoRead, reinterpret_cast<void**>(&MappedParamsBase)));
-        
         MappedParams = reinterpret_cast<PostParams*>(MappedParamsBase);
 
         MappedParams->BloomIntensity = 0.04f;
@@ -402,4 +375,14 @@ namespace Smile {
 
         CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FPostProcessor::ShaderStems() const {
+        static const char* const kStems[] = { "BloomExtract.ps", "BloomDownsample.ps", "BloomUpsample.ps", "BloomBlur.ps", "FinalTonemap.ps", "PostProcess.vs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FPostProcessor::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device);
+    }
+
 }

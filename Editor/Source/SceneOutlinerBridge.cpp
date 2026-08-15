@@ -455,6 +455,29 @@ namespace SmileEditor {
         return R ? R->Visible : true;
     }
 
+    bool SceneOutlinerBridge::MeshDynamic() const {
+        const auto R = SelMesh(Renderer);
+        return R && R->Mobility == Smile::EMobility::Dynamic;
+    }
+
+    void SceneOutlinerBridge::SetMeshDynamic(bool _V) {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        const int Sel = Renderer->GetSelectedObject();
+        auto& List = Renderer->GetScene().Renderables();
+        if (Sel < 0 || Sel >= static_cast<int>(List.size())) return;
+
+        const auto Want = _V ? Smile::EMobility::Dynamic : Smile::EMobility::Static;
+        Smile::FRenderable& R = List[static_cast<size_t>(Sel)];
+        if (R.Mobility == Want) return;
+        R.Mobility = Want;
+        // Nos DOIS sentidos: virar dinamico tira o objeto do mapa estatico, virar estatico o
+        // coloca la. Qualquer um dos dois muda o conteudo cacheado.
+        Renderer->GetScene().BumpStaticCastersVersion();
+        MarkDirty();
+        emit SelectionChanged();
+    }
+
     // ---- Acoes ----
     void SceneOutlinerBridge::toggleExpand(int _Row) {
         if (_Row < 0 || _Row >= Rows.size()) return;
@@ -557,10 +580,24 @@ namespace SmileEditor {
         const FRow& Row = Rows[_Row];
         auto& Renderables = Renderer->GetScene().Renderables();
 
+        // Uniao das caixas de mundo do que for realmente alternado. O objeto nao MOVE, entao
+        // antes e depois sao a mesma caixa e basta uma; o que muda e ele entrar ou sair da TLAS
+        // (RaytracingScene pula !Visible), ou seja, o GI daquela regiao passa a ver outra cena.
+        Smile::Vec3 RegionMin{}, RegionMax{};
+        bool        HasRegion = false;
+        auto GrowRegion = [&](const Smile::FRenderable& _R) {
+            if (!HasRegion) { RegionMin = _R.AABBMin; RegionMax = _R.AABBMax; HasRegion = true; return; }
+            RegionMin = { std::min(RegionMin.X, _R.AABBMin.X), std::min(RegionMin.Y, _R.AABBMin.Y),
+                          std::min(RegionMin.Z, _R.AABBMin.Z) };
+            RegionMax = { std::max(RegionMax.X, _R.AABBMax.X), std::max(RegionMax.Y, _R.AABBMax.Y),
+                          std::max(RegionMax.Z, _R.AABBMax.Z) };
+        };
+
         if (Row.Kind == KMesh) {
             if (Row.SceneIdx < 0 || Row.SceneIdx >= (int)Renderables.size()) return;
             Renderables[(size_t)Row.SceneIdx].Visible =
                 !Renderables[(size_t)Row.SceneIdx].Visible;
+            GrowRegion(Renderables[(size_t)Row.SceneIdx]);
         } else if (Row.Kind == KAsset) {
             // Pasta: range do asset (ou o residual "Outros"). Se ha alguma visivel ->
             // esconde todas; senao mostra todas.
@@ -577,8 +614,10 @@ namespace SmileEditor {
                 if (!Renderables[(size_t)I].RaytracingOnly && Renderables[(size_t)I].Visible)
                     { AnyVisible = true; break; }
             for (int I = Begin; I < End; ++I)
-                if (!Renderables[(size_t)I].RaytracingOnly)
+                if (!Renderables[(size_t)I].RaytracingOnly) {
                     Renderables[(size_t)I].Visible = !AnyVisible;
+                    GrowRegion(Renderables[(size_t)I]);
+                }
         } else if (Row.Kind == KEnv && Row.SceneIdx == EnvTerreno) {
             SetTerrainVisible(!Renderer->Settings().GetUseTerrain());
             return;
@@ -589,6 +628,17 @@ namespace SmileEditor {
         // TLAS re-coleta as instancias no rebuild leve do proximo frame (pula !Visible),
         // entao GI/reflexos/ReSTIR respeitam o olho, nao so o raster.
         Renderer->GetScene().BumpTransformsVersion();
+        // Ocultar/mostrar muda o que o mapa estatico contem, tanto quanto criar ou remover.
+        Renderer->GetScene().BumpStaticCastersVersion();
+        // ...e muda o que os CACHES ja acumularam. O atlas do DDGI cai so na regiao afetada;
+        // reservoirs, reflexoes, ReGIR e cache de radiancia nao tem granularidade espacial e
+        // caem inteiros (dominio SceneContent). Diferente do arraste de gizmo, aqui e um clique
+        // discreto: nao ha gesto continuo para o reset atrapalhar.
+        // Geometria: a instancia sai da TLAS (RaytracingScene pula !Visible), entao as sondas
+        // dali passam a enxergar coisa diferente — e a classificacao delas envelheceu junto.
+        if (HasRegion)
+            Renderer->NotifyGIRegionChanged(RegionMin, RegionMax, Smile::EGIRegionChange::Geometry);
+        Renderer->Settings().MarkSceneContentDirty();
         MarkDirty();
         Rebuild();
     }
@@ -751,6 +801,7 @@ namespace SmileEditor {
 
         if (Applied) {
             Renderer->GetScene().BumpTransformsVersion(); // TLAS acompanha as ocultas
+            Renderer->GetScene().BumpStaticCastersVersion();
             if (HiddenApplied > 0)
                 Smile::LogInfo("Outliner: " + std::to_string(HiddenApplied) +
                                " mesh(es) ocultas de " +

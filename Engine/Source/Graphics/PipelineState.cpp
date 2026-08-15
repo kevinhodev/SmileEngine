@@ -9,6 +9,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <iterator>
 
 namespace Smile {
     void FPipelineState::Initialize(ID3D12Device* _Device) {
@@ -458,4 +459,19 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&LightDesc, IID_PPV_ARGS(&NewPSODeferredLightingDebug)));
         PipelineStateDeferredLightingDebug = NewPSODeferredLightingDebug;
     }
+
+    FPassShaderStems FPipelineState::ShaderStems() const {
+        // As variantes masked entram porque o RecreatePSO abaixo reconstroi TODAS as PSOs deste
+        // conjunto — verificado, nao suposto. Sem elas, editar DepthMasked.ps logava "sem
+        // pipeline mapeado" apesar de o reload ja funcionar.
+        static const char* const kStems[] = { "Triangle.vs", "GBuffer.ps", "DeferredLighting.ps",
+                                              "DepthNormal.ps", "ForwardBlend.ps",
+                                              "DepthMasked.ps", "DepthNormalMasked.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FPipelineState::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (RootSignature) RecreatePSO(_Ctx.Device);
+    }
+
 }

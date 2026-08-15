@@ -21,6 +21,11 @@ namespace Smile {
         DDGIIrradiance, // desfaz o gamma do atlas DDGI antes do tonemap
         DDGIDistance,   // primeiro momento do atlas DDGI em heatmap
         Heatmap,        // escalar generico em falsa-cor; Exposure = 1/valor "quente" (timer de RT)
+        // Fatia de um Texture2DArray (SubIndex = indice da fatia), lida como escala de cinza.
+        // O alvo generico do tile e um Texture2D e nao consegue enderecar fatia: nao existe
+        // SRV de dimensao TEXTURE2D que selecione array slice. As cascatas do CSM sao o
+        // primeiro alvo de array do visualizador; o atlas das sombras locais e o proximo.
+        ArraySlice,
         Count
     };
 

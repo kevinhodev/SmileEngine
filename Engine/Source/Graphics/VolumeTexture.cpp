@@ -1,6 +1,5 @@
 #include "Smile/Graphics/VolumeTexture.h"
-#include "Smile/Graphics/VramTracker.h"
-#include "Smile/Core/HResultCheck.h"
+#include "Smile/Graphics/GpuResources.h"
 
 namespace Smile {
     void FVolumeTexture::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -12,31 +11,16 @@ namespace Smile {
         TexDepth  = _Depth;
         MipLevels = _MipLevels;
 
-        D3D12_RESOURCE_DESC TextureDesc{};
-        TextureDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
-        TextureDesc.Width            = _Width;
-        TextureDesc.Height           = _Height;
-        TextureDesc.DepthOrArraySize = static_cast<UINT16>(_Depth);
-        TextureDesc.MipLevels        = static_cast<UINT16>(_MipLevels);
-        TextureDesc.Format           = _Format;
-        TextureDesc.SampleDesc       = { 1, 0 };
-        TextureDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        TextureDesc.Flags            = _AllowUAV
-                                     ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
-                                     : D3D12_RESOURCE_FLAG_NONE;
-
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         const D3D12_RESOURCE_STATES InitialState = _AllowUAV
             ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
             : D3D12_RESOURCE_STATE_COPY_DEST;
         MipStates.assign(_MipLevels, InitialState);
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &TextureDesc,
-            InitialState, nullptr, IID_PPV_ARGS(&GpuResource)));
-        VramTracker::Register(GpuResource.Get(), EVramCategory::Sky);
+        GpuResource = GpuResources::CreateTex3D(
+            _Device, _Width, _Height, _Depth, _Format,
+            _AllowUAV ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+                      : D3D12_RESOURCE_FLAG_NONE,
+            InitialState, EVramCategory::Sky, _MipLevels);
 
         VolumeSRVSlot = _SRVHeap.Allocate(1);
 

@@ -36,3 +36,5 @@ Desktop.ini
 /Assets/Scenes/
 /.codex_deps
 /.claude
+# Material local de referencia (PDFs, extracoes) — nao versionado.
+/tmp/

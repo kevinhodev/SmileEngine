@@ -1,8 +1,8 @@
 #include "Smile/Graphics/Reflections.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/ShaderTimer.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/ShaderUtils.h"
@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -18,23 +19,11 @@ namespace Smile {
     namespace {
         constexpr DXGI_FORMAT kRadianceFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H, DXGI_FORMAT _Fmt) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = _W;
-            Desc.Height           = _H;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = _Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Tex;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::GI);
-            return Tex;
+        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
+                                              DXGI_FORMAT _Fmt, const char* _Label) {
+            return GpuResources::CreateTex2D(
+                _Device, _W, _H, _Fmt, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI, nullptr, 1, 1, _Label);
         }
     }
 
@@ -72,21 +61,13 @@ namespace Smile {
     }
 
     void FReflections::CreateConstantBuffer(ID3D12Device* _Device) {
-        const UINT64 Size = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(ReflectionConstants);
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = Size;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        static_assert(sizeof(ReflectionConstants) % 256 == 0,
+                      "o CBAddr indexa por sizeof(); root CBV exige 256-alinhado");
+
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(ReflectionConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     void FReflections::CreateCompositePipeline(ID3D12Device* _Device) {
@@ -228,21 +209,30 @@ namespace Smile {
 
     void FReflections::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                       u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
-                                      u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
+                                      u32 _InstanceSlot, const FGIFallbackBindings& _Fallback,
+                                       u32 _DepthSlot,
                                        u32 _GBufferSlot, u32 _GBufferCSlot, u32 _BRDFLutSlot,
                                        u32 _GBufferASlot, u32 _VelocitySlot,
                                        u32 _SceneColorSlot, u32 _SceneDepthSlot,
                                        u32 _SceneColorMipCount,
                                        u32 _AtmosphereSpecularSlot, u32 _HDRSpecularSlot,
-                                       u32 _DistSlot, u32 _ProbeDataSlot,
                                       const u32 _TransformSlots[FCommandQueue::kFramesInFlight],
                                       const u32 _SurfaceSlots[FCommandQueue::kFramesInFlight]) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
+        const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
+        const u32 _DistSlot      = _Fallback.DistanceAtlasSRV;
+        const u32 _ProbeDataSlot = _Fallback.ProbeDataSRV;
+        // Os tres do fallback entram na validacao mesmo com Available == false: "sem volume" quer
+        // dizer slot NEUTRO, nunca invalido. Chegar invalido significa que o Renderer nao criou os
+        // recursos neutros, e ai o certo e nao montar tabela nenhuma — nunca montar com um buraco,
+        // que e o que kInvalidSlot vira dentro do CopyDescriptors.
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
             _InstanceSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot ||
             _SceneColorSlot == kInvalidSlot || _SceneDepthSlot == kInvalidSlot ||
-            _AtmosphereSpecularSlot == kInvalidSlot || _HDRSpecularSlot == kInvalidSlot)
+            _AtmosphereSpecularSlot == kInvalidSlot || _HDRSpecularSlot == kInvalidSlot ||
+            _IrradSlot == kInvalidSlot || _DistSlot == kInvalidSlot ||
+            _ProbeDataSlot == kInvalidSlot)
             return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
             if (_TransformSlots[f] == kInvalidSlot || _SurfaceSlots[f] == kInvalidSlot) return;
@@ -253,18 +243,28 @@ namespace Smile {
             ? _SceneColorMipCount - 1 : 0);
         DepthSlotCached = _DepthSlot; GBufferSlotCached = _GBufferSlot; BRDFLutSlotCached = _BRDFLutSlot;
         GBufferCSlotCached = _GBufferCSlot; GBufferASlotCached = _GBufferASlot;
-        Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
-        RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
-        RayMotion = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat);
-        Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        ResolvedMotion = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterResolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterMotion   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterHistory[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
-        WaterHistory[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat);
+        // Rotulos separados por ETAPA (meia-res / resolve / historico / agua): e o agrupamento que
+        // responde "onde estao os MB", ja que todos usam o mesmo formato e so mudam de resolucao.
+        Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
+                                  "Reflexoes · meia-res");
+        RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
+                                  "Reflexoes · meia-res");
+        RayMotion = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
+                                   "Reflexoes · meia-res");
+        Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · resolve");
+        ResolvedMotion = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                        "Reflexoes · resolve");
+        History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                    "Reflexoes · historico");
+        History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                    "Reflexoes · historico");
+        Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · denoise");
+        WaterResolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · agua");
+        WaterMotion   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · agua");
+        WaterHistory[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                         "Reflexoes · agua");
+        WaterHistory[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                         "Reflexoes · agua");
         RadianceState = RayDataState = RayMotionState = ResolvedState =
             ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
@@ -539,6 +539,15 @@ namespace Smile {
 
     void FReflections::SetupNrdSpec(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                     ID3D12Resource* _NrdInSpec, ID3D12Resource* _NrdOutSpec) {
+        // Idempotente: o NRD agora e alocado sob demanda (Renderer::ReconcileNrdAllocation) e
+        // isto e re-chamado a cada toggle, nao so depois de um ReleaseResize.
+        {
+            auto FreeIf = [&](u32& Slot) {
+                if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, 1); Slot = kInvalidSlot; }
+            };
+            FreeIf(SpecPackUAVSlot);
+            FreeIf(NrdOutSpecSRV);
+        }
         if (!Ready || !_NrdInSpec || !_NrdOutSpec) return;
 
         // UAV da IN_SPEC do NRD (o pack escreve aqui; o RecordNrdSpecZero limpa via ponteiro).
@@ -589,7 +598,7 @@ namespace Smile {
                                       const Vec3& _CameraPos, const Vec3& _PrevCameraPos,
                                       u32 _Width, u32 _Height, const Vec3& _SunDir,
                                       f32 _SunIntensity, const Vec3& _SunColor, u32 _FrameIndex,
-                                      f32 _SkyIntensity, bool _RealHitShading,
+                                      f32 _SkyIntensity,
                                       const Mat44& _View, bool _UseAtmosphereSky,
                                       f32 _WaterEnvironmentIntensity, u32 _PunctualLightCount,
                                       u32 _TemporalInstanceCount, bool _MotionHistoryValid) {
@@ -616,7 +625,7 @@ namespace Smile {
                                 static_cast<f32>(_PunctualLightCount) };
         CPU.ScreenParams    = { (f32)_Width, (f32)_Height, 1.0f / (f32)_Width, 1.0f / (f32)_Height };
         CPU.ReflectParams   = { MaxRoughnessToTrace, RoughnessFadeLength,
-                                _RealHitShading ? 1.0f : 0.0f, AlbedoLOD };
+                                0.0f, AlbedoLOD }; // .z livre
         CPU.GridMinSpacing  = GIGridMinSpacing;
         CPU.GridCount       = GIGridCount;
         CPU.AtlasParams     = GIAtlasParams;
@@ -634,12 +643,21 @@ namespace Smile {
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
-                                GIHit.SkipMode };
+                                GIHit.SkipModePacked() };
+        // .w fica em ZERO de proposito: e o piso de roughness do hit secundario, e ele so vale
+        // p/ quem guarda a radiancia num cache nao-direcional (DDGI e ReSTIR GI). Aqui o hit e
+        // sombreado p/ uma visada conhecida e consumido uma vez so — clampar borraria
+        // espelho-no-espelho. Os shaders de reflexao tambem passam 0 na unha; esta linha existe
+        // p/ o `.w` nao ser preenchido por engano num refactor do GIBiasParams.
         CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.RadianceCacheCamCell     = RadianceCacheParams.CameraPosCell;
+        CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
+        CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
+        CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };
@@ -698,7 +716,7 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable));
         // O UAV falso da extensao: o driver troca o acesso, mas a tabela precisa estar setada.
         if (Timed)
-            _CL->SetComputeRootDescriptorTable(FVolumetricPipeline::kNvApiRootParam,
+            _CL->SetComputeRootDescriptorTable(FComputePipeline::kNvApiRootParam,
                                                FShaderTimer::ExtnTable(_SRVHeap));
         _CL->Dispatch(HGX, HGY, 1);
 
@@ -922,4 +940,19 @@ namespace Smile {
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FReflections::ShaderStems() const {
+        static const char* const kStems[] = { "ReflectionTrace.cs", "ReflectionTraceTimed.cs",
+                                              "ReflectionTraceMirror.cs", "ReflectionResolve.cs",
+                                              "ReflectionTemporal.cs", "ReflectionSpatial.cs",
+                                              "ReflectionNrdPack.cs", "ReflectionComposite.ps",
+                                              "WaterReflectionTrace.cs", "WaterReflectionTemporal.cs",
+                                              "WaterReflectionComposite.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FReflections::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Ready) RecreatePipelines(_Ctx.Device);
+    }
+
 }

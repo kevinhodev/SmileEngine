@@ -1,4 +1,5 @@
 #include "Smile/Graphics/GpuProfiler.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 
@@ -19,25 +20,15 @@ namespace Smile {
         HeapDesc.Count = QueriesPerFrame * FramesInFlight_;
         SMILE_HR(_Device->CreateQueryHeap(&HeapDesc, IID_PPV_ARGS(&QueryHeap)));
 
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_READBACK;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(QueriesPerFrame) * FramesInFlight_ * sizeof(u64);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Readback)));
+        const u64 ReadbackBytes =
+            static_cast<u64>(QueriesPerFrame) * FramesInFlight_ * sizeof(u64);
+        Readback = GpuResources::CreateReadbackBuffer(_Device, ReadbackBytes);
 
         // Map persistente: heap READBACK aceita; a leitura por slot so acontece depois do
-        // wait de fence do frame (feito pelo CommandQueue.BeginFrame).
+        // wait de fence do frame (feito pelo CommandQueue.BeginFrame). Range de leitura
+        // COMPLETO aqui — ao contrario do upload, a CPU e quem le.
         void* Ptr = nullptr;
-        D3D12_RANGE All{ 0, static_cast<SIZE_T>(Desc.Width) };
+        const D3D12_RANGE All{ 0, static_cast<SIZE_T>(ReadbackBytes) };
         SMILE_HR(Readback->Map(0, &All, &Ptr));
         ReadbackMapped = reinterpret_cast<const u64*>(Ptr);
 

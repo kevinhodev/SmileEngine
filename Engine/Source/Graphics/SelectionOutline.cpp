@@ -1,4 +1,5 @@
 #include "Smile/Graphics/SelectionOutline.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/SwapChain.h"   
@@ -8,6 +9,7 @@
 #include "Smile/Core/Logger.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     static constexpr DXGI_FORMAT kMaskFormat = DXGI_FORMAT_R8_UNORM;
@@ -32,24 +34,13 @@ namespace Smile {
         Height = MaskH;
         MaskTarget.Reset();
 
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = Width;
-        Desc.Height           = Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kMaskFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         D3D12_CLEAR_VALUE Clear{};
-        Clear.Format = kMaskFormat; 
+        Clear.Format = kMaskFormat;
 
-        SMILE_HR(Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&MaskTarget)));
+        MaskTarget = GpuResources::CreateTex2D(
+            Device, Width, Height, kMaskFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, EVramCategory::Misc, &Clear,
+            1, 1, "Mascara de outline");
         MaskState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
         if (MaskRTVHeap.GetCapacity() == 0)
@@ -221,26 +212,17 @@ namespace Smile {
     }
 
     void FSelectionOutline::CreateConstantBuffer(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES UploadHeap{};
-        UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = 256ull * kFIF; 
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ParamsCB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(ParamsCB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedParams)));
+        // Passo de 256 explicito nos dois: e o alinhamento minimo de CBV, e o indexador de
+        // ambos ja assume esse passo.
+        const GpuResources::FUploadBuffer Params =
+            GpuResources::CreateUploadBuffer(Device, 256, kFIF);
+        ParamsCB     = Params.Resource;
+        MappedParams = Params.Mapped;
 
-        Desc.Width = 256ull * kMaxOutlineObjects * kFIF;
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ObjectCB)));
-        SMILE_HR(ObjectCB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedObjectCB)));
+        const GpuResources::FUploadBuffer Objects =
+            GpuResources::CreateUploadBuffer(Device, 256, kMaxOutlineObjects * kFIF);
+        ObjectCB       = Objects.Resource;
+        MappedObjectCB = Objects.Mapped;
     }
 
     void FSelectionOutline::RecordMask(ID3D12GraphicsCommandList* CmdList,
@@ -326,4 +308,14 @@ namespace Smile {
         CmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         CmdList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FSelectionOutline::ShaderStems() const {
+        static const char* const kStems[] = { "SelectionGeom.vs", "SelectionMask.ps", "SelectionOutline.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FSelectionOutline::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device);
+    }
+
 }

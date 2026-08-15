@@ -1,10 +1,30 @@
 # Biblioteca estatica da engine - SmileEngine
 
-# Gera VersionInfo.h a partir do template (.in) com as macros definidas no CMake raiz
+# Gera VersionInfo.h a partir do template (.in) com as macros definidas no CMake raiz.
+# Este aqui e o do CONFIGURE, e existe so para o arquivo ja estar em disco quando o CMake monta
+# a lista de fontes. O valor que vale e o carimbado a cada build pelo alvo abaixo.
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Smile/Core/VersionInfo.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/generated/Smile/Core/VersionInfo.h
     @ONLY
+)
+
+# Recarimba o header a cada build, para o SMILE_BUILD_COMMIT nao envelhecer — ver
+# cmake/StampVersion.cmake. O configure_file la dentro so reescreve quando o conteudo muda, entao
+# builds consecutivos sem commit novo nao recompilam nada.
+add_custom_target(SmileVersionStamp
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/Include/Smile/Core/VersionInfo.h.in
+        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/Smile/Core/VersionInfo.h
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DSMILE_VERSION_MAJOR=${SMILE_VERSION_MAJOR}
+        -DSMILE_VERSION_MINOR=${SMILE_VERSION_MINOR}
+        -DSMILE_VERSION_PATCH=${SMILE_VERSION_PATCH}
+        -DSMILE_BUILD_NUMBER=${SMILE_BUILD_NUMBER}
+        -DSMILE_BUILD_DATE=${SMILE_BUILD_DATE}
+        -P ${CMAKE_SOURCE_DIR}/cmake/StampVersion.cmake
+    COMMENT "Carimbando VersionInfo.h com o commit da build"
+    VERBATIM
 )
 
 set(ENGINE_HEADERS
@@ -37,7 +57,7 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/Material.h
     Include/Smile/Graphics/GBuffer.h
     Include/Smile/Graphics/ComputePipeline.h
-    Include/Smile/Graphics/VolumetricPipeline.h
+    Include/Smile/Graphics/PipelineUtils.h
     Include/Smile/Graphics/HDREnvironment.h
     Include/Smile/Graphics/Atmosphere.h
     Include/Smile/Graphics/CloudNoise.h
@@ -76,6 +96,9 @@ set(ENGINE_HEADERS
     Include/Smile/Graphics/GpuProfiler.h
     Include/Smile/Graphics/Renderer.h
     Include/Smile/Graphics/RenderSettings.h
+    Include/Smile/Graphics/SceneTargets.h
+    Include/Smile/Graphics/FrameContext.h
+    Include/Smile/Graphics/FrameCapture.h
     Include/Smile/Graphics/HistoryDomain.h
 )
 
@@ -85,6 +108,7 @@ set(ENGINE_GENERATED_HEADERS
 )
 
 set(ENGINE_SOURCES
+    ThirdParty/D3D12MA/D3D12MemAlloc.cpp
     Source/Core/Logger.cpp
     Source/Graphics/D3D12Device.cpp
     Source/Graphics/CommandQueue.cpp
@@ -107,7 +131,7 @@ set(ENGINE_SOURCES
     Source/Graphics/GBuffer.cpp
     Source/Graphics/Terrain.cpp
     Source/Graphics/ComputePipeline.cpp
-    Source/Graphics/VolumetricPipeline.cpp
+    Source/Graphics/PipelineUtils.cpp
     Source/Graphics/HDREnvironment.cpp
     Source/Graphics/Atmosphere.cpp
     Source/Graphics/CloudNoise.cpp
@@ -120,10 +144,12 @@ set(ENGINE_SOURCES
     Source/Graphics/SunShadows.cpp
     Source/Graphics/LocalShadows.cpp
     Source/Graphics/RaytracingScene.cpp
+    Source/Graphics/GIFallback.cpp
     Source/Graphics/DDGI.cpp
     Source/Graphics/DDGIDebug.cpp
     Source/Graphics/ReSTIRGI.cpp
     Source/Graphics/ReGIR.cpp
+    Source/Graphics/RadianceCache.cpp
     Source/Graphics/ReSTIRDI.cpp
     Source/Graphics/MeshLights.cpp
     Source/Graphics/NrdDenoiser.cpp
@@ -155,12 +181,23 @@ set(ENGINE_SOURCES
     Source/Graphics/GpuProfiler.cpp
     Source/Graphics/Renderer.cpp
     Source/Graphics/RenderSettings.cpp
+    Source/Graphics/SceneTargets.cpp
+    Source/Graphics/FrameCapture.cpp
 )
 
 add_library(SmileEngine STATIC
     ${ENGINE_HEADERS}
     ${ENGINE_GENERATED_HEADERS}
     ${ENGINE_SOURCES}
+)
+
+# O carimbo tem de rodar ANTES de compilar qualquer .cpp que inclua o VersionInfo.h.
+add_dependencies(SmileEngine SmileVersionStamp)
+
+# Fonte vendorado: mantem os avisos da engine acionaveis sem editar a biblioteca externa.
+set_source_files_properties(
+    ThirdParty/D3D12MA/D3D12MemAlloc.cpp
+    PROPERTIES COMPILE_OPTIONS "/W0"
 )
 
 target_include_directories(SmileEngine
@@ -175,6 +212,11 @@ target_include_directories(SmileEngine
 target_compile_definitions(SmileEngine
     PUBLIC
         SMILE_SHADER_DIR="${SMILE_SHADER_OUTPUT_DIR}"
+        # Ferramenta de diagnostico (captura de descritores para o AllocBench) so em build de
+        # desenvolvimento: em Release ela escreveria um arquivo a cada resize dentro do jogo
+        # do usuario final, que e efeito colateral que ninguem pediu.
+        $<$<CONFIG:Debug,RelWithDebInfo>:SMILE_DIAGNOSTICS=1>
+        $<$<NOT:$<CONFIG:Debug,RelWithDebInfo>>:SMILE_DIAGNOSTICS=0>
 )
 
 # Bibliotecas necessarias para DirectX 12 + DXGI

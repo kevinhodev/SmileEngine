@@ -5,6 +5,7 @@
 #include "Smile/Graphics/Mesh.h"
 #include "Smile/Graphics/Texture.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <string>
@@ -47,8 +48,14 @@ namespace Smile {
     //    (estilo Flax/CDLOD): sem skirts, sem permutacao de indices;
     //  - passes: z-prepass (depth ou depth+normal p/ GTAO), G-buffer (+velocity) e CSM
     //    (mesmo LOD da vista). RT/TLAS fica pra F3.
-    class FTerrain {
+    class FTerrain : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Terreno"; }
+        bool IsInitialized() const override { return ChunksPerSide > 0; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kChunkQuads = 128; // quads por lado do chunk no LOD0
         static constexpr u32 kMaxLods    = 8;   // LOD 0..7 (chunk de 1 quad no 7)
 

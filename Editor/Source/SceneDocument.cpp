@@ -112,7 +112,7 @@ namespace SmileEditor {
                     ByCooked.insert(List[i].CookedIndex, i);
         }
 
-        int Hidden = 0, Moved = 0, Spawned = 0, Removed = 0;
+        int Hidden = 0, Moved = 0, Spawned = 0, Removed = 0, Dynamic = 0;
 
         // 1) Overrides sobre objetos que vieram do asset.
         for (const QJsonValue& V : Root.value(QStringLiteral("overrides")).toArray()) {
@@ -135,6 +135,11 @@ namespace SmileEditor {
                 R.RefreshWorldBounds();
                 ++Moved;
             }
+            // Ausente = estatico (o default). So aparece no arquivo quem foi marcado.
+            if (O.value(QStringLiteral("dynamic")).toBool(false)) {
+                R.Mobility = Smile::EMobility::Dynamic;
+                ++Dynamic;
+            }
         }
 
         // 2) Objetos criados no editor: recria duplicando a fonte, que e o que a copia e.
@@ -155,6 +160,8 @@ namespace SmileEditor {
             Copy->Transform.Scale = JsonToVec3(O.value(QStringLiteral("scale")).toArray(),
                                                Copy->Transform.Scale);
             Copy->RefreshWorldBounds();
+            if (O.value(QStringLiteral("dynamic")).toBool(false))
+                Copy->Mobility = Smile::EMobility::Dynamic;
             ++Spawned;
         }
 
@@ -214,11 +221,16 @@ namespace SmileEditor {
         for (const Smile::FRenderable& R : List) {
             if (R.CookedIndex < 0) continue; // proxy do terreno e afins: nao sao do asset
 
+            const bool IsDynamic = R.Mobility == Smile::EMobility::Dynamic;
+
             QJsonObject O;
             O[QStringLiteral("pos")]   = Vec3ToJson(R.Transform.Position);
             O[QStringLiteral("rot")]   = Vec3ToJson(R.Transform.RotationEuler);
             O[QStringLiteral("scale")] = Vec3ToJson(R.Transform.Scale);
             if (!R.Visible) O[QStringLiteral("visible")] = false;
+            // Só o que diverge do default vai para o arquivo, como a visibilidade: estático é
+            // o default e a ausência da chave já o descreve.
+            if (IsDynamic) O[QStringLiteral("dynamic")] = true;
 
             if (R.Spawned) {
                 O[QStringLiteral("from")] = R.CookedIndex;
@@ -235,7 +247,10 @@ namespace SmileEditor {
                 !(NearlyEqual(R.Transform.Position, Baseline[R.CookedIndex].Position) &&
                   NearlyEqual(R.Transform.RotationEuler, Baseline[R.CookedIndex].Rotation) &&
                   NearlyEqual(R.Transform.Scale, Baseline[R.CookedIndex].Scale));
-            if (!MovedByUser && R.Visible) continue;
+            // Mobilidade entra na condicao junto com transform e visibilidade: um objeto
+            // marcado como dinamico e um override legitimo mesmo parado e visivel, e sem isto
+            // a marcacao seria perdida no save.
+            if (!MovedByUser && R.Visible && !IsDynamic) continue;
             if (!MovedByUser) {
                 O.remove(QStringLiteral("pos"));
                 O.remove(QStringLiteral("rot"));

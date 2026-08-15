@@ -51,6 +51,30 @@ bool HitFaceNormal(StructuredBuffer<DDGIVertex> Verts, uint i0, uint i1, uint i2
 // gate `geo.TwoSided == 0` saiu: material two-sided agora tambem tem a normal virada no verso,
 // como o raster ja faz em GBuffer.ps.hlsl. (Hoje isso e inerte para o unico consumidor: o
 // ReconnectionJacobian usa abs() nos dois cossenos. Fica correto para os proximos.)
+// CLASSIFICACAO do hit, sem sombrear — a politica de auto-interseccao precisa decidir se
+// re-traca ANTES de pagar o shading, e o caller e quem escolhe o que fazer (o ReSTIR mata o
+// caminho, o DDGI usa o outSignedDist do ShadeSurfaceHit, as reflexoes tem politica propria).
+//
+// `outTwoSided` sai junto porque a politica trata os dois casos com distancias diferentes.
+// Custo: os 3 indices + as 3 posicoes do triangulo — o mesmo que o HitGeomNormal ja faz.
+//
+// Morava no HitShading.hlsli, ABAIXO do include do PathTracingCommon — o que impedia a politica
+// de auto-interseccao de virar funcao compartilhada la. Mudou-se para ca porque e o que ela e:
+// geometria do hit sem iluminacao, o mesmo criterio que trouxe o HitGeomNormal. Move puro.
+bool HitIsBackface(uint instId, uint tri, float3x4 worldToObject, float3 rayDir,
+                   out bool outTwoSided) {
+    InstanceGeo geo = Instances[instId];
+    outTwoSided = (geo.TwoSidedRT != 0);
+
+    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
+    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
+    float3 faceN;
+    if (!HitFaceNormal(Verts, Idx[tri * 3 + 0], Idx[tri * 3 + 1], Idx[tri * 3 + 2],
+                       worldToObject, faceN))
+        return false; // degenerado: nao da p/ afirmar que e verso
+    return dot(faceN, rayDir) > 0.0f;
+}
+
 float3 HitGeomNormal(uint instId, uint tri, float2 bary, float3x4 worldToObject, float3 rayDir) {
     InstanceGeo geo = Instances[instId];
     StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];

@@ -206,12 +206,46 @@ namespace SmileEditor {
         std::sort(Sorted.begin(), Sorted.end(),
                   [](const auto& A, const auto& B) { return A.second > B.second; });
 
+        // Linhas-filhas por recurso, no mesmo contrato dos passes de GPU (name/text/shareText):
+        // a categoria vira expansivel e mostra quem paga a conta. A fracao dos filhos e relativa
+        // a PROPRIA categoria, nao ao total — dentro de "GI e reflexos" o que interessa e quanto
+        // daquele bloco cada recurso ocupa.
+        const auto Labels = Smile::VramTracker::LabelBreakdown();
         for (const auto& [Index, Bytes] : Sorted) {
             QVariantMap Row;
             Row.insert(QStringLiteral("name"), QString::fromUtf8(
                 Smile::VramTracker::CategoryName(static_cast<EVramCategory>(Index))));
             Row.insert(QStringLiteral("text"), FormatBytes(Bytes));
             Row.insert(QStringLiteral("frac"), static_cast<double>(Bytes) / Total);
+
+            QVariantList Children;
+            Smile::u64 Labeled = 0;
+            for (const auto& E : Labels) {
+                if (static_cast<size_t>(E.Category) != Index) continue;
+                QVariantMap Child;
+                Child.insert(QStringLiteral("name"), QString::fromUtf8(E.Label));
+                Child.insert(QStringLiteral("text"), FormatBytes(E.Bytes));
+                Child.insert(QStringLiteral("shareText"),
+                             QString::number(Bytes ? (100.0 * static_cast<double>(E.Bytes) /
+                                                      static_cast<double>(Bytes)) : 0.0, 'f', 0) + "%");
+                Children.push_back(Child);
+                Labeled += E.Bytes;
+            }
+            // "Outros" fecha a soma: sem ele os filhos nao batem com o total da categoria e a
+            // leitura fica errada justamente onde falta instrumentacao.
+            if (!Children.isEmpty() && Bytes > Labeled) {
+                const Smile::u64 Rest = Bytes - Labeled;
+                QVariantMap Child;
+                Child.insert(QStringLiteral("name"), QStringLiteral("Outros (sem rótulo)"));
+                Child.insert(QStringLiteral("text"), FormatBytes(Rest));
+                Child.insert(QStringLiteral("shareText"),
+                             QString::number(100.0 * static_cast<double>(Rest) /
+                                             static_cast<double>(Bytes), 'f', 0) + "%");
+                Child.insert(QStringLiteral("active"), false); // cinza, como pass inativo
+                Children.push_back(Child);
+            }
+            Row.insert(QStringLiteral("hasChildren"), !Children.isEmpty());
+            Row.insert(QStringLiteral("children"), Children);
             Rows.push_back(Row);
         }
 
@@ -240,6 +274,97 @@ namespace SmileEditor {
 
     QVariantList ViewportWidget::GetGpuTimings() const {
         return Telemetry.GpuTimings;
+    }
+
+    QVariantList ViewportWidget::GetShadowCascades() const {
+        return Telemetry.ShadowCascades;
+    }
+
+    // Tabela "Sombra do sol (CSM)": o que cada cascata desenha e com que frequencia ela
+    // dispara. As duas colunas juntas sao a medida que interessa — uma cascata cara que roda
+    // 16 frames em 64 custa menos por frame que uma barata que roda nos 64 —, e e sobre elas
+    // que a separacao static/dynamic vai ser avaliada.
+    //
+    // `casters` e do ULTIMO update daquela cascata, nao do frame corrente (ver FCascadeStats):
+    // cascata congelada continua mostrando o que ela desenha quando acorda.
+    QVariantList ViewportWidget::BuildShadowCascades(Smile::Renderer& _Renderer) const {
+        QVariantList Rows;
+        const Smile::FSunShadows& Csm = _Renderer.GetSunShadows();
+        if (!Csm.IsInitialized()) return Rows;
+
+        const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
+        const int Submitted = static_cast<int>(Csm.GetSubmittedCasterCount());
+        double MeanPerFrame = 0.0, MeanDynamic = 0.0;
+
+        for (Smile::u32 C = 0; C < Smile::FSunShadows::kNumCascades; ++C) {
+            const auto& S = Csm.CascadeStats(C);
+            // popcount da janela de 64 frames. Sem <bit> para nao exigir C++20 aqui.
+            // A taxa que interessa é a de RE-RASTERIZAÇÃO DO ESTÁTICO: é ela que a F2 move.
+            // A de runtime (UpdateHistory) fica em 64/64 sempre que houver dinâmico, porque
+            // cópia mais dinâmico acontece todo frame — e é barata, que é o ponto.
+            int Updates = 0;
+            for (Smile::u64 B = S.StaticHistory; B; B &= B - 1) ++Updates;
+            const double Rate = Updates / 64.0;
+            // Estático leva a taxa; dinâmico não. Essa assimetria É o cache: o primeiro só é
+            // pago quando o mapa invalida, o segundo é redesenhado todo frame de qualquer
+            // forma. O piso é o que nenhum cache remove.
+            MeanPerFrame += S.SubmittedStatic * Rate + S.SubmittedDynamic;
+            MeanDynamic  += S.SubmittedDynamic;
+
+            QVariantMap Row;
+            Row.insert(QStringLiteral("name"), QStringLiteral("Cascata %1").arg(C));
+            // Estático · dinâmico é a leitura central: o primeiro número é o que o cache pode
+            // reter, o segundo é o que sobra para redesenhar todo frame.
+            Row.insert(QStringLiteral("text"),
+                       QStringLiteral("%1 · %2")
+                           .arg(Loc.toString(static_cast<int>(S.SubmittedStatic)))
+                           .arg(Loc.toString(static_cast<int>(S.SubmittedDynamic))));
+            Row.insert(QStringLiteral("shareText"),
+                       QStringLiteral("%1/64 fr").arg(Updates));
+            // Quanto cada filtro cortou, na ordem em que o passe aplica (tamanho e depois
+            // planos): um objeto pequeno E fora da fatia conta no primeiro. O Δ fecha a linha
+            // com o quanto o fit andou — é o que diz se o mapa anterior era reaproveitável.
+            Row.insert(QStringLiteral("cullText"),
+                       QStringLiteral("−%1 tam · −%2 fatia · Δ%3 tx")
+                           .arg(S.CulledSize).arg(S.CulledPlanes)
+                           .arg(Loc.toString(S.SnapDeltaTexels, 'f', 0)));
+            Row.insert(QStringLiteral("frac"),
+                       Submitted > 0 ? static_cast<double>(S.Submitted) / Submitted : 0.0);
+            Row.insert(QStringLiteral("frozen"), !S.UpdatedThisFrame);
+            Rows.push_back(Row);
+        }
+
+        // Soma das 4 cascatas: o MESMO objeto é desenhado uma vez por cascata que o aceita,
+        // então isto passa de 1.542 sem contradição — a lista é de objetos, isto é de draws.
+        // O teto é 4 × lista (nada cullado, nada cacheado), e é contra ele que o número tem de
+        // ser lido: é o que culling e cache já cortam hoje, e a base do A/B da F2/F3.
+        QVariantMap Total;
+        Total.insert(QStringLiteral("name"), QStringLiteral("Draws de sombra/frame"));
+        Total.insert(QStringLiteral("text"), Loc.toString(MeanPerFrame, 'f', 0));
+        Total.insert(QStringLiteral("shareText"),
+                     QStringLiteral("de %1").arg(
+                         Loc.toString(Submitted * static_cast<int>(
+                             Smile::FSunShadows::kNumCascades))));
+        // O que sobraria com o cache perfeito: só o dinâmico, todo frame, em toda cascata.
+        QVariantMap Floor;
+        Floor.insert(QStringLiteral("name"), QStringLiteral("Piso com cache"));
+        Floor.insert(QStringLiteral("text"), Loc.toString(MeanDynamic, 'f', 0));
+        Floor.insert(QStringLiteral("shareText"),
+                     MeanPerFrame > 0.0
+                         ? QStringLiteral("%1%").arg(Loc.toString(
+                               100.0 * MeanDynamic / MeanPerFrame, 'f', 0))
+                         : QStringLiteral("—"));
+        Floor.insert(QStringLiteral("cullText"), QString());
+        Floor.insert(QStringLiteral("frac"), 0.0);
+        Floor.insert(QStringLiteral("frozen"), false);
+        Floor.insert(QStringLiteral("summary"), true);
+        Total.insert(QStringLiteral("cullText"), QString());
+        Total.insert(QStringLiteral("frac"), 0.0);
+        Total.insert(QStringLiteral("frozen"), false);
+        Total.insert(QStringLiteral("summary"), true);
+        Rows.push_back(Total);
+        Rows.push_back(Floor);
+        return Rows;
     }
 
     // Tabela "GPU por passe": escopos do FGpuProfiler (sem o total, que vira o header),
@@ -436,6 +561,7 @@ namespace SmileEditor {
                                 QStringLiteral(" ms");
         }
         Next.GpuTimings = BuildGpuTimings(_Renderer);
+        Next.ShadowCascades = BuildShadowCascades(_Renderer);
         Telemetry = std::move(Next);
     }
 
@@ -513,8 +639,13 @@ namespace SmileEditor {
         return Renderer ? static_cast<double>(Renderer->GetDebugExposure()) : 1.0;
     }
 
-    bool ViewportWidget::GetDebugProbeCoordValues(
-            int& _X, int& _Y, int& _Z, int& _CountX, int& _CountY, int& _CountZ) const {
+    // Decomposicao UNICA do indice de sonda que o painel inspeciona: global -> (cascata, indice
+    // local, coord). Cinco consumidores dependem dela — coord, posicao de mundo, descricao do
+    // grid, alcance de distancia e o stepping — e antes cada um refazia a conta assumindo indice
+    // LOCAL. Em qualquer cascata acima da 0 isso dava coordenada fora do grid, posicao calculada
+    // com a origem da cascata errada, e um stepping que reconstruia o indice sem a base da
+    // cascata, saltando para a 0 no primeiro passo.
+    bool ViewportWidget::GetDebugProbeCoordValues(FDebugProbeCoord& _Out) const {
         if (!Renderer || !DebugProbeSessionActive) return false;
         auto RendererAccess = Renderer.Lock();
         const auto& DDGI = Renderer->GetDDGI();
@@ -525,16 +656,40 @@ namespace SmileEditor {
         }
 
         const Smile::Vec3 Count = DDGI.GridCount();
-        _CountX = static_cast<int>(Count.X);
-        _CountY = static_cast<int>(Count.Y);
-        _CountZ = static_cast<int>(Count.Z);
-        if (_CountX <= 0 || _CountY <= 0 || _CountZ <= 0) return false;
+        _Out.CountX = static_cast<int>(Count.X);
+        _Out.CountY = static_cast<int>(Count.Y);
+        _Out.CountZ = static_cast<int>(Count.Z);
+        if (_Out.CountX <= 0 || _Out.CountY <= 0 || _Out.CountZ <= 0) return false;
 
-        const int XY = _CountX * _CountY;
-        _Z = static_cast<int>(Index) / XY;
-        const int R = static_cast<int>(Index) - _Z * XY;
-        _Y = R / _CountX;
-        _X = R - _Y * _CountX;
+        const int PerCascade = std::max(1, static_cast<int>(DDGI.ProbesPerCascade()));
+        _Out.Cascade    = static_cast<int>(Index) / PerCascade;
+        _Out.LocalIndex = static_cast<int>(Index) - _Out.Cascade * PerCascade;
+
+        const int XY = _Out.CountX * _Out.CountY;
+        int SZ = _Out.LocalIndex / XY;
+        const int R = _Out.LocalIndex - SZ * XY;
+        int SY = R / _Out.CountX;
+        int SX = R - SY * _Out.CountX;
+        // ARMAZENAMENTO -> GEOMETRIA (o mesmo DDGI_GeometricCoord dos shaders). O indice de sonda
+        // enderessa um SLOT; com a cascata fina rolando atras da camera, a coordenada de grid e a
+        // posicao de mundo que o painel mostra so batem com a sonda de verdade depois de desfazer
+        // o scroll. Sem isto, o painel apontaria para uma sonda `scroll` celulas ao lado — e o
+        // erro seria pior parado do que andando, porque pareceria estavel.
+        const int Scroll[3] = { DDGI.CascadeScroll(static_cast<Smile::u32>(_Out.Cascade), 0),
+                                DDGI.CascadeScroll(static_cast<Smile::u32>(_Out.Cascade), 1),
+                                DDGI.CascadeScroll(static_cast<Smile::u32>(_Out.Cascade), 2) };
+        const int Counts[3] = { _Out.CountX, _Out.CountY, _Out.CountZ };
+        int Geo[3] = { SX, SY, SZ };
+        for (int A = 0; A < 3; ++A) {
+            Geo[A] -= Scroll[A];
+            if (Geo[A] < 0) Geo[A] += Counts[A];
+        }
+        _Out.X = Geo[0];
+        _Out.Y = Geo[1];
+        _Out.Z = Geo[2];
+        // Origem e espacamento DA CASCATA, nao os da grossa que GridMin()/Spacing() devolvem.
+        _Out.GridMin = DDGI.CascadeGridMin(static_cast<Smile::u32>(_Out.Cascade));
+        _Out.Spacing = DDGI.CascadeSpacing(static_cast<Smile::u32>(_Out.Cascade));
         return true;
     }
 
@@ -545,21 +700,23 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetDebugProbeCoord() const {
-        int X, Y, Z, CX, CY, CZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
-        return QStringLiteral("grid (%1, %2, %3)").arg(X).arg(Y).arg(Z);
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
+        // A cascata entra no rotulo: sem ela, duas sondas em cascatas diferentes no mesmo
+        // vertice local sao indistinguiveis.
+        return QStringLiteral("cascata %1 · grid (%2, %3, %4)")
+            .arg(C.Cascade).arg(C.X).arg(C.Y).arg(C.Z);
     }
 
     QString ViewportWidget::GetDebugProbeWorld() const {
-        int X, Y, Z, CX, CY, CZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
-        auto RendererAccess = Renderer.Lock();
-        const auto& DDGI = Renderer->GetDDGI();
-        const Smile::Vec3 Min = DDGI.GridMin();
-        const double S = DDGI.Spacing();
-        const double PX = Min.X + static_cast<double>(X) * S;
-        const double PY = Min.Y + static_cast<double>(Y) * S;
-        const double PZ = Min.Z + static_cast<double>(Z) * S;
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
+        // Origem e espacamento DA CASCATA (ver a decomposicao): com os da grossa, a posicao da
+        // sonda de uma fina sairia em outro lugar do mundo.
+        const double S  = C.Spacing;
+        const double PX = C.GridMin.X + static_cast<double>(C.X) * S;
+        const double PY = C.GridMin.Y + static_cast<double>(C.Y) * S;
+        const double PZ = C.GridMin.Z + static_cast<double>(C.Z) * S;
         const QLocale Locale;
         return QStringLiteral("posição-base %1 · %2 · %3 m")
             .arg(Locale.toString(PX, 'f', 2))
@@ -568,19 +725,22 @@ namespace SmileEditor {
     }
 
     QString ViewportWidget::GetDebugProbeGrid() const {
-        int X, Y, Z, CX, CY, CZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CX, CY, CZ)) return QString();
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
         const QLocale Locale;
         return QStringLiteral("%1 × %2 × %3 probes · spacing %4 m")
-            .arg(CX).arg(CY).arg(CZ)
-            .arg(Locale.toString(Renderer->GetDDGI().Spacing(), 'f', 2));
+            .arg(C.CountX).arg(C.CountY).arg(C.CountZ)
+            .arg(Locale.toString(static_cast<double>(C.Spacing), 'f', 2));
     }
 
     QString ViewportWidget::GetDebugProbeDistanceRange() const {
-        if (!Renderer || !DebugProbeSessionActive) return QString();
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return QString();
         const QLocale Locale;
+        // 2,6 espacamentos DA CASCATA — o mesmo clamp que o DDGIUpdateDist aplica aos momentos.
+        // O DistanceMomentMax() do FDDGI e um valor so e descreveria a fina para uma sonda grossa.
         return QStringLiteral("distância média · 0 → %1 m")
-            .arg(Locale.toString(Renderer->GetDDGI().DistanceMomentMax(), 'f', 2));
+            .arg(Locale.toString(static_cast<double>(C.Spacing) * 2.6, 'f', 2));
     }
 
     bool ViewportWidget::IsDebugPreviewReady() const {
@@ -693,8 +853,14 @@ namespace SmileEditor {
         const int CountZ = static_cast<int>(Count.Z);
         if (CountX <= 0 || CountY <= 0 || CountZ <= 0) return;
 
-        const int TilesX = CountX * CountZ;
-        const int Total  = TilesX * CountY;
+        // Grade FISICA de tiles do atlas. Tem de bater com o `total = tilesX*tilesY` do
+        // DebugView.ps, que e quem reempacota para a tela — daqui sai o indice que o clique
+        // seleciona. Sai do DDGI e nao de CountX*CountZ: o empacotamento virou 2D e a largura
+        // deixou de ser um par de eixos do grid (ver DDGI_TileOrigin).
+        const int TilesX = static_cast<int>(DDGI.AtlasTilesPerRow());
+        const int TileRows = static_cast<int>(DDGI.AtlasTileRows());
+        if (TilesX <= 0 || TileRows <= 0) return;
+        const int Total  = TilesX * TileRows;
         const double Aspect = std::max(_TileAspect, 1e-4);
         const int Cols = std::max(1, static_cast<int>(
             std::ceil(std::sqrt(static_cast<double>(Total) * Aspect))));
@@ -706,11 +872,13 @@ namespace SmileEditor {
         const int AtlasIndex = DisplayY * Cols + DisplayX;
         if (AtlasIndex < 0 || AtlasIndex >= Total) return; // celula vazia da ultima linha
 
-        const int TileCol = AtlasIndex % TilesX;
-        const int Y = AtlasIndex / TilesX;
-        const int X = TileCol % CountX;
-        const int Z = TileCol / CountX;
-        const int ProbeIndex = X + Y * CountX + Z * CountX * CountY;
+        // Inversa do AtlasTileFromProbe, e mora no FDDGI junto com ela: o atlas tem ordem propria
+        // (plano (x,z) nas colunas, y nas linhas, enrolado em bandas) e duplicar essa conta aqui
+        // era o que fazia o clique apontar para outra sonda quando o layout mudava. Devolve false
+        // na celula de SOBRA — a ultima banda pode ter colunas que nao sao sonda nenhuma.
+        Smile::u32 Probe = 0;
+        if (!DDGI.ProbeFromAtlasTile(static_cast<Smile::u32>(AtlasIndex), Probe)) return;
+        const int ProbeIndex = static_cast<int>(Probe);
 
         DebugProbePreviousTargets.clear();
         for (Smile::u32 Index : Renderer->GetDebugSelection()) {
@@ -744,12 +912,29 @@ namespace SmileEditor {
     void ViewportWidget::StepDebugProbe(int _DX, int _DY, int _DZ) {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();
-        int X, Y, Z, CountX, CountY, CountZ;
-        if (!GetDebugProbeCoordValues(X, Y, Z, CountX, CountY, CountZ)) return;
-        const int NX = std::clamp(X + _DX, 0, CountX - 1);
-        const int NY = std::clamp(Y + _DY, 0, CountY - 1);
-        const int NZ = std::clamp(Z + _DZ, 0, CountZ - 1);
-        const int Index = NX + NY * CountX + NZ * CountX * CountY;
+        FDebugProbeCoord C;
+        if (!GetDebugProbeCoordValues(C)) return;
+        // O passo e GEOMETRICO — andar uma sonda quer dizer andar uma celula no MUNDO, e e o que
+        // o `C` traz (o GetDebugProbeCoordValues ja desfez o scroll).
+        const int Counts[3] = { C.CountX, C.CountY, C.CountZ };
+        int Geo[3] = { std::clamp(C.X + _DX, 0, C.CountX - 1),
+                       std::clamp(C.Y + _DY, 0, C.CountY - 1),
+                       std::clamp(C.Z + _DZ, 0, C.CountZ - 1) };
+        // GEOMETRIA -> ARMAZENAMENTO antes de linearizar (o DDGI_StorageCoord dos shaders). Sem
+        // isto o scroll seria aplicado DUAS vezes — uma vez desfeito na leitura, nunca refeito na
+        // escrita — e cada passo saltaria para uma sonda a `scroll` celulas de distancia. Parado,
+        // o salto e constante e parece um bug de indexacao; e so andando que ele muda de tamanho.
+        const auto& DDGI = Renderer->GetDDGI();
+        for (int A = 0; A < 3; ++A) {
+            Geo[A] += DDGI.CascadeScroll(static_cast<Smile::u32>(C.Cascade), A);
+            if (Geo[A] >= Counts[A]) Geo[A] -= Counts[A];
+        }
+        // O indice reconstruido tem de voltar para o espaco GLOBAL. Sem a base da cascata, o
+        // primeiro passo do navegador saltaria da cascata inspecionada para a 0, e o painel
+        // passaria a mostrar outra sonda sem dizer que mudou de cascata.
+        const int PerCascade = C.CountX * C.CountY * C.CountZ;
+        const int Index = C.Cascade * PerCascade +
+                          (Geo[0] + Geo[1] * C.CountX + Geo[2] * C.CountX * C.CountY);
         if (Index == GetDebugProbeIndex()) return;
         ResetDebugProbePoint();
         SelectDebugProbe(Index);
@@ -1357,16 +1542,26 @@ namespace SmileEditor {
                      I < Smile::FDDGIDebug::kPointProbeCount; ++I) {
                     const Smile::FDDGIPointProbeDiagnostic& P =
                         PointDiagnostic.Probes[I];
-                    const int Index = static_cast<int>(P.ProbeIndex);
-                    const int Z = Index / XY;
-                    const int R = Index - Z * XY;
+                    // O indice publicado e GLOBAL: cascata * sondasPorCascata + local. Decodifica-lo
+                    // direto daria coordenada fora do grid em qualquer cascata acima da 0 — no
+                    // Bistro o Z da cascata 1 comecaria em 24, num grid que tem 24.
+                    const int Index    = static_cast<int>(P.ProbeIndex);
+                    const int PerCasc  = std::max(1, XY * std::max(1, static_cast<int>(GridCount.Z)));
+                    const int Cascade  = Index / PerCasc;
+                    const int Local    = Index - Cascade * PerCasc;
+                    const int Z = Local / XY;
+                    const int R = Local - Z * XY;
                     const int Y = R / CountX;
                     const int X = R - Y * CountX;
 
                     QVariantMap Item;
                     Item.insert(QStringLiteral("probeIndex"), Index);
+                    Item.insert(QStringLiteral("cascade"), Cascade);
+                    // A cascata entra na coordenada mostrada: sem ela, duas sondas de cascatas
+                    // diferentes no mesmo vertice local apareceriam com o mesmo rotulo.
                     Item.insert(QStringLiteral("coord"),
-                                QStringLiteral("(%1,%2,%3)").arg(X).arg(Y).arg(Z));
+                                QStringLiteral("c%1 (%2,%3,%4)")
+                                    .arg(Cascade).arg(X).arg(Y).arg(Z));
                     Item.insert(QStringLiteral("active"), P.Active);
                     Item.insert(QStringLiteral("dominant"),
                                 static_cast<int>(I) == PointDiagnostic.DominantSlot);
@@ -1435,11 +1630,25 @@ namespace SmileEditor {
                     ? QString()
                     : QStringLiteral("  •  borda do volume (%1% DDGI)")
                           .arg(Locale.toString(PointDiagnostic.VolumeWeight * 100.0f, 'f', 0));
+                // Composicao de cascatas: e ela que explica por que ha DUAS paginas de oito taps
+                // e com que peso cada uma entrou. Sem isto o painel mostra o `cN` de cada tap sem
+                // dizer qual foi a DECISAO do seletor — o leitor teria de reconstrui-la somando
+                // pesos, que e justamente o que o diagnostico existe para poupar.
+                const bool Blended = PointDiagnostic.NextCascade != PointDiagnostic.PrimaryCascade;
+                const QString CascadeNote = Blended
+                    ? QStringLiteral("  •  c%1 %2% + c%3 %4%")
+                          .arg(PointDiagnostic.PrimaryCascade)
+                          .arg(Locale.toString(PointDiagnostic.PrimaryWeight * 100.0f, 'f', 0))
+                          .arg(PointDiagnostic.NextCascade)
+                          .arg(Locale.toString(
+                              (1.0f - PointDiagnostic.PrimaryWeight) * 100.0f, 'f', 0))
+                    : QStringLiteral("  •  c%1 100%").arg(PointDiagnostic.PrimaryCascade);
                 DebugProbePointSummary = QStringLiteral(
-                    "ponto %1 · %2 · %3 m  •  dominante #%4%5%6")
+                    "ponto %1 · %2 · %3 m%4  •  dominante #%5%6%7")
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.X, 'f', 2))
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.Y, 'f', 2))
                     .arg(Locale.toString(PointDiagnostic.WorldPosition.Z, 'f', 2))
+                    .arg(CascadeNote)
                     .arg(DominantIndex)
                     .arg(RiskIndex >= 0
                         ? QStringLiteral("  •  maior risco #%1").arg(RiskIndex)
@@ -1520,7 +1729,7 @@ namespace SmileEditor {
             GizmoMousePending = false;
         }
         if (GizmoReleasePending) {
-            GizmoCtrl.OnMouseRelease();
+            GizmoCtrl.OnMouseRelease(_Renderer);
             GizmoReleasePending = false;
         }
     }
@@ -1616,7 +1825,14 @@ namespace SmileEditor {
                 if (RendererAccess && RendererAccess->IsInitialized())
                     FlushPendingGizmoInput(*RendererAccess);
             } else {
-                GizmoCtrl.OnMouseRelease();
+                // Sem arraste em curso o release e so reset de estado, mas passou a precisar
+                // do Renderer (limpa o dragging do CSM), entao segue o mesmo caminho diferido:
+                // se o frame nao liberou o Renderer agora, o FlushPendingGizmoInput pega no
+                // proximo. Adiar um frame um reset de estado ja neutro nao tem efeito visivel.
+                GizmoReleasePending = true;
+                auto RendererAccess = Renderer ? Renderer.TryLock() : decltype(Renderer.TryLock()){};
+                if (RendererAccess && RendererAccess->IsInitialized())
+                    FlushPendingGizmoInput(*RendererAccess);
             }
         }
         QWidget::mouseReleaseEvent(_Event);

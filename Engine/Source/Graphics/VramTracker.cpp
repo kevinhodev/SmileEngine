@@ -1,13 +1,18 @@
 #include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/Logger.h"
+#include <algorithm>
+#include <cstring>
 #include <mutex>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace Smile::VramTracker {
     namespace {
         struct FEntry {
             EVramCategory Category;
             u64           Bytes;
+            const char*   Label; // literal do call site; nullptr = nao rotulado
         };
 
         // Singleton "leaky" de proposito: o destruction callback do D3D pode disparar
@@ -35,7 +40,7 @@ namespace Smile::VramTracker {
         }
     }
 
-    void Register(ID3D12Resource* _Resource, EVramCategory _Category) {
+    void Register(ID3D12Resource* _Resource, EVramCategory _Category, const char* _Label) {
         if (!_Resource) return;
 
         // So interessa o que mora em VRAM; staging UPLOAD/READBACK fica em system memory.
@@ -76,9 +81,9 @@ namespace Smile::VramTracker {
         if (It != S.Entries.end()) {
             // Re-registro do mesmo recurso vivo (nao esperado): troca em vez de somar.
             S.Totals[static_cast<size_t>(It->second.Category)] -= It->second.Bytes;
-            It->second = FEntry{ _Category, Bytes };
+            It->second = FEntry{ _Category, Bytes, _Label };
         } else {
-            S.Entries.emplace(_Resource, FEntry{ _Category, Bytes });
+            S.Entries.emplace(_Resource, FEntry{ _Category, Bytes, _Label });
         }
         S.Totals[static_cast<size_t>(_Category)] += Bytes;
     }
@@ -89,7 +94,29 @@ namespace Smile::VramTracker {
         std::lock_guard Lock(S.Mutex);
         Snap.Bytes = S.Totals;
         for (const u64 B : Snap.Bytes) Snap.TotalTracked += B;
+        Snap.LiveResources = static_cast<u32>(S.Entries.size());
         return Snap;
+    }
+
+    std::vector<FVramLabelEntry> LabelBreakdown() {
+        FState& S = State();
+        std::vector<FVramLabelEntry> Out;
+        {
+            std::lock_guard Lock(S.Mutex);
+            for (const auto& [Res, E] : S.Entries) {
+                if (!E.Label) continue; // sem rotulo: fica no resto da categoria
+                // Agrupa pelo TEXTO e nao pelo ponteiro: o mesmo literal em duas TUs pode nao ser
+                // o mesmo endereco, e ai o ping-pong sairia como duas linhas iguais.
+                const auto Hit = std::find_if(Out.begin(), Out.end(), [&](const FVramLabelEntry& P) {
+                    return P.Category == E.Category && std::strcmp(P.Label, E.Label) == 0;
+                });
+                if (Hit != Out.end()) Hit->Bytes += E.Bytes;
+                else                  Out.push_back(FVramLabelEntry{ E.Category, E.Label, E.Bytes });
+            }
+        }
+        std::sort(Out.begin(), Out.end(),
+                  [](const FVramLabelEntry& A, const FVramLabelEntry& B) { return A.Bytes > B.Bytes; });
+        return Out;
     }
 
     const char* CategoryName(EVramCategory _Category) {
@@ -106,5 +133,53 @@ namespace Smile::VramTracker {
             case EVramCategory::Misc:          return "Outros";
             default:                           return "?";
         }
+    }
+
+    void LogBreakdown(u64 _LocalUsageBytes) {
+        const FVramSnapshot Snap = Snapshot();
+
+        // Uma casa decimal em MB, do jeito que a janela mostra — comparar duas builds vira
+        // diferenca de texto, nao conta de bytes.
+        auto Mb = [](u64 Bytes) {
+            const u64 Tenths = (Bytes * 10u + (1u << 19)) >> 20; // arredonda p/ 0,1 MiB
+            return std::to_string(Tenths / 10u) + "," + std::to_string(Tenths % 10u) + " MB";
+        };
+
+        std::vector<std::pair<size_t, u64>> Sorted;
+        for (size_t i = 0; i < static_cast<size_t>(EVramCategory::Count); ++i)
+            if (Snap.Bytes[i] > 0) Sorted.emplace_back(i, Snap.Bytes[i]);
+        std::sort(Sorted.begin(), Sorted.end(),
+                  [](const auto& A, const auto& B) { return A.second > B.second; });
+
+        // Mesma fonte que a janela de Estatisticas consome (ver LabelBreakdown), ja ordenada.
+        const std::vector<FVramLabelEntry> Labels = LabelBreakdown();
+
+        std::string Line = "[VRAM] rastreado " + Mb(Snap.TotalTracked) + " em " +
+                           std::to_string(Snap.LiveResources) + " recursos";
+        if (_LocalUsageBytes > 0) {
+            Line += " | DXGI " + Mb(_LocalUsageBytes);
+            // So faz sentido quando o DXGI ja contabilizou tudo que registramos; se vier menor
+            // (recurso recem-criado que o driver ainda nao cobrou), imprimir a subtracao daria
+            // um numero negativo disfarcado de u64.
+            if (_LocalUsageBytes > Snap.TotalTracked)
+                Line += " | nao rastreado " + Mb(_LocalUsageBytes - Snap.TotalTracked);
+        }
+        for (const auto& [Index, Bytes] : Sorted) {
+            Line += "\n         " + std::string(CategoryName(static_cast<EVramCategory>(Index))) +
+                    ": " + Mb(Bytes);
+            u64  Labeled = 0;
+            bool Any     = false;
+            for (const FVramLabelEntry& E : Labels) {
+                if (static_cast<size_t>(E.Category) != Index) continue;
+                Line += "\n             " + std::string(E.Label) + ": " + Mb(E.Bytes);
+                Labeled += E.Bytes;
+                Any = true;
+            }
+            // O resto so aparece quando existe rotulo na categoria — numa categoria inteiramente
+            // sem rotulo a linha seria uma copia do total, so ruido.
+            if (Any && Bytes > Labeled)
+                Line += "\n             (sem rotulo): " + Mb(Bytes - Labeled);
+        }
+        LogInfo(Line);
     }
 }

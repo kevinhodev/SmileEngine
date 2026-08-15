@@ -36,6 +36,34 @@ namespace Smile {
         u32  TlasSRVSlot()    const { return TlasSRVSlot_; }
         u32  InstanceCount()  const { return InstanceCount_; }
         u32  BlasCount()      const { return BlasCount_; }
+
+        // === Snapshot InstanceGeo =========================================================
+        // Material + geometria por instancia, indexado pelo InstanceID da TLAS: o que TODO hit
+        // de RT le para saber em que superficie bateu (VB/IB bindless, albedo, MR, emissivo,
+        // alpha cutoff, two-sided). Consumido por DDGI, ReSTIR GI/DI, reflexoes, mesh lights,
+        // temporal motion, BvhDebug e — a partir da serie SHaRC — pelo updater do radiance cache.
+        //
+        // Morava no FDDGI, e isso obrigava sete consumidores que nao tocam em sonda nenhuma a
+        // esperar o VOLUME existir para receber um descritor valido. Aqui ele fica ao lado do que
+        // ja descreve a mesma cena de RT: a TLAS enderecada pelo mesmo InstanceID e o BlasByMesh,
+        // que percorre exatamente a mesma lista de malhas unicas deste snapshot.
+        u32  InstanceGeoSRV()      const { return InstanceGeoSRVSlot_; }
+        // Quantas instancias o snapshot consegue descrever. Alocado no Build pelo tamanho da cena
+        // de entao, COM folga (SceneCapacityFor); o RefreshInstanceGeo trunca nele. Quem cria
+        // objeto com a cena ja carregada precisa consultar antes (Renderer::OnSceneStructureChanged).
+        u32  InstanceGeoCapacity() const { return InstanceGeoCount; }
+        // Re-upload do snapshot sem refazer o Build. Chamar quando uma propriedade de material que
+        // o RT enxerga muda em runtime (AlphaTest, TwoSided, emissivo...) ou quando a lista de
+        // renderaveis muda e ainda cabe na folga: o snapshot e criado uma vez e nao acompanha a
+        // edicao sozinho.
+        //
+        // ⚠️ CONTRATO: o chamador drena as DUAS filas antes — Flush na direta e WaitIdle na
+        // compute, nesta ordem. E upload heap sem versao por frame em voo, entao escrever com
+        // trabalho em voo corrompe o que ele le; e o consumidor nao esta so na direta, porque o
+        // update do DDGI roda na COMPUTE e chega ao snapshot pela tabela de trace dele. Drenar so
+        // a direta deixa passar exatamente esse leitor. Nao da para drenar aqui dentro: as filas
+        // sao do Renderer.
+        void RefreshInstanceGeo(const FScene& Scene);
         // Teto de instancias que os rebuilds por frame conseguem endereçar: TLAS, scratch e
         // uploads foram dimensionados para ele no Build. Passar disso exige Build de novo —
         // quem cria objeto com a cena carregada precisa consultar (Renderer::OnSceneStructureChanged).
@@ -49,6 +77,8 @@ namespace Smile {
     private:
         void CollectInstances(const FScene& Scene,
                               std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& Out) const;
+        // Definido no .cpp (FRTInstanceGeo e local daquele arquivo); _Mapped tem _Count entradas.
+        void FillInstanceGeo(const FScene& Scene, u8* Mapped, u32 Count) const;
 
         bool   Built          = false;
         u32    TlasSRVSlot_    = 0xFFFFFFFFu;
@@ -67,5 +97,20 @@ namespace Smile {
         u8*                                    InstanceMapped[kInstanceSlots] = {};
         Microsoft::WRL::ComPtr<ID3D12Resource> TlasScratch;
         u32                                    InstanceCapacity_ = 0;
+
+        // Snapshot InstanceGeo (ver os acessores acima). Upload heap sem versao por frame: o
+        // conteudo muda raramente e sempre com a GPU drenada pelo chamador.
+        Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;
+        u32                                    InstanceGeoCount    = 0; // capacidade, nao a cena
+        u32                                    InstanceGeoSRVSlot_ = 0xFFFFFFFFu;
+        // SRVs bindless de VB/IB por malha unica (2 slots contiguos por malha: base+2i = VB,
+        // base+2i+1 = IB) — o InstanceGeo carrega os indices. Mesma lista de malhas unicas do
+        // BlasByMesh, agora percorrida UMA vez: o DDGI refazia a propria deduplicacao com o
+        // mesmo criterio, e duas listas com a mesma regra sao uma que fica para tras.
+        u32                                    MeshGeoSlotBase  = 0xFFFFFFFFu;
+        u32                                    MeshGeoSlotCount = 0;
+        // Malha -> slot bindless do VB (IB = +1). Membro, e nao local do Build, porque o
+        // RefreshInstanceGeo remonta o snapshot sem refazer a alocacao de descritores.
+        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot;
     };
 }

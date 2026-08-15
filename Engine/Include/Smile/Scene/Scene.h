@@ -16,7 +16,7 @@ namespace Smile {
     //
     // Cinco estruturas sao dimensionadas pelo tamanho da cena: o ObjectCB (`MaxObjects`), a
     // tabela de bounds do HiZ, a TLAS + uploads de instancia, o buffer de transforms do
-    // TemporalMotion e o snapshot InstanceGeo do DDGI. Dimensionar pelo N EXATO fazia o
+    // TemporalMotion e o snapshot InstanceGeo da cena de RT. Dimensionar pelo N EXATO fazia o
     // primeiro objeto criado no editor estourar todas de uma vez e cair no re-setup completo
     // (rebuild de todos os BLAS + DDGI + MeshLights) a cada Ctrl+D.
     //
@@ -56,11 +56,24 @@ namespace Smile {
 
     struct FTransform {
         Vec3 Position      = { 0.0f, 0.0f, 0.0f };
-        Vec3 RotationEuler = { 0.0f, 0.0f, 0.0f }; 
+        Vec3 RotationEuler = { 0.0f, 0.0f, 0.0f };
         Vec3 Scale         = { 1.0f, 1.0f, 1.0f };
 
         Mat44 Matrix() const;
     };
+
+    // Se o renderer pode assumir que este objeto estara no MESMO lugar no proximo frame.
+    //
+    // Nao e "ja foi movido alguma vez": um objeto arrastado no editor e depois solto volta a
+    // ser estatico, e o que muda e que o cache de sombra dele precisa ser refeito uma vez. E
+    // uma PROMESSA sobre o futuro, e e o que permite reaproveitar o shadow map entre frames em
+    // vez de re-rasterizar a cena inteira — hoje 25% do frame na Bistro, com a camera parada.
+    //
+    // Estatico e o default porque cena importada e integralmente estatica; marcar o que se
+    // move e a excecao. Mesma escolha da UE (Mobility, com Static default no editor) e da Flax
+    // (StaticFlags, que vem todas ligadas). A Cry inverte — la a flag e
+    // ERF_DYNAMIC_DISTANCESHADOWS, que EXCLUI o objeto do cache — mas o efeito e o mesmo.
+    enum class EMobility : u8 { Static = 0, Dynamic };
 
     struct FRenderable {
         // Identidade ESTAVEL do renderavel (0 = ainda nao atribuida). Mesmo motivo do FLight::Id:
@@ -91,6 +104,9 @@ namespace Smile {
         // prepass, CSM e picking. Uso: proxy do terreno (F3) — o terreno real rasteriza
         // pelo FTerrain, o proxy da o chao pro DDGI/ReSTIR/reflexoes.
         bool        RaytracingOnly = false;
+
+        // Ver EMobility. Consumido pelo CSM; persistido no .smap quando difere do default.
+        EMobility   Mobility = EMobility::Static;
 
         // Caixa em espaco do OBJETO, como o cozido v7 a grava. E a fonte: nao muda quando o
         // objeto se move.
@@ -166,6 +182,18 @@ namespace Smile {
         // bumpa so a primeira; um objeto que nasce ou morre bumpa as duas.
         u64  StructureVersion() const { return StructureVersion_; }
 
+        // Versao do conjunto ESTATICO de casters. Terceira versao porque as tres respondem a
+        // perguntas diferentes e tem custos diferentes: transform pede rebuild da TLAS (barato,
+        // por frame), estrutura pede remapear caches indexados por indice, e esta pede
+        // RE-RASTERIZAR o shadow map cacheado — a mais cara das tres, e por isso a que menos
+        // pode ser bumpada por engano.
+        //
+        // Bumpa quando algo que o mapa estatico contem muda: um estatico se move, aparece,
+        // some, e ocultado, ou troca de mobilidade. NAO bumpa quando um DINAMICO se move, que
+        // e o caso comum e justamente o que o cache tolera sem refazer nada.
+        u64  StaticCastersVersion() const { return StaticCastersVersion_; }
+        void BumpStaticCastersVersion()   { ++StaticCastersVersion_; }
+
     private:
         void RebuildRenderableIndex();
 
@@ -178,6 +206,7 @@ namespace Smile {
         std::unordered_map<u64, u32>           RenderableIndexById_;
         u64                                    TransformsVersion_ = 0;
         u64                                    StructureVersion_  = 0;
+        u64                                    StaticCastersVersion_ = 0;
         // UM contador para os dois tipos. Ver ESceneObject.
         u64                                    NextObjectId_      = 0;
     };

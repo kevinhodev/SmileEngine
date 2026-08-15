@@ -1,37 +1,20 @@
 #include "Smile/Graphics/GpuMesh.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
+#include "Smile/Graphics/Material.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 
 namespace Smile {
     namespace {
+        // Caminho avulso do FGpuMesh::Upload (primitivas do editor e do preview de material):
+        // o VB/IB fica no proprio upload heap, sem copia para DEFAULT. A cena usa o pool do
+        // AddMeshesBatch, nao isto.
         Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(
             ID3D12Device* _Device, const void* _Src, UINT _Size) {
-            D3D12_HEAP_PROPERTIES HeapProps{};
-            HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-            D3D12_RESOURCE_DESC ResourceDesc{};
-            ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            ResourceDesc.Width            = _Size;
-            ResourceDesc.Height           = 1;
-            ResourceDesc.DepthOrArraySize = 1;
-            ResourceDesc.MipLevels        = 1;
-            ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            ResourceDesc.SampleDesc       = { 1, 0 };
-            ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-            Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                     &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                     IID_PPV_ARGS(&Buffer)));
-
-            D3D12_RANGE NoReadRange{ 0, 0 };
-            void* Mapped = nullptr;
-            SMILE_HR(Buffer->Map(0, &NoReadRange, &Mapped));
-            std::memcpy(Mapped, _Src, _Size);
-            Buffer->Unmap(0, nullptr);
-            return Buffer;
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, _Size, 1, false);
+            std::memcpy(Upload.Mapped, _Src, _Size);
+            return Upload.Resource;
         }
     }
 
@@ -53,24 +36,9 @@ namespace Smile {
 
     Microsoft::WRL::ComPtr<ID3D12Resource> FGpuMesh::CreatePoolBuffer(ID3D12Device* _Device,
                                                                       u64 _Size) {
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC ResourceDesc{};
-        ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        ResourceDesc.Width            = _Size;
-        ResourceDesc.Height           = 1;
-        ResourceDesc.DepthOrArraySize = 1;
-        ResourceDesc.MipLevels        = 1;
-        ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        ResourceDesc.SampleDesc       = { 1, 0 };
-        ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ResourceDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-        Microsoft::WRL::ComPtr<ID3D12Resource> Buffer;
-        SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                 &ResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                 IID_PPV_ARGS(&Buffer)));
-        VramTracker::Register(Buffer.Get(), EVramCategory::Geometry);
-        return Buffer;
+        return GpuResources::CreateBuffer(_Device, _Size, D3D12_RESOURCE_FLAG_NONE,
+                                          D3D12_RESOURCE_STATE_COMMON,
+                                          EVramCategory::Geometry, "Pool de VB/IB");
     }
 
     void FGpuMesh::InitFromPool(const Microsoft::WRL::ComPtr<ID3D12Resource>& _Pool,
@@ -92,11 +60,36 @@ namespace Smile {
         IbFirstElement = static_cast<u32>(_IbOffset / sizeof(u32));
     }
 
+    void FGpuMesh::BindIA(ID3D12GraphicsCommandList* _CommandList) const {
+        _CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
+        _CommandList->IASetIndexBuffer(&IndexBufferView);
+    }
+
+    void FGpuMesh::DrawIndexed(ID3D12GraphicsCommandList* _CommandList) const {
+        _CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+    }
+
     void FGpuMesh::Draw(ID3D12GraphicsCommandList* _CommandList) const {
         if (IndexCount == 0) return;
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        _CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
-        _CommandList->IASetIndexBuffer(&IndexBufferView);
-        _CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+        BindIA(_CommandList);
+        DrawIndexed(_CommandList);
+    }
+
+    void FDrawSubmitCache::BindMaterial(ID3D12GraphicsCommandList* _CommandList,
+                                        FTextureSRVHeap& _SRVHeap, const FMaterial* _Mat) {
+        if (_Mat == LastMat) return;
+        LastMat = _Mat;
+        if (_Mat) _Mat->Bind(_CommandList, _SRVHeap);
+    }
+
+    void FDrawSubmitCache::DrawMesh(ID3D12GraphicsCommandList* _CommandList,
+                                    const FGpuMesh* _Mesh) {
+        if (!_Mesh || !_Mesh->IsValid()) return;
+        if (_Mesh != LastMesh) {
+            LastMesh = _Mesh;
+            _Mesh->BindIA(_CommandList);
+        }
+        _Mesh->DrawIndexed(_CommandList);
     }
 }

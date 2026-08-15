@@ -1,6 +1,6 @@
 #include "Smile/Graphics/LocalShadows.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/Material.h"
@@ -23,29 +23,15 @@ namespace Smile {
     }
 
     void FLocalShadows::CreateResources(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = kResolution;
-        Desc.Height           = kResolution;
-        Desc.DepthOrArraySize = static_cast<UINT16>(kMaxShadows);
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32_TYPELESS;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
         D3D12_CLEAR_VALUE Clear{};
         Clear.Format             = DXGI_FORMAT_D32_FLOAT;
         Clear.DepthStencil.Depth = 1.0f;
 
         ArrayState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            ArrayState, &Clear, IID_PPV_ARGS(&DepthArray)));
-        VramTracker::Register(DepthArray.Get(), EVramCategory::Shadows);
+        DepthArray = GpuResources::CreateTex2D(
+            _Device, kResolution, kResolution, DXGI_FORMAT_R32_TYPELESS,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, ArrayState, EVramCategory::Shadows,
+            &Clear, 1, kMaxShadows, "Atlas de spot");
 
         DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kMaxShadows, false);
         for (u32 s = 0; s < kMaxShadows; ++s) {
@@ -60,14 +46,11 @@ namespace Smile {
 
         // Cube array dos points (F3b): mesma textura D32, 6 faces por luz, vista como
         // TextureCubeArray no SRV (cube e um conceito de view, o recurso e um array 2D).
-        Desc.Width            = kCubeResolution;
-        Desc.Height           = kCubeResolution;
-        Desc.DepthOrArraySize = static_cast<UINT16>(kMaxCubeShadows * 6);
         CubeState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            CubeState, &Clear, IID_PPV_ARGS(&CubeArray)));
-        VramTracker::Register(CubeArray.Get(), EVramCategory::Shadows);
+        CubeArray = GpuResources::CreateTex2D(
+            _Device, kCubeResolution, kCubeResolution, DXGI_FORMAT_R32_TYPELESS,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, CubeState, EVramCategory::Shadows,
+            &Clear, 1, kMaxCubeShadows * 6, "Cube array de point");
 
         CubeDSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kMaxCubeShadows * 6, false);
         for (u32 s = 0; s < kMaxCubeShadows * 6; ++s) {
@@ -218,27 +201,12 @@ namespace Smile {
     }
 
     void FLocalShadows::CreateConstantBuffers(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) *
-                                (kMaxShadows + kMaxCubeShadows * 6) * 256; // 1 Mat44/slice+face
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&SliceCB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(SliceCB->Map(0, &NoRead, &Ptr));
-        MappedSlice = reinterpret_cast<u8*>(Ptr);
+        // 1 Mat44 por slice+face, num passo de 256 (alinhamento de CBV).
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, 256,
+            FCommandQueue::kFramesInFlight * (kMaxShadows + kMaxCubeShadows * 6));
+        SliceCB     = Upload.Resource;
+        MappedSlice = Upload.Mapped;
     }
 
     void FLocalShadows::TransitionArray(ID3D12GraphicsCommandList* _CommandList,
@@ -333,6 +301,8 @@ namespace Smile {
             Vec4 Planes[6];
             ExtractFrustumPlanes(_ViewProj, Planes);
             ID3D12PipelineState* Cur = nullptr; // local: o ExtraDraw da view anterior trocou o PSO
+            FDrawSubmitCache Submit;
+            _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             for (u32 k : CullScratch) {
                 const FShadowDrawItem& It = _Items[k];
                 if (AABBOutsidePlanes(Planes, It.AABBMin, It.AABBMax)) continue;
@@ -340,8 +310,8 @@ namespace Smile {
                 ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
                 _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
-                if (AlphaTested) It.Mat->Bind(_CommandList, _SRVHeap);
-                It.Mesh->Draw(_CommandList);
+                if (AlphaTested) Submit.BindMaterial(_CommandList, _SRVHeap, It.Mat);
+                Submit.DrawMesh(_CommandList, It.Mesh);
             }
         };
 

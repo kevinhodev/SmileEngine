@@ -2,7 +2,8 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -19,8 +20,14 @@ namespace Smile {
     //
     // Passe de DEBUG: so roda com o toggle ligado (Renderer::SetBvhDebug), e desligado nao aloca
     // nem dispara nada.
-    class FBvhDebugView {
+    class FBvhDebugView : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Debug da BVH"; }
+        bool IsInitialized() const override { return Target != nullptr && SceneTableReady; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // Espelha o modo lido de BvhDebugParams.x em Shaders/Debug/BvhDebug.cs.hlsl.
         enum class EMode : u32 {
             Category = 0,  // cor por categoria da instancia na TLAS (opaco/alpha-test/translucido)
@@ -39,7 +46,7 @@ namespace Smile {
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Release(FTextureSRVHeap& SRVHeap);
 
-        // Liga a TLAS e o snapshot de instancias (FDDGI::InstanceSRV). Precisa ser refeito toda
+        // Liga a TLAS e o snapshot de instancias (FRaytracingScene::InstanceGeoSRV). Precisa ser refeito toda
         // vez que a cena de RT e reconstruida — os slots mudam. Sem os dois, o passe nao roda.
         void SetSceneSRVs(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                           u32 TlasSRVSlot, u32 InstanceSRVSlot);
@@ -54,6 +61,7 @@ namespace Smile {
         void ToRead(ID3D12GraphicsCommandList* CL);
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         struct alignas(256) BvhDebugConstants {
             Mat44 InvViewProj;
             Vec4  CameraPos;
@@ -64,7 +72,7 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
         void Transition(ID3D12GraphicsCommandList* CL, D3D12_RESOURCE_STATES After);
 
-        FVolumetricPipeline PSO; // 2 SRV [TLAS, InstanceGeo], 1 UAV; heap diretamente indexado
+        FComputePipeline PSO; // 2 SRV [TLAS, InstanceGeo], 1 UAV; heap diretamente indexado
                                  // (VB/IB do alpha-test e da normal vem bindless pelo InstanceGeo)
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Target;

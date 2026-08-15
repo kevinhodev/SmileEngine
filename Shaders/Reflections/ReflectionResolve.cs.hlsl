@@ -67,6 +67,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
         float3 centerRad     = float3(0.0f, 0.0f, 0.0f);
         float  centerW       = 0.0f;
+        float  centerHitAcc  = 0.0f; // distancia acumulada com o mesmo peso do centerRad
         float  centerHitDist = 0.0f;
         float  bestW         = 0.0f;
         [unroll] for (uint u = 0; u < 4; ++u) {
@@ -84,17 +85,27 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             if (wb <= 0.0f) continue;
             float4 hrad = Radiance.Load(int3(h, 0));
             centerRad += hrad.rgb * wb;
+            // A DISTANCIA acumula com o mesmo peso da radiancia. Antes ela era copiada da UNICA
+            // amostra de maior peso, enquanto o rgb virava media — o hitDist saia daqui com todo
+            // o ruido de 1 spp de meia-res. Isso importa porque ele nao e so metadado: e o
+            // kBufferTypeSpecularHitDistance do DLSS-RR, de onde ele deriva os motion vectors
+            // ESPECULARES. Ruido por pixel ali faz o RR reprojetar cada vizinho para um lugar
+            // diferente, e o resultado e o campo de firefly que so aparece no RR (medido
+            // 2026-08-07: o heatmap do guide bate forma, posicao e tamanho com o artefato).
+            centerHitAcc += hrad.a * wb;
             centerW   += wb;
             if (wb > bestW) {
                 bestW = wb;
-                centerHitDist = hrad.a;
+                // Motion continua vindo da MELHOR amostra, nao da media: media de motion vector
+                // entre superficies diferentes nao descreve movimento nenhum.
                 outMotion = RayMotion.Load(int3(h, 0));
             }
         }
         if (centerW > 1e-6f) {
             centerRad /= centerW;
+            centerHitDist = centerHitAcc / centerW;
         } else {
-            float4 c = Radiance.Load(int3(centerHalf, 0));           
+            float4 c = Radiance.Load(int3(centerHalf, 0));
             centerRad = c.rgb; centerHitDist = c.a;
             outMotion = RayMotion.Load(int3(centerHalf, 0));
         }
@@ -104,6 +115,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         float  w0   = max(GGX_D(a2, saturate(dot(N, normalize(V + dir0)))), 1e-3f);
         float3 sum  = centerRad * w0;
         float  wsum = w0;
+        // O laco largo tambem passou a somar distancia. E onde mais importa: o kernel cresce com
+        // a roughness, entao a superficie que mais espalha raio (e mais ruido gera no hitDist) e
+        // justamente a que ganha mais vizinhos para mediar.
+        float  hitSum = centerHitDist * w0;
 
         [loop] for (uint i = 1; i <= RESOLVE_SAMPLES; ++i) {
             float2 E   = GGX_Hammersley(i - 1, RESOLVE_SAMPLES, rnd);
@@ -135,9 +150,15 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
             sum  += nrad.rgb * w;
             wsum += w;
+            hitSum += nrad.a * w;
         }
 
         resolved = sum / max(wsum, 1e-6f);
+        // Fade por combineAlpha: onde a reflexao esta desaparecendo por roughness, o guide vai a
+        // ZERO junto com ela. Zero e o valor SEGURO do kBufferTypeSpecularHitDistance — o RR cai
+        // no motion vector da superficie —, e sem isto a borda do corte de roughness entregaria
+        // distancia cheia num pixel que quase nao tem especular, que e o pior dos dois mundos.
+        outHitDist = (hitSum / max(wsum, 1e-6f)) * combineAlpha;
     }
 
     RWResolved[DTid.xy] = float4(resolved, outHitDist);

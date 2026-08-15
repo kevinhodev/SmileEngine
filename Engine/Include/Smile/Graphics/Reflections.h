@@ -2,11 +2,15 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/GIHitSampling.h"
+#include "Smile/Graphics/DDGI.h" // FDDGICascadeConstants
+#include "Smile/Graphics/GIFallback.h"
 #include "Smile/Graphics/ReGIR.h"
+#include "Smile/Graphics/RadianceCache.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstddef>
@@ -23,7 +27,7 @@ namespace Smile {
         Mat44 InvViewProj;       // FULL inverse view-proj (row-major)
         Vec4  CameraPos;         // xyz = camera world
         Vec4  ScreenParams;      // W, H, 1/W, 1/H
-        Vec4  ReflectParams;     // x=maxRoughnessToTrace, y=roughnessFadeLength, z=realHitShading, w=albedoLOD
+        Vec4  ReflectParams;     // x=maxRoughnessToTrace, y=roughnessFadeLength, z=livre, w=albedoLOD
         Vec4  GridMinSpacing;    // DDGI grid origin + spacing
         Vec4  GridCount;         // DDGI probe counts
         Vec4  AtlasParams;       // DDGI irradiance atlas (tile, W, H)
@@ -56,7 +60,17 @@ namespace Smile {
         // de trace que nao usam a cauda da agua declaram ViewProj/WaterEnvironmentParams como
         // preenchimento p/ alcancar este offset (convencao ja existente nesses arquivos).
         Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
+        // World radiance cache (FRadianceCacheShaderParams). Contrato por NOME com o
+        // RC_UNPACK_PARAMS do RadianceCache.hlsli; anexado no FIM como o SkyParams.
+        Vec4  RadianceCacheCamCell;
+        Vec4  RadianceCacheLodCapFlags;
+        Vec4  RadianceCacheResources;
+        // Cascatas do DDGI, para o gather do 2o bounce no HitShading. Mesmo bloco dos outros
+        // quatro cbuffers; o GIGridMinSpacing continua sendo a GROSSA (peso do volume).
+        FDDGICascadeConstants GICascades;
     };
+    static_assert(offsetof(ReflectionConstants, GICascades) == 688,
+                  "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
     static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 480,
                   "ReflectionConstants divergiu do cbuffer ReflectionCB");
     static_assert(offsetof(ReflectionConstants, ViewProj) == 544,
@@ -70,25 +84,33 @@ namespace Smile {
     // Fase 1: mirror, full-res, sem denoise. Passe de compute (trace, sombreado pelo MESMO
     // HitShading.hlsli do DDGI) -> composite aditivo no HDR. Reusa a geometria/atlas do DDGI.
     // No-op sem DXR/DDGI pronto. So roda sem MSAA (G-buffer single-sample).
-    class FReflections {
+    class FReflections : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Reflexos"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         // Cria a pipeline de trace (compute) + a pipeline de composite (grafica) + o CB. 1x.
         void Initialize(ID3D12Device* Device);
         void RecreatePipelines(ID3D12Device* Device);
 
         // (Re)cria a textura de saida (radiancia) no tamanho da tela e (re)monta as tabelas de
         // descritores. Chamar no setup da cena e em TODO resize (depth/gbuffer recriados). Os
-        // slots vem do DDGI (geometria/atlas), RaytracingScene (TLAS), Atmosphere (skyview) e
-        // Renderer (depth, gbuffer, BRDF LUT).
+        // slots vem do RaytracingScene (TLAS + InstanceGeo), Atmosphere (skyview), Renderer
+        // (depth, gbuffer, BRDF LUT) e do fallback indireto.
+        //
+        // O fallback chega como CONTRATO (FGIFallbackBindings): sem volume DDGI os tres slots sao
+        // os neutros do Renderer e o passe continua chegando a IsReady(). Reflexao nao precisa de
+        // sonda para existir — o gather do DDGI e so o terminador do 2o bounce dela.
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
-                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot, u32 IrradSlot,
+                            u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot,
+                            const FGIFallbackBindings& Fallback,
                             u32 DepthSlot, u32 GBufferSlot, u32 GBufferCSlot, u32 BRDFLutSlot,
                             u32 GBufferASlot, u32 VelocitySlot,
                             u32 SceneColorSlot, u32 SceneDepthSlot, u32 SceneColorMipCount,
                             u32 AtmosphereSpecularSlot, u32 HDRSpecularSlot,
-                            // t4/t5 do trace: atlas de distancia e ProbeData do DDGI — o 2o
-                            // bounce usa o gather completo (Chebyshev + skip), nao a trilinear.
-                            u32 DistSlot, u32 ProbeDataSlot,
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                             const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
 
@@ -101,7 +123,7 @@ namespace Smile {
                             const Vec3& CameraPos, const Vec3& PrevCameraPos,
                             u32 Width, u32 Height, const Vec3& SunDir,
                             f32 SunIntensity, const Vec3& SunColor, u32 FrameIndex, f32 SkyIntensity,
-                            bool RealHitShading, const Mat44& View, bool UseAtmosphereSky,
+                            const Mat44& View, bool UseAtmosphereSky,
                             f32 WaterEnvironmentIntensity,
                             u32 PunctualLightCount, u32 TemporalInstanceCount,
                             bool MotionHistoryValid);
@@ -152,7 +174,14 @@ namespace Smile {
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         // Gather do 2o bounce (dono = Renderer, empurra todo frame; ver FGIHitSampling).
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
+        // Cascatas: empurradas por FRAME (nao no SetGIParams, que so roda em setup/resize) porque
+        // a origem da cascata fina segue a camera. Dono = Renderer, fonte = FDDGI.
+        void SetGICascades(const FDDGICascadeConstants& C) { GICascadesCPU = C; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
+        // SEM o bit de update — o Renderer publica ShaderParams(false) aqui. A radiancia que este
+        // passe produz vale para UMA direcao de espelho e o cache nao guarda direcao; grava-la
+        // envenenaria as celulas para o DDGI e o ReSTIR GI. Consultar continua valido.
+        void SetRadianceCacheParams(const FRadianceCacheShaderParams& P) { RadianceCacheParams = P; }
         // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
         // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
         void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
@@ -188,8 +217,6 @@ namespace Smile {
         f32  GetMaxRoughness() const  { return MaxRoughnessToTrace; }
         void SetRoughnessFade(f32 V)  { RoughnessFadeLength = V; }
         f32  GetRoughnessFade() const { return RoughnessFadeLength; }
-        void SetRealHitShading(bool V){ RealHit = V; }
-        bool GetRealHitShading() const{ return RealHit; }
         // Back-face culling NOS RAIOS DE REFLEXAO. Politica por passe, no lugar da chave global
         // que existia na TLAS: o Lumen culla no passe de reflexao
         // (LumenReflectionHardwareRayTracing.usf:181) e NAO culla no gather do ReSTIR
@@ -223,17 +250,17 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
+        FComputePipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
         // Gemea instrumentada do trace (FShaderTimer): mesmas tabelas + slot falso da NVAPI.
         // PSO separada e nao um if no CB — a instrumentacao custa registrador no passe quente.
-        FVolumetricPipeline TracePSOTimed;
-        FVolumetricPipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
-        FVolumetricPipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
-        FVolumetricPipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
-        FVolumetricPipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
-        FVolumetricPipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
-        FVolumetricPipeline WaterTracePSO;    // 15 SRV [cena + water + copies + env], 2 UAV
-        FVolumetricPipeline WaterTemporalPSO; // 5 SRV, 1 UAV; historico exclusivo da agua
+        FComputePipeline TracePSOTimed;
+        FComputePipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
+        FComputePipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
+        FComputePipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
+        FComputePipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
+        FComputePipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
+        FComputePipeline WaterTracePSO;    // 15 SRV [cena + water + copies + env], 2 UAV
+        FComputePipeline WaterTemporalPSO; // 5 SRV, 1 UAV; historico exclusivo da agua
         Microsoft::WRL::ComPtr<ID3D12RootSignature> CompositeRS;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> WaterCompositePSO;
@@ -329,6 +356,7 @@ namespace Smile {
         Vec4 GIGridMinSpacing{ 0,0,0,1 };
         Vec4 GIGridCount{ 0,0,0,0 };
         Vec4 GIAtlasParams{ 6,1,1,0 };
+        FDDGICascadeConstants GICascadesCPU{};
         f32  GIMaxRayDist = 0.0f;
 
         u32  Width = 0, Height = 0;          // full-res (resolve, composite)
@@ -343,11 +371,11 @@ namespace Smile {
         FRayEpsilonProfile RayEps;        // perfil compartilhado (dono = Renderer)
         FGIHitSampling     GIHit;
         FReGIRShaderParams ReGIRParams{};
+        FRadianceCacheShaderParams RadianceCacheParams{};
         Vec4               SkyLutParams{};
         f32  MaxRoughnessToTrace = 0.6f;  // acima -> so DDGI (combine do Lumen)
         f32  RoughnessFadeLength = 0.1f;  // fade RT<->DDGI
         f32  AlbedoLOD           = 2.0f;  // LOD do albedo no hit (mais nitido que o difuso=4)
-        bool RealHit             = true;  // normal real no hit (igual ao DDGI Fase 1a)
         bool FoliageShadows      = true;  // folhagem nos shadow rays do hit (GATHER vs OPAQUE)
         bool BackfaceCull        = false; // culling nos raios de reflexao (ver setter)
         bool UseNrd              = false; // denoise via NRD RELAX especular (unificado c/ o GI)

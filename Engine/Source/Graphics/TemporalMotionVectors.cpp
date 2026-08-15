@@ -2,21 +2,21 @@
 #include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Scene/Scene.h"
-#include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     namespace {
         ComPtr<ID3D12Resource> CreateTexture2D(ID3D12Device* Device, u32 Width, u32 Height,
-                                               DXGI_FORMAT Format) {
+                                               DXGI_FORMAT Format, const char* Label = nullptr) {
             return GpuResources::CreateTex2D(Device, Width, Height, Format,
                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
+                                             nullptr, 1, 1, Label);
         }
 
         ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* Device, UINT64 Size, u8** Mapped) {
@@ -30,8 +30,7 @@ namespace Smile {
     }
 
     void FTemporalMotionVectors::Initialize(ID3D12Device* Device) {
-        SurfacePSO.Initialize(Device, "TemporalSurface.cs_6_6.cso", 3, 1, true);
-        DualPSO.Initialize(Device, "DualMotion.cs_6_0.cso", 4, 1, false);
+        CreatePipelines(Device);
         CB = CreateUploadBuffer(Device,
             static_cast<UINT64>(kFrames) * sizeof(FTemporalMotionConstants), &MappedCB);
         Initialized = true;
@@ -125,8 +124,10 @@ namespace Smile {
         constexpr DXGI_FORMAT SurfaceFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
         constexpr DXGI_FORMAT MotionFormat  = DXGI_FORMAT_R16G16_FLOAT;
         for (u32 i = 0; i < kFrames; ++i)
-            Surface[i] = CreateTexture2D(Device, Width, Height, SurfaceFormat);
-        ReliableMotion = CreateTexture2D(Device, Width, Height, MotionFormat);
+            Surface[i] = CreateTexture2D(Device, Width, Height, SurfaceFormat,
+                                         "Historico de superficie");
+        ReliableMotion = CreateTexture2D(Device, Width, Height, MotionFormat,
+                                         "Motion confiavel");
 
         auto MakeViews = [&](ID3D12Resource* Resource, DXGI_FORMAT Format, u32& SRV, u32& UAV) {
             SRV = SRVHeap.Allocate(1); UAV = SRVHeap.Allocate(1);
@@ -260,4 +261,20 @@ namespace Smile {
         if (Profiler) Profiler->End(CL);
         HistoryValid = true;
     }
+
+    void FTemporalMotionVectors::CreatePipelines(ID3D12Device* _Device) {
+        SurfacePSO.Initialize(_Device, "TemporalSurface.cs_6_6.cso", 3, 1, true);
+        DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 4, 1, false);
+    }
+
+
+    FPassShaderStems FTemporalMotionVectors::ShaderStems() const {
+        static const char* const kStems[] = { "TemporalSurface.cs", "DualMotion.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FTemporalMotionVectors::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

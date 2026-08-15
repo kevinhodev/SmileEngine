@@ -1,5 +1,5 @@
 #include "Smile/Graphics/SunShafts.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
 
@@ -216,37 +217,21 @@ namespace Smile {
     }
 
     void FSunShafts::CreateConstantBuffers(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(VolConstants) % 256 == 0 &&
+                      sizeof(TemporalConstants) % 256 == 0,
+                      "os dois CBs sao indexados por sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(VolConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        D3D12_RANGE NoRead{ 0, 0 };
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&VolCB)));
-        void* VolPtr = nullptr;
-        SMILE_HR(VolCB->Map(0, &NoRead, &VolPtr));
-        VolMappedBase = reinterpret_cast<u8*>(VolPtr);
+        const GpuResources::FUploadBuffer Vol = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(VolConstants), FCommandQueue::kFramesInFlight);
+        VolCB         = Vol.Resource;
+        VolMappedBase = Vol.Mapped;
         std::memset(VolMappedBase, 0,
                     static_cast<size_t>(FCommandQueue::kFramesInFlight) * sizeof(VolConstants));
 
-        Desc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(TemporalConstants);
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&TemporalCB)));
-        void* TempPtr = nullptr;
-        SMILE_HR(TemporalCB->Map(0, &NoRead, &TempPtr));
-        TemporalMappedBase = reinterpret_cast<u8*>(TempPtr);
+        const GpuResources::FUploadBuffer Temporal = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(TemporalConstants), FCommandQueue::kFramesInFlight);
+        TemporalCB         = Temporal.Resource;
+        TemporalMappedBase = Temporal.Mapped;
         std::memset(TemporalMappedBase, 0,
                     static_cast<size_t>(FCommandQueue::kFramesInFlight) * sizeof(TemporalConstants));
     }
@@ -259,36 +244,22 @@ namespace Smile {
         VolRT.Reset();
         for (u32 i = 0; i < 2; ++i) HistoryRT[i].Reset();
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = RTWidth;
-        Desc.Height           = RTHeight;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
-        D3D12_HEAP_PROPERTIES HeapProps{};
-        HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-        SMILE_HR(_Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&VolRT)));
-        VramTracker::Register(VolRT.Get(), EVramCategory::Sky);
+        auto CreateShaftTarget = [&](const char* Label) {
+            return GpuResources::CreateTex2D(
+                _Device, RTWidth, RTHeight, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, EVramCategory::Sky,
+                &ClearValue, 1, 1, Label);
+        };
+
+        VolRT    = CreateShaftTarget("Sun shafts");
         VolState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         for (u32 i = 0; i < 2; ++i) {
-            SMILE_HR(_Device->CreateCommittedResource(
-                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-                IID_PPV_ARGS(&HistoryRT[i])));
-            VramTracker::Register(HistoryRT[i].Get(), EVramCategory::Sky);
+            HistoryRT[i] = CreateShaftTarget("Sun shafts · historico");
             HistState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
@@ -428,4 +399,14 @@ namespace Smile {
         NextHistory  = Prev;
         HistoryValid = true;
     }
+
+    FPassShaderStems FSunShafts::ShaderStems() const {
+        static const char* const kStems[] = { "SunShaftsVolumetric.ps", "SunShaftsTemporal.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FSunShafts::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device);
+    }
+
 }

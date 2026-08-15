@@ -1,8 +1,9 @@
 #include "Smile/Graphics/ReSTIRGI.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuProfiler.h"
 #include "Smile/Graphics/RTMasks.h"
 #include "Smile/Graphics/ShaderTimer.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/DebugTargets.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
@@ -10,69 +11,41 @@
 #include <cstring>
 #include <exception>
 #include <vector>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
 namespace Smile {
     namespace {
-        constexpr DXGI_FORMAT kGIFormat  = DXGI_FORMAT_R16G16B16A16_FLOAT; 
-        constexpr DXGI_FORMAT kResFormat = DXGI_FORMAT_R32G32B32A32_FLOAT; 
+        constexpr DXGI_FORMAT kGIFormat   = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        // Reservoir: x2 precisa da faixa inteira de fp32 (e posicao de mundo — a RTXDI tambem a
+        // guarda assim); o resto vive empacotado em quatro uints. Ver ReSTIRReservoir.hlsli.
+        constexpr DXGI_FORMAT kRes0Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        constexpr DXGI_FORMAT kRes1Format = DXGI_FORMAT_R32G32B32A32_UINT;
 
-        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H, DXGI_FORMAT _Fmt) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = _W;
-            Desc.Height           = _H;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = _Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            ComPtr<ID3D12Resource> Tex;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::GI);
-            return Tex;
+        ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
+                                              DXGI_FORMAT _Fmt, const char* _Label) {
+            return GpuResources::CreateTex2D(
+                _Device, _W, _H, _Fmt, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI, nullptr, 1, 1, _Label);
         }
+
     }
 
     void FReSTIRGI::Initialize(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 5, true);
-        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
-        NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
-        // A gemea instrumentada so existe com NVAPI ligada (o FShaderTimer ja reservou o slot da
-        // extensao ANTES desta chamada — e o que faz o driver reconhecer o timer na criacao da
-        // PSO). O try aqui cobre o caso de o build ter a NVAPI mas nao o .cso da permutacao.
-        if (FShaderTimer::IsAvailable()) {
-            try {
-                TracePSOTimed.Initialize(_Device, "ReSTIRGITraceTimed.cs_6_6.cso", 14, 5, true, true);
-                TraceTimed = true;
-            } catch (const std::exception&) {
-                LogWarning("ReSTIRGITraceTimed.cso ausente — timer do ReSTIR GI indisponivel.");
-            }
-        }
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
         Initialized = true;
     }
 
     void FReSTIRGI::CreateConstantBuffer(ID3D12Device* _Device) {
-        const UINT64 Size = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(ReSTIRGIConstants);
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = Size;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        static_assert(sizeof(ReSTIRGIConstants) % 256 == 0,
+                      "o CBAddr indexa por sizeof(); root CBV exige 256-alinhado");
+
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(ReSTIRGIConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     void FReSTIRGI::SetGIParams(const Vec3& _GridMin, f32 _Spacing, const Vec3& _GridCount,
@@ -90,13 +63,20 @@ namespace Smile {
         Free(GITexSRV, 1);
         Free(GITexUAV, 1);
         for (u32 i = 0; i < 2; ++i) {
-            Free(ResASRV[i], 1); Free(ResBSRV[i], 1); Free(ResCSRV[i], 1); Free(ResDSRV[i], 1);
-            Free(ResAUAV[i], 1); Free(ResBUAV[i], 1); Free(ResCUAV[i], 1); Free(ResDUAV[i], 1);
-            Free(TraceTable[i], 14); Free(TraceUAVTable[i], 5); Free(SpatialTable[i], 10);
-            ResA[i].Reset(); ResB[i].Reset(); ResC[i].Reset(); ResD[i].Reset();
-            ResAState[i] = ResBState[i] = ResCState[i] = ResDState[i] = D3D12_RESOURCE_STATE_COMMON;
+            Free(Res0SRV[i], 1); Free(Res1SRV[i], 1);
+            Free(Res0UAV[i], 1); Free(Res1UAV[i], 1);
+            Free(TraceTable[i], 14); Free(TraceUAVTable[i], 3); Free(SpatialTable[i], 10);
+            Res0[i].Reset(); Res1[i].Reset();
+            Res0State[i] = Res1State[i] = D3D12_RESOURCE_STATE_COMMON;
         }
         Free(PackSrvTable, 4); Free(PackUavTable, 4); Free(NrdOutSRV, 1);
+        // O alvo da fonte entra aqui como todo o resto. Faltando, cada resize perdia dois slots do
+        // heap para sempre — e, se o setup seguinte falhasse, o SRV antigo continuaria registrado
+        // apontando para uma textura que ja nao existe.
+        Free(SourceDebugSRV, 1);
+        Free(SourceDebugUAV, 1);
+        SourceDebugTex.Reset();
+        SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
         GITexture.Reset();
         GITextureState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
@@ -104,32 +84,48 @@ namespace Smile {
 
     void FReSTIRGI::SetupForResize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                    u32 _Width, u32 _Height, u32 _TlasSlot, u32 _SkyViewSlot,
-                                   u32 _InstanceSlot, u32 _IrradSlot, u32 _DepthSlot,
-                                   u32 _GBufferSlot, u32 _VelocitySlot,
-                                   u32 _DistSlot, u32 _ProbeDataSlot) {
+                                   u32 _InstanceSlot, const FGIFallbackBindings& _Fallback,
+                                   u32 _DepthSlot, u32 _GBufferSlot, u32 _VelocitySlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
+        const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
+        const u32 _DistSlot      = _Fallback.DistanceAtlasSRV;
+        const u32 _ProbeDataSlot = _Fallback.ProbeDataSRV;
         // Valida os SETE slots, nao so tres: todos vao direto p/ CpuHandleStaging ao montar as
         // tabelas, e la kInvalidSlot (0xFFFFFFFF) vira base + 0xFFFFFFFF * HandleSize — ~128 GiB
         // fora do heap. O CopyDescriptors le desse endereco: access violation, ou pior, descriptor
         // corrompido em silencio. Hoje o Renderer garante os quatro que faltavam, mas isso e
         // invariante de call site, nao da classe.
+        //
+        // Os tres do fallback continuam validados mesmo com Available == false: `sem volume` quer
+        // dizer slot NEUTRO, nunca slot invalido. Se chegou invalido, o Renderer nao criou os
+        // recursos neutros — e ai o certo e nao montar a tabela, nao montar com um buraco.
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
             _SkyViewSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot ||
-            _IrradSlot == kInvalidSlot || _DepthSlot == kInvalidSlot ||
+            _IrradSlot == kInvalidSlot || _DistSlot == kInvalidSlot ||
+            _ProbeDataSlot == kInvalidSlot || _DepthSlot == kInvalidSlot ||
             _GBufferSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot)
             return;
 
         Width = _Width; Height = _Height;
         DepthSlot = _DepthSlot; GBufferSlot = _GBufferSlot; VelocitySlot = _VelocitySlot;
-        GITexture = CreateUAVTex2D(_Device, Width, Height, kGIFormat);
+        GITexture = CreateUAVTex2D(_Device, Width, Height, kGIFormat, "ReSTIR GI · saida");
         for (u32 i = 0; i < 2; ++i) {
-            ResA[i] = CreateUAVTex2D(_Device, Width, Height, kResFormat);
-            ResB[i] = CreateUAVTex2D(_Device, Width, Height, kResFormat);
-            ResC[i] = CreateUAVTex2D(_Device, Width, Height, kGIFormat);
-            ResD[i] = CreateUAVTex2D(_Device, Width, Height, kGIFormat);
+            // Os dois lados do ping-pong compartilham o rotulo: o breakdown soma e mostra o custo
+            // real do historico, que e o numero que interessa comparar entre builds.
+            Res0[i] = CreateUAVTex2D(_Device, Width, Height, kRes0Format, "ReSTIR GI · reservoir");
+            Res1[i] = CreateUAVTex2D(_Device, Width, Height, kRes1Format, "ReSTIR GI · reservoir");
         }
+        // Falsa-cor de diagnostico, entao 8 bits por canal bastam — nao e radiancia.
+        //
+        // CUSTO, para nao ser esquecido: RGBA8 permanente sao ~4,8 MiB nesta resolucao e ~31,6 MiB
+        // em 4K, alocados exista ou nao alguem olhando. Aceitavel para ferramenta de editor agora;
+        // se incomodar, o caminho e R8_UINT com o decode no visor — a classe cabe em 3 bits e
+        // economizaria 75%. A cor ja vive numa funcao so (RC_SourceColor), entao a troca e local.
+        SourceDebugTex = CreateUAVTex2D(_Device, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                        "ReSTIR GI · fonte do candidato");
         GITextureState = D3D12_RESOURCE_STATE_COMMON;
+        SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
         FrameParity = 0; NeedsClear = true;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
@@ -147,11 +143,11 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, Res, Uav, UavSlot);
         };
         MakeSrvUav(GITexture.Get(), kGIFormat, GITexSRV, GITexUAV);
+        MakeSrvUav(SourceDebugTex.Get(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                   SourceDebugSRV, SourceDebugUAV);
         for (u32 i = 0; i < 2; ++i) {
-            MakeSrvUav(ResA[i].Get(), kResFormat, ResASRV[i], ResAUAV[i]);
-            MakeSrvUav(ResB[i].Get(), kResFormat, ResBSRV[i], ResBUAV[i]);
-            MakeSrvUav(ResC[i].Get(), kGIFormat,  ResCSRV[i], ResCUAV[i]);
-            MakeSrvUav(ResD[i].Get(), kGIFormat,  ResDSRV[i], ResDUAV[i]);
+            MakeSrvUav(Res0[i].Get(), kRes0Format, Res0SRV[i], Res0UAV[i]);
+            MakeSrvUav(Res1[i].Get(), kRes1Format, Res1SRV[i], Res1UAV[i]);
         }
 
         auto CopyTable = [&](u32 Dst, const D3D12_CPU_DESCRIPTOR_HANDLE* Src, UINT Count) {
@@ -175,30 +171,30 @@ namespace Smile {
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_VelocitySlot),
-                _SRVHeap.CpuHandleStaging(ResASRV[prev]),
-                _SRVHeap.CpuHandleStaging(ResBSRV[prev]),
-                _SRVHeap.CpuHandleStaging(ResCSRV[prev]),
-                _SRVHeap.CpuHandleStaging(ResDSRV[prev]),
+                _SRVHeap.CpuHandleStaging(Res0SRV[prev]),
+                _SRVHeap.CpuHandleStaging(Res1SRV[prev]),
+                // t11/t12 continuam filler porque SetPunctualLightsSRV escreve as luzes no
+                // offset 13 fixo.
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
             };
             CopyTable(TraceTable[p], TSrc, 13);
 
-            TraceUAVTable[p] = _SRVHeap.Allocate(5);
-            D3D12_CPU_DESCRIPTOR_HANDLE USrc[5] = {
+            TraceUAVTable[p] = _SRVHeap.Allocate(3);
+            D3D12_CPU_DESCRIPTOR_HANDLE USrc[3] = {
                 _SRVHeap.CpuHandleStaging(GITexUAV),
-                _SRVHeap.CpuHandleStaging(ResAUAV[p]),
-                _SRVHeap.CpuHandleStaging(ResBUAV[p]),
-                _SRVHeap.CpuHandleStaging(ResCUAV[p]),
-                _SRVHeap.CpuHandleStaging(ResDUAV[p]),
+                _SRVHeap.CpuHandleStaging(Res0UAV[p]),
+                _SRVHeap.CpuHandleStaging(Res1UAV[p]),
             };
-            CopyTable(TraceUAVTable[p], USrc, 5);
+            CopyTable(TraceUAVTable[p], USrc, 3);
 
             SpatialTable[p] = _SRVHeap.Allocate(10);
             D3D12_CPU_DESCRIPTOR_HANDLE SSrc[10] = {
                 _SRVHeap.CpuHandleStaging(_TlasSlot),
-                _SRVHeap.CpuHandleStaging(ResASRV[p]),
-                _SRVHeap.CpuHandleStaging(ResBSRV[p]),
-                _SRVHeap.CpuHandleStaging(ResCSRV[p]),
-                _SRVHeap.CpuHandleStaging(ResDSRV[p]),
+                _SRVHeap.CpuHandleStaging(Res0SRV[p]),
+                _SRVHeap.CpuHandleStaging(Res1SRV[p]),
+                _SRVHeap.CpuHandleStaging(_InstanceSlot), // t3/t4: filler (ver acima)
+                _SRVHeap.CpuHandleStaging(_InstanceSlot),
                 _SRVHeap.CpuHandleStaging(_GBufferSlot),
                 _SRVHeap.CpuHandleStaging(_DepthSlot),
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
@@ -240,7 +236,7 @@ namespace Smile {
                                    u32 _Width, u32 _Height, const Vec3& _SunDir, f32 _SunIntensity,
                                    const Vec3& _SunColor, u32 _FrameIndex, f32 _SkyIntensity,
                                    const Mat44& _View, const Vec2& _JitterDeltaUv,
-                                   u32 _PunctualLightCount) {
+                                   u32 _PrevSurfaceSlot, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;
@@ -260,29 +256,51 @@ namespace Smile {
                                 RayEps.HitShadowRayBias };
         // GI cru (RR/None) usa teto de firefly mais apertado: sem o NRD pra limpar o residuo, os
         // outliers viram sparkles que o RR nao remove bem. O caminho NRD mantem o teto original.
-        CPU.ShadeParams     = { RealHit ? 1.0f : 0.0f, AlbedoLOD,
+        CPU.ShadeParams     = { 0.0f, AlbedoLOD, // .x livre
                                 UseNrd ? FireflyMax : FireflyMaxRaw, ValidateInterval };
-        CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f, Temporal ? 1.0f : 0.0f };
+        // Sem historico de superficie nao ha x1 anterior p/ reconstruir, entao o reuso temporal
+        // deste frame cai — o passe volta a valer so pela amostra inicial, que e exatamente o que
+        // ele ja fazia num frame de disoclusao. Nao invalida o reservoir: assim que o slot voltar,
+        // o historico ainda esta la e o acumulo retoma sem piscar.
+        const bool HasSurfaceHistory = _PrevSurfaceSlot != kInvalidSlot;
+        CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f,
+                                (Temporal && HasSurfaceHistory) ? 1.0f : 0.0f };
         CPU.SpatialParams   = { SpatialRadius, SpatialCount, Spatial ? 1.0f : 0.0f, NormalReject };
         CPU.JitterParams    = { _JitterDeltaUv.X, _JitterDeltaUv.Y,
                                 static_cast<f32>(_PunctualLightCount), RayEps.MaxAge }; // z = luzes (F5)
-        CPU.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        CPU.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, BoilingStrength,
+                                TemporalBiasCorr ? 1.0f : 0.0f,
+                                JacobianKillBackface ? 1.0f : 0.0f };
         CPU.RayEpsA         = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                                 RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB         = { RayEps.ShadowRayTMin, RayEps.VisRayTMin, RayEps.VisRayEndMargin,
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
-                                GIHit.SkipMode };
-        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
+                                GIHit.SkipModePacked() };
+        // .w = piso de roughness do hit secundario: o reservoir e cache NAO-direcional (ver
+        // FGIHitSampling::SecondaryRoughnessMin e o bloco no ShadeSurfaceHit).
+        CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,
+                                GIHit.SecondaryRoughnessMin };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         CPU.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;
         CPU.ReGIRResources        = ReGIRParams.Resources;
+        CPU.RadianceCacheCamCell     = RadianceCacheParams.CameraPosCell;
+        CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
+        CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
+        CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
         // O slot bindless viaja como float; -1 e o sentinela de "captura off" (o shader testa
         // < 0). Sem a permutacao instrumentada isto nunca e lido, mas fica coerente de todo jeito.
+        // `.y` = alvo da FONTE do candidato, pelo MESMO sentinela. -1 desliga, e o shader testa
+        // `< 0` — nunca converter kInvalidSlot para float: 0xFFFFFFFF nao e representavel exato em
+        // f32 e viraria um indice bindless enorme, valido para o branch e catastrofico no heap.
         CPU.DebugParams           = { (TraceTimed && TimerSlot != kInvalidSlot)
                                           ? static_cast<f32>(TimerSlot) : -1.0f,
+                                      (SourceDebug && SourceDebugUAV != kInvalidSlot)
+                                          ? static_cast<f32>(SourceDebugUAV) : -1.0f,
+                                      0.0f, 0.0f };
+        CPU.HistoryParams         = { static_cast<f32>(HasSurfaceHistory ? _PrevSurfaceSlot : 0u),
                                       0.0f, 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
@@ -313,28 +331,36 @@ namespace Smile {
         const u32 p = FrameParity, prev = 1u - FrameParity;
 
         if (NeedsClear) {
-            const float Zero[4] = { 0, 0, 0, 0 };
-            auto ClearRes = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES& St, u32 UavSlot) {
-                Transition(_CL, R, St, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                _CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(UavSlot),
-                                                   _SRVHeap.CpuHandleStaging(UavSlot), R, Zero, 0, nullptr);
-            };
-            ClearRes(ResA[prev].Get(), ResAState[prev], ResAUAV[prev]);
-            ClearRes(ResB[prev].Get(), ResBState[prev], ResBUAV[prev]);
-            ClearRes(ResC[prev].Get(), ResCState[prev], ResCUAV[prev]);
-            ClearRes(ResD[prev].Get(), ResDState[prev], ResDUAV[prev]);
+            // Res1 e um formato INTEIRO: limpar com ClearUnorderedAccessViewFloat nele e undefined
+            // behavior (a runtime le o clear value como float e o descriptor diz UINT). O que
+            // importa zerar de fato e o canal de M — M == 0 e o unico sinal de "sem historico"
+            // que o Pass A checa antes de tocar em qualquer outro campo.
+            Transition(_CL, Res0[prev].Get(), Res0State[prev], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            const float ZeroF[4] = { 0, 0, 0, 0 };
+            _CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(Res0UAV[prev]),
+                                               _SRVHeap.CpuHandleStaging(Res0UAV[prev]),
+                                               Res0[prev].Get(), ZeroF, 0, nullptr);
+            Transition(_CL, Res1[prev].Get(), Res1State[prev], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            const UINT ZeroU[4] = { 0, 0, 0, 0 };
+            _CL->ClearUnorderedAccessViewUint(_SRVHeap.GpuHandle(Res1UAV[prev]),
+                                              _SRVHeap.CpuHandleStaging(Res1UAV[prev]),
+                                              Res1[prev].Get(), ZeroU, 0, nullptr);
             NeedsClear = false;
         }
 
-        Transition(_CL, ResA[prev].Get(), ResAState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        Transition(_CL, ResB[prev].Get(), ResBState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        Transition(_CL, ResC[prev].Get(), ResCState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        Transition(_CL, ResD[prev].Get(), ResDState[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        Transition(_CL, ResA[p].Get(), ResAState[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, ResB[p].Get(), ResBState[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, ResC[p].Get(), ResCState[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, ResD[p].Get(), ResDState[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, Res0[prev].Get(), Res0State[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, Res1[prev].Get(), Res1State[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, Res0[p].Get(), Res0State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, Res1[p].Get(), Res1State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        // So com o debug LIGADO. A justificativa anterior ("o estado e do recurso, nao do knob")
+        // nao se sustenta: o ultimo frame ligado termina em SRV, e desligado o recurso pode
+        // simplesmente ficar la — ninguem escreve nele. Sem o gate eram duas barreiras por frame
+        // (SRV->UAV->SRV) para um alvo que o shader nem toca.
+        if (SourceDebug && SourceDebugTex) {
+            Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
 
         if (_Profiler) _Profiler->Begin(_CL, "Temporal + Trace Secundário");
         const bool Timed = TraceTimed && TimerSlot != kInvalidSlot;
@@ -344,17 +370,16 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable[p]));
         // O UAV falso da extensao: o driver troca o acesso, mas a tabela precisa estar setada.
         if (Timed)
-            _CL->SetComputeRootDescriptorTable(FVolumetricPipeline::kNvApiRootParam,
+            _CL->SetComputeRootDescriptorTable(FComputePipeline::kNvApiRootParam,
                                                FShaderTimer::ExtnTable(_SRVHeap));
         _CL->Dispatch(GX, GY, 1);
         if (_Profiler) _Profiler->End(_CL);
 
+
         if (Spatial) {
             if (_Profiler) _Profiler->Begin(_CL, "Reuso Espacial + Resolve");
-            Transition(_CL, ResA[p].Get(), ResAState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Transition(_CL, ResB[p].Get(), ResBState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Transition(_CL, ResC[p].Get(), ResCState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Transition(_CL, ResD[p].Get(), ResDState[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Transition(_CL, Res0[p].Get(), Res0State[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Transition(_CL, Res1[p].Get(), Res1State[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             D3D12_RESOURCE_BARRIER UB{};
             UB.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
             UB.UAV.pResource = GITexture.Get();
@@ -378,12 +403,44 @@ namespace Smile {
         Transition(_CL, GITexture.Get(), GITextureState,
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // O alvo da fonte volta para leitura pelo mesmo motivo da GITexture crua: ele e registrado
+        // no DebugTargets e o FDebugView nao emite barreira nenhuma — sem esta, o visor leria um
+        // recurso em UNORDERED_ACCESS. Gatada igual a de subida: o par abre e fecha junto, entao o
+        // recurso nunca fica em UAV depois de um frame com o debug desligado.
+        if (SourceDebug && SourceDebugTex) {
+            Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         FrameParity ^= 1u;
+    }
+
+    void FReSTIRGI::OnRegisterDebugTargets() {
+        // Exige o toggle LIGADO, e nao so o recurso existir: registrado com o debug desligado, o
+        // alvo aparece na lista e o operador pode seleciona-lo — para ver uma textura que ninguem
+        // escreveu neste frame (lixo de alocacao, ou o mapa de quando o toggle esteve ligado).
+        // Um alvo so deve ser oferecido quando alguem esta enchendo ele.
+        if (!SourceDebug || !SourceDebugTex || SourceDebugSRV == kInvalidSlot) return;
+        // Raw: o shader ja escreve cor de diagnostico em faixa visivel. Passar por tonemap
+        // distorceria a leitura — verde e laranja tem de sair como sao.
+        DebugTargets::Register(kSourceDebugTargetName, SourceDebugSRV, EDebugDecode::Raw,
+                               0, 1, 1.0f, 0, /*LinearFilter*/ false);
     }
 
     void FReSTIRGI::SetupNrdPack(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                  ID3D12Resource* _ViewZ, ID3D12Resource* _NormalRough,
                                  ID3D12Resource* _Mv, ID3D12Resource* _DiffRadHit, ID3D12Resource* _Out) {
+        // Idempotente pelo mesmo motivo do ReSTIR DI: com o NRD alocado sob demanda
+        // (Renderer::ReconcileNrdAllocation) isto e re-chamado a cada toggle do denoiser, e sem
+        // devolver os slots cada troca vazaria 9 descritores.
+        {
+            auto FreeIf = [&](u32& Slot, u32 Count) {
+                if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
+            };
+            FreeIf(PackUavTable, 4);
+            FreeIf(PackSrvTable, 4);
+            FreeIf(NrdOutSRV, 1);
+        }
         // Os CINCO recursos, nao so dois: ponteiro nulo vira descriptor nulo (legal em D3D12), as
         // escritas do pack somem em silencio e o NRD denoisa lixo sem erro nenhum.
         if (!Ready || !_ViewZ || !_NormalRough || !_Mv || !_DiffRadHit || !_Out) return;
@@ -427,4 +484,31 @@ namespace Smile {
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(PackUavTable));
         _CL->Dispatch(GX, GY, 1);
     }
+
+    void FReSTIRGI::CreatePipelines(ID3D12Device* _Device) {
+        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 3, true);
+        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
+        NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
+
+        if (FShaderTimer::IsAvailable()) {
+            try {
+                TracePSOTimed.Initialize(_Device, "ReSTIRGITraceTimed.cs_6_6.cso", 14, 3, true, true);
+                TraceTimed = true;
+            } catch (const std::exception&) {
+                LogWarning("ReSTIRGITraceTimed.cso Ausente — Timer do ReSTIR GI Indisponível.");
+            }
+        }
+    }
+
+
+    FPassShaderStems FReSTIRGI::ShaderStems() const {
+        static const char* const kStems[] = { "ReSTIRGITrace.cs", "ReSTIRGITraceTimed.cs",
+                                              "ReSTIRGISpatial.cs", "ReSTIRNrdPack.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FReSTIRGI::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

@@ -8,4 +8,8 @@
 #define SMILE_VERSION_PATCH  @SMILE_VERSION_PATCH@
 #define SMILE_BUILD_NUMBER   "@SMILE_BUILD_NUMBER@"
 #define SMILE_BUILD_DATE     "@SMILE_BUILD_DATE@"
+// Commit da BUILD (sufixo -dirty quando a arvore tinha alteracoes). Carimbado a cada build pelo
+// alvo SmileVersionStamp, e nao no configure: ele identifica a build no manifesto das capturas
+// deterministicas, entao nao pode apontar para o commit anterior depois de um rebuild.
+#define SMILE_BUILD_COMMIT   "@SMILE_BUILD_COMMIT@"
 #define SMILE_VERSION_STRING "@SMILE_VERSION_MAJOR@.@SMILE_VERSION_MINOR@.@SMILE_VERSION_PATCH@"

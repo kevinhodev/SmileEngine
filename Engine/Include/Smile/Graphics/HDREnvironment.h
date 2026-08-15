@@ -4,6 +4,7 @@
 #include "Smile/Graphics/CubeTexture.h"
 #include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <string>
@@ -11,8 +12,14 @@
 namespace Smile {
     class FCommandQueue;
 
-    class FHDREnvironment {
+    class FHDREnvironment : public FPipelineOwner {
     public:
+        // --- Dono de pipeline (RenderPass.h): tem shader, mas NAO grava frame ---
+        const char* Name() const override { return "IBL / ambiente HDR"; }
+        bool IsInitialized() const override { return HDRLoaded; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         static constexpr u32 kEnvCubeSize        = 1024;
         static constexpr u32 kEnvCubeMips        = 11; 
         static constexpr u32 kIrradianceSize     = 32;
@@ -34,6 +41,7 @@ namespace Smile {
         bool HasHDRLoaded()   const { return HDRLoaded; }
 
     private:
+        void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         u32 UploadEquirect2D(ID3D12Device* Device, FCommandQueue& CmdQueue,
                              FTextureSRVHeap& SRVHeap,
                              const float* Pixels, u32 Width, u32 Height);

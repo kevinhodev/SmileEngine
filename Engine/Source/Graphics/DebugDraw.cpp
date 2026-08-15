@@ -1,13 +1,14 @@
 #include "Smile/Graphics/DebugDraw.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Graphics/ShaderUtils.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
 #include <algorithm>
 #include <string>
+#include <iterator>
 
 namespace Smile {
     static constexpr u32 kFIF = FCommandQueue::kFramesInFlight;
@@ -46,19 +47,6 @@ namespace Smile {
         if (OverlayDSVHeap.Native() == nullptr)
             OverlayDSVHeap.Initialize(Device_, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
 
-        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = Width;
-        Desc.Height           = Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kOverlayDepthFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL |
-                                D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
-
         D3D12_CLEAR_VALUE Clear{};
         Clear.Format               = kOverlayDepthFormat;
         Clear.DepthStencil.Depth   = kClearDepth;
@@ -67,9 +55,11 @@ namespace Smile {
         // Sai do escopo antes de criar o novo: o Renderer da Flush na fila antes do resize, entao
         // ninguem esta lendo o antigo.
         OverlayDepth.Reset();
-        SMILE_HR(Device_->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &Clear, IID_PPV_ARGS(&OverlayDepth)));
-        VramTracker::Register(OverlayDepth.Get(), EVramCategory::Misc);
+        OverlayDepth = GpuResources::CreateTex2D(
+            Device_, Width, Height, kOverlayDepthFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE, EVramCategory::Misc, &Clear,
+            1, 1, "Depth do overlay");
 
         D3D12_DEPTH_STENCIL_VIEW_DESC DSVDesc{};
         DSVDesc.Format        = kOverlayDepthFormat;
@@ -290,36 +280,22 @@ namespace Smile {
     }
 
     void FDebugDraw::CreateBuffers(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        D3D12_RANGE NoRead{ 0, 0 };
+        // Um bloco por frame em voo em cada buffer. Os tres VBs sao vertex buffer e nao CB:
+        // arredondar para 256 mudaria o passo que o Render usa (kLineStride/kVBStride/
+        // sizeof(IconVertex)), entao o alinhamento de CBV fica desligado neles.
+        auto Make = [&](u64 SliceBytes, u32 SliceCount, bool ForCB,
+                        Microsoft::WRL::ComPtr<ID3D12Resource>& Out, u8*& Mapped) {
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(Device, SliceBytes, SliceCount, ForCB);
+            Out    = Upload.Resource;
+            Mapped = Upload.Mapped;
+        };
 
-        Desc.Width = 256ull * kFIF;
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
-
-        Desc.Width = static_cast<u64>(kMaxLines) * kLineStride * kFIF;
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&LineVB)));
-        SMILE_HR(LineVB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedLineVB)));
-
-        Desc.Width = static_cast<u64>(kMaxTriVerts) * kVBStride * kFIF;
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&TriVB)));
-        SMILE_HR(TriVB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedTriVB)));
-
-        Desc.Width = static_cast<u64>(kMaxIconVerts) * sizeof(IconVertex) * kFIF;
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&IconVB)));
-        SMILE_HR(IconVB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedIconVB)));
+        Make(256, kFIF, true, CB, MappedCB);
+        Make(static_cast<u64>(kMaxLines) * kLineStride, kFIF, false, LineVB, MappedLineVB);
+        Make(static_cast<u64>(kMaxTriVerts) * kVBStride, kFIF, false, TriVB, MappedTriVB);
+        Make(static_cast<u64>(kMaxIconVerts) * sizeof(IconVertex), kFIF, false,
+             IconVB, MappedIconVB);
     }
 
     void FDebugDraw::Render(ID3D12GraphicsCommandList* CmdList, u32 FrameSlot, const Mat44& ViewProj,
@@ -510,4 +486,14 @@ namespace Smile {
             CmdList->DrawInstanced(numIcon, 1, 0, 0);
         }
     }
+
+    FPassShaderStems FDebugDraw::ShaderStems() const {
+        static const char* const kStems[] = { "DebugDraw.vs", "DebugDraw.ps", "DebugDrawOccluded.ps", "DebugDrawLine.vs", "DebugDrawLine.ps", "DebugDrawLineDepth.ps", "LightIcon.vs", "LightIcon.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDebugDraw::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) RecreatePSOs(_Ctx.Device);
+    }
+
 }

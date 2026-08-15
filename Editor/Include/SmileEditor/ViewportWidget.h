@@ -85,6 +85,7 @@ namespace SmileEditor {
         Q_PROPERTY(QString gpuFrameText READ GetGpuFrameText NOTIFY TelemetryUpdated)
         Q_PROPERTY(double gpuFrameMs READ GetGpuFrameMs NOTIFY TelemetryUpdated)
         Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY TelemetryUpdated)
+        Q_PROPERTY(QVariantList shadowCascades READ GetShadowCascades NOTIFY TelemetryUpdated)
 
     public:
         // Valores explicitos preservados (o QML compara viewMode com inteiros fixos; o 1 era o
@@ -157,6 +158,7 @@ namespace SmileEditor {
         QString           GetGpuFrameText() const;
         double            GetGpuFrameMs() const;
         QVariantList      GetGpuTimings() const;
+        QVariantList      GetShadowCascades() const;
 
         Q_INVOKABLE void SelectLit();
         Q_INVOKABLE void SelectReflectionHeatmap();
@@ -249,6 +251,7 @@ namespace SmileEditor {
         void CaptureTelemetry(Smile::Renderer& Renderer);
         QVariantList BuildVRAMBreakdown(Smile::Renderer& Renderer) const;
         QVariantList BuildGpuTimings(Smile::Renderer& Renderer);
+        QVariantList BuildShadowCascades(Smile::Renderer& Renderer) const;
         // Publico p/ o RenderSettingsBridge: os knobs que recriam recurso precisam da MESMA
         // fila que serializa com os frames.
     public:
@@ -263,8 +266,17 @@ namespace SmileEditor {
         // navegar pelo grid, clicar num contribuinte, fechar. O foco automatico do point-pick
         // chama o renderer direto e NAO passa por aqui, de proposito (ver DebugProbeBaseIndex).
         void SelectDebugProbe(int ProbeIndex);
-        bool GetDebugProbeCoordValues(int& X, int& Y, int& Z,
-                                      int& CountX, int& CountY, int& CountZ) const;
+        // Decomposicao unica do indice GLOBAL da sonda inspecionada. Ver o .cpp: os cinco
+        // consumidores tem de concordar, e antes cada um refazia a conta como se o indice fosse
+        // local.
+        struct FDebugProbeCoord {
+            int  X = 0, Y = 0, Z = 0;
+            int  CountX = 0, CountY = 0, CountZ = 0;
+            int  Cascade = 0, LocalIndex = 0;
+            Smile::Vec3 GridMin{};
+            Smile::f32  Spacing = 1.0f;
+        };
+        bool GetDebugProbeCoordValues(FDebugProbeCoord& Out) const;
 
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
@@ -317,6 +329,7 @@ namespace SmileEditor {
             QString      GPUFrameText = QStringLiteral("—");
             double       GPUFrameMs = 0.0;
             QVariantList GpuTimings;
+            QVariantList ShadowCascades;
         } Telemetry;
         // Ranking visual dos passes GPU precisa de histerese entre snapshots para nao ficar
         // trocando de posicao quando dois passes tem custo praticamente igual.

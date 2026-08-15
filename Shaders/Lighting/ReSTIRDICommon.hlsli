@@ -78,6 +78,13 @@ void DIResFinalize(inout ReSTIRDIReservoir r, float selectedTarget) {
         ? r.WeightSum / (r.M * selectedTarget) : 0.0f;
 }
 
+// O reservoir mora em DUAS texturas, mas a primeira e so um R32_FLOAT com o W. O ponto visivel X1
+// vivia ali num RGBA32F inteiro e era redundante: no Pass B ele sai do depth do vizinho (que o
+// passe ja carrega pro teste de ceu — e a correcao de vies ja reconstruia posicao assim), e no
+// Pass A o X1 do frame ANTERIOR sai do historico de superficie do FTemporalMotionVectors, que
+// grava `InvViewProj * (ndc, deviceZ)` com a mesma matriz e o mesmo depth. Sao 12 B/pixel por
+// copia do ping-pong. E o que a RTXDI faz: ela nunca guarda o ponto visivel no reservoir.
+//
 // ResB e R32G32B32A32_UINT. Layout:
 //   .x = LightIndex, 32 bits (0xFFFFFFFF = sem amostra)
 //   .y = UV da amostra na superficie da luz, unorm 16+16. Um triangulo emissivo nao e identificado
@@ -107,11 +114,12 @@ void DI_UnpackMAge(uint packed, out float M, out float age) {
     age = (float)((packed >> 16) & 0xFFu);
 }
 
-ReSTIRDIReservoir DI_LoadReservoir(float4 a, uint4 b) {
+// X1 NAO vem daqui: o caller preenche com o ponto reconstruido (ver o cabecalho acima). Fica em
+// zero ate la, e todo consumidor de X1 escreve antes de ler.
+ReSTIRDIReservoir DI_LoadReservoir(float w, uint4 b) {
     ReSTIRDIReservoir r;
     DIResInit(r);
-    r.X1 = a.xyz;
-    r.W = a.w;
+    r.W = w;
     r.LightIndex = b.x;
     // UV vive em [0,1], entao usa o unorm direto em vez do mapeamento [-1,1] da normal.
     r.UV = float2(b.y & 0xFFFFu, b.y >> 16) * (1.0f / 65535.0f);
@@ -122,8 +130,8 @@ ReSTIRDIReservoir DI_LoadReservoir(float4 a, uint4 b) {
 }
 
 void DI_StoreReservoir(ReSTIRDIReservoir r, float age,
-                       out float4 a, out uint4 b) {
-    a = float4(r.X1, r.W);
+                       out float w, out uint4 b) {
+    w = r.W;
     const uint2 quv = (uint2)(saturate(r.UV) * 65535.0f + 0.5f);
     b = uint4(r.LightIndex, quv.x | (quv.y << 16), DI_PackMAge(r.M, age),
               DI_PackUnorm16x2(r.N1Oct));

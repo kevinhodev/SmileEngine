@@ -1,4 +1,5 @@
 #include "Smile/Scene/Scene.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/UploadQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
@@ -85,26 +86,13 @@ namespace Smile {
             Microsoft::WRL::ComPtr<ID3D12Resource> Pool =
                 FGpuMesh::CreatePoolBuffer(_Device, Total);
 
-            Microsoft::WRL::ComPtr<ID3D12Resource> Staging;
-            u8* Mapped = nullptr;
-            {
-                D3D12_HEAP_PROPERTIES HeapProps{};
-                HeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-                D3D12_RESOURCE_DESC ResourceDesc{};
-                ResourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-                ResourceDesc.Width            = Total;
-                ResourceDesc.Height           = 1;
-                ResourceDesc.DepthOrArraySize = 1;
-                ResourceDesc.MipLevels        = 1;
-                ResourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
-                ResourceDesc.SampleDesc       = { 1, 0 };
-                ResourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-                SMILE_HR(_Device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
-                         &ResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                         IID_PPV_ARGS(&Staging)));
-                D3D12_RANGE NoReadRange{ 0, 0 };
-                SMILE_HR(Staging->Map(0, &NoReadRange, reinterpret_cast<void**>(&Mapped)));
-            }
+            // Staging do chunk INTEIRO (ate 256 MB). Fica fora do ring da fila de upload de
+            // proposito: e uma alocacao grande e unica por chunk, nao o churn de uma por
+            // recurso que o ring existe para resolver.
+            const GpuResources::FUploadBuffer StagingBuffer =
+                GpuResources::CreateUploadBuffer(_Device, Total, 1, false);
+            Microsoft::WRL::ComPtr<ID3D12Resource> Staging = StagingBuffer.Resource;
+            u8* Mapped = StagingBuffer.Mapped;
 
             u64 VbCursor = 0, IbCursor = VbTotal;
             for (size_t m = First; m < i; ++m) {
@@ -124,7 +112,8 @@ namespace Smile {
                 Out.push_back(Gpu.get());
                 MeshLibrary.push_back(std::move(Gpu));
             }
-            Staging->Unmap(0, nullptr);
+            // Sem Unmap: o staging da fabrica e mapeado de forma persistente e morre com o
+            // Keep abaixo, quando a fence da copia passar.
 
             // Fila COPY, sem bloquear e sem barrier: buffer promove/decai implicitamente
             // (VB/IB/SRV de BLAS leem via promotion na fila direta). O staging fica retido
@@ -145,6 +134,9 @@ namespace Smile {
         RenderableIndexById_.emplace(Added.Id,
                                      static_cast<u32>(RenderableList.size() - 1));
         ++StructureVersion_;
+        // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
+        // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
+        ++StaticCastersVersion_;
         // Tambem a de transforms: a TLAS ganhou uma instancia, e quem reage a ela e o rebuild
         // por frame do RenderFrame. Durante o load isto e so um contador subindo 2,5k vezes
         // antes de existir TLAS — o custo e zero e a alternativa (bumpar so em quem cria com a
@@ -163,6 +155,9 @@ namespace Smile {
         RenderableList.erase(RenderableList.begin() + Index);
         RebuildRenderableIndex();
         ++StructureVersion_;
+        // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
+        // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
+        ++StaticCastersVersion_;
         ++TransformsVersion_; // a TLAS tem uma instancia a menos
         return true;
     }
@@ -235,6 +230,9 @@ namespace Smile {
         MeshLibrary.clear();
         LightList.clear();
         ++StructureVersion_;
+        // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
+        // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
+        ++StaticCastersVersion_;
         // NextObjectId_ NAO volta a zero: um Id nunca pode ser reusado dentro
         // da sessao, senao uma referencia velha (selecao, undo futuro) passaria a apontar em
         // silencio para um objeto diferente da cena nova em vez de simplesmente nao resolver.

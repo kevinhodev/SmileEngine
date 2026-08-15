@@ -14,6 +14,20 @@ namespace Smile {
     // que e o que permite acrescentar um acumulador novo sem varrer os setters.
     void FRenderSettings::Invalidate(EHistoryTarget _Targets) {
         using T = EHistoryTarget;
+        // FUNIL DA CAPTURA. Todo knob que derruba acumulador passa por aqui, e derrubar um
+        // acumulador no meio do aquecimento quebra o contrato "N frames apos UM reset" — a
+        // captura sairia sub-aquecida com o manifesto afirmando N. Como este e o ponto unico por
+        // onde a invalidacao passa, um gate aqui cobre os ~40 setters de uma vez, em vez de um
+        // gate por setter que o proximo knob esqueceria.
+        //
+        // O proprio capturador entra por aqui — no preset, no reset e na restauracao —, e por isso
+        // a excecao. Ela cobre o UpdateFrameCapture INTEIRO e nao so o reset: a restauracao passa
+        // pelos setters, e um pedido novo enfileirado no mesmo frame seria descartado por ela.
+        //
+        // NAO e completo, e vale registrar o limite: TemporalMotion e NrdDirect tem chamadas
+        // diretas de InvalidateHistory no Renderer que nao passam pelo funil.
+        if (!R.CaptureSetupGuard)
+            R.Capture.Cancel("um ajuste derrubou historico durante o aquecimento");
         if (HasTarget(_Targets, T::DDGIAtlas))        R.DDGI.ResetHistoryOnce();
         if (HasTarget(_Targets, T::ReGIR))            R.ReGIR.InvalidateHistory();
         if (HasTarget(_Targets, T::ReSTIRGI))         R.ReSTIRGI.InvalidateHistory();
@@ -28,6 +42,12 @@ namespace Smile {
         if (HasTarget(_Targets, T::TemporalMotion))   R.TemporalMotion.InvalidateHistory();
         if (HasTarget(_Targets, T::HiZOcclusion))     R.HiZ.InvalidateResults();
         if (HasTarget(_Targets, T::ProbeDiagnostic))  R.RepeatDebugProbePoint();
+        if (HasTarget(_Targets, T::RadianceCache))    R.RadianceCache.ResetOnce();
+        if (HasTarget(_Targets, T::SunShafts))        R.SunShafts.ResetHistory();
+        if (HasTarget(_Targets, T::OceanTemporal)) {
+            for (u32 C = 0; C < Renderer::kOceanCascades; ++C)
+                R.Ocean[C].ResetTemporalHistory();
+        }
     }
 
     // === Apresentacao e escala ==========================================================
@@ -89,6 +109,9 @@ namespace Smile {
         if (R.Denoiser == EDenoiser::DLSS_RR) // RR faz o upscale; trava o upscaler em DLSS
             SetUpscaler(EUpscaler::DLSS);
         R.ApplyUpscalerScale();
+        // Depois do ApplyUpscalerScale: ele pode disparar RecreateInternalTargets (que ja
+        // reconcilia), e ai isto vira no-op. Sair do NRD devolve os ~336 MB das duas instancias.
+        R.ReconcileNrdAllocation();
     }
 
     EDenoiser FRenderSettings::GetDenoiser() const { return R.Denoiser; }
@@ -120,6 +143,28 @@ namespace Smile {
 
     // === Iluminacao global ==============================================================
 
+    // O mapa de fonte e produzido DENTRO do RecordTrace do ReSTIR GI. Sem esse passe, ninguem
+    // escreve no alvo — e ele continuaria registrado, exibindo o ultimo frame para sempre.
+    //
+    // Desliga o toggle em vez de calcular um "efetivo": visualizacao de diagnostico nao precisa
+    // sobreviver ao passe que a produz, e o estado que sobra na UI passa a ser verdadeiro em vez
+    // de uma promessa suspensa. Religar o ReSTIR GI NAO traz o mapa de volta sozinho — quem quer
+    // ver pede de novo, e o toggle diz exatamente o que esta acontecendo.
+    void FRenderSettings::DropGISourceDebugIfOrphaned() {
+        if (!R.ReSTIRGI.GetSourceDebug()) return;
+        // A CONDICAO agora esta aqui dentro, e o nome do metodo passou a ser verdade. Ela vivia nos
+        // chamadores, e com o seletor da Fase 6 apareceram tres — o toggle do ReSTIR GI, o combo do
+        // primario e o detector de borda do topo do frame —, cada um com sua chance de errar o
+        // criterio. O produtor e o PRIMARIO EFETIVO e nao `UseReSTIRGI`: com `primario = DDGI` o
+        // passe esta pronto e mesmo assim nao traca.
+        if (R.EffectivePrimary() == EIndirectPrimary::ReSTIR_SHaRC) return;
+        R.ReSTIRGI.SetSourceDebug(false);
+        R.RegisterDebugTargets(); // o alvo so e oferecido enquanto alguem o enche
+    }
+
+    // NAO derruba o mapa da fonte: `UseGI` e o volume DDGI, e o trace do ReSTIR GI — que escreve o
+    // mapa — roda sem ele. Derrubar aqui matava o caso mais interessante do visualizador, que e
+    // olhar de onde o indireto vem com o DDGI fora.
     void FRenderSettings::SetUseGI(bool _V) { R.UseGI = _V; }
     bool FRenderSettings::GetUseGI() const  { return R.UseGI; }
 
@@ -131,6 +176,338 @@ namespace Smile {
     bool FRenderSettings::GetUseReGIR() const { return R.UseReGIR; }
     bool FRenderSettings::ReGIRActive() const { return R.UseReGIR && R.ReGIR.IsReady(); }
 
+    void FRenderSettings::SetRadianceCacheEnabled(bool _V) {
+        if (_V == R.RadianceCache.GetEnabled()) return;
+        R.RadianceCache.SetEnabled(_V);
+        // O que o raio secundario DEVOLVE muda — e esse valor realimenta o atlas do DDGI e os
+        // reservoirs do ReSTIR, que precisam esquecer o regime anterior.
+        Invalidate(Dom::RayVisibility);
+    }
+    bool FRenderSettings::GetRadianceCacheEnabled() const { return R.RadianceCache.GetEnabled(); }
+
+    // Um so lugar monta a mascara: "os consumidores esquecem, a tabela fica". Ela e usada por tres
+    // eventos que sao o MESMO evento visto de angulos diferentes — o operador abrindo a leitura, o
+    // operador mexendo no aquecimento automatico, e o aquecimento abrindo a leitura sozinho.
+    // Duplicar a mascara e como um deles deixaria de acompanhar os outros.
+    static EHistoryTarget RadianceCacheConsumersOnly() {
+        return static_cast<EHistoryTarget>(static_cast<u32>(Dom::RayVisibility) &
+                                           ~static_cast<u32>(EHistoryTarget::RadianceCache));
+    }
+
+    void FRenderSettings::SetRadianceCacheQuery(bool _V) {
+        if (_V == R.RadianceCache.GetQueryEnabled()) return;
+        R.RadianceCache.SetQueryEnabled(_V);
+        // Trocar o terminador invalida quem ACUMULOU a resposta, mas nao a tabela que acabamos de
+        // aquecer em write-only. Passar RayVisibility inteiro apagaria o cache exatamente quando
+        // o usuario liga a leitura para o A/B.
+        //
+        // Pela funcao, e nao pela copia que estava aqui: era a terceira do mesmo `&~` no arquivo,
+        // e as tres tinham de mudar juntas.
+        Invalidate(RadianceCacheConsumersOnly());
+    }
+    bool FRenderSettings::GetRadianceCacheQuery() const {
+        return R.RadianceCache.GetQueryEnabled();
+    }
+
+    void FRenderSettings::SetRadianceCacheAutoWarmup(bool _V) {
+        if (_V == R.RadianceCache.GetAutoWarmup()) return;
+        R.RadianceCache.SetAutoWarmup(_V);
+        // Mesma forma exata do toggle de query acima, e pelo mesmo motivo: o que muda e QUEM LE a
+        // tabela, nao o que ela guarda. Apagar o cache aqui destruiria justamente o aquecimento
+        // que este knob existe para administrar.
+        Invalidate(RadianceCacheConsumersOnly());
+    }
+
+    void FRenderSettings::NotifyRadianceCacheQueryChanged() {
+        // Para os consumidores isto e a MESMA coisa que o operador mexer no toggle de leitura: o
+        // terminador do raio secundario troca entre fallback e cache. O que eles acumularam foi
+        // medido com o outro — os reservoirs do ReSTIR GI, o atlas do DDGI (histerese 0,99, ou
+        // seja centenas de updates de memoria), o NRD.
+        //
+        // Vale NOS DOIS SENTIDOS, e o de fechar demorou mais a aparecer porque parecia inofensivo:
+        // o reload de shader reseta a tabela — a semantica da chave pode ter mudado — e a consulta
+        // fecha sozinha, sem passar por setter nenhum. Quem estava segurando radiancia vinda do
+        // cache continuava a usa-la.
+        //
+        // Passa pelo funil de proposito: se acontecer no meio de um aquecimento de captura, a
+        // sessao TEM de ser cancelada — o contrato "N frames apos UM reset" foi quebrado no meio.
+        // E o caso concreto do reload de shader, que ate aqui trocava os pipelines e resetava o
+        // cache sem a captura ficar sabendo. A borda do aquecimento nao chega a acontecer dentro
+        // de uma sessao: ela roda com o automatico desligado, e o latch so arma quando a consulta
+        // muda DE FATO (ver FRadianceCache::ConsumeQueryChange).
+        Invalidate(RadianceCacheConsumersOnly());
+    }
+    bool FRenderSettings::GetRadianceCacheAutoWarmup() const {
+        return R.RadianceCache.GetAutoWarmup();
+    }
+    const char* FRenderSettings::RadianceCacheWarmupName() const {
+        return R.RadianceCache.WarmupStateName();
+    }
+    u32 FRenderSettings::RadianceCacheWarmupFrames() const {
+        return R.RadianceCache.WarmupFillFrames();
+    }
+
+    void FRenderSettings::SetRadianceCacheDedicatedUpdate(bool _V) {
+        if (_V == R.RadianceCache.GetDedicatedUpdate()) return;
+        // O setter da classe ja arma o ResetOnce da tabela — as duas fontes produzem estatisticas
+        // diferentes para a mesma celula, e uma media que mistura as duas nao descreve nenhuma.
+        R.RadianceCache.SetDedicatedUpdate(_V);
+        // E os CONSUMIDORES tambem esquecem: o que o raio secundario devolve muda de ORIGEM, e
+        // esse valor ja esta acumulado no atlas do DDGI e nos reservoirs do ReSTIR.
+        Invalidate(Dom::RayVisibility);
+    }
+    bool FRenderSettings::GetRadianceCacheDedicatedUpdate() const {
+        return R.RadianceCache.GetDedicatedUpdate();
+    }
+
+    void FRenderSettings::SetRadianceCacheUpdateFraction(f32 _V) {
+        if (_V == R.RadianceCache.GetUpdateFraction()) return;
+        // NAO invalida — o que esta na tabela continua valendo, so a taxa de reposicao muda. Mas
+        // cancela captura em curso, e por um motivo que a invalidacao nao cobriria: o manifesto
+        // grava a fracao do frame FINAL, entao um aquecimento de 128 frames que rodasse metade a
+        // 4% e metade a 20% sairia declarando 20% — um arquivo que descreve uma configuracao que
+        // nunca existiu. Mesmo caso da instrumentacao do cache, que ja cancela por aqui.
+        //
+        // Os outros dois knobs do passe (produtor dedicado, terminal) nao precisam disto: eles
+        // invalidam, e o funil do Invalidate ja cancela a captura.
+        R.Capture.Cancel("a fracao do update do cache mudou durante o aquecimento");
+        R.RadianceCache.SetUpdateFraction(_V);
+    }
+    f32 FRenderSettings::GetRadianceCacheUpdateFraction() const {
+        return R.RadianceCache.GetUpdateFraction();
+    }
+
+    void FRenderSettings::SetRadianceCacheUsePrevTerminal(bool _V) {
+        if (_V == R.RadianceCache.GetUsePrevCacheAtTerminal()) return;
+        R.RadianceCache.SetUsePrevCacheAtTerminal(_V);
+        // A tabela guarda energias diferentes nos dois regimes (com o terminal, cada celula carrega
+        // o multi-bounce acumulado; sem ele, so o primeiro bounce). Uma media que misturasse os
+        // dois nao descreveria nenhum — e o A/B compararia historico contaminado.
+        Invalidate(Dom::RayVisibility);
+    }
+    bool FRenderSettings::GetRadianceCacheUsePrevTerminal() const {
+        return R.RadianceCache.GetUsePrevCacheAtTerminal();
+    }
+
+    void FRenderSettings::SetRadianceCacheMaxVertices(u32 _V) {
+        if (_V == R.RadianceCache.GetUpdateMaxVertices()) return;
+        R.RadianceCache.SetUpdateMaxVertices(_V); // ja arma o ResetOnce da tabela
+        // Com um vertice a celula acumula a serie de ponto fixo ao longo de frames; com quatro ela
+        // ja chega resolvida. Sao energias diferentes na MESMA celula, e quem consumiu a anterior
+        // (atlas do DDGI, reservoirs) carrega o regime velho.
+        Invalidate(Dom::RayVisibility);
+    }
+    u32 FRenderSettings::GetRadianceCacheMaxVertices() const {
+        return R.RadianceCache.GetUpdateMaxVertices();
+    }
+
+    void FRenderSettings::SetRadianceCacheMinCacheableRoughness(f32 _V) {
+        if (_V == R.RadianceCache.GetMinCacheableRoughness()) return;
+        R.RadianceCache.SetMinCacheableRoughness(_V);
+        // INVALIDA, e o comentario anterior aqui estava errado. Ele dizia "muda quais amostras
+        // NOVAS entram, nao o significado das guardadas" — mas o que muda e justamente o que a
+        // CELULA promete conter. Subir o piso quer dizer "daqui em diante so radiancia de lobo
+        // largo mora aqui", e a media continuaria carregando as amostras estreitas ja aceitas,
+        // por ate 64 delas. O A/B do knob seria feito sobre celulas contaminadas com o regime que
+        // ele existe para retirar — e o efeito medido apareceria diluido, ou nao apareceria.
+        //
+        // Mesmo criterio do produtor dedicado e do numero de vertices: knob que muda o que ENTRA
+        // na celula limpa a tabela. O Invalidate tambem cancela captura em curso, entao o
+        // Capture.Cancel explicito que estava aqui deixou de ser necessario.
+        Invalidate(Dom::RayVisibility);
+    }
+    f32 FRenderSettings::GetRadianceCacheMinCacheableRoughness() const {
+        return R.RadianceCache.GetMinCacheableRoughness();
+    }
+
+    void FRenderSettings::SetRadianceCacheMinSampleCount(u32 _V) {
+        if (_V == R.RadianceCache.GetMinSampleCount()) return;
+        R.RadianceCache.SetMinSampleCount(_V); // ja arma o ResetOnce da tabela
+        // INVALIDA pelos dois lados, e vale distinguir os dois porque so um deles e obvio.
+        //
+        // O obvio: o piso muda o que os traces de render APROVEITAM, e o que eles ja aproveitaram
+        // esta acumulado no atlas do DDGI e nos reservoirs do ReSTIR.
+        //
+        // O outro: o TERMINAL do updater tambem consulta com este piso, entao ele muda o que a
+        // celula GUARDA — subir o piso quer dizer "daqui em diante o multi-bounce so entra por
+        // celula confiavel", e a media continuaria carregando o que entrou pelo regime frouxo por
+        // ate 64 amostras. E o mesmo argumento do piso de roughness, e o motivo de o setter da
+        // classe limpar a tabela.
+        Invalidate(Dom::RayVisibility);
+    }
+    u32 FRenderSettings::GetRadianceCacheMinSampleCount() const {
+        return R.RadianceCache.GetMinSampleCount();
+    }
+
+    void FRenderSettings::SetRadianceCacheStatsEnabled(bool _V) {
+        if (_V == R.RadianceCache.GetStatsEnabled()) return;
+        // NAO invalida historico: o conteudo ja acumulado continua valendo, e derrubar o cache a
+        // cada vez que se liga o contador tornaria a instrumentacao inutil justamente para quem
+        // quer olhar um cache quente.
+        //
+        // Mas TAMBEM nao e neutra, e isso foi medido: os atomicos disputados por wave mudam o
+        // escalonamento e, com ele, quais threads vencem as insercoes — 73.218 celulas contra
+        // 73.195, PSNR de 48 dB entre os regimes. Trocar de regime no meio de um aquecimento
+        // produziria uma captura meio instrumentada e meio nao, que nao pertence a nenhuma das
+        // duas series. Sem guarda de setup: o capturador nao mexe neste knob.
+        R.Capture.Cancel("a instrumentacao do cache foi alternada durante o aquecimento");
+        R.RadianceCache.SetStatsEnabled(_V);
+    }
+    void FRenderSettings::SetRadianceCacheStatsDetailEnabled(bool _V) {
+        if (_V == R.RadianceCache.GetStatsDetailEnabled()) return;
+        // Mesmo tratamento do knob acima, e pelo mesmo motivo levado um passo adiante: o detalhe
+        // acrescenta atomicos AO PRODUTOR tambem (a telemetria de insercao), onde eles mudam quem
+        // vence a corrida do CAS. E o regime que mais mexe no escalonamento, entao alterna-lo no
+        // meio de um aquecimento produz uma captura que nao pertence a serie nenhuma.
+        R.Capture.Cancel("o detalhe da instrumentacao do cache foi alternado durante o aquecimento");
+        R.RadianceCache.SetStatsDetailEnabled(_V);
+    }
+    bool FRenderSettings::GetRadianceCacheStatsDetailEnabled() const {
+        return R.RadianceCache.GetStatsDetailEnabled();
+    }
+
+    // Os dois setters so escrevem. Quem derruba historico e o detector de borda do topo do frame
+    // (Renderer::ResolveIndirectPolicy), e por um motivo que o setter nao teria como cobrir: o
+    // EFETIVO muda sozinho quando o volume aparece ou some, e nesse caminho nao ha setter nenhum.
+    // Uma invalidacao aqui seria a segunda, redundante com a do detector — e a captura seria
+    // cancelada duas vezes pelo mesmo evento.
+    //
+    // Pedir uma politica que nao existe tambem nao e recusado aqui: `EffectivePrimary` degrada e o
+    // manifesto registra os dois lados. Recusar no setter transformaria "pedi SHaRC sem o passe
+    // pronto" num knob que volta sozinho, que e o comportamento mais confuso possivel numa UI.
+    void FRenderSettings::SetIndirectPrimary(EIndirectPrimary _V) {
+        if (_V == R.IndirectPrimary) return;
+        R.IndirectPrimary = _V;
+        // A UNICA coisa que este setter faz alem de escrever, e ela nao e invalidacao: os pools do
+        // NRD indireto existem so enquanto o ReSTIR GI for o primario PEDIDO (ver WantNrdIndirect).
+        // Tem de ser aqui porque o Reconcile faz Flush + realocacao — trabalho de entre-frames, que
+        // o detector de borda do topo do frame nao pode fazer. Mesmo par do SetUseReSTIRGI.
+        R.ReconcileNrdAllocation();
+    }
+    EIndirectPrimary FRenderSettings::GetIndirectPrimary() const { return R.IndirectPrimary; }
+    EIndirectPrimary FRenderSettings::EffectiveIndirectPrimary() const {
+        return R.EffectivePrimary();
+    }
+    void FRenderSettings::SetIndirectFallback(EIndirectFallback _V) { R.IndirectFallback = _V; }
+    EIndirectFallback FRenderSettings::GetIndirectFallback() const { return R.IndirectFallback; }
+    EIndirectFallback FRenderSettings::EffectiveIndirectFallback() const {
+        return R.EffectiveFallback();
+    }
+
+    void FRenderSettings::NotifyIndirectPolicyChanged(bool _Terminator, bool _Route,
+                                                      bool _Volumetric) {
+        EHistoryTarget Targets = EHistoryTarget::None;
+        // TERMINADOR: o fallback trocou. Muda o que os cinco traces encontram no miss, e o ATLAS
+        // esta entre eles — as sondas terminam no mesmo lugar. Por isso este, e so este, leva a
+        // NEVOA junto: quem reseta o atlas move o chao de quem o le.
+        if (_Terminator) Targets = Targets | Dom::IndirectTerminator;
+        // ROTA: trocou quem produz o indireto de superficie na tela. Nenhum raio muda de destino,
+        // entao o atlas e a nevoa ficam de pe. Mesma mascara do toggle do UseReSTIRGI, que e o
+        // mesmo evento por outro knob.
+        if (_Route)      Targets = Targets | Dom::IndirectSurfaceRoute;
+        // VOLUMETRIA: o volume apareceu ou sumiu, e ai a fonte da nevoa mudou de verdade.
+        if (_Volumetric) Targets = Targets | Dom::IndirectVolumetricSource;
+        if (Targets == EHistoryTarget::None) return;
+        // Passa pelo funil de proposito, como o NotifyRadianceCacheQueryChanged: uma troca de
+        // politica no meio de um aquecimento quebra o contrato "N frames apos UM reset", e a
+        // sessao tem de ser cancelada em vez de sair declarando uma politica que valeu por metade
+        // dos frames.
+        Invalidate(Targets);
+    }
+
+    void FRenderSettings::SetGISourceDebug(bool _V) {
+        // LIGAR exige o produtor vivo, e o produtor e EXATAMENTE o que o Modes calcula. Com o
+        // seletor da Fase 6 isso deixou de ser `UseReSTIRGI && IsReady()` e passou a ser o PRIMARIO
+        // EFETIVO: com `primario = DDGI` o passe esta pronto e mesmo assim nao traca, entao ligar o
+        // mapa aqui ofereceria uma textura que ninguem enche.
+        //
+        // ⚠️ `UseGI` NAO entra, e ja entrou errado uma vez. Ele governa o volume DDGI — e por isso
+        // que a propriedade do editor se chama `ddgiEnabled` —, e o `RecordTrace` do ReSTIR GI roda
+        // sem ele. Exigi-lo aqui recusava um caso legitimo: mapa da fonte com o GI global
+        // desligado, que e justamente quando se quer ver de onde o indireto ainda vem. Note que a
+        // condicao nova continua permitindo esse caso: sem volume, `primario` segue ReSTIR_SHaRC.
+        //
+        // DESLIGAR nunca e recusado — a guarda protege a ativacao, nao o inverso.
+        if (_V && R.EffectivePrimary() != EIndirectPrimary::ReSTIR_SHaRC) return;
+        if (_V == R.ReSTIRGI.GetSourceDebug()) return;
+        R.ReSTIRGI.SetSourceDebug(_V);
+        // O registro dos alvos e reconstruido do ZERO e so em eventos de setup — ele nao roda por
+        // frame. Como o alvo da fonte so se registra com o toggle ligado (senao a UI ofereceria
+        // uma textura que ninguem esta enchendo), a troca do toggle E um desses eventos.
+        R.RegisterDebugTargets();
+        // Nao invalida historico nenhum: escrever falsa-cor num alvo proprio nao muda o que
+        // qualquer acumulador guarda. O `DebugParams.y` decide a escrita por frame.
+    }
+    bool FRenderSettings::GetGISourceDebug() const { return R.ReSTIRGI.GetSourceDebug(); }
+
+    void FRenderSettings::SetRadianceCacheStatsSourceEnabled(bool _V) {
+        if (_V == R.RadianceCache.GetStatsSourceEnabled()) return;
+        // Terceira vez que este bloco se repete, e a repeticao e o ponto: cada regime de medicao
+        // cancela captura em curso porque uma sessao que troca de regime no meio nao pertence a
+        // serie nenhuma. Este acrescenta UM atomico por hit sombreado — nao muda o conteudo do
+        // cache (os traces de render nao inserem desde a Fase 3), mas muda custo, contencao no UAV
+        // de estatisticas e overlap com o updater. "Nao muda a imagem" nao e "e comparavel".
+        R.Capture.Cancel("a telemetria de fonte foi alternada durante o aquecimento");
+        R.RadianceCache.SetStatsSourceEnabled(_V);
+    }
+    bool FRenderSettings::GetRadianceCacheStatsSourceEnabled() const {
+        return R.RadianceCache.GetStatsSourceEnabled();
+    }
+
+    bool FRenderSettings::GetRadianceCacheStatsEnabled() const {
+        return R.RadianceCache.GetStatsEnabled();
+    }
+
+    void FRenderSettings::SetRadianceCacheCellSize(f32 _V) {
+        if (_V == R.RadianceCache.GetBaseCellSize()) return;
+        R.RadianceCache.SetBaseCellSize(_V);
+        // A chave muda: o conteudo guardado passa a estar enderecado errado. O executor acima
+        // transforma o bit RadianceCache do dominio em ResetOnce.
+        Invalidate(Dom::RayVisibility);
+    }
+    f32 FRenderSettings::GetRadianceCacheCellSize() const {
+        return R.RadianceCache.GetBaseCellSize();
+    }
+
+    void FRenderSettings::SetRadianceCacheLodDistance(f32 _V) {
+        if (_V == R.RadianceCache.GetLodDistance()) return;
+        R.RadianceCache.SetLodDistance(_V);
+        Invalidate(Dom::RayVisibility);
+    }
+    f32 FRenderSettings::GetRadianceCacheLodDistance() const {
+        return R.RadianceCache.GetLodDistance();
+    }
+
+    void FRenderSettings::SetRadianceCacheDebugMode(u32 _V) {
+        if (_V >= static_cast<u32>(ERadianceCacheDebugMode::Count)) return;
+        R.RadianceCache.SetDebugMode(static_cast<ERadianceCacheDebugMode>(_V));
+    }
+    u32 FRenderSettings::GetRadianceCacheDebugMode() const {
+        return static_cast<u32>(R.RadianceCache.GetDebugMode());
+    }
+
+    // O botao de limpar a tabela, pelo FUNIL e nao pelo ResetOnce cru. Chamar o metodo da classe
+    // direto era a ultima porta lateral do lifecycle: o reset FECHA a consulta (o ResetPending
+    // zera as flags dos consumidores), e quem estava segurando radiancia vinda do cache —
+    // reservoirs do ReSTIR GI, atlas do DDGI — continuava a usa-la. Pelo mesmo motivo o botao
+    // tinha de cancelar captura em curso e nao cancelava.
+    //
+    // `RayVisibility` inteiro, com o cache dentro: aqui a tabela DEVE morrer, e e o proprio funil
+    // que chama o ResetOnce. E o oposto do toggle de leitura, que usa a mascara sem o cache.
+    void FRenderSettings::ResetRadianceCache() { Invalidate(Dom::RayVisibility); }
+
+    const FRadianceCacheStats& FRenderSettings::RadianceCacheStats() const {
+        return R.RadianceCache.Stats();
+    }
+    const FRadianceCacheStatsMeta& FRenderSettings::RadianceCacheStatsMeta() const {
+        return R.RadianceCache.StatsMetaCPU();
+    }
+    FRadianceCacheSnapshot FRenderSettings::RadianceCacheSnapshot() const {
+        return R.RadianceCache.Snapshot();
+    }
+    u64 FRenderSettings::RadianceCacheBytes() const { return R.RadianceCache.MemoryBytes(); }
+    u32 FRenderSettings::RadianceCacheCapacity() const { return R.RadianceCache.Capacity(); }
+
     void FRenderSettings::SetUseReSTIRGI(bool _V) {
         if (_V == R.UseReSTIRGI) return;
         // Os reservoirs so na borda de SUBIDA: guardam radiancia do frame em que o toggle
@@ -138,11 +515,15 @@ namespace Smile {
         // descida eles param de ser lidos, entao limpar seria custo puro.
         if (_V) Invalidate(EHistoryTarget::ReSTIRGI);
         R.UseReSTIRGI = _V;
+        // O mapa de fonte morre junto: quem o escreve e o RecordTrace deste passe. Ver
+        // DropGISourceDebugIfOrphaned.
+        if (!_V) DropGISourceDebugIfOrphaned();
         // Nas DUAS bordas, espelhando o SetUseReSTIRDI: ligar ou desligar o ReSTIR GI muda
         // drasticamente o sinal que o NRD acumula, que o RR reconstroi e que o TAA integra.
         // Antes daqui so o NrdIndirect caia — o RR seguia com historico neural de um sinal
         // que deixou de existir.
         Invalidate(Dom::ScreenResolve);
+        R.ReconcileNrdAllocation(); // a instancia indireta do NRD so existe com o ReSTIR GI ligado
     }
     bool FRenderSettings::GetUseReSTIRGI() const { return R.UseReSTIRGI; }
 
@@ -152,6 +533,7 @@ namespace Smile {
         if (_V) Invalidate(EHistoryTarget::ReSTIRDI);
         R.UseReSTIRDI = _V;
         Invalidate(EHistoryTarget::NrdDirect | Dom::Resolve);
+        R.ReconcileNrdAllocation(); // idem p/ a instancia direta
     }
     bool FRenderSettings::GetUseReSTIRDI() const { return R.UseReSTIRDI; }
     bool FRenderSettings::ReSTIRDIActive() const { return R.UseReSTIRDI && R.ReSTIRDI.IsReady(); }
@@ -196,15 +578,74 @@ namespace Smile {
         OnGIHitSamplingChanged();
     }
 
+    bool FRenderSettings::GetGIAdaptiveHysteresis() const {
+        return R.DDGI.GetAdaptiveHysteresis();
+    }
+    void FRenderSettings::SetGIAdaptiveHysteresis(bool _V) {
+        if (_V == R.DDGI.GetAdaptiveHysteresis()) return;
+        R.DDGI.SetAdaptiveHysteresis(_V);
+        // GIAccumulation e nao RayVisibility: nao mudou o que o raio ve, mudou a REGRA com que
+        // o atlas acumula. A mascara e a mesma hoje; o nome e o que decide o dia em que um
+        // alvo novo entrar em so um dos dois (ver HistoryDomain.h).
+        //
+        // Limpar e obrigatorio para o A/B: sem isso o lado "ligado" comeca com sondas
+        // convergidas pelo lado "desligado" e a comparacao mede estado misturado.
+        Invalidate(Dom::GIAccumulation);
+    }
+
+    u32 FRenderSettings::GetGICascadeCount() const { return R.DDGI.GetDesiredCascades(); }
+    void FRenderSettings::SetGICascadeCount(u32 _V) {
+        if (_V == R.DDGI.GetDesiredCascades()) return;
+        R.DDGI.SetDesiredCascades(_V);
+        // Recria o volume AQUI, e nao no proximo load: sem isso o knob pareceria inerte ate
+        // alguem recarregar a cena, que e a pior forma de um botao mentir — ele aceita o clique
+        // e nao faz nada visivel.
+        R.RebuildGIVolume();
+        // Tudo que se apoiava no volume antigo (sondas, indices, historicos de tela que
+        // acumularam sobre ele) descreve uma grade que nao existe mais.
+        Invalidate(Dom::GIAccumulation);
+    }
+
+    bool FRenderSettings::GetGIAdaptiveRays() const { return R.DDGI.GetAdaptiveRays(); }
+    void FRenderSettings::SetGIAdaptiveRays(bool _V) {
+        if (_V == R.DDGI.GetAdaptiveRays()) return;
+        R.DDGI.SetAdaptiveRays(_V); // agenda a reclassificacao (ver FDDGI::TriggerReclassify)
+        // Mesmo dominio do detector de histerese, e pela mesma razao: nao mudou o que o raio
+        // enxerga, mudou o ESTIMADOR que alimenta o atlas (quantas amostras cada sonda tem por
+        // frame). Sem o clear, o lado ligado do A/B comeca com sondas convergidas a 64 raios e a
+        // comparacao mede estado misturado em vez da diferenca de variancia.
+        Invalidate(Dom::GIAccumulation);
+    }
+
+    bool FRenderSettings::GetGIMeasureTerminatorOff() const { return R.GIMeasureTerminatorOff; }
+    void FRenderSettings::SetGIMeasureTerminatorOff(bool _V) {
+        if (_V == R.GIMeasureTerminatorOff) return;
+        R.GIMeasureTerminatorOff = _V;
+        // RayVisibility no sentido literal do dominio: mudou o que o raio ENXERGA no hit. Sem o
+        // clear, o lado "sem DDGI" da medicao comecaria com reservoirs e atlas cheios de energia
+        // que veio justamente do DDGI — o A/B mediria a propria memoria do sistema desligado.
+        Invalidate(Dom::RayVisibility);
+    }
+
     bool FRenderSettings::GetGIBackfacePolicy() const { return R.ReSTIRGI.GetBackfacePolicy(); }
     void FRenderSettings::SetGIBackfacePolicy(bool _V) {
         // Passa por aqui, e nao direto no FReSTIRGI, porque o clear dos reservoirs sozinho nao
         // basta: o NRD e o RR acumulam SOBRE eles e o TAA sobre o resultado, entao um A/B feito
-        // so com o clear compararia um estado misturado. DDGI e reflexoes ficam de fora de
-        // proposito — a politica so toca no gather.
+        // so com o clear compararia um estado misturado.
+        //
+        // ERA ScreenResolve, com a justificativa "DDGI e reflexoes ficam de fora de proposito — a
+        // politica so toca no gather". Isso deixou de ser verdade quando o passe de update do
+        // radiance cache passou a ler o MESMO toggle: agora a politica decide o que um raio VE
+        // tambem no produtor de um cache de MUNDO, e as celulas treinadas sob a regra anterior
+        // sobreviveriam ate 64 frames misturando-se as novas — mais tempo do que qualquer A/B
+        // levaria para ser feito, e sem nada na tela denunciando.
+        //
+        // RayVisibility e o dominio pelo MOTIVO, que e a politica de nomes deste arquivo: mudou o
+        // que o raio enxerga. Ele ja carrega o RadianceCache, e leva junto DDGI e reflexoes — que
+        // nao aplicam a politica, mas CONSOMEM o cache e por isso herdaram o estado velho.
         if (_V == R.ReSTIRGI.GetBackfacePolicy()) return;
         R.ReSTIRGI.SetBackfacePolicy(_V); // ja marca NeedsClear nos reservoirs
-        Invalidate(Dom::ScreenResolve);
+        Invalidate(Dom::RayVisibility);
     }
 
     // O FDDGI e a fonte da verdade na leitura, como no toggle antigo do editor.
@@ -283,6 +724,8 @@ namespace Smile {
     f32  FRenderSettings::GetShadowMaxDistance() const { return R.SunShadows.GetMaxDistance(); }
     void FRenderSettings::SetShadowDepthBias(f32 _T)   { R.SunShadows.SetDepthBias(_T); }
     f32  FRenderSettings::GetShadowDepthBias() const   { return R.SunShadows.GetDepthBias(); }
+    void FRenderSettings::SetShadowNormalOffset(f32 _T) { R.SunShadows.SetNormalOffset(_T); }
+    f32  FRenderSettings::GetShadowNormalOffset() const { return R.SunShadows.GetNormalOffset(); }
     void FRenderSettings::SetShadowMinCasterTexels(f32 _V) {
         R.SunShadows.SetMinCasterTexels(_V);
     }
@@ -461,7 +904,16 @@ namespace Smile {
 
     // === Agua ===========================================================================
 
-    void FRenderSettings::SetUseWater(bool _Use) { R.SetUseWater(_Use); }
+    // O espectro da FFT recomeca, entao o historico de displacement/foam das cascatas cai. Passa
+    // pelo funil e nao por um laco no setter: o FOceanFFT ja se reseta sozinho nos proprios
+    // setters de espectro, mas aquilo e invariante INTERNA da classe e ninguem de fora fica
+    // sabendo — nem uma captura em aquecimento, que precisa ser cancelada quando o mundo muda
+    // debaixo dela. Declarar aqui e o que poe o oceano no grafo.
+    void FRenderSettings::SetUseWater(bool _Use) {
+        if (_Use == R.UseWater) return;
+        R.SetUseWater(_Use);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     bool FRenderSettings::GetUseWater() const    { return R.UseWater; }
 
     bool FRenderSettings::GetWaterGuideInvisible() const { return R.Water.GetGuideInvisible(); }
@@ -471,17 +923,45 @@ namespace Smile {
         Invalidate(Dom::Guides); // muda os guides do RR: historico neural velho mente
     }
 
-    void FRenderSettings::SetWaterWindSpeed(f32 _V) { R.Water.SetWindSpeed(_V); }
+    // Os seis abaixo mudam o ESPECTRO: o FOceanFFT marca H0Dirty e derruba o historico temporal
+    // por conta propria. O Invalidate aqui nao existe para repetir esse reset — existe para
+    // DECLARA-LO, que e o que o funil precisa para cancelar uma captura em aquecimento. Sem isso o
+    // mundo mudava no meio da medicao e a captura saia como se nada tivesse acontecido.
+    void FRenderSettings::SetWaterWindSpeed(f32 _V) {
+        if (_V == R.Water.GetWindSpeed()) return;
+        R.Water.SetWindSpeed(_V);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterWindSpeed() const { return R.Water.GetWindSpeed(); }
-    void FRenderSettings::SetWaterWindDirection(f32 _Rad) { R.Water.SetWindDirection(_Rad); }
+    void FRenderSettings::SetWaterWindDirection(f32 _Rad) {
+        if (_Rad == R.Water.GetWindDirection()) return;
+        R.Water.SetWindDirection(_Rad);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterWindDirection() const   { return R.Water.GetWindDirection(); }
-    void FRenderSettings::SetWaterWavesAmount(f32 _V) { R.Water.SetWavesAmount(_V); }
+    void FRenderSettings::SetWaterWavesAmount(f32 _V) {
+        if (_V == R.Water.GetWavesAmount()) return;
+        R.Water.SetWavesAmount(_V);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterWavesAmount() const { return R.Water.GetWavesAmount(); }
-    void FRenderSettings::SetWaterSwell(f32 _V) { R.Water.SetSwell(_V); }
+    void FRenderSettings::SetWaterSwell(f32 _V) {
+        if (_V == R.Water.GetSwell()) return;
+        R.Water.SetSwell(_V);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterSwell() const { return R.Water.GetSwell(); }
-    void FRenderSettings::SetWaterSpectrumFetch(f32 _Km) { R.Water.SetSpectrumFetch(_Km); }
+    void FRenderSettings::SetWaterSpectrumFetch(f32 _Km) {
+        if (_Km == R.Water.GetSpectrumFetch()) return;
+        R.Water.SetSpectrumFetch(_Km);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterSpectrumFetch() const  { return R.Water.GetSpectrumFetch(); }
-    void FRenderSettings::SetWaterOceanDepth(f32 _M) { R.Water.SetOceanDepth(_M); }
+    void FRenderSettings::SetWaterOceanDepth(f32 _M) {
+        if (_M == R.Water.GetOceanDepth()) return;
+        R.Water.SetOceanDepth(_M);
+        Invalidate(EHistoryTarget::OceanTemporal);
+    }
     f32  FRenderSettings::GetWaterOceanDepth() const { return R.Water.GetOceanDepth(); }
     void FRenderSettings::SetWaterFFTDisplacementScale(f32 _V) {
         R.Water.SetFFTDisplacementScale(_V);
@@ -593,6 +1073,12 @@ namespace Smile {
 
     void FRenderSettings::MarkMaterialRTStateDirty()  { R.MaterialRTStateDirty  = true; }
     void FRenderSettings::MarkIndirectLightingDirty() { R.IndirectLightingDirty = true; }
+    void FRenderSettings::MarkSceneContentDirty()     { R.SceneContentDirty     = true; }
+
+    // O par do Renderer::NotifyGIRegionChanged: aquele cuida do atlas do DDGI por REGIAO, este
+    // cuida de todo o resto que acumulou sobre a luz/geometria antiga. Separados porque so o
+    // DDGI sabe invalidar por caixa — os outros nao tem granularidade espacial nenhuma.
+    void FRenderSettings::NotifySceneContentChanged() { Invalidate(Dom::SceneContent); }
 
     // Reservoirs guardam Lo medido com a luz antiga; o atlas do DDGI, idem.
     void FRenderSettings::NotifyIndirectLightingChanged() { Invalidate(Dom::SkyRadiance); }
@@ -601,13 +1087,31 @@ namespace Smile {
 
     void FRenderSettings::NotifyCameraCut() { Invalidate(Dom::CameraCut); }
 
+    // Os passos 3 e 4 do protocolo de captura, juntos porque separa-los nao tem uso: um reset que
+    // limpe todo acumulador mas deixe a semente correndo produz ruido diferente a cada rodada,
+    // e zerar so a semente deixa o resto do estado herdado do trajeto. Ver Docs/CAPTURE-PROTOCOL.md.
+    //
+    // O FrameIndex absoluto NAO e tocado — fences, frame slots e lifetime dependem de ele ser
+    // monotonico. Essa e a razao de os dois contadores existirem separados.
+    // Chamada de dentro do UpdateFrameCapture, sob o CaptureSetupGuard — sem ele o funil
+    // cancelaria a sessao no ato de comeca-la.
+    void FRenderSettings::NotifyDeterministicCapture() {
+        Invalidate(Dom::DeterministicCapture);
+        R.TemporalSampleIndex = 0;
+    }
+
     void FRenderSettings::NotifyMaterialRTStateChanged() {
-        // REFRESH (nao e invalidacao — e trabalho a refazer, nao memoria a descartar). O Flush
+        // REFRESH (nao e invalidacao — e trabalho a refazer, nao memoria a descartar). O dreno
         // e necessario: o InstanceGeo e um upload heap sem versao por frame em voo, entao
         // reescrever com frames voando corromperia o que eles leem. Custa um stall, mas isto so
         // dispara em edicao manual de material.
+        //
+        // As DUAS filas: havia so o Flush da direta, e o trace do DDGI le o snapshot na COMPUTE.
+        // Ver a nota do caminho barato do Renderer::OnSceneStructureChanged, que tinha o mesmo
+        // buraco pelo mesmo motivo.
         R.CommandQueue.Flush();
-        R.DDGI.RefreshInstanceGeo(R.Scene);
+        R.ComputeQueue.WaitIdle();
+        R.RaytracingScene.RefreshInstanceGeo(R.Scene);
         R.TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
         // E os historicos acumulados sobre a aparencia antiga.
         Invalidate(Dom::MaterialRTState);

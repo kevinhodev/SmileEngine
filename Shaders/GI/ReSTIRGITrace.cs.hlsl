@@ -23,7 +23,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity,
                                     // w=shadowRayBias (SO sombras no hit; a origem dos raios
                                     // que saem do G-buffer usa OffsetRayGBuffer)
-    float4 ShadeParams;             // x=realHitShading(0/1), y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
+    float4 ShadeParams;             // x=livre, y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
     float4 JitterParams;            // xy = prevJitterUv - currJitterUv (reprojecao temporal),
@@ -34,16 +34,34 @@ cbuffer ReSTIRCB : register(b0) {
                                     // w=shadowRayBiasMin  (perfil de epsilons — knobs do editor)
     float4 RayEpsB;                 // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin,
                                     // w=angularMinRatio
-    float4 PolicyParams;            // x = politica deste passe (backface/culling)
+    float4 PolicyParams;            // x = politica deste passe (backface/culling),
+                                    // y = strength do boiling filter (0 = desligado),
+                                    // z = correcao de vies do temporal (0 = 1/M historico),
+                                    // w = kill de backface no Jacobiano (0 = abs() historico)
     // Gather do 2o bounce (contrato do HitShading.hlsli).
     float4 GIDistParams;            // x=distTile, y=distW, z=distH, w=skipMode
-    float4 GIBiasParams;            // x=escala do bias, y=teto em metros, zw=-
+    float4 GIBiasParams;            // x=escala do bias, y=teto em metros, z=fade de sondas,
+                                    // w=piso de roughness do hit (cache nao-direcional)
     float4 ReGIRGridMinSlots;
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;
     float4 ReGIRResources;
     float4 SkyParams;               // x = view height (km), y = raio do planeta (km) — ShadeSky
     float4 DebugParams;             // x = slot bindless do alvo de timer (< 0 = captura off)
+    float4 HistoryParams;           // x = slot bindless do historico de superficie do frame
+                                    //     ANTERIOR (FTemporalMotionVectors::SurfaceSRV). E de la
+                                    //     que sai o x1 do reservoir temporal, que deixou de ser
+                                    //     gravado. O Renderer zera ReuseParams.w quando o slot nao
+                                    //     existe, entao aqui ele e sempre valido quando lido.
+    float4 RadianceCacheCamCell;
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
+    // Cascatas do DDGI, consumidas pelo gather do 2o bounce no HitShading (contrato por NOME).
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
 };
 
 // Depois do cbuffer: os dois headers leem RayEpsA/RayEpsB (ver o contrato no RayOffset.hlsli).
@@ -61,25 +79,37 @@ Buffer<float4>                  GIProbeData : register(t5);
 Texture2D<float>                Depth      : register(t6);
 Texture2D<float4>               GBuffer    : register(t7);
 Texture2D<float2>               Velocity   : register(t8);
-Texture2D<float4>               PrevResA   : register(t9);  // x1.xyz, M
-Texture2D<float4>               PrevResB   : register(t10); // x2.xyz, W
-Texture2D<float4>               PrevResC   : register(t11); // Lo.rgb, a = n1.oct.x
-Texture2D<float4>               PrevResD   : register(t12); // n2.xyz, a = n1.oct.y
+// Reservoir do frame anterior em DUAS texturas (era quatro): ver o cabecalho de empacotamento em
+// ReSTIRReservoir.hlsli. t11/t12 continuam filler porque a tabela tem 14 descritores e
+// SetPunctualLightsSRV escreve as luzes no offset 13 na unha.
+Texture2D<float4>               PrevRes0   : register(t9);  // x2.xyz, W
+Texture2D<uint4>                PrevRes1   : register(t10); // n2 | Lo | M+idade | n1
 
 #include "../LightsCommon.hlsli"
 StructuredBuffer<FPunctualLight> SceneLights : register(t13); // F5: luzes puntuais nos hits
 
 RWTexture2D<float4>             GIOut    : register(u0); // rgb=gi, a=hitDist (NRD)
-RWTexture2D<float4>            CurrResA : register(u1);
-RWTexture2D<float4>            CurrResB : register(u2);
-RWTexture2D<float4>            CurrResC : register(u3);
-RWTexture2D<float4>            CurrResD : register(u4);
+RWTexture2D<float4>             CurrRes0 : register(u1); // x2.xyz, W
+RWTexture2D<uint4>              CurrRes1 : register(u2); // n2 | Lo | M+idade | n1
 
 SamplerState LinearClamp : register(s0);
 SamplerState LinearWrap  : register(s1);
 
 #include "HitShading.hlsli"
 #include "ReSTIRReservoir.hlsli"
+
+// Visualizador da FONTE do candidato tracado. Bindless pelo DebugParams.y, com -1 = desligado —
+// o mesmo sentinela do timer, e nunca `kInvalidSlot` convertido para float (0xFFFFFFFF nao e
+// exato em f32 e viraria um indice enorme, valido para o branch).
+//
+// SEM CLEAR: o dispatch cobre a textura inteira e todos os caminhos de saida escrevem, entao nao
+// sobra pixel de frame anterior. E por isso que o retorno do ceu primario tambem pinta.
+void WriteSourceViz(uint2 px, uint kind) {
+    if (DebugParams.y < 0.0f) return;
+    RWTexture2D<float4> dst =
+        ResourceDescriptorHeap[NonUniformResourceIndex((uint)DebugParams.y)];
+    dst[px] = float4(RC_SourceColor(kind), 1.0f);
+}
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
@@ -90,7 +120,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float deviceZ = Depth.Load(int3(px, 0)).r;
     if (deviceZ <= 0.0f) {
         GIOut[px]    = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        CurrResA[px] = 0.0f; CurrResB[px] = 0.0f; CurrResC[px] = 0.0f; CurrResD[px] = 0.0f;
+        CurrRes0[px] = 0.0f; CurrRes1[px] = uint4(0u, 0u, 0u, 0u);
+        // Ceu NA TELA: nao ha superficie primaria, logo nao ha raio secundario para classificar.
+        // Classe propria — confundi-la com o miss do secundario faria o fundo parecer falha do
+        // estimador.
+        WriteSourceViz(px, RC_SRC_NOSURFACE);
         return;
     }
 
@@ -150,7 +184,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.SunColor       = SunColor.rgb;        P.ShadowRayBias = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
     P.AlbedoLOD      = ShadeParams.y;
-    P.RealHitShading = ShadeParams.x > 0.5f;
     P.NumLights      = (int)JitterParams.z; // F5
     P.ShadowRayMask  = (uint)SunColor.w;
     P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
@@ -165,6 +198,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    // Cache NAO-direcional (o reservoir entrega o mesmo Lo a vizinhos com outra visada), entao
+    // o piso de roughness vale aqui — ver o bloco no ShadeSurfaceHit.
+    P.RoughnessMin       = GIBiasParams.w;
+    P.CacheRayRoughness  = -1.0f;
+    RC_UNPACK_PARAMS(P);
 
     // POLITICA DE BACKFACE (Lumen AvoidSelfIntersections modo Retrace + terminacao preta).
     //
@@ -219,16 +257,22 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // reservoir sabe que aquela direcao nao rende nada) mas, com wInit = 0, o WRS nao a
         // seleciona — x2/n2 sao calculados p/ o hitDist do NRD e NAO chegam a entrar no
         // reservoir nem no Jacobiano.
+        uint srcKind = RC_SRC_KILLED; // sobrescrito pelo Ex quando o caminho nao morre
         Lo = killPath ? float3(0.0f, 0.0f, 0.0f)
-                      : ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
-                                        q.CommittedTriangleBarycentrics(),
-                                        q.CommittedWorldToObject3x4(),
-                                        ray.Origin, ray.Direction, hitDist, P, sd);
+                      : ShadeSurfaceHitEx(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                          q.CommittedTriangleBarycentrics(),
+                                          q.CommittedWorldToObject3x4(),
+                                          ray.Origin, ray.Direction, hitDist, P, sd, srcKind);
+        // A classe do HIT vem de quem decidiu a radiancia; `killed` e do trace, que e quem conhece
+        // a politica de backface. Ver o nome do alvo: isto e a fonte do CANDIDATO deste frame, e
+        // nao a da amostra que o reservoir vai acabar servindo depois do reuso.
+        WriteSourceViz(px, srcKind);
     } else {
         hitDist = TraceParams.y;
         Lo = ShadeSky(dir, sunDir, P.SkyIntensity, P);
         x2 = ray.Origin + ray.Direction * hitDist; // ponto distante na direcao do ceu
         n2 = -dir;                                  // normal "virada" p/ o ponto visivel
+        WriteSourceViz(px, RC_SRC_SKY);
     }
 
     // Firefly clamp: limita outliers de luminancia (mata os pontinhos brilhantes que o WRS
@@ -249,6 +293,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         ResUpdate(r, x2, n2, Lo, wInit, rng); // adotada -> age 0 (ja e o default)
     }
 
+    // Dominio do reservoir reprojetado, guardado p/ a correcao de vies do passo (3). Sao os
+    // MESMOS dados que o teste de aceitacao ja carrega (ponto visivel, normal e M do frame
+    // anterior) — a correcao nao custa leitura nova, so os dois TargetPHat do fim.
+    bool   tempMerged = false; // o reservoir anterior entrou no WRS
+    bool   tempPicked = false; // ... e a amostra dele venceu a selecao
+    float3 tempX1     = 0.0f;
+    float3 tempN1     = 0.0f;
+    float  tempM      = 0.0f;  // M ja limitado pelo MCap (e o mesmo que pesou o merge)
+
     // --- (2) Reuso temporal ------------------------------------------------------------------
     if (ReuseParams.w > 0.5f) {
         float2 vel    = Velocity.Load(int3(px, 0)).rg;
@@ -259,7 +312,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         if (all(prevUv > 0.0f) && all(prevUv < 1.0f)) {
             // Fetch de UM texel por truncamento — config estavel do bisect 2026-07-12. A busca
             // 2x2 por melhor x1 (fix 6) foi removida: mesmo ancorada em prevPx ela mantinha as
-            // manchas/rastejo; re-introduzir so com A/B dedicado. Unpack do M mantido (ResA.w
+            // manchas/rastejo; re-introduzir so com A/B dedicado. Unpack do M mantido (Res1.z
             // fica no formato M+idade empacotados; expiracao hoje desligada via MaxAge=0).
             int2 ppx = int2(prevUv * ScreenParams.xy);
 
@@ -300,23 +353,41 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 if (permOk) ppx = perm;
             }
 
-            float4 pa = PrevResA.Load(int3(ppx, 0));
-            float4 pc = PrevResC.Load(int3(ppx, 0));
-            float4 pd = PrevResD.Load(int3(ppx, 0));
-            float posReject = ReuseParams.y * max(camDist, 1.0f);
-            float planeDist = abs(dot(N, pa.xyz - x1));
-            float3 prevN1 = DDGI_OctDecode(float2(pc.a, pd.a));
+            uint4 p1 = PrevRes1.Load(int3(ppx, 0));
             float prevM, prevAge;
-            ResUnpackMAge(pa.w, prevM, prevAge);
-            bool accept = permOk && prevM > 0.0f && dot(prevN1, N) >= SpatialParams.w &&
-                          length(pa.xyz - x1) < posReject && planeDist < 0.2f * posReject;
+            ResUnpackMAge(p1.z, prevM, prevAge);
+
+            // O x1 do frame anterior vem do HISTORICO DE SUPERFICIE, nao mais do reservoir: o
+            // FTemporalMotionVectors grava `InvViewProj * (ndc, deviceZ)` com a mesma matriz
+            // (InvViewProjFull) e o mesmo depth que este passe usa, entao o valor e identico ao
+            // que era gravado aqui — e sai 12 B/pixel do reservoir.
+            //
+            // A leitura fica DENTRO do gate de prevM: reservoir zerado (clear de historico,
+            // disoclusao, ceu) nunca toca a textura de superficie, que pode estar velha de um
+            // frame em que o passe de motion confiavel nao rodou. Sem esse gate, uma posicao
+            // obsoleta poderia passar nos testes geometricos por coincidencia.
+            float3 prevX1 = 0.0f;
+            // prevN1 subiu de escopo: alem do teste de aceitacao, ela e a normal do DOMINIO
+            // anterior na correcao de vies do passo (3).
+            float3 prevN1 = 0.0f;
+            bool accept = permOk && prevM > 0.0f;
+            if (accept) {
+                Texture2D<float4> PrevSurface = ResourceDescriptorHeap[(uint)HistoryParams.x];
+                prevX1 = PrevSurface.Load(int3(ppx, 0)).xyz;
+                prevN1 = ResUnpackNormal(p1.w);
+                float  posReject = ReuseParams.y * max(camDist, 1.0f);
+                float  planeDist = abs(dot(N, prevX1 - x1));
+                accept = dot(prevN1, N) >= SpatialParams.w &&
+                         length(prevX1 - x1) < posReject && planeDist < 0.2f * posReject;
+            }
 
             if (accept) {
-                float4 pb = PrevResB.Load(int3(ppx, 0));
+                float4 p0 = PrevRes0.Load(int3(ppx, 0));
                 Reservoir prev;
-                prev.x1 = pa.xyz; prev.x2 = pb.xyz; prev.n2 = pd.xyz; prev.Lo = pc.rgb;
+                prev.x1 = prevX1;                 prev.x2 = p0.xyz;
+                prev.n2 = ResUnpackNormal(p1.x);  prev.Lo = ResUnpackRadiance(p1.y);
                 prev.M  = min(prevM, ReuseParams.x); // MCap
-                prev.W  = pb.w; prev.wSum = 0.0f;
+                prev.W  = p0.w; prev.wSum = 0.0f;
 
                 // Idade maxima da amostra (RTXDI maxReservoirAge): o MCap limita o PESO do
                 // historico, nao a vida da amostra. Expira com stagger por hash do pixel
@@ -441,30 +512,123 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     // camDist — com segmento indireto curto (contatos) isso muda a medida de
                     // verdade (J=1 era aproximacao enviesada). Mesma politica do espacial:
                     // J extremo REJEITA (clampar mantem o sample com peso errado).
-                    float J = ReconnectionJacobian(x1, prev.x1, prev.x2, prev.n2);
+                    float J = ReconnectionJacobian(x1, prev.x1, prev.x2, prev.n2,
+                                                   PolicyParams.w > 0.5f);
                     if (J >= 0.1f && J <= 10.0f) {
                         float pHatPrev = TargetPHat(x1, N, prev.x2, prev.Lo);
+                        // Registra o dominio ANTES do merge: a correcao de vies precisa dele
+                        // tenha a amostra vencido ou nao (quem perde ainda vota no denominador).
+                        tempMerged = true;
+                        tempX1 = prev.x1; tempN1 = prevN1; tempM = prev.M;
                         // Amostra do historico sobreviveu a selecao -> envelhece 1 frame.
-                        if (ResMerge(r, prev, pHatPrev, J, rng)) age = prevAge + 1.0f;
+                        if (ResMerge(r, prev, pHatPrev, J, rng)) {
+                            age = prevAge + 1.0f;
+                            tempPicked = true;
+                        }
                     }
                 }
             }
         }
     }
 
-    // --- (3) Resolve (sobrescrito pelo Pass B quando o spatial esta ON) ----------------------
-    ResFinalizeW(r, x1, N);
+    // --- (3) Correcao de vies do temporal + resolve (sobrescrito pelo Pass B c/ spatial ON) ---
+    //
+    // Era 1/M (W = wSum / (M * pHat)). O argumento que sustentava isso era "a reprojecao cai no
+    // MESMO ponto visivel, entao os dois dominios sao o mesmo e a correcao vira no-op" — e ele
+    // MORREU quando a permutation sampling entrou (ver o bloco no passo 2): a permutacao desloca
+    // a leitura em ate 3 texels, o x1 anterior deixa de ser o atual e os dominios passam a ser
+    // diferentes de verdade. A RTXDI, que tambem embaralha, corrige por default
+    // (RTXDI_GITemporalResampling, biasCorrectionMode = Basic); era a Smile que estava fazendo o
+    // oposto nos dois eixos (permutacao sempre ligada + 1/M).
+    //
+    // Mesma conta do Pass B, agora no helper compartilhado. Dominios: o proprio pixel (M = 1, o
+    // sample inicial) e o reservoir reprojetado (M = tempM). O `pi` e o pHat do vencedor NO
+    // DOMINIO QUE O GEROU; o `piSum` soma os dois dominios ponderados pelo M de cada um.
+    // pHatSel serve de pi quando o vencedor veio do sample inicial porque o dominio dele E o
+    // pixel atual — igual ao `selectedTargetPdf` da RTXDI.
+    // DEFAULT OFF (PolicyParams.z) apos o A/B de 2026-08-07 — ver o porque no bloco abaixo.
+    {
+        float pHatSel = TargetPHat(x1, N, r.x2, r.Lo);
+        float pi, piSum;
+        if (PolicyParams.z > 0.5f) {
+            float temporalP = tempMerged ? TargetPHat(tempX1, tempN1, r.x2, r.Lo) : 0.0f;
+            pi    = tempPicked ? temporalP : pHatSel;
+            piSum = pHatSel + temporalP * tempM;   // M do sample inicial e 1
+        } else {
+            // 1/M historico, escrito como CASO PARTICULAR do mesmo helper: com pi = pHatSel e
+            // piSum = pHatSel*(1 + tempM), a conta vira wSum / (M_total * pHatSel), que e
+            // exatamente o ResFinalizeW de antes (r.M == 1 + tempM por construcao). Uma via de
+            // codigo so p/ os dois modos — o A/B nao compara caminhos diferentes.
+            pi    = pHatSel;
+            piSum = pHatSel * (1.0f + tempM);
+        }
+        ResFinalizeMIS(r, pHatSel, pi, piSum);
+    }
+    //
+    // POR QUE A CORRECAO NASCEU LIGADA E VOLTOU P/ OFF (A/B do usuario, 2026-08-07):
+    //
+    // Ela e fiel a RTXDI (RTXDI_GITemporalResampling, modo Basic) e o 1/M e de fato enviesado com
+    // a permutation sampling ligada — nada disso mudou. O que mudou foi a medida: com ela ligada o
+    // caminho do Ray Reconstruction encheu de firefly TRAVADO no mundo, e o boiling filter nao
+    // conteve.
+    //
+    // O mecanismo e um LOOP, nao um pico isolado. `W_novo/W_velho = M_total*pi/piSum` chega a
+    // M_total = 1 + MCap = 21 quando o dominio anterior nao consegue gerar a amostra vencedora
+    // (temporalP -> 0, tipico de canto concavo com normal-map). Ate aqui e o que a RTXDI aceita.
+    // A diferenca e que AQUI o W inflado e GRAVADO no reservoir e volta como `prev.W` no frame
+    // seguinte, sem nada que o amorteca: a RTXDI realimenta o temporal com a saida do ESPACIAL
+    // (temporalResamplingInputBufferIndex = spatialResamplingOutputBufferIndex no modo
+    // TemporalAndSpatial), e o espacial dilui o outlier entre K vizinhos. Nesta engine o espacial
+    // NAO realimenta — o temporal e um laco fechado, e o pico se acumula em vez de decair.
+    //
+    // O Lumen roda sem realimentacao igual a nós, mas com o temporal 1/M e Jacobiano DESLIGADO,
+    // isto e, um temporal fortemente amortecido. A combinacao "sem realimentacao espacial +
+    // temporal corrigido por MIS + MCap 20" nao existe em nenhuma das duas referencias.
+    //
+    // P/ religar isto, o pre-requisito NAO e parametro, e estrutura — uma destas:
+    //   (a) realimentar o temporal com a saida do Pass B (vira o desenho da RTXDI), ou
+    //   (b) MCap 8 (teto da RTXDI) junto de boiling filter validado, aceitando o loop com ganho
+    //       menor.
+    // Religar so pelo knob, sem (a) ou (b), reproduz o artefato — foi exatamente isso que o A/B
+    // mostrou.
+
+    // Boiling filter (RTXDI_GIBoilingFilter + Utils/BoilingFilter.hlsli, ligado por DEFAULT la com
+    // strength 0.2). O firefly clamp da engine NAO cobre este caso: ele limita o Lo da amostra e o
+    // gi resolvido, mas o outlier nasce do W — um pixel parado no teto do clamp ainda fica ordens
+    // de grandeza acima do vizinho num muro escuro, que e o ponto branco fixo que aparece no RR (o
+    // NRD borra, o Ray Reconstruction reconstroi e preserva). O teste do boiling e RELATIVO a
+    // vizinhanca, e e isso que separa "amostra rara porem legitima" de "reservoir travado".
+    //
+    // Esvaziar o reservoir, e nao so zerar o gi do frame: com M = 0 o proximo frame nao le mais a
+    // amostra presa (o gate `prevM > 0` do reuso temporal falha) e o pixel recomeca do sample
+    // inicial. E o que mata o ponto FIXO; zerar so a saida deixaria ele voltar no frame seguinte.
+    //
+    // Diferenca deliberada p/ a RTXDI: a media e por WAVE, nao pelo grupo 8x8 inteiro. A versao
+    // dela usa groupshared + GroupMemoryBarrierWithGroupSync, e este passe tem dois early-out
+    // (fora da tela e ceu) ANTES daqui — barreira sob divergencia e comportamento indefinido.
+    // WaveActiveSum opera nas lanes ATIVAS, entao a variante de wave e correta sem reestruturar o
+    // main; a vizinhanca cai de 8x8 p/ 8x4 (wave de 32) ou continua 8x8 (wave de 64).
+    if (PolicyParams.y > 0.0f) {
+        const float bw    = ReSTIR_Luminance(r.Lo) * r.W;
+        const float bSum  = WaveActiveSum(bw);
+        const uint  bCnt  = WaveActiveCountBits(bw > 0.0f);
+        const float bAvg  = (bCnt > 0u) ? (bSum / (float)bCnt) : 0.0f;
+        // Multiplicador da RTXDI: 10/strength - 9 (0.2 -> corta acima de 41x a media da vizinhanca).
+        const float bMult = 10.0f / clamp(PolicyParams.y, 1e-6f, 1.0f) - 9.0f;
+        if (bAvg > 0.0f && bw > bAvg * bMult) {
+            ResInit(r);
+            age = 0.0f;
+        }
+    }
+
     float3 gi = ResResolve(r, x1, N, ShadeParams.z);
 
     // hitDist p/ o NRD = distancia da amostra VENCEDORA do WRS (o temporal pode trocar x2; o hitT
     // do raio inicial guiaria o denoiser com um caminho diferente do da radiancia resolvida).
     float selDist = (r.wSum > 0.0f) ? length(r.x2 - x1) : hitDist;
-    float2 n1Oct = DDGI_OctEncode(N); // n1 no historico p/ a rejeicao por normal do temporal
     GIOut[px]    = float4(gi, selDist);
-    CurrResA[px] = float4(r.x1, ResPackMAge(r.M, age));
-    CurrResB[px] = float4(r.x2, r.W);
-    CurrResC[px] = float4(r.Lo, n1Oct.x);
-    CurrResD[px] = float4(r.n2, n1Oct.y);
+    CurrRes0[px] = float4(r.x2, r.W);
+    CurrRes1[px] = ResPack1(r, age, N); // n1 vai junto: o temporal do proximo frame rejeita por ela
 
     // Fecha depois das escritas do reservoir: elas fazem parte do custo do passe.
     SMILE_TIMER_END(timerStart, px, DebugParams.x)

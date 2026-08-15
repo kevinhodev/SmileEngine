@@ -1,6 +1,5 @@
 #include "Smile/Graphics/NrdDenoiser.h"
 #include "Smile/Graphics/GpuResources.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -15,13 +14,13 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
-    void* NRD_CALL NrdAlloc(void*, size_t size, size_t alignment)            { return _aligned_malloc(size, alignment ? alignment : 16); }
+    void* NRD_CALL NrdAlloc(void*, size_t size, size_t alignment)             { return _aligned_malloc(size, alignment ? alignment : 16); }
     void* NRD_CALL NrdRealloc(void*, void* mem, size_t size, size_t alignment){ return _aligned_realloc(mem, size, alignment ? alignment : 16); }
-    void  NRD_CALL NrdFree(void*, void* mem)                                 { _aligned_free(mem); }
+    void  NRD_CALL NrdFree(void*, void* mem)                                  { _aligned_free(mem); }
 
-    DXGI_FORMAT ToDXGI(nrd::Format f) {
+    DXGI_FORMAT ToDXGI(nrd::Format _Format) {
         using F = nrd::Format;
-        switch (f) {
+        switch (_Format) {
             case F::R8_UNORM:  return DXGI_FORMAT_R8_UNORM;
             case F::R8_SNORM:  return DXGI_FORMAT_R8_SNORM;
             case F::R8_UINT:   return DXGI_FORMAT_R8_UINT;
@@ -89,10 +88,12 @@ namespace {
 namespace Smile {
 #if SMILE_NRD_ENABLED
     namespace {
-        ComPtr<ID3D12Resource> CreateTex(ID3D12Device* Dev, u32 W, u32 H, DXGI_FORMAT Fmt) {
+        ComPtr<ID3D12Resource> CreateTex(ID3D12Device* Dev, u32 W, u32 H, DXGI_FORMAT Fmt,
+                                         const char* Label = "NRD · pools") {
             return GpuResources::CreateTex2D(Dev, W, H, Fmt,
                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI);
+                                             D3D12_RESOURCE_STATE_COMMON, EVramCategory::GI,
+                                             nullptr, 1, 1, Label);
         }
     }
 #endif
@@ -100,78 +101,60 @@ namespace Smile {
     void FNrdDenoiser::Initialize(ID3D12Device* _Device, ESignalProfile _Profile) {
 #if SMILE_NRD_ENABLED
         if (Available) return;
-        Dev = _Device;
+        Device = _Device;
         SignalProfile = _Profile;
-        const char* ProfileName = SignalProfile == ESignalProfile::Direct ? "direta" : "indireta";
+        const char* ProfileName = SignalProfile == ESignalProfile::Direct ? "Direta" : "Indireta";
 
-        const nrd::LibraryDesc& lib = *nrd::GetLibraryDesc();
-        LogDebug("NRD " + std::string(ProfileName) + " v" + std::to_string(lib.versionMajor) + "." + std::to_string(lib.versionMinor) +
-                "." + std::to_string(lib.versionBuild) +
-                " | normalEnc=" + std::to_string((int)lib.normalEncoding) +
-                " roughEnc=" + std::to_string((int)lib.roughnessEncoding));
+        const nrd::LibraryDesc& LibraryDesc = *nrd::GetLibraryDesc();
+        LogDebug("NRD " + std::string(ProfileName) + " v" + std::to_string(LibraryDesc.versionMajor) + "." + std::to_string(LibraryDesc.versionMinor) +
+                "." + std::to_string(LibraryDesc.versionBuild) +
+                " | Normal Encoding = " + std::to_string((int)LibraryDesc.normalEncoding) +
+                " Roughness Encoding = " + std::to_string((int)LibraryDesc.roughnessEncoding));
 
-        nrd::DenoiserDesc denoiser{};
-        denoiser.identifier = 0;
-        denoiser.denoiser   = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
-        nrd::InstanceCreationDesc icd{};
-        icd.allocationCallbacks = { NrdAlloc, NrdRealloc, NrdFree, nullptr };
-        icd.denoisers           = &denoiser;
-        icd.denoisersNum        = 1;
-        nrd::Result r = nrd::CreateInstance(icd, Instance);
-        if (r != nrd::Result::SUCCESS || !Instance) {
-            LogError("NRD CreateInstance falhou (Result=" + std::to_string((int)r) + ")");
-            Instance = nullptr; return;
+        nrd::DenoiserDesc DenoiserDesc{};
+        DenoiserDesc.identifier = 0;
+        DenoiserDesc.denoiser   = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
+        nrd::InstanceCreationDesc InstanceCreationDesc{};
+        InstanceCreationDesc.allocationCallbacks = { NrdAlloc, NrdRealloc, NrdFree, nullptr };
+        InstanceCreationDesc.denoisers           = &DenoiserDesc;
+        InstanceCreationDesc.denoisersNum        = 1;
+        nrd::Result CreationResult = nrd::CreateInstance(InstanceCreationDesc, Instance);
+        if (CreationResult != nrd::Result::SUCCESS || !Instance) {
+            LogError("NRD CreateInstance Falhou (Resultado = " + std::to_string((int)CreationResult) + ")");
+            Instance = nullptr;
+            return;
         }
 
-        const nrd::InstanceDesc& d = *nrd::GetInstanceDesc(*Instance);
-        PerSetTex      = d.descriptorPoolDesc.perSetTexturesMaxNum;
-        PerSetUav      = d.descriptorPoolDesc.perSetStorageTexturesMaxNum;
-        SetsMax        = d.descriptorPoolDesc.setsMaxNum;
+        const nrd::InstanceDesc& InstanceDesc = *nrd::GetInstanceDesc(*Instance);
+        PerSetTex      = InstanceDesc.descriptorPoolDesc.perSetTexturesMaxNum;
+        PerSetUav      = InstanceDesc.descriptorPoolDesc.perSetStorageTexturesMaxNum;
+        SetsMax        = InstanceDesc.descriptorPoolDesc.setsMaxNum;
         TableStride    = PerSetTex + PerSetUav;
-        ResourcesSpace = d.resourcesSpaceIndex;
-        CbSpace        = d.constantBufferAndSamplersSpaceIndex;
-        CbReg          = d.constantBufferRegisterIndex;
-        SamplerBaseReg = d.samplersBaseRegisterIndex;
-        LogDebug("NRD " + std::string(ProfileName) + " RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(d.pipelinesNum) +
-                " perm=" + std::to_string(d.permanentPoolSize) +
-                " trans=" + std::to_string(d.transientPoolSize) +
-                " samplers=" + std::to_string(d.samplersNum) +
-                " cbMax=" + std::to_string(d.constantBufferMaxDataSize));
+        ResourcesSpace = InstanceDesc.resourcesSpaceIndex;
+        CbSpace        = InstanceDesc.constantBufferAndSamplersSpaceIndex;
+        CbReg          = InstanceDesc.constantBufferRegisterIndex;
+        SamplerBaseReg = InstanceDesc.samplersBaseRegisterIndex;
+        LogDebug("NRD " + std::string(ProfileName) + " RELAX_DIFFUSE_SPECULAR: pipelines=" + std::to_string(InstanceDesc.pipelinesNum) +
+                " perm=" + std::to_string(InstanceDesc.permanentPoolSize) +
+                " trans=" + std::to_string(InstanceDesc.transientPoolSize) +
+                " samplers=" + std::to_string(InstanceDesc.samplersNum) +
+                " cbMax=" + std::to_string(InstanceDesc.constantBufferMaxDataSize));
 
-        nrd::RelaxSettings relax{};
-        // Defaults do NRD para o resto: o RELAX foi desenhado para sinal estilo RTXDI/ReSTIR
-        // (prepass 30/50, atrous 5 iteracoes, roughness edge stopping ON) — e o que temos.
-        // O antilag fica no default; o README recomenda desliga-lo so no bring-up inicial
-        // (antilagSettings.accelerationAmount/resetAmount = 0) se aparecer instabilidade.
-        relax.enableAntiFirefly = true;
+        nrd::RelaxSettings RelaxSettings{};
+        RelaxSettings.enableAntiFirefly = true;
+
         if (SignalProfile == ESignalProfile::Direct) {
-            // Preset inicial alinhado ao FullSample do RTXDI: historico mais curto porque o ReSTIR
-            // volta a poucas candidatas nas disoclusoes, luma difusa mais seletiva e estimativa de
-            // variancia espacial ja no primeiro frame. A instancia separada permite calibrar isto
-            // sem mudar a resposta do GI/reflexos.
-            relax.diffuseMaxAccumulatedFrameNum = 20;
-            relax.specularMaxAccumulatedFrameNum = 20;
-            relax.diffusePhiLuminance = 1.0f;
-            relax.spatialVarianceEstimationHistoryThreshold = 1;
-
-            // Receita do GPU Zen 3 cap. 7, p. 219 (CDPR/NVIDIA, Ray Tracing: Overdrive): como o
-            // ReSTIR DI entrega variancia BAIXA no input, da para deixar a fast history bem curta
-            // (eles usam 1 a 2 frames) e o color clamping agressivo. Isso torna o historico regular
-            // responsivo — o caso motivador la e sombra em movimento (pas de ventilador girando),
-            // que com historico longo o denoiser nao acompanha.
-            relax.diffuseMaxFastAccumulatedFrameNum = 2;
-            relax.specularMaxFastAccumulatedFrameNum = 2;
-
-            // NRDSettings.h exige historyFixFrameNum < maxFastAccumulatedFrameNum. Com o fast em 3
-            // e o default 3 isso ja estava no limite; baixar o fast para 2 obriga a descer aqui.
-            relax.historyFixFrameNum = 1;
-
-            // Clamp do box de cor da historia lenta contra a rapida. Faixa valida [1;3], default 2;
-            // o proprio NRD anota que 1,5 funciona ate para sinal sujo, e o nosso e mais limpo que
-            // isso. 1,0 e o piso se o A/B pedir mais agressividade.
-            relax.fastHistoryClampingSigmaScale = 1.5f;
+            RelaxSettings.diffuseMaxAccumulatedFrameNum = 20;
+            RelaxSettings.specularMaxAccumulatedFrameNum = 20;
+            RelaxSettings.diffusePhiLuminance = 1.0f;
+            RelaxSettings.spatialVarianceEstimationHistoryThreshold = 1;
+            RelaxSettings.diffuseMaxFastAccumulatedFrameNum = 2;
+            RelaxSettings.specularMaxFastAccumulatedFrameNum = 2;
+            RelaxSettings.historyFixFrameNum = 1;
+            RelaxSettings.fastHistoryClampingSigmaScale = 1.5f;
         }
-        nrd::SetDenoiserSettings(*Instance, 0, &relax);
+
+        nrd::SetDenoiserSettings(*Instance, 0, &RelaxSettings);
 
         BuildRootSignature(_Device);
         BuildPipelines(_Device);
@@ -179,70 +162,72 @@ namespace Smile {
         Available = true;
 #else
         (void)_Device; (void)_Profile;
-        LogDebug("NRD desabilitado (SMILE_NRD_ENABLED=0)");
+        LogDebug("NRD Desabilitado (SMILE_NRD_ENABLED=0)");
 #endif
     }
 
 #if SMILE_NRD_ENABLED
     void FNrdDenoiser::BuildRootSignature(ID3D12Device* _Device) {
-        D3D12_DESCRIPTOR_RANGE ranges[2]{};
-        ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        ranges[0].NumDescriptors = PerSetTex;
-        ranges[0].BaseShaderRegister = 0;
-        ranges[0].RegisterSpace = ResourcesSpace;
-        ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-        ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-        ranges[1].NumDescriptors = PerSetUav;
-        ranges[1].BaseShaderRegister = 0;
-        ranges[1].RegisterSpace = ResourcesSpace;
-        ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE DescriptorRanges[2]{};
+        DescriptorRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        DescriptorRanges[0].NumDescriptors = PerSetTex;
+        DescriptorRanges[0].BaseShaderRegister = 0;
+        DescriptorRanges[0].RegisterSpace = ResourcesSpace;
+        DescriptorRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        DescriptorRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        DescriptorRanges[1].NumDescriptors = PerSetUav;
+        DescriptorRanges[1].BaseShaderRegister = 0;
+        DescriptorRanges[1].RegisterSpace = ResourcesSpace;
+        DescriptorRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER params[2]{};
-        params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        params[0].Descriptor.ShaderRegister = CbReg;
-        params[0].Descriptor.RegisterSpace  = CbSpace;
-        params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-        params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        params[1].DescriptorTable.NumDescriptorRanges = 2;
-        params[1].DescriptorTable.pDescriptorRanges   = ranges;
-        params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        D3D12_ROOT_PARAMETER RootParams[2]{};
+        RootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        RootParams[0].Descriptor.ShaderRegister = CbReg;
+        RootParams[0].Descriptor.RegisterSpace  = CbSpace;
+        RootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        RootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        RootParams[1].DescriptorTable.NumDescriptorRanges = 2;
+        RootParams[1].DescriptorTable.pDescriptorRanges   = DescriptorRanges;
+        RootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-        D3D12_STATIC_SAMPLER_DESC samp[2]{};
+        D3D12_STATIC_SAMPLER_DESC StaticSamplersDesc[2]{};
         for (u32 i = 0; i < 2; ++i) {
-            samp[i].Filter = (i == 0) ? D3D12_FILTER_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-            samp[i].AddressU = samp[i].AddressV = samp[i].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-            samp[i].ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-            samp[i].MaxLOD = D3D12_FLOAT32_MAX;
-            samp[i].ShaderRegister = SamplerBaseReg + i;
-            samp[i].RegisterSpace  = CbSpace;
-            samp[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+            StaticSamplersDesc[i].Filter = (i == 0) ? D3D12_FILTER_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+            StaticSamplersDesc[i].AddressU = StaticSamplersDesc[i].AddressV = StaticSamplersDesc[i].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            StaticSamplersDesc[i].ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+            StaticSamplersDesc[i].MaxLOD = D3D12_FLOAT32_MAX;
+            StaticSamplersDesc[i].ShaderRegister = SamplerBaseReg + i;
+            StaticSamplersDesc[i].RegisterSpace  = CbSpace;
+            StaticSamplersDesc[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         }
 
-        D3D12_ROOT_SIGNATURE_DESC rs{};
-        rs.NumParameters = 2; rs.pParameters = params;
-        rs.NumStaticSamplers = 2; rs.pStaticSamplers = samp;
-        rs.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+        D3D12_ROOT_SIGNATURE_DESC RootSignatureDesc{};
+        RootSignatureDesc.NumParameters = 2;
+        RootSignatureDesc.pParameters = RootParams;
+        RootSignatureDesc.NumStaticSamplers = 2;
+        RootSignatureDesc.pStaticSamplers = StaticSamplersDesc;
+        RootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-        ComPtr<ID3DBlob> blob, err;
-        HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
+        ComPtr<ID3DBlob> Blob, Error;
+        HRESULT hr = D3D12SerializeRootSignature(&RootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &Blob, &Error);
         if (FAILED(hr)) {
-            if (err) LogError(std::string("NRD root sig: ") + (const char*)err->GetBufferPointer());
+            if (Error) LogError(std::string("NRD Root Signature: ") + (const char*)Error->GetBufferPointer());
             SMILE_HR(hr);
         }
-        SMILE_HR(_Device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
-                 IID_PPV_ARGS(&RootSig)));
+        SMILE_HR(_Device->CreateRootSignature(0, Blob->GetBufferPointer(), Blob->GetBufferSize(),
+                 IID_PPV_ARGS(&RootSignature)));
     }
 
     void FNrdDenoiser::BuildPipelines(ID3D12Device* _Device) {
-        const nrd::InstanceDesc& d = *nrd::GetInstanceDesc(*Instance);
-        Pipelines.resize(d.pipelinesNum);
-        for (u32 i = 0; i < d.pipelinesNum; ++i) {
-            const nrd::ComputeShaderDesc& cs = d.pipelines[i].computeShaderDXIL;
-            assert(cs.bytecode && cs.size && "NRD pipeline sem DXIL");
-            D3D12_COMPUTE_PIPELINE_STATE_DESC ps{};
-            ps.pRootSignature = RootSig.Get();
-            ps.CS = { cs.bytecode, (SIZE_T)cs.size };
-            SMILE_HR(_Device->CreateComputePipelineState(&ps, IID_PPV_ARGS(&Pipelines[i])));
+        const nrd::InstanceDesc& InstanceDesc = *nrd::GetInstanceDesc(*Instance);
+        Pipelines.resize(InstanceDesc.pipelinesNum);
+        for (u32 i = 0; i < InstanceDesc.pipelinesNum; ++i) {
+            const nrd::ComputeShaderDesc& ComputeShaderDesc = InstanceDesc.pipelines[i].computeShaderDXIL;
+            assert(ComputeShaderDesc.bytecode && ComputeShaderDesc.size && "NRD Pipeline sem DXIL");
+            D3D12_COMPUTE_PIPELINE_STATE_DESC PSODesc{};
+            PSODesc.pRootSignature = RootSignature.Get();
+            PSODesc.CS = { ComputeShaderDesc.bytecode, (SIZE_T)ComputeShaderDesc.size };
+            SMILE_HR(_Device->CreateComputePipelineState(&PSODesc, IID_PPV_ARGS(&Pipelines[i])));
         }
     }
 
@@ -266,20 +251,15 @@ namespace Smile {
         SMILE_HR(_Device->CreateDescriptorHeap(&th, IID_PPV_ARGS(&TableHeap)));
         TableRingOffset = 0;
 
-        CbStride    = ((d.constantBufferMaxDataSize + 255u) / 256u) * 256u;
-        CbRingCount = SetsMax * frames;
-        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC cd{};
-        cd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        cd.Width = (UINT64)CbStride * CbRingCount;
-        cd.Height = 1; cd.DepthOrArraySize = 1; cd.MipLevels = 1;
-        cd.Format = DXGI_FORMAT_UNKNOWN; cd.SampleDesc = { 1, 0 };
-        cd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &cd,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CbRing)));
-        D3D12_RANGE nr{ 0, 0 };
-        SMILE_HR(CbRing->Map(0, &nr, reinterpret_cast<void**>(&CbRingMapped)));
-        CbRingOffset = 0;
+        ConstantBufferStride    = ((d.constantBufferMaxDataSize + 255u) / 256u) * 256u;
+        ConstantBufferRingCount = SetsMax * frames;
+        // O stride ja vem arredondado para 256 na linha acima (exigencia do NRD e do CBV),
+        // entao o slice da fabrica coincide com ele.
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, ConstantBufferStride, ConstantBufferRingCount);
+        ConstantBufferRing       = Upload.Resource;
+        ConstantBufferRingMapped = Upload.Mapped;
+        ConstantBufferRingOffset = 0;
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE FNrdDenoiser::StagingCpu(u32 Index) const {
@@ -298,40 +278,45 @@ namespace Smile {
         const nrd::InstanceDesc& d = *nrd::GetInstanceDesc(*Instance);
 
         u32 staging = 0;
-        auto Init = [&](FNrdTexture& T, ID3D12Resource* Res, DXGI_FORMAT Fmt) {
+        auto Init = [&](FNRDTexture& T, ID3D12Resource* Res, DXGI_FORMAT Fmt) {
             T.Res = Res; T.State = D3D12_RESOURCE_STATE_COMMON;
-            T.SrvStaging = staging++; T.UavStaging = staging++;
+            T.SRVStaging = staging++; T.UAVStaging = staging++;
             D3D12_SHADER_RESOURCE_VIEW_DESC s{};
             s.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             s.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             s.Format = Fmt; s.Texture2D.MipLevels = 1;
-            _Device->CreateShaderResourceView(Res, &s, StagingCpu(T.SrvStaging));
+            _Device->CreateShaderResourceView(Res, &s, StagingCpu(T.SRVStaging));
             D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
             u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; u.Format = Fmt;
-            _Device->CreateUnorderedAccessView(Res, nullptr, &u, StagingCpu(T.UavStaging));
+            _Device->CreateUnorderedAccessView(Res, nullptr, &u, StagingCpu(T.UAVStaging));
         };
 
         auto DivUp = [](u32 a, u32 b) { return b ? (a + b - 1) / b : a; };
 
-        PermPool.resize(d.permanentPoolSize);
+        PermanentPool.resize(d.permanentPoolSize);
         for (u32 i = 0; i < d.permanentPoolSize; ++i) {
             const nrd::TextureDesc& td = d.permanentPool[i];
             DXGI_FORMAT fmt = ToDXGI(td.format);
             ComPtr<ID3D12Resource> res = CreateTex(_Device, DivUp(RtWidth, td.downsampleFactor),
-                                                   DivUp(RtHeight, td.downsampleFactor), fmt);
-            Init(PermPool[i], res.Get(), fmt); 
+                                                   DivUp(RtHeight, td.downsampleFactor), fmt,
+                                                   PoolLabel());
+            Init(PermanentPool[i], res.Get(), fmt);
         }
-        TransPool.resize(d.transientPoolSize);
+        TransientPool.resize(d.transientPoolSize);
         for (u32 i = 0; i < d.transientPoolSize; ++i) {
             const nrd::TextureDesc& td = d.transientPool[i];
             DXGI_FORMAT fmt = ToDXGI(td.format);
             ComPtr<ID3D12Resource> res = CreateTex(_Device, DivUp(RtWidth, td.downsampleFactor),
-                                                   DivUp(RtHeight, td.downsampleFactor), fmt);
-            Init(TransPool[i], res.Get(), fmt);
+                                                   DivUp(RtHeight, td.downsampleFactor), fmt,
+                                                   PoolLabel());
+            Init(TransientPool[i], res.Get(), fmt);
         }
         for (u32 i = 0; i < IO_COUNT; ++i) {
             DXGI_FORMAT fmt = IoFormat((EIo)i);
-            ComPtr<ID3D12Resource> res = CreateTex(_Device, RtWidth, RtHeight, fmt);
+            // IN/OUT, todas na resolucao CHEIA — e por isso que somam mais que os pools.
+            ComPtr<ID3D12Resource> res = CreateTex(_Device, RtWidth, RtHeight, fmt,
+                                                   SignalProfile == ESignalProfile::Direct
+                                                       ? "NRD · IO (direta)" : "NRD · IO (indireta)");
             Init(Io[i], res.Get(), fmt);
         }
         assert(staging <= StagingCount && "NRD StagingHeap overflow");
@@ -345,12 +330,13 @@ namespace Smile {
 
 #if SMILE_NRD_ENABLED
     void FNrdDenoiser::ReleaseResize() {
-        PermPool.clear(); TransPool.clear(); 
-        for (u32 i = 0; i < IO_COUNT; ++i) Io[i] = FNrdTexture{};
+        PermanentPool.clear();
+        TransientPool.clear();
+        for (u32 i = 0; i < IO_COUNT; ++i) Io[i] = FNRDTexture{};
         Ready = false;
     }
 
-    FNrdDenoiser::FNrdTexture* FNrdDenoiser::MapResource(u32 type, u32 indexInPool) {
+    FNrdDenoiser::FNRDTexture* FNrdDenoiser::MapResource(u32 type, u32 indexInPool) {
         using RT = nrd::ResourceType;
         switch ((RT)type) {
             case RT::IN_MV:                    return &Io[IO_MV];
@@ -360,8 +346,8 @@ namespace Smile {
             case RT::IN_SPEC_RADIANCE_HITDIST: return &Io[IO_SPEC_RADIANCE_HITDIST];
             case RT::OUT_DIFF_RADIANCE_HITDIST:return &Io[IO_OUT_DIFF];
             case RT::OUT_SPEC_RADIANCE_HITDIST:return &Io[IO_OUT_SPEC];
-            case RT::PERMANENT_POOL: return (indexInPool < PermPool.size())  ? &PermPool[indexInPool]  : nullptr;
-            case RT::TRANSIENT_POOL: return (indexInPool < TransPool.size()) ? &TransPool[indexInPool] : nullptr;
+            case RT::PERMANENT_POOL: return (indexInPool < PermanentPool.size())  ? &PermanentPool[indexInPool]  : nullptr;
+            case RT::TRANSIENT_POOL: return (indexInPool < TransientPool.size()) ? &TransientPool[indexInPool] : nullptr;
             default: return nullptr;
         }
     }
@@ -395,164 +381,171 @@ namespace Smile {
     }
 
 #if SMILE_NRD_ENABLED
-    void FNrdDenoiser::RecordDispatches(ID3D12GraphicsCommandList* _CL) {
-        nrd::Identifier id = 0;
-        const nrd::DispatchDesc* dispatches = nullptr;
-        uint32_t num = 0;
-        nrd::Result r = nrd::GetComputeDispatches(*Instance, &id, 1, dispatches, num);
-        if (r != nrd::Result::SUCCESS || !dispatches) {
-            LogError("NRD GetComputeDispatches falhou (Result=" + std::to_string((int)r) + ")");
+    void FNrdDenoiser::RecordDispatches(ID3D12GraphicsCommandList* _CommandList) {
+        nrd::Identifier Identifier = 0;
+        const nrd::DispatchDesc* DispatchDesc = nullptr;
+        uint32_t Num = 0;
+        nrd::Result Result = nrd::GetComputeDispatches(*Instance, &Identifier, 1, DispatchDesc, Num);
+        if (Result != nrd::Result::SUCCESS || !DispatchDesc) {
+            LogError("NRD GetComputeDispatches Falhou (Resultado = " + std::to_string((int)Result) + ")");
             return;
         }
 
-        ID3D12DescriptorHeap* heaps[] = { TableHeap.Get() };
-        _CL->SetDescriptorHeaps(1, heaps);
-        _CL->SetComputeRootSignature(RootSig.Get());
+        ID3D12DescriptorHeap* DescriptorHeaps[] = { TableHeap.Get() };
+        _CommandList->SetDescriptorHeaps(1, DescriptorHeaps);
+        _CommandList->SetComputeRootSignature(RootSignature.Get());
 
-        const D3D12_GPU_DESCRIPTOR_HANDLE tableGpu0 = TableHeap->GetGPUDescriptorHandleForHeapStart();
-        const D3D12_CPU_DESCRIPTOR_HANDLE tableCpu0 = TableHeap->GetCPUDescriptorHandleForHeapStart();
-        const D3D12_GPU_VIRTUAL_ADDRESS  cbBase     = CbRing->GetGPUVirtualAddress();
+        const D3D12_GPU_DESCRIPTOR_HANDLE TableGPU0             = TableHeap->GetGPUDescriptorHandleForHeapStart();
+        const D3D12_CPU_DESCRIPTOR_HANDLE TableCpu0             = TableHeap->GetCPUDescriptorHandleForHeapStart();
+        const D3D12_GPU_VIRTUAL_ADDRESS   ConstantBufferBase    = ConstantBufferRing->GetGPUVirtualAddress();
 
-        for (uint32_t di = 0; di < num; ++di) {
-            const nrd::DispatchDesc& dd = dispatches[di];
+        for (uint32_t DispatchIndex = 0; DispatchIndex < Num; ++DispatchIndex) {
+            const nrd::DispatchDesc& dd = DispatchDesc[DispatchIndex];
 
             if (TableRingOffset + TableStride > TableRingCapacity) TableRingOffset = 0;
-            if (CbRingOffset + 1 > CbRingCount) CbRingOffset = 0;
-            assert(dd.resourcesNum <= TableStride && "NRD dispatch excede a tabela");
+            if (ConstantBufferRingOffset + 1 > ConstantBufferRingCount) ConstantBufferRingOffset = 0;
+            assert(dd.resourcesNum <= TableStride && "[NRD] Dispatch Excede a Tabela");
 
-            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvSrc(PerSetTex, StagingCpu(Io[IO_OUT_DIFF].SrvStaging));
-            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> uavSrc(PerSetUav, StagingCpu(Io[IO_OUT_DIFF].UavStaging));
-            std::vector<D3D12_RESOURCE_BARRIER> barriers;
-            u32 srvIdx = 0, uavIdx = 0;
-            for (uint32_t ri = 0; ri < dd.resourcesNum; ++ri) {
-                const nrd::ResourceDesc& rd = dd.resources[ri];
-                FNrdTexture* t = MapResource((u32)rd.type, rd.indexInPool);
-                if (!t || !t->Res) { LogError("NRD recurso nao mapeado"); continue; }
-                if (rd.descriptorType == nrd::DescriptorType::TEXTURE) {
-                    if (srvIdx < PerSetTex) srvSrc[srvIdx++] = StagingCpu(t->SrvStaging);
-                    if (t->State != D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) {
-                        D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                        b.Transition.pResource = t->Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                        b.Transition.StateBefore = t->State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                        barriers.push_back(b); t->State = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> SRVSource(PerSetTex, StagingCpu(Io[IO_OUT_DIFF].SRVStaging));
+            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> UAVSource(PerSetUav, StagingCpu(Io[IO_OUT_DIFF].UAVStaging));
+            std::vector<D3D12_RESOURCE_BARRIER> ResourceBarriers;
+            u32 SRVIndex = 0, UAVIndex = 0;
+
+            for (uint32_t ResourceIndex = 0; ResourceIndex < dd.resourcesNum; ++ResourceIndex) {
+                const nrd::ResourceDesc& ResourceDesc = dd.resources[ResourceIndex];
+                FNRDTexture* NRDTexture = MapResource((u32)ResourceDesc.type, ResourceDesc.indexInPool);
+                if (!NRDTexture || !NRDTexture->Res) { LogError("[NRD] Recurso Não Mapeado"); continue; }
+                if (ResourceDesc.descriptorType == nrd::DescriptorType::TEXTURE) {
+                    if (SRVIndex < PerSetTex) SRVSource[SRVIndex++] = StagingCpu(NRDTexture->SRVStaging);
+                    if (NRDTexture->State != D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) {
+                        D3D12_RESOURCE_BARRIER ResourceBarrier{};
+                        ResourceBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        ResourceBarrier.Transition.pResource = NRDTexture->Res.Get();
+                        ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                        ResourceBarrier.Transition.StateBefore = NRDTexture->State; ResourceBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                        ResourceBarriers.push_back(ResourceBarrier); NRDTexture->State = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                     }
                 } else {
-                    if (uavIdx < PerSetUav) uavSrc[uavIdx++] = StagingCpu(t->UavStaging);
-                    if (t->State != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
-                        D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                        b.Transition.pResource = t->Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                        b.Transition.StateBefore = t->State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-                        barriers.push_back(b); t->State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                    if (UAVIndex < PerSetUav) UAVSource[UAVIndex++] = StagingCpu(NRDTexture->UAVStaging);
+                    if (NRDTexture->State != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+                        D3D12_RESOURCE_BARRIER ResourceBarrier{};
+                        ResourceBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        ResourceBarrier.Transition.pResource = NRDTexture->Res.Get();
+                        ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                        ResourceBarrier.Transition.StateBefore = NRDTexture->State;
+                        ResourceBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                        ResourceBarriers.push_back(ResourceBarrier);
+                        NRDTexture->State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
                     } else {
-                        D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                        b.UAV.pResource = t->Res.Get(); barriers.push_back(b); 
+                        D3D12_RESOURCE_BARRIER ResourceBarrier{};
+                        ResourceBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                        ResourceBarrier.UAV.pResource = NRDTexture->Res.Get();
+                        ResourceBarriers.push_back(ResourceBarrier);
                     }
                 }
             }
-            if (!barriers.empty()) _CL->ResourceBarrier((UINT)barriers.size(), barriers.data());
+            if (!ResourceBarriers.empty()) _CommandList->ResourceBarrier((UINT)ResourceBarriers.size(), ResourceBarriers.data());
 
-            D3D12_CPU_DESCRIPTOR_HANDLE dstSrv = tableCpu0; dstSrv.ptr += (SIZE_T)TableRingOffset * HandleSize;
-            D3D12_CPU_DESCRIPTOR_HANDLE dstUav = dstSrv;    dstUav.ptr += (SIZE_T)PerSetTex * HandleSize;
+            D3D12_CPU_DESCRIPTOR_HANDLE dstSrv = TableCpu0;
+            dstSrv.ptr += (SIZE_T)TableRingOffset * HandleSize;
+            D3D12_CPU_DESCRIPTOR_HANDLE dstUav = dstSrv;
+            dstUav.ptr += (SIZE_T)PerSetTex * HandleSize;
             std::vector<UINT> onesS(PerSetTex, 1u), onesU(PerSetUav, 1u);
-            Dev->CopyDescriptors(1, &dstSrv, &PerSetTex, PerSetTex, srvSrc.data(), onesS.data(),
+            Device->CopyDescriptors(1, &dstSrv, &PerSetTex, PerSetTex, SRVSource.data(), onesS.data(),
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            Dev->CopyDescriptors(1, &dstUav, &PerSetUav, PerSetUav, uavSrc.data(), onesU.data(),
+            Device->CopyDescriptors(1, &dstUav, &PerSetUav, PerSetUav, UAVSource.data(), onesU.data(),
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            D3D12_GPU_DESCRIPTOR_HANDLE tableGpu = tableGpu0; tableGpu.ptr += (UINT64)TableRingOffset * HandleSize;
+            D3D12_GPU_DESCRIPTOR_HANDLE TableGPU = TableGPU0;
+            TableGPU.ptr += (UINT64)TableRingOffset * HandleSize;
 
-            u8* cbDst = CbRingMapped + (size_t)CbRingOffset * CbStride;
+            u8* cbDst = ConstantBufferRingMapped + (size_t)ConstantBufferRingOffset * ConstantBufferStride;
             std::memcpy(cbDst, dd.constantBufferData, dd.constantBufferDataSize);
-            D3D12_GPU_VIRTUAL_ADDRESS cbAddr = cbBase + (UINT64)CbRingOffset * CbStride;
+            D3D12_GPU_VIRTUAL_ADDRESS ConstantBufferAddress = ConstantBufferBase + (UINT64)ConstantBufferRingOffset * ConstantBufferStride;
 
-            _CL->SetPipelineState(Pipelines[dd.pipelineIndex].Get());
-            _CL->SetComputeRootConstantBufferView(0, cbAddr);
-            _CL->SetComputeRootDescriptorTable(1, tableGpu);
-            _CL->Dispatch(dd.gridWidth, dd.gridHeight, 1);
+            _CommandList->SetPipelineState(Pipelines[dd.pipelineIndex].Get());
+            _CommandList->SetComputeRootConstantBufferView(0, ConstantBufferAddress);
+            _CommandList->SetComputeRootDescriptorTable(1, TableGPU);
+            _CommandList->Dispatch(dd.gridWidth, dd.gridHeight, 1);
 
             TableRingOffset += TableStride;
-            CbRingOffset += 1;
+            ConstantBufferRingOffset += 1;
         }
 
-        if (!SelfTestLogged) {
-            LogDebug("NRD driver: " + std::to_string(num) + " dispatches executados (bring-up OK)");
-            SelfTestLogged = true;
-        }
         NeedsClear = false;
     }
 #endif
 
-    void FNrdDenoiser::RunSelfTest(ID3D12GraphicsCommandList* _CL) {
+    void FNrdDenoiser::Denoise(ID3D12GraphicsCommandList* _CommandList) {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
-        RecordDispatches(_CL);
+        RecordDispatches(_CommandList);
 #else
-        (void)_CL;
+        (void)_CommandList;
 #endif
     }
 
-    void FNrdDenoiser::Denoise(ID3D12GraphicsCommandList* _CL) {
+    void FNrdDenoiser::TransitionInputsToWrite(ID3D12GraphicsCommandList* _CommandList) {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
-        RecordDispatches(_CL);
-#else
-        (void)_CL;
-#endif
-    }
-
-    void FNrdDenoiser::TransitionInputsToWrite(ID3D12GraphicsCommandList* _CL) {
-#if SMILE_NRD_ENABLED
-        if (!Ready) return;
-        const EIo ins[5] = { IO_MV, IO_NORMAL_ROUGHNESS, IO_VIEWZ,
+        const EIo Inputs[5] = { IO_MV, IO_NORMAL_ROUGHNESS, IO_VIEWZ,
                              IO_DIFF_RADIANCE_HITDIST, IO_SPEC_RADIANCE_HITDIST };
-        std::vector<D3D12_RESOURCE_BARRIER> bs;
-        for (EIo e : ins) {
-            FNrdTexture& t = Io[e];
-            if (!t.Res || t.State == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) continue;
-            D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            b.Transition.StateBefore = t.State; b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-            bs.push_back(b); t.State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        std::vector<D3D12_RESOURCE_BARRIER> ResourceBarriers;
+        for (EIo Input : Inputs) {
+            FNRDTexture& NRDTexture = Io[Input];
+            if (!NRDTexture.Res || NRDTexture.State == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) continue;
+            D3D12_RESOURCE_BARRIER ResourceBarrier{};
+            ResourceBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            ResourceBarrier.Transition.pResource = NRDTexture.Res.Get();
+            ResourceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ResourceBarrier.Transition.StateBefore = NRDTexture.State;
+            ResourceBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            ResourceBarriers.push_back(ResourceBarrier);
+            NRDTexture.State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         }
-        if (!bs.empty()) _CL->ResourceBarrier((UINT)bs.size(), bs.data());
+        if (!ResourceBarriers.empty()) _CommandList->ResourceBarrier((UINT)ResourceBarriers.size(), ResourceBarriers.data());
 #else
-        (void)_CL;
+        (void)_CommandList;
 #endif
     }
 
-    void FNrdDenoiser::TransitionOutputToRead(ID3D12GraphicsCommandList* _CL) {
+    void FNrdDenoiser::TransitionOutputToRead(ID3D12GraphicsCommandList* _CommandList) {
 #if SMILE_NRD_ENABLED
         if (!Ready) return;
 
         constexpr D3D12_RESOURCE_STATES ShaderRead =
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        const EIo outs[2] = { IO_OUT_DIFF, IO_OUT_SPEC };
+        const EIo Outputs[2] = { IO_OUT_DIFF, IO_OUT_SPEC };
         std::vector<D3D12_RESOURCE_BARRIER> bs;
-        for (EIo e : outs) {
-            FNrdTexture& t = Io[e];
-            if (!t.Res || t.State == ShaderRead) continue;
+        for (EIo Output : Outputs) {
+            FNRDTexture& NRDTexture = Io[Output];
+            if (!NRDTexture.Res || NRDTexture.State == ShaderRead) continue;
             D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            b.Transition.pResource = t.Res.Get(); b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            b.Transition.StateBefore = t.State; b.Transition.StateAfter = ShaderRead;
-            bs.push_back(b); t.State = ShaderRead;
+            b.Transition.pResource = NRDTexture.Res.Get();
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = NRDTexture.State;
+            b.Transition.StateAfter = ShaderRead;
+            bs.push_back(b);
+            NRDTexture.State = ShaderRead;
         }
-        if (!bs.empty()) _CL->ResourceBarrier((UINT)bs.size(), bs.data());
+        if (!bs.empty()) _CommandList->ResourceBarrier((UINT)bs.size(), bs.data());
 #else
-        (void)_CL;
+        (void)_CommandList;
 #endif
     }
 
-    ID3D12Resource* FNrdDenoiser::IoResource(EIo Which) const {
+    ID3D12Resource* FNrdDenoiser::IoResource(EIo _Which) const {
 #if SMILE_NRD_ENABLED
-        return (Which < IO_COUNT) ? Io[Which].Res.Get() : nullptr;
+        return (_Which < IO_COUNT) ? Io[_Which].Res.Get() : nullptr;
 #else
-        (void)Which; return nullptr;
+        (void)_Which;
+        return nullptr;
 #endif
     }
 
     void FNrdDenoiser::Shutdown() {
 #if SMILE_NRD_ENABLED
-        if (CbRing && CbRingMapped) { CbRing->Unmap(0, nullptr); CbRingMapped = nullptr; }
+        if (ConstantBufferRing && ConstantBufferRingMapped) { ConstantBufferRing->Unmap(0, nullptr); ConstantBufferRingMapped = nullptr; }
         ReleaseResize();
         Pipelines.clear();
         if (Instance) { nrd::DestroyInstance(*Instance); Instance = nullptr; }

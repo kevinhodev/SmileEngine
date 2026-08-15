@@ -2,9 +2,10 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/VolumetricPipeline.h"
+#include "Smile/Graphics/ComputePipeline.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/CommandQueue.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -35,8 +36,14 @@ namespace Smile {
     // triangulos — e combina o historico; Pass B combina vizinhos, corrige o vies e traca no
     // maximo um shadow ray. O sol fica no caminho dedicado do deferred; desligado, o fallback e
     // o loop raster.
-    class FReSTIRDI {
+    class FReSTIRDI : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "ReSTIR DI"; }
+        bool IsInitialized() const override { return Ready; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         void Initialize(ID3D12Device* Device);
         void RecreatePSO(ID3D12Device* Device);
 
@@ -48,6 +55,13 @@ namespace Smile {
                             const u32 LightSlots[FCommandQueue::kFramesInFlight],
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                             const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
+        // Reescreve SO os descritores de mesh light das tabelas de trace, sem realocar alvo nem
+        // reservoir. Chamar sempre que o FMeshLights se reconstruir fora do SetupForResize — hoje,
+        // o caminho barato do Renderer::OnSceneStructureChanged. As tabelas guardam uma COPIA do
+        // descritor, entao sem isto o DI le o pool/alias ja liberados e a tela estoura em branco.
+        // Motivo completo no .cpp. O CHAMADOR garante as filas drenadas.
+        void RefreshMeshLightDescriptors(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                         u32 MeshLightSlot, u32 MeshAliasSlot);
         void SetupNrdPack(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                           u32 GBufferASlot, u32 GBufferBSlot, u32 GBufferCSlot,
                           u32 DepthSlot, u32 VelocitySlot,
@@ -86,22 +100,22 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FVolumetricPipeline InitialTemporalPSO; // 10 SRV, 2 UAV, bindless alpha-test
-        FVolumetricPipeline SpatialPSO;         // 12 SRV, 4 UAV, bindless alpha-test
-        FVolumetricPipeline NrdPackPSO;          // 8 SRV, 5 UAV
-        FVolumetricPipeline NrdCompositePSO;     // 6 SRV, 1 UAV
+        FComputePipeline InitialTemporalPSO; // 10 SRV, 2 UAV, bindless alpha-test
+        FComputePipeline SpatialPSO;         // 12 SRV, 4 UAV, bindless alpha-test
+        FComputePipeline NrdPackPSO;          // 8 SRV, 5 UAV
+        FComputePipeline NrdCompositePSO;     // 6 SRV, 1 UAV
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Output;
         Microsoft::WRL::ComPtr<ID3D12Resource> RawDiffuse;  // rgb modulado, a = distancia da luz
         Microsoft::WRL::ComPtr<ID3D12Resource> RawSpecular; // rgb modulado, a = distancia da luz
         Microsoft::WRL::ComPtr<ID3D12Resource> ShadowMotion;// xy=MV, z=confianca, w=valido
-        Microsoft::WRL::ComPtr<ID3D12Resource> ResA[2]; // RGBA32F: x1.xyz, W
+        Microsoft::WRL::ComPtr<ID3D12Resource> ResW[2]; // R32F: W (o x1 saiu — reconstruido)
         Microsoft::WRL::ComPtr<ID3D12Resource> ResB[2]; // RGBA32_UINT: luz, uv, M+idade, n1 oct
         D3D12_RESOURCE_STATES OutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawDiffuseState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawSpecularState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ShadowMotionState = D3D12_RESOURCE_STATE_COMMON;
-        D3D12_RESOURCE_STATES ResAState[2] = {
+        D3D12_RESOURCE_STATES ResWState[2] = {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
         D3D12_RESOURCE_STATES ResBState[2] = {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
@@ -116,9 +130,9 @@ namespace Smile {
         u32 RawSpecularUAV = kInvalidSlot;
         u32 ShadowMotionSRV = kInvalidSlot;
         u32 ShadowMotionUAV = kInvalidSlot;
-        u32 ResASRV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 ResWSRV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResBSRV[2] = { kInvalidSlot, kInvalidSlot };
-        u32 ResAUAV[2] = { kInvalidSlot, kInvalidSlot };
+        u32 ResWUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 ResBUAV[2] = { kInvalidSlot, kInvalidSlot };
         u32 InitialTable[kParityCount][FCommandQueue::kFramesInFlight] = {
             { kInvalidSlot, kInvalidSlot }, { kInvalidSlot, kInvalidSlot } };

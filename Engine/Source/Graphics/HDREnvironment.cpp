@@ -1,8 +1,9 @@
 #include "Smile/Graphics/HDREnvironment.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <iterator>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_HDR
@@ -54,22 +55,11 @@ namespace Smile {
                             kSpecularSize, kSpecularMips, true);
 
         {
-            D3D12_RESOURCE_DESC LutDesc{};
-            LutDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            LutDesc.Width            = kBRDFLutSize;
-            LutDesc.Height           = kBRDFLutSize;
-            LutDesc.DepthOrArraySize = 1;
-            LutDesc.MipLevels        = 1;
-            LutDesc.Format           = DXGI_FORMAT_R16G16_FLOAT;
-            LutDesc.SampleDesc       = { 1, 0 };
-            LutDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            LutDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &LutDesc,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-                IID_PPV_ARGS(&BRDFLutResource)));
-            VramTracker::Register(BRDFLutResource.Get(), EVramCategory::SceneTextures);
+            BRDFLutResource = GpuResources::CreateTex2D(
+                _Device, kBRDFLutSize, kBRDFLutSize, DXGI_FORMAT_R16G16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::SceneTextures,
+                nullptr, 1, 1, "LUT do BRDF");
 
             BRDFLutSRVSlot = _SRVHeap.Allocate(1);
             BRDFLutUAVSlot = _SRVHeap.Allocate(1);
@@ -91,11 +81,7 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, BRDFLutResource.Get(), UAVDesc, BRDFLutUAVSlot);
         }
 
-        EquirectToCubePSO.Initialize(_Device, "EquirectToCube.cs_6_0.cso",        false);
-        MipGenPSO        .Initialize(_Device, "MipGen.cs_6_0.cso",                true);
-        IrradiancePSO    .Initialize(_Device, "IrradianceConvolution.cs_6_0.cso", true);
-        SpecularPSO      .Initialize(_Device, "SpecularPrefilter.cs_6_0.cso",     true);
-        BRDFLutPSO       .Initialize(_Device, "BRDFIntegration.cs_6_0.cso",       false);
+        CreatePipelines(_Device);
 
         GenerateBRDFLut(_Device, _CmdQueue, _SRVHeap);
 
@@ -137,45 +123,25 @@ namespace Smile {
                                           const float* _Pixels, u32 _Width, u32 _Height) {
         Equirect2DResource.Reset();
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = _Width;
-        Desc.Height           = _Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32G32B32A32_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-        D3D12_HEAP_PROPERTIES DefaultHeap{}; DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-            IID_PPV_ARGS(&Equirect2DResource)));
-        VramTracker::Register(Equirect2DResource.Get(), EVramCategory::SceneTextures);
+        // Desc guardado: o GetCopyableFootprints logo abaixo precisa dele p/ dimensionar o
+        // staging do upload.
+        const D3D12_RESOURCE_DESC Desc =
+            GpuResources::Tex2DDesc(_Width, _Height, DXGI_FORMAT_R32G32B32A32_FLOAT);
+        Equirect2DResource = GpuResources::CreateTex2D(
+            _Device, _Width, _Height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+            D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST,
+            EVramCategory::SceneTextures, nullptr, 1, 1, "HDRI equirretangular");
 
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT Layout{};
         UINT NumRows = 0; UINT64 RowSize = 0; UINT64 TotalSize = 0;
         _Device->GetCopyableFootprints(&Desc, 0, 1, 0, &Layout, &NumRows, &RowSize, &TotalSize);
 
-        D3D12_RESOURCE_DESC BufDesc{};
-        BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        BufDesc.Width            = TotalSize;
-        BufDesc.Height           = 1;
-        BufDesc.DepthOrArraySize = 1;
-        BufDesc.MipLevels        = 1;
-        BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        BufDesc.SampleDesc       = { 1, 0 };
-        BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        BufDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        ComPtr<ID3D12Resource> Staging;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &UploadHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Staging)));
-
-        u8* Mapped = nullptr;
-        SMILE_HR(Staging->Map(0, nullptr, reinterpret_cast<void**>(&Mapped)));
+        // Staging do HDRI inteiro (um 4K equirect em RGBA32F passa de 100 MB). Fora do ring
+        // pelo mesmo motivo do chunk de mesh: alocacao unica e grande, nao churn.
+        const GpuResources::FUploadBuffer StagingBuffer =
+            GpuResources::CreateUploadBuffer(_Device, TotalSize, 1, false);
+        ComPtr<ID3D12Resource> Staging = StagingBuffer.Resource;
+        u8* Mapped = StagingBuffer.Mapped;
         const u32 SrcRowPitchBytes = _Width * 4 * sizeof(float);
         for (u32 Row = 0; Row < _Height; ++Row) {
             const u8* Src = reinterpret_cast<const u8*>(_Pixels) + Row * SrcRowPitchBytes;
@@ -313,4 +279,23 @@ namespace Smile {
         LogDebug("IBL chain generated (env cube 512^2, irradiance 32^2, specular 128^2 x 7 mips)");
         return true;
     }
+
+    void FHDREnvironment::CreatePipelines(ID3D12Device* _Device) {
+        EquirectToCubePSO.Initialize(_Device, "EquirectToCube.cs_6_0.cso",        false);
+        MipGenPSO        .Initialize(_Device, "MipGen.cs_6_0.cso",                true);
+        IrradiancePSO    .Initialize(_Device, "IrradianceConvolution.cs_6_0.cso", true);
+        SpecularPSO      .Initialize(_Device, "SpecularPrefilter.cs_6_0.cso",     true);
+        BRDFLutPSO       .Initialize(_Device, "BRDFIntegration.cs_6_0.cso",       false);
+    }
+
+
+    FPassShaderStems FHDREnvironment::ShaderStems() const {
+        static const char* const kStems[] = { "EquirectToCube.cs", "MipGen.cs", "IrradianceConvolution.cs", "SpecularPrefilter.cs", "BRDFIntegration.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FHDREnvironment::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

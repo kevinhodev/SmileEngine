@@ -85,6 +85,10 @@ namespace SmileEditor {
 
         explicit operator bool() const { return Value != nullptr; }
         Smile::FLight* operator->() const { return Value; }
+        // Sob o MESMO Access do operator-> acima: os setters que invalidam GI por regiao passam
+        // a luz por referencia p/ o InvalidateLightRegion. So chame com o bool ja testado — como
+        // o operator->, nao ha checagem aqui.
+        Smile::FLight& operator*() const { return *Value; }
 
     private:
         RendererHandle::Access Access;
@@ -157,6 +161,23 @@ namespace SmileEditor {
         emit LightChanged();
     }
 
+    void LightsBridge::InvalidateLightRegion(const Smile::FLight& _L,
+                                             const Smile::Vec3& _OldMin,
+                                             const Smile::Vec3& _OldMax) {
+        if (!Renderer) return;
+        Smile::Vec3 NewMin, NewMax;
+        _L.InfluenceBounds(NewMin, NewMax);
+        // Duas caixas em vez de uma uniao na mao: o FDDGI une chamadas dentro da janela e a
+        // uniao dele e CRUA, entao mudar o raio de 2 p/ 40 m nao deixa a caixa antiga de fora
+        // nem paga padding duas vezes.
+        // Funil de TODA edicao de luz, e nenhuma delas move geometria: radiometrico sempre.
+        Renderer->NotifyGIRegionChanged(_OldMin, _OldMax, Smile::EGIRegionChange::Radiometric);
+        Renderer->NotifyGIRegionChanged(NewMin, NewMax, Smile::EGIRegionChange::Radiometric);
+        // Coalescido: um arraste de slider de intensidade chama isto a cada tick, e cada
+        // NotifySceneContentChanged imediato limparia reservoir/ReGIR/cache no meio do gesto.
+        Renderer->Settings().MarkSceneContentDirty();
+    }
+
     void LightsBridge::SetName(const QString& _V) {
         auto L = SelOf(Renderer); if (!L) return;
         const std::string S = _V.trimmed().toStdString();
@@ -166,9 +187,14 @@ namespace SmileEditor {
     }
     void LightsBridge::SetLightEnabled(bool _V) {
         auto L = SelOf(Renderer); if (!L || L->Enabled == _V) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->Enabled = _V;
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(true); // estado aparece na lista
     }
+    // SEM invalidacao, e nao por esquecimento: a lista de luzes do GI (Renderer.cpp, montagem do
+    // FGPULightGI) nao le CastShadows — o hit do indireto sempre dispara shadow ray. Este campo
+    // so escolhe slot no atlas 2D / cube array do raster, que nao acumula entre frames.
     void LightsBridge::SetCastShadows(bool _V) {
         auto L = SelOf(Renderer); if (!L || L->CastShadows == _V) return;
         L->CastShadows = _V;
@@ -176,68 +202,108 @@ namespace SmileEditor {
     }
     void LightsBridge::SetColor(const QColor& _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->Color = { (float)_V.redF(), (float)_V.greenF(), (float)_V.blueF() };
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(true); // dot de cor na lista
     }
     void LightsBridge::SetIntensity(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->Intensity = (float)std::max(_V, 0.0);
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
+    // Unico setter em que a caixa ANTIGA e a NOVA sao mesmo diferentes: encolher o raio deixa
+    // sondas que estavam iluminadas fora da caixa nova, e sem a antiga elas guardam a luz.
     void LightsBridge::SetRadius(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->AttenuationRadius = (float)std::clamp(_V, 0.1, 500.0);
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
     void LightsBridge::SetSourceRadius(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        // Nao muda a caixa, mas muda a ENERGIA: o SourceRadius e o piso da distancia no
+        // inverse-square, entao entra no FGPULightGI e no que a sonda mede.
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->SourceRadius = (float)std::clamp(_V, 0.01, 2.0);
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
     void LightsBridge::SetRTWeight(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
         // Teto em 1: isto e para REMOVER duplicata de emissivo, nao para inflar o indireto acima do
         // que a luz entrega no direto. Quem quiser mais energia sobe a Intensity, que vale nos dois.
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->RTWeight = (float)std::clamp(_V, 0.0, 1.0);
-        // O Touch so mexe em UI e persistencia. Quem consome este peso — DDGI, ReSTIR GI e
-        // reflexoes — ACUMULOU energia da luz antiga, e o DDGI com Hysteresis 0,99 seguraria essa
-        // energia por muitos frames: o slider pareceria inerte e a calibracao seria contra um
-        // estado que o usuario ja mandou embora. Coalescido (uma vez por frame, no Renderer).
-        if (Renderer) Renderer->Settings().MarkIndirectLightingDirty();
+        // Quem consome este peso — DDGI, ReSTIR GI e reflexoes — ACUMULOU energia da luz antiga,
+        // e o atlas seguraria essa energia por muitos frames: o slider pareceria inerte e a
+        // calibracao seria contra um estado que o usuario ja mandou embora.
+        //
+        // Era MarkIndirectLightingDirty (dominio SkyRadiance), que carrega DDGIAtlas e portanto
+        // derrubava o atlas INTEIRO — a piscada de GI a cada tique do slider. Trocado pela via
+        // por regiao + SceneContent: a caixa de influencia cobre o DDGI com precisao e o
+        // SceneContent ainda alcanca MAIS caches que o SkyRadiance (ReGIR e o cache de radiancia
+        // tambem guardam energia de luz puntual). Este e o caminho de toda edicao de luz agora.
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
     void LightsBridge::SetInnerConeDeg(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->InnerConeDeg = (float)std::clamp(_V, 0.0, 89.0);
         L->OuterConeDeg = std::max(L->OuterConeDeg, L->InnerConeDeg); // inner <= outer sempre
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
     void LightsBridge::SetOuterConeDeg(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->OuterConeDeg = (float)std::clamp(_V, 1.0, 89.0);
         L->InnerConeDeg = std::min(L->InnerConeDeg, L->OuterConeDeg);
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
+    // Posicao por campo numerico: a caixa se desloca, entao a antiga entra igual ao arraste do
+    // gizmo. Os tres eixos sao setters separados, e mexer em X e depois em Y da duas chamadas —
+    // a uniao dentro do FDDGI cobre o caminho, nao so as pontas.
     void LightsBridge::SetPosX(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
-        L->Position.X = (float)_V; Touch(false);
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
+        L->Position.X = (float)_V;
+        InvalidateLightRegion(*L, OldMin, OldMax);
+        Touch(false);
     }
     void LightsBridge::SetPosY(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
-        L->Position.Y = (float)_V; Touch(false);
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
+        L->Position.Y = (float)_V;
+        InvalidateLightRegion(*L, OldMin, OldMax);
+        Touch(false);
     }
     void LightsBridge::SetPosZ(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
-        L->Position.Z = (float)_V; Touch(false);
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
+        L->Position.Z = (float)_V;
+        InvalidateLightRegion(*L, OldMin, OldMax);
+        Touch(false);
     }
+    // Direcao do spot: a esfera de influencia nao muda, mas o cone aponta p/ outro lugar e as
+    // sondas dos dois lados reavaliam. A caixa conservadora ja cobre os dois.
     void LightsBridge::SetSpotAzimuthDeg(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->Direction = DirFromAzEl(_V, SpotElevationDeg());
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
     void LightsBridge::SetSpotElevationDeg(double _V) {
         auto L = SelOf(Renderer); if (!L) return;
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->Direction = DirFromAzEl(SpotAzimuthDeg(), std::clamp(_V, -90.0, 90.0));
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
 
@@ -288,6 +354,10 @@ namespace SmileEditor {
         Lights->push_back(L);
         Renderer->SetSelectedLight((int)Lights.size() - 1);
         Renderer->ClearSelection(); // selecao de luz e de renderavel sao exclusivas
+        // Luz nova ilumina uma regiao que ate agora estava sem ela: mesma invalidacao de uma
+        // edicao, so que sem caixa antiga (a "antiga" e a propria nova).
+        Smile::Vec3 BornMin, BornMax; L.InfluenceBounds(BornMin, BornMax);
+        InvalidateLightRegion(L, BornMin, BornMax);
         Touch(true);
         emit SelectionChanged();
     }
@@ -296,7 +366,13 @@ namespace SmileEditor {
         if (!Renderer) return;
         auto Lights = LightsOf(Renderer);
         if (_Index < 0 || _Index >= (int)Lights.size()) return;
+        // ANTES do erase: depois dele nao ha de onde tirar a caixa, e sem ela a energia da luz
+        // apagada fica no atlas (mesmo motivo do Renderer::RemoveRenderable).
+        Smile::Vec3 GoneMin, GoneMax;
+        Lights[(size_t)_Index].InfluenceBounds(GoneMin, GoneMax);
         Lights->erase(Lights->begin() + _Index);
+        Renderer->NotifyGIRegionChanged(GoneMin, GoneMax, Smile::EGIRegionChange::Radiometric);
+        Renderer->Settings().MarkSceneContentDirty();
 
         int Sel = Renderer->GetSelectedLight();
         if (Sel == _Index)     Sel = -1;
@@ -320,6 +396,8 @@ namespace SmileEditor {
         Lights->push_back(Copy);
         Renderer->SetSelectedLight((int)Lights.size() - 1);
         Renderer->ClearSelection();
+        Smile::Vec3 CopyMin, CopyMax; Copy.InfluenceBounds(CopyMin, CopyMax);
+        InvalidateLightRegion(Copy, CopyMin, CopyMax);
         Touch(true);
         emit SelectionChanged();
     }
@@ -338,7 +416,13 @@ namespace SmileEditor {
         if (!Renderer) return;
         auto Lights = LightsOf(Renderer);
         if (_Index < 0 || _Index >= (int)Lights.size()) return;
-        Lights[(size_t)_Index].Enabled = !Lights[(size_t)_Index].Enabled;
+        // Mesmo evento do SetLightEnabled, por outro caminho de UI (o olho da linha da lista, que
+        // nao passa pela luz SELECIONADA). Sem isto, a mesma acao invalidaria ou nao dependendo
+        // de onde o usuario clicou.
+        Smile::FLight& L = Lights[(size_t)_Index];
+        Smile::Vec3 OldMin, OldMax; L.InfluenceBounds(OldMin, OldMax);
+        L.Enabled = !L.Enabled;
+        InvalidateLightRegion(L, OldMin, OldMax);
         Touch(true);
     }
 
@@ -349,8 +433,12 @@ namespace SmileEditor {
         const Smile::Vec3 Fwd = { (float)(std::cos(Pitch) * std::sin(Yaw)),
                                   (float)std::sin(Pitch),
                                   (float)(std::cos(Pitch) * std::cos(Yaw)) };
+        Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->Position = Renderer->GetCameraPos() + Fwd * 5.0f;
         if (L->Type == Smile::ELightType::Spot) L->Direction = Fwd; // spot aponta pro olhar
+        // Teleporte, nao arraste: a caixa antiga pode estar do outro lado da cena, e e por isso
+        // que ela precisa entrar junto com a nova.
+        InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
 

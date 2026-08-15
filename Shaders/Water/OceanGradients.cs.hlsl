@@ -1,7 +1,8 @@
 #include "OceanFFTCommon.hlsli"
 
-Texture2D<float4>   DispIn     : register(t0); 
-RWTexture2D<float4> OceanOut   : register(u0); 
+Texture2D<float4>   DispIn     : register(t0);
+Texture2D<float4>   PrevOcean  : register(t1);
+RWTexture2D<float4> OceanOut   : register(u0);
 RWTexture2D<float4> NormalMip0 : register(u1); 
 
 [numthreads(16, 16, 1)]
@@ -52,9 +53,8 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     // Acumulacao temporal da espuma: .w guarda um MINIMO RELAXADO de J — onde a onda
     // dobrou (J baixo) a espuma persiste e o valor recupera rumo ao J do frame a
-    // FoamRecovery/s (espuma some em ~coverage/recovery segundos). Semantica de J
-    // preservada: PS/sliders/debug intactos. Ler e escrever o MESMO texel via UAV e ok.
-    float prevJ = OceanOut[loc].w;
+    // FoamRecovery/s. O J anterior vem do ping-pong (PrevOcean), nao do UAV de escrita.
+    float prevJ = PrevOcean.Load(int3(loc, 0)).w;
     float Jout  = (FoamReset > 0.5f) ? J
                                      : min(J, prevJ + FoamRecovery * DeltaTime);
 

@@ -1,5 +1,5 @@
 #include "Smile/Graphics/VolumetricClouds.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CloudNoise.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
@@ -11,6 +11,7 @@
 #include <fstream>
 #include <vector>
 #include <stdexcept>
+#include <iterator>
 
 namespace Smile {
 
@@ -40,29 +41,15 @@ namespace Smile {
         CreateConstantBuffer(_Device);
         CreateRT(_Device, _SRVHeap, _Width, _Height);
 
-        BuildRaymarchPipeline(_Device);
-        TemporalPSO.Initialize(_Device, "CloudTemporal.cs_6_0.cso", 2, 1);
-        ShadowPSO.Initialize(_Device, "CloudShadowMap.cs_6_0.cso", 5, 1);
+        CreateComputePipelines(_Device);
 
         // Shadow map das nuvens: resolucao fixa (independe da tela), criado uma vez.
         {
-            D3D12_RESOURCE_DESC SDesc{};
-            SDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            SDesc.Width            = kShadowRes;
-            SDesc.Height           = kShadowRes;
-            SDesc.DepthOrArraySize = 1;
-            SDesc.MipLevels        = 1;
-            SDesc.Format           = DXGI_FORMAT_R16_FLOAT;
-            SDesc.SampleDesc       = { 1, 0 };
-            SDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            SDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            D3D12_HEAP_PROPERTIES SHeap{};
-            SHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
             ShadowState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &SHeap, D3D12_HEAP_FLAG_NONE, &SDesc, ShadowState, nullptr,
-                IID_PPV_ARGS(&ShadowTex)));
-            VramTracker::Register(ShadowTex.Get(), EVramCategory::Sky);
+            ShadowTex = GpuResources::CreateTex2D(
+                _Device, kShadowRes, kShadowRes, DXGI_FORMAT_R16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, ShadowState,
+                EVramCategory::Sky, nullptr, 1, 1, "Nuvens · shadow map");
 
             ShadowSRVSlot = _SRVHeap.Allocate(1);
             ShadowUAVSlot = _SRVHeap.Allocate(1);
@@ -95,24 +82,10 @@ namespace Smile {
         RTState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         CloudRT.Reset();
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = RTWidth;
-        Desc.Height           = RTHeight;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, RTState, nullptr,
-            IID_PPV_ARGS(&CloudRT)));
-        VramTracker::Register(CloudRT.Get(), EVramCategory::Sky);
+        CloudRT = GpuResources::CreateTex2D(
+            _Device, RTWidth, RTHeight, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, RTState, EVramCategory::Sky,
+            nullptr, 1, 1, "Nuvens · alvo");
 
         if (RTSRVSlot == kInvalidSlot) RTSRVSlot = _SRVHeap.Allocate(1);
         if (RTUAVSlot == kInvalidSlot) RTUAVSlot = _SRVHeap.Allocate(1);
@@ -135,10 +108,10 @@ namespace Smile {
         for (u32 i = 0; i < 2; ++i) {
             HistoryRT[i].Reset();
             HistState[i] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, HistState[i], nullptr,
-                IID_PPV_ARGS(&HistoryRT[i])));
-            VramTracker::Register(HistoryRT[i].Get(), EVramCategory::Sky);
+            HistoryRT[i] = GpuResources::CreateTex2D(
+                _Device, RTWidth, RTHeight, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, HistState[i],
+                EVramCategory::Sky, nullptr, 1, 1, "Nuvens · historico");
 
             if (HistSRVSlot[i] == kInvalidSlot) HistSRVSlot[i] = _SRVHeap.Allocate(1);
             if (HistUAVSlot[i] == kInvalidSlot) HistUAVSlot[i] = _SRVHeap.Allocate(1);
@@ -185,28 +158,13 @@ namespace Smile {
     }
 
     void FVolumetricClouds::CreateConstantBuffer(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(CloudConstants) % 256 == 0,
+                      "o indexador do CB usa sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(CloudConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedBase = reinterpret_cast<u8*>(Ptr);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(CloudConstants), FCommandQueue::kFramesInFlight);
+        ConstantBuffer = Upload.Resource;
+        MappedBase     = Upload.Mapped;
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
             std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(CloudConstants),
                         &CPUConstants, sizeof(CloudConstants));
@@ -227,6 +185,14 @@ namespace Smile {
         UINT DstCount = 5; UINT SrcCounts[5] = { 1, 1, 1, 1, 1 };
         _Device->CopyDescriptors(1, &Dst, &DstCount, 5, Srcs, SrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    // Raymarch, temporal e shadow map. Separado porque o RecreateComposite so cobria a PSO
+    // grafica do composite — editar CloudRaymarch.cs nao recarregava nada.
+    void FVolumetricClouds::CreateComputePipelines(ID3D12Device* _Device) {
+        BuildRaymarchPipeline(_Device);
+        TemporalPSO.Initialize(_Device, "CloudTemporal.cs_6_0.cso", 2, 1);
+        ShadowPSO.Initialize(_Device, "CloudShadowMap.cs_6_0.cso", 5, 1);
     }
 
     void FVolumetricClouds::BuildRaymarchPipeline(ID3D12Device* _Device) {
@@ -581,4 +547,18 @@ namespace Smile {
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FVolumetricClouds::ShaderStems() const {
+        static const char* const kStems[] = { "CloudComposite.vs", "CloudComposite.ps",
+                                              "CloudRaymarch.cs", "CloudTemporal.cs",
+                                              "CloudShadowMap.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FVolumetricClouds::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (!Initialized) return;
+        CreateComputePipelines(_Ctx.Device);
+        RecreateComposite(_Ctx.Device, _Ctx.SceneColorFormat, _Ctx.SceneDepthFormat);
+    }
+
 }

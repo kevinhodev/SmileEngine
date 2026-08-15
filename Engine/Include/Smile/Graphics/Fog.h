@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -37,8 +38,13 @@ namespace Smile {
         Vec4  VolFogMatchAmbient;            // rgb=ambiente*albedo na borda, w=fade p/ sky LUT
     };
 
-    class FFogPass {
+    class FFogPass : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Fog (altura + aerial)"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         struct FVolumetricMatchParams {
             bool Enabled = false;
             Vec3 Albedo{ 1.0f, 1.0f, 1.0f };
@@ -107,9 +113,10 @@ namespace Smile {
         // 0 = comportamento historico, bit a bit. E o botao do A/B.
         void SetHeightFogSkyContribution(f32 V) { HeightFogSkyContribution = V; }
         f32  GetHeightFogSkyContribution() const { return HeightFogSkyContribution; }
-        bool IsInitialized() const     { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
     private:
+        DXGI_FORMAT RTFormat = DXGI_FORMAT_UNKNOWN; // alvo com que as PSOs nasceram
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat);
         void CreateConstantBuffer(ID3D12Device* Device);

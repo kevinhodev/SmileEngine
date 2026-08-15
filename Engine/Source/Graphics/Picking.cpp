@@ -1,10 +1,12 @@
 #include "Smile/Graphics/Picking.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/CommandQueue.h"   
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
+#include <iterator>
 
 namespace Smile {
     static constexpr u32 kReadbackRowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT; 
@@ -15,19 +17,7 @@ namespace Smile {
         BuildPSO(Device);
         CreateTargets(Device, Width, Height);
 
-        D3D12_HEAP_PROPERTIES ReadbackHeap{};
-        ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-        D3D12_RESOURCE_DESC BufDesc{};
-        BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        BufDesc.Width            = kReadbackRowPitch;
-        BufDesc.Height           = 1;
-        BufDesc.DepthOrArraySize = 1;
-        BufDesc.MipLevels        = 1;
-        BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-        BufDesc.SampleDesc       = { 1, 0 };
-        BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&ReadbackHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Readback)));
+        Readback = GpuResources::CreateReadbackBuffer(Device, kReadbackRowPitch);
 
         Initialized = true;
         LogDebug("FObjectPicker (GPU ID-buffer picking) inicializado");
@@ -38,24 +28,13 @@ namespace Smile {
         TargetHeight = std::max(1u, Height);
         IDTarget.Reset();
 
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = TargetWidth;
-        Desc.Height           = TargetHeight;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_R32_UINT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         D3D12_CLEAR_VALUE Clear{};
-        Clear.Format = DXGI_FORMAT_R32_UINT; 
+        Clear.Format = DXGI_FORMAT_R32_UINT;
 
-        SMILE_HR(Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&IDTarget)));
+        IDTarget = GpuResources::CreateTex2D(
+            Device, TargetWidth, TargetHeight, DXGI_FORMAT_R32_UINT,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            EVramCategory::Misc, &Clear, 1, 1, "Alvo de picking");
 
         if (IDRTVHeap.GetCapacity() == 0)
             IDRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
@@ -234,4 +213,14 @@ namespace Smile {
         OutIndex       = (Value == 0) ? -1 : static_cast<int>(Value) - 1; 
         return true;
     }
+
+    FPassShaderStems FObjectPicker::ShaderStems() const {
+        static const char* const kStems[] = { "ObjectID.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FObjectPicker::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSO(_Ctx.Device);
+    }
+
 }

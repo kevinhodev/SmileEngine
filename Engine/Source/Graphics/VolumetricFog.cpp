@@ -1,11 +1,12 @@
 #include "Smile/Graphics/VolumetricFog.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/ShaderUtils.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
 
@@ -21,29 +22,14 @@ namespace Smile {
         Integrated.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
                           kGridW, kGridH, kGridZ, 1, true);
 
-        SetupPSO.Initialize(_Device, "VolumetricFogSetup.cs_6_0.cso", 1, 1);
-        IntegratePSO.Initialize(_Device, "VolumetricFogIntegrate.cs_6_0.cso", 1, 1);
-        ConsDepthPSO.Initialize(_Device, "VolumetricFogConsDepth.cs_6_0.cso", 1, 1);
-
         // Conservative depth 160x90 R16F ping-pong (cur = min-Z deste frame; prev
         // alimenta o fixup da historia contra desoclusao com fog fantasma).
         for (u32 i = 0; i < 2; ++i) {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = kGridW;
-            Desc.Height           = kGridH;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_R16_FLOAT;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                nullptr, IID_PPV_ARGS(&ConsDepthTex[i])));
-            VramTracker::Register(ConsDepthTex[i].Get(), EVramCategory::Sky);
+            ConsDepthTex[i] = GpuResources::CreateTex2D(
+                _Device, kGridW, kGridH, DXGI_FORMAT_R16_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Sky, nullptr,
+                1, 1, "Fog · depth conservador");
 
             ConsDepthSRV[i] = _SRVHeap.Allocate(1);
             D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -60,17 +46,26 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, ConsDepthTex[i].Get(), UAVDesc, ConsDepthUAV[i]);
         }
         BuildScatteringRootSignature(_Device);
-        {
-            auto CSO = LoadShaderBytecode("VolumetricFogScattering.cs_6_0.cso");
-            D3D12_COMPUTE_PIPELINE_STATE_DESC Desc{};
-            Desc.pRootSignature = ScatterRootSig.Get();
-            Desc.CS             = { CSO.data(), CSO.size() };
-            SMILE_HR(_Device->CreateComputePipelineState(&Desc, IID_PPV_ARGS(&ScatterPSO)));
-        }
+        CreatePipelines(_Device);
         CreateConstantBuffer(_Device);
 
         Initialized = true;
         LogDebug("Volumetric fog (froxel 160x90x64) inicializado");
+    }
+
+    // Os quatro PSOs do froxel. Os tres primeiros nasciam ~35 linhas acima, no meio da criacao
+    // dos volumes; desceram para ca porque o ScatterPSO precisa da ScatterRootSig, e ter os
+    // quatro num lugar so e o que permite recria-los todos no hot reload. Mover foi inerte:
+    // nada entre as duas posicoes toca esses tres.
+    void FVolumetricFogPass::CreatePipelines(ID3D12Device* _Device) {
+        SetupPSO.Initialize(_Device, "VolumetricFogSetup.cs_6_0.cso", 1, 1);
+        IntegratePSO.Initialize(_Device, "VolumetricFogIntegrate.cs_6_0.cso", 1, 1);
+        ConsDepthPSO.Initialize(_Device, "VolumetricFogConsDepth.cs_6_0.cso", 1, 1);
+        auto CSO = LoadShaderBytecode("VolumetricFogScattering.cs_6_0.cso");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC Desc{};
+        Desc.pRootSignature = ScatterRootSig.Get();
+        Desc.CS             = { CSO.data(), CSO.size() };
+        SMILE_HR(_Device->CreateComputePipelineState(&Desc, IID_PPV_ARGS(&ScatterPSO)));
     }
 
     void FVolumetricFogPass::BuildScatteringRootSignature(ID3D12Device* _Device) {
@@ -212,28 +207,15 @@ namespace Smile {
     }
 
     void FVolumetricFogPass::CreateConstantBuffer(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(VolFogConstants) % 256 == 0,
+                      "o indexador do CB usa sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(VolFogConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedBase = reinterpret_cast<u8*>(Ptr);
-        std::memset(MappedBase, 0, static_cast<size_t>(Desc.Width));
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(VolFogConstants), FCommandQueue::kFramesInFlight);
+        ConstantBuffer = Upload.Resource;
+        MappedBase     = Upload.Mapped;
+        std::memset(MappedBase, 0,
+                    static_cast<size_t>(Upload.SliceBytes) * Upload.SliceCount);
     }
 
     // Halton radical-inverse (mesma base do VolumetricFogTemporalRandom da UE).
@@ -278,6 +260,7 @@ namespace Smile {
         c.DDGIGridMin    = _P.DDGIGridMin;
         c.DDGIGridCount  = _P.DDGIGridCount;
         c.DDGIParams     = _P.DDGIParams;
+        c.DDGICascades   = _P.DDGICascades;
         c.AmbientFallback= { _P.SkyAmbient.X, _P.SkyAmbient.Y, _P.SkyAmbient.Z,
                              _P.DDGIVolumeFadeProbes };
 
@@ -417,4 +400,14 @@ namespace Smile {
         CurrentScatter = 1u - CurrentScatter;
         HistoryValid   = true;
     }
+
+    FPassShaderStems FVolumetricFogPass::ShaderStems() const {
+        static const char* const kStems[] = { "VolumetricFogSetup.cs", "VolumetricFogScattering.cs", "VolumetricFogIntegrate.cs", "VolumetricFogConsDepth.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FVolumetricFogPass::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) CreatePipelines(_Ctx.Device);
+    }
+
 }

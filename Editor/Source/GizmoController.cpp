@@ -215,6 +215,20 @@ namespace SmileEditor {
             ? R.GetScene().Lights()[static_cast<size_t>(Idx)].Position
             : R.GetScene().Renderables()[static_cast<size_t>(Idx)].Transform.Position;
         DragStartT     = AxisParam(O, Dir, AxisDir(Axis), Pivot);
+
+        // Enquanto arrasta, o renderavel entra no conjunto DINAMICO do CSM (ver
+        // Renderer::SetDraggingRenderable). O bump aqui e o que o tira do mapa estatico uma
+        // vez; sem ele o objeto continuaria estampado na posicao antiga do mapa cacheado
+        // enquanto a copia dinamica se move — sombra dupla.
+        if (!IsLight && Idx >= 0) {
+            const auto& List = R.GetScene().Renderables();
+            if (Idx < static_cast<int>(List.size())) {
+                const Smile::FRenderable& Rn = List[static_cast<size_t>(Idx)];
+                R.SetDraggingRenderable(Rn.Id);
+                if (Rn.Mobility == Smile::EMobility::Static)
+                    R.GetScene().BumpStaticCastersVersion();
+            }
+        }
         return true;
     }
 
@@ -231,13 +245,30 @@ namespace SmileEditor {
         if (DragIsLight) {
             auto& Lights = R.GetScene().Lights();
             if (DragIdx >= static_cast<int>(Lights.size())) return;
-            Lights[static_cast<size_t>(DragIdx)].Position = NewPos;
+            Smile::FLight& L = Lights[static_cast<size_t>(DragIdx)];
+            // Volume de influencia de ONDE SAIU + de ONDE CHEGOU: a luz deixa de iluminar um e
+            // passa a iluminar o outro, e as sondas dos dois precisam reavaliar. Duas chamadas
+            // em vez de uniao na mao — o FDDGI une, e a uniao dele e crua (sem padding
+            // acumulado), o que e o que torna seguro chamar isto a cada frame do arraste.
+            Vec3 OldMin, OldMax, NewMin, NewMax;
+            L.InfluenceBounds(OldMin, OldMax);
+            L.Position = NewPos;
+            L.InfluenceBounds(NewMin, NewMax);
+            // Radiometrico: a luz anda, a GEOMETRIA nao. As sondas dos dois volumes recebem
+            // energia diferente, mas continuam vendo exatamente as mesmas superficies — nao ha
+            // o que reclassificar (ver EGIRegionChange).
+            R.NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Radiometric);
+            R.NotifyGIRegionChanged(NewMin, NewMax, Smile::EGIRegionChange::Radiometric);
             return;
         }
 
         auto& List = R.GetScene().Renderables();
         if (DragIdx >= static_cast<int>(List.size())) return;
         Smile::FRenderable& Rn = List[static_cast<size_t>(DragIdx)];
+        // Caixa de mundo ANTES de mexer: depois do RefreshWorldBounds ela ja e a nova, e sem a
+        // antiga o color bleed do objeto fica estampado no lugar de onde ele saiu — a "luz
+        // fantasma" que so somia quando a histerese terminava de escoar.
+        const Vec3 OldMin = Rn.AABBMin, OldMax = Rn.AABBMax;
         Rn.Transform.Position = NewPos;
         // Recomputa da caixa LOCAL em vez de somar o passo na de mundo. O remendo antigo so
         // valia porque o gizmo e de translacao pura; no dia em que ele ganhar rotacao ou escala,
@@ -245,9 +276,27 @@ namespace SmileEditor {
         // geometria sumindo no culling, longe daqui.
         Rn.RefreshWorldBounds();
         R.GetScene().BumpTransformsVersion(); // TLAS segue o objeto (rebuild leve no frame)
+        R.NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Geometry);
+        R.NotifyGIRegionChanged(Rn.AABBMin, Rn.AABBMax, Smile::EGIRegionChange::Geometry);
+        // Sem MarkSceneContentDirty aqui, e de proposito: mover e um gesto CONTINUO e os
+        // historicos de tela reprojetam por motion vector (o objeto esta no TemporalMotion),
+        // entao disoclusao e clamp de vizinhanca rejeitam o historico invalido sozinhos em
+        // alguns frames. Derrubar reservoir a cada frame do arraste seria reset permanente
+        // durante o gesto — exatamente o que HistoryDomain.h descreve como o erro antigo.
     }
 
-    void GizmoController::OnMouseRelease() {
+    void GizmoController::OnMouseRelease(Smile::Renderer& R) {
+        // O objeto volta ao conjunto estatico no lugar NOVO, entao o mapa cacheado precisa ser
+        // refeito uma vez. Bumpa mesmo que o arraste nao tenha movido nada (clique sem
+        // deslocamento): o custo e um redesenho, e a alternativa e comparar transforms para
+        // economizar um caso que nao acontece em sessao real.
+        if (Dragging && !DragIsLight && R.GetDraggingRenderable() != 0) {
+            const Smile::FRenderable* Rn = R.GetScene().FindRenderable(R.GetDraggingRenderable());
+            if (Rn && Rn->Mobility == Smile::EMobility::Static)
+                R.GetScene().BumpStaticCastersVersion();
+        }
+        R.SetDraggingRenderable(0);
+
         Dragging    = false;
         Active      = EAxis::None;
         DragIdx     = -1;

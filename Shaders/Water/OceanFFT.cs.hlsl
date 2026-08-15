@@ -1,9 +1,9 @@
 #include "OceanFFTCommon.hlsli"
 
-Texture2D<float2>   ReadBuf  : register(t0);
-RWTexture2D<float2> WriteBuf : register(u0);
+Texture2D<float4>   ReadBuf  : register(t0);
+RWTexture2D<float4> WriteBuf : register(u0);
 
-groupshared float2 PingPong[2][256];
+groupshared float4 PingPong[2][256];
 
 // First octant of exp(+i*2*pi*k/256). The other roots are reconstructed by
 // exact axis swaps/sign changes, avoiding per-thread transcendental work.
@@ -68,20 +68,20 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID) {
     GroupMemoryBarrierWithGroupSync();
 
     int src = 0;
-    [loop] for (int s = 1; s <= int(LOG2_DISP_MAP_SIZE); ++s) {
-        int m  = int(1u << uint(s)); 
-        int mh = m >> 1;           
+    [unroll] for (int s = 1; s <= int(LOG2_DISP_MAP_SIZE); ++s) {
+        int m  = int(1u << uint(s));
+        int mh = m >> 1;
         int k  = (x * (int(DISP_MAP_SIZE) / m)) & (int(DISP_MAP_SIZE) - 1);
-        int i  = (x & ~(m - 1));    
-        int j  = (x & (mh - 1));    
+        int i  = (x & ~(m - 1));
+        int j  = (x & (mh - 1));
 
         float2 W_N_k = OceanFFTPositiveTwiddle(uint(k));
 
-        float2 input1 = PingPong[src][i + j + mh];
-        float2 input2 = PingPong[src][i + j];
+        float4 input1 = PingPong[src][i + j + mh];
+        float4 input2 = PingPong[src][i + j];
 
         src = 1 - src;
-        PingPong[src][x] = input2 + OceanComplexMul(W_N_k, input1);
+        PingPong[src][x] = input2 + OceanComplexMul2(input1, W_N_k);
 
         GroupMemoryBarrierWithGroupSync();
     }

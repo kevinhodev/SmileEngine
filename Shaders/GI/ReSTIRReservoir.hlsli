@@ -38,17 +38,70 @@ float TargetPHat(float3 x1, float3 n1, float3 x2, float3 Lo) {
     return ReSTIR_Luminance(Lo) * cosT;
 }
 
-// Pack/unpack de M + idade da amostra no MESMO canal (ResA.w, fp32): M fica abaixo de 1024 e a
-// idade (inteira) vive nos multiplos de 1024 — exato em fp32 ate idade ~4000. A idade conta ha
-// quantos frames a amostra SELECIONADA sobrevive no reservoir (nao e o M, que o MCap limita):
-// sem expiracao, amostra brilhante rara travada num bolsao escuro vira mancha persistente.
-// Historico antigo (so M) decodifica idade 0 — migracao gratis.
-float ResPackMAge(float M, float age) {
-    return min(M, 1000.0f) + min(floor(age), 4000.0f) * 1024.0f;
+// === Empacotamento do reservoir (2 texturas) =================================================
+//
+// O reservoir mora em Res0 (RGBA32F) + Res1 (RGBA32_UINT), 32 B/pixel em vez dos 48 B das quatro
+// texturas de antes. Duas mudancas pagam a diferenca:
+//   1. x1 SAIU. O ponto visivel e reconstrutivel: no espacial, do proprio depth do vizinho (que o
+//      passe ja carrega pro teste de rejeicao); no temporal, do historico de superficie do
+//      FTemporalMotionVectors, que guarda exatamente `InvViewProj * (ndc, deviceZ)` do frame
+//      anterior — a MESMA conta, com a MESMA matriz (InvViewProjFull), entao o valor e identico
+//      ao que era gravado aqui. E o que a RTXDI faz: ela nunca guarda o ponto visivel.
+//   2. Lo, n2 e n1 sao empacotados em 32 bits cada, no lugar de meio RGBA16F cada.
+//
+// M e idade dividem um canal inteiro (16+16). Antes eram um truque de fp32 (idade nos multiplos
+// de 1024) que existia justamente por falta de um canal inteiro — o formato UINT o torna obsoleto.
+uint ResPackMAge(float M, float age) {
+    return min((uint)(M + 0.5f), 0xFFFFu) | (min((uint)max(age, 0.0f), 0xFFFFu) << 16);
 }
-void ResUnpackMAge(float packed, out float M, out float age) {
-    age = floor(packed / 1024.0f);
-    M   = packed - age * 1024.0f;
+void ResUnpackMAge(uint packed, out float M, out float age) {
+    M   = (float)(packed & 0xFFFFu);
+    age = (float)(packed >> 16);
+}
+
+// Normal em octaedrico + snorm 16:16. Precisao ANGULAR melhor que a do RGB16F que guardava n2 em
+// tres meios floats: fp16 gasta bits em expoente que uma componente em [-1,1] nao usa.
+uint ResPackNormal(float3 n) {
+    const float2 o = clamp(DDGI_OctEncode(n), -1.0f, 1.0f);
+    const int2   q = (int2)round(o * 32767.0f);
+    return ((uint)(q.x & 0xFFFF)) | (((uint)(q.y & 0xFFFF)) << 16);
+}
+float3 ResUnpackNormal(uint p) {
+    // Extensao de sinal manual: o campo de 16 bits e snorm.
+    const int2 q = int2((int)(p << 16) >> 16, (int)p >> 16);
+    return DDGI_OctDecode(clamp(float2(q) * (1.0f / 32767.0f), -1.0f, 1.0f));
+}
+
+// Radiancia em RGB9E5 (mantissa 9 bits por canal + expoente 5 bits COMPARTILHADO) — o mesmo
+// formato do DXGI_FORMAT_R9G9B9E5_SHAREDEXP, empacotado na mao porque o canal e um uint generico.
+// A RTXDI resolve o mesmo problema com LogLuv; RGB9E5 trata os tres canais igual, o que evita
+// desvio de matiz no indireto. Faixa util: ~3e-5 ate 65408, de sobra pro Lo pos-firefly-clamp.
+static const float kResRadianceMax = 65408.0f;
+
+uint ResPackRadiance(float3 c) {
+    c = clamp(c, 0.0f, kResRadianceMax);
+    const float maxc = max(c.r, max(c.g, c.b));
+    int e = (maxc > 1e-16f) ? ((int)floor(log2(maxc)) + 1) : -15;
+    e = clamp(e, -15, 16);
+    float denom = exp2((float)(e - 9));
+    // O arredondamento pode empurrar a mantissa do canal dominante p/ 512 (estouro do campo de
+    // 9 bits). Sobe o expoente uma vez em vez de saturar — saturar escureceria o pixel.
+    if ((int)floor(maxc / denom + 0.5f) >= 512) { e = min(e + 1, 16); denom = exp2((float)(e - 9)); }
+    const uint3 q = (uint3)clamp(floor(c / denom + 0.5f), 0.0f, 511.0f);
+    return q.x | (q.y << 9) | (q.z << 18) | ((uint)(e + 15) << 27);
+}
+
+float3 ResUnpackRadiance(uint p) {
+    const uint3 q = uint3(p & 0x1FFu, (p >> 9) & 0x1FFu, (p >> 18) & 0x1FFu);
+    const int   e = (int)(p >> 27) - 15;
+    return float3(q) * exp2((float)(e - 9));
+}
+
+// Res1 completo: n2 | Lo | M+idade | n1. Res0 leva x2.xyz e W em fp32 (x2 precisa da faixa
+// inteira — e uma posicao de mundo, e a RTXDI tambem a guarda em fp32).
+uint4 ResPack1(Reservoir r, float age, float3 n1) {
+    return uint4(ResPackNormal(r.n2), ResPackRadiance(r.Lo),
+                 ResPackMAge(r.M, age), ResPackNormal(n1));
 }
 
 // Adiciona um candidato (M=1) com peso de resampling w. Retorna true se adotado.
@@ -79,21 +132,48 @@ bool ResMerge(inout Reservoir r, Reservoir other, float pHatOther, float J, inou
 
 // Jacobiano de reconexao (Ouyang 2021): reusar a amostra x2 (normal n2) de um pixel visivel x1Src
 // no pixel x1Dst. J = (cosPhiDst/cosPhiSrc) * (|x2-x1Src|^2 / |x2-x1Dst|^2). Clampado pelo caller.
-float ReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 x2, float3 n2) {
+//
+// Os dois cossenos usam SATURATE, nao abs. Com abs, uma amostra vista pelo VERSO de n2 pelo pixel
+// de destino ainda rendia um J finito e plausivel — e como o TargetPHat so olha o cosseno no
+// RECEPTOR, nada mais barrava o reuso: luz atravessando geometria fina (folha, ripa, tabique) de
+// um lado da superficie da amostra para o outro. Com saturate o cosseno morto zera o J e o caller
+// descarta o vizinho, que e o que a RTXDI (RTXDI_CalculatePartialJacobian, Utils/Math.hlsli) e o
+// Lumen (LumenReSTIRGather.usf: CalculateJacobian) fazem.
+//
+// Nao regride o ceu: la n2 = -dir aponta de volta p/ o ponto visivel, entao cos ~ 1 nos dois
+// lados. Nem folhagem two-sided: o HitGeomNormal ja orienta n2 CONTRA o raio, entao o dominio de
+// origem sempre tem cosseno positivo — so o destino do outro lado da folha e que cai, que e
+// exatamente o caso que se quer matar.
+// `killBackface` alterna entre saturate (RTXDI/Lumen) e o abs() historico — knob de A/B, ver
+// PolicyParams.w. Nao virou duas funcoes porque o resto da conta e identico e duplicar convida
+// a divergirem.
+float ReconnectionJacobian(float3 x1Dst, float3 x1Src, float3 x2, float3 n2, bool killBackface) {
     float3 dDst = x2 - x1Dst; float lDst2 = dot(dDst, dDst);
     float3 dSrc = x2 - x1Src; float lSrc2 = dot(dSrc, dSrc);
     if (lDst2 < 1e-8f || lSrc2 < 1e-8f) return 0.0f;
     float lDst = sqrt(lDst2), lSrc = sqrt(lSrc2);
-    float cosDst = abs(dot(n2, -dDst / lDst));
-    float cosSrc = abs(dot(n2, -dSrc / lSrc));
+    float rawDst = dot(n2, -dDst / lDst);
+    float rawSrc = dot(n2, -dSrc / lSrc);
+    float cosDst = killBackface ? saturate(rawDst) : abs(rawDst);
+    float cosSrc = killBackface ? saturate(rawSrc) : abs(rawSrc);
     if (cosSrc < 1e-4f) return 0.0f;
     return (cosDst / cosSrc) * (lSrc2 / lDst2);
 }
 
-// Finaliza W = wSum / (M * pHat(selecionado)).
-void ResFinalizeW(inout Reservoir r, float3 x1, float3 n1) {
-    float pHatSel = TargetPHat(x1, n1, r.x2, r.Lo);
-    r.W = (pHatSel > 0.0f && r.M > 0.0f) ? (r.wSum / (r.M * pHatSel)) : 0.0f;
+// Normalizacao "MIS-like" da RTXDI (RTXDI_FinalizeGIResampling): W = wSum*pi / (piSum*pHatSel),
+// com pi = pHat do sample VENCEDOR no dominio que o gerou e piSum = Σ pHat(vencedor)*M sobre TODOS
+// os dominios que entraram no WRS. Substitui o 1/M, que so e exato quando todos os dominios sao o
+// mesmo ponto visivel; fora disso o 1/M enviesa (escurecimento em descontinuidade geometrica).
+//
+// Vive aqui, e nao inline em cada passe, porque OS DOIS usam a mesma conta desde a correcao do
+// temporal: o Pass A passa {self, reservoir reprojetado} e o Pass B passa {self, K vizinhos}. Se
+// divergirem, o vies volta por um dos lados sem aviso.
+//
+// Propriedade util p/ A/B: quando todos os dominios avaliam o vencedor com o MESMO pHat (superficie
+// plana, reprojecao perfeita), piSum = pHatSel*ΣM e a formula reduz EXATAMENTE ao 1/M antigo — ou
+// seja, area aberta tem que ficar identica, so quina/borda muda.
+void ResFinalizeMIS(inout Reservoir r, float pHatSel, float pi, float piSum) {
+    r.W = (pHatSel > 0.0f && pi > 0.0f && piSum > 0.0f) ? (r.wSum * pi / (piSum * pHatSel)) : 0.0f;
 }
 
 // Resolve a irradiancia: gi = Lo * cosTheta1 * W / pi (= (1/pi) * E). maxLuma > 0 aplica firefly

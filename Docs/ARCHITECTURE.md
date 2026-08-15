@@ -191,7 +191,8 @@ Engine/Include/Smile/
     │   ├── TextureSRVHeap    heap CBV/SRV/UAV compartilhado (16384, shader-visible, free-list)
     │   ├── Barriers.h        FBarrierBatch — acumula transições, 1 ResourceBarrier no Flush
     │   ├── PipelineState     root signature principal + 10 PSOs (prepass/G-buffer/lighting/blend)
-    │   ├── ComputePipeline   PSO de compute fixo · VolumetricPipeline  PSO parametrizável
+    │   ├── ComputePipeline   PSO de compute com layouts fixo e parametrizável
+    │   ├── PipelineUtils     criação comum de root signatures e compute PSOs
     │   ├── DepthConfig.h     kReverseZ (true) + funções de comparação derivadas
     │   └── GpuProfiler       timestamps por escopo (FGpuScope), por fila
     ├── ── recursos / cena ──
@@ -260,9 +261,9 @@ separados — ver §5). RTV heap próprio. `Present()` respeita tearing.
 ### `FDescriptorHeap` vs `FTextureSRVHeap`
 - `FDescriptorHeap` — wrapper genérico para heaps **não shader-visible** (RTV, DSV), pequenos.
 - `FTextureSRVHeap` — **o** heap CBV/SRV/UAV global, shader-visible, **`kCapacity = 16384`**,
-  com heap de *staging* espelhado (`CpuHandleStaging`) para servir de origem em `CopyDescriptors`.
-  `Allocate(count)` / `Free(slot, count)` sobre uma **free-list** de ranges. Tabelas contíguas
-  são montadas copiando SRVs dispersos para um bloco (ex.: a tabela IBL t8..t10).
+  com heap de *staging* espelhado. `Allocate(count)` / `Free(slot, count)` operam sobre uma
+  **free-list** de ranges; `Release(slot, count)` também invalida o slot do chamador.
+  `CopyTable` monta tabelas contíguas a partir de slots dispersos do staging heap.
 
 > Quem aloca é responsável por liberar no caminho de resize/shutdown. O padrão canônico é o
 > par `ReleaseSizedResources(SRVHeap)` + `SetupForResize(...)` (ver `FAmbientOcclusion`,
@@ -294,17 +295,29 @@ O **registro no `VramTracker` é parte da criação** em DEFAULT heap — o cham
 `EVramCategory` e pronto. Antes era um passo separado que cada autor precisava lembrar, e
 esquecer sumia com o recurso do breakdown de VRAM do editor sem nenhum sintoma.
 
-Não cobre caminhos com necessidade própria (placed/reservados/aliasing): monte o desc na mão
-nesses casos. O objetivo é matar o boilerplate, não virar uma camada sobre o D3D12.
+Em **Resource Heap Tier 2**, o funil subaloca DEFAULT heap com D3D12MA 3.2.0 e cria placed
+resources; a `Allocation` é liberada pelo `ID3DDestructionNotifier` do recurso. Tier 1,
+RT/DS ainda sem inicialização explícita, falha do allocator e `SMILE_DISABLE_D3D12MA=1` usam
+`CreateCommittedResource` como fallback. UPLOAD e READBACK continuam committed. Os logs de
+criação separam `DEFAULT/D3D12MA` de
+`DEFAULT/committed` e incluem bytes reservados/ocupados pelo allocator para o A/B de custo e
+residência não depender de estimativa.
 
-### Pipelines de compute: dois sabores
-| Classe | Forma do root sig | Usado por |
-|--------|-------------------|-----------|
-| `FComputePipeline` | fixa (`Initialize(device, cso, sourceIsCube)`) | passes de IBL, mip de scene color |
-| `FVolumetricPipeline` | parametrizável: `b0` CBV + tabela SRV `t0..t(N-1)` + tabela UAV `u0..u(M-1)` + `s0` linear-clamp + `s1` linear-wrap | atmosfera, nuvens, AO, HZB, … |
+Não cobre caminhos com política própria (recursos reservados ou aliasing explícito entre
+recursos): monte o desc e gerencie o lifetime nesses casos. O objetivo é centralizar a forma
+comum, não virar uma camada completa sobre o D3D12.
+
+### Pipeline de compute: dois layouts
+
+`FComputePipeline` oferece dois overloads de `Initialize`:
+
+| Overload | Forma do root sig | Usado por |
+|----------|-------------------|-----------|
+| `Initialize(device, cso, sourceIsCube)` | 8 root constants em `b0` + `t0` + `u0` + `s0` linear-clamp | passes de IBL, mip de scene color |
+| `Initialize(device, cso, numSRVs, numUAVs, heapDirectlyIndexed, nvApiExtnSlot)` | `b0` CBV + tabela SRV `t0..t(N-1)` + tabela UAV `u0..u(M-1)` + `s0` linear-clamp + `s1` linear-wrap | atmosfera, nuvens, AO, HZB, ReSTIR, reflexões, … |
 
 As *dimensões* das views (2D/3D/cube) ficam no shader, então a mesma root sig serve a tudo.
-Subsistemas com necessidade própria (ReSTIR, reflexões, água) montam a root signature na mão.
+Subsistemas que não cabem nesses layouts (como NRD e partes da água) montam a root signature na mão.
 
 ---
 
@@ -488,10 +501,10 @@ incluído pelos shaders que consomem material (G-buffer, forward blend, os dois 
 shadow depth e o preview). Campo novo no struct C++ = editar esse header, e só ele.
 
 ### Convenção de descriptors
-Tabelas contíguas são montadas copiando SRVs dispersos para um bloco contíguo via
-`ID3D12Device::CopyDescriptors`, tendo o **staging heap** do `FTextureSRVHeap` como origem
-(`CpuHandleStaging`). O G-buffer já nasce contíguo: A, B, C e o depth ocupam 4 slots
-sequenciais, ligados como uma única tabela t0..t3 no deferred lighting.
+Tabelas contíguas são montadas com `FTextureSRVHeap::CopyTable`, que copia slots dispersos do
+**staging heap** para um bloco contíguo via `ID3D12Device::CopyDescriptors`. O G-buffer já nasce
+contíguo: A, B, C e o depth ocupam 4 slots sequenciais, ligados como uma única tabela t0..t3
+no deferred lighting.
 
 ---
 
@@ -797,8 +810,8 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
      `InvalidateHistory()` se acumular entre frames.
 2. **Recursos:** crie via `GpuResources` (§4) — nunca `CreateCommittedResource` direto, senão
    o recurso fica fora do breakdown de VRAM. Aloque SRV/UAV no `FTextureSRVHeap` e **libere** no
-   `ReleaseSizedResources`; monte tabelas contíguas com `CopyDescriptors` a partir do staging
-   heap. Use `FVolumetricPipeline` para compute parametrizável.
+   `ReleaseSizedResources`; monte tabelas contíguas com `FTextureSRVHeap::CopyTable`. Use o
+   overload parametrizável de `FComputePipeline`.
 3. **Constant buffer:** `GpuResources::CreateUploadBuffer(dev, sizeof(XxxConstants),
    FCommandQueue::kFramesInFlight)` — um slice por frame em voo, já alinhado a 256 B.
 4. **Barreiras:** `TransitionResource` para uma, `FBarrierBatch` para 2+. Nunca
@@ -849,9 +862,20 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 
 ### Estrutural
 
-- **`Renderer` é um God object.** `Renderer.h` tem 1198 linhas, 69 `#include` de subsistemas e
-  ~90 membros; `Renderer.cpp` tem 4159 linhas, das quais **`RenderFrame()` sozinho ocupa ~2500**
-  (≈40 escopos de GPU numa única função). Toda feature nova toca esse arquivo.
+- **`Renderer` é um God object.** *Em desmembramento desde 2026-08-05 — plano e fila em
+  `KNOBS-AUDIT.md`.* Já saíram os knobs (`FRenderSettings`, com `HistoryDomain.h` no lugar das
+  19 listas de invalidação manuais), o espelho deles no editor (`RenderSettingsBridge`, que
+  tirou 92 dos 134 `Q_PROPERTY` do `ViewportWidget`) e os alvos de cena (`FSceneTargets`: 29
+  membros + as 6 funções de criação). `Renderer.h` foi de 1198 para **873** linhas.
+  **O núcleo continua de pé:** `Renderer.cpp` tem ~4000 linhas e **`RenderFrame()` sozinho
+  ocupa ~2500** (≈40 escopos de GPU numa única função). O desmembramento dele começou pelo
+  `FrameContext.h`: `FFrameModes` (16 flags de "que passes rodam neste frame", resolvidas por
+  `ResolveFrameModes()` no topo em vez de espalhadas por 1200 linhas), `FFrameView`
+  (câmera/matrizes/jitter) e `FFrameLighting` (sol/lua/chuva/luz-chave). Os **locais de nível 0
+  do `RenderFrame` caíram de 115 para 54**, que era o bloqueio real: enquanto o estado
+  compartilhado for local, não há o que passar para um método, e nenhuma fase pode ser extraída.
+  Falta só o ambiente hemisférico (`SkyAmbient`/`GroundAmbient`), soldado ao bloco que publica a
+  SH no constant buffer. Depois disso, a extração das fases.
 - **O grafo de invalidação da §5.4 é escrito à mão.** São ~8 listas parcialmente sobrepostas de
   "quem cai junto". Já houve caso de knob que passou a entrar no sinal gravado sem o setter
   acompanhar. Candidato natural a virar dado (`enum class EHistoryDomain` + máscara).
@@ -863,12 +887,9 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
   divergiu: `IsReady()` vs `IsInitialized()`; `Execute()` vs `Record*()`; `InvalidateHistory()`
   vs `ResetHistory()` vs `ResetHistoryOnce()` vs `InvalidateResults()`; `Resize()` vs
   `SetupForResize()`. É por isso que a orquestração precisa saber o nome exato de cada um.
-- **Boilerplate DX12 duplicado** — *parcialmente resolvido em 2026-08-04*. As cópias sumiram
-  (5 `Transition()` locais idênticos, 4 clones de `CreateTex2D`, 3 de upload buffer) e existe
-  `GpuResources.h` (§4) como caminho único. **Restam ~125 `CreateCommittedResource`** montando
-  `HEAP_PROPERTIES`+`RESOURCE_DESC` na mão — migração mecânica, mas caso a caso: cada uma pode
-  divergir num flag ou no estado inicial, e não há teste que pegue isso. ~60 root signatures
-  seguem montadas campo a campo (sem helper ainda).
+- **Boilerplate DX12 duplicado** — *funil de recursos resolvido*. `GpuResources.h` (§4) é o
+  caminho único da engine para DEFAULT/UPLOAD/READBACK e aplica tracking, instrumentação e a
+  política D3D12MA num só ponto. ~60 root signatures ainda seguem montadas campo a campo.
 - **`ViewportWidget` é o espelho do God object no editor:** 2796 linhas + 645 no header e
   **134 `Q_PROPERTY`**, acumulando host do HWND, input, telemetria e a bridge de ~130 knobs de
   render. As bridges por domínio já provam o padrão certo — falta um `RenderSettingsBridge`.
@@ -876,6 +897,9 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
   `<d3d12.h>`/`<Windows.h>`; `Renderer.h` puxa 69 headers e é incluído por 10 TUs.
 - **Inversão de dependência menor:** `Engine/Source/Scene/SceneLoader.cpp` inclui
   `Graphics/Renderer.h` — a camada de cena depende do renderer.
+- **Submissão de draws.** O Z-prepass continua front-to-back (Hi-Z). O G-buffer, depois do
+  depth EQUAL, agrupa por PSO/material/mesh e o `FDrawSubmitCache` pula Bind/IA repetidos —
+  o CSM já fazia o equivalente. Translúcidos seguem back-to-front na lista original.
 
 ### Build e ferramentas
 
@@ -918,6 +942,9 @@ O oceano combina três cascatas espectrais físicas, IFFT compute, clipmap GPU-d
 shading forward e reflexão hierárquica posterior à escrita de depth/G-buffer:
 SSR de contato sobre as cópias sem água, DXR no miss ou na cobertura parcial e céu no
 miss final.
+A IFFT empacota altura e deslocamento horizontal no mesmo `float4` (dois dispatches
+por cascata) e o mapa de deslocamento ping-ponga entre dois alvos — o frame anterior
+não é copiado.
 O `SceneColorCopy` é HDR e possui cadeia completa de mips gerada antes da água; o SSR
 seleciona um LOD contínuo pelo footprint GGX em vez de refletir sempre o mip 0.
 Normal, Sol e reflexão compartilham momentos de slope anisotrópicos, e o histórico

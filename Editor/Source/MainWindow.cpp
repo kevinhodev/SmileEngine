@@ -12,6 +12,8 @@
 #include "SmileEditor/LightsBridge.h"
 #include "SmileEditor/SceneOutlinerBridge.h"
 #include "SmileEditor/SceneDocument.h"
+#include "SmileEditor/CameraBookmarksBridge.h"
+#include "SmileEditor/CaptureBridge.h"
 #include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
@@ -95,6 +97,8 @@ namespace SmileEditor {
         OutlinerBr = new SceneOutlinerBridge(this);   // Scene Outliner (renderer depois)
         SceneDoc   = new SceneDocument(this);         // camada autorada (.smap)
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
+        CameraBookmarksBr = new CameraBookmarksBridge(this); // bookmarks de camera (renderer depois)
+        CaptureBr  = new CaptureBridge(this);         // captura deterministica (renderer depois)
         RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
@@ -120,6 +124,23 @@ namespace SmileEditor {
         WireMenuActions(); // conecta os menus depois que Viewport e ConsoleDock existem
 
         CreateStatusBar();
+
+        // Bookmarks -> barra de status. Depois do CreateStatusBar porque o StatusBr nasce la.
+        // Sem isto, uma falha de persistencia (disco cheio, arquivo somente-leitura, sidecar de
+        // outra versao) ficava so no valor de retorno que a QML descarta, e gravar uma camera
+        // parecia um clique sem efeito — o pior desfecho possivel, porque o usuario seguiria a
+        // sessao de captura acreditando ter uma referencia que nao existe.
+        if (CameraBookmarksBr && StatusBr) {
+            connect(CameraBookmarksBr, &CameraBookmarksBridge::Message, this,
+                    [this](const QString& _Text) { StatusBr->ShowMessage(_Text, 4000); });
+        }
+        // Captura -> barra de status, pelo mesmo argumento: o resultado sai N frames depois do
+        // clique, e sem um aviso o operador nao tem como distinguir "ainda aquecendo" de "o
+        // pedido nao entrou". O caminho do PNG tambem sai por aqui.
+        if (CaptureBr && StatusBr) {
+            connect(CaptureBr, &CaptureBridge::Message, this,
+                    [this](const QString& _Text) { StatusBr->ShowMessage(_Text, 6000); });
+        }
 
         connect(Viewport, &ViewportWidget::TelemetryUpdated,    this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
@@ -428,6 +449,8 @@ namespace SmileEditor {
                     if (SceneDoc)    SceneDoc->OnSceneLoaded(Path, Additive);
                     if (OutlinerBr)  OutlinerBr->OnSceneLoaded(Path, Additive);
                     if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
+                    if (CameraBookmarksBr) CameraBookmarksBr->OnSceneLoaded(Path, Additive);
+                    if (CaptureBr)   CaptureBr->OnSceneLoaded(Path, Additive);
                     if (Viewport)    Viewport->NotifyDebugTargetsChanged();
                     if (StatusBr) {
                         StatusBr->ShowMessage(
@@ -682,6 +705,13 @@ namespace SmileEditor {
             RenderBr->SetViewport(Viewport);
         }
 
+        // Bookmarks de camera: so precisa do handle. Sem Refresh por frame — a pose gravada so
+        // muda por clique, e ler a camera todo frame nao diria nada sobre os SLOTS.
+        if (CameraBookmarksBr) CameraBookmarksBr->SetRenderer(Viewport->GetRenderer());
+        // Captura: idem, so o handle. O progresso e puxado por Timer do QML enquanto o card
+        // estiver visivel — a sessao roda na render thread e a GUI so pergunta.
+        if (CaptureBr) CaptureBr->SetRenderer(Viewport->GetRenderer());
+
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {
             TodBridge->SetRenderer(Viewport->GetRenderer());
@@ -783,6 +813,8 @@ namespace SmileEditor {
                 QStringLiteral("SettingsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("renderModel"), RenderBr },
+                  { QStringLiteral("cameraBookmarks"), CameraBookmarksBr },
+                  { QStringLiteral("capture"), CaptureBr },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
                 Dialog);
             Panel->setObjectName(QStringLiteral("SettingsPanel"));
@@ -997,6 +1029,25 @@ namespace SmileEditor {
     void MainWindow::TriggerShaderCompileAndReload(const QString& _Path) {
         Smile::LogInfo("Alteracao Detectada no Shader: " + QFileInfo(_Path).fileName().toStdString());
 
+        // O stem sai AQUI, na deteccao, e nao la no fim da compilacao — e o mesmo valor viaja para
+        // as duas chamadas, entao nao ha como as duas derivarem coisas diferentes.
+        //
+        // .hlsli (include) afeta varios shaders -> stem vazio forca reload completo. Caso
+        // contrario, deriva o stem do .cso: "WaterSurface.ps.hlsl" -> "WaterSurface.ps".
+        const QFileInfo ShaderInfo(_Path);
+        const bool IsInclude = ShaderInfo.suffix().compare("hlsli", Qt::CaseInsensitive) == 0;
+        const std::string ChangedStem =
+            IsInclude ? std::string() : ShaderInfo.completeBaseName().toStdString();
+
+        // ANTES de disparar o compilador. A compilacao leva ~1,5 s e o renderer nao para durante
+        // ela: uma captura de 128 frames cabe inteira nessa janela e sairia gravada como valida,
+        // com parte dos frames feita com o .cso antigo. Medido — a captura foi gravada 1,4 s antes
+        // de o ReloadShaders sequer ser chamado. Quem decide se ha o que cancelar e o renderer,
+        // que e quem conhece o mapeamento de stems.
+        if (Viewport && Viewport->GetRenderer()) {
+            Viewport->GetRenderer()->NotifyShaderReloadQueued(ChangedStem);
+        }
+
 #ifdef SMILE_CMAKE_BINARY_DIR
         QString BuildDir = QStringLiteral(SMILE_CMAKE_BINARY_DIR);
 #else
@@ -1018,15 +1069,12 @@ namespace SmileEditor {
         Smile::LogInfo("Compilando Shader via CMake (" + BuildConfig.toStdString() + ")...");
         CompileProcess->start("cmake", Arguments);
 
-        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess, _Path](int _ExitCode, QProcess::ExitStatus _Status) {
+        connect(CompileProcess, &QProcess::finished, this, [this, CompileProcess, ChangedStem](int _ExitCode, QProcess::ExitStatus _Status) {
             if (_Status == QProcess::NormalExit && _ExitCode == 0) {
                 if (Viewport && Viewport->GetRenderer()) {
-                    // .hlsli (include) afeta varios shaders -> stem vazio forca reload completo.
-                    // Caso contrario, deriva o stem do .cso: "WaterSurface.ps.hlsl" -> "WaterSurface.ps".
-                    const QFileInfo ShaderInfo(_Path);
-                    const bool IsInclude = ShaderInfo.suffix().compare("hlsli", Qt::CaseInsensitive) == 0;
-                    const std::string ChangedStem =
-                        IsInclude ? std::string() : ShaderInfo.completeBaseName().toStdString();
+                    // O stem foi derivado na deteccao e capturado por valor: re-deriva-lo aqui
+                    // abriria a porta para o cancelamento e o reload discordarem sobre qual
+                    // pipeline mudou.
                     if (Viewport->GetRenderer()->ReloadShaders(ChangedStem)) {
                         if (StatusBr) StatusBr->ShowMessage(tr("Shader Recarregado com Sucesso."), 3000);
                     } else {

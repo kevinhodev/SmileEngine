@@ -5,6 +5,9 @@
 #include <QString>
 #include <QVariantMap>
 #include "SmileEditor/RenderThread.h"
+// FLight + Vec3 por valor na assinatura do InvalidateLightRegion (a caixa de influencia sai do
+// proprio FLight, ver FLight::InfluenceBounds).
+#include "Smile/Scene/Light.h"
 
 namespace Smile { class Renderer; }
 
@@ -119,6 +122,16 @@ namespace SmileEditor {
     private:
         void SelectLight(int index) { selectLight(index); } // WRITE da Q_PROPERTY
         void Touch(bool Structure); // rev++/dirty + sinais (Structure = lista mudou de forma)
+
+        // Invalidacao dos caches de GI depois de editar uma luz. `OldMin/OldMax` e a caixa de
+        // influencia de ANTES da edicao — capture-a no setter antes de mexer no campo. Nos
+        // setters que nao mexem em posicao nem raio ela e igual a de depois, e passar as duas
+        // continua correto (o FDDGI une caixas).
+        //
+        // O Touch() ao lado dela cuida so de UI e persistencia: quem consome a luz no mundo —
+        // atlas do DDGI, reservoirs, ReGIR, reflexoes, cache de radiancia — nao ouve sinal de Qt.
+        void InvalidateLightRegion(const Smile::FLight& L,
+                                   const Smile::Vec3& OldMin, const Smile::Vec3& OldMax);
         bool LoadLights();          // le o JsonPath e ADICIONA na cena
 
         RendererHandle Renderer;

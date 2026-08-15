@@ -1,5 +1,5 @@
 #include "Smile/Graphics/Atmosphere.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
@@ -11,6 +11,7 @@
 #include <fstream>
 #include <vector>
 #include <stdexcept>
+#include <iterator>
 
 namespace Smile {
     void FLut2D::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
@@ -18,24 +19,9 @@ namespace Smile {
         W = _Width; H = _Height; Fmt = _Format;
         State = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = _Width;
-        Desc.Height           = _Height;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = _Format;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, State, nullptr,
-            IID_PPV_ARGS(&Resource)));
-        VramTracker::Register(Resource.Get(), EVramCategory::Sky);
+        Resource = GpuResources::CreateTex2D(
+            _Device, _Width, _Height, _Format, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            State, EVramCategory::Sky, nullptr, 1, 1, "LUTs da atmosfera");
 
         SRVSlot = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -115,11 +101,7 @@ namespace Smile {
         AerialPerspectiveVolume.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
                                        kAerialW, kAerialH, kAerialSlices, 1, true);
 
-        TransmittancePSO.Initialize(_Device, "BakeTransmittance.cs_6_0.cso", 1, 1);
-        MultiScatterPSO.Initialize(_Device, "BakeMultiScatter.cs_6_0.cso", 1, 1);
-        SkyViewPSO.Initialize(_Device, "BakeSkyView.cs_6_0.cso", 2, 1);
-        AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
-        IntegrateAmbientPSO.Initialize(_Device, "IntegrateSkyAmbient.cs_6_0.cso", 1, 1);
+        CreateBakePipelines(_Device);
 
         // Cube de reflexo da atmosfera (consumido pela água): raw + prefiltrado GGX.
         SkyReflRaw.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -134,23 +116,10 @@ namespace Smile {
         {
             constexpr u64 kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
 
-            D3D12_HEAP_PROPERTIES DefHeap{};
-            DefHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC BufDesc{};
-            BufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            BufDesc.Width            = kAmbientBytes;
-            BufDesc.Height           = 1;
-            BufDesc.DepthOrArraySize = 1;
-            BufDesc.MipLevels        = 1;
-            BufDesc.Format           = DXGI_FORMAT_UNKNOWN;
-            BufDesc.SampleDesc       = { 1, 0 };
-            BufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            BufDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &DefHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-                IID_PPV_ARGS(&AmbientBuffer)));
-            VramTracker::Register(AmbientBuffer.Get(), EVramCategory::Sky);
+            AmbientBuffer = GpuResources::CreateBuffer(
+                _Device, kAmbientBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Sky,
+                "Ambiente do ceu");
 
             AmbientUAVSlot = _SRVHeap.Allocate(1);
             D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc{};
@@ -160,19 +129,15 @@ namespace Smile {
             UAVDesc.Buffer.StructureByteStride  = sizeof(f32) * 4;
             _SRVHeap.CreateUAV(_Device, AmbientBuffer.Get(), UAVDesc, AmbientUAVSlot);
 
-            D3D12_HEAP_PROPERTIES RbHeap{};
-            RbHeap.Type = D3D12_HEAP_TYPE_READBACK;
-            BufDesc.Width = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * kAmbientBytes;
-            BufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-            SMILE_HR(_Device->CreateCommittedResource(
-                &RbHeap, D3D12_HEAP_FLAG_NONE, &BufDesc,
-                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                IID_PPV_ARGS(&AmbientReadback)));
-            D3D12_RANGE All{ 0, static_cast<SIZE_T>(BufDesc.Width) };
+            const u64 ReadbackBytes =
+                static_cast<u64>(FCommandQueue::kFramesInFlight) * kAmbientBytes;
+            AmbientReadback = GpuResources::CreateReadbackBuffer(_Device, ReadbackBytes);
+
+            const D3D12_RANGE All{ 0, static_cast<SIZE_T>(ReadbackBytes) };
             void* Ptr = nullptr;
             SMILE_HR(AmbientReadback->Map(0, &All, &Ptr));
             AmbientMapped = reinterpret_cast<u8*>(Ptr);
-            std::memset(AmbientMapped, 0, static_cast<size_t>(BufDesc.Width));
+            std::memset(AmbientMapped, 0, static_cast<size_t>(ReadbackBytes));
         }
 
         MoonTexture = FTexture::CreateDefault(_Device, _UploadQueue, _SRVHeap, EDefaultTexture::White);
@@ -188,28 +153,13 @@ namespace Smile {
     }
 
     void FAtmosphere::CreateConstantBuffer(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(AtmosphereConstants) % 256 == 0,
+                      "o CB e indexado por sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(AtmosphereConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedBase = reinterpret_cast<u8*>(Ptr);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(AtmosphereConstants), FCommandQueue::kFramesInFlight);
+        ConstantBuffer = Upload.Resource;
+        MappedBase     = Upload.Mapped;
 
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
             std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(AtmosphereConstants),
@@ -286,27 +236,15 @@ namespace Smile {
         if (!File) { LogWarning("Catalogo de estrelas truncado"); return; }
 
         // Upload heap direto: 8k estrelas x 20B, lido 1x por frame so a noite — nao vale copy.
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(Count) * sizeof(FStarRec);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&StarBuffer)));
-        {
-            D3D12_RANGE NoRead{ 0, 0 };
-            void* Ptr = nullptr;
-            SMILE_HR(StarBuffer->Map(0, &NoRead, &Ptr));
-            std::memcpy(Ptr, Stars.data(), static_cast<size_t>(Desc.Width));
-            StarBuffer->Unmap(0, nullptr);
-        }
+        // SliceCount 1 e alinhamento de CBV desligado: e um StructuredBuffer, e arredondar
+        // para 256 quebraria o stride que o SRV declara.
+        const u64 StarBytes = static_cast<u64>(Count) * sizeof(FStarRec);
+        const GpuResources::FUploadBuffer StarUpload =
+            GpuResources::CreateUploadBuffer(_Device, StarBytes, 1, false);
+        StarBuffer = StarUpload.Resource;
+        // Sem Unmap: mapeamento persistente da fabrica. O buffer e lido pela GPU a cada
+        // frame noturno, entao ele vive tanto quanto a atmosfera de qualquer forma.
+        std::memcpy(StarUpload.Mapped, Stars.data(), static_cast<size_t>(StarBytes));
 
         const u32 StarSRVSlot = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
@@ -528,6 +466,17 @@ namespace Smile {
         Desc.SampleDesc            = { 1, 0 };
 
         SMILE_HR(_Device->CreateGraphicsPipelineState(&Desc, IID_PPV_ARGS(&SkyPSO)));
+    }
+
+    // Os LUTs. Separado do BuildSkyPSO porque o RecreateSky historicamente so cuidava da PSO
+    // grafica do ceu — e era por isso que editar BakeSkyView.cs ou BakeTransmittance.cs nao
+    // recarregava nada: os cinco nao estavam em caminho de reload nenhum.
+    void FAtmosphere::CreateBakePipelines(ID3D12Device* _Device) {
+        TransmittancePSO.Initialize(_Device, "BakeTransmittance.cs_6_0.cso", 1, 1);
+        MultiScatterPSO.Initialize(_Device, "BakeMultiScatter.cs_6_0.cso", 1, 1);
+        SkyViewPSO.Initialize(_Device, "BakeSkyView.cs_6_0.cso", 2, 1);
+        AerialPerspectivePSO.Initialize(_Device, "BakeAerialPerspective.cs_6_0.cso", 2, 1);
+        IntegrateAmbientPSO.Initialize(_Device, "IntegrateSkyAmbient.cs_6_0.cso", 1, 1);
     }
 
     void FAtmosphere::RecreateSky(ID3D12Device* _Device,
@@ -876,4 +825,25 @@ namespace Smile {
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FAtmosphere::ShaderStems() const {
+        static const char* const kStems[] = {
+            "SkyAtmosphere.vs", "SkyAtmosphere.ps", "BakeSkyReflection.cs",
+            // Os LUTs e o campo de estrelas: cobertos pelo CreateBakePipelines e pelo
+            // BuildStarPipeline abaixo, que o OnRecreatePipelines passou a chamar.
+            "BakeTransmittance.cs", "BakeMultiScatter.cs", "BakeSkyView.cs",
+            "BakeAerialPerspective.cs", "IntegrateSkyAmbient.cs",
+            "StarField.vs", "StarField.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FAtmosphere::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (!Initialized) return;
+        CreateBakePipelines(_Ctx.Device);
+        RecreateSky(_Ctx.Device, _Ctx.SceneColorFormat, _Ctx.SceneDepthFormat);
+        // Formatos do proprio passe, nao os do contexto: o campo de estrelas nasce com os do sky
+        // pass, que a classe cacheia justamente para PSOs tardios como esta.
+        BuildStarPipeline(_Ctx.Device, SkyRTFormat, SkyDSFormat);
+    }
+
 }

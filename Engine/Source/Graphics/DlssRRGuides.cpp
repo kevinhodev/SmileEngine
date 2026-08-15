@@ -1,7 +1,7 @@
 #include "Smile/Graphics/DlssRRGuides.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
-#include "Smile/Graphics/VramTracker.h"
-#include "Smile/Core/HResultCheck.h"
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -12,27 +12,17 @@ namespace Smile {
 
         ComPtr<ID3D12Resource> CreateUAVTex2D(ID3D12Device* Device, u32 W, u32 H, DXGI_FORMAT Fmt,
                                               bool AllowRenderTarget = false) {
-            D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = W;
-            Desc.Height           = H;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = Fmt;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
-                                    (AllowRenderTarget ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
-                                                       : D3D12_RESOURCE_FLAG_NONE);
-            ComPtr<ID3D12Resource> Tex;
+            // O clear value so pode acompanhar um recurso que permite RT/DS — passa-lo num
+            // recurso UAV-only faz a criacao falhar.
             D3D12_CLEAR_VALUE Clear{};
             Clear.Format = Fmt;
-            SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_COMMON, AllowRenderTarget ? &Clear : nullptr,
-                     IID_PPV_ARGS(&Tex)));
-            VramTracker::Register(Tex.Get(), EVramCategory::RenderTargets);
-            return Tex;
+            return GpuResources::CreateTex2D(
+                Device, W, H, Fmt,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
+                    (AllowRenderTarget ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+                                       : D3D12_RESOURCE_FLAG_NONE),
+                D3D12_RESOURCE_STATE_COMMON, EVramCategory::RenderTargets,
+                AllowRenderTarget ? &Clear : nullptr, 1, 1, "Guides do DLSS-RR");
         }
     }
 
@@ -58,6 +48,7 @@ namespace Smile {
         };
         Free(MainUavTable, 3);
         Free(SpecHitUav, 1);
+        Free(GuideSrvBase, 4);
         DiffAlb.Reset(); SpecAlb.Reset(); NrmRough.Reset(); SpecHit.Reset();
         DiffAlbState = SpecAlbState = NrmRoughState = SpecHitState = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
@@ -88,6 +79,19 @@ namespace Smile {
         SpecHitUav = SRVHeap.Allocate(1);
         Uav.Format = kHitFormat;
         SRVHeap.CreateUAV(Device, SpecHit.Get(), Uav, SpecHitUav);
+
+        // SRVs de inspecao (visualizador). Contiguos p/ os getters serem base + indice.
+        GuideSrvBase = SRVHeap.Allocate(4);
+        D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
+        Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        Srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        Srv.Texture2D.MipLevels     = 1;
+        Srv.Format = kGuideFormat;
+        SRVHeap.CreateSRV(Device, DiffAlb.Get(),  Srv, GuideSrvBase + 0);
+        SRVHeap.CreateSRV(Device, SpecAlb.Get(),  Srv, GuideSrvBase + 1);
+        SRVHeap.CreateSRV(Device, NrmRough.Get(), Srv, GuideSrvBase + 2);
+        Srv.Format = kHitFormat;
+        SRVHeap.CreateSRV(Device, SpecHit.Get(),  Srv, GuideSrvBase + 3);
 
         if (!SpecHitRTVHeap.Native())
             SpecHitRTVHeap.Initialize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
@@ -177,4 +181,23 @@ namespace Smile {
         Transition(CL, NrmRough.Get(), NrmRoughState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(CL, SpecHit.Get(),  SpecHitState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
+
+    void FDlssRRGuides::TransitionForDebug(ID3D12GraphicsCommandList* CL) {
+        constexpr D3D12_RESOURCE_STATES kRead = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        Transition(CL, DiffAlb.Get(),  DiffAlbState,  kRead);
+        Transition(CL, SpecAlb.Get(),  SpecAlbState,  kRead);
+        Transition(CL, NrmRough.Get(), NrmRoughState, kRead);
+        Transition(CL, SpecHit.Get(),  SpecHitState,  kRead);
+    }
+
+    FPassShaderStems FDlssRRGuides::ShaderStems() const {
+        static const char* const kStems[] = { "DlssRRGuides.cs", "DlssRRSpecHit.cs", "DlssRRWaterSpecHit.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FDlssRRGuides::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Ready) RecreatePSOs(_Ctx.Device);
+    }
+
 }

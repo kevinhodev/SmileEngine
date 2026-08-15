@@ -41,6 +41,14 @@ namespace Smile {
         TemporalMotion   = 1u << 11,
         HiZOcclusion     = 1u << 12, // readback ring do occlusion culling
         ProbeDiagnostic  = 1u << 13, // one-shot por clique: reexecuta, senao o painel mente
+        RadianceCache    = 1u << 14, // hash de MUNDO; media movel com teto de 64 amostras
+        // Os dois abaixo entraram com a captura deterministica. Eram acumuladores reais que
+        // simplesmente nunca tinham sido cadastrados: o unico reset de cada um era interno
+        // (SunShafts quando o passe adormece; Ocean no toggle da agua e nos parametros do
+        // espectro). Nenhum dominio os alcancava, entao "reset de tudo" nao era verdade —
+        // achado da revisao do capturador.
+        SunShafts        = 1u << 15, // temporal de TELA, reprojeta por PrevVP
+        OceanTemporal    = 1u << 16, // displacement/foam da FFT: historico de MUNDO
     };
 
     constexpr EHistoryTarget operator|(EHistoryTarget A, EHistoryTarget B) {
@@ -49,6 +57,26 @@ namespace Smile {
     constexpr bool HasTarget(EHistoryTarget Set, EHistoryTarget Bit) {
         return (static_cast<u32>(Set) & static_cast<u32>(Bit)) != 0;
     }
+
+    // O UNIVERSO dos bits acima, e nao mais um dominio: dominio se nomeia pelo motivo e se
+    // escreve como lista, e aqui a lista e justamente o que nao pode existir. Um alvo novo tem
+    // de entrar aqui SEM ninguem lembrar — esquecer um alvo num dominio de conteudo produz um
+    // sintoma visivel ("historico que nao morre"), enquanto esquece-lo na captura produz uma
+    // medicao silenciosamente dependente do trajeto ate a pose, que e o erro que a serie SHaRC
+    // nao pode se dar ao luxo de cometer.
+    inline constexpr u32 kHistoryTargetCount = 17;
+    inline constexpr EHistoryTarget kAllHistoryTargets =
+        static_cast<EHistoryTarget>((1u << kHistoryTargetCount) - 1u);
+
+    static_assert(static_cast<u32>(EHistoryTarget::OceanTemporal) ==
+                      (1u << (kHistoryTargetCount - 1u)),
+        "alvo novo no fim do enum sem subir o kHistoryTargetCount: o reset deterministico da "
+        "captura deixaria de pe exatamente o historico mais recente");
+
+    // O assert acima protege o enum de crescer sem o contador acompanhar. Ele NAO protege contra
+    // o erro que a revisao do capturador achou: um acumulador que existe na engine e nunca entrou
+    // no enum. Esse ninguem detecta por compilacao — a unica defesa e a pergunta, em toda revisao
+    // de passe novo: "isto sobrevive ao frame? entao tem um bit aqui".
 
     namespace HistoryDomain {
         using T = EHistoryTarget;
@@ -97,12 +125,64 @@ namespace Smile {
         // Mudou o que o RAIO ENXERGA no hit (mascara, backface, alpha-test, fade de borda,
         // bias de amostragem). Muda o Lo gravado no reservoir E o valor devolvido as sondas.
         inline constexpr T RayVisibility = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
-                                           T::VolumetricFog | T::ProbeDiagnostic | Resolve;
+                                           T::VolumetricFog | T::ProbeDiagnostic |
+                                           T::RadianceCache | Resolve;
+
+        // Mudou COMO o atlas do DDGI acumula, e nao o que o raio ve nem quanta luz existe:
+        // histerese, detector de mudanca por sonda. O valor gravado nas sondas passa a ser
+        // produzido por outra regra, entao comparar antes/depois sem limpar seria medir um
+        // estado misturado — e tudo que se apoia no atlas herdou o estado velho.
+        //
+        // Mascara igual a do RayVisibility hoje, e separado de proposito: a politica deste
+        // arquivo e nomear pelo MOTIVO, porque e o motivo que decide para onde um alvo NOVO
+        // vai. Um denoiser que dependa da geometria do hit entraria no RayVisibility sem
+        // entrar aqui.
+        inline constexpr T GIAccumulation = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
+                                            T::VolumetricFog | T::ProbeDiagnostic |
+                                            T::RadianceCache | Resolve;
+
+        // Trocou o TERMINADOR do raio secundario: o fallback foi de DDGI a Black (ou de volta), ou
+        // passou a haver / deixou de haver quem o consuma. Vale para os CINCO traces de render de
+        // uma vez, porque o `PT_SampleIndirectFallback` mora no `ShadeSurfaceHit` compartilhado —
+        // e o ATLAS do DDGI esta entre os consumidores, ja que o 2o bounce das sondas termina no
+        // fallback como qualquer outro raio.
+        //
+        // ⚠️ A NEVOA ENTRA, e a primeira versao deste dominio a deixou de fora. O contrato do
+        // IndirectPolicy.h dizia "a nevoa continua lendo exatamente o mesmo", e isso so vale
+        // enquanto o atlas nao e resetado — mas e justamente este dominio que o reseta. O chao da
+        // nevoa se move junto: ela reprojetaria inscatter acumulado sobre o atlas convergido contra
+        // um atlas que voltou a estimativa de um trace so.
+        //
+        // A TABELA do cache fica de pe: desde a Fase 3 os traces de render nao inserem e o terminal
+        // do updater nunca leu DDGI, entao o CONTEUDO dela nao depende desta politica.
+        //
+        // Mesma mascara e MESMO MOTIVO do `RadianceCacheConsumersOnly` (RenderSettings.cpp) —
+        // trocar o terminador entre cache e fallback e este mesmo evento visto de outro angulo.
+        // Ficam separados enquanto aquele for derivado do RayVisibility por subtracao.
+        inline constexpr T IndirectTerminator = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
+                                                T::VolumetricFog | T::ProbeDiagnostic | Resolve;
+
+        // Trocou QUEM PRODUZ o indireto de superficie na tela (primario), ou se o atlas ainda o
+        // ilumina. NAO move raio nenhum: sondas e reflexoes tracam igual, com o mesmo terminador —
+        // verificado, o `GIHitSampling` e o `RadianceCacheParams` das sondas saem do fallback e do
+        // volume vivo, nunca do primario. Por isso o ATLAS fica de pe aqui, e com ele a nevoa.
+        //
+        // E o MESMO evento que o toggle do `UseReSTIRGI` alcancado por outro knob, entao a mascara
+        // e a daquele setter. Divergir das duas seria exatamente a regra que a Fase 4 pagou:
+        // automatismo que duplica um gesto manual tem de fazer TUDO o que ele faz.
+        inline constexpr T IndirectSurfaceRoute = T::ReSTIRGI | ScreenResolve;
+
+        // O VOLUME apareceu ou sumiu, e a fonte da nevoa mudou de verdade — ela reprojeta inscatter
+        // acumulado com um atlas que deixou de existir, ou que acabou de nascer. Separado dos dois
+        // acima porque as bordas sao independentes: a politica troca com o volume vivo, e o volume
+        // some sem a politica mudar.
+        inline constexpr T IndirectVolumetricSource = T::VolumetricFog;
 
         // Mudou a GEOMETRIA do raio (epsilons, offsets, TMin). Alcanca tambem o shadow ray da
         // direta, por isso inclui o eixo do DI.
         inline constexpr T RayGeometry = T::DDGIAtlas | T::ReSTIRGI | T::ReSTIRDI |
-                                         T::Reflections | T::NrdDirect | Resolve;
+                                         T::Reflections | T::NrdDirect |
+                                         T::RadianceCache | Resolve;
 
         // Mudou a ENERGIA que alimenta o indireto: radiancia do ceu, cor da luz-chave,
         // peso de luz no RT. Distinto do RayVisibility — la muda o que o raio VE, aqui muda
@@ -114,24 +194,25 @@ namespace Smile {
         // nao move superficie nem troca InstanceID. Ele continua no MaterialRTState, onde e
         // legitimo: la as flags de instancia da TLAS mudam, e o buffer e indexado pelo InstanceID.
         inline constexpr T SkyRadiance = T::DDGIAtlas | T::ReSTIRGI | T::Reflections |
-                                         T::VolumetricFog | Resolve;
+                                         T::VolumetricFog | T::RadianceCache | Resolve;
 
         // Trocou de denoiser. O teto de firefly do ReSTIR depende do denoiser e e aplicado ao
         // Lo NA HORA DO TRACE, ou seja, fica gravado no reservoir. Inclui o RayReconstruct
         // explicitamente (o Resolve nao o carrega mais): trocar PARA ou DE DLSS-RR troca o
         // proprio acumulador, entao ele tem de comecar limpo — mesmo caso do TemporalOnly.
         inline constexpr T DenoiserSwap = T::ReSTIRGI | T::ReSTIRDI | T::Reflections |
-                                          T::NrdDirect | T::RayReconstruct | Resolve;
+                                          T::NrdDirect | T::RayReconstruct |
+                                          T::RadianceCache | Resolve;
 
         // Trocou o SAMPLER de luzes do mundo para hits secundarios (ReGIR).
         inline constexpr T IndirectSampler = T::ReGIR | T::DDGIAtlas | T::ReSTIRGI |
-                                            T::Reflections | Resolve;
+                                            T::Reflections | T::RadianceCache | Resolve;
 
         // Propriedade de material que o RT enxerga mudou. O mais largo: alem de tudo que
         // acumula, o chamador ainda tem refresh a fazer (Flush + InstanceGeo + flags da TLAS).
         inline constexpr T MaterialRTState = T::DDGIAtlas | T::TemporalMotion | T::ReSTIRGI |
                                              T::ReSTIRDI | T::NrdDirect | T::Reflections |
-                                             Resolve;
+                                             T::RadianceCache | Resolve;
 
         // A LISTA de renderaveis mudou: um objeto nasceu ou morreu, e o indice de todos os que
         // vinham depois andou. Mais largo que o MaterialRTState, por dois motivos que se somam:
@@ -156,10 +237,38 @@ namespace Smile {
         // primitiva. O mesmo vale para o ReGIR, que e grade de MUNDO pela mesma razao — mas ele
         // fica, porque a geometria removida podia ser emissiva e estar nos pools de luz, e ele
         // ainda nao tem invalidacao por regiao.
+        //
+        // O RadianceCache tambem e cache de MUNDO e tambem fica, mas o argumento e outro: um
+        // reset dele nao produz o pop do atlas. Zerar o hash so faz o ShadeSurfaceHit voltar a
+        // sombrear de verdade por alguns frames — o caminho que existia antes do cache — em vez
+        // de trocar a irradiancia da cena inteira pela estimativa de um trace so. Custa alguns
+        // ms de trace e nao custa piscada, entao nao ha por que arriscar radiancia de um objeto
+        // que nao existe mais. (Invalidacao por regiao aqui e barata de fazer depois: a chave ja
+        // carrega a posicao quantizada.)
         inline constexpr T SceneStructure = T::ReGIR | T::ReSTIRGI | T::ReSTIRDI |
                                             T::Reflections | T::NrdDirect | T::TemporalMotion |
                                             T::HiZOcclusion | T::VolumetricFog |
-                                            T::ProbeDiagnostic | Resolve;
+                                            T::ProbeDiagnostic | T::RadianceCache | Resolve;
+
+        // Mudou o CONTEUDO da cena sem a LISTA de renderaveis mudar de tamanho: o olho do
+        // outliner (a instancia sai da TLAS, RaytracingScene.cpp pula !Visible) e as
+        // propriedades de uma luz puntual (cor, intensidade, raio, cone, on/off).
+        //
+        // Duas ausencias, cada uma por um motivo diferente:
+        //
+        //  - DDGIAtlas, pelo mesmo argumento do SceneStructure: derrubar o atlas inteiro troca a
+        //    irradiancia da cena toda pela estimativa de UM trace, e editar uma luz deixa 99%
+        //    das sondas corretas. Quem chama invalida por REGIAO (FDDGI::InvalidateRegion) com a
+        //    caixa de influencia da luz ou a AABB do objeto.
+        //  - TemporalMotion e HiZOcclusion, porque sao indexados por INDICE e aqui a lista nao
+        //    andou: nenhuma entrada passou a descrever outro objeto.
+        //
+        // O resto entra inteiro, e ReSTIRDI/NrdDirect entram AQUI e nao no SkyRadiance porque
+        // ali a mudanca e do sol/ceu, que seguem no caminho dedicado — luz puntual e exatamente
+        // o que os reservoirs de DI amostram.
+        inline constexpr T SceneContent = T::ReGIR | T::ReSTIRGI | T::ReSTIRDI |
+                                          T::Reflections | T::NrdDirect | T::VolumetricFog |
+                                          T::ProbeDiagnostic | T::RadianceCache | Resolve;
 
         // A CAMERA SALTOU: teleporte do foco do editor, carga de cena, buffers recriados. E o
         // unico caso em que resetar os filtros de tela e a resposta certa — nao existe vetor de
@@ -173,10 +282,34 @@ namespace Smile {
         // NAO caem os caches de MUNDO — DDGIAtlas e ReGIR. Uma sonda irradia o mesmo
         // independentemente de onde a camera esteja; derruba-las faria o GI reconvergir do zero
         // a cada duplo-clique no outliner, que e o oposto do que este dominio existe para evitar.
+        // SunShafts entra pelo mesmo argumento do VolumetricFog, que ja estava aqui: o temporal
+        // dele reprojeta por PrevVP, e um teleporte deixa a historia apontando para outro lugar.
+        // Estava de fora so porque o alvo nao existia — o unico reset era o do proprio passe ao
+        // adormecer. OceanTemporal NAO entra, e pelo argumento oposto (o mesmo do DDGIAtlas e do
+        // ReGIR): a FFT e simulacao de MUNDO, e a onda e a mesma independentemente de onde a
+        // camera esta.
         inline constexpr T CameraCut = T::TemporalAA | T::RayReconstruct | T::NrdIndirect |
                                        T::NrdDirect | T::ReSTIRGI | T::ReSTIRDI |
                                        T::Reflections | T::TemporalMotion | T::HiZOcclusion |
-                                       T::VolumetricFog | T::VolumetricClouds;
+                                       T::VolumetricFog | T::VolumetricClouds | T::SunShafts;
+
+        // CAPTURA DETERMINISTICA (Docs/CAPTURE-PROTOCOL.md). Mais forte que o corte de camera, e
+        // a diferenca sao exatamente os caches de MUNDO que o CameraCut se recusa a derrubar.
+        //
+        // La a recusa e certa: navegar nao muda o que uma sonda irradia, e derrubar o atlas a cada
+        // duplo-clique no outliner faria a GI reconvergir do zero. Numa captura isso se INVERTE. O
+        // estado inicial precisa ser conhecido, e nao "o que sobrou do trajeto ate aqui": o
+        // radiance cache chegaria com celulas de onde a camera passou e o atlas do DDGI com a
+        // convergencia do caminho percorrido, entao duas capturas da MESMA pose dariam numeros
+        // diferentes conforme o caminho ate ela — e a serie SHaRC compara justamente ocupacao do
+        // hash e convergencia temporal.
+        //
+        // O preco e o aquecimento: sao CENTENAS de frames, nao dezenas (histerese 0,99 no DDGI,
+        // teto de 64 amostras por celula no cache). E o preco de a medicao ser reproduzivel, e e
+        // por isso que o contador de aquecimento conta frame RENDERIZADO e nao tique de UI.
+        //
+        // Nao e uma lista: e o universo. Ver kAllHistoryTargets.
+        inline constexpr T DeterministicCapture = kAllHistoryTargets;
 
         // --- Invariante deste arquivo, verificada pelo compilador -------------------------
         // Os filtros de TELA so podem cair onde o historico deles realmente perdeu a
@@ -195,11 +328,16 @@ namespace Smile {
         static_assert(!ResetsScreenFilters(ScreenResolve), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(Specular),      "dominio de conteudo");
         static_assert(!ResetsScreenFilters(RayVisibility), "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(GIAccumulation), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(RayGeometry),   "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(IndirectTerminator),        "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(IndirectSurfaceRoute),      "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(IndirectVolumetricSource),  "dominio de conteudo");
         static_assert(!ResetsScreenFilters(SkyRadiance),   "dominio de conteudo");
         static_assert(!ResetsScreenFilters(IndirectSampler), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(MaterialRTState), "dominio de conteudo");
         static_assert(!ResetsScreenFilters(SceneStructure),  "dominio de conteudo");
+        static_assert(!ResetsScreenFilters(SceneContent),    "dominio de conteudo");
         // E os quatro onde resetar E a resposta certa — em todos, o que quebrou foi a propria
         // referencia de reprojecao, nao o conteudo da cena.
         static_assert(ResetsScreenFilters(CameraCut),
@@ -207,5 +345,20 @@ namespace Smile {
         static_assert(ResetsScreenFilters(Guides),       "trocou o depth/velocity da reprojecao");
         static_assert(ResetsScreenFilters(TemporalOnly), "trocou o filtro de tela");
         static_assert(ResetsScreenFilters(DenoiserSwap), "trocou o acumulador do denoiser");
+        static_assert(ResetsScreenFilters(DeterministicCapture),
+            "captura comeca do zero em TUDO, inclusive nos filtros de tela");
+
+        // E a invariante que a captura acrescenta ao arquivo: ela nao pode ser um dominio de
+        // conteudo COM alguns extras. Tem de ser um superconjunto proprio do corte de camera —
+        // e os tres bits que sobram sao os caches de mundo, o motivo de o dominio existir.
+        constexpr bool Contains(T Set, T Subset) {
+            return (static_cast<u32>(Set) & static_cast<u32>(Subset)) == static_cast<u32>(Subset);
+        }
+        static_assert(Contains(DeterministicCapture, CameraCut),
+            "a captura tem de derrubar pelo menos o que o corte de camera derruba");
+        static_assert(Contains(DeterministicCapture,
+                               T::DDGIAtlas | T::ReGIR | T::RadianceCache),
+            "os caches de MUNDO sao a diferenca entre captura e navegacao; sem eles a captura "
+            "herda o trajeto ate a pose e deixa de ser reproduzivel");
     }
 }

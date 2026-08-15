@@ -33,7 +33,7 @@ Texture2D<float4> GBufferC : register(t2);
 Texture2D<float>  Depth    : register(t3);
 RaytracingAccelerationStructure Scene : register(t4);
 StructuredBuffer<InstanceGeo> Instances : register(t5);
-Texture2D<float4> ResA : register(t6);
+Texture2D<float>  ResW : register(t6); // W (o x1 saiu — ver ReSTIRDICommon.hlsli)
 Texture2D<uint4>  ResB : register(t7);
 StructuredBuffer<FGPULightFull> Lights : register(t8);
 #include "../Temporal/TemporalMotionCommon.hlsli"
@@ -49,6 +49,16 @@ RWTexture2D<float4> OutSpecular : register(u2);
 RWTexture2D<float4> OutShadowMotion : register(u3); // xy=curUV-prevUV, z=confianca, w=valido
 
 #include "../GI/RTAlphaTest.hlsli"
+
+// O ponto visivel deixou de morar no reservoir: vem do depth, que este passe ja carrega pro teste
+// de ceu de cada tap. A correcao de vies la embaixo ja fazia exatamente esta conta inline — agora
+// e uma so, usada tambem pela rejeicao geometrica dos vizinhos.
+float3 WorldFromDepth(int2 p, float deviceZ) {
+    const float2 uv  = (float2(p) + 0.5f) * ScreenParams.zw;
+    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    const float4 wh  = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
+    return wh.xyz / wh.w;
+}
 
 float4 ComputeShadowMotion(int2 px, float3 receiverPos, float3 receiverNormal,
                            float3 blockerPos, uint blockerId, FGPULightFull light) {
@@ -117,9 +127,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                         GBufferB.Load(int3(px, 0)),
                                         GBufferC.Load(int3(px, 0)));
     const float2 uv = (float2(px) + 0.5f) * ScreenParams.zw;
-    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    const float4 wh = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
-    const float3 x1 = wh.xyz / wh.w;
+    const float3 x1 = WorldFromDepth(px, deviceZ);
     const float3 n1 = g.WorldNormal;
 
     uint rng = GGX_SeedE(upx, (uint)Params.y, SMILE_RNG_DI_SPATIAL);
@@ -134,7 +142,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     int   candCount = 0;
     int   selCand = 0; // dominio que gerou a amostra vencedora
 
-    ReSTIRDIReservoir self = DI_LoadReservoir(ResA.Load(int3(px, 0)), ResB.Load(int3(px, 0)));
+    ReSTIRDIReservoir self = DI_LoadReservoir(ResW.Load(int3(px, 0)), ResB.Load(int3(px, 0)));
+    self.X1 = x1; // mesmo pixel, mesmo depth: e o x1 ja reconstruido acima
     self.M = min(self.M, Sampling.y);
     // Basta ter M: um reservoir SEM amostra valida (todas as candidatas deram target 0, ou o
     // Alg. 5 passo 2 descartou a ocluida) ainda sorteou M candidatas e precisa entrar na soma.
@@ -168,11 +177,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                              GBufferC.Load(int3(qpx, 0)));
         if (dot(qg.WorldNormal, n1) < Reuse.z) continue;
 
-        ReSTIRDIReservoir nb = DI_LoadReservoir(ResA.Load(int3(qpx, 0)), ResB.Load(int3(qpx, 0)));
+        ReSTIRDIReservoir nb = DI_LoadReservoir(ResW.Load(int3(qpx, 0)), ResB.Load(int3(qpx, 0)));
         // So M > 0 — mesma razao do bloco do self. Reservoir invalido (fundo/ceu) tem M = 0 e cai
-        // aqui; um pixel valido que so nao achou luz tem M > 0 e X1 escrito, entao os testes
-        // geometricos abaixo continuam validos.
+        // aqui. O qz > 0 acima ja garante que o X1 reconstruido abaixo e de geometria real, entao
+        // os testes geometricos continuam validos.
         if (nb.M <= 0.0f) continue;
+        nb.X1 = WorldFromDepth(qpx, qz);
         if (length(nb.X1 - x1) >= posReject ||
             abs(dot(n1, nb.X1 - x1)) >= 0.2f * posReject) continue;
         nb.M = min(nb.M, Sampling.y);
@@ -229,10 +239,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     const GBufferData cg = DecodeGBuffer(GBufferA.Load(int3(cp, 0)),
                                                          GBufferB.Load(int3(cp, 0)),
                                                          GBufferC.Load(int3(cp, 0)));
-                    const float2 cuv  = (float2(cp) + 0.5f) * ScreenParams.zw;
-                    const float2 cndc = float2(cuv.x * 2.0f - 1.0f, 1.0f - cuv.y * 2.0f);
-                    const float4 cwh  = mul(float4(cndc, cz, 1.0f), InvViewProj);
-                    const float3 cx1  = cwh.xyz / cwh.w;
+                    const float3 cx1 = WorldFromDepth(cp, cz);
                     // A amostra vencedora vista do dominio do vizinho: reamostra com o MESMO uv
                     // no ponto DELE, senao a pdf comparada seria a de outra amostra.
                     const DILightSample cls = DI_SampleAnyLight(Lights, lightCount, TriLights,

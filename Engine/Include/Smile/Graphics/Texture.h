@@ -88,10 +88,13 @@ namespace Smile {
                                DXGI_FORMAT Format,
                                EVramCategory Category = EVramCategory::SceneTextures);
 
+        // Recebe a FILA e nao um vetor de staging: o staging agora sai do ring dela (ver
+        // FUploadQueue::AllocateStaging), entao nao ha mais recurso por textura para o
+        // chamador segurar ate a fence — quem faz isso e o proprio ring.
         static FTexture RecordUpload(ID3D12Device* Device, ID3D12GraphicsCommandList* CommandList,
                                      FTextureSRVHeap& SRVHeap,
                                      const std::vector<FMipData>& Mips, DXGI_FORMAT Format,
-                                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& StagingOut,
+                                     FUploadQueue& UploadQueue,
                                      EVramCategory Category = EVramCategory::SceneTextures);
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;

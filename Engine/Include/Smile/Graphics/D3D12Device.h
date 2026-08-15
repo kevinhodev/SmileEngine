@@ -36,6 +36,12 @@ namespace Smile {
         bool RaytracingSupported() const { return IsRaytracingSupported; }
         bool TearingSupported() const { return IsTearingSupported; }
 
+        // Tier 1 exige heap SEPARADO para buffer, textura comum e textura RT/DS; Tier 2
+        // mistura os tres. Sem consumidor hoje (a engine so cria committed, que nao ve heap),
+        // mas e o gate de qualquer politica futura de placed resource ou pool — e o valor
+        // aparece no log do boot para nao ter de ser adivinhado num relatorio de bug.
+        D3D12_RESOURCE_HEAP_TIER HeapTier() const { return ResourceHeapTier; }
+
         const std::wstring& GetAdapterDescription() const { return AdapterDescription; }
         u64 GetAdapterDedicatedVideoMemory() const { return AdapterDedicatedVideoMemory; }
 
@@ -58,6 +64,7 @@ namespace Smile {
         u64                   AdapterDedicatedVideoMemory = 0;
         bool                  IsTearingSupported    = false;
         bool                  IsRaytracingSupported = false;
+        D3D12_RESOURCE_HEAP_TIER ResourceHeapTier   = D3D12_RESOURCE_HEAP_TIER_1;
         DWORD                 DebugCallbackCookie   = 0;
         bool                  DebugCallbackRegistered = false;
     };

@@ -1,0 +1,298 @@
+#pragma once
+
+#include "Smile/Core/Types.h"
+
+// POLITICA DO INDIRETO — quem produz o sinal, e quem responde quando ele nao consegue.
+//
+// Este header existe por causa de uma confusao MEDIDA, e nao por gosto de taxonomia. Ate a Fase 6
+// havia um unico `UseGI`, e a auditoria de abertura encontrou `UseGI && DDGI.IsReady()` repetido em
+// oito pontos do Renderer servindo TRES perguntas diferentes:
+//
+//   1. o passe do DDGI roda neste frame?          (grid, trace, update das sondas)
+//   2. o DDGI responde o miss do raio secundario? (FGIHitSampling::FallbackAvailable)
+//   3. o deferred e a nevoa leem o atlas?         (GITable, VolumetricFog)
+//
+// Sao independentes. A (3) e consumo VOLUMETRICO e sobrevive a qualquer decisao sobre GI de
+// superficie — fog precisa de irradiancia volumetrica e nao tem substituto no cache, que e
+// direcionalmente cego e esparso. A (2) e politica de FALLBACK. A (1) e orcamento.
+//
+// O custo da confusao nao foi teorico: durante a Fase 5 um gate foi escrito assumindo que `UseGI`
+// governava a execucao do ReSTIR GI. Nao governa — `ReSTIRGIActive = UseReSTIRGI &&
+// ReSTIRGI.IsReady()` —, e o resultado foi um botao inerte na UI. O nome mentia, e alguem
+// acreditou.
+namespace Smile {
+
+    // QUEM PRODUZ o indireto de superficie. Nao e escala de qualidade: sao estimadores
+    // diferentes, com historicos diferentes, e trocar entre eles invalida acumulador.
+    enum class EIndirectPrimary : u32 {
+        // ReSTIR GI com o radiance cache como terminador primario dos hits elegiveis. E o default
+        // desde a Fase 5, e o que a serie inteira mediu.
+        ReSTIR_SHaRC = 0,
+        // O volume DDGI como sinal principal de superficie. Continua alcancavel de proposito: e o
+        // ROLLBACK da serie, e o controle de A/B contra o qual as baselines da Fase 0 foram
+        // tiradas. Nao remover sem um gate que prove que ninguem precisa mais dele.
+        DDGI,
+        // Sem indireto de superficie. O direto continua inteiro; a nevoa continua lendo o atlas se
+        // o volume existir (ver a nota (3) acima).
+        Off
+    };
+
+    // QUEM RESPONDE quando o primario nao consegue — miss do cache, celula fria, ou geometria que
+    // o cache nao pode representar (segmento curto, cone estreito).
+    //
+    // A escolha aqui NAO e cosmetica, e a Fase 5 mediu o tamanho dela: o fallback responde 30,14%
+    // dos hits secundarios na Bistro exterior. Trocar DDGI por Black nao apaga 30% do brilho —
+    // apaga 30% dos CAMINHOS, e o que sobra e uma imagem mais escura de forma desigual.
+    enum class EIndirectFallback : u32 {
+        DDGI = 0,    // irradiancia do volume, quando ele existe
+        // ⚠️ DECLARADO, NAO IMPLEMENTADO. Nao ha cor de ambiente no cbuffer de um passe de RT, e o
+        // gather desvanece para preto fora do volume justamente por isso. O
+        // `Renderer::EffectiveFallback` DEGRADA este valor para Black enquanto for assim — pedi-lo
+        // e pedir Black, e reportar "environment" no manifesto seria publicar um estado que o
+        // shader nao produz. Ele fica no enum como intencao nomeada, e nao como pendencia
+        // escondida atras de um numero que ninguem honra.
+        Environment,
+        Black        // zero explicito; util para MEDIR de quanto o fallback e responsavel
+    };
+
+    // ============================================================================================
+    // DOIS CONTRATOS para quem consumir estes enums. Nenhum dos dois e opcional, e os dois saem de
+    // defeito ja pago nesta serie.
+    //
+    // 1. O MANIFESTO GRAVA OS DOIS: pedido E efetivo.
+    //
+    //    Gravar so o efetivo nao mente sobre a imagem — e essa era a tentacao —, mas apaga a
+    //    DEGRADACAO. Uma captura que diz `fallback: black` nao distingue "o operador pediu preto
+    //    para medir" de "pediu DDGI e nao havia volume" nem de "pediu Environment, que nao
+    //    existe". Sao tres configuracoes diferentes com o mesmo pixel, e a serie inteira mostrou
+    //    que duas capturas indistinguiveis na pasta sao um convite a compara-las.
+    //
+    //    Forma sugerida: `indirectFallbackRequested` + `indirectFallbackEffective`. Iguais na
+    //    maioria dos frames; quando divergem, e a divergencia que interessa.
+    //
+    // 2. MUDANCA DO EFETIVO INVALIDA OS CONSUMIDORES — inclusive a que ninguem pediu.
+    //
+    //    ⚠️ A armadilha esta aqui: o efetivo muda SEM passar por setter nenhum. Basta o volume
+    //    aparecer ou sumir (carga de cena, resize que recria o DDGI, `UseGI` mexido noutro
+    //    caminho) para `EffectiveFallback` ir de DDGI a Black e voltar — e isso troca o terminador
+    //    do raio secundario para todo mundo, que e exatamente o evento que obriga ReSTIR GI, atlas
+    //    do DDGI e NRD a esquecer.
+    //
+    //    Logo NAO basta invalidar no setter do enum: e preciso um DETECTOR DE BORDA sobre o valor
+    //    efetivo, avaliado por frame, no topo — mesmo desenho do aquecimento do radiance cache
+    //    (latch + consumidor no Renderer + invalidacao dos consumidores). Aquele levou quatro
+    //    rodadas de revisao para ficar certo; este comeca sabendo onde as pedras estao:
+    //    o detector roda antes de qualquer consumidor publicar cbuffer, e o latch descreve a
+    //    mudanca EFETIVA e nao a transicao de estado.
+    //
+    //    2a. O PRIMEIRO valor observado apenas INICIALIZA. `uninitialized -> DDGI` nao e borda:
+    //        nada mudou, so passou a existir observador. Tratado como borda, ele invalidaria
+    //        historico no primeiro frame de toda cena e — pior — cancelaria a sessao de captura
+    //        recem-aberta, porque a invalidacao passa pelo funil. O estado anterior nasce
+    //        indefinido e a primeira leitura o preenche em silencio.
+    //
+    //    2b. A MASCARA depende de POR QUE o efetivo mudou, e nao so de que mudou. As tres
+    //        perguntas do topo deste arquivo voltam aqui:
+    //
+    //          - trocou o FALLBACK com o volume ainda vivo (ex.: DDGI -> Black): muda o terminador
+    //            do raio secundario, entao ReSTIR GI, reflexoes, NRD **e o atlas** esquecem — as
+    //            sondas tracam pelo mesmo `ShadeSurfaceHit` e terminam no mesmo fallback.
+    //          - trocou o PRIMARIO: muda quem produz o indireto na TELA. Nenhum raio muda de
+    //            destino, entao o atlas fica de pe.
+    //          - sumiu ou apareceu o VOLUME: a fonte da nevoa mudou de verdade.
+    //
+    //        ⚠️ ESTA NOTA DIZIA "a nevoa NAO — ela le o atlas direto e continua lendo exatamente o
+    //        mesmo", e a frase estava errada no primeiro caso. Ela trata o atlas como recurso
+    //        estatico que se le, quando ele e tambem um ACUMULADOR e um consumidor da politica:
+    //        derrubar o atlas move o chao da nevoa, que reprojetaria inscatter somado sobre o atlas
+    //        convergido contra um atlas de volta ao primeiro trace. A regra correta e mais simples
+    //        de lembrar: **quem reseta o atlas leva a nevoa junto**.
+    //
+    //        FEITO, em TRES dominios e nao dois: `HistoryDomain::IndirectTerminator` (com atlas e
+    //        nevoa), `IndirectSurfaceRoute` (sem os dois) e `IndirectVolumetricSource`. As bordas
+    //        sao avaliadas de forma INDEPENDENTE e as mascaras se somam.
+    // ============================================================================================
+
+    // ============================================================================================
+    // 3. CADA CALL SITE TERMINA NUMA PERGUNTA NOMEADA. Sao quatro, e nenhuma e sinonimo de outra:
+    //
+    //      Renderer::DDGIVolumeLive()            -> executar/manter o volume    (orcamento)
+    //      Renderer::EffectiveFallback() == DDGI -> fallback dos RAIOS           (politica)
+    //      Renderer::DDGISurfaceAvailable()      -> deferred, folhagem/subsurface,
+    //                                               translucidos e debug de GI   (consumo)
+    //      Renderer::DDGIVolumetricAvailable()   -> SOMENTE nevoa/volume         (consumo)
+    //      Renderer::EffectivePrimary()          -> roteamento principal         (estimador)
+    //
+    //    Duas delas devolvem o MESMO booleano hoje (`VolumeLive` e `VolumetricAvailable`), e isso
+    //    nao e duplicacao a eliminar: e o contrato. O dia em que a politica de superficie disser
+    //    Black com o volume vivo, a nevoa continua lendo — e nenhum call site volumetrico precisa
+    //    mudar, porque ele ja pergunta a coisa certa. Colapsar as duas por serem iguais AGORA
+    //    reintroduz exatamente a confusao que custou esta fase.
+    //
+    //    Criterio de revisao para a classificacao: se um `UseGI` sobreviver, ou se alguem escrever
+    //    `DDGIVolumeLive()` num ponto volumetrico, a classificacao falhou mesmo com a imagem
+    //    identica.
+    //
+    //    CLASSIFICACAO (Renderer.cpp): DEZ pontos — 3 de volume, 4 de superficie, 2 volumetricos e
+    //    1 de fallback. A auditoria de abertura contou sete e a primeira revisao contou nove; a
+    //    lista abaixo e a fonte, e a soma dela e que vale.
+    //
+    //      EXECUCAO DO VOLUME  -> DDGIVolumeLive()
+    //        HasReGIRConsumer      o trace do DDGI consome ReGIR? (orcamento do pool)
+    //        DDGIWillTrace         o passe vai tracar neste frame
+    //        bloco do GIComputeFence  bifurcacao para a fila compute
+    //
+    //      CONSUMO DE SUPERFICIE -> DDGISurfaceAvailable()
+    //        CB do frame           DDGIGridMin/Count/Params/DistParams — lidos pelo DEFERRED e
+    //                              pelo ForwardBlend
+    //        GITable do deferred   GI primaria, fill de folhagem, termo traseiro de subsurface
+    //        GITable dos TRANSLUCIDOS  ambiente difuso do ForwardBlend (nao e o debug view!)
+    //        DeferredDebugView     a visualizacao de GI, que e de superficie
+    //
+    //      CONSUMO VOLUMETRICO -> DDGIVolumetricAvailable()
+    //        CB da nevoa           VF.* com grid e atlas
+    //        VolumetricFog::Execute  SRV do atlas de irradiancia
+    //
+    //    ⚠️ A PRIMEIRA VERSAO DESTA CLASSIFICACAO ERROU AQUI, e o erro merece ficar: ela pos os
+    //    quatro pontos de superficie em "volumetrico" porque todos LEEM O ATLAS. Ler o atlas nao e
+    //    a categoria — o USO e. A nevoa integra meio participante; o deferred sombreia superficie,
+    //    e os dois respondem a politicas diferentes. Com `primario = Off`, um helper chamado
+    //    "volumetrico" continuaria iluminando superficie: imagem identica hoje, mentira no dia da
+    //    divergencia. Foi o segundo ponto do arquivo em que "todos devolvem o mesmo booleano"
+    //    quase apagou uma distincao real.
+    //
+    //      POLITICA DE FALLBACK -> EffectiveFallback() == DDGI
+    //        GIHit.FallbackAvailable   ✅ ja convertido
+    //
+    //      ROTEAMENTO PRINCIPAL -> EffectivePrimary()
+    //        Modes.ReSTIRGIActive      o estimador de superficie roda? Dele caem trace,
+    //                                  resampling, NRD indireto, a t16 do deferred e o registro
+    //                                  do passe na telemetria.
+    //        DDGISurfaceAvailable()    `!= Off` — o atlas ilumina superficie enquanto EXISTIR
+    //                                  indireto de superficie, seja ele quem for (ver secao 4).
+    //
+    //    Os dois entraram com o seletor. Ate ele, a pergunta nao tinha call site nenhum, e a
+    //    ausencia era informacao: o enum existia sem rotear nada.
+    //
+    // ============================================================================================
+    // 4. O TERCEIRO PAPEL DO DDGI: AUXILIAR DE SUPERFICIE.
+    //
+    //    A taxonomia tinha dois papeis para o atlas em superficie — primario e fallback dos raios
+    //    — e falta um. Mesmo com `primario = ReSTIR_SHaRC`, o DDGI segue atendendo TRES consumos
+    //    de superficie que ninguem mais atende:
+    //
+    //      - fill de folhagem;
+    //      - termo traseiro de subsurface;
+    //      - TRANSLUCIDOS do ForwardBlend, que nao recebem a textura do ReSTIR GI.
+    //
+    //    Consequencia direta para o seletor: `DDGISurfaceAvailable()` NAO pode virar
+    //    `EffectivePrimary() == DDGI`. Se virar, escolher SHaRC apaga as tres de uma vez e em
+    //    silencio — uma mudanca de imagem que ninguem pediu, escondida dentro de uma mudanca de
+    //    politica que prometia so trocar o terminador dos raios.
+    //
+    //    A regra: `DDGIVolumeLive() && EffectivePrimary() != Off`. O atlas ilumina superficie
+    //    enquanto EXISTIR indireto de superficie, seja ele quem for.
+    //
+    //    ⚠️ E ISSO MUDA COMO O MANIFESTO SE LE: `fallback: black` NAO significa "nenhum DDGI em
+    //    superficie" enquanto os auxiliares existirem. Ele descreve o terminador dos RAIOS.
+    //
+    //    OS ESTADOS ALCANCAVEIS, para ninguem escolher o errado achando que isolou alguma coisa:
+    //
+    //      ReSTIR_SHaRC + fallback Black + volume vivo
+    //          SHaRC nos raios, sem DDGI como terminador. Os AUXILIARES continuam (folhagem,
+    //          subsurface, translucidos) e a nevoa tambem.
+    //      ReSTIR_SHaRC + volume desligado
+    //          SHaRC sem nenhum DDGI em superficie — mas a VOLUMETRIA perde o atlas junto, entao
+    //          a nevoa muda tambem e a medida deixa de ser so sobre superficie.
+    //      Primary = Off
+    //          nenhum indireto de superficie. Isto NAO isola o DDGI: apaga o SHaRC tambem.
+    //
+    //    ⚠️ "SHaRC sem DDGI em superficie, MANTENDO o DDGI na nevoa" NAO E ALCANCAVEL hoje. Ele
+    //    exige um toggle/papel explicito para o auxiliar de superficie, e nao existe. Nao inventar
+    //    um estado equivalente com os knobs atuais — nenhum deles faz isso, e a versao anterior
+    //    desta nota afirmava que `Primary = Off` fazia, o que apagaria o SHaRC junto.
+    // ============================================================================================
+    // ============================================================================================
+
+    // ORDEM DE RESOLUCAO — invariante, e o que impede um ciclo:
+    //
+    //   1. `EffectivePrimary()` deriva SO de pedido + capacidades (`UseReSTIRGI`, readiness do
+    //      passe, volume vivo). NUNCA de `FFrameModes` — o modo e consequencia dela, nao insumo.
+    //   2. O snapshot efetivo e resolvido UMA vez, no topo do frame.
+    //   3. `FFrameModes`, cbuffers, invalidacao e manifesto consomem esse MESMO snapshot.
+    //   4. O snapshot ANTERIOR so e atualizado depois de a politica do frame estar fixada — nunca
+    //      dentro da comparacao. Atualizar antes apaga a borda para quem ler depois no frame.
+    //
+    // Sem (1) a funcao perguntaria ao modo que ela define; sem (2)+(3) a captura poderia observar
+    // uma politica diferente da que renderizou o frame.
+    //
+    // Corolario para o seletor: `primario = DDGI` nao pode se limitar a fechar a leitura no
+    // shader. `Modes.ReSTIRGIActive` sai do snapshot, e com ele caem trace, resampling, NRD
+    // indireto e o registro do passe na telemetria — senao o frame paga por trabalho que ninguem
+    // le, e o manifesto conta um participante que nao participou.
+    //
+    // Degradacao do primario: ReSTIR_SHaRC pedido -> ReSTIR_SHaRC se pronto; senao DDGI se o
+    // volume estiver vivo; senao Off.
+
+    // O estado EFETIVO do frame, num valor comparavel. E o que o detector de borda observa: a
+    // imagem muda com qualquer um destes campos, e nao so com o fallback.
+    //
+    // `FallbackActive` = existe raio que consome o fallback — e NAO e so o ReSTIR GI. A primeira
+    // versao deste campo dizia `Primary == ReSTIR_SHaRC`, e subcontava: o `ShadeSurfaceHit` e
+    // compartilhado, entao o `PT_SampleIndirectFallback` responde o miss dos CINCO traces de
+    // render (ReSTIR GI, as tres reflexoes e o 2o bounce das sondas). Com primario DDGI, trocar o
+    // fallback de DDGI para Black mudava o terminador das reflexoes e o detector nao via borda
+    // nenhuma. O campo e lido pelo `TerminatorDiffers`, que decide se as REFLEXOES e o ATLAS
+    // esquecem — logo ele tem de contar os raios dos dois.
+    //
+    // `VolumeLive` e a pergunta de ORCAMENTO (o passe do DDGI roda). Nenhum comparador o le, e
+    // isso e verdade derivada e nao descuido: hoje `DDGIVolumetric == VolumeLive` por definicao,
+    // entao toda borda dele ja aparece no `VolumetricDiffers`. No dia em que as duas divergirem,
+    // este campo precisa de comparador proprio — ele esta aqui para o frame inteiro ler a mesma
+    // resposta, que e a invariante (2)+(3) abaixo.
+    struct FEffectiveIndirectPolicy {
+        EIndirectPrimary  Primary        = EIndirectPrimary::Off;
+        EIndirectFallback Fallback       = EIndirectFallback::Black;
+        bool              FallbackActive = false; // ha raio consumindo o fallback
+        bool              VolumeLive     = false; // o passe do DDGI roda neste frame (orcamento)
+        bool              DDGISurface    = false; // auxiliares: folhagem, subsurface, translucidos
+        bool              DDGIVolumetric = false; // nevoa
+
+        // TRES perguntas, e nao duas. A primeira versao tinha um `SurfaceDiffers` so, juntando
+        // primario e fallback — e isso derrubava o ATLAS por troca de primario, que nao mexe em
+        // sonda nenhuma. Cada uma invalida um dominio diferente do HistoryDomain.h.
+
+        // O que os raios secundarios encontram no MISS. Muda o conteudo de tudo que acumula
+        // radiancia tracada — o atlas do DDGI inclusive, porque o 2o bounce das sondas termina no
+        // mesmo lugar. E como este e o unico que reseta o atlas, e o unico que arrasta a nevoa
+        // junto (ver nota 2b).
+        bool TerminatorDiffers(const FEffectiveIndirectPolicy& O) const {
+            return FallbackActive != O.FallbackActive ||
+                   (FallbackActive && Fallback != O.Fallback);
+        }
+        // QUEM produz o indireto de superficie na tela, e se o atlas ainda o ilumina. Nao move raio
+        // nenhum: o que as sondas e as reflexoes tracam sai do fallback e do volume vivo, nunca do
+        // primario. O atlas fica de pe, e a nevoa nao e notificada.
+        bool SurfaceRouteDiffers(const FEffectiveIndirectPolicy& O) const {
+            return Primary != O.Primary || DDGISurface != O.DDGISurface;
+        }
+        bool VolumetricDiffers(const FEffectiveIndirectPolicy& O) const {
+            return DDGIVolumetric != O.DDGIVolumetric;
+        }
+    };
+
+    inline const char* IndirectPrimaryName(EIndirectPrimary P) {
+        switch (P) {
+            case EIndirectPrimary::ReSTIR_SHaRC: return "restir_sharc";
+            case EIndirectPrimary::DDGI:         return "ddgi";
+            default:                             return "off";
+        }
+    }
+    inline const char* IndirectFallbackName(EIndirectFallback F) {
+        switch (F) {
+            case EIndirectFallback::DDGI:        return "ddgi";
+            case EIndirectFallback::Environment: return "environment";
+            default:                             return "black";
+        }
+    }
+}

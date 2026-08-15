@@ -33,6 +33,16 @@ cbuffer ReflectionCB : register(b0) {
     row_major float4x4 ViewProj;
     float4 WaterEnvironmentParams;
     float4 SkyParams;       // x = view height (km), y = raio do planeta (km) — ver ShadeSky
+    // Sem bit de update (radiancia direcional) — ver ReflectionTrace.cs.hlsl.
+    float4 RadianceCacheCamCell;
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
+    // Cascatas do DDGI, consumidas pelo gather do 2o bounce no HitShading (contrato por NOME).
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
+    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
+    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
+    float4 GICascadeScrollOffset[4];
 };
 
 // Ver ReflectionTrace.cs.hlsl: politica por passe, no molde do Context.CullingMode do Lumen.
@@ -132,7 +142,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     P.SunColor       = SunColor.rgb;        P.ShadowRayBias = TraceParams.w;
     P.SkyIntensity   = TraceParams.z;       P.MaxRayDist   = TraceParams.y;
     P.AlbedoLOD      = ReflectParams.w;
-    P.RealHitShading = ReflectParams.z > 0.5f;
     P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
     P.ShadowRayMask  = (uint)SunColor.w;
     P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
@@ -147,6 +156,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    // ZERO: hit direcional e consumido uma vez (ver ReflectionTrace.cs.hlsl).
+    P.RoughnessMin       = 0.0f;
+    P.CacheRayRoughness  = roughness;
+    RC_UNPACK_PARAMS(P);
 
     float3 radiance;
     float  hitDist = TraceParams.y;

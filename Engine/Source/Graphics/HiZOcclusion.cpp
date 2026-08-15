@@ -1,10 +1,11 @@
 #include "Smile/Graphics/HiZOcclusion.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Barriers.h"
-#include "Smile/Graphics/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -16,32 +17,10 @@ namespace Smile {
             return P;
         }
 
-        ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* _Device, u64 _Size,
-                                            D3D12_HEAP_TYPE _Heap,
-                                            D3D12_RESOURCE_STATES _State,
-                                            D3D12_RESOURCE_FLAGS _Flags) {
-            D3D12_HEAP_PROPERTIES Heap{};
-            Heap.Type = _Heap;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = _Size;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            Desc.Flags            = _Flags;
-            ComPtr<ID3D12Resource> Buffer;
-            SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     _State, nullptr, IID_PPV_ARGS(&Buffer)));
-            return Buffer;
-        }
     }
 
     void FHiZOcclusion::Initialize(ID3D12Device* _Device) {
-        BuildPSO.Initialize(_Device, "HZBBuild.cs_6_0.cso", false);
-        TestPSO.Initialize(_Device, "HZBTest.cs_6_0.cso", 2, 1);
+        CreatePipelines(_Device);
         Initialized = true;
     }
 
@@ -72,23 +51,11 @@ namespace Smile {
         while (((HZBWidth >> NumMips) > 0 || (HZBHeight >> NumMips) > 0) && NumMips < kMaxMips)
             ++NumMips;
 
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = HZBWidth;
-        Desc.Height           = HZBHeight;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = static_cast<UINT16>(NumMips);
-        Desc.Format           = DXGI_FORMAT_R32_FLOAT;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        SMILE_HR(_Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
-                 IID_PPV_ARGS(&HZB)));
-        VramTracker::Register(HZB.Get(), EVramCategory::RenderTargets);
+        HZB = GpuResources::CreateTex2D(
+            _Device, HZBWidth, HZBHeight, DXGI_FORMAT_R32_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, EVramCategory::RenderTargets,
+            nullptr, NumMips, 1, "HZB de oclusao");
 
         for (u32 m = 0; m < NumMips; ++m) {
             MipSRVSlot[m] = _SRVHeap.Allocate(1);
@@ -145,36 +112,31 @@ namespace Smile {
         ObjectCapacity = _MaxObjects;
 
         const u64 BoundsSize = static_cast<u64>(kSlots) * ObjectCapacity * sizeof(FBoundsEntry);
-        BoundsBuffer = CreateBuffer(_Device, BoundsSize, D3D12_HEAP_TYPE_UPLOAD,
-                                    D3D12_RESOURCE_STATE_GENERIC_READ,
-                                    D3D12_RESOURCE_FLAG_NONE);
-        D3D12_RANGE NoRead{ 0, 0 };
+        const GpuResources::FUploadBuffer Bounds =
+            GpuResources::CreateUploadBuffer(_Device, BoundsSize, 1, false);
+        BoundsBuffer = Bounds.Resource;
+        MappedBounds = Bounds.Mapped;
         void* P = nullptr;
-        SMILE_HR(BoundsBuffer->Map(0, &NoRead, &P));
-        MappedBounds = reinterpret_cast<u8*>(P);
         std::memset(MappedBounds, 0, BoundsSize); // Extent 0 = sempre visivel
 
-        ResultBuffer = CreateBuffer(_Device, static_cast<u64>(ObjectCapacity) * sizeof(u32),
-                                    D3D12_HEAP_TYPE_DEFAULT,
-                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ResultBuffer = GpuResources::CreateBuffer(
+            _Device, static_cast<u64>(ObjectCapacity) * sizeof(u32),
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, EVramCategory::Misc,
+            "Resultado do culling");
         ResultState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-        ReadbackBuffer = CreateBuffer(_Device,
-                                      static_cast<u64>(kSlots) * ObjectCapacity * sizeof(u32),
-                                      D3D12_HEAP_TYPE_READBACK,
-                                      D3D12_RESOURCE_STATE_COPY_DEST,
-                                      D3D12_RESOURCE_FLAG_NONE);
+        ReadbackBuffer = GpuResources::CreateReadbackBuffer(
+            _Device, static_cast<u64>(kSlots) * ObjectCapacity * sizeof(u32));
         // Map persistente: heap READBACK aceita; a leitura por slot so acontece depois
         // do WaitForValue da fence do slot no BeginFrame (mesmo padrao do GpuProfiler).
         SMILE_HR(ReadbackBuffer->Map(0, nullptr, &P));
         MappedReadback = reinterpret_cast<const u32*>(P);
 
-        TestCB = CreateBuffer(_Device, static_cast<u64>(kSlots) * 256,
-                              D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
-                              D3D12_RESOURCE_FLAG_NONE);
-        SMILE_HR(TestCB->Map(0, &NoRead, &P));
-        MappedTestCB = reinterpret_cast<u8*>(P);
+        const GpuResources::FUploadBuffer Test =
+            GpuResources::CreateUploadBuffer(_Device, 256, kSlots);
+        TestCB       = Test.Resource;
+        MappedTestCB = Test.Mapped;
 
         ResultUAVSlot = _SRVHeap.Allocate(1);
         D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
@@ -326,4 +288,20 @@ namespace Smile {
     void FHiZOcclusion::InvalidateResults() {
         for (u32 s = 0; s < kSlots; ++s) SlotMeta[s].Valid = false;
     }
+
+    void FHiZOcclusion::CreatePipelines(ID3D12Device* _Device) {
+        BuildPSO.Initialize(_Device, "HZBBuild.cs_6_0.cso", false);
+        TestPSO.Initialize(_Device, "HZBTest.cs_6_0.cso", 2, 1);
+    }
+
+
+    FPassShaderStems FHiZOcclusion::ShaderStems() const {
+        static const char* const kStems[] = { "HZBBuild.cs", "HZBTest.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FHiZOcclusion::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

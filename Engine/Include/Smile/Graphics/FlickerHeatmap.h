@@ -3,6 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -13,8 +14,13 @@ namespace Smile {
     // EMA de luma e luma^2 num buffer persistente (Stats); std = sqrt(E[x^2]-E[x]^2) -> colormap.
     // Pass fullscreen que LE a cor HDR (saida do TAA) via SRV e ESCREVE o heatmap num Output RT
     // proprio (que vira a entrada do bloom/tonemap quando ligado). So roda quando Mode > 0.
-    class FFlickerHeatmap {
+    class FFlickerHeatmap : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Heatmap de flicker"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         struct alignas(256) FlickerConstants {
             f32 Alpha;     // peso do frame atual na EMA
             f32 HeatScale; // std -> [0,1]
@@ -36,7 +42,7 @@ namespace Smile {
 
         ID3D12Resource* OutputResource() const { return Output.Get(); }
         u32             OutputSRVSlot() const  { return OutputSRVSlot_; }
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
     private:
         void BuildRootSignature(ID3D12Device* Device);

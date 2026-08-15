@@ -1,4 +1,5 @@
 #include "Smile/Graphics/MaterialPreview.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/Material.h"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -248,64 +250,37 @@ namespace Smile {
     }
 
     void FMaterialPreview::CreateTargets(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES DefaultHeap{};
-        DefaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
         {
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = kSize;
-            Desc.Height           = kSize;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = kColorFormat;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
             D3D12_CLEAR_VALUE Clear{};
             Clear.Format = kColorFormat;
 
-            SMILE_HR(_Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&ColorTarget)));
+            ColorTarget = GpuResources::CreateTex2D(
+                _Device, kSize, kSize, kColorFormat,
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, EVramCategory::Misc, &Clear,
+                1, 1, "Preview de material");
 
             RTVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
             _Device->CreateRenderTargetView(ColorTarget.Get(), nullptr, RTVHeap.CpuHandle(0));
         }
 
         {
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            Desc.Width            = kSize;
-            Desc.Height           = kSize;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = kDepthFormat;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
             D3D12_CLEAR_VALUE Clear{};
             Clear.Format             = kDepthFormat;
             Clear.DepthStencil.Depth = 1.0f;
 
-            SMILE_HR(_Device->CreateCommittedResource(&DefaultHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_DEPTH_WRITE, &Clear, IID_PPV_ARGS(&DepthTarget)));
+            DepthTarget = GpuResources::CreateTex2D(
+                _Device, kSize, kSize, kDepthFormat,
+                D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE, EVramCategory::Misc, &Clear,
+                1, 1, "Preview de material");
 
             DSVHeap.Initialize(_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
             _Device->CreateDepthStencilView(DepthTarget.Get(), nullptr, DSVHeap.CpuHandle(0));
         }
 
         {
-            D3D12_HEAP_PROPERTIES ReadbackHeap{};
-            ReadbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = u64(kMaxRowPitch) * kSize;
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            const u64 ReadbackBytes = u64(kMaxRowPitch) * kSize;
 
             for (FReadbackSlot& Slot : ReadbackSlots) {
                 SMILE_HR(_Device->CreateCommandAllocator(
@@ -314,31 +289,21 @@ namespace Smile {
                     0, D3D12_COMMAND_LIST_TYPE_DIRECT, Slot.Allocator.Get(), nullptr,
                     IID_PPV_ARGS(&Slot.CommandList)));
                 SMILE_HR(Slot.CommandList->Close());
-                SMILE_HR(_Device->CreateCommittedResource(
-                    &ReadbackHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&Slot.Readback)));
+                Slot.Readback = GpuResources::CreateReadbackBuffer(_Device, ReadbackBytes);
             }
             SMILE_HR(_Device->CreateFence(
                 0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&ReadbackFence)));
         }
 
         {
-            D3D12_HEAP_PROPERTIES UploadHeap{};
-            UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-            D3D12_RESOURCE_DESC Desc{};
-            Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-            Desc.Width            = static_cast<u64>(kReadbackSlots) *
-                                    (sizeof(FMeshCB) + sizeof(FSkyCB) +
-                                     sizeof(MaterialConstants));
-            Desc.Height           = 1;
-            Desc.DepthOrArraySize = 1;
-            Desc.MipLevels        = 1;
-            Desc.Format           = DXGI_FORMAT_UNKNOWN;
-            Desc.SampleDesc       = { 1, 0 };
-            Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            SMILE_HR(_Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-            SMILE_HR(ConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&MappedCB)));
+            // Bloco unico com os tres CBs por slot em sequencia (layout proprio, escrito a
+            // mao no Submit), nao um slice por frame — dai SliceCount 1.
+            const u64 Bytes = static_cast<u64>(kReadbackSlots) *
+                              (sizeof(FMeshCB) + sizeof(FSkyCB) + sizeof(MaterialConstants));
+            const GpuResources::FUploadBuffer Upload =
+                GpuResources::CreateUploadBuffer(_Device, Bytes, 1, false);
+            ConstantBuffer = Upload.Resource;
+            MappedCB       = Upload.Mapped;
         }
     }
 
@@ -548,4 +513,14 @@ namespace Smile {
         Ready->RowPitch   = 0;
         return true;
     }
+
+    FPassShaderStems FMaterialPreview::ShaderStems() const {
+        static const char* const kStems[] = { "MaterialPreview.vs", "MaterialPreview.ps", "PreviewSky.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FMaterialPreview::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (MeshPSO) BuildPSOs(_Ctx.Device);
+    }
+
 }

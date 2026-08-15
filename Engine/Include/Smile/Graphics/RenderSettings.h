@@ -6,6 +6,8 @@
 #include "Smile/Graphics/Upscaler.h"
 #include "Smile/Graphics/RayEpsilons.h"
 #include "Smile/Graphics/HistoryDomain.h"
+// Enums por VALOR nos getters de politica; o header e folha (so Core/Types.h), sem ciclo.
+#include "Smile/Graphics/IndirectPolicy.h"
 
 // Fachada unica dos knobs de render.
 //
@@ -34,6 +36,10 @@
 namespace Smile {
 
     class Renderer;
+    // So a referencia de retorno precisa do tipo aqui; a definicao chega pelo Renderer.h no .cpp.
+    struct FRadianceCacheStats;
+    struct FRadianceCacheStatsMeta;
+    struct FRadianceCacheSnapshot;
 
     class FRenderSettings {
     public:
@@ -84,6 +90,127 @@ namespace Smile {
         void SetUseReGIR(bool V);
         bool GetUseReGIR() const;
         bool ReGIRActive() const;
+
+        // --- World radiance cache -------------------------------------------------------
+        // Enabled e Query sao knobs separados de proposito: o A/B util e ligar so a ESCRITA,
+        // deixar a tabela encher alguns segundos, e so entao ligar a LEITURA. Ligando os dois
+        // juntos, os primeiros frames consultam uma tabela vazia e o resultado parece bug.
+        void SetRadianceCacheEnabled(bool V);
+        bool GetRadianceCacheEnabled() const;
+        void SetRadianceCacheQuery(bool V);
+        bool GetRadianceCacheQuery() const;
+        // QUEM alimenta a tabela: o passe dedicado da Fase 3 (true) ou os hits do render (false).
+        // Nao e ajuste de qualidade — sao dois ESTIMADORES. O antigo aprendia um sinal cujo
+        // terminador era o DDGI; o dedicado traca do G-buffer e nunca le sonda. Invalida.
+        void SetRadianceCacheDedicatedUpdate(bool V);
+        bool GetRadianceCacheDedicatedUpdate() const;
+        // Fracao dos pixels que lanca caminho por frame no passe dedicado (0,04 = o numero
+        // publicado do Cyberpunk). Quantizada em 1/25 pela permutacao do tile 5x5. NAO invalida:
+        // muda so a taxa de amostragem, e o que ja esta na tabela continua valendo.
+        void SetRadianceCacheUpdateFraction(f32 V);
+        f32  GetRadianceCacheUpdateFraction() const;
+        // Terminal do caminho de update no cache resolvido: e o que torna o update multi-bounce
+        // NO TEMPO (L = direta + f*L_anterior). Desligar isola a realimentacao — o raio do
+        // terminal e o ceu continuam saindo, so a consulta ao Resolved fecha. Invalida: a energia
+        // guardada nos dois regimes e diferente, e a media que misturasse os dois nao seria nenhum.
+        void SetRadianceCacheUsePrevTerminal(bool V);
+        bool GetRadianceCacheUsePrevTerminal() const;
+        // Vertices SOMBREADOS por caminho de update (1..4). Custo em raios = V + 1. Com 1 o passe
+        // reproduz o produtor de um bounce, e e esse o A/B do multi-bounce. Invalida: o que a
+        // celula guarda em cada regime e diferente.
+        void SetRadianceCacheMaxVertices(u32 V);
+        u32  GetRadianceCacheMaxVertices() const;
+        // Piso de roughness do lobo que CHEGA para o vertice ser gravavel. INVALIDA: o que muda e
+        // o que a celula promete conter, e as amostras estreitas ja aceitas continuariam na media.
+        void SetRadianceCacheMinCacheableRoughness(f32 V);
+        f32  GetRadianceCacheMinCacheableRoughness() const;
+        // Piso de CONFIANCA (1..16): amostras minimas para a celula poder ENCERRAR um caminho. Com
+        // 1 o cache volta ao comportamento anterior a Fase 4, em que uma unica amostra de path
+        // tracer era servida como radiancia convergida. INVALIDA: o terminal do updater consulta
+        // com este piso, entao ele decide tambem o que a celula GUARDA.
+        void SetRadianceCacheMinSampleCount(u32 V);
+        u32  GetRadianceCacheMinSampleCount() const;
+        // Aquecimento GLOBAL automatico (Resetting -> Filling -> Active): a consulta de render so
+        // abre quando a tabela ja tem celulas confiaveis suficientes. Desligar reproduz o regime
+        // anterior, em que a consulta seguia so o toggle acima — e esse e o braco de A/B. Invalida
+        // os CONSUMIDORES, nao a tabela, pelo mesmo motivo do toggle de query.
+        void SetRadianceCacheAutoWarmup(bool V);
+        bool GetRadianceCacheAutoWarmup() const;
+        // Estado atual do aquecimento e ha quantos frames ele esta enchendo (0 fora de Filling).
+        const char* RadianceCacheWarmupName() const;
+        u32  RadianceCacheWarmupFrames() const;
+        // A consulta ao cache mudou sem passar por setter nenhum — o aquecimento a abriu, ou um
+        // reload de shader a fechou. Chamada pelo Renderer no TOPO do frame: derruba o historico
+        // dos CONSUMIDORES, porque o terminador do raio secundario acabou de trocar. Mesma
+        // invalidacao do toggle manual de leitura, nos dois sentidos.
+        void NotifyRadianceCacheQueryChanged();
+        // Politica do indireto (Fase 6). Os getters de EFETIVO devolvem o que o pipeline fez —
+        // pedido degradado pelo que existe. Ver IndirectPolicy.h.
+        //
+        // Os SETTERS nao invalidam nada, e isso e desenho e nao esquecimento: o valor efetivo muda
+        // sem passar por setter nenhum (basta o volume aparecer ou sumir), entao a invalidacao mora
+        // no DETECTOR DE BORDA do topo do frame, que cobre os dois caminhos com uma regra so.
+        // Invalidar aqui tambem produziria invalidacao dupla no caminho que passa pelo setter.
+        void SetIndirectPrimary(EIndirectPrimary V);
+        EIndirectPrimary  GetIndirectPrimary() const;
+        EIndirectPrimary  EffectiveIndirectPrimary() const;
+        void SetIndirectFallback(EIndirectFallback V);
+        EIndirectFallback GetIndirectFallback() const;
+        EIndirectFallback EffectiveIndirectFallback() const;
+        // A politica EFETIVA mudou entre dois frames. Chamada pelo Renderer no topo do frame, com
+        // o que de fato diferiu — a MASCARA mora aqui, como a de todos os outros eventos, para as
+        // tres bordas nao poderem divergir uma da outra.
+        //
+        // Sao TRES e nao duas, e a diferenca custou um achado: `Terminator` (o fallback trocou —
+        // move os cinco traces E o atlas, e por isso leva a nevoa junto) e `Route` (trocou quem
+        // produz na tela — nao move raio nenhum, entao o atlas fica). Junta-las derrubava o atlas
+        // por troca de primario. As tres sao independentes e podem vir juntas no mesmo frame.
+        void NotifyIndirectPolicyChanged(bool Terminator, bool Route, bool Volumetric);
+        // Mapa por pixel da FONTE do candidato tracado pelo ReSTIR GI (cache / DDGI / zero / ceu /
+        // morto). E do FReSTIRGI, e nao do cache, mas mora aqui junto do resto do diagnostico de
+        // GI. Nao invalida historico — so pinta um alvo de debug. Re-registra os alvos, porque o
+        // alvo so e oferecido enquanto alguem o enche.
+        void SetGISourceDebug(bool V);
+        bool GetGISourceDebug() const;
+        // Desliga o mapa quando o passe que o escreve para de rodar (ReSTIR GI ou GI global
+        // desligados). Publico porque as duas bordas chamam; ver o corpo para o porque de desligar
+        // em vez de calcular um estado efetivo.
+        void DropGISourceDebugIfOrphaned();
+        // Instrumentacao de acerto/erro: custa atomicos em todo trace do frame. Nao invalida
+        // historico — so mede.
+        void SetRadianceCacheStatsEnabled(bool V);
+        bool GetRadianceCacheStatsEnabled() const;
+        // Detalhe: misses por MOTIVO e saude da insercao (balde cheio, sondagens). Terceiro
+        // regime de medicao, nao um detalhe do segundo — soma atomicos por cima e por isso entra
+        // no manifesto e na etiqueta. Nao invalida historico; cancela captura em curso.
+        void SetRadianceCacheStatsDetailEnabled(bool V);
+        bool GetRadianceCacheStatsDetailEnabled() const;
+        // FONTE do terminal por hit de render: cache / DDGI / zero / inelegivel, mutuamente
+        // exclusivos e com denominador proprio. QUARTO regime de medicao — o `Sd` fica congelado
+        // como referencia historica. Nao invalida historico; cancela captura em curso.
+        void SetRadianceCacheStatsSourceEnabled(bool V);
+        bool GetRadianceCacheStatsSourceEnabled() const;
+        // Mudam a CHAVE do hash: todo valor guardado passa a viver noutra celula, entao o
+        // conteudo antigo vira lixo enderecado errado. Invalidam.
+        void SetRadianceCacheCellSize(f32 V);
+        f32  GetRadianceCacheCellSize() const;
+        void SetRadianceCacheLodDistance(f32 V);
+        f32  GetRadianceCacheLodDistance() const;
+        // So visualizacao: nao toca no que os traces leem.
+        void SetRadianceCacheDebugMode(u32 V);
+        u32  GetRadianceCacheDebugMode() const;
+        void ResetRadianceCache();
+        const FRadianceCacheStats& RadianceCacheStats() const;
+        // Validade e regime DO SNAPSHOT acima. Ler os dois juntos nao e recomendacao: o snapshot
+        // vem de frames atras e pode ter sido tirado sob outro regime, ou ter sido invalidado
+        // depois por reset/desligamento.
+        const FRadianceCacheStatsMeta& RadianceCacheStatsMeta() const;
+        // Contadores + meta + capacidade + bytes, por VALOR e numa leitura so. E o acessor certo
+        // para quem chama de outra thread: os dois de cima devolvem REFERENCIA, e uma referencia
+        // sobrevive ao lock temporario do RendererHandle — o par voltaria de frames diferentes.
+        FRadianceCacheSnapshot RadianceCacheSnapshot() const;
+        u64  RadianceCacheBytes() const;
+        u32  RadianceCacheCapacity() const;
         void SetUseReSTIRGI(bool V);
         bool GetUseReSTIRGI() const;
         void SetUseReSTIRDI(bool V);
@@ -105,6 +232,27 @@ namespace Smile {
         f32  GetGIVolumeFadeProbes() const;
         void SetGIVolumeFadeProbes(f32 V);
         void OnGIHitSamplingChanged();
+
+        // Detector de mudanca por sonda: o update do atlas mede o quanto a sonda mudou e
+        // derruba a histerese dela sozinho, sem depender de alguem chamar invalidacao.
+        bool GetGIAdaptiveHysteresis() const;
+        void SetGIAdaptiveHysteresis(bool V);
+
+        // Numero de CASCATAS do DDGI. Recria o volume — a contagem dimensiona atlas,
+        // ProbesTrace, buffers e dispatch. Default 1 = comportamento historico.
+        u32  GetGICascadeCount() const;
+        void SetGICascadeCount(u32 V);
+
+        // Raios por sonda variaveis com a proximidade de geometria: sonda em espaco aberto
+        // decima para MinRays, sonda encostada em geometria fica no teto. E a alavanca de CUSTO
+        // do DDGI — o orcamento hoje e 64 raios fixos vezes NumProbes.
+        bool GetGIAdaptiveRays() const;
+        void SetGIAdaptiveRays(bool V);
+
+        // Gate de MEDICAO (nao e knob de qualidade): corta o DDGI como terminador dos hits de RT
+        // sem desmontar nada, para medir o que ele entrega. Ver Renderer::GIMeasureTerminatorOff.
+        bool GetGIMeasureTerminatorOff() const;
+        void SetGIMeasureTerminatorOff(bool V);
 
         bool GetGIBackfacePolicy() const;
         void SetGIBackfacePolicy(bool V);
@@ -139,6 +287,9 @@ namespace Smile {
         f32  GetShadowMaxDistance() const;
         void SetShadowDepthBias(f32 Texels);
         f32  GetShadowDepthBias() const;
+        // Em TEXELS da cascata, como o bias — logo 4x maior em metros a cada cascata.
+        void SetShadowNormalOffset(f32 Texels);
+        f32  GetShadowNormalOffset() const;
         void SetShadowMinCasterTexels(f32 V);
         f32  GetShadowMinCasterTexels() const;
         void SetShadowCascadeCache(bool V);
@@ -302,9 +453,15 @@ namespace Smile {
         // todos os historicos.
         void MarkMaterialRTStateDirty();
         void MarkIndirectLightingDirty();
+        // Conteudo da cena mudou sem a lista mudar de tamanho: visibilidade de objeto, edicao de
+        // luz puntual. NAO derruba o atlas do DDGI — quem chama isto tambem chama
+        // Renderer::NotifyGIRegionChanged com a caixa afetada, que e a versao por REGIAO. Ver
+        // HistoryDomain::SceneContent.
+        void MarkSceneContentDirty();
         // Imediatas. Chame so fora do caminho de arraste.
         void NotifyIndirectLightingChanged();
         void NotifyMaterialRTStateChanged();
+        void NotifySceneContentChanged();
         // A lista de renderaveis mudou de tamanho. So a parte de HISTORICO: o refresh (capacidades
         // de GPU, snapshot do InstanceGeo, TLAS, reancoragem da selecao) e lifecycle de cena e mora
         // no Renderer::OnSceneStructureChanged, que e quem chama isto no fim.
@@ -313,6 +470,11 @@ namespace Smile {
         // tela — ver HistoryDomain::CameraCut. Nao chame em mudanca de conteudo: era isso que
         // fazia a cena piscar a cada knob.
         void NotifyCameraCut();
+        // Comeco de uma captura deterministica: derruba TODO acumulador (inclusive os caches de
+        // mundo, que o corte de camera preserva de proposito) e zera a semente de amostragem
+        // temporal. NAO e knob nem navegacao — o custo e reconverger a GI do zero, entao so o
+        // capturador chama. Ver HistoryDomain::DeterministicCapture e Docs/CAPTURE-PROTOCOL.md.
+        void NotifyDeterministicCapture();
 
     private:
         // Executor UNICO do grafo de invalidacao. Recebe uma mascara de HistoryDomain (ou uma

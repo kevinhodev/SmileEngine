@@ -1,11 +1,12 @@
 #include "Smile/Graphics/TemporalAA.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Barriers.h"
 #include "Smile/Graphics/ShaderUtils.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -35,38 +36,24 @@ namespace Smile {
         History[1].Reset();
         DisplayTex.Reset();
 
-        D3D12_HEAP_PROPERTIES HeapProps{}; HeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        Desc.Width            = W;
-        Desc.Height           = H;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = kHDRFormat;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
         const FLOAT ClearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
         D3D12_CLEAR_VALUE ClearValue{};
         ClearValue.Format = kHDRFormat;
         std::memcpy(ClearValue.Color, ClearColor, sizeof(ClearColor));
 
+        auto CreateTarget = [&](const char* Label) {
+            return GpuResources::CreateTex2D(
+                Device, W, H, kHDRFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, EVramCategory::RenderTargets,
+                &ClearValue, 1, 1, Label);
+        };
+
         for (int i = 0; i < 2; ++i) {
-            SMILE_HR(Device->CreateCommittedResource(
-                &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-                IID_PPV_ARGS(&History[i])));
-            VramTracker::Register(History[i].Get(), EVramCategory::RenderTargets);
+            History[i]      = CreateTarget("TAA · historico");
             HistoryState[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
-        SMILE_HR(Device->CreateCommittedResource(
-            &HeapProps, D3D12_HEAP_FLAG_NONE, &Desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &ClearValue,
-            IID_PPV_ARGS(&DisplayTex)));
-        VramTracker::Register(DisplayTex.Get(), EVramCategory::RenderTargets);
+        DisplayTex   = CreateTarget("TAA · display");
         DisplayState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!HistoryRTVHeap.Native())
@@ -202,21 +189,15 @@ namespace Smile {
     }
 
     void FTemporalAA::CreateConstantBuffer(ID3D12Device* Device) {
-        D3D12_HEAP_PROPERTIES UploadHeap{}; UploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        // O indexador do CB usa sizeof() como passo, e root CBV exige endereco 256-alinhado:
+        // se o struct deixar de ser multiplo de 256, o slot 1 em diante cai fora do
+        // alinhamento e a falha aparece como "so o primeiro frame esta certo".
+        static_assert(sizeof(TAAConstants) % 256 == 0, "passo do CB tem que ser 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = sizeof(TAAConstants) * FCommandQueue::kFramesInFlight;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        SMILE_HR(Device->CreateCommittedResource(&UploadHeap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&CB)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(CB->Map(0, &NoRead, reinterpret_cast<void**>(&MappedCB)));
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            Device, sizeof(TAAConstants), FCommandQueue::kFramesInFlight);
+        CB       = Upload.Resource;
+        MappedCB = Upload.Mapped;
     }
 
     void FTemporalAA::Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
@@ -283,4 +264,14 @@ namespace Smile {
         LastOutputIndex = curr;
         HistoryIndex    = 1 - curr;
     }
+
+    FPassShaderStems FTemporalAA::ShaderStems() const {
+        static const char* const kStems[] = { "TAAResolve.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FTemporalAA::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSO(_Ctx.Device);
+    }
+
 }

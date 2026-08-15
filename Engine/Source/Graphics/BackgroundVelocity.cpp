@@ -1,8 +1,10 @@
 #include "Smile/Graphics/BackgroundVelocity.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
+#include <iterator>
 
 namespace Smile {
     namespace {
@@ -12,24 +14,12 @@ namespace Smile {
 
     void FBackgroundVelocity::Initialize(ID3D12Device* Device) {
         // Mesma layout de root sig do RRGuides: CBV b0 + tabela SRV (1) + tabela UAV (1).
-        PSO.Initialize(Device, "BackgroundVelocity.cs_6_0.cso", 1, 1, false);
+        CreatePipelines(Device);
 
-        D3D12_HEAP_PROPERTIES Heap{}; Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<u64>(FCommandQueue::kFramesInFlight) * kCBStride;
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SMILE_HR(Device->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_NONE, &Desc,
-                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Constants)));
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(Constants->Map(0, &NoRead, &Ptr));
-        MappedConstants = static_cast<u8*>(Ptr);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            Device, kCBStride, FCommandQueue::kFramesInFlight);
+        Constants       = Upload.Resource;
+        MappedConstants = Upload.Mapped;
 
         Initialized = true;
     }
@@ -57,4 +47,19 @@ namespace Smile {
         const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
         CL->Dispatch(GX, GY, 1);
     }
+
+    void FBackgroundVelocity::CreatePipelines(ID3D12Device* _Device) {
+        PSO.Initialize(_Device, "BackgroundVelocity.cs_6_0.cso", 1, 1, false);
+    }
+
+
+    FPassShaderStems FBackgroundVelocity::ShaderStems() const {
+        static const char* const kStems[] = { "BackgroundVelocity.cs" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FBackgroundVelocity::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        CreatePipelines(_Ctx.Device);
+    }
+
 }

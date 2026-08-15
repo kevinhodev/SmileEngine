@@ -17,6 +17,7 @@
 #define DECODE_DDGI_IRRADIANCE 7u
 #define DECODE_DDGI_DISTANCE   8u
 #define DECODE_HEATMAP         9u
+#define DECODE_ARRAY_SLICE    10u
 
 cbuffer DebugViewCB : register(b0) {
     uint   Decode;
@@ -38,6 +39,11 @@ Texture2D GBufferA  : register(t1);
 Texture2D GBufferB  : register(t2);
 Texture2D GBufferC  : register(t3);
 Texture2D Velocity  : register(t4);
+// Mesmo descritor que t0, so que visto como array (ver DECODE_ARRAY_SLICE). O par de
+// bindings existe porque a dimensao da view faz parte da DECLARACAO no HLSL: um SRV de
+// Texture2DArray nao pode ser lido por uma declaracao Texture2D, e vice-versa. Cada tile
+// acessa exatamente um dos dois, decidido pelo Decode.
+Texture2DArray TargetArray : register(t5);
 SamplerState LinearClamp : register(s0);
 SamplerState PointClamp  : register(s1);
 
@@ -94,6 +100,36 @@ float3 VisualizeReverseZ(float d, float nearZ, float farZ) {
 }
 
 float4 main(VSOutput input) : SV_Target {
+    // Fatia de array tem caminho proprio, e ele vem ANTES de qualquer toque em `Target`:
+    // naquele slot esta um SRV de array, que a declaracao Texture2D nao pode ler — nem para
+    // um GetDimensions. Tudo o que o resto do shader faz com mip, atlas e jitter e
+    // reproduzido aqui em miniatura porque nada disso se aplica: fatia de array nao e
+    // screen-space (nao leva ScreenUvOffset) e nao e atlas de tiles.
+    if (Decode == DECODE_ARRAY_SLICE) {
+        uint aw, ah, aelems, amips;
+        TargetArray.GetDimensions(0, aw, ah, aelems, amips);
+
+        // Mesmo letterbox do caminho comum: preserva o aspecto do alvo dentro do tile.
+        float2 auv = input.uv;
+        float ascale = (float(aw) / max(float(ah), 1.0f)) / max(TileAspect, 1e-4f);
+        if (ascale > 1.0f) auv.y = (auv.y - 0.5f) * ascale + 0.5f;
+        else               auv.x = (auv.x - 0.5f) / ascale + 0.5f;
+        if (auv.x < 0.0f || auv.x > 1.0f || auv.y < 0.0f || auv.y > 1.0f)
+            return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+        uint amip = min(Mip, amips > 0 ? amips - 1u : 0u);
+        uint mw   = max(aw >> amip, 1u);
+        uint mh   = max(ah >> amip, 1u);
+        int2 apx  = clamp(int2(auv * float2(mw, mh)),
+                          int2(0, 0), int2(int(mw) - 1, int(mh) - 1));
+        int  slice = int(min(SubIndex, aelems > 0u ? aelems - 1u : 0u));
+        // Load pontual, nunca filtrado: o primeiro alvo de array e um shadow map, e
+        // interpolar profundidade entre texels de casters diferentes inventa uma superficie
+        // intermediaria que nao existe — exatamente o que se quer poder descartar ao olhar.
+        float v = TargetArray.Load(int4(apx, slice, int(amip))).r;
+        return DebugOutput(saturate(v * ChannelWeight.r * Exposure).xxx);
+    }
+
     // UV -> texel do PROPRIO alvo (cada tile pode ter resolucao diferente da tela).
     uint tw, th, tmips;
     Target.GetDimensions(0, tw, th, tmips);
@@ -105,10 +141,12 @@ float4 main(VSOutput input) : SV_Target {
     // scale ~= 1 e nada muda: da p/ aplicar sempre, sem flag.
     float2 uv = input.uv;
     if (AtlasTilePx > 0u) {
-        // Atlas de probe (DDGI): a largura e CountX*CountZ*tile e a altura so CountY*tile —
-        // num grid comum isso da algo como 8192x64, proporcao ~128:1. Esticar vira listra e
-        // o letterbox vira um fio de 1 pixel. O util e REEMPACOTAR: os tiles viram uma grade
-        // aproximadamente quadrada, cada probe legivel.
+        // Atlas de probe (DDGI): reempacota os tiles numa grade aproximadamente quadrada, cada
+        // probe legivel, com a proporcao do painel. Nasceu porque o atlas era uma FILEIRA (largura
+        // CountX*CountZ*tile, altura CountY*tile — algo como 8192x64, ~128:1) e esticar isso virava
+        // listra. O atlas em si ja e quase quadrado desde o empacotamento 2D, entao hoje o reempa-
+        // cotamento e quase identidade — continua aqui porque "quase" nao e "sempre", e porque e
+        // ele que ajusta a grade a proporcao do painel, que varia.
         uint tilesX = max(tw / AtlasTilePx, 1u);
         uint tilesY = max(th / AtlasTilePx, 1u);
         uint total  = tilesX * tilesY;

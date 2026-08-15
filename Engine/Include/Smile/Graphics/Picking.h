@@ -4,6 +4,7 @@
 #include <cstddef>
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/DescriptorHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 
 namespace Smile {
     class FGpuMesh;
@@ -19,8 +20,13 @@ namespace Smile {
     // READBACK. Como a copia faz parte do frame F, ela so termina quando a GPU passa a fence de
     // F; com kFramesInFlight=2 isso esta garantido 2 frames depois — TryResolve devolve o ID
     // entao (indice = valor - 1; -1 = nada).
-    class FObjectPicker {
+    class FObjectPicker : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Picking (ID pass)"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         struct FDrawItem {
             const FGpuMesh*           Mesh;
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCBAddress; // slot b2 desse renderavel (mesmo MVP do forward)
@@ -29,7 +35,7 @@ namespace Smile {
 
         void Initialize(ID3D12Device* Device, u32 Width, u32 Height);
         void Resize(ID3D12Device* Device, u32 Width, u32 Height);
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
         // Editor pede um pick no pixel (x,y) do backbuffer. Ignora se ja ha um pendente.
         void RequestPick(u32 X, u32 Y);

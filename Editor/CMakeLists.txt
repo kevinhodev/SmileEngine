@@ -22,6 +22,8 @@ set(EDITOR_HEADERS
     Include/SmileEditor/LightsBridge.h
     Include/SmileEditor/SceneOutlinerBridge.h
     Include/SmileEditor/SceneDocument.h
+    Include/SmileEditor/CameraBookmarksBridge.h
+    Include/SmileEditor/CaptureBridge.h
     Include/SmileEditor/MaterialsBridge.h
     Include/SmileEditor/RenderSettingsBridge.h
 )
@@ -46,6 +48,8 @@ set(EDITOR_SOURCES
     Source/LightsBridge.cpp
     Source/SceneOutlinerBridge.cpp
     Source/SceneDocument.cpp
+    Source/CameraBookmarksBridge.cpp
+    Source/CaptureBridge.cpp
     Source/MaterialsBridge.cpp
     Source/RenderSettingsBridge.cpp
 )

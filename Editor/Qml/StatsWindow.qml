@@ -29,6 +29,7 @@ Rectangle {
     readonly property color amber: C.Theme.amber
     readonly property color warn: C.Theme.warn
     property var expandedPasses: ({})
+    property var expandedVram: ({})
     property var gpuTimingSnapshot: []
     property bool passInteractionActive: false
 
@@ -48,6 +49,22 @@ Rectangle {
             next[key] = expandedPasses[key]
         next[name] = expanded
         expandedPasses = next
+    }
+
+    // Mesmo par de funcoes dos passes, para as categorias de VRAM. Persistir por NOME e o que
+    // faz o estado sobreviver ao vramBreakdown ser reconstruido a cada refresh: o delegate e
+    // recriado, a chave nao. Default recolhido — a lista de categorias e a leitura principal,
+    // e abrir tudo empurraria o resto do painel p/ fora da tela.
+    function vramExpanded(name) {
+        return expandedVram[name] === true
+    }
+
+    function setVramExpanded(name, expanded) {
+        var next = {}
+        for (var key in expandedVram)
+            next[key] = expandedVram[key]
+        next[name] = expanded
+        expandedVram = next
     }
 
     function refreshGpuTimingSnapshot() {
@@ -617,24 +634,41 @@ Rectangle {
                             Repeater {
                                 model: viewportModel.vramBreakdown
                                 delegate: Item {
+                                    id: vramRow
                                     required property var modelData
+                                    readonly property bool expandable: vramRow.modelData.hasChildren === true
+                                    property bool expanded: expandable
+                                                            && root.vramExpanded(vramRow.modelData.name)
+                                    readonly property bool untracked: vramRow.modelData.name === "Não rastreado"
+                                    readonly property color accent: untracked ? "#4b4b43" : root.blue
                                     width: categoryRows.width
-                                    height: 29
+                                    height: 29 + (expanded ? vramChildRows.implicitHeight + 6 : 0)
+
+                                    Behavior on height { NumberAnimation { duration: 130; easing.type: Easing.OutCubic } }
 
                                     Text {
                                         x: 0; y: 0
-                                        width: parent.width - 85
-                                        text: modelData.name
+                                        width: 12
+                                        visible: vramRow.expandable
+                                        text: vramRow.expanded ? "−" : "+"
+                                        color: root.textMuted
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+                                    Text {
+                                        x: vramRow.expandable ? 14 : 0
+                                        y: 0
+                                        width: parent.width - x - 85
+                                        text: vramRow.modelData.name
                                         elide: Text.ElideRight
-                                        color: modelData.name === "Não rastreado"
-                                               ? root.textMuted : root.textNormal
+                                        color: vramRow.untracked ? root.textMuted : root.textNormal
                                         font.family: C.Theme.fontFamily
                                         font.pixelSize: 9
                                     }
                                     Text {
                                         anchors.right: parent.right
                                         y: 0
-                                        text: modelData.text
+                                        text: vramRow.modelData.text
                                         color: root.textNormal
                                         font.family: C.Theme.fontMono
                                         font.pixelSize: 9
@@ -644,9 +678,83 @@ Rectangle {
                                         anchors.right: parent.right
                                         y: 20
                                         height: 3
-                                        value: modelData.frac
-                                        fillColor: modelData.name === "Não rastreado"
-                                                   ? "#4b4b43" : root.blue
+                                        value: vramRow.modelData.frac
+                                        fillColor: vramRow.accent
+                                    }
+
+                                    TapHandler {
+                                        enabled: vramRow.expandable
+                                        acceptedButtons: Qt.LeftButton
+                                        cursorShape: Qt.PointingHandCursor
+                                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                                        onTapped: {
+                                            var nextExpanded = !vramRow.expanded
+                                            vramRow.expanded = nextExpanded
+                                            root.setVramExpanded(vramRow.modelData.name, nextExpanded)
+                                        }
+                                    }
+
+                                    Column {
+                                        id: vramChildRows
+                                        x: 13; y: 27
+                                        width: parent.width - x
+                                        visible: vramRow.expanded
+                                        spacing: 1
+
+                                        Repeater {
+                                            model: vramRow.modelData.children
+                                            delegate: Item {
+                                                id: vramChild
+                                                required property var modelData
+                                                readonly property bool active: vramChild.modelData.active !== false
+                                                width: vramChildRows.width
+                                                height: 20
+
+                                                Rectangle {
+                                                    x: 0; y: 0
+                                                    width: 1; height: parent.height
+                                                    color: vramChild.active
+                                                           ? Qt.rgba(vramRow.accent.r, vramRow.accent.g,
+                                                                     vramRow.accent.b, 0.35)
+                                                           : "#34362f"
+                                                }
+                                                Rectangle {
+                                                    x: 0; y: 9
+                                                    width: 8; height: 1
+                                                    color: vramChild.active
+                                                           ? Qt.rgba(vramRow.accent.r, vramRow.accent.g,
+                                                                     vramRow.accent.b, 0.35)
+                                                           : "#34362f"
+                                                }
+                                                Text {
+                                                    x: 14; y: 3
+                                                    width: parent.width - 104
+                                                    text: vramChild.modelData.name
+                                                    elide: Text.ElideRight
+                                                    color: vramChild.active ? root.textSecondary : "#686a61"
+                                                    font.family: C.Theme.fontFamily
+                                                    font.pixelSize: 9
+                                                    font.italic: !vramChild.active
+                                                }
+                                                Text {
+                                                    anchors.right: parent.right
+                                                    anchors.rightMargin: 38
+                                                    y: 3
+                                                    text: vramChild.modelData.text
+                                                    color: vramChild.active ? root.textNormal : root.textMuted
+                                                    font.family: C.Theme.fontMono
+                                                    font.pixelSize: 9
+                                                }
+                                                Text {
+                                                    anchors.right: parent.right
+                                                    y: 3
+                                                    text: vramChild.modelData.shareText
+                                                    color: vramChild.active ? root.textMuted : "#73776b"
+                                                    font.family: C.Theme.fontMono
+                                                    font.pixelSize: 8
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -707,6 +815,107 @@ Rectangle {
                                         color: root.textNormal
                                         font.family: C.Theme.fontMono
                                         font.pixelSize: 9
+                                    }
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        height: 1
+                                        color: root.divider
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Sombra do sol: quanto cada cascata desenha e com que frequência ela
+                    // dispara. A taxa (X/64) é o que o cache de cascata muda; a média por
+                    // frame é o produto das duas colunas e é o número a comparar num A/B.
+                    Card {
+                        width: parent.width
+                        height: 270
+                        visible: viewportModel.shadowCascades.length > 0
+
+                        Text {
+                            x: 16; y: 15
+                            text: "SOMBRA DO SOL (CSM)"
+                            color: root.textPrimary
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 16
+                            y: 17
+                            text: "ESTÁT · DIN     RE-RASTERIZA"
+                            color: root.textMuted
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 8
+                        }
+
+                        Column {
+                            x: 16; y: 46
+                            width: parent.width - 32
+                            spacing: 0
+
+                            Repeater {
+                                model: viewportModel.shadowCascades
+                                // Duas linhas por cascata: a de cima é a medida (quanto desenha,
+                                // com que frequência), a de baixo é o diagnóstico (o que cada
+                                // filtro cortou e quanto o fit andou). Numa linha só o
+                                // diagnóstico passava por baixo do valor — o card é estreito e
+                                // texto monoespaçado de 3 campos não cabe ao lado do número.
+                                delegate: Item {
+                                    id: csmRow
+                                    required property var modelData
+                                    readonly property bool summary: csmRow.modelData.summary === true
+                                    width: parent.width
+                                    height: csmRow.summary ? 30 : 38
+
+                                    Text {
+                                        id: csmName
+                                        anchors.left: parent.left
+                                        y: csmRow.summary ? (csmRow.height - height) / 2 : 5
+                                        text: csmRow.modelData.name
+                                        color: csmRow.summary ? root.textNormal : root.textMuted
+                                        font.family: C.Theme.fontFamily
+                                        font.pixelSize: 9
+                                        font.weight: csmRow.summary ? Font.DemiBold : Font.Normal
+                                    }
+                                    Text {
+                                        id: csmRate
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: csmName.verticalCenter
+                                        text: csmRow.modelData.shareText
+                                        color: root.textMuted
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 9
+                                        horizontalAlignment: Text.AlignRight
+                                        width: 52
+                                    }
+                                    Text {
+                                        anchors.right: csmRate.left
+                                        anchors.rightMargin: 10
+                                        anchors.verticalCenter: csmName.verticalCenter
+                                        text: csmRow.modelData.text
+                                        color: root.textNormal
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+                                    // Diagnóstico: cortes de cada filtro e deslocamento do fit.
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: csmName.bottom
+                                        anchors.topMargin: 2
+                                        text: csmRow.modelData.cullText
+                                        color: root.textMuted
+                                        opacity: 0.6
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 8
+                                        elide: Text.ElideRight
+                                        visible: !csmRow.summary
                                     }
                                     Rectangle {
                                         anchors.left: parent.left

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Fog.h"
+#include "Smile/Graphics/GpuResources.h"
 #include "Smile/Graphics/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -9,11 +10,13 @@
 #include <fstream>
 #include <stdexcept>
 #include <vector>
+#include <iterator>
 
 namespace Smile {
 
     void FFogPass::Initialize(ID3D12Device* _Device, DXGI_FORMAT _RTFormat) {
         if (Initialized) return;
+        RTFormat = _RTFormat; // cacheado p/ o OnRecreatePipelines rebuildar com o mesmo alvo
         BuildRootSignature(_Device);
         BuildPSOs(_Device, _RTFormat);
         CreateConstantBuffer(_Device);
@@ -145,28 +148,13 @@ namespace Smile {
     }
 
     void FFogPass::CreateConstantBuffer(ID3D12Device* _Device) {
-        D3D12_HEAP_PROPERTIES Heap{};
-        Heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        static_assert(sizeof(FogConstants) % 256 == 0,
+                      "o indexador do CB usa sizeof(); root CBV exige 256-alinhado");
 
-        D3D12_RESOURCE_DESC Desc{};
-        Desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        Desc.Width            = static_cast<UINT64>(FCommandQueue::kFramesInFlight) * sizeof(FogConstants);
-        Desc.Height           = 1;
-        Desc.DepthOrArraySize = 1;
-        Desc.MipLevels        = 1;
-        Desc.Format           = DXGI_FORMAT_UNKNOWN;
-        Desc.SampleDesc       = { 1, 0 };
-        Desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        Desc.Flags            = D3D12_RESOURCE_FLAG_NONE;
-
-        SMILE_HR(_Device->CreateCommittedResource(
-            &Heap, D3D12_HEAP_FLAG_NONE, &Desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr, IID_PPV_ARGS(&ConstantBuffer)));
-
-        D3D12_RANGE NoRead{ 0, 0 };
-        void* Ptr = nullptr;
-        SMILE_HR(ConstantBuffer->Map(0, &NoRead, &Ptr));
-        MappedBase = reinterpret_cast<u8*>(Ptr);
+        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(FogConstants), FCommandQueue::kFramesInFlight);
+        ConstantBuffer = Upload.Resource;
+        MappedBase     = Upload.Mapped;
         FogConstants Zero{};
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i)
             std::memcpy(MappedBase + static_cast<size_t>(i) * sizeof(FogConstants), &Zero, sizeof(FogConstants));
@@ -281,4 +269,14 @@ namespace Smile {
         _CommandList->IASetIndexBuffer(nullptr);
         _CommandList->DrawInstanced(3, 1, 0, 0);
     }
+
+    FPassShaderStems FFogPass::ShaderStems() const {
+        static const char* const kStems[] = { "FogFullscreen.vs", "FogFullscreen.ps" };
+        return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    void FFogPass::OnRecreatePipelines(const FPassInitContext& _Ctx) {
+        if (Initialized) BuildPSOs(_Ctx.Device, RTFormat);
+    }
+
 }

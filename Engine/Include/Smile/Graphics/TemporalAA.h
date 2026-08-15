@@ -4,6 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/DescriptorHeap.h"
 #include "Smile/Graphics/TextureSRVHeap.h"
+#include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -18,8 +19,13 @@ namespace Smile {
     // Ping-pong de 2 history buffers RGBA16F: o frame N le history[N-1] e escreve history[N].
     // Seguro com 2 frames-in-flight pelas transicoes PSR<->RT (a leitura do frame anterior
     // termina antes do write deste frame por causa do barrier PSR->RT).
-    class FTemporalAA {
+    class FTemporalAA : public FRenderPass {
     public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "TAA"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
         struct alignas(256) TAAConstants {
             Mat44 InvViewProj;   // atual, FULL (com translacao)
             Mat44 PrevViewProj;  // frame anterior, FULL
@@ -56,7 +62,7 @@ namespace Smile {
         ID3D12Resource* DisplayOutputResource() const { return DisplayTex.Get(); }
         u32             DisplayOutputSRVSlot() const  { return DisplaySRVSlot; }
 
-        bool IsInitialized() const { return Initialized; }
+        bool IsInitialized() const override { return Initialized; }
 
     private:
         void BuildRootSignature(ID3D12Device* Device);
