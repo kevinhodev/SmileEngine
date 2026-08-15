@@ -184,6 +184,8 @@ contrato para as cascatas FFT do Smile.
 - setters apenas marcam o espectro dirty e resets invalidam os históricos;
 - normalização direcional é cacheada por raio espectral;
 - twiddles usam LUT e não recalculam seno/cosseno por thread/estágio;
+- a FFT empacota altura e choppy num único `float4` (2 dispatches por cascata, não 4);
+- o deslocamento ping-ponga entre dois alvos — sem `CopyResource` da cadeia de mips;
 - argumentos indiretos são compactados e usam count buffer real por frame;
 - VB/IB estáticos do clipmap residem em heap `DEFAULT` após upload único;
 - shaders têm saída por configuração e rotas explícitas de hot reload;

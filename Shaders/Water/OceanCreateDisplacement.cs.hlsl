@@ -1,7 +1,6 @@
 #include "OceanFFTCommon.hlsli"
 
-Texture2D<float2>   HeightF : register(t0); 
-Texture2D<float2>   ChoppyF : register(t1); 
+Texture2D<float4>   SpecHD  : register(t0);
 RWTexture2D<float4> DispOut : register(u0);
 
 [numthreads(16, 16, 1)]
@@ -12,8 +11,9 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     float sgn = (((loc.x + loc.y) & 1) == 1) ? -1.0f : 1.0f;
 
-    float  h = sgn * HeightF.Load(int3(loc, 0)).x;
-    float2 D = sgn * ChoppyF.Load(int3(loc, 0)).xy;
+    float4 s = SpecHD.Load(int3(loc, 0));
+    float  h = sgn * s.x;
+    float2 D = sgn * s.zw;
 
     DispOut[loc] = float4(D.x * ChoppyScale, D.y * ChoppyScale, h * HeightScale, 0.0f);
 }

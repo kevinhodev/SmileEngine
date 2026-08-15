@@ -46,12 +46,21 @@ namespace Smile {
 
         void RecordCompute(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
-        u32  SRVSlot() const       { return OceanSRVSlot; }
-        u32  PreviousSRVSlot() const { return PreviousOceanSRVSlot; }
+        u32  SRVSlot() const {
+            return OceanSRVSlot[CurrentIndex];
+        }
+        u32  PreviousSRVSlot() const {
+            return PreviousSampleValid
+                ? OceanSRVSlot[1u - CurrentIndex]
+                : OceanSRVSlot[CurrentIndex];
+        }
         u32  NormalSRVSlot() const { return NormalChainSRVSlot; }
-        bool IsInitialized() const override { return OceanTex != nullptr && NormalTex != nullptr; }
+        bool IsInitialized() const override {
+            return OceanTex[0] != nullptr && OceanTex[1] != nullptr && NormalTex != nullptr;
+        }
         void ResetTemporalHistory() {
             DisplacementHistoryValid = false;
+            PreviousSampleValid = false;
             FoamHistoryValid = false;
         }
 
@@ -121,36 +130,37 @@ namespace Smile {
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT H0Footprint{};
         bool H0Dirty = true;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> SpecH;
-        Microsoft::WRL::ComPtr<ID3D12Resource> SpecD;
+        Microsoft::WRL::ComPtr<ID3D12Resource> SpecHD;
         Microsoft::WRL::ComPtr<ID3D12Resource> FFTTemp;
         Microsoft::WRL::ComPtr<ID3D12Resource> DispTex;
-        Microsoft::WRL::ComPtr<ID3D12Resource> OceanTex;
-        Microsoft::WRL::ComPtr<ID3D12Resource> PreviousOceanTex;
+        // Ping-pong: o frame N escreve OceanTex[Write] e o VS le o N-1 em OceanTex[1-Write].
+        // Elimina o CopyResource da cadeia inteira (9 mips RGBA32F) por cascata, por frame.
+        Microsoft::WRL::ComPtr<ID3D12Resource> OceanTex[2];
         Microsoft::WRL::ComPtr<ID3D12Resource> NormalTex;
+        u32 CurrentIndex = 0;
 
         D3D12_RESOURCE_STATES H0State      = D3D12_RESOURCE_STATE_COPY_DEST;
-        D3D12_RESOURCE_STATES SpecHState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        D3D12_RESOURCE_STATES SpecDState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        D3D12_RESOURCE_STATES SpecHDState  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES FFTTempState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         D3D12_RESOURCE_STATES DispState    = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        D3D12_RESOURCE_STATES OceanMipState[kDisplacementMipCount]{};
-        D3D12_RESOURCE_STATES PreviousOceanMipState[kDisplacementMipCount]{};
+        D3D12_RESOURCE_STATES OceanMipState[2][kDisplacementMipCount]{};
         D3D12_RESOURCE_STATES NormalMipState[kNormalMipCount]{};
         bool DisplacementHistoryValid = false;
+        bool PreviousSampleValid = false;
 
         u32 H0SRVSlot          = 0;
-        u32 SpecSRVPair        = 0;
+        u32 SpecSRVSlot        = 0;
         u32 FFTTempSRVSlot     = 0;
-        u32 SpecUAVPair        = 0;
+        u32 SpecUAVSlot        = 0;
         u32 FFTTempUAVSlot     = 0;
         u32 DispSRVSlot        = 0;
         u32 DispUAVSlot        = 0;
-        u32 GradUAVPair        = 0;
-        u32 OceanSRVSlot       = 0;
-        u32 PreviousOceanSRVSlot = 0;
-        u32 OceanMipUAVSlot[kDisplacementMipCount]{};
-        u32 OceanMipSRVSlot[kDisplacementMipCount - 1]{};
+        u32 GradUAVPair[2]     = {};
+        u32 GradSRVPair[2]     = {};
+        u32 GradSRVDummy       = 0;
+        u32 OceanSRVSlot[2]    = {};
+        u32 OceanMipUAVSlot[2][kDisplacementMipCount]{};
+        u32 OceanMipSRVSlot[2][kDisplacementMipCount - 1]{};
         u32 NormalChainSRVSlot = 0;
         u32 NormalMipUAVSlot[kNormalMipCount]{};
         u32 NormalMipSRVSlot[kNormalMipCount]{};

@@ -897,6 +897,9 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
   `<d3d12.h>`/`<Windows.h>`; `Renderer.h` puxa 69 headers e é incluído por 10 TUs.
 - **Inversão de dependência menor:** `Engine/Source/Scene/SceneLoader.cpp` inclui
   `Graphics/Renderer.h` — a camada de cena depende do renderer.
+- **Submissão de draws.** O Z-prepass continua front-to-back (Hi-Z). O G-buffer, depois do
+  depth EQUAL, agrupa por PSO/material/mesh e o `FDrawSubmitCache` pula Bind/IA repetidos —
+  o CSM já fazia o equivalente. Translúcidos seguem back-to-front na lista original.
 
 ### Build e ferramentas
 
@@ -939,6 +942,9 @@ O oceano combina três cascatas espectrais físicas, IFFT compute, clipmap GPU-d
 shading forward e reflexão hierárquica posterior à escrita de depth/G-buffer:
 SSR de contato sobre as cópias sem água, DXR no miss ou na cobertura parcial e céu no
 miss final.
+A IFFT empacota altura e deslocamento horizontal no mesmo `float4` (dois dispatches
+por cascata) e o mapa de deslocamento ping-ponga entre dois alvos — o frame anterior
+não é copiado.
 O `SceneColorCopy` é HDR e possui cadeia completa de mips gerada antes da água; o SSR
 seleciona um LOD contínuo pelo footprint GGX em vez de refletir sempre o mip 0.
 Normal, Sol e reflexão compartilham momentos de slope anisotrópicos, e o histórico
