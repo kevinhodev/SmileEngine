@@ -1,5 +1,6 @@
 #include "Smile/Graphics/GpuMesh.h"
 #include "Smile/Graphics/GpuResources.h"
+#include "Smile/Graphics/Material.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 
@@ -59,11 +60,36 @@ namespace Smile {
         IbFirstElement = static_cast<u32>(_IbOffset / sizeof(u32));
     }
 
+    void FGpuMesh::BindIA(ID3D12GraphicsCommandList* _CommandList) const {
+        _CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
+        _CommandList->IASetIndexBuffer(&IndexBufferView);
+    }
+
+    void FGpuMesh::DrawIndexed(ID3D12GraphicsCommandList* _CommandList) const {
+        _CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+    }
+
     void FGpuMesh::Draw(ID3D12GraphicsCommandList* _CommandList) const {
         if (IndexCount == 0) return;
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        _CommandList->IASetVertexBuffers(0, 1, &VertexBufferView);
-        _CommandList->IASetIndexBuffer(&IndexBufferView);
-        _CommandList->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
+        BindIA(_CommandList);
+        DrawIndexed(_CommandList);
+    }
+
+    void FDrawSubmitCache::BindMaterial(ID3D12GraphicsCommandList* _CommandList,
+                                        FTextureSRVHeap& _SRVHeap, const FMaterial* _Mat) {
+        if (_Mat == LastMat) return;
+        LastMat = _Mat;
+        if (_Mat) _Mat->Bind(_CommandList, _SRVHeap);
+    }
+
+    void FDrawSubmitCache::DrawMesh(ID3D12GraphicsCommandList* _CommandList,
+                                    const FGpuMesh* _Mesh) {
+        if (!_Mesh || !_Mesh->IsValid()) return;
+        if (_Mesh != LastMesh) {
+            LastMesh = _Mesh;
+            _Mesh->BindIA(_CommandList);
+        }
+        _Mesh->DrawIndexed(_CommandList);
     }
 }

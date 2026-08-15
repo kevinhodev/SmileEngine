@@ -1,8 +1,7 @@
 #include "OceanFFTCommon.hlsli"
 
-Texture2D<float4>   H0Tex : register(t0);
-RWTexture2D<float2>  SpecH : register(u0);
-RWTexture2D<float2>  SpecD : register(u1);
+Texture2D<float4>   H0Tex  : register(t0);
+RWTexture2D<float4> SpecHD : register(u0);
 
 [numthreads(16, 16, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -11,7 +10,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     int2 loc1 = int2(id.xy);
     int2 loc2 = (-loc1) & (int(DISP_MAP_SIZE) - 1);
 
-    float4 hk    = H0Tex.Load(int3(loc1, 0)); 
+    float4 hk    = H0Tex.Load(int3(loc1, 0));
     float2 h0_k  = hk.xy;
     float  w_k   = hk.z;
     float2 h0_mk = H0Tex.Load(int3(loc2, 0)).xy;
@@ -31,6 +30,5 @@ void main(uint3 id : SV_DispatchThreadID) {
     float2 Dt_x  = float2(h_tk.y * nk.x, -h_tk.x * nk.x);
     float2 iDt_z = float2(h_tk.x * nk.y,  h_tk.y * nk.y);
 
-    SpecH[loc1] = h_tk;
-    SpecD[loc1] = Dt_x + iDt_z;
+    SpecHD[loc1] = float4(h_tk, Dt_x + iDt_z);
 }

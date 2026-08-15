@@ -4427,12 +4427,14 @@ namespace Smile {
                     CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
                 }
                 CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
+                CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                FDrawSubmitCache Submit;
                 for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
                     if (!It->Mat->Blend) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
-                    It->Mat->Bind(CommandList, SRVHeap);
-                    It->R->Mesh->Draw(CommandList);
+                    Submit.BindMaterial(CommandList, SRVHeap, It->Mat);
+                    Submit.DrawMesh(CommandList, It->R->Mesh);
                 }
             }
         }
@@ -4515,7 +4517,8 @@ namespace Smile {
                               const bool am = a.Mat && a.Mat->Constants.AlphaTest != 0;
                               const bool bm = b.Mat && b.Mat->Constants.AlphaTest != 0;
                               if (am != bm) return !am;
-                              return a.Mat < b.Mat;
+                              if (a.Mat != b.Mat) return a.Mat < b.Mat;
+                              return a.Mesh < b.Mesh;
                           });
                 {
                     FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
@@ -4554,6 +4557,17 @@ namespace Smile {
                                          ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                          A.R->AABBMin, A.R->AABBMax });
             }
+            // Mesma chave do CSM (sem mobilidade): alpha-test agrupado e Bind/IA
+            // adjacentes. A broad-phase por luz nao depende da ordem.
+            std::sort(LocalCasters.begin(), LocalCasters.end(),
+                      [](const FLocalShadows::FShadowDrawItem& a,
+                         const FLocalShadows::FShadowDrawItem& b) {
+                          const bool am = a.Mat && a.Mat->Constants.AlphaTest != 0;
+                          const bool bm = b.Mat && b.Mat->Constants.AlphaTest != 0;
+                          if (am != bm) return !am;
+                          if (a.Mat != b.Mat) return a.Mat < b.Mat;
+                          return a.Mesh < b.Mesh;
+                      });
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Sombras — locais");
                 // Terreno tambem projeta nas luzes locais. Sem isto o terreno era iluminado
@@ -4627,13 +4641,15 @@ namespace Smile {
             } else {
                 CommandList->SetPipelineState(PipelineState.PSODepthOnly());
             }
+            CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Z - opacos");
+                FDrawSubmitCache Submit;
                 for (const FVisibleItem& V : VisibleScratch) {
                     if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    V.R->Mesh->Draw(CommandList);
+                    Submit.DrawMesh(CommandList, V.R->Mesh);
                 }
             }
 
@@ -4642,13 +4658,14 @@ namespace Smile {
                                               : PipelineState.PSODepthOnlyMasked());
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "Z - mascarados");
+                FDrawSubmitCache Submit;
                 for (const FVisibleItem& V : VisibleScratch) {
                     if (V.Mat->Blend) continue;
                     if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    V.Mat->Bind(CommandList, SRVHeap);
-                    V.R->Mesh->Draw(CommandList);
+                    Submit.BindMaterial(CommandList, SRVHeap, V.Mat);
+                    Submit.DrawMesh(CommandList, V.R->Mesh);
                 }
             }
 
@@ -4763,18 +4780,36 @@ namespace Smile {
 
             {
                 FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - meshes");
-                ID3D12PipelineState* CurGeomPSO = nullptr;
+                // Front-to-back serve o Z-prepass (Hi-Z). Depois do EQUAL, ordem de
+                // profundidade nao reduz overdraw — so espalha PSO/material/IA. Agrupar
+                // como o CSM ja faz: PSO (two-sided) -> material -> mesh.
+                std::vector<const FVisibleItem*> GBufferOrder;
+                GBufferOrder.reserve(VisibleScratch.size());
                 for (const FVisibleItem& V : VisibleScratch) {
-                    FMaterial* Mat = V.Mat;
-                    if (Mat->Blend) continue;
+                    if (!V.Mat->Blend) GBufferOrder.push_back(&V);
+                }
+                std::sort(GBufferOrder.begin(), GBufferOrder.end(),
+                          [](const FVisibleItem* a, const FVisibleItem* b) {
+                              const bool at = a->Mat->IsTwoSidedForRT();
+                              const bool bt = b->Mat->IsTwoSidedForRT();
+                              if (at != bt) return !at;
+                              if (a->Mat != b->Mat) return a->Mat < b->Mat;
+                              return a->R->Mesh < b->R->Mesh;
+                          });
+
+                CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                ID3D12PipelineState* CurGeomPSO = nullptr;
+                FDrawSubmitCache Submit;
+                for (const FVisibleItem* V : GBufferOrder) {
+                    FMaterial* Mat = V->Mat;
                     const bool TwoSided = Mat->IsTwoSidedForRT();
                     ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
                                                          : PipelineState.PSOGBuffer();
                     if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
                     CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    Mat->Bind(CommandList, SRVHeap);
-                    V.R->Mesh->Draw(CommandList);
+                        4, ObjectCBBase + static_cast<u64>(V->Slot) * sizeof(ObjectConstants));
+                    Submit.BindMaterial(CommandList, SRVHeap, Mat);
+                    Submit.DrawMesh(CommandList, V->R->Mesh);
                 }
             }
 
