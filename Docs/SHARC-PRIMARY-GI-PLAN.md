@@ -13,11 +13,19 @@
 > rodar. Ver `➜ FASE 6`.
 > O contrato inteiro da fase mora em `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse
 > header antes de escrever qualquer linha da fase**. O bloco `➜ FASE 6` abaixo tem o que o seletor
-> decidiu e o que falta. A Fase 4 fechou com os três gates de runtime passados
-> (13 commits): piso de confiança aprovado por A/B, capacidade 2¹⁷ confirmada em GPU (19,21% de
-> ocupação, `insertFull` = 0), luz/ToD respondendo, hot reload cancelando captura. **Fase 5 EM
-> CURSO** — e ela começa com uma auditoria que muda o tamanho dela: a política de sombreamento que
-> a Fase 5 pede **já está em pé** desde a decomposição da Fase 2. Ver o bloco `➜ FASE 5`.
+> decidiu e o que falta.
+>
+> ⚠️ **A FASE 6 NÃO ESTÁ FECHADA, e a Fase 7 abre assim mesmo — por decisão explícita** (2026-08-14).
+> Duas dívidas ficam abertas e nomeadas, para nenhuma leitura rápida tratá-las como feitas:
+>
+> 1. **a matriz de seis gates, aprovada e NÃO rodada** — é o gate de saída da Fase 6;
+> 2. **o orçamento do DDGI não começou** (menos probes/frame, relight menos frequente, cascatas
+>    distantes mais grosseiras). Ele é a cauda da Fase 6, não da 7.
+>
+> É dívida de MEDIÇÃO e de tuning, não de estrutura: o seletor está inteiro e roteando, então a
+> Fase 7 não constrói sobre contrato indefinido. Mas vale o aviso que a própria série escreveu — a
+> Fase 4 só achou dois bugs reais porque rodou o gate dela **depois** de cinco rodadas de auditoria
+> de código não terem achado nada.
 >
 > Leia este bloco ESTADO inteiro antes de continuar; ele existe para não re-derivar decisão. A
 > seção "Estado de PARTIDA", lá embaixo, é retrato histórico e **não** descreve o código de hoje.
@@ -713,6 +721,43 @@ célula no lugar novo. Troca de cena arma `ResetPending` no `SetupForScene`.
 instrumentação desligada, e o regime `d` mexe no escalonamento também do **produtor** (os atômicos
 de inserção mudam quem vence o CAS). Telemetria e imagem continuam em séries separadas, como já
 valia para o `S` — só que agora há três regimes, não dois.
+
+---
+
+### ➜ FASE 7 — ponto de partida (a fase começa com dívida da 6 em aberto)
+
+A especificação está em `## Fase 7`, lá embaixo. Este bloco é só o que a série **já decidiu ou já
+mediu** e que restringe a fase — para a próxima sessão não re-derivar.
+
+**Leia antes:** as duas dívidas abertas no bloco ESTADO do topo (matriz de seis gates, orçamento do
+DDGI). Nenhuma bloqueia a Fase 7 estruturalmente; as duas mudam o que os números dela significam.
+
+**O que já está medido e não se re-mede:**
+
+- **Async é requisito, e o teto dele já é conhecido.** Com sobreposição perfeita o piso é
+  `max(updater, resto)`: V1 iria a ~3,75 ms (esconde os 3,7 ms do resto), V4 continuaria em
+  7,73 ms. E sobreposição perfeita não existe aqui — o RayQuery disputa SM e RT cores com os passes
+  gráficos. Dependências já levantadas: G-buffer antes, resolve depois, e a fila compute **já
+  ocupada pelo DDGI** nessa mesma janela.
+- **O custo atual do updater** (Bistro exterior, 3060 Ti, preset gameplay com FSR): 3,75 ms em V1,
+  7,73 ms em V4, resolve 0,06 ms. A meta de saída da fase é ≤ 1,5 ms para update + resolve, ou
+  orçamento redefinido com evidência — ou seja, **o alvo pede fator 2,5×, não ajuste fino**.
+- **Capacidade 2¹⁷ e ocupação 19,21%** confirmadas em GPU, `insertFull` = 0, cadeia média 1,0332.
+  A Fase 7 prevê sweep de 2¹⁸–2²¹; o ponto de partida já existe e não precisa ser retirado.
+
+**O que está pendente e é barato, fora da linha crítica:** medir **V2**. A média de vértices
+gravados por caminho deu exatamente 2,00 em V1×V4, então V2 corta na média — mas isso depende da
+cauda, não da média, e por isso é medida e não dedução.
+
+⚠️ **A ressalva de escopo do default V1 continua valendo e vale mais aqui:** ela foi calibrada na
+Bistro **exterior**, onde o caminho escapa cedo. Em interior a média sobe na direção de 4 e o V4
+passa a custar mais **e entregar mais**. Otimizar scheduling contra uma classe de cena só é como o
+plano erra sem perceber.
+
+**Não misturar com a Fase 7**, por decisão já registrada: semântica de fallback (Fase 6) e
+scheduling (Fase 7) não entram no mesmo commit. E a otimização de hit packets da idTech8 **não
+entra se quebrar backpropagation ou introduzir bias não medido** — ela é um segundo produtor
+possível, não requisito da correção SHaRC.
 
 ### Histórico — implementação dos commits #5 e #6
 
