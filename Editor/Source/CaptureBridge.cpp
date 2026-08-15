@@ -2,9 +2,23 @@
 #include "Smile/Graphics/Renderer.h"
 
 #include <QFileInfo>
+#include <QTimer>
 #include <cmath>
 
 namespace SmileEditor {
+
+    CaptureBridge::CaptureBridge(QObject* _Parent)
+        : QObject(_Parent), PollTimer(new QTimer(this))
+    {
+        PollTimer->setInterval(100);
+        connect(PollTimer, &QTimer::timeout, this, &CaptureBridge::Poll);
+    }
+
+    bool CaptureBridge::Available() const {
+        if (!Renderer) return false;
+        auto Access = Renderer.TryLock();
+        return Access && Access->IsInitialized();
+    }
 
     void CaptureBridge::OnSceneLoaded(const QString& _ScenePath, bool _Additive) {
         // Carga aditiva nao troca o nome: a captura pertence a cena PRINCIPAL, mesma regra dos
@@ -71,6 +85,7 @@ namespace SmileEditor {
         }
 
         Result = tr("aquecendo %1 frames…").arg(Request.WarmupFrames);
+        PollTimer->start();
         emit ProgressChanged();
         emit Message(tr("Captura iniciada: %1 frames de aquecimento").arg(Request.WarmupFrames));
         return true;
@@ -81,29 +96,35 @@ namespace SmileEditor {
 
         bool Busy = LastBusy;
         int  Remaining = LastRemaining;
-        Smile::FFrameCapture::FResult Finished;
+        Smile::FFrameCapture::FResult CaptureResult;
         bool HasResult = false;
         {
             auto Access = Renderer.TryLock();
             if (!Access) return;
-            HasResult = Access->ConsumeCaptureResult(Finished);
+            HasResult = Access->ConsumeCaptureResult(CaptureResult);
             Busy      = Access->CaptureBusy();
             Remaining = static_cast<int>(Access->CaptureWarmupRemaining());
         }
 
         if (HasResult) {
+            const QString Png      = QString::fromStdWString(CaptureResult.PngPath);
+            const QString Manifest = QString::fromStdWString(CaptureResult.ManifestPath);
+            const QString Error    = QString::fromStdString(CaptureResult.Error);
             // Sucesso implica PNG *e* manifesto: sem manifesto o motor descarta os dois e reporta
             // falha, entao nao ha estado intermediario a exibir aqui.
-            if (Finished.Success) {
-                const QString Png = QString::fromStdWString(Finished.PngPath);
+            if (CaptureResult.Success) {
                 Result = QFileInfo(Png).fileName();
                 emit Message(tr("Captura gravada: %1").arg(Png));
             } else {
                 Result = tr("falhou");
-                emit Message(tr("Falha na captura: %1")
-                                 .arg(QString::fromStdString(Finished.Error)));
+                emit Message(tr("Falha na captura: %1").arg(Error));
             }
+            PollTimer->stop();
+            emit Finished(CaptureResult.Success, Png, Manifest, Error,
+                          static_cast<int>(CaptureResult.WarmupFrames));
         }
+
+        if (!HasResult && !Busy) PollTimer->stop();
 
         if (HasResult || Busy != LastBusy || Remaining != LastRemaining) {
             LastBusy      = Busy;

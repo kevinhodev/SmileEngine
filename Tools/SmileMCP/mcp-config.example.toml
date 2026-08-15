@@ -1,0 +1,10 @@
+[mcp_servers.smile]
+command = "node"
+args = ["D:/Engines/SmileEngine/Tools/SmileMCP/dist/index.js"]
+cwd = "D:/Engines/SmileEngine"
+startup_timeout_sec = 10
+tool_timeout_sec = 900
+default_tools_approval_mode = "writes"
+
+[mcp_servers.smile.env]
+SMILE_ROOT = "D:/Engines/SmileEngine"

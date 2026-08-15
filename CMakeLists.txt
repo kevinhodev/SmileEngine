@@ -54,7 +54,7 @@ endif()
 
 # Localiza Qt 6
 # Quick/Qml/QuickWidgets: migracao incremental da UI do Editor para QML (ilhas QQuickWidget)
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core Concurrent Gui Svg Widgets Qml Quick QuickWidgets QuickControls2)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Concurrent Gui Network Svg Widgets Qml Quick QuickWidgets QuickControls2)
 qt_standard_project_setup()
 
 # Modulo cmake interno: utilitario para compilar shaders HLSL

@@ -4,6 +4,8 @@
 #include <QString>
 #include "SmileEditor/RenderThread.h"
 
+class QTimer;
+
 namespace SmileEditor {
     // ============================================================================================
     // Disparo da captura deterministica (Docs/CAPTURE-PROTOCOL.md).
@@ -29,7 +31,7 @@ namespace SmileEditor {
         Q_PROPERTY(QString lastResult      READ LastResult      NOTIFY ProgressChanged)
 
     public:
-        explicit CaptureBridge(QObject* parent = nullptr) : QObject(parent) {}
+        explicit CaptureBridge(QObject* parent = nullptr);
 
         void SetRenderer(RendererHandle R) { Renderer = R; emit ProgressChanged(); }
         // Nome da cena para o manifesto e para o nome do arquivo. Vem do MainWindow no load.
@@ -38,6 +40,7 @@ namespace SmileEditor {
         bool    Busy() const;
         int     WarmupRemaining() const;
         QString LastResult() const { return Result; }
+        bool    Available() const;
 
         // Enfileira. Slot < 0 = camera livre (o manifesto registra -1). Scientific = resolucao
         // nativa, sem upscaler e sem TAA. PinHours >= 0 fixa a hora do dia da sessao.
@@ -53,6 +56,10 @@ namespace SmileEditor {
     signals:
         void ProgressChanged();
         void Message(const QString& Text);
+        // Resultado consumido do renderer. Alem da UI, o bridge MCP usa este sinal para manter a
+        // named pipe aberta ate PNG + manifesto terem sido publicados de forma atomica.
+        void Finished(bool Success, const QString& PngPath, const QString& ManifestPath,
+                      const QString& Error, int WarmupFrames);
 
     private:
         RendererHandle Renderer;
@@ -60,5 +67,6 @@ namespace SmileEditor {
         QString        Result;
         bool           LastBusy      = false;
         int            LastRemaining = 0;
+        QTimer*        PollTimer     = nullptr;
     };
 }

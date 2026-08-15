@@ -24,6 +24,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/SceneDocument.h
     Include/SmileEditor/CameraBookmarksBridge.h
     Include/SmileEditor/CaptureBridge.h
+    Include/SmileEditor/McpBridge.h
     Include/SmileEditor/MaterialsBridge.h
     Include/SmileEditor/RenderSettingsBridge.h
 )
@@ -50,6 +51,7 @@ set(EDITOR_SOURCES
     Source/SceneDocument.cpp
     Source/CameraBookmarksBridge.cpp
     Source/CaptureBridge.cpp
+    Source/McpBridge.cpp
     Source/MaterialsBridge.cpp
     Source/RenderSettingsBridge.cpp
 )
@@ -86,6 +88,7 @@ target_link_libraries(SmileEditor
         Qt6::Core
         Qt6::Concurrent
         Qt6::Gui
+        Qt6::Network
         Qt6::Svg
         Qt6::Widgets
         Qt6::Qml

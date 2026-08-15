@@ -14,6 +14,7 @@
 #include "SmileEditor/SceneDocument.h"
 #include "SmileEditor/CameraBookmarksBridge.h"
 #include "SmileEditor/CaptureBridge.h"
+#include "SmileEditor/McpBridge.h"
 #include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
@@ -99,6 +100,7 @@ namespace SmileEditor {
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
         CameraBookmarksBr = new CameraBookmarksBridge(this); // bookmarks de camera (renderer depois)
         CaptureBr  = new CaptureBridge(this);         // captura deterministica (renderer depois)
+        McpBr      = new McpBridge(CaptureBr, CameraBookmarksBr, this);
         RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
@@ -451,6 +453,7 @@ namespace SmileEditor {
                     if (MaterialsBr) MaterialsBr->OnSceneLoaded(Path, Additive);
                     if (CameraBookmarksBr) CameraBookmarksBr->OnSceneLoaded(Path, Additive);
                     if (CaptureBr)   CaptureBr->OnSceneLoaded(Path, Additive);
+                    if (McpBr)       McpBr->OnSceneLoaded(Path, Additive);
                     if (Viewport)    Viewport->NotifyDebugTargetsChanged();
                     if (StatusBr) {
                         StatusBr->ShowMessage(
