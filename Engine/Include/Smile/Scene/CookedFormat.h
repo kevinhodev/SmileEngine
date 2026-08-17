@@ -5,7 +5,16 @@
 namespace Smile {
     constexpr u32 kSMeshMagic    = 0x48534D53u; 
     constexpr u32 kSSceneMagic   = 0x4E435353u; 
-    constexpr u32 kCookedVersion = 7u; // v7: o transform do no NAO e mais bakeado no vertice. A geometria
+    constexpr u32 kCookedVersion = 8u; // v8: +payload de RT por triangulo (FRTTriangle, 32 B) numa terceira
+                                       //     regiao do blob, por mesh. O hit de RT deixa de percorrer
+                                       //     PrimitiveIndex -> IB -> 3 vertices (cadeia dependente, enderecos
+                                       //     espalhados) e le UM registro contiguo indexado direto pelo
+                                       //     PrimitiveIndex. Carrega normal de face E as 3 normais de vertice
+                                       //     (octaedricas SNORM16x2) + as 3 UVs (half2): a interpolada continua
+                                       //     mandando na BRDF, a de face continua governando facing/OffsetN/
+                                       //     SignedDist. VB/IB CONTINUAM no arquivo — BLAS, raster e
+                                       //     MeshLightExtract ainda os consomem.
+                                       // v7: o transform do no NAO e mais bakeado no vertice. A geometria
                                        //     sai em espaco LOCAL (AABB da SMeshEntry idem) e cada renderavel
                                        //     carrega nome do no, TRS de mundo e indice do pai. Com isso o
                                        //     cooker passa a DEDUPLICAR mesh por (ufbx_mesh, parte): N nos que
@@ -40,7 +49,15 @@ namespace Smile {
         f32 AABBMax[3];
         u64 VertexOffset; // offset (bytes, relativo ao inicio do blob) p/ Vertex[VertexCount]
         u64 IndexOffset;  // offset (bytes, relativo ao inicio do blob) p/ u32[IndexCount]
+        // v8: terceira regiao do blob — FRTTriangle[RTTriangleCount], com RTTriangleCount ==
+        // IndexCount/3. A correspondencia com o BLAS e POSICIONAL: o registro i descreve o
+        // PrimitiveIndex i, que o DXR define como o i-esimo triangulo na ordem do IB. Por isso o
+        // cooker so gera esta regiao DEPOIS do weld e do winding finais.
+        u64 RTTriangleOffset;
+        u32 RTTriangleCount;
+        u32 Reserved0;    // mantem o struct multiplo de 8 (os u64 acima exigem alinhamento 8)
     };
+    static_assert(sizeof(SMeshEntry) == 64, "SMeshEntry e formato persistido: 64 B na v8");
 
     struct SSceneHeader {
         u32 Magic;   // kSSceneMagic

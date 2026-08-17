@@ -4,23 +4,23 @@
 // Alpha-test de candidatos do RayQuery (extraido do HitShading.hlsli p/ passes que so precisam
 // de visibilidade, ex. ReSTIRGISpatial). Contrato de bindings (declarados pelo shader que
 // inclui): Instances (StructuredBuffer<InstanceGeo>), LinearWrap e root signature
-// heap-directly-indexed (ResourceDescriptorHeap). VB/IB vem bindless via InstanceGeo.
+// heap-directly-indexed (ResourceDescriptorHeap). O payload por triangulo vem bindless via
+// InstanceGeo.TriangleSrv.
 //
 // Instancias com AlphaTest sao marcadas FORCE_NON_OPAQUE na TLAS (RaytracingScene.cpp) e cada
 // candidato nao-opaco amostra albedo.a vs cutoff. Sem isto, cards de folhagem seriam quads
 // solidos (partes transparentes pretas + auto-sombra chapada).
+//
+// ⚠️ ESTE E O CAMINHO MAIS QUENTE dos que migraram, e por um motivo que nao e obvio: ele roda por
+// CANDIDATO de travessia (ver SMILE_RT_PROCEED), nao por hit comitado. Em folhagem um raio gera
+// varios candidatos nao-opacos antes de comitar, entao a contagem de chamadas aqui supera a do
+// PT_LoadHitSurface. Antes ele pagava a cadeia IB -> 3 vertices INTEIRA para extrair 3 UVs — 3
+// leituras dependentes com stride de 32 B para usar 24 B. Agora sao os 12 B de UV do registro.
 bool AlphaTestPass(uint instId, uint tri, float2 bary) {
     InstanceGeo geo = Instances[instId];
     if ((geo.Flags & INSTGEO_FLAG_ALPHATEST) == 0u || geo.HasAlbedo == 0u)
         return true; // sem alpha-test -> trata como opaco
-    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
-    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
-    uint i0 = Idx[tri * 3 + 0];
-    uint i1 = Idx[tri * 3 + 1];
-    uint i2 = Idx[tri * 3 + 2];
-    float2 uv = Verts[i0].TexCoord * (1.0f - bary.x - bary.y)
-              + Verts[i1].TexCoord * bary.x
-              + Verts[i2].TexCoord * bary.y;
+    float2 uv = RT_InterpolatedUV(RT_LoadTriangle(geo, tri), bary);
     Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
     // O fator de opacidade do material entra no recorte, igual ao raster (GBuffer.ps.hlsl faz
     // clip(ClipAlpha * BaseColorFactor.a - AlphaCutoff)). Sem ele, um cutout com BaseColorFactor.a

@@ -112,14 +112,16 @@ FHitSurface PT_LoadHitSurface(InstanceGeo geo, uint tri, float2 bary, float3x4 w
     FHitSurface S;
     S.Pos = rayOrigin + rayDir * hitDist;
 
-    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
-    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
-    uint   i0   = Idx[tri * 3 + 0];
-    uint   i1   = Idx[tri * 3 + 1];
-    uint   i2   = Idx[tri * 3 + 2];
-    float3 nObj = Verts[i0].Normal * (1.0f - bary.x - bary.y)
-                + Verts[i1].Normal * bary.x
-                + Verts[i2].Normal * bary.y;
+    // UM registro pre-cozido, indexado direto pelo PrimitiveIndex — sem passar pelo IB e sem as
+    // tres leituras dependentes no VB. Ele traz a normal de face, as 3 normais de vertice e as 3
+    // UVs, que e tudo o que esta funcao lia da geometria.
+    //
+    // ⚠️ Esta leitura acontece em 100% dos hits, ANTES do retorno antecipado do cache — a chave do
+    // hash precisa da normal. Por isso ela e o unico custo de decodificacao que os ~78% de acerto
+    // NAO evitam, e por isso o payload comeca por ela.
+    const RTTriangle T = RT_LoadTriangle(geo, tri);
+
+    float3 nObj  = RT_InterpolatedNormalObj(T, bary);
     float3 nWrld = mul(nObj, (float3x3)worldToObject);
     float  nLen  = length(nWrld);
     S.GeomN = (nLen > 1e-5f) ? (nWrld / nLen) : normalize(-rayDir);
@@ -144,7 +146,7 @@ FHitSurface PT_LoadHitSurface(InstanceGeo geo, uint tri, float2 bary, float3x4 w
     // O teste sai da normal de FACE (nao da interpolada): em malha suavizada a interpolada erra o
     // sinal perto da silhueta, e era essa impressao que o gate mascarava.
     float3 faceN;
-    const bool faceOk        = HitFaceNormal(Verts, i0, i1, i2, worldToObject, faceN);
+    const bool faceOk        = HitFaceNormal(T, worldToObject, faceN);
     const bool hitFromBehind = faceOk ? (dot(faceN,  rayDir) > 0.0f)
                                       : (dot(S.GeomN, rayDir) > 0.0f);
     S.HitFromBehind = hitFromBehind;
@@ -166,9 +168,7 @@ FHitSurface PT_LoadHitSurface(InstanceGeo geo, uint tri, float2 bary, float3x4 w
     S.OffsetN = faceOk ? (hitFromBehind ? -faceN    : faceN)
                        : (hitFromBehind ? -S.GeomN  : S.GeomN); // degenerado: interpolada
 
-    S.UV = Verts[i0].TexCoord * (1.0f - bary.x - bary.y)
-         + Verts[i1].TexCoord * bary.x
-         + Verts[i2].TexCoord * bary.y;
+    S.UV = RT_InterpolatedUV(T, bary);
 
     // Facing (1): sem gate, igual ao raster. A do cache e a MESMA — a chave tem de ser uma
     // propriedade da superficie, e com a direcao do raio na chave cada raio cairia numa celula
@@ -474,7 +474,7 @@ bool PT_ResolveSelfIntersection(inout RayQuery<RAY_FLAG_NONE> q, inout RayDesc r
         SMILE_RT_PROCEED(q)
         ray.TMin = tmin; // a origem nao mudou; so o intervalo daquela consulta
         // Re-classifica SO aqui: no caminho comum a classificacao de cima ja vale, e o
-        // HitIsBackface custa 3 indices + 3 posicoes.
+        // HitIsBackface custa UM registro de 32 B (era 3 indices + 3 posicoes, dependentes).
         backface = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) &&
                    HitIsBackface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                  q.CommittedWorldToObject3x4(), ray.Direction, twoSided);

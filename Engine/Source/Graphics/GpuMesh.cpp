@@ -3,6 +3,7 @@
 #include "Smile/Graphics/Material.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
+#include <vector>
 
 namespace Smile {
     namespace {
@@ -32,6 +33,18 @@ namespace Smile {
         IndexBufferView.BufferLocation = IndexBuffer->GetGPUVirtualAddress();
         IndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
         IndexBufferView.SizeInBytes    = IndexBufferSize;
+
+        // Payload de RT tambem por aqui: este caminho serve primitiva do editor e preview de
+        // material, que nunca passam pelo .smesh — logo nunca trazem o payload cozido e ele e
+        // gerado agora, do mesmo VB/IB que acabou de subir.
+        std::vector<FRTTriangle> Scratch;
+        const std::vector<FRTTriangle>& Rt = ResolveRTTriangles(_Mesh, Scratch);
+        RtTriangleCount_ = static_cast<u32>(Rt.size());
+        RtFirstElement   = 0;
+        if (RtTriangleCount_ > 0) {
+            RTTriangleBuffer = CreateUploadBuffer(
+                _Device, Rt.data(), static_cast<UINT>(RtTriangleCount_ * sizeof(FRTTriangle)));
+        }
     }
 
     Microsoft::WRL::ComPtr<ID3D12Resource> FGpuMesh::CreatePoolBuffer(ID3D12Device* _Device,
@@ -42,8 +55,8 @@ namespace Smile {
     }
 
     void FGpuMesh::InitFromPool(const Microsoft::WRL::ComPtr<ID3D12Resource>& _Pool,
-                                u64 _VbOffset, u64 _IbOffset,
-                                u32 _VertexCount, u32 _IndexCount) {
+                                u64 _VbOffset, u64 _IbOffset, u64 _RtOffset,
+                                u32 _VertexCount, u32 _IndexCount, u32 _RtTriangleCount) {
         IndexCount = _IndexCount;
         if (_VertexCount == 0 || _IndexCount == 0) { IndexCount = 0; return; }
 
@@ -58,6 +71,11 @@ namespace Smile {
         IndexBufferView.SizeInBytes     = _IndexCount * static_cast<u32>(sizeof(u32));
         VbFirstElement = static_cast<u32>(_VbOffset / sizeof(Vertex));
         IbFirstElement = static_cast<u32>(_IbOffset / sizeof(u32));
+
+        // Terceira regiao do MESMO pool: o ComPtr extra so soma refcount, nao aloca nada.
+        RtTriangleCount_ = _RtTriangleCount;
+        RtFirstElement   = static_cast<u32>(_RtOffset / sizeof(FRTTriangle));
+        if (_RtTriangleCount > 0) RTTriangleBuffer = _Pool;
     }
 
     void FGpuMesh::BindIA(ID3D12GraphicsCommandList* _CommandList) const {

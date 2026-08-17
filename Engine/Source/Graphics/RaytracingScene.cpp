@@ -56,8 +56,16 @@ namespace Smile {
         // hit de RT ler material trocado, em silencio.
         struct FRTInstanceGeo {
             Vec4 BaseColor;
+            // VB/IB continuam aqui: o MeshLightExtract ainda percorre a malha por vertice, e o
+            // raster/BLAS seguem consumindo os mesmos buffers. Quem saiu deles foi o caminho de
+            // HIT (PT_LoadHitSurface, HitFaceNormal, HitIsBackface, HitGeomNormal, AlphaTestPass),
+            // que agora le o TriangleSrv.
             u32  VertexSrv   = 0;
             u32  IndexSrv    = 0;
+            // Payload pre-cozido por triangulo (FRTTriangle, 32 B), indexado por PrimitiveIndex.
+            // Compartilhado por TODAS as instancias da mesma FGpuMesh — ele descreve geometria em
+            // espaco local, entao duas instancias da mesma malha leem o mesmo buffer.
+            u32  TriangleSrv = 0;
             u32  AlbedoIndex = 0;
             u32  HasAlbedo   = 0;
             u32  TwoSidedRT  = 0; // = FMaterial::IsTwoSidedForRT (inclui AlphaTest), nao a flag crua
@@ -70,7 +78,10 @@ namespace Smile {
             u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
             u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
         };
-        static_assert(sizeof(FRTInstanceGeo) == 80, "FRTInstanceGeo deve casar com o HLSL (80B)");
+        // 84 B na v8 (+TriangleSrv). Vec4 aqui e alinhado em 4, entao o struct nao ganha padding
+        // de cauda e o stride do StructuredBuffer casa byte a byte com o `InstanceGeo` do HLSL —
+        // que e o unico contrato que importa (StructuredBuffer nao exige stride multiplo de 16).
+        static_assert(sizeof(FRTInstanceGeo) == 84, "FRTInstanceGeo deve casar com o HLSL (84B)");
     }
 
     static_assert(FRaytracingScene::kInstanceSlots == FCommandQueue::kFramesInFlight,
@@ -228,8 +239,16 @@ namespace Smile {
                     }
                 }
             }
+            // Tres slots CONSECUTIVOS por malha unica: [VB][IB][RTTri]. O base vem do
+            // MeshGeoSlot, que e indexado pela FGpuMesh — entao N instancias da mesma malha
+            // recebem o MESMO TriangleSrv, que e o que torna o payload por malha e nao por
+            // instancia (a conta de VRAM segue triangulos unicos).
             auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
-            if (It != MeshGeoSlot.end()) { g.VertexSrv = It->second; g.IndexSrv = It->second + 1; }
+            if (It != MeshGeoSlot.end()) {
+                g.VertexSrv   = It->second;
+                g.IndexSrv    = It->second + 1;
+                g.TriangleSrv = It->second + 2;
+            }
             std::memcpy(_Mapped + i * sizeof(FRTInstanceGeo), &g, sizeof(FRTInstanceGeo));
         }
     }
@@ -503,7 +522,9 @@ namespace Smile {
         //
         // Os SRVs bindless de VB/IB saem do MESMO UniqueMeshes que dimensionou os BLAS. O DDGI
         // reconstruia essa lista com um criterio identico, palavra por palavra; uma so agora.
-        MeshGeoSlotCount = NumBlas * 2;
+        // TRES por malha desde a v8: [VB][IB][RTTri]. O terceiro e o payload pre-cozido por
+        // triangulo, que o caminho de hit passou a ler no lugar da cadeia IB -> 3 vertices.
+        MeshGeoSlotCount = NumBlas * 3;
         MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
@@ -511,7 +532,7 @@ namespace Smile {
             GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             for (u32 i = 0; i < NumBlas; ++i) {
                 const FGpuMesh* M      = UniqueMeshes[i];
-                const u32       VbSlot = MeshGeoSlotBase + i * 2;
+                const u32       VbSlot = MeshGeoSlotBase + i * 3;
 
                 GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
                 GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
@@ -523,6 +544,18 @@ namespace Smile {
                 GeoSrv.Buffer.NumElements         = M->GetIndexCount();
                 GeoSrv.Buffer.StructureByteStride = 0;
                 _SRVHeap.CreateSRV(_Device.Native(), M->IndexResource(), GeoSrv, VbSlot + 1);
+
+                // Malha sem payload nao deveria existir (o loader recusa cozido sem a regiao, e o
+                // caminho procedural gera no upload), mas um descritor NULO tipado e melhor que
+                // um slot nao escrito: o shader le zeros e cai no fallback de normal invalida,
+                // em vez de amostrar lixo de um descritor herdado.
+                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
+                GeoSrv.Buffer.FirstElement        = M->RTTriangleFirstElement();
+                GeoSrv.Buffer.NumElements         = M->RTTriangleCount();
+                GeoSrv.Buffer.StructureByteStride = sizeof(FRTTriangle);
+                _SRVHeap.CreateSRV(_Device.Native(),
+                                   M->RTTriangleCount() > 0 ? M->RTTriangleResource() : nullptr,
+                                   GeoSrv, VbSlot + 2);
                 MeshGeoSlot[M] = VbSlot;
             }
         }
