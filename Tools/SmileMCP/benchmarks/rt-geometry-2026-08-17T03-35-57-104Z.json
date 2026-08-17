@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-08-17T03:35:57.103Z",
+  "scenePath": "Assets/Scenes/Bistro/BistroExterior.sscene",
+  "sequence": [
+    "packed-a1",
+    "legacy-b",
+    "packed-a2"
+  ],
+  "regime": {
+    "preset": "gameplay_rr",
+    "warmupSeconds": 15,
+    "samples": 60,
+    "intervalMs": 250,
+    "statistic": "timestamp bruto; mediana por rodada; packed = media de A1 e A2"
+  },
+  "restoredVariant": "packed",
+  "comparisons": [],
+  "runs": [],
+  "failure": "McpError: MCP error -32001: Request timed out\n    at McpError.fromError (file:///D:/Engines/SmileEngine/Tools/SmileMCP/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js:2048:16)\n    at Timeout.timeoutHandler (file:///D:/Engines/SmileEngine/Tools/SmileMCP/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js:713:58)\n    at listOnTimeout (node:internal/timers:605:17)\n    at process.processTimers (node:internal/timers:541:7)"
+}

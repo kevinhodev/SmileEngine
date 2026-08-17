@@ -30,6 +30,10 @@ namespace Smile {
             const char* Name = nullptr;
             f64 Milliseconds = 0.0; // suavizado (EMA 0.1)
             u32 Depth = 0;          // 0 = raiz; filhos incrementam conforme a pilha Begin/End
+            // Timestamp do frame lido, sem suavizacao. A UI continua usando Milliseconds; este
+            // campo existe para capturas estatisticas nao tratarem amostras de uma EMA como se
+            // fossem observacoes independentes.
+            f64 RawMilliseconds = 0.0;
         };
         // Snapshot do ultimo frame lido, na ordem de gravacao ("Frame" total incluso).
         const std::vector<FScopeResult>& Results() const { return LastResults; }
