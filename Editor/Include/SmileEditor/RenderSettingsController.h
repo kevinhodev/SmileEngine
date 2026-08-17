@@ -53,6 +53,31 @@ namespace SmileEditor {
         double RenderScale           = 1.0;
         double TimeOfDayHours        = 0.0;
         bool   TimeOfDayRunning      = false;
+        // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Entram no READBACK, e nao so na
+        // aplicacao: quem roda o sweep precisa confirmar o degrau que de fato ficou, sem inferir
+        // do que pediu. Mesmo contrato do resto deste struct.
+        int    DIAnalyticCandidates  = 0;
+        int    DIMeshCandidates      = 0;
+        bool   DIMeshLightsInPool    = false;
+        bool   DIInitialVisibility   = false;
+        bool   DIMeshCompactSupport  = false;
+    };
+
+    // Sobrescritas OPCIONAIS do profile_configure. Os knobs de amostragem ausentes preservam o
+    // valor corrente — um default neles reescreveria o eixo que nao esta em teste. A hora e a
+    // excecao deliberada: ausente preserva o baseline historico e deterministico de 10:00;
+    // presente permite que a mesma regua rode de noite sem uma mutacao manual posterior.
+    //
+    // Nao viraram comando MCP proprio de proposito: o regime deterministico ja e responsabilidade
+    // do profile_configure, e um segundo comando abriria a possibilidade de configurar knob sem
+    // fixar preset/TOD — exatamente a captura sem regime declarado que o protocolo proibe.
+    struct FProfileOverrides {
+        std::optional<double> TimeOfDayHours;
+        std::optional<int>  DIAnalyticCandidates;
+        std::optional<int>  DIMeshCandidates;
+        std::optional<bool> DIMeshLightsInPool;
+        std::optional<bool> DIInitialVisibility;
+        std::optional<bool> DIMeshCompactSupport;
     };
 
     struct FProfileSnapshot {
@@ -87,8 +112,12 @@ namespace SmileEditor {
         void SetViewport(ViewportWidget* Value);
         bool Ready() const;
 
+        // As sobrescritas sao aplicadas DEPOIS do preset, para o preset continuar sendo o regime
+        // base declarado e o override ser so o eixo em teste. Invertida, a ordem faria o preset
+        // apagar o degrau do sweep silenciosamente.
         std::optional<FProfileConfiguration> ApplyProfilePreset(
-            EProfilePreset Preset, QString& Error);
+            EProfilePreset Preset, QString& Error,
+            const FProfileOverrides& Overrides = {});
         std::optional<FProfileSnapshot> ProfileSnapshot(QString& Error) const;
 
     signals:

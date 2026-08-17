@@ -1333,6 +1333,57 @@ namespace Smile {
         S.ReGIR       = ReGIRRanThisFrame;    // toggle + consumidor + luz na cena
         S.ReGIRRequested     = UseReGIR;      // so o toggle — a diferenca entre os dois e o achado
         S.PunctualLightCount = GILightCountThisFrame;
+
+        // Mesh lights e amostragem do DI (MESH-LIGHTS-PLAN.md, Fase 0). Mesmo criterio do bloco
+        // acima: contagem LEVANTADA da cena de um lado, e do outro o que a distribuicao de fato
+        // conseguiu publicar. Elas divergem enquanto o readback do fluxo nao fecha, e e nessa
+        // janela que uma captura disparada cedo demais sairia afirmando mesh lights numa imagem
+        // que nao teve nenhuma.
+        {
+            const FMeshLights::FDistributionStats& D = MeshLights.Distribution();
+            S.MeshLightSurveyed  = MeshLights.ExtractedTriangleCount();
+            S.MeshLightSamplable = MeshLights.SamplableTriangleCount();
+            S.MeshAliasReady     = MeshLights.IsAliasReady();
+            S.MeshLightTotalFlux = D.TotalFlux;
+            // A validade e a alias table estar pronta, e nao o fluxo ser maior que zero: os dois
+            // sao numeros diferentes justamente quando toda a geometria emissiva tem radiancia
+            // nula, que e um estado legitimo e precisa se distinguir do rebuild em andamento.
+            S.MeshLightFluxValid = MeshLights.IsAliasReady();
+            S.MeshLightUniformFallback = D.UniformFallback;
+            S.MeshTriDegenerate = D.Degenerate;
+            S.MeshTriZeroFlux   = D.ZeroFlux;
+            S.MeshTriNonFinite  = D.NonFinite;
+            S.MeshLightTrianglePayloadBytes = MeshLights.TrianglePayloadBytes();
+            S.MeshLightAliasUploadPayloadBytes  = MeshLights.AliasUploadPayloadBytes();
+            S.MeshLightAliasDefaultPayloadBytes = MeshLights.AliasDefaultPayloadBytes();
+            S.MeshCompactRequested         = MeshLights.GetCompactSupport();
+            S.MeshCompactEffective         = MeshLights.IsCompactSupportEffective();
+            // TAMANHO DO DOMINIO, e nao trafego — ver o comentario no FCaptureState.
+            S.MeshLightAliasDomainBytes    = MeshLights.AliasDomainBytes();
+            S.MeshLightTriangleDomainBytes = MeshLights.TriangleDomainBytes();
+            S.MeshLightTriangleCompactPayloadBytes  = MeshLights.TriangleCompactPayloadBytes();
+            S.MeshLightTriangleStagingPayloadBytes  = MeshLights.TriangleStagingPayloadBytes();
+            S.MeshLightTriangleReadbackPayloadBytes = MeshLights.TriangleReadbackPayloadBytes();
+            S.MeshLightVramBytes             = MeshLights.VramBytes();
+
+            S.DIAnalyticCandidatesRequested = ReSTIRDI.GetInitialCandidates();
+            S.DIMeshCandidatesRequested     = ReSTIRDI.GetMeshCandidates();
+            S.DIMeshLightsInPoolRequested   = ReSTIRDI.GetMeshLightsInPool();
+            S.DIInitialVisibilityRequested  = ReSTIRDI.GetInitialVisibility();
+            // Os efetivos saem do que o UpdatePerFrame publicou no cbuffer, e sao zerados quando o
+            // DI nao rodou. Recompor a condicao aqui daria outra resposta pelo mesmo motivo do
+            // CacheUpdate logo abaixo: este metodo roda depois do EndFrame.
+            const bool DIRan = _Modes.ReSTIRDIActiveFrame;
+            S.DIAnalyticCandidatesEffective = DIRan ? ReSTIRDI.EffectiveAnalyticCandidates() : 0u;
+            S.DIMeshCandidatesEffective     = DIRan ? ReSTIRDI.EffectiveMeshCandidates() : 0u;
+            S.DIMeshLightsInPoolEffective   = DIRan && ReSTIRDI.EffectiveMeshLightCount() > 0u;
+            S.DIInitialVisibilityEffective  = DIRan && ReSTIRDI.GetInitialVisibility();
+            S.DIRenderWidth  = DIRan ? ReSTIRDI.DIRenderWidth()  : 0u;
+            S.DIRenderHeight = DIRan ? ReSTIRDI.DIRenderHeight() : 0u;
+            // RIS, dado compacto e meia resolucao continuam nao existindo. Ficam explicitamente
+            // false em vez de ausentes — ver o comentario no FCaptureState.
+        }
+
         S.Reflections = _Modes.ReflectionsActive;
         // O que o ShaderParams REALMENTE publicou aos traces deste frame. Recompor a condicao
         // aqui (Enabled && Ready && !ResetPending) daria outra resposta: o resolve limpa o
@@ -5270,6 +5321,16 @@ namespace Smile {
             SceneContentDirty = false;
             Settings().NotifySceneContentChanged();
         }
+
+        // O dominio de mesh lights ficou pronto: limpa o historico ANTES de abrir o pool. Aqui,
+        // junto das coalescencias acima, porque e onde o clear ainda alcanca o frame inteiro.
+        //
+        // O clear NAO pode acontecer no setter do knob: entre o pedido e a tabela nova existem
+        // varios frames de extracao, readback e copia, e o historico limpo la volta a encher sob o
+        // dominio ANTIGO nesse intervalo. Com a compactacao isso nao e so higiene de A/B — o
+        // dominio muda de tamanho, entao o mesmo indice de reservoir passa a apontar para outro
+        // triangulo.
+        if (MeshLights.ConsumeDomainPublish()) Settings().NotifyMeshDomainChanged();
 
         // Captura deterministica: abre a sessao (preset + reset) ou desfaz o preset da anterior.
         // AQUI, junto das coalescencias acima e antes do BeginFrame, pelo mesmo motivo delas —

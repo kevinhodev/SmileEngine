@@ -549,6 +549,77 @@ namespace Smile {
     bool FRenderSettings::GetUseReSTIRDI() const { return R.UseReSTIRDI; }
     bool FRenderSettings::ReSTIRDIActive() const { return R.UseReSTIRDI && R.ReSTIRDI.IsReady(); }
 
+    // Knobs da matriz da Fase 0 (MESH-LIGHTS-PLAN.md §5). O FReSTIRDI ja marca o proprio
+    // NeedsClear no setter — o que se acrescenta aqui e o resto da cadeia, pelo argumento do
+    // SetGIBackfacePolicy: o clear do reservoir sozinho nao basta porque o NRD direto acumula
+    // SOBRE ele e o resolve sobre o resultado. Mesma mascara do SetUseReSTIRDI, porque e o mesmo
+    // sinal que muda.
+    //
+    // Sem guarda de igualdade aqui: os setters do FReSTIRDI ja comparam antes de sujar, e um
+    // Invalidate a mais numa acao deliberada do operador custa alguns frames de reacumulo.
+    namespace {
+        constexpr EHistoryTarget kDISamplingHistory =
+            EHistoryTarget::ReSTIRDI | EHistoryTarget::NrdDirect | Dom::Resolve;
+    }
+
+    void FRenderSettings::SetDIInitialCandidates(u32 _V) {
+        R.ReSTIRDI.SetInitialCandidates(_V);
+        Invalidate(kDISamplingHistory);
+    }
+    u32 FRenderSettings::GetDIInitialCandidates() const {
+        return R.ReSTIRDI.GetInitialCandidates();
+    }
+
+    void FRenderSettings::SetDIMeshCandidates(u32 _V) {
+        R.ReSTIRDI.SetMeshCandidates(_V);
+        Invalidate(kDISamplingHistory);
+    }
+    u32 FRenderSettings::GetDIMeshCandidates() const {
+        return R.ReSTIRDI.GetMeshCandidates();
+    }
+
+    void FRenderSettings::SetDIMeshLightsInPool(bool _V) {
+        R.ReSTIRDI.SetMeshLightsInPool(_V);
+        Invalidate(kDISamplingHistory);
+    }
+    bool FRenderSettings::GetDIMeshLightsInPool() const {
+        return R.ReSTIRDI.GetMeshLightsInPool();
+    }
+
+    void FRenderSettings::SetDIInitialVisibility(bool _V) {
+        R.ReSTIRDI.SetInitialVisibility(_V);
+        Invalidate(kDISamplingHistory);
+    }
+    bool FRenderSettings::GetDIInitialVisibility() const {
+        return R.ReSTIRDI.GetInitialVisibility();
+    }
+
+    // Muda o DOMINIO amostrado, entao o indice guardado no reservoir passa a significar outro
+    // triangulo: o clear nao e opcional aqui, e sim correcao. Sem ele, um reservoir do braco
+    // anterior apontaria para o triangulo errado no dominio novo.
+    void FRenderSettings::SetDIMeshCompactSupport(bool _V) {
+        if (_V == R.MeshLights.GetCompactSupport()) return;
+        R.MeshLights.SetCompactSupport(_V);
+        // Forca a reconstrucao da tabela: a compactacao acontece no BuildAliasTable, que so
+        // roda quando a cena fica suja.
+        //
+        // NAO invalida aqui. O dominio novo so existe alguns frames depois — extracao, readback
+        // diferido, construcao, copia —, e um clear no PEDIDO deixaria o historico reenchendo sob o
+        // dominio ANTIGO nesse intervalo. O clear acontece na PUBLICACAO, pelo
+        // NotifyMeshDomainChanged; o MarkDirty ja fechou o pool ate la.
+        R.MeshLights.MarkDirty();
+    }
+    bool FRenderSettings::GetDIMeshCompactSupport() const {
+        return R.MeshLights.GetCompactSupport();
+    }
+
+    void FRenderSettings::NotifyMeshDomainChanged() {
+        // Mesma mascara dos knobs de amostragem: o reservoir guarda indice, o NRD direto acumula
+        // sobre ele e o resolve sobre o resultado.
+        Invalidate(kDISamplingHistory);
+    }
+
+
     const FRayEpsilonProfile& FRenderSettings::GetRayEpsilons() const { return R.RayEps; }
 
     void FRenderSettings::SetRayEpsilons(const FRayEpsilonProfile& _P) {

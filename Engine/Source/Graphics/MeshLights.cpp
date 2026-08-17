@@ -29,6 +29,116 @@ namespace Smile {
             return MC.EmissiveFactor.X > 0.0f || MC.EmissiveFactor.Y > 0.0f ||
                    MC.EmissiveFactor.Z > 0.0f;
         }
+
+        // fp16 -> f32 para ler as arestas do readback. Existe aqui e nao no Math.h porque este e
+        // o unico consumidor CPU do empacotamento do MeshLightCommon.hlsli; promover a utilitario
+        // geral criaria uma segunda convencao de half na engine sem cliente que a justifique.
+        //
+        // Subnormais sao normalizados, e NAO achatados em zero. Achatar parece inofensivo e nao e:
+        // o maior subnormal de half vale 2^-14 ~= 6,1e-5 (e nao ~6e-8, que e o MENOR, 2^-24). Um
+        // triangulo com as arestas nessa ordem tem |cross| ~= 3,6e-9, muito acima do 1e-12 que o
+        // DI_SampleTriangleLight testa: o shader o aceita, e achatar as componentes faria o
+        // contador da CPU marca-lo como degenerado. Seria justamente a divergencia entre as duas
+        // nocoes de degenerado que o TriangleCrossLength existe para nao ter.
+        f32 HalfToFloat(u16 H) {
+            const u32 Sign = static_cast<u32>(H & 0x8000u) << 16;
+            const u32 Exp  = (H >> 10) & 0x1Fu;
+            u32       Mant = H & 0x03FFu;
+            u32 Bits;
+            if (Exp == 0u) {
+                if (Mant == 0u) {
+                    Bits = Sign; // +-0
+                } else {
+                    // Desloca ate o bit implicito aparecer. Valor = m * 2^-24; com Shift
+                    // deslocamentos o expoente sem vies fica -14 - Shift, ou seja 113 - Shift
+                    // depois do vies de 127.
+                    u32 Shift = 0;
+                    while ((Mant & 0x0400u) == 0u) { Mant <<= 1; ++Shift; }
+                    Mant &= 0x03FFu;
+                    Bits = Sign | ((113u - Shift) << 23) | (Mant << 13);
+                }
+            } else if (Exp == 31u) {
+                Bits = Sign | 0x7F800000u | (Mant << 13);     // Inf/NaN
+            } else {
+                Bits = Sign | ((Exp + 112u) << 23) | (Mant << 13); // 127 - 15
+            }
+            f32 Out;
+            std::memcpy(&Out, &Bits, sizeof(Out));
+            return Out;
+        }
+
+        // |cross(e0, e1)| do triangulo extraido — o dobro da area. Devolve exatamente a grandeza
+        // que o DI_SampleTriangleLight testa contra 1e-12, para o contador de degenerados contar
+        // os triangulos que o SHADER rejeita e nao uma nocao paralela de degenerado.
+        f32 TriangleCrossLength(const FTriangleLightGPU& T) {
+            const f32 E0x = HalfToFloat(static_cast<u16>(T.Edges0 & 0xFFFFu));
+            const f32 E0y = HalfToFloat(static_cast<u16>(T.Edges1 & 0xFFFFu));
+            const f32 E0z = HalfToFloat(static_cast<u16>(T.Edges2 & 0xFFFFu));
+            const f32 E1x = HalfToFloat(static_cast<u16>(T.Edges0 >> 16));
+            const f32 E1y = HalfToFloat(static_cast<u16>(T.Edges1 >> 16));
+            const f32 E1z = HalfToFloat(static_cast<u16>(T.Edges2 >> 16));
+            const f32 Cx = E0y * E1z - E0z * E1y;
+            const f32 Cy = E0z * E1x - E0x * E1z;
+            const f32 Cz = E0x * E1y - E0y * E1x;
+            return std::sqrt(Cx * Cx + Cy * Cy + Cz * Cz);
+        }
+    }
+
+    namespace {
+        // Todos os buffers de triangulo/alias sao dimensionados pelo mesmo LightElems do
+        // SetupForScene: no minimo um elemento, mesmo sem geometria emissiva.
+        u64 PayloadBytes(const Microsoft::WRL::ComPtr<ID3D12Resource>& Res, u32 NumTriangles,
+                         size_t Stride) {
+            if (!Res) return 0;
+            return static_cast<u64>(std::max(NumTriangles, 1u)) * Stride;
+        }
+
+        // Footprint de um BUFFER: o payload arredondado para cima no alinhamento de alocacao de
+        // recurso do D3D12 (64 KiB). Para buffer isso e exatamente o que o
+        // GetResourceAllocationInfo devolveria, e por ser deterministico dispensa guardar o
+        // resultado por recurso na criacao.
+        u64 AlignedFootprint(u64 Payload) {
+            if (Payload == 0) return 0;
+            constexpr u64 kAlign = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT; // 64 KiB
+            return (Payload + kAlign - 1u) & ~(kAlign - 1u);
+        }
+    }
+
+    u64 FMeshLights::TrianglePayloadBytes() const {
+        return PayloadBytes(LightBuffer, NumTriangles, sizeof(FTriangleLightGPU));
+    }
+
+    u64 FMeshLights::TriangleCompactPayloadBytes() const {
+        return PayloadBytes(CompactLightBuffer, NumTriangles, sizeof(FTriangleLightGPU));
+    }
+
+    u64 FMeshLights::TriangleStagingPayloadBytes() const {
+        return PayloadBytes(CompactUploadBuffer, NumTriangles, sizeof(FTriangleLightGPU));
+    }
+
+    u64 FMeshLights::TriangleReadbackPayloadBytes() const {
+        return PayloadBytes(ReadbackBuffer, NumTriangles, sizeof(FTriangleLightGPU));
+    }
+
+    // Só o que ocupa VRAM: os dois DEFAULT de triangulo mais a alias em DEFAULT. O staging e o
+    // readback moram em system memory e por isso ficam fora — somá-los aqui inflaria o orçamento
+    // de VRAM com memória que não é VRAM, que é exatamente o erro que este bloco existe p/ evitar.
+    //
+    // Soma de FOOTPRINTS ALINHADOS, e não de payloads: um pool de um triângulo tem 32 B de payload
+    // e ocupa 64 KiB. Somar payload aqui subestimaria a VRAM por três ordens de grandeza em cena
+    // pequena — e o campo se chama VRAM, então tem de descrever VRAM.
+    u64 FMeshLights::VramBytes() const {
+        return AlignedFootprint(TrianglePayloadBytes()) +
+               AlignedFootprint(TriangleCompactPayloadBytes()) +
+               AlignedFootprint(AliasDefaultPayloadBytes());
+    }
+
+    u64 FMeshLights::AliasUploadPayloadBytes() const {
+        return PayloadBytes(AliasBuffer, NumTriangles, sizeof(FMeshLightAliasGPU));
+    }
+
+    u64 FMeshLights::AliasDefaultPayloadBytes() const {
+        return PayloadBytes(AliasDefaultBuffer, NumTriangles, sizeof(FMeshLightAliasGPU));
     }
 
     void FMeshLights::Survey(const FScene& _Scene) {
@@ -129,13 +239,31 @@ namespace Smile {
         FreeSlot(LightsSRV, 1);
         FreeSlot(LightsUAV, 1);
         FreeSlot(AliasSRV, 1);
+        FreeSlot(AliasDefaultSRV, 1);
+        FreeSlot(CompactLightsSRV, 1);
         FreeSlot(ExtractTable, 2);
         TaskBuffer.Reset();
         LightBuffer.Reset();
         ReadbackBuffer.Reset();
         if (AliasBuffer && MappedAlias) { AliasBuffer->Unmap(0, nullptr); MappedAlias = nullptr; }
         AliasBuffer.Reset();
+        AliasDefaultBuffer.Reset();
+        CompactLightBuffer.Reset();
+        CompactUploadBuffer.Reset();
+        MappedCompact      = nullptr;
+        CompactLightState  = D3D12_RESOURCE_STATE_COMMON;
+        CompactCopyPending = false;
+        CompactApplied     = false;
+        NumSamplable       = 0;
+        DomainPublished      = false;
+        PendingDomainPublish = false;
+        AliasDefaultState  = D3D12_RESOURCE_STATE_COMMON;
+        // O PEDIDO sobrevive ao rebuild de cena: ele e configuracao do operador, nao estado do
+        // recurso. O que morre e a copia e o vinculo, que descrevem buffers que deixaram de existir.
+        AliasDefaultCopied = false;
+        AliasCopyPending   = false;
         AliasReady      = false;
+        DistStats       = FDistributionStats{};
         ReadbackPending = false;
         ReadbackAge     = 0;
         LightState   = D3D12_RESOURCE_STATE_COMMON;
@@ -238,6 +366,41 @@ namespace Smile {
         AliasSRV = _SRVHeap.Allocate(1);
         _SRVHeap.CreateSRV(_Device, AliasBuffer.Get(), Srv, AliasSRV);
 
+        // Copia em DEFAULT heap, alocada SEMPRE — inclusive com o toggle desligado. O A/B da
+        // Fase 0.5 varia so o descritor que o Pass A le; alocar junto com o toggle faria o braco
+        // ligado pagar tambem a pressao de memoria, e a medida atribuiria a localizacao um custo
+        // que era de alocacao.
+        AliasDefaultBuffer = GpuResources::CreateBuffer(
+            _Device, sizeof(FMeshLightAliasGPU) * LightElems,
+            D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON,
+            EVramCategory::GI, "Mesh lights · alias (default heap)");
+        AliasDefaultState = D3D12_RESOURCE_STATE_COMMON;
+        AliasDefaultSRV   = _SRVHeap.Allocate(1);
+        _SRVHeap.CreateSRV(_Device, AliasDefaultBuffer.Get(), Srv, AliasDefaultSRV);
+
+        // Copia COMPACTA dos triangulos, em VRAM, e o staging dela. Dimensionados pelo PIOR caso
+        // (todos os triangulos com fluxo) para o SRV nunca precisar ser recriado quando o conteudo
+        // da cena mudar: quem varia e a CONTAGEM publicada, nao a alocacao.
+        const GpuResources::FUploadBuffer CompactUpload = GpuResources::CreateUploadBuffer(
+            _Device, sizeof(FTriangleLightGPU) * LightElems, 1, false);
+        CompactUploadBuffer = CompactUpload.Resource;
+        MappedCompact       = CompactUpload.Mapped;
+        std::memset(MappedCompact, 0, sizeof(FTriangleLightGPU) * LightElems);
+
+        CompactLightBuffer = GpuResources::CreateBuffer(
+            _Device, sizeof(FTriangleLightGPU) * LightElems,
+            D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON,
+            EVramCategory::GI, "Mesh lights · triangulos compactos");
+        CompactLightState = D3D12_RESOURCE_STATE_COMMON;
+
+        Srv.Buffer.NumElements         = LightElems;
+        Srv.Buffer.StructureByteStride = sizeof(FTriangleLightGPU);
+        CompactLightsSRV = _SRVHeap.Allocate(1);
+        _SRVHeap.CreateSRV(_Device, CompactLightBuffer.Get(), Srv, CompactLightsSRV);
+
+        NumSamplable   = NumTriangles;
+        CompactApplied = false;
+
         ExtractTable = _SRVHeap.Allocate(2);
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(ExtractTable);
         D3D12_CPU_DESCRIPTOR_HANDLE Src[2] = {
@@ -269,13 +432,68 @@ namespace Smile {
                        const_cast<FTriangleLightGPU**>(&Src)))) || !Src)
             return;
 
-        const u32 N = NumTriangles;
-        std::vector<f64> P(N);
+        // Primeira passada: estatisticas e o SUPORTE POSITIVO. `Support` guarda os indices no
+        // dominio original; ele vira o dominio compacto se a compactacao estiver ligada.
+        std::vector<u32> Support;
+        Support.reserve(NumTriangles);
         f64 Total = 0.0;
-        for (u32 i = 0; i < N; ++i) {
+        DistStats = FDistributionStats{};
+        DistStats.Triangles = NumTriangles;
+        for (u32 i = 0; i < NumTriangles; ++i) {
             const f32 F = Src[i].Flux;
-            P[i]   = (F > 0.0f && std::isfinite(F)) ? static_cast<f64>(F) : 0.0;
-            Total += P[i];
+            // Mesma ORDEM de rejeicao do DI_SampleTriangleLight: corrompido, depois degenerado,
+            // depois sem energia. Classificar fora dessa ordem faria um triangulo degenerado E sem
+            // radiancia aparecer como conteudo, escondendo o defeito de geometria atras dele.
+            if (!std::isfinite(F))                        ++DistStats.NonFinite;
+            else if (TriangleCrossLength(Src[i]) < 1e-12f) ++DistStats.Degenerate;
+            else if (F <= 0.0f)                            ++DistStats.ZeroFlux;
+
+            if (F > 0.0f && std::isfinite(F)) {
+                Support.push_back(i);
+                Total += static_cast<f64>(F);
+            }
+        }
+        DistStats.TotalFlux = Total;
+
+        // Compacta so quando ha suporte positivo. Com fluxo total zero o caminho antigo (tabela
+        // uniforme sobre TODOS os triangulos) e preservado inteiro: mudar aquele caso aqui seria
+        // uma segunda alteracao de comportamento escondida dentro desta.
+        CompactApplied = CompactRequested && Total > 0.0 && MappedCompact != nullptr &&
+                         !Support.empty();
+        NumSamplable   = CompactApplied ? static_cast<u32>(Support.size()) : NumTriangles;
+        const u32 N    = NumSamplable;
+
+        // P e construido sobre o dominio EFETIVAMENTE AMOSTRADO, e o tamanho dele tem de ser N.
+        //
+        // Aqui morava um bug: P era preenchido so com o suporte positivo, mas N caia para
+        // NumTriangles quando a compactacao estava desligada — e o laco de Vose abaixo indexava
+        // P[i] alem do fim do vetor. O braco de CONTROLE do A/B construia a tabela a partir de
+        // memoria de heap arbitraria, e so foi pego porque a imagem dos dois bracos foi comparada:
+        // o compactado saiu 4% mais claro, contra um piso de ruido de 0,02%.
+        std::vector<f64> P(N);
+        if (CompactApplied) {
+            for (u32 k = 0; k < N; ++k) P[k] = static_cast<f64>(Src[Support[k]].Flux);
+        } else {
+            for (u32 i = 0; i < N; ++i) {
+                const f32 F = Src[i].Flux;
+                P[i] = (F > 0.0f && std::isfinite(F)) ? static_cast<f64>(F) : 0.0;
+            }
+        }
+
+        if (CompactApplied) {
+            // Os 32 bytes do triangulo viajam inteiros: o dominio compacto nao precisa de mapa de
+            // volta para o indice original, porque o reservoir guarda o indice COMPACTO e o
+            // triangulo que ele aponta ja tem tudo que o Pass A e o Pass B leem.
+            FTriangleLightGPU* CDst = reinterpret_cast<FTriangleLightGPU*>(MappedCompact);
+            for (u32 k = 0; k < N; ++k) CDst[k] = Src[Support[k]];
+            CompactCopyPending = true;
+        } else if (!CompactRequested || Total <= 0.0) {
+            // Sem compactacao o Pass A amostra o buffer original, mas o SRV compacto continua
+            // ligado na tabela de trace — entao ele precisa receber os mesmos dados.
+            if (MappedCompact) {
+                std::memcpy(MappedCompact, Src, sizeof(FTriangleLightGPU) * NumTriangles);
+                CompactCopyPending = true;
+            }
         }
 
         D3D12_RANGE NoWrite{ 0, 0 };
@@ -288,6 +506,8 @@ namespace Smile {
             const f32 Uniform = 1.0f / static_cast<f32>(N);
             for (u32 i = 0; i < N; ++i) Dst[i] = { 1.0f, i, Uniform, Uniform };
             AliasReady = true;
+            AliasCopyPending = true;
+            DistStats.UniformFallback = true;
             LogInfo("MeshLights: alias table uniforme (fluxo total zero).");
             return;
         }
@@ -323,8 +543,26 @@ namespace Smile {
         }
 
         AliasReady = true;
+        // A copia para o DEFAULT heap fica pendente ate o proximo Record. O conteudo mudou, entao
+        // a copia anterior — se existia — descreve uma tabela que nao vale mais.
+        AliasCopyPending = true;
         LogInfo("MeshLights: alias table pronta para " + std::to_string(N) +
                 " triangulos (fluxo total " + std::to_string(Total) + ").");
+        if (CompactApplied) {
+            LogInfo("MeshLights: dominio compactado de " + std::to_string(NumTriangles) +
+                    " para " + std::to_string(N) + " triangulos (" +
+                    std::to_string(static_cast<u32>(100.0 * N / NumTriangles + 0.5)) +
+                    "% do original).");
+        }
+        const u32 Rejected = DistStats.Degenerate + DistStats.ZeroFlux + DistStats.NonFinite;
+        if (Rejected > 0) {
+            // So quando existe: numa cena limpa esta linha nao aparece, e a ausencia dela e
+            // informacao. Aparecendo, ela diz qual dos tres problemas comprar.
+            LogInfo("MeshLights: " + std::to_string(Rejected) + " triangulos sem contribuicao (" +
+                    std::to_string(DistStats.Degenerate) + " degenerados, " +
+                    std::to_string(DistStats.ZeroFlux) + " com radiancia zero, " +
+                    std::to_string(DistStats.NonFinite) + " com fluxo invalido).");
+        }
     }
 
     void FMeshLights::Record(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
@@ -338,6 +576,64 @@ namespace Smile {
                 BuildAliasTable();
             }
         }
+
+        // Copia UPLOAD -> DEFAULT da alias table. FORA do gate de Dirty logo abaixo: quem acabou de
+        // produzir a tabela foi o BuildAliasTable acima, num frame em que a cena ja nao esta suja —
+        // dentro do gate, a copia nunca aconteceria.
+        //
+        // Os bytes sao os MESMOS: uma copia do recurso inteiro, sem reconstruir a tabela. E o que
+        // faz o A/B medir localizacao e nada mais; reconstruir dos dois lados abriria espaco para
+        // as duas distribuicoes divergirem por arredondamento.
+        //
+        // O upload heap fica em GENERIC_READ permanentemente (exigencia do tipo de heap), entao so
+        // o destino transiciona. Este passe roda ANTES do ReSTIR DI no mesmo command list, e a
+        // barreira abaixo e o que garante que o Pass A do mesmo frame ja leia o conteudo copiado.
+        if (AliasCopyPending && AliasDefaultBuffer && AliasBuffer) {
+            auto ToState = [&](D3D12_RESOURCE_STATES After) {
+                if (AliasDefaultState == After) return;
+                D3D12_RESOURCE_BARRIER B{};
+                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                B.Transition.pResource   = AliasDefaultBuffer.Get();
+                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                B.Transition.StateBefore = AliasDefaultState;
+                B.Transition.StateAfter  = After;
+                _CL->ResourceBarrier(1, &B);
+                AliasDefaultState = After;
+            };
+            ToState(D3D12_RESOURCE_STATE_COPY_DEST);
+            _CL->CopyResource(AliasDefaultBuffer.Get(), AliasBuffer.Get());
+            ToState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            AliasCopyPending   = false;
+            AliasDefaultCopied = true;
+        }
+
+        // Triangulos compactados: mesma janela e mesmo raciocinio da copia acima. Os dois buffers
+        // sao publicados juntos porque o indice do reservoir e o da alias vivem no MESMO dominio —
+        // subir um sem o outro faria a probabilidade apontar para o triangulo errado.
+        if (CompactCopyPending && CompactLightBuffer && CompactUploadBuffer) {
+            auto ToState = [&](D3D12_RESOURCE_STATES After) {
+                if (CompactLightState == After) return;
+                D3D12_RESOURCE_BARRIER B{};
+                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                B.Transition.pResource   = CompactLightBuffer.Get();
+                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                B.Transition.StateBefore = CompactLightState;
+                B.Transition.StateAfter  = After;
+                _CL->ResourceBarrier(1, &B);
+                CompactLightState = After;
+            };
+            ToState(D3D12_RESOURCE_STATE_COPY_DEST);
+            _CL->CopyResource(CompactLightBuffer.Get(), CompactUploadBuffer.Get());
+            ToState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            CompactCopyPending = false;
+        }
+
+        // Com os dois buffers no lugar, o dominio novo esta pronto — mas so PENDENTE. Quem o abre e
+        // o Renderer, depois de limpar o historico: o indice do reservoir pode ter mudado de
+        // significado, e servi-lo contra o dominio novo apontaria para outro triangulo.
+        if (AliasReady && AliasDefaultCopied && !CompactCopyPending && !DomainPublished)
+            PendingDomainPublish = true;
+
         if (!Dirty) return;
 
         if (LightState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
@@ -378,6 +674,15 @@ namespace Smile {
         ReadbackPending = true;
         ReadbackAge     = 0;
         AliasReady      = false;
+        // Fecha o pool enquanto a tabela e reconstruida. Sem isto, o dominio ANTIGO continuaria
+        // publicado durante o rebuild e o `effective` do manifesto descreveria um regime que a
+        // proxima tabela pode nem ter.
+        DomainPublished      = false;
+        PendingDomainPublish = false;
+        // Junto com o AliasReady, e nao so no Release: durante o rebuild a distribuicao publicada
+        // descreveria a tabela ANTERIOR, e uma captura disparada nesses frames sairia afirmando um
+        // fluxo total que nao era o da tabela em uso.
+        DistStats       = FDistributionStats{};
 
         // Estatico: sem isto a extracao rodaria todo frame reconstruindo o mesmo dado.
         Dirty = false;

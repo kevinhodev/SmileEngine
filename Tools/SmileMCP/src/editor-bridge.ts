@@ -85,6 +85,18 @@ export interface ProfileConfiguration {
   settings: Record<string, unknown>;
 }
 
+// Overrides da regua da Fase 0. Knob de amostragem ausente PRESERVA o valor corrente; a hora
+// ausente usa 10:00 para manter o baseline historico. Todos ficam opcionais na borda para `null`
+// poder significar "nao informado" em payloads montados dinamicamente.
+export interface ProfileOverrides {
+  timeOfDayHours?: number;
+  diAnalyticCandidates?: number;
+  diMeshCandidates?: number;
+  meshLightsInPool?: boolean;
+  diInitialVisibility?: boolean;
+  meshCompactSupport?: boolean;
+}
+
 function isInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return (
@@ -222,10 +234,13 @@ export class SmileEditorBridge {
   async configureProfile(
     preset: "gameplay_rr" | "controlled_native",
     bookmarkSlot: number,
+    overrides: ProfileOverrides = {},
   ): Promise<ProfileConfiguration> {
+    // Espalhados e nao enumerados: uma chave so viaja quando o chamador a definiu, e o editor
+    // trata ausencia como "preserve". Enumerar aqui reintroduziria `undefined` no JSON.
     const result = await this.request(
       "profile_configure",
-      { preset, bookmarkSlot },
+      { preset, bookmarkSlot, ...overrides },
       30_000,
     );
     if (!result || typeof result !== "object") {

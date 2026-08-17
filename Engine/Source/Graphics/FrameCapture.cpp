@@ -96,7 +96,33 @@ namespace Smile {
             if (S.UseGI)       Add("gi");
             if (S.DDGIReady)   Add("ddgi");
             if (S.ReSTIRGI)    Add("rgi");
-            if (S.ReSTIRDI)    Add("rdi");
+            // O `rdi` carrega a CONFIGURACAO DE AMOSTRAGEM junto, pelo mesmo motivo do `rc` mais
+            // abaixo: o sweep da Fase 0 produz capturas que so diferem no orcamento de candidatas,
+            // e sem isto as quatro cairiam na pasta com nome identico — as "duas capturas
+            // indistinguiveis" contra as quais o resto desta funcao foi escrito.
+            if (S.ReSTIRDI) {
+                std::string Di = "rdi";
+                Di += 'A'; Di += std::to_string(S.DIAnalyticCandidatesEffective);
+                // Tres estados distintos, e nao dois: `Moff` e o braco desligado do A/B, `M0` e
+                // pool pedido sem nada amostravel (alias em readback, ou cena sem emissivo), e
+                // `M8`/`M4`/`M2`/`M1` sao os degraus do sweep. Colapsar os dois primeiros faria a
+                // captura de controle parecer a de uma cena vazia.
+                Di += 'M';
+                if (!S.DIMeshLightsInPoolRequested) Di += "off";
+                else Di += std::to_string(S.DIMeshCandidatesEffective);
+                // O outro A/B que a Fase 0 pede. So aparece desligada: ligada e o default, e o
+                // nome nao precisa repetir o que nao mudou.
+                if (!S.DIInitialVisibilityRequested) Di += "-noVis";
+                // Compactacao do suporte positivo. O EFETIVO, e so quando ligada: desligada e o
+                // braco de controle do A/B, e ele herda o nome historico — o que precisa se
+                // distinguir e o braco novo.
+                if (S.MeshCompactEffective) Di += "-cmp";
+                // O `-aliasDef` saiu junto com o toggle: com a residencia fixa em VRAM ele seria
+                // constante em todo nome. ⚠️ Isso faz uma captura nova colidir de NOME com as da
+                // era upload (builds anteriores a `681c1f2`, sem a etiqueta) — ali quem separa e o
+                // campo `build` do manifesto.
+                Add(Di.c_str());
+            }
             if (S.ReGIR)       Add("regir");
             if (S.Reflections) Add("refl");
             // O S da instrumentacao entra no NOME, e nao so no manifesto: os dois regimes produzem
@@ -518,6 +544,79 @@ namespace Smile {
                 File << "  \"regir\": "        << Bool(_State.ReGIR)       << ",\n";
                 File << "  \"regirRequested\": " << Bool(_State.ReGIRRequested) << ",\n";
                 File << "  \"giPunctualLightCount\": " << _State.PunctualLightCount << ",\n";
+                // Mesh lights e amostragem do DI. O gate de saida da Fase 0 do
+                // MESH-LIGHTS-PLAN.md e exatamente este bloco: sem ele, `restirDI: true` nao
+                // distingue cena sem emissivo, alias em readback, pool desligado no A/B e sweep
+                // de candidatas — quatro configuracoes com o mesmo manifesto.
+                File << "  \"meshLightSurveyed\": "  << _State.MeshLightSurveyed  << ",\n";
+                File << "  \"meshLightSamplable\": " << _State.MeshLightSamplable << ",\n";
+                File << "  \"meshAliasReady\": "     << Bool(_State.MeshAliasReady) << ",\n";
+                File << "  \"meshLightTotalFlux\": " << _State.MeshLightTotalFlux << ",\n";
+                // Sem isto, fluxo zero nao distingue "tabela em reconstrucao" de "toda geometria
+                // emissiva com radiancia nula".
+                File << "  \"meshLightFluxValid\": " << Bool(_State.MeshLightFluxValid) << ",\n";
+                File << "  \"meshLightUniformFallback\": "
+                     << Bool(_State.MeshLightUniformFallback) << ",\n";
+                File << "  \"meshTriDegenerate\": " << _State.MeshTriDegenerate << ",\n";
+                File << "  \"meshTriZeroFlux\": "   << _State.MeshTriZeroFlux   << ",\n";
+                File << "  \"meshTriNonFinite\": "  << _State.MeshTriNonFinite  << ",\n";
+                File << "  \"diAnalyticCandidatesRequested\": "
+                     << _State.DIAnalyticCandidatesRequested << ",\n";
+                File << "  \"diAnalyticCandidatesEffective\": "
+                     << _State.DIAnalyticCandidatesEffective << ",\n";
+                File << "  \"diMeshCandidatesRequested\": "
+                     << _State.DIMeshCandidatesRequested << ",\n";
+                File << "  \"diMeshCandidatesEffective\": "
+                     << _State.DIMeshCandidatesEffective << ",\n";
+                File << "  \"meshLightsInPoolRequested\": "
+                     << Bool(_State.DIMeshLightsInPoolRequested) << ",\n";
+                File << "  \"meshLightsInPoolEffective\": "
+                     << Bool(_State.DIMeshLightsInPoolEffective) << ",\n";
+                File << "  \"diInitialVisibilityRequested\": "
+                     << Bool(_State.DIInitialVisibilityRequested) << ",\n";
+                File << "  \"diInitialVisibilityEffective\": "
+                     << Bool(_State.DIInitialVisibilityEffective) << ",\n";
+                File << "  \"diRenderWidth\": "  << _State.DIRenderWidth  << ",\n";
+                File << "  \"diRenderHeight\": " << _State.DIRenderHeight << ",\n";
+                File << "  \"meshLightTrianglePayloadBytes\": "
+                     << _State.MeshLightTrianglePayloadBytes << ",\n";
+                // As duas copias da alias. A de UPLOAD nao entra no orcamento de VRAM (system
+                // memory), a de DEFAULT entra; as duas existem nos dois bracos do A/B.
+                File << "  \"meshLightAliasUploadPayloadBytes\": "
+                     << _State.MeshLightAliasUploadPayloadBytes << ",\n";
+                File << "  \"meshLightAliasDefaultPayloadBytes\": "
+                     << _State.MeshLightAliasDefaultPayloadBytes << ",\n";
+                File << "  \"meshCompactRequested\": "
+                     << Bool(_State.MeshCompactRequested) << ",\n";
+                File << "  \"meshCompactEffective\": "
+                     << Bool(_State.MeshCompactEffective) << ",\n";
+                // TAMANHO DO DOMINIO, nao trafego e nao alocacao — ver o FCaptureState. E este par
+                // que a compactacao reduz.
+                File << "  \"meshLightAliasDomainBytes\": "
+                     << _State.MeshLightAliasDomainBytes << ",\n";
+                File << "  \"meshLightTriangleDomainBytes\": "
+                     << _State.MeshLightTriangleDomainBytes << ",\n";
+                // Os buffers que um campo unico escondia. `meshLightTrianglePayloadBytes` acima e so a
+                // saida da extracao; a copia amostrada, o staging e o readback sao outros tres.
+                File << "  \"meshLightTriangleCompactPayloadBytes\": "
+                     << _State.MeshLightTriangleCompactPayloadBytes << ",\n";
+                File << "  \"meshLightTriangleStagingPayloadBytes\": "
+                     << _State.MeshLightTriangleStagingPayloadBytes << ",\n";
+                File << "  \"meshLightTriangleReadbackPayloadBytes\": "
+                     << _State.MeshLightTriangleReadbackPayloadBytes << ",\n";
+                File << "  \"meshLightVramBytes\": " << _State.MeshLightVramBytes << ",\n";
+                // Fases 1 e 2. Presentes e zerados de proposito: a serie de baseline e a serie com
+                // RIS precisam do mesmo conjunto de chaves para serem comparaveis.
+                File << "  \"meshLightRISBytes\": "        << _State.MeshLightRISBytes        << ",\n";
+                File << "  \"meshLightRISCompactBytes\": " << _State.MeshLightRISCompactBytes << ",\n";
+                File << "  \"meshRISRequested\": "  << Bool(_State.MeshRISRequested)  << ",\n";
+                File << "  \"meshRISEffective\": "  << Bool(_State.MeshRISEffective)  << ",\n";
+                File << "  \"meshRISCompactRequested\": "
+                     << Bool(_State.MeshRISCompactRequested) << ",\n";
+                File << "  \"meshRISCompactEffective\": "
+                     << Bool(_State.MeshRISCompactEffective) << ",\n";
+                File << "  \"diHalfResRequested\": " << Bool(_State.DIHalfResRequested) << ",\n";
+                File << "  \"diHalfResEffective\": " << Bool(_State.DIHalfResEffective) << ",\n";
                 File << "  \"reflections\": "  << Bool(_State.Reflections) << ",\n";
                 File << "  \"cacheUpdate\": "  << Bool(_State.CacheUpdate) << ",\n";
                 File << "  \"cacheQuery\": "   << Bool(_State.CacheQuery)  << ",\n";

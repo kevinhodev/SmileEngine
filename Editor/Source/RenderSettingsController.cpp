@@ -60,11 +60,16 @@ namespace SmileEditor {
         Out.RenderScale               = Settings.GetRenderScale();
         Out.TimeOfDayHours            = Tod.TimeHours;
         Out.TimeOfDayRunning          = Tod.Running;
+        Out.DIAnalyticCandidates      = static_cast<int>(Settings.GetDIInitialCandidates());
+        Out.DIMeshCandidates          = static_cast<int>(Settings.GetDIMeshCandidates());
+        Out.DIMeshLightsInPool        = Settings.GetDIMeshLightsInPool();
+        Out.DIInitialVisibility       = Settings.GetDIInitialVisibility();
+        Out.DIMeshCompactSupport      = Settings.GetDIMeshCompactSupport();
         return Out;
     }
 
     std::optional<FProfileConfiguration> RenderSettingsController::ApplyProfilePreset(
-        EProfilePreset _Preset, QString& _Error) {
+        EProfilePreset _Preset, QString& _Error, const FProfileOverrides& _Overrides) {
         _Error.clear();
         if (!Renderer) {
             _Error = QStringLiteral("renderer ainda nao esta pronto");
@@ -104,10 +109,27 @@ namespace SmileEditor {
                 Settings.SetRenderScale(1.0f);
             }
 
+            // Sobrescritas da matriz da Fase 0, DEPOIS do preset: o preset e o regime base
+            // declarado, o override e o unico eixo em teste. Ausente = preserva o valor corrente,
+            // entao um sweep so precisa repetir o campo que esta variando.
+            if (_Overrides.DIAnalyticCandidates)
+                Settings.SetDIInitialCandidates(
+                    static_cast<Smile::u32>(*_Overrides.DIAnalyticCandidates));
+            if (_Overrides.DIMeshCandidates)
+                Settings.SetDIMeshCandidates(
+                    static_cast<Smile::u32>(*_Overrides.DIMeshCandidates));
+            if (_Overrides.DIMeshLightsInPool)
+                Settings.SetDIMeshLightsInPool(*_Overrides.DIMeshLightsInPool);
+            if (_Overrides.DIInitialVisibility)
+                Settings.SetDIInitialVisibility(*_Overrides.DIInitialVisibility);
+            // Muda o DOMINIO amostrado: o setter forca rebuild da tabela e limpa historico.
+            if (_Overrides.DIMeshCompactSupport)
+                Settings.SetDIMeshCompactSupport(*_Overrides.DIMeshCompactSupport);
+
             auto& Tod = Access->GetTimeOfDay();
             Tod.Enabled   = true;
             Tod.Running   = false;
-            Tod.TimeHours = 10.0f;
+            Tod.TimeHours = static_cast<float>(_Overrides.TimeOfDayHours.value_or(10.0));
 
             Result.TimeOfDayHours = Tod.TimeHours;
             // Readback no mesmo lock: a resposta descreve exatamente o estado deixado pelo
